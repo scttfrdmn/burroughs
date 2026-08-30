@@ -168,10 +168,19 @@ func TestEveryMemargRowHasANaturalWidth(t *testing.T) {
 	// The floor is the reference's count, restated here as the pin the *sweep* needs: the loops
 	// above bound `op` by hand, so a region growing past 1024 sub-opcodes would silently stop being
 	// swept, and only a count catches that.
-	const wantRows = 45
+	//
+	// 76 = the core pin's 45 (23 core loads and stores, 22 vector) + the threads pin's 31. Decomposed
+	// rather than restated as one number, because the two halves have different authorities and a
+	// single 76 would let a loss on one side be paid for by a gain on the other.
+	const (
+		wantCoreRows   = 45
+		wantAtomicRows = 31
+		wantRows       = wantCoreRows + wantAtomicRows
+	)
 	if len(engine) != wantRows {
-		t.Errorf("swept %d memarg rows out of the table, want %d — either a row moved past this "+
-			"sweep's opcode bounds or the table's memarg set changed", len(engine), wantRows)
+		t.Errorf("swept %d memarg rows out of the table, want %d (%d core + %d atomic) — either a row "+
+			"moved past this sweep's opcode bounds or the table's memarg set changed",
+			len(engine), wantRows, wantCoreRows, wantAtomicRows)
 	}
 
 	for name := range engine {
@@ -181,12 +190,18 @@ func TestEveryMemargRowHasANaturalWidth(t *testing.T) {
 				"unreachable, reached", name)
 		}
 	}
-	for _, row := range parseRefMemops(t) {
-		if !engine[row.name] {
-			t.Errorf("%s constructs %q with a memarg and the generated table does not mark it, so "+
-				"its alignment is never checked: HasMemarg gates checkAlignment, and a row missing "+
-				"from that predicate is a rule that silently does not apply",
-				testenv.RefMnemonicsML, row.name)
+	// The other direction, per pin. Both authorities, because the sweep above walks the *composed*
+	// table and a row missing from it is missing whichever pin contributed it — and because a
+	// one-pin check here would have gone on passing while the 0xfe region's 31 rows were absent from
+	// the engine's predicate entirely.
+	modes, _ := parseThreadsMemopModes(t)
+	for _, rows := range [][]refMemop{parseRefMemops(t), parseRefAtomicMemops(t, modes)} {
+		for _, row := range rows {
+			if !engine[row.name] {
+				t.Errorf("the reference constructs %q with a memarg and the generated table does not "+
+					"mark it, so its alignment is never checked: HasMemarg gates checkAlignment, and a "+
+					"row missing from that predicate is a rule that silently does not apply", row.name)
+			}
 		}
 	}
 }
@@ -212,6 +227,190 @@ func parseRefMemops(tb testing.TB) []refMemop {
 		})
 	}
 	return rows
+}
+
+// refAtomicMemopRe matches one atomic memarg constructor in the threads pin's `operators.ml` —
+// which is `mnemonics.ml` under the name it had at that baseline (see `fetch-threads-ref.sh`).
+//
+// Three differences from the core pattern above, all of them the older baseline's spelling rather
+// than anything about atomics: the constructors take no memory index (`x`) because the baseline
+// predates multi-memory, the record carries an `ordering` field, and the pack is a bare
+// `Some Pack8` rather than the pair `Some (Pack8, S)`. The `rmwop` parameter is the one real shape
+// difference — `AtomicRmw` carries the operator beside the memop, which is the same fact the opcode
+// table records as `operator`.
+//
+// The family is captured as `(\w+)` rather than alternated against a list, so a constructor family
+// this test does not know about arrives as an unrecognized mode below rather than as a row that
+// silently fails to match.
+var refAtomicMemopRe = regexp.MustCompile(
+	`let (\w+) (?:rmwop )?align offset =\s*\n\s*(\w+) \(?(?:rmwop, )?\{ty = (\w+); align; offset; ` +
+		`pack = ([^;]+); ordering`)
+
+// parseRefAtomicMemops reads the threads pin's memarg constructors and keeps the ones `valid.ml`
+// checks in `Atomic` mode.
+//
+// **The filter is the licence.** The threads pin's `operators.ml` also holds that baseline's *core*
+// load and store constructors, and reading those would be the wholesale consultation §9 G-2 forbids
+// — the baseline predates memory64 and multi-memory, so its core rows disagree with this engine's
+// on facts nothing here is asking about. Scoping by "the families the reference itself checks in
+// Atomic mode" derives the clause boundary from the authority instead of from a list written here,
+// which is the same move `consultedClauses` makes one package over for the 0xfe region.
+func parseRefAtomicMemops(tb testing.TB, modes map[string]string) []refMemop {
+	tb.Helper()
+	src := testenv.RequireSpecRef(tb, testenv.ThreadsRefOperatorsML)
+	var rows []refMemop
+	for _, m := range refAtomicMemopRe.FindAllStringSubmatch(src, -1) {
+		if modes[m[2]] != "Atomic" {
+			continue
+		}
+		rows = append(rows, refMemop{
+			name:   m[1],
+			family: m[2],
+			ty:     m[3],
+			pack:   strings.TrimSpace(m[4]),
+		})
+	}
+	return rows
+}
+
+// TestAtomicNaturalWidthsMatchTheThreadsReference is TestNaturalWidthsMatchTheReference for the 31
+// atomic memarg rows, against the pin that defines them.
+//
+// Its own test rather than more rows in the first, because the two share no input: a different pin,
+// a different constructor spelling, a different `check_memop` signature. What they do share is
+// `applyGetSz` and `refSizes`, which are the reference's arithmetic and not either pin's text.
+func TestAtomicNaturalWidthsMatchTheThreadsReference(t *testing.T) {
+	modes, forms := parseThreadsMemopModes(t)
+	rows := parseRefAtomicMemops(t, modes)
+
+	// Pinned exactly, not floored, for the first test's reason: a floor catches a moved file and
+	// says nothing about six rows a tightened pattern quietly dropped. 31 is the *authority's*
+	// count — 3 notify/wait, 7 loads, 7 stores, 7 rmw, 7 rmw.cmpxchg — and it is also the number of
+	// distinct memarg mnemonics the 0xfe region contributes, the 42 rmw encodings collapsing onto 14
+	// constructors because the operator is a separate immediate.
+	const wantRows = 31
+	if len(rows) != wantRows {
+		t.Fatalf("parsed %d atomic memarg constructors from %s, want %d; a different count means the "+
+			"proposal's set moved or this parse narrowed", len(rows), testenv.ThreadsRefOperatorsML, wantRows)
+	}
+
+	for _, row := range rows {
+		sz, hasSz, err := applyGetSz(forms[row.family], row.pack)
+		if err != nil {
+			// Fatal for the first test's reason: a get_sz form this test cannot read is a row it
+			// must not report as checked.
+			t.Fatalf("%s (%s): %v", row.name, row.family, err)
+		}
+		key := row.ty
+		if hasSz {
+			key = sz
+		}
+		want, ok := refSizes[key]
+		if !ok {
+			t.Fatalf("%s: %q has no size in refSizes, so the proposal names a constructor this test "+
+				"does not know; add it rather than defaulting", row.name, key)
+		}
+		got, hasWidth := naturalWidth(row.name)
+		if !hasWidth {
+			t.Errorf("naturalWidth(%q) declines, and the reference gives it %d bytes — a memarg row "+
+				"with no width reaches errNoNaturalWidth and its alignment goes unchecked",
+				row.name, want)
+			continue
+		}
+		if got != want {
+			t.Errorf("naturalWidth(%q) = %d, reference = %d (%s, ty %s, pack %s). Under the atomic "+
+				"rule a wrong width rejects the *legal* alignment and accepts an illegal one, so this "+
+				"is wrong in both directions at once", row.name, got, want, row.family, row.ty, row.pack)
+		}
+	}
+	t.Logf("%d atomic memarg rows re-derived from %s", len(rows), testenv.ThreadsRefOperatorsML)
+}
+
+// TestAtomicModeMatchesTheThreadsReference is what makes `atomicAccess`'s claim checked.
+//
+// `atomicAccess` keys the equality rule on the mnemonic's `atomic` component; the reference keys it
+// on the constructor family. This walks both directions of that correspondence — every Atomic-mode
+// constructor must satisfy the predicate, and none of the core pin's 45 must — so the *substitution*
+// is the thing under test rather than the rule it selects.
+//
+// The reverse direction runs over the **core** pin's rows and not the threads pin's core rows: those
+// are the constructors this engine's non-atomic mnemonics come from, and the threads baseline's
+// copies of them are outside the consulted clause.
+func TestAtomicModeMatchesTheThreadsReference(t *testing.T) {
+	modes, _ := parseThreadsMemopModes(t)
+
+	// Both modes present, or the correspondence below is one-sided: a `valid.ml` this parse read as
+	// all-Atomic would pass the forward direction on every row and mean nothing.
+	atomic, nonAtomic := 0, 0
+	for _, mode := range modes {
+		switch mode {
+		case "Atomic":
+			atomic++
+		case "NonAtomic":
+			nonAtomic++
+		default:
+			t.Errorf("%s gives a check_memop call the mode %q, which is neither of the two the "+
+				"reference's `mem_mode` declares — a third mode means the rule has a branch this "+
+				"package does not implement", testenv.ThreadsRefValidML, mode)
+		}
+	}
+	if atomic != 6 || nonAtomic != 6 {
+		t.Errorf("parsed %d Atomic and %d NonAtomic check_memop arms from %s, want 6 and 6",
+			atomic, nonAtomic, testenv.ThreadsRefValidML)
+	}
+
+	for _, row := range parseRefAtomicMemops(t, modes) {
+		if !atomicAccess(row.name) {
+			t.Errorf("%s is checked in Atomic mode (%s) and atomicAccess declines it, so its "+
+				"alignment is bounded rather than fixed: an under-aligned access the reference "+
+				"rejects is accepted, which no vector in the threads suite can see", row.name, row.family)
+		}
+	}
+	for _, row := range parseRefMemops(t) {
+		if atomicAccess(row.name) {
+			t.Errorf("%s is checked in NonAtomic mode (%s, %s) and atomicAccess claims it, so a "+
+				"legal under-aligned access is rejected — 62 corpus vectors expect the ceiling rule "+
+				"and this would answer them with the wrong string",
+				row.name, row.family, testenv.RefMnemonicsML)
+		}
+	}
+}
+
+// threadsCallRe captures the mode, `ty_size` and `get_sz` of a `check_memop` call at the threads
+// baseline. The mode is the parameter this pin adds and the core pin does not have.
+var threadsCallRe = regexp.MustCompile(
+	`check_memop (\w+) c \w+ (?:num_size|vec_size) (\([^)]*\)) e\.at`)
+
+// parseThreadsMemopModes maps each family to its `check_memop` mode and `get_sz` form.
+//
+// Line-walked with the current arm tracked, for `parseGetSzForms`' reason and not merely by
+// symmetry: a pattern that can cross the arm boundary it is keying on already mispaired a get_sz
+// once in this file, and it produced a complete-looking map rather than an error.
+func parseThreadsMemopModes(tb testing.TB) (modes, forms map[string]string) {
+	tb.Helper()
+	src := testenv.RequireSpecRef(tb, testenv.ThreadsRefValidML)
+	modes, forms = map[string]string{}, map[string]string{}
+	arm := ""
+	for i, line := range strings.Split(src, "\n") {
+		if m := armRe.FindStringSubmatch(line); m != nil {
+			arm = m[1]
+		}
+		m := threadsCallRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		if arm == "" {
+			tb.Errorf("%s:%d calls check_memop outside any arm, so its mode cannot be attributed",
+				testenv.ThreadsRefValidML, i+1)
+			continue
+		}
+		if prev, dup := modes[arm]; dup && prev != m[1] {
+			tb.Errorf("%s:%d gives arm %s the mode %q after %q — one arm, two modes",
+				testenv.ThreadsRefValidML, i+1, arm, m[1], prev)
+		}
+		modes[arm], forms[arm] = m[1], m[2]
+	}
+	return modes, forms
 }
 
 var (
@@ -326,8 +525,15 @@ func cutSome(pack string) (string, bool) {
 var refSizes = map[string]uint64{
 	// packed_size
 	"Pack8": 1, "Pack16": 2, "Pack32": 4, "Pack64": 8,
-	// num_size
+	// num_size, core-pin spelling
 	"I32T": 4, "F32T": 4, "I64T": 8, "F64T": 8,
+	// num_size, threads-pin spelling — the same four numbers under the names that baseline gave the
+	// constructors. Two spellings rather than one normalized key because a rename upstream should
+	// arrive as a missing key here, and normalizing `I32Type` to `I32T` in the parse would be this
+	// file quietly agreeing that the two are the same type without either pin saying so. F32/F64
+	// have no entry: no atomic constructor names a float, and a key nothing looks up is a claim with
+	// no witness.
+	"I32Type": 4, "I64Type": 8,
 	// vec_size
 	"V128T": 16,
 }

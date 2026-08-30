@@ -29,6 +29,7 @@ package testenv
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -471,6 +472,18 @@ const (
 	// ThreadsRefEncodeML is its encoder: the wire form for a shared memtype and for the
 	// atomic instructions, which is the bridge half 0011 established for the core pin.
 	ThreadsRefEncodeML = "third_party/spec-threads/interpreter/binary/encode.ml"
+	// ThreadsRefOperatorsML is its instruction-constructor table: the 67 atomic bindings
+	// `decode.ml` calls, in the `let <name> args = <Constructor …>` form the const-legality
+	// join reads.
+	//
+	// **This is the core pin's `syntax/mnemonics.ml` under its older name.** Upstream renamed
+	// the file; `threadsRefFloors` recorded that `mnemonics.ml` does not exist at cc535ad, which
+	// is true and was read as *this pin has no such authority* — a negative claim with nothing
+	// for a citation sweep to resolve. Licensed only when the atomics join needed it, which is
+	// twenty-eight-citations-late's smaller cousin: the clause it serves is the 0xfe region's
+	// mnemonics and nothing beyond them, since every non-atomic binding in this file is a
+	// three-proposal-old snapshot of one the core pin has.
+	ThreadsRefOperatorsML = "third_party/spec-threads/interpreter/syntax/operators.ml"
 )
 
 // Floors for the threads pin, each stating the file's size at cc535ad beside it.
@@ -494,22 +507,34 @@ const (
 	MinThreadsRefParserBytes = 22000
 	// MinThreadsRefEncodeBytes is the floor for encode.ml, 46030 bytes at cc535ad.
 	MinThreadsRefEncodeBytes = 28000
+	// MinThreadsRefOperatorsBytes is the floor for operators.ml, 29166 bytes at cc535ad.
+	MinThreadsRefOperatorsBytes = 18000
 )
 
 // threadsRefFloors is the size floor per file of the threads pin.
 //
-// Five entries against the core pin's nine, and the gap is a fact about upstream rather
+// Six entries against the core pin's nine, and the gap is a fact about upstream rather
 // than an omission here: `interpreter/valid/match.ml` and `interpreter/syntax/mnemonics.ml`
 // **do not exist at cc535ad**, the proposal being forked from a core baseline older than
 // either file. The remaining two the core pin licenses — free.ml and exec/v128.ml — exist
 // but hold no threads clause (`grep -ic atomic` returns 0 in v128.ml at this revision), so
 // licensing them would claim an authority this pin does not have.
+//
+// **The mnemonics.ml clause of that paragraph was true and misleading, and the sixth entry is
+// the correction.** The file does not exist; the *authority* does, as `syntax/operators.ml`,
+// which is what upstream renamed to `mnemonics.ml` later. Read as written, "does not exist at
+// cc535ad" answered the question "can this pin supply constructor bindings?" with a fact about
+// a filename — and a negative claim has no target for any sweep to check. It cost a control:
+// the const-legality join reported 67 atomic mnemonics unresolvable, against an authority
+// sitting fetched and unlicensed in the same directory. *An unmeasured complement is not an
+// empty one* — the two absent files were measured, the third was inferred from them.
 var threadsRefFloors = map[string]int{
-	ThreadsRefDecodeML:  MinThreadsRefDecodeBytes,
-	ThreadsRefValidML:   MinThreadsRefValidBytes,
-	ThreadsRefLexerMLL:  MinThreadsRefLexerBytes,
-	ThreadsRefParserMLY: MinThreadsRefParserBytes,
-	ThreadsRefEncodeML:  MinThreadsRefEncodeBytes,
+	ThreadsRefDecodeML:    MinThreadsRefDecodeBytes,
+	ThreadsRefValidML:     MinThreadsRefValidBytes,
+	ThreadsRefLexerMLL:    MinThreadsRefLexerBytes,
+	ThreadsRefParserMLY:   MinThreadsRefParserBytes,
+	ThreadsRefEncodeML:    MinThreadsRefEncodeBytes,
+	ThreadsRefOperatorsML: MinThreadsRefOperatorsBytes,
 }
 
 // coreRefFloors is the size floor per file of the **core** pin, keyed by the path
@@ -661,6 +686,36 @@ func LicensedRefPaths() []string {
 	return paths
 }
 
+// PinFor returns the pin that licenses a reference path, matched on the path's suffix.
+//
+// Exported because a *generator* now needs it, which nothing did while the pin set was
+// singular: `internal/gen/opcodegen` composes the atomics region from the threads pin and has
+// to stamp that pin's revision into the generated header, so it needs the pin's `Script`.
+// `gen.go` records why there is deliberately no `PinnedThreadsRefRev` beside `PinnedRefRev`
+// — *a helper earns a caller*, and the way a generator was told to get there was to read its
+// pin's own `Script`. This is that lookup, once, rather than at each generator.
+//
+// Not a `testing.TB` door: it resolves provenance and reads nothing, so it has no floor to
+// enforce and no skip to license. RequireSpecRef is still the only way to *read* a licensed
+// file in a test, and it now shares this lookup instead of carrying its own copy.
+// The match takes the *longest* suffix, over sorted keys, and both halves matter. The loop
+// this replaces ranged over a map and returned the first hit, so two licensed paths where one
+// is a suffix of the other would have resolved to whichever Go's iteration order offered —
+// a first-match pick declining to ask. Longest-wins is the only answer that cannot be wrong
+// about which file a caller named.
+func PinFor(path string) (RefPin, string, bool) {
+	slash := filepath.ToSlash(path)
+	best, bestPath, found := RefPin{}, "", false
+	for _, pin := range refPins {
+		for _, p := range slices.Sorted(maps.Keys(pin.Floors)) {
+			if strings.HasSuffix(slash, p) && len(p) > len(bestPath) {
+				best, bestPath, found = pin, p, true
+			}
+		}
+	}
+	return best, bestPath, found
+}
+
 // RequireSpecRef is the licensed door for tests that read the reference interpreter.
 //
 // Same policy as RequireSuite and the same reason it exists: a drift check's whole job is
@@ -691,17 +746,10 @@ func RequireSpecRef(tb testing.TB, path string) string {
 	// with `third_party/spec/…/decode.ml`, so the match is unambiguous — but only because
 	// both constants carry their prefix. `refFloors`' construction panics on a licensed path
 	// that does not, rather than leaving this loop to pick whichever entry it met first.
-	floor, known, canon, target := 0, false, "", ""
-	for _, pin := range refPins {
-		for p, f := range pin.Floors {
-			if strings.HasSuffix(filepath.ToSlash(path), p) {
-				floor, known, canon, target = f, true, p, pin.Target
-				break
-			}
-		}
-		if known {
-			break
-		}
+	pin, canon, known := PinFor(path)
+	floor, target := 0, ""
+	if known {
+		floor, target = pin.Floors[canon], pin.Target
 	}
 	if !known {
 		tb.Fatalf("RequireSpecRef: no size floor registered for %q — add it to the Floors map "+
@@ -819,11 +867,26 @@ func RequireSuiteFile(tb testing.TB, name string) []byte {
 	return nil
 }
 
-// ProposalDoc is a proposal overview under the vendored reference tree, relative to the
-// repo root. The *citation targets* of the gate mapping (decision 0008): each mapped
-// construct names a line in one of these, and a machine checks that the line resolves.
+// ProposalDoc is a proposal overview under a vendored pin, relative to the repo root. The
+// *citation targets* of the gate mapping (decision 0008): each mapped construct names a line
+// in one of these, and a machine checks that the line resolves.
+//
+// # rel names the pin, because two pins have a proposals/ tree and one of the names collides
+//
+// This joined `third_party/spec` and took `proposals/gc/MVP.md`, which was unambiguous while
+// there was one pin and stopped being so when the threads pin arrived: it has a `proposals/`
+// tree of its own, and `proposals/simd/` exists under *both*. A citation reading
+// `proposals/simd/BinarySIMD.md:47` therefore names two files, and the one it resolved to was
+// whichever this function had hardcoded — a provenance that is right by luck rather than by
+// statement, which is the defect OverlayProvenance.Path exists to prevent in the generated
+// table's header.
+//
+// So `rel` now starts at the pin: `spec/proposals/gc/MVP.md`,
+// `spec-threads/proposals/threads/Overview.md`. Declared rather than discovered — "resolve
+// under whichever pin has it" is the same rule Compose rejects for regions, and it fails the
+// same way, by silently answering from a stale snapshot when the current pin loses a file.
 func ProposalDoc(rel string) string {
-	return filepath.Join("third_party", "spec", rel)
+	return filepath.Join("third_party", rel)
 }
 
 // MinProposalDocBytes is the floor for a proposal document to count as present.

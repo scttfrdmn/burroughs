@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,6 +23,78 @@ var refPath = testenv.RefDecodeML
 func refSource(tb testing.TB) string {
 	tb.Helper()
 	return testenv.RequireSpecRef(tb, refPath)
+}
+
+// shippedArms is every arm the composed table carries, paired with the lines of the decoder it
+// was read from — the domain of any control whose subject is "the readers this table uses".
+//
+// # It exists because two controls had `refSource` where they needed this
+//
+// `TestEveryReaderIsCalledNotPassed` and `TestEveryReaderIsInTheVocabulary` are both scoped to
+// the *space of readers the table's arms use*, and both read the core pin alone. That was a
+// complete domain until the 0xfe region arrived, and then it was 67 arms short with nothing
+// saying so — the shape of grave
+// [#495](https://github.com/scttfrdmn/burroughs/issues/495) and of `Floors`' own bug two files
+// over: a generic mechanism with a hand-spelled domain, where the mechanism keeps working and
+// the domain silently stops covering the subject.
+//
+// The reader it was missing is not hypothetical. `expect 0x00 s` is in the 0xfe region and
+// nowhere else, it is the one immediate whose content is a *constraint* (ImmZeroByte), and the
+// vocabulary control could not have objected to it even in domain — see reCall's own note.
+//
+// # The composed table, not the pin set
+//
+// The first version of this walked each pin's *whole* extraction, and that was wrong in the
+// other direction: it reported `var`, `block_type`, and `value_type` as readers outside the
+// vocabulary, all three from the threads pin's single-byte region, which is a three-proposal-old
+// spelling of `idx`/`blocktype`/`valtype` — and every one of those arms is dropped unread by
+// Compose. Nine failures, none of them about anything this table ships. *Consultation is
+// clause-scoped, never wholesale* (contract §9 G-2) applies to a control's domain exactly as it
+// applies to the composition: the arms are the ones that crossed, and Arm.Path is what says
+// which file each one's line number is in.
+func shippedArms(tb testing.TB) (*Table, map[string][]string) {
+	tb.Helper()
+	requireEveryPinFetched(tb)
+	tab, err := BuildFromPins()
+	if err != nil {
+		tb.Fatalf("BuildFromPins: %v", err)
+	}
+	sources := map[string][]string{}
+	for _, a := range tab.Arms {
+		if _, read := sources[a.Path]; !read {
+			sources[a.Path] = strings.Split(testenv.RequireSpecRef(tb, a.Path), "\n")
+		}
+	}
+	if len(sources) < 2 {
+		tb.Fatalf("the shipped arms name %d decoder(s), want >=2: a reader control over one pin "+
+			"cannot see a reader the other pin's region is the only user of", len(sources))
+	}
+	return tab, sources
+}
+
+// requireEveryPinFetched runs the licensed door over *every* pin's decoder, so a composed
+// table's drift check cannot proceed on a half-fetched tree.
+//
+// Derived from the pin set rather than listing the two paths, for DecodeMLFor's reason: the
+// list already exists, and a second copy is a claim that drifts. The direction it asserts is
+// the one BuildFromPins' own `seen < 2` floor cannot — that floor fires on a pin set with no
+// licence, this fires on a licence whose file is absent, and only one of those is a bug in
+// the tree rather than in the box.
+func requireEveryPinFetched(tb testing.TB) {
+	tb.Helper()
+	pins := 0
+	for _, pin := range testenv.RefPins() {
+		path, ok := DecodeMLFor(pin)
+		if !ok {
+			continue
+		}
+		testenv.RequireSpecRef(tb, path)
+		pins++
+	}
+	if pins < 2 {
+		tb.Fatalf("%d pins license a decoder; the composed table needs core and threads. A "+
+			"presence check over one pin passes on a tree missing the other", pins)
+	}
 }
 
 // TestExtractMatchesMeasuredShape pins the counts, and the numbers are the point.
@@ -158,21 +231,28 @@ func TestSingleByteSpaceIsAccountedFor(t *testing.T) {
 // real immediate is whatever the combinator does with it. Any *new* upstream combinator
 // wrapping a reader trips this the same way, which is the point of scoping to the token
 // rather than to `repeat`.
+//
+// Over **every** pin's decoder, not the core pin's: see everyDecoderSource for the 67 arms this
+// was blind to and why the domain is derived.
 func TestEveryReaderIsCalledNotPassed(t *testing.T) {
-	src := refSource(t)
-	lines := strings.Split(src, "\n")
-	tab, err := Extract(src, "test")
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
 	// The legal predecessors, each a deliberate entry. An unlisted one means a reader
 	// is being consumed by something other than a binding — most likely a combinator,
 	// which changes the immediate's count or width.
 	legal := map[string]bool{
-		"=":          true, // let x = memop s
-		"at":         true, // let x = at idx s
-		"NoNull),":   true, // ((if bit 0 flags then Null else NoNull), heaptype s)
-		"<arrowend>": true, // the reader opens the RHS
+		// `let x = memop s`, and also `let x = at idx s`: the `at` wrapper is inside the mask
+		// pattern (`at idx s` is its own, longer entry in immPatterns), so it is consumed with
+		// the reader and never appears as a predecessor.
+		"=": true,
+		// `((if bit 0 flags then Null else NoNull), heaptype s)` — br_on_cast's tuple.
+		"NoNull),": true,
+		// `| 0x03 -> expect 0x00 s "zero flag expected"; atomic_fence` — the reader is the
+		// first thing the arm does, so the token before it is the arm's own arrow, and an arrow
+		// is not a consumer.
+		//
+		// New with the *composed* domain rather than with the widened regexp: no core arm puts
+		// a reader directly after its arrow, which is why a list that was complete over 542
+		// arms was one entry short over 610.
+		"->": true,
 		// `| 0xfd -> (match u32 s with` — the prefix escapes. The reader is called, and
 		// its result is a *dispatch key* rather than an immediate, so the arm carries no
 		// Imms and this predecessor is the tell that says why. Added when Arm.Escape
@@ -184,32 +264,72 @@ func TestEveryReaderIsCalledNotPassed(t *testing.T) {
 		"(match": true,
 	}
 	reLastTok := regexp.MustCompile(`([^\s]+)\s*$`)
-	for _, a := range tab.Arms {
-		rhs := joinRHS(lines, a.Line-1)
-		// Mask as parseImms does, so this checks the hits extraction actually *uses*.
-		// Scanning unmasked text instead makes the test fail on the correct source —
-		// `laneidx s` still matches inside `repeat 16 laneidx s` even though the longer
-		// pattern claims it — which is a test reporting a defect in itself as a defect
-		// in the thing measured.
-		masked := []byte(rhs)
-		for _, p := range immPatterns {
-			for _, loc := range p.pat.FindAllIndex(masked, -1) {
-				tok := "<arrowend>"
-				if m := reLastTok.FindStringSubmatch(string(masked[:loc[0]])); m != nil {
-					tok = m[1]
-				}
-				for k := loc[0]; k < loc[1]; k++ {
-					masked[k] = ' '
-				}
-				if !legal[tok] {
-					t.Errorf("decode.ml:%d (%#02x/%#x): reader %q is preceded by %q, not a binding — "+
-						"it is being passed to something rather than called, so the extracted immediate "+
-						"is probably not the real shape (this is the i8x16_shuffle defect's class)\n\t%s",
-						a.Line, a.Prefix, a.Code, p.imm, tok, strings.TrimSpace(rhs))
+	scanned := 0
+	witnessed := map[string]int{}
+	tab, sources := shippedArms(t)
+	{
+		for _, a := range tab.Arms {
+			lines := sources[a.Path]
+			rhs := joinRHS(lines, a.Line-1)
+			// Mask as parseImms does, so this checks the hits extraction actually *uses*.
+			// Scanning unmasked text instead makes the test fail on the correct source —
+			// `laneidx s` still matches inside `repeat 16 laneidx s` even though the longer
+			// pattern claims it — which is a test reporting a defect in itself as a defect
+			// in the thing measured.
+			masked := []byte(rhs)
+			for _, p := range immPatterns {
+				for _, loc := range p.pat.FindAllIndex(masked, -1) {
+					tok := "<arrowend>"
+					if m := reLastTok.FindStringSubmatch(string(masked[:loc[0]])); m != nil {
+						tok = m[1]
+					}
+					for k := loc[0]; k < loc[1]; k++ {
+						masked[k] = ' '
+					}
+					scanned++
+					witnessed[tok]++
+					if !legal[tok] {
+						t.Errorf("%s:%d (%#02x/%#x): reader %q is preceded by %q, not a binding — "+
+							"it is being passed to something rather than called, so the extracted immediate "+
+							"is probably not the real shape (this is the i8x16_shuffle defect's class)\n\t%s",
+							a.Path, a.Line, a.Prefix, a.Code, p.imm, tok, strings.TrimSpace(rhs))
+					}
 				}
 			}
 		}
 	}
+	// A floor on what was looked at, because every failure mode of this control except a
+	// real defect ends in *fewer* readers scanned: a joinRHS that reassembles nothing, an
+	// immPatterns that matches nothing, a domain that lost a pin. Zero readers agrees with
+	// every source there is.
+	if scanned < 200 {
+		t.Errorf("scanned %d reader calls across the shipped arms, want >=200 (measured 235) — the "+
+			"predecessors all came out legal, but over a population this small that is the scan "+
+			"reporting its own reach", scanned)
+	}
+	// Every licence must have a witness. An allow list is a set of claims about the authority,
+	// and an entry nothing matches is a claim about a shape that has gone — which reads to the
+	// next author as a shape that is present and permitted. Same argument as the per-pin
+	// coverage guards on the citation joins, and it is checkJoinKeyDomain's direction applied
+	// to a test's own table.
+	//
+	// **It found two of five dead on its first run**, and neither was dead by upstream drift:
+	// `at` cannot be a predecessor because every `at …` form is its own longer mask pattern, so
+	// the wrapper is consumed with the reader; `<arrowend>` cannot fire because joinRHS starts
+	// at the arm's head line, so something always precedes. Both were unwitnessable *by
+	// construction* and had been since they were written — which is the case a "the list is
+	// still accurate" reading cannot reach, because the entries describe real shapes in the
+	// authority that this scan structurally never sees. The live entry for what `<arrowend>`
+	// was written for is `->`.
+	for tok := range legal {
+		if witnessed[tok] == 0 {
+			t.Errorf("legal predecessor %q has no witness among %d reader calls: the shape it "+
+				"licenses is not in the authority any more, so the entry permits nothing and "+
+				"documents something untrue", tok, scanned)
+		}
+	}
+	t.Logf("%d reader calls scanned across %d shipped arms; predecessors %v",
+		scanned, len(tab.Arms), witnessed)
 }
 
 // TestEveryReaderIsInTheVocabulary asserts the vocabulary is complete over the corpus:
@@ -221,36 +341,103 @@ func TestEveryReaderIsCalledNotPassed(t *testing.T) {
 // text a shorter pattern is already claiming. The shuffle defect was in the second class
 // only, which is why this test alone was insufficient — and both are needed, because a
 // brand-new reader leaves text unmatched and trips nothing else.
+//
+// Over every pin's decoder (everyDecoderSource), and with reCall widened past the shape it was
+// written against — the two ways this control was narrower than its own name.
 func TestEveryReaderIsInTheVocabulary(t *testing.T) {
-	src := refSource(t)
-	lines := strings.Split(src, "\n")
-	tab, err := Extract(src, "test")
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
 	// Constructs that take `s` and are not immediates: the sequence terminator, the
 	// two error reporters, and the if/else lookahead. Enumerated because each is a
 	// deliberate exclusion, and an unlisted one is a reader we are silently dropping.
-	allowed := map[string]bool{"end_": true, "error": true, "illegal": true, "peek": true}
-	reCall := regexp.MustCompile(`\b([a-z_][a-z0-9_']*)\s+s\b`)
-	for _, a := range tab.Arms {
-		rhs := joinRHS(lines, a.Line-1)
-		masked := []byte(rhs)
-		for _, p := range immPatterns {
-			for _, loc := range p.pat.FindAllIndex(masked, -1) {
-				for k := loc[0]; k < loc[1]; k++ {
-					masked[k] = ' '
+	allowed := map[string]bool{
+		"end_":    true, // expect 0x0b s — the sequence terminator
+		"error":   true, // the two error reporters
+		"illegal": true,
+		"peek":    true, // the if/else lookahead
+		// `| 0xfe -> … (match op s with` — a prefix escape's *dispatch key*, which is a
+		// sub-opcode and not an immediate. The core escapes spell it `u32 s` and are masked as
+		// if it were one, which is a pre-existing untruth this entry does not extend: which
+		// reader each region names is subOpcodeReaders' subject, checked there against the
+		// authority, and the choice between the two readings is recorded there too.
+		"op": true,
+	}
+	// `expect <byte> s` is a byte *matcher*, and whether one is an immediate or a structural
+	// terminator is decided by which byte — so the exclusion is per byte, listed here, and
+	// `expect` is deliberately not in `allowed` above.
+	//
+	// 0x00 in `atomic.fence` is the instruction's entire immediate (ImmZeroByte) and is masked
+	// out before this scan runs; 0x05 is the ELSE that closes an `if`, which the structural arm
+	// consumes and the table does not record. Licensing the bare identifier would have covered
+	// both and licensed a future `expect 0x07 s` that is an immediate — the exact reporting
+	// failure this control exists to prevent, admitted through its own allow list.
+	terminatorExpects := map[string]string{
+		"0x05": "the ELSE opcode closing an `if` (spec/binary/decode.ml:371) — consumed by the " +
+			"structural arm, whose immediates are hand-cited in TestIrregularArmsHaveCitedShapes",
+	}
+	// `<ident> s`, and `<ident> <literal> s` — the second alternative is the widening, and
+	// the reader that motivated it is `expect 0x00 s`.
+	//
+	// The old pattern's implicit premise was that a reader takes the stream and nothing else,
+	// so the token before `s` is always the reader's own name. `expect 0x00 s "zero flag
+	// expected"` breaks it: the token before `s` is `0x00`, the pattern does not match, and a
+	// reader outside the vocabulary would have gone unreported by the control whose whole job
+	// is to report exactly that. ImmZeroByte's doc records how that was found — not by this
+	// control firing, but by reading an arm that came out with an empty immediate list.
+	//
+	// The literal is `[0-9]\w*`, which covers `0x00` and a decimal count, and it does *not*
+	// swallow `repeat 16 laneidx s`: the numeric group cannot match `laneidx`, so the scan
+	// finds `laneidx s` where it always did, and the neighbouring control's reading of that
+	// arm is unchanged.
+	reCall := regexp.MustCompile(`\b([a-z_][a-z0-9_']*)(?:\s+([0-9]\w*))?\s+s\b`)
+	arms, expects := 0, 0
+	tab, sources := shippedArms(t)
+	{
+		for _, a := range tab.Arms {
+			lines := sources[a.Path]
+			rhs := joinRHS(lines, a.Line-1)
+			masked := []byte(rhs)
+			for _, p := range immPatterns {
+				for _, loc := range p.pat.FindAllIndex(masked, -1) {
+					for k := loc[0]; k < loc[1]; k++ {
+						masked[k] = ' '
+					}
+				}
+			}
+			arms++
+			for _, m := range reCall.FindAllStringSubmatch(string(masked), -1) {
+				if m[1] == "expect" {
+					expects++
+					if _, licensed := terminatorExpects[m[2]]; !licensed {
+						t.Errorf("%s:%d (%#02x/%#x): `expect %s s` matches a byte no entry in "+
+							"terminatorExpects accounts for — if the byte is the instruction's "+
+							"immediate it belongs in vocab and immPatterns, and if the arm consumes "+
+							"it structurally say so there with the citation",
+							a.Path, a.Line, a.Prefix, a.Code, m[2])
+					}
+					continue
+				}
+				if !allowed[m[1]] {
+					t.Errorf("%s:%d (%#02x/%#x): reader %q is not in the immediate vocabulary; "+
+						"add it to vocab and immPatterns, or add it to this test's allowed set with a reason",
+						a.Path, a.Line, a.Prefix, a.Code, m[1])
 				}
 			}
 		}
-		for _, m := range reCall.FindAllStringSubmatch(string(masked), -1) {
-			if !allowed[m[1]] {
-				t.Errorf("decode.ml:%d (%#02x/%#x): reader %q is not in the immediate vocabulary; "+
-					"add it to vocab and immPatterns, or add it to this test's allowed set with a reason",
-					a.Line, a.Prefix, a.Code, m[1])
-			}
-		}
 	}
+	// This control passes by finding *nothing*, which is the verdict a lost domain also
+	// produces. The floor is on the arms walked, since that is the population whose emptiness
+	// would be invisible.
+	if arms < 600 {
+		t.Errorf("walked %d arms across the pin set, want >=600 — a clean scan over a population "+
+			"this small is the domain reporting its own size, not the vocabulary's completeness", arms)
+	}
+	// The `expect` branch above is the widening's whole subject, so its population is asserted
+	// separately: at zero it would be the old regexp back, passing because it matches nothing.
+	if expects == 0 {
+		t.Error("no `expect <byte> s` call survived masking, so the branch that tells a terminator " +
+			"from an immediate never ran — which is the state the unwidened reCall was in, and it " +
+			"passed")
+	}
+	t.Logf("%d arms walked, %d unmasked `expect` calls classified", arms, expects)
 }
 
 // joinRHS reassembles an arm's right-hand side the way parseArm does.
@@ -401,17 +588,37 @@ func TestMultiMnemonicArmSplitsByCode(t *testing.T) {
 // discriminating field. Here that is the message text, which names the mechanism.
 //
 // Falsified by *inducing* each case against the real source, not by reasoning about it.
+//
+// # The third mechanism, and why one case had to change path
+//
+// `composed` cases run the mutation through the *composed* table, and they exist because the
+// floor map's domain was wrong and the repair moved a case from one mechanism to another. When
+// `Floors` was iterated over its own keys, gutting the SIMD region fired a per-source floor; now
+// that checkFloors walks the regions the source *declares* — the change that makes the threads
+// pin extractable, since its baseline correctly has no 0xfb — a vanished region is not checked
+// per source at all. The same mutation still has to be caught, by checkFloorDomain, and the case
+// that used to name `byFloors` now names `byDomain`.
+//
+// A `composed` case therefore asserts *both* halves: the per-source path must come out silent,
+// and the composed path must fire. Without the first half the case would pass whether or not the
+// mechanism it names is the one running — the way it did before this test was split by message —
+// and the two halves together are what makes "neither check is redundant" an assertion rather
+// than a remark in Floors' doc.
 func TestVacuityIsCaughtByTheNamedMechanism(t *testing.T) {
 	src := refSource(t)
 
 	const (
 		byFloors = "floor is" // checkFloors' message
 		byLocate = "could not locate"
+		byDomain = "has no such region" // checkFloorDomain's message
 	)
 	cases := []struct {
 		name string
 		by   string
-		mung func(string) string
+		// composed runs the mutation through Compose with the real overlays, and asserts the
+		// per-source extraction of the same mutated source is silent.
+		composed bool
+		mung     func(string) string
 	}{
 		{
 			// The function is still there; every arm is unrecognizable. This is the
@@ -422,16 +629,40 @@ func TestVacuityIsCaughtByTheNamedMechanism(t *testing.T) {
 			mung: func(s string) string { return strings.ReplaceAll(s, "  | 0x", "  (* x *) | Q") },
 		},
 		{
-			// Only the SIMD region breaks. The single-byte region still yields 215
-			// arms, so any global "is the table non-empty" check passes — measured at
-			// 264 arms with the floors disarmed. The floors are per-region precisely
-			// because a whole region can vanish while the total stays plausible.
-			name: "SIMD region gutted, total still plausible",
-			by:   byFloors,
+			// The whole SIMD region vanishes, head and all. The rest of the table still
+			// yields 266 arms (measured, printed from the per-source extraction this case
+			// asserts is silent), so any global "is the table non-empty" check passes, and
+			// **so does every per-source floor**: no `| 0xfd ->` head means no declared
+			// region, no floor lookup, and nothing to fall short of. This is the case
+			// checkFloorDomain exists for, and it is why a floor map keyed by region is not
+			// enough on its own — the region that disappears is the one nobody checks.
+			name:     "SIMD region gutted, total still plausible",
+			by:       byDomain,
+			composed: true,
 			mung: func(s string) string {
 				i := strings.Index(s, "  | 0xfd ->")
 				j := strings.Index(s, "and instr_block s =")
 				return s[:i] + strings.Repeat("\n", 10) + s[j:]
+			},
+		},
+		{
+			// The region is still *declared* and its arms are unrecognizable: the head and
+			// its `(match u32 s with` survive, so the region is in Regions and its floor is
+			// looked up, and it comes out at 0 against a floor of 200.
+			//
+			// Kept beside the case above because the two are different failures wearing one
+			// name — a region that *vanishes* and a region that is *gutted in place* — and
+			// only the second is a per-source floor's business. This is the case that carries
+			// the claim Floors' doc makes, that the floors are per-region because a whole
+			// region can go while the total stays plausible: measured at 267 arms over all
+			// four declared regions with the 0xfd floor disarmed, which is how the figure in
+			// the case above it was taken too.
+			name: "SIMD region declared and its arms unrecognizable",
+			by:   byFloors,
+			mung: func(s string) string {
+				i := strings.Index(s, "  | 0xfd ->")
+				j := strings.Index(s, "and instr_block s =")
+				return s[:i] + strings.ReplaceAll(s[i:j], "\n    | 0x", "\n    (* x *) | Q") + s[j:]
 			},
 		},
 		{
@@ -457,7 +688,22 @@ func TestVacuityIsCaughtByTheNamedMechanism(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			tab, err := Extract(c.mung(src), "test")
+			munged := c.mung(src)
+			if munged == src {
+				t.Fatal("mutation did not apply: its anchor text changed upstream, and a case that " +
+					"mutates nothing asserts that the real source is caught by a vacuity check")
+			}
+			tab, err := Extract(munged, "test")
+			if c.composed {
+				// The half that makes this case exercise the mechanism it names rather than
+				// merely reach it: per source the mutation must be *invisible*.
+				if err != nil {
+					t.Fatalf("the per-source extraction caught this, with %v — then the composed "+
+						"path below would report the same error and this case would pass without "+
+						"checkFloorDomain running at all", err)
+				}
+				tab, err = composeOverMutatedBase(t, tab)
+			}
 			n := -1
 			if tab != nil {
 				n = len(tab.Arms)
@@ -468,10 +714,120 @@ func TestVacuityIsCaughtByTheNamedMechanism(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), c.by) {
 				t.Fatalf("caught by the wrong mechanism: want a message containing %q, got %v\n"+
-					"\tboth controls report ErrVacuous, so this case is not exercising the one it names",
-					c.by, err)
+					"\tall three controls report ErrVacuous, so this case is not exercising the one "+
+					"it names", c.by, err)
 			}
 		})
+	}
+}
+
+// composeOverMutatedBase composes the real overlay set over a base extracted from mutated
+// source, through the same Compose call the generator reaches.
+//
+// The overlays come from pinSources rather than being built here, which is the point: a control
+// that assembled its own overlay list would be checking a second implementation of the
+// composition and reporting on the first.
+func composeOverMutatedBase(tb testing.TB, base *Table) (*Table, error) {
+	tb.Helper()
+	requireEveryPinFetched(tb)
+	real_, overlays, err := pinSources()
+	if err != nil {
+		tb.Fatalf("pinSources: %v", err)
+	}
+	if len(overlays) == 0 {
+		tb.Fatal("pinSources returned no overlays: Compose would then be handed the mutated base " +
+			"alone, and a composed-path case would be exercising the per-source path")
+	}
+	// The stamps travel with the authority the base *would* have had; only its arms and regions
+	// are the mutation's.
+	base.SourceSHA, base.SourcePath = real_.SourceSHA, real_.SourcePath
+	return Compose(base, overlays...)
+}
+
+// TestEveryArmCitesItsOwnAuthority resolves all 610 rows' citations, over the composed table.
+//
+// # The defect it was written for
+//
+// `refLine` is the generated table's audit trail — "any row can be audited against the
+// authority without a search" — and for one row it pointed at the wrong arm in the wrong file.
+// The 0xfe escape lives in the single-byte region, whose authority is the core pin, and its line
+// number came from the threads pin: `0xfe: {escape: true, refLine: 780}`, where core
+// decode.ml:780 is `v128_store16_lane`. A citation that resolves to something plausible is worse
+// than one that dangles, and no control could have seen it, because every control that had a
+// path had spelled that path itself. Grave
+// [#529](https://github.com/scttfrdmn/burroughs/issues/529); the repair is Arm.Path, and this is
+// the check on it.
+//
+// # Why it is over the composed table and per arm
+//
+// The failure only exists after composition — per extraction, one call reads one file and every
+// line number is in it, so a per-source version of this control would pass on the two pins
+// separately and say nothing about the artifact that ships. It is per *arm* rather than per
+// region for the same reason the defect exists: the region is the wrong unit exactly where a
+// composition moves a row across one.
+//
+// The predicate resolves the citation rather than merely opening the file — the line must be an
+// arm head, and the arm's own code must appear in that head. `decode.ml:780 exists` is true of
+// both pins and is what the old comment was effectively asserting.
+func TestEveryArmCitesItsOwnAuthority(t *testing.T) {
+	requireEveryPinFetched(t)
+	tab, err := BuildFromPins()
+	if err != nil {
+		t.Fatalf("BuildFromPins: %v", err)
+	}
+	auth := tab.Authority()
+	// Read each authority once; keyed by the path the *arms* name, so a path no arm names is
+	// never opened and a path no pin licenses fails loudly at the read.
+	sources := map[string][]string{}
+	crossRegion := 0
+	for _, a := range tab.Arms {
+		if a.Path == "" {
+			t.Fatalf("arm %#02x/%#x cites line %d of no file: Arm.Path is the citation's other "+
+				"half and nothing stamped it", a.Prefix, a.Code, a.Line)
+		}
+		if a.Path != auth[a.Prefix] {
+			crossRegion++
+		}
+		lines, read := sources[a.Path]
+		if !read {
+			lines = strings.Split(testenv.RequireSpecRef(t, a.Path), "\n")
+			sources[a.Path] = lines
+		}
+		if a.Line < 1 || a.Line > len(lines) {
+			t.Errorf("arm %#02x/%#x cites %s:%d, which has %d lines",
+				a.Prefix, a.Code, a.Path, a.Line, len(lines))
+			continue
+		}
+		// The head may wrap across lines (parseArm's reHeadContinues), so the citation is
+		// resolved against the joined head rather than the single line — the same joining the
+		// extractor did when it recorded this number.
+		head := lines[a.Line-1]
+		for i := a.Line; reHeadContinues.MatchString(head) && i < len(lines); i++ {
+			head += " " + strings.TrimSpace(lines[i])
+		}
+		found := false
+		for _, m := range reHexCode.FindAllStringSubmatch(head, -1) {
+			if v, err := strconv.ParseUint(m[1], 16, 32); err == nil && uint32(v) == a.Code {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("arm %#02x/%#x cites %s:%d, whose head names no such code — a citation that "+
+				"resolves to the wrong arm reads as an audited one:\n\t%s",
+				a.Prefix, a.Code, a.Path, a.Line, strings.TrimSpace(head))
+		}
+	}
+	// The cross-region rows are the population this control exists for, and a zero here would
+	// mean it had been reduced to re-checking what a single extraction already guarantees. One
+	// per overlaid region: the escape arm.
+	if got, want := crossRegion, len(tab.Overlays); got != want {
+		t.Errorf("%d arms whose authority differs from their region's, want %d (one escape arm per "+
+			"overlay) — at 0 this control is asserting only what a per-source version would", got, want)
+	}
+	if len(sources) < 2 {
+		t.Errorf("resolved citations against %d file(s), want >=2: a composed table whose arms all "+
+			"name one authority is not the table this checks", len(sources))
 	}
 }
 
@@ -508,6 +864,10 @@ func TestEmitIsDeterministic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Extract: %v", err)
 		}
+		// Extract is handed a string and cannot know its path; Emit refuses a region with no
+		// authority and an arm citing no file, so the stamp its caller would apply is applied
+		// here too — through StampPath, which is the only way to set one without the other.
+		tab.StampPath(refPath)
 		got, err := tab.Emit()
 		if err != nil {
 			t.Fatalf("Emit: %v", err)
@@ -521,13 +881,26 @@ func TestEmitIsDeterministic(t *testing.T) {
 
 // TestEmitRejectsAnImmediateWithNoIdentifier proves the vocabulary/table coupling fails
 // loudly rather than emitting a narrower shape than the authority's.
+//
+// The table is minimal but not *under*-specified: the path and Regions are set because Emit
+// refuses a region with no authority path *and* an arm citing no file, and a fixture that
+// tripped either refusal instead would pass this test while proving nothing about immediates.
+// Same reason the mnemonic is a real one — the failure has to be the declared one. The stamp
+// comes after the arms exist, since StampPath walks them.
 func TestEmitRejectsAnImmediateWithNoIdentifier(t *testing.T) {
-	tab := &Table{SourceSHA: "test", Arms: []Arm{
+	tab := &Table{SourceSHA: "test", Regions: []byte{0x00}, Arms: []Arm{
 		{Prefix: 0, Code: 0x28, Mnemonic: "i32_load", Imms: []Imm{"a_reader_nobody_declared"}, Line: 1},
 	}}
-	if _, err := tab.Emit(); err == nil {
+	tab.StampPath(refPath)
+	_, err := tab.Emit()
+	if err == nil {
 		t.Fatal("Emit accepted an immediate with no generated identifier; it would have written " +
 			"an empty imms list, silently narrowing the shape")
+	}
+	if !strings.Contains(err.Error(), "a_reader_nobody_declared") {
+		t.Fatalf("Emit failed with %v, which does not name the undeclared immediate — the "+
+			"fixture tripped some other refusal and this test is asserting nothing about the "+
+			"vocabulary coupling it is named for", err)
 	}
 }
 
@@ -543,15 +916,21 @@ func TestEmitRejectsAnImmediateWithNoIdentifier(t *testing.T) {
 // vendored; it runs in `make opcode-drift` and in CI, and it refuses to run without the
 // reference rather than skipping, because a drift check that skips reports agreement
 // with an authority it never read.
+//
+// **Through BuildFromPins, not Extract.** It read the core pin alone until the atomics region
+// landed, and then reported the committed 610-arm table as disagreeing with a 542-arm
+// extraction — a drift failure whose content was "you added a region", said in the voice of
+// "upstream moved". That is the coupling BuildFromPins exists to hold: the generator and its
+// drift check compose the table by one function, or the check measures a table nobody ships.
 func TestCommittedTableMatchesTheReference(t *testing.T) {
-	src := refSource(t)
+	requireEveryPinFetched(t)
 	sha, err := gen.PinnedRefRev()
 	if err != nil {
 		t.Fatal(err)
 	}
-	tab, err := Extract(src, sha)
+	tab, err := BuildFromPins()
 	if err != nil {
-		t.Fatalf("Extract: %v", err)
+		t.Fatalf("BuildFromPins: %v", err)
 	}
 	want, err := tab.Emit()
 	if err != nil {

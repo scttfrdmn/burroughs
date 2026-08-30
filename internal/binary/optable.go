@@ -2,8 +2,8 @@
 //
 // Authority:  WebAssembly/spec interpreter/binary/decode.ml
 // Revision:   bdd7164bfe18cf0bd5c3d90ef8cc3b8919fb9c0a
-// Extractor:  opcodegen v2
-// Arms:       542
+// Extractor:  opcodegen v3
+// Arms:       610
 //
 // This table is machine-derived from the reference interpreter, per decision 0007:
 // every spec-suite vector bearing on it is assert_malformed, so a table that wrongly
@@ -11,6 +11,15 @@
 // G-3). The accept direction needs the objective's other representation, and this is
 // it. Regenerate with 'make opcodes'; 'make opcode-drift' asserts this file still
 // agrees with the pinned reference.
+//
+// Composed with consulted proposal pins, one clause each (contract §9 G-2 —
+// consultation is clause-scoped, never wholesale; a symmetric read of any of these
+// pins deletes shipped proposals their baselines predate):
+//
+//   region 0xfe  spec-threads
+//   authority   third_party/spec-threads/interpreter/binary/decode.ml
+//   revision    cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0
+//   licence     testenv.ThreadsRefDecodeML — "the limits flags' shared bit, the shared-table refusal, and the 0xfe region"; contract §9 G-2
 
 package binary
 
@@ -21,6 +30,13 @@ type opInfo struct {
 	// from, so a rename here moves an opcode. This comment read "a label, not a fact"
 	// until that decision made it one.
 	mnemonic string
+	// operator is the reference's operator constructor where the instruction takes one:
+	// RmwXor, from "i64_atomic_rmw32_u (I64 I64Op.RmwXor) a o". Empty otherwise, which is
+	// every row outside the atomics region. That region builds 42 of its opcodes by applying
+	// 7 constructors to 6 operators each, so the *pair* (mnemonic, operator) is what
+	// identifies an encoding; the mnemonic alone does not, and decision 0014 made that
+	// identification load-bearing.
+	operator string
 	// imms is the immediate sequence in reading order. Order is load-bearing: a wrong
 	// order shifts every subsequent byte.
 	imms []imm
@@ -28,18 +44,34 @@ type opInfo struct {
 	// rather than absent from it — "rejected by the authority" and "unknown to the
 	// table" are different facts, and conflating them is how a hole becomes an accept.
 	illegal bool
-	// escape marks a prefix byte (0xfb, 0xfc, 0xfd) whose operand is a u32 sub-opcode
-	// read from the matching sub-table, rather than an instruction in its own right.
-	// A third flavour of the distinction illegal draws: escape, illegal, and absent
-	// are three different verdicts, and a decoder that cannot tell them apart reports
-	// "no such opcode" for a whole proposal.
+	// escape marks a prefix byte whose operand is a u32 sub-opcode read from the matching
+	// sub-table, rather than an instruction in its own right. A third flavour of the
+	// distinction illegal draws: escape, illegal, and absent are three different verdicts,
+	// and a decoder that cannot tell them apart reports "no such opcode" for a whole
+	// proposal. The prefixes are listed once, below, beside the maps they escape to —
+	// this comment named three of them and would have gone on naming three.
 	escape bool
 	// reason is the reference's own error text where the arm reports one
 	// (misplaced ELSE/END), and is empty otherwise.
 	reason string
-	// refLine is the 1-indexed decode.ml line this row was read from, so any row can be
-	// audited against the authority without a search.
+	// refLine is the 1-indexed line this row was read from, in the decoder named by refPath
+	// if it is set and by regionAuthority[prefix] otherwise, so any row can be audited
+	// against its authority without a search.
+	//
+	// **Both fields, or the citation is half a citation.** This doc said "the decode.ml line"
+	// when there was one decode.ml, and the composition made that phrase name two files: the
+	// row for the 0xfe escape lives in the single-byte region, whose authority is the core
+	// pin, and carries a line number from the threads pin. It shipped as refLine 780, pointing
+	// at v128_store16_lane in a file that has no atomics — grave
+	// https://github.com/scttfrdmn/burroughs/issues/529.
 	refLine int
+	// refPath is this row's authority where it differs from its region's, and empty otherwise.
+	//
+	// Set on exactly the rows a composition moves across regions, which is the escape arm of
+	// each overlaid region. Emitted per row rather than folded into regionAuthority because
+	// the region *is* the right key for the other 609: a per-row path on every row would be
+	// 610 copies of two strings, and the exceptional row is the fact worth seeing.
+	refPath string
 }
 
 // imm names one immediate reader, in the reference's vocabulary rather than ours: the
@@ -53,6 +85,7 @@ const (
 	immLaneIdx    imm = "laneidx"
 	immLane16     imm = "laneidx16"
 	immByte       imm = "byte"
+	immZeroByte   imm = "expect_zero"
 	immU32        imm = "u32"
 	immS32        imm = "s32"
 	immS64        imm = "s64"
@@ -288,6 +321,7 @@ var opTable = map[uint32]opInfo{
 	0xfb: {escape: true, refLine: 612},
 	0xfc: {escape: true, refLine: 658},
 	0xfd: {escape: true, refLine: 684},
+	0xfe: {escape: true, refLine: 780, refPath: "third_party/spec-threads/interpreter/binary/decode.ml"},
 }
 
 // opTableFB — 0xfb prefix (GC).
@@ -624,4 +658,92 @@ var opTableFD = map[uint32]opInfo{
 	0x111: {mnemonic: "i16x8_relaxed_q15mulr_s", refLine: 958},
 	0x112: {mnemonic: "i16x8_relaxed_dot_i8x16_i7x16_s", refLine: 959},
 	0x113: {mnemonic: "i32x4_relaxed_dot_i8x16_i7x16_add_s", refLine: 960},
+}
+
+// opTableFE — 0xfe prefix (threads: atomics).
+var opTableFE = map[uint32]opInfo{
+	0x00: {mnemonic: "memory_atomic_notify", imms: []imm{immMemop}, refLine: 783},
+	0x01: {mnemonic: "memory_atomic_wait32", imms: []imm{immMemop}, refLine: 784},
+	0x02: {mnemonic: "memory_atomic_wait64", imms: []imm{immMemop}, refLine: 785},
+	0x03: {mnemonic: "atomic_fence", imms: []imm{immZeroByte}, refLine: 786},
+	0x10: {mnemonic: "i32_atomic_load", imms: []imm{immMemop}, refLine: 788},
+	0x11: {mnemonic: "i64_atomic_load", imms: []imm{immMemop}, refLine: 789},
+	0x12: {mnemonic: "i32_atomic_load8_u", imms: []imm{immMemop}, refLine: 790},
+	0x13: {mnemonic: "i32_atomic_load16_u", imms: []imm{immMemop}, refLine: 791},
+	0x14: {mnemonic: "i64_atomic_load8_u", imms: []imm{immMemop}, refLine: 792},
+	0x15: {mnemonic: "i64_atomic_load16_u", imms: []imm{immMemop}, refLine: 793},
+	0x16: {mnemonic: "i64_atomic_load32_u", imms: []imm{immMemop}, refLine: 794},
+	0x17: {mnemonic: "i32_atomic_store", imms: []imm{immMemop}, refLine: 795},
+	0x18: {mnemonic: "i64_atomic_store", imms: []imm{immMemop}, refLine: 796},
+	0x19: {mnemonic: "i32_atomic_store8", imms: []imm{immMemop}, refLine: 797},
+	0x1a: {mnemonic: "i32_atomic_store16", imms: []imm{immMemop}, refLine: 798},
+	0x1b: {mnemonic: "i64_atomic_store8", imms: []imm{immMemop}, refLine: 799},
+	0x1c: {mnemonic: "i64_atomic_store16", imms: []imm{immMemop}, refLine: 800},
+	0x1d: {mnemonic: "i64_atomic_store32", imms: []imm{immMemop}, refLine: 801},
+	0x1e: {mnemonic: "i32_atomic_rmw", operator: "RmwAdd", imms: []imm{immMemop}, refLine: 803},
+	0x1f: {mnemonic: "i64_atomic_rmw", operator: "RmwAdd", imms: []imm{immMemop}, refLine: 804},
+	0x20: {mnemonic: "i32_atomic_rmw8_u", operator: "RmwAdd", imms: []imm{immMemop}, refLine: 805},
+	0x21: {mnemonic: "i32_atomic_rmw16_u", operator: "RmwAdd", imms: []imm{immMemop}, refLine: 806},
+	0x22: {mnemonic: "i64_atomic_rmw8_u", operator: "RmwAdd", imms: []imm{immMemop}, refLine: 807},
+	0x23: {mnemonic: "i64_atomic_rmw16_u", operator: "RmwAdd", imms: []imm{immMemop}, refLine: 808},
+	0x24: {mnemonic: "i64_atomic_rmw32_u", operator: "RmwAdd", imms: []imm{immMemop}, refLine: 809},
+	0x25: {mnemonic: "i32_atomic_rmw", operator: "RmwSub", imms: []imm{immMemop}, refLine: 811},
+	0x26: {mnemonic: "i64_atomic_rmw", operator: "RmwSub", imms: []imm{immMemop}, refLine: 812},
+	0x27: {mnemonic: "i32_atomic_rmw8_u", operator: "RmwSub", imms: []imm{immMemop}, refLine: 813},
+	0x28: {mnemonic: "i32_atomic_rmw16_u", operator: "RmwSub", imms: []imm{immMemop}, refLine: 814},
+	0x29: {mnemonic: "i64_atomic_rmw8_u", operator: "RmwSub", imms: []imm{immMemop}, refLine: 815},
+	0x2a: {mnemonic: "i64_atomic_rmw16_u", operator: "RmwSub", imms: []imm{immMemop}, refLine: 816},
+	0x2b: {mnemonic: "i64_atomic_rmw32_u", operator: "RmwSub", imms: []imm{immMemop}, refLine: 817},
+	0x2c: {mnemonic: "i32_atomic_rmw", operator: "RmwAnd", imms: []imm{immMemop}, refLine: 819},
+	0x2d: {mnemonic: "i64_atomic_rmw", operator: "RmwAnd", imms: []imm{immMemop}, refLine: 820},
+	0x2e: {mnemonic: "i32_atomic_rmw8_u", operator: "RmwAnd", imms: []imm{immMemop}, refLine: 821},
+	0x2f: {mnemonic: "i32_atomic_rmw16_u", operator: "RmwAnd", imms: []imm{immMemop}, refLine: 822},
+	0x30: {mnemonic: "i64_atomic_rmw8_u", operator: "RmwAnd", imms: []imm{immMemop}, refLine: 823},
+	0x31: {mnemonic: "i64_atomic_rmw16_u", operator: "RmwAnd", imms: []imm{immMemop}, refLine: 824},
+	0x32: {mnemonic: "i64_atomic_rmw32_u", operator: "RmwAnd", imms: []imm{immMemop}, refLine: 825},
+	0x33: {mnemonic: "i32_atomic_rmw", operator: "RmwOr", imms: []imm{immMemop}, refLine: 827},
+	0x34: {mnemonic: "i64_atomic_rmw", operator: "RmwOr", imms: []imm{immMemop}, refLine: 828},
+	0x35: {mnemonic: "i32_atomic_rmw8_u", operator: "RmwOr", imms: []imm{immMemop}, refLine: 829},
+	0x36: {mnemonic: "i32_atomic_rmw16_u", operator: "RmwOr", imms: []imm{immMemop}, refLine: 830},
+	0x37: {mnemonic: "i64_atomic_rmw8_u", operator: "RmwOr", imms: []imm{immMemop}, refLine: 831},
+	0x38: {mnemonic: "i64_atomic_rmw16_u", operator: "RmwOr", imms: []imm{immMemop}, refLine: 832},
+	0x39: {mnemonic: "i64_atomic_rmw32_u", operator: "RmwOr", imms: []imm{immMemop}, refLine: 833},
+	0x3a: {mnemonic: "i32_atomic_rmw", operator: "RmwXor", imms: []imm{immMemop}, refLine: 835},
+	0x3b: {mnemonic: "i64_atomic_rmw", operator: "RmwXor", imms: []imm{immMemop}, refLine: 836},
+	0x3c: {mnemonic: "i32_atomic_rmw8_u", operator: "RmwXor", imms: []imm{immMemop}, refLine: 837},
+	0x3d: {mnemonic: "i32_atomic_rmw16_u", operator: "RmwXor", imms: []imm{immMemop}, refLine: 838},
+	0x3e: {mnemonic: "i64_atomic_rmw8_u", operator: "RmwXor", imms: []imm{immMemop}, refLine: 839},
+	0x3f: {mnemonic: "i64_atomic_rmw16_u", operator: "RmwXor", imms: []imm{immMemop}, refLine: 840},
+	0x40: {mnemonic: "i64_atomic_rmw32_u", operator: "RmwXor", imms: []imm{immMemop}, refLine: 841},
+	0x41: {mnemonic: "i32_atomic_rmw", operator: "RmwXchg", imms: []imm{immMemop}, refLine: 843},
+	0x42: {mnemonic: "i64_atomic_rmw", operator: "RmwXchg", imms: []imm{immMemop}, refLine: 844},
+	0x43: {mnemonic: "i32_atomic_rmw8_u", operator: "RmwXchg", imms: []imm{immMemop}, refLine: 845},
+	0x44: {mnemonic: "i32_atomic_rmw16_u", operator: "RmwXchg", imms: []imm{immMemop}, refLine: 846},
+	0x45: {mnemonic: "i64_atomic_rmw8_u", operator: "RmwXchg", imms: []imm{immMemop}, refLine: 847},
+	0x46: {mnemonic: "i64_atomic_rmw16_u", operator: "RmwXchg", imms: []imm{immMemop}, refLine: 848},
+	0x47: {mnemonic: "i64_atomic_rmw32_u", operator: "RmwXchg", imms: []imm{immMemop}, refLine: 849},
+	0x48: {mnemonic: "i32_atomic_rmw_cmpxchg", imms: []imm{immMemop}, refLine: 851},
+	0x49: {mnemonic: "i64_atomic_rmw_cmpxchg", imms: []imm{immMemop}, refLine: 852},
+	0x4a: {mnemonic: "i32_atomic_rmw8_u_cmpxchg", imms: []imm{immMemop}, refLine: 853},
+	0x4b: {mnemonic: "i32_atomic_rmw16_u_cmpxchg", imms: []imm{immMemop}, refLine: 854},
+	0x4c: {mnemonic: "i64_atomic_rmw8_u_cmpxchg", imms: []imm{immMemop}, refLine: 855},
+	0x4d: {mnemonic: "i64_atomic_rmw16_u_cmpxchg", imms: []imm{immMemop}, refLine: 856},
+	0x4e: {mnemonic: "i64_atomic_rmw32_u_cmpxchg", imms: []imm{immMemop}, refLine: 857},
+}
+
+// regionAuthority is the decoder each region was read from, repo-relative.
+//
+// Generated because the fact is the generator's and nobody else's: two pins license a file
+// named interpreter/binary/decode.ml, so a control that wants to re-derive a region's
+// grammar from the authority has to be told *which* authority, per region. Spelling one
+// path in the consuming test is how a derivation over "the decoder" comes to search the
+// core pin for a region the threads pin defines.
+//
+// Every region has an entry, so there is no default to get wrong.
+var regionAuthority = map[byte]string{
+	0x00: "third_party/spec/interpreter/binary/decode.ml",
+	0xfb: "third_party/spec/interpreter/binary/decode.ml",
+	0xfc: "third_party/spec/interpreter/binary/decode.ml",
+	0xfd: "third_party/spec/interpreter/binary/decode.ml",
+	0xfe: "third_party/spec-threads/interpreter/binary/decode.ml",
 }

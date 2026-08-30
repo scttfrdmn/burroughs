@@ -2,6 +2,7 @@ package binary
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -141,41 +142,55 @@ var immBytes = map[imm]reader3{
 	// (decode.ml:151), and laneidx is *u8* (decode.ml:152) — `uN 8`, a one-to-two-byte
 	// LEB, not a raw byte. See ImmLaneIdx's entry for why that distinction cost a grave.
 	immS32: {
-		"decode.ml:107", "let s32 s = I32.of_int_s (I64.to_int_s (sN 32 s))",
+		"spec/binary/decode.ml:107", "let s32 s = I32.of_int_s (I64.to_int_s (sN 32 s))",
 		func(_ *Decoder, r *reader) error { _, err := r.s32(); return err },
 	},
 	immS64: {
-		"decode.ml:109", "let s64 s = sN 64 s",
+		"spec/binary/decode.ml:109", "let s64 s = sN 64 s",
 		func(_ *Decoder, r *reader) error { _, err := r.s64(); return err },
 	},
 	immU32: {
-		"decode.ml:104", "let u32 s = I32.of_int_u (I64.to_int_u (uN 32 s))",
+		"spec/binary/decode.ml:104", "let u32 s = I32.of_int_u (I64.to_int_u (uN 32 s))",
 		func(_ *Decoder, r *reader) error { _, err := r.u32(); return err },
 	},
 	immIdx: {
-		"decode.ml:151", "let idx s = u32 s",
+		"spec/binary/decode.ml:151", "let idx s = u32 s",
 		func(_ *Decoder, r *reader) error { return discardIndex(r) },
 	},
 
 	// The fixed-width readers. word32/word64 are little-endian raw reads, not LEBs, and
 	// v128 is a flat 16-byte string — so a byte count is the honest reader here.
 	immF32: {
-		"decode.ml:110", "let f32 s = F32.of_bits (word32 s)",
+		"spec/binary/decode.ml:110", "let f32 s = F32.of_bits (word32 s)",
 		func(_ *Decoder, r *reader) error { _, err := r.bytes(4); return err },
 	},
 	immF64: {
-		"decode.ml:111", "let f64 s = F64.of_bits (word64 s)",
+		"spec/binary/decode.ml:111", "let f64 s = F64.of_bits (word64 s)",
 		func(_ *Decoder, r *reader) error { _, err := r.bytes(8); return err },
 	},
 	immV128: {
-		"decode.ml:112", "let v128 s = V128.of_bits (get_string 16 s)",
+		"spec/binary/decode.ml:112", "let v128 s = V128.of_bits (get_string 16 s)",
 		func(_ *Decoder, r *reader) error { _, err := r.bytes(16); return err },
 	},
 
 	// `op s = byte s` — the raw one-byte read, and the only immediate that genuinely is
 	// one. Everything that *looks* like a byte because its values are small is a LEB.
 	immByte: {
-		"decode.ml:67", "let byte s =",
+		"spec/binary/decode.ml:67", "let byte s =",
+		func(_ *Decoder, r *reader) error { _, err := r.byte(); return err },
+	},
+
+	// `atomic.fence`'s flag: one byte whose only legal value is zero. The *extent* is what
+	// this table witnesses, and it is one byte either way — so the reader here is the plain
+	// byte read, and the constraint is deliberately absent from it. A reader that also
+	// refused a non-zero value would make this entry a second copy of the check in
+	// instrCtx.imm, and the differential would then compare that check against itself. The
+	// constraint's own witness is TestAtomicFenceRejectsANonZeroFlag.
+	//
+	// The first entry here whose authority is not the core pin, which is why every citation
+	// above now carries a pin name.
+	immZeroByte: {
+		"spec-threads/binary/decode.ml:786", "| 0x03 -> expect 0x00 s \"zero flag expected\"; atomic_fence",
 		func(_ *Decoder, r *reader) error { _, err := r.byte(); return err },
 	},
 
@@ -186,7 +201,7 @@ var immBytes = map[imm]reader3{
 	// compounding reasons — no lane instruction is const-legal, so composition never
 	// reached it, and "laneidx is small so it must be a byte" reads correctly.
 	immLaneIdx: {
-		"decode.ml:152", "let laneidx s = u8 s",
+		"spec/binary/decode.ml:152", "let laneidx s = u8 s",
 		func(_ *Decoder, r *reader) error { _, err := r.uleb(8); return err },
 	},
 
@@ -195,7 +210,7 @@ var immBytes = map[imm]reader3{
 	// blind spot: i8x16_shuffle is not const-legal either. The extractor got the
 	// *count* right (that was #46) and this map got the *element* wrong.
 	immLane16: {
-		"decode.ml:699", "| 0x0dl -> let is = repeat 16 laneidx s in i8x16_shuffle is",
+		"spec/binary/decode.ml:699", "| 0x0dl -> let is = repeat 16 laneidx s in i8x16_shuffle is",
 		func(_ *Decoder, r *reader) error {
 			for range 16 {
 				if _, err := r.uleb(8); err != nil {
@@ -220,7 +235,7 @@ var immBytes = map[imm]reader3{
 	// second byte to be read as the next opcode. That is the grave #47 shape at a third
 	// site, and it never fired because the type-index branch was unreachable.
 	immHeapType: {
-		"decode.ml:179", "let heaptype s =",
+		"spec/binary/decode.ml:179", "let heaptype s =",
 		func(d *Decoder, r *reader) error { return d.decodeHeapType(r) },
 	},
 
@@ -235,13 +250,13 @@ var immBytes = map[imm]reader3{
 	//   immCatchVec    a vec of catch clauses (try_table).
 	//   immBlockType   a blocktype: an s33 that is either a valtype or a type index.
 	//   immBlock       structural — instr_block + end_, i.e. recursion.
-	immMemop:      {"decode.ml:324", "let memop s =", nil},
-	immValType:    {"decode.ml:220", "let valtype s =", nil},
-	immVecValType: {"decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
-	immVecIdx:     {"decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
-	immCatchVec:   {"decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
-	immBlockType:  {"decode.ml:334", "let blocktype s =", nil},
-	immBlock:      {"decode.ml:967", "and instr_block' s es =", nil},
+	immMemop:      {"spec/binary/decode.ml:324", "let memop s =", nil},
+	immValType:    {"spec/binary/decode.ml:220", "let valtype s =", nil},
+	immVecValType: {"spec/binary/decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
+	immVecIdx:     {"spec/binary/decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
+	immCatchVec:   {"spec/binary/decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
+	immBlockType:  {"spec/binary/decode.ml:334", "let blocktype s =", nil},
+	immBlock:      {"spec/binary/decode.ml:967", "and instr_block' s es =", nil},
 }
 
 // reader3 is one enrolled entry: this package's reader for an immediate, plus the
@@ -294,6 +309,55 @@ func refDecodersML() []string {
 	return out
 }
 
+// armAuthority is the decoder a row's `refLine` is a line *in*: the row's own `refPath` where it
+// carries one, and its region's otherwise.
+//
+// # The two fields are one citation
+//
+// A `refLine` alone names no file, and this package has two decode.ml files.
+// `TestStructuralArmsAreExactlyTheBlockRows` walks every region and resolved all of them against
+// `refDecodeML`, so the 67 atomics rows and the 0xfe escape were checked against a file with no
+// atomics region — 68 of 610 rows, agreeing because the wrong lines happen to contain neither
+// `instr_block s` nor `end_ s`. The escape row is the sharper half: it sits in the *single-byte*
+// region, whose authority is the core pin, carrying line 780 from the threads pin, where the core
+// pin has `v128_store16_lane`. Grave
+// [#529](https://github.com/scttfrdmn/burroughs/issues/529).
+//
+// This is the same defect `regionAuthority` was generated to close, still standing in the control
+// beside the one that got fixed — *a FAIL names a site, not the population*. The population is
+// every row-to-source resolution in this file, and it now goes through here.
+func armAuthority(tb testing.TB, prefix byte, info opInfo) string {
+	tb.Helper()
+	if info.refPath != "" {
+		return filepath.Join("..", "..", info.refPath)
+	}
+	path, declared := regionAuthority[prefix]
+	if !declared {
+		tb.Fatalf("region %#02x has no entry in regionAuthority, so a row in it cites a line in no "+
+			"named file — the generated provenance map covers every region the table has, so this "+
+			"means the table and the map came from different runs; regenerate with: make opcodes",
+			prefix)
+	}
+	return filepath.Join("..", "..", path)
+}
+
+// citeArm renders a row's citation whole, path and line, for a failure message.
+//
+// Because `decode.ml:780` names no pin and this tree has paid for that twice: grave #517 in
+// prose, grave #529 in the generated table. A message is testimony
+// ([errors-and-testimony.md](../../docs/laws/errors-and-testimony.md)), and one that hands the
+// reader an ambiguous citation sends them to the wrong file to check a real failure.
+func citeArm(prefix byte, info opInfo) string {
+	path := info.refPath
+	if path == "" {
+		var declared bool
+		if path, declared = regionAuthority[prefix]; !declared {
+			path = fmt.Sprintf("<no authority recorded for region %#02x>", prefix)
+		}
+	}
+	return fmt.Sprintf("%s:%d", path, info.refLine)
+}
+
 // TestImmBytesCitationsResolve is what makes immBytes an enrolled witness rather than a
 // third hand-written opinion (ruling: Scott, PR #43).
 //
@@ -306,38 +370,101 @@ func refDecodersML() []string {
 // The reader itself is reviewed by eyes against the cited text — that judgement is
 // allowed. What is machine-checked is that the premise resolves, which is the half a
 // mechanism can own.
+//
+// # The pin name is part of the citation
+//
+// The form was `decode.ml:N` and it resolved against one file, which was right while one pin
+// supplied every immediate. `immZeroByte` comes from the threads pin, at a line number the
+// core pin also has and where it says something else entirely — so an unprefixed citation
+// would have resolved, quoted the wrong file, and reported a drift that is not one. Every
+// entry now names its pin, and the name→path mapping is derived from the pin set: *a label is
+// part of the citation*, and a default of "unprefixed means core" is the discovery rule this
+// tree keeps paying for.
 func TestImmBytesCitationsResolve(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refDecodeML)
-	lines := strings.Split(src, "\n")
+	pins := decodersByPinName()
+	if len(pins) < 2 {
+		t.Fatalf("%d pins license a decoder: this check resolves citations by pin name, so a "+
+			"one-pin mapping cannot tell a wrong-pin citation from a right one", len(pins))
+	}
+	lines := map[string][]string{}
+	for name, path := range pins {
+		lines[name] = strings.Split(testenv.RequireSpecRef(t, path), "\n")
+	}
 
 	if len(immBytes) == 0 {
 		t.Fatal("immBytes is empty: a citation check over no entries resolves everything")
 	}
+	cited := map[string]int{}
 	for im, e := range immBytes {
 		if e.authority == "" || e.text == "" {
 			t.Errorf("%q has no citation: an enrolled witness testifies or it is derived; "+
 				"there is no third option (PR #43)", im)
 			continue
 		}
-		prefix, num, ok := strings.Cut(e.authority, ":")
-		if !ok || prefix != "decode.ml" {
-			t.Errorf("%q: citation %q is not of the form decode.ml:N", im, e.authority)
+		pin, rest, ok := strings.Cut(e.authority, "/")
+		if !ok {
+			t.Errorf("%q: citation %q names no pin; the form is <pin>/binary/decode.ml:N, and the pin "+
+				"is load-bearing because both pins have a decode.ml with that line number",
+				im, e.authority)
+			continue
+		}
+		src, known := lines[pin]
+		if !known {
+			t.Errorf("%q: citation %q names pin %q, which licenses no decoder in refPins",
+				im, e.authority, pin)
+			continue
+		}
+		file, num, ok := strings.Cut(rest, ":")
+		if !ok || file != "binary/decode.ml" {
+			t.Errorf("%q: citation %q is not of the form <pin>/binary/decode.ml:N", im, e.authority)
 			continue
 		}
 		n, err := strconv.Atoi(num)
-		if err != nil || n < 1 || n > len(lines) {
-			t.Errorf("%q: citation %q does not resolve to a line in a %d-line file",
-				im, e.authority, len(lines))
+		if err != nil || n < 1 || n > len(src) {
+			t.Errorf("%q: citation %q does not resolve to a line in %s's %d-line decoder",
+				im, e.authority, pin, len(src))
 			continue
 		}
-		if got := strings.TrimSpace(lines[n-1]); got != strings.TrimSpace(e.text) {
+		if got := strings.TrimSpace(src[n-1]); got != strings.TrimSpace(e.text) {
 			t.Errorf("%q: %s says\n\t\tgot  %q\n\t\twant %q\n\t"+
 				"the citation has drifted: either upstream moved and the reader needs "+
 				"re-checking against the new definition, or the line was wrong when written",
 				im, e.authority, got, e.text)
 		}
+		cited[pin]++
 	}
-	t.Logf("%d immBytes citations resolve against %s", len(immBytes), refDecodeML)
+	// Per pin, not a total: a mapping with two pins in it and every citation aimed at one of
+	// them resolves perfectly and leaves the second file unread. That is the shape a total
+	// cannot express — the same argument censusRegionFloors makes one directory over.
+	for name := range pins {
+		if cited[name] == 0 {
+			t.Errorf("no immBytes citation resolves against pin %q: its decoder is loaded and "+
+				"never read, so a wrong path for it would not fail this test", name)
+		}
+	}
+	if !t.Failed() {
+		t.Logf("%d immBytes citations resolve, across %d pins: %v", len(immBytes), len(pins), cited)
+	}
+}
+
+// decodersByPinName is each pin's decoder keyed by the pin's short name — "spec",
+// "spec-threads" — resolved for reading from this package's directory.
+//
+// The name comes from the pin's own `Dest`, which is the field that already carries the job of
+// telling the two decode.ml authorities apart (see consultedClauses on why not the index or a
+// literal). Derived from refPins, so a third pin is in scope on arrival, and unlike
+// refDecodersML this keeps the key: a citation has to say *which*.
+func decodersByPinName() map[string]string {
+	out := map[string]string{}
+	for _, pin := range testenv.RefPins() {
+		for p := range pin.Floors {
+			if strings.HasSuffix(p, "interpreter/binary/decode.ml") {
+				name := strings.TrimSuffix(strings.TrimPrefix(pin.Dest, "third_party/"), "/")
+				out[name] = filepath.Join("..", "..", p)
+			}
+		}
+	}
+	return out
 }
 
 // TestEveryReaderAgreesWithItsAuthorityDefinition measures each enrolled reader on its
@@ -370,6 +497,14 @@ func TestEveryReaderAgreesWithItsAuthorityDefinition(t *testing.T) {
 		immByte: {
 			"\x81\x00", 1,
 			"decode.ml:321 `op s = byte s` is a raw read: one byte, continuation bit or not",
+		},
+		// The same vector as immByte's, and deliberately the *illegal* value: extent is this
+		// test's question, and `expect 0x00 s` consumes its byte before deciding anything about
+		// it. A vector of \x00 would agree with a reader that peeked without consuming.
+		immZeroByte: {
+			"\x81\x00", 1,
+			"expect 0x00 s (spec-threads/binary/decode.ml:786) reads one byte through `byte s` and " +
+				"then tests it: the constraint is on the value, never on the extent",
 		},
 		immU32: {
 			twoByteLEB, 2,
@@ -458,7 +593,9 @@ func TestEveryReaderAgreesWithItsAuthorityDefinition(t *testing.T) {
 		t.Errorf("measured %d of %d flat readers (flat must be >0): a per-reader claim must "+
 			"walk every reader it claims", checked, flat)
 	}
-	t.Logf("%d flat readers agree with their authority definitions", checked)
+	if !t.Failed() { // guarded: see TestPrefixIllegalRenderingMatchesTheAuthority's closing note
+		t.Logf("%d flat readers agree with their authority definitions", checked)
+	}
 }
 
 // TestEveryImmediateInTheTableHasABytesVerdict asserts totality of the seam.
@@ -844,13 +981,28 @@ func TestEveryImmediateHasAProductionReader(t *testing.T) {
 // A fifth structural arm upstream then fails *here*, loudly, instead of being read flat
 // — which is the difference between a marker and a guess. Scoped to the space: every
 // region, not just the single-byte table.
+//
+// **Every region, and every region's own authority.** A single hoisted `src` read the core pin
+// for all 610 rows, which is armAuthority's grave: the atomics rows were compared against
+// whatever the core decoder has at those line numbers.
 func TestStructuralArmsAreExactlyTheBlockRows(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refDecodeML)
-	lines := strings.Split(src, "\n")
+	// Read each authority once, keyed by the path the rows name — so a file no row cites is
+	// never opened, and the count below says how many were.
+	srcs := map[string][]string{}
+	linesFor := func(prefix byte, info opInfo) []string {
+		path := armAuthority(t, prefix, info)
+		if l, read := srcs[path]; read {
+			return l
+		}
+		l := strings.Split(testenv.RequireSpecRef(t, path), "\n")
+		srcs[path] = l
+		return l
+	}
 
 	marked, matched := 0, 0
 	for prefix, region := range prefixRegions {
 		for code, info := range region {
+			lines := linesFor(prefix, info)
 			hasBlock := false
 			for _, im := range info.imms {
 				if im == immBlock {
@@ -864,8 +1016,8 @@ func TestStructuralArmsAreExactlyTheBlockRows(t *testing.T) {
 			// citation is the table's own refLine, which TestImmBytesCitationsResolve's
 			// sibling mechanism keeps honest for the immediates.
 			if info.refLine < 1 || info.refLine > len(lines) {
-				t.Errorf("%#02x %#x: refLine %d does not resolve in a %d-line file",
-					prefix, code, info.refLine, len(lines))
+				t.Errorf("%#02x %#x: %s does not resolve in a %d-line file",
+					prefix, code, citeArm(prefix, info), len(lines))
 				continue
 			}
 			arm := armText(lines, info.refLine-1)
@@ -877,11 +1029,11 @@ func TestStructuralArmsAreExactlyTheBlockRows(t *testing.T) {
 				matched++
 			}
 			if isStructural != hasBlock {
-				t.Errorf("%#02x %#x (%s, decode.ml:%d): the authority's arm is structural=%v "+
+				t.Errorf("%#02x %#x (%s, %s): the authority's arm is structural=%v "+
 					"but the table's immBlock marker says %v\n\tarm: %s\n\t"+
 					"instr.go keys its hand-written recursion off immBlock, so a disagreement "+
 					"here means an arm is read with the wrong shape",
-					prefix, code, info.mnemonic, info.refLine, isStructural, hasBlock, arm)
+					prefix, code, info.mnemonic, citeArm(prefix, info), isStructural, hasBlock, arm)
 			}
 		}
 	}
@@ -891,7 +1043,16 @@ func TestStructuralArmsAreExactlyTheBlockRows(t *testing.T) {
 		t.Errorf("found %d immBlock rows and %d structural arms in the authority; both must be "+
 			">0 or this agreement is between two empty sets", marked, matched)
 	}
-	t.Logf("%d structural arms, agreed between the table's immBlock marker and decode.ml", marked)
+	// The domain's own size, printed: at one file this control is back to comparing the atomics
+	// rows against the core decoder, which is the state it passed in.
+	if len(srcs) < 2 {
+		t.Errorf("resolved rows against %d authority file(s), want >=2 — every region's rows are "+
+			"in scope, and they do not all come from one decoder", len(srcs))
+	}
+	if !t.Failed() {
+		t.Logf("%d structural arms agreed between the table's immBlock marker and %d authorities",
+			marked, len(srcs))
+	}
 }
 
 // armText returns the reference arm beginning at lines[i], joined to the next arm head.
@@ -1104,9 +1265,15 @@ func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
 	// counted 0x05 in `present` (the loop skipped only the eight members of the old
 	// const set, which included 0x0b but not 0x05) and had no bucket for a byte that
 	// is neither instruction nor rejection. Same 256 bytes, one more honest column.
+	//
+	// `absent` 38 → 37 and `escape` 3 → 4 with the atomics region: 0xfe moved from "no arm in
+	// decode.ml" to "dispatch to a sub-table", one byte crossing between two buckets. The sum is
+	// unchanged, which is the property that makes this partition worth pinning as five figures
+	// rather than as a total — a total cannot see a byte change verdict, and this delta is
+	// nothing but a byte changing verdict.
 	const (
-		wantAbsent    = 38  // no arm in decode.ml: the catch-all's territory
-		wantEscape    = 3   // 0xfb, 0xfc, 0xfd: dispatch to a sub-table
+		wantAbsent    = 37  // no arm in decode.ml: the catch-all's territory
+		wantEscape    = 4   // 0xfb, 0xfc, 0xfd, 0xfe: dispatch to a sub-table
 		wantIllegal   = 21  // an arm that explicitly rejects
 		wantPresent   = 179 // a real instruction that is simply not constant
 		wantDelimiter = 2   // 0x05, 0x0b: `block` stops on them
@@ -1263,15 +1430,42 @@ func TestIllegalOpcodeRenderings(t *testing.T) {
 // the generated table. That makes it an enrolled witness, and this is the enrolment: the
 // authority's own text decides, and the map is checked against it over every region in
 // prefixRegions rather than over the entries the map happens to have.
+//
+// # Which authority, which is the half this got wrong
+//
+// It read one file — the core pin's decode.ml — for every region, and that was right while
+// every region came from one pin. The atomics region arrived from the threads pin and the
+// control reported `0xfe: no fallthrough arm found in decode.ml after line 857`: a derivation
+// failing, correctly, over a file that does not define its subject. The fact it needed was
+// already in optable.go's *header comment* and nowhere a control could read it, which is why
+// `regionAuthority` is now generated data. Per region, no default.
+//
+// The answer for 0xfe, once it read the right file, is that the region does *not* use
+// `illegal2`: its fallthrough is `| b -> illegal s (pos + 1) b`, because the threads pin's
+// baseline predates the two-field rendering. That is a difference in refusal text between
+// this region and 0xfb, it has no vector behind it — `atomic.wast` has 0 assert_malformed
+// rows — and it is the reject direction, so following the authority per region is the
+// conservative reading. It is *not* the sub-opcode-width question wearing a different hat:
+// that one changed which instruction a legal module decodes to, and this one changes only
+// what a rejected module is told. Flagged in the report either way, because "follow the
+// snapshot here, the standard there" is a distinction a principal should get to see.
 func TestPrefixIllegalRenderingMatchesTheAuthority(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refDecodeML)
-	lines := strings.Split(src, "\n")
-
 	checked := 0
 	for prefix, region := range prefixRegions {
 		if prefix == 0x00 {
 			continue
 		}
+		// The region's own decoder, generated beside the region's arms. A single `src` hoisted
+		// out of this loop is exactly the bug this control had.
+		path, declared := regionAuthority[prefix]
+		if !declared {
+			t.Errorf("%#02x has a region but no entry in regionAuthority: the generated "+
+				"provenance map covers every region the table has, so this means the table and "+
+				"the map came from different runs — regenerate with: make opcodes", prefix)
+			continue
+		}
+		src := testenv.RequireSpecRef(t, filepath.Join("..", "..", path))
+		lines := strings.Split(src, "\n")
 		// The region's extent: from its escape row's line to the last arm's, then on to
 		// the fallthrough that closes the nested match.
 		info, ok := opTable[uint32(prefix)]
@@ -1309,7 +1503,15 @@ func TestPrefixIllegalRenderingMatchesTheAuthority(t *testing.T) {
 	if checked == 0 {
 		t.Error("no prefix regions checked: a derivation over no regions derives nothing")
 	}
-	t.Logf("%d prefix regions' rejection renderings agree with decode.ml", checked)
+	// Guarded, and it was not: falsifying the 0xfe entry printed the disagreement and then
+	// "4 prefix regions' rejection renderings agree" underneath it. `checked` counts regions
+	// *derived*, which is the vacuity guard and is right to include a region that disagreed —
+	// but the sentence claimed agreement. Same shape as TestCensusRowsAreWellFormed's guarded
+	// summary, found the same way: by reading a falsification's output rather than its exit
+	// code.
+	if !t.Failed() {
+		t.Logf("%d prefix regions' rejection renderings agree with their own pin's decode.ml", checked)
+	}
 }
 
 func maxU32(a, b uint32) uint32 { return max(a, b) }
@@ -1348,11 +1550,17 @@ func ulebBytes(v uint32) []byte {
 
 // TestPrefixRegionsCoverTheTable keeps prefixRegions from silently missing a region.
 //
-// The single-byte table's three prefix escapes are facts *in* the table: 0xfb, 0xfc and
-// 0xfd have arms with no mnemonic and no immediates, because decode.ml handles them
-// with a nested match rather than a flat arm. So the set of regions is derivable, and
-// deriving it is what makes a fourth prefix landing upstream a failure here instead of
-// an uncovered region (*derive the domain, never enumerate it*).
+// The single-byte table's prefix escapes are facts *in* the table: each has an arm with no
+// mnemonic and no immediates, because the reference handles them with a nested match rather than
+// a flat arm. So the set of regions is derivable, and deriving it is what makes a new prefix
+// landing upstream a failure here instead of an uncovered region (*derive the domain, never
+// enumerate it*).
+//
+// This doc said "three prefix escapes … a fourth prefix landing upstream" and both numbers were
+// spent when 0xfe landed. The *check* was fine — it derives, and it is what demanded the 0xfe
+// entry in prefixRegions — so the counts were decoration that went stale silently. De-enumerated
+// rather than bumped to four: a comment that counts a derived set has to be re-edited every time
+// the set grows, and the one thing it can do in the meantime is mislead.
 func TestPrefixRegionsCoverTheTable(t *testing.T) {
 	for p, region := range prefixRegions {
 		if p == 0x00 {
@@ -1367,8 +1575,12 @@ func TestPrefixRegionsCoverTheTable(t *testing.T) {
 			continue
 		}
 		if !info.escape {
+			// Region 0x00, not `p`: an escape arm *lives in* the single-byte table and merely
+			// names the region it dispatches to, so its citation resolves against the
+			// single-byte region's authority unless the row carries its own refPath — which
+			// is exactly what the 0xfe row does, and exactly what grave #529 got wrong.
 			t.Errorf("prefix %#02x has a region but its single-byte arm is not marked as an "+
-				"escape (decode.ml:%d)", p, info.refLine)
+				"escape (%s)", p, citeArm(0x00, info))
 		}
 	}
 	// And the reverse: a prefix escape with no region would be a dispatch the decoder
@@ -1376,16 +1588,44 @@ func TestPrefixRegionsCoverTheTable(t *testing.T) {
 	// other field — inferring "this must be an escape because it has nothing else" is
 	// how the escapes went missing in the first place, and a fact worth checking is a
 	// fact worth recording (Arm.Escape).
-	escapes := 0
+	escapes, crossRegion := 0, 0
 	for code, info := range opTable {
 		if !info.escape {
 			continue
 		}
 		escapes++
 		if _, ok := prefixRegions[byte(code)]; !ok {
-			t.Errorf("%#02x is a prefix escape (decode.ml:%d) but prefixRegions has no "+
-				"table for it: a dispatch the decoder cannot follow", code, info.refLine)
+			t.Errorf("%#02x is a prefix escape (%s) but prefixRegions has no "+
+				"table for it: a dispatch the decoder cannot follow", code, citeArm(0x00, info))
 		}
+		// And the citation itself, resolved: the arm at the cited line must be the dispatch on
+		// this very byte. Here rather than anywhere else because the escape rows are *the*
+		// cross-region rows — an escape lives in the single-byte table and is read from the
+		// decoder that defines the region it jumps to, so 0xfe's row is the only one in the
+		// table carrying its own refPath, and this is the only assertion whose verdict changes
+		// when armAuthority stops reading that field. Stripping the refPath branch left every
+		// test in this package green (grave #529's repair, unwatched dying) until this walk.
+		if info.refPath != "" {
+			crossRegion++
+		}
+		lines := strings.Split(testenv.RequireSpecRef(t, armAuthority(t, 0x00, info)), "\n")
+		if info.refLine < 1 || info.refLine > len(lines) {
+			t.Errorf("%#02x is a prefix escape whose citation %s does not resolve in a %d-line file",
+				code, citeArm(0x00, info), len(lines))
+			continue
+		}
+		if arm := armText(lines, info.refLine-1); !strings.Contains(arm, fmt.Sprintf("%#02x", code)) {
+			t.Errorf("%#02x is a prefix escape citing %s, and that arm does not mention %#02x\n\t"+
+				"arm: %s\n\tthe row names the wrong file or the wrong line, so an auditor reading "+
+				"the citation is handed some other proposal's opcode", code, citeArm(0x00, info), code, arm)
+		}
+	}
+	// A cross-region row is what refPath exists for; at zero, the field is emitted by nobody and
+	// read by nobody, and armAuthority is back to one authority per region (grave #529's state).
+	if crossRegion == 0 {
+		t.Error("no escape row carries a refPath: the composed table has a region read from an " +
+			"overlay pin, so its escape arm's citation is a line in that pin's decoder — regenerate " +
+			"with: make opcodes")
 	}
 	if escapes != len(prefixRegions)-1 { // -1 for the 0x00 "no prefix" entry
 		t.Errorf("%d escapes in the table, %d sub-tables in prefixRegions: the two halves "+

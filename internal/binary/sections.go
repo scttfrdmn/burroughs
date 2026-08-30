@@ -90,8 +90,15 @@ type Features struct {
 	// one survive three PRs.
 	ExceptionHandling bool // tag section (id 13), import/export kind 4; throw, throw_ref, try_table; the exn (-0x17) and noexn (-0x0c) heap types, so exnref/nullexnref (#395)
 	SIMD              bool // v128 value type, including as a blocktype; the 0xfd region
-	Threads           bool // shared limits flags (2, 3)
-	Memory64          bool // 64-bit limits flags (4..7)
+	// Described by **bit** rather than by value, and these two lines are where grave #511's
+	// repair did not reach. That grave was the limits flags read as a value enumeration —
+	// threads "(2, 3)" and memory64 "(4..7)" partition a byte the two proposals *overlap* on,
+	// since 0x06 sets both bits, and 0x06 was accepted with threads off. The fix corrected
+	// gatedNonOpcodes' descriptions and left this copy of the same enumeration standing: *a FAIL
+	// names a site, not the population* — the checker pointed at one file and the other channel
+	// was never swept.
+	Threads  bool // the limits flags' shared bit (0x02); the 0xfe region (atomics)
+	Memory64 bool // the limits flags' i64 address bit (0x04)
 
 	// The four gates #48 found missing. A *tracked* proposal (contract §9 G-2) with no
 	// bool here is worse than a gate that never fires, because the reflection-derived

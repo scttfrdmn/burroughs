@@ -21,6 +21,52 @@ weakly-ordered platform.
 
 ### Added
 
+- **The `0xfe` atomic opcode region — 67 arms, machine-derived from the threads pin and gated on
+  `Threads`** ([#524](https://github.com/scttfrdmn/burroughs/issues/524), `gate:threads`).
+  `opcodegen` now composes over the pin set the way `keywordgen` does: the core pin is the base, the
+  threads pin contributes exactly one region, and the licence for that consultation is clause-scoped
+  (contract §9 G-2) rather than a wholesale read of a file whose baseline predates GC and memory64.
+  Three parts of the region are decisions rather than transcriptions, and each has a control:
+  - **The sub-opcode is read as a `u32`, not a byte.** The threads snapshot's decoder reads one byte
+    where the merged standard reads a LEB `u32`, and the two answer differently on the first
+    encoding that needs a continuation byte: `0xfe 0xce 0x00` is `i64.atomic.rmw32.cmpxchg_u` under
+    the standard and a trailing-garbage refusal under the snapshot. Ruled by Scott — *the standard
+    outranks the snapshot* — and pinned by `TestAtomicSubOpcodeIsReadAsALEB` on that exact
+    encoding, since the reject direction is where a byte-width reader looks correct.
+  - **`atomic.fence` carries a zero-byte immediate**, refused when non-zero
+    (`TestAtomicFenceRejectsANonZeroFlag`) — the reserved-byte shape the memory instructions
+    already use, and the only arm in the region taking no memarg.
+  - **A row's operator is a field, because the reference names one `rmw` constructor per family and
+    carries the operation as an argument.** `i32.atomic.rmw.add` and `i32.atomic.rmw.sub` both name
+    `i32_atomic_rmw`; the 42 `rmw` encodings differ by an `I32Op.RmwAdd`-shaped argument the
+    decoder turns into an opcode. So the table's join key is `(mnemonic, operator)`, and the 31
+    memarg *families* in the region are what the 67 mnemonics collapse to.
+  - **Floors apply to the composed table, and the floor map's key set must equal the composed
+    region set.** A floor per region on a table assembled from two pins is condition 1 of 0007 over
+    the wrong subject unless the two sets agree: a region present with no floor is unfloored, and a
+    floor for a region no pin contributes is a floor over nothing. Both are now errors.
+
+- **Atomic memory accesses must be *naturally* aligned, which is an equality and not a ceiling**
+  ([#524](https://github.com/scttfrdmn/burroughs/issues/524), `gate:threads`). The threads pin's
+  `check_memop` takes a mode: `NonAtomic` requires `1 lsl align <= size` and says *alignment must
+  not be larger than natural*; `Atomic` requires `1 lsl align = size` and says *atomic alignment
+  must be natural*. Six call sites each, and which mode a family takes is now read from the
+  reference rather than inferred from the `0xfe` prefix
+  (`TestAtomicModeMatchesTheThreadsReference`), because the mode is keyed on the *constructor
+  family* upstream. The 31 atomic families' natural widths are machine-checked against that pin
+  (`TestAtomicNaturalWidthsMatchTheThreadsReference`), and the memarg domain pin is stated as
+  **45 core + 31 atomic** rather than as 76, so a loss on one side cannot be paid for by a gain on
+  the other.
+  - **Zero corpus vectors expect the new string**, measured over the four files the threads suite
+    ships: no vector gives an atomic access a non-natural alignment. The rule therefore sits
+    entirely in the direction no board can see, and its failure direction is *accept* — contract §9
+    G-3 — so the discriminating modules that do not exist upstream exist here, as a five-case pair
+    over `i32.atomic.load` and `i32.load` at the same natural width.
+  - The rule ships **one slice ahead of its own call site**: `signature` has no `0xfe` arm yet, so
+    the controls call `checkAlignment` directly and say so. Named because a control exercising a
+    helper nothing calls is this project's own defect, and the honest form is to say which half is
+    covered.
+
 - **The wat keyword table is generated from the union of the tracked pins, so `shared` and the 67
   atomic mnemonics lex** ([#511](https://github.com/scttfrdmn/burroughs/issues/511),
   `gate:threads`). The grammar is **the union of the tracked set** — contract §9 G-2, and
@@ -167,6 +213,59 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **`ErrZeroFlagExpected` was enrolled in one of two registries over one sentinel space, and the
+  comment licensing the omission was falsified by the fuzz find that exposed it**
+  ([grave #531](https://github.com/scttfrdmn/burroughs/issues/531), `gate:threads`). Fourth instance
+  of [#264](https://github.com/scttfrdmn/burroughs/issues/264)'s class — *(sentinel × registry), not
+  sentinel* — and the second found by the fuzzer rather than a control: `make check` was green (it
+  runs no fuzz target) and `fuzz-smoke` reported `undeclared constexpr error "zero flag expected"
+  for fe 03 30` on the first push. Three defects, one arriving out of the last:
+  - **#264's own tripwire could not see the second registry.** It parses `fuzz_test.go` for a var
+    named `declaredErrors`; the narrower constexpr list was an anonymous composite literal inside
+    the fuzz body, so the half of the space it holds was uncovered by construction. Hoisting it to
+    a package-level `constExprErrors` is the whole mechanism of the fix — *a registry a control
+    cannot name by AST is a registry it cannot check* — and
+    `TestEveryInstrGrammarSentinelIsInTheConstExprRegistry` is what it bought: #264's relation over
+    the second registry, domain derived by AST from instr.go's 15 mentioned sentinels, three
+    exclusions carrying the reader that raises them, plus the `constExprErrors ⊆ declaredErrors`
+    subset relation that nothing asserted before. Watched dying four ways.
+  - **The exclusion was reasoned from a false reachability claim.** The enrollment comment said the
+    verdict "is reachable only with the Threads gate on" and that "the fuzzer's default-gate corpus
+    cannot produce it at all"; the fuzzer produced it from `fe 03 30` at a zero-value `Decoder`. A
+    gate decline is *recorded, not returned*, and malformed outranks a deferred decline (0008's
+    order), so **every gated arm's malformed-immediate sentinel is reachable with its gate off**.
+    `TestAtomicFenceRejectsANonZeroFlagWithTheGateOff` holds the fact now, one byte from its
+    sibling: `fe 03 00` gate-off is the feature decline, `fe 03 30` gate-off is malformed.
+  - **`TestAtomicRegionIsGatedOnThreads` was stillborn, and its own repair note was the tell.** It
+    passed with the 0xfe gate-map range shrunk to exclude both opcodes it decodes, and passed again
+    with `prefixed`'s entire `gateCheck` call commented out: `atomicImage` declared a **shared**
+    memory, itself threads-gated, so a gate-off decode failed in the memory section and every
+    assertion was about `decodeLimits`. Its message check had been "corrected" from `"atomics"` to
+    `"threads"` under a comment reading *"the test was wrong, not the message"* — and the region
+    decline renders `the 0xfe region (atomics): feature gate disabled`, so the original assertion
+    was right and the correction was confirmed by the wrong section's decline. The memory is
+    unshared now, the message assertion reads `what` out of the row it keys with a negative arm
+    against every other region's, and the crasher `035b8b0994e9c30a` is committed.
+  - **Process:** `make fuzz` is a named local gate and it was not run before pushing — the rule
+    `ErrMalformedBrOnCastFlags`' enrollment comment states in those words, written for this class.
+
+- **The generated table's one cross-region row cited a line from one reference pin and was resolved
+  against the other** ([grave #529](https://github.com/scttfrdmn/burroughs/issues/529)). Every row
+  carries a `refLine` and every citation control resolved it against `regionAuthority[prefix]` — the
+  region's declared pin — which is right for 609 rows and wrong for the one the composition *moves*:
+  the `0xfe` escape arm lands in region `0x00`, whose authority is the core decoder, carrying line
+  780 from the threads decoder. Line 780 of the core decoder is `v128_store16_lane`, so the shipped
+  row was a citation that **resolved, to the wrong arm in the wrong file** — grave #517's shape one
+  level in, where there the file part was elided in prose and here it was inferred by a data
+  structure. Repaired with `Arm.Path`/`StampPath`, a per-row `refPath`, and an escape-citation walk
+  that reads each arm's text through that path and asserts the arm mentions its own escape byte.
+  Two measurements are the reason it survived: stripping the `refPath` branch left **every test in
+  package `binary` green** until that walk existed — *a repair is not born until it is watched dying
+  per branch* — and hoisting one core source for all 610 rows produced **zero** content
+  disagreements, with only the domain-size floor firing, because an agreement check comparing the
+  reference against itself through a one-file view agrees. Auditability has no vectors (contract §9
+  G-3), so the only instrument that can catch this is one that reads the cited text.
 
 - **A shared memory imported where an unshared one was declared linked, and the refusal it should
   have printed named two identical types**

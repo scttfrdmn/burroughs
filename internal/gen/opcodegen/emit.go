@@ -12,7 +12,7 @@ import (
 // change the table's *content* — the header is then a claim about the pair, and a
 // reader who finds a table stamped v1 next to a v2 extractor knows the file is stale
 // without running anything.
-const Version = 2
+const Version = 3
 
 // Output is where the emitted table is committed, relative to the repo root.
 //
@@ -45,7 +45,7 @@ func (t *Table) Emit() (string, error) {
 // G-3). The accept direction needs the objective's other representation, and this is
 // it. Regenerate with 'make opcodes'; 'make opcode-drift' asserts this file still
 // agrees with the pinned reference.
-
+%s
 package binary
 
 // opInfo is one opcode's immediate shape, as the reference interpreter reads it.
@@ -55,6 +55,13 @@ type opInfo struct {
 	// from, so a rename here moves an opcode. This comment read "a label, not a fact"
 	// until that decision made it one.
 	mnemonic string
+	// operator is the reference's operator constructor where the instruction takes one:
+	// RmwXor, from "i64_atomic_rmw32_u (I64 I64Op.RmwXor) a o". Empty otherwise, which is
+	// every row outside the atomics region. That region builds 42 of its opcodes by applying
+	// 7 constructors to 6 operators each, so the *pair* (mnemonic, operator) is what
+	// identifies an encoding; the mnemonic alone does not, and decision 0014 made that
+	// identification load-bearing.
+	operator string
 	// imms is the immediate sequence in reading order. Order is load-bearing: a wrong
 	// order shifts every subsequent byte.
 	imms []imm
@@ -62,18 +69,34 @@ type opInfo struct {
 	// rather than absent from it — "rejected by the authority" and "unknown to the
 	// table" are different facts, and conflating them is how a hole becomes an accept.
 	illegal bool
-	// escape marks a prefix byte (0xfb, 0xfc, 0xfd) whose operand is a u32 sub-opcode
-	// read from the matching sub-table, rather than an instruction in its own right.
-	// A third flavour of the distinction illegal draws: escape, illegal, and absent
-	// are three different verdicts, and a decoder that cannot tell them apart reports
-	// "no such opcode" for a whole proposal.
+	// escape marks a prefix byte whose operand is a u32 sub-opcode read from the matching
+	// sub-table, rather than an instruction in its own right. A third flavour of the
+	// distinction illegal draws: escape, illegal, and absent are three different verdicts,
+	// and a decoder that cannot tell them apart reports "no such opcode" for a whole
+	// proposal. The prefixes are listed once, below, beside the maps they escape to —
+	// this comment named three of them and would have gone on naming three.
 	escape bool
 	// reason is the reference's own error text where the arm reports one
 	// (misplaced ELSE/END), and is empty otherwise.
 	reason string
-	// refLine is the 1-indexed decode.ml line this row was read from, so any row can be
-	// audited against the authority without a search.
+	// refLine is the 1-indexed line this row was read from, in the decoder named by refPath
+	// if it is set and by regionAuthority[prefix] otherwise, so any row can be audited
+	// against its authority without a search.
+	//
+	// **Both fields, or the citation is half a citation.** This doc said "the decode.ml line"
+	// when there was one decode.ml, and the composition made that phrase name two files: the
+	// row for the 0xfe escape lives in the single-byte region, whose authority is the core
+	// pin, and carries a line number from the threads pin. It shipped as refLine 780, pointing
+	// at v128_store16_lane in a file that has no atomics — grave
+	// https://github.com/scttfrdmn/burroughs/issues/529.
 	refLine int
+	// refPath is this row's authority where it differs from its region's, and empty otherwise.
+	//
+	// Set on exactly the rows a composition moves across regions, which is the escape arm of
+	// each overlaid region. Emitted per row rather than folded into regionAuthority because
+	// the region *is* the right key for the other 609: a per-row path on every row would be
+	// 610 copies of two strings, and the exceptional row is the fact worth seeing.
+	refPath string
 }
 
 // imm names one immediate reader, in the reference's vocabulary rather than ours: the
@@ -82,36 +105,49 @@ type opInfo struct {
 type imm string
 
 const (
-`, t.SourceSHA, Version, len(t.Arms))
+`, t.SourceSHA, Version, len(t.Arms), overlayHeader(t.Overlays))
 
 	for _, c := range immConsts() {
 		fmt.Fprintf(&b, "\t%s imm = %q\n", c.ident, c.imm)
 	}
 	b.WriteString(")\n")
 
+	// The per-region provenance, as data. See Table.Authority for why a header comment was
+	// not enough, and regionAuthority's own generated doc for what reads it. Read here as well
+	// as emitted below, because a row whose own authority differs from its region's carries the
+	// difference itself (opInfo.refPath).
+	auth := t.Authority()
+
 	// One map per region. Separate maps rather than a composite key because the prefix
 	// is read by a different reader (a byte) than the sub-opcode (a u32 LEB), and the
 	// decoder dispatches on that difference.
-	regions := []struct {
-		prefix byte
-		name   string
-		doc    string
-	}{
-		{0x00, "opTable", "single-byte opcodes"},
-		{0xfb, "opTableFB", "0xfb prefix (GC)"},
-		{0xfc, "opTableFC", "0xfc prefix (misc: trunc_sat, bulk memory)"},
-		{0xfd, "opTableFD", "0xfd prefix (SIMD)"},
-	}
-	for _, r := range regions {
-		fmt.Fprintf(&b, "\n// %s — %s.\nvar %s = map[uint32]opInfo{\n", r.name, r.doc, r.name)
+	//
+	// **The region list is the table's own, not a literal here.** It was a four-entry slice
+	// with the names and docs written out, which is the shape that made adding the atomics
+	// region a two-site edit where one site is a generator that would have emitted a correct
+	// four-map file and said nothing about the fifth. The identifier is derived; only the
+	// human label is declared, and a region with no label is an error below for the same
+	// reason an immediate with no identifier is.
+	for _, prefix := range t.Regions {
+		name := regionVar(prefix)
+		doc, labelled := regionDocs[prefix]
+		if !labelled {
+			return "", fmt.Errorf("no generated documentation label for region %#02x: add it to "+
+				"regionDocs. A region emitted with no label would carry no statement of which "+
+				"proposal it is, in the one file a reader consults to find out", prefix)
+		}
+		fmt.Fprintf(&b, "\n// %s — %s.\nvar %s = map[uint32]opInfo{\n", name, doc, name)
 		for _, a := range t.Arms {
-			if a.Prefix != r.prefix {
+			if a.Prefix != prefix {
 				continue
 			}
 			fmt.Fprintf(&b, "\t%#02x: {", a.Code)
 			var fields []string
 			if a.Mnemonic != "" {
 				fields = append(fields, fmt.Sprintf("mnemonic: %q", a.Mnemonic))
+			}
+			if a.Operator != "" {
+				fields = append(fields, fmt.Sprintf("operator: %q", a.Operator))
 			}
 			if len(a.Imms) > 0 {
 				idents := make([]string, len(a.Imms))
@@ -138,9 +174,95 @@ const (
 				fields = append(fields, fmt.Sprintf("reason: %q", a.Reason))
 			}
 			fields = append(fields, fmt.Sprintf("refLine: %d", a.Line))
+			// The citation's other half. Empty is refused for the reason a region with no
+			// authority is: a consumer resolving "" gets the package directory and reads
+			// *something*, which is how an unresolvable citation comes to look resolved.
+			if a.Path == "" {
+				return "", fmt.Errorf("arm prefix=%#02x code=%#x cites line %d of no file: the "+
+					"extraction was not stamped through Table.StampPath, so this row would ship a "+
+					"line number a reader resolves against whichever decoder they opened (Arm.Path)",
+					a.Prefix, a.Code, a.Line)
+			}
+			if a.Path != auth[prefix] {
+				fields = append(fields, fmt.Sprintf("refPath: %q", a.Path))
+			}
 			fmt.Fprintf(&b, "%s},\n", strings.Join(fields, ", "))
 		}
 		b.WriteString("}\n")
 	}
+
+	b.WriteString(`
+// regionAuthority is the decoder each region was read from, repo-relative.
+//
+// Generated because the fact is the generator's and nobody else's: two pins license a file
+// named interpreter/binary/decode.ml, so a control that wants to re-derive a region's
+// grammar from the authority has to be told *which* authority, per region. Spelling one
+// path in the consuming test is how a derivation over "the decoder" comes to search the
+// core pin for a region the threads pin defines.
+//
+// Every region has an entry, so there is no default to get wrong.
+var regionAuthority = map[byte]string{
+`)
+	for _, prefix := range t.Regions {
+		path := auth[prefix]
+		if path == "" {
+			// Same choice as the missing region label and the missing immediate identifier: a
+			// generated provenance map with a blank entry is worse than no map, because the
+			// consuming control would resolve "" to the package directory and read *something*.
+			return "", fmt.Errorf("region %#02x has no authority path: Table.SourcePath is unset "+
+				"and no overlay claims the region, so the emitted regionAuthority would carry a "+
+				"blank path that a control would resolve to a real directory", prefix)
+		}
+		fmt.Fprintf(&b, "\t%#02x: %q,\n", prefix, path)
+	}
+	b.WriteString("}\n")
+
 	return b.String(), nil
+}
+
+// regionVar is the generated map's identifier for a prefix region.
+//
+// Derived from the byte rather than declared, so a new region cannot arrive with a name
+// nobody chose — or, worse, with no map at all. `opTable` for the single-byte space keeps the
+// three existing identifiers byte-identical, which is what makes this change visible in the
+// diff as *one new map* rather than as a rename of four.
+func regionVar(prefix byte) string {
+	if prefix == 0x00 {
+		return "opTable"
+	}
+	return fmt.Sprintf("opTable%02X", prefix)
+}
+
+// regionDocs is the human label per region: which proposal the sub-table is.
+//
+// Declared, because "0xfd is SIMD" is not derivable from the byte — and checked for
+// completeness against the table's own region set at emit time, which is the half that was
+// missing when the region list itself was a literal.
+var regionDocs = map[byte]string{
+	0x00: "single-byte opcodes",
+	0xfb: "0xfb prefix (GC)",
+	0xfc: "0xfc prefix (misc: trunc_sat, bulk memory)",
+	0xfd: "0xfd prefix (SIMD)",
+	0xfe: "0xfe prefix (threads: atomics)",
+}
+
+// overlayHeader states every consulted proposal pin in the generated file's header.
+//
+// Empty for a single-source table, so the header of a core-only extraction is unchanged. It
+// is a paragraph rather than one more `Field: value` line because each entry carries four
+// facts — proposal, file, revision, licence — and both pins license a file with the same
+// name, so "Revision" alone would be a stamp that is wrong about the rows it does not cover.
+func overlayHeader(ovs []OverlayProvenance) string {
+	if len(ovs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("//\n// Composed with consulted proposal pins, one clause each (contract §9 G-2 —\n" +
+		"// consultation is clause-scoped, never wholesale; a symmetric read of any of these\n" +
+		"// pins deletes shipped proposals their baselines predate):\n")
+	for _, ov := range ovs {
+		fmt.Fprintf(&b, "//\n//   region %#02x  %s\n//   authority   %s\n//   revision    %s\n//   licence     %s\n",
+			ov.Region, ov.Name, ov.Path, ov.SHA, ov.Clause)
+	}
+	return b.String()
 }

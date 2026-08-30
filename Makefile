@@ -412,7 +412,7 @@ threads-ref:
 
 # Regenerate the opcode table from the vendored reference (decision 0007). The output
 # is committed, so this is run when the pin moves, not on every build.
-opcodes: spec-ref
+opcodes: spec-ref threads-ref
 	$(GO) run ./internal/gen/opcodegen/cmd/opcodegen -o internal/binary/optable.go
 	@echo "regenerated internal/binary/optable.go"
 
@@ -429,9 +429,17 @@ opcodes: spec-ref
 # so a control added later would silently not run here, and the gate would quietly
 # narrow while still reporting green. -count=1 because a cached result is a verdict
 # about a previous tree.
+#
+# Two guards since the table is composed, for keyword-drift's reason: the extraction reads
+# *both* pins' decoders, so a tree holding only the core pin fails on a `refPins` walk whose
+# message is about vacuity, and sends the reader to re-run the target they already ran. Which
+# pin a recipe needs is not a fact the recipe can infer — it is stated, per pin.
 opcode-drift:
 	@if [ ! -f third_party/spec/interpreter/binary/decode.ml ]; then \
 		echo "reference not vendored; run: make spec-ref"; exit 1; \
+	fi
+	@if [ ! -f third_party/spec-threads/interpreter/binary/decode.ml ]; then \
+		echo "threads reference not vendored; run: make threads-ref"; exit 1; \
 	fi
 	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/gen/opcodegen/
 
