@@ -349,6 +349,43 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **CI's skip gate discarded `go test`'s entire output, so a real failure exited 1 with no located
+  cause and the wrong stated one** ([grave #539](https://github.com/scttfrdmn/burroughs/issues/539),
+  `type:grave`). The `no test declined to answer` step held its own copy of `make strict`'s script —
+  `out="$(go test -v -shuffle=on ./... 2>&1)"` — under the workflow's `-e` shell, where a non-zero
+  `go test` makes the **assignment** the failing command. The shell died on line one: every `--- FAIL`
+  line, every panic and the `-test.shuffle` seed stayed inside `$out`, the `::error::` message never
+  ran, and a red job's whole record was a group header, **82 seconds of silence**, and `exit code 1` —
+  with the step's *name*, asserting a skip that had not been detected, as the only cause on offer.
+  Repaired by **deletion rather than a third correct copy**: the step is now `run: make strict`, one
+  implementation called from both sides, since a text mirror's halves fail in two shells and only one
+  is `-e`. `make strict` additionally prints the seed first and then the full output on failure — its
+  `(FAIL|SKIP)` filter matched no seed line, so it shared that defect with the step it beat.
+  **The hazard was already recorded and already repaired twice in this same file**: the Makefile header
+  argues that `-e` is deliberately absent so `strict` can keep its testimony, and names `ci.yml`'s two
+  `suite-count.sh` floors as copies that *"had to become loops"* for exactly this reason. This step was
+  the third and the sweep did not reach it. Cost: [#540](https://github.com/scttfrdmn/burroughs/issues/540),
+  a genuine `linux/arm64` failure that cannot be worked because no seed survived, held open on its own
+  account because this repair is what creates its oracle.
+- **The maxim gains an exception that runs the other way, and its exceptions stop being counted**
+  (overhead charged to grave #539's repair). *A surprise in CI is a bug in the Makefile* assumes the
+  Makefile observes a superset of what CI observes; #539 is the case where `make strict` was the
+  **better** instrument and invoking the maxim would have sent a reader to repair the working half. So
+  parity failures run in both directions and *which half is worse* is asked rather than assumed
+  ([the exception](docs/laws/operations.md#the-exception-that-runs-the-other-way-the-makefile-can-be-the-better-instrument)).
+  Recorded by **name instead of by ordinal**: this section had been written as *the* exception and then
+  as *the second* while `CLAUDE.md` still said *one*, so the count was a foreclosing word already
+  falsified twice. Also folded in, on the same ruling: the CI-watch recipe now stamps `SHA=` and `RUN=`
+  into the verdict file **before** the watch runs, after two backgrounded watches completed together
+  and a red belonging to a commit two behind came one sentence from being reported as `HEAD`'s.
+- **The oracle-seam criterion gets a named home and its closing half written down**
+  (overhead charged to grave #539's repair). *Split issues at the oracle seam* existed only as an
+  unanchored italic phrase, which an ADR was already citing by file with no anchor — the gap
+  `CLAUDE.md` names. It is now [a law with a heading and the #539/#540
+  specimen](docs/laws/evidence-and-instruments.md#an-issue-whose-oracle-does-not-exist-yet-stays-open-on-its-own-account),
+  carrying the half that gets skipped: when one issue's repair *creates* another's oracle, discharging
+  the enabler leaves the enabled one open, because the moment the fix lands is exactly when the enabled
+  question is least visible and most likely to be retired as handled.
 - **A range citation dropped its pin qualifier, which re-points rather than dangles** (overhead
   charged to #524's validation half). An unqualified `valid.ml:203-209` is the **core** pin by the
   citation rule, and the core pin has no atomics at all — `grep -c Atomic` over it is 0 — so those

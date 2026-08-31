@@ -30,8 +30,11 @@ if [ -z "$RUN" ]; then   # no run — say WHICH no, don't just time out
     -q 'if length == 0 then "no open PR for this branch: ci.yml is `push: branches: [main]` plus `pull_request`, so a topic-branch push creates no run until its PR exists. Open the PR, then resolve the run." else "PR exists and no run appeared in 60s — that is a real anomaly, not a wait." end'
   exit 1
 fi
-gh run watch "$RUN" --compact --exit-status   # run this with run_in_background
-gh run view "$RUN" --json jobs -q '.jobs[] | "\(.conclusion)\t\(.name)"'   # the verdict is here
+V=/tmp/ci-verdict-$SHA.txt
+echo "SHA=$SHA RUN=$RUN" > "$V"                # stamp the identity FIRST — see below
+gh run watch "$RUN" --compact --exit-status > /tmp/ci-frames.log 2>&1   # run_in_background
+echo "WATCH_EXIT=$?" >> "$V"
+gh run view "$RUN" --json jobs -q '.jobs[] | "\(.conclusion)\t\(.name)"' >> "$V"   # the verdict
 ```
 
 **The loop's negative has two meanings and must say which.** `ci.yml` triggers on
@@ -135,6 +138,25 @@ form this is.
 This compounds with mistake 4 rather than restating it: there, a sentinel over the wrong run
 reports an empty green; here, a sentinel over the *right* run is answered by the watch's own
 chrome, and neither SHA-binding nor reading `.jobs[]` can see it.
+
+**And the verdict file states the SHA it watched, stamped before the watch starts.** Mistake 2 binds
+the *watch* to a SHA; nothing so far binds the **artifact**, and a verdict file that does not name its
+subject is unattributable the moment a second one exists. Two backgrounded watches on one branch
+completed together and only one of the two output files opened with an identifying line — so a red
+belonging to a commit **two behind** was one sentence away from being reported as `HEAD`'s. What
+recovered it was `gh run list --json databaseId,headSha,conclusion`, which put the red on the older
+commit and showed the commit after it fully green. `--exit-status` yields a number with no subject and a
+job list yields a subject with no identity; neither is a verdict on its own. Stamp `SHA=` and `RUN=`
+into the file **first**, so the identity survives a killed watch that never appends anything — the kill
+mode above is exactly when an unstamped file is left behind to be misread later. And when a file's SHA
+is missing, never infer it from recency: the newest run on a SHA is
+[systematically the emptiest](#waiting-on-ci), and the newest *file* is not evidence about which commit
+it describes. Note what a re-resolution does not buy: the following commit's green was over a
+`CHANGELOG.md`-only diff, so it was byte-identical Go and [refuted
+nothing](evidence-and-instruments.md#a-re-run-green-doesnt-refute-a-fail--explaining-the-fail-does).
+Folded in here rather than filed, on the ruling that misattributing a verdict is the most load-bearing
+failure available in this recipe. (Directive: Scott, on the #539/#540 report — *"every watch output file
+records the SHA it watched … charged overhead, not a new PR."*)
 
 ## Local cross-architecture verification
 
@@ -258,11 +280,56 @@ Two consequences, and the second is the one that generalizes:
   makes about it is a text, and a text is in a control's domain. When a maxim has an exception, look
   for the artifact the exception is a statement about.
 
-This is the maxim's second stated exception, and the pair names the boundary: the mirror is incomplete
-**by construction** wherever the subject is not in the Makefile's domain — [a PR body that does not
-exist until the PR does](#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it),
-and a fetched artifact whose presence is a fact about the machine. *Text mirrors are not
-failure-behaviour mirrors*; so are absence mirrors.
+**The exceptions are named rather than numbered, because the count kept going stale.** This section was
+written as *the* exception and then amended to *the second*, while `CLAUDE.md` still says *one* — a
+count is a foreclosing word, true when written and falsified by the next addition, and that has now
+happened twice. So the set is enumerated by name and nothing here says how many there are: [a PR body
+that does not exist until the PR
+does](#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it), a fetched artifact
+whose presence is a fact about the machine, and [the Makefile as the better
+instrument](#the-exception-that-runs-the-other-way-the-makefile-can-be-the-better-instrument).
+
+The first two share a shape: the mirror is incomplete **by construction** wherever the subject is not
+in the Makefile's domain. *Text mirrors are not failure-behaviour mirrors*; so are absence mirrors. The
+third does not share it, and is the one that says something about the maxim itself. (Ruling: Scott, on
+the #539/#540 report — *"record the second beside the first."* The naming-instead-of-counting is the
+agent's, stated in the same report.)
+
+## The exception that runs the other way: the Makefile can be the better instrument
+
+The maxim assumes the Makefile **observes a superset** of what CI observes, so any difference is the
+local gate's deficiency. Both exceptions above are cases where that containment fails in the expected
+direction — CI sees something `make` cannot. **It also fails in the other direction, and then invoking
+the maxim sends the reader to repair the better of the two instruments.**
+
+The specimen is grave #539. `ci.yml`'s `no test declined to answer` step and `make strict` ran the same
+command, `go test -v -shuffle=on ./...`, captured into `out="$(…)"`. The recipe captured `status=$?`
+next and printed the FAIL and SKIP lines; the workflow step relied on `-e` and printed nothing. So a
+red job's entire record was a group header, 82 seconds of silence, and `exit code 1`, with the step's
+*name* — asserting a skip that was never detected — as the only cause on offer. `make strict` was
+green and correct throughout, on the same tree. **Running the local mirror could not have exposed
+this**, because the local mirror was the half that worked.
+
+Three things this fixes in how the pair is read:
+
+- **Ask which half is worse before assuming.** The maxim's operative content is *the two must agree*;
+  *the Makefile is wrong* is an inference from containment, and containment is what this exception
+  denies. `-e` is deliberately absent from `SHELL` here — the Makefile header argues for that at
+  length, and names this workflow while doing it: *"ci.yml's two copies of it had to become loops:
+  those run under `-e` as well, where the failing assignment kills the step before the floor can print
+  its diagnosis."* The tree therefore held both halves of the diagnosis before #539 and still lost a
+  verdict, because the sentence naming the hazard sat in the file that did not have it.
+- **The better instrument is not the complete one.** `make strict` was better on three counts —
+  captures the status, prints FAIL and SKIP unconditionally, separates *tests failed* from *a test
+  skipped* — and shared a fourth defect with the step it beat: its filter is `(FAIL|SKIP)`, so
+  `-test.shuffle <seed>`, the one line that makes a shuffled order reproducible, matched nothing and
+  was discarded on exactly the runs that needed it. #540 is unworkable for that reason. A comparison
+  that ranks two instruments answers *which* and never *whether*, so the winner still gets audited.
+- **The remedy is one implementation, not a second correct copy.** The repair replaced the step's
+  script with `run: make strict`. A third correct copy would have left three texts that can drift in
+  two shells; calling the target removes the mirror's room to exist, the same move as [writing the
+  sentinel block to a different file from the refresh
+  stream](#waiting-on-ci) — remove the collision's room rather than out-argue it.
 
 ## Reading the tracker's state: the queue comes from the issues API, never from a cached listing
 

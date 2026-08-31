@@ -186,11 +186,16 @@ prose can still name a law that does not exist.
 - Module `github.com/scttfrdmn/burroughs` (the vanity `burroughs.run` path is a later decision —
   [0001](docs/decisions/0001-project-genesis.md) records this). Go ≥ 1.26. **No cgo. Pure Go.**
 - **`make check` is the gate** — fmt-check, build, vet, lint, test, deadcode — and must be green
-  before any report; it is the local mirror of CI, so a surprise in CI is a bug in the Makefile —
-  **with one stated exception: fetched-artifact presence is machine state, not repo state**, so a gate
-  on a box that already holds a corpus cannot test its absence and the surprise is not the Makefile's
-  ([the exception, with its
+  before any report; it is the local mirror of CI, so a surprise in CI is usually a bug in the
+  Makefile — **with stated exceptions, named rather than counted** because the count went stale twice.
+  One is that **fetched-artifact presence is machine state, not repo state**, so a gate on a box that
+  already holds a corpus cannot test its absence and the surprise is not the Makefile's ([the
+  exception, with its
   specimen](docs/laws/operations.md#the-maxims-stated-exception-fetched-artifact-presence-is-machine-state-not-repo-state)).
+  Another is that **the Makefile can be the *better* instrument** — `make strict` printed a failing
+  run's testimony while its `ci.yml` twin, under a `-e` shell, printed nothing at all — so parity
+  failures run in both directions and *which half is worse* is asked, not assumed ([grave #539's
+  exception](docs/laws/operations.md#the-exception-that-runs-the-other-way-the-makefile-can-be-the-better-instrument)).
   `make fuzz`, `make bench`, `make vuln`, `make cite`, `make close` for the rest. Tools are
   pinned in `tools/go.mod` via `tool` directives, never in CI YAML
   ([0005](docs/decisions/0005-tooling-gates.md)), and the engine's own `go.mod` stays

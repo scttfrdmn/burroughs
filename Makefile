@@ -179,11 +179,25 @@ conformance:
 # through internal/testenv, and TestEverySkipSiteIsLicensed proves that is all of
 # them today. This reads the output channel for the case where a future skip escapes
 # both. A skip does not fail a test run, so the exit code cannot be asked.
+#
+# **On failure it prints the `-shuffle` seed first and then everything** (grave #539).
+# The FAIL-and-SKIP grep above was the whole failure report, and it is the wrong filter
+# for the failing case: `-test.shuffle <seed>` is the one line that makes a shuffled
+# order reproducible, it matches neither pattern, and it was therefore discarded on
+# exactly the runs that needed it. #540 is a real arm64 failure that cannot be worked
+# because no seed survived. The seed goes first so a truncated log still holds it, the
+# full output second, and the verdict word last where a reader's tail lands. Volume is
+# only a cost on green runs, and on a green run none of this prints.
 strict:
 	@out="$$($(STRICT) $(GO) test -v -shuffle=on ./... 2>&1)"; \
 	status=$$?; \
 	printf '%s\n' "$$out" | grep -E '^[[:space:]]*(---[[:space:]]*)?(FAIL|SKIP)' || true; \
-	if [ $$status -ne 0 ]; then echo "tests failed"; exit 1; fi; \
+	if [ $$status -ne 0 ]; then \
+		printf '%s\n' "$$out" | grep -E '^-test\.shuffle ' || echo "(no -test.shuffle line in the output)"; \
+		echo "--- full output follows; the seed above reproduces this order via -shuffle=<seed> ---"; \
+		printf '%s\n' "$$out"; \
+		echo "tests failed"; exit 1; \
+	fi; \
 	if printf '%s\n' "$$out" | grep -qE '^[[:space:]]*(---[[:space:]]*)?SKIP'; then \
 		echo "a test skipped under BURROUGHS_NO_SKIP=1"; exit 1; \
 	fi; \

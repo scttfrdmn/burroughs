@@ -104,8 +104,10 @@ reach is a law out of context.
   declaration-shape spans rather than backticked ones. The unchecked sibling remains
   the **issue-number** class from #84 (`#NN` in prose asserting *what a defect is* —
   a diagnosis, and `annotations.wast:1` sat misattributed to #55 for three PRs while
-  a ceiling's comment called it "not ours"); different oracle, still open. *Split
-  issues at the oracle seam* — this half's oracle is local, so this half lands first.
+  a ceiling's comment called it "not ours"); different oracle, still open. [*Split
+  issues at the oracle
+  seam*](evidence-and-instruments.md#an-issue-whose-oracle-does-not-exist-yet-stays-open-on-its-own-account)
+  — this half's oracle is local, so this half lands first.
   (Ruling: Scott, PR #113; graves #114, #115, #116.)
   - **Cite issues at fix sites, never PRs — the mitigation is a better target, not a better
     resolver.** An issue number is a *durable home*: a grave stays a grave, and #8 still names
