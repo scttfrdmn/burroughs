@@ -105,7 +105,88 @@ So two forecasts, one for now and one for the slice that can falsify it:
 A forecast beaten is a forecast falsified. If the 2% comes out at 0.0% on every row I will say so and
 ask why, rather than bank it.
 
+## The result: forecast 1 passes, and the instrument failed before the forecast could
+
+**Forecast 1 holds.** With the arms interleaved, no `scanbench` row moves by more than **1.32%**
+against the registered 2% ceiling:
+
+| arm | worst row | geomean |
+| --- | --- | --- |
+| `host thread` by value (**landed**) | `PadOnce/distance=64` **+0.94%** (p=0.012) | **−0.05%** |
+| `host *thread` by pointer | `PadOnce/distance=64` **+1.32%** (p=0.000) | **+0.45%** |
+
+Every other row in both arms is `~` at n=10.
+
+**The forecast passed, and 0050 committed to asking why rather than banking it.** The answer is that
+the ceiling was never within reach of the mechanism it was aimed at. `stack` grows by eight bytes and
+is allocated once per `Invoke`; the benchmark bodies run 30µs to 2ms. For a carried-and-never-read
+word to move any of them 2% would have required `stack`'s width to dominate the dispatch loop, and
+nothing in the design suggested it could. So this is *an unasserted distance*: a bound far enough
+from what it bounds that it ran, agreed, and said little. A forecast that could only have failed
+through a mechanism it did not name is a weak forecast, and forecast 2 — the two-dereference *read*
+at #515, against a 5% ceiling on the same rows — is the one that carries the real risk.
+
+### What actually failed: three rounds of measurement, from run order (grave **#552**)
+
+This is recorded in full because for three rounds the tree said forecast 1 was falsified, and every
+figure was an artifact.
+
+The reported sequence was: `Instantiate/funcs=1/openers=1` **+2.73%** (p=0.000), reproduced at
+**+3.10%**; decomposed on that row into the `thread` struct's allocation **+1.57pp** and T-1's
+`done` channel **+1.53pp**; repaired by embedding `host` by value, which returned the row to `~`.
+Then the full board on the repaired tree showed `Decoupled/span=276` **+6.64%**,
+`Entries/distance=512` **+6.98%** and `Entries/distance=4096` **+3.86%** — a repair apparently three
+times worse than the defect.
+
+**The arms had been run sequentially: all of A, then all of B.** That makes run order a confounder
+perfectly correlated with the arm. It was caught by measuring the *baseline* twice, fifteen minutes
+apart, with identical code at `5387682`:
+
+| row | first run | second run | drift, same code |
+| --- | --- | --- | --- |
+| `Entries/distance=4096` | 2.239m | 2.442m | **+9.1%** |
+| `Entries/distance=512` | 335.1µ | 362.8µ | **+8.3%** |
+| `Entries/distance=64` | 91.01µ | 96.81µ | **+6.4%** |
+| `Decoupled/span=276` | 188.8µ | 196.5µ | **+4.1%** |
+
+The baseline drifted further than the effect being attributed to the change, and the same landed tree
+reads **+1.16%** geomean against one baseline and **−1.07%** against the other. The sign of the board
+was a function of which run was called *old*.
+
+**The repair.** Arms are compiled to binaries up front — so nothing builds during measurement and the
+tree is never mutated mid-run — and one round runs every arm at `-count=1`, ten rounds. Thermal drift
+then hits all arms alike instead of loading onto whichever ran last. Two checks ride along: the three
+binaries are confirmed distinct by hash, because identical arms would agree perfectly and say nothing,
+and each round prints its per-arm row count.
+
+Three things worth keeping:
+
+- **A repair validated on one row is not validated.** The `+1.57`/`+1.53pp` decomposition and the
+  by-value repair were measured on `Instantiate/funcs=1/openers=1` alone. The other 23 rows were
+  *unmeasured, not unmoved* — and when they were finally measured they appeared to have blown up.
+- **The high-variance rows cannot resolve this ceiling at all.** On the interleaved board
+  `Decoupled/span=276` carries ±21%, `Entries/distance=512` ±17%, `Entries/distance=4096` ±19%. A 2%
+  question put to a row with ±20% spread gets an answer about the room. Stating this is the honest
+  bound on what forecast 1's pass covers; forecast 2 needs either more rounds or a quieter machine,
+  and it should not be checked on these four rows.
+- **Nothing decides between by-value and by-pointer on performance,** so the choice is made on design
+  and said to be: by-value rides `Instance`'s own allocation, so there is one object fewer, and it
+  cannot be nil on any instance the constructor built. Option C is untouched either way — what
+  `stack` carries is one pointer in both forms.
+
 ## Consequences
+
+**The four bullets below are about T-1's `Spawn`, which this decision's implementation does not
+land.** They are stated in the present tense because they are this decision's commitments about
+`Spawn` whenever it lands, and a reader must not take them as claims that the code is in the tree —
+it is not. `Spawn` exists, is measured, and sits at commit `3b0129f` on the `v1/thread-context`
+branch, withheld because `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on the first
+`go` statement in `internal/interp` and instructs the reader to discharge **#542** rather than exempt
+the file. #542 prices its discharge as §4's litmus battery (**#516**, **#10**), which is work this
+slice was sequenced ahead of. That is a cycle in the phase's order, so it is a ruling for Scott and
+not a choice available here; neither evasion was taken — no exception-list entry, and `Spawn` was not
+moved to a sibling package to put the `go` statement outside the control's domain, since *an
+exemption inherits none of the trigger's lessons.*
 
 - **`Spawn` is an engine API and not a wasm instruction.** The threads proposal defines no spawn
   opcode; T-1 says *host primitive*, and *"this is `newosproc`, not a Worker with a message port."* In

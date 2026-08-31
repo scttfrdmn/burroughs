@@ -281,10 +281,17 @@ type stack struct {
 	// **Nil is legal and means "no thread context", which is every stack the host creates for its
 	// own bookkeeping.** Nothing on the hot path reads this in #514's slice — the first reader is
 	// #515's safepoint check — so a nil here is not yet a defect, and the three creation sites that
-	// do set it (`runConst`, the start function, `invokeIndex`) hand over `in.host`.
+	// do set it (`runConst`, the start function, `invokeIndex`) hand over `&in.host`.
 	//
-	// Carrying it costs the dispatch loop nothing beyond `stack`'s width, which is 0050's live
-	// forecast rather than an assumption: no `scanbench` row moves by more than 2%.
+	// **Carrying it costs the dispatch loop nothing beyond `stack`'s width, and that is measured
+	// rather than assumed** — 0050's forecast 1, discharged: with the arms interleaved at
+	// `-count=1` over ten rounds, no `scanbench` row moves by more than **1.32%** against the
+	// registered 2% ceiling and the geomean is **-0.05%**. The forecast passed, which 0050 said it
+	// would have to explain rather than bank: 8 bytes on a struct allocated once per `Invoke`
+	// cannot register against bodies of 30µs to 2ms, so the ceiling was never within reach of the
+	// mechanism it was aimed at. What did fail first was the instrument: three rounds of figures,
+	// including a "falsified" pre-registration, were thermal drift read through sequentially-run
+	// benchmark arms (grave #552).
 	t *thread
 }
 

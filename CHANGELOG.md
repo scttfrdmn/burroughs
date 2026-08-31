@@ -21,6 +21,80 @@ weakly-ordered platform.
 
 ### Added
 
+- **Contract §2's T-4 per-thread context: a `thread` object every stack carries**
+  ([#514](https://github.com/scttfrdmn/burroughs/issues/514), [ADR
+  0050](docs/decisions/0050-the-per-thread-context-is-its-own-object-reached-by-one-pointer-on-stack-because-3-and-5-need-more-per-thread-state-than-a-slot.md),
+  `gate:threads`). `internal/interp` had no per-thread execution context at all: the hot path's
+  receiver is `*Instance`, which every thread of a shared-memory module shares by definition.
+  - **A `thread` object reached by one `*thread` on `stack`, and not a slot field on `stack`.** A
+    field would have cost zero new parameters against three propagation sites — by a long way the
+    cheapest option, and the one 0050 argues against. `stack` is per-*invocation* and T-4 asks for
+    per-*thread*; they coincide today, and §7's growable continuations will separate them, at which
+    point a slot on `stack` is per-continuation and a fresh stack that forgot to copy it holds a
+    **zero value indistinguishable from a legitimate first thread**. A pointer copies idempotently
+    and a stack that forgot holds nil. The larger reason is that §§3–5 need somewhere for SP-1's
+    stop flag, SP-2's in-host-call bit and T-3's park token — every one per-thread, every one
+    per-continuation on `stack`.
+  - **The host thread takes id 1, and 0 is reserved for failure.** Ids are monotonic from an
+    `atomic.Uint64` on the instance, typed for T-2's second incrementer now rather than retyped
+    then, though today there is exactly one increment and no race. There is no main-thread special
+    case and no second field that could carry one: identity is the whole of what the context can be
+    distinguished by in this slice.
+  - **T-1's `Spawn` is written, measured, and withheld — a control in the tree says so.** The slice
+    was built with it: a shared-memory gate by construction (a `shared` limits flag only decodes
+    with `Features.Threads` on, so reaching one *is* proof the gate was set), an entry-signature
+    check, and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and never unlocks,
+    which is how pure Go gets 1:1 with an OS thread. Commit `3b0129f` on the branch holds it with
+    seven tests. It does not land because
+    `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on the first `go` statement in
+    the package and instructs: *"Do not exempt this file; discharge
+    [#542](https://github.com/scttfrdmn/burroughs/issues/542)."* #542 prices its own discharge as
+    §4's litmus battery ([#516](https://github.com/scttfrdmn/burroughs/issues/516),
+    [#10](https://github.com/scttfrdmn/burroughs/issues/10)) — work this slice was sequenced ahead
+    of, so the collision is a ruling about phase order and not a choice available to the code. The
+    two evasions were available and not taken: no exception-list entry, and `Spawn` was not moved to
+    a sibling package where the `go` statement would sit outside the control's domain. *An exemption
+    inherits none of the trigger's lessons.*
+  - **`TestEveryStackCreationSiteCarriesAThread` is structural, and the test says so first.** Nothing
+    on the hot path reads `stack.t` in this slice — the first reader is
+    [#515](https://github.com/scttfrdmn/burroughs/issues/515)'s safepoint check — so a behavioural
+    propagation test at two of the three sites would be an **analytic zero wearing a control's
+    clothes**: deleting `t: &in.host` changes no observable answer. It parses the package's own
+    non-test sources instead and asserts every `stack{…}` literal sets a thread, **deriving the
+    domain rather than enumerating today's three sites**, since the failure it exists to catch is a
+    fourth added later — and withheld `runEntry` is exactly that fourth site. An exact vacuity floor
+    sits beside it, because a control that stopped seeing the literals would pass by asking nothing.
+    The one site that *is* behaviourally observable is observed: `runConst` hands its stack back, so
+    the thread is read off the engine's own code path rather than off a literal the test wrote —
+    which would be asserting a thing against itself.
+  - **Forecast 1 of ADR 0050 passes: no `scanbench` row moves more than 1.32%** against a registered
+    2% ceiling, geomean **−0.05%**, arms interleaved at `-count=1` over ten rounds. A pass the ADR
+    committed to explaining rather than banking: eight bytes on a struct allocated once per `Invoke`
+    cannot move bodies of 30µs–2ms, so the ceiling was never within reach of the mechanism it named.
+  - **Before that, three rounds of measurement said the opposite, and every figure was an artifact of
+    run order.** The arms had been run sequentially — all of A, then all of B — which makes run order
+    a confounder perfectly correlated with the arm. Reported and now withdrawn: a **+2.73%** then
+    **+3.10%** move on `Instantiate/funcs=1/openers=1`, a decomposition of it into **+1.57pp** struct
+    and **+1.53pp** channel, and then **+6.64%**/**+6.98%** on `Decoupled/span=276` and
+    `Entries/distance=512` that made the repair look three times worse than the defect. What caught it
+    was measuring the *baseline* twice with identical code: **+9.1%** on `Entries/distance=4096`,
+    **+8.3%**, **+6.4%**, **+4.1%** — the baseline drifting further than the effect, so the same tree
+    read +1.16% geomean against one baseline and −1.07% against the other. Arms are now compiled to
+    binaries up front and interleaved round-by-round, with the binaries hash-checked distinct because
+    identical arms would agree perfectly and say nothing. Two lessons kept in the ADR: **a repair
+    validated on one row is not validated** (23 rows were unmeasured, not unmoved), and the four
+    rows carrying ±17–21% spread **cannot resolve a 2% question at all**, which bounds what this pass
+    covers and means forecast 2 must not be checked on them.
+  - **`host` is a value rather than a pointer on design grounds, with performance measured neutral**
+    — by value it rides `Instance`'s own allocation and cannot be nil on a constructed instance. The
+    two forms are statistically indistinguishable on every row.
+  - **Falsifications, each checked for compiling before its verdict was read.** Two mutations in the
+    previous slice printed `FAIL` over a build error, which measures nothing while looking exactly
+    like a control firing. Each of the three propagation sites dropped in turn fails naming that
+    site by file and line, and blinding the literal's type match fails the vacuity floor at `found 0
+    stack literals` rather than passing. One further finding, from the withheld half: **a `-run`
+    filter hid a pre-registered tripwire entirely** — the atomics control fired only once a run
+    executed the whole package, so falsification runs here take no filter.
 - **The `0xfe` region executes: all 67 atomics interpret, and `atomic.wast` goes green**
   ([#545](https://github.com/scttfrdmn/burroughs/issues/545), `gate:threads`). Threads lane,
   `atomic.wast`: **110 → 297 pass, 187 → 0 fail**; the lane over four files **389 → 576 pass, 228 → 41

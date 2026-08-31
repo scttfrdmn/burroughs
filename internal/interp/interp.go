@@ -128,29 +128,42 @@ type Instance struct {
 	// than #9's closure (ADR 0043).
 	deferred error
 
-	// nextTID hands out contract §2 T-1 thread ids, monotonic from 1 (`newThread`, thread.go).
+	// nextTID hands out contract §2 T-1 thread ids, monotonic from 1 — see `InstantiateLinked`,
+	// which takes the first.
 	//
-	// **Atomic because T-2 forbids a main-thread special case.** If only the host's thread could
-	// spawn, a plain counter would do; T-2 says every thread is a peer, so two threads can reach
-	// `Spawn` on this instance at once and race for an id. A duplicated tid is the kind of wrong
-	// answer that surfaces as a bug in whatever uses tids, three slices from here.
+	// **Atomic for the second incrementer, and today there is exactly one.** Instantiation takes id
+	// 1 and nothing else calls this, so no race exists in the landed tree and this comment does not
+	// claim one. It is typed for T-2's requirement rather than retyped when that arrives: T-2
+	// forbids a main-thread special case, so once spawn lands *any* thread may spawn and two can
+	// race for an id — and a field's type flipping back and forth across two PRs is worse than a
+	// word of explanation here.
 	nextTID atomic.Uint64
 
-	// host is the thread the *host's* calls run on — the `*thread` handed to every stack created
-	// outside `Spawn` (`runConst`, the start function, `invokeIndex`).
+	// host is the thread the *host's* calls run on — the thread handed to every stack this engine
+	// creates (`runConst`, the start function, `invokeIndex`).
 	//
 	// **Named `host` and not `main`, because T-2 forbids a main thread and this is not one.** It
-	// carries no privilege, no special id, and nothing distinguishes it from a spawned thread
-	// except which side created it: the host, rather than a guest's call to `Spawn`. Calling it
-	// `main` would be the special case T-2 rules out, asserted in the one channel that gets no
-	// review — and the field would then be cited later as evidence the engine has one.
+	// carries no privilege, no special id, and nothing would distinguish it from a spawned thread
+	// except which side created it. Calling it `main` would assert the special case T-2 rules out,
+	// in the one channel that gets no review, and the field would be cited later as evidence the
+	// engine has one.
 	//
-	// Allocated eagerly by `InstantiateLinked`, which is the only constructor, so `stack.t` is
-	// non-nil on every engine-created stack from the first instruction. Doing it lazily would make
-	// the nil case reachable from `Instantiate` and therefore something #515's safepoint check has
-	// to handle. It stays nil on a bare `&Instance{}` — a shape only this package's own tests
-	// build — which is one of the two reasons `stack.t`'s nil is legal rather than a defect.
-	host *thread
+	// **A value and not a pointer, and the reason is *not* a measurement — that is worth saying,
+	// because for three rounds it looked like one.** A `*thread` here was measured at +2.73% and then
+	// +3.10% on `scanbench`'s `Instantiate/funcs=1/openers=1` row, against decision 0050's
+	// pre-registered 2% ceiling, and by-value was adopted as the repair. Both figures were artifacts
+	// of the measurement protocol: the arms ran sequentially, so run order was a confounder perfectly
+	// correlated with the arm (grave #552). Interleaved at `-count=1` across ten rounds the two forms are
+	// indistinguishable on that row and on every other (see 0050's result section). So this field's
+	// shape is a design choice with the performance question answered *neutral*: it rides `Instance`'s
+	// own allocation, so there is one fewer object to allocate, and it cannot be nil on an instance
+	// the constructor built. The propagation sites take `&in.host`, so what `stack` carries is still
+	// one pointer either way.
+	//
+	// Non-nil by construction on any instance `InstantiateLinked` built, which is every instance
+	// outside this package's own tests, so `stack.t` is set from the first instruction and #515's
+	// safepoint check will not have to treat a threadless stack as a live state.
+	host thread
 }
 
 // Instantiate allocates a module's memories and copies its active data segments in.
@@ -363,9 +376,10 @@ func (in *Instance) build() *Trap {
 	// nothing reads it afterwards either way — the validator's `check_start` is what makes the arity
 	// true (`moduleStart`), and this path does not depend on having run it.
 	if m.HasStart {
-		// `t: in.host` — propagation site 2 of 3 (decision 0050). The start function runs on the
-		// host's thread by definition: no guest code has run yet, so nothing has called `Spawn`.
-		if err := in.call(m.Start, &stack{t: in.host}, 0); err != nil {
+		// `t: &in.host` — propagation site 2 of 3 (decision 0050). The start function runs on the
+		// host's thread by definition: no guest code has run yet, so nothing could have asked for a
+		// second thread even once T-1's spawn lands.
+		if err := in.call(m.Start, &stack{t: &in.host}, 0); err != nil {
 			if t := asTrap(err); t != nil {
 				return t
 			}
@@ -726,10 +740,12 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		// number nobody ran.
 		num: make([]uint64, 0, len(fn.Body)),
 
-		// Propagation site 3 of 3 (decision 0050). A boundary `Invoke` runs on the host's thread —
-		// a *spawned* thread's entry gets its stack from `runEntry`, which is the fourth creation
-		// site and the only one that does not use `in.host`.
-		t: in.host,
+		// Propagation site 3 of 3 (decision 0050). A boundary `Invoke` runs on the host's thread,
+		// and all three of this engine's stack creation sites do, because there is no second thread
+		// to run on: T-1's spawn is withheld (see `thread`'s doc comment). Its entry would be the
+		// fourth site and the first not to use `&in.host`, which is why
+		// `TestEveryStackCreationSiteCarriesAThread` derives its domain rather than listing these three.
+		t: &in.host,
 	}
 	numResults, refResults := countByArray(ft.Results)
 	if err := in.run(fn, locals, st, numResults, refResults); err != nil {
