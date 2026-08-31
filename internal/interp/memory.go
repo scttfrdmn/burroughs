@@ -166,6 +166,16 @@ var sharedReservePages uint64 = 128
 // checkBaseAlignment asserts the premise ADR 0051's atomics rest on: the backing array's base is
 // 8-byte aligned in the host's address space.
 //
+// **It has a second dependent since #557, and that one is a conformance requirement rather than a
+// mechanism choice.** ADR 0053 tests tear-freedom eligibility on a slice's own host address
+// (`wordAligned`) instead of plumbing the guest effective address to the access site, and the two
+// questions coincide *only* because of this assertion: with the base 8-aligned, `&m.bytes[ea]` is
+// aligned exactly when `ea mod width` is zero, which is the proposal's own condition
+// (`runtime.rst:742-746`). So a platform where this failed would not merely lose the atomics — it
+// would make the plain-access predicate answer a different question than the one it is documented to
+// answer. Both dependents fail the same safe way: one loud refusal at construction, never a silent
+// tear.
+//
 // The threads proposal guarantees an atomic access is naturally aligned *relative to the memory's
 // base* (`relaxed.rst:242`), which the interpreter already traps on. `sync/atomic` needs absolute
 // alignment, and **Go does not document any alignment for the result of `make([]byte, n)`.**
@@ -281,6 +291,52 @@ func (m *memory) write(idx, offset uint64, bs []byte) error {
 		return trapOOB
 	}
 	copy(m.bytes[ea:], bs)
+	return nil
+}
+
+// writeNum stores width bytes of v at the effective address, or traps.
+//
+// **The value-taking twin of `write`, and the reason it exists is conformance and nothing else.**
+// `write` receives a rendered `[]byte` and `copy`s it, and a `memmove`'s granularity is not a
+// guest-visible guarantee — so an aligned `i32.store`, which the threads proposal marks `NOTEARS`,
+// could observably decompose. Here an aligned access is one typed host-word store (ADR 0053, #557).
+// The byte fallback is the unaligned path, where tearing is permitted.
+//
+// **It is not here for an allocation, and that is a correction rather than a scruple.** ADR 0053
+// forecast that deleting `storeBytes`' 4-byte `make` per store would be the larger of two speedups.
+// It was no speedup at all: `storeBytes` inlined into this call site, the `make` was reported *does
+// not escape*, and restoring the whole pre-change path measured **zero** heap allocations per store.
+// A control written to witness the deletion could not be made to fail and was deleted as stillborn;
+// the ADR records the withdrawal, which happened before any benchmark existed. `storeBytes` itself is
+// still gone, on the conformance argument alone — a whole-word write needs nothing rendered, the
+// fallback writes into the memory directly, and that removed its only caller. Nothing else in the tree
+// wanted bytes from a slot (`simd.go` has its own `encode` and `laneBytes`), so it was deleted rather
+// than left for `deadcode` to find.
+//
+// **Truncation is the spec's, and this is where it now lives**: `i32.store8` writes the low byte and
+// discards the rest, with no range check, because a store is not a conversion. Both paths truncate —
+// `storeWord` by converting to the width's type, the fallback by shifting — which is a partition a
+// falsification has to cross twice, and `TestStoreTruncatesAndIsLittleEndian`'s note says so.
+//
+// **The out-of-bounds property is `write`'s and is preserved for the same reason**: the whole extent is
+// checked before anything is touched, so a trapping store leaves the memory unchanged whichever path
+// would have run — which is what `memory_trap.wast` asserts by reading the memory back.
+func (m *memory) writeNum(idx, offset, width, v uint64) error {
+	ea, err := effectiveAddress(idx, offset)
+	if err != nil {
+		return err
+	}
+	if width > uint64(len(m.bytes)) || ea > uint64(len(m.bytes))-width {
+		return trapOOB
+	}
+	dst := m.bytes[ea : ea+width]
+	if wordAligned(dst, width) {
+		storeWord(dst, v)
+		return nil
+	}
+	for i := range dst {
+		dst[i] = byte(v >> (8 * uint(i)))
+	}
 	return nil
 }
 
@@ -515,7 +571,10 @@ func (in *Instance) memAccess(ins binary.Instr, st *stack) error {
 		}
 		v := st.popNum()   // the value, pushed second
 		idx := st.popNum() // the address, pushed first
-		return mem.write(mem.addr(idx), offset, storeBytes(v, m.width))
+		// `writeNum`, not `write(…, storeBytes(…))`: an aligned store must not tear, and a
+		// rendered byte slice reaching `copy` is exactly the decomposition the proposal forbids
+		// (ADR 0053).
+		return mem.writeNum(mem.addr(idx), offset, m.width, v)
 	}
 	if err := st.needNum(1); err != nil {
 		return err
@@ -525,7 +584,19 @@ func (in *Instance) memAccess(ins binary.Instr, st *stack) error {
 	if err != nil {
 		return err
 	}
-	st.pushNum(loadValue(bs, m))
+	// **The tear-freedom branch lives here rather than inside `loadValue`, and its placement is a
+	// measurement.** An aligned integer access up to 32 bits must not tear (`runtime.rst:742-746`),
+	// which a byte loop violates by construction — but hosting the branch in `loadValue` made that
+	// function too complex to inline (cost 65 → 165 against an 80-point budget) and cost 6.24% on
+	// every *unaligned* load, the one class the change was supposed to leave alone. Both arms here are
+	// inlinable on their own, so the branch is free and the cost lands nowhere. ADR 0053 records the
+	// figure, and this is what its registered rollback was for — the mechanism it named (a precomputed
+	// width flag) would not have touched the cause.
+	if wordAligned(bs, m.width) {
+		st.pushNum(extendSlot(loadWord(bs), m))
+	} else {
+		st.pushNum(loadValue(bs, m))
+	}
 	return nil
 }
 

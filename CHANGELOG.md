@@ -21,6 +21,52 @@ weakly-ordered platform.
 
 ### Added
 
+- **An aligned load or store up to 32 bits no longer tears: one typed word access, chosen at the
+  dispatch site** ([#557](https://github.com/scttfrdmn/burroughs/issues/557), [ADR
+  0053](docs/decisions/0053-tear-freedom-is-one-aligned-word-access-chosen-from-the-slices-own-host-address-because-0051-already-asserts-the-base.md),
+  `gate:threads`). The threads proposal's `tearing` marks an aligned integer access no wider than 32
+  bits `NOTEARS` (`runtime.rst:742-746` at ADR 0049's pin) and calls it from the *ordinary* load and
+  store rules, not the atomic ones — so this is a requirement #542's atomics do not discharge. The
+  engine read width bytes one at a time and rendered stores one at a time, which is exactly the
+  decomposition `NOTEARS` forbids. Both now take a single typed access through `unsafe` when the
+  slice's own base is aligned, with the byte loop kept as the general path.
+  - **The predicate is the slice's own host address, and that rests on ADR 0051's assertion.**
+    `checkBaseAlignment` already refuses to construct a memory whose backing array is not 8-byte
+    aligned, so `&bs[0]` being width-aligned is equivalent to the proposal's guest-space condition
+    `ea mod N/8 = 0` for every width up to 8 — which avoids threading an effective address into a
+    function three of whose callers (`gcobj.go`) have no effective address at all. Where the premise
+    does not hold the test is still *sound*, because a false answer only declines the fast path.
+  - **The authority is Go's memory model, cited locally** (`$(go env GOROOT)/doc/go_mem.html:245`),
+    which is why the access is a typed word read rather than `encoding/binary`: at the source level
+    the latter is four byte reads, so the word-sized guarantee would rest on an intrinsic no citation
+    covers.
+  - **Three of the four widths are over-conformance and it is free.** Aligned `i64` may tear (`N ≤ 32`
+    excludes it) and an aligned *float* access may always tear — `tearing(fN', N, u32) = ε` carries no
+    side condition, so `i32.load` and `f32.load` at the same aligned address have different
+    obligations. Branching on `isFloat` would be slower code written to be less conforming.
+  - **The branch lives at the dispatch site, and that placement is a measurement rather than a
+    taste.** Hosting it inside `loadValue` took that function from inline cost 65 to 165 against an
+    80-point budget, so every load in every module paid a call and *unaligned* loads — the class the
+    change was supposed to leave alone — regressed 6.24% at `p=0.000`, past the 2% bound registered
+    for them. `wordAligned` (19) plus `loadWord` (70) exceeds the budget on their own, so the
+    registered rollback's named mechanism, a precomputed width flag on the memop table, could not have
+    addressed the cause; its intent is served by moving the branch to `memAccess`, which is too large
+    to inline either way, so both arms inline into it. Re-measured: every row `~`.
+  - **The performance claim is withdrawn, as its registration said it would be.** Ten interleaved
+    rounds against `main` with the arms' binary hashes checked distinct show no row moving in either
+    direction, so the change is cost-neutral and conformance-positive — a weaker claim than the one
+    registered, and the one the numbers support. The `geomean` line's figure is not reported as a
+    speedup, because benchstat attaches no p-value to a geomean and all four of its inputs are `~`.
+  - **`internal/interp/membench` is the first bench package here to drive the real interpreter**,
+    built because nothing in the tree could execute a wasm load or store under measurement: every
+    `load`/`store` hit across the four existing bench packages is prose in a comment. Its arms differ
+    by one byte of address and nothing else, and its own control asserts that.
+  - **Whether narrow SIMD accesses carry the same obligation is a reading of normative text and is
+    filed, not answered** ([#565](https://github.com/scttfrdmn/burroughs/issues/565)). `simd.go`
+    reaches neither site this change touches, so those accesses still tear — which is the
+    unconstrained choice under one reading of `tearing`'s argument and a conformance gap under the
+    other.
+
 - **Contract §4's boundary edges exist: every host↔guest transition is now an acquire/release pair
   over the whole shared address space** ([#516](https://github.com/scttfrdmn/burroughs/issues/516),
   [ADR
