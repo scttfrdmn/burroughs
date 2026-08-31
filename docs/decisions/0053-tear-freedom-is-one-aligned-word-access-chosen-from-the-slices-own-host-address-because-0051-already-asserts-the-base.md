@@ -1,6 +1,11 @@
 # 0053 — Tear-freedom is one aligned word access, chosen from the slice's own host address, because 0051 already asserts the base
 
-Status: **proposed**
+Date: 2026-08-31 · Status: **proposed** — no stamp exists to cite, and *a `Status:` field is a
+citation to an approval*, so it stays open until one does. The scheduling was ordered in session
+(*"proceed with #557 … it's the last blocker"*) and **that is not a citation**: an in-session order
+leaves no artifact to point at, and *durability is not independence* — a record of it written by the
+actor who was ordered cites the actor. So nothing here is claimed as stamped, and the commits in this
+slice carry `Ratio-Class: carried`.
 
 Issue: [#557](https://github.com/scttfrdmn/burroughs/issues/557)
 Contract: none — and that is a finding, not an omission. See *This requirement is not §4's* below.
@@ -35,8 +40,11 @@ for i := len(bs) - 1; i >= 0; i-- {
 
 Four separate byte reads for an `i32.load`. The store side is `copy(m.bytes[ea:], storeBytes(v, width))`
 — a `memmove` whose granularity is not a guest-visible guarantee, over a byte slice rendered per store.
-Both are single call sites: `storeBytes` has exactly one caller (`memory.go:518`) and the memop load
-path exactly one (`memory.go:524`).
+Both are single call sites, on `main` at `9eb0acb` where they were read: `storeBytes` has exactly one
+caller (`memory.go:518`, `return mem.write(mem.addr(idx), offset, storeBytes(v, m.width))`) and the
+memop load path exactly one (`memory.go:524`, `bs, err := mem.read(mem.addr(idx), offset, m.width)`).
+The revision is named because this slice moves both lines, so a bare number would resolve against a
+tree that no longer has the shape the sentence describes.
 
 The rendered slice is **not** a heap allocation, which this ADR first said it was; see *The
 allocation was never there* below.
@@ -108,11 +116,12 @@ the next guest-level memory-model requirement is not looked for in §4 and then 
 
 The condition is `ea mod N/8 = 0` on the *guest* effective address, but what a single-instruction
 host access needs is absolute alignment in the host address space. The two coincide exactly when the
-backing array's base is 8-byte aligned — which `checkBaseAlignment` (`memory.go:185`) already asserts
-once per memory, for ADR 0051's benefit, refusing construction otherwise.
+backing array's base is 8-byte aligned — which `checkBaseAlignment` (`memory.go:195`,
+`func checkBaseAlignment(bs []byte) error`) already asserts once per memory, for ADR 0051's benefit,
+refusing construction otherwise.
 
 - **A — plumb `ea` to the access site.** Requires threading the effective address into `loadValue`,
-  whose four call sites include two in `gcobj.go` that have no effective address at all. Rejected:
+  whose call sites include three in `gcobj.go` that have no effective address at all. Rejected:
   it widens a signature to carry a value that a cheaper and more local fact already implies.
 - **B — test the slice's own host address, `uintptr(unsafe.Pointer(&bs[0])) & (width-1) == 0`.**
   Chosen. `bs` *is* `m.bytes[ea:ea+n]`, so its first element's address is the host address of `ea`;
@@ -156,6 +165,12 @@ dependency is real and a reader changing that assertion needs to find this ADR f
 order; an unaligned access keeps the byte loop.** The predicate is the slice's own host address. On
 the store side the rendered byte slice goes away with it, because a whole-word write needs nothing
 rendered — a code-shape consequence, not a measured saving (below).
+
+**And the branch lives at the dispatch site, not at the top of `loadValue`.** That is the one part of
+this decision the benchmark rewrote rather than confirmed; the figure and the mechanism are under *What
+came out* below. The short form: a `loadValue` containing the branch is not inlinable, `memAccess` is
+too large to be inlined either way, so hosting the branch in `memAccess` costs nothing and hosting it
+in `loadValue` costs a function call on every load in every module.
 
 ### Three widths are over-conformance, and it is free rather than tolerated
 
@@ -216,7 +231,8 @@ optimized away and I will say so rather than record a null."*
 That condition was checkable without the benchmark, and checking it came out against the forecast.
 `storeBytes` inlines into its only call site, and at that site the compiler reports the slice **does not
 escape** — on `main`, at the real call site, `go build -gcflags='-m -m'` prints
-`memory.go:518:53: make([]byte, width) does not escape`. Restoring the entire pre-change store path into
+`memory.go:518:53: make([]byte, width) does not escape` — again `main` at `9eb0acb`, the only tree where
+that line exists. Restoring the entire pre-change store path into
 this branch and measuring allocations through `Invoke` gave **0 per store**, unchanged from the new path.
 Two independent mechanisms, agreeing: escape analysis and a counter.
 
@@ -254,6 +270,79 @@ watched die.*
   *larger* speedup than registered needs a mechanism too, and "it got much faster" is exactly the
   result that goes unexamined.
 
+## What came out
+
+Ten interleaved rounds, `-benchtime=300x`, both arms compiled to binaries up front and their hashes
+checked distinct before any round ran (grave #552's protocol). **The hash check earned its keep on the
+first attempt:** both `go test -c` invocations ran in the external worktree, so the two "arms" were
+byte-identical copies of `main` and every row would have read `~` for the most boring possible reason.
+*Identical boards are the finding.*
+
+### First measurement — the control regressed, and the rollback fired
+
+With the branch inside `loadValue`, which is where this ADR put it:
+
+```
+LoadAligned-12       28.40µ ± 3%   28.66µ ± 2%       ~ (p=0.579 n=10)
+LoadUnaligned-12     28.26µ ± 2%   30.02µ ± 1%  +6.24% (p=0.000 n=10)
+StoreAligned-12      18.75µ ± 5%   18.15µ ± 3%       ~ (p=0.143 n=10)
+StoreUnaligned-12    18.70µ ± 7%   18.40µ ± 5%       ~ (p=0.436 n=10)
+```
+
+Two registered outcomes at once. The **aligned** rows did not move, which falsifies the direction
+forecast on both of them. And the **within-instrument control regressed 6.24%** at `p=0.000`, past its
+registered 2% bound — the rollback trigger, on exactly the row registered as *"the row most likely to
+embarrass the change"*. That row is why it was registered: *an unmeasured complement is not an empty
+one.*
+
+### The cause, found before the rollback was fired rather than after
+
+Firing a pre-registered rollback blind would have been the letter of the registration and a waste: the
+rollback names a *mechanism*, and a mechanism is a hypothesis about the cause. `-gcflags=-m=2`:
+
+| | `loadValue` |
+| --- | --- |
+| `main` | `can inline loadValue with cost 65` (budget 80) |
+| this branch, ADR-as-written | `cannot inline loadValue: function too complex: cost 165 exceeds budget 80` |
+
+So every load — aligned or not — went from an inlined body to a call. `wordAligned` costs 19 and
+`loadWord` costs 70; **89 alone exceeds the 80-point budget**, so an inlinable `loadValue` containing
+the branch is not a thing that can be tuned into existence. The 6.24% is the call, and the aligned
+rows read `~` because the word read's saving and the new call cancel.
+
+**The registered rollback's named mechanism does not address this cause, and its intent does.** The
+registration said the predicate *"moves off the per-access path — the memop table gains a precomputed
+fast-path-eligible width flag"*. That removes arithmetic from a function whose problem is not
+arithmetic: the flag would leave `loadWord` inline in `loadValue`, still 70 points, still over budget,
+still a call. What the registration was *for* — get the branch off the hot path — is served by moving
+the branch to the caller. `memAccess` costs 898 and is not inlinable under any change, so
+`wordAligned`, `loadWord`, `extendSlot` and `loadValue` all inline *into* it, and neither arm pays a
+call. Recorded this way round because a rollback executed to the letter against the wrong cause reads,
+afterwards, exactly like one that worked.
+
+### Second measurement — the restructured branch
+
+```
+LoadAligned-12       28.49µ ± 2%   28.34µ ± 3%   ~ (p=0.684 n=10)
+LoadUnaligned-12     28.57µ ± 4%   28.74µ ± 4%   ~ (p=0.631 n=10)
+StoreAligned-12      18.88µ ± 6%   18.46µ ± 8%   ~ (p=0.436 n=10)
+StoreUnaligned-12    19.33µ ± 5%   18.74µ ± 5%   ~ (p=0.315 n=10)
+geomean              23.34µ        23.04µ       -1.32%
+```
+
+The control is back inside its bound — `~` at `p=0.631`, from `+6.24%` at `p=0.000`. And **every row is
+`~`**, which settles the performance side the way the registration said it would be settled: *"if the
+aligned rows fail to improve, the mechanism stays anyway on conformance grounds and the performance
+claim is withdrawn from the report rather than restated more weakly."* It is withdrawn. Both direction
+forecasts are falsified.
+
+The geomean line prints `-1.32%` and **that is not reported as a speedup anywhere**, because benchstat
+attaches no p-value to a geomean and all four of its inputs are `~`. A summary figure assembled from
+four null results is not a fifth result.
+
+So this change is **cost-neutral and conformance-positive**, which is a weaker claim than the one
+registered and the one the numbers support.
+
 ## Consequences
 
 - **`loadValue`'s doc comment becomes wrong in the direction it warned about.** It currently says the
@@ -269,10 +358,23 @@ watched die.*
   authority" true of history and false of the tree. Reversing the *fallback* loop's index alone fails
   both `TestPhase1Files` and `TestThreadsProposalLane`, so the board does exercise unaligned accesses;
   reversing only the *word* path fails both as well. Neither path is carried by the other.
-- **A vacuity risk with a name.** The fast path could silently never be taken and every agreement test
-  would still pass, because both paths compute the same value. So the fast path is counted and the
-  count is asserted, which is the presence-oracle pattern from ADR 0052 — *a control isn't born until
-  it's watched die*, and here the death to watch is the fast path never firing.
+- **A vacuity risk with a name, and the count does *not* close it.** The fast path could silently never
+  be taken and every agreement test would still pass, because both paths compute the same value. So the
+  aligned and unaligned populations are counted and both are asserted non-empty — and running the
+  injection showed that assertion does **not** catch a deleted branch: the tally classifies *addresses*
+  by asking the predicate, which still answers correctly, so it reports the partition the code would
+  have had. Deleting `memAccess`'s branch, and deleting `writeNum`'s, both leave the two agreement
+  controls green. What catches them is the structural control, by AST, at its site floor — and
+  behaviourally the spec suite, since reversing only `loadWord` fails `TestPhase1Files` and could not if
+  the word path were unreached. The forecast that the floors would fire was written into two doc
+  comments and is corrected there; *a re-pointed control has not been watched die*, and this one had to
+  be run to find out which control the death lands on.
+- **`loadValue`'s remaining callers are the ones with no obligation, and that is a gain.** After the
+  branch moved to the dispatch site, `loadValue` is reached by `memAccess`'s unaligned arm — where
+  tearing is permitted — and by `gcobj.go`, whose bytes are Go-allocated struct fields rather than
+  linear memory. `struct.get` is a different rule from `t.load`, so `tearing`'s condition never reached
+  those three sites; the narrower placement is more faithful to the specification than the wider one,
+  not a concession made for the inliner.
 - **`checkBaseAlignment` acquires a second dependent.** Its comment names ADR 0051; it now also
   guarantees this decision's conformance, and saying so is what makes the coupling findable from the
   assertion rather than only from here.
