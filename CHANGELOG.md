@@ -446,6 +446,37 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`citecheck.sh` reported zero citations and exited 0 whenever its revision did not resolve**
+  ([grave #549](https://github.com/scttfrdmn/burroughs/issues/549), `type:grave`, charged overhead on
+  [#545](https://github.com/scttfrdmn/burroughs/issues/545)). Both diff captures ended `|| true`, and
+  `git diff` is invoked there without `--exit-code` or `--quiet` — so it returns 0 whether or not
+  there are differences and **that token had no legitimate subject.** What it caught was an argument
+  that is not a revision: git wrote `fatal:` to stderr, `|| true` turned 128 into 0, `diffout` was
+  empty, and all seven checks ran over nothing and signed off with *"this diff cites nothing"* — a
+  finding about a diff standing in for a confession that no diff was read.
+  - **It is [grave #365](https://github.com/scttfrdmn/burroughs/issues/365)'s specimen recurring in
+    the same file, fourteen lines below the comment that narrates it.** That repair fixed the `--pr`
+    fetch's swallowed status and left the diff arm's identical hole standing, which is why the new
+    control's domain is *the scripts* rather than the arm — a per-arm fix is how the second grave came
+    out of the first.
+  - **Reached twice in one session on real work**, both times caught by a figure being implausible
+    rather than by the tool: `--range origin/main HEAD` reported 0 added lines over a 1219-line diff,
+    and `--body <file>` reported 0 over a comment carrying 20 citations. `--range` is nobody's form;
+    `--body` is `closecheck.sh`'s and not this script's, and that asymmetry is what invites it.
+  - **The blast radius was derived, not assumed.** All three scripts taking the same revision forms
+    were asked with four bad arguments each: `closecheck.sh` and `ratio.sh` exit 128/129 on every one,
+    `citecheck.sh` exited 0 on every one — including a plain unresolvable revision, which is the
+    cleanest witness because no flag is involved. So this is a swallowed `git` status, not an
+    unknown-flag defect with a revision symptom.
+  - Repaired by dropping both `|| true`, verifying each user-supplied revision resolves before
+    anything is diffed, and refusing an unrecognized `-*` argument by shape rather than against an
+    allow-list — the allow-list being the half that goes stale when a form is added.
+  - `TestABadRevisionIsNeverAPass` covers all three scripts over a domain derived from their usage
+    strings, both directions, against a two-commit fixture repository that cites nothing so the arm
+    needs no network. **Its own falsification found a guard with no witness in it:** deleting the new
+    `-*` rejection left the test green, because the revision check catches a flag too. So the flag
+    arm's non-zero exit is not evidence about flag handling, the arm asserts the guard's *message*
+    instead, and the comment says which of the two arms is subsumed.
 - **The `deadcode` gate read an empty capture as a clean bill of health, so a tool that never ran
   passed it** ([grave #544](https://github.com/scttfrdmn/burroughs/issues/544), `type:grave`, charged
   overhead on [#545](https://github.com/scttfrdmn/burroughs/issues/545)). Both halves suppressed the
