@@ -63,11 +63,18 @@ func skipWalkDir(d fs.DirEntry, also ...string) bool {
 // would not report a false violation but a **false pass** — a citation naming a file that exists only
 // inside a nested copy of the repo would resolve, and the control would call it good.
 //
+// **Eight** since #516: enginelock_test.go's walk for contract §4 B-MM-3, whose domain is every
+// non-test `.go` file in the tree. It is the first site whose domain is Go *source* rather than
+// markdown or text, and the first whose subject is a `type:grave`-free future event — it fires on the
+// first `sync` import in engine code and is otherwise green over a non-empty domain. A walk that
+// overran the boundary here would report a nested copy's imports as this tree's, which is grave #369's
+// false red in the one control whose whole value is the message it prints when it goes red.
+//
 // A floor and not an equality, because another walk site is a normal thing to add and the check that
 // matters is the routing one; if this number ever needs *lowering*, a walk site was deleted and that
 // is worth noticing deliberately. It tracks the known count for exactly that reason — left behind
 // when a new site lands, the floor stops being able to notice a deletion.
-const walkBoundaryFloor = 7
+const walkBoundaryFloor = 8
 
 // TestEveryTreeWalkStopsAtTheRepoBoundary is grave #369's control, and it guards the general shape
 // rather than the specific name.

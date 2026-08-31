@@ -21,6 +21,41 @@ weakly-ordered platform.
 
 ### Added
 
+- **Contract §4's boundary edges exist: every host↔guest transition is now an acquire/release pair
+  over the whole shared address space** ([#516](https://github.com/scttfrdmn/burroughs/issues/516),
+  [ADR
+  0052](docs/decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md),
+  `gate:threads`). B-MM-1's mechanism, as distinct from #10 which is its battery: one package-level
+  sequentially-consistent word in `internal/interp/boundary.go`, incremented entering and leaving each
+  of five derived sites — `InstantiateLinked`, `build`, `runConst`, `invokeIndex` and
+  `Instance.Global`.
+  - **One word for the package, not one per instance, because a shared memory spans instances.** A
+    per-`Instance` word is cheaper and has a hole that opens under exactly the concurrency v1 is
+    building: two instances can import the same memory, and two agents releasing and acquiring on two
+    different words have no edge between them. Per-*object* words are wrong on the memory model
+    instead of on cost — a release publishes every prior write of that goroutine, not the writes near
+    the word — so one word covers everything they would, at one atomic rather than one per import.
+  - **The count is a presence oracle and not an ordering oracle**, and the code says so where it
+    could be overread. Deleting a crossing shortens a delta, which is what
+    `TestEveryBoundaryCrossingIsPaired` reads; nothing running one agent on one architecture witnesses
+    that a write before a release is *visible* after an acquire. That is B-MM-5's job and #10's
+    battery, on a TSO and a weakly-ordered platform.
+  - **B-MM-3 gets a tripwire, and its green today is stated to be an analytic zero.** There are no
+    engine-internal locks, so the clause is true by having no subject. `TestNoSyncPrimitiveIsUsedInEngineCode`
+    fires on the first non-test file in the tree importing `sync`, keyed on the import path rather
+    than a `sync.Mutex` selector because an aliased import evades a selector match, and it carries
+    B-MM-3's instruction in its failure message — which is the whole of its value.
+  - **B-MM-4 gets a stated default and deliberately no control.** The clause makes an unannotated
+    boundary call *conforming* and sequentially consistent, so a test demanding an annotation would be
+    stricter than the contract it cites. What lands is the convention and the `// Publication:` form,
+    so the first non-SC call has a spelling rather than inventing one under pressure.
+  - **Four falsifications, run.** A scratch non-test file with a `sync` import and a crossing-free
+    `stack{…}` literal failed both new controls by name; deleting `invokeIndex`'s release edge failed
+    the pairing deltas *and* the structural control; blinding each vacuity floor failed at `found 0`.
+    A `stack{t: nil}` literal also discriminates the two structural controls — it satisfies
+    `TestEveryStackCreationSiteCarriesAThread` and fails the boundary one — so they are independent
+    rather than two spellings of one check.
+
 - **The 67 atomics are actually atomic: sequentially-consistent word operations over the backing
   array** ([#542](https://github.com/scttfrdmn/burroughs/issues/542), [ADR
   0051](docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md),

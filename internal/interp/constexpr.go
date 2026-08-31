@@ -131,6 +131,12 @@ func (in *Instance) constAddr(expr []binary.Instr, site string) (uint64, error) 
 // instantiation path to read it, and appending a parenthetical would change an oracle-covered trap
 // string into a near-miss (`refop.go`'s note on which trap texts the suite matches verbatim).
 func (in *Instance) runConst(expr []binary.Instr, numWant, refWant int, site string) (*stack, error) {
+	// §4 B-MM-1, at the enclosing function of the `stack` literal below. Called once per global
+	// initializer and once per active segment offset, so instantiation crosses here repeatedly —
+	// the count 0052's forecast is put to (`boundary.go`, decision 0052, #516).
+	enterGuest()
+	defer leaveGuest()
+
 	fn := &binary.Func{Body: expr}
 	// `t: &in.host` — propagation site 1 of 3 for decision 0050's per-thread context. A const
 	// expression runs on whichever thread reached instantiation, which is the host's. This is also

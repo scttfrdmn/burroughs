@@ -67,6 +67,14 @@ Scott, *is* the decisions-needed queue, now queryable. **Queryable by the issues
 have just drained reads as full, in a report to the principal whose queue it is. Recipe, and the
 two ways the API arm still under-reports: [reading the tracker's
 state](docs/laws/operations.md#reading-the-trackers-state-the-queue-comes-from-the-issues-api-never-from-a-cached-listing).
+**And the queue is parked: it is not reported at all until the §4 litmus battery ([#10](https://github.com/scttfrdmn/burroughs/issues/10))
+completes.** No count, no list, no *"none blocking"* — an item is surfaced only when it **blocks code**,
+and then only that item. Filing is untouched; what is parked is the reporting. Scott's order on the
+#562 review, and the end point is half of it: *"the queue parking gets an end point so it stops
+recurring … Until then, don't report the queue at all — 'twelve waiting, none blocking' is itself the
+surfacing I asked you to stop, and half-parking pays both costs."* Recorded here by the actor who was
+ordered, which is not independent provenance — *durability is not independence* — so commits in the
+slices this covers stay `Ratio-Class: carried`.
 Graves are closed issues labeled
 `type:grave`, lesson in the closing comment, with a comment at the fix site citing the number.
 
