@@ -132,7 +132,11 @@ func (in *Instance) constAddr(expr []binary.Instr, site string) (uint64, error) 
 // string into a near-miss (`refop.go`'s note on which trap texts the suite matches verbatim).
 func (in *Instance) runConst(expr []binary.Instr, numWant, refWant int, site string) (*stack, error) {
 	fn := &binary.Func{Body: expr}
-	st := &stack{num: make([]uint64, 0, max(numWant, len(expr)))}
+	// `t: &in.host` — propagation site 1 of 3 for decision 0050's per-thread context. A const
+	// expression runs on whichever thread reached instantiation, which is the host's. This is also
+	// the only one of the three that hands its stack back to a caller, which is what makes
+	// propagation behaviourally observable at all: see `TestTheHostThreadTakesTheFirstIDAndIsNotSpecial`.
+	st := &stack{t: &in.host, num: make([]uint64, 0, max(numWant, len(expr)))}
 	if err := in.run(fn, nil, st, numWant, refWant); err != nil {
 		return nil, err
 	}
