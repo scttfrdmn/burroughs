@@ -181,6 +181,11 @@ func InstantiateLinked(m *binary.Module, imp Imports) (*Instance, *Trap, error) 
 		// allocation the way a defined memory does, where a defined function needs none.
 		tags: make([]*tagInst, tagOff+len(m.Tags)),
 	}
+	// The host's own thread, so every stack this engine creates outside `Spawn` has a `*thread` to
+	// carry (decision 0050, T-4). Built here rather than lazily at the first stack: a lazy one makes
+	// the nil case reachable from `Instantiate`, and #515's safepoint check would then have to handle
+	// a stack with no thread as a *live* state rather than as a test-only one.
+	in.host = in.newThread()
 	// **Imports are resolved before anything is allocated or evaluated**, and the position is
 	// forced rather than chosen: a global's initializer may read an imported global, and an
 	// element or data segment's offset may too, so an unfilled import slot during those passes

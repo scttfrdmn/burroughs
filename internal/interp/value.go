@@ -265,6 +265,27 @@ type stack struct {
 	refSeq   []uint64
 	nextSeq  uint64
 	tracking bool
+
+	// t is the thread this stack is executing on — decision 0050's chosen representation for
+	// contract §2's T-4 slot, and the object §§3–5's per-thread state will hang off (see
+	// `thread`, thread.go).
+	//
+	// **A pointer here rather than the slot itself, and the difference is what 0050 is about.**
+	// `stack` is per-*invocation*; T-4 asks for per-*thread*. Those coincide today because a wasm
+	// call reuses its caller's stack, and §7's growable continuations (v2) will make them differ by
+	// creating stacks *within* one thread. A slot stored directly would then be per-continuation,
+	// and a fresh stack that forgot to copy it would hold a **zero value indistinguishable from a
+	// legitimate first thread** — a plausible wrong answer rather than a crash. A pointer copies
+	// idempotently, and a stack that forgot holds nil.
+	//
+	// **Nil is legal and means "no thread context", which is every stack the host creates for its
+	// own bookkeeping.** Nothing on the hot path reads this in #514's slice — the first reader is
+	// #515's safepoint check — so a nil here is not yet a defect, and the three creation sites that
+	// do set it (`runConst`, the start function, `invokeIndex`) hand over `in.host`.
+	//
+	// Carrying it costs the dispatch loop nothing beyond `stack`'s width, which is 0050's live
+	// forecast rather than an assumption: no `scanbench` row moves by more than 2%.
+	t *thread
 }
 
 // frame is a call's local-variable storage: 0002's parallel-array split applied to *locals*
