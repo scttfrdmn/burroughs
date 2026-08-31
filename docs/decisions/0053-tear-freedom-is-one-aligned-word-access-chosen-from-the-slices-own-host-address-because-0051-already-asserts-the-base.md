@@ -23,7 +23,7 @@ tearing(iN', N, u32)  =  ε         (otherwise)
 tearing(fN', N, u32)  =  ε
 ```
 
-called from the *ordinary* load and store rules — `instructions.rst:1763` and `:2315`, each
+called from the *ordinary* load and store rules — `instructions.rst:1763` and `instructions.rst:2315`, each
 `Let notears? be tearing(t, N, ea)` — not from the atomic ones. So this is a different requirement
 from #542/ADR 0051's, on different opcodes, and it exists even with every atomic implemented
 perfectly.
@@ -40,11 +40,12 @@ for i := len(bs) - 1; i >= 0; i-- {
 
 Four separate byte reads for an `i32.load`. The store side is `copy(m.bytes[ea:], storeBytes(v, width))`
 — a `memmove` whose granularity is not a guest-visible guarantee, over a byte slice rendered per store.
-Both are single call sites, on `main` at `9eb0acb` where they were read: `storeBytes` has exactly one
-caller (`memory.go:518`, `return mem.write(mem.addr(idx), offset, storeBytes(v, m.width))`) and the
-memop load path exactly one (`memory.go:524`, `bs, err := mem.read(mem.addr(idx), offset, m.width)`).
-The revision is named because this slice moves both lines, so a bare number would resolve against a
-tree that no longer has the shape the sentence describes.
+Both are single call sites, and on `main` at `9eb0acb` — where they were read — both are inside
+`internal/interp/memory.go:memAccess`: `return mem.write(mem.addr(idx), offset, storeBytes(v, m.width))`
+is `storeBytes`' only caller, and `bs, err := mem.read(mem.addr(idx), offset, m.width)` is the memop
+load path's. Cited by symbol and quoted line rather than by line number, per ADR 0047, because this
+slice rewrites both statements: a number would resolve against a tree that no longer has the shape the
+sentence describes.
 
 The rendered slice is **not** a heap allocation, which this ADR first said it was; see *The
 allocation was never there* below.
@@ -116,9 +117,8 @@ the next guest-level memory-model requirement is not looked for in §4 and then 
 
 The condition is `ea mod N/8 = 0` on the *guest* effective address, but what a single-instruction
 host access needs is absolute alignment in the host address space. The two coincide exactly when the
-backing array's base is 8-byte aligned — which `checkBaseAlignment` (`memory.go:195`,
-`func checkBaseAlignment(bs []byte) error`) already asserts once per memory, for ADR 0051's benefit,
-refusing construction otherwise.
+backing array's base is 8-byte aligned — which `internal/interp/memory.go:checkBaseAlignment` already
+asserts once per memory, for ADR 0051's benefit, refusing construction otherwise.
 
 - **A — plumb `ea` to the access site.** Requires threading the effective address into `loadValue`,
   whose call sites include three in `gcobj.go` that have no effective address at all. Rejected:
@@ -190,13 +190,17 @@ float rule is documented where a reader would otherwise reconstruct it wrongly f
 
 ## What this does not cover
 
-- **SIMD.** `simd.go` reads and writes through the same `read`/`write` pair at four sites, and a
-  `v128` access is 128 bits, so `tearing` gives it `ε`. But the *narrow* SIMD accesses —
-  `v128.load32_splat`, `v128.load32_lane` and their siblings — touch 4 bytes, and whether the
-  proposal's `t` at `instructions.rst:1763` is the lane type or the vector type decides whether they
-  carry `NOTEARS`. **That is a reading of normative text and it is not decided here**; it is filed
-  rather than answered by whichever way this implementation happens to fall, and it currently falls
-  on the byte-loop side because `simd.go` does not call `loadValue`.
+- **SIMD**, filed as [#565](https://github.com/scttfrdmn/burroughs/issues/565). `simd.go` reads and
+  writes through the same `read`/`write` pair at four sites — `internal/interp/simd.go:vecLoad`,
+  `:vecStore`, `:vecLoadLane` and `:vecStoreLane` — and
+  a `v128` access is 128 bits, so `tearing` gives it `ε`. But the *narrow* SIMD accesses —
+  `v128.load32_splat`, `v128.load32_lane`, `v128.load32_zero`, `v128.store32_lane` and their 8-, 16- and
+  64-bit siblings — touch 4 bytes or fewer, and whether the proposal's `t` at `instructions.rst:1763` is
+  the lane type or the vector type decides whether they carry `NOTEARS`. **That is a reading of
+  normative text and it is not decided here.** It falls on the byte-loop side in this tree only because
+  `simd.go` reaches neither of the two sites this decision touches — not `memAccess`'s branch and not
+  `writeNum` — which is a fact about which functions `simd.go` happens to call and must not be read as
+  an answer.
 - **Whether a tear can be *observed*.** Nothing here witnesses non-tearing; it witnesses that the
   single-word path was taken. A witness needs two guest threads racing on a weakly-ordered platform,
   which is #554 plus a battery, and it is the same presence-versus-ordering distinction ADR 0052
@@ -231,8 +235,9 @@ optimized away and I will say so rather than record a null."*
 That condition was checkable without the benchmark, and checking it came out against the forecast.
 `storeBytes` inlines into its only call site, and at that site the compiler reports the slice **does not
 escape** — on `main`, at the real call site, `go build -gcflags='-m -m'` prints
-`memory.go:518:53: make([]byte, width) does not escape` — again `main` at `9eb0acb`, the only tree where
-that line exists. Restoring the entire pre-change store path into
+`make([]byte, width) does not escape`, at the `storeBytes` call inside
+`internal/interp/memory.go:memAccess` — again `main` at `9eb0acb`, the only tree where that call exists.
+Restoring the entire pre-change store path into
 this branch and measuring allocations through `Invoke` gave **0 per store**, unchanged from the new path.
 Two independent mechanisms, agreeing: escape analysis and a counter.
 
