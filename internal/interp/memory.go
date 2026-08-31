@@ -3,6 +3,7 @@ package interp
 import (
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
@@ -28,12 +29,16 @@ var trapOOB = &Trap{Reason: "out of bounds memory access"}
 
 // memory is one linear memory: its bytes and the type that bounds them.
 //
-// **A flat `[]byte` grown by reallocation**, which is `memory.ml`'s own shape (`create` makes a
-// zeroed Bigarray, `grow` allocates and blits) and not a decision this phase gets to make
-// interestingly. What §1's workload wants — a Go guest that loads once and runs for hours — is
-// a memory whose *steady state* is a single contiguous slice with no indirection per access,
-// which this is. The interesting version of this question is v1's, where §4's boundary model
-// and shared memories decide whether growth may move the backing array at all.
+// **A flat `[]byte`**, which is `memory.ml`'s own shape (`create` makes a zeroed Bigarray, `grow`
+// allocates and blits) and not a decision v0 got to make interestingly. What §1's workload wants —
+// a Go guest that loads once and runs for hours — is a memory whose *steady state* is a single
+// contiguous slice with no indirection per access, which this is.
+//
+// **Growth moves the backing array for an unshared memory and never for a shared one**, which is the
+// question this comment used to defer to v1 — *"§4's boundary model and shared memories decide
+// whether growth may move the backing array at all"* — and #556 is where v1 answered it. Recorded
+// here because a deferral left standing after its subject is settled tells the next reader the tree
+// is in a state it is not. The reasons are on `allocate` and on `grow`.
 type memory struct {
 	// bytes is the memory's contents. Its length is always a multiple of pageSize, and it
 	// is the authority on the current size — the reference reads `size` back out of the
@@ -71,7 +76,121 @@ func newMemory(m binary.Memory) (*memory, error) {
 	if n > math.MaxInt {
 		return nil, &Trap{Reason: "out of memory"}
 	}
-	return &memory{bytes: make([]byte, n), limits: lim}, nil
+	bs, err := allocate(lim, n)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkBaseAlignment(bs); err != nil {
+		return nil, err
+	}
+	return &memory{bytes: bs, limits: lim}, nil
+}
+
+// allocate reserves the backing array, and for a **shared** memory it reserves the declared
+// maximum as capacity so that `grow` never has to move the array (#556).
+//
+// The array moving is not a performance question, it is a memory-safety one. A slice header is
+// three words and `grow` writes all three; a concurrent reader can observe the new length paired
+// with the stale pointer and index past the end of the old array. The spec is explicit that a wasm
+// data race is *not* undefined behaviour (`relaxed.rst:248`), so an engine that turns a permitted
+// guest race into a Go out-of-bounds read has strengthened the guest's crime into its own. And
+// under ADR 0051 the atomics hold a pointer into this array for the duration of an access, which an
+// array that can be replaced underneath them makes meaningless — an atomic operation on a
+// reallocatable array is not an atomic operation. That is why this is #542's floor rather than an
+// arm beside it.
+//
+// **Reserving is available because the validator already guarantees the max exists.**
+// `internal/validate/module.go:checkMemoryType` refuses a shared memory that declares no maximum
+// (`ErrSharedMemoryNoMax`), which is the threads proposal's own requirement, so `lim.Max` is always
+// known on the branch that needs it. Cited by symbol rather than by line per ADR 0047, so that
+// `TestSymbolCitationsResolveToADeclaration` checks it and an insertion above it cannot re-point it.
+//
+// The branch on `Shared` is stated rather than hidden: an unshared memory has no second observer by
+// construction, so §0's performance partisanship says leave its allocate-and-blit alone rather than
+// reserve address space no guest can race for.
+//
+// **The reservation is capped, because reserving `max` outright was pre-registered and measured too
+// expensive.** ADR 0051 forecast under 1 ms for the largest declaration the address width allows and
+// stated the rollback in advance; the measurement came back at 4.3 ms best and **855 ms worst** for
+// `(memory 1 65535 shared)`, three orders over, so the rollback fired. `sharedReservePages` is that
+// cap. What is *not* the registered rollback is what happens above it — see `grow`.
+func allocate(lim binary.Limits, n uint64) ([]byte, error) {
+	if !lim.Shared || !lim.HasMax {
+		return make([]byte, n), nil
+	}
+	reserve := min(lim.Max, sharedReservePages) * pageSize
+	if reserve < n {
+		// A declared minimum above the cap is allocated in full and simply cannot grow.
+		// `grow` reports that as the spec's -1 rather than pretending otherwise.
+		reserve = n
+	}
+	if reserve > math.MaxInt {
+		// The reservation itself is what cannot be served. Reported as the same
+		// out-of-memory trap the minimum would have raised, because from the module's
+		// side that is what happened.
+		return nil, &Trap{Reason: "out of memory"}
+	}
+	return make([]byte, n, reserve), nil
+}
+
+// sharedReservePages caps how much capacity a shared memory reserves at instantiation, in pages.
+//
+// **The value comes from the measurement that falsified ADR 0051's forecast, not from taste.** Best
+// and worst of five `newMemory` calls per size, this host:
+//
+//	max pages   size     best        worst
+//	       64   4 MiB     45.1 µs    474.7 µs
+//	      128   8 MiB     12.2 µs    618.6 µs
+//	      256  16 MiB     11.8 µs      1.161 ms
+//	      512  32 MiB    334.5 µs      2.673 ms
+//	     1024  64 MiB    367.9 µs     26.050 ms
+//	    65535   4 GiB      4.288 ms  855.438 ms
+//
+// The spread is the allocator's `needzero`: a fresh arena span is already zero and costs nothing to
+// hand out, where a span the allocator has recycled is cleared first — and a 4 GiB memclr is not a
+// millisecond. So 128 is the largest size whose *worst* case clears the 1 ms bar the forecast set,
+// and taking the worst column rather than the best is the point: the best case is the one a
+// benchmark loop and a fresh process both see, and the worst is the one a long-running host hits.
+//
+// **A package-level var rather than a field, and that is a deliberate non-decision.** Making this
+// configurable through the public API is API-surface design, which §0 makes partisan and which is
+// therefore Scott's and chat-Claude's rather than this slice's. A var is settable from inside the
+// package, which is all any test here needs, and it does not commit the boundary to a shape.
+//
+// The number limits which programs run — a shared memory declaring a larger max cannot grow past
+// this — so it is flagged for review rather than merely recorded. Nothing observable in this tree
+// depends on it yet: no vector grows a shared memory, and no threaded guest can run at all until
+// T-1 lands. That makes it cheap to move on evidence later and wrong to pick generously now.
+var sharedReservePages uint64 = 128
+
+// checkBaseAlignment asserts the premise ADR 0051's atomics rest on: the backing array's base is
+// 8-byte aligned in the host's address space.
+//
+// The threads proposal guarantees an atomic access is naturally aligned *relative to the memory's
+// base* (`relaxed.rst:242`), which the interpreter already traps on. `sync/atomic` needs absolute
+// alignment, and **Go does not document any alignment for the result of `make([]byte, n)`.**
+// Measured across 800 allocations from 64 KiB to 16 MiB the base was 8-byte aligned every time,
+// which is what the allocator's span alignment predicts for page-sized and larger objects — but a
+// measurement is not a guarantee, so the premise is asserted here, once per memory, where a reader
+// can find it and where a platform that violated it would fail one loud construction instead of
+// producing torn atomics.
+//
+// `-race` checks the same premise far more thoroughly, at every access, because it enables
+// `checkptr` and every `unsafe.Pointer` conversion in `atomic.go` is instrumented with
+// `runtime.checkptrAlignment`. This assertion earns its place by holding in non-race builds too.
+//
+// **A zero-length memory is legal** — `(memory 0)` appears in `align.wast:3` — so the slice may
+// have no first element to take the address of, and there is nothing to check: no access into a
+// zero-length memory is in bounds.
+func checkBaseAlignment(bs []byte) error {
+	if len(bs) == 0 {
+		return nil
+	}
+	if base := uintptr(unsafe.Pointer(&bs[0])); base%8 != 0 {
+		return fmt.Errorf("%w: linear memory base %#x is not 8-byte aligned, so the atomics in "+
+			"atomic.go cannot use sync/atomic on it (ADR 0051)", ErrUnsupportedOp, base)
+	}
+	return nil
 }
 
 // validSize is `memory.ml:27`'s `valid_size`: an i32-addressed memory is capped at 0xffff
@@ -188,12 +307,59 @@ func (m *memory) grow(delta uint64) int64 {
 	if n > math.MaxInt {
 		return -1
 	}
-	// Reallocate and copy, matching `grow`'s allocate-and-blit. `append` would also work
-	// and would leave the growth factor to the runtime; an explicit make is what keeps the
-	// length an exact multiple of pageSize, which `size` reads back as the authority.
-	grown := make([]byte, n)
-	copy(grown, m.bytes)
-	m.bytes = grown
+	// **A memory with reserved capacity grows by reslicing into it; the pointer never moves.**
+	// The condition is the capacity rather than `limits.Shared`, and that is deliberate in both
+	// directions: `allocate` reserves capacity only for a shared memory (#556), so this is the
+	// shared arm in practice — but an unshared memory whose allocator rounded its size class up
+	// would also take it, and reslicing is *correct* there too, since `make` zeroes the whole
+	// object and the reservation's tail is therefore already the zero page the spec requires.
+	// Testing the property the code actually needs beats testing the flag that usually implies
+	// it.
+	//
+	// The safety argument is about what a *concurrent* reader of the slice header can observe: the
+	// pointer is unchanged and the length only rises, so a torn header pairs a stable pointer
+	// with either the old or the new length. Both are in bounds, and the tail is already zero
+	// because the reservation came from `make`. The torn read becomes benign rather than
+	// needing to be prevented — which is the only version of this that works, since there is
+	// no way to write three words atomically.
+	//
+	// The other arm reallocates and copies, matching `grow`'s allocate-and-blit. `append`
+	// would also work and would leave the growth factor to the runtime; an explicit make is
+	// what keeps the length an exact multiple of pageSize, which `size` reads back as the
+	// authority.
+	switch {
+	case n <= uint64(cap(m.bytes)):
+		m.bytes = m.bytes[:n]
+	case m.limits.Shared:
+		// **Above the reservation a shared memory refuses to grow, and this is a
+		// deviation from ADR 0051's pre-registered rollback that has to be said out loud.**
+		// The registration said *"falling back to allocate-and-blit above it, accepting
+		// that a shared memory grown past the ceiling needs the header protected some
+		// other way."* There is no other way that is both safe and cheap, and worse, the
+		// registration did not account for its own decision: ADR 0051 has the atomics
+		// holding a raw pointer into this array for the duration of an access, so
+		// allocate-and-blit here is not merely a torn header — it is a **use-after-free**,
+		// an atomic operating on an array the engine has abandoned while another agent
+		// works on the replacement. *A failed pre-registration narrows, it does not
+		// licence*, and shipping the registered fallback because it was registered would
+		// be honouring the letter of the discipline by breaking memory safety.
+		//
+		// `-1` is the conforming alternative, and it is conforming rather than convenient:
+		// `memory.grow` does not trap, it reports failure in its result, and the reference
+		// itself fails a grow for reasons of its own (`memory.ml:60-67`'s SizeOverflow and
+		// SizeLimit). An engine limit reported through the channel the spec provides for
+		// engine limits is a true answer. A guest that needs more growth room than
+		// `sharedReservePages` gets a legal refusal instead of a wrong success.
+		//
+		// Nothing in either corpus reaches this arm — no vector grows a shared memory at
+		// all — so the board cannot witness it, and
+		// `TestSharedMemoryGrowthKeepsItsBackingArray` is what stands in for one.
+		return -1
+	default:
+		grown := make([]byte, n)
+		copy(grown, m.bytes)
+		m.bytes = grown
+	}
 	// **The declared type grows with the memory, and it is mutable for exactly this
 	// reason.** `memory.ml:64`'s `grow` sets `mem.ty <- MemoryT (at, lim')` with `lim'.min`
 	// the new size — `type_of` (called at import-match time, `instance.ml:76`) reads that

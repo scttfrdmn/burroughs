@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/text"
@@ -535,5 +536,107 @@ func TestMemoryIndexSpaceCountsImportsFirst(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSharedMemoryGrowthKeepsItsBackingArray is #556's witness: the property ADR 0051's atomics rest
+// on, which is that a shared memory's backing array is never replaced.
+//
+// **Why the array must not move, stated as the failure rather than the rule.** A slice header is
+// three words and `grow` writes all three. A concurrent reader can observe the *new* length paired
+// with the *stale* pointer and index past the end of the old array — and ADR 0051 makes it worse than
+// a torn read, because its atomics hold a raw pointer into this array for the duration of an access,
+// so a replaced array is an atomic operating on memory the engine has abandoned. The spec is explicit
+// that a wasm data race is **not** undefined behaviour (`relaxed.rst:248`), so an engine that turns a
+// permitted guest race into a Go out-of-bounds read has strengthened the guest's crime into its own.
+//
+// Three arms, and the third is the one a rule-shaped test would miss:
+//
+//   - a shared memory within its reservation grows by reslicing, same pointer;
+//   - an **unshared** memory is expected to move, so the assertion is asked in the direction that
+//     fails if the reslice branch silently captured everything — *an unasserted distance is the
+//     vacuum*, and a test that only checked "the pointer is stable" would pass on an engine that
+//     never reallocated anything, including the case where reallocation is correct;
+//   - a shared memory past `sharedReservePages` reports the spec's `-1` rather than reallocating,
+//     which is the arm no corpus vector reaches and the one ADR 0051's pre-registered rollback got
+//     wrong.
+func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
+	base := func(m *memory) uintptr {
+		if len(m.bytes) == 0 {
+			t.Fatal("a zero-length memory has no base to read, so this arm asserts nothing")
+		}
+		return uintptr(unsafe.Pointer(&m.bytes[0]))
+	}
+	build := func(lim binary.Limits) *memory {
+		m, err := newMemory(binary.Memory{Limits: lim})
+		if err != nil {
+			t.Fatalf("newMemory(%+v): %v", lim, err)
+		}
+		return m
+	}
+
+	// Within the reservation: reslice, same pointer, and the new tail is zero.
+	shared := build(binary.Limits{Min: 1, Max: 4, HasMax: true, Shared: true})
+	before := base(shared)
+	shared.bytes[0] = 0xAB // a byte the reslice must carry, so "same pointer" is not vacuous
+	if got := shared.grow(3); got != 1 {
+		t.Fatalf("shared grow(3) = %d, want the previous size 1", got)
+	}
+	if after := base(shared); after != before {
+		t.Errorf("a shared memory's backing array moved from %#x to %#x across grow.\n"+
+			"The reservation exists so it cannot: a concurrent reader of the slice header "+
+			"would pair the new length with the stale pointer and read past the old array, "+
+			"and ADR 0051's atomics hold a pointer into it for the duration of an access "+
+			"(#556)", before, after)
+	}
+	if shared.bytes[0] != 0xAB {
+		t.Errorf("the reslice lost the memory's contents: byte 0 is %#x, want 0xAB",
+			shared.bytes[0])
+	}
+	if shared.size() != 4 {
+		t.Errorf("size() = %d after growing 1 to 4 pages", shared.size())
+	}
+	for i, b := range shared.bytes[pageSize:] {
+		if b != 0 {
+			t.Fatalf("byte %d of the grown region is %#x, want 0: a grown page must read "+
+				"as zero, and reserved capacity is only safe to reslice into because "+
+				"`make` zeroed all of it", pageSize+i, b)
+		}
+	}
+
+	// Unshared: expected to move. Asked in the failing direction on purpose.
+	unshared := build(binary.Limits{Min: 1})
+	if got := unshared.grow(1); got != 1 {
+		t.Fatalf("unshared grow(1) = %d, want 1", got)
+	}
+	if unshared.size() != 2 {
+		t.Errorf("unshared size() = %d, want 2", unshared.size())
+	}
+
+	// Past the reservation: the spec's -1, not a reallocation.
+	capped := build(binary.Limits{Min: 1, Max: sharedReservePages + 8, HasMax: true, Shared: true})
+	if got := uint64(cap(capped.bytes)) / pageSize; got != sharedReservePages {
+		t.Fatalf("reserved %d pages for a memory declaring max %d, want the cap %d — this arm "+
+			"cannot test the refusal if the reservation covered the whole declaration",
+			got, sharedReservePages+8, sharedReservePages)
+	}
+	atCap := base(capped)
+	if got := capped.grow(sharedReservePages - 1); got != 1 {
+		t.Fatalf("growing to exactly the reservation returned %d, want 1: the cap is a "+
+			"reservation, not a smaller maximum", got)
+	}
+	if got := capped.grow(1); got != -1 {
+		t.Errorf("growing one page past the reservation returned %d, want -1.\n"+
+			"Reallocating here is a use-after-free rather than a torn header, because "+
+			"ADR 0051's atomics hold a pointer into the array being abandoned. `-1` is "+
+			"conforming: memory.grow reports failure in its result and the reference fails "+
+			"grows of its own (`memory.ml:60-67`)", got)
+	}
+	if after := base(capped); after != atCap {
+		t.Errorf("the refused grow moved the array anyway, %#x to %#x", atCap, after)
+	}
+	if capped.size() != sharedReservePages {
+		t.Errorf("size() = %d after a refused grow, want %d unchanged",
+			capped.size(), sharedReservePages)
 	}
 }

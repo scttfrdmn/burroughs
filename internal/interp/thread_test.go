@@ -33,7 +33,7 @@ import (
 // job in a way that matters: it does not consider build tags when grouping files into packages, so a
 // tagged file could fall outside the domain. Walking the directory takes every `.go` file regardless
 // of tag, which is the safe direction — a stack created behind a build tag is still a stack.
-// `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` reaches the same conclusion for the same
+// `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` reaches the same conclusion for the same
 // reason one file over, which is why this reads the same way rather than differently.
 //
 // Watched die, four ways: dropping `t:` at any one of the three sites fails naming that site, and

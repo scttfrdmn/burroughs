@@ -21,6 +21,65 @@ weakly-ordered platform.
 
 ### Added
 
+- **The 67 atomics are actually atomic: sequentially-consistent word operations over the backing
+  array** ([#542](https://github.com/scttfrdmn/burroughs/issues/542), [ADR
+  0051](docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md),
+  `gate:threads`). `internal/interp/atomic.go` implemented all 67 opcodes of the 0xFE region as plain
+  read-then-write on a byte slice — no lock, no intrinsic, no fence. Two threads doing 2000
+  `i32.atomic.rmw.add` each on one cell landed on **3392 of 4000**. They now land on 4000.
+  - **There was no ordering decision to make, which is what made the ADR small.** The threads
+    proposal fixes atomic strength at SC unconditionally — `relaxed.rst:35` is
+    `ordact(ARMW loc byte₁* byte₂*) = SEQCST`, a function with one case, and `relaxed.rst:244` says atomics *"are
+    also required to be sequentially consistent"*. Go's `sync/atomic` is exactly SC. So the available
+    strength matches the required one with nothing to spare, and only the mechanism was open.
+  - **The authority is §0 and §9, not §4.** #542's own body priced its discharge as whatever §4's
+    litmus battery settles on. Read end to end, **§4 has no clause about guest-to-guest atomicity** —
+    every clause is a boundary transition — and the dependency runs the other way: B-MM-2 requires a
+    wake to synchronize the writes that happened-before it, which is unimplementable while nothing
+    establishes a happens-before. **Scott's option-1 ordering was right and the reason given for it was
+    not**; *a ruling's premises are checkable separately from its conclusion.*
+  - **`sync/atomic` on a word pointer cast per access, and it is the first `unsafe` in engine code.**
+    Nothing is cached: a `[]uint32` view captured at construction goes stale on any reslice, and
+    staleness in a memory view is the plausible-wrong-answer failure mode ADR 0050 rejected its own
+    option B for. Absolute alignment is a premise Go does not document, so it is **asserted at
+    construction** (`checkBaseAlignment`) rather than trusted per access — and the cost inverted into
+    an instrument: `-race` enables `checkptr`, which calls `runtime.checkptrAlignment` on every
+    `unsafe.Pointer`→`*T` conversion, so the premise is machine-checked at every access on both CI
+    architectures without this slice building anything.
+  - **Widths 1 and 2 are a compare-and-swap loop on the containing 32-bit word, because Go has no 8-
+    or 16-bit atomics** — by design; `sync/atomic`'s doc calls non-word-sized operations *"inefficient
+    or infeasible"* on many architectures. 32 of the 67 rows are that narrow. The property making it
+    correct rather than merely conventional is that **the CAS compares the whole word**: a neighbour
+    byte's concurrent write changes the word, the CAS fails, the loop re-reads, and the write is never
+    lost. Compare-exchange takes the loop too, for a different reason — Go's CAS returns a `bool` where
+    the instruction pushes the value it *observed*.
+  - **All field arithmetic happens in guest space, so the cast does not smuggle in host endianness.**
+    One normalizing involution sits between the host word and the guest word — identity on a
+    little-endian host, `bits.ReverseBytes32/64` otherwise — after which the sub-word shift is
+    `8 × (ea − base)` everywhere. This is the second ground ADR 0051's option C was rejected on, and
+    option A does not get to keep the property for free by touching fewer lines. It gets an oracle
+    rather than an argument: the normalized read must equal `loadValue` of the same bytes, the byte
+    loop the whole spec suite has already validated. *A repair is confirmed by the authority.*
+  - **One CAS loop serves all six RMW operators, reusing `applyRmw`** rather than twelve dispatch arms
+    of native primitives for a saving nothing here measured. The native fast path is filed as
+    [#559](https://github.com/scttfrdmn/burroughs/issues/559) with a benchmark, because *cheap is a
+    grammar claim* — "dispatch overhead swamps `LOCK XADD`" is as falsifiable as any other, and it is
+    a number to go and get.
+  - **The witness was falsified before it was trusted.** `TestAtomicRmwIsNotObservablyTornAcrossThreads`
+    passed in 0.00s, which is the suspiciously-clean shape, so `atomicRmw` was patched back to the
+    plain three steps: **3493, 3517 and 3637 of 4000** across three runs. Three *different* losses is
+    the proof the goroutines genuinely overlap; a fixed number would have been a coincidence. The
+    zero-race half was vacuity-checked separately — the plain mutation under `-race` prints `WARNING:
+    DATA RACE`, so the detector was demonstrably watching the path it later cleared.
+  - **The single-thread tripwire is re-pointed, not retired.**
+    `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` becomes
+    `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`, same `go`-statement scan
+    over the package's non-test files and same vacuity floor, now naming #557 and
+    [#516](https://github.com/scttfrdmn/burroughs/issues/516). This slice falsifies half its premise
+    and none of the other half, and *a tripwire whose subject dissolves is re-pointed rather than
+    retired.* ADR 0050's chain says *"it is retired"*; it is accepted, so it takes a postscript rather
+    than a rewrite. **#554 merges after this**, the last link the ruling ordered.
+
 - **Contract §2's T-4 per-thread context: a `thread` object every stack carries**
   ([#514](https://github.com/scttfrdmn/burroughs/issues/514), [ADR
   0050](docs/decisions/0050-the-per-thread-context-is-its-own-object-reached-by-one-pointer-on-stack-because-3-and-5-need-more-per-thread-state-than-a-slot.md),
@@ -46,8 +105,9 @@ weakly-ordered platform.
     check, and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and never unlocks,
     which is how pure Go gets 1:1 with an OS thread. It lives in
     [#554](https://github.com/scttfrdmn/burroughs/pull/554), a PR parked unmerged and deliberately
-    red, with five tests of its own. It does not land because
-    `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on the first `go` statement in
+    red, with five tests of its own. It does not land because the package's single-thread tripwire
+    (then `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded`, since renamed —
+    see **Fixed** below) fires on the first `go` statement in
     the package and instructs: *"Do not exempt this file; discharge
     [#542](https://github.com/scttfrdmn/burroughs/issues/542)."* #542 prices its own discharge as
     §4's litmus battery ([#516](https://github.com/scttfrdmn/burroughs/issues/516),
@@ -568,6 +628,56 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **A shared memory's `memory.grow` no longer replaces the array the atomics hold a pointer into**
+  ([#556](https://github.com/scttfrdmn/burroughs/issues/556), charged overhead on
+  [#542](https://github.com/scttfrdmn/burroughs/issues/542)). `grow` did `make` + `copy` + assign, and
+  the spec models a length change as an atomic RMW on the memory (`relaxed.rst:246`). This is not an
+  arm of #542 — it is its **floor**: an atomic operation on an array that can be replaced underneath it
+  is not an atomic operation, so the mechanism above is meaningless without it. The scope call is
+  flagged in the report rather than made quietly. A shared memory with a declared `max` now reserves
+  capacity at instantiation and grows by reslicing inside it, so the base pointer never moves.
+  - **The reservation ceiling is measured, and the forecast it replaced was wrong by three orders of
+    magnitude.** ADR 0051 pre-registered *"under 1 ms at instantiation, for the largest declaration the
+    address width allows"*, on the mechanism that Go serves a large fresh allocation from newly-mapped
+    arena pages and skips the memset. Measured, best/worst of five: `(memory 1 65535 shared)` took
+    **4.288 ms / 855.438 ms**. The mechanism is real and *unreliable* — a recycled span is cleared
+    first, and a multi-gigabyte memclr is not a millisecond — which is why that forecast was registered
+    rather than asserted.
+  - **The pre-registered rollback fired, and the ceiling is the largest value whose *worst* case clears
+    the bar registered before the numbers existed**: 64 pages 474.7 µs, **128 pages (8 MiB) 618.6 µs**,
+    256 pages 1.161 ms, 512 pages 2.673 ms, 1024 pages 26.05 ms, 2048 pages 70.84 ms. So
+    `sharedReservePages = 128`. The worst column is the one read, because best is what a fresh process
+    sees once and worst is what a long-running host sees repeatedly. *A failed pre-registration narrows,
+    it does not licence.* **This value bounds which programs run**, so it is flagged for Scott rather
+    than treated as a tuning constant.
+  - **One deliberate deviation from that rollback, because the registration was unsafe rather than
+    merely expensive.** It said *"falling back to allocate-and-blit above it"* — which, combined with
+    ADR 0051's own decision, is a **use-after-free**: the atomics hold a raw pointer into the array
+    across an access, so replacing it under a concurrent thread is worse than the torn header the
+    registration imagined. A shared memory above its reservation returns **−1** instead, which is
+    conforming rather than a compromise: `memory.grow` reports failure in its result, and the reference
+    fails grows of its own for engine limits (`memory.ml:60-67`, `SizeOverflow`/`SizeLimit`). Flagged
+    for Scott.
+  - **Absolute 8-byte alignment of the base is asserted where the memory is built, not where it is
+    used**, so a platform whose allocator returns an oddly-aligned span fails one loud construction
+    instead of producing torn 64-bit atomics. A zero-page memory is legal — `(memory 0)` is
+    `align.wast:3` — so the assertion is written against a slice that may have no first element.
+
+- **`memory.atomic.fence`'s no-op is conformant, and the comment claiming otherwise is gone**
+  ([#558](https://github.com/scttfrdmn/burroughs/issues/558), charged overhead on
+  [#542](https://github.com/scttfrdmn/burroughs/issues/542)). `atomic.go`'s header called the bare
+  `return nil` design debt of the same kind as the plain atomics. **The code was right and the reason
+  was wrong**: `AFENCE` appears in the action grammar (`runtime.rst:693`) and the reduction
+  (`instructions.rst:3631-3639`) and in **no consistency rule in `relaxed.rst`** — no `locact`,
+  `ordact`, `readact` or `writeact` case — and an action no rule constrains constrains no
+  implementation. Once the atomics are unconditionally SC, a fence between them has nothing left to
+  order. *A comment asserting the property the code lacks makes review confirm the bug*; this was that
+  inverted, and it costs the same — reviewer time spent looking for absent work. Recorded as a
+  **reading with citations, not a measurement**: no vector can witness a fence's absence, and it
+  inverts if upstream gives `AFENCE` a rule. The proposal's own grammar/prose disagreement (`\AFENCE`
+  bare against `\AFENCE_{\SEQCST}`) is left upstream, since neither reading changes what this engine
+  does.
 
 - **`citecheck.sh` reported zero citations and exited 0 whenever its revision did not resolve**
   ([grave #549](https://github.com/scttfrdmn/burroughs/issues/549), `type:grave`, charged overhead on
