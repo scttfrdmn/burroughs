@@ -32,7 +32,7 @@ type ThreadID uint64
 // entry-signature check, and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and
 // never unlocks. Five tests for T-1 there, and it is deliberately red at one test — see below.
 //
-// It is **withheld** because `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on it.
+// It is **withheld** because `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` fires on it.
 // That control watches for the first `go` statement in this package's non-test files and says what to
 // do about it: *"the atomics now need a memory model (contract §4) … Do not exempt this file;
 // discharge #542."* All 67 atomics in `atomic.go` are plain read-then-write, correct only while

@@ -313,21 +313,35 @@ func TestAtomicFenceNeedsNoMemory(t *testing.T) {
 	}
 }
 
-// TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded is #542's tripwire.
+// TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded is #557's tripwire, and it
+// used to be #542's.
 //
-// `atomic.go` implements all 67 rows as plain read-then-write: no lock, no intrinsic, no fence.
-// That is observationally complete **only** while nothing can run concurrently with a function
-// body, and the threads proposal's own suite cannot witness the difference either way — it is
-// single-agent by construction, so no vector will ever fail when this stops being true.
+// **Re-pointed rather than retired, because its subject narrowed and did not dissolve.** It was named
+// `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` and it watched for the first goroutine in
+// this package on the ground that the 67 atomics were plain read-then-write. ADR 0051 discharged
+// that: they are sequentially consistent now, and the old name would be *asserting a property the
+// code no longer has*, which is the review-confirms-the-bug shape wearing a test name.
 //
-// The event that makes the debt real is the first goroutine in this package. So that is what is
-// watched, over a domain derived from the parser rather than a list of files someone remembered:
-// *a design debt is discharged by a tripwire, never by an intention.*
+// What survives is the other half of the same risk. The plain accesses — `i32.load`, `i32.store` and
+// every narrower integer width, in memop.go, not in this file — are still a byte-at-a-time loop and a
+// `copy`, and the threads proposal requires a naturally aligned integer access of 32 bits or fewer
+// **not to tear** (`runtime.rst:742-746`, called from the ordinary load and store at
+// `instructions.rst:1763` and `instructions.rst:2315`). That is a weaker property than atomicity and it is still
+// unmet: #557. §4's boundary model and its litmus battery are the rest of it: #516.
 //
-// It fails **loudly and by design**. The fix is not to delete the check or to add this file to an
-// exception list; it is to give the 67 rows a memory model, which is contract §4's work and #542's
-// subject.
-func TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded(t *testing.T) {
+// So the *event* being watched is unchanged — the first goroutine in a non-test file in this package
+// — and only what it points the reader at has moved. *A tripwire whose subject dissolves is
+// re-pointed*; closing one as no-longer-applicable retires a live risk, and this one's risk is live
+// twice over.
+//
+// It stays in this file rather than moving to memop_test.go with its new subject. The domain is the
+// whole package, so no file is its natural home, and moving it would re-point five citations twice
+// for no gain — thread.go and thread_test.go both cite it as the reason `Spawn` is withheld, which is
+// a fact about the package rather than about either file.
+//
+// It fails **loudly and by design**. The fix is not to delete the check or to add a file to an
+// exception list; it is to make the aligned plain accesses tear-free.
+func TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded(t *testing.T) {
 	// `os.ReadDir` plus `ParseFile` rather than `parser.ParseDir`, which is deprecated *and* for a
 	// reason that matters to a tripwire: it does not consider build tags when grouping files into
 	// packages. Walking the directory takes every `.go` file regardless of tag, which is the safe
@@ -354,12 +368,15 @@ func TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded(t *testing.T) {
 				return true
 			}
 			t.Errorf("%s:%d launches a goroutine.\n"+
-				"The 67 atomics in atomic.go are plain read-then-write with no "+
-				"synchronisation, which is correct only while nothing can run "+
-				"concurrently with a function body. This is the event #542 was filed "+
-				"for: the atomics now need a memory model (contract §4), and no vector "+
-				"in the threads suite will fail to tell you so — it is single-agent by "+
-				"construction. Do not exempt this file; discharge #542.",
+				"memop.go's plain load is a byte-at-a-time loop and its plain store is "+
+				"a `copy`, so an aligned i32 access can tear where the threads proposal "+
+				"forbids it (`runtime.rst:742-746`, `tearing(iN, N, u32) = NOTEARS` for "+
+				"N <= 32, called from the ordinary load and store). Tear-freedom is "+
+				"weaker than atomicity — it asks that the access not decompose, not "+
+				"that it be ordered — so ADR 0051's atomics do not cover it: different "+
+				"opcodes, different path. No vector in the threads suite will fail to "+
+				"tell you, because it is single-agent by construction. Do not exempt "+
+				"this file; discharge #557, and #516 for §4's boundary model.",
 				name, fset.Position(g.Pos()).Line)
 			return true
 		})
@@ -369,5 +386,201 @@ func TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded(t *testing.T) {
 	if files < 20 {
 		t.Errorf("parsed %d non-test files in internal/interp, expected at least 20; "+
 			"the walk is reading the wrong directory and its silence means nothing", files)
+	}
+}
+
+// TestAtomicCellAgreesWithTheByteLoop checks ADR 0051's word arithmetic against the authority that
+// can settle it: `loadValue`, the byte-at-a-time little-endian loop the whole spec suite has already
+// validated.
+//
+// **This is the only place the host-endianness normalization is checked at all**, and it is checked
+// against a second mechanism rather than against itself. memop.go's own comment says why that
+// matters: *"A big-endian host reading through unsafe would produce byte-swapped values for every
+// vector, which dual-platform CI would catch only if one of its arches were big-endian — and neither
+// is."* Reading a word through `unsafe` is exactly what `atomicCell` does, so on a big-endian host
+// every atomic in the region would be byte-swapped and both CI arches would stay green. This test
+// does not fix that — it cannot manufacture a big-endian host — but it makes the two mechanisms
+// disagree loudly wherever they disagree, which is the strongest thing available from here.
+//
+// Three directions, because they fail differently. The load direction catches a wrong shift or mask;
+// the store direction catches the same in reverse *plus* a write that clobbers the bytes it should
+// not, which is the failure mode the 1- and 2-byte compare-and-swap emulation is usually suspected
+// of; and cmpxchg is asked in both of its branches, since a version that always wrote and a version
+// that never wrote would both pass a one-branch test.
+func TestAtomicCellAgreesWithTheByteLoop(t *testing.T) {
+	mem, err := newMemory(binary.Memory{Limits: binary.Limits{Min: 1}})
+	if err != nil {
+		t.Fatalf("newMemory: %v", err)
+	}
+	// Every byte distinct, and none of them zero: a swapped pair, a dropped high byte and a
+	// mask that reads one byte too many all produce a different number against this pattern,
+	// where a run of zeros would hide all three.
+	const span = 32
+	pattern := func() {
+		for i := range mem.bytes[:span] {
+			mem.bytes[i] = byte(0x80 + i)
+		}
+	}
+
+	rows := 0
+	for _, width := range []uint64{1, 2, 4, 8} {
+		for ea := uint64(0); ea+width <= span; ea += width {
+			pattern()
+			c, cerr := mem.cell(ea, 0, width)
+			if cerr != nil {
+				t.Fatalf("cell(%d, 0, %d): %v", ea, 0, cerr)
+			}
+			byteLoop := func() uint64 {
+				return loadValue(mem.bytes[ea:ea+width], memop{width: width})
+			}
+
+			// Load.
+			if got, want := c.load(), byteLoop(); got != want {
+				t.Errorf("width %d at ea %d: cell.load() = %#x, byte loop reads %#x.\n"+
+					"The word cast disagrees with the little-endian assembly the suite "+
+					"validated, so either the shift, the mask or the host-order "+
+					"normalization is wrong (ADR 0051)", width, ea, got, want)
+			}
+
+			// Store, and the neighbours it must not touch.
+			word := ea &^ 3
+			before := append([]byte(nil), mem.bytes[word:word+8]...)
+			v := uint64(0x1122334455667788) & c.mask
+			c.store(v)
+			if got := byteLoop(); got != v {
+				t.Errorf("width %d at ea %d: stored %#x, byte loop reads back %#x",
+					width, ea, v, got)
+			}
+			for i, b := range mem.bytes[word : word+8] {
+				at := word + uint64(i)
+				if at >= ea && at < ea+width {
+					continue // inside the field, expected to have changed
+				}
+				if b != before[i] {
+					t.Errorf("width %d at ea %d: storing the field changed byte %d "+
+						"of the containing word from %#x to %#x.\n"+
+						"A narrow atomic is a read-modify-write of the whole 32-bit "+
+						"word, so a wrong mask silently rewrites its neighbours — "+
+						"which are separate locations in the model and must survive",
+						width, ea, at, before[i], b)
+				}
+			}
+
+			// Compare-exchange, both branches.
+			pattern()
+			live := byteLoop()
+			if got := c.compareAndSwap(live^c.mask, v); got != live {
+				t.Errorf("width %d at ea %d: mismatching cmpxchg returned %#x, want the "+
+					"value that was there, %#x", width, ea, got, live)
+			}
+			if got := byteLoop(); got != live {
+				t.Errorf("width %d at ea %d: a mismatching cmpxchg wrote %#x over %#x; "+
+					"the spec stores only on equality", width, ea, got, live)
+			}
+			if got := c.compareAndSwap(live, v); got != live {
+				t.Errorf("width %d at ea %d: matching cmpxchg returned %#x, want the old "+
+					"value %#x — the result is the old value either way", width, ea, got, live)
+			}
+			if got := byteLoop(); got != v {
+				t.Errorf("width %d at ea %d: matching cmpxchg left %#x, want %#x",
+					width, ea, got, v)
+			}
+			rows++
+		}
+	}
+
+	// 32 + 16 + 8 + 4 aligned positions across the four widths. Printed and pinned because a
+	// loop bound edited to `ea < width` would test one position per width and pass everything.
+	t.Logf("cell arithmetic checked against loadValue at %d aligned positions, four widths, "+
+		"three directions each", rows)
+	if rows != 60 {
+		t.Errorf("covered %d positions, want 60: the loop bounds changed, and a shrunken "+
+			"sweep is a quieter test rather than a correct engine", rows)
+	}
+}
+
+// TestAtomicRmwIsNotObservablyTornAcrossThreads is #542's deliverable, and the first test in this
+// tree where two agents touch one linear memory.
+//
+// **It is a witness, not a forecast.** Before ADR 0051 this exact program yielded 3392 of 4000 —
+// `atomicRmw` was `read`, `applyRmw`, `write` as three plain steps, so an update landing between any
+// two of them was lost. Nothing in either corpus can see that: `atomic.wast`'s 297 vectors exercise
+// all 67 opcodes and every one of them single-threaded, which is why they scored 297/297 both before
+// and after this repair. *A zero-fail board is a lost instrument* — the file agreed with the engine
+// while the engine was losing three quarters of a thousand updates.
+//
+// The `go` statement is what made the defect reachable, and it lives here rather than in the engine
+// on purpose: `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` scans non-test files only, so
+// this test does not trip the tripwire that was watching for exactly this event. That is not a
+// loophole being exploited — T-1's `Spawn` is #514's, still unlanded, and this test needs none of it.
+// Two goroutines each calling `Invoke` get their own frames and stacks and share `in.mems[0]`, which
+// is the whole of what §4's model is about.
+func TestAtomicRmwIsNotObservablyTornAcrossThreads(t *testing.T) {
+	const (
+		agents = 2
+		adds   = 2000
+	)
+	src := fmt.Sprintf(`(module
+	  (memory 1 1 shared)
+	  (func (export "bump") (local $i i32)
+	    (block $done (loop $l
+	      (br_if $done (i32.eq (local.get $i) (i32.const %d)))
+	      (drop (i32.atomic.rmw.add (i32.const 0) (i32.const 1)))
+	      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+	      (br $l))))
+	  (func (export "read") (result i32) (i32.atomic.load (i32.const 0))))`, adds)
+
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	m, err := (&binary.Decoder{Features: binary.Features{Threads: true}}).DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+	if derr := in.Deferred(); derr != nil {
+		t.Fatalf("instantiate fell short: %v", derr)
+	}
+
+	errs := make(chan error, agents)
+	done := make(chan struct{})
+	for range agents {
+		go func() {
+			_, ierr := in.Invoke("bump")
+			errs <- ierr
+			done <- struct{}{}
+		}()
+	}
+	for range agents {
+		<-done
+	}
+	close(errs)
+	for ierr := range errs {
+		if ierr != nil {
+			t.Fatalf("invoke: %v", ierr)
+		}
+	}
+
+	got, err := in.Invoke("read")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("read returned %d values, want 1", len(got))
+	}
+	want := uint64(agents * adds)
+	if v := uint64(uint32(got[0].Int32())); v != want {
+		t.Errorf("%d agents x %d i32.atomic.rmw.add on one cell left %d, want %d — %d updates "+
+			"were lost.\n"+
+			"The region's read-modify-write must be one atomic operation, which the threads "+
+			"proposal fixes at sequential consistency unconditionally (`relaxed.rst:35`, "+
+			"`ordact(ARMW ...) = SEQCST`, a function with one case; `relaxed.rst:244`). No corpus "+
+			"vector "+
+			"can witness this, so this test is the oracle (#542, ADR 0051)",
+			agents, adds, v, want, want-v)
 	}
 }

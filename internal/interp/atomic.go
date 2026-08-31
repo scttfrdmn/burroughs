@@ -2,8 +2,11 @@ package interp
 
 import (
 	"fmt"
+	"math/bits"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
@@ -104,24 +107,36 @@ import (
 // both `mnemonic: "i32_atomic_rmw"`. Dispatching that pair to one arm computes a sum where the
 // module asked for a difference.
 //
-// # Atomicity, and why this file contains none
+// # Atomicity, and where it comes from
 //
-// Every operation below is a plain read-then-write on the instance's byte slice, with no lock, no
-// atomic intrinsic, and no memory fence. That is **observationally complete for the engine as it
-// exists** — nothing can run concurrently with a body, because v1's §§2-5 thread spawn does not
-// exist yet — and it is **not** complete for the engine v1 is building toward. `atomic_fence` being
-// a bare `return nil` is the same statement in one line.
+// Every operation below is sequentially consistent, reached through `atomicCell` and `sync/atomic`
+// on the containing host word (#542, [ADR
+// 0051](../../docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md)).
+// **SC is not this project's choice and there was no ordering decision to make**: the proposal fixes
+// it, `relaxed.rst:35` giving `ordact(ARMW loc byte₁* byte₂*) = SEQCST` as a function with one case
+// and `relaxed.rst:244` saying atomics *"are also required to be sequentially consistent"*. Go's `sync/atomic`
+// is exactly SC, so the available strength matches the required one with nothing to spare.
 //
-// This is design debt, so it is a tripwire rather than a comment (#542) — and the tripwire watches
-// the *event*, not the defect. `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fails on the
-// first `go` statement in a non-test file in this package, over a domain the parser derives with a
-// file-count floor. A test that spawned two goroutines and asserted no lost update would have to
-// fail permanently, which either breaks `make check` or earns a skip, and *a skip is not a verdict*.
-// So the assertion is about what makes the debt real rather than about the debt: nothing in the
-// threads suite can ever witness the difference, since it is single-agent by construction.
+// This paragraph used to read *"why this file contains none"*, and the sentence it opened with —
+// plain read-then-write being *"observationally complete for the engine as it exists"* — was true
+// when it was written and stopped being true the moment T-1 could spawn a second agent. The
+// tripwire that watched for exactly that event fired, and it is still standing: re-pointed at #557
+// and renamed `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`, because the
+// plain accesses one file over are still a byte loop and the risk narrowed rather than dissolving.
 //
-// "Not shared yet, so plain access is fine" is honest only while something is scheduled to notice
-// when it stops being fine.
+// **`atomic_fence`'s bare `return nil` is not the same statement in one line**, which is what this
+// header used to claim, and #558 is the correction. The no-op is conformant, and for a reason that
+// has nothing to do with the debt above: `AFENCE` appears in the action grammar
+// (`runtime.rst:693`) and in the reduction rule (`instructions.rst:3631-3639`) and **in no
+// consistency rule at all** — not `locact`, not `ordact`, not `readact` or `writeact`. An action no
+// consistency rule constrains constrains no implementation, and once every atomic around it is SC a
+// fence between them has nothing left to order. That is a *reading* rather than a measurement, and
+// it has to be: no vector can witness a fence's absence, single- or multi-threaded, so there is no
+// oracle here — only citations, which invert if upstream gives `AFENCE` a rule.
+//
+// What is still missing is named where it lives rather than here: #557 for the tearing requirement
+// on *plain* aligned accesses, which is a different code path in memop.go, and #543 for a wait that
+// can actually suspend.
 type atomicKind uint8
 
 const (
@@ -166,6 +181,17 @@ type atomicop struct {
 	// is64 is whether the value slot is 64 bits. False for `notify` and both `wait` rows'
 	// *results*, which are i32 — `wait64` sets it because its `expected` operand is an i64,
 	// and the arm below reads that rather than this flag for the push.
+	//
+	// **No executor reads it, and that is a real observation rather than an oversight to fix.**
+	// Its one consumer was `slotOf`, which passed it to `loadValue` — where the unsigned path
+	// ignores it, since the atomics have no sign-extending row. ADR 0051 removed `slotOf`, so
+	// what is left is a field the mnemonic derivation *writes* and that
+	// `TestAtomicopParsesTheRegionsThreeHardPairs` reads back. That makes it a checked property
+	// of the parse rather than an input to execution, and
+	// deleting it would delete a row of that check: `i64.atomic.rmw32.add_u` and
+	// `i32.atomic.rmw.add_u` differ in nothing else, so the flag is where the derivation's
+	// family split is asserted. Stated because a write-only field is normally a defect, and this
+	// one's reader is in a test file where `deadcode` cannot see the difference.
 	is64 bool
 
 	// rmw is meaningful only when kind is atomicRmw.
@@ -297,10 +323,12 @@ func parseAtomicMnemonic(mnemonic, operator string) (atomicop, error) {
 		return atomicop{}, fmt.Errorf("cmpxchg on unexpected family %q", family)
 	}
 
-	if bits := rest[len(family):]; bits != "" {
-		n, err := strconv.Atoi(bits)
+	// `widthTag` rather than `bits`: this slice imports `math/bits` for the endianness involution,
+	// and the shorter name would shadow the package for the rest of the block.
+	if widthTag := rest[len(family):]; widthTag != "" {
+		n, err := strconv.Atoi(widthTag)
 		if err != nil || n != 8 && n != 16 && n != 32 {
-			return atomicop{}, fmt.Errorf("unreadable access width %q", bits)
+			return atomicop{}, fmt.Errorf("unreadable access width %q", widthTag)
 		}
 		a.width = uint64(n) / 8
 	}
@@ -393,12 +421,174 @@ func checkAlign(addr, offset, width uint64) error {
 	return nil
 }
 
-// slotOf renders width bytes as the value slot: zero-extended, little-endian.
+// hostLittleEndian is whether this host stores a word's low byte first.
 //
-// `memop{width: ...}` with `signed` left false is exactly the atomic case, so this reuses
-// `loadValue` rather than restating the byte loop — the endianness argument in memop.go is the
-// same argument here, and one copy of it is one place to be wrong.
-func slotOf(bs []byte, a atomicop) uint64 { return loadValue(bs, memop{width: a.width, is64: a.is64}) }
+// Probed rather than taken from a build tag because the two forms cost the same and this one cannot
+// go stale when a port is added: a `//go:build` list of little-endian architectures is a claim about
+// every architecture Go will ever have, and the wrong answer there is silent byte-swapping on the
+// new one.
+var hostLittleEndian = func() bool {
+	probe := uint16(1)
+	return *(*byte)(unsafe.Pointer(&probe)) == 1
+}()
+
+// guestWord32 and guestWord64 convert between the host's in-memory word order and wasm's.
+//
+// **This is the function memop.go's endianness comment predicts the need for.** `loadValue` spells
+// its little-endian assembly out byte by byte and says why: *"A big-endian host reading through
+// unsafe would produce byte-swapped values for every vector, which dual-platform CI would catch only
+// if one of its arches were big-endian — and neither is."* Reading a word through `unsafe` is exactly
+// what the atomics now do, so that warning applies to them and the portability property has to be
+// re-established rather than assumed. `guestWord32` is where it is re-established, and it is an
+// involution, so one function serves both directions.
+//
+// Unexercised by CI, like everything else in the tree that depends on host byte order — which is why
+// it is checked against `loadValue` in a test rather than argued: the byte loop is the authority the
+// whole spec suite has already validated, and the two must agree on every host.
+func guestWord32(v uint32) uint32 {
+	if hostLittleEndian {
+		return v
+	}
+	return bits.ReverseBytes32(v)
+}
+
+func guestWord64(v uint64) uint64 {
+	if hostLittleEndian {
+		return v
+	}
+	return bits.ReverseBytes64(v)
+}
+
+// atomicCell is one atomic access resolved to the naturally-aligned host word that contains it,
+// plus where the access's bytes sit inside that word.
+//
+// **The 1- and 2-byte accesses are why this indirection exists.** `sync/atomic` has no 8- or 16-bit
+// operations — by design, its own doc saying operations on non-word-sized integers are *"inefficient
+// or infeasible"* on many architectures — and 32 of the region's rows are that narrow. So a narrow
+// access becomes a read-modify-write of the containing 32-bit word, and this type is where the shift
+// and mask arithmetic lives once instead of at four call sites (ADR 0051).
+//
+// The containing word always fits inside the memory: a memory's length is a multiple of the 64 KiB
+// page, so `(ea &^ 3) + 4 <= len(bytes)` wherever `ea < len(bytes)`. And a width-2 access is
+// guaranteed 2-byte aligned by `checkAlign`, so a field never straddles the word boundary.
+//
+// **Nothing here is cached.** The pointer is computed per access from `m.bytes`, which is what makes
+// it impossible for it to be stale; a view captured at construction would survive an unshared
+// memory's `grow` reallocating underneath it, and answering from a replaced array is the
+// plausible-wrong-answer mode ADR 0051 chose this shape to avoid.
+type atomicCell struct {
+	// Exactly one of these is non-nil; p64 means the containing word is the access itself.
+	p32 *uint32
+	p64 *uint64
+
+	// shift is where the field's low bit sits in the *guest's* word, and mask is the field's
+	// width at position zero. Both are in guest space, so `8 * (ea - base)` is right on every
+	// host — the normalization happens before the shift, not after.
+	shift uint
+	mask  uint64
+}
+
+// cell resolves an atomic access, reporting the same out-of-bounds trap `read` and `write` do.
+//
+// Called *after* `checkAlign` at every site, which is the trap precedence the reference fixes: an
+// unaligned access past the end of memory reports `unaligned atomic`, not the bounds trap.
+func (m *memory) cell(addr, offset, width uint64) (atomicCell, error) {
+	ea, err := effectiveAddress(addr, offset)
+	if err != nil {
+		return atomicCell{}, err
+	}
+	if width > uint64(len(m.bytes)) || ea > uint64(len(m.bytes))-width {
+		return atomicCell{}, trapOOB
+	}
+	if width == 8 {
+		return atomicCell{p64: (*uint64)(unsafe.Pointer(&m.bytes[ea])), mask: ^uint64(0)}, nil
+	}
+	base := ea &^ 3
+	return atomicCell{
+		p32:   (*uint32)(unsafe.Pointer(&m.bytes[base])),
+		shift: 8 * uint(ea-base),
+		mask:  uint64(1)<<(8*width) - 1,
+	}, nil
+}
+
+// word reads the containing word sequentially consistently, in guest byte order.
+func (c atomicCell) word() uint64 {
+	if c.p64 != nil {
+		return guestWord64(atomic.LoadUint64(c.p64))
+	}
+	return uint64(guestWord32(atomic.LoadUint32(c.p32)))
+}
+
+// casWord replaces the whole containing word, comparing the whole containing word.
+//
+// **The full-word comparison is what makes a narrow access safe for its neighbours.** A concurrent
+// write to another byte of the same word changes the word, so this fails and the caller re-reads;
+// the write is never lost. Those are disjoint locations in the model — `loc` is a region and a byte
+// range — so no rule would permit losing one, and this is why none is lost.
+func (c atomicCell) casWord(old, replacement uint64) bool {
+	if c.p64 != nil {
+		return atomic.CompareAndSwapUint64(c.p64, guestWord64(old), guestWord64(replacement))
+	}
+	return atomic.CompareAndSwapUint32(c.p32, guestWord32(uint32(old)), guestWord32(uint32(replacement)))
+}
+
+// isWholeWord reports whether the field is the containing word, so no read-modify-write is needed.
+func (c atomicCell) isWholeWord() bool { return c.p64 != nil || c.mask == 1<<32-1 }
+
+// load is the field, zero-extended — the same value `loadValue` produces for these bytes.
+func (c atomicCell) load() uint64 { return c.word() >> c.shift & c.mask }
+
+// store writes the field, leaving the rest of the word alone.
+func (c atomicCell) store(v uint64) {
+	if c.isWholeWord() {
+		if c.p64 != nil {
+			atomic.StoreUint64(c.p64, guestWord64(v))
+			return
+		}
+		atomic.StoreUint32(c.p32, guestWord32(uint32(v)))
+		return
+	}
+	c.update(func(uint64) uint64 { return v })
+}
+
+// update applies f to the field until it lands, and returns the field's previous value.
+//
+// **One loop for all six operators rather than `AddUint32` for add and `SwapUint32` for xchg**, so
+// that `applyRmw` stays the single definition of the six — its own comment's reason, *"one copy of it
+// is one place to be wrong"*, and the narrow widths need this loop regardless. Whether the four
+// native primitives are worth four dispatch arms is #559's benchmark to settle, not this comment's
+// to assert.
+func (c atomicCell) update(f func(uint64) uint64) uint64 {
+	for {
+		w := c.word()
+		old := w >> c.shift & c.mask
+		if c.casWord(w, w&^(c.mask<<c.shift)|f(old)&c.mask<<c.shift) {
+			return old
+		}
+	}
+}
+
+// compareAndSwap stores replacement only if the field equals expected, and returns what was there.
+//
+// **A loop even for a whole-word access, because Go's primitive returns the wrong thing.**
+// `CompareAndSwapUint32` reports a bool where the spec needs the value that was observed
+// (`i32.atomic.rmw.cmpxchg` pushes the old value whether or not it swapped), and reading it back
+// after a failed CAS would report a value the CAS never saw. So the observation comes from the load
+// at the top of the loop, which is the only read whose result can honestly be pushed.
+func (c atomicCell) compareAndSwap(expected, replacement uint64) uint64 {
+	expected &= c.mask
+	for {
+		w := c.word()
+		old := w >> c.shift & c.mask
+		if old != expected {
+			// No write, and the loop ends here: a mismatch is a complete answer.
+			return old
+		}
+		if c.casWord(w, w&^(c.mask<<c.shift)|replacement&c.mask<<c.shift) {
+			return old
+		}
+	}
+}
 
 func (in *Instance) atomicLoad(a atomicop, st *stack, mem *memory, offset uint64) error {
 	if err := st.needNum(1); err != nil {
@@ -408,11 +598,11 @@ func (in *Instance) atomicLoad(a atomicop, st *stack, mem *memory, offset uint64
 	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
-	bs, err := mem.read(addr, offset, a.width)
+	c, err := mem.cell(addr, offset, a.width)
 	if err != nil {
 		return err
 	}
-	st.pushNum(slotOf(bs, a))
+	st.pushNum(c.load())
 	return nil
 }
 
@@ -425,7 +615,14 @@ func (in *Instance) atomicStore(a atomicop, st *stack, mem *memory, offset uint6
 	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
-	return mem.write(addr, offset, storeBytes(v, a.width))
+	c, err := mem.cell(addr, offset, a.width)
+	if err != nil {
+		return err
+	}
+	// Truncation is `storeBytes`'s, kept here now that no byte slice is built: a store is not a
+	// conversion, so `i32.atomic.store8` writes the low byte and discards the rest.
+	c.store(v & c.mask)
+	return nil
 }
 
 // atomicRmw is the read-modify-write family: load, apply, store, push the value that was there.
@@ -433,6 +630,10 @@ func (in *Instance) atomicStore(a atomicop, st *stack, mem *memory, offset uint6
 // **The old value is the result, not the new one** (`Num n1 :: vs'`, eval.ml:415), and the
 // distinction is invisible for `and`/`or`/`xor` against a zero cell — which is most of a fresh
 // memory — so the corpus rows that discriminate it are the ones run after `init`.
+//
+// The three steps are now one atomic operation rather than three plain ones (#542, ADR 0051). What
+// used to be `read`, `applyRmw`, `write` — with a window between each pair where another agent's
+// update was lost — is a compare-and-swap loop that retries instead.
 func (in *Instance) atomicRmw(a atomicop, st *stack, mem *memory, offset uint64) error {
 	if err := st.needNum(2); err != nil {
 		return err
@@ -442,15 +643,11 @@ func (in *Instance) atomicRmw(a atomicop, st *stack, mem *memory, offset uint64)
 	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
-	bs, err := mem.read(addr, offset, a.width)
+	c, err := mem.cell(addr, offset, a.width)
 	if err != nil {
 		return err
 	}
-	old := slotOf(bs, a)
-	if err := mem.write(addr, offset, storeBytes(applyRmw(a.rmw, old, operand), a.width)); err != nil {
-		return err
-	}
-	st.pushNum(old)
+	st.pushNum(c.update(func(old uint64) uint64 { return applyRmw(a.rmw, old, operand) }))
 	return nil
 }
 
@@ -496,17 +693,11 @@ func (in *Instance) atomicCmpxchg(a atomicop, st *stack, mem *memory, offset uin
 	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
-	bs, err := mem.read(addr, offset, a.width)
+	c, err := mem.cell(addr, offset, a.width)
 	if err != nil {
 		return err
 	}
-	old := slotOf(bs, a)
-	if old == truncTo(expected, a.width) {
-		if err := mem.write(addr, offset, storeBytes(replacement, a.width)); err != nil {
-			return err
-		}
-	}
-	st.pushNum(old)
+	st.pushNum(c.compareAndSwap(truncTo(expected, a.width), replacement))
 	return nil
 }
 
@@ -554,11 +745,13 @@ func (in *Instance) atomicWait(a atomicop, st *stack, mem *memory, offset uint64
 	if !mem.limits.Shared {
 		return trapExpectedShared
 	}
-	bs, err := mem.read(addr, offset, a.width)
+	c, err := mem.cell(addr, offset, a.width)
 	if err != nil {
 		return err
 	}
-	if slotOf(bs, a) != truncTo(expected, a.width) {
+	// The compare reads the cell atomically, like every other access in this file: a wait that
+	// decided on a torn read would report not-equal for a value no agent ever wrote.
+	if c.load() != truncTo(expected, a.width) {
 		st.pushI32(1)
 		return nil
 	}

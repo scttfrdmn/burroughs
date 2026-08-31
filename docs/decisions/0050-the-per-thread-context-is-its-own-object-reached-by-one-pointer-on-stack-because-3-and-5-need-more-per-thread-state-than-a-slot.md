@@ -180,7 +180,10 @@ Three things worth keeping:
 land.** They are stated in the present tense because they are this decision's commitments about
 `Spawn` whenever it lands, and a reader must not take them as claims that the code is in the tree —
 it is not. `Spawn` exists and lives in **#554**, a PR parked unmerged and deliberately red, withheld
-because `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on the first `go` statement in
+because the package's single-thread tripwire — at the time of this decision
+`TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded`, re-pointed and renamed by #542's
+implementation to `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` (see the
+postscript) — fires on the first `go` statement in
 `internal/interp` and instructs the reader to discharge **#542** rather than exempt the file. #542
 prices its discharge as §4's litmus battery (**#516**, **#10**), which is work this slice was
 sequenced ahead of. That looked like a cycle in the phase's order, so it went to Scott rather than
@@ -196,6 +199,22 @@ premise becomes false and it is retired → T-1 merges → #10's battery runs ag
 chain waits on itself. #554 also carries the measurement that decided the refusal of an override: two
 threads × 2000 atomic adds on one cell yield 3392 rather than 4000, with the race detector naming the
 read in `atomic.go` and the write in `memory.go`.
+
+## Postscript — one link of that chain came out differently
+
+Recorded here rather than by rewriting the paragraph above, because this ADR is accepted and the
+paragraph is what was decided; this is what happened next.
+
+**The chain's third link reads "the tripwire's premise becomes false and it is retired". It was
+re-pointed instead.** #542's implementation ([ADR
+0051](0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md))
+made the *atomics* synchronised, which is only half of what the tripwire was watching for: the plain
+accesses in `memop.go` are still a byte loop and still tear under a second thread (**#557**), and §4's
+boundary model is still **#516**. So the control kept its mechanism — the first `go` statement in a
+non-test file of the package, with its vacuity floor — and took a new name and new citations. *A
+tripwire whose subject dissolves is re-pointed rather than retired*: closing it as no longer
+applicable would have retired a live risk. Every other link of the chain held, and **#554 still
+merges after #542**, which is what the ruling ordered.
 
 - **`Spawn` is an engine API and not a wasm instruction.** The threads proposal defines no spawn
   opcode; T-1 says *host primitive*, and *"this is `newosproc`, not a Worker with a message port."* In
