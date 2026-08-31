@@ -2,6 +2,7 @@ package interp
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"unsafe"
@@ -121,58 +122,100 @@ func TestNarrowLoadSignExtendsIntoItsOwnSlotWidth(t *testing.T) {
 
 // TestStoreTruncatesAndIsLittleEndian pins the store direction, read back through a *wider* load.
 //
-// **Reading back with a load of the same width would be circular**: a storeBytes and a loadValue
-// that shared a byte-order mistake would agree perfectly, and the round trip would be green on a
-// big-endian answer. So each row stores narrow and reads back the full 8 bytes, which makes the
-// *placement* of the bytes observable rather than just their round trip. That is the same reason
-// the memop table is cross-checked against the generated mnemonics rather than against itself
-// (grave #106: a premise measured over the same sample the code reads is an echo).
+// **Reading back with a load of the same width would be circular**: a store and a load that shared a
+// byte-order mistake would agree perfectly, and the round trip would be green on a big-endian answer.
+// So each row stores narrow and reads back the full 8 bytes, which makes the *placement* of the bytes
+// observable rather than just their round trip. That is the same reason the memop table is
+// cross-checked against the generated mnemonics rather than against itself (grave #106: a premise
+// measured over the same sample the code reads is an echo).
 //
-// Falsified by reversing storeBytes' shift to `byte(v >> (8 * uint(int(width)-1-i)))` — a
-// big-endian store. **Three of the four rows fail**, and the one that does not is the useful part
-// of the measurement: `s8` writes one byte, so no byte-order defect can show in it, and it is here
-// for the truncation half of the partition rather than the endianness half. A test made of `s8`
-// rows alone would be a byte-order control that cannot fail — the stillborn shape, which is found
-// by watching a falsification *pass*.
+// # The address is a row field since #557, because truncation moved into a partition
+//
+// Every row used to store at address 0, which is aligned for every width — so after ADR 0053 this
+// test would have exercised the *word* path alone, and the byte fallback's truncation would have had
+// no test at all while this one's name went on claiming the property. Both paths truncate, by
+// different means (`storeWord` by converting to the width's type, the fallback by shifting), so the
+// rows are doubled onto an unaligned address and **a falsification now has to cross the partition
+// twice** to fail this test everywhere. Width 1 has no unaligned form — a one-byte access is aligned
+// at every address — so `s8` appears once, and that is the proposal's `u32 mod N/8 = 0` being
+// vacuously true rather than a row missed.
+//
+// Falsified two ways, and the split is the point. Reversing the **fallback**'s shift to
+// `byte(v >> (8 * uint(len(dst)-1-i)))` fails the three `addr: 1` rows above width 1 and **leaves every
+// aligned row green**; making the same reversal in `storeWord` (by swapping `guestWord16`/`32`/`64` for
+// an unconditional `bits.Reverse*`) fails the aligned side and leaves the unaligned rows green. Neither
+// injection alone would have been caught by the pre-#557 version of this test.
+//
+// The rows that cannot fail on endianness are still here for the truncation half: `s8` writes one byte,
+// so no byte-order defect can show in it. A test made of `s8` rows alone would be a byte-order control
+// that cannot fail — the stillborn shape, found by watching a falsification *pass*.
 func TestStoreTruncatesAndIsLittleEndian(t *testing.T) {
+	// The reader takes its address as a parameter so an unaligned store can be read back from where
+	// it was written. That makes the read-back itself unaligned for the `addr: 1` rows, which is
+	// harmless — a load's correctness does not depend on its alignment, only its tearing does.
 	const src = `(module
 		(memory 1)
-		(func (export "s8")  (param i64) (i32.store8  (i32.const 0) (i32.wrap_i64 (local.get 0))))
-		(func (export "s16") (param i64) (i32.store16 (i32.const 0) (i32.wrap_i64 (local.get 0))))
-		(func (export "s32") (param i64) (i32.store    (i32.const 0) (i32.wrap_i64 (local.get 0))))
-		(func (export "s64") (param i64) (i64.store    (i32.const 0) (local.get 0)))
-		(func (export "read") (result i64) (i64.load (i32.const 0)))
+		(func (export "s8")  (param i32 i64) (i32.store8  (local.get 0) (i32.wrap_i64 (local.get 1))))
+		(func (export "s16") (param i32 i64) (i32.store16 (local.get 0) (i32.wrap_i64 (local.get 1))))
+		(func (export "s32") (param i32 i64) (i32.store    (local.get 0) (i32.wrap_i64 (local.get 1))))
+		(func (export "s64") (param i32 i64) (i64.store    (local.get 0) (local.get 1)))
+		(func (export "read") (param i32) (result i64) (i64.load (local.get 0)))
 	)`
 
 	cases := []struct {
-		fn   string
-		arg  uint64
-		want uint64 // the whole 8 bytes afterwards; a narrow store leaves the rest zero
+		fn    string
+		width uint64
+		addr  uint64
+		arg   uint64
+		want  uint64 // the 8 bytes from addr afterwards; a narrow store leaves the rest zero
 	}{
 		// Truncation is the spec's: i32.store8 writes the low byte and discards the rest,
 		// with no range check. So the high bytes of the argument must not appear.
-		{"s8", 0x1122334455667788, 0x88},
-		{"s16", 0x1122334455667788, 0x7788},
-		{"s32", 0x1122334455667788, 0x55667788},
-		{"s64", 0x1122334455667788, 0x1122334455667788},
+		//
+		// addr 0 takes the word path at every width; addr 1 takes the byte fallback at every
+		// width above 1.
+		{"s8", 1, 0, 0x1122334455667788, 0x88},
+		{"s16", 2, 0, 0x1122334455667788, 0x7788},
+		{"s16", 2, 1, 0x1122334455667788, 0x7788},
+		{"s32", 4, 0, 0x1122334455667788, 0x55667788},
+		{"s32", 4, 1, 0x1122334455667788, 0x55667788},
+		{"s64", 8, 0, 0x1122334455667788, 0x1122334455667788},
+		{"s64", 8, 1, 0x1122334455667788, 0x1122334455667788},
 	}
+	word, fallback := 0, 0
 	for _, c := range cases {
-		t.Run(c.fn, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s/at%d", c.fn, c.addr), func(t *testing.T) {
 			in, trap := instantiate1(t, src)
 			if trap != nil {
 				t.Fatalf("instantiate: %v", trap)
 			}
-			if _, err := in.Invoke(c.fn, Value{Type: binary.I64, Bits: c.arg}); err != nil {
-				t.Fatalf("invoke %s: %v", c.fn, err)
+			if _, err := in.Invoke(c.fn,
+				Value{Type: binary.I32, Bits: c.addr}, Value{Type: binary.I64, Bits: c.arg}); err != nil {
+				t.Fatalf("invoke %s at %d: %v", c.fn, c.addr, err)
 			}
-			out, err := in.Invoke("read")
+			out, err := in.Invoke("read", Value{Type: binary.I32, Bits: c.addr})
 			if err != nil {
 				t.Fatalf("invoke read: %v", err)
 			}
 			if out[0].Bits != c.want {
-				t.Errorf("after %s(%#x), memory = %#016x, want %#016x", c.fn, c.arg, out[0].Bits, c.want)
+				t.Errorf("after %s(%d, %#x), memory at %d = %#016x, want %#016x",
+					c.fn, c.addr, c.arg, c.addr, out[0].Bits, c.want)
 			}
 		})
+		// Which path each row takes, by the proposal's own guest-space condition rather than by
+		// calling `wordAligned` on the instance — the memory's base is 8-byte aligned
+		// (`checkBaseAlignment`), so the two agree, and *that* agreement is what
+		// TestWordAlignedAnswersTheProposalsGuestSpaceCondition exists to assert. Restating it here
+		// would make this tally depend on the predicate it is meant to be independent of.
+		if c.addr%c.width == 0 {
+			word++
+		} else {
+			fallback++
+		}
+	}
+	if word == 0 || fallback == 0 {
+		t.Errorf("the rows covered %d word-path and %d fallback stores; both must be non-empty or "+
+			"this test asserts truncation on one side of ADR 0053's partition only", word, fallback)
 	}
 }
 

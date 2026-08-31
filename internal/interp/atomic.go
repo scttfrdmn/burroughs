@@ -459,6 +459,18 @@ func guestWord64(v uint64) uint64 {
 	return bits.ReverseBytes64(v)
 }
 
+// guestWord16 is the same involution at two bytes, and it exists for the *plain* accesses rather
+// than for the atomics: `sync/atomic` has no 16-bit operations, which is why `atomicCell` reaches a
+// narrow field through the containing 32-bit word and never needs this. #557's tear-free path has no
+// such constraint — an aligned 2-byte access is one `uint16` load — so the width appears here for the
+// first time. Kept beside its siblings because the three answer one question (ADR 0053).
+func guestWord16(v uint16) uint16 {
+	if hostLittleEndian {
+		return v
+	}
+	return bits.ReverseBytes16(v)
+}
+
 // atomicCell is one atomic access resolved to the naturally-aligned host word that contains it,
 // plus where the access's bytes sit inside that word.
 //
@@ -619,8 +631,9 @@ func (in *Instance) atomicStore(a atomicop, st *stack, mem *memory, offset uint6
 	if err != nil {
 		return err
 	}
-	// Truncation is `storeBytes`'s, kept here now that no byte slice is built: a store is not a
-	// conversion, so `i32.atomic.store8` writes the low byte and discards the rest.
+	// Truncation is the plain store's, and `memory.writeNum` is where that rule is written down
+	// now — #557 deleted `storeBytes`, which this comment used to name. Same rule either way: a
+	// store is not a conversion, so `i32.atomic.store8` writes the low byte and discards the rest.
 	c.store(v & c.mask)
 	return nil
 }

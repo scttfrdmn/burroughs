@@ -1,5 +1,7 @@
 package interp
 
+import "unsafe"
+
 // memop describes one load or store: how many bytes it touches, whether a narrow load
 // sign-extends, and which value type the slot holds.
 //
@@ -69,48 +71,120 @@ var memops = map[uint32]memop{
 // added to `memops` cannot be classified by omission.
 func isStore(op uint32) bool { return op >= 0x36 && op <= 0x3e }
 
-// loadValue reads width bytes little-endian and returns them as a slot.
+// wordAligned reports whether bs starts at a host address that a single width-byte access can
+// use, and is the whole of the tear-freedom predicate (ADR 0053).
 //
-// **Little-endian is the format's, not the host's**, and it is spelled out byte by byte rather
-// than taken from encoding/binary so that the engine's answer does not depend on the machine it
-// runs on. A big-endian host reading through unsafe would produce byte-swapped values for every
-// vector, which dual-platform CI would catch only if one of its arches were big-endian — and
-// neither is.
+// **The test is on the host address, not on the guest's effective address**, and the two are the
+// same question here. `bs` is `m.bytes[ea : ea+width]`, so `&bs[0]` is the host address of `ea`;
+// `checkBaseAlignment` refuses to construct a memory whose backing array is not 8-byte aligned, so
+// for every width up to 8 the host address is aligned exactly when `ea mod width` is zero — which
+// is the proposal's own condition, `u32 mod N/8 = 0`. The implication runs in the direction
+// conformance needs: aligned in guest space implies aligned in host space implies the single-access
+// path, so the accesses the proposal marks `NOTEARS` are the accesses that get it.
+//
+// Sound where that premise does *not* hold, which matters because `gcobj.go` passes Go-allocated
+// field bytes rather than linear memory: a false answer only declines the fast path, and the byte
+// loop is correct everywhere.
+//
+// Widths are always powers of two in this family (1, 2, 4, 8), so `&(width-1)` is the modulus.
+func wordAligned(bs []byte, width uint64) bool {
+	if uint64(len(bs)) != width {
+		return false
+	}
+	return uintptr(unsafe.Pointer(&bs[0]))&uintptr(width-1) == 0
+}
+
+// loadWord reads all of bs as one host word, in guest byte order. Only valid where wordAligned.
+//
+// The four widths are the family's, and `guestWord32`/`guestWord64` are ADR 0051's — see the
+// endianness note on `loadValue` for why the conversion has to be here rather than assumed away.
+func loadWord(bs []byte) uint64 {
+	switch len(bs) {
+	case 1:
+		return uint64(bs[0])
+	case 2:
+		return uint64(guestWord16(*(*uint16)(unsafe.Pointer(&bs[0]))))
+	case 4:
+		return uint64(guestWord32(*(*uint32)(unsafe.Pointer(&bs[0]))))
+	default:
+		return guestWord64(*(*uint64)(unsafe.Pointer(&bs[0])))
+	}
+}
+
+// storeWord writes v as one host word over all of bs, in guest byte order. Only valid where
+// wordAligned.
+func storeWord(bs []byte, v uint64) {
+	switch len(bs) {
+	case 1:
+		bs[0] = byte(v)
+	case 2:
+		*(*uint16)(unsafe.Pointer(&bs[0])) = guestWord16(uint16(v))
+	case 4:
+		*(*uint32)(unsafe.Pointer(&bs[0])) = guestWord32(uint32(v))
+	default:
+		*(*uint64)(unsafe.Pointer(&bs[0])) = guestWord64(v)
+	}
+}
+
+// extendSlot turns raw access bytes into a slot value: sign-extension where the mnemonic asks for it,
+// verbatim otherwise.
+//
+// Its own function since #557 because **both** load paths need it and neither may host it — see
+// `loadValue` for why the paths are two, and `memAccess` for where the choice between them is made.
+//
+// **No float branch, and its absence was verified rather than assumed.** `pushF32` stores
+// `uint64(math.Float32bits(v))` and `pushF64` stores `math.Float64bits(v)`, so a float slot *is* the
+// little-endian bits zero-extended — exactly what `raw` already holds. A branch reinterpreting through
+// a Go float would round-trip a signalling NaN's payload through a quiet one, which the suite asserts
+// exact and which no arithmetic vector would reveal. `isFloat` therefore exists for the mnemonic
+// cross-check, not for this function.
+func extendSlot(raw uint64, m memop) uint64 {
+	if !m.signed {
+		return raw
+	}
+	// Sign-extend from the access width, then narrow to the slot width. The two steps differ for
+	// i32.load8_s: extending to 64 bits and truncating to 32 is what makes `i32.load8_s` of 0xFF read
+	// 0xFFFFFFFF rather than 0xFFFFFFFFFFFFFFFF, and the i32 slot is defined as the low 32 bits with
+	// the high bits *zero* (exec.go's i32.const grave).
+	shift := 64 - m.width*8
+	v := uint64(int64(raw<<shift) >> shift)
+	if !m.is64 {
+		return uint64(uint32(v))
+	}
+	return v
+}
+
+// loadValue reads width bytes little-endian and returns them as a slot, one byte at a time.
+//
+// **Little-endian is the format's, not the host's**, and the loop below spells it out byte by byte so
+// that the engine's answer does not depend on the machine it runs on. It warned that *"a big-endian
+// host reading through unsafe would produce byte-swapped values for every vector, which dual-platform
+// CI would catch only if one of its arches were big-endian — and neither is"*, and since #557 that
+// warning is load-bearing for the sibling path rather than hypothetical: an **aligned** linear-memory
+// access is a word read through `unsafe`, where the property is re-established by
+// `guestWord16`/`32`/`64` (ADR 0053). The two are checked against each other with this loop as the
+// authority — the same arrangement ADR 0051 made for the atomics, for the same reason: the loop is the
+// code the whole spec suite has validated.
+//
+// # This is the *general* path, and the tear-free one is at the call site
+//
+// The threads proposal's `tearing` (`runtime.rst:742-746` at ADR 0049's pin) marks an aligned integer
+// access no wider than 32 bits `NOTEARS`, and four separate byte reads are exactly the decomposition
+// that word forbids. So an aligned linear-memory load must not come through here — and the branch that
+// sends it elsewhere is in `memAccess` rather than at the top of this function, **because putting it
+// here cost 6.24% on every unaligned load and bought nothing.** `wordAligned` and `loadWord` inline to
+// 89 against an 80-point budget, so a `loadValue` containing both stopped being inlinable at all
+// (cost 65 → 165, measured with `-gcflags=-m=2`), and every load in every module paid a call. The
+// figure, the mechanism and the pre-registration it falsified are in ADR 0053.
+//
+// **Its remaining callers are the ones with no tearing obligation**: `memAccess`'s unaligned branch,
+// where tearing is permitted, and `gcobj.go`, whose bytes are Go-allocated struct fields rather than
+// linear memory — `struct.get` is a different rule from `t.load`, so the proposal's condition does not
+// reach them. That makes the narrower placement more faithful than the wider one, not a concession.
 func loadValue(bs []byte, m memop) uint64 {
 	var raw uint64
 	for i := len(bs) - 1; i >= 0; i-- {
 		raw = raw<<8 | uint64(bs[i])
 	}
-	// **No float branch, and its absence was verified rather than assumed.** `pushF32` stores
-	// `uint64(math.Float32bits(v))` and `pushF64` stores `math.Float64bits(v)`, so a float
-	// slot *is* the little-endian bits zero-extended — exactly what the loop above produced.
-	// A branch reinterpreting through a Go float would round-trip a signalling NaN's payload
-	// through a quiet one, which the suite asserts exact and which no arithmetic vector would
-	// reveal. `isFloat` therefore exists for the mnemonic cross-check, not for this function.
-	if m.signed {
-		// Sign-extend from the access width, then narrow to the slot width. The two steps
-		// differ for i32.load8_s: extending to 64 bits and truncating to 32 is what makes
-		// `i32.load8_s` of 0xFF read 0xFFFFFFFF rather than 0xFFFFFFFFFFFFFFFF, and the i32
-		// slot is defined as the low 32 bits with the high bits *zero* (exec.go's i32.const
-		// grave).
-		shift := 64 - m.width*8
-		v := uint64(int64(raw<<shift) >> shift)
-		if !m.is64 {
-			return uint64(uint32(v))
-		}
-		return v
-	}
-	return raw
-}
-
-// storeBytes renders a slot as width little-endian bytes, truncating.
-//
-// Truncation is the spec's: `i32.store8` writes the low byte and discards the rest, with no
-// range check — a store is not a conversion.
-func storeBytes(v, width uint64) []byte {
-	bs := make([]byte, width)
-	for i := range bs {
-		bs[i] = byte(v >> (8 * uint(i)))
-	}
-	return bs
+	return extendSlot(raw, m)
 }
