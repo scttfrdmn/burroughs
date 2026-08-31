@@ -293,7 +293,54 @@ weakly-ordered platform.
   0xfc` with `shared` from bit 1, each banning the other's bit — and neither pin authorizes flags
   `0x06`/`0x07`, which is why that pair requires **both** gates rather than either.
 
+- **The threads lane's 41 failures are registered per row, with an authority and a named suite
+  conflict each** (`gate:threads`, ruling: Scott — *"an aggregate 'superseded' column is a bucket
+  where a real regression hides"*). `internal/spec/threads_superseded_test.go` accounts for every
+  failing row in the lane across seven entries and refuses in **both** directions: a failure with no
+  entry is a candidate engine defect, an entry with no failure is a stale citation. The total is
+  pinned at **41**, so a new row cannot join silently. Five findings, all of them corpus age — the
+  bare-index `(data 0 …)`/`(elem 0 …)` segment forms (22 rows, refused by the normative spectec
+  grammar and both pins' `parser.mly`, accepted only by wabt as Wasm 1.0 legacy), multiple
+  tables/memories (8), the max-pages wording (6), malformed-versus-invalid layering (3), and
+  `spectest.shared_memory` (2, which no pinned reference exports). **Zero engine defects**, which is
+  a claim the register is what makes checkable.
+  - **The two costs are measured, not argued.** Implementing `at most one table` scores **138** core
+    failures and `at most one memory` **33**, each obtained by adding the rule and reading the board;
+    33+138 is 171 against **169** for both at once, so two modules are claimed by whichever rule
+    fires first and the split is not additive. The malformed-versus-invalid reading breaks **9** core
+    rows. The board column still reads 41: laundering a failing vector into a pass would be the
+    dishonest board, and what is recorded is why each one is not the engine's to fix.
+  - **Watched die eight ways**, including a row re-pointed one line off — which fires in both
+    directions at once — and a drained register, which fails 41 times rather than passing vacuously.
+    Two of the eight initially printed `FAIL` over a *build* error, so the control had not run at all
+    and the word FAIL was the compiler's; both were rewritten as mutations that compile.
+  - The summary line is guarded on `!t.Failed()`, because the unguarded version printed `0 engine
+    defects` underneath every one of those failures — including the one whose message was that a
+    failure had no entry.
+
 ### Changed
+
+- **`checkLimits`' comment stops claiming a vector for the contested half of its message**
+  (`internal/validate/module.go`). It read *"the vector matches the head of it"* — singular, with no
+  antecedent. The head is asserted by **15** vectors (12 `"memory size"` in `memory.wast:54-100`, 3
+  `"table size"` in `table.wast:36,40,44`), all prefix-matched, so all of them pass on any suffix;
+  the *suffix* is asserted by none of them, and the inference a reader took from that — nothing
+  checks the tail — was true when written and false once the threads lane arrived with 6 vectors
+  asserting a different one. The comment now names the measured population and points the suffix at
+  the register above and ADR 0049.
+
+- **ADR 0049 records the revision of the standard-form prose it rests on** (ruling: Scott on #548 —
+  *don't move the core pin now*; moving it re-derives `optable.go` and everything downstream and can
+  move board figures, while `v0.4.0`'s closure claim is dated to the corpus as the harness may
+  currently ask it). `WebAssembly/threads @ cc535ada` (2026-07-30), verified against the fetched
+  checkout's `HEAD` rather than read off the fetch script, with all four distinct verbatim strings
+  across the six sites and a site→form table. #548 changes shape from a question into the scheduled
+  slice that moves the pin, entry condition a pre-registered board delta.
+  - Two corrections the amendment makes, neither changing the decision: it is **not** merged-spec
+    text — this ADR's own measurement is that no merged spec exists at the pin set or upstream — and
+    a **quantifier between two exact citations was wrong**, since two of the six traps carry an `ord`
+    is `SEQCST` conjunct the summarising sentence flattened. The site table beneath it had recorded
+    the distinction all along.
 
 - **The Makefile maxim states its precondition, and its exceptions stop being numbered or listed**
   ([the precondition](docs/laws/operations.md#the-maxims-precondition-the-mirror-holds-where-the-makefile-observes-a-superset-of-ci),

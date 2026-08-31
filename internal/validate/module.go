@@ -99,7 +99,24 @@ const (
 //
 // rangeErr is the caller's sentinel because the message names the quantity being bounded; see
 // ErrMemorySize. The `%w %s` detail reproduces the reference's suffix, so the full string is
-// `memory size must be at most 2^16 pages (4 GiB) for i32` — the vector matches the head of it.
+// `memory size must be at most 2^16 pages (4 GiB) for i32` — printed from `checkMemoryType`, not
+// transcribed from here.
+//
+// **The head is asserted by 15 vectors and the suffix by none of them, which is a different thing
+// from the suffix being uncontested.** This read *"the vector matches the head of it"*, singular and
+// with no antecedent, and the singular was the whole problem: the population is 12 `"memory size"`
+// vectors in `memory.wast:54-100` plus 3 `"table size"` in `table.wast:36,40,44`, matched as a
+// prefix — `internal/spec/wast.go` compares with `strings.HasPrefix(got, c.Expect)`, cited by its
+// text rather than by a line number because #497 is spending the project's positional citations
+// down and this comment should not add one — so every one of them passes on any suffix whatsoever.
+// That much the sentence had right. What it left a reader with is the inference that
+// nothing anywhere checks the tail — true when written, and false since the threads lane arrived
+// with 6 vectors that assert a *full* string and assert a different suffix, `65536 pages (4GiB)`.
+// Those 6 fail, deliberately: `spec/threads_superseded_test.go` registers them per row and
+// [0049](../../docs/decisions/0049-atomic-alignment-is-checked-on-the-effective-address-because-the-proposals-normative-prose-outranks-its-own-reference-interpreter.md)
+// settles the direction — the current pin's wording, because the standard outranks the snapshot.
+// So the suffix is the contested half of this string and the comment claiming a vector for it was
+// pointing at the half nobody disputes.
 func checkLimits(lim binary.Limits, limRange uint64, rangeErr error, rangeText string) error {
 	if lim.Min > limRange {
 		return fmt.Errorf("%w %s", rangeErr, rangeText)
