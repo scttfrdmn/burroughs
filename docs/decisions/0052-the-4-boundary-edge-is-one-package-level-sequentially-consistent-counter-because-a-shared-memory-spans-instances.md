@@ -198,6 +198,49 @@ cost. The sensitive case is the **cheapest** instantiate, not the busiest.
 - **A forecast beaten is a forecast falsified.** If the Instantiate row comes out at `~` I will say
   which mechanism could have moved it and why it did not, rather than banking the pass.
 
+## The result, and the pass is weaker evidence than the ceiling implies
+
+Ten interleaved rounds, whole board, `-count=1` per arm per round so run order is not perfectly
+correlated with the arm (grave #552), arms compiled up front and hash-checked distinct. On the forecast
+row:
+
+```
+Instantiate/funcs=1/openers=1-12     1.369µ ± 2%   1.369µ ± 2%   ~ (p=0.643 n=10)
+Instantiate/funcs=200/openers=1-12   186.1µ ± 2%   184.3µ ± 3%   ~ (p=0.315 n=10)
+Instantiate/funcs=200/openers=0-12   63.23µ ± 2%   62.80µ ± 9%   ~ (p=0.631 n=10)
+geomean                              89.12µ        89.03µ        -0.10%
+```
+
+**The forecast passes and the rollback is not triggered.** No row moved beyond the ceiling; the geomean
+moved -0.10%.
+
+**Discharging the clause above: which mechanism could have moved this row, and why it did not.** The
+named mechanism is four uncontended `atomic.Uint64.Add`s. On arm64 that compiles to `LDADDAL`, and with
+one goroutine the line is already exclusive in L1, so the realistic cost is ~1–2 ns each: **4–8 ns
+against 1369 ns, i.e. 0.3–0.6%.** The registered estimate was 0.6–1.4%, and its low end sat *under* the
+row's own ±2% spread. So a `~` on this row is consistent with the mechanism costing 0.3% and equally
+consistent with it costing 1.5%, and **the ceiling was not tight enough to distinguish them.** The
+registration was honest about the row being the sensitive one and wrong about it being sensitive
+*enough*; what would actually have failed it is a fifth crossing nobody counted (which
+`TestEveryBoundaryCrossingIsPaired` independently rules out at 6 per instantiate, 4 of them on this
+path) or a contended atomic, and **no `scanbench` row runs two goroutines**, so contention is unpriced
+here exactly as the rollback's own note says.
+
+**The noise floor is measured rather than assumed, and the mechanism's sign is what measures it.** Four
+rows came out significant and small: `Decoupled/span=5` -0.49%, `PadOnce/distance=0` -0.37%,
+`PadOnce/distance=64` -0.60%, `PadOnce/distance=4096` -0.49%, against `Decoupled/span=276` **+1.49%**.
+A crossing can only ever *add* work, so **a negative movement cannot be this mechanism** — which puts a
+floor of roughly 0.5% on what this instrument can attribute at all, and makes the lone positive row's
++1.49% unattributable in the same breath rather than reported as a cost. That floor is above the
+predicted effect, which is the same finding as the paragraph before it arrived at from the other side.
+
+**A level shifted between sessions and the deltas did not.** The pre-registration quoted 1423 ns/op for
+this row from an earlier session; this run's base arm reads 1369 ns/op, ~4% lower. Nothing in the engine
+explains it and nothing needs to: *correlated errors preserve deltas*, and the two arms here ran
+interleaved on one machine within one script, which is why the comparison survives a wandering absolute.
+It is also the concrete reason the arms could not have been measured on separate occasions — a 4%
+session drift would have swamped a 0.3% mechanism outright.
+
 ## Consequences
 
 - **Every new interpreter entry point must cross the boundary**, and this is enforced structurally
