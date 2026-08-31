@@ -44,14 +44,16 @@ weakly-ordered platform.
     was built with it: a shared-memory gate by construction (a `shared` limits flag only decodes
     with `Features.Threads` on, so reaching one *is* proof the gate was set), an entry-signature
     check, and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and never unlocks,
-    which is how pure Go gets 1:1 with an OS thread. Commit `3b0129f` on the branch holds it with
-    seven tests. It does not land because
+    which is how pure Go gets 1:1 with an OS thread. It lives in
+    [#554](https://github.com/scttfrdmn/burroughs/pull/554), a PR parked unmerged and deliberately
+    red, with five tests of its own. It does not land because
     `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on the first `go` statement in
     the package and instructs: *"Do not exempt this file; discharge
     [#542](https://github.com/scttfrdmn/burroughs/issues/542)."* #542 prices its own discharge as
     §4's litmus battery ([#516](https://github.com/scttfrdmn/burroughs/issues/516),
     [#10](https://github.com/scttfrdmn/burroughs/issues/10)) — work this slice was sequenced ahead
-    of, so the collision is a ruling about phase order and not a choice available to the code. The
+    of, so the collision was a ruling about phase order rather than a choice available to the code.
+    **Scott ruled option 1**: discharge #542 first, #542 → #516 → #10. The
     two evasions were available and not taken: no exception-list entry, and `Spawn` was not moved to
     a sibling package where the `go` statement would sit outside the control's domain. *An exemption
     inherits none of the trigger's lessons.*
