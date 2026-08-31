@@ -55,6 +55,36 @@ reach is a law out of context.
   starvation. Re-running until green, with nothing explained, is the same reflex
   as scrolling past a warning. (Ruling: Scott, PR #27; the fix is #28.)
 
+### An issue whose oracle does not exist yet stays open on its own account.
+
+- **An issue whose oracle does not exist yet stays open on its own account.** *Split
+  issues at the oracle seam* says two questions with two oracles are two issues; this
+  is the half that gets skipped, and it is about **closing** rather than filing. When
+  one issue's repair is what *creates* the other's oracle, the enabled issue is not a
+  consequence of the enabling one and does not travel with it: discharging the
+  enabler must leave the enabled one open, on its own subject, or the work is
+  retired by the very change that first made it possible.
+  - The specimen is the pair #539/#540. #539 is a CI step that discarded `go test`'s
+    entire output — no FAIL line, no `-shuffle` seed — so #540, a real `linux/arm64`
+    failure underneath it, has **no available oracle at all**: the one input that
+    would reproduce it was never written anywhere. #539's oracle is the workflow
+    file, which the tree holds, so it is workable immediately. Filing them as one
+    number would have meant a single issue that is simultaneously fixable today and
+    undiagnosable today, and the predictable outcome is that landing the fixable half
+    reads as discharging the whole.
+  - **The failure mode this prevents is the tripwire whose subject dissolves.** The
+    enabling repair is the natural moment to declare the matter handled — the red is
+    gone, the step is correct, the diff is green — and the enabled question is at its
+    *least* visible precisely then, because nothing is failing. Closing on that
+    evidence retires a live risk on the grounds that its instrument was repaired.
+  - The criterion is availability, not difficulty: *does an oracle for this question
+    exist in the tree, or on a machine, right now?* A hard question with an oracle
+    rides along; an easy question with none does not. And the seam is worth cutting
+    even when both halves are small, because the numbers are what carry the
+    dependency after the session that found them has ended. (Ruling: Scott, on the
+    #539/#540 report — *"an issue whose oracle doesn't exist yet stays open on its own
+    account rather than riding one whose oracle does."*)
+
 ### A failure establishes an event, not a condition — and "unavailable" is self-serving where "flake" is not.
 
 - **A failure establishes an event, not a condition — and "unavailable" is

@@ -323,13 +323,42 @@ jobs:
         # inside; this makes it visible from outside, so the two would have to fail
         # together for a skip to pass unnoticed. Reads the *output* channel, not the
         # exit code — a skip does not fail a test run, which is the entire problem.
-        run: |
-          out="$(go test -v -shuffle=on ./... 2>&1)"
-          if printf '%s\n' "$out" | grep -E '^\s*(---\s*)?SKIP' ; then
-            echo "::error::a test skipped under BURROUGHS_NO_SKIP=1 — every skip must route through internal/testenv, where the flag revokes it"
-            exit 1
-          fi
-          echo "no SKIP lines"
+        #
+        # **Calls the target instead of repeating its script, and that is a deletion
+        # rather than a fix (grave #539).** This step held its own copy —
+        # `out="$(go test -v -shuffle=on ./... 2>&1)"` and a grep — under this
+        # workflow's `-e` shell, where a non-zero `go test` makes the *assignment* the
+        # failing command. The shell then died on line one: every FAIL line, every
+        # panic and the `-shuffle` seed stayed inside `$out` and were never printed,
+        # the `::error::` message below never ran, and the entire record of a red job
+        # was a group header, 82 seconds of silence and `exit code 1`. The step's
+        # *name* was then the only cause on offer, asserting a skip that had not been
+        # detected — the worst available direction, since `BURROUGHS_NO_SKIP` and
+        # `TestEverySkipSiteIsLicensed` make a real skip very unlikely, so the message
+        # was nearly always wrong and pointed at `internal/testenv` instead of at the
+        # failing test. It cost one verdict: #540 is a genuine `linux/arm64` failure
+        # that cannot be worked because no seed survived.
+        #
+        # **The hazard was already recorded, and already repaired twice in this file.**
+        # The Makefile's header explains that `-e` is deliberately absent there so
+        # `strict` can capture `status=$?` and print its testimony, and it names this
+        # workflow: *"ci.yml's two copies of it had to become loops: those run under
+        # `-e` as well, where the failing assignment kills the step before the floor
+        # can print its diagnosis."* Both `suite-count.sh` floors were converted for
+        # that stated reason. This step is the third copy and the sweep did not reach
+        # it — *a repair to a defect whose file records a prior instance of the same
+        # shape isn't done until it sweeps*. So the remedy is one implementation rather
+        # than a third correct copy: `make strict` removes the mirror's room to exist,
+        # which is the stronger move because a text mirror's two halves fail in two
+        # shells and only one of them is `-e`.
+        #
+        # Not #297, which is worth stating because they look alike. #297 is *status
+        # masking* — the observed status belongs to a different command than the one
+        # under test. Here the status was perfectly correct and the **testimony** was
+        # destroyed. A wrong verdict with intact evidence, versus a right verdict with
+        # none; `pipefail` is irrelevant to both, and they meet only at #297's keyboard
+        # rule, which `strict` follows and this step did not.
+        run: make strict
 
       - name: go mod tidy is clean
         # The engine module only. `tidy` is NOT run on tools/go.mod: a tool
