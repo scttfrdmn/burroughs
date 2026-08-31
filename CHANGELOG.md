@@ -32,13 +32,30 @@ weakly-ordered platform.
     `0x00..0x4e` loop would have covered the region's holes and silently dropped any row added later;
     a hand-written table would have been 67 accept-direction chances no `assert_invalid` vector can
     see.
-  - **The alignment check follows the reference and diverges from the proposal document, which is
-    Scott's to rule on** ([#546](https://github.com/scttfrdmn/burroughs/issues/546),
-    `decision-needed:scott`). `eval.ml`'s six `check_align` sites all pass the *dynamic* address;
-    `proposals/threads/Overview.md:344-345` says the *effective* address.
-    `TestAtomicAlignmentIsCheckedOnTheDynamicAddress` is the hand-built discriminating pair, firing
-    in **opposite directions** on its two rows so no engine satisfies it by trapping on everything or
-    on nothing. If the document wins, that test inverts.
+  - **The alignment check follows the proposal's normative prose, which contradicts the proposal's
+    own reference interpreter** ([#546](https://github.com/scttfrdmn/burroughs/issues/546), [ADR
+    0049](docs/decisions/0049-atomic-alignment-is-checked-on-the-effective-address-because-the-proposals-normative-prose-outranks-its-own-reference-interpreter.md)).
+    `document/core/exec/instructions.rst` puts the check on `ea = i + memarg.offset` at **all six**
+    sites that check alignment at all; `eval.ml`'s six `check_align` calls pass the *dynamic* address
+    and fold the offset in later. A specification outranks an implementation of it, so the engine
+    takes the prose — and **knowingly disagrees with the reference** on a population no vector covers.
+    - **The question was first framed as `eval.ml` versus `Overview.md:344-345`, and that framing was
+      ruled out rather than answered**: both are artifacts of the same proposal, and neither is the
+      standard (Scott, on the #547 review — *"the standard outranks the snapshot"*). Reading through
+      the overview alone also understated the conflict as *two* of seven arms, because that is what
+      its one sentence mentions; the prose puts it at six of six. A design overview is a summary, and
+      its silence is not agreement.
+    - **The authority the ruling named does not exist**, and the ruling survives the correction: the
+      core pin `bdd7164` has no atomics whatsoever, and two checks against upstream agree it has none
+      there either. Whether the pin should move, which would give the region a genuinely third
+      authority where it now has one, is [#548](https://github.com/scttfrdmn/burroughs/issues/548).
+    - `TestAtomicAlignmentIsCheckedOnTheEffectiveAddress` pins the reading with **12 hand-built
+      vectors** — 6 arms × 2 directions, none in either corpus — run through the front end rather than
+      against `checkAlign`, because *a control can test the helper, not the path*. Falsified per
+      direction: the dynamic reading fails 12 of 12 rows, trapping unconditionally fails 6 (all
+      `addr=3`), never trapping fails 6 (all `addr=4`). It does not prove the reading correct — that
+      would be this project's decoder answering this project's reading — it makes the reading
+      observable, so a future change flips a named test instead of altering behaviour silently.
     - **The "no vector separates them" claim is measured over both corpora, not one.** Zero atomics
       carry a nonzero static offset in `testdata/spec` *or* in the threads pin's own 1018-line file,
       so both readings score 297/297 — *identical boards are the corpus declining to choose.* The

@@ -18,25 +18,54 @@ import (
 // plan: 142 + 45 = 187, so the bucket and the file's own assertion census agree exactly, and there
 // is no third stratum hiding in the count.
 //
-// # The authority, and the one place it contradicts its own document
+// # The authority, and the one place the proposal contradicts itself
 //
-// `spec-threads/interpreter/exec/eval.ml:377-471`, seven arms, and every semantic decision below
-// is a transcription of one of them. The core pin has no atomics at all, so unlike most regions
-// there is no second interpreter to cross-check against.
+// `spec-threads/interpreter/exec/eval.ml:377-471`, seven arms, and every semantic decision below is
+// a transcription of one of them **except the alignment rule**, which is taken from the proposal's
+// normative prose instead, because the two disagree.
 //
-// **Alignment is checked on the dynamic address, not the effective address**, and this engine
-// follows the reference in doing so. All six `check_align` call sites read
-// `addr = I64_convert.extend_i32_u i` — the popped operand alone — while the static `offset` is
-// passed separately to `Memory.load_num`/`store_num` and folded in by `effective_address`
-// (`runtime/memory.ml:91-94`) only after the check has passed. So `i32.atomic.load offset=1` at
-// address 4 traps in this engine, and at address 3 it does not.
+// **Alignment is checked on the effective address**: `ea = i + memarg.offset`, trap when
+// `ea mod N/8 != 0`. That is the rule at all six of the prose's atomic sites, each one defining
+// `ea` two lines above the trap it guards:
 //
-// The proposal's own prose says the opposite for two of the seven arms: *"Both notify and wait
-// operators trap if the effective address of either operator is misaligned or out-of-bounds"*
-// (`proposals/threads/Overview.md:344-345`). That sentence and `eval.ml:445`/`eval.ml:462` cannot
-// both be satisfied, and **no vector in either corpus can tell them apart** — measured over both,
-// because "the board has no witnesses" and "nothing has witnesses" are different claims and #537
-// exists precisely because the two corpora differ by 45 alignment vectors:
+//	spec-threads/document/core/exec/instructions.rst
+//	  1737/1743  load with ord     "Let ea be the integer i + memarg.offset" / SEQCST trap
+//	  2285/2291  store with ord    same pair
+//	  3066/3068  atomic.load(n)    "Let ea be i + memarg.offset" / trap
+//	  3205/3207  atomic.rmw(n)     same pair
+//	  3364/3366  memory.atomic.notify
+//	  3481/3483  memory.atomic.waitN
+//
+// **`eval.ml` computes something else, and this is an upstream inconsistency rather than a reading
+// of ours.** All six `check_align` call sites pass `addr = I64_convert.extend_i32_u i` — the popped
+// operand alone — while the static `offset` goes separately to `Memory.load_num`/`store_num` and is
+// folded in by `effective_address` (`runtime/memory.ml:91-94`) only after the check has passed. The
+// proposal's own specification text and its own reference interpreter cannot both be satisfied.
+//
+// The engine follows the prose. Prose is the specification and the interpreter is an
+// implementation of it, so where they diverge the implementation is the thing with the bug —
+// *the standard outranks the snapshot* ([ADR
+// 0049](../../docs/decisions/0049-atomic-alignment-is-checked-on-the-effective-address-because-the-proposals-normative-prose-outranks-its-own-reference-interpreter.md),
+// ruling on #546). Two things this replaced are worth naming, because both were wrong in a way a
+// reader would not otherwise see:
+//
+//   - The question was first framed as `eval.ml` versus `proposals/threads/Overview.md:344-345`,
+//     and **adjudicating between those two settles nothing** — they are artifacts of the same
+//     proposal, and neither is the standard. That framing was ruled out rather than answered.
+//   - Read through `Overview.md` alone, the disagreement looked like *two* of the seven arms
+//     (its sentence is about wait and notify only). The prose puts it at **all six** sites that
+//     check alignment at all. A design overview is a summary, and its silence is not agreement.
+//
+// The merged spec would outrank both, and **it does not exist at this pin set**: the core pin
+// (`bdd7164`, 2026-07-28) has no atomics whatsoever — zero `Atomic` constructors in its `eval.ml`,
+// no `check_align`, and `atomic` in one prose file where it means "atomically" in the linking
+// sense. So there is no second interpreter to cross-check against, and the best available normative
+// text is the proposal's own, which is spec-form prose in a fork of the spec repo rather than a
+// design document.
+//
+// **No vector in either corpus can tell the two readings apart** — measured over both, because
+// "the board has no witnesses" and "nothing has witnesses" are different claims, and #537 exists
+// precisely because the two corpora differ by 45 alignment vectors:
 //
 //	$ grep -rhoE '(i32|i64|memory)\.atomic\.[a-z0-9_.]+[^)]*offset=[0-9]+' \
 //	      testdata/spec third_party/spec-threads/test | wc -l
@@ -46,22 +75,20 @@ import (
 //	      testdata/spec third_party/spec-threads/test | wc -l
 //	2424
 //
-// Every atomic in both files carries a zero static offset, so the two readings coincide on all 187
-// rows and score identically. Identical boards are the finding rather than the licence, so the
-// choice is pinned by `TestAtomicAlignmentIsCheckedOnTheDynamicAddress` — a hand-built
-// discriminating pair neither corpus contains — and flagged for Scott on #546 rather than decided
-// quietly here.
+// Every atomic in both files carries a zero static offset, so `ea == i` on all 187 rows and the two
+// readings score identically. Identical boards are the finding rather than the licence, so the rule
+// is pinned by `TestAtomicAlignmentIsCheckedOnTheEffectiveAddress` — a hand-built discriminating
+// pair neither corpus contains, run through the front end rather than against this file's helper, so
+// that what is pinned is the behaviour and not the predicate.
 //
 // Not the equality rule #538 landed, which shares the word: that one checks the static `align=`
-// immediate against the access size, in the validator. This one checks the runtime address.
+// immediate against the access size, in the validator. This one checks a runtime address.
 //
 // **It is deliberately *not* decided by #538's precedent, whose premise is absent here.** That
 // ruling let this package take the address *type* from the core pin against the threads pin's
 // `I32Type`, on the stated ground that the threads pin "predates memory64 and cannot express the
-// question". This pin can express *this* question and answers it: `effective_address` is defined
-// twelve lines above `is_aligned` in the same file and deliberately not used by it. Copying the
-// earlier conclusion would inherit the visible property — "we diverged from the threads pin once"
-// — and drop the load-bearing one.
+// question". This pin can express *this* question — and answers it twice, in two voices that
+// disagree, which is a different situation and gets a different instrument.
 //
 // # Derived from the mnemonic and the operator, never transcribed
 //
@@ -344,14 +371,23 @@ func (in *Instance) execFE(ins binary.Instr, st *stack) error {
 	return fmt.Errorf("%w: 0xfe atomic kind %d has no arm", ErrNotValidated, a.kind)
 }
 
-// checkAlign traps unless the dynamic address is naturally aligned for the access.
+// checkAlign traps unless the **effective** address is naturally aligned for the access.
 //
-// **The offset is not a parameter, and that is the divergence this file's header records.** The
-// reference passes `addr` alone to `check_align`, folding the static offset in only inside
-// `effective_address`. Written as its own function so the omission is a visible signature rather
-// than a missing `+ offset` at six call sites.
-func checkAlign(addr, width uint64) error {
-	if addr&(width-1) != 0 {
+// The offset is a parameter because the rule is about `ea`, and this file's header records why that
+// is the rule despite the reference interpreter computing something else: the normative prose says
+// `ea = i + memarg.offset` and traps on `ea` at all six of its atomic sites, while `eval.ml` passes
+// the popped operand alone. Prose outranks the implementation snapshot ([ADR
+// 0049](../../docs/decisions/0049-atomic-alignment-is-checked-on-the-effective-address-because-the-proposals-normative-prose-outranks-its-own-reference-interpreter.md), #546).
+//
+// Written as its own function so the rule is a visible signature rather than a `+ offset` that has
+// to be spotted at six call sites — and it keeps that property in the direction it now points:
+// dropping the parameter is a compile error, not a silent revert to the reference's reading.
+func checkAlign(addr, offset, width uint64) error {
+	// Exact integer addition, matching the prose's `i + memarg.offset` rather than the wrapped
+	// arithmetic a 32-bit address space might suggest: both operands are already widened to uint64
+	// by `mem.addr`, so a u32 address plus a u32 offset cannot overflow here, and the bounds check
+	// inside `mem.read`/`mem.write` is what rejects an `ea` past the end.
+	if (addr+offset)&(width-1) != 0 {
 		return trapUnalignedAtomic
 	}
 	return nil
@@ -369,7 +405,7 @@ func (in *Instance) atomicLoad(a atomicop, st *stack, mem *memory, offset uint64
 		return err
 	}
 	addr := mem.addr(st.popNum())
-	if err := checkAlign(addr, a.width); err != nil {
+	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
 	bs, err := mem.read(addr, offset, a.width)
@@ -386,7 +422,7 @@ func (in *Instance) atomicStore(a atomicop, st *stack, mem *memory, offset uint6
 	}
 	v := st.popNum() // the value, pushed second
 	addr := mem.addr(st.popNum())
-	if err := checkAlign(addr, a.width); err != nil {
+	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
 	return mem.write(addr, offset, storeBytes(v, a.width))
@@ -403,7 +439,7 @@ func (in *Instance) atomicRmw(a atomicop, st *stack, mem *memory, offset uint64)
 	}
 	operand := st.popNum()
 	addr := mem.addr(st.popNum())
-	if err := checkAlign(addr, a.width); err != nil {
+	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
 	bs, err := mem.read(addr, offset, a.width)
@@ -457,7 +493,7 @@ func (in *Instance) atomicCmpxchg(a atomicop, st *stack, mem *memory, offset uin
 	replacement := st.popNum()
 	expected := st.popNum()
 	addr := mem.addr(st.popNum())
-	if err := checkAlign(addr, a.width); err != nil {
+	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
 	bs, err := mem.read(addr, offset, a.width)
@@ -509,7 +545,7 @@ func (in *Instance) atomicWait(a atomicop, st *stack, mem *memory, offset uint64
 	timeout := int64(st.popNum())
 	expected := st.popNum()
 	addr := mem.addr(st.popNum())
-	if err := checkAlign(addr, a.width); err != nil {
+	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
 	// **After the alignment check and before the load**, which is `check_align; check_shared;
@@ -550,7 +586,7 @@ func (in *Instance) atomicNotify(a atomicop, st *stack, mem *memory, offset uint
 	}
 	st.popNum() // count: read for the stack discipline, and 0 is the answer at every value
 	addr := mem.addr(st.popNum())
-	if err := checkAlign(addr, a.width); err != nil {
+	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
 	if _, err := mem.read(addr, offset, a.width); err != nil {

@@ -2,6 +2,7 @@ package interp
 
 import (
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/text"
 )
 
 // TestAtomicopsCoversTheRegionExactly checks the derivation is total over the generated table.
@@ -94,56 +96,167 @@ func TestAtomicopParsesTheRegionsThreeHardPairs(t *testing.T) {
 	}
 }
 
-// TestAtomicAlignmentIsCheckedOnTheDynamicAddress pins the divergence atomic.go's header records,
-// with the pair the corpus does not contain.
+// atomicGated encodes, decodes under the threads gate, instantiates and invokes `f`.
 //
-// **This is the control that makes a choice rather than watching one.** Every atomic in
-// `atomic.wast` carries a zero static offset, so the reference's reading (align the *dynamic*
-// address) and the proposal document's (align the *effective* address) coincide on all 187 rows and
-// both score 297/297. Identical boards are the corpus declining to choose, so the pair below is
-// hand-built to separate them, and it fires in **opposite directions** — which is what stops it
-// being satisfiable by an engine that traps on everything or on nothing:
+// A local helper rather than `instantiate1`, for `link1Threads`'s reason: an atomic in the source
+// needs `binary.Features{Threads: true}` on the *decoder*, and threading a gate set through
+// `instantiate1`'s call sites would make every one of them assert something about gates it does not
+// care about. It returns the invoke error rather than failing on it, because half of what is under
+// test here is *which* modules trap.
+func atomicGated(t *testing.T, src string) ([]Value, error) {
+	t.Helper()
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	m, err := (&binary.Decoder{Features: binary.Features{Threads: true}}).DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+	if err := in.Deferred(); err != nil {
+		t.Fatalf("instantiate fell short: %v", err)
+	}
+	return in.Invoke("f")
+}
+
+// TestAtomicAlignmentIsCheckedOnTheEffectiveAddress pins the rule atomic.go's header takes from the
+// normative prose, with the vector the corpus does not contain.
 //
-//	offset=1, addr=3  → effective 4 (aligned), dynamic 3 (misaligned)  → this engine TRAPS
-//	offset=1, addr=4  → effective 5 (misaligned), dynamic 4 (aligned)  → this engine SUCCEEDS
+// **This is the control that makes a choice rather than watching one.** Every atomic in both corpora
+// carries a zero static offset, so `ea == i` on all 187 rows and *any* reading of which address is
+// aligned scores 297/297. Identical boards are the corpus declining to choose, so the rows below are
+// hand-built to separate the readings, and each arm is asked in **both directions** — which is what
+// stops the test being satisfiable by an engine that traps on everything or on nothing:
 //
-// An engine following the document answers the reverse on both rows. If Scott rules for the
-// document on the flagged question, this test inverts — it is a pinned decision, not a property.
-func TestAtomicAlignmentIsCheckedOnTheDynamicAddress(t *testing.T) {
-	for _, tc := range []struct {
-		name           string
-		addr, offset   uint64
-		wantUnaligned  bool
-		effectiveWould string
+//	offset=1, addr=3  → ea 4 aligned      → succeeds   (the dynamic reading would trap: 3)
+//	offset=1, addr=4  → ea 5 misaligned   → traps      (the dynamic reading would accept: 4)
+//
+// **It runs through the front end, not against `checkAlign`.** The first version of this test called
+// the predicate directly, which is *a control can test the helper, not the path*: it would keep
+// passing if `execFE` stopped calling `checkAlign`, or called it with the offset dropped at one of
+// six sites. Going through `text.EncodeModule` → `DecodeModule` → `Instantiate` → `Invoke` also
+// means the `offset=1` immediate has to survive the reader and the validator to reach the executor,
+// so the vector asserts the rule rather than the arithmetic.
+//
+// It does not prove the reading correct — the expectations are this project's reading of the prose,
+// asserted against this project's own decoder, and no independent oracle is involved. What it buys
+// is that the reading is **observable and pinned**: a future change to the alignment base flips a
+// named test instead of silently altering behaviour on a population no vector covers.
+//
+// Six arms, because there are six `checkAlign` call sites and a per-arm sweep is what catches one of
+// them being threaded wrongly. `wait32` needs a shared memory (`check_shared` is reached from the
+// wait rows and from nothing else) and is asked with a mismatched expected value, so it answers
+// not-equal immediately rather than reaching the suspend path #543 tracks.
+func TestAtomicAlignmentIsCheckedOnTheEffectiveAddress(t *testing.T) {
+	rows := 0
+	// Each arm is one instruction with `offset=1`, taking its address from a parameter-free
+	// `i32.const` so the two directions differ in exactly one character.
+	for _, arm := range []struct {
+		name string
+		// body renders the instruction sequence for a given address; result is the function's
+		// result type, empty for store.
+		body   func(addr int) string
+		result string
+		shared bool
 	}{
 		{
-			name: "dynamic 3 misaligned, effective 4 aligned", addr: 3, offset: 1,
-			wantUnaligned: true,
-			effectiveWould: "an engine aligning the effective address would accept this, " +
-				"because 3+1 = 4 is 4-byte aligned",
+			name:   "i32.atomic.load",
+			body:   func(a int) string { return fmt.Sprintf("(i32.atomic.load offset=1 (i32.const %d))", a) },
+			result: "(result i32)",
 		},
 		{
-			name: "dynamic 4 aligned, effective 5 misaligned", addr: 4, offset: 1,
-			wantUnaligned: false,
-			effectiveWould: "an engine aligning the effective address would trap here, " +
-				"because 4+1 = 5 is not 4-byte aligned",
+			name: "i32.atomic.store",
+			body: func(a int) string {
+				return fmt.Sprintf("(i32.atomic.store offset=1 (i32.const %d) (i32.const 7))", a)
+			},
+		},
+		{
+			name: "i32.atomic.rmw.add",
+			body: func(a int) string {
+				return fmt.Sprintf("(i32.atomic.rmw.add offset=1 (i32.const %d) (i32.const 7))", a)
+			},
+			result: "(result i32)",
+		},
+		{
+			name: "i32.atomic.rmw.cmpxchg",
+			body: func(a int) string {
+				return fmt.Sprintf("(i32.atomic.rmw.cmpxchg offset=1 (i32.const %d) (i32.const 0) (i32.const 7))", a)
+			},
+			result: "(result i32)",
+		},
+		{
+			name: "memory.atomic.notify",
+			body: func(a int) string {
+				return fmt.Sprintf("(memory.atomic.notify offset=1 (i32.const %d) (i32.const 0))", a)
+			},
+			result: "(result i32)",
+		},
+		{
+			name: "memory.atomic.wait32",
+			body: func(a int) string {
+				// expected = 999 against a zero cell, so this returns 1 (not-equal) without
+				// suspending; the timeout is irrelevant on that path and is written -1 anyway.
+				return fmt.Sprintf(
+					"(memory.atomic.wait32 offset=1 (i32.const %d) (i32.const 999) (i64.const -1))", a)
+			},
+			result: "(result i32)",
+			shared: true,
 		},
 	} {
-		// The engine's own predicate, called the way execFE calls it: the address alone.
-		err := checkAlign(tc.addr, 4)
-		gotUnaligned := err != nil
-		if gotUnaligned != tc.wantUnaligned {
-			t.Errorf("%s: checkAlign(addr=%d, width=4) unaligned=%v, want %v.\n"+
-				"%s.\nThis engine follows eval.ml's six check_align call sites, which pass the "+
-				"popped operand and fold the static offset in only inside effective_address "+
-				"(memory.ml:91-94). Overview.md:344-345 says the opposite for wait and notify. "+
-				"No corpus vector separates them; this row does.",
-				tc.name, tc.addr, gotUnaligned, tc.wantUnaligned, tc.effectiveWould)
+		for _, dir := range []struct {
+			addr          int
+			wantUnaligned bool
+			dynamicWould  string
+		}{
+			{
+				addr: 3, wantUnaligned: false,
+				dynamicWould: "aligning the dynamic address would trap here, because the popped " +
+					"operand 3 is not 4-byte aligned even though ea = 3+1 = 4 is",
+			},
+			{
+				addr: 4, wantUnaligned: true,
+				dynamicWould: "aligning the dynamic address would accept this, because the popped " +
+					"operand 4 is 4-byte aligned even though ea = 4+1 = 5 is not",
+			},
+		} {
+			mem := "(memory 1)"
+			if arm.shared {
+				mem = "(memory 1 1 shared)"
+			}
+			src := fmt.Sprintf(`(module %s (func (export "f") %s %s))`,
+				mem, arm.result, arm.body(dir.addr))
+
+			_, err := atomicGated(t, src)
+			rows++
+			gotUnaligned := err != nil && errors.Is(err, trapUnalignedAtomic)
+			switch {
+			case err != nil && !gotUnaligned:
+				t.Errorf("%s addr=%d: failed with an unrelated error %v.\n"+
+					"Wanted either success or the unaligned trap; anything else means the vector "+
+					"never reached the alignment check and this row asserts nothing about it",
+					arm.name, dir.addr, err)
+			case gotUnaligned != dir.wantUnaligned:
+				t.Errorf("%s addr=%d offset=1: unaligned=%v, want %v.\n%s.\n"+
+					"The engine checks `ea = i + memarg.offset` per the proposal's normative prose "+
+					"(document/core/exec/instructions.rst, six sites); eval.ml's six check_align "+
+					"calls pass the popped operand alone and disagree with it. No corpus vector "+
+					"separates them; this row does. If the base is ever re-ruled, invert this "+
+					"table rather than deleting it (#546).",
+					arm.name, dir.addr, gotUnaligned, dir.wantUnaligned, dir.dynamicWould)
+			}
 		}
-		if gotUnaligned && !errors.Is(err, trapUnalignedAtomic) {
-			t.Errorf("%s: trapped with %v, want the reference's own phrase %q",
-				tc.name, err, trapUnalignedAtomic.Reason)
-		}
+	}
+	// The count is printed and floored rather than trusted: an arm table drained to empty, or a
+	// `continue` added above, passes every assertion by asking nothing. 6 arms x 2 directions.
+	t.Logf("alignment base pinned over %d vectors (6 arms x 2 directions), none of them in either "+
+		"corpus", rows)
+	if rows != 12 {
+		t.Errorf("ran %d vectors, want 12: the arm table or the direction table changed size, and "+
+			"a shrunken sweep is a quieter test rather than a passing engine", rows)
 	}
 
 	// The trap text has to satisfy the corpus's prefix rule, and the corpus's expectation is
