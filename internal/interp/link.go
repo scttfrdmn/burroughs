@@ -166,6 +166,13 @@ type Imports func(module, name string) (Extern, bool)
 // A nil `imp` means "supply nothing", which is exactly Instantiate's behaviour, so
 // Instantiate is this function with a nil resolver rather than a second body.
 func InstantiateLinked(m *binary.Module, imp Imports) (*Instance, *Trap, error) {
+	// Contract §4 B-MM-1's edges, at one of the two sites that touch guest state without running
+	// any guest code: `link` fills import slots and `build`'s segment copies write memory
+	// (`boundary.go`, decision 0052, #516). The release on the way out is what publishes a
+	// freshly instantiated module's state to whichever agent reaches it next.
+	enterGuest()
+	defer leaveGuest()
+
 	memOff, tabOff := m.ImportedMems(), m.ImportedTables()
 	globOff, tagOff := m.ImportedGlobals(), m.ImportedTags()
 	in := &Instance{

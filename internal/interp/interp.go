@@ -201,6 +201,11 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 // four separate ways (see the comments below, each with the vector that proves it), and a
 // second copy of it is four opportunities to drift.
 func (in *Instance) build() *Trap {
+	// §4 B-MM-1, at the enclosing function of the start-function `stack` literal below — the
+	// interpreter is entered here, so the transition is here (`boundary.go`, decision 0052, #516).
+	enterGuest()
+	defer leaveGuest()
+
 	m := in.mod
 	memOff, tabOff := m.ImportedMems(), m.ImportedTables()
 	globOff := m.ImportedGlobals()
@@ -579,6 +584,12 @@ func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
 // so that a fourth storage shape cannot be right for the interpreter and wrong here — grave #239
 // was that split with `v128`, on the read-back half specifically.
 func (in *Instance) Global(name string) (Value, error) {
+	// §4 B-MM-1, at the second of the two sites that run no guest code: this reads a global's
+	// storage directly, and a stale read is exactly what the acquire edge forbids (`boundary.go`,
+	// decision 0052, #516).
+	enterGuest()
+	defer leaveGuest()
+
 	idx, ok := in.exportedGlobal(name)
 	if !ok {
 		return Value{}, fmt.Errorf("interp: no exported global %q", name)
@@ -604,6 +615,13 @@ func (in *Instance) Global(name string) (Value, error) {
 // `name` travels along for the error messages only: a host that asked for `"call"` should be told
 // about `"call"`, not about whatever index it turned out to be two instances away.
 func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value, error) {
+	// §4 B-MM-1. Here rather than in `Invoke` because this is the enclosing function of the
+	// `stack` literal below, so the structural control's parsed population covers it; the
+	// delegation to a supplier's `invokeIndex` therefore crosses once per hop in a re-export
+	// chain, which is granularity and not double-counting (`boundary.go`, decision 0052, #516).
+	enterGuest()
+	defer leaveGuest()
+
 	fn, ok := in.mod.DefinedFunc(idx)
 	if !ok {
 		// **An exported *import*, which is a name this module passes through** — `Mt` in
