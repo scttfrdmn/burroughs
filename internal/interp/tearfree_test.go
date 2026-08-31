@@ -132,11 +132,21 @@ func loadMnemonics(t *testing.T) []struct {
 // below — placements are classified by the production predicate itself over the instance's real
 // memory, and both classes must be non-empty per width.
 //
-// Watched die four ways: reversing the byte loop's index (a big-endian loop) fails every width above
-// 1; reversing `loadWord`'s byte order likewise; stubbing `wordAligned` to `false` fails the
-// aligned-population floor; and deleting `memAccess`'s branch fails it too. Only the first two are
-// value defects, and the point of the others is that a value defect is invisible once the partition
-// collapses.
+// Watched die three ways: reversing the byte loop's index (a big-endian loop) fails every width above
+// 1; reversing `loadWord`'s 4-byte arm fails the 4-byte loads; and stubbing `wordAligned` to `false`
+// fails the aligned-population floor. The first two are value defects, and the point of the third is
+// that a value defect is invisible once the partition collapses.
+//
+// **And a fourth injection was forecast to kill it and does not, which is a limit worth stating rather
+// than a list worth trimming.** Deleting `memAccess`'s branch — so every load takes the byte loop —
+// leaves this control green: the tally classifies *addresses* by asking the predicate, and the
+// predicate still answers correctly, so a healthy partition is reported for a partition nothing acts
+// on. Making the word path unconditional passes here too, since on amd64 and arm64 a misaligned typed
+// load returns the right bits. Neither is a value defect and neither is visible from outside the
+// dispatch, so **the wiring is not this control's subject**:
+// `TestEveryWordAccessSiteIsGuardedByTheAlignmentTest` catches both by AST, and behaviourally the
+// spec suite does — reversing *only* `loadWord` fails `TestPhase1Files`, which it could not do if the
+// word path were unreached.
 //
 // **What it cannot see, and no test in this tree can: `guestWord16`/`32`/`64`'s swap.** Deleting the
 // swap changes nothing on a little-endian host, where the function is the identity — so this control
@@ -335,9 +345,16 @@ func TestWordAlignedAnswersTheProposalsGuestSpaceCondition(t *testing.T) {
 // The aligned placement is the reference and the unaligned placements must match it, so the
 // authority is again the byte loop by way of the address.
 //
-// Watched die by reversing `writeNum`'s fallback shift (the unaligned rows disagree with the
-// aligned ones at every width above 1) and by deleting the `wordAligned` branch so every store
-// takes the fallback (which fails the partition floor, not the agreement — the values are the same).
+// Watched die two ways: reversing `writeNum`'s fallback shift (the unaligned rows disagree with the
+// aligned ones at every width above 1) and byte-swapping `storeWord`'s 4-byte arm (the aligned rows
+// disagree with the unaligned ones).
+//
+// **Deleting `writeNum`'s branch was forecast to fail the partition floor and does not.** Every store
+// then takes the fallback, the values are identical, and the floor is computed by asking the predicate
+// about *addresses* rather than about which arm ran — so it reports the partition it would have had.
+// The same limit its load-side sibling has, for the same reason, and the same control covers it:
+// `TestEveryWordAccessSiteIsGuardedByTheAlignmentTest` fails at one site, naming `memAccess` as the
+// survivor.
 func TestAnAlignedStoreWritesTheSameBytesAsAnUnalignedOne(t *testing.T) {
 	// Store mnemonics by width. Spelled because wat is text, and then *checked* against the table
 	// so that a width the family gains cannot be covered by omission.
@@ -426,12 +443,18 @@ func TestAnAlignedStoreWritesTheSameBytesAsAnUnalignedOne(t *testing.T) {
 // borrows its enclosing-function granularity for the same reason: the test is at the top of the
 // function and the access is inside a branch, so the two are in one body and never in one expression.
 //
-// It doubles as the fast path's wiring check. An agreement control cannot see a fast path that is
-// never called, and this names the two sites that must call it.
+// **It is also the only control here that can see the wiring, and that is measured rather than
+// claimed.** Its two siblings classify addresses by asking the predicate, so both stay green when the
+// branch they describe is deleted outright — the partition is reported as healthy because the
+// predicate still answers correctly about addresses nothing dispatches on. Both of those injections
+// land here instead, which is why this control's floor is load-bearing and not decoration.
 //
-// Watched die three ways: deleting either `wordAligned` guard fails naming that function; a scratch
-// non-test file with a bare `loadWord` call fails naming the scratch file; and blinding the call
-// match fails the floor at `found 0`.
+// Watched die four ways. Deleting a whole branch — the guard *and* the word access — fails the floor
+// at `found 1`, naming the surviving site (`writeNum` when `memAccess`'s branch goes, `memAccess` when
+// `writeNum`'s does). Deleting only the guard, leaving the word access unconditional, fails the bare
+// list naming that function — which is the memory-safety half, since the access is then made at
+// misaligned addresses. A scratch non-test file with a bare `loadWord` call fails naming the scratch
+// file. And blinding the call match fails the floor at `found 0`.
 func TestEveryWordAccessSiteIsGuardedByTheAlignmentTest(t *testing.T) {
 	// `memAccess` and `writeNum`, both in memory.go — the two linear-memory access paths. A floor
 	// rather than an equality because a new site is what this should judge, with the exact count
