@@ -102,6 +102,12 @@ WebAssembly/threads @ cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0   2026-07-30
   document/core/exec/instructions.rst — 4218 lines at this revision.
 ```
 
+The `(#257)` in that subject is **`WebAssembly/threads#257` and not this tracker's #257**, which is an
+unrelated merged tail-calls PR. It is left verbatim because a git subject reproduced with an edit in it
+is no longer the revision's subject, and it is safe from auto-linking only because it sits in a fenced
+block. Worth stating because `citecheck.sh` resolved it, reported `ok`, and pointed at the wrong
+target: the sweep checks that a citation *resolves*, never that it resolves to the thing meant.
+
 The twelve lines are four distinct strings. Verbatim, RST math roles intact:
 
 ```
