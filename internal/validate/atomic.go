@@ -76,20 +76,37 @@ import (
 // atomics' address from the older pin would hardcode i32 into the one region whose authority is
 // too old to have been asked.
 //
-// **Flagged to Scott rather than settled here**, on #310's precedent — that is the other place this
+// **Ruled for, by Scott on the #538 review**, on #310's precedent — that is the other place this
 // package diverges from an authority inside a memarg check (`checkOffset`, where the reference reads
 // memory 0 for the offset bound and this engine reads the instruction's own memory), and it was
-// Scott's ruling and not a code decision. The observability condition, stated so the deferral has a
-// trigger rather than a date:
+// Scott's ruling and not a code decision. The ruling's own reasoning, because it is narrower than the
+// argument above and the narrower version is the one that binds: the pin's `I32Type` is *a snapshot
+// artifact from a revision predating memory64, the same shape as `op s` versus `u32`, and the standard
+// outranks the snapshot* — with the added ground that unlike the sub-opcode case **this reading is
+// strictly better rather than merely defensible**, being identical under i32 memories and correct
+// under memory64. So the deferral is discharged and what follows is no longer a trigger for a
+// decision; it is the reason the ruling needs controls at all.
+//
+// Observability takes two conditions together:
 //
 //   - the **memory64** gate on, and
 //   - an atomic access to a memory whose index type is i64.
 //
 // Both are needed and no corpus vector meets either: `atomic.wast`'s three modules all declare
-// `(memory 1 1 shared)`. With memory64 off, `checkMemop` returns i32 for every memory and this
-// file and the authority agree on every row — which is why
-// `TestAtomicAddressTypeIsTheNamedMemorys` builds the discriminating module by hand, exactly as
-// `checkOffset`'s pair does.
+// `(memory 1 1 shared)`. With memory64 off, `checkMemop` returns i32 for every memory and this file
+// and the authority agree on every row. **That is now a printed reading rather than a claim** —
+// `TestAtomicAddressTypeIsObservableWithBothGatesOn` runs one image under all four gate combinations
+// and each single-gate case is refused *by the decoder*, naming the gate that refused it, which also
+// fixes the layer: this file never consults a feature, and by the time a module arrives the address
+// type has come in as `Limits.Addr64` (grave #427's lesson, one region over).
+//
+// Two controls, hand-built for that reason, and two rather than one because they fail for unrelated
+// reasons: `TestAtomicAddressTypeIsTheNamedMemorys` reads a `sig` and covers *which* memory is
+// consulted, and `TestAtomicAddressTypeIsObservableWithBothGatesOn` runs wat → encoder → decoder →
+// validator and reads a verdict about a whole module, which is the only thing an implementation of the
+// losing reading would disagree with. **The mutation that implements that reading leaves every board
+// green** — the core suite's 256 files and the threads lane's four all score unchanged — so these two
+// controls are not a supplement to the corpus here, they are the entire witness set.
 //
 // # What the alignment rule cost to *reach*
 //

@@ -37,15 +37,27 @@ weakly-ordered platform.
     are both `mnemonic: "i32_atomic_rmw"`. A table would have spelled 42 of them, each an
     accept-direction chance no `assert_invalid` vector can see (§9 G-3). `wait32`'s timeout is the
     one place the name lies — i64 for both widths — and is the arm written out rather than parsed.
-  - **The address operand's type is composed from the two pins, and that is flagged to Scott, not
-    settled here.** Every threads arm says `NumType I32Type`; this file passes the memory's own
+  - **The address operand's type is the memory's own, composed from the two pins — ruled for by Scott
+    on the #538 review.** Every threads arm says `NumType I32Type`; this file passes the memory's own
     address type from `checkMemop`. Three printed premises: the same pin's plain `Load` says i32 too
     and this engine already declines to follow it there, the pin contains no `I64AT` and no
     `addrtype` at all so it predates memory64, and the core pin answers the identical question one
     family over. On [#310](https://github.com/scttfrdmn/burroughs/issues/310)'s precedent — the
-    other divergence inside a memarg check, also Scott's ruling. Observable only with the memory64
-    gate on *and* an i64-indexed memory, so `TestAtomicAddressTypeIsTheNamedMemorys` builds the
-    discriminating module by hand.
+    other divergence inside a memarg check, also Scott's ruling. The ruling's own grounds are
+    narrower than that argument and are the ones that bind: the pin's `I32Type` is a snapshot artifact
+    from a revision predating memory64, the same shape as `op s` versus `u32`, and the standard
+    outranks the snapshot — and unlike the sub-opcode case this reading is **strictly better** rather
+    than merely defensible, identical under i32 memories and correct under memory64.
+  - **The ruling is observable end to end, by order of the same review.** Observability takes the
+    memory64 gate on *and* an i64-indexed memory, and
+    `TestAtomicAddressTypeIsObservableWithBothGatesOn` now runs one image under all four gate
+    combinations — each single-gate case refused *by the decoder*, naming the gate — then puts four
+    modules through wat → encoder → decoder → validator and reads verdicts rather than a `sig`. Its
+    discriminating pair flips in **opposite** directions under the pin's literal reading, so neither a
+    hardcoded i32 nor a hardcoded i64 passes both. **The mutation implementing the losing reading
+    leaves every board green** — 256 core files and the threads lane's four all score unchanged — so
+    this control and `TestAtomicAddressTypeIsTheNamedMemorys` are not a supplement to the corpus,
+    they are the entire witness set.
   - **Three controls lost their decline specimen, and were re-pointed rather than retired.** With
     0xFE claimed, all four escape prefixes are this package's and no prefixed region declines any
     more. The successor population is *prefixes `internal/binary` has no table for* — 252 of them,

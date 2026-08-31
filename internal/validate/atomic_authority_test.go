@@ -13,6 +13,7 @@ import (
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
+	"github.com/scttfrdmn/burroughs/internal/text"
 )
 
 // The 0xFE region's controls, and the one thing that makes them different from every other region's.
@@ -46,12 +47,19 @@ import (
 // # The address operand is where these controls stop agreeing with the pin
 //
 // Every arm writes `NumType I32Type` for the address, because the threads baseline predates
-// memory64. `atomicSignature` passes the memory's own address type instead — the divergence
-// `atomic.go`'s header flags to Scott — and the two readings agree on every module with a 32-bit
-// memory, which is every module these arms can be checked against. So
-// `TestAtomicSignaturesMatchTheThreadsReference` builds a 32-bit memory and the agreement it reports
-// is real but silent on the divergence; `TestAtomicAddressTypeIsTheNamedMemorys` is the discriminating
-// case, and it is hand-built because *no corpus vector meets the condition*.
+// memory64. `atomicSignature` passes the memory's own address type instead — **ruled for by Scott on
+// the #538 review**, as a snapshot artifact rather than a statement about atomics — and the two
+// readings agree on every module with a 32-bit memory, which is every module these arms can be
+// checked against. So `TestAtomicSignaturesMatchTheThreadsReference` builds a 32-bit memory and the
+// agreement it reports is real but silent on the divergence.
+//
+// Two controls cover it, and they are two because they fail for unrelated reasons.
+// `TestAtomicAddressTypeIsTheNamedMemorys` is the *helper*: which memory's type is read, when a module
+// has several, checked by reading a `sig`. `TestAtomicAddressTypeIsObservableWithBothGatesOn` is the
+// *path*: wat through the encoder, the decoder under an explicit feature set, and the validator, read
+// as a verdict about a module. Both are hand-built because **no corpus vector meets the condition**,
+// and the mutation that implements the losing reading leaves every board green — so these two are the
+// whole witness set.
 
 // atomicRegion returns the 0xFE region as the decoder actually presents it: sub-opcode to mnemonic.
 //
@@ -535,8 +543,8 @@ func refAtomicSig(tb testing.TB, arm refAtomicArm, row refMemop, name string) (s
 	return out, true
 }
 
-// TestAtomicAddressTypeIsTheNamedMemorys is the divergence `atomic.go`'s header flags to Scott, made
-// executable before it is ruled on.
+// TestAtomicAddressTypeIsTheNamedMemorys is the *named memory* half of the divergence `atomic.go`'s
+// header records: which memory's address type an atomic access takes when a module has several.
 //
 // The threads pin writes `NumType I32Type` for every atomic address operand. This engine passes the
 // memory's own address type, on the grounds that the pin predates memory64 and its plain `Load` arm
@@ -547,9 +555,21 @@ func refAtomicSig(tb testing.TB, arm refAtomicArm, row refMemop, name string) (s
 // pair `checkOffset`'s controls use: bug-compatibility flips one verdict and not the other, and a
 // single case would be passed by an implementation that hardcoded either answer.
 //
-// This test is the record of a decision that has not been made yet. If Scott rules for the pin's
-// literal reading, it fails — which is the point of writing it down rather than leaving the
-// divergence in a comment.
+// **Ruled for this engine's reading** (Scott, on the #538 review): the pin's `I32Type` is a snapshot
+// artifact from a revision predating memory64, the same shape as the sub-opcode's `op s` versus
+// `u32`, and the standard outranks the snapshot — with the added grounds that unlike the sub-opcode
+// case this reading is *strictly better* rather than merely defensible, being identical under i32
+// memories and correct under memory64. The draft of this comment said the test was "the record of a
+// decision that has not been made yet" and that it would fail if Scott ruled for the pin's literal
+// reading. That sentence is now false in both halves and is corrected in place rather than deleted,
+// because a sentence written before a ruling and left standing after it tells the next reader the
+// tree is in a state it is not.
+//
+// **This control reads a signature, so it is the helper and not the path.** It hands
+// `atomicSignature` a `binary.Module` with `Addr64` already set, which is a struct no decoder
+// produces with the memory64 gate off — so it proves the rule reads the right field and says nothing
+// about whether a real module reaches it. `TestAtomicAddressTypeIsObservableWithBothGatesOn` is the
+// path, and the two are separate because they fail for unrelated reasons.
 func TestAtomicAddressTypeIsTheNamedMemorys(t *testing.T) {
 	op := atomicMemargRow(t, "i32_atomic_load")
 
@@ -599,6 +619,158 @@ func TestAtomicAddressTypeIsTheNamedMemorys(t *testing.T) {
 			}
 			if got.params[0] != tc.want {
 				t.Errorf("address operand is %v, want %v.\n%s", got.params[0], tc.want, tc.why)
+			}
+		})
+	}
+}
+
+// TestAtomicAddressTypeIsObservableWithBothGatesOn is the ruling made observable end to end, which is
+// what Scott ordered on the #538 review: *"a test with Memory64 on and an i64-indexed memory
+// asserting the atomic address operand is i64 turns 'unobservable' into 'tested' — exactly what the
+// `0xfe 0xce 0x00` control did for sub-opcode width. Unobservable-today is what the last two of these
+// turned out not to be."*
+//
+// The sibling above reads a `sig` off `atomicSignature` with a hand-built module. This one goes
+// through the whole path — wat, encoder, decoder under an explicit feature set, validator — and reads
+// a **verdict about a module**, because that is the only thing an implementation of the losing reading
+// would disagree with. `got.params[0] != binary.I64` is a fact about an internal struct; *this module
+// validates and that one does not* is the observable the ruling is about.
+//
+// # Two parts, and the first is why nothing on the board can see this
+//
+// Part 1 asserts the two gates are **each** necessary, over one image, by feature set. Both refuse at
+// the *decoder* and each names itself, so the claim `atomic.go`'s header makes — that observability
+// needs the memory64 gate on **and** an i64-indexed memory — is a printed reading rather than an
+// argument. It also fixes which layer owns the edge: the validator never consults a gate, and by the
+// time a module reaches it the address type has arrived as `Limits.Addr64` and the gate's whole job is
+// already done (grave #427's lesson, one region over).
+//
+// Part 2 is the quad. Rows 1 and 2 are the discriminating pair and they flip in **opposite**
+// directions under the pin's literal reading — it refuses row 1 and accepts row 2 — so an
+// implementation that hardcoded `i32` cannot pass both, and neither can one that hardcoded `i64`.
+// Rows 3 and 4 are where the two readings agree, and they are here for the reason the sibling's second
+// case is: a validator that always answered i64 would pass rows 1 and 2's *shape* while breaking every
+// 32-bit module in the corpus, and a control whose rows all disagree with the loser cannot see that.
+//
+// # Watched die
+//
+// Mutation: `atomicSignature`'s six memarg arms take `binary.I32` instead of `addr` — the pin's
+// literal reading, implemented. What printed:
+//
+//	row                       result
+//	--------------------------+---------------------------------------------------------------
+//	i64 addr on an i64 memory   refused: requires [i32] but stack has [i64] — a valid module lost
+//	i32 addr on an i64 memory   accepted, and this control's only witness that it should not be
+//	i32 addr on an i32 memory   unchanged (the readings agree)
+//	i64 addr on an i32 memory   unchanged (the readings agree)
+//
+// So the pair fires in both directions and the agreement rows stay quiet, which is the shape that
+// distinguishes a discriminating control from one that merely has more rows.
+//
+// **The mutation was run over the whole tree, not just this test, and that is the reportable part:
+// every board passes it.** The core suite's 256 files and the threads lane's four both score exactly
+// as they do now with the losing reading compiled in, and the only failures anywhere are this control
+// and its sibling above. So the two of them are the entire witness set for the ruling — not "the
+// board plus these", *these*. That is the measurement behind the order to build this, and it is why
+// the four gate rows are here too: they say the corpus's silence is structural rather than an
+// accident of which vectors upstream happened to write.
+func TestAtomicAddressTypeIsObservableWithBothGatesOn(t *testing.T) {
+	const i64MemAtomic = `(module (memory i64 1 1 shared)
+		(func (result i32) i64.const 0 i32.atomic.load))`
+
+	// Part 1: one image, four feature sets. The image is fixed so the only variable is the gate.
+	img, err := text.EncodeModule([]byte(i64MemAtomic))
+	if err != nil {
+		t.Fatalf("the wat encoder refused the module this whole control is about, so nothing below "+
+			"says anything about the validator: %v", err)
+	}
+
+	gates := []struct {
+		name           string
+		threads, mem64 bool
+		wantRefusal    string // "" means the decoder must accept
+	}{
+		{"both on", true, true, ""},
+		// The two single-gate rows are the necessity claim. Each names the gate that refused,
+		// because "decode failed" is compatible with the module being malformed for an unrelated
+		// reason and would let this row pass while proving nothing about the gate.
+		{"threads on, memory64 off", true, false, "memory64"},
+		{"threads off, memory64 on", false, true, "threads"},
+		// v0's default policy, which is the board's default lane: the row that says no corpus vector
+		// can reach the rule under test even if one were written.
+		{"both off — DefaultFeatures", false, false, "threads"},
+	}
+	for _, g := range gates {
+		t.Run("gate/"+g.name, func(t *testing.T) {
+			f := binary.DefaultFeatures()
+			f.Threads, f.Memory64 = g.threads, g.mem64
+			_, err := (&binary.Decoder{Features: f}).DecodeModule(img)
+			switch {
+			case g.wantRefusal == "" && err != nil:
+				t.Fatalf("decoder refused a shared i64 memory with both gates on: %v — the address "+
+					"type rule cannot be reached at all, so the ruling has no observable", err)
+			case g.wantRefusal != "" && err == nil:
+				t.Fatalf("decoder accepted a shared i64 memory with %s — the two-condition "+
+					"observability claim in atomic.go's header is then false, and the corpus may be "+
+					"able to reach this rule after all, which would change where it is tested",
+					g.name)
+			case g.wantRefusal != "" && !strings.Contains(err.Error(), g.wantRefusal):
+				t.Errorf("decoder refused with %q, which does not name %q — a refusal for some other "+
+					"reason would let this row pass while saying nothing about the gate",
+					err, g.wantRefusal)
+			}
+		})
+	}
+
+	// Part 2: the quad, through the full path with both gates on.
+	bothOn := func(f *binary.Features) { f.Threads, f.Memory64 = true, true }
+
+	rows := []struct {
+		name      string
+		wat       string
+		wantValid bool
+		pinSays   string
+	}{
+		{
+			name: "i64 address on an i64 memory validates",
+			wat: `(module (memory i64 1 1 shared)
+				(func (result i32) i64.const 0 i32.atomic.load))`,
+			wantValid: true,
+			pinSays: "the pin's literal `NumType I32Type` refuses this — a valid program lost, " +
+				"which is the direction that costs",
+		},
+		{
+			name: "i32 address on an i64 memory is refused",
+			wat: `(module (memory i64 1 1 shared)
+				(func (result i32) i32.const 0 i32.atomic.load))`,
+			wantValid: false,
+			pinSays: "the pin's literal reading accepts this, and it is the only row that witnesses " +
+				"the accept direction — contract §9 G-3, where no assert_invalid vector can help",
+		},
+		{
+			name: "i32 address on an i32 memory validates",
+			wat: `(module (memory 1 1 shared)
+				(func (result i32) i32.const 0 i32.atomic.load))`,
+			wantValid: true,
+			pinSays:   "both readings agree; this row is what a validator answering i64 always breaks",
+		},
+		{
+			name: "i64 address on an i32 memory is refused",
+			wat: `(module (memory 1 1 shared)
+				(func (result i32) i64.const 0 i32.atomic.load))`,
+			wantValid: false,
+			pinSays:   "both readings agree, in the reject direction",
+		},
+	}
+	for _, r := range rows {
+		t.Run("path/"+r.name, func(t *testing.T) {
+			_, err := validated(t, r.wat, bothOn)
+			switch {
+			case r.wantValid && err != nil:
+				t.Errorf("valid module refused: %v\n%s\n%s", err, r.pinSays, r.wat)
+			case !r.wantValid && err == nil:
+				t.Errorf("invalid module accepted — the accept direction, which no board column "+
+					"reports.\n%s\n%s", r.pinSays, r.wat)
 			}
 		})
 	}
