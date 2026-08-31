@@ -137,10 +137,13 @@ weakly-ordered platform.
     entirely in the direction no board can see, and its failure direction is *accept* — contract §9
     G-3 — so the discriminating modules that do not exist upstream exist here, as a five-case pair
     over `i32.atomic.load` and `i32.load` at the same natural width.
-  - The rule ships **one slice ahead of its own call site**: `signature` has no `0xfe` arm yet, so
-    the controls call `checkAlignment` directly and say so. Named because a control exercising a
+  - The rule shipped **one slice ahead of its own call site**: `signature` had no `0xfe` arm, so the
+    controls called `checkAlignment` directly and said so. Named because a control exercising a
     helper nothing calls is this project's own defect, and the honest form is to say which half is
-    covered.
+    covered. **Closed by the validation-half entry above**, where `atomicInstr` became `checkMemop`'s
+    seventh call site — tense corrected in place rather than deleted, because *which* rule was
+    uncalled and for how long is the durable part, and a sentence written before a change and left
+    standing after it tells the next reader the tree is in a state it is not.
 
 - **The wat keyword table is generated from the union of the tracked pins, so `shared` and the 67
   atomic mnemonics lex** ([#511](https://github.com/scttfrdmn/burroughs/issues/511),
