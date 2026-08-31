@@ -78,19 +78,59 @@ gated PR and not this ADR's to answer. Filed as **#548** so the question has a s
 The threads proposal repository is a fork of the spec repository, so it carries
 `document/core/exec/instructions.rst` — the spec's own normative prose, in the spec's own formal style, with
 the numbered execution steps. Not a design overview. It answers the question six times, each site defining
-`ea` two lines above the trap that guards it:
+`ea` a step or two above the trap that guards it.
+
+**Amended 2026-08-30, on Scott's #548 ruling**, which declined to move the core pin now and ordered this
+instead: *"record on ADR 0049 the exact merged-spec text it rests on, with its revision. That converts an
+out-of-tree reading into a dated pointer for the cost of a citation."* Two notes on discharging it, because
+the order's description and the artifact do not quite match:
+
+- **It is not merged-spec text, and this ADR's own measurement is why** — no merged spec exists at the pin
+  set or, on two checks, upstream today. What the reading rests on is the *fork's* standard-form prose,
+  which stands to `eval.ml` as a merged spec would. Recorded here under that name rather than the order's,
+  so a later reader does not go looking for a merged spec on this ADR's authority.
+- **The revision is the thing that was missing.** The prose is fetched to a gitignored path, so nothing in
+  this tree could resolve a citation to it, and line numbers in a file under active restructuring drift.
+  Hence: verbatim text, keyed to a revision, with the line numbers demoted to a convenience.
+
+Revision, verified against the fetched checkout rather than read off the fetch script's variable:
 
 ```
-spec-threads/document/core/exec/instructions.rst
-  1737/1743  load with ord         "Let ea be the integer i + memarg.offset" / SEQCST trap
-  2285/2291  store with ord        same pair
-  3066/3068  atomic.load(n)        "Let ea be i + memarg.offset" / trap
-  3205/3207  atomic.rmw(n)         same pair
-  3364/3366  memory.atomic.notify  same pair
-  3481/3483  memory.atomic.waitN   same pair
+WebAssembly/threads @ cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0   2026-07-30
+  subject: "Add atomic ordering param to memop (#257)"
+  scripts/fetch-threads-ref.sh:65 pins this SHA; the checkout's HEAD agrees.
+  document/core/exec/instructions.rst — 4218 lines at this revision.
 ```
 
-Every one reads *"If `ea` modulo `N/8` is not equal to `0`, then: Trap."*
+The twelve lines are four distinct strings. Verbatim, RST math roles intact:
+
+```
+Let, "the integer" form   9. Let :math:`\X{ea}` be the integer :math:`i + \memarg.\OFFSET`.
+Let, bare form            7. Let :math:`\X{ea}` be :math:`i + \memarg.\OFFSET`.
+trap, ord-qualified      11. If both :math:`\ord` is :math:`\SEQCST` and :math:`\X{ea}` modulo :math:`N/8` is not equal to :math:`0`, then:
+trap, unconditional       8. If :math:`\X{ea}` modulo :math:`N/8` is not equal to :math:`0`, then:
+```
+
+Only the leading step number varies between a site and the form it instantiates. Which site takes which:
+
+```
+line   site                    Let form        trap form
+1737   load with ord           the integer     ord-qualified   (step 9  / step 11)
+2285   store with ord          the integer     ord-qualified   (step 11 / step 13)
+3066   atomic.load(n)          bare            unconditional   (step 7  / step 8)
+3205   atomic.rmw(n)           bare            unconditional   (step 8  / step 9)
+3364   memory.atomic.notify    bare            unconditional   (step 8  / step 9)
+3481   memory.atomic.waitN     bare            unconditional   (step 8  / step 9)
+```
+
+**All six define `ea` as `i + memarg.offset` and test the modulus on `ea`, which is the whole of what this
+ADR needs** — the two forms differ on *when* the trap fires, never on *which address* it measures.
+
+An earlier revision of this ADR summarised the trap as *"every one reads: if `ea` modulo `N/8` is not equal
+to `0`, then Trap"*. That is false of two of the six as written, which carry an `ord` is `SEQCST` conjunct;
+the site table beneath it recorded the distinction while the sentence above it flattened it. Corrected here
+rather than left standing, since *a valid citation does not certify the sentence between two of them* — both
+line references were exact and the quantifier over them was wrong.
 
 `eval.ml` computes something else. All six `check_align` call sites (`exec/eval.ml:381,393,405,422,445,462`)
 pass `addr = I64_convert.extend_i32_u i` — the popped operand alone — while the static `offset` travels
@@ -153,4 +193,11 @@ that gets re-made by the next reader.
   the bug*, so the divergence is stated where the divergence is.
 - Nothing about the static `align=` immediate changes. That is a third rule sharing the word — the
   validator's equality check, `1 lsl align = size` (#538, #537) — and it is not touched here.
-- **Whether the core pin should move**, giving a genuinely third authority, is #548 rather than settled here.
+- **Whether the core pin should move**, giving a genuinely third authority, is #548 rather than settled here —
+  and #548's own disposition is now ruled: **not now.** Scott, 2026-08-30: moving the pin re-derives
+  `optable.go` and everything downstream of it and can move board figures, while `v0.4.0`'s closure claim is
+  *dated to the corpus as the harness may currently ask it*, so moving the pin changes the corpus that claim
+  was made over. It becomes **its own scheduled slice with a pre-registered board delta**, which is behaviour
+  4's shape applied to a fetched input: the re-derivation is the mechanism, and a board that moves under it
+  needs its forecast registered before the numbers exist. Until then this ADR rests on the revision recorded
+  above, which is what the amendment buys — a dated pointer instead of a standing invitation to re-fetch.
