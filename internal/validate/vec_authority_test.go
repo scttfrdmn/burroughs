@@ -1437,7 +1437,31 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// in this package's account where the third category is fed by a *classifier* rather than by an arm
 	// delegating its refusal. The slice wrote a third range, in `align_atomic_test.go`, which this
 	// pin's engine-file domain excludes and the subject pin holds.
-	const wantRanges = 114
+	// **#524's validation half moves this +4, all in the new `atomic.go`, and two of the four were
+	// invisible to this pin until the slice edited prose it was not repairing.** The seven-arm block's
+	// citation and `check_memop`'s `Atomic` mode are the two a reader would predict. The other two had
+	// been written with **no file part** — one a range, one a bare line — so `rangeRe` matched neither.
+	// They were counted by nothing, keyed by nothing, and bounds-checked by nothing, in a package where
+	// three separate sweeps exist to make exactly that impossible. `CLAUDE.md` names the same gap one
+	// level up for markdown ("the half still uncovered is a citation carrying no anchor at all"); this is
+	// the Go-comment spelling of it, and the population it hides in is *not* enumerable from this pin's
+	// own output, since a citation this pin cannot see cannot appear in its count.
+	//
+	// **One of the two was also wrong, and the way it surfaced is the argument for converting rather
+	// than tolerating the form.** It cited the *call site* of `check_pack` inside `check_memop` while
+	// quoting the `require` from `check_pack`'s own body, twenty-three lines earlier — a citation and a
+	// quotation naming different lines, with the quotation right. Nothing in this package could see it,
+	// because a file-less citation is outside every trigger's domain. What found it was
+	// `internal/testenv`'s **continuation census**, which counts bare `:NNN` forms without resolving
+	// any of them: the count went up by one, the one was located, and the content defect came out with
+	// it. A pin that only counts still points at the row worth reading.
+	//
+	// The trigger is not widened here. Making it accept a file-less range means picking the file from
+	// context, which is the thing the qualifier exists to stop guessing at, and it would arrive in a
+	// slice whose product is the atomics region with a forecast nobody has measured. What this row can
+	// honestly say is the size of the specimen it found: two, both in a file written this slice, and
+	// both now qualified so they are inside this pin's domain rather than outside it.
+	const wantRanges = 118
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",

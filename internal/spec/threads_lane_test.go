@@ -167,12 +167,22 @@ type threadsLaneRow struct {
 var threadsLane = map[string]threadsLaneRow{
 	"atomic.wast": {
 		Heads: map[string]int{"assert_invalid": 48, "assert_return": 142, "assert_trap": 45, "invoke": 59, "module": 3},
-		// Re-pinned **upward** by #524's text half, from `Pass: 0, Fail: 297, Declined: 0,
-		// ValidateReached: 0, InvalidReached: 0` and `GateSensitive: false`. The direction and the
-		// mechanism of every moved column are in atomicWastPartition below, which asserts the
-		// partition rather than leaving these five numbers to be read as a win.
-		Pass: 59, Fail: 238, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
-		Declined: 51, ValidateReached: 51, InvalidReached: 48, InvalidFailed: 48,
+		// Re-pinned **upward** twice. #524's text half moved it from `Pass: 0, Fail: 297, Declined: 0,
+		// ValidateReached: 0, InvalidReached: 0` and `GateSensitive: false`; #524's validation half
+		// moves it from `Pass: 59, Fail: 238, Declined: 51, ValidateReached: 51, InvalidReached: 48,
+		// InvalidFailed: 48`. The direction and the mechanism of every moved column are in
+		// atomicWastPartition below, which asserts the partition rather than leaving these numbers to
+		// be read as a win.
+		//
+		// The four zeros on the bottom row are the reward and they are four different statements. The
+		// 51 `Declined` are gone because the region has a type checker; the 51 `ValidateReached` are
+		// gone because none of those rows *fails* at the validate stratum any more; and the 48
+		// `InvalidReached`/`InvalidFailed` are gone because the file's `assert_invalid` vectors now get
+		// the verdict they ask for. A zero here means the column has nothing left to report, which is
+		// the one case where a drained column is the point rather than a lost instrument — and it is
+		// why the partition below asserts `pass + exec` against the head census instead of trusting it.
+		Pass: 110, Fail: 187, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
+		Declined: 0, ValidateReached: 0, InvalidReached: 0, InvalidFailed: 0,
 		GateSensitive: true,
 	},
 	"exports.wast": {
@@ -561,9 +571,20 @@ func scoreThreadsLane(t *testing.T, paths []string, f binary.Features, log bool)
 //
 // # What the partition pins
 //
-//	 59  invoke            → pass       (no 0xfe opcode in `init`)
-//	187  assert_return+trap → fail      StratumExec, `interp: no arm for opcode fe NN`
-//	 51  assert_invalid+module → fail   StratumValidate, Declined
+//	 59  invoke               → pass    (no 0xfe opcode in `init`)
+//	 51  assert_invalid+module → pass    the validation half's population, and it now *agrees*
+//	187  assert_return+trap    → fail    StratumExec, `interp: no arm for opcode fe NN`
+//
+// **The middle row was `fail / StratumValidate / Declined` until #524's validation half**, and its
+// movement is that slice's whole reward: the 48 `assert_invalid` vectors and 3 `module` definitions
+// were declining at `instr.go`'s region dispatch, and they now reach the type checker and get the
+// verdict the corpus asks for. Every one of the 48 expects `unknown memory`.
+//
+// The forecast for that slice was pre-registered decomposed by mechanism, on the lesson this control's
+// own header teaches — pass 59 → 110, fail 238 → 187, declined 51 → 0, **and the 187 execution rows
+// unchanged**, that last one because movement there would be a third mechanism rather than progress.
+// All four came in as registered. The fourth is the one that could not have been read off the pass
+// count, which is why it was registered separately.
 //
 // 66 distinct `fe NN` codes appear in that middle row, against the **67** `0xfe` arms
 // `TestReservedByteWireFormsAreTheReferences` finds in the grammar. The missing one is
@@ -607,19 +628,43 @@ func atomicWastPartition(t *testing.T, r *Result, heads map[string]int) {
 			"mechanism here is the interesting case (an atomic op that executed and answered "+
 			"wrongly), not a pin to update", len(residue), residue)
 	}
-	if r.Pass != heads["invoke"] {
-		t.Errorf("atomic.wast passes %d but has %d invoke directives: the registered explanation for "+
-			"the +59 is that the passing set is exactly the non-atomic `init` invocations, and that "+
-			"is now false", r.Pass, heads["invoke"])
+	if want := heads["invoke"] + heads["assert_invalid"] + heads["module"]; r.Pass != want {
+		t.Errorf("atomic.wast passes %d, want %d — the registered explanation is two mechanisms: the "+
+			"%d non-atomic `init` invocations, which passed as soon as the module parsed, plus the %d "+
+			"`assert_invalid`+`module` rows the validation half took off the decline pile. A pass "+
+			"count that is neither sum is a third mechanism, and this control exists because the last "+
+			"unexplained +59 was one",
+			r.Pass, want, heads["invoke"], heads["assert_invalid"]+heads["module"])
 	}
 	if want := heads["assert_return"] + heads["assert_trap"]; exec != want {
 		t.Errorf("atomic.wast charges %d failures to the interpreter, want %d (assert_return+"+
 			"assert_trap): the execution rows are the ones #524 deferred, and a change here means "+
 			"one of them stopped reaching the interpreter or started passing", exec, want)
 	}
-	if want := heads["assert_invalid"] + heads["module"]; declined != want {
-		t.Errorf("atomic.wast has %d validate-stratum declines, want %d (assert_invalid+module): "+
-			"this is the population #9's closure criterion quantifies over", declined, want)
+	// The decline count is now expected to be **zero**, which is the inverse of what this line asserted
+	// before #524's validation half — and a zero is exactly the shape that needs a companion, because
+	// `declined == 0` is also what a region that stopped being *reached* looks like. The companion is
+	// arithmetic rather than a second traversal: `residue` is empty, so every failure is one of the two
+	// modelled mechanisms, and `pass + exec` must therefore account for all 297 directives. With `exec`
+	// pinned to the execution rows above, that closes the 51 into the passing set without this control
+	// having to trust the pass column it is checking.
+	if declined != 0 {
+		t.Errorf("atomic.wast still declines %d validate-stratum row(s), want 0 — this is the "+
+			"population #9's closure criterion quantifies over, and the validation half's claim is "+
+			"that the type checker now decides every one of them", declined)
+	}
+	// Derived from the head census rather than written as 297, so the file growing a directive is a
+	// re-pin of `Heads` and not a silent slackening here.
+	directives := 0
+	for _, n := range heads {
+		directives += n
+	}
+	if total := r.Pass + exec; total != directives {
+		t.Errorf("atomic.wast's pass+exec is %d over %d directives, so %d verdict(s) are in neither "+
+			"column: with residue empty this arithmetic is what pins the 51 formerly-declined rows "+
+			"into the *passing* set rather than into some other quiet agreement — a row that stops "+
+			"declining and starts failing at the validate stratum with the wrong message would leave "+
+			"`declined` at 0 too", total, directives, directives-total)
 	}
 }
 

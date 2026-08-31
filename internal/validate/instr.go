@@ -69,19 +69,35 @@ func (v *validator) instr(i int, in binary.Instr) error {
 	}
 	if in.Prefix != 0 {
 		// The prefixed regions are 0xFB (GC), 0xFC (bulk memory/table), 0xFD (SIMD), 0xFE
-		// (threads). Slice 2 (#305) types 0xFD, slice 5 types 0xFC, slice 7 types 0xFB; **0xFE
-		// alone stays declined** — which is what keeps an unchecked module from being reported
-		// valid, and keeps the decline census a work plan for the slice that owns it rather than a
-		// silence.
+		// (threads), and **every one of them now has an arm**. Slice 2 (#305) types 0xFD, slice 5
+		// types 0xFC, slice 7 types 0xFB, and #524's validation half types 0xFE.
 		//
-		// The prior text said "0xFB and 0xFE stay declined", quoted here because a retired boundary
-		// is recorded rather than absorbed (ADR 0032, on 0025's and 0031's reasoning). The half
-		// about 0xFE is unchanged; what retired is the GC half, and its 81 declines are the ADR's
-		// pre-registered criterion.
+		// Two retired boundaries are quoted rather than absorbed, because a retired boundary is
+		// recorded (ADR 0032, on 0025's and 0031's reasoning). The text read "0xFB and 0xFE stay
+		// declined" until slice 7 took the GC half, and then **"0xFE alone stays declined — which is
+		// what keeps an unchecked module from being reported valid, and keeps the decline census a
+		// work plan for the slice that owns it rather than a silence."** That sentence was true of
+		// the census and is now spent: the 51 declines it described are `atomic.wast`'s, and they
+		// were this slice's pre-registered criterion the way 0xFB's 81 were the ADR's.
+		//
+		// **The fall-through below is now unreachable for any region, and it stays.** It is not dead
+		// code in the sense `deadcode` means — `binary`'s dispatch decides which prefixes exist, and
+		// a fifth region added there arrives here as an opcode with no arm. A refusal is the honest
+		// answer to that; deleting it would make the next proposal's first instruction fall out of
+		// the `if` and be typed as a plain opcode by the switch below, which is an accept-direction
+		// hole in exchange for four lines.
+		//
+		// That was an argument until this slice and is now a **checked claim**. `unclaimedPrefix`
+		// derives a prefix `binary` has no table for, three controls drive this line with it, and
+		// deleting the return was run: the two decline rows report an accept and the partition reports
+		// its every-row-claimed vacuity. The reachable path is a prefix outside the grammar rather than
+		// a region inside it, which is why the sentence above says *the next proposal's* instruction —
+		// the witness is what that proposal's byte looks like today.
 		//
 		// A region dispatch rather than one arm per region: the regions that decline decline
 		// *identically*, and a copy of that refusal per region is a place to forget when the next
-		// slice claims one of them. That prediction has now been paid out three times.
+		// slice claims one of them. That prediction was paid out four times and has now run out of
+		// regions to be paid out by.
 		switch in.Prefix {
 		case prefixSIMD:
 			return v.vecInstr(in)
@@ -89,6 +105,8 @@ func (v *validator) instr(i int, in binary.Instr) error {
 			return v.bulkInstr(in)
 		case prefixGC:
 			return v.gcInstr(i, in)
+		case prefixAtomic:
+			return v.atomicInstr(in)
 		}
 		return fmt.Errorf("%w: prefixed opcode %#02x %#02x", ErrUnsupported, in.Prefix, in.Op)
 	}

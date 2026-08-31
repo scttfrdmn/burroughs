@@ -4,6 +4,7 @@ package validate
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -541,30 +542,107 @@ func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
 	// The prefixed-region half, and it was never in the deleted table because its specimen cannot be
 	// carried by a module.
 	//
-	// **Re-pointed twice and re-mechanised once.** The specimen was `memory.copy` under the sentence
-	// "the prefixed regions, all four of which are later slices'"; slice 5 moved it to `ref.i31`
-	// (`0xfb 0x1c`) when 0xFC became this package's; slice 7 types 0xFB, so the only unclaimed region
-	// left is 0xFE — and **the text encoder has no operator for it** ("unknown operator
-	// memory.atomic.notify"), so no `wat` string could reach the arm. The check is therefore driven at
-	// the dispatch, which is the same move `vec_test.go` makes for relaxed SIMD and for the same stated
-	// reason: the layering is named rather than worked around.
+	// **Re-pointed three times and re-mechanised twice.** The specimen was `memory.copy` under the
+	// sentence "the prefixed regions, all four of which are later slices'"; slice 5 moved it to
+	// `ref.i31` (`0xfb 0x1c`) when 0xFC became this package's; slice 7 typed 0xFB, leaving 0xFE, and
+	// because **the text encoder had no operator for it** ("unknown operator memory.atomic.notify")
+	// the check moved from a `wat` string to the dispatch directly.
 	//
-	// What survives the re-point is the assertion, not the specimen — an unclaimed prefixed region
-	// declines *and says which region*, because the decline census is the next slice's work plan.
-	// Deriving the specimen rather than naming it is still #326, and this is now the issue's only
-	// live quote: 0xFE is one region and the byte is written here literally, so the cost the issue
-	// argues from is a single line either way.
+	// #524's validation half types 0xFE, and that **drains the population of real regions**: the
+	// grammar has four escape prefixes and this package now has an arm for every one of them. The row
+	// above met the same fate by subtraction and was deleted, so the precedent for a drained specimen
+	// is deletion — and this one is not deleted, because its population is not the four regions. It is
+	// *prefixes `internal/binary` has no table for*, of which there are 252, and the risk is the one
+	// the earlier note already named: **a prefixed region falling through to an accept**. That is a
+	// property of the dispatch, not of any one region, and it survives every region being claimed.
+	//
+	// So the specimen is now derived rather than named — which is #326's ask, granted here by the same
+	// subtraction that closed the row above: with no unclaimed region left to write literally, there
+	// is nothing to write but the derivation. It also makes `instr.go`'s retained fall-through a
+	// *checked* claim. That comment argues the four lines stay because a fifth region added in
+	// `binary` would otherwise be typed as a plain opcode by the switch below it, an accept-direction
+	// hole; this is the witness for the argument, and `deadcode` sees a live path where it would
+	// otherwise see none.
+	prefix := unclaimedPrefix(t)
 	v := &validator{mod: &binary.Module{}}
 	v.frames = []frame{{}}
-	err := v.instr(0, binary.Instr{Prefix: 0xfe, Op: 0})
+	err := v.instr(0, binary.Instr{Prefix: prefix, Op: 0})
 	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("want a decline (ErrUnsupported) for the 0xFE region, got %v.\nAccepting an "+
-			"instruction this slice cannot type reports *valid* for a module nothing type-checked, "+
-			"which is the accept-direction failure no board can see (§9 G-3)", err)
+		t.Fatalf("want a decline (ErrUnsupported) for the unclaimed %#02x region, got %v.\nAccepting "+
+			"an instruction this slice cannot type reports *valid* for a module nothing type-checked, "+
+			"which is the accept-direction failure no board can see (§9 G-3)", prefix, err)
 	}
-	if !strings.Contains(err.Error(), "prefixed opcode 0xfe") {
-		t.Errorf("the decline does not name what it declined (want %q): %v", "prefixed opcode 0xfe", err)
+	if want := fmt.Sprintf("prefixed opcode %#02x", prefix); !strings.Contains(err.Error(), want) {
+		t.Errorf("the decline does not name what it declined (want %q): %v", want, err)
 	}
+}
+
+// unclaimedPrefix returns an escape byte `internal/binary` has no table for.
+//
+// Derived, and the derivation is the point: every prefix this package's dispatch has an arm for is a
+// prefix `binary` names rows under, so "has no rows" *is* "no slice has claimed it" without a list of
+// the four regions written here to fall out of step with `instr.go`. Three controls take their
+// specimen from this — the two decline rows and the region partition — and all three had to be
+// re-pointed each time a slice claimed a region, four times between them.
+//
+// Scanned **downward** from 0xFF. The escape bytes are at the top of the opcode space and the four
+// assigned ones are consecutive below it, so the highest unclaimed byte is the neighbour of the
+// region a fifth proposal would most plausibly take; scanning up returns 0x01, which is unclaimed for
+// the unrelated reason that it is not an escape byte at all and would read as a specimen chosen to
+// pass.
+//
+// # All three callers construct the instruction directly, and the reason they used to give is dead
+//
+// Each of the three recorded that its specimen was unreachable through `validated()` because *the
+// text encoder has no operator for the region* — quoting "unknown operator memory.atomic.notify".
+// **#534's reader half falsified that**, and it was printed rather than reasoned about:
+// `text.EncodeModule` on `(module (memory 1 1 shared) (func (param i32) (result i32) local.get 0
+// i32.atomic.load))` now returns 38 bytes and a nil error. (`atomic.fence` alone still refuses, with
+// its own reason — "its wire form ends in a reserved byte no immediate shape writes (#532)".) So a
+// module *can* carry 0xFE today, and the three notes were true when written and stale by the time
+// this slice read them.
+//
+// The direct construction survives on a reason the encoder cannot overturn: a prefix `binary` has no
+// rows under also has no keyword in `text`, so there is no mnemonic to write in a `wat` string. That
+// is the same fact this function derives from, which is why the layering note is here once instead of
+// three times.
+//
+// # Watched die, and the derivation resolves to 0xFF today
+//
+// Two mutations, each applied and run, because a helper feeding three controls can be inert in all
+// three:
+//
+//	mutation                                      what fired
+//	----------------------------------------------+-----------------------------------------------
+//	`instr.go`'s fall-through `return` deleted      all three callers, each with its own message:
+//	                                                the two decline rows print `got <nil>` — the
+//	                                                instruction *validated* — and the partition
+//	                                                prints its every-row-claimed vacuity
+//	this scan narrowed to `prefixSIMD` only         the fatal below, so the vacuity guard is not
+//	                                                itself stillborn
+//
+// The first is the important one and it is the accept-direction hole `instr.go`'s comment argues four
+// lines against: with the refusal gone, a prefixed instruction no slice types falls out of the `if`
+// and is typed as a plain opcode. `<nil>` is what that looks like from here.
+func unclaimedPrefix(t *testing.T) byte {
+	t.Helper()
+	for p := 0xFF; p >= 1; p-- {
+		claimed := false
+		for op := range uint32(0x10000) {
+			if _, _, ok := binary.PrefixedOp(byte(p), op); ok {
+				claimed = true
+				break
+			}
+		}
+		if !claimed {
+			return byte(p)
+		}
+	}
+	// Vacuity, in the direction that matters: with every prefix claimed there is no specimen for a
+	// decline and the three controls that call this would silently be asserting nothing.
+	t.Fatal("every prefix byte from 0x01 to 0xFF has rows in binary's tables, so the declined half " +
+		"of the instruction grammar has no witness and the fall-through in instr.go cannot be reached")
+	return 0
 }
 
 // singleByteDeclines walks the single-byte opcode space and asks the **real dispatch** which rows

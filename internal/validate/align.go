@@ -257,8 +257,55 @@ func checkAlignment(in binary.Instr, name string) error {
 // mode per family from `valid.ml` and checks this predicate against it over both pins' constructor
 // sets, in both directions — which is what makes the paragraph above a checked claim rather than an
 // argument.
+//
+// # It split on `_` only, while the other half of the same rule normalizes — a near miss, not a grave
+//
+// `naturalWidth` is called from `checkAlignment` on the line above this one, with the *same*
+// argument, and its first statement is `strings.ReplaceAll(name, "_", ".")`, so it answers 4 for
+// both spellings of `i32.atomic.load`. This function split on `_` alone and did not. Printed rather
+// than reasoned:
+//
+//	old("i32_atomic_load")=true   old("i32.atomic.load")=false
+//	new("i32_atomic_load")=true   new("i32.atomic.load")=true
+//
+// So the two halves of one rule disagreed about their input's spelling, and which half was right
+// depended on the caller. **No caller was ever wrong**, and that was measured too rather than
+// assumed: `checkMemop`'s three call sites are `sig.go`'s two arms (which dot the name — the
+// `strings.ReplaceAll` in `internal/validate/sig.go:signature` — and to which no atomic mnemonic can
+// arrive), `vec.go`'s four (table spelling, never atomic), and
+// `atomic.go`'s one (table spelling). The row that reaches here is `i32_atomic_load`, the old
+// predicate answered true for it, and the equality rule fired:
+//
+//	atomicSignature(align=1 on i32.atomic.load) = atomic alignment must be natural: … natural is 4
+//
+// **This was drafted as a grave and the measurement withdrew it before it was filed.** The claimed
+// consequence — that the first atomic instruction through #524's new path would be checked in
+// NonAtomic mode, the equality rule silently becoming the ceiling rule — was derived from
+// `signature`'s spelling and not from the path that actually exists, and it is false. Nothing was
+// paid, so there is no grave; the withdrawal is recorded here because *a finding retracted on
+// measurement is worth as much as one confirmed by it*, and because the corpus should be able to
+// show one.
+//
+// It is recorded **without a number**, and that is the second thing this paragraph is for. The
+// draft had reserved the next issue number for itself and this sentence cited it. Withdrawing the
+// finding did not consume the number, so the next issue filed took it — and the citation went on
+// resolving, to an unrelated artifact, in a sentence calling it this grave. *Never guess the next
+// number* is usually about a pointer that dangles; the withdrawal direction is worse, because a
+// citation sweep confirms a live target and the only wrong thing is what it points at. A finding
+// that was never filed has nothing to cite, so the description carries the whole load.
+//
+// The hardening stands on what is left, which is a fragility rather than a defect: the predicate's
+// correctness was a property of *which caller*, not of itself, and the caller most likely to be
+// written next is the one that dots. `signature` normalizes at the top and parses afterwards,
+// `atomicForm` normalizes internally, and an `atomicSignature` written in either of those two shapes
+// — the two shapes this package already has — would hand the dotted spelling straight through. The
+// failure would be accept-direction and the board could not see it: the corpus the harness runs has
+// no atomic-alignment vector at all (atomic.go's header on the two snapshots, and #537).
+//
+// The separator set is derived from the two spellings that exist rather than from a guess about
+// future ones: the generated table's, and the spec's.
 func atomicAccess(name string) bool {
-	for _, part := range strings.Split(name, "_") {
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '_' || r == '.' }) {
 		if part == "atomic" {
 			return true
 		}

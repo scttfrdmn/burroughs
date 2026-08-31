@@ -528,7 +528,29 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// inside the cited range — while its citation line names no identifier this pin can key on, and #524
 	// is the cleanest instance yet: one block, keyed there, residue here, and neither reading is wrong
 	// about the other's question.
-	const wantKeyed, wantResidue = 104, 48
+	// **#524's validation half moves keyed +6 and residue not at all, against four new ranges — and it
+	// is the first entry in this ledger where a residue row turned out to be *wrong*.** All four ranges
+	// are `atomic.go`'s, and the reconciliation is the subject-count effect twice over: the seven-arm
+	// block keys on `MemoryAtomicWait` and `AtomicRmwCmpXchg`, the alignment sentence keys on
+	// `check_memop` and `Atomic`, and the core pin's `Load` arm and the threads pin's `check_pack` key
+	// once each. Six subjects, four ranges, so the excess over `wantRanges` goes 38 → 40.
+	//
+	// The reason no row is excused is the finding, and it belongs here because this is the pin whose
+	// header decides what residue costs. The alignment citation's first draft put the rule's
+	// transcription on the citation's line and `check_memop` a line above it — a textbook
+	// continuation-line row, the category the four entries above this one all excuse — and **the
+	// citation was pointing at the wrong pin**. It was unqualified, so it routed to the core pin, where
+	// those lines are `check_memorytype`'s page-limit rule and not an alignment mode at all. The sibling
+	// pin counted it and bounds-checked it clean, because the core pin is long enough that the numbers
+	// exist there. Rewriting the sentence so the range and the name shared a line is what fired it, with
+	// the reading printed: neither inside the cited lines nor inside `check_memop`'s own definition.
+	//
+	// So the four entries above are not wrong, but they were priced with only one side of the trade
+	// visible. "Recorded rather than repaired" weighed a faithful transcription against a keyable name
+	// on the assumption that an unkeyed row is merely *unchecked*; an unkeyed row is also **unfalsified**,
+	// and a wrong-pin citation is precisely the defect that survives a bounds check. Residue is where
+	// that defect lives, and this file's account of it is in `atomic.go`'s own header, at the citation.
+	const wantKeyed, wantResidue = 110, 48
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

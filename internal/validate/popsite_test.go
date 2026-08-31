@@ -69,8 +69,19 @@ import (
 // true wherever the primitive is later moved to.
 func TestEveryOperandPopIsFatalToItsArm(t *testing.T) {
 	const (
-		wantArms        = 62 // arm sites: seven files, one per typing rule that consumes operands
-		wantDelegations = 2  // popExpect and popExpectAll, each one line over popSeqExpect
+		// Arm sites: one per typing rule that consumes operands, across every file the glob finds.
+		// 62 → 63 for the `popExpectAll` in `internal/validate/atomic.go:atomicInstr`. Cited by symbol
+		// and not by line because the first draft cited it by line and the slice then grew that file's
+		// header past it — the number still named a line, and the line was a heading. The stale number
+		// is described rather than reproduced, since a citation census reads tokens and not quotation
+		// marks, and this comment is inside the tree that census scans. #524's
+		// validation half: the 0xFE region is one arm however many opcodes it dispatches, because the
+		// seven families'
+		// operands are resolved into a `sig` before the pop, exactly as `vecInstr` and `bulkInstr`
+		// resolve theirs. A slice adding a region and *not* moving this number by one would be a
+		// region whose operands are popped somewhere this control cannot see.
+		wantArms        = 63
+		wantDelegations = 2 // popExpect and popExpectAll, each one line over popSeqExpect
 	)
 
 	helpers := map[string]bool{"popExpect": true, "popExpectAll": true, "popSeqExpect": true}

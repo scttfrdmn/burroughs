@@ -359,19 +359,34 @@ func TestAtomicModeMatchesTheThreadsReference(t *testing.T) {
 			atomic, nonAtomic, testenv.ThreadsRefValidML)
 	}
 
+	// **Both spellings of every row.** The reference writes `i32_atomic_load` and this test fed
+	// exactly that, which is the spelling every one of `checkMemop`'s call sites happens to pass for
+	// an atomic row; `signature` passes the dotted form for its own two arms, and the predicate
+	// answered those two spellings differently (`atomicAccess`' doc section has the printed pair).
+	// One spelling was therefore enough to check today's paths and not enough to check the
+	// *predicate*, whose claim is about a name rather than about a separator. Asking both is a
+	// predicate over rows already parsed rather than a second instrument.
+	spellings := func(name string) []string {
+		return []string{name, strings.ReplaceAll(name, "_", ".")}
+	}
 	for _, row := range parseRefAtomicMemops(t, modes) {
-		if !atomicAccess(row.name) {
-			t.Errorf("%s is checked in Atomic mode (%s) and atomicAccess declines it, so its "+
-				"alignment is bounded rather than fixed: an under-aligned access the reference "+
-				"rejects is accepted, which no vector in the threads suite can see", row.name, row.family)
+		for _, name := range spellings(row.name) {
+			if !atomicAccess(name) {
+				t.Errorf("%s is checked in Atomic mode (%s) and atomicAccess declines it as %q, so "+
+					"its alignment is bounded rather than fixed: an under-aligned access the "+
+					"reference rejects is accepted, which no vector in the corpus the harness runs "+
+					"can see (#537)", row.name, row.family, name)
+			}
 		}
 	}
 	for _, row := range parseRefMemops(t) {
-		if atomicAccess(row.name) {
-			t.Errorf("%s is checked in NonAtomic mode (%s, %s) and atomicAccess claims it, so a "+
-				"legal under-aligned access is rejected — 62 corpus vectors expect the ceiling rule "+
-				"and this would answer them with the wrong string",
-				row.name, row.family, testenv.RefMnemonicsML)
+		for _, name := range spellings(row.name) {
+			if atomicAccess(name) {
+				t.Errorf("%s is checked in NonAtomic mode (%s, %s) and atomicAccess claims it as "+
+					"%q, so a legal under-aligned access is rejected — 62 corpus vectors expect the "+
+					"ceiling rule and this would answer them with the wrong string",
+					row.name, row.family, testenv.RefMnemonicsML, name)
+			}
 		}
 	}
 }

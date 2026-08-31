@@ -4,6 +4,7 @@ package validate
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -363,30 +364,35 @@ func TestVecDeclinesWhatThisSliceDoesNotType(t *testing.T) {
 	// The prefixed regions that are still someone else's stay declined, and the message names the
 	// opcode so the bucket is a work item.
 	//
-	// **Re-pointed by slice 5, then re-pointed and re-mechanised by slice 7.** This row's specimen
-	// was `memory.init` — `0xfc 0x08`, "whose slice is not this one" — and slice 5 was that slice;
-	// it moved to `ref.i31` (`0xfb 0x1c`) under the note that GC's region was still unclaimed, and
-	// slice 7 is that slice. The risk it was filed against is *a prefixed region falling through to
-	// an accept*, which is a property of the dispatch and not of any one region, so the row follows
-	// the boundary rather than closing with its second specimen.
+	// **Re-pointed three times and re-mechanised twice.** This row's specimen was `memory.init` —
+	// `0xfc 0x08`, "whose slice is not this one" — and slice 5 was that slice; it moved to `ref.i31`
+	// (`0xfb 0x1c`) under the note that GC's region was still unclaimed, and slice 7 was that slice;
+	// it moved to 0xFE, and #524's validation half is that slice. The risk it was filed against is
+	// *a prefixed region falling through to an accept*, which is a property of the dispatch and not
+	// of any one region, so the row follows the boundary rather than closing with its third specimen.
 	//
-	// What changed with the second re-point is the *mechanism*, because 0xFE is the last unclaimed
-	// region and the paragraph this one replaces had already recorded why no module can carry it:
-	// the text encoder has no operator for the region ("unknown operator memory.atomic.notify"). So
-	// this row now drives the dispatch directly, exactly as the relaxed-SIMD row above it does and
-	// for the same reason — the specimen is unreachable through `validated()` by design, and the
-	// layering is named instead of worked around. `TestPrefixedRegionsPartitionIntoClaimedAndDeclined`
+	// The mechanism changed at the second re-point, on the grounds that 0xFE had no text-encoder
+	// operator ("unknown operator memory.atomic.notify"), so the row drove the dispatch directly
+	// rather than a `wat` string. **That reason is now false** — #534's reader half encodes the six
+	// memarg atomic kinds, printed in `unclaimedPrefix`' note — and the direct construction is kept on
+	// the replacement reason given there, which is a property of the derived specimen rather than of
+	// any encoder's coverage.
+	//
+	// What changes here is the *specimen*, which has no name left to spell: with 0xFE typed, all four
+	// escape prefixes in the grammar are claimed, so the successor is the one thing that cannot drain —
+	// a prefix `internal/binary` has no table for. `TestPrefixedRegionsPartitionIntoClaimedAndDeclined`
 	// remains the control scoped to the whole space; this row is the one witness inside slice 2's own
 	// file, which is what keeps the boundary visible to whoever reads this file next.
+	prefix := unclaimedPrefix(t)
 	v := &validator{mod: &binary.Module{}}
 	v.frames = []frame{{}}
-	err := v.instr(0, binary.Instr{Prefix: 0xfe, Op: 0})
+	err := v.instr(0, binary.Instr{Prefix: prefix, Op: 0})
 	if err == nil {
-		t.Fatal("a threads instruction validated; the regions no slice has claimed must decline " +
-			"rather than fall through to an accept")
+		t.Fatalf("an instruction in the unclaimed %#02x region validated; the regions no slice has "+
+			"claimed must decline rather than fall through to an accept", prefix)
 	}
-	if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "0xfe") {
-		t.Errorf("the 0xFE region declined with %q, want an ErrUnsupported naming the prefix", err)
+	if want := fmt.Sprintf("%#02x", prefix); !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), want) {
+		t.Errorf("the %s region declined with %q, want an ErrUnsupported naming the prefix", want, err)
 	}
 }
 

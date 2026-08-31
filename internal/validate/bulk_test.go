@@ -506,11 +506,12 @@ func TestPrefixBulkIsTheRegionBinaryDispatches(t *testing.T) {
 // TestPrefixedRegionsPartitionIntoClaimedAndDeclined covers the dispatch over the whole prefix
 // space rather than over the specimens available for it.
 //
-// Three regions are this package's and one is not, and the property worth asserting is not which —
-// that changes every slice, and this sentence read "Two regions are this package's and two are not"
-// until slice 7 typed 0xFB — but that the partition is **total**: every prefix either types or
-// declines *naming itself*, and none falls through to an accept. A control listing today's regions
-// inherits today's blind spot; this one derives the claimed set by asking the dispatch.
+// **All four regions are now this package's**, and the property worth asserting is not which — that
+// changes every slice, and this sentence read "Two regions are this package's and two are not" until
+// slice 7 typed 0xFB and "Three … and one is not" until #524's validation half typed 0xFE — but that
+// the partition is **total**: every prefix either types or declines *naming itself*, and none falls
+// through to an accept. A control listing today's regions inherits today's blind spot; this one
+// derives the claimed set by asking the dispatch.
 //
 // The derivation is what made the slice-7 edit here small and honest: the loop needed no change at
 // all, and what needed changing was the *landed* list below it, which is a claim about history rather
@@ -518,20 +519,40 @@ func TestPrefixBulkIsTheRegionBinaryDispatches(t *testing.T) {
 // whose prose calls a claimed region unclaimed is the drifted-testimony shape, and it is caught by
 // reading rather than by running, which is the argument for keeping the two lists adjacent.
 //
-// It is also where 0xFE (threads) is covered at all. The text encoder has no operator for its
-// instructions ("unknown operator memory.atomic.notify"), so no module can be built to carry one
-// and `validated()` cannot reach it — which is why the instruction is constructed directly here.
+// # 0xFE draining the decline half is what this slice cost here, and three sentences went with it
 //
-// **This sentence used to cite relaxed SIMD as the second example of that layering, and the citation
-// outlived its subject** (#427): relaxed SIMD was reachable through `validated()` from the day its
-// gate flipped, so "no module can reach this arm" was true of 0xFE alone. The distinction the
-// remaining example rests on is which layer refuses — 0xFE has no entry in `binary`'s table at all,
-// which is a different fact from a gate being off, and it is the durable one because a prefix with no
-// table cannot be reached by flipping anything.
+// The four escape prefixes are claimed, so the region list can no longer supply a declined member and
+// the loop's decline arm would assert nothing. The subject is restored from `unclaimedPrefix` rather
+// than retired: the risk is *a prefixed region falling through to an accept*, which is a property of
+// the dispatch — a tripwire's subject dissolving is a re-pointing, not a closure — and a prefix with
+// no table in `binary` is a population of 252 that no slice can drain.
+//
+// Three claims here were falsified before this slice touched them, and they are corrected rather than
+// overwritten:
+//
+//   - *"0xFE has no table in `binary` at all"* — false since **#534**, which is the reader half of
+//     the same issue as this validation work.
+//   - *"the text encoder has no operator for its instructions … so no module can be built to carry
+//     one and `validated()` cannot reach it"* — also false since #534, and printed rather than
+//     reasoned about: see `unclaimedPrefix`, where the 38-byte encode is quoted.
+//   - *"0xFE is threads', a v1 milestone behind its own gate, and a slice that typed it here would be
+//     landing a later phase's capability"* — the phase **is** v1, since #536. Typing it is this
+//     slice's work, not a reach ahead.
+//
+// The pattern in all three is one shape: a sentence about what a *later* slice must not do, left
+// standing after that slice landed. It is the foreclosing-words shape `CLAUDE.md`'s phase ladder
+// records at the level of a closure condition, and here it survived two green runs because none of the
+// three sentences is asserted by anything.
+//
+// **The layering note that survives** is the one #427 already narrowed this to: which layer refuses.
+// A prefix with no entry in `binary`'s table cannot be reached by flipping a gate, which is why the
+// derived specimen is constructed directly and why relaxed SIMD — reachable through `validated()` from
+// the day its gate flipped — was never a second example of it.
 func TestPrefixedRegionsPartitionIntoClaimedAndDeclined(t *testing.T) {
-	// The four regions of the instruction grammar. 0xFE has no table in `binary` at all, which is
-	// itself the fact that keeps it out of the claimed set — and asserting over it anyway is the
-	// point of a partition test.
+	// The four regions of the instruction grammar, plus a prefix no slice has claimed. The fifth row
+	// is derived because there is nothing left to name: every escape byte the grammar defines is in
+	// the four above it, so the declined half of the partition comes from outside the grammar or not
+	// at all.
 	regions := []struct {
 		prefix byte
 		name   string
@@ -539,7 +560,8 @@ func TestPrefixedRegionsPartitionIntoClaimedAndDeclined(t *testing.T) {
 		{prefixGC, "GC"},
 		{prefixBulk, "bulk memory/table"},
 		{prefixSIMD, "SIMD"},
-		{0xfe, "threads"},
+		{prefixAtomic, "threads atomics"},
+		{unclaimedPrefix(t), "no region — a prefix binary has no table for"},
 	}
 
 	claimed := map[byte]bool{}
@@ -576,20 +598,24 @@ func TestPrefixedRegionsPartitionIntoClaimedAndDeclined(t *testing.T) {
 		}
 	}
 
-	// The vacuity check, and it runs in both directions. With every region declining, the loop
-	// above passes while asserting that this package types nothing — and with every region
-	// claimed, the decline half has no subject.
+	// The vacuity check, and it runs in both directions. With every row declining, the loop above
+	// passes while asserting that this package types nothing — and with every row claimed, the
+	// decline half has no subject.
 	if len(claimed) == 0 {
-		t.Error("no prefixed region is claimed, so the loop above only checked that four " +
-			"declines name themselves — slice 2 types 0xFD and slice 5 types 0xFC, and a run " +
-			"where neither does means the dispatch is not reached at all")
+		t.Error("no prefixed region is claimed, so the loop above only checked that five " +
+			"declines name themselves — every escape byte in the grammar has a slice, and a run " +
+			"where none of them types means the dispatch is not reached at all")
 	}
 	if len(claimed) == len(regions) {
-		t.Error("every prefixed region is claimed, which leaves the decline half of this " +
-			"partition with no subject: 0xFE is threads', a v1 milestone behind its own gate, and " +
-			"a slice that typed it here would be landing a later phase's capability")
+		t.Error("every row is claimed, which leaves the decline half of this partition with no " +
+			"subject — including the derived row, whose whole purpose is to be a prefix nothing " +
+			"types. A claimed unclaimed prefix means `binary` grew a table `unclaimedPrefix` " +
+			"scanned past, or the dispatch stopped keying on the prefix at all")
 	}
-	for _, p := range []byte{prefixBulk, prefixSIMD, prefixGC} {
+	// The four regions whose slices have landed, spelled out rather than counted: `len(claimed) > 0`
+	// is satisfied by any one of them, so a region that silently stopped typing would hide behind
+	// its neighbours.
+	for _, p := range []byte{prefixBulk, prefixSIMD, prefixGC, prefixAtomic} {
 		if !claimed[p] {
 			t.Errorf("region %#02x declined, but its slice has landed — a region that types "+
 				"nothing after its slice is a dispatch that stopped firing, which is invisible "+

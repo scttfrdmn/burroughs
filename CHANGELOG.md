@@ -21,6 +21,53 @@ weakly-ordered platform.
 
 ### Added
 
+- **The `0xfe` region is typed, so all 51 of `atomic.wast`'s validation directives stop declining
+  and start passing** ([#524](https://github.com/scttfrdmn/burroughs/issues/524), `gate:threads`).
+  `atomicInstr` is the seventh caller of `checkMemop` and the first that can hand it an atomic row.
+  Threads lane, `atomic.wast`: **59 → 110 pass, 238 → 187 fail, 51 → 0 declined**, and the **187
+  execution rows unchanged** at 66 distinct `interp: no arm for opcode fe NN` codes. The
+  pre-registration named all four figures separately and all four were met; the fourth is the one
+  that mattered, because "the interpreter did not move" cannot be read off a pass count.
+  - **`declined == 0` gets an arithmetic companion**, since it is also what a region that stopped
+    being *reached* would print. `atomicWastPartition` now requires the residue set empty — every
+    failure is one of two modelled mechanisms — and `Pass + exec` to equal the summed head census,
+    so the zero is a statement about verdicts rather than about arrival.
+  - **The seven signatures are derived from the mnemonic, not transcribed.** 67 rows collapse onto
+    four shapes because the *rmw operator* is a term in none of the pin's arms: `0x1e` and `0x25`
+    are both `mnemonic: "i32_atomic_rmw"`. A table would have spelled 42 of them, each an
+    accept-direction chance no `assert_invalid` vector can see (§9 G-3). `wait32`'s timeout is the
+    one place the name lies — i64 for both widths — and is the arm written out rather than parsed.
+  - **The address operand's type is the memory's own, composed from the two pins — ruled for by Scott
+    on the #538 review.** Every threads arm says `NumType I32Type`; this file passes the memory's own
+    address type from `checkMemop`. Three printed premises: the same pin's plain `Load` says i32 too
+    and this engine already declines to follow it there, the pin contains no `I64AT` and no
+    `addrtype` at all so it predates memory64, and the core pin answers the identical question one
+    family over. On [#310](https://github.com/scttfrdmn/burroughs/issues/310)'s precedent — the
+    other divergence inside a memarg check, also Scott's ruling. The ruling's own grounds are
+    narrower than that argument and are the ones that bind: the pin's `I32Type` is a snapshot artifact
+    from a revision predating memory64, the same shape as `op s` versus `u32`, and the standard
+    outranks the snapshot — and unlike the sub-opcode case this reading is **strictly better** rather
+    than merely defensible, identical under i32 memories and correct under memory64.
+  - **The ruling is observable end to end, by order of the same review.** Observability takes the
+    memory64 gate on *and* an i64-indexed memory, and
+    `TestAtomicAddressTypeIsObservableWithBothGatesOn` now runs one image under all four gate
+    combinations — each single-gate case refused *by the decoder*, naming the gate — then puts four
+    modules through wat → encoder → decoder → validator and reads verdicts rather than a `sig`. Its
+    discriminating pair flips in **opposite** directions under the pin's literal reading, so neither a
+    hardcoded i32 nor a hardcoded i64 passes both. **The mutation implementing the losing reading
+    leaves every board green** — 256 core files and the threads lane's four all score unchanged — so
+    this control and `TestAtomicAddressTypeIsTheNamedMemorys` are not a supplement to the corpus,
+    they are the entire witness set.
+  - **Three controls lost their decline specimen, and were re-pointed rather than retired.** With
+    0xFE claimed, all four escape prefixes are this package's and no prefixed region declines any
+    more. The successor population is *prefixes `internal/binary` has no table for* — 252 of them,
+    a population no slice can drain, because the risk is a property of the dispatch and not of any
+    region. `unclaimedPrefix` derives it downward from 0xFF (so the specimen reads as a plausible
+    future escape byte rather than as `0x01`, which is unclaimed for an unrelated reason), resolves
+    to 0xFF today, and fails loudly if every prefix is claimed. This makes `instr.go`'s retained
+    fall-through a **checked claim** instead of an argument: deleting its `return` was run, and the
+    two decline rows print `got <nil>` — the instruction validated.
+
 - **The 67 atomic mnemonics have immediate shapes, so `atomic.wast`'s modules parse and its atomic
   functions encode** ([#524](https://github.com/scttfrdmn/burroughs/issues/524), `gate:threads`).
   Six kinds take a memarg (`ATOMIC_LOAD`, `ATOMIC_STORE`, `ATOMIC_RMW`, `ATOMIC_RMW_CMPXCHG`,
@@ -102,10 +149,13 @@ weakly-ordered platform.
     entirely in the direction no board can see, and its failure direction is *accept* — contract §9
     G-3 — so the discriminating modules that do not exist upstream exist here, as a five-case pair
     over `i32.atomic.load` and `i32.load` at the same natural width.
-  - The rule ships **one slice ahead of its own call site**: `signature` has no `0xfe` arm yet, so
-    the controls call `checkAlignment` directly and say so. Named because a control exercising a
+  - The rule shipped **one slice ahead of its own call site**: `signature` had no `0xfe` arm, so the
+    controls called `checkAlignment` directly and said so. Named because a control exercising a
     helper nothing calls is this project's own defect, and the honest form is to say which half is
-    covered.
+    covered. **Closed by the validation-half entry above**, where `atomicInstr` became `checkMemop`'s
+    seventh call site — tense corrected in place rather than deleted, because *which* rule was
+    uncalled and for how long is the durable part, and a sentence written before a change and left
+    standing after it tells the next reader the tree is in a state it is not.
 
 - **The wat keyword table is generated from the union of the tracked pins, so `shared` and the 67
   atomic mnemonics lex** ([#511](https://github.com/scttfrdmn/burroughs/issues/511),
@@ -299,6 +349,37 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A range citation dropped its pin qualifier, which re-points rather than dangles** (overhead
+  charged to #524's validation half). An unqualified `valid.ml:203-209` is the **core** pin by the
+  citation rule, and the core pin has no atomics at all — `grep -c Atomic` over it is 0 — so those
+  lines there are `check_memorytype`'s page-limit body, cited under a sentence about atomic alignment
+  modes, in the one file whose header argues at length that the threads pin is these arms' only
+  authority. The rule's two other citations in the package both carry the qualifier, which is what
+  makes it drift rather than a misreading. **The well-formedness sweep passed it** — 209 is inside
+  the core pin's length, so the bounds check agreed — and the subject sweep **skipped it as residue**,
+  because the first draft put the rule's name one line above its citation. It failed only when the
+  sentence was rewritten to name `check_memop` and `Atomic` on the citation's own line, printing
+  "neither written inside [[203 209]] nor is any of those ranges inside its own definition at
+  [380 416]". Recorded because it settles a trade the sibling headers had priced with one side
+  visible: **residue is not a neutral holding pen — an unkeyed row is also an unfalsified one**, and
+  a wrong-pin citation is exactly the defect a bounds check cannot see. Two further range citations
+  were keyed for that reason, one of which was also wrong (a `check_pack` citation naming the *call
+  site* while quoting the definition, found by a census that counts bare `:NNN` forms and resolves
+  none of them).
+- **A near miss in `atomicAccess`, withdrawn on measurement rather than filed as a grave** (no
+  number, and that is the point). The predicate selecting the alignment *mode* split on `_` while
+  `naturalWidth`, called a line above on the same argument, normalizes `_`→`.`; the draft write-up
+  claimed the first atomic instruction through the new path would therefore be checked in NonAtomic
+  mode, the equality silently becoming the ceiling. Printed: `old("i32_atomic_load")=true`,
+  `old("i32.atomic.load")=false`, `new(...)=true` for both — and every live caller passes the
+  table's undotted spelling, so **no verdict was ever wrong**. The hardening stands as a fragility
+  fix: correctness was a property of *which caller*, and the caller most likely to be written next
+  is the one that dots. The draft had also reserved the next issue number for itself and cited it;
+  withdrawing did not consume the number, so the next issue filed took it and the citation went on
+  resolving — to an unrelated artifact, in a sentence calling it a grave. *Never guess the next
+  number* is usually about a pointer that dangles, and **the withdrawal direction is worse: a
+  citation sweep confirms a live target and the only wrong thing is what it points at.** A finding
+  never filed has nothing to cite, so the description carries the load.
 - **A citation named a basename that exists at two paths, and resolved to the stale one**
   ([grave #533](https://github.com/scttfrdmn/burroughs/issues/533)). A comment justifying
   `atomic.fence`'s encode refusal cited `atomic.wast:965` for a module expecting the fence to work.
