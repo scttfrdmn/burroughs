@@ -16,26 +16,15 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// alignedBuf returns a byte slice whose first element is 8-byte aligned, plus that base.
+// There is no hand-aligned scratch buffer here, and its absence is the point.
 //
-// **It aligns rather than checks-and-skips.** `make([]byte, n)` carries no documented alignment
-// (see `checkBaseAlignment`), so a test that asserted the base was aligned would be asserting the
-// allocator's behaviour, and one that *skipped* when it was not would pass by asking nothing — a
-// skip is not a verdict. Over-allocating by 8 and slicing forward makes the premise true by
-// construction on every platform, which is what the controls below need: they are about the
-// predicate, not about `make`.
-func alignedBuf(t *testing.T, n int) []byte {
-	t.Helper()
-	raw := make([]byte, n+8)
-	base := uintptr(unsafe.Pointer(&raw[0]))
-	buf := raw[(8-base%8)%8:]
-	if got := uintptr(unsafe.Pointer(&buf[0])) % 8; got != 0 {
-		t.Fatalf("alignedBuf produced a base at %#x, misaligned by %d — the slice arithmetic is "+
-			"wrong and every offset classification below is measuring the wrong thing",
-			uintptr(unsafe.Pointer(&buf[0])), got)
-	}
-	return buf
-}
+// An earlier draft over-allocated a `[]byte` and sliced forward to make its base 8-byte aligned,
+// because `make([]byte, n)` carries no documented alignment (see `checkBaseAlignment`) and a control
+// that *skipped* when the base came out misaligned would pass by asking nothing — *a skip is not a
+// verdict*. Every control below now runs over a real linear memory instead, which is strictly better
+// for the same reason it is more work: the premise those controls need is the one the engine actually
+// relies on, and `TestWordAlignedAnswersTheProposalsGuestSpaceCondition` asserts it on the instance's
+// own backing array rather than on a fixture built to satisfy it.
 
 // memopWidths returns the distinct access widths in the family, in increasing order.
 //
@@ -215,7 +204,7 @@ func TestWordAccessAgreesWithTheByteLoop(t *testing.T) {
 			var wantAt uint64
 			haveWant := false
 			for ea := uint64(0); ea+m.width <= window; ea++ {
-				for i := uint64(0); i < m.width; i++ {
+				for i := range m.width {
 					if _, err := in.Invoke("put",
 						Value{Type: binary.I32, Bits: ea + i},
 						Value{Type: binary.I32, Bits: uint64(byte(pat >> (8 * i)))}); err != nil {
@@ -308,7 +297,7 @@ func TestWordAlignedAnswersTheProposalsGuestSpaceCondition(t *testing.T) {
 	agree, disagree := 0, 0
 	for _, w := range widths {
 		// Two full periods of the widest width, so every residue of every width appears twice.
-		for ea := uint64(0); ea < 16; ea++ {
+		for ea := range uint64(16) {
 			got := wordAligned(mem.bytes[ea:ea+w], w)
 			want := ea%w == 0 // the proposal's own condition, `u32 mod N/8 = 0`
 			if got == want {

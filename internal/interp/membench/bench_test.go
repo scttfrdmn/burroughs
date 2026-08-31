@@ -58,7 +58,7 @@ func build(src string) (*interp.Instance, error) {
 	}
 	in, trap := interp.Instantiate(m)
 	if trap != nil {
-		return nil, fmt.Errorf("instantiate: %v", trap)
+		return nil, fmt.Errorf("instantiate: %w", trap)
 	}
 	return in, nil
 }
@@ -87,14 +87,14 @@ func buildModule() string {
 		skew uint64
 	}{{"aligned", 0}, {"unaligned", 1}} {
 		fmt.Fprintf(&b, "\t(func (export \"load_%s\") (result i32) (local i32)\n", arm.name)
-		for i := uint64(0); i < accesses; i++ {
+		for i := range uint64(accesses) {
 			fmt.Fprintf(&b, "\t\t(local.set 0 (i32.add (local.get 0) (i32.load (i32.const %d))))\n",
 				i*stride+arm.skew)
 		}
 		b.WriteString("\t\t(local.get 0))\n")
 
 		fmt.Fprintf(&b, "\t(func (export \"store_%s\") (param i32)\n", arm.name)
-		for i := uint64(0); i < accesses; i++ {
+		for i := range uint64(accesses) {
 			fmt.Fprintf(&b, "\t\t(i32.store (i32.const %d) (local.get 0))\n", i*stride+arm.skew)
 		}
 		b.WriteString("\t\t)\n")
@@ -122,6 +122,7 @@ func instance(b *testing.B) *interp.Instance {
 // Go's compiler can see through `Invoke` to eliminate a load — it cannot, since the accesses happen
 // inside the interpreter's own dispatch loop over data the compiler has no view of.
 func run(b *testing.B, name string, args ...interp.Value) {
+	b.Helper()
 	in := instance(b)
 	// One call outside the loop, so a failure is reported as a failure rather than folded into the
 	// first iteration's time.
