@@ -394,27 +394,31 @@ jobs:
       - name: deadcode
         # The unreachable-error grave promoted to a tool (grave #3). A finding
         # here is a classification question, not automatically a bug: declared
-        # and tracked is a TODO with an audit trail, silent is a grave. Anything
-        # not in the allowlist below has failed to answer that question.
-        run: |
-          # 2>/dev/null deliberately: deadcode reports findings on stdout and
-          # exits 0, so the output *is* the verdict here — but stderr carries
-          # `go: downloading ...` on a cold cache, which would read as a finding.
-          out="$(go tool -modfile=tools/go.mod deadcode -test ./... 2>/dev/null || true)"
-          printf 'deadcode says:\n%s\n' "$out"
-          # The allowlist is empty. It held exactly one entry — reader.u64, tracked
-          # in #19 — until #36 gave limits min/max their true 64-bit width and made
-          # it reachable, which is the placeholder discipline's intended ending: a
-          # deferral retired by a production caller, not by a suppression outliving
-          # its reason. An entry left here after its subject became reachable would
-          # license the next regression silently. Mirrors the Makefile's deadcode
-          # target, which is the point of both existing.
-          filtered="$(printf '%s\n' "$out" | grep -v '^$' || true)"
-          if [ -n "$filtered" ]; then
-            echo "::error::unreachable code with no tracking issue — name it at its definition site and file an issue, or delete it:"
-            printf '%s\n' "$filtered"
-            exit 1
-          fi
+        # and tracked is a TODO with an audit trail, silent is a grave. The
+        # allowlist in the Makefile target is empty, and its header says why.
+        #
+        # **Calls the target instead of repeating its script (grave #544), and this
+        # is the second time in this file — see `no test declined to answer` and
+        # grave #539.** The step held its own copy, and the copy carried the same
+        # defect: `out="$(... 2>/dev/null || true)"` then an emptiness test, so a
+        # `deadcode` that exited non-zero without analysing anything printed a blank
+        # line and passed. An empty capture was this gate's spelling of "no dead
+        # code", which is a skip wearing a gate's name.
+        #
+        # It could not be repaired here, and that is the reason for the deletion
+        # rather than a preference. The fix is to stop discarding the status —
+        # `out="$(...)"; status=$?` — and under this workflow's `-e` shell the
+        # failing assignment kills the step on line one, so the diagnosis on stderr
+        # is never printed and the record of the red is `exit code 2` and nothing
+        # else. Measured in both shells: identical script, testimony in `sh`,
+        # silence under `-e`. The Makefile's header explains that `-e` is absent
+        # there for exactly this reason, so the repair belongs there and the mirror
+        # has no room to exist. *Text mirrors are not failure-behaviour mirrors.*
+        #
+        # The cost, stated: no `::error::` annotation. The step still fails and its
+        # log still names every unreachable func, so what is lost is the run-summary
+        # line, not the finding.
+        run: make deadcode
 
   citations:
     # Every `#NNNN` a diff adds must resolve to a real issue or PR, every `decision NNNN` to a

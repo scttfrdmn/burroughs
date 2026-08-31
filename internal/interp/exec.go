@@ -134,6 +134,15 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				}
 				continue
 			}
+			// The 0xFE region (threads: atomics). Nothing about the region reaches
+			// control flow — every one of its 67 rows is a memory access, a trap, or a
+			// no-op — so unlike 0xfb below it needs no interception here.
+			if ins.Prefix == 0xfe {
+				if err := in.execFE(ins, st); err != nil {
+					return err
+				}
+				continue
+			}
 			if ins.Prefix == 0xfb {
 				// **The region's two branching arms are intercepted here, and only their
 				// branch is here.** `execFB` returns an `error` and cannot express a
