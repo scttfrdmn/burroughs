@@ -28,19 +28,29 @@ type ThreadID uint64
 //
 // # T-1's spawn is not here, and a control in this package is why
 //
-// This slice was written with T-1 attached: `Spawn`, a shared-memory gate, an entry-signature check,
-// and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and never unlocks. It works
-// and it is measured — commit `3b0129f` on this branch holds it, with seven tests and twelve
-// falsifications.
+// T-1 is written and lives in **#554**, a PR parked unmerged: `Spawn`, a shared-memory gate, an
+// entry-signature check, and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and
+// never unlocks. Five tests for T-1 there, and it is deliberately red at one test — see below.
 //
 // It is **withheld** because `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on it.
 // That control watches for the first `go` statement in this package's non-test files and says what to
 // do about it: *"the atomics now need a memory model (contract §4) … Do not exempt this file;
 // discharge #542."* All 67 atomics in `atomic.go` are plain read-then-write, correct only while
 // nothing runs concurrently with a function body, and **#542's own body prices its discharge as
-// §4's litmus battery** (#516, #10) rather than as a change to that file. So T-1 sits behind work
-// that this slice was sequenced ahead of, which is a **ruling about the phase's order** and not a
-// choice available to the code. Flagged for Scott rather than decided here.
+// §4's litmus battery** (#516, #10) rather than as a change to that file.
+//
+// **Scott ruled that order, and the ruling is what this comment now records rather than the question
+// it used to pose.** Option 1: discharge #542 first — **#542 → #516 → #10** — reversing the
+// in-session ordering that had put spawn ahead of §4's model. An override was refused on the grounds
+// that *"once a second thread exists, plain Go operations on shared interpreter state are data
+// races — undefined behaviour, not merely wrong values."* #554 carries the measurement that makes
+// that concrete: two threads doing 2000 atomic adds each on one cell land on 3392 rather than 4000,
+// with `-race` naming `atomic.go`'s read and `memory.go`'s write.
+//
+// **A PR and not a bare commit, deliberately.** A PR number resolves under `citecheck` and GitHub
+// retains the diff and `refs/pull/N/head` independently of the branch; the commit SHA this comment
+// used to cite could not be checked by anything in the tree, so it would have read as a valid
+// citation forever while pointing at a pruned object.
 //
 // Two things deliberately not done, because both are the shape of arguing with the instrument: the
 // file is not added to an exception list, and `Spawn` is not moved to a sibling package where the

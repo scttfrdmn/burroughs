@@ -179,14 +179,23 @@ Three things worth keeping:
 **The four bullets below are about T-1's `Spawn`, which this decision's implementation does not
 land.** They are stated in the present tense because they are this decision's commitments about
 `Spawn` whenever it lands, and a reader must not take them as claims that the code is in the tree —
-it is not. `Spawn` exists, is measured, and sits at commit `3b0129f` on the `v1/thread-context`
-branch, withheld because `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on the first
-`go` statement in `internal/interp` and instructs the reader to discharge **#542** rather than exempt
-the file. #542 prices its discharge as §4's litmus battery (**#516**, **#10**), which is work this
-slice was sequenced ahead of. That is a cycle in the phase's order, so it is a ruling for Scott and
-not a choice available here; neither evasion was taken — no exception-list entry, and `Spawn` was not
-moved to a sibling package to put the `go` statement outside the control's domain, since *an
-exemption inherits none of the trigger's lessons.*
+it is not. `Spawn` exists and lives in **#554**, a PR parked unmerged and deliberately red, withheld
+because `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` fires on the first `go` statement in
+`internal/interp` and instructs the reader to discharge **#542** rather than exempt the file. #542
+prices its discharge as §4's litmus battery (**#516**, **#10**), which is work this slice was
+sequenced ahead of. That looked like a cycle in the phase's order, so it went to Scott rather than
+being resolved here; neither evasion was taken — no exception-list entry, and `Spawn` was not moved to
+a sibling package to put the `go` statement outside the control's domain, since *an exemption inherits
+none of the trigger's lessons.*
+
+**The ruling was option 1: discharge #542 first, #542 → #516 → #10**, reversing the in-session
+ordering that had put spawn ahead of §4's model. It was not in fact a cycle, which is worth recording
+because the appearance of one is what escalated it: the atomics repair and §4's boundary edges need no
+second thread to *write*, only to test at scale, so the order runs repair → edges → the tripwire's
+premise becomes false and it is retired → T-1 merges → #10's battery runs against it. Nothing in that
+chain waits on itself. #554 also carries the measurement that decided the refusal of an override: two
+threads × 2000 atomic adds on one cell yield 3392 rather than 4000, with the race detector naming the
+read in `atomic.go` and the write in `memory.go`.
 
 - **`Spawn` is an engine API and not a wasm instruction.** The threads proposal defines no spawn
   opcode; T-1 says *host primitive*, and *"this is `newosproc`, not a Worker with a message port."* In
