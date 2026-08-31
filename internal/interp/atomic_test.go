@@ -317,10 +317,16 @@ func TestAtomicFenceNeedsNoMemory(t *testing.T) {
 // used to be #542's.
 //
 // **Re-pointed rather than retired, because its subject narrowed and did not dissolve.** It was named
-// `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` and it watched for the first goroutine in
+// `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` and it watched for the first goroutine in
 // this package on the ground that the 67 atomics were plain read-then-write. ADR 0051 discharged
 // that: they are sequentially consistent now, and the old name would be *asserting a property the
 // code no longer has*, which is the review-confirms-the-bug shape wearing a test name.
+//
+// That old name is deliberate here and was overwritten once, which is grave **#561**: a bulk re-point
+// of the nine live citations ran over this one historical mention, and the sweep that would have
+// caught a dangling name could not — `pastReference`'s *"it was"* exemption in
+// `internal/testenv/citation_test.go:TestEveryCitedTestNameResolves` skips exactly this sentence, and
+// the wrong name it skipped over resolves. *An exemption inherits none of the trigger's lessons.*
 //
 // What survives is the other half of the same risk. The plain accesses — `i32.load`, `i32.store` and
 // every narrower integer width, in memop.go, not in this file — are still a byte-at-a-time loop and a

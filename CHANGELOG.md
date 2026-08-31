@@ -78,7 +78,7 @@ weakly-ordered platform.
     [#516](https://github.com/scttfrdmn/burroughs/issues/516). This slice falsifies half its premise
     and none of the other half, and *a tripwire whose subject dissolves is re-pointed rather than
     retired.* ADR 0050's chain says *"it is retired"*; it is accepted, so it takes a postscript rather
-    than a rewrite. **#554 merges after this**, the last link the ruling ordered.
+    than a rewrite. This bullet said **"#554 merges after this"**, and it does not: see the grave below.
 
 - **Contract §2's T-4 per-thread context: a `thread` object every stack carries**
   ([#514](https://github.com/scttfrdmn/burroughs/issues/514), [ADR
@@ -628,6 +628,36 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **Four channels said T-1's spawn merges next; the control it turns on says otherwise, and the
+  refutation was in the same diff** (grave
+  [#561](https://github.com/scttfrdmn/burroughs/issues/561)). The slice above re-pointed the package's
+  single-thread tripwire from *"discharge #542"* to *"discharge #557, and #516 for §4's boundary
+  model"* — and, two files away from that change, asserted that the control *"now permits its `go`
+  statement"*. It does not: the mechanism was kept deliberately, so it fires on the first `go`
+  statement in any non-test file of `internal/interp`, which is what
+  [#554](https://github.com/scttfrdmn/burroughs/pull/554) adds.
+  - **Settled by the instrument, not by re-reading.** A `go` statement was injected into a scratch
+    non-test file in the package and removed in the same command; the tripwire named it and printed the
+    new message. **A claim about what a control will permit is a forecast about a machine sitting in the
+    tree**, and asking it cost one file and one `go test -run`.
+  - **The corrected order:** #542 (landed) → tear-freedom
+    ([#557](https://github.com/scttfrdmn/burroughs/issues/557)) and §4's boundary edges
+    ([#516](https://github.com/scttfrdmn/burroughs/issues/516)) → *then* the tripwire's premise is false
+    → #554 merges → [#10](https://github.com/scttfrdmn/burroughs/issues/10)'s battery runs against it.
+    ADR 0050's chain had this right; the postscript that corrected one of its links introduced this
+    error in the next sentence. **#516 is the next product work.**
+  - **The population was four channels and one of them is a title**, which is *a FAIL names a site, not
+    the population*: this file, ADR 0050's postscript, ADR 0051's tripwire bullet, #560's **Next**
+    section (corrected by posting), plus #554's own title, which named a blocker that no longer exists.
+    Two further sentences fell to #542 landing rather than to the mis-forecast: `thread.go`'s withholding
+    paragraph quoted the tripwire's old message and asserted *"all 67 atomics … are plain
+    read-then-write"*, a comment claiming a property the code no longer has.
+  - **One historical name was overwritten by the bulk re-point**, at `atomic_test.go`'s *"It was named
+    X"* sentence, where the old name belongs. `pastReference`'s *"it was"* exemption in
+    `internal/testenv/citation_test.go:TestEveryCitedTestNameResolves` skips exactly that sentence, so
+    the sweep that exists to catch a wrong test name could not see this one — and the wrong name it
+    skipped resolves. *An exemption inherits none of the trigger's lessons.*
 
 - **A shared memory's `memory.grow` no longer replaces the array the atomics hold a pointer into**
   ([#556](https://github.com/scttfrdmn/burroughs/issues/556), charged overhead on

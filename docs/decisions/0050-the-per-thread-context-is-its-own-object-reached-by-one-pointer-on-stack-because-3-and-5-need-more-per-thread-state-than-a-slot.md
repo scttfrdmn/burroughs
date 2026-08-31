@@ -213,8 +213,22 @@ accesses in `memop.go` are still a byte loop and still tear under a second threa
 boundary model is still **#516**. So the control kept its mechanism — the first `go` statement in a
 non-test file of the package, with its vacuity floor — and took a new name and new citations. *A
 tripwire whose subject dissolves is re-pointed rather than retired*: closing it as no longer
-applicable would have retired a live risk. Every other link of the chain held, and **#554 still
-merges after #542**, which is what the ruling ordered.
+applicable would have retired a live risk.
+
+**The sentence that stood here was wrong, and it is left visible rather than swapped out.** It said
+*"Every other link of the chain held, and **#554 still merges after #542**, which is what the ruling
+ordered."* The fourth link did not hold either. Re-pointing a tripwire and clearing it are different
+events: the control kept the mechanism that fires on the first `go` statement in a non-test file of
+`internal/interp`, so it fires on `Spawn` exactly as before, now naming #557 and #516. The chain's real
+shape is repair (#542, landed) → #557 and #516 → *then* the premise is false → #554 → #10's battery. So
+**#516 is the next work**, and the ruling's ordering is intact — it is this postscript's reading of its
+own correction that was not.
+
+Filed as grave **#561**, and the part worth carrying is where the refutation was: in the diff that
+wrote the sentence, two files away, in the tripwire's own new message. A claim about what an instrument
+will permit is a forecast about a machine sitting in the tree, and it was settled afterwards by
+injecting a `go` statement into a scratch file and reading the FAIL — which is what it would have cost
+to settle beforehand.
 
 - **`Spawn` is an engine API and not a wasm instruction.** The threads proposal defines no spawn
   opcode; T-1 says *host primitive*, and *"this is `newosproc`, not a Worker with a message port."* In
