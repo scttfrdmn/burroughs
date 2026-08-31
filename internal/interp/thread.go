@@ -32,20 +32,31 @@ type ThreadID uint64
 // entry-signature check, and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and
 // never unlocks. Five tests for T-1 there, and it is deliberately red at one test — see below.
 //
-// It is **withheld** because `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` fires on it.
-// That control watches for the first `go` statement in this package's non-test files and says what to
-// do about it: *"the atomics now need a memory model (contract §4) … Do not exempt this file;
-// discharge #542."* All 67 atomics in `atomic.go` are plain read-then-write, correct only while
-// nothing runs concurrently with a function body, and **#542's own body prices its discharge as
-// §4's litmus battery** (#516, #10) rather than as a change to that file.
+// It is **withheld** because `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`
+// fires on it. That control watches for the first `go` statement in this package's non-test files and
+// says what to do about it: *"Do not exempt this file; discharge #557, and #516 for §4's boundary
+// model."*
 //
-// **Scott ruled that order, and the ruling is what this comment now records rather than the question
-// it used to pose.** Option 1: discharge #542 first — **#542 → #516 → #10** — reversing the
-// in-session ordering that had put spawn ahead of §4's model. An override was refused on the grounds
-// that *"once a second thread exists, plain Go operations on shared interpreter state are data
-// races — undefined behaviour, not merely wrong values."* #554 carries the measurement that makes
-// that concrete: two threads doing 2000 atomic adds each on one cell land on 3392 rather than 4000,
-// with `-race` naming `atomic.go`'s read and `memory.go`'s write.
+// **The blocker changed rather than cleared, and this paragraph is where that was noticed too late**
+// (grave **#561**). It used to quote the same control saying *"discharge #542"*, and to assert that all
+// 67 atomics in `atomic.go` were plain read-then-write — true when written, falsified by [ADR
+// 0051][0051], which made them sequentially-consistent word operations over the backing array.
+// What the control still watches for is the other half of one risk: the plain accesses in `memop.go`
+// are a byte-at-a-time loop and a `copy`, so an aligned `i32.load` can tear where the proposal forbids
+// it (**#557**), and §4's boundary model is **#516**. The watched event is unchanged, so `Spawn` is
+// parked one link further along the chain than the ruling below predicted, and the way that was
+// settled is the part worth keeping: a `go` statement injected into a scratch non-test file and the
+// resulting FAIL read back. **A claim about what an instrument will permit is a forecast about a
+// machine sitting in the tree.**
+//
+// **Scott ruled that order, and the ruling is what this comment records rather than the question it
+// used to pose.** Option 1: discharge #542 first — **#542 → #516 → #10** — reversing the in-session
+// ordering that had put spawn ahead of §4's model. An override was refused on the grounds that *"once
+// a second thread exists, plain Go operations on shared interpreter state are data races — undefined
+// behaviour, not merely wrong values."* #542 is discharged. #554 carries the measurement that made
+// that refusal concrete — two threads doing 2000 atomic adds each on one cell landing on 3392 rather
+// than 4000, with `-race` naming `atomic.go`'s read and `memory.go`'s write — and the repaired engine
+// returns 4000, which `TestAtomicRmwIsNotObservablyTornAcrossThreads` asserts and keeps asserting.
 //
 // **A PR and not a bare commit, deliberately.** A PR number resolves under `citecheck` and GitHub
 // retains the diff and `refs/pull/N/head` independently of the branch; the commit SHA this comment
@@ -58,6 +69,7 @@ type ThreadID uint64
 // trigger's lessons.*
 //
 // [0050]: ../../docs/decisions/0050-the-per-thread-context-is-its-own-object-reached-by-one-pointer-on-stack-because-3-and-5-need-more-per-thread-state-than-a-slot.md
+// [0051]: ../../docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md
 type thread struct {
 	// id is T-1's tid, assigned once at creation and never written again.
 	id ThreadID

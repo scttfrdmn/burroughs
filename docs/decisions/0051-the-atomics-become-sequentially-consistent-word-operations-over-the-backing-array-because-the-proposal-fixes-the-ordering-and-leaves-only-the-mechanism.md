@@ -370,8 +370,13 @@ executed as written.
   `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`, same `go`-statement scan
   and same vacuity floor, with its failure message now naming #557 and #516 instead of #542. Nine
   citations moved with it, including this ADR's and — with a postscript rather than a rewrite, since it
-  is accepted — ADR 0050's, whose chain says *"it is retired"*. **#554 merges after this**, which is
-  the last link in the chain the ruling ordered.
+  is accepted — ADR 0050's, whose chain says *"it is retired"*. This bullet ended *"**#554 merges after
+  this**, which is the last link in the chain the ruling ordered"*, and that is grave **#561**: a
+  re-pointed control is not a cleared one. The mechanism was kept *on purpose*, so it still fires on the
+  first `go` statement in a non-test file of `internal/interp` — settled by injecting one into a scratch
+  file and reading the FAIL, which is what a claim about an instrument costs to check, and which this
+  slice's own diff already contained the answer to two files away. #554 is parked behind #557 and #516,
+  and **#516 is the next work**.
 - **The alignment invariant is asserted where the memory is built, not where it is used**, so a
   platform whose allocator returns an oddly-aligned span fails one loud construction rather than
   producing torn atomics on 32-bit hosts. A zero-page memory is legal — `(memory 0)` appears in

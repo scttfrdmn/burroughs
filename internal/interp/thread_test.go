@@ -25,7 +25,9 @@ import (
 //
 // **The domain is derived, not enumerated.** Listing today's three sites would inherit today's blind
 // spot — the failure this exists to catch is a *fourth* site added later, and T-1's `runEntry` is
-// exactly that fourth site waiting on a ruling (see `thread`'s own doc comment). Test files are
+// exactly that fourth site, parked in #554 behind #557 and #516 rather than behind the ruling it was
+// once waiting on (see `thread`'s own doc comment, and grave **#561** for why the two differ). Test
+// files are
 // excluded because a bare `&stack{}` is the right thing there: several tests drive a single opcode arm
 // and have no thread to speak of, which is also the second reason `stack.t`'s nil is legal.
 //
