@@ -167,21 +167,24 @@ type threadsLaneRow struct {
 var threadsLane = map[string]threadsLaneRow{
 	"atomic.wast": {
 		Heads: map[string]int{"assert_invalid": 48, "assert_return": 142, "assert_trap": 45, "invoke": 59, "module": 3},
-		// Re-pinned **upward** twice. #524's text half moved it from `Pass: 0, Fail: 297, Declined: 0,
-		// ValidateReached: 0, InvalidReached: 0` and `GateSensitive: false`; #524's validation half
-		// moves it from `Pass: 59, Fail: 238, Declined: 51, ValidateReached: 51, InvalidReached: 48,
-		// InvalidFailed: 48`. The direction and the mechanism of every moved column are in
-		// atomicWastPartition below, which asserts the partition rather than leaving these numbers to
-		// be read as a win.
+		// Re-pinned **upward** three times. #524's text half moved it from `Pass: 0, Fail: 297,
+		// Declined: 0, ValidateReached: 0, InvalidReached: 0` and `GateSensitive: false`; #524's
+		// validation half from `Pass: 59, Fail: 238, Declined: 51, ValidateReached: 51,
+		// InvalidReached: 48, InvalidFailed: 48`; the atomics executor from `Pass: 110, Fail: 187`.
+		// The direction and the mechanism of every moved column are in atomicWastPartition below,
+		// which asserts the partition rather than leaving these numbers to be read as a win.
 		//
-		// The four zeros on the bottom row are the reward and they are four different statements. The
-		// 51 `Declined` are gone because the region has a type checker; the 51 `ValidateReached` are
-		// gone because none of those rows *fails* at the validate stratum any more; and the 48
-		// `InvalidReached`/`InvalidFailed` are gone because the file's `assert_invalid` vectors now get
-		// the verdict they ask for. A zero here means the column has nothing left to report, which is
-		// the one case where a drained column is the point rather than a lost instrument — and it is
-		// why the partition below asserts `pass + exec` against the head census instead of trusting it.
-		Pass: 110, Fail: 187, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
+		// **This row is now the lane's only zero-fail file, and that costs it its work plan.** Every
+		// zero on the bottom row is a column with nothing left to report, and `Fail: 0` joins them:
+		// the 51 `Declined` are gone because the region has a type checker, the 51 `ValidateReached`
+		// because none of those rows fails at the validate stratum any more, the 48
+		// `InvalidReached`/`InvalidFailed` because the file's `assert_invalid` vectors get the verdict
+		// they ask for, and the 187 `Fail` because the interpreter answers them. *A zero-fail board is
+		// a lost instrument* — the buckets that were the plan for this file are empty, so what remains
+		// is a regression detector, and the partition below is what keeps it one: with no failing rows
+		// to inspect, every one of its arms now expects zero, which is also what an unparsed file
+		// looks like. It carries its own floor for that reason.
+		Pass: 297, Fail: 0, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
 		Declined: 0, ValidateReached: 0, InvalidReached: 0, InvalidFailed: 0,
 		GateSensitive: true,
 	},
@@ -287,6 +290,15 @@ var threadsLane = map[string]threadsLaneRow{
 // while the count sat still or moved by a fraction nobody forecast. See atomicWastPartition, which
 // asserts the whole partition so a fourth layer cannot be discovered by reading a delta.
 //
+// **The fourth board removed the third layer, and the chain ended there — which the partition is what
+// establishes.** The atomics executor gave the region its 67 arms and all 187 execution rows moved to
+// `pass` in one step, exactly the count that had been sitting in the exec bucket. The reason that is a
+// measurement rather than a hope is the residue arm: had a fifth layer existed — an atomic that
+// decodes, type-checks, executes, and answers wrongly — it would have landed as a bucket outside both
+// modelled mechanisms rather than as a pass count that came up short, and the file would still be
+// red. `+187 pass / −187 fail` with residue empty and nothing else in the lane moving is the strongest
+// form the claim takes: the delta and the partition agree, and neither was read off the other.
+//
 // # The lane reissues #9's closure criterion, and the reissue is measured rather than asserted
 //
 // #9 closed on a stamped criterion whose wording is about the *asker* as much as the answerer: *"no
@@ -331,11 +343,19 @@ var threadsLane = map[string]threadsLaneRow{
 //
 // Landing red is the arrangement, not a concession: the board reports and the buckets are the
 // work plan (TestAllGatesOnLeavesNothingGated is deliberately red-ish for the same reason).
-// The pins are what make it a control — every column exact in both directions, so the lane's
-// **338 pass / 279 fail** cannot quietly become 339 and cannot quietly become 330 either. Quoted
-// with both terms and in that order deliberately: the pre-reader board was `279 pass / 338 fail`,
-// the +59 makes the two an exact mirror, and a bare "the 338" now names whichever figure the reader
-// already believed.
+// The pins are what make it a control — every column exact in both directions, so no figure here
+// can quietly move by one in either direction.
+//
+// **No aggregate is transcribed into this comment, and the reason is that one was.** This paragraph
+// read *"the lane's **338 pass / 279 fail** cannot quietly become 339 and cannot quietly become 330
+// either"* — a pair that had been correct on the board it was written against and that no board had
+// read since #524's validation half re-pinned `atomic.wast` from `59/238` to `110/187`, moving the
+// lane to `389/228`. The pins moved and the prose beside them did not, so the sentence asserting that
+// the figures cannot move quietly was itself the thing that had moved quietly. The atomics executor
+// then moved them again. A transcribed aggregate has no instrument: `checkThreadsRow` reads the table,
+// nothing reads a comment, and the arithmetic that would catch a drifted total is exactly the
+// arithmetic a reader does not do. So the totals live in the per-file table, which is checked, and in
+// the `threads lane over N files` line the run prints — *ask the instrument*.
 func TestThreadsProposalLane(t *testing.T) {
 	paths := testenv.RequireProposal(t, suiteDir, threadsProposal, threadsLaneFiles)
 
@@ -571,9 +591,18 @@ func scoreThreadsLane(t *testing.T, paths []string, f binary.Features, log bool)
 //
 // # What the partition pins
 //
-//	 59  invoke               → pass    (no 0xfe opcode in `init`)
+//	 59  invoke                → pass    (no 0xfe opcode in `init`)
 //	 51  assert_invalid+module → pass    the validation half's population, and it now *agrees*
-//	187  assert_return+trap    → fail    StratumExec, `interp: no arm for opcode fe NN`
+//	187  assert_return+trap    → pass    the atomics executor; **was** `fail`/StratumExec
+//
+// **The third row inverted, and inverting it is what this control is for rather than a reason to
+// retire it.** It read `fail  StratumExec, "interp: no arm for opcode fe NN"` until the executor
+// landed, so the mechanism it names now has no members. *A tripwire whose subject dissolves is
+// re-pointed*: the risk was never "187 rows report no arm", it was "the fail side has no residue" —
+// every failing row is one of a stated set of mechanisms — and that risk is **more** live now, not
+// less, because an atomic that decodes and answers wrongly is a failure mode that did not previously
+// exist. The no-arm arm therefore keeps its subject with its sign flipped: a non-zero count is now a
+// row that stopped reaching the interpreter, which is a decoder regression rather than a deferral.
 //
 // **The middle row was `fail / StratumValidate / Declined` until #524's validation half**, and its
 // movement is that slice's whole reward: the 48 `assert_invalid` vectors and 3 `module` definitions
@@ -628,18 +657,34 @@ func atomicWastPartition(t *testing.T, r *Result, heads map[string]int) {
 			"mechanism here is the interesting case (an atomic op that executed and answered "+
 			"wrongly), not a pin to update", len(residue), residue)
 	}
-	if want := heads["invoke"] + heads["assert_invalid"] + heads["module"]; r.Pass != want {
-		t.Errorf("atomic.wast passes %d, want %d — the registered explanation is two mechanisms: the "+
-			"%d non-atomic `init` invocations, which passed as soon as the module parsed, plus the %d "+
-			"`assert_invalid`+`module` rows the validation half took off the decline pile. A pass "+
-			"count that is neither sum is a third mechanism, and this control exists because the last "+
-			"unexplained +59 was one",
-			r.Pass, want, heads["invoke"], heads["assert_invalid"]+heads["module"])
+	// The floor comes first, and it is newly load-bearing: every arm below now expects a zero, and
+	// zero residue over zero buckets is what an unparsed file scores too. With `heads` empty the
+	// three-term sum is 0 and `r.Pass` is 0, so the agreement would be perfect and about nothing —
+	// *comparisons need a vacuity check.* Fatal rather than an error, because a file that scored
+	// nothing makes every message after this one name the wrong cause.
+	if len(heads) == 0 || r.Pass+r.Fail == 0 {
+		t.Fatalf("atomic.wast scored %d pass / %d fail over %d head kinds: the file did not run, "+
+			"and every arm in this partition passes vacuously when it does not", r.Pass, r.Fail,
+			len(heads))
 	}
-	if want := heads["assert_return"] + heads["assert_trap"]; exec != want {
-		t.Errorf("atomic.wast charges %d failures to the interpreter, want %d (assert_return+"+
-			"assert_trap): the execution rows are the ones #524 deferred, and a change here means "+
-			"one of them stopped reaching the interpreter or started passing", exec, want)
+
+	setup, validated := heads["invoke"], heads["assert_invalid"]+heads["module"]
+	executed := heads["assert_return"] + heads["assert_trap"]
+	if want := setup + validated + executed; r.Pass != want {
+		t.Errorf("atomic.wast passes %d, want %d — the registered explanation is three mechanisms, "+
+			"one per slice that moved this file: %d non-atomic `init` invocations, which passed as "+
+			"soon as the module parsed; %d `assert_invalid`+`module` rows the validation half took "+
+			"off the decline pile; and %d `assert_return`+`assert_trap` rows the atomics executor "+
+			"answers. A pass count that is none of those sums is a fourth mechanism, and this "+
+			"control exists because the last unexplained +59 was one",
+			r.Pass, want, setup, validated, executed)
+	}
+	if exec != 0 {
+		t.Errorf("atomic.wast charges %d failure(s) to the interpreter with `no arm for opcode fe` "+
+			"over codes %v, want 0 — this arm expected %d until the atomics executor landed and its "+
+			"sign is now flipped: a no-arm failure means a row that used to reach an implemented "+
+			"opcode stopped reaching it, which is a decoder or dispatch regression, not a deferral "+
+			"to re-pin", exec, execCodes, executed)
 	}
 	// The decline count is now expected to be **zero**, which is the inverse of what this line asserted
 	// before #524's validation half — and a zero is exactly the shape that needs a companion, because
@@ -655,16 +700,22 @@ func atomicWastPartition(t *testing.T, r *Result, heads map[string]int) {
 	}
 	// Derived from the head census rather than written as 297, so the file growing a directive is a
 	// re-pin of `Heads` and not a silent slackening here.
+	//
+	// **Not implied by the three-term sum above, and the difference is the point.** That arm accounts
+	// for five head kinds by name; this one sums *whatever* kinds the census reports. They agree only
+	// while those are the same set, so a sixth kind arriving upstream — an `assert_malformed` or an
+	// `assert_exhaustion` added to the file — fires here while the named decomposition stays
+	// internally consistent about a population that is no longer the whole file. A partition that
+	// enumerates its members cannot notice a member it does not enumerate; the total can.
 	directives := 0
 	for _, n := range heads {
 		directives += n
 	}
 	if total := r.Pass + exec; total != directives {
 		t.Errorf("atomic.wast's pass+exec is %d over %d directives, so %d verdict(s) are in neither "+
-			"column: with residue empty this arithmetic is what pins the 51 formerly-declined rows "+
-			"into the *passing* set rather than into some other quiet agreement — a row that stops "+
-			"declining and starts failing at the validate stratum with the wrong message would leave "+
-			"`declined` at 0 too", total, directives, directives-total)
+			"column: the arm above decomposes five named head kinds, and this one sums every kind the "+
+			"census reports, so a disagreement here is a head kind the decomposition does not know "+
+			"about rather than a miscount within it", total, directives, directives-total)
 	}
 }
 

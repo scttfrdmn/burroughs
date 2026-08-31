@@ -468,7 +468,60 @@ if [ "${1-}" = "--pr" ]; then
 else
 	base="${1:?$usage}"
 	head="${2-}"
+	# An unrecognized `--flag` is refused rather than read as a revision, which is how **grave
+	# #549** was reached twice in one session on real work: `--range origin/main HEAD` scanned 0
+	# lines of a 1219-line diff, and `--body <file>` scanned 0 lines of a comment carrying 20
+	# citations. Neither is a form this script has; `--body` *is* a `closecheck.sh` form, and that
+	# asymmetry is what invites the second mistake, so the message names it.
+	#
+	# Refused by *shape* rather than against an allow-list of known flags, because an allow-list is
+	# the half that goes stale when a form is added — the same under-matching-predicate defect the
+	# `--pr` guard below was repaired for.
+	case "$base" in
+	--worktree) ;;
+	-*)
+		echo "FAIL  \"$base\" is not a form this script has, and it was not read as a revision."
+		echo "      \`--body\` is a closecheck.sh form; \`--range\` is nobody's (grave #549)."
+		echo "      $usage"
+		exit 1
+		;;
+	esac
 fi
+
+# requirerev refuses a revision that does not resolve, before anything is diffed.
+#
+# **Grave #549, and grave #365's specimen recurring below the comment that narrates it.** Both diff
+# captures used to end `|| true`, and `git diff` is invoked here without `--exit-code` or `--quiet`,
+# so it returns 0 whether or not there are differences: that token had no legitimate subject and
+# caught exactly one thing — an argument that is not a revision. git wrote `fatal:` to stderr, `||
+# true` turned 128 into 0, `diffout` was empty, and all seven checks ran over nothing and printed
+# "this diff cites nothing", which is a finding about a diff rather than a confession that no diff
+# was read.
+#
+# Checked here rather than left to `set -e`, which is this script's own argument at the `--pr` fetch
+# below: the property should be visible at the line that has it, and the reader should get a message
+# naming the argument instead of git's. The user-supplied revisions are what is verified, not the
+# derived `$base^` — a one-arg form on a root commit has no parent, and that case is caught by the
+# diff's own status a few lines on rather than reported here as a bad argument.
+requirerev() {
+	if ! git rev-parse --verify --quiet "$1^{commit}" >/dev/null; then
+		echo "FAIL  \"$1\" is not a revision in this repository, so no diff was read."
+		echo "      This is not a pass: a check that could not ask its question does not get to"
+		echo "      report green (grave #549)."
+		echo "      $usage"
+		exit 1
+	fi
+}
+
+# readdiff captures the diff and refuses to continue if git could not produce one.
+readdiff() {
+	if ! diffout="$(git diff "$@")"; then
+		echo "FAIL  \`git diff $*\` failed, so no diff was read; git's own message is above."
+		echo "      This is not a pass (grave #549)."
+		exit 1
+	fi
+}
+
 if [ "$prmode" -eq 1 ]; then
 	if ! command -v gh >/dev/null 2>&1; then
 		echo "FAIL  gh is not installed, so PR #$selfpr's body was not scanned."
@@ -513,13 +566,20 @@ if [ "$prmode" -eq 1 ]; then
 elif [ "$base" = "--worktree" ]; then
 	base="${2-main}"
 	head="" # the empty head *is* the working tree, for git diff and for the label below
-	diffout="$(git diff "$base" $head || true)"
+	requirerev "$base"
+	# Unquoted `$head` deliberately: empty has to vanish from the argument list rather than become
+	# an empty pathspec, which is the whole mechanism by which this mode means "the working tree".
+	readdiff "$base" $head
 else
+	requirerev "$base"
+	if [ -n "$head" ]; then
+		requirerev "$head"
+	fi
 	if [ -z "$head" ]; then
 		head="$base"
 		base="$base^"
 	fi
-	diffout="$(git diff "$base" $head || true)"
+	readdiff "$base" $head
 fi
 
 # In worktree mode, `git diff` is not the whole working tree: an **untracked** file is invisible

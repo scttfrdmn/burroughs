@@ -1,6 +1,9 @@
 package binary
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // The internal form: what the decoder *retains* rather than merely recognizes.
 //
@@ -1662,4 +1665,54 @@ func PrefixedOp(prefix byte, op uint32) (mnemonic string, imms int, ok bool) {
 		return "", 0, false
 	}
 	return info.mnemonic, len(info.imms), true
+}
+
+// PrefixedRegionOpcodes returns every sub-opcode a prefix region's table defines, ascending.
+//
+// **So a consumer can derive the region's domain instead of enumerating it.** `internal/interp`
+// builds its 0xFE semantics table by walking this and parsing each row's mnemonic; had it written
+// `for op := 0x00; op <= 0x4e; op++` it would have covered the region's four holes (0x04-0x0f) with
+// lookups that fail and — worse — would have kept the same 79 iterations after a regeneration moved
+// the region's top, silently dropping every new row.
+//
+// Ascending order is promised because the caller set includes tests that print the list, and an
+// unordered print over a Go map is a diff that changes without a cause.
+func PrefixedRegionOpcodes(prefix byte) []uint32 {
+	tab, region := prefixRegion(prefix)
+	if !region {
+		return nil
+	}
+	ops := make([]uint32, 0, len(tab))
+	for op := range tab {
+		ops = append(ops, op)
+	}
+	slices.Sort(ops)
+	return ops
+}
+
+// PrefixedOperator returns a prefixed sub-opcode's *operator* constructor, and whether the region's
+// table has a row for it. Empty string with `true` is the answer for every row outside the atomics
+// region, which is a fact about the row rather than a lookup failure — hence the second return.
+//
+// **A separate call rather than a third result on PrefixedOp, and the reason is the caller set.**
+// PrefixedOp has callers that want (mnemonic, imms) and would have to name and discard a third
+// value; more to the point, its doc argues that returning *two* facts is what stops a consumer from
+// checking the cheap half and calling it agreement. A third value nobody in that caller set reads
+// would weaken exactly that argument, since an unchecked return is indistinguishable from an absent
+// one. The consumer here is `internal/interp`'s 0xfe arms, and the operator is the only thing that
+// tells `fe 1e` from `fe 25`: both are `mnemonic: "i32_atomic_rmw"`, differing in `RmwAdd` versus
+// `RmwSub`. Dispatching those two to one arm computes a *sum* where the module asked for a
+// *difference* — a value the corpus does catch here (atomic.wast asserts exact results for all 42
+// rmw rows), which is why this is a lookup rather than a hand-written pairing: the table is where
+// the generator already wrote the fact down.
+func PrefixedOperator(prefix byte, op uint32) (operator string, ok bool) {
+	tab, region := prefixRegion(prefix)
+	if !region {
+		return "", false
+	}
+	info, found := tab[op]
+	if !found {
+		return "", false
+	}
+	return info.operator, true
 }

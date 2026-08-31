@@ -250,10 +250,45 @@ local mirror of CI, so a surprise in CI is a bug in the Makefile) meeting the on
 does not exist yet when the Makefile runs. The mirror is incomplete **by construction** here, which is
 why the sequence above is written down instead of a Makefile target being fixed.
 
-## The maxim's stated exception: fetched-artifact presence is machine state, not repo state
+## The maxim's precondition: the mirror holds where the Makefile observes a superset of CI
 
-*A surprise in CI is a bug in the Makefile* holds for everything the Makefile can observe, and there
-is a class it cannot: **whether a fetched artifact is present on the machine.** A gitignored corpus —
+*A surprise in CI is a bug in the Makefile* is not a free-standing rule. It is an **inference from
+containment**: if `make check` observes everything CI observes, then a difference between them can only
+be the local gate's deficiency. Write the condition down and the maxim reads in full:
+
+> `make check` is the local mirror of CI **where the Makefile observes a superset of what CI observes.**
+> A surprise inside that region is a bug in the Makefile. A surprise outside it is the gap itself, and
+> the gap is what to name.
+
+**Nothing below is an exception, and nothing counts them.** They were written as exceptions — first as
+*the* exception, then amended to *the second*, while `CLAUDE.md` still said *one* — and a count is a
+foreclosing word, true when written and falsified by the next addition, which had already happened
+twice before this section stopped counting. With the precondition stated, each is just a place where
+containment fails, so they need no number and no closed list: a new one is a new instance, not an
+amendment to an arithmetic. (Ruling: Scott, on the #541 report — *"Your own closing sentence states the
+precondition … write the precondition into the maxim and let the instances sit under it unnumbered.
+That retires the question permanently instead of answering it each time."* The earlier
+naming-instead-of-counting step was the agent's, on the #539/#540 report, and it answered the question
+once more instead of retiring it.)
+
+Containment can fail in either direction, and the direction determines what to do:
+
+- **CI observes more.** The subject is not in the Makefile's domain at all, so no `make` target could
+  have caught it and the mirror is incomplete *by construction*. Look for the artifact the gap is a
+  statement about, and put a control on that. Instances: a fetched artifact's presence, below; and [a
+  PR body, which does not exist until the PR
+  does](#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it).
+- **The Makefile observes more.** Then invoking the maxim sends the reader to repair the better of the
+  two instruments. Ask which half is worse before assuming; the instance is
+  [below](#an-instance-of-the-other-direction-the-makefile-can-be-the-better-half).
+
+*Text mirrors are not failure-behaviour mirrors*; so are absence mirrors, and so is a mirror whose two
+halves run in two shells.
+
+### An instance: fetched-artifact presence is machine state, not repo state
+
+There is a class the Makefile cannot observe: **whether a fetched artifact is present on the machine.**
+A gitignored corpus —
 the spec suite, either reference pin — is machine state, and a local gate running on a box that
 already holds the artifact cannot test the case where it is missing. The absence is not in the
 Makefile's domain, so no `make check` can be written that would have caught it. (Ruling: Scott, on the
@@ -277,30 +312,15 @@ Two consequences, and the second is the one that generalizes:
   (`internal/testenv`) asserts that every corpus declaring a revision pin under `scripts/` is fetched
   by every job that runs `go test` without `-fuzz` — a predicate over the Makefile and the workflows,
   both of which the tree *does* hold. The machine's state is unobservable; the *claim* the workflow
-  makes about it is a text, and a text is in a control's domain. When a maxim has an exception, look
-  for the artifact the exception is a statement about.
+  makes about it is a text, and a text is in a control's domain. Wherever containment fails, look for
+  the artifact the gap is a statement about.
 
-**The exceptions are named rather than numbered, because the count kept going stale.** This section was
-written as *the* exception and then amended to *the second*, while `CLAUDE.md` still says *one* — a
-count is a foreclosing word, true when written and falsified by the next addition, and that has now
-happened twice. So the set is enumerated by name and nothing here says how many there are: [a PR body
-that does not exist until the PR
-does](#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it), a fetched artifact
-whose presence is a fact about the machine, and [the Makefile as the better
-instrument](#the-exception-that-runs-the-other-way-the-makefile-can-be-the-better-instrument).
+(Ruling: Scott, on the #539/#540 report — *"record the second beside the first."*)
 
-The first two share a shape: the mirror is incomplete **by construction** wherever the subject is not
-in the Makefile's domain. *Text mirrors are not failure-behaviour mirrors*; so are absence mirrors. The
-third does not share it, and is the one that says something about the maxim itself. (Ruling: Scott, on
-the #539/#540 report — *"record the second beside the first."* The naming-instead-of-counting is the
-agent's, stated in the same report.)
+### An instance of the other direction: the Makefile can be the better half
 
-## The exception that runs the other way: the Makefile can be the better instrument
-
-The maxim assumes the Makefile **observes a superset** of what CI observes, so any difference is the
-local gate's deficiency. Both exceptions above are cases where that containment fails in the expected
-direction — CI sees something `make` cannot. **It also fails in the other direction, and then invoking
-the maxim sends the reader to repair the better of the two instruments.**
+Containment also fails the other way, **and then invoking the maxim sends the reader to repair the
+better of the two instruments.**
 
 The specimen is grave #539. `ci.yml`'s `no test declined to answer` step and `make strict` ran the same
 command, `go test -v -shuffle=on ./...`, captured into `out="$(…)"`. The recipe captured `status=$?`
@@ -313,7 +333,7 @@ this**, because the local mirror was the half that worked.
 Three things this fixes in how the pair is read:
 
 - **Ask which half is worse before assuming.** The maxim's operative content is *the two must agree*;
-  *the Makefile is wrong* is an inference from containment, and containment is what this exception
+  *the Makefile is wrong* is the inference from containment, and containment is what this instance
   denies. `-e` is deliberately absent from `SHELL` here — the Makefile header argues for that at
   length, and names this workflow while doing it: *"ci.yml's two copies of it had to become loops:
   those run under `-e` as well, where the failing assignment kills the step before the floor can print
@@ -330,6 +350,35 @@ Three things this fixes in how the pair is read:
   two shells; calling the target removes the mirror's room to exist, the same move as [writing the
   sentinel block to a different file from the refresh
   stream](#waiting-on-ci) — remove the collision's room rather than out-argue it.
+
+**The second specimen, grave #544, sharpens the third bullet from *unnecessary* to *impossible*.** The
+`deadcode` gate existed in both halves and both halves suppressed the tool's exit status with `|| true`,
+so an `out="$(…)"` that captured nothing because the tool never ran was indistinguishable from a clean
+tree: an empty capture was the gate's spelling of *no dead code*. The correct repair is to stop
+discarding the status. Measured, identical script, two shells:
+
+```console
+$ bash --noprofile --norc -e -o pipefail -c 'out="$(deadcode -tests ./... 2>err)"; status=$?; echo "REACHED $status"; cat err'
+step exit=2                       # nothing printed at all
+
+$ /bin/sh -c 'out="$(deadcode -tests ./... 2>err)"; status=$?; echo "REACHED $status"; head -1 err'
+REACHED 2
+flag provided but not defined: -tests
+```
+
+So the mirror was not merely redundant here, it was **hostile to its own repair**: under `-e` the
+failing assignment kills the step on line one, and the fix cannot be written in the CI copy at all.
+Which also means the `|| true` that destroyed the verdict channel was the same token protecting the
+testimony channel — remove it in the wrong half and #539 comes back. One more reason the remedy is one
+implementation: a mirror can make a defect unfixable in the half you happen to be editing.
+
+And the sweep the previous grave asked for had not happened. #539's own lesson is *a repair to a defect
+whose file records a prior instance of the same shape isn't done until it sweeps*, and #544 was found
+because a principal pointed at it, not by that sweep. Running it afterwards over `ci.yml` and the
+Makefile — every command-substitution assignment, every `|| true`, every `2>/dev/null` — found no third
+silent-pass instance: the two `suite-count.sh` floors fail loudly under `-e`, and the byte-size reads
+suppress to `0`, which is below every floor. A sweep that comes up empty is still the sweep; skipping it
+is what let this one wait for a pointer.
 
 ## Reading the tracker's state: the queue comes from the issues API, never from a cached listing
 

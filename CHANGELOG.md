@@ -21,6 +21,71 @@ weakly-ordered platform.
 
 ### Added
 
+- **The `0xfe` region executes: all 67 atomics interpret, and `atomic.wast` goes green**
+  ([#545](https://github.com/scttfrdmn/burroughs/issues/545), `gate:threads`). Threads lane,
+  `atomic.wast`: **110 → 297 pass, 187 → 0 fail**; the lane over four files **389 → 576 pass, 228 → 41
+  fail**. The two deltas are `+187`/`−187` and identical, so nothing outside the file moved, and the
+  87 remaining lane failures are `imports.wast` and `memory.wast` as before.
+  - **The dispatch table is derived from the decoder's, not transcribed.** `PrefixedRegionOpcodes`
+    and `PrefixedOperator` expose the generated `0xfe` table, and `buildAtomicops` parses each
+    mnemonic into a `{kind, width, is64, rmw}` row, panicking on a row it cannot read. A
+    `0x00..0x4e` loop would have covered the region's holes and silently dropped any row added later;
+    a hand-written table would have been 67 accept-direction chances no `assert_invalid` vector can
+    see.
+  - **The alignment check follows the proposal's normative prose, which contradicts the proposal's
+    own reference interpreter** ([#546](https://github.com/scttfrdmn/burroughs/issues/546), [ADR
+    0049](docs/decisions/0049-atomic-alignment-is-checked-on-the-effective-address-because-the-proposals-normative-prose-outranks-its-own-reference-interpreter.md)).
+    `document/core/exec/instructions.rst` puts the check on `ea = i + memarg.offset` at **all six**
+    sites that check alignment at all; `eval.ml`'s six `check_align` calls pass the *dynamic* address
+    and fold the offset in later. A specification outranks an implementation of it, so the engine
+    takes the prose — and **knowingly disagrees with the reference** on a population no vector covers.
+    - **The question was first framed as `eval.ml` versus `Overview.md:344-345`, and that framing was
+      ruled out rather than answered**: both are artifacts of the same proposal, and neither is the
+      standard (Scott, on the #547 review — *"the standard outranks the snapshot"*). Reading through
+      the overview alone also understated the conflict as *two* of seven arms, because that is what
+      its one sentence mentions; the prose puts it at six of six. A design overview is a summary, and
+      its silence is not agreement.
+    - **The authority the ruling named does not exist**, and the ruling survives the correction: the
+      core pin `bdd7164` has no atomics whatsoever, and two checks against upstream agree it has none
+      there either. Whether the pin should move, which would give the region a genuinely third
+      authority where it now has one, is [#548](https://github.com/scttfrdmn/burroughs/issues/548).
+    - `TestAtomicAlignmentIsCheckedOnTheEffectiveAddress` pins the reading with **12 hand-built
+      vectors** — 6 arms × 2 directions, none in either corpus — run through the front end rather than
+      against `checkAlign`, because *a control can test the helper, not the path*. Falsified per
+      direction: the dynamic reading fails 12 of 12 rows, trapping unconditionally fails 6 (all
+      `addr=3`), never trapping fails 6 (all `addr=4`). It does not prove the reading correct — that
+      would be this project's decoder answering this project's reading — it makes the reading
+      observable, so a future change flips a named test instead of altering behaviour silently.
+    - **The "no vector separates them" claim is measured over both corpora, not one.** Zero atomics
+      carry a nonzero static offset in `testdata/spec` *or* in the threads pin's own 1018-line file,
+      so both readings score 297/297 — *identical boards are the corpus declining to choose.* The
+      search is falsified rather than trusted: the same regex shape finds **2424** plain loads that
+      do carry offsets. Scoping matters here because
+      [#537](https://github.com/scttfrdmn/burroughs/issues/537) measured the two corpora disagreeing
+      by exactly 45 alignment vectors, so "the board has no witnesses" and "nothing has witnesses"
+      are different claims and only the second is the one being made.
+    - **Not the equality rule #524 landed, and the two share a word.** That one is the static
+      `align=` immediate against the access size, in the validator
+      (`TestAtomicAlignmentIsEqualityNotACeiling`, 0 witnesses on the board and 45 in the pin's
+      corpus). This one is the runtime address, in the interpreter, with 0 in both.
+  - **`#538`'s precedent was checked rather than copied.** That divergence was licensed because the
+    threads pin "cannot express the question". Here it can: `effective_address` sits twelve lines
+    from `is_aligned` in `memory.ml` and is deliberately not used by the atomic arms. The premise is
+    absent, so the conclusion does not transfer — *check a ruling's premises, not just its
+    conclusion.*
+  - **Two debts filed with tripwires rather than intentions.** The 67 rows are plain read-then-write,
+    which is observationally complete only while nothing runs concurrently with a function body, and
+    the threads suite is single-agent by construction so no vector will ever say otherwise
+    ([#542](https://github.com/scttfrdmn/burroughs/issues/542)); the watcher is the first `go`
+    statement in `internal/interp`, over a parser-derived domain with a file-count floor.
+    `memory.atomic.wait*`'s suspend path returns `ErrUnsupportedOp` rather than a plausible number
+    ([#543](https://github.com/scttfrdmn/burroughs/issues/543)).
+  - **`atomicWastPartition`'s no-arm arm was re-pointed, not retired.** It asserted 187 exec failures
+    and now asserts zero: the risk was never "187 rows report no arm", it was "the fail side has no
+    residue", and that risk is *more* live now that a wrong answer is a reachable failure mode. Its
+    residue arm predicted this exact case before the executor existed, and the `RmwSub → rmwAdd`
+    mutation lands there as `assert_return value mismatch:7`. With every arm now expecting a zero,
+    the partition carries its own vacuity floor — an unparsed file scores zero on all of them.
 - **The `0xfe` region is typed, so all 51 of `atomic.wast`'s validation directives stop declining
   and start passing** ([#524](https://github.com/scttfrdmn/burroughs/issues/524), `gate:threads`).
   `atomicInstr` is the seventh caller of `checkMemop` and the first that can hand it an atomic row.
@@ -230,6 +295,38 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The Makefile maxim states its precondition, and its exceptions stop being numbered or listed**
+  ([the precondition](docs/laws/operations.md#the-maxims-precondition-the-mirror-holds-where-the-makefile-observes-a-superset-of-ci),
+  ruling: Scott on the #541 report — *"write the precondition into the maxim and let the instances sit
+  under it unnumbered. That retires the question permanently instead of answering it each time."*).
+  *A surprise in CI is a bug in the Makefile* was never free-standing; it is an inference from
+  containment, and writing the condition down — **the mirror holds where the Makefile observes a
+  superset of what CI observes** — turns every former "exception" into an instance of containment
+  failing. Nothing counts them and nothing closes the list, so a new one is a new instance rather than
+  an amendment to an arithmetic.
+  - **The count had gone stale twice**, which is what the naming step was reacting to and what it
+    failed to cure: the section was written as *the* exception, amended to *the second*, while
+    `CLAUDE.md` still said *one*. Naming instead of counting answered the question once more; stating
+    the precondition retires it. A foreclosing word is not repaired by choosing a better word for the
+    same claim.
+  - **Both directions are now named, because containment fails both ways.** CI observes what `make`
+    cannot (a fetched artifact's presence is machine state; a PR body does not exist until the PR
+    does), and `make` observes what CI cannot (`make strict`'s testimony, and grave #544's repair,
+    which could not be written in the CI half at all). *Which half is worse* is asked, not assumed.
+  - **#526's second clause dissolves and its first is untouched**
+    ([relayed](https://github.com/scttfrdmn/burroughs/issues/526#issuecomment-5472693892)). Its title
+    reads *"the maxim's exception list does not say so"*; there is no list. The closecheck/citecheck
+    gap now reads *more* sharply — `make cite` exists, so containment does not fail there and it is
+    the plain Makefile deficiency the maxim is about. Left open and `decision-needed:scott`, because
+    the live question was never the wording.
+- **A stale board figure in the threads lane's own header is replaced by the property, not a newer
+  figure** ([#545](https://github.com/scttfrdmn/burroughs/issues/545)). The paragraph arguing that the
+  pins make quiet movement impossible said *"the lane's **338 pass / 279 fail** cannot quietly become
+  339 and cannot quietly become 330 either"* — a pair no board had read since #524's validation half
+  re-pinned `atomic.wast` and moved the lane to 389/228. The pins moved and the prose beside them did
+  not, so the sentence asserting the figures cannot move quietly had itself moved quietly. A
+  transcribed aggregate has no instrument: `checkThreadsRow` reads the table, nothing reads a comment.
+  The totals now live only in the per-file table and in the line the run prints — *ask the instrument.*
 - **`CLAUDE.md`'s phase line advances to `v1`, dissolving
   [#527](https://github.com/scttfrdmn/burroughs/issues/527) rather than adjudicating it.** `Current
   phase: **v0**` described a state that ended at the signed `v0.4.0` tag of 2026-08-28 — *"v0's
@@ -337,7 +434,7 @@ weakly-ordered platform.
   keywords — **any two-token co-occurrence check has this property, and the report about the check is
   inside its population.**
 - **The Makefile maxim gains a stated exception, recorded at the maxim rather than as a new law**
-  ([the exception](docs/laws/operations.md#the-maxims-stated-exception-fetched-artifact-presence-is-machine-state-not-repo-state),
+  ([the exception](docs/laws/operations.md#an-instance-fetched-artifact-presence-is-machine-state-not-repo-state),
   ruling: Scott on the #518 review). *A surprise in CI is a bug in the Makefile* does not reach
   **fetched-artifact presence, which is machine state and not repo state**: a local gate running on a
   box that already holds a gitignored corpus cannot test the case where the corpus is absent. Stated
@@ -349,6 +446,60 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`citecheck.sh` reported zero citations and exited 0 whenever its revision did not resolve**
+  ([grave #549](https://github.com/scttfrdmn/burroughs/issues/549), `type:grave`, charged overhead on
+  [#545](https://github.com/scttfrdmn/burroughs/issues/545)). Both diff captures ended `|| true`, and
+  `git diff` is invoked there without `--exit-code` or `--quiet` — so it returns 0 whether or not
+  there are differences and **that token had no legitimate subject.** What it caught was an argument
+  that is not a revision: git wrote `fatal:` to stderr, `|| true` turned 128 into 0, `diffout` was
+  empty, and all seven checks ran over nothing and signed off with *"this diff cites nothing"* — a
+  finding about a diff standing in for a confession that no diff was read.
+  - **It is [grave #365](https://github.com/scttfrdmn/burroughs/issues/365)'s specimen recurring in
+    the same file, fourteen lines below the comment that narrates it.** That repair fixed the `--pr`
+    fetch's swallowed status and left the diff arm's identical hole standing, which is why the new
+    control's domain is *the scripts* rather than the arm — a per-arm fix is how the second grave came
+    out of the first.
+  - **Reached twice in one session on real work**, both times caught by a figure being implausible
+    rather than by the tool: `--range origin/main HEAD` reported 0 added lines over a 1219-line diff,
+    and `--body <file>` reported 0 over a comment carrying 20 citations. `--range` is nobody's form;
+    `--body` is `closecheck.sh`'s and not this script's, and that asymmetry is what invites it.
+  - **The blast radius was derived, not assumed.** All three scripts taking the same revision forms
+    were asked with four bad arguments each: `closecheck.sh` and `ratio.sh` exit 128/129 on every one,
+    `citecheck.sh` exited 0 on every one — including a plain unresolvable revision, which is the
+    cleanest witness because no flag is involved. So this is a swallowed `git` status, not an
+    unknown-flag defect with a revision symptom.
+  - Repaired by dropping both `|| true`, verifying each user-supplied revision resolves before
+    anything is diffed, and refusing an unrecognized `-*` argument by shape rather than against an
+    allow-list — the allow-list being the half that goes stale when a form is added.
+  - `TestABadRevisionIsNeverAPass` covers all three scripts over a domain derived from their usage
+    strings, both directions, against a two-commit fixture repository that cites nothing so the arm
+    needs no network. **Its own falsification found a guard with no witness in it:** deleting the new
+    `-*` rejection left the test green, because the revision check catches a flag too. So the flag
+    arm's non-zero exit is not evidence about flag handling, the arm asserts the guard's *message*
+    instead, and the comment says which of the two arms is subsumed.
+- **The `deadcode` gate read an empty capture as a clean bill of health, so a tool that never ran
+  passed it** ([grave #544](https://github.com/scttfrdmn/burroughs/issues/544), `type:grave`, charged
+  overhead on [#545](https://github.com/scttfrdmn/burroughs/issues/545)). Both halves suppressed the
+  status with `|| true` and stderr with `2>/dev/null`, then decided the verdict by asking whether
+  stdout was empty. Reading the output *is* right — `deadcode` reports findings on stdout and exits 0
+  either way, measured — but with the status gone, **an empty verdict was indistinguishable from a
+  dead mechanism** and the gate defaulted to the reassuring reading. A flag rename of the kind a
+  toolchain bump produces exits 2 with `flag provided but not defined`, and the gate printed one blank
+  line and passed; over a tree the tool could not load it threw away three parse errors and exited 0.
+  Same shape as a skip: it agreed by asking nothing.
+  - **The repair was inexpressible in the CI half, which is why the mirror was deleted rather than
+    fixed** ([the instance](docs/laws/operations.md#an-instance-of-the-other-direction-the-makefile-can-be-the-better-half)).
+    Capturing `status=$?` under that workflow's `-e` shell kills the step on the failing assignment
+    before the diagnosis prints — grave #539 exactly, measured with the identical script in both
+    shells. So the `|| true` that destroyed the verdict channel was the same token protecting the
+    testimony channel, and #539's *one implementation* remedy applies with a sharper reason: a mirror
+    can make a defect unfixable in the half you happen to be editing. `ci.yml`'s step is now
+    `run: make deadcode`; the cost is the `::error::` annotation, stated rather than discovered.
+  - **Falsified in three directions before landing** — a real finding still fails it, a tool that did
+    not run now fails it, and a clean tree still passes. And the sweep #539's own lesson demands was
+    run afterwards over both files: no third silent-pass instance, since the `suite-count.sh` floors
+    fail loudly under `-e` and the byte-size reads suppress to `0`, below every floor. A sweep that
+    comes up empty is still the sweep; skipping it is what left this one waiting for a pointer.
 - **CI's skip gate discarded `go test`'s entire output, so a real failure exited 1 with no located
   cause and the wrong stated one** ([grave #539](https://github.com/scttfrdmn/burroughs/issues/539),
   `type:grave`). The `no test declined to answer` step held its own copy of `make strict`'s script —
@@ -372,7 +523,7 @@ weakly-ordered platform.
   Makefile observes a superset of what CI observes; #539 is the case where `make strict` was the
   **better** instrument and invoking the maxim would have sent a reader to repair the working half. So
   parity failures run in both directions and *which half is worse* is asked rather than assumed
-  ([the exception](docs/laws/operations.md#the-exception-that-runs-the-other-way-the-makefile-can-be-the-better-instrument)).
+  ([the exception](docs/laws/operations.md#an-instance-of-the-other-direction-the-makefile-can-be-the-better-half)).
   Recorded by **name instead of by ordinal**: this section had been written as *the* exception and then
   as *the second* while `CLAUDE.md` still said *one*, so the count was a foreclosing word already
   falsified twice. Also folded in, on the same ruling: the CI-watch recipe now stamps `SHA=` and `RUN=`

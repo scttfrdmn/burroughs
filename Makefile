@@ -305,8 +305,36 @@ vuln:
 # caller, not by an allowlist entry outliving the reason for it. An entry left here
 # after its subject became reachable would license the next regression silently,
 # which is the suppression-wearing-a-disguise shape the target exists to catch.
+#
+# **The status is checked, and reading the output alone was grave #544.** This was
+# `out="$$(... 2>/dev/null || true)"` followed by an emptiness test. Reading the
+# *output* is right — `deadcode` puts findings on stdout and exits 0 either way,
+# measured — but `|| true` deleted the only channel that says whether the question
+# was asked, so **an empty capture was this gate's spelling of "no dead code"**. A
+# flag rename of the kind a toolchain bump produces (`-tests` for `-test`) exits 2
+# with `flag provided but not defined` on stderr, and the gate printed one blank
+# line and passed. Same shape as a skip: it agreed by asking nothing.
+#
+# The two channels are now split rather than merged, which is why stderr goes to a
+# file instead of into `$$out`: findings are the verdict, the status is the
+# mechanism, and `go: downloading ...` on a cold cache is neither. Stderr is
+# printed only on the mechanism failure, where it is the whole diagnosis.
+#
+# **`-e` is absent here and that is what makes the repair expressible.** ci.yml's
+# copy of this script was deleted rather than fixed: under that workflow's
+# `bash -e` the failing assignment kills the step before `status` can be read, so
+# the identical repair prints nothing and exits 2 — grave #539 exactly, measured in
+# both shells. *Text mirrors are not failure-behaviour mirrors*, so the step calls
+# this target. The cost is the `::error::` annotation, stated rather than found later.
 deadcode:
-	@out="$$($(TOOL) deadcode -test ./... 2>/dev/null || true)"; \
+	@err="$$(mktemp)"; \
+	out="$$($(TOOL) deadcode -test ./... 2>"$$err")"; status=$$?; \
+	if [ "$$status" -ne 0 ]; then \
+		echo "deadcode exited $$status without reporting, so an empty finding list is not a"; \
+		echo "clean bill of health — the tool did not run (grave #544). Its stderr:"; \
+		cat "$$err"; rm -f "$$err"; exit 1; \
+	fi; \
+	rm -f "$$err"; \
 	printf '%s\n' "$$out"; \
 	filtered="$$(printf '%s\n' "$$out" | grep -v '^$$' || true)"; \
 	if [ -n "$$filtered" ]; then \
