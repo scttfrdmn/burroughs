@@ -124,6 +124,21 @@ reach is a law out of context.
   is also where scope creep back inward gets caught: the re-aimed control is scoped to
   the *space* (all 256 single-byte opcodes and the tracked prefixes), never to the
   subset today's code touches. (Directive: chat-Claude, #41.)
+- **And a re-pointed control has not been watched die, so the prose about what it now
+  permits is a forecast on a machine sitting in the tree.** Grave **#561**: #560
+  re-pointed the interpreter's single-thread tripwire from *"discharge #542"* to
+  *"discharge #557, and #516"* — correctly, by the law above, since only half its
+  premise had dissolved — and then wrote, two files from that change, that the control
+  *"now permits"* the `go` statement it was parked on. It does not; the mechanism was
+  kept deliberately, which is the whole point of re-pointing rather than rewriting. **The
+  refutation was inside the diff that made the claim.** The law that would have caught it
+  is already two sections up — *a control's green must be falsifiable, and the way to know
+  is to break it* — and re-pointing is exactly the moment that applies twice, because the
+  control's message changed while its trigger did not. Supplying the event costs one
+  scratch file and one `go test -run`: for a `go`-statement scan, a file containing a `go`
+  statement, deleted in the same command. The corollary for reports: a sentence claiming
+  what a control will say next is checkable *now*, and *the same claim will have been
+  written into every channel the slice touches* — this one stood in six.
 
 ### A test named for a partition must be checked against the partition, not against its own case labels.
 
