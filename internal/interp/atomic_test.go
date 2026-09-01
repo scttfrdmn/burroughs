@@ -71,20 +71,28 @@ func TestAtomicopsCoversTheRegionExactly(t *testing.T) {
 //     only thing between a sum and a difference.
 //   - `memory_atomic_wait64`: an 8-byte compare whose *result* is an i32, which is the one place
 //     `is64` does not select the push.
+//
+// **The comparison is over the whole struct, which is why ADR 0057's `native` field appears in these
+// literals rather than being ignored by them.** Adding a field to `atomicop` reddened this test, which
+// is the property worth keeping: a row's derived shape is asserted in full, so a new field arrives with
+// three rows' worth of expectations rather than silently defaulting to zero. All three rmw rows here are
+// whole-word `add`/`sub`, so their expected `native` **is** `hostLittleEndian` rather than `true` — the
+// one arm of the eligibility rule that is host-dependent, and writing `true` would make this test assert
+// a platform instead of a parse.
 func TestAtomicopParsesTheRegionsThreeHardPairs(t *testing.T) {
 	for _, tc := range []struct {
 		op   uint32
 		want atomicop
 	}{
-		{0x24, atomicop{kind: atomicRmw, width: 4, is64: true, rmw: rmwAdd}}, // i64.atomic.rmw32.add_u
-		{0x4e, atomicop{kind: atomicCmpxchg, width: 4, is64: true}},          // i64.atomic.rmw32.cmpxchg_u
-		{0x1e, atomicop{kind: atomicRmw, width: 4, rmw: rmwAdd}},             // i32.atomic.rmw.add
-		{0x25, atomicop{kind: atomicRmw, width: 4, rmw: rmwSub}},             // i32.atomic.rmw.sub
-		{0x02, atomicop{kind: atomicWait, width: 8, is64: true}},             // memory.atomic.wait64
-		{0x01, atomicop{kind: atomicWait, width: 4}},                         // memory.atomic.wait32
-		{0x03, atomicop{kind: atomicFence}},                                  // atomic.fence
-		{0x12, atomicop{kind: atomicLoad, width: 1}},                         // i32.atomic.load8_u
-		{0x1d, atomicop{kind: atomicStore, width: 4, is64: true}},            // i64.atomic.store32
+		{0x24, atomicop{kind: atomicRmw, width: 4, is64: true, rmw: rmwAdd, native: hostLittleEndian}}, // i64.atomic.rmw32.add_u
+		{0x4e, atomicop{kind: atomicCmpxchg, width: 4, is64: true}},                                    // i64.atomic.rmw32.cmpxchg_u
+		{0x1e, atomicop{kind: atomicRmw, width: 4, rmw: rmwAdd, native: hostLittleEndian}},             // i32.atomic.rmw.add
+		{0x25, atomicop{kind: atomicRmw, width: 4, rmw: rmwSub, native: hostLittleEndian}},             // i32.atomic.rmw.sub
+		{0x02, atomicop{kind: atomicWait, width: 8, is64: true}},                                       // memory.atomic.wait64
+		{0x01, atomicop{kind: atomicWait, width: 4}},                                                   // memory.atomic.wait32
+		{0x03, atomicop{kind: atomicFence}},                                                            // atomic.fence
+		{0x12, atomicop{kind: atomicLoad, width: 1}},                                                   // i32.atomic.load8_u
+		{0x1d, atomicop{kind: atomicStore, width: 4, is64: true}},                                      // i64.atomic.store32
 	} {
 		mnemonic, _, ok := binary.PrefixedOp(0xfe, tc.op)
 		if !ok {
@@ -592,6 +600,36 @@ func TestAtomicRmwIsNotObservablyTornAcrossThreads(t *testing.T) {
 	}
 }
 
+// alignedTestMemory builds a memory whose base satisfies the premise `checkBaseAlignment` asserts for
+// every real one, and **fails the test rather than the process if it cannot** (grave #579).
+//
+// A test that writes `&memory{bytes: make([]byte, 64)}` has skipped the only place that premise is
+// checked: `newMemory` calls `checkBaseAlignment`, a struct literal calls nothing, and `cell` does not
+// re-check — it hands `&m.bytes[ea]` to `sync/atomic` as a `*uint64`. Whether that address is 8-aligned
+// is then decided by escape analysis, because a `[]byte` the compiler keeps on the stack has alignment
+// 1: the first version of `TestNativeEligibilityAgreesWithTheDispatch` built its memory inline, the
+// slice stayed on the stack, and `atomic.AddUint64` took a SIGBUS on an odd address. The tests that got
+// away with it did so because a closure returning `*memory` forces the allocation to the heap, where a
+// 64-byte object is 8-aligned — *protection by coincidence is not protection*, and the coincidence here
+// is an inlining decision.
+//
+// The scan over `slack` is what makes the result deterministic instead of dependent on that decision:
+// one of eight consecutive bases is 8-aligned, whichever allocation arena the slice came from. The
+// premise is then asserted with the engine's own function rather than restated, so this helper cannot
+// disagree with what construction requires.
+func alignedTestMemory(t *testing.T, n int) *memory {
+	t.Helper()
+	for slack := range 8 {
+		bs := make([]byte, n+8)[slack : slack+n]
+		if checkBaseAlignment(bs) == nil {
+			return &memory{bytes: bs}
+		}
+	}
+	t.Fatalf("no 8-aligned base found within eight offsets of a %d-byte allocation, which "+
+		"checkBaseAlignment requires of every real memory", n+8)
+	return nil
+}
+
 // TestTheNativeRmwDispatchAgreesWithApplyRmw is what makes ADR 0057's fast path safe: `applyRmw` stays
 // the authority for all six operators, and the dispatch is checked *against* it rather than trusted
 // beside it.
@@ -628,7 +666,7 @@ func TestTheNativeRmwDispatchAgreesWithApplyRmw(t *testing.T) {
 	// that can be told apart from its neighbours. A zeroed memory would make `and` and `or` agree on
 	// every shift.
 	seeded := func() *memory {
-		m := &memory{bytes: make([]byte, 64)}
+		m := alignedTestMemory(t, 64)
 		for i := range m.bytes {
 			m.bytes[i] = byte(i*7 + 1)
 		}
@@ -706,4 +744,98 @@ func TestTheNativeRmwDispatchAgreesWithApplyRmw(t *testing.T) {
 			"asking nothing")
 	}
 	t.Logf("%d comparisons over %d native operator/width pairs", cases, len(nativePairs))
+}
+
+// TestNativeEligibilityAgreesWithTheDispatch pins `nativeEligible` to `nativeRmw`'s own answer, in both
+// directions and at every field position.
+//
+// **The hoist that made `atomicop.native` a derivation-time field created a second definition of which
+// shapes are native, and a predicate written beside a pattern can drop one of the pattern's conditions
+// and still read as equivalent.** `nativeRmw` decides on the cell — `isWholeWord` is `p64 != nil ||
+// mask == 1<<32-1` — while the predicate decides on the access width, and those agree only because a
+// cell is `p64` at width 8 and a full-mask `p32` at width 4. That is the bridge, and this is where it is
+// asserted rather than argued.
+//
+// Three claims, each catching a different drift:
+//
+//   - **Per position**, so a predicate that ignores where in the word the field sits is right because
+//     the pattern's answer does not vary with position, rather than by coincidence. A width-1 access is
+//     checked at all 32 offsets: if `nativeRmw` ever declined one of them, the predicate — which cannot
+//     see `ea` at all — would be wrong for that one and this loop is what would say so.
+//   - **Per region row**, so the field the interpreter actually reads carries the predicate's answer.
+//     The field is written in `parseAtomicMnemonic` and read in `atomicRmw`, and nothing else connects
+//     them; a derivation that set it from the wrong variable would leave both this predicate and
+//     `nativeRmw` correct and the engine on the slow path.
+//   - **An exact row census**, because the two counts above are over *pairs* and the region has more
+//     rows than pairs: the i64 slot carries `rmw8`, `rmw16` and `rmw32` as well as its natural width, so
+//     each operator has seven rows whose widths are 1, 2, 4, 1, 2, 4 and 8. `and` and `or` take all
+//     seven each; `xchg`, and `add`/`sub` on a little-endian host, take the three whole-word ones.
+func TestNativeEligibilityAgreesWithTheDispatch(t *testing.T) {
+	ops := []struct {
+		name string
+		op   rmwOp
+	}{{"add", rmwAdd}, {"sub", rmwSub}, {"and", rmwAnd}, {"or", rmwOr}, {"xor", rmwXor}, {"xchg", rmwXchg}}
+
+	positions := 0
+	for _, o := range ops {
+		for _, width := range []uint64{1, 2, 4, 8} {
+			predicted := nativeEligible(o.op, width)
+			for ea := uint64(0); ea+width <= 32; ea += width {
+				m := alignedTestMemory(t, 64)
+				c, err := m.cell(ea, 0, width)
+				if err != nil {
+					t.Fatalf("%s/w%d ea=%d: cell: %v", o.name, width, ea, err)
+				}
+				// The operand is irrelevant to eligibility, so any value serves; 1 is used
+				// because it is the identity for neither and so cannot make a wrong arm look
+				// right if this ever grows a value assertion.
+				_, ok := c.nativeRmw(o.op, 1)
+				positions++
+				if ok != predicted {
+					t.Errorf("%s/w%d at ea=%d: nativeRmw says native=%v, nativeEligible says %v — the "+
+						"derivation-time predicate and the dispatch disagree, so `atomicop.native` "+
+						"routes some row to the wrong path", o.name, width, ea, ok, predicted)
+				}
+			}
+		}
+	}
+	if positions == 0 {
+		t.Fatal("no position was compared, so the agreement above was asserted of nothing")
+	}
+
+	// And the field every executed instruction actually reads.
+	rows, nativeRows := 0, 0
+	for op, a := range atomicops {
+		if a.kind != atomicRmw {
+			if a.native {
+				t.Errorf("0xfe %#x is kind %d and carries native=true: the field is meaningful only "+
+					"for the rmw family, and a true here is a claim no arm would check", op, a.kind)
+			}
+			continue
+		}
+		rows++
+		if want := nativeEligible(a.rmw, a.width); a.native != want {
+			t.Errorf("0xfe %#x (%s width %d) has native=%v, want %v", op, rmwName(a.rmw), a.width,
+				a.native, want)
+		}
+		if a.native {
+			nativeRows++
+		}
+	}
+	// 42 rmw rows: six operators × seven slot/width rows. Exact, not a floor — a floor sits safely
+	// below its population and reads as a census.
+	if rows != 42 {
+		t.Errorf("the region has %d rmw rows, want 42 — the population this field is derived over is "+
+			"not the one the census below counts", rows)
+	}
+	wantNativeRows := 17 // and/or at all seven rows each, plus xchg's three whole-word ones
+	if hostLittleEndian {
+		wantNativeRows = 23 // and add/sub's three each
+	}
+	if nativeRows != wantNativeRows {
+		t.Errorf("%d of %d rmw rows are derived native, want %d (hostLittleEndian=%v)",
+			nativeRows, rows, wantNativeRows, hostLittleEndian)
+	}
+	t.Logf("%d (operator, width, position) comparisons; %d of %d region rows derived native",
+		positions, nativeRows, rows)
 }

@@ -196,6 +196,65 @@ type atomicop struct {
 
 	// rmw is meaningful only when kind is atomicRmw.
 	rmw rmwOp
+
+	// native is whether `nativeRmw` can serve this row, decided once at derivation rather than on
+	// every execution — meaningful only when kind is atomicRmw.
+	//
+	// **It is here because asking the question at execution time cost the rows that get told no.**
+	// `nativeRmw` cannot inline (`cost 339 exceeds budget 80`), so the first form of ADR 0057's
+	// dispatch put a real call in front of the compare-and-swap loop, and the ten (operator, width)
+	// pairs that keep the loop measured 2–5% slower for it on both architectures — a regression in
+	// the population the benchmark had designated a control. Eligibility varies with the operator,
+	// the access width and the host's byte order and with nothing that changes per instruction, so
+	// it belongs where the rest of the row's shape is derived.
+	//
+	// It is a *second* derivation of what `nativeRmw`'s own guards decide, which is the risk it
+	// carries rather than a remark about it: a predicate written beside a pattern can drop one of
+	// the pattern's conditions and read as equivalent. The two are pinned together in both
+	// directions — `atomicRmw` treats a disagreement as `ErrNotValidated`, and
+	// `TestNativeEligibilityAgreesWithTheDispatch` holds the predicate against `nativeRmw`'s own
+	// `ok` over every operator, width and field position.
+	native bool
+}
+
+// nativeEligible reports whether `nativeRmw` has a single `sync/atomic` primitive for this operator at
+// this access width, on this host.
+//
+// Small and inlinable on purpose: it is what `atomicRmw` would otherwise learn by making a call, and a
+// predicate that did not inline would move the cost rather than remove it.
+//
+// **`width == 4 || width == 8` is `atomicCell.isWholeWord` restated in terms the derivation can see**,
+// and the two are equivalent only because the access is alignment-checked before a cell exists: a cell
+// is `p64` at width 8 and a full-mask `p32` at width 4, so those are exactly the widths whose field is
+// its containing word. That equivalence is the bridge this whole hoist rests on and it is asserted
+// rather than argued — see the test named in `atomicop.native`.
+//
+// Why each arm is what it is belongs to `nativeRmw`, which is the authority; this function must not
+// grow a reason of its own, because a second reason is how the two derivations drift apart.
+// rmwName is the reference's constructor for an operator, for an error message that has to name one.
+//
+// Derived by inverting `rmwOperators` rather than by a second list of six strings: the map is already
+// the pairing, and a parallel array is a place for the seventh operator to be forgotten.
+func rmwName(op rmwOp) string {
+	for name, r := range rmwOperators {
+		if r == op {
+			return name
+		}
+	}
+	return fmt.Sprintf("rmwOp(%d)", op)
+}
+
+func nativeEligible(op rmwOp, width uint64) bool {
+	wholeWord := width == 4 || width == 8
+	switch op {
+	case rmwAnd, rmwOr:
+		return true
+	case rmwXchg:
+		return wholeWord
+	case rmwAdd, rmwSub:
+		return wholeWord && hostLittleEndian
+	}
+	return false
 }
 
 // trapUnalignedAtomic is the reference's own phrase (`eval.ml:148`).
@@ -339,6 +398,7 @@ func parseAtomicMnemonic(mnemonic, operator string) (atomicop, error) {
 			return atomicop{}, fmt.Errorf("rmw row carries unknown operator %q", operator)
 		}
 		a.rmw = r
+		a.native = nativeEligible(r, a.width)
 	} else if operator != "" {
 		return atomicop{}, fmt.Errorf("non-rmw row carries operator %q", operator)
 	}
@@ -769,7 +829,18 @@ func (in *Instance) atomicRmw(a atomicop, st *stack, mem *memory, offset uint64)
 	// The native primitive where one serves this shape, and the general loop otherwise (ADR 0057).
 	// The order matters only for reading: both paths compute the same answer, which is asserted over
 	// the whole cross product rather than argued here.
-	if old, ok := c.nativeRmw(a.rmw, operand); ok {
+	//
+	// **The eligibility test is `a.native` rather than `nativeRmw`'s return, so the rows that keep the
+	// loop do not pay for a call to be told no** — the field's comment carries the measurement that
+	// made that the shape. `ok` is still read, and a false here is a disagreement between the two
+	// derivations rather than a shape to fall back on: falling back would be *correct* and would
+	// silently retire the fast path, which is the failure a green suite cannot see.
+	if a.native {
+		old, ok := c.nativeRmw(a.rmw, operand)
+		if !ok {
+			return fmt.Errorf("%w: %s at width %d is derived native but nativeRmw declined it",
+				ErrNotValidated, rmwName(a.rmw), a.width)
+		}
 		st.pushNum(old)
 		return nil
 	}
