@@ -21,6 +21,44 @@ weakly-ordered platform.
 
 ### Added
 
+- **`grow` refuses on a per-memory no-move mark instead of `limits.Shared`, and the refusal is a named
+  engine limit** ([#572](https://github.com/scttfrdmn/burroughs/issues/572), [ADR
+  0056](docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md),
+  `gate:threads`). `allocate` returns a `noMove` mark wherever it reserves capacity, `memory` carries it,
+  and `grow`'s refusal arm tests it — so the question *"may this array be replaced?"* is asked of the
+  property the code needs rather than of a flag that merely correlates with it. **`limits.Shared` was
+  never a sound answer**: T-1's `Spawn` ([#554](https://github.com/scttfrdmn/burroughs/pull/554)) runs
+  the entry in the *same* instance, making a spawn-capable instance's **unshared** memories reachable
+  from two threads, and a `Shared`-gated refusal drops those onto the arm that moves the pointer. The
+  flag survives only where it is the *spec's* question — `atomicWait`'s `check_shared`
+  (`eval.ml:445-447`).
+  - **The mark is set where the reservation happens**, so *reserved ⇒ marked* is one function's
+    invariant rather than an agreement between two that can drift — and the mark has a live engine
+    producer from its first commit rather than a test-only setter.
+  - **Reserving for every memory would not have closed the hole**, which is what makes this an ADR
+    instead of a one-line widening: the reservation is capped at `sharedReservePages`, so reserving
+    everything moves a memory onto the reslice arm below the cap and back onto the moving arm above it.
+    Reserve *and* refuse is what closes it. The refusal reserves to the declared max wherever that is
+    below the cap, so it bites only where the max exceeds the cap or no max is declared.
+  - **The engine limit is named, not anonymous.** `memory.grow` reports every failure as the spec's
+    `-1` (`memory.ml:60-67`), so the four refusals are indistinguishable to the guest **by design** —
+    inventing a fifth guest answer would be a wrong verdict borrowed from the wrong channel. The record
+    is the engine's: `growthRefusedPastReservation` moves on this arm and no other, and
+    `TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal` asserts the two halves together —
+    identical where the guest can see, different where the engine records. **The excluded programs are
+    stated** on the counter and in the ADR: today a shared memory declaring more than 128 pages, which
+    nothing in either corpus reaches; with #554, any memory in an instance that has spawned.
+  - **Behaviour today is identical** — shared ⇒ reserved ⇒ marked, and no vector grows a shared memory
+    at all — so the board cannot witness the change and the unit control is the only witness there is.
+    Watched die by five mutations, each on the arm it should: the increment deleted, the increment moved
+    above the switch, everything marked, nothing marked, and the three other refusals also incrementing.
+    The second of those reached only one subtest, which is why the fifth exists.
+  - **Half the decision is deferred with its oracle named.** `Spawn`'s walk — relocate and mark the
+    unreserved memories while exactly one thread exists — rides #554, because its oracle needs a second
+    thread. Condition 1's *no max declared* branch rides it too: the validator refuses a shared memory
+    with no maximum (`ErrSharedMemoryNoMax`), so no marked memory can lack one today and the branch
+    would be unreachable code. Named as an omission rather than left to be found.
+
 - **The §§2–5 litmus battery's allowed-outcome sets are pre-registered, before any mechanism that could
   satisfy them exists** ([#10](https://github.com/scttfrdmn/burroughs/issues/10), [ADR
   0055](docs/decisions/0055-the-2-5-litmus-batterys-oracle-is-the-contract-read-clause-by-clause-with-its-outcome-sets-pre-registered-because-no-external-engine-can-arbitrate-a-clause-written-against-one.md),
@@ -90,7 +128,10 @@ weakly-ordered platform.
   two threads. `limits.Shared` is therefore not a sound gate.
   `TestNothingInEngineCodeCreatesASecondObserver` fails on the first `go` statement in any non-test
   file in the module — the census is exactly zero today, so it needs no allow-list — and its message
-  carries the three ways out. Watched die twice: an injected `go` statement, and a neutered walk
+  carried the three ways out. **It no longer does: ADR 0056 chose one of the three and narrowed it, so
+  the message now names the decision and the half of it that remains** (see the #572 entry above). The
+  trigger is unchanged, which is why that is a message edit and not a re-pointed control. Watched die
+  twice: an injected `go` statement, and a neutered walk
   against the vacuity floor. What it cannot see, and nothing in the tree documents either way, is an
   embedder calling `Invoke` on one instance from two goroutines.
 - **An aligned load or store up to 32 bits no longer tears: one typed word access, chosen at the

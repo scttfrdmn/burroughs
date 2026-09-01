@@ -3,6 +3,7 @@ package interp
 import (
 	"fmt"
 	"math"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -34,11 +35,14 @@ var trapOOB = &Trap{Reason: "out of bounds memory access"}
 // a Go guest that loads once and runs for hours — is a memory whose *steady state* is a single
 // contiguous slice with no indirection per access, which this is.
 //
-// **Growth moves the backing array for an unshared memory and never for a shared one**, which is the
+// **Growth moves the backing array for an unmarked memory and never for a marked one**, which is the
 // question this comment used to defer to v1 — *"§4's boundary model and shared memories decide
 // whether growth may move the backing array at all"* — and #556 is where v1 answered it. Recorded
 // here because a deferral left standing after its subject is settled tells the next reader the tree
-// is in a state it is not. The reasons are on `allocate` and on `grow`.
+// is in a state it is not. It said *"unshared"* and *"shared"* until decision 0056 (#572) replaced the
+// flag with the `noMove` mark below; the two coincide on every memory this engine can build today, and
+// the sentence is written in the terms the code now uses rather than the terms that happen to agree
+// with it. The reasons are on `allocate`, on `noMove`, and on `grow`.
 type memory struct {
 	// bytes is the memory's contents. Its length is always a multiple of pageSize, and it
 	// is the authority on the current size — the reference reads `size` back out of the
@@ -49,6 +53,25 @@ type memory struct {
 	// limits is the declared type, kept because `grow` needs the max and the address width
 	// to decide whether a delta is legal.
 	limits binary.Limits
+
+	// noMove records that this memory's backing array must never be replaced — decision 0056's
+	// mark, and `grow`'s refusal arm is gated on it rather than on `limits.Shared`.
+	//
+	// **Set where the reservation happens.** `allocate` is the only site that reserves capacity,
+	// so it is the site that sets this, and *reserved ⇒ marked* is an invariant of one function
+	// rather than an agreement between two that can drift.
+	//
+	// **Why a mark and not the flag it replaces.** `limits.Shared` is not a sound answer to "can a
+	// second thread reach this array": T-1's `Spawn` (#554) refuses an instance with no shared
+	// memory and then runs the entry in the *same* instance, so a spawn-capable instance's
+	// **unshared** memories are reachable from two threads too. The flag stays the producer's
+	// input at `allocate`; it stops being the consumer's question.
+	//
+	// **Never read racily, by construction rather than by care.** The only writers are `allocate`,
+	// before the memory is reachable at all, and — with #554 — `Spawn`'s walk, which runs while
+	// exactly one thread exists. A flag written before any second thread starts is a fact about
+	// the past, which is precisely what decision 0056 rejects option (C) for not being.
+	noMove bool
 }
 
 // newMemory allocates a memory at its declared minimum.
@@ -76,14 +99,14 @@ func newMemory(m binary.Memory) (*memory, error) {
 	if n > math.MaxInt {
 		return nil, &Trap{Reason: "out of memory"}
 	}
-	bs, err := allocate(lim, n)
+	bs, noMove, err := allocate(lim, n)
 	if err != nil {
 		return nil, err
 	}
 	if err := checkBaseAlignment(bs); err != nil {
 		return nil, err
 	}
-	return &memory{bytes: bs, limits: lim}, nil
+	return &memory{bytes: bs, limits: lim, noMove: noMove}, nil
 }
 
 // allocate reserves the backing array, and for a **shared** memory it reserves the declared
@@ -114,18 +137,22 @@ func newMemory(m binary.Memory) (*memory, error) {
 // in engine code and carries the instruction to whoever writes it. The gate that looks obvious —
 // `limits.Shared` — is not sound: T-1's `Spawn` (#554) refuses an instance with no shared memory and
 // then runs the entry in the *same* instance, so a spawn-capable instance's unshared memories are
-// reachable from two threads too. #567 is where that is being decided. What the control cannot see is
-// an embedder calling `Invoke` on one instance from two goroutines, which nothing here documents either
-// way.
+// reachable from two threads too. **Decided in ADR 0056 (#572), and the `noMove` return value is this
+// function's half of it**: the flag below decides whether to reserve, and the mark it hands back is what
+// `grow` refuses on, so `limits.Shared` stops being the consumer's question. The other half is `Spawn`'s
+// walk, which relocates and marks the unreserved memories while exactly one thread exists (#554) — until
+// it lands, the sentence above is still true of every instance this engine can build, because no engine
+// code starts a goroutine. What the control cannot see is an embedder calling `Invoke` on one instance
+// from two goroutines, which nothing here documents either way.
 //
 // **The reservation is capped, because reserving `max` outright was pre-registered and measured too
 // expensive.** ADR 0051 forecast under 1 ms for the largest declaration the address width allows and
 // stated the rollback in advance; the measurement came back at 4.3 ms best and **855 ms worst** for
 // `(memory 1 65535 shared)`, three orders over, so the rollback fired. `sharedReservePages` is that
 // cap. What is *not* the registered rollback is what happens above it — see `grow`.
-func allocate(lim binary.Limits, n uint64) ([]byte, error) {
+func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 	if !lim.Shared || !lim.HasMax {
-		return make([]byte, n), nil
+		return make([]byte, n), false, nil
 	}
 	reserve := min(lim.Max, sharedReservePages) * pageSize
 	if reserve < n {
@@ -137,10 +164,34 @@ func allocate(lim binary.Limits, n uint64) ([]byte, error) {
 		// The reservation itself is what cannot be served. Reported as the same
 		// out-of-memory trap the minimum would have raised, because from the module's
 		// side that is what happened.
-		return nil, &Trap{Reason: "out of memory"}
+		return nil, false, &Trap{Reason: "out of memory"}
 	}
-	return make([]byte, n, reserve), nil
+	// **Decision 0056's condition 1 is this `min` and nothing more, which is worth stating
+	// because it looks like it needs code.** Where the declared max is at or below the cap the
+	// reservation *is* the max, so arm 1 covers every legal growth and the engine limit can never
+	// bite: `grow` refuses above `limits.Max` on the module's own declaration, one check earlier.
+	// The refusal therefore reaches only a memory whose max exceeds the cap — or, once #554's walk
+	// marks memories that never declared one, a memory with no max at all.
+	return make([]byte, n, reserve), true, nil
 }
+
+// growthRefusedPastReservation counts decision 0056's condition 2: the named engine limit, kept
+// apart from every other reason a grow can fail.
+//
+// **Why a counter and not a distinct return value.** `memory.grow` does not trap and does not carry
+// a reason — it reports failure as `-1` in its result (`memory.ml:60-67`), and inventing a second
+// guest-visible answer would be a wrong verdict borrowed from the wrong channel. So the record the
+// condition asks for is the engine's, not the guest's: this is incremented on exactly one arm, which
+// makes an engine-limit refusal distinguishable from an out-of-memory or over-the-declared-max
+// refusal by something an instrument can read. Testing that the two are distinguishable is what
+// `TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal` does with it.
+//
+// **The excluded programs, stated because the limit changes which programs run.** A memory carrying
+// `noMove` whose declared max exceeds `sharedReservePages` cannot grow past that cap. Today that is a
+// shared memory declaring more than 128 pages — and nothing in either corpus reaches it, since no
+// vector grows a shared memory at all. With #554 it is also every memory in an instance that has
+// spawned, including the unshared ones, which is the population that makes this worth naming.
+var growthRefusedPastReservation atomic.Uint64
 
 // sharedReservePages caps how much capacity a shared memory reserves at instantiation, in pages.
 //
@@ -406,8 +457,8 @@ func (m *memory) grow(delta uint64) int64 {
 	switch {
 	case n <= uint64(cap(m.bytes)):
 		m.bytes = m.bytes[:n]
-	case m.limits.Shared:
-		// **Above the reservation a shared memory refuses to grow, and this is a
+	case m.noMove:
+		// **Above the reservation a no-move memory refuses to grow, and this is a
 		// deviation from ADR 0051's pre-registered rollback that has to be said out loud.**
 		// The registration said *"falling back to allocate-and-blit above it, accepting
 		// that a shared memory grown past the ceiling needs the header protected some
@@ -430,6 +481,24 @@ func (m *memory) grow(delta uint64) int64 {
 		// Nothing in either corpus reaches this arm — no vector grows a shared memory at
 		// all — so the board cannot witness it, and
 		// `TestSharedMemoryGrowthKeepsItsBackingArray` is what stands in for one.
+		//
+		// **The condition is `noMove` and not `limits.Shared`, which is decision 0056.**
+		// `limits.Shared` is not a sound answer to "may this array be replaced": T-1's
+		// `Spawn` (#554) runs a second thread in the *same* instance, so a spawn-capable
+		// instance's **unshared** memories are reachable from two threads too, and a
+		// `Shared`-gated refusal drops them onto the arm below that moves the pointer. The
+		// mark says what this arm needs to know; the flag says what `allocate` needed to
+		// know. Behaviour today is identical — shared ⇒ reserved ⇒ marked — which is why the
+		// unit control above is the only witness there can be.
+		//
+		// **And it is a named engine limit rather than an anonymous `-1`**, which is the
+		// second of the two conditions decision 0056's ruling carries. The `-1` is shared
+		// with three other failure modes a few lines up, so the *record* is where the naming
+		// has to happen: `growthRefusedPastReservation` is incremented on this arm and on no
+		// other, which is what makes an engine-limit refusal distinguishable from an
+		// over-the-declared-max or address-width one by something other than reading this
+		// code. The excluded programs are stated on the counter.
+		growthRefusedPastReservation.Add(1)
 		return -1
 	default:
 		grown := make([]byte, n)
