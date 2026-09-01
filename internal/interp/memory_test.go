@@ -3,6 +3,7 @@ package interp
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"unsafe"
@@ -604,6 +605,13 @@ func TestMemoryIndexSpaceCountsImportsFirst(t *testing.T) {
 //   - a shared memory past `sharedReservePages` reports the spec's `-1` rather than reallocating,
 //     which is the arm no corpus vector reaches and the one ADR 0051's pre-registered rollback got
 //     wrong.
+//
+// **That third arm is gated on the `noMove` mark rather than on `limits.Shared` since decision
+// 0056**, and this test cannot tell the difference: shared ⇒ reserved ⇒ marked, so both spellings
+// agree on every input here. The mark's own claims — that *reserved ⇒ marked* holds and that its
+// refusal is distinguishable from the other three — are
+// `TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal`'s, and saying so here is what
+// keeps this test from being read as covering them.
 func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 	base := func(m *memory) uintptr {
 		if len(m.bytes) == 0 {
@@ -682,5 +690,117 @@ func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 	if capped.size() != sharedReservePages {
 		t.Errorf("size() = %d after a refused grow, want %d unchanged",
 			capped.size(), sharedReservePages)
+	}
+}
+
+// TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal is decision 0056's second
+// condition, which Scott stated as part of the ruling rather than as gloss on it: *"the refusal must
+// be a named, documented engine limit — distinguishable in the record from an out-of-memory refusal,
+// with the excluded programs stated. It changes which programs run, so it says so."*
+//
+// **The whole difficulty is that the guest-visible channel cannot carry the distinction, so this test
+// asserts both halves of that.** `memory.grow` reports every failure as `-1` (`memory.ml:60-67`), and
+// giving the engine limit its own guest answer would be a wrong verdict borrowed from the wrong
+// channel. So the four refusals are asserted **identical** where the guest can see them and
+// **different** where the engine records them — `growthRefusedPastReservation` moving by exactly one
+// on the engine-limit arm and by zero on the other three. Asserting only the increment would pass on
+// an engine that had also changed the return value, which is the failure this pairing exists to catch.
+//
+// **Three of the four refusals are asked of a *marked* memory on purpose.** If the wrap, the address
+// width, and the over-the-max refusals were asked of unmarked memories, "the counter moved" would be
+// consistent with the counter tracking the mark rather than the arm — the discriminator would be the
+// fixture, not the code. Only the engine-limit case needs a declaration above the cap, so that is the
+// only thing that differs between the arms.
+//
+// It also pins *reserved ⇒ marked*, the invariant that lets the mark live at `allocate`: the one
+// function that reserves is the one that marks, so there is no second site to drift from it. `Spawn`'s
+// walk becomes a second writer with #554, and it writes while exactly one thread exists.
+func TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal(t *testing.T) {
+	build := func(lim binary.Limits) *memory {
+		m, err := newMemory(binary.Memory{Limits: lim})
+		if err != nil {
+			t.Fatalf("newMemory(%+v): %v", lim, err)
+		}
+		return m
+	}
+
+	// reserved ⇒ marked, and its complement, which is what keeps the mark from being vacuously true.
+	marked := build(binary.Limits{Min: 1, Max: 4, HasMax: true, Shared: true})
+	if !marked.noMove {
+		t.Errorf("a shared memory with a declared max is reserved and therefore must be marked "+
+			"no-move; noMove = %v. `allocate` is the only site that reserves, so it is the site "+
+			"that marks, and reserved-implies-marked is one function's invariant (decision 0056)",
+			marked.noMove)
+	}
+	if plain := build(binary.Limits{Min: 1}); plain.noMove {
+		t.Errorf("an unshared memory reserves nothing and must not be marked; noMove = %v. A mark "+
+			"on everything would put every program on the refusal arm, which is option (A) that "+
+			"0056 rejected for charging single-threaded programs", plain.noMove)
+	}
+
+	// A memory declaring more than the cap: reserved to the cap, so its growth past that point is
+	// the engine limit and nothing else.
+	overCap := binary.Limits{Min: 1, Max: sharedReservePages + 8, HasMax: true, Shared: true}
+	// The address-width refusal needs a declaration the max check will wave through, which means a
+	// max above the i32 page cap. The validator would refuse this module (a shared memory over
+	// 0xffff pages is not a legal declaration); it is built here directly because the arm it reaches
+	// in `grow` is ordered before the max check and is otherwise unreachable from any fixture.
+	overWidth := binary.Limits{Min: 1, Max: maxPages32 + 1, HasMax: true, Shared: true}
+
+	cases := []struct {
+		name     string
+		lim      binary.Limits
+		delta    uint64
+		wantMove uint64 // the expected delta on the engine-limit counter
+	}{
+		{
+			name:     "the engine limit: past the reservation, below the declared max",
+			lim:      overCap,
+			delta:    sharedReservePages, // 1 + 128 pages: over the reservation, under max+8
+			wantMove: 1,
+		},
+		{
+			name:     "over the declared max, on a marked memory",
+			lim:      binary.Limits{Min: 1, Max: 4, HasMax: true, Shared: true},
+			delta:    4,
+			wantMove: 0,
+		},
+		{
+			name:     "past the address width, on a marked memory",
+			lim:      overWidth,
+			delta:    maxPages32,
+			wantMove: 0,
+		},
+		{
+			name:     "the 64-bit wrap, on a marked memory",
+			lim:      overCap,
+			delta:    math.MaxUint64,
+			wantMove: 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := build(c.lim)
+			// Read before and subtract: the counter is process-wide and every other test in this
+			// package that refuses a grow moves it, so an absolute value here would be measuring
+			// the package's history rather than this call.
+			before := growthRefusedPastReservation.Load()
+			size := m.size()
+			if got := m.grow(c.delta); got != -1 {
+				t.Fatalf("grow(%d) = %d, want -1: every one of these four is a refusal, and the "+
+					"guest-visible answer is the same for all of them by design", c.delta, got)
+			}
+			if m.size() != size {
+				t.Errorf("a refused grow changed the size from %d to %d", size, m.size())
+			}
+			if moved := growthRefusedPastReservation.Load() - before; moved != c.wantMove {
+				t.Errorf("growthRefusedPastReservation moved by %d, want %d.\n"+
+					"The four refusals are indistinguishable in the result — `-1` for all of "+
+					"them — so this counter is the whole of the record decision 0056's second "+
+					"condition asks for. Moving on the wrong arm makes an engine limit "+
+					"unreportable, and an unreported limit is one that changes which programs "+
+					"run without saying so.", moved, c.wantMove)
+			}
+		})
 	}
 }

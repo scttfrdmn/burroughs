@@ -33,6 +33,16 @@ import (
 // rejected closing the gap by refusing to spawn on an instance holding unshared memories, since a
 // module may legitimately hold both and that would reject valid programs.
 //
+// **The remedy is decided, and half of it has landed — so this control's *message* changed while its
+// trigger did not.** Decision [0056] takes the mark: `grow` refuses on a per-memory `noMove` flag
+// rather than on `limits.Shared`, `allocate` sets it wherever it reserves, and `Spawn` walks the
+// instance's memories before starting the first goroutine (#572 for the first two, #554 for the walk).
+// The trigger is untouched, which means **this control has not been watched die under the new
+// message**: the message is instructions for an author, not an assertion, and a changed message with
+// an unchanged trigger permits and refuses exactly what it did before. Stated because *a re-pointed
+// control has not been watched die* — the thing that would need re-watching is a trigger change, and
+// there isn't one.
+//
 // # Why a `go` statement is the trigger
 //
 // A second observer needs a second stack. Inside this module the only way to get one is a `go`
@@ -59,6 +69,8 @@ import (
 // Watched die by injection: a scratch non-test file containing a `go` statement, the FAIL read back,
 // and the file removed in the same command — the method grave #561 paid for, since *a re-pointed
 // control has not been watched die*.
+//
+// [0056]: ../../docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md
 func TestNothingInEngineCodeCreatesASecondObserver(t *testing.T) {
 	var offenders, scanned []string
 	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
@@ -119,15 +131,24 @@ func TestNothingInEngineCodeCreatesASecondObserver(t *testing.T) {
 			"reason that \"an unshared memory has no second observer by construction\". A second "+
 			"goroutine in engine code falsifies that, and the consequence is not a slow path but an "+
 			"unshared memory whose backing array `grow` may move while another thread reads it — a "+
-			"stale pointer paired with a fresh length (#556). Before this lands, one of: (1) reserve "+
-			"for every memory an executing instance can reach, not just the shared ones; (2) track "+
-			"reachability **per memory** rather than per `limits.Shared` flag, which is the shape #567 "+
-			"names for its scoped option; or (3) show this goroutine can reach no linear memory at "+
-			"all, and narrow this control's domain in the PR that adds it — say why, and do not add "+
-			"the file to a list. What is **not** available is gating on `limits.Shared`: T-1's "+
-			"`Spawn` runs the entry in the *same* instance, so that flag does not answer the "+
-			"question. #554 is the spawn, #567 is the decision, and refusing to spawn on an instance "+
-			"holding unshared memories is already rejected — a module may legitimately hold both",
+			"stale pointer paired with a fresh length (#556).\n"+
+			"**The way out is no longer a choice: decision 0056 made it, and half of it has landed.** "+
+			"`grow`'s refusal arm now tests a per-memory `noMove` mark instead of `limits.Shared`, and "+
+			"`allocate` sets that mark wherever it reserves (#572). What is left is the half whose "+
+			"oracle needs this goroutine to exist: before starting it, walk the instance's memories, "+
+			"relocate any unreserved one onto a reserved backing array, and mark it — while exactly "+
+			"one thread still exists, which is what makes the mark unreadable racily and the "+
+			"relocation safe. Marking after the goroutine starts is option (C) that 0056 rejects as "+
+			"unsound.\n"+
+			"Two things this message no longer offers, because the ruling closed them. Reserving for "+
+			"every memory *without* extending the refusal is not sufficient: the reservation is capped "+
+			"at `sharedReservePages`, so it closes the hole below the cap and reopens it above. And "+
+			"gating on `limits.Shared` was never available — T-1's `Spawn` runs the entry in the "+
+			"*same* instance, so that flag does not answer the question, and refusing to spawn on an "+
+			"instance holding unshared memories is separately rejected, since a module may "+
+			"legitimately hold both. If you believe instead that this goroutine can reach no linear "+
+			"memory at all, narrow this control's domain in the PR that adds it — say why, and do not "+
+			"add the file to a list. #554 is the spawn; 0056 is the decision",
 			offenders)
 	}
 }
