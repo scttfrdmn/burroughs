@@ -106,6 +106,29 @@ Three separate mistakes are being avoided, and they were made in that order:
      turned back on the disposition. That is
      [a re-run green doesn't refute a fail](evidence-and-instruments.md#a-re-run-green-doesnt-refute-a-fail--explaining-the-fail-does)
      satisfied rather than waived: the cause is bounded, not called a flake.
+   - **Third occurrence, and the hazard got worse: the newest run can now read `success` over a
+     branch whose verdict is `failure`.** #422's and #424's empty greens sat beside a verdict run
+     that was still `in_progress`, so reading the newest one reported *not yet known* as pass. On
+     #554 the verdict run had already **completed `failure`** — two of seven jobs red — and the
+     newest run on that same SHA concluded `success` over one real job and five `skipped`. So the
+     wrong reading is no longer *premature*, it is **contradicted**: the emptiest run outranks a
+     decided red, and nothing about the aggregate says so. The consequence for a report is a
+     stronger rule than *read the job list*: **no run's conclusion but the push's may enter a
+     report**, and it enters as the named jobs present-and-`success`, never as the run's own
+     verdict. A parked branch is where this bites hardest — it is red for as long as it is parked,
+     so every body edit adds another green above the red that explains why it is parked.
+   - **The same instance is the first in which the two-halves disposition above was *applied* rather
+     than derived, and it is worth naming because the halves came from different mechanisms.** #554's
+     middle run failed on `citations`, down to its single assertion: three citations of the PR's own
+     number in the body, a subject that is the body and not the tree. The newest run saw the
+     corrected body, ran **that same job**, and passed. Both halves satisfied, and neither by the
+     tool that made the mess — the local `citecheck --pr` and CI's `citations` job are two mechanisms
+     agreeing in the right order, so the repair is confirmed by something other than the instrument
+     that produced it. Worth naming because the second witness was **not arranged**: CI was not known
+     to score a body edit, and it scored it both ways. That the intermediate red was real and public
+     for about ninety seconds is
+     the unavoidable shape of a sweep that runs after delivery: `closecheck` has a `--body <file>`
+     form and can run before posting, `citecheck` has only `--pr`, which reads the *posted* body.
 
 **And `sleep` is never how you wait for a signal that exists — background it and let the
 wake-up arrive.** This is mistake 1 restated because restating it was necessary: it was
@@ -157,6 +180,33 @@ nothing](evidence-and-instruments.md#a-re-run-green-doesnt-refute-a-fail--explai
 Folded in here rather than filed, on the ruling that misattributing a verdict is the most load-bearing
 failure available in this recipe. (Directive: Scott, on the #539/#540 report — *"every watch output file
 records the SHA it watched … charged overhead, not a new PR."*)
+
+**One run, one watcher, one verdict file — and the question that protects it is about the watcher, not
+about the run.** Two watchers on one run both write the path above, and the *later* finisher wins, which
+is not the more correct one by any mechanism: on #568 the surviving line came from the earlier watcher and
+carried a real bug the replacement had already fixed (`echo "… conclusion=$(gh api …) watch-exit=$?"`
+expands the substitution first, so `$?` is the api call's status). What starts it every time is reading an
+**absent verdict file as a dead watcher**. It is not evidence of that: the file above is written by the
+watch's own final commands, so it does not exist while the watch is working, and absence is the normal
+mid-flight state.
+
+The rule this file already carried aimed the reader at `gh run list` / `jobs?filter=all` to disambiguate —
+and that is **a correct rule aimed at the wrong subject**. Those endpoints answer *is the run finished*;
+the question is *is the watcher alive*, and the two are independent in both directions: a live run is
+consistent with a dead watcher, and a finished run with a live watcher still appending. On #554 the run
+was queried one command before the second watcher was started, came back `in_progress`, and that answer
+licensed nothing — the recurrence happened with the rule in hand. Ask the process, not its subject: the
+backgrounded task's own status is the answer, and it is not in the GitHub API at all. If a second watcher
+is started anyway, give it a **watcher-distinct path** so neither can overwrite the other; agreement
+between two files is luck, not a property, and on #554 they happened to agree. (Directive: Scott, on the
+#554 report — *"the rule's disambiguator answers 'is the run finished' when the question was 'is the
+watcher alive'. A correct rule aimed at the wrong subject."*)
+
+**And a single-job re-run is a request, not a scope.** `gh run rerun --job <id>` can re-run the whole run;
+the flag names what was asked for and the run decides what it does. So never report a job's attempt from
+the flag that was passed — read `run_attempt` **per job** from `jobs?filter=all`, which is the same
+population mistake 4 demands for the conclusion, asked about attempts instead. A report that says "one job
+re-run" on the strength of the command line is describing its own intent.
 
 ## Local cross-architecture verification
 

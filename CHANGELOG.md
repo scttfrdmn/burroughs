@@ -650,6 +650,36 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The waiting-on-CI recipe gains the ordering hazard's worse form, the watcher-liveness rule, and the
+  `--job` re-run scope** ([the recipe](docs/laws/operations.md#waiting-on-ci)). Three lines, all ordered
+  by Scott, all recorded where the procedure they correct already lives rather than in a report that
+  scrolls away.
+  - **The newest run on a SHA can now read `success` over a branch whose verdict is `failure`.** The
+    earlier specimens (#422, #424) had the empty green sitting beside a verdict run still
+    `in_progress`, so the wrong reading reported *not yet known* as pass. On
+    [#554](https://github.com/scttfrdmn/burroughs/pull/554) the verdict run had **completed `failure`**
+    at two of seven jobs while the newest run on the same SHA concluded `success` over one real job and
+    five `skipped` — so the wrong reading is contradicted rather than premature. The rule is therefore
+    stronger than *read the job list*: no run's conclusion but the push's may enter a report, and it
+    enters as the named jobs present-and-`success`. A parked branch is where it bites hardest, since
+    every body edit stacks another green above the red that explains the parking.
+  - **The two-halves rule for disposing of a body-scoped red was applied rather than derived**, for the
+    first time since #424 wrote it, and the halves came from two mechanisms: the middle run's
+    `citations` failure identified down to its single assertion, and a later run in which *that same
+    job* ran and passed. Local `citecheck --pr` and CI's `citations` job agreeing in that order is *a
+    repair confirmed by the authority* obtained for free.
+  - **One run, one watcher — and the protecting question is about the watcher, not the run.** An absent
+    verdict file is the normal mid-flight state, since the file is written by the watch's own final
+    commands; reading absence as a dead watcher is what starts a second watcher, and the later finisher
+    wins by ordering rather than by correctness. The disambiguator the recipe already carried
+    (`gh run list`, `jobs?filter=all`) answers *is the run finished* when the question is *is the
+    watcher alive* — **a correct rule aimed at the wrong subject**, and the two are independent in both
+    directions. The recurrence happened with the rule in hand and the run queried one command earlier.
+  - **A single-job re-run is a request, not a scope**: `gh run rerun --job` can re-run the whole run, so
+    `run_attempt` is read per job from `jobs?filter=all` and never from the flag that was passed.
+    Observed in an earlier session and carried here on the first slice that could host it; it has no
+    issue or PR of its own to cite, which is why it waited rather than being filed.
+
 - **`checkLimits`' comment stops claiming a vector for the contested half of its message**
   (`internal/validate/module.go`). It read *"the vector matches the head of it"* — singular, with no
   antecedent. The head is asserted by **15** vectors (12 `"memory size"` in `memory.wast:54-100`, 3
