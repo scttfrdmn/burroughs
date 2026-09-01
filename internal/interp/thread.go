@@ -166,6 +166,61 @@ func (in *Instance) hasSharedMemory() bool {
 	return false
 }
 
+// reachableMemories is every linear memory reachable from this instance through *import slots*, in a
+// deterministic order: this instance's memory index space, then that of every instance it imports a
+// function from, transitively.
+//
+// **It is a closure and not `in.mems`, because a thread's entry can be an imported function.**
+// `resolveCall` resolves an import to the instance that *defined* the body and `spawn` hands that
+// instance to `runEntry`, so a walk over one index space would mark the wrong set — and the set it
+// missed is precisely the one the new thread runs against.
+//
+// **This closure is not the set the new thread can touch, and the gap is [#575].** The first draft of
+// this comment argued it was, on the ground that a `funcref` cannot name another instance's function.
+// That is `link.go`'s sentence about what decision 0017 *records*, and it is true as history only:
+// grave #163 widened `ref` to a pair, `funcRefTarget` resolves a call through `r.Inst`, and
+// `call.go`'s own comment says a table slot may hold another instance's funcref. So `call_indirect`
+// does leave the instance that owns the table, along an edge nothing here follows.
+//
+// Widening the walk is not the repair. A funcref is a value that flows: `table.set`, `table.copy`,
+// `table.init` and the instantiation of a module that did not exist yet all put a foreign one into a
+// table a running thread reads. `TestSpawnMarksEveryMemoryTheNewThreadCanReach`'s last two rows are
+// the witness and the refutation of the cheap fix respectively — the second links its foreign instance
+// *after* the spawn returns. #575 holds the option space; until it is ruled, this walk covers the
+// import closure and `Spawn` is parked.
+//
+// Import slots of every kind carry an owner, and only the function slots are followed: a memory,
+// table, global or tag import introduces no *code*, and the memory it introduces is already in this
+// instance's own `mems` (the same allocation, one pointer, which is why the dedup is by `*memory` and
+// not by index). A nil slot is an import nothing supplied, and a nil owner is a host function with no
+// instance behind it; both are skipped rather than being errors here, since `resolveCall` is what
+// reports an unlinked import to the caller.
+func (in *Instance) reachableMemories() []*memory {
+	var mems []*memory
+	seenInst := make(map[*Instance]bool)
+	seenMem := make(map[*memory]bool)
+	var walk func(x *Instance)
+	walk = func(x *Instance) {
+		if x == nil || seenInst[x] {
+			return
+		}
+		seenInst[x] = true
+		for _, m := range x.mems {
+			if m != nil && !seenMem[m] {
+				seenMem[m] = true
+				mems = append(mems, m)
+			}
+		}
+		for _, ext := range x.funcs {
+			if ext != nil {
+				walk(ext.owner)
+			}
+		}
+	}
+	walk(in)
+	return mems
+}
+
 // Spawn is contract §2's T-1: `spawn(entry_func, arg, stack_hint) → tid`, a wasm thread backed 1:1
 // by an OS thread, sharing the module's shared linear memory.
 //
@@ -176,11 +231,25 @@ func (in *Instance) hasSharedMemory() bool {
 // unlocking would return the thread to the pool and make the binding 1:N over the thread's life.
 //
 // **Spawn does not make shared memory safe, and this comment is not the place a reader should have
-// to discover that.** The 67 atomics are plain reads and writes (**#542**) and
-// `memory.atomic.wait` cannot return 0/woken (**#543**); §4's boundary memory model is **#516** and
-// its litmus battery **#10**. Before a second thread existed a lost update was *unobservable*
-// rather than absent, and this function is what makes it observable. That is why this code is parked
-// rather than merged — see the type's doc comment for the ruling.
+// to discover that.** `memory.atomic.wait` cannot return 0/woken (**#543**); §4's boundary memory
+// model is **#516** and its litmus battery **#10**. Before a second thread existed a lost update was
+// *unobservable* rather than absent, and this function is what makes it observable. That is why this
+// code is parked rather than merged — see the type's doc comment for the ruling.
+//
+// **One of that list is discharged and two blockers are not on it, which is the state to read this in.**
+// The 67 atomics stopped being plain reads and writes with #542/#557. Neither of the others was
+// enumerated when the list was written:
+//
+//   - This function runs the entry in the same instance, so the new thread shares the instance's
+//     **globals**, and `global.set` writes them plainly (**#573**). Contract T-1 says a spawned thread
+//     shares *"the module's shared linear memory"* and says nothing about the instance, so whether the
+//     globals may be shared at all is the open question rather than how to synchronise them.
+//   - The moving-backing-array hole this function opened (**#556**) is **not** closed by the walk
+//     below. Decision 0056 chose the right shape and rested it on a false premise: the walk's domain is
+//     an import closure, and a table slot holding a foreign funcref takes the thread outside it
+//     (**#575**, `reachableMemories`). A memory reached that way is unmarked *and* unreserved, so
+//     `grow` relocates it under a running thread — which is memory-unsafe rather than a lost update,
+//     since a torn slice header can pair a new length with an old pointer.
 //
 // The lifecycle stays open: T-5's exit/join/detach are contract §10.3 (**#12**), so a caller gets a
 // tid and no way to wait on it. See `thread.done` for why the internal channel is not that API.
@@ -215,6 +284,46 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 	if len(ft.Params) != 1 || ft.Params[0] != binary.I32 || len(ft.Results) != 0 {
 		return nil, fmt.Errorf("%w: function %d takes %v and returns %v",
 			ErrThreadEntry, entry, ft.Params, ft.Results)
+	}
+
+	// **Decision 0056's walk, and its position in this function is load-bearing twice over.**
+	//
+	// *After every refusal*, because marking is not free to undo: a marked memory can never grow past
+	// `sharedReservePages` again (see `reservation`), so a spawn that was going to fail its entry-shape
+	// check must not narrow what the instance's memories can do on its way out. A `Spawn` that returns
+	// an error leaves the instance exactly as it found it.
+	//
+	// **Half of that placement is forced by the data flow rather than by the policy, which is worth
+	// knowing before someone "simplifies" it.** `target` does not exist until `resolveCall` has run, so
+	// a walk hoisted above the refusals cannot have the right domain — it would have to walk the
+	// *spawner's* closure and would then mark memories the new thread cannot reach. Measured while
+	// trying to mutate the position alone: the naive hoist changed the domain too, and failed a second
+	// row than the one it was aimed at.
+	//
+	// *Before the `go`*, because that is the whole soundness argument — the relocation and the mark
+	// happen while one thread exists, so no other agent holds a slice header or an ADR 0051 pointer
+	// into the array being replaced. Marking after the goroutine starts is option (C), which 0056
+	// rejects.
+	//
+	// **`target`'s closure and not `in`'s**, for `runEntry`'s reason one step further: the thread runs
+	// `target`'s body, so the memories it can reach are `target`'s and those of every instance
+	// `target` can call into. Memories only the *spawner* reaches stay single-threaded and keep their
+	// cheap allocate-and-blit growth, which is the narrowing §0 asks for — this marks what a second
+	// thread can touch, not everything in sight.
+	//
+	// **And it does not mark all of what a second thread can touch: [#575].** The closure is over import
+	// slots, and an indirect call through a table slot another instance filled leaves it
+	// (`reachableMemories` carries the falsification and why a bigger walk is the wrong repair). This
+	// loop is correct about the memories it reaches and is not the soundness argument it was written as;
+	// #575 is what makes it one, and `Spawn` stays parked until that is ruled.
+	//
+	// A failure refuses the spawn. That direction is forced: the alternative is a thread running
+	// against a memory whose array can still move, which is #556 with a thread to observe it.
+	for _, m := range target.reachableMemories() {
+		if err := m.reserveForASecondThread(); err != nil {
+			return nil, fmt.Errorf("%w: preparing this instance's memories for a second thread "+
+				"(decision 0056)", err)
+		}
 	}
 
 	t := in.newThread()

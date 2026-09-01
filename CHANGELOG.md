@@ -21,6 +21,82 @@ weakly-ordered platform.
 
 ### Added
 
+- **`Spawn` relocates and marks every memory the new thread can reach, before that thread exists** —
+  decision 0056's second half ([#554](https://github.com/scttfrdmn/burroughs/pull/554), [ADR
+  0056](docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md),
+  `gate:threads`). It does **not** discharge
+  [#556](https://github.com/scttfrdmn/burroughs/issues/556) — see the entry below this one, which is the
+  finding that landed with it. `reserveForASecondThread` moves an unreserved memory onto a reserved
+  backing array and takes its mark from `allocate`'s return value, so *reserved ⇒ marked* keeps a single
+  source, and `grow` then reslices into the reservation instead of replacing an array another thread may
+  hold.
+  - **The domain is the entry's import closure, not the spawning instance's index space.** `resolveCall`
+    resolves an imported entry to the instance that defined the body and the thread runs *there*, so a
+    walk over `in.mems` marks the wrong set. `reachableMemories` follows import slots transitively —
+    which is a smaller set than the memories the thread can reach, and that gap is the next entry.
+  - **The complement is asserted, not assumed.** A memory only the *spawner* reaches is left unmarked:
+    marking narrows growth to `sharedReservePages` permanently, and §0 says not to pay that where no
+    second thread can observe the array move.
+  - **The walk sits after every refusal**, so a `Spawn` that fails its entry-shape check leaves the
+    instance exactly as it found it. Half of that placement turned out to be forced by the data flow
+    rather than by the policy — `target` does not exist until `resolveCall` has run — which is recorded
+    where a later simplification would meet it.
+  - **Condition 1's no-max branch, named as unreachable in ADR 0056, is now reached** by the population
+    the ADR predicted: an unshared memory the walk marks need not declare a maximum, where a shared one
+    always does (`ErrSharedMemoryNoMax`). `reservation` answers it with the cap, and such a memory
+    therefore cannot grow past 128 pages — `growthRefusedPastReservation`'s named population arriving.
+  - **Eight rows and seven mutations**, `TestSpawnMarksEveryMemoryTheNewThreadCanReach`. Two of the first
+    six exist because the first four were watched die and **two mutations survived**: in a two-module
+    fixture `in`'s closure, `target`'s closure and `target.mems` all happen to name the supplier's memory,
+    so the import row could not separate them. A three-instance chain and a spawner-only memory are the
+    hand-built discriminating pair; the mutation table pins which row each mutation kills. Rows seven and
+    eight are the next entry's, and the seventh **fails**.
+- **The walk's completeness premise is false, and the row that says so fails**
+  ([#575](https://github.com/scttfrdmn/burroughs/issues/575), filed with the option space). ADR 0056
+  rested on a sentence copied out of `link.go`: a `funcref` cannot name another instance's function, so
+  the only edge out of an instance is an import slot. Grave
+  [#163](https://github.com/scttfrdmn/burroughs/issues/163) had already falsified it — `ref` is a
+  `{Addr, Inst}` pair, `funcRefTarget` resolves through `r.Inst`, and `call.go`'s own comment says a
+  table slot may hold another instance's funcref. Two probes, run rather than argued: a spawned thread
+  reached and wrote into a memory outside its closure, unmarked and with `cap == len` so `grow` would
+  have moved it under the running thread; and the second probe linked the foreign instance **after** the
+  spawn returned, which is what rules out repairing this with a bigger walk. Reachability is not a
+  spawn-time property — a table slot takes a foreign funcref from `table.set`, `table.copy`,
+  `table.init`, or a module nobody had written yet. #556 therefore stays open, `Spawn` stays parked with
+  a second blocker beside [#573](https://github.com/scttfrdmn/burroughs/issues/573), and the remedy is
+  an ADR about when relocation is permitted rather than code.
+  - The false sentence's *source* is repaired in place: `link.go` reported what 0017 records, which is
+    accurate as history and false read as present tense. The population was swept — five mentions of
+    the module-local claim, four of them narrating the pre-#163 defect and correctly tensed, one the
+    present-tense one this cost.
+  - **A link control caught a soundness bug.** `TestMarkdownLinksResolve` failed on this entry's own
+    first draft, which cited `docs/decisions/0017-reference-values-are-module-local-indices.md` — a path
+    invented out of the false sentence. The real 0017 is titled *"the script registry is a name→instance
+    map, and **a funcref names an instance**"*: the refutation was the citation's target all along, and a
+    wrong claim could not produce a right pointer.
+- **The plain-access tripwire is stale and filed rather than repaired here**
+  ([#576](https://github.com/scttfrdmn/burroughs/issues/576)).
+  `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` fires on this branch's `go`
+  statement, correctly — but both remedies its message names are closed (#557 by ADR 0054's all-atomic
+  access, #516 by ADR 0052), and its *name* now asserts the property #567 removed, which is the exact
+  shape its previous rename escaped. It is a defect in a landed control in no gate's lane, so *a repair
+  rides its subject's lane*: it belongs to a `main`-lane slice, not to T-1's parked branch, where its
+  firing is the correct reading of a parked branch.
+- **The observer tripwire is re-pointed from presence to pairing**, and renamed to say so:
+  `TestEveryGoStatementInEngineCodeIsPrecededByTheWalk` (was
+  `TestNothingInEngineCodeCreatesASecondObserver`). Its old trigger — any `go` statement in engine code —
+  was the right question only while the remedy was outstanding; a control still asserting *"there are no
+  goroutines"* would fail forever on a tree that did what the control asked for, and retiring it would
+  drop a live risk. The new trigger is that every `go` in a non-test file has a
+  `reserveForASecondThread` call earlier in the same function body. **Being a trigger change it was
+  watched die on its own terms** — three falsifications: the walk deleted, the walk moved below the `go`,
+  and a scratch file with a bare `go` in a function that marks nothing. It also gained a second vacuity
+  check in the opposite direction from the first: an empty `go` census used to be its *passing* state and
+  now fails it, since a pairing check with nothing to pair asserts nothing. Under #575 its green means
+  less than it was written to mean — pairing a `go` with the walk is necessary and not sufficient — and
+  its doc says so; the trigger is unaffected, since a rule about *when* relocation is permitted still
+  needs the relocation to happen before the thread.
+
 - **`grow` refuses on a per-memory no-move mark instead of `limits.Shared`, and the refusal is a named
   engine limit** ([#572](https://github.com/scttfrdmn/burroughs/issues/572), [ADR
   0056](docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md),
@@ -130,7 +206,9 @@ weakly-ordered platform.
   file in the module — the census is exactly zero today, so it needs no allow-list — and its message
   carried the three ways out. **It no longer does: ADR 0056 chose one of the three and narrowed it, so
   the message now names the decision and the half of it that remains** (see the #572 entry above). The
-  trigger is unchanged, which is why that is a message edit and not a re-pointed control. Watched die
+  trigger is unchanged, which is why that is a message edit and not a re-pointed control. (It has since
+  become `TestEveryGoStatementInEngineCodeIsPrecededByTheWalk`, whose trigger *is* changed — see the
+  #554 entry.) Watched die
   twice: an injected `go` statement, and a neutered walk
   against the vacuity floor. What it cannot see, and nothing in the tree documents either way, is an
   embedder calling `Invoke` on one instance from two goroutines.

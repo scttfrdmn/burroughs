@@ -259,8 +259,10 @@ it is a surprise.
   aliasing. So SP-3's discharge is a control over the timer path's write set — every address the timer
   machinery writes must lie outside every linear memory — registered here so that landing the timer
   facility without that control is a visible omission rather than an oversight. Its shape's sibling is
-  `TestNothingInEngineCodeCreatesASecondObserver`: a syntactic total over engine code rather than a
-  reachability argument.
+  `TestEveryGoStatementInEngineCodeIsPrecededByTheWalk`: a syntactic total over engine code rather than a
+  reachability argument. (It was `TestNothingInEngineCodeCreatesASecondObserver` when this was written;
+  #554 landed the remedy that control demanded, which changed its trigger from *presence* to *pairing* —
+  the sibling shape this cites is the syntactic-total part, which survived the re-pointing intact.)
 
 ### SP-4 — stop composes with parked agents
 

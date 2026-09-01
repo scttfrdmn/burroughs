@@ -118,3 +118,87 @@ caller is a test, which `deadcode` would refuse and which would in any case be
 - **#554 does not merge on this ADR.** #573 blocks it independently: `Spawn` shares the whole instance,
   so `global.set`'s plain writes to `in.globals` are data races, and a `v128` global is two plain word
   writes that tear in the value sense. That is a separate decision with its own measurement.
+
+## Amendment — the walk landed, and the tripwire this ADR cites was re-pointed
+
+Recorded here because the ADR's text above names a control that no longer exists under that name, and a
+tombstone whose citations do not resolve is worse than a tombstone that says what happened next.
+
+`TestNothingInEngineCodeCreatesASecondObserver` — the tripwire this ADR was written against, cited twice
+above — **is now `TestEveryGoStatementInEngineCodeIsPrecededByTheWalk`**, and the rename marks a real
+trigger change rather than a tidier name. Its old trigger was the *presence* of a `go` statement in engine
+code, which was the right question only while the remedy was outstanding: once #554 lands the walk, a
+control still asserting "there are no goroutines" fails forever on a tree that did exactly what the
+control asked for. Retiring it would have been the mistake this project has already paid for — *a
+tripwire names a risk, not a code shape* — so the risk was re-pointed instead. It is now "a goroutine in
+engine code that starts without the walk in front of it", and the trigger is the pairing: every `go` in a
+non-test file must have a call to `reserveForASecondThread` earlier in the same function body.
+
+Being a trigger change, it was watched die on its own terms — the message edit recorded in the #568
+changelog entry explicitly had not been. Three falsifications, each run and read back: the walk deleted
+(FAIL, unpaired), the walk moved below the `go` (FAIL, on the ordering), and a scratch non-test file with
+a bare `go` in a function that marks nothing (FAIL, naming the scratch site).
+
+Two findings from the implementation that this ADR did not anticipate, both now on the code:
+
+- **The walk's domain is the entry's import closure, not the spawning instance's memory index space.**
+  `resolveCall` resolves an imported entry to the instance that *defined* the body, and the thread runs
+  there, so a walk over `in.mems` marks the wrong set. It is a closure and it is complete only because
+  decision 0017 keeps a `funcref` module-local — if that widens (Q2), the walk widens with it. The
+  complement is asserted too: a memory only the *spawner* reaches is deliberately left unmarked, since
+  marking narrows growth to `sharedReservePages` permanently and §0 says not to pay that where no second
+  thread can observe the array move.
+- **Half of the "after every refusal" placement is forced by the data flow, not by the policy.** `target`
+  does not exist until `resolveCall` has run, so a walk hoisted to the top of `spawn` cannot have the
+  right domain at all. Noticed while trying to mutate the position alone: the naive hoist changed the
+  domain too and killed a second row.
+
+The condition-1 branch this ADR named as an omission — *"a memory with no max at all"* — is no longer
+unreachable, and it is reached by exactly the population predicted: an **unshared** memory the walk marks
+is under no obligation to declare a maximum, where a shared one always declares one
+(`ErrSharedMemoryNoMax`). `reservation` is the function that answers it, and the consequence is that such
+a memory cannot grow past the cap. That is `growthRefusedPastReservation`'s named population arriving.
+
+## Second amendment — this ADR's completeness premise is false, and #575 is what replaces it
+
+Appended rather than edited, on this project's rule for accepted records: the sentence in the amendment
+above is wrong, and striking it would hide the fact that the walk shipped with it.
+
+The first amendment says the walk's closure **"is complete only because decision 0017 keeps a `funcref`
+module-local — if that widens (Q2), the walk widens with it."** That widening had already happened when
+the sentence was written. **Grave #163** made `ref` a `{Addr, Inst}` pair and `funcRefTarget` resolves a
+call through `r.Inst`; `call.go`'s comment on that function states the consequence directly — *"a table
+slot may hold **another instance's** funcref […] a different instance whenever this table was imported and
+someone else's segment wrote into it."* So `call_indirect` leaves the instance that owns the table, along
+an edge the walk does not follow.
+
+The sentence came from `link.go`'s `Extern.owner`, where it is accurate as *history* — a report of what
+0017 records, immediately followed by "that widening `ref` is its own PR". Read in the present tense it
+is false, and no citation sweep can tell the two apart, because the pointer resolves.
+
+**Witnessed, not argued.** Two probes, whose fixtures survive as the last two rows of
+`TestSpawnMarksEveryMemoryTheNewThreadCanReach`:
+
+- A spawner exports a table and calls indirectly through slot 0, which it never fills; a second instance
+  imports that table, writes its own function into the slot, and holds an unshared memory. The spawned
+  thread wrote into that memory, `noMove` was false, and `cap == len == 65536` — so `grow` takes the
+  allocate-and-blit arm and replaces the array under a thread running in it. That is #556, on a path this
+  ADR does not cover, and it is memory-unsafety rather than a lost update: a torn three-word slice header
+  can pair a new length with an old pointer.
+- The same fixture with the second instance linked **after** `spawn` returns, the entry spinning on the
+  shared memory until the host releases it. The instance did not exist when the walk ran.
+
+The second probe is the one that decides the *shape* of the remedy. **Reachability is not a spawn-time
+property**, so following tables and globals as well as import slots is not an incomplete fix but a fix of
+the wrong kind — `table.set`, `table.copy`, `table.init` and a later instantiation all put a foreign
+funcref where a running thread reads it.
+
+What survives of this ADR: the mark, its site (*reserved ⇒ marked*, one function's invariant), `grow`'s
+refusal arm reading it, the ordering (relocate while one thread exists, never after), and the walk itself
+as the thing that lets a two-thread-reachable memory still grow to the cap. What does not survive is the
+walk as the **soundness argument**. #575 holds the option space and is where the successor decision goes;
+it prices a relocation rule keyed on whether any thread is live, reservation at instantiation under the
+threads feature, a tear-free published header, and refusing the spawn. Options 1 and 3 there should be
+read together with #573's ruling rather than a week apart.
+
+#554 now has two independent blockers, and the count in the section above is stale for that reason.

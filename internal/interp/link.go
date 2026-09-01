@@ -41,11 +41,19 @@ type Extern struct {
 	// `==` and accepted four modules the spec refuses.
 	//
 	// **Q2's question in embryo, deliberately answered no further than this.** Decision
-	// 0017 records that a `ref` holding a bare module-local index cannot name another
+	// 0017 recorded that a `ref` holding a bare module-local index cannot name another
 	// instance's function, and that widening `ref` is its own PR. This field is not that
 	// widening: it carries an instance for an *import slot*, which is a name the module
 	// resolves once at instantiation, where a table slot's funcref is a value that flows.
 	// Keeping them apart is what stops this from pre-deciding Q2 in the load-bearing spot.
+	//
+	// **That widening has since landed, and the tense above is why this sentence now says
+	// so** (grave #163): a `ref` is a pair and `funcRefTarget` resolves a call through
+	// `r.Inst`, so a table slot *does* name another instance's function. The paragraph is
+	// still correct about this field, which is the narrow thing it was written to say — but
+	// read as present tense it is a false statement about `ref`, and #575 is what that cost:
+	// `Spawn`'s walk took its completeness argument from this sentence, and a foreign funcref
+	// in a table is the edge it therefore does not follow.
 	owner *Instance
 	fnIdx uint32
 }
