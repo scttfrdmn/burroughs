@@ -212,6 +212,18 @@ doing its job — they are untouched by construction and they read untouched.
 aligned rows landing at the `atomicCell` arm's figures (≈+6% amd64 load, ≈+21% amd64 store): the load is
 flat rather than +6%, and the store is +10.16% rather than ≈+21%. The tuning survived translation.
 
+### The stamp was given against the worse number, which makes it safe a fortiori
+
+**Scott stamped this decision against +13.72%; production measures +10.16%.** Recorded because the
+direction matters and is easy to lose: a stamp given against a *worse* number is stronger than one given
+against a better one. The price he agreed to pay — and gave his grounds for paying, above — is larger
+than the price this mechanism actually charges, so nothing about the approval needs re-examining in the
+light of the measurement. Had the arm read +10.16% and production +13.72%, the approval would have been
+obtained under a figure the artifact then exceeded, and the stamp would be owed a second look. It runs
+the other way. (Scott, on the #569 review: *"the decision is safe a fortiori … a stamp against a worse
+number is stronger than one against a better one."*) Recorded by the actor who was told, so this slice
+stays `Ratio-Class: carried` — *durability is not independence*.
+
 ### The 3.6pp between the arm and the mechanism, named rather than banked
 
 The measurement arm read **+13.72%** on this row and the mechanism reads **+10.16%**. Both are inside the
