@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **`allocate`'s "no second observer by construction" is now a tripwire, before T-1's spawn falsifies
+  it** ([#554](https://github.com/scttfrdmn/burroughs/issues/554),
+  [#567](https://github.com/scttfrdmn/burroughs/issues/567), `gate:threads`). An unshared memory does
+  not reserve its declared maximum, so `grow` may move its backing array — safe only while there is
+  exactly one observer, and `Instance.Spawn` refuses an instance with no shared memory and then runs
+  the entry in the *same* instance, which makes that instance's **unshared** memories reachable from
+  two threads. `limits.Shared` is therefore not a sound gate.
+  `TestNothingInEngineCodeCreatesASecondObserver` fails on the first `go` statement in any non-test
+  file in the module — the census is exactly zero today, so it needs no allow-list — and its message
+  carries the three ways out. Watched die twice: an injected `go` statement, and a neutered walk
+  against the vacuity floor. What it cannot see, and nothing in the tree documents either way, is an
+  embedder calling `Invoke` on one instance from two goroutines.
 - **An aligned load or store up to 32 bits no longer tears: one typed word access, chosen at the
   dispatch site** ([#557](https://github.com/scttfrdmn/burroughs/issues/557), [ADR
   0053](docs/decisions/0053-tear-freedom-is-one-aligned-word-access-chosen-from-the-slices-own-host-address-because-0051-already-asserts-the-base.md),

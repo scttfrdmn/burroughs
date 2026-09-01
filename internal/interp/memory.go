@@ -109,6 +109,15 @@ func newMemory(m binary.Memory) (*memory, error) {
 // construction, so §0's performance partisanship says leave its allocate-and-blit alone rather than
 // reserve address space no guest can race for.
 //
+// **"By construction" now has a tripwire, because it is a claim about reachability that this tree is
+// about to falsify.** `TestNothingInEngineCodeCreatesASecondObserver` fails on the first `go` statement
+// in engine code and carries the instruction to whoever writes it. The gate that looks obvious —
+// `limits.Shared` — is not sound: T-1's `Spawn` (#554) refuses an instance with no shared memory and
+// then runs the entry in the *same* instance, so a spawn-capable instance's unshared memories are
+// reachable from two threads too. #567 is where that is being decided. What the control cannot see is
+// an embedder calling `Invoke` on one instance from two goroutines, which nothing here documents either
+// way.
+//
 // **The reservation is capped, because reserving `max` outright was pre-registered and measured too
 // expensive.** ADR 0051 forecast under 1 ms for the largest declaration the address width allows and
 // stated the rollback in advance; the measurement came back at 4.3 ms best and **855 ms worst** for
