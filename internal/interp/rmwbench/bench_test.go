@@ -34,12 +34,40 @@
 //     `and` is a full-word `AndUint32` with 1s outside the field, and its `or` is an `OrUint32` with 0s
 //     there. So these rows are a second regime rather than part of the loop's remainder.
 //   - **`xor` at every width, and narrow `add`/`sub`/`xchg`**, keep the compare-and-swap loop under every
-//     outcome. They are the within-instrument control: if they move, something other than the dispatch
-//     changed and the eligible rows are measuring that instead. *An unmeasured complement is not an empty
-//     one.*
-//   - **`cmpxchg` at all seven rows** is the second control, and the stronger one, because it keeps its
-//     loop for a reason that cannot change — Go's `CompareAndSwapUint32` returns a bool where the spec
-//     needs the value that was observed.
+//     outcome. They are the *complement*, and reading them is how the price of a dispatch on the rows it
+//     does not serve gets measured at all. *An unmeasured complement is not an empty one.*
+//   - **`cmpxchg` at all seven rows** keeps its loop for a reason that cannot change — Go's
+//     `CompareAndSwapUint32` returns a bool where the spec needs the value that was observed.
+//
+// **Neither population is a control, and this doc claimed both were (grave #581).** The claim was: *"if
+// they move, something other than the dispatch changed and the eligible rows are measuring that
+// instead."* They are rows whose *semantics* the diff leaves alone, which is not the same thing: they
+// share a binary and a schedule with the change. #559's three-arm run moved all seven `cmpxchg` rows by
+// 2.5–5.8% (arm64) and 6.9–8.8% (amd64) across a diff that cannot reach `atomicCmpxchg`, so their
+// flatness in the two-arm run before it had been luck — and it had already been spent, as the licence for
+// a published attribution that had to be withdrawn. See #580 for what does move them.
+//
+// # The protocol a comparison here has to use (grave #581)
+//
+// This is prose rather than a control because it governs a run a human does across two machines, and a
+// control that could assert it would have to run the benchmark it is checking.
+//
+//   - **A null arm.** A byte-identical copy of one arm, its sha256 asserted equal to the original and
+//     distinct from the other arm, run as a third arm. Its true effect is zero *by construction*, so
+//     whatever it shows is the instrument and nothing about the code under test can make it flat by
+//     accident. A control chosen for semantic invariance cannot do this job.
+//   - **Rotated slots.** With *k* arms and a round count that is a multiple of *k*, arm *i* takes slot
+//     *(i+r) mod k* in round *r*, so each arm holds each slot equally often — which balances position and
+//     elapsed time at once. Splitting output per (arm, slot) then makes the slot effect readable from the
+//     same run for free. Fixed slots are grave #552's shape: a per-arm constant nobody varied.
+//   - **A distributional floor.** The null arm's spread is the instrument's resolution, and it must be
+//     summarised by a geomean or a quantile — **never by the largest per-row delta**. Over 49 rows at
+//     benchstat's α=0.05, ~2.45 rows carry a verdict on a perfectly flat instrument, so the maximum *is*
+//     the multiplicity artifact: taking it as the floor reproduces the very defect it looks like a repair
+//     for. For the same reason a criterion of the form "every row is `~`" is failed by the truth ~92% of
+//     the time here (1 − 0.95⁴⁹) and gets worse with more samples.
+//   - **A criterion that states its row count**, since every threshold over this population is a
+//     statement about 49 comparisons rather than about one.
 //
 // Bodies are straight-line rather than looped, so the figure is the access and not a guest loop's
 // bookkeeping, and the whole module is built through the real front end — `text.EncodeModule` →
