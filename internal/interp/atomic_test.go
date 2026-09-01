@@ -592,6 +592,35 @@ func TestAtomicRmwIsNotObservablyTornAcrossThreads(t *testing.T) {
 	}
 }
 
+// alignedTestMemory builds a memory whose base satisfies the premise `checkBaseAlignment` asserts for
+// every real one, and **fails the test rather than the process if it cannot** (grave #579).
+//
+// A test that writes `&memory{bytes: make([]byte, 64)}` has skipped the only place that premise is
+// checked: `newMemory` calls `checkBaseAlignment`, a struct literal calls nothing, and `cell` does not
+// re-check — it hands `&m.bytes[ea]` to `sync/atomic` as a `*uint64`. Whether that address is 8-aligned
+// is then decided by escape analysis, because a `[]byte` the compiler keeps on the stack has alignment
+// 1: a draft of the test below built its memory inline, the slice stayed on the stack, and
+// `atomic.AddUint64` took a SIGBUS on an odd address. The version that got away with it did so because
+// a closure returning `*memory` forces the allocation to the heap, where a 64-byte object is 8-aligned
+// — *protection by coincidence is not protection*, and the coincidence here is an inlining decision.
+//
+// The scan over `slack` is what makes the result deterministic instead of dependent on that decision:
+// one of eight consecutive bases is 8-aligned, whichever allocation arena the slice came from. The
+// premise is then asserted with the engine's own function rather than restated, so this helper cannot
+// disagree with what construction requires.
+func alignedTestMemory(t *testing.T, n int) *memory {
+	t.Helper()
+	for slack := range 8 {
+		bs := make([]byte, n+8)[slack : slack+n]
+		if checkBaseAlignment(bs) == nil {
+			return &memory{bytes: bs}
+		}
+	}
+	t.Fatalf("no 8-aligned base found within eight offsets of a %d-byte allocation, which "+
+		"checkBaseAlignment requires of every real memory", n+8)
+	return nil
+}
+
 // TestTheNativeRmwDispatchAgreesWithApplyRmw is what makes ADR 0057's fast path safe: `applyRmw` stays
 // the authority for all six operators, and the dispatch is checked *against* it rather than trusted
 // beside it.
@@ -628,7 +657,7 @@ func TestTheNativeRmwDispatchAgreesWithApplyRmw(t *testing.T) {
 	// that can be told apart from its neighbours. A zeroed memory would make `and` and `or` agree on
 	// every shift.
 	seeded := func() *memory {
-		m := &memory{bytes: make([]byte, 64)}
+		m := alignedTestMemory(t, 64)
 		for i := range m.bytes {
 			m.bytes[i] = byte(i*7 + 1)
 		}

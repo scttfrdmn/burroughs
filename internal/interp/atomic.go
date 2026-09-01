@@ -640,6 +640,11 @@ func (c atomicCell) nativeRmw(op rmwOp, operand uint64) (uint64, bool) {
 			operand = -operand
 		}
 		return c.field(c.addWord(operand)), true
+	case rmwXor:
+		// No `XorUint32` exists to call. Spelled as its own arm rather than left to the fall-through
+		// so the `exhaustive` linter reads it — and so the one operator with no primitive is stated
+		// here, where a reader checking the table above lands, instead of inferred from an absence.
+		return 0, false
 	}
 	return 0, false
 }
