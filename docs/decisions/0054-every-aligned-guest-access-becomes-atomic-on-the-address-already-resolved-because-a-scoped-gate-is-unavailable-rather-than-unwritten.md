@@ -187,6 +187,11 @@ their hashes checked distinct before any round ran (grave #552's protocol). arm6
 `verdict from NATIVE x86_64 (janus.local), exit 0` — not the QEMU container, and named because *a PR
 asserting a cross-architecture claim states which instrument confirmed it*.
 
+The arms are `main` at `3135a29` against `551b3f7`, the commit that carries the mechanism. The commits
+after it in this slice touch markdown only, so the Go is byte-identical and these figures describe the
+engine as merged — the same reason a re-run green over a `CHANGELOG.md`-only diff refutes nothing, read
+in the direction where it licenses rather than withholds.
+
 ```
 arm64 (Apple M4 Pro)          base = main @ 3135a29     new = 551b3f7
 LoadAligned-12      28.10µ ± 2%   28.15µ ± 3%       ~ (p=1.000 n=10)
