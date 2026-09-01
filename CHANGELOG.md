@@ -21,6 +21,25 @@ weakly-ordered platform.
 
 ### Added
 
+- **The first benchmark in the tree that executes an atomic instruction, and a native `sync/atomic`
+  dispatch for the 23 read-modify-write rows one primitive can serve**
+  ([#559](https://github.com/scttfrdmn/burroughs/issues/559), [ADR
+  0057](docs/decisions/0057-the-native-atomic-rmw-dispatch-replaces-the-cas-loop-for-the-shapes-syncatomic-can-serve-in-one-operation.md),
+  `gate:threads`). `internal/interp/rmwbench` derives 49 arms from `binary.PrefixedRegionOpcodes(0xfe)`,
+  and the dispatch takes one `AddUint32`/`AndUint64`/`SwapUint32`-class operation where 0051's
+  compare-and-swap loop took two round-trips, keeping `applyRmw` as the authority and checking every fast
+  path against it over the whole operator × width × in-word-position cross product. **Eligibility is
+  derived from `atomicCell`'s geometry rather than from the operator**: `and`/`or` at every width, because
+  the identity element lies outside the field; `xchg` whole-word only; `add`/`sub` whole-word *and*
+  little-endian, because carries cross bytes where masking does not; `xor` never, since `sync/atomic` has
+  no `Xor`. **Measured, and the claim #559 disputed is refuted at the interpreter's own granularity** —
+  −9.05…−12.69% on darwin/arm64 and −4.39…−9.20% on linux/amd64 across exactly the 23 native rows and no
+  other, on a slot-rotated three-arm instrument with a byte-identical null arm. **Its landing is held on
+  two rulings**: the pre-registered acceptance threshold failed on amd64 by 0.04 points, and the criterion
+  that failed it is itself defective (grave #581), which is not this agent's call to re-specify. The price
+  the ADR carries forward: the 19 ineligible rows pay 1–5%, and the hoist written to remove that cost was
+  declined by its own rule.
+
 - **`grow` refuses on a per-memory no-move mark instead of `limits.Shared`, and the refusal is a named
   engine limit** ([#572](https://github.com/scttfrdmn/burroughs/issues/572), [ADR
   0056](docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md),
