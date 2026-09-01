@@ -1,6 +1,9 @@
 package interp
 
-import "unsafe"
+import (
+	"sync/atomic"
+	"unsafe"
+)
 
 // memop describes one load or store: how many bytes it touches, whether a narrow load
 // sign-extends, and which value type the slot holds.
@@ -94,35 +97,75 @@ func wordAligned(bs []byte, width uint64) bool {
 	return uintptr(unsafe.Pointer(&bs[0]))&uintptr(width-1) == 0
 }
 
-// loadWord reads all of bs as one host word, in guest byte order. Only valid where wordAligned.
+// **`loadWord` and `storeWord` stood here and are deleted by ADR 0054, along with `guestWord16`, whose
+// only callers were their width-2 arms.** They were 0053's aligned access: one *typed* host-word
+// operation, which cannot decompose. 0054 needs the same access to be *atomic*, which is a strictly
+// stronger property at the same address, so their two call sites became `atomicLoadWord`/
+// `atomicStoreWord` below and nothing was left to call them.
 //
-// The four widths are the family's, and `guestWord32`/`guestWord64` are ADR 0051's — see the
-// endianness note on `loadValue` for why the conversion has to be here rather than assumed away.
-func loadWord(bs []byte) uint64 {
+// **Recorded because the supersession is easy to under-describe, and this comment is the correction.**
+// 0054's own text first said the rest of 0053 "stands and is the base this builds on"; what stands is
+// `wordAligned`, the *predicate*, which 0054 leans on entirely. The access helpers it guarded do not —
+// the `deadcode` gate said so, naming all three, which is how a supersession described as an amendment
+// got caught being a deletion.
+//
+// Deleted rather than left for a later sweep, on the precedent `writeNum`'s comment records for
+// `storeBytes`: the widths that still need a read-modify-write reach the containing word through
+// `atomicCell` (ADR 0051), so there is no width left for which a plain typed access is the answer.
+
+// atomicLoadWord and atomicStoreWord are `loadWord`/`storeWord` with the access made sequentially
+// consistent, and they report `false` at the widths where a single atomic instruction does not exist
+// (ADR 0054).
+//
+// # Why every access, and not only the ones that could tear
+//
+// 0053 made an aligned access one *typed* word access, which stopped it decomposing. That is
+// tear-freedom and it is a guest-visible property. **0054 is a different requirement wearing the same
+// shape**: a plain host read racing a host atomic write is a data race under Go's memory model and a
+// report under `-race`, and that is true even at width 1, where the byte load is indivisible and could
+// not tear if it wanted to. So the trigger here is not "could this tear" but "can two threads reach
+// it" — and since a scoped gate is *unavailable* rather than unwritten (`Spawn` is ambient; see 0054),
+// the answer is every aligned access.
+//
+// # Widths 1 and 2 report false, and the caller routes them through `atomicCell`
+//
+// `sync/atomic` has no narrow operations, so a 1- or 2-byte field has to be reached through a CAS loop
+// on its containing 32-bit word — which is exactly what `atomicCell` (ADR 0051) already does, including
+// the full-word comparison that keeps a neighbour's concurrent write from being lost. Duplicating that
+// here would be a second implementation of the delicate half. Returning `(_, false)` and letting the
+// caller fall through costs those two widths a re-resolution of the effective address; the measurement
+// that chose this design says the re-resolution is worth ≈5–8pp, so it is paid only where it buys
+// something rather than on all four widths.
+//
+// # The pointer is safe for exactly the reason the deleted `loadWord`'s was
+//
+// `wordAligned` has already checked the **host** address (`internal/interp/memop.go:wordAligned`), which
+// is `sync/atomic`'s own
+// requirement at both widths, and the caller has already bounds-checked the extent. Nothing is cached:
+// the pointer is derived from the slice handed in per access, so an unshared memory's `grow` cannot
+// leave a stale one behind — the property ADR 0051 states for `atomicCell` and the reason #568's
+// tripwire is a separate guard rather than a duplicate of this one.
+func atomicLoadWord(bs []byte) (uint64, bool) {
 	switch len(bs) {
-	case 1:
-		return uint64(bs[0])
-	case 2:
-		return uint64(guestWord16(*(*uint16)(unsafe.Pointer(&bs[0]))))
 	case 4:
-		return uint64(guestWord32(*(*uint32)(unsafe.Pointer(&bs[0]))))
+		return uint64(guestWord32(atomic.LoadUint32((*uint32)(unsafe.Pointer(&bs[0]))))), true
+	case 8:
+		return guestWord64(atomic.LoadUint64((*uint64)(unsafe.Pointer(&bs[0])))), true
 	default:
-		return guestWord64(*(*uint64)(unsafe.Pointer(&bs[0])))
+		return 0, false
 	}
 }
 
-// storeWord writes v as one host word over all of bs, in guest byte order. Only valid where
-// wordAligned.
-func storeWord(bs []byte, v uint64) {
+func atomicStoreWord(bs []byte, v uint64) bool {
 	switch len(bs) {
-	case 1:
-		bs[0] = byte(v)
-	case 2:
-		*(*uint16)(unsafe.Pointer(&bs[0])) = guestWord16(uint16(v))
 	case 4:
-		*(*uint32)(unsafe.Pointer(&bs[0])) = guestWord32(uint32(v))
+		atomic.StoreUint32((*uint32)(unsafe.Pointer(&bs[0])), guestWord32(uint32(v)))
+		return true
+	case 8:
+		atomic.StoreUint64((*uint64)(unsafe.Pointer(&bs[0])), guestWord64(v))
+		return true
 	default:
-		*(*uint64)(unsafe.Pointer(&bs[0])) = guestWord64(v)
+		return false
 	}
 }
 
@@ -161,8 +204,9 @@ func extendSlot(raw uint64, m memop) uint64 {
 // host reading through unsafe would produce byte-swapped values for every vector, which dual-platform
 // CI would catch only if one of its arches were big-endian — and neither is"*, and since #557 that
 // warning is load-bearing for the sibling path rather than hypothetical: an **aligned** linear-memory
-// access is a word read through `unsafe`, where the property is re-established by
-// `guestWord16`/`32`/`64` (ADR 0053). The two are checked against each other with this loop as the
+// access is a word read through `unsafe`, where the property is re-established by `guestWord32`/`64`
+// — and, at widths 1 and 2 since ADR 0054, by `atomicCell`'s normalization of the containing 32-bit
+// word (`guestWord16` is deleted; see the note where it stood in atomic.go). The two are checked against each other with this loop as the
 // authority — the same arrangement ADR 0051 made for the atomics, for the same reason: the loop is the
 // code the whole spec suite has validated.
 //
@@ -172,8 +216,9 @@ func extendSlot(raw uint64, m memop) uint64 {
 // access no wider than 32 bits `NOTEARS`, and four separate byte reads are exactly the decomposition
 // that word forbids. So an aligned linear-memory load must not come through here — and the branch that
 // sends it elsewhere is in `memAccess` rather than at the top of this function, **because putting it
-// here cost 6.24% on every unaligned load and bought nothing.** `wordAligned` and `loadWord` inline to
-// 89 against an 80-point budget, so a `loadValue` containing both stopped being inlinable at all
+// here cost 6.24% on every unaligned load and bought nothing.** `wordAligned` and `loadWord` — the
+// latter since deleted by ADR 0054, so the figure is historical — inlined to 89 against an 80-point
+// budget, so a `loadValue` containing both stopped being inlinable at all
 // (cost 65 → 165, measured with `-gcflags=-m=2`), and every load in every module paid a call. The
 // figure, the mechanism and the pre-registration it falsified are in ADR 0053.
 //

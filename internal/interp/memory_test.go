@@ -134,7 +134,7 @@ func TestNarrowLoadSignExtendsIntoItsOwnSlotWidth(t *testing.T) {
 // Every row used to store at address 0, which is aligned for every width — so after ADR 0053 this
 // test would have exercised the *word* path alone, and the byte fallback's truncation would have had
 // no test at all while this one's name went on claiming the property. Both paths truncate, by
-// different means (`storeWord` by converting to the width's type, the fallback by shifting), so the
+// different means (`atomicStoreWord` by converting to the width's type, the fallback by shifting), so the
 // rows are doubled onto an unaligned address and **a falsification now has to cross the partition
 // twice** to fail this test everywhere. Width 1 has no unaligned form — a one-byte access is aligned
 // at every address — so `s8` appears once, and that is the proposal's `u32 mod N/8 = 0` being
@@ -142,8 +142,9 @@ func TestNarrowLoadSignExtendsIntoItsOwnSlotWidth(t *testing.T) {
 //
 // Falsified two ways, and the split is the point. Reversing the **fallback**'s shift to
 // `byte(v >> (8 * uint(len(dst)-1-i)))` fails the three `addr: 1` rows above width 1 and **leaves every
-// aligned row green**; making the same reversal in `storeWord` (by swapping `guestWord16`/`32`/`64` for
-// an unconditional `bits.Reverse*`) fails the aligned side and leaves the unaligned rows green. Neither
+// aligned row green**; making the same reversal in the aligned helper (`storeWord` when this was
+// written, `atomicStoreWord` since ADR 0054, by swapping `guestWord32`/`64` for an unconditional
+// `bits.Reverse*`) fails the aligned side and leaves the unaligned rows green. Neither
 // injection alone would have been caught by the pre-#557 version of this test.
 //
 // The rows that cannot fail on endianness are still here for the truncation half: `s8` writes one byte,

@@ -9,6 +9,16 @@ slice carry `Ratio-Class: carried`.
 
 Issue: [#557](https://github.com/scttfrdmn/burroughs/issues/557)
 Contract: none — and that is a finding, not an omission. See *This requirement is not §4's* below.
+Superseded in part by [ADR 0054](0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md),
+which is recorded here rather than only there because a superseded decision that does not say so reads
+as current to anyone who arrives by citation. What 0054 takes is the *"Plain accesses, not
+`sync/atomic`"* reasoning below — a mechanism-tier choice the standing ruling of the #566 review moved
+to stamp tier — and, as a consequence, the three helpers that reasoning produced: `loadWord`,
+`storeWord`, and `guestWord16` are **deleted**, their two dispatch sites now calling atomic equivalents.
+What survives is the part this ADR's title names: `wordAligned`, the host-address predicate, which 0054
+leans on entirely. **So the sentences below about `loadWord`'s inlining budget, its injections, and its
+call sites are historical** — true when written, about code that is gone.
+
 Supersedes: nothing. Rests on [ADR 0051](0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md)'s base-alignment premise and reuses its endianness machinery.
 
 ## Context
