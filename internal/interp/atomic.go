@@ -459,17 +459,18 @@ func guestWord64(v uint64) uint64 {
 	return bits.ReverseBytes64(v)
 }
 
-// guestWord16 is the same involution at two bytes, and it exists for the *plain* accesses rather
-// than for the atomics: `sync/atomic` has no 16-bit operations, which is why `atomicCell` reaches a
-// narrow field through the containing 32-bit word and never needs this. #557's tear-free path has no
-// such constraint — an aligned 2-byte access is one `uint16` load — so the width appears here for the
-// first time. Kept beside its siblings because the three answer one question (ADR 0053).
-func guestWord16(v uint16) uint16 {
-	if hostLittleEndian {
-		return v
-	}
-	return bits.ReverseBytes16(v)
-}
+// **`guestWord16` stood here and is deleted by ADR 0054, and its own comment had named the condition
+// under which it would die.** That comment said the two-byte involution *"exists for the `plain`
+// accesses rather than for the atomics: `sync/atomic` has no 16-bit operations, which is why
+// `atomicCell` reaches a narrow field through the containing 32-bit word and never needs this."* 0054
+// makes every aligned access atomic, so the plain two-byte access it served no longer exists, and an
+// aligned 2-byte guest access now reaches its bytes through `atomicCell`'s 32-bit word — where
+// `guestWord32` does the normalization *before* the shift, so the byte order stays right on a
+// big-endian host without a 16-bit conversion anywhere.
+//
+// Kept as a note rather than dropped silently because the deleted comment is the clearest statement in
+// the tree of why the atomics and the plain path needed different byte-order helpers, and 0054's whole
+// content is that there is no longer a plain path to need one.
 
 // atomicCell is one atomic access resolved to the naturally-aligned host word that contains it,
 // plus where the access's bytes sit inside that word.

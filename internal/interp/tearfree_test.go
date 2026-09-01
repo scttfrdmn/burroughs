@@ -109,7 +109,7 @@ func loadMnemonics(t *testing.T) []struct {
 // rows fail first.
 //
 // Float rows report through `reinterpret`, which is a bit move in this engine (`memop.isFloat`'s
-// comment). They are included because `loadWord`'s 4- and 8-byte arms serve them too, so a byte-order
+// comment). They are included because `atomicLoadWord`'s 4- and 8-byte arms serve them too, so a byte-order
 // defect there is observable on a float row — even though floats carry *no* tearing obligation at all
 // (`tearing(fN', N, u32) = ε`).
 //
@@ -122,9 +122,14 @@ func loadMnemonics(t *testing.T) []struct {
 // memory, and both classes must be non-empty per width.
 //
 // Watched die three ways: reversing the byte loop's index (a big-endian loop) fails every width above
-// 1; reversing `loadWord`'s 4-byte arm fails the 4-byte loads; and stubbing `wordAligned` to `false`
+// 1; reversing `atomicLoadWord`'s 4-byte arm fails the 4-byte loads; and stubbing `wordAligned` to `false`
 // fails the aligned-population floor. The first two are value defects, and the point of the third is
 // that a value defect is invisible once the partition collapses.
+//
+// The middle one was **re-observed after ADR 0054 re-pointed the word path**, because re-pointing a
+// control at a new identifier leaves its trigger unexercised: wrapping the 4-byte arm's result in
+// `bits.ReverseBytes32` fails at `i32.load (opcode 0x28, width 4 …) address 1 read 0x…05060708 but
+// address 0 read 0x…08070605`, on the aligned addresses only — which is the arm named and no other.
 //
 // **And a fourth injection was forecast to kill it and does not, which is a limit worth stating rather
 // than a list worth trimming.** Deleting `memAccess`'s branch — so every load takes the byte loop —
@@ -134,10 +139,10 @@ func loadMnemonics(t *testing.T) []struct {
 // load returns the right bits. Neither is a value defect and neither is visible from outside the
 // dispatch, so **the wiring is not this control's subject**:
 // `TestEveryWordAccessSiteIsGuardedByTheAlignmentTest` catches both by AST, and behaviourally the
-// spec suite does — reversing *only* `loadWord` fails `TestPhase1Files`, which it could not do if the
+// spec suite does — reversing *only* `atomicLoadWord` fails `TestPhase1Files`, which it could not do if the
 // word path were unreached.
 //
-// **What it cannot see, and no test in this tree can: `guestWord16`/`32`/`64`'s swap.** Deleting the
+// **What it cannot see, and no test in this tree can: `guestWord32`/`64`'s swap.** Deleting the
 // swap changes nothing on a little-endian host, where the function is the identity — so this control
 // is green on an engine that byte-swaps every access on s390x. That is not a gap this file can close
 // and it is not a new one: `guestWord32`'s own comment records it (*"unexercised by CI, like
@@ -326,7 +331,7 @@ func TestWordAlignedAnswersTheProposalsGuestSpaceCondition(t *testing.T) {
 // runs end to end through the interpreter rather than through `writeNum` directly.
 //
 // The reason is the shape a sibling control paid for: *a control can test the helper, not the path.*
-// Calling `storeWord` and the fallback from a test proves the two renderings agree while nothing in
+// Calling `atomicStoreWord` and the fallback from a test proves the two renderings agree while nothing in
 // the engine calls either. So the module below stores through `i32.store`/`i64.store` and reads back
 // through `i32.load8_u`, one byte at a time — a *narrower* read than the store, which makes byte
 // placement observable and avoids the round-trip circularity that a same-width read-back would have.
@@ -335,8 +340,10 @@ func TestWordAlignedAnswersTheProposalsGuestSpaceCondition(t *testing.T) {
 // authority is again the byte loop by way of the address.
 //
 // Watched die two ways: reversing `writeNum`'s fallback shift (the unaligned rows disagree with the
-// aligned ones at every width above 1) and byte-swapping `storeWord`'s 4-byte arm (the aligned rows
-// disagree with the unaligned ones).
+// aligned ones at every width above 1) and byte-swapping `atomicStoreWord`'s 4-byte arm (the aligned rows
+// disagree with the unaligned ones). The second was **re-observed after ADR 0054 re-pointed the word
+// path**, for the reason its load-side sibling records: `i32.store of 0x1122334455667788 wrote 88 77 66
+// 55 at address 1 but 55 66 77 88 at address 0`.
 //
 // **Deleting `writeNum`'s branch was forecast to fail the partition floor and does not.** Every store
 // then takes the fallback, the values are identical, and the floor is computed by asking the predicate
@@ -421,7 +428,7 @@ func TestAnAlignedStoreWritesTheSameBytesAsAnUnalignedOne(t *testing.T) {
 }
 
 // TestEveryWordAccessSiteIsGuardedByTheAlignmentTest is the structural half, and its subject is
-// memory safety rather than conformance: `loadWord` and `storeWord` make typed accesses through
+// memory safety rather than conformance: `atomicLoadWord` and `atomicStoreWord` make typed accesses through
 // `unsafe`, which is undefined at a misaligned address, so **every** call site must be dominated by
 // the predicate.
 //
@@ -438,12 +445,24 @@ func TestAnAlignedStoreWritesTheSameBytesAsAnUnalignedOne(t *testing.T) {
 // predicate still answers correctly about addresses nothing dispatches on. Both of those injections
 // land here instead, which is why this control's floor is load-bearing and not decoration.
 //
-// Watched die four ways. Deleting a whole branch — the guard *and* the word access — fails the floor
-// at `found 1`, naming the surviving site (`writeNum` when `memAccess`'s branch goes, `memAccess` when
-// `writeNum`'s does). Deleting only the guard, leaving the word access unconditional, fails the bare
-// list naming that function — which is the memory-safety half, since the access is then made at
-// misaligned addresses. A scratch non-test file with a bare `loadWord` call fails naming the scratch
-// file. And blinding the call match fails the floor at `found 0`.
+// Watched die four ways against `loadWord`/`storeWord`, the identifiers this control named before ADR
+// 0054. Deleting a whole branch — the guard *and* the word access — fails the floor at `found 1`,
+// naming the surviving site (`writeNum` when `memAccess`'s branch goes, `memAccess` when `writeNum`'s
+// does). Deleting only the guard, leaving the word access unconditional, fails the bare list naming
+// that function — which is the memory-safety half, since the access is then made at misaligned
+// addresses. A scratch non-test file with a bare word-access call fails naming the scratch file. And
+// blinding the call match fails the floor at `found 0`.
+//
+// **Re-pointed at `atomicLoadWord`/`atomicStoreWord` by 0054, and re-pointing is not re-witnessing** —
+// changing the names a tripwire matches leaves its trigger unexercised, so two of the four were run
+// again on the new identifiers rather than assumed to have survived the rename. Deleting `memAccess`'s
+// branch: `found 1 call sites of atomicLoadWord/atomicStoreWord, want at least 2`. Deleting only
+// `writeNum`'s guard: `1 function(s) make a typed word access without consulting wordAligned:
+// [memory.go:NNN writeNum]` — the line number is elided from the quote rather than transcribed, since a
+// transcribed one drifts with the next insertion above it and the function name is the part that
+// identifies the site. The other two are unchanged in mechanism — the scratch-file and
+// blind-the-match injections turn on the file walk and the match switch, neither of which 0054
+// touched — and they are recorded as carried from the original witnessing, not as re-observed.
 func TestEveryWordAccessSiteIsGuardedByTheAlignmentTest(t *testing.T) {
 	// `memAccess` and `writeNum`, both in memory.go — the two linear-memory access paths. A floor
 	// rather than an equality because a new site is what this should judge, with the exact count
@@ -473,10 +492,10 @@ func TestEveryWordAccessSiteIsGuardedByTheAlignmentTest(t *testing.T) {
 				continue
 			}
 			// The definitions themselves are not call sites, and `wordAligned` is documented as
-			// their precondition rather than enforced inside them — putting the test in `loadWord`
+			// their precondition rather than enforced inside them — putting the test in `atomicLoadWord`
 			// would make the fast path pay for it twice and the fallback unreachable.
 			switch fn.Name.Name {
-			case "loadWord", "storeWord":
+			case "atomicLoadWord", "atomicStoreWord":
 				continue
 			}
 			accesses, tested := 0, false
@@ -490,7 +509,7 @@ func TestEveryWordAccessSiteIsGuardedByTheAlignmentTest(t *testing.T) {
 					return true
 				}
 				switch id.Name {
-				case "loadWord", "storeWord":
+				case "atomicLoadWord", "atomicStoreWord":
 					accesses++
 				case "wordAligned":
 					tested = true
@@ -517,7 +536,7 @@ func TestEveryWordAccessSiteIsGuardedByTheAlignmentTest(t *testing.T) {
 			"vacuous: %d directory entries were considered", len(ents))
 	}
 	if sites < sitesWhenWritten {
-		t.Fatalf("found %d call sites of loadWord/storeWord, want at least %d (memAccess and "+
+		t.Fatalf("found %d call sites of atomicLoadWord/atomicStoreWord, want at least %d (memAccess and "+
 			"writeNum, both in memory.go). Below that the fast path is not wired into a memory "+
 			"access at all, and every agreement control in this file is comparing the byte loop "+
 			"with itself. Guarded: %v", sites, sitesWhenWritten, guarded)

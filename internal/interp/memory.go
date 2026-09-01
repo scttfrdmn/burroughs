@@ -324,7 +324,7 @@ func (m *memory) write(idx, offset uint64, bs []byte) error {
 //
 // **Truncation is the spec's, and this is where it now lives**: `i32.store8` writes the low byte and
 // discards the rest, with no range check, because a store is not a conversion. Both paths truncate —
-// `storeWord` by converting to the width's type, the fallback by shifting — which is a partition a
+// `atomicStoreWord` by converting to the width's type, the fallback by shifting — which is a partition a
 // falsification has to cross twice, and `TestStoreTruncatesAndIsLittleEndian`'s note says so.
 //
 // **The out-of-bounds property is `write`'s and is preserved for the same reason**: the whole extent is
@@ -339,8 +339,19 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 		return trapOOB
 	}
 	dst := m.bytes[ea : ea+width]
+	// The aligned arm is atomic (ADR 0054) — see the twin comment in `memAccess`'s load tail for why
+	// this is a Go-memory-model requirement rather than a tearing one, and why widths 1 and 2 fall
+	// through to `atomicCell`. `cell` re-derives `ea` from `idx`/`offset`, which is the ≈5–8pp the
+	// measurement isolated and the reason widths 4 and 8 do not go through it.
 	if wordAligned(dst, width) {
-		storeWord(dst, v)
+		if atomicStoreWord(dst, v) {
+			return nil
+		}
+		c, cerr := m.cell(idx, offset, width)
+		if cerr != nil {
+			return cerr
+		}
+		c.store(v)
 		return nil
 	}
 	for i := range dst {
@@ -601,8 +612,24 @@ func (in *Instance) memAccess(ins binary.Instr, st *stack) error {
 	// inlinable on their own, so the branch is free and the cost lands nowhere. ADR 0053 records the
 	// figure, and this is what its registered rollback was for — the mechanism it named (a precomputed
 	// width flag) would not have touched the cause.
+	//
+	// **The aligned arm is atomic, not merely untorn (ADR 0054).** 0053 chose one typed word access
+	// here so an aligned access could not decompose; 0054 makes that same access sequentially
+	// consistent, because a plain host read racing a host atomic write is a Go data race whether or not
+	// it tears — and a scoped gate that would confine the racy region is *unavailable* rather than
+	// unwritten, `Spawn` being ambient on any instance. `atomicLoadWord` declines widths 1 and 2, which
+	// have no single atomic instruction, and those route through `atomicCell`'s CAS loop at the cost of
+	// re-resolving the effective address.
 	if wordAligned(bs, m.width) {
-		st.pushNum(extendSlot(loadWord(bs), m))
+		if v, ok := atomicLoadWord(bs); ok {
+			st.pushNum(extendSlot(v, m))
+			return nil
+		}
+		c, cerr := mem.cell(mem.addr(idx), offset, m.width)
+		if cerr != nil {
+			return cerr
+		}
+		st.pushNum(extendSlot(c.load(), m))
 	} else {
 		st.pushNum(loadValue(bs, m))
 	}
