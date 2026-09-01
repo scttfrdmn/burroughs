@@ -68,9 +68,11 @@ type memory struct {
 	// input at `allocate`; it stops being the consumer's question.
 	//
 	// **Never read racily, by construction rather than by care.** The only writers are `allocate`,
-	// before the memory is reachable at all, and — with #554 — `Spawn`'s walk, which runs while
-	// exactly one thread exists. A flag written before any second thread starts is a fact about
-	// the past, which is precisely what decision 0056 rejects option (C) for not being.
+	// before the memory is reachable at all, and — since #554 — `reserveForASecondThread`, which
+	// `Spawn` calls while exactly one thread exists. A flag written before any second thread starts
+	// is a fact about the past, which is precisely what decision 0056 rejects option (C) for not
+	// being. Nothing sets it after a thread is running, and the control on the `go` statement is
+	// what holds that ordering rather than this sentence.
 	noMove bool
 }
 
@@ -99,7 +101,10 @@ func newMemory(m binary.Memory) (*memory, error) {
 	if n > math.MaxInt {
 		return nil, &Trap{Reason: "out of memory"}
 	}
-	bs, noMove, err := allocate(lim, n)
+	// `lim.Shared` is the *producer's* input here and the only thing this site knows: a memory
+	// declared shared is declared for a second thread, and at instantiation no second thread has
+	// been asked for yet. `Spawn`'s walk is the site that knows otherwise (`reserveForASecondThread`).
+	bs, noMove, err := allocate(lim, n, lim.Shared)
 	if err != nil {
 		return nil, err
 	}
@@ -122,57 +127,123 @@ func newMemory(m binary.Memory) (*memory, error) {
 // reallocatable array is not an atomic operation. That is why this is #542's floor rather than an
 // arm beside it.
 //
-// **Reserving is available because the validator already guarantees the max exists.**
-// `internal/validate/module.go:checkMemoryType` refuses a shared memory that declares no maximum
-// (`ErrSharedMemoryNoMax`), which is the threads proposal's own requirement, so `lim.Max` is always
-// known on the branch that needs it. Cited by symbol rather than by line per ADR 0047, so that
+// **The caller supplies the reachability, which is the whole of ADR 0056's shape.** `twoThreadReachable`
+// is the question the reservation actually turns on — *can a second thread reach this array* — and it is
+// a parameter rather than a field read because the two callers know different things. `newMemory` knows
+// only what the module declared, so it passes `lim.Shared`. `Spawn`'s walk knows a second thread is
+// about to exist, so it passes `true` for every memory that thread can reach **through an import
+// slot**, including the unshared ones (`reserveForASecondThread`). That qualifier is the live defect
+// **#575** rather than a detail: the closure is smaller than the reachable set, so a memory the thread
+// enters through a foreign funcref in a table arrives here with `false` and keeps the movable array.
+// The flag stops being the consumer's question here as well as in
+// `grow`: `limits.Shared` was never a sound answer, since T-1's `Spawn` runs the entry in the *same*
+// instance and a spawn-capable instance's unshared memories are two-thread-reachable too.
+//
+// **This is the one site that reserves and therefore the one site that marks**, which is what makes
+// *reserved ⇒ marked* an invariant rather than an agreement: both callers take the mark from this
+// return value, and there is no path that widens the capacity without also handing back the mark.
+//
+// **The validator's guarantee is no longer load-bearing, and saying so is the repair of a citation that
+// was.** This comment used to argue that reserving is *available* because
+// `internal/validate/module.go:checkMemoryType` refuses a shared memory declaring no maximum
+// (`ErrSharedMemoryNoMax`), so `lim.Max` is always known. `reservation` no longer needs a declared max —
+// the cap answers when there is none — which is what ADR 0056's condition 1 owed for the memories the
+// walk marks, since an *unshared* memory is under no obligation to declare one. The citation stays
+// because the refusal is still true and still the reason no shared memory reaches the no-max path; it is
+// no longer the reason the branch is safe. Cited by symbol rather than by line per ADR 0047, so that
 // `TestSymbolCitationsResolveToADeclaration` checks it and an insertion above it cannot re-point it.
 //
-// The branch on `Shared` is stated rather than hidden: an unshared memory has no second observer by
-// construction, so §0's performance partisanship says leave its allocate-and-blit alone rather than
-// reserve address space no guest can race for.
-//
-// **"By construction" now has a tripwire, because it is a claim about reachability that this tree is
-// about to falsify.** `TestNothingInEngineCodeCreatesASecondObserver` fails on the first `go` statement
-// in engine code and carries the instruction to whoever writes it. The gate that looks obvious —
-// `limits.Shared` — is not sound: T-1's `Spawn` (#554) refuses an instance with no shared memory and
-// then runs the entry in the *same* instance, so a spawn-capable instance's unshared memories are
-// reachable from two threads too. **Decided in ADR 0056 (#572), and the `noMove` return value is this
-// function's half of it**: the flag below decides whether to reserve, and the mark it hands back is what
-// `grow` refuses on, so `limits.Shared` stops being the consumer's question. The other half is `Spawn`'s
-// walk, which relocates and marks the unreserved memories while exactly one thread exists (#554) — until
-// it lands, the sentence above is still true of every instance this engine can build, because no engine
-// code starts a goroutine. What the control cannot see is an embedder calling `Invoke` on one instance
-// from two goroutines, which nothing here documents either way.
+// **What no control here can see** is an embedder calling `Invoke` on one instance from two goroutines.
+// Nothing in this tree documents whether that is permitted, so the reachability this parameter carries
+// is the engine's own; a caller outside the module can still create a second observer the walk never
+// heard about. `TestEveryGoStatementInEngineCodeIsPrecededByTheWalk` is scoped to what it can assert.
 //
 // **The reservation is capped, because reserving `max` outright was pre-registered and measured too
 // expensive.** ADR 0051 forecast under 1 ms for the largest declaration the address width allows and
 // stated the rollback in advance; the measurement came back at 4.3 ms best and **855 ms worst** for
 // `(memory 1 65535 shared)`, three orders over, so the rollback fired. `sharedReservePages` is that
 // cap. What is *not* the registered rollback is what happens above it — see `grow`.
-func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
-	if !lim.Shared || !lim.HasMax {
+func allocate(lim binary.Limits, n uint64, twoThreadReachable bool) (bs []byte, noMove bool, err error) {
+	if !twoThreadReachable {
 		return make([]byte, n), false, nil
 	}
-	reserve := min(lim.Max, sharedReservePages) * pageSize
-	if reserve < n {
-		// A declared minimum above the cap is allocated in full and simply cannot grow.
-		// `grow` reports that as the spec's -1 rather than pretending otherwise.
-		reserve = n
-	}
+	reserve := reservation(lim, n)
 	if reserve > math.MaxInt {
 		// The reservation itself is what cannot be served. Reported as the same
 		// out-of-memory trap the minimum would have raised, because from the module's
 		// side that is what happened.
 		return nil, false, &Trap{Reason: "out of memory"}
 	}
-	// **Decision 0056's condition 1 is this `min` and nothing more, which is worth stating
-	// because it looks like it needs code.** Where the declared max is at or below the cap the
-	// reservation *is* the max, so arm 1 covers every legal growth and the engine limit can never
-	// bite: `grow` refuses above `limits.Max` on the module's own declaration, one check earlier.
-	// The refusal therefore reaches only a memory whose max exceeds the cap — or, once #554's walk
-	// marks memories that never declared one, a memory with no max at all.
 	return make([]byte, n, reserve), true, nil
+}
+
+// reservation is how much capacity a no-move memory gets, in bytes: the declared maximum or the cap,
+// whichever is smaller, and never less than what the memory already holds.
+//
+// **Decision 0056's condition 1 is this `min` and nothing more, which is worth stating because it looks
+// like it needs code.** Where the declared max is at or below the cap the reservation *is* the max, so
+// `grow`'s reslice arm covers every legal growth and the engine limit can never bite: `grow` refuses
+// above `limits.Max` on the module's own declaration, one check earlier. The refusal therefore reaches
+// only a memory whose max exceeds the cap, or one with no max at all.
+//
+// **The no-max arm is what the walk needed and a shared memory cannot reach.** A shared memory always
+// declares a maximum (`ErrSharedMemoryNoMax`), so before `Spawn` marked anything this arm was
+// unreachable; an *unshared* memory the walk marks has no such obligation, and the cap is the only bound
+// available for it. That is a real narrowing of what such a memory can do — it becomes a memory that
+// cannot grow past 128 pages — and it is `growthRefusedPastReservation`'s named population rather than a
+// silent one.
+//
+// A declared minimum above the cap is allocated in full and simply cannot grow; `grow` reports that as
+// the spec's -1 rather than pretending otherwise. The multiplication cannot overflow: `pages` is at most
+// `sharedReservePages`, having been floored against it before being scaled.
+func reservation(lim binary.Limits, n uint64) uint64 {
+	pages := sharedReservePages
+	if lim.HasMax && lim.Max < pages {
+		pages = lim.Max
+	}
+	if r := pages * pageSize; r > n {
+		return r
+	}
+	return n
+}
+
+// reserveForASecondThread relocates this memory onto a reserved backing array and marks it, which is
+// decision 0056's second half: the step `Spawn` takes, before the new thread exists, for every memory
+// that thread can reach **through an import slot** — which is not every memory it can reach, and the
+// difference is **#575** (`reachableMemories`). This function is sound about the memory it is handed;
+// what is unsound is the set it is handed, so nothing below changes under #575's remedy.
+//
+// **Relocating here is safe for exactly the reason relocating in `grow` is not.** This runs while one
+// thread exists, so no other agent holds the slice header or a pointer into the old array — the
+// use-after-free `grow`'s refusal arm exists to prevent has no second party yet. That is also why the
+// order is *relocate, then start the thread* and never the reverse: marking a memory a running thread
+// can already see is option (C), which 0056 rejects for asserting a fact about the past.
+//
+// **Idempotent, and the early return is the shared memory's path.** A memory `allocate` already reserved
+// is already marked, so the common case allocates nothing; re-reserving it would also be wrong, since the
+// reservation it has may be larger than the one this would compute if its declared max sits above the cap.
+//
+// The alignment premise is re-asserted on the new array rather than inherited from the old one: ADR 0051's
+// 8-byte base is a property of *an allocation*, and a memory that passed the check at construction says
+// nothing about the array it is being moved onto. A failure here refuses the spawn (see `spawn`), which is
+// the only safe direction — a thread started against a memory this could not mark is the hole itself.
+func (m *memory) reserveForASecondThread() error {
+	if m.noMove {
+		return nil
+	}
+	bs, noMove, err := allocate(m.limits, uint64(len(m.bytes)), true)
+	if err != nil {
+		return err
+	}
+	if err := checkBaseAlignment(bs); err != nil {
+		return err
+	}
+	copy(bs, m.bytes)
+	// The mark comes from `allocate`'s return value rather than being written as `true` here, so that
+	// *reserved ⇒ marked* keeps its single source: this function cannot mark a memory that the one
+	// site which reserves did not report as reserved.
+	m.bytes, m.noMove = bs, noMove
+	return nil
 }
 
 // growthRefusedPastReservation counts decision 0056's condition 2: the named engine limit, kept
@@ -436,8 +507,9 @@ func (m *memory) grow(delta uint64) int64 {
 	}
 	// **A memory with reserved capacity grows by reslicing into it; the pointer never moves.**
 	// The condition is the capacity rather than `limits.Shared`, and that is deliberate in both
-	// directions: `allocate` reserves capacity only for a shared memory (#556), so this is the
-	// shared arm in practice — but an unshared memory whose allocator rounded its size class up
+	// directions: `allocate` reserves capacity for a memory declared shared and for one the walk
+	// marks (#556, #554), so this is the two-thread arm in practice — but a single-threaded
+	// instance's memory whose allocator rounded its size class up
 	// would also take it, and reslicing is *correct* there too, since `make` zeroes the whole
 	// object and the reservation's tail is therefore already the zero page the spec requires.
 	// Testing the property the code actually needs beats testing the flag that usually implies
@@ -488,8 +560,12 @@ func (m *memory) grow(delta uint64) int64 {
 		// instance's **unshared** memories are reachable from two threads too, and a
 		// `Shared`-gated refusal drops them onto the arm below that moves the pointer. The
 		// mark says what this arm needs to know; the flag says what `allocate` needed to
-		// know. Behaviour today is identical — shared ⇒ reserved ⇒ marked — which is why the
-		// unit control above is the only witness there can be.
+		// know. It was written when the two coincided, and #554's walk is what separated
+		// them: a memory an instance never declared shared is marked once a thread that can
+		// reach it is about to start, so *unshared and unable to grow past the cap* is now a
+		// reachable state and `limits.Shared` would have dropped it onto the arm below.
+		// Neither corpus can witness that either, so the unit controls above remain the only
+		// witnesses there are.
 		//
 		// **And it is a named engine limit rather than an anonymous `-1`**, which is the
 		// second of the two conditions decision 0056's ruling carries. The `-1` is shared
