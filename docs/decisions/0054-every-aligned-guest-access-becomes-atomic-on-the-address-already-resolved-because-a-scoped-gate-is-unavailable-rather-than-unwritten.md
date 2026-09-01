@@ -179,6 +179,52 @@ arms already exists, so there is no excuse for shipping the wrong one and callin
 translation from measurement arm to mechanism, and that is a finding to report before the mechanism
 lands, not a favourable result to bank. A forecast beaten is a forecast falsified.
 
+## What came out
+
+Ten interleaved rounds per architecture, `-benchtime=300x`, both arms compiled to binaries up front and
+their hashes checked distinct before any round ran (grave #552's protocol). arm64 is the dev box
+(Apple M4 Pro); amd64 is native x86-64 on `janus.local` through `scripts/xcheck-amd64.sh`, which reported
+`verdict from NATIVE x86_64 (janus.local), exit 0` — not the QEMU container, and named because *a PR
+asserting a cross-architecture claim states which instrument confirmed it*.
+
+```
+arm64 (Apple M4 Pro)          base = main @ 3135a29     new = 551b3f7
+LoadAligned-12      28.10µ ± 2%   28.15µ ± 3%       ~ (p=1.000 n=10)
+LoadUnaligned-12    28.59µ ± 2%   28.81µ ± 1%       ~ (p=0.436 n=10)
+StoreAligned-12     18.82µ ± 5%   18.28µ ± 7%       ~ (p=0.218 n=10)
+StoreUnaligned-12   18.63µ ± 6%   18.92µ ± 5%       ~ (p=0.469 n=10)
+geomean             23.04µ        23.01µ       -0.12%
+
+amd64 (Intel i9-9960X @ 3.10GHz, native)
+LoadAligned-32      59.18µ ± 1%   59.40µ ± 1%        ~ (p=0.481 n=10)
+LoadUnaligned-32    59.09µ ± 2%   60.36µ ± 3%        ~ (p=0.165 n=10)
+StoreAligned-32     38.88µ ± 4%   42.83µ ± 4%  +10.16% (p=0.000 n=10)
+StoreUnaligned-32   42.08µ ± 7%   41.07µ ± 4%        ~ (p=0.436 n=10)
+geomean             48.91µ        50.11µ        +2.46%
+```
+
+**All four registrations hold.** (1) arm64's two aligned rows are `~`. (2) amd64's aligned load is `~`.
+(3) amd64's aligned store is significantly positive at **+10.16%, p=0.000**, inside the registered +8%
+to +20% band. (4) All four unaligned rows are `~` on both architectures, which is the noise reference
+doing its job — they are untouched by construction and they read untouched.
+
+**The rollback did not fire, and the margin is what it was registered to see.** Its trigger was the
+aligned rows landing at the `atomicCell` arm's figures (≈+6% amd64 load, ≈+21% amd64 store): the load is
+flat rather than +6%, and the store is +10.16% rather than ≈+21%. The tuning survived translation.
+
+### The 3.6pp between the arm and the mechanism, named rather than banked
+
+The measurement arm read **+13.72%** on this row and the mechanism reads **+10.16%**. Both are inside the
+band, so nothing here is falsified — but *a forecast beaten is a forecast falsified* applies to figures
+too, and a favourable difference banked as a win never gets asked why it moved. **The two baselines are
+not the same code.** The arm-selectable binary carried an environment-variable branch in the dispatch
+path so that one binary could run three arms; the mechanism carries none. Its `plain` baseline was
+36.61µ against 38.88µ here, so the denominators differ by more than the gap does, and a ratio computed
+against a different baseline is a different ratio. That is the *available* explanation and it is not a
+measured one: nothing here isolates the selector's cost, and no figure below should be read as having
+done so. What is measured is the mechanism's own row, and **+10.16% is the number this decision costs**;
++13.72% was the arm's.
+
 ## Provenance of the instrument
 
 The arm-selectable binary was a throwaway on `measure/0567-arm-selectable`, committed so the figures

@@ -32,9 +32,12 @@ weakly-ordered platform.
   method on any `*Instance` with no spawn-capability declared at instantiation, so nothing at
   instantiation can soundly conclude a memory stays single-observer, and a per-access reachability flag
   would be read racily — a memory-ordering question inside the mechanism meant to settle memory ordering.
-  Measured cost, three arms in one binary, validated on arm64 before the amd64 figure was read: **arm64
-  nothing significant on any row; amd64 aligned stores +13.72%** (`XCHGL` is locked even uncontended),
-  aligned loads and all unaligned rows flat. The 4.70%/8.13% priced earlier was `atomicCell`'s
+  Measured cost of the mechanism as landed, ten interleaved rounds per architecture against `main` under
+  grave #552's protocol: **arm64 nothing significant on any row (geomean -0.12%); amd64 aligned stores
+  +10.16% at p=0.000** (`XCHGL` is locked even uncontended), amd64 aligned loads and all four unaligned
+  rows flat on both. All four pre-registered forecasts hold and the rollback did not fire. The three-arm
+  selectable binary that chose the design had read +13.72% on that row against a different baseline; the
+  gap is named in the ADR rather than banked. The 4.70%/8.13% priced earlier was `atomicCell`'s
   bookkeeping, not atomicity. **Not covered: the unaligned path, which still has no atomic mechanism at
   all** — `atomicCell` assumes alignment and pure Go has no 16-byte CAS — and §4's litmus battery
   ([#10](https://github.com/scttfrdmn/burroughs/issues/10)) will state its coverage as aligned-only for
