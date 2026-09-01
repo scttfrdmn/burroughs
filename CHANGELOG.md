@@ -21,6 +21,43 @@ weakly-ordered platform.
 
 ### Added
 
+- **The §§2–5 litmus battery's allowed-outcome sets are pre-registered, before any mechanism that could
+  satisfy them exists** ([#10](https://github.com/scttfrdmn/burroughs/issues/10), [ADR
+  0055](docs/decisions/0055-the-2-5-litmus-batterys-oracle-is-the-contract-read-clause-by-clause-with-its-outcome-sets-pre-registered-because-no-external-engine-can-arbitrate-a-clause-written-against-one.md),
+  `gate:threads`). `docs/litmus-battery-preregistration.md` carries one entry per clause in contract
+  §§2–5 — all seventeen — each quoting its clause verbatim, and eleven `#### Case` blocks with allowed
+  and forbidden outcome tuples, the interleaving that must be witnessed, the fraction of runs that must
+  reach it, and which architecture is expected to discriminate. **The PR that lands a mechanism may not
+  edit them**; that un-editability is the whole reason they land now rather than after `Spawn`.
+  - **The oracle question is what blocked #10, and it is settled.** Every other suite here is checked
+    against upstream material we did not author, which is contract §0's neutrality guarantee; §§2–5 has
+    no upstream and exists because the mainstream engines disagree with it. So the specification is the
+    contract read clause by clause, **arm64 versus amd64 is the external arbiter** — a reordering the
+    model forbids but the machine performs shows on one and not the other — `-race` is the host half, and
+    a differential against V8 or wasmtime is **refused**, because §4's provenance is D20 with the browser
+    host as the known non-conformer and a differential would ratify the defect §4 exists to forbid.
+  - **The caveat is at the top of the document, not the bottom**: a green from this battery means
+    agreement with an oracle this project wrote, weaker than every green before it. A verdict from it is
+    a falsifier, never a certificate, and is spelled *"not observed in N runs on both architectures"*.
+  - **The tables are data, so there is no green to misread.** The one control beside them,
+    `TestEveryClauseInSectionsTwoThroughFiveIsPreregistered`, asserts the document's agreement with the
+    contract and nothing about the engine: two-way clause coverage, verbatim quotation fidelity, the
+    required keys per case, and an inverse tripwire — a case whose status becomes `implemented` must name
+    a test that resolves, so discharging a blocker turns into a failing test naming the cases to write.
+    Watched die by eleven injections, two of which first reported `ok` because the `perl` substitution
+    had not matched, caught by diffing the mutation before reading the result.
+  - **A caseless clause is visible rather than absent.** Six clauses are structural, one is a suite
+    property, one is a cost claim, and two are deferred to §10 open questions; each says why no
+    interleaving can reach it and what discharges it instead. **Coverage is aligned accesses only, with
+    unaligned named as uncovered**, and the Go-runtime torture set is
+    [#406](https://github.com/scttfrdmn/burroughs/issues/406) — a different oracle.
+  - **The sequencing is stated in the document, including the blocker that is easy to miss.** Tables,
+    then spawn ([#554](https://github.com/scttfrdmn/burroughs/pull/554)), then suspend and wake
+    ([#543](https://github.com/scttfrdmn/burroughs/issues/543)), then the battery. **#543 is a *second*
+    blocker distinct from #554**: two agents can race over plain memory without either suspending, so
+    spawn unblocks B-MM-1 and H-1 while B-MM-2 — the sibling-field-after-wake case §4 names by hand —
+    stays blocked behind `memory.atomic.wait`'s missing suspend path.
+
 - **Every aligned guest memory access is now atomic, on the address the alignment test already
   resolved** ([#567](https://github.com/scttfrdmn/burroughs/issues/567), [ADR
   0054](docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md),
