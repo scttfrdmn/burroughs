@@ -257,6 +257,16 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 // thread runs on its own. `TestEveryStackCreationSiteCarriesAThread` partitions the sites on exactly
 // that distinction rather than listing them.
 func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, arg int32, stackHint int) error {
+	// §4 B-MM-1, at the enclosing function of the `stack` literal below, same as the other three
+	// sites (`boundary.go`, decision 0052, #516). **This is the site where the edge stops being
+	// bookkeeping.** At the other three the host and the guest are the same thread, so the acquire
+	// and release order a thread against itself and the crossing is recorded rather than needed.
+	// Here the crossing is the *only* thing ordering what the spawner wrote before `Spawn` against
+	// what this thread reads first — B-MM-1's message-passing case is exactly this pair of edges
+	// observed from two threads, so the site the control named is also the site the clause is about.
+	enterGuest()
+	defer leaveGuest()
+
 	st := &stack{
 		t:   t,
 		num: make([]uint64, 0, max(stackHint, len(fn.Body))),
