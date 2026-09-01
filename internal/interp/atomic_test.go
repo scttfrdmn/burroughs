@@ -1,6 +1,7 @@
 package interp
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -589,4 +590,120 @@ func TestAtomicRmwIsNotObservablyTornAcrossThreads(t *testing.T) {
 			"can witness this, so this test is the oracle (#542, ADR 0051)",
 			agents, adds, v, want, want-v)
 	}
+}
+
+// TestTheNativeRmwDispatchAgreesWithApplyRmw is what makes ADR 0057's fast path safe: `applyRmw` stays
+// the authority for all six operators, and the dispatch is checked *against* it rather than trusted
+// beside it.
+//
+// **The requirement is #559's own, quoted in the ADR**: a fast path that reimplements sub, and, or and
+// xchg beside `applyRmw` puts a second copy of each operator's meaning in the tree, where
+// `fe 1e` computing a sum for a module that asked for a difference is exactly the defect the derivation
+// was built to prevent. Three properties are asserted per case rather than one, because agreeing on the
+// pushed value is the weakest of the three:
+//
+//   - the **pushed old value** matches, which is what the guest reads;
+//   - the **whole memory image** matches, byte for byte, which is what a neighbouring field reads — a
+//     narrow `and` that wrote 1s outside its field would agree on the return value and corrupt a
+//     neighbour;
+//   - the **eligibility set** is exactly the pre-registered one, pinned as an exact count rather than a
+//     floor. Without that, every arm falling back to the loop would agree with the loop perfectly, and
+//     a fast path nothing takes is the *shape of what survives names the bug* case: a green test over a
+//     mechanism that is not running.
+//
+// The window is 32 bytes at every naturally-aligned position, so a width-1 access is tested at all four
+// in-word shifts and a width-2 access at both — which is where a shift-by-the-wrong-amount hides.
+func TestTheNativeRmwDispatchAgreesWithApplyRmw(t *testing.T) {
+	ops := []struct {
+		name string
+		op   rmwOp
+	}{{"add", rmwAdd}, {"sub", rmwSub}, {"and", rmwAnd}, {"or", rmwOr}, {"xor", rmwXor}, {"xchg", rmwXchg}}
+
+	// Operands chosen to cross every boundary the mechanism has: zero and the identity, a value that
+	// fits one byte, one that fills two, one that fills four, and one that fills eight — so an arm
+	// that failed to truncate to the access width is caught by the operand that overflows it.
+	operands := []uint64{0, 1, 0x5a, 0xffff, 0x89abcdef, 0xfedcba9876543210}
+
+	// seeded is a memory whose bytes are all distinct modulo the word, so a wrong shift moves a value
+	// that can be told apart from its neighbours. A zeroed memory would make `and` and `or` agree on
+	// every shift.
+	seeded := func() *memory {
+		m := &memory{bytes: make([]byte, 64)}
+		for i := range m.bytes {
+			m.bytes[i] = byte(i*7 + 1)
+		}
+		return m
+	}
+
+	nativePairs := map[string]bool{}
+	cases := 0
+	for _, o := range ops {
+		for _, width := range []uint64{1, 2, 4, 8} {
+			key := fmt.Sprintf("%s/w%d", o.name, width)
+			for ea := uint64(0); ea+width <= 32; ea += width {
+				for _, operand := range operands {
+					fast, slow := seeded(), seeded()
+					cf, err := fast.cell(ea, 0, width)
+					if err != nil {
+						t.Fatalf("%s ea=%d: cell: %v", key, ea, err)
+					}
+					cs, err := slow.cell(ea, 0, width)
+					if err != nil {
+						t.Fatalf("%s ea=%d: cell: %v", key, ea, err)
+					}
+					want := cs.update(func(old uint64) uint64 { return applyRmw(o.op, old, operand) })
+					got, ok := cf.nativeRmw(o.op, operand)
+					if !ok {
+						continue
+					}
+					nativePairs[key] = true
+					cases++
+					if got != want {
+						t.Errorf("%s ea=%d operand=%#x: native pushed %#x, applyRmw's loop pushed %#x",
+							key, ea, operand, got, want)
+					}
+					if !bytes.Equal(fast.bytes, slow.bytes) {
+						t.Errorf("%s ea=%d operand=%#x: the two paths left different memory — "+
+							"the pushed values agree and a neighbouring field does not:\n native %x\n loop   %x",
+							key, ea, operand, fast.bytes, slow.bytes)
+					}
+				}
+			}
+		}
+	}
+
+	// The pre-registered eligibility set, derived from the mechanism rather than listed: `and` and `or`
+	// at every width, `xchg` whole-word, and `add`/`sub` whole-word on a little-endian host only.
+	want := map[string]bool{}
+	for _, width := range []uint64{1, 2, 4, 8} {
+		whole := width >= 4
+		want[fmt.Sprintf("and/w%d", width)] = true
+		want[fmt.Sprintf("or/w%d", width)] = true
+		want[fmt.Sprintf("xchg/w%d", width)] = whole
+		want[fmt.Sprintf("add/w%d", width)] = whole && hostLittleEndian
+		want[fmt.Sprintf("sub/w%d", width)] = whole && hostLittleEndian
+		want[fmt.Sprintf("xor/w%d", width)] = false
+	}
+	for key, wantNative := range want {
+		if nativePairs[key] != wantNative {
+			t.Errorf("%s takes the native path: %v, want %v — the dispatch's domain is not the one "+
+				"ADR 0057 records, so either a shape is silently on the loop or one is on a "+
+				"primitive that cannot serve it", key, nativePairs[key], wantNative)
+		}
+	}
+	// A vacuity floor is not a census, so this is the exact count: 24 operator/width pairs, of which
+	// 14 are native on a little-endian host and 10 on a big-endian one.
+	wantNativeCount := 10
+	if hostLittleEndian {
+		wantNativeCount = 14
+	}
+	if len(nativePairs) != wantNativeCount {
+		t.Errorf("%d operator/width pairs reached a native primitive, want %d (hostLittleEndian=%v)",
+			len(nativePairs), wantNativeCount, hostLittleEndian)
+	}
+	if cases == 0 {
+		t.Fatal("no case reached the native dispatch at all, so every comparison above passed by " +
+			"asking nothing")
+	}
+	t.Logf("%d comparisons over %d native operator/width pairs", cases, len(nativePairs))
 }
