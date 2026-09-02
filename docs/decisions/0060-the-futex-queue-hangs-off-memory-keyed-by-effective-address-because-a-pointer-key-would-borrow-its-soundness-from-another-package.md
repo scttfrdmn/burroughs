@@ -141,6 +141,40 @@ whole content is revisiting this function, having first shipped a version of it 
 deadline on any instance with a waiter — `ErrStopDeadline` firing for a thread that is by definition not
 running.
 
+## What implementing decision 3 found, and it is two defects in the code it was extending
+
+Both were found by reading `link.go`'s registration site while writing the `blocked` field, not by a
+failing test, and neither is in this ADR's design — they are in #591's, which decision 3 extends.
+
+**One `thread` is per *instance*; a caller is per *goroutine* ([#592](https://github.com/scttfrdmn/burroughs/issues/592),
+`type:contract`).** `link.go` registers exactly one `thread` per instance, and an embedder may drive N
+concurrent `Invoke` calls through it — this engine's own `TestAtomicRmwIsNotObservablyTornAcrossThreads`
+does, with N=2. So `blocked` is a **count** rather than a flag: a flag would be cleared by the first
+caller to leave a wait while the others were still in one, which is the mark saying *"running"* about a
+thread that is not. The count is exact for that shape and does **not** fix the *mixed* one — one caller
+suspended and another executing guest code on the same `thread`, where `blocked > 0` lets `Stop` report a
+safepoint while guest code runs, SP-2 failing on its own terms. That is not repaired here: the fix is a
+per-call execution context, which is #514's subject, and doing a representation change of that size
+inside a futex slice is *"moving all of them later, in the PR that can least afford it"* pointed the
+other way.
+
+**The arrival buffer was sized by members and filled by callers (grave
+[#593](https://github.com/scttfrdmn/burroughs/issues/593)).** `parkAtSafepoint` sent one arrival per
+*park* into a channel sized `len(w.members)`, having argued the send could not block because *"the buffer
+is `len(w.members)` and each thread sends once per round"* — and deferred the hazard to SP-4's dynamic
+membership. Each thread does send once; the **sender is a caller**. Three concurrent `Invoke`s and one
+`Stop`: A's send is received, B's fills the one slot, and C blocks on the send forever — before
+`<-release`, so `Resume` cannot free it, and `Resume` nils `w.arrived` so nothing ever will. A permanent
+hang through the public API, with no gate. Repaired by reporting one arrival per thread per round
+(`thread.reported`, set under `world.mu`, cleared by `Stop` when it installs the round). A non-blocking
+send is rejected: it cannot hang and it silently *drops* arrivals, which lets `Stop` count two from one
+member and report a stopped world with another member running. **A hang is visible; a wrong verdict is
+not.**
+
+The reason both belong in this ADR rather than only in their issues is that decision 3 is what made them
+reachable in one slice, and a reader who finds `blocked int` and asks why it is not a `bool` needs #592
+in front of them.
+
 ## Options considered
 
 | | Where the queue lives | Why not |
@@ -189,6 +223,9 @@ discharged once a wait/notify pair works.
   answer and not a fast path.
 - `Stop`'s arrival count stops being `len(members)`. That is a change to code #591 landed a week's worth
   of reasoning into, so the two blocked-thread orderings get their own tests rather than an argument.
+- `thread` gains **two** fields rather than the one this ADR designed: `blocked int` and `reported bool`,
+  for the two findings above. Both are guarded by `world.mu`, which is where the transitions they describe
+  are already serialized.
 - **`world`'s one-instance extent is still the named limit it was in #591**, and this slice does not
   narrow it. A `Stop` on instance A does not park a waiter that entered through instance B on the same
   shared memory, which is SP-4's work behind `Spawn`. Recorded because a wait queue that spans instances
