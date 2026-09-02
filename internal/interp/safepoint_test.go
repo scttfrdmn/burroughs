@@ -634,3 +634,106 @@ func TestAResumedGuestSeesAHostWriteFromTheStop(t *testing.T) {
 		t.Fatal("the guest did not finish 30s after Resume, so it was neither released nor bounded")
 	}
 }
+
+// TestThreeConcurrentCallersAndAStopDoNotHang is grave **#593**'s regression, named by that issue.
+//
+// The defect: `parkAtSafepoint` sent one arrival *per park* into a channel `Stop` sized
+// `len(w.members)`, and the comment beside the send argued it could not block because *"the buffer is
+// `len(w.members)` and each thread sends once per round"*. Each thread does; the **sender is a caller**.
+// `link.go` registers one `thread` per instance (#592), so N concurrent `Invoke` calls are N senders
+// sharing one member and one buffer slot: caller A's send is received by `Stop`, caller B's fills the
+// buffer, and **caller C blocks on the send forever** — never reaching `<-release`, so `Resume` cannot
+// free it, and `Resume` nils `w.arrived` so nothing ever will. A permanent hang, no gate, reachable
+// through the public API.
+//
+// **The hang is detected rather than suffered.** Every wait here is a `select` against an interval, so a
+// wedged caller is a reported failure that names how many callers came back; letting the test simply
+// block would surface as the package timeout killing every other test in it, which reports the harness
+// and not the engine.
+//
+// # Two arms, because the grave's own sequence reproduces the defect only in one direction
+//
+// `spinningCallers` is the sequence the issue describes: three goroutines invoking a looping export, one
+// `Stop`. It has a false-negative window — `Stop` returns as soon as *one* arrival lands, and callers B
+// and C have to reach a poll before the `Resume` that follows. They poll at every back-edge, so in
+// practice they do, but "in practice" is not what a regression test for a hang should rest on.
+//
+// `expiringWaits` closes that: three callers suspended in `memory.atomic.wait` whose intervals expire
+// while the world is stopped. `awaitQueued` is an exact signal that all three are suspended before the
+// stop begins, and each one's wake runs `leaveBlocked` → `poll` → `parkAtSafepoint`, so the round
+// contains three parks by construction rather than by scheduling. With `thread.reported` removed this
+// arm reports **1 of 3** callers back, and with it, three.
+func TestThreeConcurrentCallersAndAStopDoNotHang(t *testing.T) {
+	const callers = 3
+
+	t.Run("spinningCallers", func(t *testing.T) {
+		const trips = 10_000_000
+
+		in := spinModule(t)
+		done := make(chan outcome, callers)
+		for range callers {
+			go func() { done <- callOffGoroutine(in, "spin", I32(trips)) }()
+		}
+
+		if err := in.Stop(5 * time.Second); err != nil {
+			t.Fatalf("Stop with %d concurrent callers: %v", callers, err)
+		}
+		in.Resume()
+
+		for i := range callers {
+			select {
+			case r := <-done:
+				if got := r.get(t); got != trips {
+					t.Errorf("a caller returned %d trips, want %d", got, trips)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatalf("%d of %d callers returned within 30s after Resume. The missing one is "+
+					"blocked on the arrival send inside `parkAtSafepoint`, which happens *before* "+
+					"`<-release`, so `Resume` cannot free it and nothing will ever drain the "+
+					"channel again (grave #593). An arrival is one per thread per round, and the "+
+					"buffer was always sized for that", i, callers)
+			}
+		}
+	})
+
+	t.Run("expiringWaits", func(t *testing.T) {
+		const timeout = time.Second
+
+		in := futexModule(t)
+		done := make(chan outcome, callers)
+		for range callers {
+			go func() {
+				done <- callOffGoroutine(in, "wait32", I32(0), I32(0), I64(int64(timeout)))
+			}()
+		}
+		awaitQueued(t, in, 0, callers)
+
+		if err := in.Stop(2 * time.Second); err != nil {
+			t.Fatalf("Stop with %d callers suspended in memory.atomic.wait: %v — contract §3 SP-2 "+
+				"makes every one of them at a safepoint (see "+
+				"TestAStopCompletesWithAThreadSuspendedInAWaitAndDoesNotWakeIt)", callers, err)
+		}
+		// The intervals expire in here, so all three parks happen inside the round.
+		select {
+		case r := <-done:
+			t.Fatalf("a wait returned %d while the world was stopped (see "+
+				"TestAWaitThatExpiresDuringAStopDoesNotReturnUntilResume)", r.res)
+		case <-time.After(2 * timeout):
+		}
+		in.Resume()
+
+		for i := range callers {
+			select {
+			case r := <-done:
+				if got := r.get(t); got != waitTimedOut {
+					t.Errorf("a wait returned %d, want %d (\"timed-out\")", got, waitTimedOut)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatalf("%d of %d callers returned within 30s after Resume — the arrival send is "+
+					"per caller rather than per thread per round, so the buffer `Stop` sized from "+
+					"the membership is full and the rest are wedged before `<-release` "+
+					"(grave #593)", i, callers)
+			}
+		}
+	})
+}

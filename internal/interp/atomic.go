@@ -852,23 +852,31 @@ func truncTo(v, width uint64) uint64 {
 	return v & (1<<(width*8) - 1)
 }
 
-// atomicWait compares the cell against `expected` and reports why it is not waiting.
+// atomicWait suspends this thread until a `notify` claims it or its timeout elapses, and pushes which
+// of the three things happened. The queue and the race argument are in `futex.go`; decision 0060.
 //
-// Three results, and the reference's names for them: 0 "ok" (woken), 1 "not-equal", 2 "timed-out".
-// This engine can produce 1 and 2 and **cannot yet produce 0**, because waking requires a notifier
-// and v1's §§2-5 thread spawn does not exist.
+// Three results, under the reference's names: 0 "ok" (woken), 1 "not-equal", 2 "timed-out". **All three
+// are now reachable.** This comment said the engine *"cannot yet produce 0, because waking requires a
+// notifier and v1's §§2-5 thread spawn does not exist"* — the premise held until [ADR 0059]'s `world`
+// gave the tree its first mechanism for suspending and resuming a guest thread, and #543 is the issue
+// that tracked exactly this gap.
 //
-//   - not equal → 1, immediately. Total, and the only path the corpus exercises: `atomic.wast:433`
-//     seeds the cell with `0xffffffffffff` and then waits on 0, twice.
-//   - equal, and the timeout is short → 2. The reference treats any timeout under
-//     `timeout_epsilon` (1e6 ns, eval.ml:45) as having expired already, and with no other agent
-//     that reading is exact rather than an approximation.
-//   - equal, with a long or infinite timeout → the reference suspends. There is nothing here to
-//     suspend, and the two available lies are both wrong in the accept direction: returning 2
-//     claims a timeout that did not elapse, and returning 0 claims a wake that never happened.
-//     So it reports an engine gap on the *mechanism* channel, which is a fail the board can see
-//     rather than a value it would score. #543 tracks it, milestoned v1 with the futex work whose
-//     absence is the actual cause.
+// **The reference's `timeout_epsilon` is gone, and its own recorded premise is why.** `eval.ml:45`
+// treats a timeout under 1e6 ns as already expired, and the note at this copy site said what made that
+// exact rather than approximate: *"with no other agent that reading is exact."* This slice is what
+// falsifies it. With a notifier in the world, returning 2 for a 500 µs timeout reports a timeout that
+// did not elapse and discards a wake that could have arrived inside it — so the constant is an artifact
+// of a non-suspending executor rather than a clause of the proposal, and keeping it would be copying a
+// workaround for a constraint this engine no longer has. **No vector arbitrates this**: `atomic.wast`
+// seeds the cell with `0xffffffffffff` and waits on 0 twice, taking the not-equal arm both times, and
+// no `.wast` directive can start the second agent that would do the waking. Decision 0060 records the
+// divergence; the oracle is a Go test.
+//
+// The trap order is `check_align; check_shared; Memory.load_num` (eval.ml:445-447), which is why an
+// unaligned wait on an unshared memory reports `unaligned atomic` and not `expected shared memory`, and
+// why an effective address that overflows is raised after the shared check rather than before it.
+//
+// [ADR 0059]: ../../docs/decisions/0059-the-safepoint-poll-is-guarded-at-the-pc-assignment-because-a-back-edge-is-a-runtime-comparison-and-straight-line-code-pays-nothing.md
 func (in *Instance) atomicWait(a atomicop, st *stack, mem *memory, offset uint64) error {
 	if err := st.needNum(3); err != nil {
 		return err
@@ -879,52 +887,54 @@ func (in *Instance) atomicWait(a atomicop, st *stack, mem *memory, offset uint64
 	if err := checkAlign(addr, offset, a.width); err != nil {
 		return err
 	}
-	// **After the alignment check and before the load**, which is `check_align; check_shared;
-	// Memory.load_num` (eval.ml:445-447). An unaligned wait on an unshared memory reports
-	// `unaligned atomic`, not `expected shared memory`.
 	if !mem.limits.Shared {
 		return trapExpectedShared
+	}
+	ea, err := effectiveAddress(addr, offset)
+	if err != nil {
+		return err
 	}
 	c, err := mem.cell(addr, offset, a.width)
 	if err != nil {
 		return err
 	}
-	// The compare reads the cell atomically, like every other access in this file: a wait that
-	// decided on a torn read would report not-equal for a value no agent ever wrote.
-	if c.load() != truncTo(expected, a.width) {
-		st.pushI32(1)
-		return nil
-	}
-	const timeoutEpsilon = 1_000_000
-	if timeout >= 0 && timeout < timeoutEpsilon {
-		st.pushI32(2)
-		return nil
-	}
-	return fmt.Errorf("%w: memory.atomic.wait would suspend, and this engine has no scheduler to suspend (#543)", ErrUnsupportedOp)
+	// The compare happens inside `wait`, under the queue's lock, and that placement is the whole
+	// soundness argument rather than a detail — loading here and passing "it was equal" would read as
+	// the same code and would reopen the futex miss. It reads the cell atomically like every other
+	// access in this file: a wait that decided on a torn read would report not-equal for a value no
+	// agent ever wrote.
+	st.pushI32(mem.wait(st.t, ea, c, truncTo(expected, a.width), timeout))
+	return nil
 }
 
-// atomicNotify wakes nothing, because nothing can be waiting.
+// atomicNotify wakes up to `count` waiters at the effective address and pushes how many it woke.
 //
 // **The load is not dead code**, and deleting it would be an accept-direction defect: the reference
 // discards its result too (`let _ = Memory.load_num mem addr offset ty`, eval.ml:464) and keeps it
 // because the load is what raises the out-of-bounds trap. A notify past the end of memory must trap,
-// and this line is the only thing that makes it.
+// and this line is the only thing that makes it. It stays a discarded load now that the count is real,
+// which is worth saying: making the wake count true is exactly the change during which deleting an
+// apparently useless line would land a bounds defect inside a correctness fix.
 //
-// `count = 0` returns 0 by the reference's own fast path. A non-zero count reaches `NotifyAction`
-// there and would wake real waiters; here there are none, so 0 is the true answer rather than a
-// placeholder — and it stays true until v1 gives the engine something that can wait.
+// **No `Shared` check, which is the reference's behaviour and not an omission.** `notify` on an
+// unshared memory is legal and returns 0 — a memory no second agent can reach can have no waiters, so
+// 0 is the true answer rather than a fast path. Only `wait` requires shared (`check_shared` above).
 func (in *Instance) atomicNotify(a atomicop, st *stack, mem *memory, offset uint64) error {
 	if err := st.needNum(2); err != nil {
 		return err
 	}
-	st.popNum() // count: read for the stack discipline, and 0 is the answer at every value
+	count := uint32(st.popNum())
 	addr := mem.addr(st.popNum())
 	if err := checkAlign(addr, offset, a.width); err != nil {
+		return err
+	}
+	ea, err := effectiveAddress(addr, offset)
+	if err != nil {
 		return err
 	}
 	if _, err := mem.read(addr, offset, a.width); err != nil {
 		return err
 	}
-	st.pushI32(0)
+	st.pushI32(mem.notify(ea, count))
 	return nil
 }
