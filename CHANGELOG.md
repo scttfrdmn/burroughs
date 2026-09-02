@@ -21,6 +21,21 @@ weakly-ordered platform.
 
 ### Added
 
+- **`memory.grow` is one operation against a concurrent `memory.grow`, which the proposal's model
+  requires and this engine did in three steps**
+  ([#600](https://github.com/scttfrdmn/burroughs/issues/600), [ADR
+  0061](docs/decisions/0061-grow-serialises-on-its-own-mutex-rather-than-a-compare-and-swap-over-the-descriptor-because-the-length-lives-in-two-places-and-only-one-is-in-the-descriptor.md)).
+  `relaxed.rst:246` models a length change as an atomic read-modify-write; `grow` read the size,
+  computed a new one and published, so two agents could be granted the same page. Two goroutines
+  calling `Invoke` on one instance reached it — no gate, no `Spawn`. The mechanism is a `growMu` on
+  `memory` held across the whole function, chosen over a compare-and-swap on the image pointer because
+  **the length is stored twice**: `memImage.bytes`' length and `limits.Min`, which import matching reads
+  back, so a CAS over the descriptor leaves the second copy racing. `TestConcurrentGrowLosesNoPages` is
+  the witness — nothing in the corpus can see this, since `memory_grow.wast` is single-threaded — and it
+  carries an observer reading both copies under the lock, because its own first draft sampled them only
+  at the end and the CAS-shaped injection *passed*: the last successful grow heals the drift before
+  anything looks. `internal/interp/growbench` is the arm the pre-registration needed, `membench` having
+  never grown at all.
 - **`memory.atomic.wait32/64` suspend, so the wake result exists and `memory.atomic.notify`'s count is
   real** ([#543](https://github.com/scttfrdmn/burroughs/issues/543), [ADR
   0060](docs/decisions/0060-the-futex-queue-hangs-off-memory-keyed-by-effective-address-because-a-pointer-key-would-borrow-its-soundness-from-another-package.md),
