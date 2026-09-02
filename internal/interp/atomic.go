@@ -566,11 +566,11 @@ func (c atomicCell) store(v uint64) {
 
 // update applies f to the field until it lands, and returns the field's previous value.
 //
-// **One loop for all six operators rather than `AddUint32` for add and `SwapUint32` for xchg**, so
-// that `applyRmw` stays the single definition of the six — its own comment's reason, *"one copy of it
-// is one place to be wrong"*, and the narrow widths need this loop regardless. Whether the four
-// native primitives are worth four dispatch arms is #559's benchmark to settle, not this comment's
-// to assert.
+// **The general form, and still the authority for every operator.** `nativeRmw` below replaces this
+// loop for the shapes `sync/atomic` has a single primitive for; everything else — `xor` at every width,
+// and `add`/`sub`/`xchg` on a field narrower than its containing word — arrives here, and so does every
+// operator on a big-endian host that the native form cannot serve. `applyRmw` stays the single
+// definition of the six, which is its own comment's reason: *"one copy of it is one place to be wrong."*
 func (c atomicCell) update(f func(uint64) uint64) uint64 {
 	for {
 		w := c.word()
@@ -579,6 +579,116 @@ func (c atomicCell) update(f func(uint64) uint64) uint64 {
 			return old
 		}
 	}
+}
+
+// nativeRmw applies op with one `sync/atomic` primitive where one exists for this cell's shape, and
+// reports whether it did.
+//
+// **What it replaces is a round-trip, not the arithmetic.** `update` costs a `LoadUint32` and a
+// `CompareAndSwapUint32` even uncontended, plus a `func(uint64) uint64` closure per instruction; each
+// arm here is one atomic operation and no closure. It is [ADR
+// 0057](../../docs/decisions/0057-the-native-atomic-rmw-dispatch-replaces-the-cas-loop-for-the-shapes-syncatomic-can-serve-in-one-operation.md)'s
+// mechanism, landed on the measurement #559 pre-registered.
+//
+// # Which shapes, and why not the ones #559's body names
+//
+// That body puts the eligible set at *"four of the six at widths 4 and 8"*. Derived from this type's
+// own shape instead, it is wider in one direction and narrower in another:
+//
+//   - **`and` and `or` are native at every width**, including a field inside a containing word, because
+//     a field-scoped `and` is a full-word `AndUint32` carrying 1s outside the field and a field-scoped
+//     `or` is an `OrUint32` carrying 0s there. Those are the identity elements, so the neighbours'
+//     bytes are provably untouched — a *stronger* form of the property `casWord`'s comment argues for,
+//     since nothing outside the field is written at all and there is no retry to lose a write in.
+//   - **`xchg` is native only whole-word.** Replacing a field means preserving its neighbours, and no
+//     single primitive both replaces and preserves.
+//   - **`add` and `sub` are native only whole-word *and* only on a little-endian host.** Both
+//     restrictions are real: a narrow add would carry out of the field into a neighbour's bytes, and
+//     addition does not commute with the byte permutation `guestWord32` applies, because carries cross
+//     byte boundaries. `and`, `or` and whole-word replacement do commute with it — π(g & m) = π(g) & π(m)
+//     — which is why those three need no host-order condition and these two do.
+//   - **`xor` is native at no width**, because `sync/atomic` has no `XorUint32`. Checked against `go doc
+//     sync/atomic` rather than assumed.
+//
+// `sub` is the one arm that writes arithmetic rather than naming a primitive — `AddUint32` of the
+// negation — and it is therefore the one place where a second copy of an operator's meaning exists in
+// this file. `TestTheNativeRmwDispatchAgreesWithApplyRmw` is what makes that safe: it runs both paths
+// over all six operators at all four widths at every in-word field position and requires the pushed
+// value *and* the resulting memory image to be identical, so the fast path is checked against
+// `applyRmw` rather than trusted beside it.
+func (c atomicCell) nativeRmw(op rmwOp, operand uint64) (uint64, bool) {
+	switch op {
+	case rmwAnd:
+		// 1s outside the field, so the neighbours are ANDed with the identity.
+		return c.field(c.andWord(^(c.mask << c.shift) | (operand&c.mask)<<c.shift)), true
+	case rmwOr:
+		// 0s outside the field, likewise.
+		return c.field(c.orWord((operand & c.mask) << c.shift)), true
+	case rmwXchg:
+		if !c.isWholeWord() {
+			return 0, false
+		}
+		return c.field(c.swapWord(operand)), true
+	case rmwAdd, rmwSub:
+		if !c.isWholeWord() || !hostLittleEndian {
+			return 0, false
+		}
+		if op == rmwSub {
+			// Subtraction as addition of the negation, wrapping at the slot exactly as
+			// `applyRmw`'s `old - operand` does. The truncation to the word's width happens
+			// inside `addWord`.
+			operand = -operand
+		}
+		return c.field(c.addWord(operand)), true
+	case rmwXor:
+		// No `XorUint32` exists to call. Spelled as its own arm rather than left to the fall-through
+		// so the `exhaustive` linter reads it — and so the one operator with no primitive is stated
+		// here, where a reader checking the table above lands, instead of inferred from an absence.
+		return 0, false
+	}
+	return 0, false
+}
+
+// field extracts this cell's value from a whole word, which is what every primitive below returns.
+func (c atomicCell) field(word uint64) uint64 { return word >> c.shift & c.mask }
+
+// andWord, orWord, swapWord and addWord are the four primitives, each returning the *previous* whole
+// word in guest byte order.
+//
+// Their arguments are in guest space, like `shift` and `mask`, and the normalization happens at the
+// boundary — the same discipline `word` and `casWord` follow, and for the same reason: a value that is
+// sometimes host-ordered and sometimes guest-ordered is a byte-swap waiting for a big-endian port.
+func (c atomicCell) andWord(mask uint64) uint64 {
+	if c.p64 != nil {
+		return guestWord64(atomic.AndUint64(c.p64, guestWord64(mask)))
+	}
+	return uint64(guestWord32(atomic.AndUint32(c.p32, guestWord32(uint32(mask)))))
+}
+
+func (c atomicCell) orWord(mask uint64) uint64 {
+	if c.p64 != nil {
+		return guestWord64(atomic.OrUint64(c.p64, guestWord64(mask)))
+	}
+	return uint64(guestWord32(atomic.OrUint32(c.p32, guestWord32(uint32(mask)))))
+}
+
+func (c atomicCell) swapWord(v uint64) uint64 {
+	if c.p64 != nil {
+		return guestWord64(atomic.SwapUint64(c.p64, guestWord64(v)))
+	}
+	return uint64(guestWord32(atomic.SwapUint32(c.p32, guestWord32(uint32(v)))))
+}
+
+// addWord is reached only under hostLittleEndian, so no conversion appears in it — and its absence is
+// the point rather than an omission. `guestWord32` is the identity there, and writing it anyway would
+// suggest this arm were host-order-independent, which is the one thing it is not.
+func (c atomicCell) addWord(delta uint64) uint64 {
+	if c.p64 != nil {
+		return atomic.AddUint64(c.p64, delta) - delta
+	}
+	// The old value is the new one minus the delta, wrapping at 32 bits, because `AddUint32`
+	// returns the sum where the spec needs what was there.
+	return uint64(atomic.AddUint32(c.p32, uint32(delta)) - uint32(delta))
 }
 
 // compareAndSwap stores replacement only if the field equals expected, and returns what was there.
@@ -660,6 +770,13 @@ func (in *Instance) atomicRmw(a atomicop, st *stack, mem *memory, offset uint64)
 	c, err := mem.cell(addr, offset, a.width)
 	if err != nil {
 		return err
+	}
+	// The native primitive where one serves this shape, and the general loop otherwise (ADR 0057).
+	// The order matters only for reading: both paths compute the same answer, which is asserted over
+	// the whole cross product rather than argued here.
+	if old, ok := c.nativeRmw(a.rmw, operand); ok {
+		st.pushNum(old)
+		return nil
 	}
 	st.pushNum(c.update(func(old uint64) uint64 { return applyRmw(a.rmw, old, operand) }))
 	return nil
