@@ -34,11 +34,12 @@ weakly-ordered platform.
   little-endian, because carries cross bytes where masking does not; `xor` never, since `sync/atomic` has
   no `Xor`. **Measured, and the claim #559 disputed is refuted at the interpreter's own granularity** —
   −9.05…−12.69% on darwin/arm64 and −4.39…−9.20% on linux/amd64 across exactly the 23 native rows and no
-  other, on a slot-rotated three-arm instrument with a byte-identical null arm. **Its landing is held on
-  two rulings**: the pre-registered acceptance threshold failed on amd64 by 0.04 points, and the criterion
-  that failed it is itself defective (grave #581), which is not this agent's call to re-specify. The price
-  the ADR carries forward: the 19 ineligible rows pay 1–5%, and the hoist written to remove that cost was
-  declined by its own rule.
+  other, on a slot-rotated three-arm instrument with a byte-identical null arm. **The criterion puts the
+  same statistic on both sides**, on Scott's ruling: the geomean over the 23 eligible rows is −10.94%
+  (arm64) and −6.62% (amd64) against a matched null-arm geomean of +0.55% and −0.44% over those same rows,
+  with all 23 rows carrying a verdict at the Bonferroni-corrected α/49 = 0.00102. The price the ADR carries
+  forward: the 19 ineligible rows pay 1–5%, and the hoist written to remove that cost was declined by its
+  own rule.
 
 - **`grow` refuses on a per-memory no-move mark instead of `limits.Shared`, and the refusal is a named
   engine limit** ([#572](https://github.com/scttfrdmn/burroughs/issues/572), [ADR

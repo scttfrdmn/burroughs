@@ -1,11 +1,13 @@
 # 0057 — The native atomic RMW dispatch replaces the CAS loop for the shapes `sync/atomic` can serve in one operation
 
-Date: 2026-09-01 · Status: **proposed** — no stamp exists to cite, and *a `Status:` field is a citation to
-an approval*. **Two rulings are outstanding and one of them decides whether this ADR's mechanism ships at
-all**; both are on
-[#559](https://github.com/scttfrdmn/burroughs/issues/559#issuecomment-5501057158) and neither is this
-agent's to make. The mechanism is implemented and correct; its *landing* failed a pre-registered threshold
-on `linux/amd64` and is held.
+Date: 2026-09-01 · Status: **accepted** — Scott's ruling on the [#582](https://github.com/scttfrdmn/burroughs/pull/582)
+review, which settled both outstanding questions: the acceptance criterion must put **the same statistic on
+both sides** (*"Max effect against max noise, or geomean effect against geomean noise with corrected
+p-values. Don't mix them in either direction"*), and this PR is **product as constituted**. The criterion
+that follows from that ruling was pre-registered on
+[#559](https://github.com/scttfrdmn/burroughs/issues/559#issuecomment-5502519729) before its null side was
+computed, and the mechanism clears it on both architectures. Recorded here by the agent that was ruled on,
+which is durable but not independent.
 
 ## Context
 
@@ -73,6 +75,34 @@ rounds, `benchstat`, `darwin/arm64` Apple M4 Pro and `linux/amd64` Intel i9-9960
 **The sign of the effect partitions exactly along the eligibility census on both architectures** — 23 rows
 faster, 0 of the other 19 faster — which is the specificity that makes this a mechanism rather than a
 curve fit.
+
+**The criterion, and why it is a geomean on both sides.** The claim #559 disputes is *"the dispatch is
+faster on the shapes it serves"*, which is distributional, so the statistic is a summary over the 23
+eligible rows and **the best row is not the figure to compare**. The first criterion written here failed for
+mixing the two: an effect selected as the best of a set, judged against a floor derived from a *typical*
+row. Its replacement over-corrected the other way — a max-over-49-rows floor against a best-of-selection
+effect — and the resolving rule is that the two sides must be the *same* statistic, whichever one is
+nominated. Nominated before the null side was computed:
+
+| | `darwin/arm64` | `linux/amd64` |
+| --- | --- | --- |
+| effect: geomean over the 23 eligible rows | **−10.94%** | **−6.62%** |
+| matched null: geomean over the same 23 rows, old vs. a byte-identical copy | +0.55% | −0.44% |
+| the bar: 3 × the matched null | 1.65% | 1.32% |
+| corrected verdicts: all 23 rows at α/49 = 0.00102 | 23/23 at p ≤ 0.0005 | 23/23 at p ≤ 0.0005 |
+| substance floor, carried over from the original registration | −5% | −5% |
+
+**The null arm behaves as the multiplicity arithmetic predicts, which is a second reason to trust it**: 3 of
+49 rows carry a verdict on arm64 and 4 of 49 on amd64, against an expectation of 2.45 for a perfectly flat
+instrument at α=0.05. A criterion of the form *"every row is `~`"* would therefore have been failed by the
+truth.
+
+**The matched max-vs-max pairing is reported and disagrees on one architecture, which is recorded rather
+than smoothed.** Largest eligible effect against largest null-arm effect over the same 49-row family:
+12.69% against 3 × 1.40% on arm64 (clears), and 9.20% against 3 × 3.08% = 9.24% on amd64 (**misses by 0.04
+points**, a ratio of 2.99× where the multiplier asks 3×). The distributional pairing was nominated as
+governing before either was computed, and the multiplier is not re-tuned now that a number exists to tune it
+against — amending a threshold after measurement is the thing the pre-registration exists to prevent.
 
 **The price is real and it is the consequence to carry forward: the 19 ineligible rows pay 1–5%.** They
 run one test to learn they get the loop they were always going to run, and option 4 above is the repair
