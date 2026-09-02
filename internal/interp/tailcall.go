@@ -147,9 +147,28 @@ func tailFrom(target *Instance, fn *binary.Func, ft *binary.FuncType, st *stack,
 // does tail-call a `spectest` import, and that import's body is **empty** (`wast.go`'s
 // `spectestFields`), so the one cross-instance tail call the suite contains is unobservable by
 // construction.
+// # SP-1's call-site poll is here, and this loop is a back-edge `runFrame` cannot see
+//
+// Contract §3 SP-1 names *"loop back-edges and call sites"*, and this is the funnel every call entry
+// passes through — `invoke` for `call`/`call_indirect`/`call_ref`, and `run` for the boundary. The poll
+// is unconditional rather than predicated: there is no cheaper test at a call, and a call is already
+// paying frame construction, so an atomic load is not the term that matters.
+//
+// **The more important half is the trampoline.** A guest recursing by tail call spins *this* `for`,
+// not `runFrame`'s, and a tail chain assigns `pc` nowhere at all — `return_call.wast`'s 1M-deep
+// `even`/`odd` is exactly that shape. So a poll placed only at [ADR 0059]'s fourteen `pc` sites would
+// leave a tail-recursive guest unstoppable, which is SP-1's bound failing on the one program shape
+// 0026 added. The poll at the top of the loop body covers the call *and* every re-entry.
+//
+// What is **not** covered here is a thread blocked in a *host* call: that is SP-2's clause, it needs a
+// boundary that observes the stop rather than a poll, and it is stated as absent rather than implied
+// by this one's presence.
+//
+// [ADR 0059]: ../../docs/decisions/0059-the-safepoint-poll-is-guarded-at-the-pc-assignment-because-a-back-edge-is-a-runtime-comparison-and-straight-line-code-pays-nothing.md
 func (in *Instance) enterFrame(fn *binary.Func, locals *frame, st *stack, results, refResults, depth int) error {
 	owner := in
 	for {
+		st.t.poll()
 		err := owner.runFrame(fn, locals, st, results, refResults, depth)
 		var t *tailCall
 		if !errors.As(err, &t) {

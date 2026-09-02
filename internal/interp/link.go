@@ -194,6 +194,12 @@ func InstantiateLinked(m *binary.Module, imp Imports) (*Instance, *Trap, error) 
 	// stack with no thread as a *live* state rather than as a test-only one. No allocation happens:
 	// `host` is a value field on a struct this function already allocates.
 	in.host.id = ThreadID(in.nextTID.Add(1))
+	// And it joins the instance's stop-the-world set here, at the same point and for the same reason:
+	// SP-1's `Stop` walks `world.members`, so a thread registered later than its first instruction is a
+	// thread a stop can silently fail to reach — the arrival count would be right about a population
+	// that is missing a member. Registration is where creation is, which is the invariant SP-4's spawn
+	// inherits rather than re-derives.
+	in.world.register(&in.host)
 	// **Imports are resolved before anything is allocated or evaluated**, and the position is
 	// forced rather than chosen: a global's initializer may read an imported global, and an
 	// element or data segment's offset may too, so an unfilled import slot during those passes

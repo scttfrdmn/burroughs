@@ -2,7 +2,10 @@
 
 package interp
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 // ThreadID names a wasm thread. Contract §2's T-1 `tid`.
 //
@@ -74,6 +77,7 @@ type ThreadID uint64
 // [0050]: ../../docs/decisions/0050-the-per-thread-context-is-its-own-object-reached-by-one-pointer-on-stack-because-3-and-5-need-more-per-thread-state-than-a-slot.md
 // [0051]: ../../docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md
 // [0052]: ../../docs/decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md
+// [ADR 0059]: ../../docs/decisions/0059-the-safepoint-poll-is-guarded-at-the-pc-assignment-because-a-back-edge-is-a-runtime-comparison-and-straight-line-code-pays-nothing.md
 // [0054]: ../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md
 type thread struct {
 	// id is T-1's tid, assigned once at creation and never written again.
@@ -101,8 +105,36 @@ type thread struct {
 	// change"*, which is option C's own argument against option B. Deleted, not kept, when the
 	// reader arrives: a directive must not outlive its subject.
 	//
-	//nolint:unused // pinned by 0050 before its first consumer; retired by #515's safepoint check
+	// **That retirement condition has now been falsified by the work it named, and the directive
+	// stays.** This field's forecast was that *"the first reader is #515's safepoint check"*. #515's
+	// check landed ([ADR 0059]) and reads `stopReq` below, not `slot` — a stop request is engine
+	// state and T-4's slot is guest-visible state, and nothing about polling one requires reading the
+	// other. So the suppression's subject is unchanged and deleting it here would be a directive
+	// removed on a coincidence of issue numbers. What *is* corrected is the sentence: `slot`'s first
+	// reader is the host function a module calls to read its own slot, which is public API and still
+	// unwritten. A retirement condition that names a *slice* rather than a *reader* is the kind of
+	// citation that reads as satisfied the moment that slice lands, which is why the condition below
+	// now names the reader.
+	//
+	//nolint:unused // pinned by 0050 before its first consumer; retired by T-4's guest-visible slot accessor
 	slot uint64
+
+	// stopReq is contract §3 SP-1's epoch/stop flag: set by `Stop` on another goroutine, read by
+	// `poll` at every back-edge and call site. [ADR 0059]'s mechanism.
+	//
+	// **Atomic because of who writes it, not because of contention.** The write happens once per stop
+	// round and the read happens per back-edge, so there is no contention to speak of; what makes a
+	// plain `bool` wrong is that `Stop` runs on a different goroutine, and a non-atomic read of a word
+	// another goroutine writes is a data race — undefined behaviour, not a slightly-stale answer.
+	stopReq atomic.Bool
+
+	// w is the stop-the-world state this thread participates in, set by `world.register` at creation.
+	//
+	// Nil is legal and means "no world", which is any `thread` this package's own tests build by
+	// literal. `poll` reads `stopReq` before it ever reaches this field, so a nil `w` costs the hot
+	// path nothing: an unregistered thread can never have `stopReq` set, because the only writer is
+	// the `Stop` that walks a world's members.
+	w *world
 }
 
 // String names a thread in an error or a test failure, so a message about one says which. The only
