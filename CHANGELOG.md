@@ -36,6 +36,14 @@ weakly-ordered platform.
   at the end and the CAS-shaped injection *passed*: the last successful grow heals the drift before
   anything looks. `internal/interp/growbench` is the arm the pre-registration needed, `membench` having
   never grown at all.
+  - **What it cost, and where that could be read.** On native x86-64 the reslicing arm rose 23.68%
+    (p=0.000, n=20), which is +10.34 ns per grow against a Lock/Unlock pair the same run measured at
+    11.32 ns — the registration's bar, held. The reallocating arm is `~`. The arm64 boards do **not**
+    adjudicate that bar and are reported as such: the null arm's own spread reached the size of the bar
+    itself, and the two byte-identical rows disagreed by nine points. That is the law this slice minted —
+    *a measured floor is only informative where it is narrower than the bar it is read against*
+    (`docs/laws/controls.md`) — and the pre-registered **absolute** figure of 15–40 ns is left standing
+    and falsified, because it was a remembered number where the bar beside it was a measured one.
 - **`memory.atomic.wait32/64` suspend, so the wake result exists and `memory.atomic.notify`'s count is
   real** ([#543](https://github.com/scttfrdmn/burroughs/issues/543), [ADR
   0060](docs/decisions/0060-the-futex-queue-hangs-off-memory-keyed-by-effective-address-because-a-pointer-key-would-borrow-its-soundness-from-another-package.md),

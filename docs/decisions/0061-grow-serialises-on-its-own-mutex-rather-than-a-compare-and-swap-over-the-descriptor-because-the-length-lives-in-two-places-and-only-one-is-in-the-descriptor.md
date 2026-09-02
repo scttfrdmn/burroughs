@@ -178,6 +178,118 @@ this ADR is for while changing the cost profile, which is what a rollback has to
 `membench` after this change is not attributable to this change in either direction. This ADR does not
 claim `membench` is unmoved, and it does not get to treat an unmoved `membench` as evidence.
 
+## What came out
+
+Twenty interleaved rounds per board, both arms compiled to binaries up front and their hashes
+checked distinct before any round ran (grave #552's protocol), `-benchtime=20000x` for the reslicing
+and bar rows and `-benchtime=100x` for the reallocating one. The arms are `main` at `50f8f54` —
+permanent, since it is `main`'s tip today — against `c252214`, this slice's mechanism commit, which
+after a squash merge survives on the PR's own `refs/pull/N/head` rather than in `main`'s history.
+arm64 is the dev box (Apple M4 Pro); amd64 is native x86-64 on `janus.local` through
+`scripts/xcheck-amd64.sh`, which reported `verdict from NATIVE x86_64 (janus.local), exit 0` — not
+the QEMU container, and named because *a PR asserting a cross-architecture claim states which
+instrument confirmed it*.
+
+The instrument is identical across the arms **by construction and not by care**: the baseline arm is a
+worktree at `main` with `internal/interp/growbench/` copied in, `diff -r` clean, and the copy is what both
+`go test -c` invocations compiled. `grep -c growMu` reads 0 in the baseline tree and 5 in the effect tree on
+both machines, which is the *arms differ* half — the half #552's hash check exists for and the half a null
+board would otherwise be free to mean.
+
+```
+amd64 (Intel i9-9960X @ 3.10GHz, native)   base = main @ 50f8f54   new = the mechanism commit
+Reslice-32                 43.66µ ± 0%   54.00µ ± 0%  +23.68% (p=0.000 n=20)
+ResliceNull-32             43.69µ ± 0%   53.92µ ± 0%  +23.42% (p=0.000 n=20)
+UncontendedLockUnlock-32   11.32µ ± 0%   11.30µ ± 0%       ~ (p=0.167 n=20)
+Reallocate-32              48.53m ± 3%   47.47m ± 3%       ~ (p=0.398 n=20)
+geomean                    179.9µ        198.8µ       +10.49%
+```
+
+**Registration (1) holds.** `Reallocate` is `~` at p=0.398. The lock is not visible against a 64-page
+`copy`, which is what that arm exists to confirm and what a measurable cost on it would have refuted.
+
+**Registration (2) holds, and the percentage is the wrong unit to be alarmed by.** A reslice row is
+`grows` = 1000 grows, so +23.68% is **+10.34 ns per grow** on a 43.66 ns/grow operation, against a bar the
+same run measured at **11.32 ns per uncontended Lock/Unlock pair**. The increase is one mutex acquisition and
+release and nothing else is hiding in it. That the two byte-identical rows moved by +23.68% and +23.42% — a
+0.26-point spread — is what licenses reading the figure that finely at all.
+
+**The bar row is `~` on both arms**, which is the machine reporting that it did not drift between them. It
+is plain Go touching no engine code, so a move there would have meant the two arms were measured under
+different conditions rather than that the change cost anything.
+
+```
+arm64 (Apple M4 Pro)       first battery, n=10
+Reslice-12                 32.59µ ± 12%   34.73µ ± 14%       ~ (p=0.218 n=10)
+ResliceNull-12             33.40µ ± 10%   34.11µ ± 18%       ~ (p=0.190 n=10)
+UncontendedLockUnlock-12   1.811µ ±  6%   1.828µ ±  5%       ~ (p=0.796 n=10)
+Reallocate-12              11.84m ±  8%   12.24m ± 13%       ~ (p=0.739 n=10)
+geomean                    69.50µ         71.75µ        +3.24%
+
+arm64 (Apple M4 Pro)       second battery, n=20, a complete replication and not an extension
+Reslice-12                 34.38µ ±  9%   36.62µ ±  7%        ~ (p=0.068 n=20)
+ResliceNull-12             32.59µ ±  9%   37.55µ ±  8%  +15.23% (p=0.012 n=20)
+UncontendedLockUnlock-12   2.008µ ±  5%   1.917µ ±  7%        ~ (p=0.245 n=20)
+Reallocate-12              11.26m ± 10%   11.19m ± 11%        ~ (p=0.989 n=20)
+geomean                    70.95µ         73.70µ         +3.87%
+```
+
+### arm64 does not adjudicate registration (2), and the null arm is how that is known
+
+Every arm64 row reads `~` except one, and the exception is the row that *cannot* differ from the row above
+it: `Reslice` and `ResliceNull` are the same source, so a board where one is `~ (p=0.068)` and the other is
+`+15.23% (p=0.012)` is **the instrument disagreeing with itself by nine percentage points**. Nothing about
+the mechanism can be read off that.
+
+Put in the units the registration is written in, the two boards' within-arm floors — the same-source pair's
+own spread, per arm, on one run — sit at:
+
+| board | floor between the two identical rows | the bar, as a share of the row it bounds |
+| --- | --- | --- |
+| amd64, n=20 | 0.06% (base), 0.15% (effect) | 25.9% |
+| arm64, n=10 | 2.49% (base), 1.81% (effect) | 5.6% |
+| arm64, n=20 | 5.51% (base), 2.54% (effect) | 5.8% |
+
+**So the lesson this measurement paid for is about the bar and not about the mutex: a floor is only useful
+where it is narrower than the bar it is being read against.** On amd64 the floor is two orders of magnitude
+below the bar and the comparison means what it says. On arm64 the floor *is* the bar — 5.51% against 5.8% on
+the second battery — so an arm64 board can neither confirm nor refute *"no more than one Lock/Unlock pair"*,
+and reporting its `~` rows as a pass would be reading a resolution the instrument does not have. The
+registration was written as if a null were adjudicable everywhere it is null; what it needed, and now has
+retrospectively, is the floor-versus-bar comparison as an admissibility condition on each board.
+
+The arm64 point estimates are *consistent* with the mutex and nothing else — +6.6% and +6.5% on `Reslice`
+across the two batteries, so about 2.2 ns per grow against a bar the same runs measured at 1.81 and 2.01 ns —
+but consistency is not adjudication, and it is recorded here as the weaker thing it is. **The ordering
+matters and is stated:** the n=10 board was read first, found under-resolved against its bar, and the n=20
+run was then made as a *complete second battery into fresh files* rather than as extra rounds appended to
+the first, so neither board is a stopping rule applied to a running total.
+
+### The absolute forecast is falsified, favourably, and in both readings of its unit
+
+**15–40 ns/op added to the reslice rows** was pre-registered. Measured: +10,340 ns/op on amd64 and about
++2,200 ns/op on arm64. Read literally, as the ns/op of a row, it is wrong by two orders of magnitude. Read as
+this ADR meant it — nanoseconds per grow — it is wrong the other way: the real cost is 10.3 ns per grow on
+amd64 and about 2.2 ns on arm64.
+
+Both readings fail, and the mechanism of the failure is the interesting half. *"An uncontended `sync.Mutex`
+Lock/Unlock pair is tens of nanoseconds"* was a number recalled rather than measured; the same run measures
+it at **1.81–2.01 ns on arm64 and 11.32 ns on amd64**, a spread of six times across two machines and a factor
+of up to twenty below the forecast's floor. The forecast is left as written and falsified — *withdraw a
+forecast before measurement, never after* — and what saves the registration it sits inside is that the
+decisive bar was specified as *a row measured on the same run* instead of as that remembered figure. **A
+forecast beaten is a forecast falsified**, and the failure names its own repair: an absolute figure earns its
+place in a pre-registration only when something on the same run will produce the figure it is compared to.
+
+**The rollback does not fire.** It was registered for `Reslice` rising by materially more than one
+Lock/Unlock pair; on the board that can adjudicate it, the rise is 10.34 ns against a pair measured at 11.32
+ns, and on the board that cannot, the point estimate sits within a tenth of a nanosecond of the same
+comparison. Folding `Limits` into `memImage` and CAS-ing the descriptor stays available and unused.
+
+**The registered known limitation stands as registered.** `membench` was not run as evidence here and no
+claim is made that it is unmoved, because #580's floor is unbounded and a shift there would be unattributable
+in either direction.
+
 ## Consequences
 
 - **The witness.** A test in which two `Invoke` goroutines each grow one page repeatedly, on both arms,
