@@ -176,7 +176,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 						return err
 					}
 					ctrl = ctrl[:level]
-					pc = target - 1
+					pc = st.t.jumpTo(target-1, pc)
 					continue
 				}
 				if err := in.execFB(ins, st, fn, pc); err != nil {
@@ -300,13 +300,13 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// False, so jump to the else-arm if there is one. `elseOf` matches only at
 			// depth 1, so a nested `if`'s ELSE cannot be mistaken for this one's.
 			if els, ok := elseOf(body, pc, end); ok {
-				pc = els // the loop's pc++ lands on the first instruction of the else-arm
+				pc = st.t.jumpTo(els, pc) // the loop's pc++ lands on the first instruction of the else-arm
 				break
 			}
 			// No else-arm: an `if` without one yields nothing, so the whole construct is
 			// skipped and its label popped — the END that would pop it is never reached.
 			ctrl = ctrl[:len(ctrl)-1]
-			pc = end
+			pc = st.t.jumpTo(end, pc)
 
 		case opElse:
 			// Reached only by *falling out of* a then-arm that ran to completion, never by
@@ -331,7 +331,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			if len(ctrl) == 0 {
 				return fmt.Errorf("%w: ELSE outside any if", ErrNotValidated)
 			}
-			pc = ctrl[len(ctrl)-1].cont - 1 // cont is past the END; pc++ restores it
+			pc = st.t.jumpTo(ctrl[len(ctrl)-1].cont-1, pc) // cont is past the END; pc++ restores it
 			ctrl = ctrl[:len(ctrl)-1]
 
 		case opBr:
@@ -351,7 +351,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return err
 			}
 			ctrl = ctrl[:level]
-			pc = target - 1 // the loop's pc++ lands on the target
+			pc = st.t.jumpTo(target-1, pc) // the loop's pc++ lands on the target
 
 		case opBrIf:
 			if err := st.needNum(1); err != nil {
@@ -368,7 +368,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return err
 			}
 			ctrl = ctrl[:level]
-			pc = target - 1
+			pc = st.t.jumpTo(target-1, pc)
 
 		case opBrTable:
 			// The operand is an **unsigned** index into the label vector, and out of range is
@@ -396,7 +396,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return err
 			}
 			ctrl = ctrl[:level]
-			pc = target - 1
+			pc = st.t.jumpTo(target-1, pc)
 
 		case opReturn:
 			// The results are on top of the stack in order, and everything below them is
@@ -457,7 +457,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return returnFrom(st, base, results, refResults)
 			}
 			ctrl = ctrl[:c.Level]
-			pc = c.PC - 1
+			pc = st.t.jumpTo(c.PC-1, pc)
 
 		case opThrowRef:
 			// `ThrowRef, Ref NullRef :: vs -> Trapping "null exception reference"` /
@@ -483,7 +483,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return returnFrom(st, base, results, refResults)
 			}
 			ctrl = ctrl[:c.Level]
-			pc = c.PC - 1
+			pc = st.t.jumpTo(c.PC-1, pc)
 
 		// ---- calls ---------------------------------------------------------------
 		//
@@ -510,7 +510,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 					return returnFrom(st, base, results, refResults)
 				}
 				ctrl = ctrl[:c.Level]
-				pc = c.PC - 1
+				pc = st.t.jumpTo(c.PC-1, pc)
 				continue
 			}
 
@@ -572,7 +572,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 					return returnFrom(st, base, results, refResults)
 				}
 				ctrl = ctrl[:c.Level]
-				pc = c.PC - 1
+				pc = st.t.jumpTo(c.PC-1, pc)
 				continue
 			}
 
@@ -626,7 +626,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 					return returnFrom(st, base, results, refResults)
 				}
 				ctrl = ctrl[:c.Level]
-				pc = c.PC - 1
+				pc = st.t.jumpTo(c.PC-1, pc)
 				continue
 			}
 
@@ -998,7 +998,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return err
 			}
 			ctrl = ctrl[:level]
-			pc = target - 1
+			pc = st.t.jumpTo(target-1, pc)
 
 		case opBrOnNonNull: // 0xd6 — `eval.ml:240-244` (`gate:gc`, #172 rung 1)
 			if err := st.needRef(1); err != nil {
@@ -1023,7 +1023,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return err
 			}
 			ctrl = ctrl[:level]
-			pc = target - 1
+			pc = st.t.jumpTo(target-1, pc)
 
 		// ---- constants -----------------------------------------------------------
 		//

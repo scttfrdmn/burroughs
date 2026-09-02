@@ -529,6 +529,29 @@ reach is a law out of context.
     - **A build failure counted as a kill is the quietest way to leave a guard unwatched** — quieter
       than a stillbirth, which at least leaves a green where a red was predicted. This one leaves the
       red. (Mint: Scott, on the #429 report — "worth having written down somewhere".)
+    - **And the assertion-message tell is *still* not sufficient, because a deleted subject fires the
+      predicted assertion.** [Grave #589](https://github.com/scttfrdmn/burroughs/issues/589): between
+      two injections in #515's battery, the restore step was `git checkout internal/interp/exec.go`.
+      The slice was **uncommitted**, so HEAD was `main` and that command reverted the *subject* — all
+      fourteen `pc = st.t.jumpTo(…, pc)` routings the control exists to assert — rather than the
+      injection. The next row then blinded the control's own `jumpTo` match and predicted *14 raw, 0
+      routed, census fires*; a subject reverted to main produces **that exact board**, on the
+      assertion, with the message the row forecast, because there are no `jumpTo` calls to match
+      either way. So the row wrote itself as a kill while certifying nothing, and the rule one level
+      up — read the *channel* the redness arrives on — cannot separate them: both arrive on the
+      assertion channel. What separates them is the **state of the tree, not the output of the test**.
+      - **So an injection battery needs a committed baseline**, which turns the restore into a
+        restore: after `git checkout`, the diff against the baseline is empty by construction, and
+        `git status` showing only the injected file modified is the observation that discriminates the
+        two causes. Commit first; a battery run against uncommitted work has its subject in the blast
+        radius of its own revert step.
+      - **Generalised, this is the trichotomy pointed the other way.** The trichotomy classifies an
+        unexpected *pass*; this is an expected **fail arriving from a confounded cause**, and it is the
+        more dangerous direction precisely because the prediction was met. *A suspiciously clean result
+        is a tell* applies to a red that lands exactly on its forecast, too. Same family as grave
+        **#552**, where sequential benchmark arms made run order a confounder: in both, a step of the
+        protocol was the thing that corrupted the protocol's own output, so the audit a battery owes
+        itself is *what else could have produced this board*.
   - **A control must fail, never hang — a timeout names no row.** The birth requirement's
     second failure mode, and it is not stillbirth: the control fires, it is technically red, and it
     is *worse* than red, because `panic: test timed out` identifies no case and takes the whole test

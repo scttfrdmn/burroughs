@@ -116,7 +116,7 @@ func TestNothingInEngineCodeCreatesASecondObserver(t *testing.T) {
 
 	// The vacuity check, for the reason its sibling states: a walk that read no Go files would report
 	// no offenders and pass, which is indistinguishable from a clean tree. Same floor as
-	// `TestNoSyncPrimitiveIsUsedInEngineCode`, which walks the same population.
+	// `TestNoEngineLockIsHeldAcrossAChannelOperation`, which walks the same population.
 	const engineFilesWhenWritten = 40
 	if len(scanned) < engineFilesWhenWritten {
 		t.Fatalf("scanned %d non-test .go file(s) under %s, want at least %d — the walk is not "+

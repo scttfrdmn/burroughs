@@ -16,12 +16,19 @@ import (
 // TestEveryStackCreationSiteCarriesAThread is a **structural** control, and saying so is the point of
 // this comment.
 //
-// Nothing on the interpreter's hot path *reads* `stack.t` in this slice — the first reader is #515's
-// safepoint check — so a behavioural test of propagation is not available: deleting `t: &in.host` from
-// a creation site changes no observable answer, and a test that passed either way would be an
-// analytic zero wearing a control's clothes. What *is* checkable today is the invariant decision 0050
-// actually rests on: **every stack the engine creates is given a thread**. So this parses the
-// package's own non-test sources and asserts it of every `stack{…}` literal in them.
+// **This control's original reason has expired, and the control has not.** It was written when nothing
+// on the interpreter's hot path read `stack.t`, so a behavioural test of propagation was unavailable:
+// deleting `t: &in.host` from a creation site changed no observable answer, and a test that passed
+// either way would have been an analytic zero wearing a control's clothes. #515 landed that reader —
+// `jumpTo`'s safepoint poll, at fourteen sites in `runFrame` plus `enterFrame`'s trampoline — so a
+// missing thread is now observable in principle: `Stop` would fail to reach a guest running on that
+// stack. The control **stays and is not re-pointed** (*a tripwire whose subject dissolves is
+// re-pointed, never retired* — here the subject has not dissolved at all). Two reasons: the poll is
+// nil-legal by design, so a stack built without a thread silently opts out of stopping rather than
+// crashing, which is the quietest possible failure; and a behavioural test would cover whichever
+// creation site its module happens to reach, where this asserts the invariant decision 0050 actually
+// rests on — **every stack the engine creates is given a thread** — over every `stack{…}` literal in
+// the package's own non-test sources.
 //
 // **The domain is derived, not enumerated.** Listing today's three sites would inherit today's blind
 // spot — the failure this exists to catch is a *fourth* site added later, and T-1's `runEntry` is
@@ -110,8 +117,9 @@ func TestEveryStackCreationSiteCarriesAThread(t *testing.T) {
 	if len(without) != 0 {
 		t.Errorf("these `stack` literals set no thread: %v\n"+
 			"Every stack the engine creates carries the thread it runs on (decision 0050): all "+
-			"three sites pass `&in.host`. A stack with no thread reaches #515's safepoint check as "+
-			"a nil dereference, and until #515 lands it is silent — which is why this is checked "+
+			"three sites pass `&in.host`. #515's safepoint poll is nil-legal by design, so a stack "+
+			"with no thread does not crash — it silently opts out of `Stop`, and a guest running on "+
+			"it is unstoppable while every test still passes. That is why this is checked "+
 			"structurally rather than by running anything.\nSites that do carry one: %v",
 			without, withThread)
 	}
@@ -120,8 +128,10 @@ func TestEveryStackCreationSiteCarriesAThread(t *testing.T) {
 // TestTheHostThreadTakesTheFirstIDAndIsNotSpecial is the behavioural half available in this slice: the
 // thread exists, it is reachable from a running stack, and its id is 1.
 //
-// **Why an id assertion is worth anything here.** T-4's slot has no reader until #515, so the only
-// property of the context that is observable today is its identity — and identity is where the
+// **Why an id assertion is worth anything here.** T-4's slot still has no reader — #515's poll reads
+// `stopReq`, not `slot`, which is the retirement condition `thread.slot`'s own comment records as
+// falsified by the work that named it — so the only property of the context observable through this
+// stack is its identity, and identity is where the
 // main-thread special case T-2 forbids would show up first. A host thread with id 0 would be
 // indistinguishable from an unset field; a host thread privileged in any other way would need a
 // second field, and there is none.

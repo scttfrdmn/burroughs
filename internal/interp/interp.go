@@ -162,8 +162,19 @@ type Instance struct {
 	//
 	// Non-nil by construction on any instance `InstantiateLinked` built, which is every instance
 	// outside this package's own tests, so `stack.t` is set from the first instruction and #515's
-	// safepoint check will not have to treat a threadless stack as a live state.
+	// safepoint check does not have to treat a threadless stack as a live state. That forecast is
+	// now landed and holds: `poll` still returns nil on a nil receiver, but the path exists for
+	// stacks this package's own tests build by literal and not for anything a caller can reach.
 	host thread
+
+	// world is contract §3 SP-1's stop-the-world state — `Stop`, `Resume`, and the members every
+	// safepoint poll parks into. See `world` in safepoint.go for why its extent is one instance and
+	// why that is a stated limit rather than the end state.
+	//
+	// A value for `host`'s reason: it rides this allocation, `register` takes `&in.world`, and an
+	// instance whose world could be nil would make every poll's fast path answer a question about
+	// the engine's own construction.
+	world world
 }
 
 // Instantiate allocates a module's memories and copies its active data segments in.
