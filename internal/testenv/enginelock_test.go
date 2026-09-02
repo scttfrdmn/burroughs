@@ -56,8 +56,8 @@ import (
 // deliberately conservative — it over-reports rather than under-reports, treating everything between a
 // function's first lock and its last unlock as locked even where a branch has released early — because
 // the failure being priced is a hazard and the safe direction for a hazard control is to complain too
-// much. A false positive is a comment away from being a narrowed rule; a false negative is grave #10's
-// battery finding it on a weakly-ordered platform.
+// much. A false positive is a comment away from being a narrowed rule; a false negative is #10's litmus
+// battery finding it on a weakly-ordered platform, or not finding it.
 //
 // **Matching `.Lock()` by method name rather than `sync.Mutex` by type is what the predecessor's own
 // reasoning bought.** An aliased import — `import mu "sync"` — evades a selector match on `sync.X`
