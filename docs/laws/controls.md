@@ -649,6 +649,83 @@ reach is a law out of context.
   `wantUnclaimed` to empty — which is now a *board figure*, every category the reference has being
   claimed.
 
+  **Third instance, and the sample is the process rather than a list** (grave [#599]).
+  `TestEveryBoundaryCrossingIsPaired` (`internal/interp/boundary_test.go`) closed with
+  `crossings() % 2` — a parity read on `boundaryCrossings`, a package-level `atomic.Uint64` that is
+  never reset. Every other assertion in the file is a delta, and the reader helper says so at the read
+  site, in these words: *"every assertion here is a delta … naming that at the read site is what stops
+  an absolute from being written by accident: the word is package-level and never reset, so its value
+  is a fact about whatever ran earlier in the binary."* Twenty lines later, the accident. The scope the
+  control claimed was *its own five cases*; the scope it actually read was **every test in the package
+  that had run before it**, which under `-shuffle=on` is a different sample on every run.
+  It cost a red with another test's cause in it. A sibling arm ([#598], below) failed and abandoned
+  three callers inside the guest, three `enterGuest` calls went unpaired, and this line reported *"some
+  site entered the guest and never left it … a site paired them by hand and returned early"* — a claim
+  about an engine site, with none to point at. Repaired to `(crossings() - before) % 2`, watched from
+  both sides: an odd crossing injected **before** the window leaves it green where the absolute reds,
+  and an odd crossing injected **inside** the window reds, so the scoping did not buy silence.
+  Two things generalise past the fix. First, **the absolute's red was incoherent on its own terms** —
+  reverting the condition while leaving the message printing the delta produced *"delta is odd (14)"*,
+  an even number reported as odd, because guard and message were reading different populations. Second,
+  the leak's removal is not the repair. The counter is global, so the next test written in that package
+  can poison it, and the author has no reason to know an unrelated arm's parity is watching them: **a
+  control a sibling can break is not scoped to its subject**, and the enumeration here was implicit —
+  a process, not a list.
+
+### A deadline used as a hang detector measures throughput, and its red names a mechanism it never observed.
+
+- **A deadline used as a hang detector measures throughput, and its red names a
+  mechanism it never observed.** *Wedged* and *not finished yet* are different facts, and an interval
+  cannot tell them apart. A control that waits `D` for a result and reports "blocked" on expiry has
+  written a throughput claim and labelled it a liveness claim; the label is what the next reader
+  believes, and there is no sweep in this tree whose domain includes a `t.Fatalf` string.
+
+  **Specimen: grave [#598].** `TestThreeConcurrentCallersAndAStopDoNotHang/spinningCallers`, the
+  regression test for [#593]'s permanent hang, ran three concurrent callers through a
+  10,000,000-trip guest loop, called `Stop` and `Resume`, then gave each caller 30 seconds. On CI it
+  printed *"0 of 3 callers returned within 30s after Resume. The missing one is blocked on the arrival
+  send inside `parkAtSafepoint` … nothing will ever drain the channel again"* — over a branch whose
+  diff was a shell script, a test file, this corpus and a changelog. Nothing was blocked. All three
+  callers were `[runnable]` inside the interpreter, which is what the runtime prints if you run the
+  package with `-timeout` a few seconds under the arm's own interval and let it dump the stacks.
+
+  **The measurements that were never taken, in the order that settles it.** The bound against the
+  thing it bounds, on the slowest machine that runs it: 8.56s at `GOMAXPROCS` default on the dev box,
+  23.10s at `GOMAXPROCS=1`, 27.55s at `GOMAXPROCS=1` against eight spinning hogs — against a 30s
+  deadline, so **2.5s of headroom on an idle laptop** before CI's four shared cores were asked. And
+  the mechanism's own signature: with [#593]'s defect deliberately reintroduced the repaired arm
+  reports **2 of 3** callers back, because `Stop` receives one arrival and the buffer holds one, so
+  exactly one caller wedges. *0 of 3 is not that mechanism's shape at all* — the count in the red was
+  evidence against the diagnosis printed beside it, and reading it would have cost nothing.
+
+  **The repair is to move the property out of the scheduler's reach, not to raise the number.** The
+  loop is now gated on a word the host writes (`gatedSpinModule`), so no caller can finish early and a
+  released caller returns in microseconds: the deadline is finally orders of magnitude away from what
+  it bounds, and a red means blocked. Raising the deadline instead would have bought a quieter version
+  of the same defect, and *withdrawing a forecast after measuring it* is the shape that makes a
+  threshold amendment look like a discovery.
+
+  **Two riders the specimen earned.** A gate makes the arm *fast*, and 0.00s was a tell: three
+  goroutines that have not reached `Invoke` register no thread, so `Stop` would have stopped an empty
+  world and the arm would have been a green over nothing — closed with an arrival count the guest bumps
+  and the host waits on, as a **premise** whose failure says *nothing was measured*. And the gate does
+  not buy what it is tempting to claim: `Stop` returns on the first arrival and `Resume` clears the
+  request, so three parks in one round is still not guaranteed, only narrowed. *Narrow is not closed*,
+  the sibling arm closes it by construction, and saying so is why there are two.
+
+  **Sibling shapes.** *An unasserted distance is the vacuum* (under [a comparison against an empty
+  set](#a-comparison-against-an-empty-set-succeeds-so-a-control-that-compares-needs-a-vacuity-check))
+  is the same defect in the passing direction — a bound too far from its subject to fire; this is one
+  too close, firing on the wrong cause. And a red that names a mechanism the trigger cannot distinguish
+  is *the defect stated as the rule*
+  ([errors-and-testimony.md](errors-and-testimony.md#comments-and-adrs-are-testimony-too-and-where-prose-and-the-references-executable-disagree-the-executable-outranks))
+  relocated into a failure message, where it is worse than in a comment: a comment is read while the
+  tree is calm, and a message is read by someone deciding what a red means.
+
+  [#593]: https://github.com/scttfrdmn/burroughs/issues/593
+  [#598]: https://github.com/scttfrdmn/burroughs/issues/598
+  [#599]: https://github.com/scttfrdmn/burroughs/issues/599
+
 ### A guard's trigger predicate is itself a claim about the space, and an under-matching one fails silently by construction.
 
 - **A guard's trigger predicate is itself a claim about the space, and an
@@ -717,6 +794,50 @@ reach is a law out of context.
   rest of the body into the excluded region and reintroduce this law's own silent under-match, and
   the prose line count printed beside the verdict, so a population that collapsed to zero cannot
   report a pass. (Both boundaries measured on PR #339's own body; the second on its CI red.)
+
+  **Fifth specimen, and the aggravation is that the missing member of the population was already
+  sitting in the tracker when the trigger was written** (grave [#595], on PR [#594]'s merge).
+  `closecheck.sh` bans a closing keyword adjacent to an issue reference, and its trigger enumerated
+  three reference forms — `#N`, `GH-N`, `owner/repo#N` — under a coverage note reading *"all three
+  close, so all three are matched."* A fourth closes: the reference **wrapped in a markdown link**.
+  `Close [#543](https://github.com/scttfrdmn/burroughs/issues/543)` in #594's *Next* section scanned
+  clean, and closed #543 on the merge.
+
+  Three things make this the sharpest instance of this law rather than another one of it.
+
+  **The missed form was the house style.** Every reference in every PR body in this repo is a markdown
+  link, because that is the form `citecheck` resolves. So the trigger matched the three forms GitHub
+  *documents* and missed the only form the corpus *writes* — a predicate whose coverage of its nominal
+  space was 3-of-4 and whose coverage of its actual population was near zero.
+
+  **The remedy this law prescribes was available and cheap, and it is what finally ran.** "Measure the
+  trigger's coverage against the population it claims" is one command here, because the population is
+  the repo's own pull requests. Run over all **250** PRs in the tracker (`--state all`, title and body,
+  which is exactly what the `--pr` arm scans), the repaired trigger fires on **38** — **33** bare and
+  **5** linked. The ban landed in PR #316 on 2026-08-15; the highest bare-form hit is **#307**, so the
+  covered half has held across every PR since, and the *single* post-ban breach in 278 PRs is #594,
+  in the uncovered form. An enumerated trigger and a measured one differed by exactly the case that
+  fired.
+
+  **Four of the five linked specimens predate the trigger.**
+  `Closes [#164](https://github.com/scttfrdmn/burroughs/issues/164)` in PR #169 closed #164
+  two seconds after that merge, on 2026-08-07 — eight days before the ban was written — and #170,
+  #171 and #190 are the same construct. The evidence needed to falsify *"all three"* was in the
+  tracker, in the author's own prose, before the sentence was written; nothing had to be predicted,
+  only counted. **An enumeration of a space is a claim that can usually be checked against the
+  corpus, and the reason to check is that a trigger's under-match returns no finding rather than a
+  wrong one.** The two-second close signature is also the reading that promotes this from inference to
+  measurement, and it came free with the sweep.
+
+  The residue is stated rather than absorbed: a bare issue URL, an autolink, and a reference-style
+  `[#N][ref]` are **untested and unmatched** ([#596]). They are not matched conservatively, because
+  this law's fourth specimen above is the other direction — an over-match that fires on correct prose
+  teaches the writer to phrase around the instrument — and the only authority that could settle them
+  is GitHub's parser, which costs a merged pull request to ask.
+
+  [#594]: https://github.com/scttfrdmn/burroughs/pull/594
+  [#595]: https://github.com/scttfrdmn/burroughs/issues/595
+  [#596]: https://github.com/scttfrdmn/burroughs/issues/596
 
 ### A control specified by its mechanism rather than by the defect it must catch will catch a different population.
 

@@ -50,12 +50,12 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 		(func (export "f") (result i32) (global.get 0))
 		(func (export "boom") (result i32) (i32.div_s (i32.const 1) (i32.const 0))))`
 
-	before := crossings()
+	atStart := crossings()
 	in, trap := instantiate1(t, mod)
 	if trap != nil {
 		t.Fatalf("instantiate: %v", trap)
 	}
-	if got := crossings() - before; got != 6 {
+	if got := crossings() - atStart; got != 6 {
 		t.Errorf("instantiating one global and two functions crossed the boundary %d times, want 6: "+
 			"InstantiateLinked's pair, build's pair, and runConst's pair for the one global "+
 			"initializer. A number below this is a site that stopped crossing; above it is a site "+
@@ -96,10 +96,27 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 	// by two and the parity clean, which is measured rather than assumed (the deletion was run, and
 	// the per-case deltas above are what caught it). So this is a second, weaker net under the exact
 	// assertions above, and not a substitute for them.
-	if got := crossings() % 2; got != 0 {
-		t.Errorf("the boundary counter is odd (%d) after every case above, so some site entered the "+
-			"guest and never left it. Every crossing is `enterGuest()` with a `defer leaveGuest()`, "+
-			"so an odd count means a site paired them by hand and returned early", crossings())
+	//
+	// **Over this test's own delta, which is grave #599.** It was written as `crossings() % 2` — an
+	// absolute, over a package-level counter that is never reset — in the file whose reader helper
+	// says, twenty lines up, that *"every assertion here is a delta"* and that naming the delta at the
+	// read site is *"what stops an absolute from being written by accident"*. The accident happened
+	// anyway, two screens below the sentence predicting it, and what it cost was a red with somebody
+	// else's cause in it: `TestThreeConcurrentCallersAndAStopDoNotHang/spinningCallers` failed under
+	// `-shuffle=on`, abandoned its three in-guest callers, and this line reported an engine site that
+	// pairs `enterGuest`/`leaveGuest` by hand. There is none. The delta keeps every bit of the power
+	// claimed above — an odd number of missed releases *in the cases above* — and is immune to whatever
+	// the rest of the binary did, which an absolute over a global never was.
+	//
+	// `atStart` rather than `before`, because the baseline is now live across the per-case loop that
+	// takes its own `before` and `govet`'s `shadow` says so. Worth a line: the shadow was *unreportable*
+	// while the outer name died before the loop, so the lint arriving with this repair is the repair
+	// making a variable matter rather than a new defect.
+	if got := (crossings() - atStart) % 2; got != 0 {
+		t.Errorf("this test's own boundary delta is odd (%d) after every case above, so one of them "+
+			"entered the guest and never left it. Every crossing is `enterGuest()` with a `defer "+
+			"leaveGuest()`, so an odd delta means a site paired them by hand and returned early",
+			crossings()-atStart)
 	}
 }
 
