@@ -238,9 +238,14 @@ committed baseline. The boards recorded here are from the re-runs against one.
 Two platforms, interleaved main-then-branch within each round so a thermal or scheduler drift lands on
 both arms of a round rather than on one arm as a block, `n=20`, `-benchtime=300x`. Both binaries built
 per arm and their hashes compared before any round ran — [ADR
-0053](0053-simd-narrow-loads-and-stores-dispatch-on-alignment-because-the-cost-is-the-unaligned-path-and-not-the-simd-width.md)'s
-recorded trap fired again here and was caught by that check: a `cd` inside a compound command persists,
-so a second `go test -c` had built both arms from the same worktree and produced one binary twice.
+0053](0053-tear-freedom-is-one-aligned-word-access-chosen-from-the-slices-own-host-address-because-0051-already-asserts-the-base.md)
+records the same trap firing on its own first attempt (*"both `go test -c` invocations ran in the
+external worktree"*), and it fired again here for the same reason: a `cd` inside a compound shell command
+persists, so the second build ran in the first's directory and the two arms were one binary twice. Caught
+by the hash check before a round ran, and worth noticing that the check is carried by [grave
+#552](https://github.com/scttfrdmn/burroughs/issues/552)'s protocol while catching something #552's own
+subject — run order as a confounder — does not name. *Identical boards are the finding*, and every row
+would have read `~` for the most boring possible reason.
 
 ```
 goos: darwin  goarch: arm64  cpu: Apple M4 Pro
