@@ -120,9 +120,9 @@ import (
 // This paragraph used to read *"why this file contains none"*, and the sentence it opened with —
 // plain read-then-write being *"observationally complete for the engine as it exists"* — was true
 // when it was written and stopped being true the moment T-1 could spawn a second agent. The
-// tripwire that watched for exactly that event fired, and it is still standing: re-pointed at #557
-// and renamed `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`, because the
-// plain accesses one file over are still a byte loop and the risk narrowed rather than dissolving.
+// tripwire that watched for exactly that event fired, and it is still standing as
+// `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` — re-pointed twice and renamed twice, because
+// the event it watches outlived two successive reasons for watching it (graves #561 and #576).
 //
 // **`atomic_fence`'s bare `return nil` is not the same statement in one line**, which is what this
 // header used to claim, and #558 is the correction. The no-op is conformant, and for a reason that

@@ -56,8 +56,11 @@ slot and is whole-word exactly as `i32.atomic.rmw.add` is.
    whole cross product** — every operator × every width × every in-word position, on both the returned old
    value and the whole memory image byte for byte, with the eligibility set pinned as an exact count.
 4. **Hoist the eligibility test to derivation time** so the ineligible rows do not pay a call to be told
-   no. Implemented, measured, and **declined by its own pre-registered rule** — the diff is preserved on
-   `archive/rmw-hoist-declined` and any revival is a fresh ADR. Recorded here because its failure is what
+   no. Implemented, measured, and **declined by its own pre-registered rule** — the diff is preserved as
+   [#583](https://github.com/scttfrdmn/burroughs/pull/583), a PR opened to archive it and closed
+   unmerged, and any revival is a fresh ADR. It cited a branch name when it landed, which is a ref
+   anyone can delete and which nothing in the tree can resolve; a PR number resolves under `citecheck`
+   and GitHub retains the diff and `refs/pull/583/head` independently of the branch. Recorded here because its failure is what
    makes the price in the next section a *standing* price rather than a transient one.
 
 ## Consequences

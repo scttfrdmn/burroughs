@@ -25,8 +25,9 @@ import (
 //
 // **The domain is derived, not enumerated.** Listing today's three sites would inherit today's blind
 // spot — the failure this exists to catch is a *fourth* site added later, and T-1's `runEntry` is
-// exactly that fourth site, parked in #554 behind #557 and #516 rather than behind the ruling it was
-// once waiting on (see `thread`'s own doc comment, and grave **#561** for why the two differ). Test
+// exactly that fourth site, parked in #554 behind #10, #543, #573 and #575 rather than behind the
+// ruling it was once waiting on (see `thread`'s own doc comment, and graves **#561** and **#576** for
+// why what it is parked behind has moved twice without clearing). Test
 // files are
 // excluded because a bare `&stack{}` is the right thing there: several tests drive a single opcode arm
 // and have no thread to speak of, which is also the second reason `stack.t`'s nil is legal.
@@ -35,8 +36,8 @@ import (
 // job in a way that matters: it does not consider build tags when grouping files into packages, so a
 // tagged file could fall outside the domain. Walking the directory takes every `.go` file regardless
 // of tag, which is the safe direction — a stack created behind a build tag is still a stack.
-// `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` reaches the same conclusion for the same
-// reason one file over, which is why this reads the same way rather than differently.
+// `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` reaches the same conclusion for the same reason
+// one file over, which is why this reads the same way rather than differently.
 //
 // Watched die, four ways: dropping `t:` at any one of the three sites fails naming that site, and
 // blinding the type match fails the floor at `found 0`, which is the failure mode that would

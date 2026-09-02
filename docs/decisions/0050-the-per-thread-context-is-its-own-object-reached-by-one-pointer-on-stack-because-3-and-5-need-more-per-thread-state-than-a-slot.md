@@ -246,3 +246,24 @@ to settle beforehand.
   filed numbers rather than a surprise.
 - Nothing defaults on: `Spawn` refuses unless the instance's features carry `Threads`, so the
   capability rides the same gate as the rest of the proposal (behaviour 4, contract §9).
+
+## Postscript 2 — the tripwire was renamed a second time, for the same reason
+
+Appended rather than folded into the postscript above, on the same ground: that postscript is the
+record of what happened then.
+
+The name it hands the reader,
+`TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`, is retired. [ADR
+0054](0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md)
+(#567) made every aligned guest access atomic, which discharged **#557**, and **#516** landed with
+[ADR 0052](0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md)
+— so both remedies this ADR's chain names are done, and the control's name asserted a property the
+code no longer had. Grave **#576**. It is now
+`TestNoEngineGoroutineLandsWithoutAPrincipalsRuling`, same `go`-statement scan and same vacuity
+floor, naming **#10**, **#543**, **#573** and **#575**; the name asserts the rule by which the
+property may change rather than the property, because the two names that asserted a property were
+each falsified by the next proposal.
+
+The chain's shape as of that repair: repair (#542, landed) → #557 and #516 (both landed) → **#10,
+#543, #573, #575** → #554 → #10's battery is its own last link. The tripwire's discharge is a
+principal's call and not a successor's.
