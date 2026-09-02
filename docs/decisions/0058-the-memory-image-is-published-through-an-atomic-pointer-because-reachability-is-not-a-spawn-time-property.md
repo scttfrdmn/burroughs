@@ -147,6 +147,102 @@ in the channel ADR 0056 built for exactly this, a counter incremented on that ar
 the excluded programs stated. The refusal is conforming: `memory.grow` reports failure in its result
 and the reference itself fails a grow for reasons of its own (`memory.ml:60-67`).
 
+## The measured result, read back against the bar above
+
+Protocol as registered: 12 rotated rounds, three arms, the null arm asserted byte-identical to `old`
+by sha256 before the first round; `darwin/arm64` Apple M4 Pro and `linux/amd64` Intel i9-9960X native
+(`janus.local`, both arms cross-built by one toolchain and the harness `diff`-verified identical
+between them, so only the engine differs).
+
+| | `darwin/arm64` | `linux/amd64` |
+| --- | --- | --- |
+| effect: geomean over the 4 rows | **+0.45%** | **+1.73%** |
+| matched null: geomean, same 4 rows, `old` vs the byte-identical copy | +0.14% | −0.20% |
+| the bar, pre-registered | ≤ 2.0% | ≤ 2.0% |
+| verdict | **clears** | **clears** |
+
+**The bar clears on both architectures, so no tuning is taken and the rollback does not fire.** The
+registered tuning — hoisting the descriptor load to once per instruction or per frame — was licensed
+only *"before the rollback fires"*, and the rollback fires on a miss. Taking it anyway would be
+optimising after seeing a number against no registered criterion, which is the shape the
+pre-registration exists to prevent. **The amd64 margin is thin and saying so is part of the result**:
++1.73% against a 2.0% bar is 87% of the allowance, and a noisier day would have failed it. That is
+recorded rather than smoothed, because the next change on this path inherits the margin and not the
+verdict.
+
+Per-row, at the registered Bonferroni-corrected α/4 = 0.0125:
+
+| row | arm64 effect | arm64 null | amd64 effect | amd64 null |
+| --- | --- | --- | --- | --- |
+| `LoadAligned` | −0.03% (p=0.561) | +0.10% (p=0.900) | **+2.45% (p=0.012)** | −0.46% (p=0.078) |
+| `LoadUnaligned` | +0.38% (p=0.037) | +0.22% (p=0.452) | **+3.84% (p=0.000)** | −0.36% (p=0.242) |
+| `StoreAligned` | **+0.74% (p=0.006)** | −0.05% (p=0.944) | +0.46% (p=0.326) | −0.01% (p=0.799) |
+| `StoreUnaligned` | **+0.70% (p=0.000)** | +0.28% (p=0.165) | +0.21% (p=0.799) | +0.03% (p=0.600) |
+
+Bold marks the rows that carry a verdict at α/4. **No null-arm row carries one on either
+architecture**, which is what makes the effect readable at all.
+
+**The registered direction is falsified, and it is falsified in the direction I named as fatal to the
+attribution.** The estimate said *"worse on arm64 than on amd64"* on an acquire-barrier story — `LDAR`
+on arm64, a plain `MOV` on amd64 — and added that an effect *larger on amd64* means the cost is not
+the barrier. The effect is larger on amd64: +1.73% against +0.45%, a factor of about four the wrong
+way. **So the barrier is not what this mechanism costs**, on the criterion written before the number
+existed.
+
+A second, independent sign points the same way: **the two architectures disagree about which rows
+pay.** arm64's verdicts fall on both *store* rows and neither load row; amd64's fall on both *load*
+rows and neither store row. A barrier story predicts the same rows on both machines, because the
+barrier is per access and the access set is identical. Two disjoint row sets is not that.
+
+**What the cost is instead is a hypothesis and is labelled one**, because nothing here measured it:
+the dependent pointer load itself — an indirection the compiler cannot hoist into a register across an
+access that may publish — plus, on amd64's store rows, ADR 0054's already-locked aligned store
+(+10.16% on that row, measured there) being large enough that an added indirection is invisible beside
+it. That is a plausible reading of the table and **not a finding**; it would need its own instrument,
+and this ADR does not claim it. The falsification above stands on its own and does not depend on any
+replacement story being right.
+
+**The estimate's magnitude band held on one row of four.** Registered: 1–4% on the aligned rows.
+Measured: amd64 `LoadAligned` +2.45% is inside it; arm64 `LoadAligned` (−0.03%, `~`), arm64
+`StoreAligned` (+0.74%) and amd64 `StoreAligned` (+0.46%, `~`) are all below it. A band that a
+favourable miss falls outside is still a missed band, and it narrows the next estimate on this path
+rather than licensing it.
+
+**The matched max-vs-max pairing, reported and not governing**, as registered — largest single-row
+regression against the largest single-row null-arm magnitude over the same family: arm64 **+0.743%
+against 0.282%**, a ratio of 2.6× where the 3× multiplier ADR 0057 used would ask 0.85%, so arm64's
+worst row is *not* distinguishable from the instrument's own noise at that multiplier even though it
+carries a p-verdict — the two tests ask different questions and here they disagree. amd64 **+3.843%
+against 0.461%**, a ratio of 8.3×, which is real by both. The distributional pairing was nominated as
+governing before any of this was computed and the multiplier is not re-tuned now that there are
+numbers to tune it against.
+
+**The atomic secondary, reported and not governing**, on the same protocol and both architectures —
+`internal/interp/rmwbench`'s 49 rows, which reach the bytes through `cell` and so load the descriptor
+exactly as the plain accesses do:
+
+| | `darwin/arm64` | `linux/amd64` |
+| --- | --- | --- |
+| effect: geomean over the 49 rows | −0.27% | +0.38% |
+| matched null: geomean, same 49 rows | −0.07% | +0.24% |
+| rows carrying a verdict at α/49 = 0.00102 | 0 of 49 (effect), 0 of 49 (null) | 0 of 49 (effect), 0 of 49 (null) |
+| rows at an uncorrected α = 0.05 | 0 of 49 (effect), 0 of 49 (null) | 1 of 49 (effect), 0 of 49 (null) |
+| extreme rows, effect | +1.18% … −1.72% | +2.40% … −1.87% |
+
+**The atomic rows do not detect the indirection, and the reason is power rather than absence.** An rmw
+row spends most of its time inside the atomic operation itself — 33µs/op on arm64 against membench's
+17–28µs for a plain access — so one added pointer load is a smaller fraction of an rmw row than of a
+load row, and a per-row CI of ±1–2% is wide next to the +0.45%/+1.73% the governing population
+reports. **A flat table here is the instrument declining to answer, not the mechanism being free on
+atomics.** Saying otherwise would read a null result as a measurement.
+
+**One reason to distrust *any* "0 of 49" as a property rather than a sample, from this project's own
+record.** ADR 0057 ran this same benchmark's null arm on this same population and got 3 of 49 (arm64)
+and 4 of 49 (amd64) spurious verdicts at α=0.05, against the 2.45 the multiplicity arithmetic predicts;
+this run's null arm gets 0 and 0. Same instrument, same rows, a different day. So the 0-of-49 above is
+one draw from a distribution that has already been observed to produce 3 and 4, and it bounds the cost
+loosely rather than establishing that there is none.
+
 ## Consequences
 
 **The residual, which this decision does not close and does not pretend to.** Publishing the
