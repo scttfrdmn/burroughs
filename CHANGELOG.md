@@ -59,6 +59,30 @@ weakly-ordered platform.
     behaviour that SP-2 will invert. `world`'s extent is one `Instance`, which is a named limit — a
     shared memory spans instances (ADR 0052), and "every thread of this instance" and "every thread that
     can reach this memory" coincide only while `Spawn` is parked, which is SP-4's work.
+  - **The world's mutex made §4 B-MM-3 a live clause, and the tripwire waiting for it fired.** #516
+    landed `TestNoSyncPrimitiveIsUsedInEngineCode` on the honest ground that B-MM-3 had no subject; the
+    first `sync.Mutex` in engine code is `world.mu`, and it fired — correctly, because the first draft of
+    `Resume` closed the release channel under `defer w.mu.Unlock()`, and **`close` on a release channel
+    *is* the guest resume**, so that was the prohibited shape exactly. `Resume` now clears the guarded
+    state under the lock and closes after the unlock, and `parkAtSafepoint` does both its channel
+    operations outside it — the send too, whose old safety was an argument about a buffer size that SP-4
+    falsifies by making membership dynamic.
+  - **The tripwire is re-pointed to the rule rather than narrowed to exempt its subject**, since both
+    escapes its own message offered were written for a *harness* package needing `sync`, and this is
+    engine code. `TestNoEngineLockIsHeldAcrossAChannelOperation` replaces the import scan: for every
+    non-test file in the tree it computes each function's critical section syntactically and flags any
+    send, receive, or `close` inside it, matching `.Lock()` by **method name** so an aliased import
+    cannot evade it. The interval over-reports by construction — a hazard control's safe direction is to
+    complain too much — and there are two vacuity floors, because the walk and the `Lock` match fail for
+    unrelated reasons. Both arms watched die against a committed baseline (grave #589's precondition).
+  - **B-MM-1's acquire edge on the resume gets a behavioural test, not an appeal to channel semantics.**
+    `TestAResumedGuestSeesAHostWriteFromTheStop` stops a spinning guest, writes a flag byte through the
+    memory's own slice with a **plain** store, resumes, and requires the guest to observe it. The plain
+    store is the point: ADR 0054 made aligned guest accesses atomic, so a host write routed through
+    `memory.write` would leave two atomics and nothing for `-race` to say. `-race` is the authority here
+    and the return value is the weaker half. The edge itself is the channel pair, which gives the clause's
+    *wide* form for free — where the browser host's `Atomics.notify` gives the per-word version D20 and §4
+    descend from.
   - **Priced on two platforms against a bar registered before the mechanism existed**, and the bar is met:
     worst row +0.63% and geomean +0.38% on arm64, +1.07% and +0.73% on amd64, against ≤ +3.0% and
     ≤ +1.5%. A new `internal/interp/loopbench` is the effect arm — two rows running the **same** back-edge
