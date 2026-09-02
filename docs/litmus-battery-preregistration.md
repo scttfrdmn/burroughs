@@ -370,12 +370,34 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
 - **Shape:** structural
 - **Blocked by:** nothing.
 - **Why no litmus case:** the clause forbids a *state at the moment of resume*, and an interleaving that
-  happens not to deadlock is indistinguishable from a resume that never held a lock. It is already
-  discharged the way it should be: `TestNoSyncPrimitiveIsUsedInEngineCode` is a total over engine code — no
-  `sync` import at all, so there is no lock to hold across anything — and the clause's second half, the
-  acquire edge, is what `b-mm-1-message-passing-across-a-host-call-return` observes. The overlap is named
-  rather than double-counted: **B-MM-3 adds no outcome tuple of its own**, and if the `sync` prohibition is
-  ever relaxed, this entry is where the case it would then need must be written.
+  happens not to deadlock is indistinguishable from a resume that never held a lock. **B-MM-3 adds no
+  outcome tuple of its own**, and that survives the change below unchanged, because it is a fact about
+  what an outcome tuple can witness rather than about how many locks exist.
+
+- **The `sync` prohibition has been relaxed, and this is the entry that said it would be written here.**
+  The original text discharged the clause with `TestNoSyncPrimitiveIsUsedInEngineCode`, *"a total over
+  engine code — no `sync` import at all, so there is no lock to hold across anything"*, and closed with:
+  *"if the `sync` prohibition is ever relaxed, this entry is where the case it would then need must be
+  written."* It was relaxed by **[#515](https://github.com/scttfrdmn/burroughs/issues/515)**, whose
+  stop-the-world state needs a mutex, and the tripwire fired on it — correctly, since the first draft of
+  `Resume` closed the release channel under a deferred unlock and `close` *is* the guest resume.
+
+  What discharges the clause now is two instruments rather than a total over an empty set:
+
+  - **First half — no lock held across a resume:** `TestNoEngineLockIsHeldAcrossAChannelOperation`, still
+    structural, still repo-wide and unexempted. It asserts that a critical section contains **no channel
+    operation at all** — a `close` is the resume, a receive is a deadlock rather than a violation, and a
+    send is the same hazard resting on a buffer-size argument that SP-4's dynamic membership would
+    falsify. The interval is syntactic and deliberately over-reports.
+  - **Second half — the acquire edge on the resume:** `TestAResumedGuestSeesAHostWriteFromTheStop`, which
+    is behavioural and runs the clause's own sequence — guest in a loop, host stops it, host writes guest
+    memory while it is parked, host resumes, guest observes the write. `-race` is the authority and the
+    returned value is the weaker half. The host store is a **plain** byte store on purpose: ADR 0054 made
+    aligned guest accesses atomic, so routing it through `memory.write` would leave two atomics and a
+    detector with nothing to say, whether or not any edge existed.
+
+  So the overlap with `b-mm-1-message-passing-across-a-host-call-return` is now a *second observation* of
+  B-MM-1 at a different boundary rather than a borrowed one, and it is still not a new tuple.
 
 ### B-MM-4 — publication semantics are documented, default sequentially consistent
 

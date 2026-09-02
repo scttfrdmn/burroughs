@@ -188,9 +188,23 @@ per-instruction, which is option A's shape. The bar is carried over verbatim aga
 population, `Tight` being close to the densest back-edge a guest can write; holding the number fixed
 while making the population harder is the only re-point that cannot be an amendment in disguise.
 
+**The density half of that forecast turned out to be unanswerable by the row written for it** — see
+"What came out" below and [#590](https://github.com/scttfrdmn/burroughs/issues/590). Both hypotheses
+predict a `Wide` effect smaller than `Wide`'s own interval, so its `~` is an analytic null. Recorded as a
+failed forecast rather than repaired here: rebuilding an effect arm after seeing a null on it is
+instrument-shopping against a measured board, so #590 pre-registers the transpose and takes no figure.
+
 `membench` keeps its job as the straight-line scope control, with one correction to what it now pays:
 amendment 3's poll runs in `enterFrame`, so each `Invoke` costs exactly one atomic load against a
 thousand accesses. Its predicted direction is unchanged and its reason is now **per-call, not zero**.
+
+**And its null is not analytic against every alternative, which is why it carried the mechanism claim in
+the end.** The registration calls `membench`'s zero analytic, and that is right about *the poll* — a
+straight-line body executes no back-edge, so the poll's cost could not have appeared there. It is wrong
+about the alternative the density row was meant to exclude: fourteen new call sites inside `runFrame`
+can shift register allocation or code layout in the dispatch loop, and **that** cost falls on every
+instruction, including a body with no back-edge in it. `membench` is the only arm that can see it. Stated
+before the arm was run, which is the only ordering under which it counts.
 
 ### 3 — `enterFrame`'s trampoline is a back-edge `runFrame` cannot see
 
@@ -218,3 +232,72 @@ exec.go` on an uncommitted slice, so HEAD was `main` and the checkout reverted t
 fourteen routings — instead of the previous injection, and a reverted subject produces that row's
 predicted board exactly, on the same assertion with the same message. An injection battery needs a
 committed baseline. The boards recorded here are from the re-runs against one.
+
+## What came out
+
+Two platforms, interleaved main-then-branch within each round so a thermal or scheduler drift lands on
+both arms of a round rather than on one arm as a block, `n=20`, `-benchtime=300x`. Both binaries built
+per arm and their hashes compared before any round ran — [ADR
+0053](0053-simd-narrow-loads-and-stores-dispatch-on-alignment-because-the-cost-is-the-unaligned-path-and-not-the-simd-width.md)'s
+recorded trap fired again here and was caught by that check: a `cd` inside a compound command persists,
+so a second `go test -c` had built both arms from the same worktree and produced one binary twice.
+
+```
+goos: darwin  goarch: arm64  cpu: Apple M4 Pro
+         │ main         │ branch                     │
+Tight-12    2.978m ± 0%   2.997m ± 1%  +0.63% (p=0.008 n=20)
+Wide-12     18.46m ± 0%   18.49m ± 1%       ~ (p=0.221 n=20)
+geomean     7.415m        7.443m       +0.38%
+
+goos: linux  goarch: amd64  cpu: Intel(R) Core(TM) i9-9960X @ 3.10GHz
+Tight-32    5.796m ± 0%   5.859m ± 0%  +1.07% (p=0.000 n=20)
+Wide-32     34.95m ± 0%   35.08m ± 0%  +0.38% (p=0.001 n=20)
+geomean     14.23m        14.34m       +0.73%
+```
+
+**The bar is met on both**: registered at worst row ≤ +3.0% and geomean ≤ +1.5%, observed +0.63%/+0.38%
+on arm64 and +1.07%/+0.73% on amd64, against a `Tight` row close to the densest back-edge a guest can
+write.
+
+**The mechanism half is confirmed, and the statistic that confirms it is a fit rather than a ratio.** The
+registered wording — *"the delta must fall with the back-edge density, by roughly the ratio of the
+two"* — reads the two rows as a ratio, and the rows support something stronger: both arms run the same
+100_000 back-edges and differ only in runtime, so the two deltas determine a term independent of runtime
+(the per-back-edge cost) and a term proportional to it.
+
+| | arm64 | amd64 |
+|---|---|---|
+| absolute ratio `Wide`/`Tight` | 1.36 | 2.14 |
+| intercept, per back-edge | ~177 ps | ~523 ps |
+| slope, per instruction | ~2 ps | ≤20 ps |
+
+Option B predicts a ratio of 1.00, option A's shape 8.20. Observed 1.36 and 2.14, so the cost is
+per-back-edge dominated: on amd64, ~84% of `Tight`'s delta is intercept. 523 ps is 1.6 cycles at
+3.1 GHz — a load-acquire, a compare, and a call.
+
+**Two things this did not establish, both stated because a measurement's silences are the part a later
+reader will otherwise fill in.**
+
+1. **The slope is an upper bound, not a per-instruction cost.** A build-to-build code-layout offset is
+   multiplicative on runtime, so in this design it is *indistinguishable* from a per-instruction term and
+   lands entirely in the slope. Only the intercept survives that confound. `membench` on amd64 falsifies
+   the slope's own ordering: priced from it, the *load* rows should move more than the *store* rows (5
+   instructions per access against 3), and the only two rows that resolved were both stores
+   (`StoreAligned` +0.54% p=0.012, `StoreUnaligned` +1.01% p=0.003) while neither load row resolved. A
+   per-instruction cost cannot produce that ordering. On arm64 `membench` moved the other way entirely,
+   geomean **-1.15%** with all four rows null.
+2. **`Wide` is an analytic null on arm64** — at that machine's ±1% per-row interval, both hypotheses
+   predict an effect smaller than the interval, so `~` was the output either way. The mechanism reading
+   above rests on the amd64 arm, where both rows resolved to ±0%.
+   [#590](https://github.com/scttfrdmn/burroughs/issues/590) carries the equal-work transpose that would
+   put the intercept and the confound on opposite axes with one shared noise floor; it is filed rather
+   than run, because rebuilding an effect arm after seeing a null on it is instrument-shopping against a
+   measured board.
+
+**A forecast was taken and reported failed.** The amd64 slope predicted `membench`-on-amd64 at +0.16%
+geomean with loads moving more than stores; the geomean came out +0.30% — right sign, right order of
+magnitude — and the ordering came out reversed, which is the half that matters and the reason (1) reads
+as it does. Registered in-session before that arm was built, and the arm was built afterwards.
+
+Nothing here fires the rollback. Option C stays this document's rollback for the case where the intercept
+is the term that fails a later bar, which is not the case on either board.

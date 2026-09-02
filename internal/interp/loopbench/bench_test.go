@@ -32,6 +32,24 @@
 // would mean the mechanism is not where the decision says it is. *A count is not a price: decompose by
 // mechanism.* That is the whole reason there are two rows instead of one fast loop and a threshold.
 //
+// **Read it as an intercept and a slope, not as a pass or a fail** — and whether it can be read at all
+// is **platform-scoped** ([#590](https://github.com/scttfrdmn/burroughs/issues/590)). Both arms run the
+// same back-edge count and differ in runtime, so fitting the two deltas gives a term that does *not*
+// scale with runtime — the per-back-edge cost — and one that does. On amd64 both rows resolved to ±0%
+// and the fit is ~523 ps per back-edge against ≤20 ps per instruction: the cost is where option B put
+// it. On arm64 only `Tight` resolved; `Wide`'s ±1% interval is wider than either hypothesis's predicted
+// effect there, so its `~` was the output either way and the fit's second term is not measurable. The
+// dilution that makes this a density check is the same operation that puts the effect under the row's
+// noise floor, and #590 pre-registers the transpose — equal *total instructions*, varying back-edge
+// count — which shares one noise floor between the rows instead of giving the diluted row the worse one.
+//
+// **The slope is an upper bound and not a measurement**, which is the part easiest to over-read. A
+// build-to-build code-layout offset is multiplicative on runtime, so it is *indistinguishable from a
+// per-instruction cost* in this instrument and lands entirely in the slope. The intercept is what
+// survives that confound, because a fixed offset per binary cannot produce a term independent of
+// runtime. So this package licenses "the cost is per-back-edge" and does not license any figure for a
+// per-instruction term.
+//
 // # Why the trip count is large, which is not the usual reason
 //
 // `Invoke`'s fixed cost — a boundary crossing pair, a stack, an argument slice — does not dilute the two
@@ -169,6 +187,15 @@ func BenchmarkWide(b *testing.B)  { run(b, "wide") }
 //  2. **The bodies differ by the density this package advertises.** A `Wide` arm that had drifted to the
 //     same length as `Tight` would still produce a tidy percentage, and it would be the finding that
 //     both arms are tight rather than a confirmation. *A comparison needs a vacuity check.*
+//
+// **Both watched die**, against a committed baseline (grave #589). Changing `Wide`'s countdown to
+// `i32.const 2` — so it runs half the back-edges at the same body length — failed on *two independent
+// channels*, the textual countdown check and the accumulator oracle at exactly half the expected total,
+// which is what makes the trip-count claim checked rather than asserted. Setting `wideGroups` to 0
+// collapsed `Wide` onto `Tight` and failed the density assertion at *"the arms are 5 and 5 instructions
+// per back-edge"* — note that the padding count above did **not** fire on that one, correctly: it
+// compares the generator against `wideGroups`, so it certifies consistency, and only the density
+// assertion certifies the number the forecast is written against.
 func TestTheArmsDifferOnlyInBodyLength(t *testing.T) {
 	src := buildModule()
 

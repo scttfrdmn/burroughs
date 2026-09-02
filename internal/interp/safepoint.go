@@ -116,20 +116,36 @@ func (in *Instance) Stop(deadline time.Duration) error {
 // released and the ones that had not yet seen the request stop seeing it. Calling it without a stop in
 // progress is a no-op rather than an error, because the deadline case makes "did the stop succeed"
 // the wrong question for a caller to have to answer before cleaning up.
+// **The release happens after the unlock, and that ordering is contract §4 B-MM-3 rather than a
+// preference.** B-MM-3: *"The engine MUST NOT hold engine-internal locks across a guest resume."*
+// `close` **is** the guest resume — it is the operation that puts parked threads back on the
+// interpreter's dispatch loop — so closing under `mu` would be precisely the prohibited shape. It was
+// written that way first, with a `defer w.mu.Unlock()`, and
+// `TestNoEngineLockIsHeldAcrossAChannelOperation` is the control that now makes the ordering checked
+// rather than remembered.
+//
+// The state is cleared *before* the unlock, which is what makes the split safe: a thread released here
+// finds `stopReq` already false and `w.resume` already nil, so it cannot re-park for the round it was
+// just released from. A `Stop` that wins the mutex in the window between the unlock and the close
+// installs a fresh channel and is unaffected — `release` is a local, so the close still releases
+// exactly the round it belongs to.
 func (in *Instance) Resume() {
 	w := &in.world
 
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.resume == nil {
+	release := w.resume
+	if release == nil {
+		w.mu.Unlock()
 		return
 	}
 	for _, t := range w.members {
 		t.stopReq.Store(false)
 	}
-	close(w.resume)
 	w.resume = nil
 	w.arrived = nil
+	w.mu.Unlock()
+
+	close(release)
 }
 
 // parkAtSafepoint reports arrival and blocks until the world resumes. Contract §3 SP-1's guest half.
@@ -143,6 +159,32 @@ func (in *Instance) Resume() {
 // SP-2's guarantee stated for the back-edge case: this returns to `jumpTo`, which returns to the
 // dispatch loop, and no guest instruction executes between the send below and the release.
 //
+// # B-MM-1's edge on this transition, and why it is not `enterGuest`
+//
+// §4 B-MM-1 names *"async wake"* among the host→guest transitions that MUST constitute *"an acquire
+// edge over the entire shared address space for the resuming agent"*, and a safepoint resume is that
+// shape: the host stops the world precisely in order to look at or change something, so a thread that
+// resumed without the edge could carry on against a stale view of whatever the host wrote.
+//
+// **The edge is the channel pair, and it is an edge over everything rather than over one word.** A
+// receive from a closed channel synchronizes with the close, so this thread observes every write
+// `Resume`'s caller made before calling it; the send above synchronizes the other direction, so the
+// host that observes an arrival observes the guest's writes before it. That is B-MM-1 in both
+// directions, and it is worth noticing that the clause exists because the *browser* host's
+// `Atomics.notify` gives the narrow version — an edge for the notified word only (D20, the gap this
+// whole section descends from). Go's channel is the wide version, so the engine gets the clause for
+// free here and must not be read as having got it by luck:
+// `TestAResumedGuestSeesAHostWriteFromTheStop` is the behavioural check, and `-race` is the authority
+// that a plain flag substituted for the channel would not pass.
+//
+// **`enterGuest`/`leaveGuest` are deliberately not called**, which is a narrower claim than it looks.
+// `boundary.go`'s counter is B-MM-1 at *this engine's* radius — a host Go caller entering
+// `internal/interp` and returning — and a parking thread never leaves: it is already inside the
+// crossing `Invoke` opened, and the host's `Stop`/`Resume` are Go calls that enter no interpreter at
+// all. Adding a pair here would fence a second time for an edge the channel already gives, and would
+// put guest-thread traffic on a counter whose per-case exact rows `TestEveryBoundaryCrossingIsPaired`
+// asserts.
+//
 // **No error return, and that is a decision rather than an omission** — see `poll`.
 func (t *thread) parkAtSafepoint() {
 	w := t.w
@@ -151,14 +193,28 @@ func (t *thread) parkAtSafepoint() {
 	}
 
 	w.mu.Lock()
-	release := w.resume
+	release, arrived := w.resume, w.arrived
 	if release == nil {
 		w.mu.Unlock()
 		return
 	}
-	w.arrived <- t.id
 	w.mu.Unlock()
 
+	// Both channel operations are outside the lock, for the two halves of B-MM-3. The receive is the
+	// obvious one: blocking on a resume while holding an engine lock is the clause's own hazard, and
+	// `Resume` needs `mu` to run at all, so it would be a deadlock and not merely a violation.
+	//
+	// **The send is outside for a reason that is not deadlock today, which is why it is stated.** The
+	// buffer is `len(w.members)` and each thread sends once per round, so a send under the lock could
+	// not block — but that safety is an argument about a buffer size, and SP-4 makes membership
+	// dynamic, at which point a thread registered after `Stop` sized the channel would block on the
+	// send *while holding `mu`*, with `Resume` unable to acquire it. Keeping the operation outside
+	// the lock retires the argument instead of leaving a comment that a later change falsifies.
+	//
+	// Both are read from locals captured above: `Resume` nils the fields, so reading `w.arrived` here
+	// would be a plain read of a word another goroutine writes — a race on the *field*, even though
+	// every channel operation on the value is safe.
+	arrived <- t.id
 	<-release
 }
 

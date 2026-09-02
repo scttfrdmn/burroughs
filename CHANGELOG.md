@@ -21,6 +21,59 @@ weakly-ordered platform.
 
 ### Added
 
+- **A host can stop every guest thread of an instance at a safepoint and resume it, and the poll that
+  makes it possible is guarded at the `pc` assignment so straight-line code pays nothing**
+  ([#515](https://github.com/scttfrdmn/burroughs/issues/515), [ADR
+  0059](docs/decisions/0059-the-safepoint-poll-is-guarded-at-the-pc-assignment-because-a-back-edge-is-a-runtime-comparison-and-straight-line-code-pays-nothing.md),
+  `gate:threads`). Contract §3 SP-1's first half: `Instance.Stop(deadline)` sets a request on every
+  registered thread and waits on their arrivals, `Instance.Resume()` releases them, and a thread that
+  observes the request parks until the world resumes. `ErrStopDeadline` reports a partial stop with the
+  count that arrived, because a deadline expiry leaves the world in a stated state and `Resume` is the
+  correct next call either way.
+  - **A back-edge is a property of an execution, not of a site**, so the poll's condition is the runtime
+    comparison `target < pc` rather than a claim about which labels can be loops. The same
+    `pc = target - 1` continues a `loop` and leaves a `block`; deciding structurally which of the
+    fourteen sites *can* go backwards would need its own authority and could be wrong in the direction
+    no spec vector sees. All fourteen route through `jumpTo`, which **returns** the new `pc` rather than
+    writing through a `*int` — a pointer parameter would force `pc` out of a register and pay the
+    per-instruction cost the decision exists to avoid.
+  - **Straight-line code never assigns `pc`**, which is the whole cost argument: a body that does not
+    branch pays no compare, no atomic load, and holds no extra register. Forward branches pay one
+    compare. Only back-edges pay the load.
+  - **`enterFrame`'s trampoline is a back-edge `runFrame` cannot see**, and covering it was not
+    decoration. A guest recursing by tail call assigns `pc` **nowhere at all** — `return_call.wast`'s
+    1M-deep `even`/`odd` is that shape — so a poll placed only at the fourteen sites would leave a
+    tail-recursive guest unstoppable, which is SP-1's bounded interval failing on the one program shape
+    the tail-call proposal added. Found by asking where the *engine's* loops are rather than the guest's.
+  - **Three controls, each for a failure the others cannot see.**
+    `TestEveryPCAssignmentInRunFrameGoesThroughJumpTo` walks `runFrame`'s syntax tree — not a grep,
+    which measures text — and requires every `pc` assignment to route through `jumpTo`, exempting the
+    `for` header's own Init and Post *by node identity* so a hand-written forward step cannot join them;
+    its population is **derived from the function**, so a fifteenth arm added by a later proposal is
+    caught rather than inheriting today's blind spot, and the count of routed sites is pinned exactly at
+    14 because both directions are findings. `TestNothingTakesTheAddressOfRunFramesPC` asserts that
+    walk's one blind spot instead of leaving it as a caveat. `TestStopBringsATailCallLoopToASafepoint`
+    is behavioural, and it is the arm without which the trampoline poll could be deleted silently.
+  - **What is absent is stated rather than implied.** A thread blocked in a *host* call is SP-2's
+    clause and is not covered: `TestStopReportsItsDeadlineWhenNothingPolls` asserts the deadline
+    behaviour that SP-2 will invert. `world`'s extent is one `Instance`, which is a named limit — a
+    shared memory spans instances (ADR 0052), and "every thread of this instance" and "every thread that
+    can reach this memory" coincide only while `Spawn` is parked, which is SP-4's work.
+  - **Priced on two platforms against a bar registered before the mechanism existed**, and the bar is met:
+    worst row +0.63% and geomean +0.38% on arm64, +1.07% and +0.73% on amd64, against ≤ +3.0% and
+    ≤ +1.5%. A new `internal/interp/loopbench` is the effect arm — two rows running the **same** back-edge
+    count and differing only in body length, so the pair determines a runtime-independent cost per
+    back-edge and a proportional one. Option B predicts an absolute delta ratio of 1.00 between the rows
+    and option A's per-instruction shape 8.20; observed 1.36 and 2.14, giving **~523 ps per back-edge** on
+    amd64, which is 1.6 cycles and about what a load-acquire plus a compare plus a call should cost. The
+    proportional term is reported as an **upper bound only**: a build-to-build code-layout offset is
+    multiplicative on runtime and therefore indistinguishable from a per-instruction cost in this design,
+    and a forecast made from it — that `membench`'s load rows would move more than its store rows — came
+    out reversed, which is the measurement that demotes it. `Wide` is an **analytic null on arm64** at
+    that machine's ±1% per-row interval, filed as
+    [#590](https://github.com/scttfrdmn/burroughs/issues/590) with the equal-work transpose
+    pre-registered and deliberately not run.
+
 - **A memory's contents are published through an atomic pointer to an immutable descriptor, so
   relocation under a running thread is memory-safe without knowing who can reach what**
   ([#575](https://github.com/scttfrdmn/burroughs/issues/575), [ADR
@@ -268,10 +321,14 @@ weakly-ordered platform.
     that a write before a release is *visible* after an acquire. That is B-MM-5's job and #10's
     battery, on a TSO and a weakly-ordered platform.
   - **B-MM-3 gets a tripwire, and its green today is stated to be an analytic zero.** There are no
-    engine-internal locks, so the clause is true by having no subject. `TestNoSyncPrimitiveIsUsedInEngineCode`
-    fires on the first non-test file in the tree importing `sync`, keyed on the import path rather
-    than a `sync.Mutex` selector because an aliased import evades a selector match, and it carries
-    B-MM-3's instruction in its failure message — which is the whole of its value.
+    engine-internal locks, so the clause is true by having no subject.
+    `TestNoSyncPrimitiveIsUsedInEngineCode` fires on the first non-test file in the tree importing
+    `sync`, keyed on the import path rather than a `sync.Mutex` selector because an aliased import
+    evades a selector match, and it carries B-MM-3's instruction in its failure message — which is the
+    whole of its value. (It fired,
+    as designed, on #515's `world.mu`, and was re-pointed there to
+    `TestNoEngineLockIsHeldAcrossAChannelOperation` — the name above is the one that landed in this
+    release and is left standing as the record of it.)
   - **B-MM-4 gets a stated default and deliberately no control.** The clause makes an unannotated
     boundary call *conforming* and sequentially consistent, so a test demanding an annotation would be
     stricter than the contract it cites. What lands is the convention and the `// Publication:` form,
@@ -920,6 +977,24 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **An injection battery's restore step deleted the subject it was certifying, and the confounded board
+  was indistinguishable from the successful falsification** (grave
+  [#589](https://github.com/scttfrdmn/burroughs/issues/589)). Between two rows of #515's battery the
+  restore was `git checkout internal/interp/exec.go`; the slice was **uncommitted**, so HEAD was `main`
+  and the checkout reverted the fourteen `jumpTo` routings the control exists to assert rather than the
+  injection. The next row blinds that control's own selector match and predicts *14 raw, 0 routed,
+  census fires* — and a subject reverted to `main` produces exactly that board, on the same assertion,
+  with the message the row forecast, because either way there is no `jumpTo` to match. **This defeats
+  the existing tell**: `controls.md` already requires a battery's evidence to be the failing assertion's
+  own message rather than an exit code, on the grounds that a build error is the toolchain refusing the
+  input while an assertion failure is the control refusing the behaviour — and here the assertion fired,
+  on the assertion channel, saying what it was supposed to say. What discriminates the two causes is
+  **the state of the tree, not the output of the test**. Recorded in `docs/laws/controls.md` as the
+  compile-failure family's sibling, with the precondition that an injection battery needs a committed
+  baseline; all four rows were re-run against one and all four confirmed. Pointed the other way this is
+  the pass-trichotomy's mirror — an expected **fail from a confounded cause**, and the more dangerous
+  direction because the prediction was met and nothing invites a second look.
 
 - **Three sentences in the engine asserted that Go documents no alignment for `make([]byte, n)`, which
   is false, and a grave was filed on the strength of them** (grave

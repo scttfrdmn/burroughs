@@ -539,3 +539,98 @@ func TestStopBringsATailCallLoopToASafepoint(t *testing.T) {
 		t.Fatal("the chain did not finish 30s after Resume")
 	}
 }
+
+// TestAResumedGuestSeesAHostWriteFromTheStop is contract §4 **B-MM-1** at the safepoint boundary, and
+// it is the demand `TestNoEngineLockIsHeldAcrossAChannelOperation`'s predecessor made of this slice:
+// *"B-MM-1's acquire edge established on any resume that follows releasing it."*
+//
+// B-MM-1 names *"async wake"* among the transitions that MUST constitute *"an acquire edge over the
+// entire shared address space for the resuming agent"*, and a safepoint resume is that shape — the host
+// stops the world in order to look at or change something, so a thread resuming without the edge could
+// carry on against a stale view. The sequence run here is the clause's own: guest inside a loop, host
+// stops it, host writes guest memory **while it is parked**, host resumes, guest observes the write.
+//
+// **The write is a plain byte store into the image and not `memory.write`**, which is the difference
+// between a test with teeth and one without. [ADR
+// 0054](../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md)
+// made every aligned guest access atomic, so **the guest's load is already an atomic one** — the
+// falsification's own trace names `sync/atomic.LoadUint32` inside `memAccess` — and routing the host
+// store through `memory.write` would make both sides atomic, at which point `-race` says nothing
+// **whether or not the safepoint established any edge at all**. The host side is therefore the only one
+// whose form this test controls, and a plain store is the weakest write a host can make: it is the one
+// whose visibility actually depends on the boundary being an edge.
+//
+// **`-race` is the authority here and the assertion is the weaker half.** The returned 1 says the guest
+// observed the flag, which a sufficiently lucky run could produce without any ordering; the detector
+// says the host store and the guest load are *ordered*, which is the clause. So this test's verdict
+// under `make check` and its verdict under `make race` are different claims, and the second is the one
+// B-MM-1 asks for.
+//
+// Watched die: deleting the `Stop`/`Resume` pair and writing the flag straight into the running guest's
+// memory — the same two accesses with no edge between them — is reported by `-race` as a data race on
+// the image's byte 0, naming the guest's load and this goroutine's store. That is the falsification, and
+// it is the reason the write is not routed through the engine's own atomic path.
+func TestAResumedGuestSeesAHostWriteFromTheStop(t *testing.T) {
+	// Large enough that the loop cannot exhaust itself before the stop lands — the sibling tests'
+	// measured ~19.7M trips/s on the dev box makes this about five seconds of guest work — and
+	// bounded so that a *failure* to observe the flag is a returned 0 rather than a hung test.
+	const maxTrips = 100_000_000
+
+	const src = `(module
+		(memory 1)
+		(func (export "waitflag") (param $max i32) (result i32) (local $i i32)
+			(loop $l
+				(if (i32.load (i32.const 0)) (then (return (i32.const 1))))
+				(local.set $i (i32.add (local.get $i) (i32.const 1)))
+				(br_if $l (i32.sub (local.get $max) (local.get $i))))
+			(i32.const 0)))`
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encoding the flag module: %v", err)
+	}
+	m, err := binary.DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decoding the flag module: %v", err)
+	}
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("instantiating the flag module: %v", trap)
+	}
+
+	done := make(chan []Value, 1)
+	errs := make(chan error, 1)
+	go func() {
+		out, ierr := in.Invoke("waitflag", Value{Type: binary.I32, Bits: maxTrips})
+		if ierr != nil {
+			errs <- ierr
+			return
+		}
+		done <- out
+	}()
+
+	if serr := in.Stop(10 * time.Second); serr != nil {
+		t.Fatalf("Stop before the host write: %v — the guest never reached a safepoint, so the "+
+			"visibility question below was never asked", serr)
+	}
+
+	// The host write, while the world is stopped. Byte 0 of the published image, which is the word
+	// the guest's `i32.load (i32.const 0)` reads.
+	in.mems[0].view()[0] = 1
+
+	in.Resume()
+
+	select {
+	case out := <-done:
+		if len(out) != 1 || out[0].Bits != 1 {
+			t.Errorf("the resumed guest returned %v, want a single 1. A 0 means it ran out its "+
+				"%d trips without ever observing a store the host made while it was parked at a "+
+				"safepoint, which is B-MM-1's acquire edge missing on the resume: the clause "+
+				"requires the edge over the entire address space, not over a word the engine "+
+				"chose to publish", out, maxTrips)
+		}
+	case rerr := <-errs:
+		t.Fatalf("the guest failed after Resume: %v", rerr)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the guest did not finish 30s after Resume, so it was neither released nor bounded")
+	}
+}
