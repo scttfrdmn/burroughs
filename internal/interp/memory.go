@@ -28,12 +28,36 @@ const maxPages32 = 0xffff
 // about the same event.
 var trapOOB = &Trap{Reason: "out of bounds memory access"}
 
-// memory is one linear memory: its bytes and the type that bounds them.
+// memImage is one published state of a memory's contents — [decision 0058][0058]'s descriptor.
 //
-// **A flat `[]byte`**, which is `memory.ml`'s own shape (`create` makes a zeroed Bigarray, `grow`
-// allocates and blits) and not a decision v0 got to make interestingly. What §1's workload wants —
-// a Go guest that loads once and runs for hours — is a memory whose *steady state* is a single
-// contiguous slice with no indirection per access, which this is.
+// **Immutable once published, and that is the whole mechanism.** The *contents* of the array are
+// written all the time; the three words that name the array are written exactly once, before the
+// descriptor is reachable, and never again. So a reader that holds a `*memImage` holds a pointer and
+// a length that were published together, which is what makes it impossible to pair a new length with
+// a stale pointer and index past the end of the old array.
+//
+// A struct rather than an `atomic.Pointer[[]byte]` because the type is where the immutability is
+// stated: a reader of `atomic.Pointer[[]byte]` cannot tell from the type whether the header it is
+// about to dereference is still being written.
+//
+// [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
+type memImage struct {
+	// bytes is the memory's contents. Its length is always a multiple of pageSize, and it is the
+	// authority on the current size — the reference reads `size` back out of the array's dimension
+	// (`memory.ml:47-50`) rather than keeping a counter, and a second place holding the same fact is
+	// how the two drift.
+	bytes []byte
+}
+
+// memory is one linear memory: a published image of its bytes and the type that bounds them.
+//
+// **A flat `[]byte` behind one atomic pointer**, which is `memory.ml`'s own shape for the array
+// (`create` makes a zeroed Bigarray, `grow` allocates and blits) plus the one indirection
+// [decision 0058][0058] pays for. What §1's workload wants — a Go guest that loads once and runs for
+// hours — is a memory whose *steady state* is a single contiguous slice, which this is; the sentence
+// here used to add *"with no indirection per access"* and that half is what 0058 falsifies, so it is
+// removed rather than left for a reader to trust. The indirection's cost is not an estimate: it was
+// pre-registered on #575 before the mechanism existed and measured on `internal/interp/membench`.
 //
 // **Growth moves the backing array for an unmarked memory and never for a marked one**, which is the
 // question this comment used to defer to v1 — *"§4's boundary model and shared memories decide
@@ -43,15 +67,25 @@ var trapOOB = &Trap{Reason: "out of bounds memory access"}
 // flag with the `noMove` mark below; the two coincide on every memory this engine can build today, and
 // the sentence is written in the terms the code now uses rather than the terms that happen to agree
 // with it. The reasons are on `allocate`, on `noMove`, and on `grow`.
+//
+// **Moving the array is now memory-safe for every memory, marked or not**, which is what 0058 buys
+// and what `noMove` no longer has to buy: the mark's remaining job is *coherence*, not safety. See
+// `grow`'s reallocating arm.
+//
+// [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
 type memory struct {
-	// bytes is the memory's contents. Its length is always a multiple of pageSize, and it
-	// is the authority on the current size — the reference reads `size` back out of the
-	// array's dimension (`memory.ml:47-50`) rather than keeping a counter, and a second
-	// place holding the same fact is how the two drift.
-	bytes []byte
+	// img is the current published image. Read it once per operation and use the slice it names for
+	// the whole of that operation — **two loads in one bounds-check-then-access pair is the defect
+	// this field exists to prevent**, since the second load may name a different array than the one
+	// the check approved.
+	img atomic.Pointer[memImage]
 
 	// limits is the declared type, kept because `grow` needs the max and the address width
 	// to decide whether a delta is legal.
+	//
+	// **`grow`'s write to `Min` is still a plain write**, which 0058 names as a residual rather than
+	// fixing: it is one word rather than three, so it cannot produce an out-of-bounds access, and its
+	// only cross-thread reader is import matching. Filed with 0058's coherence residual, #586.
 	limits binary.Limits
 
 	// noMove records that this memory's backing array must never be replaced — decision 0056's
@@ -106,8 +140,25 @@ func newMemory(m binary.Memory) (*memory, error) {
 	if err := checkBaseAlignment(bs); err != nil {
 		return nil, err
 	}
-	return &memory{bytes: bs, limits: lim, noMove: noMove}, nil
+	mem := &memory{limits: lim, noMove: noMove}
+	// The store is the publication, and it happens before the memory is reachable from anything.
+	// `img` is therefore never nil for a memory this constructor returns, which is what lets `view`
+	// dereference without a check — and a hand-assembled `&memory{}` would break that, which is
+	// grave #163's reason for constructing through the real constructor in tests too.
+	mem.img.Store(&memImage{bytes: bs})
+	return mem, nil
 }
+
+// view is the memory's current contents: one atomic load of the published descriptor.
+//
+// **Call it once per operation and pass the slice down.** Every caller here binds the result to a
+// local and does its bounds check and its access against that one slice, because two calls can return
+// two different arrays and a check against the first authorises nothing about the second. That is not
+// a style preference — it is the entire content of [decision 0058][0058], and
+// `TestEveryMemoryOperationLoadsTheImageAtMostOnce` is what keeps it true as arms are added.
+//
+// [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
+func (m *memory) view() []byte { return m.img.Load().bytes }
 
 // allocate reserves the backing array, and for a **shared** memory it reserves the declared
 // maximum as capacity so that `grow` never has to move the array (#556).
@@ -229,7 +280,7 @@ var sharedReservePages uint64 = 128
 // **It has a second dependent since #557, and that one is a conformance requirement rather than a
 // mechanism choice.** ADR 0053 tests tear-freedom eligibility on a slice's own host address
 // (`wordAligned`) instead of plumbing the guest effective address to the access site, and the two
-// questions coincide *only* because of this assertion: with the base 8-aligned, `&m.bytes[ea]` is
+// questions coincide *only* because of this assertion: with the base 8-aligned, `&m.view()[ea]` is
 // aligned exactly when `ea mod width` is zero, which is the proposal's own condition
 // (`runtime.rst:742-746`). So a platform where this failed would not merely lose the atomics — it
 // would make the plain-access predicate answer a different question than the one it is documented to
@@ -244,6 +295,15 @@ var sharedReservePages uint64 = 128
 // measurement is not a guarantee, so the premise is asserted here, once per memory, where a reader
 // can find it and where a platform that violated it would fail one loud construction instead of
 // producing torn atomics.
+//
+// **It is called at one of the two sites that allocate a backing array, which is grave #585.** This
+// is `newMemory`'s check and nothing else calls it, so `grow`'s reallocating arm publishes a fresh
+// `make([]byte, n)` with the premise unasserted — a memory that passes here and is then grown past its
+// capacity can hold an array this refuses to construct. Not repaired in decision 0058's PR because the
+// repair needs a channel `grow` does not have: it reports failure as the spec's `-1`, so refusing is a
+// *second* named engine limit and therefore ADR 0056's condition 2 rather than a line of code. Stated
+// here because the sentence below, and its two copies elsewhere, are true of construction and read as
+// though they were true of the type.
 //
 // `-race` checks the same premise far more thoroughly, at every access, because it enables
 // `checkptr` and every `unsafe.Pointer` conversion in `atomic.go` is instrumented with
@@ -278,7 +338,7 @@ func validSize(lim binary.Limits, pages uint64) bool {
 
 // size is the memory's size in pages, read from the backing slice rather than from a counter
 // (`memory.ml:47-50`).
-func (m *memory) size() uint64 { return uint64(len(m.bytes)) / pageSize }
+func (m *memory) size() uint64 { return uint64(len(m.view())) / pageSize }
 
 // effectiveAddress is `memory.ml:96`'s `effective_address`: the 64-bit sum of the dynamic index
 // and the static offset, trapping when it wraps.
@@ -327,10 +387,12 @@ func (m *memory) read(idx, offset, n uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if n > uint64(len(m.bytes)) || ea > uint64(len(m.bytes))-n {
+	// One load, then both the check and the slice against it (decision 0058).
+	bs := m.view()
+	if n > uint64(len(bs)) || ea > uint64(len(bs))-n {
 		return nil, trapOOB
 	}
-	return m.bytes[ea : ea+n], nil
+	return bs[ea : ea+n], nil
 }
 
 // write copies bs to the effective address, or traps.
@@ -347,10 +409,11 @@ func (m *memory) write(idx, offset uint64, bs []byte) error {
 		return err
 	}
 	n := uint64(len(bs))
-	if n > uint64(len(m.bytes)) || ea > uint64(len(m.bytes))-n {
+	dst := m.view()
+	if n > uint64(len(dst)) || ea > uint64(len(dst))-n {
 		return trapOOB
 	}
-	copy(m.bytes[ea:], bs)
+	copy(dst[ea:], bs)
 	return nil
 }
 
@@ -386,10 +449,11 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 	if err != nil {
 		return err
 	}
-	if width > uint64(len(m.bytes)) || ea > uint64(len(m.bytes))-width {
+	bs := m.view()
+	if width > uint64(len(bs)) || ea > uint64(len(bs))-width {
 		return trapOOB
 	}
-	dst := m.bytes[ea : ea+width]
+	dst := bs[ea : ea+width]
 	// The aligned arm is atomic (ADR 0054) — see the twin comment in `memAccess`'s load tail for why
 	// this is a Go-memory-model requirement rather than a tearing one, and why widths 1 and 2 fall
 	// through to `atomicCell`. `cell` re-derives `ea` from `idx`/`offset`, which is the ≈5–8pp the
@@ -418,6 +482,17 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 // (`memory.ml:60-67`) become that value here rather than errors. Returning an error instead
 // would make every failed grow a trap and turn ~53 assert_return vectors into assert_trap
 // answers — the wrong verdict, arrived at by borrowing the wrong channel.
+//
+// **This is safe against a concurrent *reader* and is not safe against a concurrent *`grow`*, which
+// decision 0058 states as a residual rather than fixing.** It reads the size, computes a new one, and
+// publishes — three steps, not one — so two threads growing the same memory can both read the same old
+// size and the second publication can name an array built from a view taken before the first. Nothing
+// is unsafe: every descriptor is internally consistent and the abandoned arrays stay alive. What can
+// happen is a *lost grow*, and on the reslicing arm a published image shorter than one already
+// published, which a subsequent access reports as a bounds trap rather than as a wrong byte.
+// Serialising it is a decision — a mutex on the memory, or a compare-and-swap loop over the
+// descriptor — and it belongs with 0058's coherence residual, **#586**, rather than inside the PR that
+// publishes the image. `Spawn` cannot reach it today: no engine code starts a goroutine.
 func (m *memory) grow(delta uint64) int64 {
 	old := m.size()
 	newSize := old + delta
@@ -443,33 +518,54 @@ func (m *memory) grow(delta uint64) int64 {
 	// Testing the property the code actually needs beats testing the flag that usually implies
 	// it.
 	//
-	// The safety argument is about what a *concurrent* reader of the slice header can observe: the
-	// pointer is unchanged and the length only rises, so a torn header pairs a stable pointer
-	// with either the old or the new length. Both are in bounds, and the tail is already zero
-	// because the reservation came from `make`. The torn read becomes benign rather than
-	// needing to be prevented — which is the only version of this that works, since there is
-	// no way to write three words atomically.
+	// The safety argument used to be about what a *concurrent* reader of the slice header can
+	// observe — the pointer unchanged and the length only rising, so a torn header pairs a stable
+	// pointer with either length, both in bounds, the tail already zero because the reservation came
+	// from `make`. **That argument is no longer load-bearing and no longer the only one available.**
+	// It was correct for this arm and had no counterpart on the arm below, which is what made *"there
+	// is no way to write three words atomically"* the wrong conclusion: decision 0058 does not write
+	// three words atomically, it publishes a pointer to three words that are never written again. So
+	// both arms now write a fresh descriptor and store it once, and a reader holds whichever
+	// descriptor it loaded, entire.
 	//
 	// The other arm reallocates and copies, matching `grow`'s allocate-and-blit. `append`
 	// would also work and would leave the growth factor to the runtime; an explicit make is
 	// what keeps the length an exact multiple of pageSize, which `size` reads back as the
 	// authority.
+	cur := m.view()
 	switch {
-	case n <= uint64(cap(m.bytes)):
-		m.bytes = m.bytes[:n]
+	case n <= uint64(cap(cur)):
+		// The same array at a greater length. The old descriptor stays valid *and in bounds* — it
+		// names the identical pointer with a smaller length — so a thread still holding it is
+		// reading its own memory, not somebody's freed array.
+		m.img.Store(&memImage{bytes: cur[:n]})
 	case m.noMove:
 		// **Above the reservation a no-move memory refuses to grow, and this is a
 		// deviation from ADR 0051's pre-registered rollback that has to be said out loud.**
 		// The registration said *"falling back to allocate-and-blit above it, accepting
 		// that a shared memory grown past the ceiling needs the header protected some
-		// other way."* There is no other way that is both safe and cheap, and worse, the
-		// registration did not account for its own decision: ADR 0051 has the atomics
-		// holding a raw pointer into this array for the duration of an access, so
-		// allocate-and-blit here is not merely a torn header — it is a **use-after-free**,
-		// an atomic operating on an array the engine has abandoned while another agent
-		// works on the replacement. *A failed pre-registration narrows, it does not
-		// licence*, and shipping the registered fallback because it was registered would
-		// be honouring the letter of the discipline by breaking memory safety.
+		// other way."* When this arm was written there was no other way that was both safe
+		// and cheap, and worse, the registration did not account for its own decision: ADR
+		// 0051 has the atomics holding a raw pointer into this array for the duration of an
+		// access, so allocate-and-blit was not merely a torn header — it was a
+		// use-after-free, an atomic operating on an array the engine had abandoned while
+		// another agent worked on the replacement. *A failed pre-registration narrows, it
+		// does not licence*, and shipping the registered fallback because it was registered
+		// would have been honouring the letter of the discipline by breaking memory safety.
+		//
+		// **Half of that reason is now discharged, and the arm survives on the other half.**
+		// Decision 0058 found *"some other way"*: the header is published through an
+		// atomic pointer, the abandoned array stays alive and in bounds for every thread
+		// still holding a descriptor naming it, and the use-after-free is gone for every
+		// memory whether marked or not. What is not discharged is **coherence** — an atomic
+		// RMW on an abandoned array is invisible to the agents on the new one, so it is not
+		// an atomic operation in any sense the model recognises, and *that* is what a shared
+		// memory cannot be allowed to reach. So this arm's subject changed while its code
+		// did not: it refuses in order to keep an agent from being left behind, not in order
+		// to keep an array from being freed. Recorded rather than rewritten silently,
+		// because a comment stating a safety argument its decision has retired is the
+		// defect-stated-as-the-rule shape: review would confirm the arm for a reason that no
+		// longer holds.
 		//
 		// `-1` is the conforming alternative, and it is conforming rather than convenient:
 		// `memory.grow` does not trap, it reports failure in its result, and the reference
@@ -501,9 +597,21 @@ func (m *memory) grow(delta uint64) int64 {
 		growthRefusedPastReservation.Add(1)
 		return -1
 	default:
+		// **Relocation is memory-safe here and is not coherent, and decision 0058 says so rather
+		// than leaving the difference to be discovered.** The abandoned array is not freed while any
+		// thread holds a descriptor naming it, and every such descriptor is internally consistent, so
+		// there is no out-of-bounds read and no use-after-free — which is the whole of what the
+		// `noMove` arm above had to buy before 0058. What relocation still costs is *coherence*: a
+		// thread left on the abandoned array loses the updates it makes there, and an atomic RMW it
+		// performs there is invisible to every agent on the new array. The class of the defect
+		// changed from memory unsafety to a lost update in the value domain, which the spec permits
+		// for plain accesses on a memory that is not shared and does not describe for atomics on one.
+		// That is why `noMove` stays: a reserved memory never reaches this arm, so no agent is ever
+		// left behind on a shared memory. The residual is filed as **#586**, a fifth precondition on
+		// unparking `Spawn` rather than a defect in this arm.
 		grown := make([]byte, n)
-		copy(grown, m.bytes)
-		m.bytes = grown
+		copy(grown, cur)
+		m.img.Store(&memImage{bytes: grown})
 	}
 	// **The declared type grows with the memory, and it is mutable for exactly this
 	// reason.** `memory.ml:64`'s `grow` sets `mem.ty <- MemoryT (at, lim')` with `lim'.min`

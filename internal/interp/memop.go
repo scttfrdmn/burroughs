@@ -78,12 +78,19 @@ func isStore(op uint32) bool { return op >= 0x36 && op <= 0x3e }
 // use, and is the whole of the tear-freedom predicate (ADR 0053).
 //
 // **The test is on the host address, not on the guest's effective address**, and the two are the
-// same question here. `bs` is `m.bytes[ea : ea+width]`, so `&bs[0]` is the host address of `ea`;
-// `checkBaseAlignment` refuses to construct a memory whose backing array is not 8-byte aligned, so
+// same question here. `bs` is `m.view()[ea : ea+width]`, so `&bs[0]` is the host address of `ea`;
+// `checkBaseAlignment` refuses to *construct* a memory whose backing array is not 8-byte aligned, so
 // for every width up to 8 the host address is aligned exactly when `ea mod width` is zero — which
 // is the proposal's own condition, `u32 mod N/8 = 0`. The implication runs in the direction
 // conformance needs: aligned in guest space implies aligned in host space implies the single-access
 // path, so the accesses the proposal marks `NOTEARS` are the accesses that get it.
+//
+// **"Construct" is doing load-bearing work in that sentence and used not to be italicised, which is
+// grave #585.** A memory's backing array is allocated at two sites and only `newMemory` asserts the
+// premise: `grow`'s reallocating arm publishes a fresh `make([]byte, n)` unchecked, so a grown memory
+// can hold an array the constructor would have refused, and then this predicate answers a different
+// question than the one it is documented to answer. The sentence was true and read as a guarantee
+// about the type. Not repaired here — the repair needs a refusal channel `grow` does not have.
 //
 // Sound where that premise does *not* hold, which matters because `gcobj.go` passes Go-allocated
 // field bytes rather than linear memory: a false answer only declines the fast path, and the byte

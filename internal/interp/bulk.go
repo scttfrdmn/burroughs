@@ -77,7 +77,10 @@ func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 	k := byte(st.popNum())
 	i := mem.addr(st.popNum())
 
-	if outOfBounds(i, n, uint64(len(mem.bytes))) {
+	// One image load, then the bound and the access against that one slice (decision 0058): a second
+	// load between the check and the fill could name a shorter array than the one checked.
+	bs := mem.view()
+	if outOfBounds(i, n, uint64(len(bs))) {
 		return trapOOB
 	}
 	if n == 0 {
@@ -85,7 +88,7 @@ func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 	}
 	// `clear`-then-set would be two passes; the range form is one and is what the compiler
 	// recognizes as a memset.
-	dst := mem.bytes[i : i+n]
+	dst := bs[i : i+n]
 	for j := range dst {
 		dst[j] = k
 	}
@@ -125,14 +128,21 @@ func (in *Instance) execMemoryCopy(ins binary.Instr, st *stack) error {
 	// which `memory_copy.wast:350` asserts by trapping a 40-byte copy at 65516 and then reading
 	// the destination back across `:353`-onward. (A first draft cited `:428`, which is an
 	// unrelated read-back inside the generated 8 KiB block; the line was checked and replaced.)
-	if outOfBounds(d, n, uint64(len(dstMem.bytes))) ||
-		outOfBounds(s, n, uint64(len(srcMem.bytes))) {
+	//
+	// **Two memories, so two image loads, and each is used for both of its own uses** (decision
+	// 0058). `x` and `y` may be the same memory, in which case the two descriptors are the same
+	// pointer and the copy is within one array exactly as before — the overlap argument above is
+	// unaffected, because it is about `copy` and not about which array is named.
+	dstBs := dstMem.view()
+	srcBs := srcMem.view()
+	if outOfBounds(d, n, uint64(len(dstBs))) ||
+		outOfBounds(s, n, uint64(len(srcBs))) {
 		return trapOOB
 	}
 	if n == 0 {
 		return nil
 	}
-	copy(dstMem.bytes[d:d+n], srcMem.bytes[s:s+n])
+	copy(dstBs[d:d+n], srcBs[s:s+n])
 	return nil
 }
 
@@ -255,13 +265,17 @@ func (in *Instance) execMemoryInit(ins binary.Instr, st *stack) error {
 	s := st.popNum()
 	d := mem.addr(st.popNum())
 
-	if outOfBounds(d, n, uint64(len(mem.bytes))) || outOfBounds(s, n, seg.size()) {
+	// One image load for both of the memory's uses (decision 0058). The segment needs none: a
+	// `dataInstance`'s bytes are replaced only by `drop`, which is not concurrent with anything in
+	// this slice, and #573 rather than 0058 is where that question lives.
+	bs := mem.view()
+	if outOfBounds(d, n, uint64(len(bs))) || outOfBounds(s, n, seg.size()) {
 		return trapOOB
 	}
 	if n == 0 {
 		return nil
 	}
-	copy(mem.bytes[d:d+n], seg.bytes[s:s+n])
+	copy(bs[d:d+n], seg.bytes[s:s+n])
 	return nil
 }
 

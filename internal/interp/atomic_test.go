@@ -458,8 +458,8 @@ func TestAtomicCellAgreesWithTheByteLoop(t *testing.T) {
 	// where a run of zeros would hide all three.
 	const span = 32
 	pattern := func() {
-		for i := range mem.bytes[:span] {
-			mem.bytes[i] = byte(0x80 + i)
+		for i := range mem.view()[:span] {
+			mem.view()[i] = byte(0x80 + i)
 		}
 	}
 
@@ -472,7 +472,7 @@ func TestAtomicCellAgreesWithTheByteLoop(t *testing.T) {
 				t.Fatalf("cell(%d, 0, %d): %v", ea, 0, cerr)
 			}
 			byteLoop := func() uint64 {
-				return loadValue(mem.bytes[ea:ea+width], memop{width: width})
+				return loadValue(mem.view()[ea:ea+width], memop{width: width})
 			}
 
 			// Load.
@@ -485,14 +485,14 @@ func TestAtomicCellAgreesWithTheByteLoop(t *testing.T) {
 
 			// Store, and the neighbours it must not touch.
 			word := ea &^ 3
-			before := append([]byte(nil), mem.bytes[word:word+8]...)
+			before := append([]byte(nil), mem.view()[word:word+8]...)
 			v := uint64(0x1122334455667788) & c.mask
 			c.store(v)
 			if got := byteLoop(); got != v {
 				t.Errorf("width %d at ea %d: stored %#x, byte loop reads back %#x",
 					width, ea, v, got)
 			}
-			for i, b := range mem.bytes[word : word+8] {
+			for i, b := range mem.view()[word : word+8] {
 				at := word + uint64(i)
 				if at >= ea && at < ea+width {
 					continue // inside the field, expected to have changed
@@ -629,9 +629,9 @@ func TestAtomicRmwIsNotObservablyTornAcrossThreads(t *testing.T) {
 // alignedTestMemory builds a memory whose base satisfies the premise `checkBaseAlignment` asserts for
 // every real one, and **fails the test rather than the process if it cannot** (grave #579).
 //
-// A test that writes `&memory{bytes: make([]byte, 64)}` has skipped the only place that premise is
+// A test that writes `&memory{}` with a hand-made slice has skipped the only place that premise is
 // checked: `newMemory` calls `checkBaseAlignment`, a struct literal calls nothing, and `cell` does not
-// re-check — it hands `&m.bytes[ea]` to `sync/atomic` as a `*uint64`. Whether that address is 8-aligned
+// re-check — it hands `&m.view()[ea]` to `sync/atomic` as a `*uint64`. Whether that address is 8-aligned
 // is then decided by escape analysis, because a `[]byte` the compiler keeps on the stack has alignment
 // 1: a draft of the test below built its memory inline, the slice stayed on the stack, and
 // `atomic.AddUint64` took a SIGBUS on an odd address. The version that got away with it did so because
@@ -642,12 +642,21 @@ func TestAtomicRmwIsNotObservablyTornAcrossThreads(t *testing.T) {
 // one of eight consecutive bases is 8-aligned, whichever allocation arena the slice came from. The
 // premise is then asserted with the engine's own function rather than restated, so this helper cannot
 // disagree with what construction requires.
+//
+// **It publishes an image rather than assigning a field, which decision 0058 makes the difference
+// between a memory and a panic.** `view` loads `img` and dereferences it unconditionally — there is no
+// nil check on the hot path and there should not be — so a `&memory{}` with nothing published is a nil
+// dereference at the first access. That is loud rather than silent, which is the right failure for a
+// shape only a test can build, and it is stated here because this is the one place in the tree that
+// builds one.
 func alignedTestMemory(t *testing.T, n int) *memory {
 	t.Helper()
 	for slack := range 8 {
 		bs := make([]byte, n+8)[slack : slack+n]
 		if checkBaseAlignment(bs) == nil {
-			return &memory{bytes: bs}
+			m := &memory{}
+			m.img.Store(&memImage{bytes: bs})
+			return m
 		}
 	}
 	t.Fatalf("no 8-aligned base found within eight offsets of a %d-byte allocation, which "+
@@ -692,8 +701,8 @@ func TestTheNativeRmwDispatchAgreesWithApplyRmw(t *testing.T) {
 	// every shift.
 	seeded := func() *memory {
 		m := alignedTestMemory(t, 64)
-		for i := range m.bytes {
-			m.bytes[i] = byte(i*7 + 1)
+		for i := range m.view() {
+			m.view()[i] = byte(i*7 + 1)
 		}
 		return m
 	}
@@ -725,10 +734,10 @@ func TestTheNativeRmwDispatchAgreesWithApplyRmw(t *testing.T) {
 						t.Errorf("%s ea=%d operand=%#x: native pushed %#x, applyRmw's loop pushed %#x",
 							key, ea, operand, got, want)
 					}
-					if !bytes.Equal(fast.bytes, slow.bytes) {
+					if !bytes.Equal(fast.view(), slow.view()) {
 						t.Errorf("%s ea=%d operand=%#x: the two paths left different memory — "+
 							"the pushed values agree and a neighbouring field does not:\n native %x\n loop   %x",
-							key, ea, operand, fast.bytes, slow.bytes)
+							key, ea, operand, fast.view(), slow.view())
 					}
 				}
 			}

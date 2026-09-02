@@ -485,10 +485,18 @@ func guestWord64(v uint64) uint64 {
 // page, so `(ea &^ 3) + 4 <= len(bytes)` wherever `ea < len(bytes)`. And a width-2 access is
 // guaranteed 2-byte aligned by `checkAlign`, so a field never straddles the word boundary.
 //
-// **Nothing here is cached.** The pointer is computed per access from `m.bytes`, which is what makes
-// it impossible for it to be stale; a view captured at construction would survive an unshared
-// memory's `grow` reallocating underneath it, and answering from a replaced array is the
+// **Nothing here is cached.** The pointer is computed per access from the memory's published image,
+// which is what makes it impossible for it to be stale; a view captured at construction would survive
+// an unshared memory's `grow` reallocating underneath it, and answering from a replaced array is the
 // plausible-wrong-answer mode ADR 0051 chose this shape to avoid.
+//
+// **Per access is exactly one image load, and decision 0058 is why that sentence is now about a
+// number.** The pointer is taken from a single `m.view()`, so the bounds check and the
+// `unsafe.Pointer` conversion are against the same array — a second load between them would take the
+// address of an offset the first array holds and the second may not. What the descriptor does *not*
+// buy is coherence: an RMW on an array `grow` has abandoned is invisible to the agents on the
+// replacement, which is a lost update rather than a memory-safety failure (**#586**), and `noMove` is
+// what keeps it off the shared path. See `grow`'s reallocating arm.
 type atomicCell struct {
 	// Exactly one of these is non-nil; p64 means the containing word is the access itself.
 	p32 *uint32
@@ -510,15 +518,16 @@ func (m *memory) cell(addr, offset, width uint64) (atomicCell, error) {
 	if err != nil {
 		return atomicCell{}, err
 	}
-	if width > uint64(len(m.bytes)) || ea > uint64(len(m.bytes))-width {
+	bs := m.view()
+	if width > uint64(len(bs)) || ea > uint64(len(bs))-width {
 		return atomicCell{}, trapOOB
 	}
 	if width == 8 {
-		return atomicCell{p64: (*uint64)(unsafe.Pointer(&m.bytes[ea])), mask: ^uint64(0)}, nil
+		return atomicCell{p64: (*uint64)(unsafe.Pointer(&bs[ea])), mask: ^uint64(0)}, nil
 	}
 	base := ea &^ 3
 	return atomicCell{
-		p32:   (*uint32)(unsafe.Pointer(&m.bytes[base])),
+		p32:   (*uint32)(unsafe.Pointer(&bs[base])),
 		shift: 8 * uint(ea-base),
 		mask:  uint64(1)<<(8*width) - 1,
 	}, nil
