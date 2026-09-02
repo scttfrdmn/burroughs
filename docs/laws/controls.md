@@ -718,6 +718,50 @@ reach is a law out of context.
   the prose line count printed beside the verdict, so a population that collapsed to zero cannot
   report a pass. (Both boundaries measured on PR #339's own body; the second on its CI red.)
 
+  **Fifth specimen, and the aggravation is that the missing member of the population was already
+  sitting in the tracker when the trigger was written** (grave [#595], on PR [#594]'s merge).
+  `closecheck.sh` bans a closing keyword adjacent to an issue reference, and its trigger enumerated
+  three reference forms — `#N`, `GH-N`, `owner/repo#N` — under a coverage note reading *"all three
+  close, so all three are matched."* A fourth closes: the reference **wrapped in a markdown link**.
+  `Close [#543](https://github.com/scttfrdmn/burroughs/issues/543)` in #594's *Next* section scanned
+  clean, and closed #543 on the merge.
+
+  Three things make this the sharpest instance of this law rather than another one of it.
+
+  **The missed form was the house style.** Every reference in every PR body in this repo is a markdown
+  link, because that is the form `citecheck` resolves. So the trigger matched the three forms GitHub
+  *documents* and missed the only form the corpus *writes* — a predicate whose coverage of its nominal
+  space was 3-of-4 and whose coverage of its actual population was near zero.
+
+  **The remedy this law prescribes was available and cheap, and it is what finally ran.** "Measure the
+  trigger's coverage against the population it claims" is one command here, because the population is
+  the repo's own pull requests. Run over all **250** PRs in the tracker (`--state all`, title and body,
+  which is exactly what the `--pr` arm scans), the repaired trigger fires on **38** — **33** bare and
+  **5** linked. The ban landed in PR #316 on 2026-08-15; the highest bare-form hit is **#307**, so the
+  covered half has held across every PR since, and the *single* post-ban breach in 278 PRs is #594,
+  in the uncovered form. An enumerated trigger and a measured one differed by exactly the case that
+  fired.
+
+  **Four of the five linked specimens predate the trigger.**
+  `Closes [#164](https://github.com/scttfrdmn/burroughs/issues/164)` in PR #169 closed #164
+  two seconds after that merge, on 2026-08-07 — eight days before the ban was written — and #170,
+  #171 and #190 are the same construct. The evidence needed to falsify *"all three"* was in the
+  tracker, in the author's own prose, before the sentence was written; nothing had to be predicted,
+  only counted. **An enumeration of a space is a claim that can usually be checked against the
+  corpus, and the reason to check is that a trigger's under-match returns no finding rather than a
+  wrong one.** The two-second close signature is also the reading that promotes this from inference to
+  measurement, and it came free with the sweep.
+
+  The residue is stated rather than absorbed: a bare issue URL, an autolink, and a reference-style
+  `[#N][ref]` are **untested and unmatched** ([#596]). They are not matched conservatively, because
+  this law's fourth specimen above is the other direction — an over-match that fires on correct prose
+  teaches the writer to phrase around the instrument — and the only authority that could settle them
+  is GitHub's parser, which costs a merged pull request to ask.
+
+  [#594]: https://github.com/scttfrdmn/burroughs/pull/594
+  [#595]: https://github.com/scttfrdmn/burroughs/issues/595
+  [#596]: https://github.com/scttfrdmn/burroughs/issues/596
+
 ### A control specified by its mechanism rather than by the defect it must catch will catch a different population.
 
 - **A control specified by its mechanism rather than by the defect it must catch will

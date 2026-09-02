@@ -1040,6 +1040,42 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`closecheck.sh`'s ban missed a reference wrapped in a markdown link, which is the only form this
+  repo writes references in** (grave [#595](https://github.com/scttfrdmn/burroughs/issues/595)). The
+  trigger enumerated three reference forms — `#N`, `GH-N`, `owner/repo#N` — under a coverage note
+  reading *"all three close, so all three are matched."* A fourth closes. A keyword bound to a
+  `[#N]` carrying a parenthesised URL scanned clean here and closed the issue on merge, which is how PR
+  [#594](https://github.com/scttfrdmn/burroughs/pull/594)'s *Next* section — a sentence stating an
+  **intention** to close two issues by hand — closed one of them as a side effect of the merge, two
+  seconds before the hand-close that was the next step. The other reference in the same sentence, not
+  preceded by a keyword, stayed open: one body, one merge, two references, and the discriminating pair
+  came free.
+  - **Repaired** by allowing an optional `[` ahead of all three reference forms rather than adding a
+    fourth arm, since a linked `GH-N` and a linked `owner/repo#N` are the same hazard written the same
+    way. The report normalises what it prints to the reference GitHub acts on, and says when the text
+    wrapped it, so the remedy line can offer a rephrasing rather than a half-open bracket.
+  - **The trigger's coverage is now measured against the population it claims**, which is what this
+    class of defect has always required and what one command answers here: over all **250** PRs in the
+    tracker, the repaired trigger fires on **38** — **33** bare and **5** linked. The ban landed in PR
+    #316; the highest bare-form hit is **#307**, so the covered half has held across every PR since,
+    and the single post-ban breach in 278 PRs is #594's, in the form that was not covered.
+  - **Four of the five linked specimens predate the trigger**:
+    `Closes [#164](https://github.com/scttfrdmn/burroughs/issues/164)` in PR #169 closed
+    #164 two seconds after that merge on 2026-08-07, eight days before the ban was written, and #170,
+    #171 and #190 carry the same construct. The evidence that falsified *"all three"* was in the
+    tracker, in this project's own prose, before the sentence claiming it was written.
+  - The control gained a second reference-form arm (`internal/testenv/closebody_test.go`, four arms to
+    five) and a *linked* recommended phrasing in its clean arm, because the repair had to be checked in
+    both directions: `Landed in [#N]` with its URL is what the script tells an author to write, and a repair
+    reaching for the bracket instead of the adjacency would have failed it. Three further forms — a bare
+    issue URL, an autolink, and a reference-style `[#N][ref]` — are **untested and unmatched**, stated in
+    the header and tracked in [#596](https://github.com/scttfrdmn/burroughs/issues/596) rather than
+    matched on a guess, because an over-matching guard that fires on correct prose teaches the writer to
+    phrase around the instrument. The lesson: *an enumeration of a space is a claim, and a trigger's
+    under-match returns no finding rather than a wrong one* — filed as the fifth specimen under
+    [an under-matching trigger fails silently by
+    construction](docs/laws/controls.md#a-guards-trigger-predicate-is-itself-a-claim-about-the-space-and-an-under-matching-one-fails-silently-by-construction).
+
 - **A safepoint arrival buffer sized by members and filled by callers hung the third of three concurrent
   callers forever** (grave [#593](https://github.com/scttfrdmn/burroughs/issues/593)). `parkAtSafepoint`
   sent one arrival per *park* into a channel `Stop` sized `len(w.members)`, and the comment beside the

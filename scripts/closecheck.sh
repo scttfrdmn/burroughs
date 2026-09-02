@@ -88,7 +88,19 @@
 #
 # * The keywords are GitHub's own set: close/closes/closed, fix/fixes/fixed, resolve/resolves/
 #   resolved, case-insensitive.
-# * A reference is `#N`, `GH-N`, or `owner/repo#N` — all three close, so all three are matched.
+# * A reference is `#N`, `GH-N`, or `owner/repo#N`, and **each of the three also closes wrapped in a
+#   markdown link** — `Close [#543](url)`. All four are matched. The fourth arm is grave #595:
+#   this note used to read *"all three close, so all three are matched"*, which is the sentence
+#   enumerating the coverage certifying the hole in it. `Close [#543](…)` in #594's **Next** section
+#   scanned clean here, and closed #543 on the merge. **The missed form was the house style** — every
+#   reference in every PR body in this repo is a markdown link, because that is the form `citecheck`
+#   resolves — so the trigger matched the three forms GitHub *documents* and missed the one the corpus
+#   *uses*. Note that the two axes are independent: this file had argued its **adjacency** boundary
+#   carefully and never asked the same question about the **reference form**.
+# * Three further forms are **untested and unmatched**, tracked in #596 rather than guessed at: a
+#   bare issue URL, an autolink, and a reference-style `[#N][ref]`. They are not matched
+#   conservatively, because the paragraph below rules on that axis in the other direction, and the
+#   experiment that would settle them costs a merged pull request on the default branch.
 # * Adjacency is **same-line**: keyword, an optional colon, spaces or tabs, then the reference.
 #   This is the form that fired. A keyword separated from its reference by a newline is a
 #   **stated under-match**: whether GitHub binds across a line break is version-dependent
@@ -110,7 +122,8 @@
 # checker enforced that against its own author before a human read the page. That third case is the
 # one worth keeping: the first two were arranged, and this one was not.
 #
-# `--body` arrived with its own four-arm control (`internal/testenv/closebody_test.go`), and both of
+# `--body` arrived with its own four-arm control (`internal/testenv/closebody_test.go`), five since
+# grave #595 split the reference-form arm in two, and both of
 # its refusals were watched die under their own mutation: with the empty-file guard removed the form
 # prints `0 lines scanned, 0 banned constructs` and exits 0, which is the exact green it exists to
 # prevent. Its first real run was over the body of the PR that added it — 161 lines against the `--pr`
@@ -177,11 +190,23 @@ scan() {
 			} else {
 				continue
 			}
-			# A reference in any of the three closing forms.
-			if (match(after, /^#[0-9]+/) ||
-			    match(after, /^[Gg][Hh]-[0-9]+/) ||
-			    match(after, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+/)) {
-				print kw " " substr(after, RSTART, RLENGTH)
+			# A reference in any of the three closing forms, each optionally wrapped in a
+			# markdown link: the optional `[` is grave #595, where one bracket between the
+			# keyword and the `#` was the entire hole, in the form this repo writes every
+			# reference in.
+			if (match(after, /^\[?#[0-9]+/) ||
+			    match(after, /^\[?[Gg][Hh]-[0-9]+/) ||
+			    match(after, /^\[?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+/)) {
+				ref = substr(after, RSTART, RLENGTH)
+				# Report the reference GitHub acts on rather than the markdown around it, so
+				# the remedy line below offers a phrasing rather than a half-open bracket —
+				# and a third field saying whether it was wrapped, because a caller who
+				# greps the body for the reported text has to find it.
+				linked = "bare"
+				if (sub(/^\[/, "", ref)) {
+					linked = "linked"
+				}
+				print kw " " ref " " linked
 			}
 		}
 	}
@@ -242,8 +267,13 @@ fi
 nfound="$(printf '%s' "$found" | grep -c '' || true)"
 
 if [ "$nfound" -gt 0 ]; then
-	printf '%s\n' "$found" | while read -r kw ref; do
+	printf '%s\n' "$found" | while read -r kw ref linked; do
 		echo "FAIL  \"$kw $ref\" — a closing keyword adjacent to a reference."
+		if [ "$linked" = linked ]; then
+			echo "      It reads \"$kw [$ref](…)\" in the text: wrapping a reference in a markdown"
+			echo "      link does not defuse it, and this repo writes every reference that way."
+			echo "      Grave #595 is the specimen, and it is why the report above is normalised."
+		fi
 		echo "      GitHub will close $ref on merge, whatever the sentence around it says:"
 		echo "      the parser reads tokens, not negations. Write \"Landed in $ref\","
 		echo "      \"Filed, deferred: $ref\", or \"see $ref\", and close the issue by hand"
