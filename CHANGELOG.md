@@ -921,6 +921,37 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Three sentences in the engine asserted that Go documents no alignment for `make([]byte, n)`, which
+  is false, and a grave was filed on the strength of them** (grave
+  [#585](https://github.com/scttfrdmn/burroughs/issues/585), `gate:threads`). `sync/atomic`'s `BUG(rsc)`
+  block documents that *"the first word in an allocated struct, array, or slice … can be relied upon to
+  be 64-bit aligned"* — this premise, for a slice, at the width ADR 0051's atomics and ADR 0053's
+  `NOTEARS` claim want. The surviving claim is narrower: the Go **specification** promises nothing about
+  an allocation's absolute address, its size-and-alignment section being about `unsafe.Alignof` of
+  *types*, so the guarantee lives outside the normative document and `checkBaseAlignment` stays as one
+  comparison per memory. Corrected at `checkBaseAlignment`, at `wordAligned`, and in
+  `tearfree_test.go`'s note on why it builds no hand-aligned fixture.
+  - **The grave's subject is the comment, not the code**, and that half stands: the sentence stated its
+    coverage in the **constructor's** terms, which reads as a guarantee about the type when it is a
+    statement about one call site — and one `grep` for `checkBaseAlignment`'s callers falsifies it.
+    `grow`'s reallocating arm rests on the same documented guarantee `newMemory`'s allocation does, so
+    what it was missing is a *redundant* assertion, not a necessary one.
+  - **What the issue asked for is not what landed, and the difference is a mechanism claim retracted.**
+    #585 concluded that a misaligned fresh array *"can only be answered by refusing the growth"* — a
+    second named engine limit under ADR 0056's condition 2, and therefore a decision. That was one
+    mechanism mistaken for the requirement: aligning by construction needs no refusal channel, and the
+    documented guarantee means neither is needed at all. The withdrawal is posted on
+    [#587](https://github.com/scttfrdmn/burroughs/pull/587), where the blocked-on-a-ruling claim had
+    been put to a principal.
+  - **The coverage becomes an oracle instead of a sentence.**
+    `TestAGrownMemorysPublishedImageIsWordAlignedToo` asserts the premise on the array `grow`
+    publishes, where its sibling covers only `newMemory`'s. Its vacuity check is the design: `grow`'s
+    reslicing arm republishes the *same* pointer, against which the control would assert construction's
+    allocation a second time and pass covering nothing — so each of eight rounds asserts the base
+    **moved** before asserting it is aligned. Watched die twice, once per arm: offsetting the published
+    array fails all eight rounds naming the misalignment, and giving an unshared memory roomy capacity
+    fails on the vacuity check naming the unmoved pointer.
+
 - **The single-thread tripwire's name and message asserted what ADR 0054 removed, so it was renamed a
   second time — and this time after the rule rather than the property** (grave
   [#576](https://github.com/scttfrdmn/burroughs/issues/576)).

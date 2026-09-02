@@ -86,11 +86,20 @@ func isStore(op uint32) bool { return op >= 0x36 && op <= 0x3e }
 // path, so the accesses the proposal marks `NOTEARS` are the accesses that get it.
 //
 // **"Construct" is doing load-bearing work in that sentence and used not to be italicised, which is
-// grave #585.** A memory's backing array is allocated at two sites and only `newMemory` asserts the
-// premise: `grow`'s reallocating arm publishes a fresh `make([]byte, n)` unchecked, so a grown memory
-// can hold an array the constructor would have refused, and then this predicate answers a different
-// question than the one it is documented to answer. The sentence was true and read as a guarantee
-// about the type. Not repaired here — the repair needs a refusal channel `grow` does not have.
+// #585.** A memory's backing array is allocated at two sites and only `newMemory` asserts the premise:
+// `grow`'s reallocating arm publishes a fresh `make([]byte, n)` unchecked. The sentence was true and
+// read as a guarantee about the type, and that half stands. **#585's other half does not: the second
+// site is not unsound.** `sync/atomic`'s bug note documents that the first word of any allocated slice
+// can be relied upon to be 64-bit aligned, so `grow`'s array rests on the same guarantee `newMemory`'s
+// does and the missing call is a missing *redundancy* — no refusal channel needed, and no second
+// engine limit. Both sites now carry an oracle instead of this sentence's implication.
+//
+// **This predicate would not have answered wrongly even if the premise failed**, which has to be
+// separated out because an earlier version of this comment said it would. It reads the real host
+// address, so its answer is always true of the address handed to it. What a misaligned base would cost
+// is the *implication* above: guest-aligned would stop implying host-aligned, an access the proposal
+// marks `NOTEARS` would take the byte loop, and the conformance claim would fail where the predicate
+// did not.
 //
 // Sound where that premise does *not* hold, which matters because `gcobj.go` passes Go-allocated
 // field bytes rather than linear memory: a false answer only declines the fast path, and the byte

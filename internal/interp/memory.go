@@ -289,21 +289,27 @@ var sharedReservePages uint64 = 128
 //
 // The threads proposal guarantees an atomic access is naturally aligned *relative to the memory's
 // base* (`relaxed.rst:242`), which the interpreter already traps on. `sync/atomic` needs absolute
-// alignment, and **Go does not document any alignment for the result of `make([]byte, n)`.**
-// Measured across 800 allocations from 64 KiB to 16 MiB the base was 8-byte aligned every time,
-// which is what the allocator's span alignment predicts for page-sized and larger objects — but a
-// measurement is not a guarantee, so the premise is asserted here, once per memory, where a reader
-// can find it and where a platform that violated it would fail one loud construction instead of
-// producing torn atomics.
+// alignment, and **Go does document it — in a bug note, which is the whole of why this assertion is
+// cheap insurance rather than the thing holding the premise up.** `sync/atomic`'s `BUG(rsc)` block:
+// *"The first word in an allocated struct, array, or slice … can be relied upon to be 64-bit
+// aligned."* That is this premise, for a slice, at the width wanted. What the Go **specification**
+// promises is nothing of the kind — its size-and-alignment section is about `unsafe.Alignof` of
+// *types*, not about an allocation's absolute address — so the guarantee exists outside the normative
+// document, and one comparison per memory is the cheapest honest response to that gap. Measured
+// across 800 allocations from 64 KiB to 16 MiB the base was 8-byte aligned every time, which is not
+// the reason it holds: *a measurement is not a guarantee*, and here it is not even the available one.
 //
-// **It is called at one of the two sites that allocate a backing array, which is grave #585.** This
-// is `newMemory`'s check and nothing else calls it, so `grow`'s reallocating arm publishes a fresh
-// `make([]byte, n)` with the premise unasserted — a memory that passes here and is then grown past its
-// capacity can hold an array this refuses to construct. Not repaired in decision 0058's PR because the
-// repair needs a channel `grow` does not have: it reports failure as the spec's `-1`, so refusing is a
-// *second* named engine limit and therefore ADR 0056's condition 2 rather than a line of code. Stated
-// here because the sentence below, and its two copies elsewhere, are true of construction and read as
-// though they were true of the type.
+// **The sentence this replaces said Go documents no alignment at all. It was false, and #585 was
+// filed on it.** That issue read this function's single caller as a soundness hole: `grow`'s
+// reallocating arm publishes a fresh `make([]byte, n)` without calling this, so a grown memory could
+// hold an array the constructor would have refused. The narrower truth is that **both allocation
+// sites rest on the same documented guarantee**, so the second one is missing a *redundant*
+// assertion rather than a necessary one, and no refusal channel for `grow` — and therefore no second
+// engine limit — is needed for it. What stands from #585 is a lesson about this comment's own shape
+// rather than about the code: it stated coverage in the **constructor's** terms, which reads as a
+// guarantee about the type, and one `grep` for this function's callers falsifies it. The coverage is
+// now an oracle instead of a sentence — `TestWordAlignedAnswersTheProposalsGuestSpaceCondition` at
+// this site and `TestAGrownMemorysPublishedImageIsWordAlignedToo` at the other.
 //
 // `-race` checks the same premise far more thoroughly, at every access, because it enables
 // `checkptr` and every `unsafe.Pointer` conversion in `atomic.go` is instrumented with

@@ -18,10 +18,12 @@ import (
 
 // There is no hand-aligned scratch buffer here, and its absence is the point.
 //
-// An earlier draft over-allocated a `[]byte` and sliced forward to make its base 8-byte aligned,
-// because `make([]byte, n)` carries no documented alignment (see `checkBaseAlignment`) and a control
-// that *skipped* when the base came out misaligned would pass by asking nothing — *a skip is not a
-// verdict*. Every control below now runs over a real linear memory instead, which is strictly better
+// An earlier draft over-allocated a `[]byte` and sliced forward to make its base 8-byte aligned, on
+// the premise that `make([]byte, n)` carries no documented alignment — a premise since corrected at
+// `checkBaseAlignment`, since `sync/atomic`'s bug note does document it and only the Go specification
+// is silent. The draft was wrong for a second and independent reason, and that one still holds: a
+// control that *skipped* when the base came out misaligned would pass by asking nothing — *a skip is
+// not a verdict*. Every control below now runs over a real linear memory instead, which is strictly better
 // for the same reason it is more work: the premise those controls need is the one the engine actually
 // relies on, and `TestWordAlignedAnswersTheProposalsGuestSpaceCondition` asserts it on the instance's
 // own backing array rather than on a fixture built to satisfy it.
@@ -269,9 +271,12 @@ func TestWordAccessAgreesWithTheByteLoop(t *testing.T) {
 // because `checkBaseAlignment` refuses to construct a memory whose backing array is not 8-byte
 // aligned, and that is a premise about the Go allocator rather than about this code — so it is
 // asserted through a real memory, at every width and every address in a window, rather than argued
-// from the base once. **A memory this test never grows**, which is the qualification grave #585 adds:
-// `newMemory` is the only caller of that check, so `grow`'s reallocating arm publishes an unasserted
-// array and the sentence above covers construction rather than the type.
+// from the base once. **A memory this test never grows**, which is what #585 pointed at: `newMemory`
+// is the only caller of that check, so the sentence above covers construction rather than the type.
+// The other allocation site gets its own oracle rather than an argument —
+// `TestAGrownMemorysPublishedImageIsWordAlignedToo`. #585's stronger claim, that the second site is
+// *unsound*, does not survive: `sync/atomic`'s bug note documents the base alignment of any allocated
+// slice, so `grow`'s fresh array rests on the same guarantee this one does.
 //
 // **The direction that matters is one-way.** A false answer only declines the fast path, which is
 // always correct; a *true* answer at an address the proposal does not mark `NOTEARS` would be
@@ -326,6 +331,70 @@ func TestWordAlignedAnswersTheProposalsGuestSpaceCondition(t *testing.T) {
 	if want := len(widths) * 16; agree+disagree != want {
 		t.Errorf("checked %d (width, address) pairs, want %d — the loop bounds and the derived "+
 			"width set disagree, so the population is not what this control claims", agree+disagree, want)
+	}
+}
+
+// TestAGrownMemorysPublishedImageIsWordAlignedToo is the sibling above's other allocation site, and it
+// exists because that one covers `newMemory` and nothing covered `grow`.
+//
+// #585 is where the gap was noticed, and this control is deliberately *not* what that issue asked for.
+// It asked for the assertion at `grow`'s site, on the premise that Go documents no alignment for
+// `make([]byte, n)` and that a misaligned fresh array is therefore a soundness hole `grow` can only
+// answer by refusing. The premise is false — `sync/atomic`'s bug note documents the base alignment of
+// any allocated slice — so there is no hole to close and no engine limit to add. What survives is that
+// the *coverage* of the premise was a sentence about one caller, and a sentence is not an oracle. So
+// the premise is asserted on the array `grow` publishes, on both architectures CI runs, which is
+// where a platform that violated Go's own note would show up.
+//
+// **The vacuity check is the whole design.** Growing a memory does not necessarily allocate: `grow`'s
+// first arm reslices into reserved capacity and republishes the *same* pointer, and against that arm
+// this control asserts the base alignment of the array `newMemory` already allocated — it would pass
+// while covering nothing, which is the sibling site wearing this one's name. So each round asserts the
+// base **moved** before it asserts the base is aligned, and a round where it did not move is a failure
+// naming that rather than a pass.
+//
+// Eight rounds rather than one, because a single allocation is a single draw and the addresses come
+// from whichever span the allocator hands out.
+//
+// Watched die two ways. Offsetting the published array in `grow`'s reallocating arm (`raw :=
+// make([]byte, n+1); grown := raw[1:]`) fails every round, naming the base and its misalignment by 1.
+// Making the memory unreserved-but-roomy in `allocate` (`make([]byte, n, n*4)`) sends every growth
+// through the reslicing arm and fails on the vacuity check instead, naming the unmoved pointer — which
+// is the arm that proves this control is not silently re-testing construction.
+func TestAGrownMemorysPublishedImageIsWordAlignedToo(t *testing.T) {
+	in, trap := instantiate1(t, `(module (memory 1))`)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+	if len(in.mems) != 1 || in.mems[0] == nil {
+		t.Fatalf("expected one memory, got %d", len(in.mems))
+	}
+	mem := in.mems[0]
+
+	const rounds = 8
+	moved := 0
+	for round := range rounds {
+		before := uintptr(unsafe.Pointer(&mem.view()[0]))
+		if got := mem.grow(1); got < 0 {
+			t.Fatalf("round %d: grow(1) refused with %d on an unshared memory with no declared "+
+				"max, so no round after this one asserts anything", round, got)
+		}
+		after := uintptr(unsafe.Pointer(&mem.view()[0]))
+		if after == before {
+			t.Fatalf("round %d: the published array's base is still %#x after a growth, so this "+
+				"round would assert `newMemory`'s allocation a second time rather than `grow`'s — "+
+				"the reslicing arm ran, and this control covers the reallocating one", round, before)
+		}
+		moved++
+		if after%8 != 0 {
+			t.Errorf("round %d: `grow` published an array based at %#x, misaligned by %d — "+
+				"`sync/atomic`'s bug note says an allocated slice's first word can be relied upon "+
+				"to be 64-bit aligned, so this platform violates it and ADR 0051's atomics and "+
+				"ADR 0053's NOTEARS claim both rest on it", round, after, after%8)
+		}
+	}
+	if moved != rounds {
+		t.Errorf("asserted %d freshly allocated bases, want %d", moved, rounds)
 	}
 }
 
