@@ -216,7 +216,7 @@ func TestWordAccessAgreesWithTheByteLoop(t *testing.T) {
 						t.Fatalf("placing byte %d of pattern %#016x at %d: %v", i, pat, ea+i, err)
 					}
 				}
-				if wordAligned(mem.bytes[ea:ea+m.width], m.width) {
+				if wordAligned(mem.view()[ea:ea+m.width], m.width) {
 					alignedSeen[m.width]++
 				} else {
 					unalignedSeen[m.width]++
@@ -269,7 +269,9 @@ func TestWordAccessAgreesWithTheByteLoop(t *testing.T) {
 // because `checkBaseAlignment` refuses to construct a memory whose backing array is not 8-byte
 // aligned, and that is a premise about the Go allocator rather than about this code — so it is
 // asserted through a real memory, at every width and every address in a window, rather than argued
-// from the base once.
+// from the base once. **A memory this test never grows**, which is the qualification grave #585 adds:
+// `newMemory` is the only caller of that check, so `grow`'s reallocating arm publishes an unasserted
+// array and the sentence above covers construction rather than the type.
 //
 // **The direction that matters is one-way.** A false answer only declines the fast path, which is
 // always correct; a *true* answer at an address the proposal does not mark `NOTEARS` would be
@@ -289,7 +291,7 @@ func TestWordAlignedAnswersTheProposalsGuestSpaceCondition(t *testing.T) {
 		t.Fatalf("expected one memory, got %d", len(in.mems))
 	}
 	mem := in.mems[0]
-	if base := uintptr(unsafe.Pointer(&mem.bytes[0])); base%8 != 0 {
+	if base := uintptr(unsafe.Pointer(&mem.view()[0])); base%8 != 0 {
 		t.Fatalf("the linear memory's base is %#x, misaligned by %d — `checkBaseAlignment` should "+
 			"have refused this construction, and ADR 0053's predicate is answering a different "+
 			"question than the proposal's condition on this platform", base, base%8)
@@ -303,7 +305,7 @@ func TestWordAlignedAnswersTheProposalsGuestSpaceCondition(t *testing.T) {
 	for _, w := range widths {
 		// Two full periods of the widest width, so every residue of every width appears twice.
 		for ea := range uint64(16) {
-			got := wordAligned(mem.bytes[ea:ea+w], w)
+			got := wordAligned(mem.view()[ea:ea+w], w)
 			want := ea%w == 0 // the proposal's own condition, `u32 mod N/8 = 0`
 			if got == want {
 				agree++
@@ -405,7 +407,7 @@ func TestAnAlignedStoreWritesTheSameBytesAsAnUnalignedOne(t *testing.T) {
 			// Classified by the production predicate over the real memory, not by arithmetic, for
 			// the reason its sibling control gives: a broken predicate must not be able to report
 			// a healthy partition.
-			if wordAligned(mem.bytes[ea:ea+w], w) {
+			if wordAligned(mem.view()[ea:ea+w], w) {
 				aligned++
 			} else {
 				unaligned++

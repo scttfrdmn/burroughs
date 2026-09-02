@@ -21,6 +21,54 @@ weakly-ordered platform.
 
 ### Added
 
+- **A memory's contents are published through an atomic pointer to an immutable descriptor, so
+  relocation under a running thread is memory-safe without knowing who can reach what**
+  ([#575](https://github.com/scttfrdmn/burroughs/issues/575), [ADR
+  0058](docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md),
+  `gate:threads`). `memory` holds an `atomic.Pointer[memImage]` where it held a `[]byte`; every reader
+  loads the descriptor once and uses the slice it names, and `grow` builds a fresh `memImage` and
+  `Store`s it instead of writing the three words of a slice header underneath a reader. **The premise
+  this replaces was unrepairable, not merely incomplete**: ADR 0056's `Spawn` walk rested on
+  *"a `funcref` cannot name another instance's function"*, and #575's probes both reach a foreign
+  instance's unreserved memory through a `call_indirect` slot **and** instantiate that foreign instance
+  *after* `m.spawn` returned — so reachability is not a spawn-time property and no spawn-time
+  computation of any shape can be the soundness argument. The hazard was memory safety rather than a
+  value race: a reader could pair the new length with the stale pointer and index past the end of the
+  abandoned array, and `relaxed.rst:248` is explicit that a wasm data race is not undefined behaviour,
+  so an engine must not strengthen the guest's permitted race into its own out-of-bounds read.
+  - **The discipline is one image load per operation**, and it has a control rather than a comment:
+    `TestEveryMemoryOperationLoadsTheImageAtMostOnce` parses every non-test file in the package and
+    counts `view()` calls per receiver per function, because two loads in one
+    bounds-check-then-access pair means the check approves one array and the access lands in another —
+    a defect that is not a compile error, not a vet finding, and not observable on any corpus vector,
+    since the second load returns the same array in every single-threaded run.
+  - **The defect fixed has no single-threaded witness, and the controls say so instead of faking one.**
+    A Go slice is a value, so a local copy of the old header stayed valid on both engines; a
+    single-threaded assertion would have been an analytic zero. `TestARelocatingGrowDoesNotRaceAConcurrentReader`
+    names the race detector as its oracle, and `TestGrowPublishesAFreshImageRatherThanMutatingTheHeldOne`
+    asserts against the one regression the mechanism newly makes available — an arm that assigns
+    through `img.Load()` rather than publishing.
+  - **Measured against a bar fixed before the mechanism existed, and the bar clears on both
+    architectures**: geomean over `membench`'s 4 rows is **+0.45%** on `darwin/arm64` and **+1.73%** on
+    `linux/amd64` against a pre-registered ≤ 2.0%, with a matched null-arm geomean of +0.14% and
+    −0.20% on a slot-rotated three-arm instrument whose null arm is asserted byte-identical. No tuning
+    was taken and the rollback to option 1 did not fire. The amd64 margin is 87% of the allowance and
+    the ADR records that rather than smoothing it. The registered atomic secondary — `rmwbench`'s 49
+    rows — is flat on both architectures, and the ADR reads that as the instrument declining to answer
+    rather than as the mechanism being free on atomics: an rmw row's own cost dwarfs one pointer load.
+  - **The ADR's own registered direction is falsified, in the direction it named as fatal to its
+    attribution.** The estimate predicted the cost was an acquire barrier and so *worse on arm64*; the
+    effect is four times larger on **amd64**, and the two architectures' significant rows are disjoint
+    (arm64's two stores, amd64's two loads) where a per-access barrier predicts the same rows on both.
+    The replacement explanation is labelled a hypothesis, because nothing in the measurement tested it.
+  - **Two residuals are filed rather than papered over**, both cited at their code sites:
+    [#585](https://github.com/scttfrdmn/burroughs/issues/585), a grave — `grow`'s reallocating arm
+    publishes an array without the base-alignment check `newMemory` applies, so `wordAligned`'s
+    documented premise is a guarantee about a *constructed* memory and not a grown one — and
+    [#586](https://github.com/scttfrdmn/burroughs/issues/586), publication making relocation
+    memory-safe but not *coherent*, plus `grow` not being atomic against `grow`, which is a fifth
+    precondition on unparking `Spawn`.
+
 - **The first benchmark in the tree that executes an atomic instruction, and a native `sync/atomic`
   dispatch for the 23 read-modify-write rows one primitive can serve**
   ([#559](https://github.com/scttfrdmn/burroughs/issues/559), [ADR

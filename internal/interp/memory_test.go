@@ -240,7 +240,7 @@ func TestStoreTruncatesAndIsLittleEndian(t *testing.T) {
 // # Falsified three ways, and the first attempt was a stillborn control
 //
 // The falsification this comment's draft proposed — replacing the check with `ea+n >
-// uint64(len(m.bytes))`, the overflow-prone form the real one is written to avoid — **passed**.
+// uint64(len(m.view()))`, the overflow-prone form the real one is written to avoid — **passed**.
 // That is the birth requirement working: the overflow it admits needs `ea` near 2^64, which needs
 // a 64-bit address, which needs a memory64, which is gated. So no row here can reach it and the
 // rows must not claim to. `effectiveAddress`'s own wrap check is likewise unreachable from a
@@ -410,7 +410,7 @@ func TestMemorySizeAndGrow(t *testing.T) {
 // off-by-one in the extent check refuses it. Likewise an empty segment at offset 0 against a
 // zero-page memory, which is in bounds and which a naive `off >= len` check rejects.
 //
-// Falsified by changing initData's write to check `ea >= uint64(len(m.bytes))-n`: the two legal
+// Falsified by changing initData's write to check `ea >= uint64(len(m.view()))-n`: the two legal
 // rows start trapping.
 func TestActiveDataSegmentOutOfBoundsTrapsAtInstantiation(t *testing.T) {
 	cases := []struct {
@@ -587,13 +587,25 @@ func TestMemoryIndexSpaceCountsImportsFirst(t *testing.T) {
 // TestSharedMemoryGrowthKeepsItsBackingArray is #556's witness: the property ADR 0051's atomics rest
 // on, which is that a shared memory's backing array is never replaced.
 //
-// **Why the array must not move, stated as the failure rather than the rule.** A slice header is
-// three words and `grow` writes all three. A concurrent reader can observe the *new* length paired
-// with the *stale* pointer and index past the end of the old array — and ADR 0051 makes it worse than
-// a torn read, because its atomics hold a raw pointer into this array for the duration of an access,
-// so a replaced array is an atomic operating on memory the engine has abandoned. The spec is explicit
-// that a wasm data race is **not** undefined behaviour (`relaxed.rst:248`), so an engine that turns a
-// permitted guest race into a Go out-of-bounds read has strengthened the guest's crime into its own.
+// **Why the array must not move, stated as the failure rather than the rule — and the failure it names
+// has changed.** It used to be memory safety: a slice header is three words, `grow` wrote all three, and
+// a concurrent reader could observe the *new* length paired with the *stale* pointer and index past the
+// end of the old array, which ADR 0051's raw pointers made a use-after-free rather than a torn read.
+// **Decision 0058 discharges that half for every memory, marked or not**, by publishing the header
+// through an atomic pointer instead of mutating it — so the reason this property is still required is
+// **coherence**: a thread left on an abandoned array loses the updates it makes there, and an atomic RMW
+// it performs there is invisible to the agents on the replacement. The spec is explicit that a wasm data
+// race is **not** undefined behaviour (`relaxed.rst:248`), which is why the engine may not answer a
+// permitted guest race with a Go out-of-bounds read; a lost update on a memory that is not shared is
+// something the spec *does* permit, and keeping shared memories off the relocating arm is what keeps
+// this engine on the right side of that line.
+//
+// So the assertions below are unchanged and their subject is not, which is worth stating because the
+// test would otherwise read as still covering memory safety. **It does not**: the memory-safety property
+// is now unconditional, and its witnesses are
+// `TestGrowPublishesAFreshImageRatherThanMutatingTheHeldOne` for the publication and
+// `TestARelocatingGrowDoesNotRaceAConcurrentReader` — whose oracle is the race detector — for the
+// concurrent header itself.
 //
 // Three arms, and the third is the one a rule-shaped test would miss:
 //
@@ -614,10 +626,10 @@ func TestMemoryIndexSpaceCountsImportsFirst(t *testing.T) {
 // keeps this test from being read as covering them.
 func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 	base := func(m *memory) uintptr {
-		if len(m.bytes) == 0 {
+		if len(m.view()) == 0 {
 			t.Fatal("a zero-length memory has no base to read, so this arm asserts nothing")
 		}
-		return uintptr(unsafe.Pointer(&m.bytes[0]))
+		return uintptr(unsafe.Pointer(&m.view()[0]))
 	}
 	build := func(lim binary.Limits) *memory {
 		m, err := newMemory(binary.Memory{Limits: lim})
@@ -630,25 +642,25 @@ func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 	// Within the reservation: reslice, same pointer, and the new tail is zero.
 	shared := build(binary.Limits{Min: 1, Max: 4, HasMax: true, Shared: true})
 	before := base(shared)
-	shared.bytes[0] = 0xAB // a byte the reslice must carry, so "same pointer" is not vacuous
+	shared.view()[0] = 0xAB // a byte the reslice must carry, so "same pointer" is not vacuous
 	if got := shared.grow(3); got != 1 {
 		t.Fatalf("shared grow(3) = %d, want the previous size 1", got)
 	}
 	if after := base(shared); after != before {
 		t.Errorf("a shared memory's backing array moved from %#x to %#x across grow.\n"+
-			"The reservation exists so it cannot: a concurrent reader of the slice header "+
-			"would pair the new length with the stale pointer and read past the old array, "+
-			"and ADR 0051's atomics hold a pointer into it for the duration of an access "+
-			"(#556)", before, after)
+			"The reservation exists so it cannot, and since decision 0058 the reason is "+
+			"coherence rather than a torn header: a thread left on the abandoned array keeps "+
+			"working there, so its plain updates are lost and its atomic RMWs are invisible "+
+			"to every agent on the replacement (#556, #575)", before, after)
 	}
-	if shared.bytes[0] != 0xAB {
+	if shared.view()[0] != 0xAB {
 		t.Errorf("the reslice lost the memory's contents: byte 0 is %#x, want 0xAB",
-			shared.bytes[0])
+			shared.view()[0])
 	}
 	if shared.size() != 4 {
 		t.Errorf("size() = %d after growing 1 to 4 pages", shared.size())
 	}
-	for i, b := range shared.bytes[pageSize:] {
+	for i, b := range shared.view()[pageSize:] {
 		if b != 0 {
 			t.Fatalf("byte %d of the grown region is %#x, want 0: a grown page must read "+
 				"as zero, and reserved capacity is only safe to reslice into because "+
@@ -667,7 +679,7 @@ func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 
 	// Past the reservation: the spec's -1, not a reallocation.
 	capped := build(binary.Limits{Min: 1, Max: sharedReservePages + 8, HasMax: true, Shared: true})
-	if got := uint64(cap(capped.bytes)) / pageSize; got != sharedReservePages {
+	if got := uint64(cap(capped.view())) / pageSize; got != sharedReservePages {
 		t.Fatalf("reserved %d pages for a memory declaring max %d, want the cap %d — this arm "+
 			"cannot test the refusal if the reservation covered the whole declaration",
 			got, sharedReservePages+8, sharedReservePages)
@@ -679,10 +691,12 @@ func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 	}
 	if got := capped.grow(1); got != -1 {
 		t.Errorf("growing one page past the reservation returned %d, want -1.\n"+
-			"Reallocating here is a use-after-free rather than a torn header, because "+
-			"ADR 0051's atomics hold a pointer into the array being abandoned. `-1` is "+
-			"conforming: memory.grow reports failure in its result and the reference fails "+
-			"grows of its own (`memory.ml:60-67`)", got)
+			"Since decision 0058 reallocating here is memory-safe — the abandoned array stays "+
+			"alive and in bounds for every thread holding a descriptor naming it — so the "+
+			"reason is coherence and not safety: an atomic RMW on an abandoned array is "+
+			"invisible to the agents on the replacement, which is not an atomic operation in "+
+			"any sense the model recognises. `-1` is conforming: memory.grow reports failure "+
+			"in its result and the reference fails grows of its own (`memory.ml:60-67`)", got)
 	}
 	if after := base(capped); after != atCap {
 		t.Errorf("the refused grow moved the array anyway, %#x to %#x", atCap, after)
