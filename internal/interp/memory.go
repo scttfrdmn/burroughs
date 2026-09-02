@@ -3,6 +3,7 @@ package interp
 import (
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -106,6 +107,32 @@ type memory struct {
 	// exactly one thread exists. A flag written before any second thread starts is a fact about
 	// the past, which is precisely what decision 0056 rejects option (C) for not being.
 	noMove bool
+
+	// waitMu guards `waiters`, and holding it across a compare-and-enqueue is what closes the futex
+	// miss — decision 0060, and the argument is on `wait`. It adds no constraint on callers of this
+	// struct: `img` above already contains an `atomic.Pointer`, so `copylocks` already forbade
+	// copying a `memory` by value.
+	waitMu sync.Mutex
+
+	// waiters is the wait queue, keyed by **effective address** — one queue per address, not per
+	// (address, width), because the proposal wakes the waiters *at an address* and the reference's
+	// notify action carries an address and no type. A width-tagged key would decline to wake a
+	// `wait32` from a `notify` at the same place, which is a correct program getting a wrong answer.
+	//
+	// **On `memory` and not on `memImage`, and keyed by an integer and not by a resolved pointer** —
+	// both halves of decision 0060's first choice. `memImage` is what a relocating `grow` republishes
+	// ([0058]), so a queue there would be abandoned with the array and its waiters orphaned (#586's
+	// first half in a second place). And an integer key makes relocation *irrelevant* to a waiter
+	// rather than excluded from it: a pointer key would be valid only because `allocate` reserves
+	// shared memories, which holds only because `validate` rejects a shared memory with no maximum —
+	// a soundness argument owned by another package, and bypassed entirely by a `memory` built as a
+	// literal (grave #579's shape).
+	//
+	// `memory` is also the right identity for free: a shared memory spans instances (0052) and this
+	// is the object they share, so two importers wait and notify on one queue without the queue
+	// having to know that instances exist. Nil until the first waiter — a memory nobody waits on
+	// pays one word, not a map.
+	waiters map[uint64][]*waiter
 }
 
 // newMemory allocates a memory at its declared minimum.

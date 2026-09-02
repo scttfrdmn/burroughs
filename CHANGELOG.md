@@ -21,6 +21,44 @@ weakly-ordered platform.
 
 ### Added
 
+- **`memory.atomic.wait32/64` suspend, so the wake result exists and `memory.atomic.notify`'s count is
+  real** ([#543](https://github.com/scttfrdmn/burroughs/issues/543), [ADR
+  0060](docs/decisions/0060-the-futex-queue-hangs-off-memory-keyed-by-effective-address-because-a-pointer-key-would-borrow-its-soundness-from-another-package.md),
+  `gate:threads`). Contract §2 T-3's wait/notify pair: a wait compares the cell and enqueues under one
+  acquisition of the memory's own mutex, blocks against its own timer, and reports the reference's three
+  results — `0` woken, `1` not-equal, `2` timed-out. Before this, the instruction returned
+  `ErrUnsupportedOp` because nothing in the engine could be suspended.
+  - **The queue is keyed by the effective address, not by the resolved cell pointer.** A pointer key
+    would have been sound only because `allocate` reserves shared memories, which holds only because
+    `validate` rejects shared-without-max — a soundness argument owned by *another package* and bypassed
+    entirely by a `memory` built as a literal (grave
+    [#579](https://github.com/scttfrdmn/burroughs/issues/579)'s shape). An integer key makes relocation
+    irrelevant to a waiter rather than excluded from it. One queue per address and not per
+    `(address, width)`, because the proposal wakes the waiters *at an address* and the reference's notify
+    carries no type: a width-tagged key would decline to wake a correct program.
+  - **The futex miss is closed by holding the mutex across the compare *and* the enqueue**, in two cases
+    and no third. Both cell accesses are sequentially consistent ([ADR
+    0054](docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md))
+    and a notifier's store precedes its notify in program order, so either the waiter's load follows that
+    store — and it sees the new value and queues nothing — or the notifier's lock acquisition follows the
+    waiter's release, and the waiter is already enqueued when it detaches. The compare therefore lives
+    inside the enqueue function and not beside it.
+  - **The reference's `timeout_epsilon` is deleted rather than carried**, which is a deliberate
+    divergence from the only authority this path has. Its 1e6 ns constant was copied under a premise this
+    engine recorded at the copy site — *"with no other agent that reading is exact rather than an
+    approximation"* — and a notifier falsifies it: under the epsilon a 500 µs wait that a notify reaches
+    *inside* its interval reports a timeout that did not elapse. Both directions are pinned, the expiry
+    one-sidedly, because a `time.Timer` cannot fire early and a ceiling there would be measuring the
+    machine.
+  - **Contract §3 SP-2 inverts the arrival protocol for a suspended thread.** SP-1 has the thread
+    announce its arrival; a thread blocked in a wait cannot, and SP-4 forbids waking it to ask. So `Stop`
+    reads the mark itself, under the same mutex the transition takes, and counts that thread as arrived —
+    and on the way out the waiter clears the mark and **polls before pushing its result**, so a wait whose
+    interval expires inside a stop parks rather than resuming guest code in a stopped world.
+  - No latency claim, and therefore no pre-registration: the mechanism is a Go channel handoff, T-1's 1:1
+    OS thread is still parked behind [#554](https://github.com/scttfrdmn/burroughs/issues/554), and *"§2
+    T-3's futex-backed"* is exactly the phrase that reads as discharged once a wait/notify pair works.
+
 - **A host can stop every guest thread of an instance at a safepoint and resume it, and the poll that
   makes it possible is guarded at the `pc` assignment so straight-line code pays nothing**
   ([#515](https://github.com/scttfrdmn/burroughs/issues/515), [ADR
@@ -1001,6 +1039,26 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **A safepoint arrival buffer sized by members and filled by callers hung the third of three concurrent
+  callers forever** (grave [#593](https://github.com/scttfrdmn/burroughs/issues/593)). `parkAtSafepoint`
+  sent one arrival per *park* into a channel `Stop` sized `len(w.members)`, and the comment beside the
+  send argued it could not block because *"the buffer is `len(w.members)` and each thread sends once per
+  round"* — then deferred the hazard to SP-4's dynamic membership. Each thread does send once; the
+  **sender is a caller**. `link.go` registers one `thread` per instance
+  ([#592](https://github.com/scttfrdmn/burroughs/issues/592)), so three concurrent `Invoke` calls are
+  three senders sharing one member and one buffer slot: A's send is received by `Stop`, B's fills the
+  slot, and **C blocks on the send forever** — before `<-release`, so `Resume` cannot free it, and
+  `Resume` nils the channel so nothing ever drains it again. A permanent hang through the public API,
+  with no gate and no unsafe embedding. Repaired by reporting one arrival **per thread per round**
+  (`thread.reported`, set under `world.mu`, cleared by `Stop` when it installs the round), with
+  `TestThreeConcurrentCallersAndAStopDoNotHang` as the regression. A non-blocking send is rejected in
+  writing: it cannot hang, and it silently *drops* arrivals, letting `Stop` count two from one member and
+  report a stopped world with another member still running — **a hang is visible, a wrong verdict is
+  not**. The lesson: *a buffer-size argument must name the sender, not the object the buffer is sized
+  by*, and the sentence that retired its own soundness to a future proposal is the foreclosing-words
+  shape at the level of a hazard — it told the next reader the danger was scheduled when it had already
+  arrived by a route the sentence does not mention.
 
 - **An injection battery's restore step deleted the subject it was certifying, and the confounded board
   was indistinguishable from the successful falsification** (grave

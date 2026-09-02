@@ -128,6 +128,35 @@ type thread struct {
 	// another goroutine writes is a data race — undefined behaviour, not a slightly-stale answer.
 	stopReq atomic.Bool
 
+	// blocked is contract §3 SP-2's mark: this thread is suspended in `memory.atomic.wait` and
+	// therefore *at a safepoint* — decision 0060's third choice.
+	//
+	// **Guarded by `world.mu`, and deliberately not an atomic.** Both writers (`enterBlocked`,
+	// `leaveBlocked`) and the only reader (`Stop`) hold that mutex, and the whole point is that the
+	// transition and the count cannot interleave: an atomic read would let `Stop` observe "not
+	// blocked" from a thread that is one instruction from blocking, and then wait for an arrival that
+	// will never come. `stopReq` above is atomic for the opposite reason — its reader is the hot path
+	// and must not take a lock.
+	//
+	// **A count and not a flag, because a `thread` is per *instance* and a caller is per *call*.**
+	// `link.go` registers exactly one thread per instance, and an embedder may drive N concurrent
+	// `Invoke` calls through it — the engine's own `TestAtomicRmwIsNotObservablyTornAcrossThreads`
+	// does, with N=2. A flag would be cleared by the first of those to leave a wait while the others
+	// were still in one, which is the mark saying "running" about a thread that is not. The count is
+	// exact for that shape; what it cannot fix is a *mixed* one, where one caller is suspended and
+	// another is executing guest code on the same `thread` — see #592.
+	blocked int
+
+	// reported records that this thread's arrival has been sent for the round `world.resume` names,
+	// so that N callers sharing one thread produce one arrival and not N.
+	//
+	// **This is a bug fix to #591's arrival protocol and not a new requirement.** `parkAtSafepoint`
+	// argued that its send could not block because *"the buffer is `len(w.members)` and each thread
+	// sends once per round"* — and each *thread* does, while each *caller* also sends, so three
+	// concurrent `Invoke`s and one `Stop` filled a one-slot buffer and left the third caller blocked
+	// on a send forever, with `Resume` unable to free it. See `parkAtSafepoint`.
+	reported bool
+
 	// w is the stop-the-world state this thread participates in, set by `world.register` at creation.
 	//
 	// Nil is legal and means "no world", which is any `thread` this package's own tests build by

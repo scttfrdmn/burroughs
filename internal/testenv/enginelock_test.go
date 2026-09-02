@@ -186,17 +186,30 @@ func TestNoEngineLockIsHeldAcrossAChannelOperation(t *testing.T) {
 	// catches a walk that stopped reading the tree; the locked-function count catches a `Lock` match
 	// that stopped resolving, which is now a live failure mode rather than a hypothetical — before
 	// #515 there were no locks at all and this second floor could not have been written.
-	const engineFilesWhenWritten = 40
+	//
+	// **The file floor is raised from 40 to 100, and the measured population is 111.** A floor 2.8×
+	// below what it bounds catches a walk that returns *nothing* and cannot catch one that stops
+	// early — the failure mode a `SkipDir` mistake produces — so the distance was the vacuum. 100
+	// keeps enough headroom for a package to be deleted without a false failure and still fires on a
+	// walk that loses a tenth of the tree. Measured by the instrument (999 forced into the floor
+	// below, whose message prints the population), not counted by eye.
+	const engineFilesWhenWritten = 100
 	if scanned < engineFilesWhenWritten {
 		t.Fatalf("scanned %d non-test .go file(s) under %s, want at least %d — the walk is not "+
 			"reading the tree, so the assertion below asserted its property of nothing and passed",
 			scanned, repoRoot, engineFilesWhenWritten)
 	}
-	// Four today, all in `internal/interp/safepoint.go`: `register`, `Stop`, `Resume` and
-	// `parkAtSafepoint`. A floor rather than an equality because a new lock is what this should
-	// judge, not refuse to look at; the exact number is stated because a floor alone catches a moved
+	// **Nine today, and it said four.** `safepoint.go`'s `register`, `Stop`, `Resume`,
+	// `parkAtSafepoint`, `enterBlocked` and `leaveBlocked`, plus `futex.go`'s `enqueueIfEqual`,
+	// `resolveExpiry` and `detach` — #543's wait queue is the second mutex in engine code and it
+	// arrived one slice after the first. The sentence naming four was true when written and false
+	// after the next slice landed, which is why the count is re-measured here rather than left to be
+	// inferred from a floor that would have passed either way.
+	//
+	// A floor rather than an equality because a new lock is what this control should *judge* and not
+	// refuse to look at; the exact number is stated beside it because a floor alone catches a moved
 	// file and never a silent partial loss.
-	const lockedFuncsWhenWritten = 4
+	const lockedFuncsWhenWritten = 9
 	if len(locked) < lockedFuncsWhenWritten {
 		t.Fatalf("found %d locked function(s) across %d files (%v), and there were %d when this was "+
 			"written. Below the floor means the `.Lock()` match has stopped resolving, so every "+
