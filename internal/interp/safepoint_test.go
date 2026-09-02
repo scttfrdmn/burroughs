@@ -39,6 +39,13 @@ import (
 // fails all fourteen at once *and* fails the census, which is the two-sided falsification —
 // *a control isn't born until it's watched die.*
 //
+// **The blinding row was run twice, and the first run proved nothing** (grave #589). Its restore step
+// was `git checkout exec.go` on an uncommitted slice, so HEAD was `main` and the checkout reverted the
+// *subject* — the fourteen routings — instead of the previous injection. A reverted subject produces
+// this row's predicted board exactly, `14 raw / 0 routed`, on the same assertion with the same
+// message, because either way there is no `jumpTo` to match. The board above is from the re-run
+// against a committed baseline, which is now the battery's precondition.
+//
 // [ADR 0059]: ../../docs/decisions/0059-the-safepoint-poll-is-guarded-at-the-pc-assignment-because-a-back-edge-is-a-runtime-comparison-and-straight-line-code-pays-nothing.md
 func TestEveryPCAssignmentInRunFrameGoesThroughJumpTo(t *testing.T) {
 	// The census, not a floor. Fourteen arms route through `jumpTo` today, and the number is pinned
