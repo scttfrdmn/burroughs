@@ -269,6 +269,85 @@ func spinModule(t *testing.T) *Instance {
 	return in
 }
 
+// gatedSpinModule is `spinModule`'s sibling with one difference: **the loop's exit condition is a word
+// the host writes, not a trip count.** `spin` runs until `release` stores into shared memory, and it
+// returns the trips it took to get there. A second word is a caller-arrival count, bumped once on
+// entry and readable through `entered`, so the host has an exact signal that every caller is in the
+// guest before it stops the world — `awaitQueued`'s move in `futex_test.go`, for its reason: *a test's
+// premise is not its assertion, and a premise that fails silently means nothing was measured.*
+//
+// # Grave #598, which is what a trip count buys and what it costs
+//
+// A counted loop makes the *duration* of the guest's work the thing a test's deadline is measured
+// against, and `spinningCallers` below then used a deadline as a hang detector. Three concurrent
+// 10,000,000-trip callers under `-race` came within 2.5s of that arm's 30s bound on an idle dev box at
+// `GOMAXPROCS=1`, and exceeded it on a four-core CI runner sharing itself with six other packages —
+// so the arm reported a wedge, in those words, over three callers that were `[runnable]` inside the
+// interpreter and blocked on nothing. Raising the trip count reproduces that red verbatim, which is
+// the proof the trigger cannot tell the two apart.
+//
+// A gated loop moves both properties the arm needs out of the scheduler's hands:
+//
+//   - **Every caller is inside the guest when `Stop` runs, and stays there.** The gate is zero until
+//     the test stores it, so no caller can finish early, and the arrival count says all three are past
+//     the loop entry rather than still queued behind a goroutine start. The counted version had
+//     neither: its callers were in the loop only because the loop was long, which is the same
+//     coincidence the deadline was resting on.
+//   - **The post-`Resume` wait bounds wedge-freedom only.** A released caller returns in microseconds,
+//     so the deadline finally sits orders of magnitude away from what it bounds, and a red means
+//     blocked rather than slow. *An unasserted distance is the vacuum*, and this is the direction that
+//     asserts it.
+//
+// **What it still does not buy is three parks in one round**, and that is worth saying because the
+// gate makes it tempting to claim. `Stop` returns on the first arrival and `Resume` clears `stopReq`,
+// so a caller that has not reached a back-edge by then never parks — the window is now a few
+// instructions wide rather than a whole loop, but it is not zero, and *narrow is not closed*. The arm
+// that closes it by construction is `expiringWaits` below, which is why there are two.
+//
+// What is given up is the exact trip count, and with it this arm's incidental frame-integrity check:
+// a gated loop's return value is whatever the schedule made it. That claim is asserted exactly, on a
+// single caller, by `TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish`'s third clause, which
+// is why `spinModule` keeps its counted form and this is a second builder rather than an edit to it.
+// A positive count is still checked here, for the vacuity reason every other count in this package is:
+// zero trips would mean the loop never ran.
+//
+// The memory is `shared` and the accesses are atomic because the flag is written by one agent and read
+// by three: a plain load in the loop against a plain store from the host is a data race on guest memory
+// and `-race` is an authority this package answers to (`TestAtomicRmwIsNotObservablyTornAcrossThreads`
+// is the same reasoning one file over). That makes the threads feature a decoder requirement here, so
+// this builder configures the decoder where `spinModule` can use the default.
+func gatedSpinModule(t *testing.T) *Instance {
+	t.Helper()
+	const src = `(module
+		(memory 1 1 shared)
+		(func (export "spin") (param $gate i32) (param $count i32) (result i32) (local $n i32)
+			(drop (i32.atomic.rmw.add (local.get $count) (i32.const 1)))
+			(loop
+				(local.set $n (i32.add (local.get $n) (i32.const 1)))
+				(br_if 0 (i32.eqz (i32.atomic.load (local.get $gate)))))
+			(local.get $n))
+		(func (export "release") (param $gate i32)
+			(i32.atomic.store (local.get $gate) (i32.const 1)))
+		(func (export "entered") (param $count i32) (result i32)
+			(i32.atomic.load (local.get $count))))`
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encoding the gated spin module: %v", err)
+	}
+	m, err := (&binary.Decoder{Features: binary.Features{Threads: true}}).DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decoding the gated spin module: %v", err)
+	}
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("instantiating the gated spin module: %v", trap)
+	}
+	if derr := in.Deferred(); derr != nil {
+		t.Fatalf("instantiating the gated spin module fell short: %v", derr)
+	}
+	return in
+}
+
 // TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish is contract §3 SP-1's own sentence, run:
 // *"a host request `stop(deadline)` brings every guest thread to a safepoint within a bounded,
 // configurable interval."*
@@ -654,9 +733,11 @@ func TestAResumedGuestSeesAHostWriteFromTheStop(t *testing.T) {
 // # Two arms, because the grave's own sequence reproduces the defect only in one direction
 //
 // `spinningCallers` is the sequence the issue describes: three goroutines invoking a looping export, one
-// `Stop`. It has a false-negative window — `Stop` returns as soon as *one* arrival lands, and callers B
-// and C have to reach a poll before the `Resume` that follows. They poll at every back-edge, so in
-// practice they do, but "in practice" is not what a regression test for a hang should rest on.
+// `Stop`. It used to have a false-negative window, conceded here in prose — `Stop` returns as soon as
+// *one* arrival lands, and callers B and C had to reach a poll before the `Resume` that followed, which
+// they did "in practice". Grave **#598** closed it, from the other end than expected: the loop is now
+// gated on a word the host writes (`gatedSpinModule`), so every caller is inside it when `Stop` runs by
+// construction, and the post-`Resume` deadline bounds only whether `Resume` freed them.
 //
 // `expiringWaits` closes that: three callers suspended in `memory.atomic.wait` whose intervals expire
 // while the world is stopped. `awaitQueued` is an exact signal that all three are suspended before the
@@ -667,12 +748,70 @@ func TestThreeConcurrentCallersAndAStopDoNotHang(t *testing.T) {
 	const callers = 3
 
 	t.Run("spinningCallers", func(t *testing.T) {
-		const trips = 10_000_000
+		// Two naturally aligned words: the gate the loop watches and the count each caller bumps
+		// on entry. Distinct addresses, four bytes apart, so neither access needs arithmetic in
+		// the assertion's way.
+		const (
+			gate  = 0
+			count = 4
+		)
 
-		in := spinModule(t)
+		in := gatedSpinModule(t)
 		done := make(chan outcome, callers)
 		for range callers {
-			go func() { done <- callOffGoroutine(in, "spin", I32(trips)) }()
+			go func() { done <- callOffGoroutine(in, "spin", I32(gate), I32(count)) }()
+		}
+		back := 0
+
+		// **Whatever happens above, no caller is left running inside the guest.** `boundaryCrossings`
+		// is a package-level counter that is never reset, so an abandoned `enterGuest` is an odd
+		// parity in `TestEveryBoundaryCrossingIsPaired` — a red in another test, naming a missing
+		// `defer` at an engine site, caused by a leak here. That is grave **#599**, and its own
+		// repair scopes that read to its own delta; this half removes the occasion. `Resume` first
+		// and unconditionally, because it is a no-op on a world that is not stopped and the release
+		// invoke would otherwise park behind a stop this arm failed before lifting.
+		t.Cleanup(func() {
+			in.Resume()
+			if _, err := in.Invoke("release", I32(gate)); err != nil {
+				t.Errorf("releasing the gated loop during cleanup: %v — callers may still be "+
+					"inside the guest, which poisons `boundaryCrossings` for whatever runs "+
+					"next (grave #599)", err)
+			}
+			for back < callers {
+				select {
+				case <-done:
+					back++
+				case <-time.After(30 * time.Second):
+					t.Errorf("%d of %d callers were still inside the guest 30s after the flag was "+
+						"set and the world resumed, so this arm is leaving crossings unpaired "+
+						"(grave #599)", callers-back, callers)
+					return
+				}
+			}
+		})
+
+		// **The premise, waited on rather than assumed.** Without this the arm is a green over
+		// nothing at all: three goroutines that have not yet reached `Invoke` register no thread,
+		// so `Stop` would stop an empty world, `Resume` would resume it, and the release would let
+		// three callers run a loop no stop ever touched. Zero of the arm's subject, exercised.
+		// *An analytic zero is not a measurement*, and 0.00s is what tipped it — the counted
+		// version's eight seconds hid the same hole behind work.
+		deadline := time.Now().Add(10 * time.Second)
+		entered := int32(0)
+		for entered < callers && time.Now().Before(deadline) {
+			res, err := in.Invoke("entered", I32(count))
+			if err != nil {
+				t.Fatalf("reading the arrival count: %v", err)
+			}
+			entered = res[0].Int32()
+			if entered < callers {
+				time.Sleep(time.Millisecond)
+			}
+		}
+		if entered != callers {
+			t.Fatalf("only %d of %d callers entered the guest within 10s — this is the arm's "+
+				"premise and not its assertion: a stop over a world none of them had joined "+
+				"would measure nothing", entered, callers)
 		}
 
 		if err := in.Stop(5 * time.Second); err != nil {
@@ -680,18 +819,39 @@ func TestThreeConcurrentCallersAndAStopDoNotHang(t *testing.T) {
 		}
 		in.Resume()
 
-		for i := range callers {
+		// The gate opens only now, so up to here every caller was held inside the loop rather than
+		// racing the stop to the end of a trip count.
+		if _, err := in.Invoke("release", I32(gate)); err != nil {
+			t.Fatalf("releasing the gated loop: %v — this is the arm's premise and not its "+
+				"assertion, since an unreleased loop never returns", err)
+		}
+
+		for back < callers {
 			select {
 			case r := <-done:
-				if got := r.get(t); got != trips {
-					t.Errorf("a caller returned %d trips, want %d", got, trips)
+				back++
+				// Vacuity, not integrity: a gated loop's trip count is whatever the schedule
+				// made it, and zero would mean the body never ran. The exact-count claim —
+				// that a safepoint left the frame, the value stack and `pc` intact — is
+				// asserted on a single caller by
+				// `TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish`.
+				if got := r.get(t); got <= 0 {
+					t.Errorf("a caller returned %d trips, want a positive count: the loop it was "+
+						"released from had to execute at least once", got)
 				}
 			case <-time.After(30 * time.Second):
-				t.Fatalf("%d of %d callers returned within 30s after Resume. The missing one is "+
-					"blocked on the arrival send inside `parkAtSafepoint`, which happens *before* "+
-					"`<-release`, so `Resume` cannot free it and nothing will ever drain the "+
-					"channel again (grave #593). An arrival is one per thread per round, and the "+
-					"buffer was always sized for that", i, callers)
+				// **What this deadline can and cannot distinguish.** The flag is set and the
+				// world is resumed, so a caller that has not returned is not merely slow —
+				// one trip is a load and a branch. What it does not do is say *where* it is
+				// blocked, and the message must not claim to: grave #598 was this arm
+				// asserting `parkAtSafepoint`'s arrival send by name over three callers that
+				// were `[runnable]` in the interpreter. Run the package with `-timeout` just
+				// under this interval and the runtime prints the stacks that answer it.
+				t.Fatalf("%d of %d callers returned within 30s after Resume and after the gate "+
+					"was opened, so at least one was not freed. The hang grave #593 names is "+
+					"the arrival send inside `parkAtSafepoint`, which happens *before* "+
+					"`<-release` — but this arm observes only that a caller did not return, "+
+					"so read the goroutine dump before believing that", back, callers)
 			}
 		}
 	})

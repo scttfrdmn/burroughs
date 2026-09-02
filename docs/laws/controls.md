@@ -649,6 +649,83 @@ reach is a law out of context.
   `wantUnclaimed` to empty — which is now a *board figure*, every category the reference has being
   claimed.
 
+  **Third instance, and the sample is the process rather than a list** (grave [#599]).
+  `TestEveryBoundaryCrossingIsPaired` (`internal/interp/boundary_test.go`) closed with
+  `crossings() % 2` — a parity read on `boundaryCrossings`, a package-level `atomic.Uint64` that is
+  never reset. Every other assertion in the file is a delta, and the reader helper says so at the read
+  site, in these words: *"every assertion here is a delta … naming that at the read site is what stops
+  an absolute from being written by accident: the word is package-level and never reset, so its value
+  is a fact about whatever ran earlier in the binary."* Twenty lines later, the accident. The scope the
+  control claimed was *its own five cases*; the scope it actually read was **every test in the package
+  that had run before it**, which under `-shuffle=on` is a different sample on every run.
+  It cost a red with another test's cause in it. A sibling arm ([#598], below) failed and abandoned
+  three callers inside the guest, three `enterGuest` calls went unpaired, and this line reported *"some
+  site entered the guest and never left it … a site paired them by hand and returned early"* — a claim
+  about an engine site, with none to point at. Repaired to `(crossings() - before) % 2`, watched from
+  both sides: an odd crossing injected **before** the window leaves it green where the absolute reds,
+  and an odd crossing injected **inside** the window reds, so the scoping did not buy silence.
+  Two things generalise past the fix. First, **the absolute's red was incoherent on its own terms** —
+  reverting the condition while leaving the message printing the delta produced *"delta is odd (14)"*,
+  an even number reported as odd, because guard and message were reading different populations. Second,
+  the leak's removal is not the repair. The counter is global, so the next test written in that package
+  can poison it, and the author has no reason to know an unrelated arm's parity is watching them: **a
+  control a sibling can break is not scoped to its subject**, and the enumeration here was implicit —
+  a process, not a list.
+
+### A deadline used as a hang detector measures throughput, and its red names a mechanism it never observed.
+
+- **A deadline used as a hang detector measures throughput, and its red names a
+  mechanism it never observed.** *Wedged* and *not finished yet* are different facts, and an interval
+  cannot tell them apart. A control that waits `D` for a result and reports "blocked" on expiry has
+  written a throughput claim and labelled it a liveness claim; the label is what the next reader
+  believes, and there is no sweep in this tree whose domain includes a `t.Fatalf` string.
+
+  **Specimen: grave [#598].** `TestThreeConcurrentCallersAndAStopDoNotHang/spinningCallers`, the
+  regression test for [#593]'s permanent hang, ran three concurrent callers through a
+  10,000,000-trip guest loop, called `Stop` and `Resume`, then gave each caller 30 seconds. On CI it
+  printed *"0 of 3 callers returned within 30s after Resume. The missing one is blocked on the arrival
+  send inside `parkAtSafepoint` … nothing will ever drain the channel again"* — over a branch whose
+  diff was a shell script, a test file, this corpus and a changelog. Nothing was blocked. All three
+  callers were `[runnable]` inside the interpreter, which is what the runtime prints if you run the
+  package with `-timeout` a few seconds under the arm's own interval and let it dump the stacks.
+
+  **The measurements that were never taken, in the order that settles it.** The bound against the
+  thing it bounds, on the slowest machine that runs it: 8.56s at `GOMAXPROCS` default on the dev box,
+  23.10s at `GOMAXPROCS=1`, 27.55s at `GOMAXPROCS=1` against eight spinning hogs — against a 30s
+  deadline, so **2.5s of headroom on an idle laptop** before CI's four shared cores were asked. And
+  the mechanism's own signature: with [#593]'s defect deliberately reintroduced the repaired arm
+  reports **2 of 3** callers back, because `Stop` receives one arrival and the buffer holds one, so
+  exactly one caller wedges. *0 of 3 is not that mechanism's shape at all* — the count in the red was
+  evidence against the diagnosis printed beside it, and reading it would have cost nothing.
+
+  **The repair is to move the property out of the scheduler's reach, not to raise the number.** The
+  loop is now gated on a word the host writes (`gatedSpinModule`), so no caller can finish early and a
+  released caller returns in microseconds: the deadline is finally orders of magnitude away from what
+  it bounds, and a red means blocked. Raising the deadline instead would have bought a quieter version
+  of the same defect, and *withdrawing a forecast after measuring it* is the shape that makes a
+  threshold amendment look like a discovery.
+
+  **Two riders the specimen earned.** A gate makes the arm *fast*, and 0.00s was a tell: three
+  goroutines that have not reached `Invoke` register no thread, so `Stop` would have stopped an empty
+  world and the arm would have been a green over nothing — closed with an arrival count the guest bumps
+  and the host waits on, as a **premise** whose failure says *nothing was measured*. And the gate does
+  not buy what it is tempting to claim: `Stop` returns on the first arrival and `Resume` clears the
+  request, so three parks in one round is still not guaranteed, only narrowed. *Narrow is not closed*,
+  the sibling arm closes it by construction, and saying so is why there are two.
+
+  **Sibling shapes.** *An unasserted distance is the vacuum* (under [a comparison against an empty
+  set](#a-comparison-against-an-empty-set-succeeds-so-a-control-that-compares-needs-a-vacuity-check))
+  is the same defect in the passing direction — a bound too far from its subject to fire; this is one
+  too close, firing on the wrong cause. And a red that names a mechanism the trigger cannot distinguish
+  is *the defect stated as the rule*
+  ([errors-and-testimony.md](errors-and-testimony.md#comments-and-adrs-are-testimony-too-and-where-prose-and-the-references-executable-disagree-the-executable-outranks))
+  relocated into a failure message, where it is worse than in a comment: a comment is read while the
+  tree is calm, and a message is read by someone deciding what a red means.
+
+  [#593]: https://github.com/scttfrdmn/burroughs/issues/593
+  [#598]: https://github.com/scttfrdmn/burroughs/issues/598
+  [#599]: https://github.com/scttfrdmn/burroughs/issues/599
+
 ### A guard's trigger predicate is itself a claim about the space, and an under-matching one fails silently by construction.
 
 - **A guard's trigger predicate is itself a claim about the space, and an

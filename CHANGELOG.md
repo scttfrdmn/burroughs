@@ -1040,6 +1040,51 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A 30-second deadline was doing duty as a hang detector, so `spinningCallers` reported a wedge over
+  three callers that were merely slow** (grave
+  [#598](https://github.com/scttfrdmn/burroughs/issues/598)). [#593](https://github.com/scttfrdmn/burroughs/issues/593)'s
+  regression arm ran three concurrent callers through a 10,000,000-trip guest loop and gave each 30s
+  after `Resume`. On a four-core CI runner under `-race -shuffle=on` the loops did not finish, and the
+  red read *"0 of 3 callers returned … blocked on the arrival send inside `parkAtSafepoint`"* — on a
+  branch whose diff was a shell script, a test, a law file and this changelog. Nothing was blocked.
+  - **What the trigger could not distinguish, measured both ways.** Run with `-timeout` a few seconds
+    under the arm's own interval, the runtime's dump shows all three callers `[runnable]` inside
+    `exec.go`/`control.go`/`value.go`, on no channel. Raising the trip count — a change that cannot
+    deadlock anything — reproduces the CI red verbatim, message included. And with #593's defect
+    deliberately reintroduced the arm reports **2 of 3**, because `Stop` takes one arrival and the
+    buffer holds one: *0 of 3 was never that mechanism's shape*, so the count in the red was evidence
+    against the diagnosis beside it.
+  - **The headroom, since it was never measured against what it bounds:** 8.56s at `GOMAXPROCS`
+    default on the dev box, 23.10s at `GOMAXPROCS=1`, 27.55s at `GOMAXPROCS=1` against eight spinning
+    hogs — 2.5s under the deadline on an idle laptop, before CI's shared cores were asked.
+  - **Repaired by gating the loop on a word the host writes** (`gatedSpinModule`), not by raising the
+    number: no caller can finish early, a released caller returns in microseconds, and the deadline
+    now bounds only whether `Resume` freed them. The arm gained an arrival handshake as a stated
+    *premise* — 0.00s was the tell that three goroutines which have not reached `Invoke` register no
+    thread, and a stop over an empty world measures nothing — and a `Cleanup` that releases and drains,
+    so a failing arm no longer abandons callers inside the guest. The exact-trip-count check it gave up
+    is asserted, on one caller, by `TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish`.
+  - Law: [*A deadline used as a hang detector measures throughput, and its red names a mechanism it
+    never observed*](docs/laws/controls.md#a-deadline-used-as-a-hang-detector-measures-throughput-and-its-red-names-a-mechanism-it-never-observed).
+
+- **The boundary parity was read as an absolute over a package global, in the file whose helper says
+  every assertion is a delta** (grave [#599](https://github.com/scttfrdmn/burroughs/issues/599)).
+  `TestEveryBoundaryCrossingIsPaired` closed with `crossings() % 2` on a counter that is never reset,
+  twenty lines below the sentence warning that naming the delta at the read site is *"what stops an
+  absolute from being written by accident."* Its claimed scope was its own five cases; its real scope
+  was every test that ran before it, which `-shuffle=on` re-rolls every run. When #598's arm above
+  abandoned three in-guest callers it duly reported *"some site … paired them by hand and returned
+  early"* — an engine site that does not exist.
+  - Repaired to `(crossings() - atStart) % 2` — the outer baseline renamed from `before`, because the
+    repair is what makes it live across a loop that takes its own `before`, so `govet`'s `shadow`
+    became reportable *with* the fix rather than as a new defect. Watched from both sides: an odd crossing injected
+    *before* the window leaves it green where the absolute reds, and one injected *inside* the window
+    still reds, so the scoping bought no silence. Removing the sibling's leak is not a substitute — the
+    counter stays global, and **a control a sibling can break is not scoped to its subject.**
+  - Law: a third instance under [*A control scoped to the current sample inherits the current blind
+    spot*](docs/laws/controls.md#a-control-scoped-to-the-current-sample-inherits-the-current-blind-spot-scope-controls-to-the-space),
+    where the sample is a process rather than a list.
+
 - **`closecheck.sh`'s ban missed a reference wrapped in a markdown link, which is the only form this
   repo writes references in** (grave [#595](https://github.com/scttfrdmn/burroughs/issues/595)). The
   trigger enumerated three reference forms — `#N`, `GH-N`, `owner/repo#N` — under a coverage note
