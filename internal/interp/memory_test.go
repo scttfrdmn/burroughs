@@ -818,3 +818,227 @@ func TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal(t *testing.
 		})
 	}
 }
+
+// instantiateThreads1 is instantiate1 with the threads gate on, which `(memory … shared)` needs to
+// decode at all. It is here rather than in `instantiate1` because the gate is off by default and a
+// test helper that quietly turns it on would decide behaviour 4's question for every caller.
+func instantiateThreads1(t *testing.T, src string) *Instance {
+	t.Helper()
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	m, err := (&binary.Decoder{Features: binary.Features{Threads: true}}).DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+	if derr := in.Deferred(); derr != nil {
+		t.Fatalf("instantiate fell short: %v", derr)
+	}
+	return in
+}
+
+// TestConcurrentGrowLosesNoPages is [#600][600]'s witness, and it is a witness rather than a forecast:
+// on `main` before decision 0061 both arms report lost pages, because `grow` reads the size, computes
+// a new one and publishes — three steps, where the proposal's own model says one
+// (`relaxed.rst:246`, *"changes to the length (e.g. |MEMORYGROW|) are modelled as atomic
+// read-modify-write accesses"*).
+//
+// **Nothing in either corpus can witness this.** `memory_grow.wast` exercises the instruction
+// thoroughly and single-threaded, so it scores the same before and after — *a zero-fail board is a
+// lost instrument*. This test is the oracle.
+//
+// # Why the expected values are exact rather than a floor
+//
+// `agents * attempts` is **120** grow attempts against **99** free pages (declared min 1, max 100),
+// so a correctly serialised run has exactly one shape: 99 attempts succeed, the remaining 21 find the
+// memory at its declared max and get the spec's `-1`. Both numbers are pinned, because *a floor is not
+// a census* and a floor here would sit under the very quantity the defect moves.
+//
+// The defect can only push successes **up**. A lost grow leaves the memory smaller than the successes
+// account for, so later attempts that should have been refused at the cap succeed instead. So
+// `successes > 99` and `size < 1+successes` are two independent readings of the same event, and both
+// are asserted: the first catches a lost page that a subsequent success happens to replace, and the
+// second catches the arithmetic directly.
+//
+// # The two arms are different mechanisms, not two samples
+//
+//   - **reslice** — a shared memory, whose reservation (`sharedReservePages` is 128) covers all 100
+//     declared pages, so every grow takes the reslicing arm: bounds checks and one `Store`. The window
+//     between the read and the publication is a handful of instructions.
+//   - **reallocate** — an unshared memory, `cap == len`, so every grow is `make` plus a `copy` of the
+//     whole memory, and the window is as wide as the copy. This is also the arm where a lost *store*
+//     would be possible — which this test deliberately does not probe, because that residual is #586's
+//     and needs §4 to say what is permitted.
+//
+// The window widths are not a guess: with the mechanism removed the reallocate arm reported bad rounds
+// in **20 of 20** and the reslice arm in **7 of 20** on the first run of this file. So a green on
+// reslice alone is the weaker evidence of the two, which is why both arms are here rather than the one
+// that reproduces more readily.
+//
+// # The falsification battery, and what each arm rules out
+//
+//	| injection into `grow`                          | pages lost | extra grants | Min drift |
+//	| ---------------------------------------------- | ---------- | ------------ | --------- |
+//	| A — no lock at all (`main` before 0061)         | yes        | yes          | yes       |
+//	| B — lock released before the `limits.Min` write | **0**      | **0**        | **yes**   |
+//	| the shipped mechanism                           | 0          | 0            | 0         |
+//
+// **B is why this test has an observer at all.** It is the CAS-over-`img` shape in miniature: the
+// descriptor's copy of the length is serialised and the second copy is not. It passes every
+// page-accounting assertion here — the accounting all derives from `img` — and fails only the
+// two-copies one, which is exactly the discrimination decision 0061 rejected the compare-and-swap on.
+// A version of this test without the observer scored B green, and that green was measured rather than
+// reasoned about.
+//
+// `Spawn` is not used and is not needed: two goroutines calling `Invoke` on one instance get their own
+// frames and share `in.mems[0]`, the same shape `TestAtomicRmwIsNotObservablyTornAcrossThreads` uses.
+// The `go` statement is in a test file, so `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` — which
+// scans non-test files only — is not being evaded.
+//
+// [600]: https://github.com/scttfrdmn/burroughs/issues/600
+func TestConcurrentGrowLosesNoPages(t *testing.T) {
+	const (
+		agents   = 2
+		attempts = 60
+		rounds   = 20
+		maxPages = 100
+		// wantOK is the only success count a serialised run can produce: every page from the
+		// declared min to the declared max is granted once and nothing else is.
+		wantOK = maxPages - 1
+	)
+
+	body := func(decl string) string {
+		return fmt.Sprintf(`(module
+		  %s
+		  (func (export "grow") (result i32) (local $i i32) (local $ok i32)
+		    (block $done (loop $l
+		      (br_if $done (i32.eq (local.get $i) (i32.const %d)))
+		      (if (i32.ge_s (memory.grow (i32.const 1)) (i32.const 0))
+		        (then (local.set $ok (i32.add (local.get $ok) (i32.const 1)))))
+		      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+		      (br $l)))
+		    (local.get $ok))
+		  (func (export "size") (result i32) (memory.size)))`, decl, attempts)
+	}
+
+	for _, arm := range []struct {
+		name string
+		decl string
+	}{
+		{"reslice", fmt.Sprintf("(memory 1 %d shared)", maxPages)},
+		{"reallocate", fmt.Sprintf("(memory 1 %d)", maxPages)},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			type report struct {
+				ok  int
+				err error
+			}
+			var (
+				lostPages   int
+				extraGrants int
+				badRounds   int
+				minDrift    int
+			)
+			for range rounds {
+				in := instantiateThreads1(t, body(arm.decl))
+
+				// **The observer, and it is what discriminates decision 0061's lock from a
+				// compare-and-swap over `img`.** The size is stored twice — `memImage.bytes`' length
+				// and `limits.Min`, which import matching reads back (`instance.ml:76`) — and a
+				// mechanism covering only the descriptor leaves the second copy racing.
+				//
+				// **It reads the pair while holding `growMu`, because that is the only place the
+				// invariant is claimed.** A reader that does not take the lock can catch the true
+				// mechanism mid-section, between the publication and the `Min` write, and would
+				// report a mismatch against correct code. A reader that does take it sees a memory
+				// with no grow in flight, where the two copies must agree.
+				//
+				// **And it samples continuously rather than at the end, which is the repair to this
+				// test's own first draft.** That draft compared the two copies once, after the agents
+				// finished, and a CAS-shaped mechanism *passed* it: the last successful grow rewrites
+				// `Min` to the right value, so the drift heals before anything looks. An end-state
+				// sample of a healing invariant asserts nothing about the window it is supposed to be
+				// watching.
+				observing := make(chan struct{})
+				drift := make(chan int, 1)
+				go func() {
+					mem, seen := in.mems[0], 0
+					for {
+						mem.growMu.Lock()
+						declared, published := mem.limits.Min, mem.size()
+						mem.growMu.Unlock()
+						if declared != published {
+							seen++
+						}
+						select {
+						case <-observing:
+							drift <- seen
+							return
+						default:
+						}
+					}
+				}()
+
+				reports := make(chan report, agents)
+				for range agents {
+					go func() {
+						out, err := in.Invoke("grow")
+						if err != nil {
+							reports <- report{err: err}
+							return
+						}
+						reports <- report{ok: int(out[0].Int32())}
+					}()
+				}
+				granted := 0
+				for range agents {
+					r := <-reports
+					if r.err != nil {
+						t.Fatalf("invoke grow: %v", r.err)
+					}
+					granted += r.ok
+				}
+				close(observing)
+				out, err := in.Invoke("size")
+				if err != nil {
+					t.Fatalf("invoke size: %v", err)
+				}
+				size := int(out[0].Int32())
+				if size != 1+granted {
+					lostPages += 1 + granted - size
+					badRounds++
+				}
+				if granted != wantOK {
+					extraGrants += granted - wantOK
+				}
+				minDrift += <-drift
+			}
+			if lostPages != 0 || extraGrants != 0 || minDrift != 0 {
+				t.Errorf("%d agents x %d grow attempts on one memory, %d rounds: %d pages lost "+
+					"across %d bad rounds, %d grants beyond the %d a serialised run can make, "+
+					"and %d observations where `limits.Min` disagreed with `memory.size` under `growMu`.\n"+
+					"Each successful `memory.grow` must add its delta, and the length change is "+
+					"one atomic read-modify-write in the proposal's model "+
+					"(`relaxed.rst:246`). This engine reads the size, computes and publishes as "+
+					"three steps, so two agents can be granted the same page (#600, decision "+
+					"0061). No corpus vector can see it: `memory_grow.wast` is single-threaded.\n"+
+					"A non-zero drift count with the other two at zero means the mechanism covers "+
+					"the descriptor and not `limits.Min` — the two copies of the length — which is "+
+					"the specific failure 0061 rejected a compare-and-swap over `img` for.",
+					agents, attempts, rounds, lostPages, badRounds, extraGrants, wantOK, minDrift)
+			}
+			// The premise, asserted rather than assumed: a run in which the agents never overlapped,
+			// or in which `grow` refused everything, would report zero losses while measuring
+			// nothing. `wantOK` grants per round is what a live memory that actually reached its
+			// declared maximum produces, so the equality above doubles as the vacuity check — but
+			// only if it is reached, which is what this logs.
+			t.Logf("%d rounds x %d agents x %d attempts, %d grants expected per round, %d pages "+
+				"lost, %d observations of Min drift", rounds, agents, attempts, wantOK, lostPages, minDrift)
+		})
+	}
+}

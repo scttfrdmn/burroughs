@@ -111,6 +111,22 @@ reach is a law out of context.
     board vector is certified by nothing *but* the control, so a blind control there is not a weak
     check but the absence of one. (Ruling: Scott, on the #130 diagnosis relay — *"both-orders alone
     would re-certify them the same way it certified the scratch patch."*)
+  - **A measured floor is only informative where it is *narrower than the bar it is read against*, so
+    the two get compared and not merely both reported.** A null arm — a second row with byte-identical
+    source, run in the same battery — exists to give a comparison its resolution instead of assuming
+    one, which is the vacuity law applied to a benchmark. It is possible to do all of that and still
+    learn nothing: [#600](https://github.com/scttfrdmn/burroughs/issues/600) pre-registered *"the arm
+    may cost no more than one uncontended Lock/Unlock pair"* and measured the pair on the same run, so
+    the bar was a number rather than a memory — and on arm64 the pair was **5.5% of the row it bounds
+    while the null pair's own spread was 5.5%**, the floor and the bar landing on the same figure. Every
+    row read `~` except the one that *cannot* differ from the row above it: the two identical arms
+    disagreed by nine percentage points, which is the instrument contradicting itself. On amd64 the same
+    battery put the floor at 0.06% against a 25.9% bar and the two identical rows within 0.26 points of
+    each other, adjudicating the registration cleanly. So a null arm is a *precondition* on reading a
+    board, not a row to report beside it: quote floor and bar in the same unit, and where the floor
+    reaches the bar say the board does not adjudicate rather than banking its `~` as a pass. The
+    failure this prevents is the comfortable one — a null result on an under-resolved instrument reads
+    exactly like a change that cost nothing.
 
 ### A tripwire whose subject dissolves is re-pointed, never closed.
 

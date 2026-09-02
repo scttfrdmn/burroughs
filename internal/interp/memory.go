@@ -108,6 +108,23 @@ type memory struct {
 	// the past, which is precisely what decision 0056 rejects option (C) for not being.
 	noMove bool
 
+	// growMu serialises `grow` against `grow`, which is decision 0061 and is what makes the length
+	// change the single atomic read-modify-write the proposal's model calls for
+	// (`relaxed.rst:246`).
+	//
+	// **A second lock rather than `waitMu`, because the two guard unrelated subjects and one of the
+	// sections is O(memory size).** The reallocating arm of `grow` is a `make` plus a `copy` of the
+	// whole memory; holding the futex queue's lock across that would block every
+	// `memory.atomic.wait` and `memory.atomic.notify` on this memory for the duration of a
+	// multi-megabyte blit, and those paths have nothing to do with growing.
+	//
+	// **There is no lock order to get wrong, and that is a property of the call graph rather than a
+	// rule anyone is keeping.** `grow` takes this and never `waitMu`; `wait`, `notify` and `detach`
+	// take `waitMu` and never this. Neither section nests inside the other, so no ordering exists to
+	// be violated — which is worth writing down because a second mutex on one struct is exactly where
+	// such a rule usually has to appear, and a later edit that nests them would need to invent one.
+	growMu sync.Mutex
+
 	// waitMu guards `waiters`, and holding it across a compare-and-enqueue is what closes the futex
 	// miss — decision 0060, and the argument is on `wait`. It adds no constraint on callers of this
 	// struct: `img` above already contains an `atomic.Pointer`, so `copylocks` already forbade
@@ -516,18 +533,31 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 // would make every failed grow a trap and turn ~53 assert_return vectors into assert_trap
 // answers — the wrong verdict, arrived at by borrowing the wrong channel.
 //
-// **This is safe against a concurrent *reader* and is not safe against a concurrent *`grow`*, which
-// decision 0058 states as a residual rather than fixing.** It reads the size, computes a new one, and
-// publishes — three steps, not one — so two threads growing the same memory can both read the same old
-// size and the second publication can name an array built from a view taken before the first. Nothing
-// is unsafe: every descriptor is internally consistent and the abandoned arrays stay alive. What can
-// happen is a *lost grow*, and on the reslicing arm a published image shorter than one already
-// published, which a subsequent access reports as a bounds trap rather than as a wrong byte.
-// Serialising it is a decision — a mutex on the memory, or a compare-and-swap loop over the
-// descriptor — and it belongs with 0058's coherence residual, **#586**, rather than inside the PR that
-// publishes the image. `Spawn` cannot reach it today: no engine code starts a goroutine.
+// **The whole function runs under `growMu`, which is what makes the length change one operation** —
+// `relaxed.rst:246` models it as an atomic read-modify-write, and this reads the size, computes a new
+// one and publishes, which is three. Decision 0061 (#600) chose the lock over a compare-and-swap on
+// `img` for a reason visible only in the last statement of this function: **the size is stored twice.**
+// `memImage.bytes`' length is the authority, and `limits.Min` below is a second copy that import
+// matching reads back. A CAS over `img` would make the descriptor's copy indivisible and leave the
+// other a plain three-step write — the same defect, relocated to the copy the CAS cannot reach. One
+// critical section covers both.
+//
+// The section is also why `img` is loaded **once** here. Two loads were correct before and would be
+// correct now; one is what the lock makes *obviously* correct, so the argument that they agree no
+// longer has to be made.
+//
+// **What the lock does not buy, because the racing party takes no lock:** a guest store into the old
+// array racing the reallocating arm's `copy` is still lost — it landed in the array this function is
+// abandoning. That is decision 0058's coherence residual, it is filed as **#586**, it needs §4 to say
+// what is permitted before code can be right about it, and `noMove` below is what excludes it for a
+// shared memory. `Spawn` reaches none of this today: no engine code starts a goroutine, so the
+// population is an embedder calling `Invoke` on two goroutines.
 func (m *memory) grow(delta uint64) int64 {
-	old := m.size()
+	m.growMu.Lock()
+	defer m.growMu.Unlock()
+
+	cur := m.view()
+	old := uint64(len(cur)) / pageSize
 	newSize := old + delta
 	if newSize < old { // 64-bit wrap: `I64.gt_u old_size new_size`
 		return -1
@@ -565,7 +595,6 @@ func (m *memory) grow(delta uint64) int64 {
 	// would also work and would leave the growth factor to the runtime; an explicit make is
 	// what keeps the length an exact multiple of pageSize, which `size` reads back as the
 	// authority.
-	cur := m.view()
 	switch {
 	case n <= uint64(cap(cur)):
 		// The same array at a greater length. The old descriptor stays valid *and in bounds* — it

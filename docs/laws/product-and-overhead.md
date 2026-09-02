@@ -247,6 +247,21 @@ reach is a law out of context.
         available to the actor as a choice. (Ruling: Scott, on the #503 review — *"a counter in
         `runFrame` is instrument by purpose, regardless of living in engine code. The counter
         measures purpose, not directory."*)
+      - **A repair the PR's own verdict compels is part of that PR, and the check is one question:
+        was the PR blockable without it?** The counter counts PRs, so *what is one PR* decides
+        whether two-consecutive trips, and without a boundary the actor can merge slices to keep
+        the count low. The specimen is #597, which repaired graves #598 and #599 alongside #595:
+        both were found by that PR's own CI verdict and it had no bound green without them, so
+        they were blockers to landing rather than independently scheduled work, and the three
+        counted as **one**. The criterion cuts the other way just as hard — **found by browsing,
+        or already scheduled, and they are their own slices and their own count** — which is what
+        makes it a boundary rather than a licence. Note what made the check possible: the actor
+        stated the motive for wanting one count and named the alternative reading, so the
+        classification arrived challengeable instead of banked. That is the
+        actor-never-classifies-the-actor rule working as designed, not an exception to it.
+        (Ruling: Scott, on the #597 report. Recorded here by the actor who was ruled on, which is
+        durable and not independent — *durability is not independence* — so the commit carrying
+        it is `Ratio-Class: carried`.)
       - **Two scope corrections that arrived with the test.** First, **the stop condition governs
         what comes next, not whether a finished PR lands**: *"holding a bound green was never part
         of the stop condition anyway."* The actor's instinct on #457 was to hold a green PR pending
