@@ -260,3 +260,18 @@ session drift would have swamped a 0.3% mechanism outright.
   depth-aware crossing the rollback describes — it reduces crossings, which is the numerator.
 - **#10 gains its subject.** The battery is no longer a test of a claim; it is a test of five named
   sites and one named word.
+
+## Postscript — the control cited in the "no second agent" derivation was renamed
+
+Appended, not edited: the derivation above is what was measured when this decision was taken, and it
+still holds. Only the name has moved.
+
+The measurement *"no `go` statement in any non-test file, which is what
+`TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` keeps true"* is unchanged in
+substance; that control is now `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling`, same scan and
+same vacuity floor. It was renamed because both remedies its failure message named — **#557**,
+discharged by [ADR
+0054](0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md),
+and **#516**, discharged by this decision — were done, so its name asserted a property the code no
+longer had (grave **#576**). It now names **#10**, **#543**, **#573** and **#575**, and this ADR is
+one of the two discharges that made the old name stale.

@@ -32,22 +32,25 @@ type ThreadID uint64
 // entry-signature check, and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and
 // never unlocks. Five tests for T-1 there, and it is deliberately red at one test — see below.
 //
-// It is **withheld** because `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`
-// fires on it. That control watches for the first `go` statement in this package's non-test files and
-// says what to do about it: *"Do not exempt this file; discharge #557, and #516 for §4's boundary
-// model."*
+// It is **withheld** because `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` fires on it. That
+// control watches for the first `go` statement in this package's non-test files, and it names what
+// unparking has to answer: §4's boundary model has its mechanism and no litmus battery (**#10**),
+// `memory.atomic.wait` cannot return 0 for woken (**#543**), `Spawn` shares the instance's globals so
+// `global.set`'s plain writes are data races (**#573**), and the spawn walk's closure is smaller than
+// the reachable set (**#575**). Deleting or re-pointing that control is a principal's call and not a
+// test author's, so this paragraph is a parking notice rather than a to-do list.
 //
-// **The blocker changed rather than cleared, and this paragraph is where that was noticed too late**
-// (grave **#561**). It used to quote the same control saying *"discharge #542"*, and to assert that all
-// 67 atomics in `atomic.go` were plain read-then-write — true when written, falsified by [ADR
-// 0051][0051], which made them sequentially-consistent word operations over the backing array.
-// What the control still watches for is the other half of one risk: the plain accesses in `memop.go`
-// are a byte-at-a-time loop and a `copy`, so an aligned `i32.load` can tear where the proposal forbids
-// it (**#557**), and §4's boundary model is **#516**. The watched event is unchanged, so `Spawn` is
-// parked one link further along the chain than the ruling below predicted, and the way that was
-// settled is the part worth keeping: a `go` statement injected into a scratch non-test file and the
-// resulting FAIL read back. **A claim about what an instrument will permit is a forecast about a
-// machine sitting in the tree.**
+// **The blocker has now changed twice without clearing, and this paragraph is where the first change
+// was noticed too late** (grave **#561**; the second is grave **#576**, in the control's own name and
+// message). It used to quote the control saying *"discharge #542"*, and to assert that all 67 atomics
+// in `atomic.go` were plain read-then-write — true when written, falsified by [ADR 0051][0051], which
+// made them sequentially-consistent word operations over the backing array. It then named **#557**,
+// the tearing of memop.go's aligned plain accesses, and **#516**, §4's boundary edges; both are
+// discharged, #557 by [ADR 0054][0054] and #516 by [ADR 0052][0052]. The watched *event* is unchanged
+// through all of it, so `Spawn` is parked further along the same chain rather than for a new reason,
+// and the way the first of these was settled is the part worth keeping: a `go` statement injected into
+// a scratch non-test file and the resulting FAIL read back. **A claim about what an instrument will
+// permit is a forecast about a machine sitting in the tree.**
 //
 // **Scott ruled that order, and the ruling is what this comment records rather than the question it
 // used to pose.** Option 1: discharge #542 first — **#542 → #516 → #10** — reversing the in-session
@@ -70,6 +73,8 @@ type ThreadID uint64
 //
 // [0050]: ../../docs/decisions/0050-the-per-thread-context-is-its-own-object-reached-by-one-pointer-on-stack-because-3-and-5-need-more-per-thread-state-than-a-slot.md
 // [0051]: ../../docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md
+// [0052]: ../../docs/decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md
+// [0054]: ../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md
 type thread struct {
 	// id is T-1's tid, assigned once at creation and never written again.
 	id ThreadID

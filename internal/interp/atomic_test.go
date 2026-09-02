@@ -314,41 +314,66 @@ func TestAtomicFenceNeedsNoMemory(t *testing.T) {
 	}
 }
 
-// TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded is #557's tripwire, and it
-// used to be #542's.
+// TestNoEngineGoroutineLandsWithoutAPrincipalsRuling watches for the first `go` statement in a
+// non-test file in this package. The *event* has never changed. Its stated reason has now been
+// falsified twice, and grave **#576** is the second time.
 //
-// **Re-pointed rather than retired, because its subject narrowed and did not dissolve.** It was named
-// `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded` and it watched for the first goroutine in
-// this package on the ground that the 67 atomics were plain read-then-write. ADR 0051 discharged
-// that: they are sequentially consistent now, and the old name would be *asserting a property the
-// code no longer has*, which is the review-confirms-the-bug shape wearing a test name.
+// **Two names have died here for one reason: each asserted a code property, and the next proposal
+// discharged it.** It was formerly `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded`, on the
+// ground that the 67 atomics were plain read-then-write, which [ADR 0051][0051] made false by making
+// them sequentially consistent. It was then renamed
+// `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`, on the ground that
+// memop.go's aligned plain accesses could tear — and [ADR 0054][0054] (#567) made *that* false:
+// `atomicLoadWord`/`atomicStoreWord` at widths 4 and 8, `atomicCell` at 1 and 2, and memop.go's own
+// comment stating the consequence, *"there is no width left for which a plain typed access is the
+// answer"*. Each name then asserted a property the code did not have, which is the
+// review-confirms-the-bug shape wearing a test name. #557 and #516, the two remedies the failure
+// message named, are both discharged.
 //
-// That old name is deliberate here and was overwritten once, which is grave **#561**: a bulk re-point
-// of the nine live citations ran over this one historical mention, and the sweep that would have
-// caught a dangling name could not — `pastReference`'s *"it was"* exemption in
-// `internal/testenv/citation_test.go:TestEveryCitedTestNameResolves` skips exactly this sentence, and
-// the wrong name it skipped over resolves. *An exemption inherits none of the trigger's lessons.*
+// **So this name asserts the rule by which the property may change, rather than the property.** No
+// proposal can discharge *"a goroutine in engine code here needs a principal's ruling"* — a proposal
+// is the thing that has to obtain one. That is the only kind of claim a tripwire's name can carry
+// across the proposals it is waiting on, and a third state-assertion would be the third occurrence
+// already written.
 //
-// What survives is the other half of the same risk. The plain accesses — `i32.load`, `i32.store` and
-// every narrower integer width, in memop.go, not in this file — are still a byte-at-a-time loop and a
-// `copy`, and the threads proposal requires a naturally aligned integer access of 32 bits or fewer
-// **not to tear** (`runtime.rst:742-746`, called from the ordinary load and store at
-// `instructions.rst:1763` and `instructions.rst:2315`). That is a weaker property than atomicity and it is still
-// unmet: #557. §4's boundary model and its litmus battery are the rest of it: #516.
+// **The reason a rename is not a retirement**: four preconditions for a second agent are open, and
+// they fail differently, which is why the message names all four rather than a representative one.
+// §4's boundary model has its mechanism ([ADR 0052][0052], #516) and no litmus battery (**#10**).
+// `memory.atomic.wait` cannot return 0/woken (**#543**). `Spawn` shares the instance's globals, so
+// `global.set`'s plain writes are races (**#573**). The spawn walk of [0056][0056]'s second half has
+// a closure smaller than the reachable set, so a table slot holding a foreign funcref escapes it
+// (**#575**).
+// *A tripwire whose subject dissolves is re-pointed*; retiring this one would drop all four.
 //
-// So the *event* being watched is unchanged — the first goroutine in a non-test file in this package
-// — and only what it points the reader at has moved. *A tripwire whose subject dissolves is
-// re-pointed*; closing one as no-longer-applicable retires a live risk, and this one's risk is live
-// twice over.
+// **Its discharge is a principal's call and not a test author's.** Whoever merges T-1 deletes or
+// re-points it, and forcing that conversation is the whole value of the control — a successor
+// quietly deciding the preconditions are met is the failure it is placed against.
 //
-// It stays in this file rather than moving to memop_test.go with its new subject. The domain is the
-// whole package, so no file is its natural home, and moving it would re-point five citations twice
-// for no gain — thread.go and thread_test.go both cite it as the reason `Spawn` is withheld, which is
-// a fact about the package rather than about either file.
+// **A control's failure message is an unscanned claim**, which is how both stale reasons survived:
+// nothing in `internal/testenv` reads string literals, so a message can name landed work
+// indefinitely and the control still looks satisfied, because it is green. It was green only because
+// nothing had started a goroutine yet.
 //
-// It fails **loudly and by design**. The fix is not to delete the check or to add a file to an
-// exception list; it is to make the aligned plain accesses tear-free.
-func TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded(t *testing.T) {
+// Both historical names above are deliberate, and one of them was overwritten once — grave **#561**,
+// a bulk re-point of the live citations that ran over this sentence. The sweep that would catch a
+// dangling name cannot: `pastReference`'s *"it was"* and *"formerly"* exemptions in
+// `internal/testenv/citation_test.go:TestEveryCitedTestNameResolves` skip exactly these sentences,
+// and the wrong name a bulk re-point leaves behind resolves. *An exemption inherits none of the
+// trigger's lessons.*
+//
+// It stays in this file rather than moving with each subject. The domain is the whole package, so no
+// file is its natural home, and moving it would re-point every citation twice for no gain —
+// thread.go and thread_test.go cite it as the reason `Spawn` is withheld, which is a fact about the
+// package rather than about either file.
+//
+// It fails **loudly and by design**. The fix is not to delete the check and not to add a file to an
+// exception list; it is to discharge the four above and get a ruling.
+//
+// [0051]: ../../docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md
+// [0052]: ../../docs/decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md
+// [0054]: ../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md
+// [0056]: ../../docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md
+func TestNoEngineGoroutineLandsWithoutAPrincipalsRuling(t *testing.T) {
 	// `os.ReadDir` plus `ParseFile` rather than `parser.ParseDir`, which is deprecated *and* for a
 	// reason that matters to a tripwire: it does not consider build tags when grouping files into
 	// packages. Walking the directory takes every `.go` file regardless of tag, which is the safe
@@ -375,15 +400,24 @@ func TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded(t *te
 				return true
 			}
 			t.Errorf("%s:%d launches a goroutine.\n"+
-				"memop.go's plain load is a byte-at-a-time loop and its plain store is "+
-				"a `copy`, so an aligned i32 access can tear where the threads proposal "+
-				"forbids it (`runtime.rst:742-746`, `tearing(iN, N, u32) = NOTEARS` for "+
-				"N <= 32, called from the ordinary load and store). Tear-freedom is "+
-				"weaker than atomicity — it asks that the access not decompose, not "+
-				"that it be ordered — so ADR 0051's atomics do not cover it: different "+
-				"opcodes, different path. No vector in the threads suite will fail to "+
-				"tell you, because it is single-agent by construction. Do not exempt "+
-				"this file; discharge #557, and #516 for §4's boundary model.",
+				"Four preconditions for a second agent in this engine are open, and "+
+				"they fail differently, so all four are named rather than a "+
+				"representative one: §4's boundary memory model has its mechanism "+
+				"and no litmus battery (#10); `memory.atomic.wait` cannot return 0 "+
+				"for woken, so a woken thread reports an engine gap rather than a "+
+				"plausible number (#543); `Spawn` shares the instance's globals, so "+
+				"`global.set`'s plain writes are data races (#573); and the spawn "+
+				"walk's closure is smaller than the reachable set, so a table slot "+
+				"holding another instance's funcref escapes it (#575).\n"+
+				"No vector in the threads suite will fail to tell you about any of "+
+				"them, because the corpus is single-agent by construction.\n"+
+				"Do not exempt this file and do not move the `go` statement to a "+
+				"sibling package: both put the statement outside the domain instead "+
+				"of answering it. Deleting or re-pointing this control is a "+
+				"principal's call and not a test author's — say which of the four "+
+				"are discharged, and get a ruling. The tearing claim this message "+
+				"used to make is itself discharged (#557, ADR 0054), which is the "+
+				"defect grave #576 records.",
 				name, fset.Position(g.Pos()).Line)
 			return true
 		})
@@ -517,7 +551,7 @@ func TestAtomicCellAgreesWithTheByteLoop(t *testing.T) {
 // while the engine was losing three quarters of a thousand updates.
 //
 // The `go` statement is what made the defect reachable, and it lives here rather than in the engine
-// on purpose: `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` scans non-test files only, so
+// on purpose: `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` scans non-test files only, so
 // this test does not trip the tripwire that was watching for exactly this event. That is not a
 // loophole being exploited — T-1's `Spawn` is #514's, still unlanded, and this test needs none of it.
 // Two goroutines each calling `Invoke` get their own frames and stacks and share `in.mems[0]`, which

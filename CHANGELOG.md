@@ -873,6 +873,58 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The single-thread tripwire's name and message asserted what ADR 0054 removed, so it was renamed a
+  second time — and this time after the rule rather than the property** (grave
+  [#576](https://github.com/scttfrdmn/burroughs/issues/576)).
+  `TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded` becomes
+  `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling`, same `go`-statement scan over
+  `internal/interp`'s non-test files and same vacuity floor, with its failure message naming
+  [#10](https://github.com/scttfrdmn/burroughs/issues/10),
+  [#543](https://github.com/scttfrdmn/burroughs/issues/543),
+  [#573](https://github.com/scttfrdmn/burroughs/issues/573) and
+  [#575](https://github.com/scttfrdmn/burroughs/issues/575) in place of the discharged #557 and #516.
+  - **Both remedies it named were done.** [#557](https://github.com/scttfrdmn/burroughs/issues/557)
+    closed with ADR 0054 (#567), which made every aligned guest access atomic — `memop.go`'s own
+    comment says the consequence, *"there is no width left for which a plain typed access is the
+    answer"* — and [#516](https://github.com/scttfrdmn/burroughs/issues/516) closed with ADR 0052's
+    package-level counter. So the *name* asserted plain accesses are unsynchronised, which is the
+    property #567 removed: **a comment asserting the property the code lacks makes review confirm the
+    bug**, wearing a test name.
+  - **This was the second occurrence, one proposal after the first.** The predecessor name
+    (`TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded`) was retired by ADR 0051 for the same
+    shape. The lesson the repeat adds: **a tripwire's name must assert the rule by which its property
+    may change, not the property** — no proposal can discharge *"a goroutine in engine code needs a
+    principal's ruling"*, because a proposal is the thing that has to obtain one, whereas any
+    state-assertion is falsified by whichever proposal discharges it.
+  - **A control's failure message is an unscanned claim**, which is how two stale reasons survived
+    green: nothing in `internal/testenv` reads string literals, so a message can name landed work
+    indefinitely while the control still looks satisfied. It was green only because nothing had started
+    a goroutine yet.
+  - **Renamed rather than retired, because four preconditions are open and fail differently** — §4's
+    battery (#10), `memory.atomic.wait`'s missing woken return (#543), `Spawn` sharing the instance's
+    globals (#573), the spawn walk's closure being smaller than the reachable set (#575). *A tripwire
+    whose subject dissolves is re-pointed*; retirement would have dropped all four. Its discharge is
+    stated as **a principal's call and not a test author's**, since whoever merges T-1 deletes or
+    re-points it and forcing that conversation is the value of it.
+  - **Eight citations, two channels treated differently.** Code comments retargeted in place
+    (`internal/interp/thread.go`, `thread_test.go` ×2, `atomic.go`, `atomic_test.go`); accepted records
+    got a pointer *appended* — ADR 0050 a second postscript, ADRs 0051 and 0052 a postscript each, and
+    this file this entry. So the #561 entry below, whose corrected order ends *"#557 and #516 → then
+    the tripwire's premise is false → #554 merges"*, is left standing and read against this one: those
+    two links landed and the premise did not become false, because **what a parked branch waits on
+    moves**.
+  - **The two historical names inside the control's doc comment survive the pass on purpose**, each in
+    its own sentence carrying a `pastReference` marker. Grave #561 was a bulk re-point running over
+    exactly that sentence, and the *"it was"* / *"formerly"* exemptions in
+    `TestEveryCitedTestNameResolves` mean no sweep would catch the wrong name a second one leaves.
+
+- **ADR 0057 cited a branch for the declined eligibility hoist; it now cites a PR number.** The diff
+  is archived as [#583](https://github.com/scttfrdmn/burroughs/pull/583), a PR opened for the purpose
+  and closed unmerged. A branch is a ref anyone can delete and no sweep in the tree has vocabulary for
+  it, where a PR number resolves under `citecheck` and GitHub retains both the diff and
+  `refs/pull/583/head` independently of the branch. Scott's remedy, given for a bare SHA in an earlier
+  comment and applied here to its second instance — **an unapplied known remedy is not a new gap.**
+
 - **Four channels said T-1's spawn merges next; the control it turns on says otherwise, and the
   refutation was in the same diff** (grave
   [#561](https://github.com/scttfrdmn/burroughs/issues/561)). The slice above re-pointed the package's

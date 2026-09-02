@@ -386,3 +386,24 @@ executed as written.
   filed as #537. 0049 said this once already and it is repeated because the three rules keep being
   read as one — and the pair is spelled out here because 0049 writes it `(#538, #537)`, which reads
   as two issues where one is a merged PR. Both resolve, so no sweep could tell.
+
+## Postscript — the re-pointed tripwire needed re-pointing again
+
+Appended rather than folded into the consequence above, since this ADR is accepted and that bullet is
+what was decided here.
+
+The name that bullet installs,
+`TestPlainAccessesAreUnsynchronisedWhileTheInterpreterIsSingleThreaded`, is retired, and so is the
+half-premise it rested on. The plain accesses in `memop.go` are no longer a byte loop that tears:
+[ADR 0054](0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md)
+(#567) made every aligned access atomic and discharged **#557**, and **#516** landed with [ADR
+0052](0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md).
+Both numbers the failure message named are therefore done, which is grave **#576** — the same defect
+this bullet's own re-point was repairing, one proposal later.
+
+The control is now `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling`, mechanism unchanged again,
+naming **#10**, **#543**, **#573** and **#575**. The lesson the second occurrence adds: a tripwire's
+name must assert the rule by which its property may change, not the property, because a name that
+states a code property is falsified by whichever proposal discharges it — twice here, from two
+different directions. And *"#554 is parked behind #557 and #516"* above should be read as the
+parking notice it was, not as a list that stays current: what a parked branch waits on moves.
