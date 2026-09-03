@@ -68,7 +68,7 @@ inverse control, and positive controls for the classifiers) is **not here**. Its
 behaviour rather than the Burroughs contract, which is the split-at-the-oracle-seam shape, so it is
 [#406](https://github.com/scttfrdmn/burroughs/issues/406) instead.
 
-## Sequencing, and the two blockers that are not the same blocker
+## Sequencing, and the three blockers that are not the same blocker
 
 Nothing in this file can run today, and the reasons are ordered:
 
@@ -86,6 +86,39 @@ Nothing in this file can run today, and the reasons are ordered:
 
 That #543 is a *second* blocker, distinct from #554, is stated here where it is cheap rather than where
 it is a surprise.
+
+### Amended: step 2's premise was false, and there is a third blocker it was hiding
+
+The four steps above are left as written — they are the registration — and this section is what came out when
+they were read against the tree, on Scott's *"#10 next"* at the #601 review. #543 closed with
+[#594](https://github.com/scttfrdmn/burroughs/pull/594), which made step 3's discharge the occasion to
+re-derive the rest.
+
+**Step 2's parenthetical is false, and that is [grave
+#606](https://github.com/scttfrdmn/burroughs/issues/606).** *"The tree has exactly one agent"* described the
+absence of the spawn primitive and was written as though it described the tree — **a blocker is a claim about
+the tree, and a claim about the tree is checkable now.** A shared memory is **imported**, so two instances
+can hold one `*memory` — the fact
+[ADR 0052](decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md)
+already turned on when it put §4's boundary counter at package scope — while each instance keeps its own
+`thread` and its own `world`. Two goroutines driving `Invoke` on two such instances are two agents with
+distinct thread identities over one address space, sharing one futex queue.
+[ADR 0062](decisions/0062-the-litmus-batterys-two-agents-are-two-instances-sharing-an-imported-memory-because-a-shared-memory-spans-instances-and-spawn-does-not-gate-that.md)
+records the vehicle and the experiment that verified it, and it names the one case the vehicle **must not** be
+used for: `t1-n-agents-block-simultaneously` would pass on it while leaving T-1's clause unsatisfied, because
+Go parks N goroutines happily and the clause is about 1:1 OS threads.
+
+**The third blocker is the host-call surface**, [#602](https://github.com/scttfrdmn/burroughs/issues/602).
+Five cases below park an agent in a *blocking host call*, and this engine has no host function surface at all —
+so spawn is neither necessary (the vehicle above) nor sufficient (nothing to park in) for any of them. Their
+`Blocked by` rows named #554 and are re-pointed.
+
+**Statuses reading `blocked — #543` were stale from the moment #594 merged, and no control saw it.** The
+inverse tripwire in `internal/testenv/litmus_test.go` requires the *form* `blocked — #N` and never asks
+whether `#N` is open; `citecheck` is diff-scoped. That gap is
+[#605](https://github.com/scttfrdmn/burroughs/issues/605), which also carries the sharper instance found here:
+T-1 read `Blocked by: #554` above a case status of `blocked — #543`, two blockers for one row, and nothing
+compares the two fields.
 
 ---
 
@@ -114,7 +147,11 @@ it is a surprise.
   miss here, so a discard would be an instrument fault.
 - **Arbiter:** neither — this is a scheduling claim, and both architectures are expected to agree. Run
   on both anyway, because "expected to agree" is a prediction this suite is in a position to check.
-- **Status:** blocked — #543
+- **Status:** blocked — #554. **This case is the one the ADR 0062 vehicle is forbidden to run**, and the
+  prohibition is what makes the blocker load-bearing rather than a formality: two instances driven by two
+  goroutines would report `blocked == N` for any N, because Go parks N goroutines happily, so the case would
+  score a pass on precisely the M:N mapping its forbidden set exists to exclude. It read `blocked — #543`
+  until #605's derivation — a second blocker for a row whose clause names #554.
 
 ### T-2 — no main-thread special case
 
@@ -122,7 +159,10 @@ it is a surprise.
 > block in `memory.atomic.wait` and in blocking host calls. No agent is forbidden from sleeping.
 
 - **Shape:** outcome
-- **Blocked by:** #543
+- **Blocked by:** #554. Re-pointed from #543, which closed with #594: the suspend path exists, and what this
+  clause's case still lacks is a **spawned child** specifically. The witness below names one, and a witness is
+  part of a registration rather than a suggestion about how to build it — two peer instances would discharge a
+  *no main-thread special case* clause with an interleaving containing no child at all.
 
 #### Case `t2-the-first-agent-waits-and-a-child-wakes-it`
 
@@ -137,7 +177,7 @@ it is a surprise.
 - **Floor:** at least 90% of runs must report `0`; below that the case fails as un-witnessed, since a run
   whose wait returned `1` (not-equal) never tested the clause.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #543
+- **Status:** blocked — #554
 
 ### T-3 — futex-backed wake latency
 
@@ -145,7 +185,7 @@ it is a surprise.
 > event-loop-turn latency.
 
 - **Shape:** timing
-- **Blocked by:** #543
+- **Blocked by:** nothing — #543 closed with #594, and the two agents are ADR 0062's vehicle.
 
 #### Case `t3-wake-latency-is-microsecond-scale`
 
@@ -163,7 +203,20 @@ it is a surprise.
   microseconds-scale, so 1ms separates the two mechanisms by an order of magnitude in either direction
   and is machine-dependent only inside a band it does not care about. A number tuned to this machine's
   actual latency would be a performance gate wearing a conformance hat.
-- **Status:** blocked — #543
+- **Status:** implemented — TestAWakeArrivesAtFutexLatencyAndNotEventLoopLatency
+
+**What the implementation measured, recorded against the registration rather than instead of it.** The case was
+watched die against an injected engine — `wait`'s `select` replaced by a 1 ms `time.Sleep` poll, which is the
+event-loop-turn mechanism the clause names — and it failed on all three runs at a median of 1.134 ms, against
+a futex median of 250 ns on the same machine. Two readings the registration did not anticipate, both in
+[ADR 0062](decisions/0062-the-litmus-batterys-two-agents-are-two-instances-sharing-an-imported-memory-because-a-shared-memory-spans-instances-and-spawn-does-not-gate-that.md):
+
+- **The ceiling's margin is 13.4% on the failing side and about 4 000× on the passing side.** A poll loop on a
+  500 µs tick would pass. That is the *"order of magnitude in either direction"* above being true of the futex
+  arm and not of the turn arm, and it bounds what a green here means.
+- **The floor's re-run count is structurally zero, and is reported in that word.** Each round waits on a fresh
+  address, a fresh address holds zero, and zero is what the wait expects — so the not-equal arm is unreachable
+  by construction rather than unobserved. `TestAWaitWhoseCellChangedDoesNotQueue` is where that arm is covered.
 
 ### T-4 — the per-thread slot
 
@@ -227,7 +280,10 @@ it is a surprise.
 > through a boundary that observes the stop
 
 - **Shape:** outcome
-- **Blocked by:** #554, and the epoch mechanism.
+- **Blocked by:** #602 — the host-call surface — and the epoch mechanism. Re-pointed from #554: the witness
+  parks in a blocking host call whose *return path* is the thing that writes, so the host-call surface is what
+  the case is built out of. `world`'s extent being one instance is why ADR 0062's vehicle does not substitute
+  for spawn here either — two instances are two worlds, and one `Stop` cannot reach N agents.
 
 #### Case `sp2-a-parked-agent-touches-no-guest-memory-during-the-stop`
 
@@ -243,7 +299,7 @@ it is a surprise.
 - **Floor:** every run must confirm all N parked before the request.
 - **Arbiter:** **arm64 is expected to discriminate.** A too-weak re-entry edge lets the parked agent's
   write become visible early, which is a reordering TSO structurally cannot exhibit.
-- **Status:** blocked — #554
+- **Status:** blocked — #602
 
 ### SP-3 — the timer channel is disjoint from guest sync state
 
@@ -268,7 +324,9 @@ it is a surprise.
 > without waking them.
 
 - **Shape:** outcome
-- **Blocked by:** #554, and the epoch mechanism.
+- **Blocked by:** #602 — the host-call surface — and the epoch mechanism, for SP-2's reasons: the witness's N
+  agents park in a blocking host call that records its own wake, and the one `Stop` reaching all of them needs
+  one `world`.
 
 #### Case `sp4-stop-completes-without-waking-parked-agents`
 
@@ -282,7 +340,7 @@ it is a surprise.
   loop so the stop has something to stop.
 - **Floor:** every run must confirm all N parked before the request.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #554
+- **Status:** blocked — #602
 
 ## §4. The boundary memory model
 
@@ -293,7 +351,9 @@ it is a surprise.
 > guest→host transition MUST constitute the corresponding release edge.
 
 - **Shape:** outcome
-- **Blocked by:** #554
+- **Blocked by:** #602 — the host-call surface. Re-pointed from #554: the witness below passes its message
+  through host `publish`/`poll` calls, so spawn is neither necessary (ADR 0062's vehicle supplies the two
+  agents) nor sufficient (there is nothing to call).
 
 #### Case `b-mm-1-message-passing-across-a-host-call-return`
 
@@ -315,7 +375,7 @@ it is a surprise.
   after the boundary, which x86-TSO's store ordering structurally forbids — B-MM-5's provenance is this
   exact asymmetry, so a case observed on neither architecture is reported as *not observed on either* and
   never merged into one green.
-- **Status:** blocked — #554
+- **Status:** blocked — #602
 
 ### B-MM-2 — a wake synchronizes every write, not the futex word
 
@@ -323,7 +383,10 @@ it is a surprise.
 > the waking agent — not only the futex word. "The notified word only" is expressly non-conforming.
 
 - **Shape:** outcome
-- **Blocked by:** #543
+- **Blocked by:** #603 — its own witness. #543 closed with #594 and ADR 0062's vehicle supplies the agents, so
+  this clause's cases are *implementable*; what #603 records is that the witness as registered below cannot
+  expose the defect the clause forbids, measured rather than argued. **Amending a witness, an outcome set or a
+  floor is its own PR** per ADR 0055, which is why the rows below are unedited and the finding is filed.
 
 #### Case `b-mm-2-sibling-field-after-wake`
 
@@ -344,7 +407,15 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
 - **Floor:** at least 80% of rounds must report `r == 0`; below that the case fails as un-witnessed, because
   the not-equal rounds test nothing. The `r == 1` share is reported on every run.
 - **Arbiter:** **arm64 is expected to discriminate**, for B-MM-1's reason.
-- **Status:** blocked — #543
+- **Status:** blocked — #603
+
+**Three findings from implementing this case, left here as a pointer because the amendment is #603's PR.** The
+witness's `i32.atomic.store` to the futex word is sequentially consistent (ADRs 0051/0054), so **the release
+edge lives in the guest program rather than in the engine's wake**: with the engine's wake edge deleted by hand,
+2,000,000 rounds produced zero `(0,0)`. An interpreter-free positive control on the same machine measured the
+phenomenon at about 6 × 10⁻⁷ per round, so `R = 100_000` has an expected count of 0.06 against a *maximally
+exposed* defect. And the floor above — 80% of rounds reporting `r == 0` — was satisfied by **every** round of
+that injected run, so **it measures the wake happening rather than the visibility window being exercised**.
 
 #### Case `b-mm-2-the-sibling-lives-in-a-second-shared-memory`
 
@@ -359,7 +430,8 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
   pass the named case, and still publish nothing about a second memory. `R = 100_000` rounds.
 - **Floor:** as above, 80% woken.
 - **Arbiter:** **arm64 is expected to discriminate.**
-- **Status:** blocked — #543, and the multiple-memories gate
+- **Status:** blocked — #603, and the multiple-memories gate. It inherits every one of the named case's three
+  findings, since its witness is *"identical, over a module with two shared memories"*.
 
 ### B-MM-3 — no engine lock across a resume
 
@@ -421,7 +493,12 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
 > platform.
 
 - **Shape:** structural
-- **Blocked by:** #554 and #543, being the whole battery.
+- **Blocked by:** #603, and not the whole battery any more. The clause asks for a litmus battery *including
+  the sibling-field-after-wake case*, so the case it names by hand is what gates it — and that case is
+  implementable and stillborn (#603) rather than blocked on a mechanism. The battery now exists and has one
+  landed case, which discharges none of this clause: **the row that read `blocked — #554 and #543` was
+  describing the mechanism's absence, and the mechanism arriving is not what satisfies a clause about
+  coverage.**
 - **Why no litmus case:** the clause's subject is this file and the suite it describes, so a case
   discharging it would be a suite testing its own existence. Its three named requirements are checked where
   each can be: the battery's existence and the sibling-field-after-wake case by
@@ -438,7 +515,8 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
 > requirement that the guest reach an event-loop turn for siblings to make progress.
 
 - **Shape:** outcome
-- **Blocked by:** #554
+- **Blocked by:** #602 — the host-call surface. Re-pointed from #554: the clause's subject *is* the blocking
+  host call, so no vehicle for the agents can unblock it.
 
 #### Case `h1-a-parked-agent-does-not-starve-its-siblings`
 
@@ -453,7 +531,7 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
   host call, so its progress cannot be an artifact of the boundary.
 - **Floor:** every run must confirm A parked before sampling.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #554
+- **Status:** blocked — #602
 
 ### H-2 — no surprise reentrancy
 
@@ -477,7 +555,9 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
 > be interruptible by a guest-visible cancel primitive (open: §10.4).
 
 - **Shape:** outcome
-- **Blocked by:** #554
+- **Blocked by:** #602 — the host-call surface, for H-1's reason, and specifically the cancellation error a
+  parked call returns: this case forbids a cancelled call reporting *success*, so the error channel is part of
+  the surface rather than a detail after it.
 
 #### Case `h3-shutdown-interrupts-a-parked-agent`
 
@@ -490,7 +570,7 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
 - **Witness:** all N confirmed parked host-side before shutdown is requested.
 - **Floor:** every run must confirm all N parked.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #554
+- **Status:** blocked — #602
 
 The MAY half — a guest-visible cancel primitive — is contract-deferred to §10.4 and gets its cases in the PR
 that closes it, for T-5's reason: an allowed-outcome set authored now would be this battery inventing the

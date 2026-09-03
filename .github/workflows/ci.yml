@@ -316,7 +316,14 @@ jobs:
         run: go test -shuffle=on -tags burroughs_endtable ./...
 
       - name: race
-        run: go test -race -shuffle=on ./...
+        # **Calls the target rather than repeating its script**, which is grave #539's deletion
+        # applied before a second copy exists rather than after: this step needed a `-timeout` (it
+        # had grown into `go test`'s 10-minute default and was killed on PR #607's run), and a flag
+        # that must be right in two places is a mirror with room to drift. The measured band, the
+        # multiplier it bought, and what that multiplier is *not* measured against live at `make
+        # race` in the Makefile — one site, because the number is testimony and testimony does not
+        # want a copy.
+        run: make race
 
       - name: no test declined to answer
         # Suspenders to the harness's belt. The flag makes a skip impossible from

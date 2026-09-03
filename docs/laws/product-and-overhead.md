@@ -190,6 +190,21 @@ reach is a law out of context.
       certify, it is that an arm is a *small* piece of work and the per-PR instrument floor
       does not shrink with it. (Measurement: #117. Ruling: pending Scott, who ordered it; the
       case is stated, not closed by the actor.)
+    - **A ratio can be *structurally forced by the defect class*, and that reading is available to
+      a principal and not to the actor.** [#600](https://github.com/scttfrdmn/burroughs/issues/600)
+      landed at **1:10.5**, and the ruling on it was that the figure is forced: no `.wast` vector can
+      witness a `memory.grow`-against-`memory.grow` race, because the corpus has no way to express two
+      agents, so **a Go test is the only possible witness** and the instrument column is a property of
+      what the defect is rather than of how the slice was worked. Two limits come with it, both from the
+      ruling itself. It **does not generalise to a slice where a corpus vector could have been the
+      witness** — which makes the claim a checkable one, since *could a vector have witnessed this?* has
+      an answer — and it is not a classification the actor may reach for: *the actor never chooses the
+      instrument that judges the actor*, so the case is stated in the report and a principal grants it.
+      The failure it guards against is the inverse of padding: a slice whose witness could only ever be
+      a Go test reads as undisciplined against a comparator that was never being compared to anything.
+      (Ruling: Scott, on the #601 review — *"it's structurally forced here … That's a fact about the
+      defect class rather than about discipline — and it doesn't generalise to slices where a corpus
+      vector could have been the witness."*)
   - **Two consecutive instrument-only PRs is a stop condition.** Not a soft
     preference — stop and take product work, or get Scott's word to continue. The
     ratchet only turns one way otherwise, because control work is always available,
