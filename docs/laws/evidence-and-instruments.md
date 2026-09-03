@@ -1017,3 +1017,64 @@ reach is a law out of context.
     only surviving evidence. Any multi-lane run therefore hashes its own sources before and after and
     refuses to report if they moved — the same discipline as *a skip is not a verdict*, applied to the
     inputs rather than the outputs.
+
+### A protocol carried only by prose is re-derived per use, and the re-derivation is where a step gets dropped.
+
+- **A protocol carried only by prose is re-derived per use, and the re-derivation is where a step gets
+  dropped.** [Grave #552](https://github.com/scttfrdmn/burroughs/issues/552) established the A/B
+  protocol this tree measures under — arms compiled to binaries up front, hashes checked distinct, one
+  `-count=1` round per arm per round, benchstat over the arms' separate files — and its own closing
+  comment recorded that *"this is not a new instrument … no harness code was added"*, leaving ADR
+  0050's result section as the durable record. Eight ADRs then hand-rolled the same four steps (0050,
+  0052, 0053, 0054, 0057, 0058, 0059, 0061), each correctly, while `make bench` could express none of
+  them and asserted the opposite in three lines: a hardcoded `new.txt`, so a two-arm A/B driven through
+  the target overwrote arm A with arm B and left the caller one file; the old-vs-new comparison printed
+  as a *suggestion* that nothing ran and no rule in the tree produced an `old.txt` for; and
+  `benchstat` over that single file, which prints per-row summaries with **no comparison and no
+  p-value** — under the target's own comment demanding *"n=10 and a p-value, or no claim."* The target
+  demanding a p-value ran the one invocation that cannot print one, which is *the defect stated as the
+  rule* in the instrument whose whole purpose is the rule, and it produced byte-identical arm logs
+  from differing binaries on janus. Eight correct runs beside a broken target is not a coincidence:
+  **nothing was the protocol's carrier, so repairing the carrier was never anyone's next step.**
+  (Scott's finding, from the keel side; enumerated at
+  [grave #612](https://github.com/scttfrdmn/burroughs/issues/612), repaired as `scripts/ab.sh` and
+  `make ab`.)
+  - **Audit such a thing by the stated protocol, not by the date.** The conclusion most likely to be
+    suspect on date alone — the `gate:endtable` decline, three days *before* #552 existed — is clean,
+    because #502's own confound finding had already forced interleaving, an A/A floor under
+    unconditional veto, and source hashing. Two of the three that are suspect predate #552 by months
+    and one says in its own text that it was *"decided the way 0002 itself was decided — `make bench`
+    numbers as the ADR's evidence."* Read what each artifact says it did.
+  - **The confound has no in-process mitigation, which is why the rounds are driven from outside.** The
+    defence that rescues a same-binary comparison is *"both arms ran in one process under one
+    `-count=10`, so run order cannot be correlated with the arm."* It is false and it costs twenty
+    seconds to check: a two-benchmark package that appends its own name to a log on every invocation
+    runs `Aaa Aaa Aaa Aaa Bbb Bbb Bbb Bbb` at `-count=4`, and `-shuffle=on` gives `Bbb×4 Aaa×4`.
+    `-count=N` runs each benchmark N times consecutively; `-shuffle` permutes the *blocks* once and
+    interleaves nothing. **Two benchmark rows in one binary are exactly as sequential as two
+    binaries**, and no flag closes it — on hardware where unchanged code drifted +4.1% to +9.1%
+    fifteen minutes apart.
+  - **Writing the protocol down states premises the prose never had to.** The script's first draft
+    built each arm in its own worktree and compared sha256s, exactly as the prose says — and that check
+    was **worthless**: without `-trimpath` a binary embeds its own build directory in its debug info,
+    so two builds of *the same commit* in two worktrees hash differently. Measured, on this tree:
+    `9fd9c27…` and `152ae44…` for one commit, and byte-identical once `-trimpath` was added. Every
+    hand-run passed the check honestly because a human building both arms works in *one* tree, where
+    the premise holds silently; the mechanised version moved the arms apart and the premise became a
+    step. So a driver is not only the protocol's carrier, it is the first reader that cannot skip a
+    line — which is the general reason to prefer one over a paragraph, and the reason the flag carries
+    a comment saying what it is load-bearing for rather than reading as tidiness.
+  - **The same move made the null arm falsifiable.** A null arm is the same source twice on purpose, so
+    the assertion is that its hash comes out **equal** to base's. Copying base's binary satisfies that
+    by construction and asserts nothing; building it independently from base's rev makes it a real
+    check, and its failure is a finding about the toolchain — a non-reproducible build means a
+    base-vs-head hash difference can no longer distinguish a code difference from a build difference,
+    which is the premise the whole protocol rests on. `--null` therefore refuses an uncommitted base
+    rather than falling back to the copy, because *a vacuous arm is worse than a missing one*.
+  - **A protocol's driver still has to admit the case it cannot serve.** A benchmark is usually written
+    alongside the change it measures, so the package does not exist in the base arm at all and the base
+    build simply fails. That is honest and useless, so the driver grows an explicit `--graft` that puts
+    head's copy of the package on every arm — one measurement source, only the code under test
+    differing. It is off by default and announces itself on every run, because it is the one option
+    that changes what the arms have in common, and a flag that quietly redefines the comparison is how
+    a driver becomes a worse carrier than the prose it replaced.

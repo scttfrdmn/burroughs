@@ -3,7 +3,10 @@
 /third_party/
 *.out
 
-# benchstat inputs from `make bench`.
+# benchstat inputs. `make bench` names its log after the rev it measured, because a fixed
+# name is how one arm's log became the other's (grave #612); new.txt and old.txt stay listed
+# so a log left behind by the old target is still ignored rather than newly committable.
+bench-*.txt
 new.txt
 old.txt
 

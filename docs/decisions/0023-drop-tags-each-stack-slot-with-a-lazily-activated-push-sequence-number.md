@@ -49,6 +49,20 @@ carries — the log doesn't avoid needing it, it duplicates it one layer removed
 
 ## What was measured
 
+> **Protocol note, added by [grave #612](https://github.com/scttfrdmn/burroughs/issues/612). The
+> figures below are left as written; this note is the pointer.** The ruling quoted above — *"decided
+> the way 0002 itself was decided — `make bench` numbers as the ADR's evidence"* — names the
+> discipline this record used, and that target could not express a two-arm A/B: it wrote a hardcoded
+> output file, printed its comparison as a suggestion nothing ran, and summarised one file, so the
+> arms here are benchmark rows in one binary run consecutively rather than interleaved. Grave
+> [#552](https://github.com/scttfrdmn/burroughs/issues/552)'s protocol is what controls for that, and
+> it is now executable as `make ab`. **The decision survives on effect size** — +27.5% to +75.1%
+> dwarfs the 4.1–9.1% same-code drift #552 measured on this hardware, so *a per-slot tag is expensive
+> and gating cuts it to about 28%* holds. **One comparison inside it does not:** *"the zero-reference
+> case costs the same as the mixed case"* rests on +71.9–74.1% against +71.9–75.1%, two overlapping
+> ranges from sequential arms, and is not resolvable from what was recorded. Whether it is
+> re-measured is Scott's call and is not decided here.
+
 `internal/interp/dropbench` (n=10, `benchstat`, two independent runs each — see its own package
 doc comment for the full access-pattern rationale) compares:
 

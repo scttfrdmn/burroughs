@@ -376,16 +376,64 @@ fuzz:
 	$(GO) test ./internal/binary/ -run XXX -fuzz FuzzConstExprProgress -fuzztime $(FUZZTIME)
 	$(GO) test ./internal/text/ -run XXX -fuzz FuzzLexerProgress -fuzztime $(FUZZTIME)
 
-# benchstat or it didn't happen (decision 0005). Any performance claim in a PR
-# cites this target's output, never a single -count=1 run: n=10 and a p-value,
-# or no claim. Writes new.txt; compare against a saved old.txt with:
-#   $(TOOL) benchstat old.txt new.txt
+# benchstat or it didn't happen (decision 0005): n=10 and a p-value, or no claim. **A
+# p-value exists only for a comparison, and this target runs one arm** — so it cannot
+# supply one, and it now says so instead of implying otherwise.
+#
+# It used to imply otherwise, in three lines. It wrote a hardcoded `new.txt`, so a
+# two-arm A/B driven through it overwrote arm A with arm B and the caller ended with one
+# file; it printed the old-vs-new comparison as a *suggestion* that nothing ran and no
+# rule in this tree produced an `old.txt` for; and it then ran `benchstat` over that
+# single file, which prints per-row summaries with no comparison and no p-value. The
+# target demanding a p-value ran the one benchstat invocation that cannot print one —
+# the defect stated as the rule, in the instrument whose whole purpose *is* the rule —
+# and the overwrite produced byte-identical arm logs from differing binaries on janus
+# (grave #612).
+#
+# Two arms go through `ab` below. What is repaired here is the single-arm path: the log
+# is named after the rev it was built from rather than after a fixed word, an existing
+# log is never overwritten, and the closing text names what one arm can and cannot say.
 BENCHCOUNT ?= 10
+BENCHPKG ?= ./internal/interp/...
+BENCHREV = $(shell git describe --always --dirty --exclude '*' 2>/dev/null || echo unknown)
+BENCHOUT ?= bench-$(BENCHREV).txt
 bench:
-	$(GO) test ./internal/interp/... -run XXX -bench . -count=$(BENCHCOUNT) | tee new.txt
+	@test ! -e "$(BENCHOUT)" || { \
+		echo "$(BENCHOUT) already exists."; \
+		echo "Refusing to overwrite it: a fixed output name is how one arm's log became the other's"; \
+		echo "(grave #612). Remove it, or pass BENCHOUT=<file>."; \
+		exit 1; \
+	}
+	$(GO) test $(BENCHPKG) -run XXX -bench . -count=$(BENCHCOUNT) | tee "$(BENCHOUT)"
 	@echo
-	@echo "baseline comparison: $(TOOL) benchstat old.txt new.txt"
-	@$(TOOL) benchstat new.txt
+	@echo "One arm, n=$(BENCHCOUNT), written to $(BENCHOUT). What follows is a per-row summary:"
+	@echo "there is no comparison in it and no p-value, so no performance claim can cite it."
+	@echo "For a claim, run the two-arm protocol:"
+	@echo "  make ab AB='--pkg <pkg> --base <rev> --head <rev>'"
+	@$(TOOL) benchstat "$(BENCHOUT)"
+
+# The two-arm A/B, executing grave #552's protocol rather than asking each caller to
+# re-derive it: arms compiled to binaries up front, their hashes checked distinct, one
+# `-count=1` round per arm per round with the slots rotated, and benchstat over two named
+# files so every row carries a p-value. Eight ADRs hand-rolled those four steps because
+# nothing in the tree could run them, which is how a broken `bench` sat beside eight
+# correct measurements without anything contradicting it.
+#
+# The rounds are driven from out here because they cannot be driven from within: `go test`
+# does not interleave two benchmark rows in one binary — `-count=N` runs each benchmark N
+# times consecutively, and `-shuffle=on` permutes the blocks once (measured, grave #612).
+# Sequential arms make run order a confounder perfectly correlated with the arm.
+AB ?=
+ab:
+	@test -n "$(AB)" || { \
+		echo "usage: make ab AB='--pkg ./internal/interp/membench --base main --head HEAD'"; \
+		echo "       make ab AB='--pkg ./internal/interp/growbench --base main --head HEAD --null --graft'"; \
+		echo "  --graft is what you want whenever the benchmark was written alongside the change:"; \
+		echo "  it puts head's copy of the package on every arm, so only the code under test differs."; \
+		echo "see scripts/ab.sh --help for the full argument list and what each step is there for."; \
+		exit 1; \
+	}
+	./scripts/ab.sh $(AB)
 
 # The engine/instrument ratio every PR's Board line quotes (#117). RATIO defaults to
 # the trailing window; pass a rev or a range for one PR:
