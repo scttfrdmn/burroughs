@@ -758,9 +758,73 @@ reach is a law out of context.
   relocated into a failure message, where it is worse than in a comment: a comment is read while the
   tree is calm, and a message is read by someone deciding what a red means.
 
+  **Second specimen, and the budget is a retry count rather than a wall clock: grave [#608].**
+  `TestAShortTimeoutIsHonouredRatherThanTreatedAsExpired` had to *win* a race — fire a `notify` blind
+  at a waiter holding a 500 µs timeout, retry for 10 s, pass if any attempt landed inside the window —
+  and its expiry printed *"no wait32 … was ever woken … which is a timeout reported for an interval
+  that did not elapse"*, an engine accusation for what a starved runner produces as **no answer**. It
+  reddened `main` on `993d883`, on a step whose skip took `race` and two later steps down with it.
+  Same shape as #598 with the interval spent on attempts instead of on one wait, which is worth naming
+  because the wall-clock form is the one a reader looks for.
+
+  **The measured rate is what chose the repair**, and it was ordered before any code: *"Measure the win
+  rate. If it can't be made reliable, it reports no-answer as SKIP with a reason, never FAIL. A
+  control's failure message is a claim about the code, and right now that claim is false."* Over 8,000
+  attempts on darwin/arm64 across four conditions (idle, 14 spinners, alongside the spec suite, under
+  `-race`): **59 wins, 0.74% per attempt** as written; **8,000 wins, zero misses** once the notify waits
+  to observe the waiter *on the queue* — a `Gosched` spin sees the enqueue at p50 ≈ 9 µs against the
+  500 µs window, and decision 0060's own clause makes a detached waiter return 0 even if its timer has
+  fired, so the wake never had to beat the timer at all. **That is this law's prescribed repair arriving
+  a second time — move the property out of the scheduler's reach rather than raise the number** — and it
+  was re-derived from measurement rather than read off this page, which is the family being paid for
+  twice.
+
+  **What the decomposition buys, since a 100% rate is still not a guarantee.** The verdict now lives in a
+  case with no race in it (a sub-epsilon wait nobody notifies must not return before its interval — a
+  timer cannot fire early, so load can only overshoot), and the racy half asserts only the conjunction
+  and **logs** its exhaustion, reporting how many times a waiter *was* seen queued because that count is
+  what separates a slow harness from the engine never queuing at all. A `t.Skip` was the ordered
+  fallback and is unavailable here for a reason worth knowing: `BURROUGHS_NO_SKIP=1` is workflow-wide
+  and CI's *no test declined to answer* step greps the output for `SKIP`, so a skip that fires reds the
+  run exactly as the `FAIL` did — the tree's own skip inventory records a fifth licence drafted and
+  rejected on that ground, with the lesson that *a control wanting a skip has usually not found the
+  layer where its property is already checkable*. Here that layer existed.
+
   [#593]: https://github.com/scttfrdmn/burroughs/issues/593
   [#598]: https://github.com/scttfrdmn/burroughs/issues/598
   [#599]: https://github.com/scttfrdmn/burroughs/issues/599
+  [#608]: https://github.com/scttfrdmn/burroughs/issues/608
+
+### A hard limit is a claim about a distribution, and an uncompared limit is an unasserted one.
+
+- **A hard limit is a claim about a distribution, and an uncompared limit is an unasserted
+  one.** A timeout, a retry budget, a floor, a ceiling: each says *the population it bounds lies on this
+  side of me*, and that sentence is either measured or merely written. So **every limit added or changed
+  records the measured population it is set against, or records that none was measured** — at the site,
+  at write time. Deliberately **no audit and no sweep**: the habit is cheap where the number is being
+  chosen and expensive everywhere else, and a sweep over string literals could not tell a bound from a
+  buffer size. (Ruling: Scott, on the #607 report — *"a hard limit is a claim about a distribution, and
+  an uncompared limit is an unasserted one. No audit and no sweep — the habit goes at write time. Any
+  limit added or changed from here records the measured population it's set against, or records that
+  none was measured."* Recorded by the actor it binds, so `Ratio-Class: carried`.)
+
+  **The specimen that minted it was an inherited limit nobody wrote.** `go test`'s per-package default
+  is 10 minutes, and `internal/spec` under `-race` had grown into it: nine consecutive `main` runs on the
+  x86-64 leg measured **430.9, 550.5, 460.6, 562.3, 566.3, 547.5, 540.3, 593.0, 580.6** seconds — a
+  1.38× spread whose maximum sat **6.98 s** under the limit — while the arm64 leg of the same nine was
+  flat at 563.5–566.8 s. The kill landed on #607 and the diagnosis was available only because the
+  population was gathered: 593/600 and 431/600 print the same word, which is *[an unasserted distance is
+  the vacuum](#a-comparison-against-an-empty-set-succeeds-so-a-control-that-compares-needs-a-vacuity-check)*
+  in the other direction.
+
+  **And the recording has a second half that is easy to skip: what the number is *not* measured
+  against.** `make race`'s replacement `-timeout 25m` is ~2.5× the largest **completed** observation, and
+  the killed run's true duration is unknown — so it is headroom over the biggest number the suite has
+  finished in, not over a measured requirement. Grave [#608]'s two limits record the same asymmetry from
+  the other side: 32 attempts and a 250 ms observation window, set against 8,000 measured attempts on
+  darwin/arm64, and **not** measured against the loaded x86-64 runner that produced the red, which this
+  tree cannot sample. A limit whose population is stated and whose gap is stated is still a guess; the
+  difference is that the next reader can price it.
 
 ### A guard's trigger predicate is itself a claim about the space, and an under-matching one fails silently by construction.
 

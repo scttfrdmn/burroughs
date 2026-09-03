@@ -4,6 +4,7 @@ package interp
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
@@ -99,6 +100,36 @@ func awaitQueued(t *testing.T, in *Instance, ea uint64, want int) {
 		t.Fatalf("only %d of %d waiter(s) reached the queue at address %d within 10s — this is the "+
 			"test's premise and not its assertion: nothing was measured", queued, want, ea)
 	}
+}
+
+// sawQueued spins until `want` waiters are queued at `ea` and *reports* whether it saw them. It is
+// `awaitQueued`'s tight-window twin rather than a duplicate of it, and the two differences are the
+// whole reason it exists (grave #608).
+//
+// **It yields instead of sleeping.** `awaitQueued` sleeps a millisecond between polls, which is right
+// for a waiter holding a five- or ten-second timeout and wrong for a **sub-millisecond** one: a waiter
+// with a 500 µs timeout is on the queue for at most 500 µs, so a 1 ms poll misses it about as often as
+// it catches it. Measured over 8,000 attempts on darwin/arm64 (idle, under 14 spinners, alongside the
+// spec suite, and under `-race`), a `Gosched` spin observed the enqueue at p50 ≈ 9 µs, p99 ≈ 20–46 µs,
+// max 1.653 ms — the tail being goroutine start latency on a contended machine rather than the
+// observation gap, since the spin is already spinning when the enqueue happens.
+//
+// **It reports rather than calling `t.Fatalf`,** because its caller retries. A helper that fatals has
+// decided the miss is a verdict, and for this window it is not one: a missed observation is the harness
+// getting no answer, and the engine claim it would print is one the run has not observed.
+func sawQueued(in *Instance, ea uint64, want int, within time.Duration) bool {
+	mem := in.mems[0]
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		mem.waitMu.Lock()
+		queued := len(mem.waiters[ea])
+		mem.waitMu.Unlock()
+		if queued >= want {
+			return true
+		}
+		runtime.Gosched()
+	}
+	return false
 }
 
 // outcome is one invocation's result carried off a goroutine.
@@ -217,45 +248,123 @@ func TestAWaitWhoseCellChangedDoesNotQueue(t *testing.T) {
 	}
 }
 
-// TestAShortTimeoutIsHonouredRatherThanTreatedAsExpired is decision 0060's second choice, and it is a
-// **deliberate divergence from the reference** — the only authority this path has.
+// belowReferenceEpsilon is the timeout the next two tests are about: **under** the reference's
+// `timeout_epsilon` of 1e6 ns, which decision 0060 removed rather than copied.
 //
-// `eval.ml:45` treats any timeout under `timeout_epsilon` (1e6 ns) as already expired, and this engine
-// copied the constant. The comment at the copy site recorded what made it exact: *"with no other agent
-// that reading is exact rather than an approximation."* A notifier falsifies that premise, so the
-// constant went, and this test is what would fail if it came back: 500 µs is under the epsilon, the
-// notify arrives inside it, and the old code returned 2 without ever queuing.
+// `eval.ml:45` treats any timeout under that constant as already expired, and this engine had copied it.
+// The comment at the copy site recorded what made it exact: *"with no other agent that reading is exact
+// rather than an approximation."* A notifier falsifies that premise, so the constant went — and what the
+// constant did, it did in two separable ways: it returned `waitTimedOut` for an interval that had not
+// elapsed, and it never queued the waiter, so no notify could ever reach one. The two tests below
+// assert one each, which is the decomposition grave #608 bought.
+const belowReferenceEpsilon = int64(500_000) // ns, and 1e6 is the constant that is gone
+
+// TestASubEpsilonTimeoutIsWaitedAndNotReportedExpired is decision 0060's second choice asserted with
+// **no race in it**, and it is the case that carries the verdict for the divergence.
 //
-// The timeout is short **and the notify is retried until it lands**, so what is asserted is not "a wake
-// beat a timer" — a race this test would lose on a loaded machine — but that a wake *is possible at
-// all* at this timeout, which the epsilon made impossible. A returned 2 is therefore retried too; only
-// the loop expiring is a failure.
-func TestAShortTimeoutIsHonouredRatherThanTreatedAsExpired(t *testing.T) {
+// Nobody notifies, so the only correct answer is `waitTimedOut` *after* the interval — and a
+// `time.Timer` cannot fire early, so `elapsed >= timeout` is a bound the engine controls and a loaded
+// machine can only overshoot. One-sided for the same reason
+// `TestAnExpiredWaitReturnsAfterItsTimeoutAndNotBefore` is, and a **necessary** sibling of it rather
+// than a smaller copy: that test's timeout is 20 ms, which is *above* the removed constant, so the
+// epsilon would short-circuit nothing there and it passes with the constant in place. The distance
+// between a bound and the thing it bounds decides whether it bounds anything, and 20 ms sat on the
+// wrong side of 1 ms. Under the epsilon this case returns in nanoseconds and fails.
+func TestASubEpsilonTimeoutIsWaitedAndNotReportedExpired(t *testing.T) {
 	in := futexModule(t)
 
-	const belowReferenceEpsilon = int64(500_000) // ns, and 1e6 is the constant that is gone
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if time.Now().After(deadline) {
-			t.Fatalf("in 10s, no wait32 with a %dns timeout was ever woken. Under the reference's "+
-				"`timeout_epsilon` every one of them returns %d immediately without queuing, which "+
-				"is a timeout reported for an interval that did not elapse (decision 0060)",
-				belowReferenceEpsilon, waitTimedOut)
-		}
+	timeout := time.Duration(belowReferenceEpsilon)
+	start := time.Now()
+	got := call(t, in, "wait32", I32(0), I32(0), I64(belowReferenceEpsilon))
+	elapsed := time.Since(start)
+
+	if got != waitTimedOut {
+		t.Fatalf("wait32 with a %s timeout and nobody to notify it returned %d, want %d (\"timed-out\")",
+			timeout, got, waitTimedOut)
+	}
+	if elapsed < timeout {
+		t.Errorf("wait32 with a %s timeout returned %d after %s. A timer cannot fire early, so this is "+
+			"the interval not being waited at all — the reference's `timeout_epsilon` reporting a "+
+			"timeout that did not elapse, at a timeout below the constant (decision 0060)",
+			timeout, got, elapsed)
+	}
+}
+
+// TestASubEpsilonWaiterIsWokenWhenTheNotifyFindsItQueued is the other half — that a sub-epsilon wait
+// *queues*, so a notify can still wake it — and it is the case grave #608 rewrote.
+//
+// **What it used to do and why that was wrong.** It fired the notify blind and retried for 10 s,
+// needing the notify to land inside the 500 µs window by luck. Measured, that luck is **59 wins in
+// 8,000 attempts — 0.74% per attempt** (darwin/arm64: idle, under 14 spinners, and alongside the spec
+// suite), and its `t.Fatalf` on the budget expiring said *"no wait32 was ever woken … which is a
+// timeout reported for an interval that did not elapse"* — an engine accusation for what is actually
+// the harness never getting an attempt in edgewise. A starved runner cannot produce a wrong answer to
+// this question, only no answer, and no-answer spelled `FAIL` reddened `main`.
+//
+// **Waiting for the enqueue removes the race instead of budgeting for it.** Once the notify finds the
+// waiter on the queue it detaches it under `waitMu`, and decision 0060 resolves that tie toward the
+// notify: *"a detached waiter whose timer has already fired still returns 0."* So the wake no longer
+// has to beat the timer — it has to find a queued waiter, which `sawQueued` observes at p50 ≈ 9 µs.
+// Measured over the same 8,000 attempts, including under `-race`: **8,000 wins, zero misses.**
+//
+// **A miss is retried and exhaustion is not a failure**, because the property is asserted race-free by
+// `TestASubEpsilonTimeoutIsWaitedAndNotReportedExpired` above; what is unasserted after an exhausted
+// budget is only the conjunction. A notify that *did* detach a waiter and got something other than 0
+// back is a different matter and does fail: that is an engine answer, and it is the clause of decision
+// 0060 that the detach is supposed to buy.
+func TestASubEpsilonWaiterIsWokenWhenTheNotifyFindsItQueued(t *testing.T) {
+	in := futexModule(t)
+
+	// Both limits below are set against the measurement in this test's own comment — 8,000 armed
+	// attempts, zero misses, enqueue observed at p50 ≈ 9 µs and max 1.653 ms — and neither is measured
+	// against the population that produced the red: a loaded x86-64 CI runner, which this tree cannot
+	// sample. So they are headroom over what was observed and not over a known requirement.
+	const attempts = 32                    // 32x the one attempt every measured case needed
+	const observe = 250 * time.Millisecond // 151x the largest observed enqueue latency
+
+	observed := 0
+	for i := range attempts {
+		// A fresh address per attempt, as the litmus battery does: the previous attempt's waiter has
+		// returned before this line, but an address nothing else has used makes that a property of the
+		// test rather than of the engine's dequeue ordering.
+		ea := int32(8 * (i + 1))
+
 		res := make(chan outcome, 1)
 		go func() {
-			res <- callOffGoroutine(in, "wait32", I32(0), I32(0), I64(belowReferenceEpsilon))
+			res <- callOffGoroutine(in, "wait32", I32(ea), I32(0), I64(belowReferenceEpsilon))
 		}()
-		// One notify, immediately: it either finds the waiter or does not, and the outer loop is the
-		// retry. Racing the notify inside the window is the point — it is what the epsilon forbade.
-		if call(t, in, "notify", I32(0), I32(1)) == 0 {
-			(<-res).get(t)
+		if !sawQueued(in, uint64(ea), 1, observe) {
+			(<-res).get(t) // it timed out unobserved; nothing to conclude, so try again
 			continue
 		}
-		if got := (<-res).get(t); got == waitWoken {
-			return
+		observed++
+		woke := call(t, in, "notify", I32(ea), I32(1))
+		got := (<-res).get(t)
+		if woke == 0 {
+			continue // the timer beat the notify to the queue; still nothing to conclude
 		}
+		if got != waitWoken {
+			// Two mechanisms produce this and the test cannot tell them apart, so the message names
+			// both rather than picking one: an inverted `w.claimed` arm survives the whole tree's tests
+			// (#609), and this line is where its consequence would surface if it ever raced.
+			t.Fatalf("memory.atomic.notify detached a waiter at address %d and reported waking it, and "+
+				"the wait32 with a %dns timeout returned %d, want %d (\"ok\"). Either the wake path "+
+				"answered with the wrong number, or the tie between a claimed waiter and a fired timer "+
+				"resolved toward the timer (decision 0060, #609)",
+				ea, belowReferenceEpsilon, got, waitWoken)
+		}
+		return
 	}
+	// `observed` is in the message because it separates the two ways this can run out, which the count
+	// of attempts alone cannot: a queue seen but lost to the timer is the harness being slow, and a
+	// queue **never** seen across every attempt is what the epsilon's short-circuit looks like from
+	// here. Neither is asserted on — that is the sibling's job — but a reader of a log should not have
+	// to guess which one happened.
+	t.Logf("no answer: in %d attempts, a wait32 with a %dns timeout was seen on the queue %d time(s) "+
+		"and never notified before its timer. Nothing is concluded about the engine — the divergence "+
+		"this case shares with TestASubEpsilonTimeoutIsWaitedAndNotReportedExpired is asserted there "+
+		"without a race, and only the conjunction goes unasserted (grave #608)",
+		attempts, belowReferenceEpsilon, observed)
 }
 
 // TestAnExpiredWaitReturnsAfterItsTimeoutAndNotBefore is the other half of the same divergence, and it

@@ -231,3 +231,55 @@ discharged once a wait/notify pair works.
   shared memory, which is SP-4's work behind `Spawn`. Recorded because a wait queue that spans instances
   sitting next to a stop protocol that does not is precisely the asymmetry a reader would otherwise
   assume had been handled.
+
+## Amendment, 2026-09-03 — decision 2's discriminating case was one racy test; it is now two, and the win rate is measured (grave #608)
+
+Decision 2 ends *"the discriminating case is a Go test, which is the only oracle there is."* That was
+true, and the test it referred to was `TestAShortTimeoutIsHonouredRatherThanTreatedAsExpired`, which
+**had to win a 500 µs race** to render its verdict: fire a notify blind at a sub-epsilon waiter, retry for
+up to 10 s, pass if any attempt landed inside the window.
+
+It reddened `main` on `993d883` by losing every attempt on a loaded x86-64 runner, and its `t.Fatalf`
+said the engine had reported *"a timeout for an interval that did not elapse"* — an accusation the run
+had not observed. A starved runner cannot produce a wrong answer to that question, only no answer.
+
+**The measurement Scott ordered, and it decides the design rather than the budget.** Per-attempt win
+rate, darwin/arm64, 2,000 attempts × 4 conditions (idle, under 14 spinners, alongside the spec suite,
+and under `-race`):
+
+| form | wins / attempts | rate |
+| --- | --- | --- |
+| notify fired blind at the waiter (as landed in #594) | 59 / 8,000 | **0.74%** |
+| notify fired once the waiter is observed on the queue | 8,000 / 8,000 | **100%** |
+
+The second form is not luckier; it is asking a different question, and the clause that makes it exact is
+decision 1's own: **a detached waiter whose timer has already fired still returns 0.** So the notify does
+not have to beat the timer — it has to find a queued waiter, which a `Gosched` spin observes at p50 ≈ 9 µs
+against a 500 µs window. The 10 s budget was never the number that mattered.
+
+**What replaces it, and why two tests rather than a fixed one.** The epsilon did two separable things —
+it returned `waitTimedOut` for an interval that had not elapsed, and it never queued the waiter at all —
+so each gets a case:
+
+- `TestASubEpsilonTimeoutIsWaitedAndNotReportedExpired` **carries the verdict** and has no race in it:
+  nobody notifies, a timer cannot fire early, and load can only overshoot a one-sided bound. Under the
+  epsilon it returns in nanoseconds and fails. This is also the case that shows why
+  `TestAnExpiredWaitReturnsAfterItsTimeoutAndNotBefore` never covered the constant: its 20 ms timeout sits
+  *above* the 1e6 ns epsilon, so nothing short-circuits there.
+- `TestASubEpsilonWaiterIsWokenWhenTheNotifyFindsItQueued` asserts the queue-and-wake half, and **its
+  exhaustion is not a failure**: 32 attempts, and if none is observed on the queue in time it logs the
+  no-answer with the number of times a waiter *was* seen, because that count is what separates a slow
+  harness from the epsilon's signature of never queuing at all.
+
+Both limits in the second case record the population they are set against, and both record the population
+they are **not** set against — a loaded x86-64 CI runner, which this tree cannot sample. That is the
+standing rule now: *a hard limit is a claim about a distribution, and an uncompared limit is an unasserted
+one* (Scott, on the #607 report).
+
+**One clause of decision 1 turns out to have no oracle at all, found by injection while checking that
+these two die when they should ([#609](https://github.com/scttfrdmn/burroughs/issues/609)).** Inverting
+`resolveExpiry`'s `w.claimed` arm — resolving the tie toward the timer, which is exactly what the sentence
+above forbids — survives `go test ./...` over the whole tree. `resolveExpiry` is only reached when the
+timer wins the `select`, and every test here arranges for the notify to arrive promptly, so the tie window
+is microseconds wide at the far end of an interval no case waits out. The failure message of the second
+test names both mechanisms rather than one, because from outside it cannot tell them apart.
