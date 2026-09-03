@@ -262,6 +262,25 @@ reach is a law out of context.
         available to the actor as a choice. (Ruling: Scott, on the #503 review — *"a counter in
         `runFrame` is instrument by purpose, regardless of living in engine code. The counter
         measures purpose, not directory."*)
+      - **And "a contract clause names it" is the third of these arguments rather than a new one:
+        normativity does not decide class.** A §4 clause can be discharged by a *test*, so a slice
+        whose subject is normative can still be pure harness — the question is about the diff, not
+        about which section of the contract the diff serves. The specimen is #607's own report, where
+        the actor flagged that §4 **B-MM-5** makes the litmus battery normative and asked whether that
+        made the battery product. Under the test it was not close: no line of that diff is reachable
+        from any guest program, so nothing about what the runtime *can do* moved. What earns it a place
+        here is the family — it is the **third** sibling of an argument this page had already ruled
+        inadmissible twice, after *"it clears a board column"* (#457) and *"it lives in engine code"*
+        (#503), and all three substitute a correlate of the work's importance for the deciding
+        question. *Lessons are indexed by shape, not by file*: the shape is "an argument that the work
+        matters, offered as an argument about its class", and both siblings were already on this page
+        when the flag was raised. The ruling also settles what the actor *may* do with the test —
+        **apply it** — which is not the self-classification the exemption rule forbids: the rule comes
+        from outside, and running it is execution. (Ruling: Scott, on the #607 report — *"Normativity
+        doesn't decide class … Purpose, not directory, not line count, and not which contract section
+        names it. Applying a rule I supply is execution rather than self-classification."* Recorded by
+        the actor who was ruled on, which is durable and not independent, so the commit carrying it is
+        `Ratio-Class: carried`.)
       - **A repair the PR's own verdict compels is part of that PR, and the check is one question:
         was the PR blockable without it?** The counter counts PRs, so *what is one PR* decides
         whether two-consecutive trips, and without a boundary the actor can merge slices to keep
@@ -305,6 +324,32 @@ reach is a law out of context.
       closes exactly one PR wide. Note the shape — this is the ratio-comparator ruling
       one level up: there the actor must not choose the measure, here the actor must not
       grant the exception. (Ruling: Scott, PR #113, on the agent's own flag.)
+      - **An order can be *scoped* rather than blanket, and the scope is three bounds: subject,
+        expiry, and a carve-out.** #113's stamp and #103's *"do it now"* were both one-off, so the
+        clause above had no shape for a standing order — and a standing order is what the §4 litmus
+        battery needed, since a battery *is* a test suite and every slice of it is instrument by the
+        deciding test, which would have meant three consecutive stamp requests for work a principal
+        was already ordering. Scott's form, verbatim: *"the §4 battery's slices are chair-ordered
+        harness for the duration of [#10], and the counter doesn't advance on them … Three bounds,
+        because a blanket exemption is exactly the shape that let the ratio climb: It covers slices of
+        #10's battery only. It expires when #10 closes. Any slice that **also changes runtime
+        behaviour** … is product, and gets classified and measured normally. And quote the ratio on
+        every one of them regardless. The cost stays visible rather than exempted into
+        invisibility."* Three readings the actor does not get to choose, all confirmed rather than
+        assumed: the order is **prospective**, so the counter keeps whatever value it had when the
+        order arrived; the provenance is **`carried`, never `ordered`**, because an in-session order
+        has no artifact for the trailer to cite; and the carve-out **fires early and that is healthy**
+        — #543's wait/suspend mechanism was the battery's own prerequisite and was classified and
+        measured as product.
+        - **Coupling a deadline to a scope makes both widening and narrowing that scope into
+          levers.** #10's closure carries two other things — this exemption expires there, and the
+          parked decisions queue drains there — so *"don't let #10 sprawl"* guards one direction only:
+          the actor gains from a **narrow** #10 exactly as much as from a wide one, and narrowing looks
+          like discipline while doing it. Disclosed by the actor in the #607 report and generalised by
+          Scott into the law above, with the disposition that closes the hole: **closure comes on the
+          registered cases being discharged, and a still-blocked row at the end comes to him** — so
+          neither edge of the scope is the actor's to move. (Ruling: Scott, on the #607 report.
+          Recorded by the actor it constrains, so `Ratio-Class: carried`.)
 
 ### Control work is a debt against the product, so it is charged, deferred, or declined — never taken because it is available.
 

@@ -893,6 +893,26 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The classification test gains a third inadmissible argument, and the exemptions clause gains a
+  scoped order with its two levers** ([the
+  clause](docs/laws/product-and-overhead.md#the-phases-product-is-the-work-instruments-are-overhead-on-it)).
+  Both are Scott's rulings on the §4 battery's slices, recorded where the rule they qualify already
+  lives.
+  - **"A contract clause names it" does not decide class.** §4's B-MM-5 is normative and
+    [#607](https://github.com/scttfrdmn/burroughs/pull/607)'s slice discharged it with a test, so the
+    diff changed what the harness can *say* and not what the runtime can *do*. That joins the two
+    arguments already rejected on the same ground — a board column ([#457](https://github.com/scttfrdmn/burroughs/issues/457))
+    and an engine directory ([#503](https://github.com/scttfrdmn/burroughs/issues/503)) — rather than
+    forming a new exception: *"purpose, not directory, not line count, and not which contract section
+    names it."*
+  - **An order can be scoped rather than blanket, and the scope is three bounds:** subject (slices of
+    [#10](https://github.com/scttfrdmn/burroughs/issues/10)'s battery only), expiry (when #10 closes),
+    and a carve-out (a slice that *also* changes runtime behaviour is product). It is prospective, it
+    is cited `Ratio-Class: carried` and never `ordered` because an in-session order has no artifact,
+    and the ratio is quoted on every slice regardless.
+  - **Coupling a deadline to a scope makes both widening and narrowing that scope into levers**, so
+    #10's closure is on discharge of its registered cases and a still-blocked row at the end goes to
+    Scott rather than being written out of the scope.
 - **The race gate states its timeout instead of inheriting one, because the inherited one had seven
   seconds of room left.** `go test` applies a 10-minute per-package default when none is given, and
   `internal/spec` under `-race` had grown into it: nine consecutive `main` runs on CI's x86-64 leg ran
@@ -1110,6 +1130,50 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **A futex test spelled its own no-answer `FAIL`, so a 0.74%-per-attempt race reddened main with a
+  claim about the engine that was false** (grave
+  [#608](https://github.com/scttfrdmn/burroughs/issues/608)).
+  `TestAShortTimeoutIsHonouredRatherThanTreatedAsExpired` launched a `wait32` with a 500 µs timeout on
+  one goroutine, slept 20 ms, then notified — and reported *"a sub-epsilon timeout was treated as
+  already expired"* when the waiter had timed out on its own before the notify arrived. The mechanism it
+  named is a real defect the test cannot observe; what it actually measured was whether the notify
+  reached the queue in time.
+  - **The win rate, measured before anything was rewritten:** 2000 attempts × 4 conditions (idle, 14
+    spinning hogs, alongside the spec suite, under `-race`) on darwin/arm64. Notifying blind, as
+    written: **59/8000 = 0.74%**. Notifying only after the waiter is observed *on the queue*:
+    **8000/8000 = 100%**, zero misses. Enqueue-observation latency p50 ≈ 9 µs, p99 ≈ 20–46 µs, max
+    1.653 ms — that tail is goroutine start, not the observation gap.
+  - **Repaired by decomposition rather than by a longer sleep or a retry.** The old assertion was a
+    conjunction of two separable properties, so each now has its own test: that a sub-epsilon interval
+    is *waited* and not reported already-expired is asserted race-free by
+    `TestASubEpsilonTimeoutIsWaitedAndNotReportedExpired` against a one-sided elapsed bound (a timer
+    cannot fire early; load can only overshoot), and that such a waiter is *woken* is asserted by
+    `TestASubEpsilonWaiterIsWokenWhenTheNotifyFindsItQueued`, which arms itself by observing the
+    enqueue first — exact rather than probable, because ADR 0060 decision 1 makes a detached waiter
+    whose timer has already fired still return 0, so the notify never has to beat the timer.
+    Exhaustion of the attempt budget is logged with the number of arms it managed, not failed: a helper
+    that fatals has decided the miss is a verdict.
+  - **Scott's ordered SKIP fallback is unavailable in this tree, so exhaustion logs instead.**
+    `BURROUGHS_NO_SKIP=1` is workflow-wide, CI's *no test declined to answer* step fails on any `SKIP`
+    line, and `TestEverySkipSiteIsLicensed`'s own comment records a fifth licence drafted and rejected
+    on exactly this ground. A skip that fires reds the run precisely as the `FAIL` did.
+  - **Both new limits record the population they are set against, and the one they are not:** 32
+    attempts is 32× the single attempt every measured condition needed, and the 250 ms observation
+    window is 151× the largest enqueue latency seen — both from the run above, on an unloaded
+    darwin/arm64 dev box, and **neither sampled on a loaded x86-64 CI runner**, which this box cannot
+    sample.
+  - **A mutant survived the repair and is filed rather than papered over**
+    ([#609](https://github.com/scttfrdmn/burroughs/issues/609)): inverting `resolveExpiry`'s `if
+    w.claimed` branch passes `go test ./... -count=1` over the whole tree, so decision 0060's tie
+    clause has no oracle. The armed test's failure message now names both mechanisms it cannot
+    distinguish instead of asserting one.
+  - Laws: [*A deadline used as a hang detector measures throughput, and its red names a mechanism it
+    never
+    observed*](docs/laws/controls.md#a-deadline-used-as-a-hang-detector-measures-throughput-and-its-red-names-a-mechanism-it-never-observed)
+    (second specimen, with the budget as a retry count rather than a wall clock) and [*A hard limit is a
+    claim about a distribution, and an uncompared limit is an unasserted
+    one*](docs/laws/controls.md#a-hard-limit-is-a-claim-about-a-distribution-and-an-uncompared-limit-is-an-unasserted-one).
 
 - **A 30-second deadline was doing duty as a hang detector, so `spinningCallers` reported a wedge over
   three callers that were merely slow** (grave
