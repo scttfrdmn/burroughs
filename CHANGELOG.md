@@ -1167,6 +1167,24 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The commit that repaired a closing-keyword adjacency in this file quoted the offending phrase in its
+  own message, so the report sat inside the population it reported on** (grave
+  [#614](https://github.com/scttfrdmn/burroughs/issues/614)). `closecheck.sh` scans commit messages, CI's
+  `citations` job went red, and issue #136's state was the thing at stake — grave
+  [#314](https://github.com/scttfrdmn/burroughs/issues/314)'s subject exactly. **Third occurrence, and
+  the corpus was already complete**: `operations.md` carries the shape, two prior specimens, and the
+  remedy as an imperative — re-run the scan after writing the commit that describes a scan failure.
+  Nothing was missing; it was not read.
+  - **The recurrence mechanism is that the remedy is a sequencing step with no instrument.** The
+    commit-message arm lives in `make close`, which is not a `make check` step, and its population grows
+    with every commit — so the green taken before the repair commit was a green about a different
+    population, and it was carried into the report unre-taken. Whether that arm belongs in the gate is
+    filed at [#615](https://github.com/scttfrdmn/burroughs/issues/615) and is not obviously a yes.
+  - **The report also named the target while quoting a different arm's figure.** `make close`'s default
+    arm is the commit-message half; the re-taken figure came from the `--pr` body arm. `operations.md`'s
+    own table says those are two populations, so the target's name attributed the body arm's verdict to
+    an arm that was red at that moment.
+
 - **`make bench` could not express a two-arm A/B and implied it could, so the target demanding a p-value
   ran the one `benchstat` invocation that cannot print one** (grave
   [#612](https://github.com/scttfrdmn/burroughs/issues/612)). Three lines, under the target's own comment
