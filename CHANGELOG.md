@@ -21,6 +21,39 @@ weakly-ordered platform.
 
 ### Added
 
+- **The §§2–5 litmus battery has its first landed case, and its two agents are two instances sharing one
+  imported memory** ([#10](https://github.com/scttfrdmn/burroughs/issues/10), [ADR
+  0062](docs/decisions/0062-the-litmus-batterys-two-agents-are-two-instances-sharing-an-imported-memory-because-a-shared-memory-spans-instances-and-spawn-does-not-gate-that.md)).
+  The pre-registration's own sequencing said the whole battery waited on `Instance.Spawn` because *"the tree
+  has exactly one agent"*; that premise was false. A shared memory is **imported**, so two instances hold one
+  `*memory` while each keeps its own `thread` and `world` — two agents over one address space, sharing one
+  futex queue, verified over 2,000,000 rounds `-race` clean at about 6 µs/round. `internal/interp` is where
+  the harness lives, because knowing the second agent has *reached* its wait needs `m.waiters` under
+  `waitMu` and no guest-visible substitute exists: a `notify` of count 0 returns 0 for an empty queue and a
+  full one alike.
+  - **`t3-wake-latency-is-microsecond-scale` is implemented** as
+    `TestAWakeArrivesAtFutexLatencyAndNotEventLoopLatency`, discharging contract §2 T-3's *"futex-backed
+    with OS-native wake latency, not event-loop-turn latency."* Median **250 ns** over 1000 wake events
+    against the pre-registered 1 ms ceiling, and watched die: `wait`'s `select` replaced by a 1 ms
+    `time.Sleep` poll — the mechanism the clause names — failed the case on all three runs at a median of
+    **1.134 ms**. The injection is the *fastest plausible* turn, so the ceiling's margin is 13.4% on the
+    failing side against about 4 000× on the passing side, and a 500 µs poll would pass: registered as the
+    case's resolution limit rather than found later. The injected arm's fastest round was 956 µs, **below**
+    the ceiling, which is what the median being the pre-registered statistic bought.
+  - **One case is prohibited on this vehicle, and the prohibition is the point.**
+    `t1-n-agents-block-simultaneously` counts N agents parked at once to rule out a pool or an M:N mapping;
+    on N instances driven by N goroutines it would *pass*, because Go parks N goroutines happily. A vehicle
+    that satisfies a case by supplying exactly what the clause forbids is worse than a blocked row.
+  - **Five rows' blockers were wrong in both directions, and are re-derived.** `b-mm-1`, `sp2`, `sp4`, `h1`
+    and `h3` named `Spawn`; every one of their witnesses parks in a **blocking host call**, which this
+    engine has no surface for — so spawn is neither necessary nor sufficient
+    ([#602](https://github.com/scttfrdmn/burroughs/issues/602)). `b-mm-2-sibling-field-after-wake` is
+    implementable and **stillborn**, measured: the witness's own SC store is the release edge, so with the
+    engine's wake edge deleted by hand 2,000,000 rounds produced zero forbidden outcomes, and an
+    interpreter-free positive control put the phenomenon at ~6 × 10⁻⁷ per round against a registered
+    `R = 100_000` ([#603](https://github.com/scttfrdmn/burroughs/issues/603)). Its floor — 80% of rounds
+    woken — was satisfied by *every* round of that injected run, so it measures the wake happening rather
+    than the visibility window being exercised.
 - **`memory.grow` is one operation against a concurrent `memory.grow`, which the proposal's model
   requires and this engine did in three steps**
   ([#600](https://github.com/scttfrdmn/burroughs/issues/600), [ADR

@@ -127,6 +127,26 @@ reach is a law out of context.
     reaches the bar say the board does not adjudicate rather than banking its `~` as a pass. The
     failure this prevents is the comfortable one — a null result on an under-resolved instrument reads
     exactly like a change that cost nothing.
+    (Confirmed: Scott, on the #601 review — *"a measured floor is only informative where it is narrower
+    than the bar it is read against."*) A worked instance of the reading, from
+    [#10](https://github.com/scttfrdmn/burroughs/issues/10)'s first case, is that **both arms of a board
+    can be admissible for opposite reasons**: the injected arm's run-to-run spread was 0.15% against a
+    13.4% margin, and the conforming arm's spread was 83% against a margin of three orders of magnitude.
+    Neither is admissible because its spread is small — one is tight and one is enormous — so the sentence
+    a report owes is *which* comparison makes each arm readable, not that both were measured.
+  - **A bar is registered as a row measured on the same run, never as a remembered absolute.** #600's
+    registration said *"no more than one uncontended Lock/Unlock pair"* **and** put
+    `BenchmarkUncontendedLockUnlock` in the same package so the pair was measured beside the rows it
+    bounded. Its prose also carried the remembered figure — *"an uncontended `sync.Mutex` Lock/Unlock pair
+    is tens of nanoseconds"* — and that figure was wrong by up to twenty times in one direction and six
+    times *between the two machines the same battery ran on*: 1.81–2.01 ns on arm64 against 11.32 ns on
+    amd64. The absolute forecast built on it was falsified in both readings of its unit, and what saved the
+    registration around it was that the decisive comparison had been specified as a row rather than as the
+    memory. So an absolute number earns a place in a pre-registration only when something on the same run
+    will produce the figure it is compared to; otherwise it is a forecast about the writer's recall wearing
+    a threshold's clothes, and the machine it is quoted on is one of its free variables.
+    (Ruling: Scott, on the #601 review — *"register a bar as a row measured on the same run, never as a
+    remembered absolute."*)
 
 ### A tripwire whose subject dissolves is re-pointed, never closed.
 
