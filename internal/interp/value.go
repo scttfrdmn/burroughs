@@ -519,9 +519,20 @@ func (f *frame) len() int { return len(f.num) }
 //
 // **Tags the slot with a push sequence number, but only when `tracking` is on** (0023, grave
 // #206) — `drop`'s own signal for which array holds the logical top, and lazily maintained for
-// 0023's own measured reason: tagging unconditionally costs the same whether or not a reference
-// is ever pushed, since the cost is the extra append/reslice on this array's own operations, not
-// anything about references.
+// 0023's own measured reason: tagging unconditionally costs **+71.9–75.1% even on runs that never
+// push a reference at all**, since the cost is the extra append/reslice on this array's own
+// operations, not anything about references.
+//
+// **That sentence used to read "costs the same whether or not a reference is ever pushed," and the
+// equality is withdrawn** (ADR 0023's amendment of 2026-09-03, from the [#612] audit): it rested on
+// two overlapping ranges measured with the arms run consecutively rather than interleaved, which
+// cannot resolve a difference that small. The *level* is what carries the gating decision and the
+// level is what this comment now states — a figure an order of magnitude outside this hardware's
+// own 4.1–9.1% same-code drift. Kept as a comment rather than deleted because this is the one place
+// in the engine that cited the withdrawn claim as a measured reason, and a withdrawal with no site
+// in the tree is a withdrawal only the ADR's own readers ever learn about.
+//
+// [#612]: https://github.com/scttfrdmn/burroughs/issues/612
 func (s *stack) pushNum(v uint64) {
 	s.num = append(s.num, v)
 	if s.tracking {

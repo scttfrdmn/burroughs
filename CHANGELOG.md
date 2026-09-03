@@ -929,6 +929,67 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Four measured claims are withdrawn across three ADRs, and one of them was re-measured to find
+  out** — the disposition of [grave #612](https://github.com/scttfrdmn/burroughs/issues/612)'s audit,
+  on Scott's orders. No figure below is repaired in place: an accepted ADR is a tombstone, so each
+  withdrawn sentence is left as written with a dated pointer at it, and one dated amendment per ADR
+  says what the decision rests on afterwards.
+  - **[ADR 0024](docs/decisions/0024-a-v128-value-occupies-two-adjacent-64-bit-slots-everywhere-a-slot-is-a-thing.md)'s
+    realistic-frequency row does not reproduce as a resolved result, and the shipped design is
+    unaffected.** Re-measured under grave [#552](https://github.com/scttfrdmn/burroughs/issues/552)'s
+    protocol — one binary built up front with `-trimpath`, ten rounds, one `-test.count=1` invocation
+    per arm per round at `-test.benchtime=5000x`, slots rotated, `benchstat` over one file per arm:
+    `2.228m ± 14%` against `2.358m ± 16%`, **`~ (p=0.529 n=10)`**, where the sequential-arm runs
+    reported +4.68% at p=0.023 and +5.01% at p=0.005. **What is falsified is the resolution, not the
+    effect**, and that is the confound's own signature: the point estimate agrees in sign and size
+    (+5.8% on medians, +1.7% on the within-round paired differences, 7 of 10 positive), while the
+    spread went from resolvable to ±14–16%. Sequential arms inflate *confidence* — each arm's samples
+    share one time window, so they agree with each other and the between-window drift is charged to
+    the arm. **The witness is in the rounds:** 6 and 7 are elevated in *both* arms at once, which is
+    the thermal envelope moving under the pair. So the section's headline finding — a direction
+    reversal by workload shape — is withdrawn, since a reversal needs the realistic row resolved in
+    the opposite direction and it is not resolved in any direction. The extreme-traffic row
+    (−22.84%/−25.30%) stands, and the correctness argument that actually decided the ADR was never a
+    measurement. **The withdrawal happens to favour the shipped design and is not banked as such: an
+    unresolved comparison is not a zero.**
+  - **[ADR 0023](docs/decisions/0023-drop-tags-each-stack-slot-with-a-lazily-activated-push-sequence-number.md)
+    withdraws three equalities, not the two the order named.** Each rested on the same shape — an
+    *equality* asserted between two sequential-arm ranges that overlap — so sweeping the class was the
+    predicate the order already implied: finding 1's *"costs the same whether or not a reference is
+    ever pushed"* (+71.9–74.1% against +71.9–75.1%), finding 3's *"indistinguishable from the
+    always-on variants"* (+73.2–73.5% against +71.9–74.1%), and **finding 4 in full**, whose entire
+    content was gated-u8 measuring indistinguishable from gated-u64. **No run was taken; none is
+    claimed.** What survives is stated per finding: a *level* for finding 1, an argument from the code
+    for finding 3 (once activated, gated *is* Seq64 plus one `if tracking` branch), and nothing at all
+    for finding 4 — gated-u8 is now **unmeasured** rather than measured-and-flat. The Decision's
+    *gated over ungated* bullet is untouched, resting on a ~72%-against-~28% *difference*; its *u64
+    over u8* bullet said *"on two grounds now rather than one"* and now **rests on the soundness ground
+    alone**, which was never a measurement.
+  - **`pushNum`'s doc comment cited the withdrawn equality as a measured reason** and now states the
+    level instead (`internal/interp/value.go`). It was the only site in the engine that did, found by
+    sweeping code comments and not only prose — *a withdrawal with no site in the tree is one only the
+    ADR's own readers ever learn about.*
+  - **Two filings this slice owed, both with subjects rather than promises.**
+    [#617](https://github.com/scttfrdmn/burroughs/issues/617) is the gated-u8 narrowing question ADR
+    0023's own Decision promised to file and never did — **an asserted deferral with no subject**, the
+    shape Scott named on the [#613](https://github.com/scttfrdmn/burroughs/pull/613) review: nothing
+    dangles, no link fails, no sweep has the promise in its domain, and the sentence reads as tracked
+    to every reader. It was found only by asking the tracker whether the subject existed.
+    [#618](https://github.com/scttfrdmn/burroughs/issues/618) is the arm `scripts/ab.sh` does not have
+    — it is rev-vs-rev, and ADR 0024's two arms are two benchmark functions inside *one* revision,
+    because they are alternatives being chosen between rather than a before and an after. The run
+    above was hand-driven for that reason, with the hash-distinctness step **replaced rather than
+    dropped**: one binary makes it inapplicable and asserting the hashes *equal* would be true by
+    construction, so every `^Benchmark` line in an arm's log had to name that arm's function exactly,
+    one per round, checked before the labels were unified for `benchstat`. That guard is stronger than
+    `ab.sh`'s own here, which would pass an unanchored filter that also swept in the package's
+    `AllIters` rows.
+  - **[ADR 0002](docs/decisions/0002-interpreter-strategy.md) is re-measured never and closed
+    instead.** Scott's order was that it *"needs nothing beyond recording that it clears on effect
+    size"*; the clearance is 1.5–1.7× against a 4.1–9.1% drift envelope. Recorded because *"whether
+    these are re-measured is Scott's call"* stays true-looking after the call is made, leaving the next
+    reader unable to tell an open question from a decided one.
+
 - **The classification test gains a third inadmissible argument, and the exemptions clause gains a
   scoped order with its two levers** ([the
   clause](docs/laws/product-and-overhead.md#the-phases-product-is-the-work-instruments-are-overhead-on-it)).
@@ -1166,6 +1227,58 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **`citecheck.sh` truncated a quoted-back sentence in the middle of a character, and the invalid
+  UTF-8 killed the `sort` downstream of it** (grave
+  [#620](https://github.com/scttfrdmn/burroughs/issues/620)). Found by this PR's own citation check:
+  `citecheck.sh --pr 619` exited **2** having printed one line, `sort: Illegal byte sequence` — no
+  FAIL, no summary, **a verdict with no located failure** from the checker whose job is pointing at
+  things. The awk this repo runs is byte-oriented, so `substr(s, 1, 177)` kept two bytes of a
+  three-byte em-dash, and BSD `sort` under a `.UTF-8` locale refuses invalid input; under `pipefail`
+  its refusal became the script's verdict. Re-running the identical body under `LC_ALL=C` exited 0
+  over zero findings, which is how the *absence* of any real citation defect was established.
+  - **Two defects, and the second is why this is a grave.** A mangled dash in a message is cosmetic
+    and legible; the path from there to exit 2 pointing at nothing runs through one `sort`, and
+    nothing between them tells a reader which happened. It fires only on bodies long enough and
+    non-ASCII enough to reach byte 178 — *exactly the bodies this repo writes, and never a short
+    fixture.*
+  - **The cut now lands on a space**, which is a character boundary by construction (a space is
+    `0x20`; no byte of a multi-byte sequence is below `0x80`), needing no byte arithmetic — which
+    that awk cannot do. With no space in range the sentence is returned whole: truncation is
+    legibility, and a shorter line is not worth a broken one.
+  - **Population derived, not listed:** every `substr(` in `scripts/` — 22 in `citecheck.sh`, 4 in
+    `closecheck.sh`, 7 in `ratio.sh` — read against *does it cut at a fixed byte offset, and does its
+    output reach a `sort` or a printed message?* All the others cut at a position from a `match()` or
+    `index()` on an **ASCII** pattern, which lands on a boundary by construction. **Population: one.**
+  - **`TestALongMultiByteSentenceIsNotAnInstrumentFailure`** is the control, in the `gh`-shim family
+    `TestPRFetchFailureIsNeverAPass` established. Its fixture **pre-registers its own sharpness** —
+    the rune is asserted to straddle byte 178 and the sentence to exceed `trunc`'s own 180-byte guard,
+    so a fixture reworded into harmlessness fails loudly instead of passing vacuously. Watched die
+    against the unfixed `trunc`: two arms fired, exit 2 and the sentence absent.
+  - **The repair's first draft broke the script outright** — `sh -n` refused it. The awk program is one
+    single-quoted shell word, so a single apostrophe ends it, and every comment already inside that
+    block is written around the constraint (`a wrapped lines own indentation`, not `line's`). The
+    constraint is now stated in the block instead of merely obeyed by it.
+
+- **Four live line citations into `internal/interp/value.go` were off by 39 lines, and only 11 of those
+  were this slice's fault.** The withdrawal note added at `pushNum` moved two subjects — the `fromRef`
+  refusal comment and `compTypeAt`'s call site — that four pointers name from `CHANGELOG.md`,
+  [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-control-is-a-pattern-plus-the-text-it-is-handed)
+  and [ADR 0042](docs/decisions/0042-the-interpreters-second-comparator-is-deleted-rather-than-tuned-and-the-criterion-is-five-rows-in-both-directions.md).
+  All four are re-pointed by the text they quote, never by arithmetic — the **third** such repair for
+  each of the two subjects, with **no two deltas alike**: twelve lines, then eleven, then thirty-nine.
+  - **The other 28 lines came from [#553](https://github.com/scttfrdmn/burroughs/pull/553)**, which
+    added exactly that many to the file and re-pointed nothing, so all four pointers had *already* been
+    broken before this slice touched them. Separating the two halves is the point: a citation broken
+    this hour is this slice's repair, and one broken a release ago is the population's defect.
+  - **Nothing could have caught the 28, and the reason is a shape worth naming.** The control over this
+    channel, `TestPositionalCitationCensusIsPinned`, pins *how many* line-numbered citations exist and
+    cannot ask whether one still resolves — the count is identical either way. `citecheck.sh` scans a
+    diff's *added* lines, and #553 added none of these; the three citing files were never touched. So
+    the defect is invisible to both instruments at once, which is
+    [#497](https://github.com/scttfrdmn/burroughs/issues/497)'s subject. **This is a specimen for it,
+    not a new finding, and converting the pointers to the symbol form ADR 0047 prescribes is #497's
+    work rather than this slice's.**
 
 - **The commit that repaired a closing-keyword adjacency in this file quoted the offending phrase in its
   own message, so the report sat inside the population it reported on** (grave
@@ -2593,7 +2706,7 @@ terms 0004 requires of a version:
   in one session. `TestEveryPayloadSpellingIsReadOrRefusedByName` asked
   `strings.Contains(err.Error(), name)` and for `struct` the substring sat inside the word
   **constructor** in the refusal's own sentence, so the falsification probe that should have failed
-  on six payloads failed on five (`value_test.go:198`, `value.go:745`). Then, reading a CI verdict
+  on six payloads failed on five (`value_test.go:198`, `value.go:784`). Then, reading a CI verdict
   out of a captured `gh run watch`, `grep -E '^JOB'` for the sentinel's `JOB <name> <conclusion>`
   rows matched the watch's own **`JOBS`** section headers, harvesting the progress display as the
   verdict. The remedy is identical and mechanical — **anchor the match or quote the token**,

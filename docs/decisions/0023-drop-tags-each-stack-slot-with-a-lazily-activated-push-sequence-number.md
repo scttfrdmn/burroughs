@@ -63,6 +63,67 @@ carries — the log doesn't avoid needing it, it duplicates it one layer removed
 > ranges from sequential arms, and is not resolvable from what was recorded. Whether it is
 > re-measured is Scott's call and is not decided here.
 
+> **Amendment, 2026-09-03 — three equalities are withdrawn as unsupported, on Scott's order from
+> the [#612](https://github.com/scttfrdmn/burroughs/issues/612) audit. No re-measurement was taken
+> and none is claimed; the figures and sentences below are left as written, each withdrawn one
+> carrying a pointer back here.**
+>
+> The order was *"withdraw both by dated amendment as unsupported … still no run."* It named the
+> two that had been reported to Scott. **Sweeping the class for the same shape — an *equality*
+> asserted between two sequential-arm ranges that overlap — found a third, and it is withdrawn on
+> the same ground.** An amendment that repaired two of three instances of a defect it had a
+> predicate for would be the incomplete-sweep shape it exists to fix; Scott can narrow this back to
+> the two he named.
+>
+> 1. **Finding 1's equality.** *"Seq64 costs the same (~72-75%) whether or not a reference is ever
+>    pushed"* — +71.9–74.1% (mixed) against +71.9–75.1% (zero-reference), two overlapping ranges
+>    from sequential arms. **The level survives, the equality does not:** the zero-reference arm is
+>    +71.9–75.1% against Base, an order of magnitude outside the 4.1–9.1% same-code drift, so *the
+>    ungated cost is paid in full by functions that never push a reference* stands on its own. Only
+>    *"the same as"* goes.
+> 2. **Finding 3's equality — the one the order did not name.** *"the mixed-workload cost stays at
+>    ~73%, statistically indistinguishable from the always-on variants"* — +73.2–73.5% against
+>    +71.9–74.1%, identical shape. **What survives is an argument from the code, not a number:**
+>    once activated, the gated design *is* Seq64's mechanism plus one `if tracking` branch, so its
+>    mixed-workload cost cannot differ from Seq64's by more than that branch. That was never
+>    something a benchmark had to establish, which is why withdrawing the measurement costs the
+>    finding nothing.
+> 3. **Finding 4, in full — the equality is its entire content.** *"gated-u8 landing in the same
+>    noisy `+25–38%` neighbourhood as gated-u64's own re-measurement under identical conditions,
+>    indistinguishable from it at the confidence available"*, asserted twice: once in the
+>    measurement table's caveat above (*"The two candidates are **statistically indistinguishable
+>    from each other**"*) and once in the finding. Its own text already conceded *"a plausible, not
+>    a proven, reading"*; this withdrawal is that concession taken to its conclusion. **Nothing
+>    survives it.** The gated-u8 question is now **unmeasured**, not measured-and-flat — a different
+>    state, and a weaker one for anyone who wanted to cite it either way. It is filed as
+>    [#617](https://github.com/scttfrdmn/burroughs/issues/617), which is the filing this ADR's own
+>    Decision promised and never made.
+>
+> **What the Decision rests on after this.**
+>
+> - ***Gated over ungated* is untouched.** It rests on the ~72%-against-~28% gap for the
+>   zero-reference population — a *difference* an order of magnitude outside the drift envelope, not
+>   an equality. Nothing withdrawn here is load-bearing for it.
+> - ***u64 over u8* rests on the soundness ground alone.** The bullet below says *"on two grounds
+>   now rather than one"*, and the second ground was finding 4. With finding 4 withdrawn, what
+>   remains is the first: **u8's wraparound is unsound as written — it wraps every 256 pushes — and
+>   no correctness patch for it has been designed.** That ground was never a measurement, which is
+>   why the shipped decision does not move. The sentence *"finding 4 means the number that design
+>   work would be fighting over is not even clearly there"* is withdrawn with it: the number is
+>   unknown, not absent.
+>
+> **One in-tree site carried the withdrawn claim and is corrected in the same slice.**
+> `internal/interp/value.go`'s `pushNum` comment cited *"0023's own measured reason: tagging
+> unconditionally costs the same whether or not a reference is ever pushed"* — finding 1's equality,
+> quoted as a measured reason on the interpreter's hot path. It now states the level instead. That
+> is where this withdrawal's grave-style citation lives, and it is why the sweep for citations of a
+> withdrawn figure has to include code comments and not only prose.
+>
+> **Why this is an amendment and not an edit.** An accepted ADR is a tombstone. A withdrawn claim
+> whose text has been rewritten in place leaves the next reader no way to tell a correction from a
+> record that was always right — and the withdrawal is the more interesting half of what happened
+> here.
+
 `internal/interp/dropbench` (n=10, `benchstat`, two independent runs each — see its own package
 doc comment for the full access-pattern rationale) compares:
 
@@ -100,7 +161,9 @@ the gap width alone would otherwise buy — plausible on the mechanism (once gat
 short-lived and small for the dominant no-ref case, so the bytes-per-slot saved by narrowing
 matter less than they do against Seq64/Seq8's always-tracking, always-growing array), but this ADR
 states that as a plausible reading of noisy data, not a measured result at the confidence its
-other rows carry. Four findings, in the order they change the shape of the decision:
+other rows carry. **[The indistinguishability asserted in this paragraph is withdrawn, 2026-09-03
+— see the amendment above; it is the same claim as finding 4's, stated here a second time, and both
+sites go together.]** Four findings, in the order they change the shape of the decision:
 
 1. **The cost is not about references at all.** Seq64 costs the same (~72-75%) whether or not a
    reference is ever pushed in the run. The regression comes from the extra `append`/reslice pair
@@ -108,7 +171,9 @@ other rows carry. Four findings, in the order they change the shape of the decis
    the overwhelming majority of all stack traffic (0 of the numeric core's 13671-vector corpus
    needs a reference at all, exec.go's own header). This rules out "most functions never touch a
    reference, so the average cost is low" as a reason to skip gating: the ungated cost is paid in
-   full by every function, reference or not.
+   full by every function, reference or not. **[The equality — *"costs the same"* — is withdrawn,
+   2026-09-03; see the amendment above. The level, and everything this finding concludes from it,
+   stands.]**
 2. **Width matters, roughly in half — the u8 speculation this ADR's own benchmark comment first
    guessed at was wrong, and the correction is on the record rather than quietly fixed.** Seq8 at
    +38% against Seq64's +72% shows narrowing the tag genuinely buys back real cost, not a
@@ -120,7 +185,9 @@ other rows carry. Four findings, in the order they change the shape of the decis
    reference, tracking activates and never turns back off for the rest of that function's
    execution, so the mixed-workload cost stays at ~73%, statistically indistinguishable from the
    always-on variants. Gating is a genuine improvement bounded exactly by exec.go's own measured
-   population, not a general fix.
+   population, not a general fix. **[*"statistically indistinguishable from the always-on
+   variants"* is withdrawn, 2026-09-03 — see the amendment above. The mechanism argument replaces
+   it: once activated, gated *is* Seq64 plus one branch.]**
 4. **Once gated, width stops being the clear lever it was when always-on.** The always-on
    comparison (finding 2) shows u8 reliably halving u64's cost — tight variance, reproduced twice.
    The *gated* comparison shows gated-u8 landing in the same noisy `+25–38%` neighbourhood as
@@ -129,7 +196,10 @@ other rows carry. Four findings, in the order they change the shape of the decis
    measurement table above) — but it changes what a future u8 proposal has to argue: not "u8 saves
    half of the *original* regression," but "u8 saves some fraction of what gating has *already*
    reduced to ~28%," a much smaller number to be fighting over, on top of a wraparound-soundness
-   design that does not exist yet.
+   design that does not exist yet. **[Withdrawn in full, 2026-09-03 — the indistinguishability is
+   this finding's entire content; see the amendment above. Gated-u8 is **unmeasured**, not
+   measured-and-flat, and the question is filed at
+   [#617](https://github.com/scttfrdmn/burroughs/issues/617).]**
 
 ## Decision
 
@@ -142,7 +212,10 @@ bundling it here.**
   per exec.go's own measured corpus split. The mixed-workload population pays the full ~73% cost
   either way — gating costs nothing extra to add for that population and helps every function
   that doesn't need it.
-- **u64 over u8, for this ADR, on two grounds now rather than one**: u8's wraparound-soundness
+- **u64 over u8, for this ADR, on two grounds now rather than one** **[amended 2026-09-03: the
+  second ground is withdrawn and this rests on the first alone — u8's wraparound is unsound as
+  written and no correctness patch for it was designed, which was never a measurement. See the
+  amendment above.]**: u8's wraparound-soundness
   question (a per-call-frame generation counter, or some other correctness patch) is real design
   work this ADR has not done — and finding 4 means the number that design work would be fighting
   over is not even clearly there: gated-u8 measured statistically indistinguishable from

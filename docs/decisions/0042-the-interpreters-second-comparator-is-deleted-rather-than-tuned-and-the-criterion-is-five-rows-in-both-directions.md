@@ -92,7 +92,7 @@ directly, comparing nothing. That is correct behaviour, not a missing check (the
 nothing there either; the validator owns it), which is precisely why the claim went unchallenged.
 
 `compTypeAt` (`:943`) is **not** in the deletion set — `castop.go:308`, `gcobj.go:382` and
-`value.go:1094` call it, and `internal/validate` has its own copy (`match.go:681`). Two bounds-checked
+`value.go:1133` call it, and `internal/validate` has its own copy (`match.go:681`). Two bounds-checked
 accessors are a duplicated three-line lookup, not a duplicated *judgement*, and collapsing them is not
 what the one-authority law is about.
 
@@ -245,11 +245,16 @@ foreclosing-words shape the v0 ladder's *"gates present and off"* was in, and on
 poor place to repeat, since it exists to score claims that turned out wrong. The one incoming citation,
 in the header above, moved with it.
 
-*(One pointer re-pointed twice on 2026-08-22 by the text it names, never by a delta: `compTypeAt`'s
-caller list read `value.go:1071`, then `:1083`, and reads `value.go:1094` — the line holding
-`ct, ok := compTypeAt(r.Obj.mod, r.Obj.typeIdx)`. #452's twelve-line dating note moved the call and
-grave #491's repair moved it eleven more; both moved the call, neither moved the claim, and the two
-deltas differ, which is why the text and not the arithmetic is what located it.)*
+*(One pointer re-pointed three times by the text it names, never by a delta: `compTypeAt`'s caller
+list read `value.go:1071`, then `:1083`, and reads `value.go:1133` — the line holding
+`ct, ok := compTypeAt(r.Obj.mod, r.Obj.typeIdx)`, today inside `payloadOf`. #452's twelve-line dating
+note moved the call, grave #491's repair moved it eleven more, and on 2026-09-03 a third move of
+thirty-nine lines moved it again — twenty-eight from #553, which moved this call and re-pointed
+nothing, and eleven from ADR 0023's withdrawal note at `pushNum`. Every delta moved the call, none
+moved the claim, and no two are alike, which is why the text and not the arithmetic is what located it
+each time. The twenty-eight had been unrepaired since #553 landed: the census control over this
+channel counts positional citations and cannot ask whether one still resolves, which is
+[#497](https://github.com/scttfrdmn/burroughs/issues/497)'s subject.)*
 
 **The board moved 17 → 7. The forecast was 17 → 12.** Ten rows, not five: `65092 → 65102 pass`,
 `17 → 7 fail`, `0 gated`, and the ten are exactly ten named rows, so the criterion's third line —

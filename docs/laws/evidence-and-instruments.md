@@ -806,10 +806,16 @@ reach is a law out of context.
     for each payload spelling. For `name == "struct"` the substring sat inside the word
     **constructor** in the refusal's own sentence, so a refusal that never named its payload
     satisfied the check anyway (`value_test.go:198`, with the reason written at the refusal it
-    corrupted, `value.go:745` — the comment line ending *"which is the fact `fromRef` used to drop"*,
-    re-pointed **twice** on 2026-08-22 by that text, first after #452's dating note moved it twelve
-    lines and again after grave #491's repair moved it eleven more; the text located it both times and
-    neither delta was reusable). The
+    corrupted, `value.go:784` — the comment line ending *"which is the fact `fromRef` used to drop"*,
+    re-pointed **three times** by that text: twice on 2026-08-22, first after #452's dating note moved
+    it twelve lines and again after grave #491's repair moved it eleven more, then on 2026-09-03 by a
+    further **39** — 28 of them from #553 (ADR 0050's per-thread context, which moved this line and
+    re-pointed nothing) and 11 from ADR 0023's withdrawal note at `pushNum`. Four deltas, four values,
+    none reusable; the text located it every time. **And the 28 sat unrepaired until an unrelated slice
+    moved the same line again**, because the control over this channel
+    (`TestPositionalCitationCensusIsPinned`) pins *how many* positional citations exist and cannot ask
+    whether one still resolves — [#497](https://github.com/scttfrdmn/burroughs/issues/497)'s subject,
+    so this is a specimen of it and not a new finding). The
     falsification probe that should have failed on six payloads
     failed on five, and *the shape of what survives named the bug*.
   - Reading a CI verdict out of a captured `gh run watch`, `grep -E '^JOB'` for the sentinel's
