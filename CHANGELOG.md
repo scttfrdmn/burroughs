@@ -1228,6 +1228,38 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`citecheck.sh` truncated a quoted-back sentence in the middle of a character, and the invalid
+  UTF-8 killed the `sort` downstream of it** (grave
+  [#620](https://github.com/scttfrdmn/burroughs/issues/620)). Found by this PR's own citation check:
+  `citecheck.sh --pr 619` exited **2** having printed one line, `sort: Illegal byte sequence` — no
+  FAIL, no summary, **a verdict with no located failure** from the checker whose job is pointing at
+  things. The awk this repo runs is byte-oriented, so `substr(s, 1, 177)` kept two bytes of a
+  three-byte em-dash, and BSD `sort` under a `.UTF-8` locale refuses invalid input; under `pipefail`
+  its refusal became the script's verdict. Re-running the identical body under `LC_ALL=C` exited 0
+  over zero findings, which is how the *absence* of any real citation defect was established.
+  - **Two defects, and the second is why this is a grave.** A mangled dash in a message is cosmetic
+    and legible; the path from there to exit 2 pointing at nothing runs through one `sort`, and
+    nothing between them tells a reader which happened. It fires only on bodies long enough and
+    non-ASCII enough to reach byte 178 — *exactly the bodies this repo writes, and never a short
+    fixture.*
+  - **The cut now lands on a space**, which is a character boundary by construction (a space is
+    `0x20`; no byte of a multi-byte sequence is below `0x80`), needing no byte arithmetic — which
+    that awk cannot do. With no space in range the sentence is returned whole: truncation is
+    legibility, and a shorter line is not worth a broken one.
+  - **Population derived, not listed:** every `substr(` in `scripts/` — 22 in `citecheck.sh`, 4 in
+    `closecheck.sh`, 7 in `ratio.sh` — read against *does it cut at a fixed byte offset, and does its
+    output reach a `sort` or a printed message?* All the others cut at a position from a `match()` or
+    `index()` on an **ASCII** pattern, which lands on a boundary by construction. **Population: one.**
+  - **`TestALongMultiByteSentenceIsNotAnInstrumentFailure`** is the control, in the `gh`-shim family
+    `TestPRFetchFailureIsNeverAPass` established. Its fixture **pre-registers its own sharpness** —
+    the rune is asserted to straddle byte 178 and the sentence to exceed `trunc`'s own 180-byte guard,
+    so a fixture reworded into harmlessness fails loudly instead of passing vacuously. Watched die
+    against the unfixed `trunc`: two arms fired, exit 2 and the sentence absent.
+  - **The repair's first draft broke the script outright** — `sh -n` refused it. The awk program is one
+    single-quoted shell word, so a single apostrophe ends it, and every comment already inside that
+    block is written around the constraint (`a wrapped lines own indentation`, not `line's`). The
+    constraint is now stated in the block instead of merely obeyed by it.
+
 - **Four live line citations into `internal/interp/value.go` were off by 39 lines, and only 11 of those
   were this slice's fault.** The withdrawal note added at `pushNum` moved two subjects — the `fromRef`
   refusal comment and `compTypeAt`'s call site — that four pointers name from `CHANGELOG.md`,

@@ -1023,7 +1023,27 @@ if [ "$prmode" -eq 1 ] && [ "$dfail" -eq 0 ]; then
 	{ flush() }
 	END { flush() }
 	function flush() { if (buf != "") scan(buf); buf = "" }
-	function trunc(s) { return (length(s) > 180) ? substr(s, 1, 177) "..." : s }
+	# The cut lands on a **space**, never on a byte offset, because awk here is byte-oriented: a
+	# length() of one em-dash is 3, so substr(s, 1, 177) kept two bytes of a three-byte character,
+	# the fragment was not valid UTF-8, and the sort -u this feeds **refused it** — exit non-zero
+	# with one line, "sort: Illegal byte sequence", which under pipefail became the whole verdict of
+	# the script. A cosmetic defect in a quoted-back message, amplified into a verdict with no
+	# located failure (grave #620). A space is 0x20 and no byte of a multi-byte UTF-8 sequence is
+	# below 0x80, so cutting at one is cutting at a character boundary — no byte arithmetic, which
+	# this awk cannot do. With no space in range the sentence is returned whole: truncation is
+	# legibility, and a shorter line is not worth a broken one.
+	#
+	# (No apostrophe anywhere in this block, and that is not a style choice — the awk program is one
+	# single-quoted shell word, so one apostrophe ends it. Every comment above is written around the
+	# same constraint, and the first draft of this one did not notice.)
+	function trunc(s,   t, i) {
+		if (length(s) <= 180) return s
+		t = substr(s, 1, 177)
+		i = length(t)
+		while (i > 0 && substr(t, i, 1) != " ") i--
+		if (i <= 1) return s
+		return substr(t, 1, i - 1) "..."
+	}
 	function scan(p,   plain, sent) {
 		# Emphasis and code markers come out first: they are what stands between a copula-style
 		# local match and its target, which is the spelling that hid two claims from check 6.
