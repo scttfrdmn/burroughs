@@ -1183,7 +1183,7 @@ weakly-ordered platform.
     for a comparison. Two arms go through the new driver above.
   - **The enumeration is the finding, and it was reported before anything was re-run** (Scott's order).
     Domain derived rather than listed — the 8 `internal/interp/*bench` packages, the 16 ADRs carrying
-    `benchstat`/`ns/op`/`geomean`/p-value tokens, the closed #136 measurement issues, and every
+    `benchstat`/`ns/op`/`geomean`/p-value tokens, #136's measurement issues, and every
     `[Unreleased]`-and-earlier entry asserting a delta: **14 landed performance conclusions, 10 clean, 3
     suspect, 1 with no A/B in it to break.** The clean set is every ADR that stated #552's protocol
     (0050, 0052, 0053, 0054, 0057, 0058, 0059, 0061) plus #507/ADR 0048's +42.2% decline **and the
