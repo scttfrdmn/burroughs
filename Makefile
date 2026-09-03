@@ -228,8 +228,26 @@ test:
 test-endtable:
 	$(GO) test -shuffle=on -tags burroughs_endtable ./...
 
+# **The timeout is stated because it was inherited, and the inherited one had 7 seconds of room.**
+# `go test` applies a 10-minute per-package default when none is given, and `internal/spec` under
+# `-race` had grown into it: nine consecutive `main` runs on CI's x86-64 leg ran that one package for
+# 430.9, 550.5, 460.6, 562.3, 566.3, 547.5, 540.3, 593.0 and 580.6 seconds, oldest first — a **1.38x
+# spread whose maximum sits 6.98s under the limit**, and the last seven all above 540. It fired on
+# PR #607's run at 600.050s, where the package was killed mid-test and the arm64 leg of the same
+# commit passed at 564.479s. The arm64 leg is flat over those runs (563.5-566.8s, 0.6% spread), so
+# the variance being measured is one runner's and not the suite's.
+#
+# **An unasserted distance is the vacuum**: a pass at 593/600 and a pass at 431/600 printed the same
+# word, so nothing could report that the room was gone. Naming the number is what makes the next
+# erosion visible — 25m is ~2.5x the largest *completed* observation, and note what that multiplier
+# is not measured against: the killed run's true duration is unknown, so this is headroom over the
+# biggest number the suite has finished in, not over a measured requirement.
+#
+# A failsafe, not a budget, in the sense the `fuzz-smoke` job's own timeout comment means it: loose
+# enough that runner variance cannot reach it, tight enough that a genuine hang is still caught.
+# **Not a conformance bar and not a performance target** — no verdict in this tree reads it.
 race:
-	$(GO) test -race -shuffle=on ./...
+	$(GO) test -race -timeout 25m -shuffle=on ./...
 
 vet:
 	$(GO) vet ./...

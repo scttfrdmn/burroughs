@@ -893,6 +893,21 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The race gate states its timeout instead of inheriting one, because the inherited one had seven
+  seconds of room left.** `go test` applies a 10-minute per-package default when none is given, and
+  `internal/spec` under `-race` had grown into it: nine consecutive `main` runs on CI's x86-64 leg ran
+  that one package for 430.9 to 593.0 seconds — a 1.38× spread whose **maximum sits 6.98s under the
+  limit** — and it fired at 600.050s, killing the package mid-test, while the arm64 leg of the same
+  commit passed at 564.479s and is flat across those runs (563.5–566.8s, 0.6% spread). So the variance
+  is one runner's rather than the suite's, and *an unasserted distance is the vacuum*: a pass at 593/600
+  and a pass at 431/600 print the same word, so nothing could report that the room was gone. `make race`
+  now passes `-timeout 25m`, ~2.5× the largest **completed** observation — stated as headroom over the
+  biggest number the suite has finished in and not over a measured requirement, because the killed run's
+  true duration is unknown. A failsafe and not a budget: no verdict in this tree reads it. CI's `race`
+  step calls `make race` rather than repeating its script, which is
+  [grave #539](https://github.com/scttfrdmn/burroughs/issues/539)'s deletion applied *before* the second
+  copy exists — a flag that must be right in two places is a mirror with room to drift, and the number
+  is testimony, which does not want a copy.
 - **The waiting-on-CI recipe gains the ordering hazard's worse form, the watcher-liveness rule, and the
   `--job` re-run scope** ([the recipe](docs/laws/operations.md#waiting-on-ci)). Three lines, all ordered
   by Scott, all recorded where the procedure they correct already lives rather than in a report that
