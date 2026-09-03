@@ -315,6 +315,22 @@ both directions are real, reproduced, and reported — not reconciled into one n
 | AtomicV128 vs NaiveV128, every-iteration v128 traffic (`benchtime=2000x`, n=10) | **−25.30%** (p=0.000), **−22.84%** (p=0.002) — Atomic faster |
 | AtomicV128 vs NaiveV128, ~1% v128 frequency, realistic (`benchtime=5000x`, n=10) | **+4.68%** (p=0.023), **+5.01%** (p=0.005) — Atomic slower |
 
+> **Protocol note, added by [grave #612](https://github.com/scttfrdmn/burroughs/issues/612). The
+> figures above are left as written; this note is the pointer.** Both rows were measured through
+> `make bench`, which could not express a two-arm A/B — a hardcoded output file, a comparison printed
+> as a suggestion nothing ran, a `benchstat` over one file — so the arms are benchmark rows in one
+> binary, run consecutively rather than interleaved. Grave
+> [#552](https://github.com/scttfrdmn/burroughs/issues/552)'s protocol controls for that and is now
+> executable as `make ab`. **The extreme-traffic row is safe** at −25.30%/−22.84%. **The
+> realistic-frequency row is the one landed figure in this tree sitting inside the drift envelope:**
+> +4.68% and +5.01% against the 4.1–9.1% that #552 measured on unchanged code fifteen minutes apart
+> on this class of machine. Its two agreeing runs do not rescue it — *reproduction under the broken
+> protocol is not reproduction* is #552's own third rider, and two sequential-arm runs share the
+> confound rather than cancelling it. So the *direction reversal by workload shape*, which this
+> section reports as its finding, is the claim that is exposed; the correctness argument in forced
+> question 1 that actually decided the ADR does not rest on it. Whether the row is re-measured is
+> Scott's call and is not decided here.
+
 **Both rows are resolved (p<0.03 in all four runs) and both are honest — the realistic-frequency
 row did *not* resolve at the smaller `benchtime=2000x` first tried (p=0.09–0.35, the environmental
 "stalls and sprints" noise this project's own fuzz-smoke lesson already characterized for this

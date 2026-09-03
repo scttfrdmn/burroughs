@@ -117,6 +117,19 @@ any timing is quoted.
 | In-place + side table | ~21.9 µs | ~21.9 µs | 0 B/op |
 | Closure compilation | ~21.5 µs | — | **72 B/op, 2 allocs** |
 
+> **Protocol note, added by [grave #612](https://github.com/scttfrdmn/burroughs/issues/612). The
+> figures above are left as written; this note is the pointer.** They are median-of-6 with no
+> `benchstat` and no p-value, and the four variants are four benchmark rows in one binary — which
+> `-count` runs consecutively rather than interleaved, so run order is a confounder perfectly
+> correlated with the variant (`-shuffle=on` permutes the blocks once and does not fix it; measured).
+> The protocol that controls for this is grave
+> [#552](https://github.com/scttfrdmn/burroughs/issues/552)'s, now executable as `make ab`. **The
+> findings below survive on effect size:** 1.5–1.7× is two orders of magnitude above the 4.1–9.1%
+> same-code drift #552 measured on this hardware, and finding 2's ~21.9-vs-~17.3 µs is a 27% gap,
+> also outside that envelope. Whether these are re-measured is Scott's call and is not decided here.
+> Separately, this ADR's *derived* claim that branch resolution becomes free was independently
+> falsified at +11.82% by #509 under a clean protocol.
+
 Three findings, two of them against expectation:
 
 1. **Rewrite is ~1.5–1.7× faster than in-place** and, unlike in-place, is

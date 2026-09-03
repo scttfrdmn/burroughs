@@ -205,7 +205,9 @@ prose can still name a law that does not exist.
   presence is machine state, not repo state), and `make` sees what CI cannot (`make strict` printed a
   red run's testimony where its `-e`-shelled twin printed nothing, and the `deadcode` gate could not
   host its own repair at all, grave #544) — so *which half is worse* is asked, not assumed.
-  `make fuzz`, `make bench`, `make vuln`, `make cite`, `make close` for the rest. Tools are
+  `make fuzz`, `make bench`, `make ab`, `make vuln`, `make cite`, `make close` for the rest —
+  **`bench` is one arm and `ab` is the comparison**, and the split is the repair for a target that
+  demanded a p-value and ran the one `benchstat` invocation that cannot print one (grave #612). Tools are
   pinned in `tools/go.mod` via `tool` directives, never in CI YAML
   ([0005](docs/decisions/0005-tooling-gates.md)), and the engine's own `go.mod` stays
   dependency-free. Suppression is **noticed-and-named or not at all**; **benchstat or it didn't

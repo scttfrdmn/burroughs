@@ -21,6 +21,42 @@ weakly-ordered platform.
 
 ### Added
 
+- **`make ab` and `scripts/ab.sh` — the A/B protocol every measurement in this tree re-derived by hand
+  now has a carrier** ([grave #612](https://github.com/scttfrdmn/burroughs/issues/612), [the
+  law](docs/laws/evidence-and-instruments.md#a-protocol-carried-only-by-prose-is-re-derived-per-use-and-the-re-derivation-is-where-a-step-gets-dropped)).
+  Grave #552's four steps, executed rather than recalled: arms compiled to binaries up front, hashes
+  checked distinct, one `-count=1` round per arm per round with the slots rotated, and `benchstat` over
+  one named file per arm so every row carries a p-value. `--null` adds a third arm built independently
+  from base's source, `--graft` puts head's copy of the benchmark on every arm for the usual case where
+  the benchmark was written alongside the change it measures, and `--out` keeps the logs.
+  - **Mechanism finding, measured: `go test` cannot interleave, so the rounds must be driven from
+    outside the process.** A two-benchmark package that appends its own name to a log on every
+    invocation runs `Aaa Aaa Aaa Aaa Bbb Bbb Bbb Bbb` at `-count=4`, and `-shuffle=on` gives `Bbb×4
+    Aaa×4`: `-count=N` runs each benchmark N times consecutively and `-shuffle` permutes the *blocks*
+    once. Two benchmark rows in one binary are exactly as sequential as two binaries, which is #552's
+    confound with no flag available against it.
+  - **`-trimpath` on every arm's build is load-bearing, and the check was worthless without it.** The
+    first draft built each arm in its own worktree and compared sha256s exactly as the protocol's prose
+    says. Two builds of the *same commit* in two worktrees hashed `9fd9c27…` and `152ae44…`, because a
+    binary embeds its own build directory in its debug info — so the distinct-arms check would have
+    passed on a pair that is identical in every way it was measuring. Byte-identical once `-trimpath`
+    was added. Every hand-run passed the check honestly because a human builds both arms in one tree,
+    where the premise holds silently; mechanising it moved the arms apart and turned the premise into a
+    step.
+  - **The null arm asserts equality and had to be made falsifiable to do so.** Copying base's binary
+    makes *"the null is byte-identical to base"* true by construction, so the null arm is built
+    independently from base's rev and the equal-hash assertion is a real check — one whose failure is a
+    finding about the toolchain, since a non-reproducible build means a base-vs-head hash difference can
+    no longer separate a code difference from a build difference. `--null` refuses an uncommitted base
+    rather than falling back to the copy.
+  - The driver also refuses a `...` package pattern (`go test -c` compiles one package, and the `bench`
+    target's own default *is* such a pattern), stops on a failed round rather than treating it as a slow
+    one, asserts each arm produced at least one `Benchmark` line per round so an over-narrow `--bench`
+    cannot leave benchstat comparing empty against empty, and prints a note below 6 rounds because that
+    is benchstat's confidence-interval floor. Its worktrees live outside the repo tree and are pruned on
+    exit — the first version of that trap accumulated its paths inside a command substitution, so
+    cleanup ran over an empty list and left three `prunable` registrations behind.
+
 - **The §§2–5 litmus battery has its first landed case, and its two agents are two instances sharing one
   imported memory** ([#10](https://github.com/scttfrdmn/burroughs/issues/10), [ADR
   0062](docs/decisions/0062-the-litmus-batterys-two-agents-are-two-instances-sharing-an-imported-memory-because-a-shared-memory-spans-instances-and-spawn-does-not-gate-that.md)).
@@ -1130,6 +1166,65 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **The commit that repaired a closing-keyword adjacency in this file quoted the offending phrase in its
+  own message, so the report sat inside the population it reported on** (grave
+  [#614](https://github.com/scttfrdmn/burroughs/issues/614)). `closecheck.sh` scans commit messages, CI's
+  `citations` job went red, and issue #136's state was the thing at stake — grave
+  [#314](https://github.com/scttfrdmn/burroughs/issues/314)'s subject exactly. **Third occurrence, and
+  the corpus was already complete**: `operations.md` carries the shape, two prior specimens, and the
+  remedy as an imperative — re-run the scan after writing the commit that describes a scan failure.
+  Nothing was missing; it was not read.
+  - **The recurrence mechanism is that the remedy is a sequencing step with no instrument.** The
+    commit-message arm lives in `make close`, which is not a `make check` step, and its population grows
+    with every commit — so the green taken before the repair commit was a green about a different
+    population, and it was carried into the report unre-taken. Whether that arm belongs in the gate is
+    filed at [#615](https://github.com/scttfrdmn/burroughs/issues/615) and is not obviously a yes.
+  - **The report also named the target while quoting a different arm's figure.** `make close`'s default
+    arm is the commit-message half; the re-taken figure came from the `--pr` body arm. `operations.md`'s
+    own table says those are two populations, so the target's name attributed the body arm's verdict to
+    an arm that was red at that moment.
+
+- **`make bench` could not express a two-arm A/B and implied it could, so the target demanding a p-value
+  ran the one `benchstat` invocation that cannot print one** (grave
+  [#612](https://github.com/scttfrdmn/burroughs/issues/612)). Three lines, under the target's own comment
+  reading *"n=10 and a p-value, or no claim"*: `Makefile:385` wrote a hardcoded `new.txt`, so a caller
+  running arm A then arm B through the target ended with one file rather than two; `Makefile:387`
+  printed the old-vs-new comparison as a *suggestion* nothing ran, for an `old.txt` no rule in the tree
+  produces; `Makefile:388` ran `benchstat` over that single file, which yields per-row summaries with no
+  comparison and no p-value. The overwrite is what produced byte-identical arm logs from differing binaries on janus.
+  Scott's finding, from the keel side.
+  - **The single-arm path is repaired rather than removed**, because one arm is a legitimate thing to
+    run — it just cannot be a claim. The log is named after the rev it measured
+    (`bench-<describe>[-dirty].txt`) instead of after a fixed word, an existing log is never overwritten,
+    and the closing text states that what follows is a summary with no p-value in it and names `make ab`
+    for a comparison. Two arms go through the new driver above.
+  - **The enumeration is the finding, and it was reported before anything was re-run** (Scott's order).
+    Domain derived rather than listed — the 8 `internal/interp/*bench` packages, the 16 ADRs carrying
+    `benchstat`/`ns/op`/`geomean`/p-value tokens, #136's measurement issues, and every
+    `[Unreleased]`-and-earlier entry asserting a delta: **14 landed performance conclusions, 10 clean, 3
+    suspect, 1 with no A/B in it to break.** The clean set is every ADR that stated #552's protocol
+    (0050, 0052, 0053, 0054, 0057, 0058, 0059, 0061) plus #507/ADR 0048's +42.2% decline **and the
+    `gate:endtable` decline** — the last of which was the likeliest to be suspect on date alone, three
+    days *before* #552 existed, and clears because #502's own confound finding had already forced
+    interleaving, an A/A floor under unconditional veto, and source hashing. Date is not the
+    discriminator; the stated protocol is.
+  - **The three suspect conclusions, and how far each is exposed.** ADR 0002's interpreter-strategy
+    comparison — the `-count=6` median table in its *What was measured* section — is median-of-6 with
+    no `benchstat` and no p-value over four arms in one binary,
+    and survives on effect size: 1.5–1.7× is two orders of magnitude above the 4.1–9.1% same-code drift
+    #552 measured. ADR 0023 says in its own text that it was *"decided the way 0002 itself was decided —
+    `make bench` numbers as the ADR's evidence"*; +27.5% to +75.1% carries the decision, while the one
+    fine distinction inside it — *"the zero-reference case costs the same as the mixed case"* — rests on
+    +71.9–74.1% against +71.9–75.1%, two overlapping ranges from sequential arms, and is not resolvable
+    from what was recorded. ADR 0024's extreme-traffic row (−25.30%/−22.84%) is safe; its
+    realistic-frequency reversal at **+4.68% (p=0.023) and +5.01% (p=0.005)** is the one landed figure
+    sitting *inside* the drift envelope, and its two agreeing runs do not help — *reproduction under the
+    broken protocol is not reproduction* is #552's own third rider. Whether and in what order these get
+    re-measured is Scott's call, flagged rather than taken.
+  - Not applicable: #506's ~197 B per function is an allocation size from a single arm, as are #502/#503's
+    census figures. A hardcoded output name cannot make a one-arm absolute wrong.
+  - The tracked zero-byte `0` in the repo root is deleted in the same slice, as overhead (Scott's order).
 
 - **A futex test spelled its own no-answer `FAIL`, so a 0.74%-per-attempt race reddened main with a
   claim about the engine that was false** (grave
