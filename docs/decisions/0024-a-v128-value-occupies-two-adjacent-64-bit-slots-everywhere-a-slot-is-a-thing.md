@@ -331,6 +331,81 @@ both directions are real, reproduced, and reported — not reconciled into one n
 > question 1 that actually decided the ADR does not rest on it. Whether the row is re-measured is
 > Scott's call and is not decided here.
 
+> **Amendment, 2026-09-03 — the realistic-frequency row was re-measured on Scott's order from the
+> [#612](https://github.com/scttfrdmn/burroughs/issues/612) audit, and it does not reproduce as a
+> resolved result. The row's claim is withdrawn; the figures above are left as written.**
+>
+> **The run.** One `vecbench` test binary built up front with `-trimpath` at `f62f4f2` (sha256
+> `1a069990…`, re-checked unchanged after the last round), ten rounds, one `-test.count=1`
+> invocation per arm per round at `-test.benchtime=5000x`, slots rotated so each arm held each
+> position five times, `benchstat` over one file per arm. Apple M4 Pro, darwin/arm64, `-12`.
+>
+> ```
+>             │    naive     │             atomic             │
+>             │    sec/op    │    sec/op     vs base          │
+> V128Push-12   2.228m ± 14%   2.358m ± 16%  ~ (p=0.529 n=10)
+> ```
+>
+> **`scripts/ab.sh` could not drive it, and the substitution it needed is filed at
+> [#618](https://github.com/scttfrdmn/burroughs/issues/618).** `ab.sh` is rev-vs-rev; these two arms
+> are two benchmark functions inside one revision, because they are alternatives being chosen
+> between rather than a before and an after. Three protocol steps carried over unchanged; two could
+> not. The arms share one binary, so the hash-distinctness check is inapplicable — and asserting the
+> hashes *equal* would be true by construction, which is the `--null` flag's own documented trap.
+> What that check guards against is measuring one arm twice, so it was **replaced rather than
+> dropped**: every `^Benchmark` line in an arm's log must name that arm's function exactly, one per
+> round, verified before the row labels were unified for `benchstat` (`10/10 lines, all naming
+> BenchmarkNaiveV128`, and likewise for `BenchmarkAtomicV128`). That guard is stronger than
+> `ab.sh`'s own here, which accepts any `^Benchmark` lines at or above the round count and would
+> have passed an unanchored filter that also swept in this package's `AllIters` rows.
+>
+> **What is falsified is the resolution, not the effect, and that distinction is the confound's own
+> signature.** The point estimate agrees in sign and roughly in size with what was published: +5.8%
+> on the medians, and +1.7% as the mean of the ten within-round paired differences, 7 of 10 positive
+> — a hand-computed diagnostic, not a verdict. `benchstat`'s `~` is the verdict, matched against the
+> original's own `benchstat` comparison. So this re-measurement does **not** say Atomic is as fast as
+> Naive at realistic frequency. It says **this hardware cannot tell**, where the sequential-arm runs
+> said it could at p=0.023 and p=0.005. Sequential arms inflate *confidence* rather than the effect:
+> each arm's samples come from one time window, so they agree with each other, and the
+> between-window drift is attributed to the arm instead. Interleaving moves that drift inside each
+> arm's own spread, which is why the spread went from resolvable to ±14–16%.
+>
+> **The witness is in the rounds.** Rounds 6 and 7 are elevated in *both* arms — naive 2.73m and
+> 2.53m, atomic 2.44m and 2.55m, against ~2.0–2.4m elsewhere. A shared excursion of that size in
+> adjacent rounds is the thermal envelope moving under both arms at once. Under sequential arms it
+> lands wholly inside whichever arm happened to be running, and is read as that arm's cost.
+>
+> **Three consequences, and one of them is about how this reads.**
+>
+> 1. **"Both rows are resolved (p<0.03 in all four runs)" below is false for the realistic row as of
+>    this note.** The extreme-traffic row is untouched and still stands on effect size.
+> 2. **The section's headline finding — the *direction reversal by workload shape* — is withdrawn.**
+>    A reversal needs the realistic row resolved in the *opposite* direction from the extreme row,
+>    and it is not resolved in any direction. What survives is one measured claim: at
+>    every-iteration v128 traffic, Atomic is 22.8–25.3% faster.
+> 3. **The withdrawal happens to favour the shipped design, which is stated rather than banked.**
+>    Atomic is the faster arm at extreme traffic and indistinguishable from Naive at realistic
+>    frequency, so a published cost has become an unmeasured one. **An unresolved comparison is not
+>    a zero.** This ADR does not get to read its own withdrawal as *atomicity is free*; it gets to
+>    say the price is unknown at this frequency, and was never what decided the design.
+>
+> **The decision does not move**, for the reason the protocol note above already gave: forced
+> question 1's correctness argument decided it — two independent `pushNum` calls give one logical
+> v128 two sequence numbers, grave #206's shape one layer up — and that argument is not a
+> measurement.
+>
+> **The criterion was not this note's to choose.** The subject is whether an already-published
+> figure reproduces, so the bar is the published figure's own: same direction, `p<0.05`, at the same
+> `benchtime` and `n`. Said out loud because a criterion chosen *after* a re-measurement is
+> indistinguishable from choosing the answer, and a re-measurement is where that substitution is
+> easiest to make.
+>
+> **Resolving the row was not attempted and is not free.** Against a ±14–16% spread an effect near
+> 5% needs order-100 rounds per arm rather than ten — roughly 45 minutes of machine time at 12s per
+> invocation. That figure treats the reported spread as a coefficient of variation, which it is not
+> exactly, so it is an order of magnitude and not a budget. Whoever wants the row resolved pays it;
+> nothing in the engine is waiting on it.
+
 **Both rows are resolved (p<0.03 in all four runs) and both are honest — the realistic-frequency
 row did *not* resolve at the smaller `benchtime=2000x` first tried (p=0.09–0.35, the environmental
 "stalls and sprints" noise this project's own fuzz-smoke lesson already characterized for this

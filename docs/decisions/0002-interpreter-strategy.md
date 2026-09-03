@@ -129,6 +129,14 @@ any timing is quoted.
 > also outside that envelope. Whether these are re-measured is Scott's call and is not decided here.
 > Separately, this ADR's *derived* claim that branch resolution becomes free was independently
 > falsified at +11.82% by #509 under a clean protocol.
+>
+> **Ruled 2026-09-03, closing that last sentence: no re-measurement.** The [#612](https://github.com/scttfrdmn/burroughs/issues/612)
+> audit put this ADR in front of Scott with the other two suspect records, and his order was that
+> this one *"needs nothing beyond recording that it clears on effect size."* This is that recording,
+> and the clearance is the note's own: 1.5–1.7× against a 4.1–9.1% drift envelope. Written down
+> because *"whether these are re-measured is Scott's call"* is a sentence that stays true-looking
+> after the call has been made, and a reader who finds it then has no way to tell an open question
+> from a decided one.
 
 Three findings, two of them against expectation:
 
