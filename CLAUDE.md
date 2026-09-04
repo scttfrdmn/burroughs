@@ -237,6 +237,33 @@ prose can still name a law that does not exist.
   named on the page is a gap a reader can price, and because the alternative was an open issue no
   work in this tree could ever discharge (#319, retired for exactly that reason).
 
+## The lab-hardware section is a verbatim copy, and the no-figures rider does not reach it
+
+What follows is copied byte-for-byte from the fleet's own page, and is **replaced wholesale
+rather than merged** when that page moves ahead of this one. Kept above the heading so a
+re-copy of the section does not delete it. What a reader arriving at the core counts, memory
+sizes and driver versions below has grounds to ask about:
+
+- **The no-measured-figure rider at the top of this file does not govern that block.** Its
+  subject is *this project's* measured quantities — board counts, suite tallies, benchmark
+  deltas — which rot silently because the tree they describe keeps moving, so they are
+  generated or deleted rather than written down. The hardware inventory below is an external
+  fact with an external owner. It goes stale when the *fleet* changes, and the repair is
+  re-copying the block, not asking an instrument here for a figure it cannot take.
+- **Nothing in `internal/testenv` can assert anything about it**, for `MEMORY.md`'s reason one
+  level out: the authority is a file outside this repository, so no control here has it in its
+  domain. Drift between this copy and the fleet's page is invisible from inside the tree, and
+  that is the standing price of holding a copy at all rather than a defect to file.
+- **The fleet table is an inventory, not this project's runners.** A host appears in it because
+  it has a daemon, which is a fact about the host and not an instruction here. **This repo uses
+  `janus.local`** — `XCHECK_HOST` / `LABHOST`'s default, and the machine every landed x86-64
+  figure in `docs/decisions/` was taken on. *The queues are per host precisely so that a project
+  uses the boxes it uses*, so the rest of the table is capacity this project has no standing
+  claim on, and reaching for a second lab host is a decision doc's business rather than a
+  convenience: it changes which hardware a figure was taken on. (Scott's order, 2026-09-03,
+  recorded by the actor it was given to — so no independent provenance, and any commit resting
+  on it stays `Ratio-Class: carried`.)
+
 ## Running tests and benchmarks on lab hardware
 
 Lab machines are shared by several projects at once. Historically nothing
