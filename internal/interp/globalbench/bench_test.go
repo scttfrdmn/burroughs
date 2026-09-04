@@ -50,9 +50,12 @@
 // pre-registration: which mechanism the wide cases get is still `decision-needed:scott`, so there is no
 // mechanism there to price. It also does not compare a mutex against a seqlock — that would need two
 // mechanisms in one revision, which is exactly the comparison
-// [#618](https://github.com/scttfrdmn/burroughs/issues/618) records `ab.sh` cannot make. The seqlock is
-// the mutex's *named successor* if F3/F4 come back dominated by the acquire, filed rather than swapped
-// in-slice.
+// [#618](https://github.com/scttfrdmn/burroughs/issues/618) records `ab.sh` cannot make. F3 *did* come
+// back dominated by the acquire — `GetV128` +41.73% on native x86-64, all of it the `Lock`/`Unlock` pair
+// — so the seqlock is filed as the named successor
+// ([#625](https://github.com/scttfrdmn/burroughs/issues/625)) and the mutex stays. Recorded here in the
+// past tense because the sentence this replaced was a conditional the board had already settled, and a
+// conditional left standing after its condition is decided tells the next reader the question is open.
 //
 // [ADR 0063]: ../../../docs/decisions/0063-a-numeric-globals-single-word-goes-atomic-and-a-v128s-pair-goes-under-the-globals-own-mutex.md
 package globalbench

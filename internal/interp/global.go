@@ -89,9 +89,16 @@ type global struct {
 	// ruling on #573 said *"a lock or seqlock, implementer's choice, measured in the slice"*: the cost of
 	// the mechanism is what the slice owes, not a bake-off, and a bake-off would need two mechanisms in
 	// one revision — which is exactly the comparison #618 records `ab.sh` cannot make. Decision 0061
-	// already reaches for `sync.Mutex` for a two-places-one-fact problem of the same shape. If the
-	// measurement had shown a v128 `global.get` dominated by the acquire, the seqlock is its named
-	// successor, because a seqlock's readers do not write and so do not serialise against each other.
+	// already reaches for `sync.Mutex` for a two-places-one-fact problem of the same shape.
+	//
+	// **The measurement did show a v128 `global.get` dominated by the acquire, so the seqlock is filed
+	// (#625) and this mutex stays.** On native x86-64 the read path costs +41.73% (p=0.000) against a
+	// null arm excursion of 0.16%, and the whole of it is the `Lock`/`Unlock` pair: an atomic *load* is
+	// a plain `MOVQ` there, so it adds nothing, and the pair prices out at 10.04 ns per access. That is
+	// the pre-registered rollback condition, and the rollback was *file the successor*, not swap it —
+	// two mechanisms in one revision is the comparison #618 records `ab.sh` cannot make. A seqlock's
+	// readers do not write and so do not serialise against each other, but the win is TSO-side: arm64
+	// shows no such cost, and a seqlock reader there needs fencing this mutex provides for free.
 	//
 	// Unconditional rather than allocated for v128 globals only: a `*sync.Mutex` is the same eight bytes
 	// plus an allocation and a nil check, so the pointer buys nothing. Taken on the v128 arm alone, and

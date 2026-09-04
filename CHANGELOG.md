@@ -145,6 +145,41 @@ weakly-ordered platform.
     *a measured floor is only informative where it is narrower than the bar it is read against*
     (`docs/laws/controls.md`) — and the pre-registered **absolute** figure of 15–40 ns is left standing
     and falsified, because it was a remembered number where the bar beside it was a measured one.
+- **A global's value survives being read while it is written: the numeric word goes atomic and the v128
+  pair goes under the global's own mutex** ([#573](https://github.com/scttfrdmn/burroughs/issues/573),
+  [ADR 0063](docs/decisions/0063-a-numeric-globals-single-word-goes-atomic-and-a-v128s-pair-goes-under-the-globals-own-mutex.md)).
+  `Invoke` is exported on `*Instance`, so two goroutines reach one `*global` with no gate, no `shared`
+  flag and no `Spawn`. **Two defects needing two oracles, which is why the decision splits rather than
+  locking the struct.** A numeric global is one `uint64`, indivisible on both targets, so no value
+  distinguishes plain from atomic — what is wrong is an unsynchronised pair in the Go memory model, where
+  the result is *undefined* rather than stale, and the instrument for that is `-race`. A v128 global is
+  two `uint64` fields (decision 0024, grave #239's storage half) written as two assignments, so an
+  interleaved `global.get` returned a vector built from the low half of one write and the high half of
+  another — a value no `global.set` ever wrote, and **452 of 200 000 reads witnessed it**.
+  `TestAV128GlobalIsNeverAssembledFromTwoWrites` is the value-level oracle (the writer stores only
+  lane-equal vectors, so unequal lanes *are* a tear) and needs no detector;
+  `TestANumericGlobalIsNotWrittenAndReadWithoutSynchronisation` is the detector's, and its documented
+  weakness was **measured rather than trusted** — on the defect it passes without `-race` across three
+  runs and fails under it, and the failing arm was the detector while its weak value arm never fired.
+  Both carry a vacuity arm requiring the reader to have seen *both* written values. The fields are
+  `atomic.Uint64` rather than plain words behind `atomic.LoadUint64` because then a plain read does not
+  compile, which is decision 0058's argument one struct over. `internal/interp/globalbench` is the arm
+  the pre-registration needed, at an asserted 43% density.
+  - **What it cost, and the row that named a successor.** On native x86-64, queued: `SetI64` +15.57%,
+    `GetV128` +41.73%, `SetV128` +66.79%, all p=0.000 against a **null arm whose largest excursion is
+    +0.16%** — a floor two orders of magnitude below the smallest effect, so every row adjudicates. The
+    rows **decompose**, which is what identifies the carrier instead of inferring it: one atomic store
+    is 2.97 ns, the `Lock`/`Unlock` pair is 10.04 ns measured on the *read* row where atomic loads are
+    free `MOVQ`, and those two predict `SetV128` at 25.56 ms against 24.82 ms observed — a 2.9%
+    residual. ADR 0061 measured the same pair at 11.32 ns in a different package on the same host,
+    agreeing within 11%. Of five pre-registered forecasts, **two are confirmed, two falsified and one
+    confirmed on a reading the board supplied**; the falsifications stand as written, including a
+    *favourable* one (`GetI64` came out 0.63% faster where a null was forecast). The arm64 boards do not
+    resolve anything below ~5% and are reported as bounds, not confirmations — but they do exclude the
+    amd64 effect, so it is genuinely architecture-specific rather than a resolution artifact.
+    `GetV128`'s penalty is **entirely** the acquire on a path that never writes, which is the
+    pre-registered rollback condition, so the seqlock is filed as the named successor
+    ([#625](https://github.com/scttfrdmn/burroughs/issues/625)) and the mutex stays.
 - **`memory.atomic.wait32/64` suspend, so the wake result exists and `memory.atomic.notify`'s count is
   real** ([#543](https://github.com/scttfrdmn/burroughs/issues/543), [ADR
   0060](docs/decisions/0060-the-futex-queue-hangs-off-memory-keyed-by-effective-address-because-a-pointer-key-would-borrow-its-soundness-from-another-package.md),
