@@ -58,6 +58,29 @@ const litmusWaiterSrc = `(module
   (func (export "wait") (param $addr i32) (param $timeout i64) (result i32)
     (memory.atomic.wait32 (local.get $addr) (i32.const 0) (local.get $timeout))))`
 
+// litmusSiblingWakerSrc and litmusSiblingWaiterSrc are `b-mm-2-sibling-field-after-wake`'s agents, and
+// the shape of the waker is the case's whole argument — see
+// TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify for why the sibling write is a
+// `memory.fill` and why nothing here stores to the futex word.
+const litmusSiblingWakerSrc = `(module
+  (memory (export "mem") 1 1 shared)
+  (func (export "publish") (param $sib i32) (param $futex i32) (result i32)
+    (memory.fill (local.get $sib) (i32.const 1) (i32.const 4))
+    (memory.atomic.notify (local.get $futex) (i32.const 1))))`
+
+// The waiter packs two observations into one i32 because `callOffGoroutine` carries exactly one — it
+// errors on any other arity (`futex_test.go:callOffGoroutine`). The wait's result goes in bits 4 and
+// up, and bit 0 is whether the sibling read non-zero. Not the sibling's *value*: a 4-byte extent
+// filled with byte `1` loads as `0x01010101`, which overflowed the first draft's one-byte field and
+// is the reason the low bit is a predicate rather than a payload.
+const litmusSiblingWaiterSrc = `(module
+  (import "m" "mem" (memory 1 1 shared))
+  (func (export "await") (param $sib i32) (param $futex i32) (param $timeout i64) (result i32)
+    (i32.or
+      (i32.shl (memory.atomic.wait32 (local.get $futex) (i32.const 0) (local.get $timeout))
+               (i32.const 4))
+      (i32.ne (i32.load (local.get $sib)) (i32.const 0)))))`
+
 // litmusAgents builds the battery's two agents and hands back the memory they share.
 //
 // Through the text front end and the decoder for `futexModule`'s reason (grave #579): a hand-built
@@ -69,6 +92,14 @@ const litmusWaiterSrc = `(module
 // identity is the whole vehicle: if the linker ever copied a memory on import, every case in this
 // battery would run two agents over two address spaces and pass by never racing.
 func litmusAgents(t *testing.T) (waker, waiter *Instance, mem *memory) {
+	t.Helper()
+	return litmusAgentsFrom(t, litmusWakerSrc, litmusWaiterSrc)
+}
+
+// litmusAgentsFrom is litmusAgents over a named pair of module sources, which is what a second case
+// with a second witness needs. The identity assertion below is the vehicle and belongs to every case
+// on it, so it lives here rather than being restated per case.
+func litmusAgentsFrom(t *testing.T, wakerSrc, waiterSrc string) (waker, waiter *Instance, mem *memory) {
 	t.Helper()
 
 	build := func(src string, imp Imports) *Instance {
@@ -94,8 +125,8 @@ func litmusAgents(t *testing.T) (waker, waiter *Instance, mem *memory) {
 		return in
 	}
 
-	waker = build(litmusWakerSrc, nil)
-	waiter = build(litmusWaiterSrc, exportsOf(waker))
+	waker = build(wakerSrc, nil)
+	waiter = build(waiterSrc, exportsOf(waker))
 	if waker.mems[0] != waiter.mems[0] {
 		t.Fatalf("the two agents hold different memories (%p, %p) — the import copied rather than "+
 			"shared, so nothing below would be a race at all",
@@ -259,4 +290,152 @@ func TestAWakeArrivesAtFutexLatencyAndNotEventLoopLatency(t *testing.T) {
 			"the reading is that the wake is no longer futex-backed — not that this machine is slow",
 			median, ceiling)
 	}
+}
+
+// TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify is the battery's case
+// `b-mm-2-sibling-field-after-wake`, discharging contract §4 B-MM-2:
+//
+//	A wake MUST synchronize all writes the notifying agent made before the notify, not only the
+//	write to the futex word.
+//
+// This is the case §4 names by hand — B-MM-5 requires the conformance suite to contain it — and D20
+// is its provenance: on the browser host `Atomics.notify` establishes happens-before for the notified
+// word only, so a sibling field's store can lag the woken agent's resume even when the read happens
+// under a freshly acquired lock.
+//
+// The pre-registered set, quoted so the reading can be checked rather than trusted: **allowed** is *no
+// race report naming the sibling extent*; **forbidden** is *a report whose two halves are A's sibling
+// write and B's post-wake sibling read, at an address inside the sibling extent*; the **witness** is A
+// filling a naturally-aligned 4-byte sibling extent and then notifying, with a fresh 16-byte-aligned
+// pair per round and `R = 1000`; the **floor** is *every round reports `r == 0`, and every round reads
+// the published sibling value*; the **arbiter** is *both architectures, and the arbiter is Go's memory
+// model via `-race`*.
+//
+// # The oracle is the race detector, and that is an amendment
+//
+// The registered witness used to have B compare the sibling's *value* and forbid the stale one. That
+// case was stillborn (#603): after [ADR 0054] a guest has no plain aligned typed store, so A's release
+// is sequentially consistent, and the interleaving where B's read lands between the notify and the
+// write measured 6 × 10⁻⁷ per round at *zero* distance — against microseconds of interpreter dispatch
+// per round, which no `R` closes. The detector's happens-before check answers **per round and
+// deterministically**, so `R` fell from 100 000 to 1000 and is now about schedule diversity rather than
+// about hitting a window.
+//
+// **A detector needs one non-atomic side to have anything to say**, which is why the sibling write is a
+// `memory.fill`: after 0054 the bulk family is the only guest-reachable plain write left (#627). A race
+// between a plain write and a sequentially consistent atomic read is still a race, so B's `i32.load` —
+// atomic since 0054 — does not remove it.
+//
+// This mechanism was already one clause up in the pre-registration:
+// `TestAResumedGuestSeesAHostWriteFromTheStop` writes plainly on purpose, for the same stated reason,
+// and reads its verdict from `-race`. Recorded because re-deriving it rather than reading the
+// neighbouring clause cost a two-million-round run.
+//
+// # The verdict lives in CI's `race` step, not in `make check`
+//
+// `make check` does not pass `-race`, so **a green from it says nothing about this case's subject** —
+// what it exercises then is the floor alone. `make race` passes it, and CI reaches it from a step named
+// `race` inside the `build` job (`.github/workflows/ci.yml`), which is a two-architecture matrix, so
+// the verdict is two readings. It is a *step* and not a job: a reader looking for `race` in a run's job
+// list finds fuzz-smoke, lint, conformance, citations, build twice and vuln, and cannot tell a skipped
+// verdict from a misnamed one. Stated for `TestANumericGlobalIsNotWrittenAndReadWithoutSynchronisation`'s
+// reason — **a verdict channel named wrongly is worse than one left unnamed**, because the wrong name
+// reads as though somebody had checked it.
+//
+// The detector's report *is* the failure here: `go test -race` fails a test during which a race is
+// reported, so there is no verdict for this function to compute. What it can do — and does — is refuse
+// to be vacuous.
+//
+// # The floor is a vacuity guard, and the forbidden outcome is located rather than counted
+//
+// A detector reports nothing when the two accesses never overlap, and it reports nothing when they
+// never landed on the same address either. So every round asserts the wait returned woken *and* that
+// the sibling read non-zero: the published value is what establishes that A's write and B's read were
+// about one extent, which is the premise the detector's silence is only informative under.
+//
+// Fresh addresses per round are load-bearing rather than tidy. With one reused pair, round *i*'s fill
+// races round *i−1*'s read and the detector reports the **harness's** race — a red that says nothing
+// about the engine.
+//
+// # Watched die
+//
+// Run against an injected engine before it was trusted: `notify`'s channel send and `wait`'s receive
+// replaced by a plain unsynchronised `bool`, which is exactly the missing-edge defect B-MM-2 forbids.
+// The detector reported the pair — the write in `internal/interp/bulk.go:execMemoryFill` against the
+// woken agent's load in `internal/interp/memory.go:memAccess`, one address, two goroutines. It also
+// produced a **second** report, on the injected flag itself, which is why the pre-registration forbids
+// a *located* report rather than any report at all: *a report with no located pair is the instrument's
+// noise, not the engine's finding*.
+//
+// # The carrier is an open finding, and this case goes vacuous silently if it is repaired
+//
+// The plain side is `memory.fill` only because the bulk family is plain at every alignment, which is
+// [#627] — an open question about whether those paths join 0054's atomic regime. **If they do, this
+// case keeps passing with nothing to detect**: two atomics leave the detector no report to make, and
+// the floor above still holds. So a repair of #627 owes this case a new plain side or a
+// re-registration, and `internal/interp/bulk.go:execMemoryFill` carries the mirror of this paragraph so
+// that a diff touching the loop sees it.
+//
+// [ADR 0054]: ../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md
+// [#627]: https://github.com/scttfrdmn/burroughs/issues/627
+func TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify(t *testing.T) {
+	const (
+		rounds  = 1000 // R, pre-registered
+		timeout = int64(5 * time.Second)
+	)
+
+	waker, waiter, mem := litmusAgentsFrom(t, litmusSiblingWakerSrc, litmusSiblingWaiterSrc)
+
+	type pair struct{ sib, futex int32 }
+	pairs := make(chan pair)
+	stamped := make(chan outcome, 1)
+	go func() {
+		for p := range pairs {
+			stamped <- callOffGoroutine(waiter, "await", I32(p.sib), I32(p.futex), I64(timeout))
+		}
+	}()
+	defer close(pairs)
+
+	for i := range rounds {
+		// A fresh 16-byte-aligned futex word and a fresh 4-byte-aligned sibling extent 8 bytes above
+		// it, per round. 1000 rounds at a stride of 16 stay inside the one page this module declares.
+		p := pair{futex: int32(16 * (i + 1))}
+		p.sib = p.futex + 8
+		pairs <- p
+
+		if !litmusArmed(mem, uint64(p.futex), time.Now().Add(10*time.Second)) {
+			t.Fatalf("round %d: the waiting agent never reached the queue at address %d within 10s — "+
+				"this is the case's premise and not its verdict: no pair was formed", i, p.futex)
+		}
+
+		// A never stores to the futex word: the fill publishes the sibling and the notify is the
+		// release. A fresh word already holds 0, which is the value B waits for.
+		if woke := call(t, waker, "publish", I32(p.sib), I32(p.futex)); woke != 1 {
+			t.Fatalf("round %d: memory.atomic.notify woke %d waiters at address %d, want 1 — the agent "+
+				"was queued when this round armed, so the wake was counted against an empty queue",
+				i, woke, p.futex)
+		}
+
+		got := (<-stamped).get(t)
+		res, published := got>>4, got&1
+		if res != waitWoken {
+			t.Fatalf("round %d: memory.atomic.wait32 returned %d, want %d (woken) — a notify claimed "+
+				"this agent and it was told something else happened. The floor is every round woken, "+
+				"and under an infinite-in-practice timeout a non-wake is an instrument fault rather "+
+				"than a verdict about B-MM-2", i, res, waitWoken)
+		}
+		if published != 1 {
+			t.Fatalf("round %d: the woken agent read 0 from the sibling extent at address %d, which A "+
+				"filled with 1 before notifying. This is the floor and not the verdict: it says A's "+
+				"write and B's read did not land on one extent, so the race detector's silence about "+
+				"the pair would be silence about nothing", i, p.sib)
+		}
+	}
+
+	// Reported on every run, because the verdict channel is invisible from here: this line says what was
+	// exercised, and a reader who ran `make check` needs to know it was the floor alone.
+	t.Logf("b-mm-2-sibling-field-after-wake: %d rounds, every round woken and every round reading the "+
+		"published sibling value. The verdict is the race detector's silence about (A's fill, B's load) "+
+		"and is only taken under `-race` — `make check` does not pass it; CI's `race` step inside the "+
+		"two-architecture `build` job does", rounds)
 }
