@@ -402,11 +402,12 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 > the waking agent — not only the futex word. "The notified word only" is expressly non-conforming.
 
 - **Shape:** outcome
-- **Blocked by:** nothing for the named case — [#628](https://github.com/scttfrdmn/burroughs/issues/628)
-  implemented it against the witness amended below. The second case waits on
-  [#631](https://github.com/scttfrdmn/burroughs/issues/631), which is the vehicle taking two shared memories
-  and asserting identity per memory; it does **not** wait on the multiple-memories gate, and this line said it
-  did until [grave #630](https://github.com/scttfrdmn/burroughs/issues/630).
+- **Blocked by:** nothing, and both cases are landed —
+  [#628](https://github.com/scttfrdmn/burroughs/issues/628) for the named one against the witness amended
+  below, [#631](https://github.com/scttfrdmn/burroughs/issues/631) for the second. Neither ever waited on the
+  multiple-memories gate, and this line said the second one did until [grave
+  #630](https://github.com/scttfrdmn/burroughs/issues/630); what #631 turned out to be was the vehicle's
+  `Features` literal becoming a parameter and its identity assertion running index by index.
 - **Amended:** 2026-09-04, discharging [#603](https://github.com/scttfrdmn/burroughs/issues/603). The witness,
   the outcome set, the floor and the arbiter all changed, and **what was wrong was the clause reading, not the
   numbers** — see *What was wrong about the reading* below, which ADR 0055 requires an amendment to state.
@@ -510,8 +511,19 @@ the test's own comment; it is recorded in three places because no instrument's d
   and both asserted.
 - **Arbiter:** as amended above — **both architectures, via `-race`.** The per-memory-edge defect this case
   exists for is a missing happens-before edge like the named case's, so the detector reaches it too.
-- **Status:** blocked — #631, the vehicle's two-memory form. It inherits the amendment above rather than the
-  three findings that prompted it, since its witness is *"identical"* and the named case's witness changed.
+- **Status:** implemented — TestAResumedAgentSeesASiblingFieldInASecondSharedMemory
+
+  It inherits the amendment above rather than the three findings that prompted it, since its witness is
+  *"identical"* and the named case's witness changed.
+
+  **Two premises this case cannot argue, so it reads them.** The registered witness leaves the sibling
+  extent's *address* free, and the implementation puts it at the same offset as the futex word — one number
+  naming two locations, which is what a second memory is. That makes every assertion in the case
+  indifferent to a memory index dropped anywhere between the text and `execMemoryFill`: the fill and the load
+  would agree with each other in memory 0 and the case would be the named one wearing a second memory's name.
+  So each round reads both memories back — memory 1 holds the published byte, memory 0's word is still the `0`
+  the waiter matched — and the vehicle asserts the two memories are distinct objects, which is a claim about
+  `allocate` rather than about the linker. Watched die by three separate injections, one per assertion.
 
   **This row's previous blocker was wrong twice, which is [grave
   #630](https://github.com/scttfrdmn/burroughs/issues/630).** It read *"blocked — #628, and the
@@ -596,7 +608,21 @@ the test's own comment; it is recorded in three places because no instrument's d
   include one case by name. It does not require every §4 row to be landed — read that way, B-MM-5 could only
   ever discharge last and would be a proxy for the whole of §§2–5 rather than a coverage requirement, which
   is a clause standing in for its neighbours. §4's own remaining rows say what is still owed on their own
-  lines: B-MM-1 and B-MM-4's host-call half on #602, B-MM-2's second case on #631.
+  lines: B-MM-1 and B-MM-4's host-call half on #602.
+
+  **What the narrow reading costs, and where the obligation went.** Scott's affirmation of it came with a
+  caveat to record at this site, and it is this: **B-MM-5 was the only clause-level pressure toward the
+  remaining nine of eleven registered cases.** Read plurally it would have held this row open until the last
+  of them landed; read narrowly it discharges on one, and the pressure toward the other nine now lives
+  **wholly in [#10](https://github.com/scttfrdmn/burroughs/issues/10)**, whose completion is bounded by the
+  cases registered in this file. Nothing in §§2–5 forces them individually. So #10 is not a tracking issue
+  here but the whole of the forcing function, and a reader who finds every §4 row discharged should check the
+  case list rather than the clause list. Stated at the discharge because *completion quietly loses its
+  forcing function* otherwise — the narrow reading is right about what the clause says and silent about what
+  used to be true while it was open. (Scott's order, reviewing the slice that discharged this row. Given in
+  session and held by no artifact — #632's thread is empty, so it is repeated here rather than cited, and
+  being recorded by the actor it was given to is not provenance either: *durability is not independence*, so
+  the commit carrying it is `Ratio-Class: carried`.)
 
   **This clause is why B-MM-2 was re-registered rather than reclassified.** The obvious reading of #603's
   findings is that no interleaving can witness B-MM-2 in this engine, which would make it `structural` — and

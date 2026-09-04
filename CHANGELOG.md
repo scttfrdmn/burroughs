@@ -21,6 +21,28 @@ weakly-ordered platform.
 
 ### Added
 
+- **B-MM-2's second registered case runs over two shared memories —
+  `TestAResumedAgentSeesASiblingFieldInASecondSharedMemory`** ([#631](https://github.com/scttfrdmn/burroughs/issues/631),
+  under [#10](https://github.com/scttfrdmn/burroughs/issues/10)). The named case landed on #628 with one
+  memory holding both the futex word and the sibling field, so it could not distinguish a per-memory wake
+  edge from a global one: an engine publishing only *the memory the futex lives in* would satisfy it. This
+  case puts the futex word in memory 0 and the sibling field in memory 1, and it is the vehicle for the whole
+  explicit-memory-index grammar — `(memory.fill 1 …)` and `(i32.load 1 …)` on the plain paths, `memory 0`'s
+  atomics on the other, so no operand rides an atomic's memarg `0x40` bit. The `-race` verdict channel is
+  unchanged and the two premises it cannot argue are **read back** rather than asserted: memory 1 holds the
+  published byte, memory 0's word at the same offset is still `0`. The two offsets coincide **on purpose**,
+  which is why the read-back is the control and the arithmetic is not — a dropped memory index leaves every
+  other assertion in the case holding.
+  - **The vehicle's `Features` was a literal and is now a parameter** — `litmusAgentsUnder(t, feats, …)`,
+    with `litmusAgentsFrom` a wrapper preserving `Threads: true` for the eleven cases that want it. That
+    literal was the whole of what grave #630's row had called *the multiple-memories gate*.
+  - **Its identity assertion runs index by index, and a pairwise-distinctness assertion joins it.** The old
+    check compared one memory; a two-memory vehicle needs both agents to agree per index *and* the indices to
+    be distinct objects. The distinctness check's subject is `Instance.allocate`, not the resolver — the
+    resolver's version of the defect is already caught by the per-index identity check, so naming it there
+    would have been a control nobody could watch die. **All three were watched die**, one injection each,
+    each firing alone: an `allocate` that hands `mems[0]` to every declared memory, a resolver binding one
+    memory twice, and a deleted wake edge (which produced the located `execMemoryFill`/`memAccess` pair).
 - **Runs on shared lab hardware go through a per-host job queue — `scripts/labrun`, `scripts/labprov`,
   `make lab-ab`, `make lab-test`.** The lab boxes carry several projects at once and nothing used to
   stop two of them landing on one machine together; each then read the interference as unexplained
@@ -1026,6 +1048,28 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Three ordered lines land in the corpus, charged to #631's slice as its overhead.** Each is stated where
+  its subject is rather than in `CLAUDE.md`, which is a pointer page.
+  - **The B-MM-5 discharge records what the narrow reading cost**
+    (`docs/litmus-battery-preregistration.md`). Read plurally the clause would have held that row open until
+    the last of eleven registered cases landed; read narrowly it discharges on the one case it names by hand.
+    Scott affirmed the narrow reading with a caveat to record at the site: B-MM-5 was **the only clause-level
+    pressure toward the remaining nine**, and that obligation now lives wholly in #10, whose closure is
+    bounded by the cases registered in that file. Stated at the discharge because *completion quietly loses
+    its forcing function* otherwise, and because a reader finding every §4 row discharged should be sent to
+    the case list rather than the clause list. The same edit drops *"B-MM-2's second case on #631"* from the
+    row's remaining-work list, which this slice falsified.
+  - **A gate's default governs what ships on; a test's `Features` literal governs what the harness can
+    build** ([gates.md](docs/laws/gates.md#a-gates-default-governs-what-ships-on-a-tests-features-literal-governs-what-the-harness-can-build)).
+    Different populations, and only the second can block a case. Grave #630's row named a proposal, which is
+    the altitude at which nobody checks a blocker; what blocked the case was one hard-coded literal in a test
+    helper, and reading it took minutes.
+  - **A `Status:` written in the PR that files its blocker is written before the blocker has a body**
+    ([citations.md](docs/laws/citations.md#a-status-written-in-the-pr-that-files-its-blocker-is-written-before-the-blocker-has-a-body)).
+    `blocked — #631` resolved to a real issue and was still a forecast of what that issue would say: #631 was
+    expected to be a gate and turned out to be a `Features` literal. Same ordering as the grave-label rule —
+    file, write the body, *then* write the field that cites it.
+
 - **§4's `b-mm-2-sibling-field-after-wake` is re-registered with the race detector as its oracle, not a
   value comparison** ([#603](https://github.com/scttfrdmn/burroughs/issues/603),
   [the pre-registration](docs/litmus-battery-preregistration.md)). The registered witness had a woken
@@ -1397,6 +1441,22 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A job's `run_attempt` names the attempt it belongs to, not the attempt it ran in — so this file's own
+  entry for "a single-job re-run is a request, not a scope" described a mechanic that does not exist**
+  (grave [#633](https://github.com/scttfrdmn/burroughs/issues/633)). The released entry stands as written and
+  is corrected here rather than rewritten, because a history entry edited in place is a correction nobody can
+  find. What it claimed: `gh run rerun --job <id>` can re-run the whole run, on the evidence that all seven
+  jobs of run `33451294518` (PR #566) carried an `attempt=2` row. Re-measured against that same run, whose
+  attempt 2 opened at `run_started_at` `23:50:10`: `jobs?filter=all` returns **14 rows for 7 jobs**, and
+  exactly one attempt-2 row started after that instant — `citations`, `23:50:14`. The other six repeat
+  attempt 1's windows *to the second* (`build (ubuntu-24.04)`: `23:35:08`→`23:49:33` under both numbers).
+  Replicated on run `33916148605` (PR #632): one executed, six carried. **`--job` re-ran the job it named.**
+  A partial re-run bumps the *run's* attempt and re-labels every job with it, carrying un-re-executed
+  conclusions forward, so the field is a grouping key and the discriminator is **time**. `docs/laws/operations.md`
+  replaces the paragraph with the measured mechanic; the population half of the old rule survives, since
+  `filter=latest` hides the carried rows altogether — seven green, nothing on a row saying six are copies.
+  The error stood for four days because it was favourable in both directions: it over-reported a green (seven
+  fresh where one was), then minted a law that under-reported what a flag can be trusted to do.
 - **"Blocked on the multiple-memories gate" was a claim about a `binary.Features` bool the harness already
   sets** (grave [#630](https://github.com/scttfrdmn/burroughs/issues/630)). B-MM-2's second registered case
   read `blocked — #628, and the multiple-memories gate`, and both halves were wrong. A gate's **default**

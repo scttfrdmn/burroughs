@@ -307,6 +307,25 @@ reach is a law out of context.
   checked against the world as it stands when the body is written, and *a plan to make a
   citation true later is a citation that is false now*.
 
+### A `Status:` written in the PR that files its blocker is written before the blocker has a body.
+
+- **A `Status:` written in the PR that files its blocker is written before the blocker has a body.**
+  `blocked — #631` went into `docs/litmus-battery-preregistration.md` in the same PR that opened #631, and
+  at the moment those characters were typed #631 was a title and nothing else. The citation resolved — the
+  issue existed, so every sweep here was satisfied — and it was still the strongest possible form of an
+  unchecked claim: **the blocker's body is written after the sentence that rests on it**, so the sentence is
+  a forecast of what the issue will say, dressed as a reference to what it does say. It came out wrong in the
+  ordinary way a forecast does. #631 was expected to be about a gate, so the row said the gate was the
+  blocker; what #631 turned out to be was a `Features` literal in a test helper, and the row had to be
+  rewritten. (Grave [#630](https://github.com/scttfrdmn/burroughs/issues/630).)
+
+  **The repair is an ordering, not more care.** File the blocker, write its body, *then* write the field
+  that cites it — the same shape as the grave label above, and the same reason: a claim is checked against
+  the world as it stands when the claim is written, and an issue with no body is not yet a world to check
+  against. Where the ordering genuinely cannot be had, the field says what is actually known — a file and a
+  line, or *"blocked, cause not yet stated"* — because **a `blocked — #N` reads as though someone has
+  already looked**, and that is the value it borrows from the number.
+
 ### A control catching its own author at the moment of authorship is the strongest evidence it aims right.
 
 - **A control catching its own author at the moment of authorship is the strongest evidence it aims

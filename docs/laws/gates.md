@@ -64,3 +64,27 @@ reach is a law out of context.
   order, uniqueness) stays gate-blind, and the features set governs per-section
   and per-opcode acceptance. (Ruling: Scott, #5; queued as a contract amendment
   in #16.)
+
+### A gate's default governs what ships on; a test's `Features` literal governs what the harness can build.
+
+- **They are different populations, and only the second can block a case.** A row in
+  `docs/litmus-battery-preregistration.md` read `blocked — the multiple-memories gate` for as long as it
+  existed, and the sentence was never true in either sense. It was not true of the *engine*: the decoder
+  reads `MultiMemory` out of whatever `binary.Features` its caller hands it, and multi-memory modules decode
+  the moment a caller sets the bool — nothing waited on a flip, and a flip is about what a default build
+  admits, which the harness is not. And it was not true of the *harness* in the way the phrase implies
+  either: what actually blocked the case was one line in `internal/interp/battery_test.go`, a helper whose
+  body hard-coded `Features{Threads: true}`, so every litmus vehicle got exactly the one gate that helper's
+  author needed. The repair was to make the literal a parameter. **A gate's name in a `blocked` field is
+  therefore a claim to check against two different things**, and the checkable form of the claim is the one
+  that names a file and a line rather than a proposal: *this vehicle cannot build the module, here*.
+  (Grave [#630](https://github.com/scttfrdmn/burroughs/issues/630); the repair is `litmusAgentsUnder`, on
+  [#631](https://github.com/scttfrdmn/burroughs/issues/631).)
+
+  The reason this is a law and not a typo is what the wrong phrasing bought: **a gate name is an
+  unfalsifiable-looking blocker.** It points at a proposal whose milestone is somewhere in the ladder, so a
+  reader nods and moves on; a file and a line is a thing anyone can go and read, and reading it here took
+  minutes. So the failure mode is not "wrong word" but *a blocker written at the altitude where nobody
+  checks it* — which is the shape [an asserted deferral is a citation with no
+  target](citations.md#an-asserted-deferral-is-a-citation-with-no-target-and-it-reads-as-tracked) takes when
+  the citation is to a proposal rather than to an issue.
