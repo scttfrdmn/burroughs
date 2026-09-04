@@ -1260,6 +1260,29 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`ab.sh` hashed its arms with `shasum`, which the lab host does not have — so `make lab-ab` had never
+  run, and the failure was reported as a claim about the code** (grave
+  [#624](https://github.com/scttfrdmn/burroughs/issues/624)). Found by the first product use of the queue
+  landed one PR earlier, five seconds into #573's amd64 arm. The portability half is the smaller one:
+  `shasum` is stock on macOS and absent on Rocky 9, so the target worked locally from the day it landed
+  and could never have worked where it matters, and **no gate in this tree can see it** — `CHECK_GATES` is
+  Go-only, there is no shell linting anywhere, and `make check` reaches nothing whose subject is another
+  machine. The half worth the grave is that with the hasher missing both hashes were the empty string,
+  the empty strings compared equal, and the script announced *"the two arms are byte-identical (sha256 )"*
+  — a substantive finding about two binaries it had never hashed, with the empty hash printed inline as
+  the tell. It fell safe only because equality happens to be the refusal condition, and it named the
+  wrong cause. **The latent direction does not fall safe**: `--null`'s assertion is `NULL_HASH =
+  BASE_HASH`, satisfied *vacuously* by two empty strings, so the arm whose whole job is to certify that a
+  hash difference means a code difference is the arm that passes when there are no hashes. Repaired in
+  three parts, each **watched die**: the hasher resolves once from a preference list (`sha256sum`, then
+  `shasum`, then `openssl dgst`, fed on **stdin** so no filename can be mistaken for a digest), every
+  digest must be exactly one 64-hex run *before* any comparison sees it, and a malformed one is a
+  mechanism failure with its own message rather than a claim about the arms. Watching the first repair
+  die is what found the third part: `die` inside a `$(...)` exits only the subshell, so the new assertion
+  printed its message and the script ran on to announce the arms byte-identical anyway — **the grave's own
+  shape recurring inside its fix** — and `hash_of`'s three call sites now carry the `|| exit 1` its two
+  sibling helpers already had. The no-tool message is derived from the candidate list rather than
+  hardcoded, because mutating the list to falsify that branch left it still naming the real three.
 - **`citecheck.sh` truncated a quoted-back sentence in the middle of a character, and the invalid
   UTF-8 killed the `sort` downstream of it** (grave
   [#620](https://github.com/scttfrdmn/burroughs/issues/620)). Found by this PR's own citation check:
