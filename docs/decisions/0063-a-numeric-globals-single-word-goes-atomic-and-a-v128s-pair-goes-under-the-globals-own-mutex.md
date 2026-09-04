@@ -27,7 +27,9 @@ picking one mechanism for the struct:
   store is indivisible, so no value a reader observes distinguishes a plain field from an atomic one.
   What is wrong is that it is an unsynchronised read/write pair in the Go memory model, where the result
   is *undefined* rather than merely stale. The instrument that answers that is `-race`, and the witness's
-  verdict therefore lives in CI's `race` job rather than in `make check`.
+  verdict therefore lives in CI's `race` **step** — inside the `build` job, on both matrix
+  architectures — rather than in `make check`. Not in a `race` *job*: there is no such job, which is
+  what this document and the witness both said first (recorded under Consequences).
 - **A v128 global is two `uint64` fields** (decision 0024, grave #239's storage half), and `set` wrote
   them as two assignments. A `global.get` interleaved between them returns a vector built from the low
   half of one write and the high half of another — a value no `global.set` in the module ever wrote.
@@ -222,6 +224,22 @@ mutex was providing for free), and a seqlock reader can be *worse* under write c
   *Re-key by content, not by arithmetic*, and a coordinate into a file that moved is the case where
   content is the only thing there is. The coordinate itself is not quoted, here or above, for the
   reason the whole bullet exists.
+- **Both this document and the witness named that verdict channel a `race` *job*, and there is no such
+  job.** `race` is a step inside `build` (`.github/workflows/ci.yml`), which is why it runs on both
+  matrix architectures and appears in no run's job list — that list is fuzz-smoke, lint, conformance,
+  citations, build twice and vuln. Found by reading this branch's own CI verdict per job, which is
+  exactly where the sentence sends a reader and exactly where it fails them: finding no `race` row,
+  they cannot tell a skipped verdict from a misnamed one. **The wrong name survived every gate this
+  slice ran** — `make check`, `make cite` and CI's `citations` job all went green with both sentences
+  in the tree, because the citation sweeps resolve file paths, heading anchors and Go symbols, and a
+  workflow's job names are in none of their domains. Recorded rather than quietly corrected, for the
+  same reason as the bullet above, and with the sharper form of it: **a wrongly named verdict channel
+  is checkable, so it reads as though somebody had checked it.** No instrument is proposed, and the
+  reason is a measurement rather than a preference — sweeping the tree for named-job claims returns
+  these two sentences and nothing else, both this slice's own and both unmerged, while the one place
+  that had said it before ([`CHANGELOG.md`](../../CHANGELOG.md), the `make race` timeout entry) already
+  says *step*. A sweep built now would be vacuous on `main` on the day it landed, which is a control's
+  first failure mode and not its absence.
 - **`make lab-ab`'s first product use found grave
   [#624](https://github.com/scttfrdmn/burroughs/issues/624)** — `ab.sh` hashed its arms with `shasum`,
   absent on the lab host, and reported the two empty hashes as *"the two arms are byte-identical."* The

@@ -141,10 +141,18 @@ func TestAV128GlobalIsNeverAssembledFromTwoWrites(t *testing.T) {
 // is an unsynchronised read/write pair in the Go memory model, where the result is undefined rather
 // than merely stale, and the instrument that answers *that* question is `-race`.
 //
-// **So this control's verdict lives in CI's `race` job, not in `make check`.** `make check` does not
-// pass `-race` (that is `make race`, its own target and its own CI job), which means a green local
-// `check` says nothing about this test's subject. Stated because the alternative is a reader assuming
-// the gate they ran covers it — *a green from a gate that did not run is unavailable, not implied.*
+// **So this control's verdict lives in CI's `race` step, not in `make check`.** `make check` does not
+// pass `-race`; `make race` does, and CI reaches it from a step named `race` inside the `build` job
+// (`.github/workflows/ci.yml`). **It is not a job of its own, which is what this comment said until
+// the sentence was read against a run's own job list** — that list is fuzz-smoke, lint, conformance,
+// citations, build twice and vuln, so a reader sent to find `race` in it finds nothing and cannot
+// tell a skipped verdict from a misnamed one. Being a step rather than a job has two consequences
+// worth having: a green local `check` still says nothing about this test's subject, and because
+// `build` is a two-architecture matrix the step runs twice, so the verdict is two readings and not
+// one. Stated because the alternative is a reader assuming the gate they ran covers it — *a green
+// from a gate that did not run is unavailable, not implied* — and because **a verdict channel named
+// wrongly is worse than one left unnamed**: the wrong name is checkable, so it reads as though
+// somebody had checked it.
 //
 // # The vacuity arm
 //
