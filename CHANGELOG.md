@@ -43,6 +43,16 @@ weakly-ordered platform.
   99, ssh's 255) plus a positive assertion that the task was queued at all, since a failed submit
   otherwise exits 1 and is indistinguishable from a real test failure — #344's lesson arriving one
   transport later.
+  - **The pasted fleet section is framed above its own heading, because its figures sit under a rider
+    forbidding them.** `CLAUDE.md`'s rider says no measured figure lives on that page, and the block
+    carries core counts, memory sizes and driver versions; Scott resolved the tension. The note sits
+    outside the verbatim copy so a wholesale re-copy of the block cannot delete it, and says three
+    things: the rider's subject is *this project's* measured quantities, whose staleness comes from the
+    tree moving under them, while the hardware inventory is an external fact whose repair is a re-copy;
+    no control in `internal/testenv` can assert anything about it, for `MEMORY.md`'s reason one level
+    out; and **the fleet table is an inventory, not this project's runners** — this repo uses
+    `janus.local`, the queues are per host so that a project uses the boxes it uses, and reaching for a
+    second lab host changes which hardware a figure was taken on, so it is a decision doc's business.
 - **`make ab` and `scripts/ab.sh` — the A/B protocol every measurement in this tree re-derived by hand
   now has a carrier** ([grave #612](https://github.com/scttfrdmn/burroughs/issues/612), [the
   law](docs/laws/evidence-and-instruments.md#a-protocol-carried-only-by-prose-is-re-derived-per-use-and-the-re-derivation-is-where-a-step-gets-dropped)).
