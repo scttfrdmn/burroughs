@@ -163,7 +163,76 @@ build() {
 	printf '%s\n' "$_bin"
 }
 
-hash_of() { shasum -a 256 "$1" | cut -d' ' -f1; }
+# HASHER is the sha256 tool, resolved once from a preference list rather than assumed (grave #624).
+#
+# This read `shasum -a 256`, which is stock on macOS and **absent on the lab host** — so `make ab`
+# worked from the day it landed and `make lab-ab` could never have run at all. No gate could see it:
+# `make check` reaches nothing whose subject is another machine, so the defect waited for the first
+# real use of the queue. Measured on both boxes rather than assumed:
+#
+#	                        dev box (darwin)   janus.local (Rocky 9)
+#	sha256sum               /sbin              yes
+#	shasum -a 256           /usr/bin           ABSENT
+#	openssl dgst -sha256    Homebrew           yes
+#
+# `sha256sum` first because it is present on both; the other two are the stock fallbacks for a box
+# that has one but not the other. Order is preference, not correctness — all three hash the same bytes.
+#
+# Override with AB_HASHER=<command> to point this at something else. It exists so hash_of's two
+# assertions can be *watched die* rather than certified by reading them: `AB_HASHER=/nonexistent` kills
+# the run check, `AB_HASHER=echo` kills the shape check (it ignores stdin and prints one empty line).
+# It does **not** reach the resolution branch below — an override that is set is exactly the case that
+# skips the list — so that branch is falsified by mutating the candidate list, and was.
+HASHER="${AB_HASHER:-}"
+# _tried accumulates what was actually looked for, so the failure below names the list rather than a
+# copy of it. Watching the mutation die is what surfaced this: the candidates were replaced with bogus
+# names and the message still said "tried sha256sum, shasum, openssl" — *a control's failure message is
+# an unscanned claim*, and the next edit to the list is what would have made it a lie in production.
+_tried=""
+if [ -z "$HASHER" ]; then
+	for _cand in "sha256sum" "shasum -a 256" "openssl dgst -sha256"; do
+		# ${_cand%% *} is the tool name without its arguments, and works for the one-word candidate too.
+		_tried="$_tried ${_cand%% *}"
+		if command -v "${_cand%% *}" >/dev/null 2>&1; then HASHER="$_cand"; break; fi
+	done
+fi
+[ -n "$HASHER" ] || die "no sha256 tool on this box: tried$_tried.
+The arms cannot be checked distinct without one, and running the rounds anyway would measure a pair
+this script cannot tell apart. Install any of the three, or pass AB_HASHER=<command>."
+
+# hash_of prints one arm binary's sha256, and **fails loudly rather than returning nothing.**
+#
+# Grave #624's real half. With the hasher missing, this returned the empty string for every arm, the
+# empty strings compared equal, and the script announced *"the two arms are byte-identical"* — a
+# substantive finding about two binaries it had never hashed, printed with the empty hash inline. It
+# fell safe only because equality happens to be the refusal condition, and it named the wrong cause.
+# The `--null` arm's assertion is the direction that does not fall safe: `NULL_HASH = BASE_HASH` is
+# satisfied *vacuously* by two empty strings, so the arm whose whole job is to certify that a hash
+# difference means a code difference is the arm that passes when there are no hashes.
+#
+# So the shape of the output is asserted before any comparison sees it. A malformed hash is a
+# mechanism failure with its own message; it is never allowed to become a claim about the arms.
+hash_of() {
+	# Fed on **stdin**, not by path, so no filename appears in the output and the one 64-hex run in it
+	# is unambiguously the hash. That is what lets three tools with three output formats — `<hash>  -`
+	# from the sum tools, `SHA2-256(stdin)= <hash>` from openssl — share one parser instead of one
+	# branch each.
+	_out=$($HASHER < "$1" 2>&1) ||
+		die "hashing $1 with '$HASHER' failed, so the arms cannot be checked distinct: $_out"
+	_h=$(printf '%s\n' "$_out" | tr -cs '0-9a-f' '\n' | grep -E '^[0-9a-f]{64}$')
+	# Counted, not first-matched: a first match declines to ask whether there were others, and
+	# "exactly one" is what makes the extraction-by-shape sound. Lowercase only, deliberately — all
+	# three tools print lowercase, and an uppercase digest would count zero and stop here rather than
+	# compare unequal against a lowercase sibling and read as a code difference.
+	_n=$(printf '%s' "$_h" | grep -c . || true)
+	[ "$_n" = "1" ] || die "'$HASHER' produced no single 64-hex-digit sha256 for $1 ($_n found).
+Its output was:
+$_out
+This is a failure of the hashing mechanism, not a finding about the arms. It is reported separately
+because the alternative is what grave #624 records: an unhashed pair compares equal and the script
+says the two arms are byte-identical, which sends the reader looking for two revs naming one commit."
+	printf '%s\n' "$_h"
+}
 
 # Each arm runs from its own copy of the package directory, so a benchmark that reads testdata
 # finds the revision of it that its own arm shipped.
@@ -197,8 +266,13 @@ HEAD_TREE="$(tree_for head "$HEAD")" || exit 1
 BASE_BIN="$(build base "$BASE_TREE")" || exit 1
 HEAD_BIN="$(build head "$HEAD_TREE")" || exit 1
 
-BASE_HASH="$(hash_of "$BASE_BIN")"
-HEAD_HASH="$(hash_of "$HEAD_BIN")"
+# `|| exit 1` on every hash_of call, the same contract `tree_for` and `build` above carry: `die` inside
+# a `$(...)` exits the **subshell**, so without it a failed hash returns the empty string and execution
+# continues into the comparison below. Found by watching grave #624's repair die: the new assertion
+# printed its message and the script ran on to announce the arms byte-identical anyway — the grave's own
+# shape recurring inside its fix, which is why the falsification is run rather than read.
+BASE_HASH="$(hash_of "$BASE_BIN")" || exit 1
+HEAD_HASH="$(hash_of "$HEAD_BIN")" || exit 1
 printf 'ab.sh: base %s\nab.sh: head %s\n' "$BASE_HASH" "$HEAD_HASH"
 
 if [ "$BASE_HASH" = "$HEAD_HASH" ]; then
@@ -220,7 +294,7 @@ make the equal-hash assertion true by construction and assert nothing."
 	NULL_TREE="$(tree_for null "$BASE")" || exit 1
 	[ "$WANT_GRAFT" -eq 0 ] || graft null "$NULL_TREE"
 	NULL_BIN="$(build null "$NULL_TREE")" || exit 1
-	NULL_HASH="$(hash_of "$NULL_BIN")"
+	NULL_HASH="$(hash_of "$NULL_BIN")" || exit 1
 	printf 'ab.sh: null %s\n' "$NULL_HASH"
 	[ "$NULL_HASH" = "$BASE_HASH" ] || die "the null arm is NOT byte-identical to base:
   base $BASE_HASH
