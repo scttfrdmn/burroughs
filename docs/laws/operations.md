@@ -202,11 +202,36 @@ between two files is luck, not a property, and on #554 they happened to agree. (
 #554 report — *"the rule's disambiguator answers 'is the run finished' when the question was 'is the
 watcher alive'. A correct rule aimed at the wrong subject."*)
 
-**And a single-job re-run is a request, not a scope.** `gh run rerun --job <id>` can re-run the whole run;
-the flag names what was asked for and the run decides what it does. So never report a job's attempt from
-the flag that was passed — read `run_attempt` **per job** from `jobs?filter=all`, which is the same
-population mistake 4 demands for the conclusion, asked about attempts instead. A report that says "one job
-re-run" on the strength of the command line is describing its own intent.
+**And a job's `run_attempt` names the attempt it belongs to, never the attempt it ran in.** This paragraph
+used to say something else — that `gh run rerun --job <id>` *can re-run the whole run*, so a job's attempt
+must be read per job rather than from the flag. The second half is right and insufficient; the first half is
+a mechanic that does not exist, and it was minted by reading the field this section now warns about (grave
+[#633](https://github.com/scttfrdmn/burroughs/issues/633)). A partial re-run bumps the **run's** attempt
+number and re-labels *every* job with it, carrying the un-re-executed jobs' conclusions forward under the
+new number. So seven attempt-2 rows do not mean seven jobs ran.
+
+Measured on the specimen the false version was written from — run `33451294518` (PR #566), whose attempt 2
+opened at `run_started_at` `23:50:10`. `jobs?filter=all` returns **14 rows for 7 jobs**, and of the seven at
+attempt 2 exactly one started after that instant (`citations`, `23:50:14`); the other six repeat attempt 1's
+windows *to the second* (`build (ubuntu-24.04)`: `23:35:08`→`23:49:33` under both numbers). Replicated on run
+`33916148605` (PR #632): same shape, one executed, six carried. **`--job` re-ran the job it named**, and the
+report that said otherwise was reading a grouping key as a record of execution.
+
+Two things follow, and the second is the one to carry:
+
+- **The discriminator is time.** A job executed in attempt *n* iff its `started_at` is at or after that
+  attempt's `run_started_at`. Quote that, not the attempt number, when a report claims a job's verdict is
+  fresh.
+- **`filter=all` is what makes carrying visible at all.** The default `filter=latest` returns only the
+  latest attempt's rows — seven green, nothing on any row saying six of them are copies of a previous
+  attempt. So the population rule survives its own falsified premise: read `jobs?filter=all`, and read the
+  timestamps in it.
+
+The original error was favourable, which is why it stood for four days: it over-reported a green (seven
+jobs fresh where one was) and it is the direction nobody re-checks — *an unmeasured complement is not an
+empty one*, and a forecast beaten is a forecast falsified. (Scott ordered a line here on the re-run
+mechanic; taking the measurement it needed is what produced the grave. Ordered in session and held by no
+artifact, so the commit carrying it is `Ratio-Class: carried`.)
 
 ## Local cross-architecture verification
 

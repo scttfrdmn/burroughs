@@ -568,6 +568,22 @@ func TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify(t *testing.T) {
 // (`litmusAgentsUnder`), so this case decodes under `MultiMemory` while every other case on the vehicle
 // keeps the feature set its clause implies. And the import side does bind two shared memories in index
 // order — asserted index by index, not inferred from the module text.
+//
+// # Watched die, three times, and each injection fired one assertion
+//
+// Against a committed baseline, reverted after each:
+//
+//   - **The verdict channel.** `notify`'s channel send and `wait`'s receive replaced by a plain
+//     unsynchronised bool, the wake preserved by a `Gosched` spin — the missing-edge defect B-MM-2
+//     forbids. The detector reported the located pair, `execMemoryFill`'s write against `memAccess`'s
+//     `sync/atomic.LoadUint32`, one address, goroutines 7 and 8, plus a second report on the injected
+//     flag. That second report is why the registration forbids a *located* pair rather than any report.
+//   - **The per-index identity assertion.** The waiter's second import re-pointed at `"mem"`, so both
+//     agents hold two memories, agree at index 0, and differ at index 1. It fires at index 1 and the
+//     distinctness assertion stays quiet.
+//   - **The distinctness assertion.** `Instance.allocate` made to hand `mems[0]` to every declared
+//     memory. Both agents then agree at every index and the counts match, so this is the only assertion
+//     that fires — which is the sense in which its subject is the allocator and not the resolver.
 func TestAResumedAgentSeesASiblingFieldInASecondSharedMemory(t *testing.T) {
 	const (
 		rounds  = 1000 // R, pre-registered — the named case's, inherited
