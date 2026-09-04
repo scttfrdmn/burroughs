@@ -453,16 +453,35 @@ func TestAWakeArrivesAtFutexLatencyAndNotEventLoopLatency(t *testing.T) {
 // a *located* report rather than any report at all: *a report with no located pair is the instrument's
 // noise, not the engine's finding*.
 //
-// # The carrier is an open finding, and this case goes vacuous silently if it is repaired
+// # The carrier survives on a ruling, and that is a debt this case owes rather than a property it has
 //
-// The plain side is `memory.fill` only because the bulk family is plain at every alignment, which is
-// [#627] — an open question about whether those paths join 0054's atomic regime. **If they do, this
-// case keeps passing with nothing to detect**: two atomics leave the detector no report to make, and
-// the floor above still holds. So a repair of #627 owes this case a new plain side or a
-// re-registration, and `internal/interp/bulk.go:execMemoryFill` carries the mirror of this paragraph so
-// that a diff touching the loop sees it.
+// The plain side is `memory.fill` only because the bulk family is plain at every alignment, which was
+// [#627] — the open question of whether those paths join 0054's atomic regime. **It is closed and they do
+// not**: [ADR 0064] keeps the region plain, so this carrier is not going away in the next slice.
+//
+// **That is a use for the gap and not an argument for it**, which is Scott's phrasing on the ruling and
+// the reason this paragraph is now pointed the other way round: *"B-MM-2's carrier surviving is a use for
+// the gap, not an argument for it — record that if the gap closes the case needs a new plain side, so the
+// carrier never becomes a reason to keep it open."* So the debt is stated here as a standing obligation on
+// **whatever slice ever closes the region**, not as a reason the region should stay open:
+//
+//   - **If the plain region closes, that slice owes this case a new plain side in the same slice.** Two
+//     atomics leave the detector no report to make and the floor above still holds, so the case would keep
+//     passing with nothing to detect.
+//   - **The only replacement in hand is an unaligned typed store**, since 0054's Consequences record that
+//     the unaligned path has no atomic mechanism at all. That re-points this oracle at *that* gap rather
+//     than rescuing it, and couples the case to that gap staying open.
+//   - **A complete repair of every plain path leaves this case with no `-race` oracle in the tree.** There
+//     is no third arbiter: the clause would have to be re-registered against an ordering assertion a
+//     passing run cannot distinguish from a lucky one, or its `Status:` goes back to blocked.
+//
+// Two places now carry the mirror of this so a diff cannot walk past it:
+// `internal/interp/bulk.go:execMemoryFill`, and — machine-checked rather than written down —
+// `TestNoGuestMemoryAccessSiteJoinsWithoutAClassification`, which fails if `execMemoryFill` starts calling
+// a synchronisation helper while ADR 0064's enumeration still classifies it `plain`.
 //
 // [ADR 0054]: ../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md
+// [ADR 0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
 // [#627]: https://github.com/scttfrdmn/burroughs/issues/627
 func TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify(t *testing.T) {
 	const (
