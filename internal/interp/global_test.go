@@ -54,9 +54,9 @@ func TestGlobalInitializerSeesEarlierGlobals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("globalFor(2): %v", err)
 	}
-	if g.num != 22 {
+	if g.num.Load() != 22 {
 		t.Errorf("global 2 = %d, want 22 (global 1's value); 11 would mean the initializer read "+
-			"global 0 rather than the index it names", g.num)
+			"global 0 rather than the index it names", g.num.Load())
 	}
 }
 
@@ -90,8 +90,8 @@ func TestGlobalIndexSpacePutsImportsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("globalFor(1): %v", err)
 	}
-	if g.num != 99 {
-		t.Errorf("global 1 = %d, want 99; the defined global is not at the import offset", g.num)
+	if g.num.Load() != 99 {
+		t.Errorf("global 1 = %d, want 99; the defined global is not at the import offset", g.num.Load())
 	}
 }
 
@@ -343,8 +343,8 @@ func TestImmutableGlobalIsNotRefusedHere(t *testing.T) {
 		t.Fatalf("set on an immutable global: %v — immutability is #9's verdict, not this "+
 			"package's, so this arm must not refuse", err)
 	}
-	if g.num != 42 {
-		t.Errorf("global = %d, want 42", g.num)
+	if g.num.Load() != 42 {
+		t.Errorf("global = %d, want 42", g.num.Load())
 	}
 }
 

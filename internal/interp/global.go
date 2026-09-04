@@ -2,6 +2,8 @@ package interp
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
@@ -45,9 +47,56 @@ type global struct {
 	// re-exporter, whose type section the index does not belong to.
 	mod *binary.Module
 
-	num   uint64
-	numHi uint64
-	ref   ref
+	// num holds a numeric global's entire value and a v128 global's **low** 64 bits; numHi holds a
+	// v128's high half and is unread for every other shape.
+	//
+	// **Atomic because a `global.set` races a `global.get` on a shared instance** (#573, decision
+	// 0063). Nothing gates that: `Invoke` is an exported method on `*Instance` that two goroutines may
+	// call at once — `TestAtomicRmwIsNotObservablyTornAcrossThreads` already does — so the two threads
+	// reaching one `*global` need no threads proposal and no `Spawn` to exist.
+	//
+	// **The type carries the discipline, rather than a comment carrying it.** `atomic.LoadUint64(&num)`
+	// over a plain `uint64` field would leave every plain read compiling silently, so the rule would
+	// live here in prose and be enforced by review. As `atomic.Uint64` a plain read does not build.
+	// Decision 0058 makes the same argument one struct over, for the same reason.
+	//
+	// **Word atomicity is not pair atomicity, and a v128 needs both** — see `mu` below. These two
+	// fields are atomic for the numeric arm's sake and are *also* atomic on the v128 path, which is
+	// redundant there and left in place: `num` serves both shapes, so its type cannot vary by shape.
+	num   atomic.Uint64
+	numHi atomic.Uint64
+
+	// ref holds a reference global's value, and is **still written and read without
+	// synchronisation** — the one arm of the three this decision does not cover.
+	//
+	// Not an oversight and not implemented around. The ruling that settled the other two priced v128 as
+	// *"the only case above word width, and rare in practice"*; a `ref` is 40 bytes, 2.5× a v128, so the
+	// premise is false and where the cheap/expensive boundary belongs is the question that reopens
+	// (#573, still `decision-needed:scott`). `mu` below would cover this field in one line, and the
+	// reason that line is not written is that a lock on every `global.get` of a hot `externref` is a
+	// different cost profile from the one the ruling weighed.
+	//
+	// What tearing it costs, bounded rather than escalated: Go writes pointer-sized fields whole, so no
+	// torn `ref` carries a forged pointer. It carries one write's discriminator bits with another's
+	// pointer — at worst `Null: false` against three nil pointers, which is a nil dereference. A wrong
+	// value, and at worst a panic; not the address-zero read a torn *slice header* produces (#622).
+	ref ref
+
+	// mu serialises the v128 arm's two-word access — held across both stores in `set` and both loads in
+	// `get` and `value`.
+	//
+	// **A lock rather than a seqlock, and the choice was granted rather than measured against one.** The
+	// ruling on #573 said *"a lock or seqlock, implementer's choice, measured in the slice"*: the cost of
+	// the mechanism is what the slice owes, not a bake-off, and a bake-off would need two mechanisms in
+	// one revision — which is exactly the comparison #618 records `ab.sh` cannot make. Decision 0061
+	// already reaches for `sync.Mutex` for a two-places-one-fact problem of the same shape. If the
+	// measurement had shown a v128 `global.get` dominated by the acquire, the seqlock is its named
+	// successor, because a seqlock's readers do not write and so do not serialise against each other.
+	//
+	// Unconditional rather than allocated for v128 globals only: a `*sync.Mutex` is the same eight bytes
+	// plus an allocation and a nil check, so the pointer buys nothing. Taken on the v128 arm alone, and
+	// the numeric arm's freedom from it is the whole point of decision 0063's split.
+	mu sync.Mutex
 }
 
 // newGlobal evaluates a global's initializer and allocates its storage.
@@ -75,10 +124,15 @@ func (in *Instance) newGlobal(g binary.Global) (*global, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &global{
-		typ: g.Type, mutable: g.Mutable, mod: in.mod,
-		num: v.lo, numHi: v.hi, ref: v.ref,
-	}, nil
+	// Stored rather than set in the composite literal, because `atomic.Uint64` has no literal form.
+	// **No lock is taken and none is needed**: nothing can reach this `*global` until `newGlobal`
+	// returns it, so these two stores are construction, not shared mutation. That is decision 0058's
+	// title premise arriving on a smaller object — reachability is the property that matters, and it
+	// begins here rather than at spawn.
+	out := &global{typ: g.Type, mutable: g.Mutable, mod: in.mod, ref: v.ref}
+	out.num.Store(v.lo)
+	out.numHi.Store(v.hi)
+	return out, nil
 }
 
 // globalFor resolves a global index to its storage. The *only* place that does, which is what
@@ -163,9 +217,15 @@ func (g *global) get(st *stack) {
 	case shapeRef:
 		st.pushRef(g.ref)
 	case shapeV128:
-		st.pushV128(g.numHi, g.num)
+		// Both halves read under one acquisition, which is the point: two atomic loads with no lock
+		// between them can take `numHi` from one `set` and `num` from the next, and a v128 assembled
+		// from two different writes is a value neither of them wrote (decision 0063).
+		g.mu.Lock()
+		hi, lo := g.numHi.Load(), g.num.Load()
+		g.mu.Unlock()
+		st.pushV128(hi, lo)
 	default:
-		st.pushNum(g.num)
+		st.pushNum(g.num.Load())
 	}
 }
 
@@ -186,9 +246,14 @@ func (g *global) value() Value {
 	case shapeRef:
 		return fromRef(g.ref, g.typ)
 	case shapeV128:
-		return Value{Type: g.typ, Bits: g.num, Hi: g.numHi}
+		// The same one-acquisition read as `get`'s v128 arm, and it is repeated rather than shared for
+		// the reason this function exists at all: routing the read through `get` would need a stack.
+		g.mu.Lock()
+		lo, hi := g.num.Load(), g.numHi.Load()
+		g.mu.Unlock()
+		return Value{Type: g.typ, Bits: lo, Hi: hi}
 	default:
-		return Value{Type: g.typ, Bits: g.num}
+		return Value{Type: g.typ, Bits: g.num.Load()}
 	}
 }
 
@@ -211,12 +276,20 @@ func (g *global) set(st *stack) error {
 		if err := st.needNum(2); err != nil {
 			return err
 		}
-		g.numHi, g.num = st.popV128()
+		//
+		// Popped before the lock is taken, and both stores made under it. The pop touches the calling
+		// thread's own stack and nothing else, so holding `mu` across it would widen the critical
+		// section over work no other thread can observe.
+		hi, lo := st.popV128()
+		g.mu.Lock()
+		g.numHi.Store(hi)
+		g.num.Store(lo)
+		g.mu.Unlock()
 	default:
 		if err := st.needNum(1); err != nil {
 			return err
 		}
-		g.num = st.popNum()
+		g.num.Store(st.popNum())
 	}
 	return nil
 }
