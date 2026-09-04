@@ -3,6 +3,7 @@ package interp
 import (
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
@@ -172,9 +173,45 @@ func (in *Instance) newTable(t binary.Table) (*table, error) {
 	return &table{slots: slots, limits: lim, elemType: t.ElemType, mod: in.mod}, nil
 }
 
-// refSize bounds one slot's size in bytes for the allocation check above. Named so the bound
-// reads as a bound rather than as arithmetic on a literal.
-const refSize = 8
+// refSize is one slot's size in bytes for the allocation checks above and in `grow`. It bounds
+// nothing on its own; it is the divisor that turns a slot count into a byte count.
+//
+// **Derived from the type rather than written down, because a literal here is correct exactly once**
+// (grave #621). It read `const refSize = 8`, and that was *true* the day it landed (#148, 2026-08-05):
+// `ref` was `{Null bool; Addr uint32}`, eight bytes. Every field added since falsified it silently —
+// rung 4 took the struct to 32 and then 40, rung 5 slice 3 added two more bools inside the padding —
+// and today a `ref` is nine fields (`Null`, `IsI31`, `Externalized`, `IsHost`, `Addr`, `I31`, `Inst`,
+// `Exc`, `Obj`), 40 bytes, five words. So both guards divided by a number five times too small and
+// admitted five times the slots the comment said they would.
+//
+// **The tree recorded every step of that drift beside this constant and no instrument could join
+// them.** TestRefWidthIsMeasuredNotAssumed has pinned the real width since #256 (2026-08-12) and its
+// own comment narrates each widening; for the twenty-three days between the two commits, and for every
+// day after, this package held two numbers for one fact and the control had the right one. A size
+// assertion cannot see a divisor, and a divisor cannot see a size assertion — so the repair is not a
+// third number but the removal of the second: `unsafe.Sizeof` is a compile-time constant, no pointer
+// arithmetic and no runtime cost, and a tenth field on `ref` now moves this divisor instead of
+// widening the guard behind it. That the stale copy sat under a sentence *claiming* to state one
+// slot's size is the reason review kept passing over it — *a comment asserting the property the code
+// lacks makes review confirm the bug*.
+//
+// **What the correct divisor does and does not buy, stated because the arithmetic error was not the
+// whole defect.** With 40 the reachable window closes: a table64 declaring a min between
+// `MaxInt/40` and `MaxInt/8` used to pass this check and then die in `make([]ref, n)` with
+// `makeslice: len out of range` — a Go panic escaping where the arm two lines up intends
+// `&Trap{Reason: "out of memory"}` — and now it traps. That window is the only place either guard
+// has ever been able to fire, and it is gated: `validTableSize` caps an i32 table at `maxElems32`,
+// which is about 5.4e7 times *below* `MaxInt/40`, so **on the i32 path this arm still cannot fire
+// for any input at all.** The bound that path wants is not `MaxInt` but a host-allocation limit —
+// `maxElems32` slots is ~172 GB of `ref` — and choosing one is a decision with its own issue
+// ([#635](https://github.com/scttfrdmn/burroughs/issues/635)), not something to pick here. Until it
+// lands, an i32 table declaring a min near the cap makes a real allocation attempt whose outcome
+// this engine does not define. That is named rather than measured: nothing in this tree has run it.
+//
+// The `uint64` conversion is not decoration: `unsafe.Sizeof` is typed `uintptr`, and both guards
+// compare it against a `uint64` slot count, so leaving it `uintptr` is a compile error rather than a
+// silent widening. Converting the *constant* keeps the whole expression constant-folded.
+const refSize = uint64(unsafe.Sizeof(ref{}))
 
 // validTableSize is `table.ml:21`'s `valid_size`: an i32-indexed table is capped at 0xffff_ffff
 // elements, an i64-indexed one is not capped here at all.
