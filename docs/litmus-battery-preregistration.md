@@ -402,9 +402,11 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 > the waking agent — not only the futex word. "The notified word only" is expressly non-conforming.
 
 - **Shape:** outcome
-- **Blocked by:** [#628](https://github.com/scttfrdmn/burroughs/issues/628) — the implementation, against the
-  witness amended below. #543 closed with #594 and ADR 0062's vehicle supplies the agents, so this clause's
-  cases are implementable; the second case additionally waits on the multiple-memories gate.
+- **Blocked by:** nothing for the named case — [#628](https://github.com/scttfrdmn/burroughs/issues/628)
+  implemented it against the witness amended below. The second case waits on
+  [#631](https://github.com/scttfrdmn/burroughs/issues/631), which is the vehicle taking two shared memories
+  and asserting identity per memory; it does **not** wait on the multiple-memories gate, and this line said it
+  did until [grave #630](https://github.com/scttfrdmn/burroughs/issues/630).
 - **Amended:** 2026-09-04, discharging [#603](https://github.com/scttfrdmn/burroughs/issues/603). The witness,
   the outcome set, the floor and the arbiter all changed, and **what was wrong was the clause reading, not the
   numbers** — see *What was wrong about the reading* below, which ADR 0055 requires an amendment to state.
@@ -443,7 +445,7 @@ the woken agent's resume even when the read occurs under a freshly acquired lock
   missing happens-before edge in the host language rather than a reordering some machine performs. That
   makes it the strongest arbiter in this document and the reason the case was worth re-registering rather
   than retiring: `-race` owes nothing to our reading of the contract.
-- **Status:** blocked — #628
+- **Status:** implemented — TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify
 
 #### What was wrong about the reading
 
@@ -508,8 +510,19 @@ the test's own comment; it is recorded in three places because no instrument's d
   and both asserted.
 - **Arbiter:** as amended above — **both architectures, via `-race`.** The per-memory-edge defect this case
   exists for is a missing happens-before edge like the named case's, so the detector reaches it too.
-- **Status:** blocked — #628, and the multiple-memories gate. It inherits the amendment above rather than the
+- **Status:** blocked — #631, the vehicle's two-memory form. It inherits the amendment above rather than the
   three findings that prompted it, since its witness is *"identical"* and the named case's witness changed.
+
+  **This row's previous blocker was wrong twice, which is [grave
+  #630](https://github.com/scttfrdmn/burroughs/issues/630).** It read *"blocked — #628, and the
+  multiple-memories gate"*. The gate half names a `binary.Features` bool **the harness already sets** — the
+  vehicle decodes with `Threads: true` for the same reason — so a proposal's default has never been what a
+  battery case is blocked on, and a two-shared-memory module with an explicit-index `memory.fill` and a
+  `memory.atomic.notify` builds today. That is grave #606's shape one document down: *a blocker that names a
+  proposal gate is a claim about the harness, not about the default*, and #607's five re-derived blockers
+  missed this one because that sweep was keyed on `Spawn` rather than on the shape. The #628 half was
+  forbidden by #628's own body — *"so the row's blocker does not silently become this number"* — and would
+  have become a `blocked` row citing a closed issue the moment the named case landed.
 
 ### B-MM-3 — no engine lock across a resume
 
@@ -571,13 +584,19 @@ the test's own comment; it is recorded in three places because no instrument's d
 > platform.
 
 - **Shape:** structural
-- **Blocked by:** [#628](https://github.com/scttfrdmn/burroughs/issues/628), and not the whole battery any
-  more. The clause asks for a litmus battery *including the sibling-field-after-wake case*, so the case it
-  names by hand is what gates it — and that case is now **registered against a witness that can fail**
-  rather than stillborn (#603, discharged by the amendment above), so what remains is writing it. The
-  battery exists and has one landed case, which discharges none of this clause: **the row that read
-  `blocked — #554 and #543` was describing the mechanism's absence, and the mechanism arriving is not what
-  satisfies a clause about coverage.**
+- **Blocked by:** nothing, as of #628. The clause asks for a litmus battery *including the
+  sibling-field-after-wake case*, so the case it names by hand is what gated it, and that case is now
+  implemented above with a `-race` verdict on both architectures. Two earlier readings of this line were
+  wrong in opposite directions and both are worth keeping: `blocked — #554 and #543` described **the
+  mechanism's absence**, and a mechanism arriving is not what satisfies a clause about coverage; `blocked —
+  #628` was right about the gate and outlived it.
+
+  **What would make a discharge here an over-claim is the plural in *"boundary edges"***, so the reading is
+  stated rather than assumed: the clause requires the suite to *include a battery* covering them and to
+  include one case by name. It does not require every §4 row to be landed — read that way, B-MM-5 could only
+  ever discharge last and would be a proxy for the whole of §§2–5 rather than a coverage requirement, which
+  is a clause standing in for its neighbours. §4's own remaining rows say what is still owed on their own
+  lines: B-MM-1 and B-MM-4's host-call half on #602, B-MM-2's second case on #631.
 
   **This clause is why B-MM-2 was re-registered rather than reclassified.** The obvious reading of #603's
   findings is that no interleaving can witness B-MM-2 in this engine, which would make it `structural` — and
