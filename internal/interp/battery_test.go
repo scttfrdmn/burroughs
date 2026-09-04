@@ -81,6 +81,39 @@ const litmusSiblingWaiterSrc = `(module
                (i32.const 4))
       (i32.ne (i32.load (local.get $sib)) (i32.const 0)))))`
 
+// litmusTwoMemWakerSrc and litmusTwoMemWaiterSrc are
+// `b-mm-2-the-sibling-lives-in-a-second-shared-memory`'s agents: the pair above with the sibling extent
+// moved into a **second** shared memory, which is the whole of what that case asks (#631).
+//
+// **The futex word stays in memory 0 and only the sibling moves**, which keeps every explicit memory
+// index on the bulk and plain-load forms — `(memory.fill 1 …)`, `(i32.load 1 …)` — and off the atomic
+// ones. Not a style choice: an atomic instruction's memory index rides its memarg's 0x40 bit, so putting
+// the futex in memory 1 would make the case's front end depend on a second encoding question that has
+// nothing to do with B-MM-2. The clause is about a write in one memory being visible after a wake
+// arranged through another, and this arrangement is the one that tests it with the fewest unrelated
+// premises.
+//
+// Both memories are exported and both are imported by name, so the two index spaces line up: imported
+// memories come first in the importer's index space and in import order, so `mem` is 0 and `sib` is 1 in
+// both agents. `litmusAgentsUnder` asserts that rather than trusting it, index by index.
+const litmusTwoMemWakerSrc = `(module
+  (memory (export "mem") 1 1 shared)
+  (memory (export "sib") 1 1 shared)
+  (func (export "publish") (param $sib i32) (param $futex i32) (result i32)
+    (memory.fill 1 (local.get $sib) (i32.const 1) (i32.const 4))
+    (memory.atomic.notify (local.get $futex) (i32.const 1))))`
+
+// The packing is litmusSiblingWaiterSrc's and for the same reason — one i32 out, the wait result in bits
+// 4 and up, bit 0 the sibling predicate — with the load's memory index the only difference.
+const litmusTwoMemWaiterSrc = `(module
+  (import "m" "mem" (memory 1 1 shared))
+  (import "m" "sib" (memory 1 1 shared))
+  (func (export "await") (param $sib i32) (param $futex i32) (param $timeout i64) (result i32)
+    (i32.or
+      (i32.shl (memory.atomic.wait32 (local.get $futex) (i32.const 0) (local.get $timeout))
+               (i32.const 4))
+      (i32.ne (i32.load 1 (local.get $sib)) (i32.const 0)))))`
+
 // litmusAgents builds the battery's two agents and hands back the memory they share.
 //
 // Through the text front end and the decoder for `futexModule`'s reason (grave #579): a hand-built
@@ -97,9 +130,45 @@ func litmusAgents(t *testing.T) (waker, waiter *Instance, mem *memory) {
 }
 
 // litmusAgentsFrom is litmusAgents over a named pair of module sources, which is what a second case
-// with a second witness needs. The identity assertion below is the vehicle and belongs to every case
-// on it, so it lives here rather than being restated per case.
+// with a second witness needs. It is `litmusAgentsUnder` at the battery's default feature set and at
+// one memory, which is every case on the vehicle except `b-mm-2-the-sibling-lives-in-a-second-shared-memory`.
 func litmusAgentsFrom(t *testing.T, wakerSrc, waiterSrc string) (waker, waiter *Instance, mem *memory) {
+	t.Helper()
+	waker, waiter, mems := litmusAgentsUnder(t, binary.Features{Threads: true}, wakerSrc, waiterSrc)
+	return waker, waiter, mems[0]
+}
+
+// litmusAgentsUnder builds the two agents under a named feature set and hands back **every** memory
+// they share, in index order.
+//
+// **The features are a parameter because they were a literal, and a literal is what grave #630 was.**
+// The row for the two-memory case read `blocked — the multiple-memories gate` for as long as this
+// function hard-coded `Features{Threads: true}`: a gate's *default* governs what ships on, and a test's
+// `Features` literal governs what the harness can build. Only the second can block a case, and it is an
+// edit rather than a decision. Widening it here — rather than at the one call site that needs
+// `MultiMemory` — would re-create the confusion in the other direction, by making every case in the
+// battery run under a gate its clause never mentioned.
+//
+// # Three assertions about the memories, and the second and third are #631's
+//
+// The vehicle *is* the shared object: if the linker ever copied a memory on import, every case in this
+// battery would run two agents over two address spaces and pass by never racing. So:
+//
+//   - **Every index is the same object in both instances**, not just index 0. A case whose sibling
+//     extent lives in memory 1 while only memory 0 is shared runs its two accesses over two address
+//     spaces — the exact failure the index-0 assertion was written against, one index over, and
+//     invisible to it.
+//   - **The counts agree.** Without this the loop below is scoped to the shorter slice and a waiter
+//     holding one memory against a waker's two passes on the prefix.
+//   - **The memories are pairwise distinct objects.** Vacuous at one memory, and at two its subject is
+//     the **allocator** rather than the resolver — which is worth stating, because the resolver's version
+//     of this defect (both import names answered with one memory) is already caught index by index above,
+//     and a control whose stated subject is the covered half is a control nobody can watch die. An
+//     `allocate` that handed one `*memory` to two declared memories satisfies both checks above — the
+//     agents agree at every index — and collapses this case into the one-memory case it exists to be
+//     different from, passing with its subject deleted. Watched die by exactly that injection, in
+//     `Instance.allocate`.
+func litmusAgentsUnder(t *testing.T, feats binary.Features, wakerSrc, waiterSrc string) (waker, waiter *Instance, mems []*memory) {
 	t.Helper()
 
 	build := func(src string, imp Imports) *Instance {
@@ -108,7 +177,7 @@ func litmusAgentsFrom(t *testing.T, wakerSrc, waiterSrc string) (waker, waiter *
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
-		m, derr := (&binary.Decoder{Features: binary.Features{Threads: true}}).DecodeModule(img)
+		m, derr := (&binary.Decoder{Features: feats}).DecodeModule(img)
 		if derr != nil {
 			t.Fatalf("decode: %v", derr)
 		}
@@ -127,12 +196,29 @@ func litmusAgentsFrom(t *testing.T, wakerSrc, waiterSrc string) (waker, waiter *
 
 	waker = build(wakerSrc, nil)
 	waiter = build(waiterSrc, exportsOf(waker))
-	if waker.mems[0] != waiter.mems[0] {
-		t.Fatalf("the two agents hold different memories (%p, %p) — the import copied rather than "+
-			"shared, so nothing below would be a race at all",
-			waker.mems[0], waiter.mems[0])
+
+	if len(waker.mems) != len(waiter.mems) {
+		t.Fatalf("the waker holds %d memories and the waiter %d — the import side did not bind what the "+
+			"export side declared, and an index-by-index comparison would run over the shorter of the two",
+			len(waker.mems), len(waiter.mems))
 	}
-	return waker, waiter, waker.mems[0]
+	for i := range waker.mems {
+		if waker.mems[i] != waiter.mems[i] {
+			t.Fatalf("memory %d is a different object in the two agents (%p, %p) — the import copied "+
+				"rather than shared, so accesses to it would not be a race at all",
+				i, waker.mems[i], waiter.mems[i])
+		}
+	}
+	for i := range waker.mems {
+		for j := i + 1; j < len(waker.mems); j++ {
+			if waker.mems[i] == waker.mems[j] {
+				t.Fatalf("memories %d and %d are the same object (%p) — a case placing its two accesses "+
+					"in different memories would be placing them in one, and would pass by being a "+
+					"different case", i, j, waker.mems[i])
+			}
+		}
+	}
+	return waker, waiter, waker.mems
 }
 
 // litmusArmed spins until a waiter is queued at `ea`, which is how a case knows its second agent has
@@ -438,4 +524,131 @@ func TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify(t *testing.T) {
 		"published sibling value. The verdict is the race detector's silence about (A's fill, B's load) "+
 		"and is only taken under `-race` — `make check` does not pass it; CI's `race` step inside the "+
 		"two-architecture `build` job does", rounds)
+}
+
+// TestAResumedAgentSeesASiblingFieldInASecondSharedMemory is the battery's case
+// `b-mm-2-the-sibling-lives-in-a-second-shared-memory` (#631), the second of the two B-MM-2 registered:
+//
+//	B-MM-2 · A wake makes **all** of A's prior writes visible to B, not only the futex word's.
+//
+// Its registered witness is *"identical to the named case as amended"* over a module with two shared
+// memories, the sibling extent in the second. Everything the neighbour above documents is inherited and
+// is not restated here: the `-race` oracle and why the plain side is a `memory.fill` (#627), the verdict
+// channel's location in CI's `race` step rather than in `make check`, the located-rather-than-counted
+// forbidden outcome, the two-half floor, `R = 1000`, fresh addresses per round. Read that function first;
+// this one is about the word *all*.
+//
+// # What a second memory adds, and why one clause needs two cases
+//
+// An engine can establish a per-memory edge. Nothing in the shape of the passing named case rules that
+// out: an implementation whose wake publishes the notified memory's writes and no others satisfies
+// `b-mm-2-sibling-field-after-wake` on every round and still loses a write to a second shared memory —
+// which is the clause's word `all` failing on exactly the configuration the clause does not mention.
+// Two cases for one clause is therefore a coverage claim rather than duplication, and the pre-registration
+// carries both rows for that reason.
+//
+// This engine's edge is not per-memory — `notify`'s channel send orders everything before it — so the
+// expectation is a pass. **A case whose result is foreseen is still worth landing when the alternative
+// is an unasserted premise**: what is foreseen is the reading of the current mechanism, and the case is
+// what makes a future mechanism that narrows the edge per memory fail rather than pass quietly.
+//
+// # The two addresses coincide, on purpose
+//
+// The futex word and the sibling extent sit at the *same offset*, one in each memory, which is a
+// statement of what a second memory is: the same number naming two locations. It is not a control. A
+// resolver that answered both import names with one memory would put A's fill directly on B's futex word
+// and this case would still pass — the waiter has already matched 0 and queued by then, so the fill's
+// `1` arrives too late to be seen as a mismatch and is read back as the published value. That
+// degeneration is caught in `litmusAgentsUnder`, by the pairwise-distinctness assertion, and it is caught
+// there precisely because no arithmetic here can catch it.
+//
+// # The front end, and the two questions #631 said were open
+//
+// Both were answered by running it rather than by reading the linker. The features are a parameter now
+// (`litmusAgentsUnder`), so this case decodes under `MultiMemory` while every other case on the vehicle
+// keeps the feature set its clause implies. And the import side does bind two shared memories in index
+// order — asserted index by index, not inferred from the module text.
+func TestAResumedAgentSeesASiblingFieldInASecondSharedMemory(t *testing.T) {
+	const (
+		rounds  = 1000 // R, pre-registered — the named case's, inherited
+		timeout = int64(5 * time.Second)
+	)
+
+	feats := binary.Features{Threads: true, MultiMemory: true}
+	waker, waiter, mems := litmusAgentsUnder(t, feats, litmusTwoMemWakerSrc, litmusTwoMemWaiterSrc)
+	if len(mems) != 2 {
+		t.Fatalf("the vehicle bound %d memories, want 2 — this case's subject is the second one", len(mems))
+	}
+
+	type round struct{ sib, futex int32 }
+	rs := make(chan round)
+	stamped := make(chan outcome, 1)
+	go func() {
+		for r := range rs {
+			stamped <- callOffGoroutine(waiter, "await", I32(r.sib), I32(r.futex), I64(timeout))
+		}
+	}()
+	defer close(rs)
+
+	for i := range rounds {
+		// One fresh 16-byte-aligned offset per round, used in both memories. 1000 rounds at a stride of
+		// 16 stay inside the one page each memory declares.
+		r := round{futex: int32(16 * (i + 1))}
+		r.sib = r.futex
+		rs <- r
+
+		// The queue is memory 0's: the wait is there, and `litmusArmed` reads the mechanism of the
+		// memory the wait was issued against. Handing it `mems[1]` would spin to the deadline on an
+		// empty queue and report the premise as failed.
+		if !litmusArmed(mems[0], uint64(r.futex), time.Now().Add(10*time.Second)) {
+			t.Fatalf("round %d: the waiting agent never reached memory 0's queue at address %d within "+
+				"10s — this is the case's premise and not its verdict: no pair was formed", i, r.futex)
+		}
+
+		if woke := call(t, waker, "publish", I32(r.sib), I32(r.futex)); woke != 1 {
+			t.Fatalf("round %d: memory.atomic.notify woke %d waiters at address %d, want 1 — the agent "+
+				"was queued when this round armed, so the wake was counted against an empty queue",
+				i, woke, r.futex)
+		}
+
+		got := (<-stamped).get(t)
+		res, published := got>>4, got&1
+		if res != waitWoken {
+			t.Fatalf("round %d: memory.atomic.wait32 returned %d, want %d (woken) — a notify claimed this "+
+				"agent and it was told something else happened. Under an infinite-in-practice timeout a "+
+				"non-wake is an instrument fault rather than a verdict about B-MM-2", i, res, waitWoken)
+		}
+		if published != 1 {
+			t.Fatalf("round %d: the woken agent read 0 from memory 1 at address %d, which A filled with 1 "+
+				"before notifying on memory 0. This is the floor and not the verdict: it says A's write "+
+				"and B's read did not land on one extent, so the detector's silence about the pair would "+
+				"be silence about nothing", i, r.sib)
+		}
+
+		// **Which memory the fill landed in, read out of both.** The two offsets coincide, so every
+		// assertion above holds unchanged if the memory index were dropped somewhere between the text and
+		// `execMemoryFill` — the fill and the load would agree with each other in memory 0 and this case
+		// would be the named case wearing a second memory's name. So the premise is read rather than
+		// argued: memory 1 holds the published byte and memory 0's word is still the 0 the waiter matched,
+		// which nothing in this case ever writes.
+		//
+		// Plain reads, and they are not a race: the fill happened on this goroutine through `call`, and
+		// the waiter's load is ordered before this line by the receive from `stamped` above.
+		if got := mems[1].view()[r.sib]; got != 1 {
+			t.Fatalf("round %d: memory 1 holds %d at address %d, want 1 — A's `(memory.fill 1 …)` did not "+
+				"land in the second memory, so this case's subject is absent and its pass is the named "+
+				"case's", i, got, r.sib)
+		}
+		if got := mems[0].view()[r.futex]; got != 0 {
+			t.Fatalf("round %d: memory 0 holds %d at address %d, want 0 — the fill reached the memory "+
+				"holding the futex word, so the two accesses under test were in one address space",
+				i, got, r.futex)
+		}
+	}
+
+	t.Logf("b-mm-2-the-sibling-lives-in-a-second-shared-memory: %d rounds over two shared memories, "+
+		"every round woken and every round reading the value published in memory 1. The verdict is the "+
+		"race detector's silence about (A's fill in memory 1, B's load from memory 1) and is only taken "+
+		"under `-race` — `make check` does not pass it; CI's `race` step inside the two-architecture "+
+		"`build` job does", rounds)
 }
