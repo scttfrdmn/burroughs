@@ -453,6 +453,13 @@ func (m *memory) read(idx, offset, n uint64) ([]byte, error) {
 // Checking the whole extent up front gets the same guarantee without depending on iteration
 // order, which is the property `memory_trap.wast` asserts by reading the memory back after a
 // failed store.
+//
+// **The `copy` is plain, and its SIMD callers are why that is worth saying here (#627).** ADR 0054's
+// atomicity lives at the typed-word sites in `memAccess`, not on this function, so every caller of `write`
+// stores without synchronisation at every alignment — including `vecStore` and the lane stores in
+// `simd.go`, which reach it on a default-on gate. `execMemoryFill`'s comment carries the finding and the
+// coupling to #10's B-MM-2 carrier; this note exists so a reader arriving from the SIMD side does not infer
+// coverage from 0054's title.
 func (m *memory) write(idx, offset uint64, bs []byte) error {
 	ea, err := effectiveAddress(idx, offset)
 	if err != nil {

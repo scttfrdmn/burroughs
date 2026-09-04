@@ -64,6 +64,21 @@ import (
 // ";; Fill value is stored as a byte", filling with `0xbbaa` and reading back `0xaa` twice
 // (`:35`-`:37`). Without the narrowing a Go `byte()` conversion is the only thing standing
 // between `0xbbaa` and a panic-free wrong answer, which is why the row exists.
+//
+// # The byte loop below is plain at every alignment, and ADR 0054 does not reach it (#627)
+//
+// 0054 made *typed word* accesses sequentially consistent — `atomicLoadWord`/`atomicStoreWord` at widths 4
+// and 8, `atomicCell` at 1 and 2 — and its title's "every aligned guest access" was read as covering this
+// file. It does not: the whole bulk family writes through plain loops and plain `copy`, so a
+// `memory.fill` racing a concurrent guest load **is a Go data race**, measured under `-race` rather than
+// argued. Two atomic readers were observed on the other side of this one write, so the finding is about
+// the write. Ungated, too — `0xFC` needs no proposal — so this is not confined to a gate's blast radius.
+//
+// Whether these paths join the atomic regime is #627's decision and is Scott's, the cost being
+// bulk-throughput rather than the per-access figure 0054 priced. **What must not happen quietly is the
+// repair**: #10's `b-mm-2-sibling-field-after-wake` uses this write as the carrier for a `-race` verdict,
+// so making it atomic leaves that case passing with nothing to detect. #627 carries the obligation; it is
+// named here because a diff that routes this loop through `atomicCell` would show no sign of it.
 func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 	mem, err := in.memoryFor("instruction", ins.Imm0)
 	if err != nil {

@@ -59,9 +59,28 @@ likely to rot, which is why the sequencing below says out loud which two issues 
 ## Coverage, fixed in advance
 
 **Aligned accesses only. Unaligned is named as uncovered.** Every case below observes naturally aligned
-words, because that is the population ADR 0054's mechanism makes atomic; the unaligned path is byte-wise
-and its tear-freedom is asserted by nothing. This is Scott's order on the #567 stamp, written here rather
-than discovered by someone reading a green as covering more than it does.
+words; the unaligned path is byte-wise and its tear-freedom is asserted by nothing. This is Scott's order on
+the #567 stamp, written here rather than discovered by someone reading a green as covering more than it does.
+
+**The reason clause this sentence used to carry was false, and the correction widens the uncovered
+region.** It read *"because that is the population ADR 0054's mechanism makes atomic"*, which is not the
+partition the mechanism draws. Measured in the tree while B-MM-2's witness was being redesigned
+([#627](https://github.com/scttfrdmn/burroughs/issues/627)): ADR 0054 makes **typed word accesses** atomic
+at widths 1, 2, 4 and 8 when aligned — wider than "the aligned population", since `atomicLoadWord` serves
+4 and 8 and `atomicCell` covers 1 and 2 — while the **bulk family** (`memory.fill`, `memory.copy`,
+`memory.init`) and the **SIMD family** (`v128.store`, `v128.store*_lane`, and the SIMD reads) are plain at
+*every* alignment. So alignment was never the boundary, and three of the plain sites are reachable from
+instructions that need no gate at all.
+
+Two things follow for this document, and only the first is a narrowing:
+
+1. **The aligned-only scope is unchanged as a scope.** Every case still observes naturally aligned words,
+   which is what Scott's order fixed. What changed is that "aligned" no longer *implies* "atomic", so a
+   case cannot infer an access is synchronised from its address.
+2. **B-MM-2's witness turns that into an instrument rather than a gap.** A litmus case whose oracle is
+   `-race` needs one non-atomic side to have anything to report, and after ADR 0054 the bulk family is the
+   only guest-reachable place a plain write remains. The case below uses it deliberately, and carries the
+   coupling that #627's repair would make it vacuous.
 
 The Go-runtime torture set (STW under load, checkdead soundness in both directions, the sleeper-deadlock
 inverse control, and positive controls for the classifiers) is **not here**. Its oracle is Go's runtime
@@ -383,10 +402,12 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 > the waking agent — not only the futex word. "The notified word only" is expressly non-conforming.
 
 - **Shape:** outcome
-- **Blocked by:** #603 — its own witness. #543 closed with #594 and ADR 0062's vehicle supplies the agents, so
-  this clause's cases are *implementable*; what #603 records is that the witness as registered below cannot
-  expose the defect the clause forbids, measured rather than argued. **Amending a witness, an outcome set or a
-  floor is its own PR** per ADR 0055, which is why the rows below are unedited and the finding is filed.
+- **Blocked by:** [#628](https://github.com/scttfrdmn/burroughs/issues/628) — the implementation, against the
+  witness amended below. #543 closed with #594 and ADR 0062's vehicle supplies the agents, so this clause's
+  cases are implementable; the second case additionally waits on the multiple-memories gate.
+- **Amended:** 2026-09-04, discharging [#603](https://github.com/scttfrdmn/burroughs/issues/603). The witness,
+  the outcome set, the floor and the arbiter all changed, and **what was wrong was the clause reading, not the
+  numbers** — see *What was wrong about the reading* below, which ADR 0055 requires an amendment to state.
 
 #### Case `b-mm-2-sibling-field-after-wake`
 
@@ -395,43 +416,100 @@ This is the case the contract names by hand, and D20 is its provenance: on the b
 the woken agent's resume even when the read occurs under a freshly acquired lock.
 
 - **Discharges:** B-MM-2
-- **Allowed:** observation `(r, d)`, where `r` is `memory.atomic.wait32`'s result on agent B and `d` is the
-  sibling word B reads immediately after: `(0,1)` — woken, sibling visible; `(1,0)` and `(1,1)` — the wait
-  returned not-equal because B arrived after A's store to the futex word, so no wake edge was claimed.
-- **Forbidden:** `(0,0)` — B was woken by A's notify and read a stale sibling field. `(2, *)` under an
-  infinite timeout is an instrument fault.
-- **Witness:** A stores `1` to a naturally-aligned sibling word, then `i32.atomic.store`s `1` to the futex
-  word, then notifies. B waits on the futex word for `0`, then loads the sibling word once. B must be inside
-  the wait before A's atomic store, which the harness arranges with a host-side arming flag — host state, so
-  the arming cannot itself supply the edge under test. `R = 100_000` rounds.
-- **Floor:** at least 80% of rounds must report `r == 0`; below that the case fails as un-witnessed, because
-  the not-equal rounds test nothing. The `r == 1` share is reported on every run.
-- **Arbiter:** **arm64 is expected to discriminate**, for B-MM-1's reason.
-- **Status:** blocked — #603
+- **Allowed:** **no race report naming the sibling extent.** The observation is the Go race detector's
+  verdict over the pair *(A's write to the sibling, B's read of it after waking)*, and the conforming
+  observation is its silence about that pair. The value tuple survives as the weaker half and is the floor
+  below, not the verdict.
+- **Forbidden:** a report whose two halves are A's sibling write and B's post-wake sibling read, **at an
+  address inside the sibling extent**. Located rather than counted, because the injection that watches this
+  case die is itself racy and produces a second report about its own flag — *a report with no located pair
+  is the instrument's noise, not the engine's finding*. A round in which B's wait returns anything but
+  woken is an instrument fault under an infinite timeout, per the floor.
+- **Witness:** A `memory.fill`s `1` over a naturally-aligned 4-byte sibling extent — a **plain** guest
+  write, which after ADR 0054 the bulk family is the only guest-reachable source of — and then notifies. A
+  **never stores to the futex word at all**: each round uses a fresh 16-byte-aligned pair, and a fresh word
+  holds `0`, which is the value B waits for. B waits on the futex word for `0`, wakes, and loads the sibling
+  once. B is inside the wait before the notify, arranged by the host-side arming spin (`litmusArmed`), which
+  observes strictly *before* A's write and so runs B→A — the opposite direction from the edge under test.
+  Fresh addresses per round are load-bearing rather than tidy: with one reused pair, round *i*'s fill races
+  round *i−1*'s read and the detector reports the **harness's** race. `R = 1000` rounds.
+- **Floor:** every round must report `r == 0`, and every round must read the published sibling value.
+  Both halves are structural rather than statistical — a fresh word cannot be not-equal, and the fill
+  precedes the notify in A's program order — and they are asserted anyway, because **the detector's silence
+  is informative only if the two accesses landed on one address**, which is exactly what the published value
+  establishes. `R` is reported; it is not a window budget.
+- **Arbiter:** **both architectures, and the arbiter is Go's memory model via `-race`** — not the hardware.
+  This is the one §4 case that does *not* rest on arm64 discriminating, because the defect it forbids is a
+  missing happens-before edge in the host language rather than a reordering some machine performs. That
+  makes it the strongest arbiter in this document and the reason the case was worth re-registering rather
+  than retiring: `-race` owes nothing to our reading of the contract.
+- **Status:** blocked — #628
 
-**Three findings from implementing this case, left here as a pointer because the amendment is #603's PR.** The
-witness's `i32.atomic.store` to the futex word is sequentially consistent (ADRs 0051/0054), so **the release
-edge lives in the guest program rather than in the engine's wake**: with the engine's wake edge deleted by hand,
-2,000,000 rounds produced zero `(0,0)`. An interpreter-free positive control on the same machine measured the
-phenomenon at about 6 × 10⁻⁷ per round, so `R = 100_000` has an expected count of 0.06 against a *maximally
-exposed* defect. And the floor above — 80% of rounds reporting `r == 0` — was satisfied by **every** round of
-that injected run, so **it measures the wake happening rather than the visibility window being exercised**.
+#### What was wrong about the reading
+
+ADR 0055 requires an amendment to say this rather than only to make the edit. **The original outcome set
+assumed a plain aligned guest store existed to carry the witness, and ADR 0054 had removed it.** The
+witness's `i32.atomic.store` to the futex word is sequentially consistent (ADRs 0051/0054), so the release
+edge lived in the guest program rather than in the engine's wake — #603 measured that directly, with the
+engine's wake edge deleted by hand: **2,000,000 rounds, zero `(0,0)`**. The clause was being tested against
+an edge the guest supplied.
+
+Three consequences, and the third is the one that changed the instrument rather than the numbers:
+
+1. **A bigger `R` was never the repair.** #603's interpreter-free positive control measured the phenomenon
+   at about 6 × 10⁻⁷ per round with *zero* distance between the flag and the read, while the interpreter
+   interposes microseconds of dispatch against a nanosecond window. No achievable `R` reaches an expected
+   count of 1, so the value-tuple oracle is unavailable at any budget — a finding about the channel, not
+   about the sample size.
+2. **The old floor measured the wrong event.** *"At least 80% of rounds report `r == 0`"* was satisfied by
+   **every** round of the injected run, so it certified that the wake happened and said nothing about
+   whether the visibility window was exercised. The floor above replaces it with the premise the new verdict
+   actually needs: address identity.
+3. **The oracle was already in this document, one clause up.** B-MM-3's second half writes plainly *on
+   purpose* — *"routing it through `memory.write` would leave two atomics and a detector with nothing to
+   say"* — and reads its verdict from `-race`. B-MM-2 had the same problem and a solution sitting beside it;
+   *lessons are indexed by shape, not by file*, and re-deriving this one cost #603's two-million-round run.
+   Where a value comparison needs a 6 × 10⁻⁷ event, the detector's happens-before check answers **per round
+   and deterministically**, which is why `R` falls from 100 000 to 1000 and is now about schedule diversity
+   rather than about hitting a window.
+
+**The feasibility of this witness was probed before it was registered, and that ordering is a partial spend
+of what ADR 0055 buys.** Two arms on darwin/arm64, 200 rounds, ADR 0062's vehicle, probe deleted rather than
+committed: the conforming engine produced **no report**, every round woken and every sibling read published;
+with `notify`'s channel send and `wait`'s receive replaced by a plain unsynchronised `bool`, the detector
+**reported the pair** — the write in `internal/interp/bulk.go:execMemoryFill` against the woken agent's
+load in `internal/interp/memory.go:memAccess`, one address, two goroutines. What the probe did
+*not* do is choose the verdict: the forbidden outcome is the negation of the clause's own words, and `R`
+follows from the detector being deterministic. The distinction is worth stating because it is the only thing
+separating a registration from a fit, and because a probe that goes unmentioned is indistinguishable from
+one that was never run.
+
+**The carrier is an open finding, and this case goes vacuous silently if it is repaired.** The sibling write
+is plain only because `memory.fill` is
+([#627](https://github.com/scttfrdmn/burroughs/issues/627)). Route the bulk family through the atomic regime
+and the detector has two atomics and nothing to report, while this case keeps passing — the *subject
+dissolves and the control does not notice*. #627 carries the mirror obligation, and #628 owes the coupling in
+the test's own comment; it is recorded in three places because no instrument's domain spans them.
 
 #### Case `b-mm-2-the-sibling-lives-in-a-second-shared-memory`
 
 - **Discharges:** B-MM-2
-- **Allowed:** as `b-mm-2-sibling-field-after-wake` — `(0,1)`, `(1,0)`, `(1,1)` — with the sibling word in
-  a *different* shared memory from the futex word.
-- **Forbidden:** `(0,0)`, for the named case's reason plus the reason this case exists separately: the
-  clause says *all* writes, and a per-memory edge would satisfy the named case while publishing nothing
-  about a second memory.
-- **Witness:** identical, over a module with two shared memories. Registered as its own case because the
-  clause says *all* writes while D20's shape is same-memory: an engine could establish a per-memory edge,
-  pass the named case, and still publish nothing about a second memory. `R = 100_000` rounds.
-- **Floor:** as above, 80% woken.
-- **Arbiter:** **arm64 is expected to discriminate.**
-- **Status:** blocked — #603, and the multiple-memories gate. It inherits every one of the named case's three
-  findings, since its witness is *"identical, over a module with two shared memories"*.
+- **Allowed:** as `b-mm-2-sibling-field-after-wake` — no race report naming the sibling extent — with the
+  sibling extent in a *different* shared memory from the futex word.
+- **Forbidden:** a located report on that extent, for the named case's reason plus the reason this case
+  exists separately: the clause says *all* writes, and a per-memory edge would satisfy the named case while
+  publishing nothing about a second memory.
+- **Witness:** identical to the named case as amended — a plain `memory.fill` over the sibling extent, no
+  store to the futex word, fresh pairs per round — over a module with two shared memories, the sibling
+  extent in the second. Registered as its own case because the clause says *all* writes while D20's shape is
+  same-memory: an engine could establish a per-memory edge, pass the named case, and still publish nothing
+  about a second memory. `R = 1000` rounds.
+- **Floor:** as amended above — every round woken, every round reading the published value, both structural
+  and both asserted.
+- **Arbiter:** as amended above — **both architectures, via `-race`.** The per-memory-edge defect this case
+  exists for is a missing happens-before edge like the named case's, so the detector reaches it too.
+- **Status:** blocked — #628, and the multiple-memories gate. It inherits the amendment above rather than the
+  three findings that prompted it, since its witness is *"identical"* and the named case's witness changed.
 
 ### B-MM-3 — no engine lock across a resume
 
@@ -493,12 +571,22 @@ that injected run, so **it measures the wake happening rather than the visibilit
 > platform.
 
 - **Shape:** structural
-- **Blocked by:** #603, and not the whole battery any more. The clause asks for a litmus battery *including
-  the sibling-field-after-wake case*, so the case it names by hand is what gates it — and that case is
-  implementable and stillborn (#603) rather than blocked on a mechanism. The battery now exists and has one
-  landed case, which discharges none of this clause: **the row that read `blocked — #554 and #543` was
-  describing the mechanism's absence, and the mechanism arriving is not what satisfies a clause about
-  coverage.**
+- **Blocked by:** [#628](https://github.com/scttfrdmn/burroughs/issues/628), and not the whole battery any
+  more. The clause asks for a litmus battery *including the sibling-field-after-wake case*, so the case it
+  names by hand is what gates it — and that case is now **registered against a witness that can fail**
+  rather than stillborn (#603, discharged by the amendment above), so what remains is writing it. The
+  battery exists and has one landed case, which discharges none of this clause: **the row that read
+  `blocked — #554 and #543` was describing the mechanism's absence, and the mechanism arriving is not what
+  satisfies a clause about coverage.**
+
+  **This clause is why B-MM-2 was re-registered rather than reclassified.** The obvious reading of #603's
+  findings is that no interleaving can witness B-MM-2 in this engine, which would make it `structural` — and
+  that reading is foreclosed here, in normative text: §4 B-MM-5 requires the suite to *include* the
+  sibling-field-after-wake case, so discharging B-MM-2 by deleting the case it names would discharge one
+  clause by falsifying another. A closure condition must not retroactively unmake a stamped requirement,
+  which is `CLAUDE.md`'s phase-ladder shape one level down. The `-race` oracle is what let both clauses stay
+  true at once; had it not existed, the honest move would have been a `type:contract` question for Scott, not
+  a shape field edited to fit.
 - **Why no litmus case:** the clause's subject is this file and the suite it describes, so a case
   discharging it would be a suite testing its own existence. Its three named requirements are checked where
   each can be: the battery's existence and the sibling-field-after-wake case by

@@ -255,6 +255,41 @@ reach is a law out of context.
   Scott, on the #499 reconciliation; specimen ordered recorded on the same review. The draft's own
   falsification, above, is recorded rather than repaired silently, on the same rule.)
 
+### An asserted deferral is a citation with no target, and it reads as tracked.
+
+- **An asserted deferral is a citation with no target.** *"Worth pursuing", "left for later", "the
+  obvious candidate, not benchmarked here" — each names future work and names no place it lives, so
+  the sentence carries a citation's force with nothing on the other end.* This is the family's
+  standing shape read in the direction where no pointer was ever written. The rest of this file is
+  about pointers that stop resolving; an asserted deferral is the case where **the pointer is absent
+  rather than broken**, which is strictly worse for a sweep,
+  because a dangling `#N` is a token an instrument can resolve and fail on, and *"worth pursuing"*
+  is prose. Nothing in `citecheck.sh` can fire on it, and nothing should be built that tries: the
+  words are unbounded. What is checkable is the other half — **once a subject is filed, the sentence
+  cites it**, and then every sweep in this file reaches it.
+
+  **The specimen is ADR 0023's narrowing question.** Finding 2 reads *"so a u8-or-narrower design is
+  worth pursuing if its wraparound can be made sound (a per-call-frame generation reset is the
+  obvious candidate, not benchmarked here)"*, in
+  [ADR 0023](../decisions/0023-drop-tags-each-stack-slot-with-a-lazily-activated-push-sequence-number.md)'s
+  finding 2 — quoted rather than line-cited, since the quotation survives an insertion above it.
+  Two deferrals in one parenthesis, a named candidate mechanism, and no issue anywhere. It sat from
+  the ADR's acceptance until the #612 audit read the decisions directory for exactly this, and it
+  had been read past repeatedly in between: an ADR is a tombstone, so a reader arriving at a
+  Consequences-tier sentence about future work assumes the record is complete, which is what
+  "tombstone" means. The tell is that **its own next finding argues against it** — finding 4 says
+  that once gated, width stops being the clear lever finding 2 made it — so the deferral was not
+  merely unfiled but had accumulated evidence its filing would have to answer.
+
+  **The repair is the form, and it is a title rather than a paragraph.**
+  [#617](https://github.com/scttfrdmn/burroughs/issues/617) is *"Gated u8 sequence numbers: ADR
+  0023's narrowing question, deferred and never filed"* — the defect named in the title, so the
+  issue's own subject line records that the deferral was asserted before it was tracked, and the
+  ADR's sentence now has something to point at. **What the audit could not do is make the ADR's
+  prose true retroactively**: the sentence was untracked for the whole interval, and a reader in
+  that interval had no way to know, since an assertion of future work is indistinguishable from a
+  tracked one until you go looking for the number that is not there.
+
 ### The word "grave" is a citation to a label, so the label lands before the body that cites it.
 
 - **The word "grave" is a citation to a label, so the label lands before the body that

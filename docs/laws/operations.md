@@ -247,6 +247,40 @@ An empty diff is the check that makes `reset --hard` safe here — it confirms t
 content difference. This surfaced three times in one session, each time re-derived
 from scratch; the pattern is mechanical once named; don't re-derive it.
 
+### Rewriting a branch's commit messages is licensed, and an empty tree diff is the licence
+
+The standing posture is *corrections by posting, not editing* — a record is appended to, never altered,
+so the wrong version stays readable beside the right one. **A commit message on a branch bound for a
+squash merge is the one place that posture cannot reach**, and the reason is mechanical rather than a
+preference: `gh pr merge --squash` builds the merge commit's body by concatenating the branch's messages,
+so a later commit saying *"the message above carries a banned form"* does not retract it. It ships both.
+The scanned population is `BASE..HEAD`, and every message in it is still in that population after the
+one that apologises for it.
+
+So a message that carries a closing keyword next to a reference, or any other construct the sweeps ban,
+is repaired **in place, by rewriting the message**, and the correction is recorded in the rewritten
+message itself rather than in a follow-up commit.
+
+```bash
+git branch backup-pre-msgfix                              # the pre-rewrite tip, kept until the check passes
+git rebase -i --root      # or `commit --amend`, or `filter-branch --msg-filter` — messages only
+git diff --stat backup-pre-msgfix HEAD                    # must be empty
+```
+
+**The empty diff is the whole safety argument**, and it is the same argument the section above makes for
+`reset --hard`: an interactive rebase can silently drop or reorder a hunk, and a message-only rewrite is
+distinguished from a content change by exactly one observation — the trees are identical. Keep the backup
+ref until that diff comes back empty; the check is worthless taken afterwards.
+
+**The specimen is #613's two message rewrites**, and the durable form of the check is the pair of commits
+themselves: `d1b1698` → `74bc525` and `3ead596` → `a812479` have byte-identical trees
+(`139f826…` and `10348973…` respectively, still resolvable with `git rev-parse <rev>^{tree}`), which is
+the check above surviving the slice it was run on. Both were rewritten because a `CHANGELOG.md` entry
+quoted a state-changing keyword in front of a reference; harmless in the changelog, where nothing parses
+it, and live the moment the sentence was quoted into the PR body. The first rewrite of the first message
+then FAILed the commit-message scan by **quoting** the offending form, which is the section below's rule
+arriving from the other direction, and its second rewrite describes the form instead.
+
 ## Opening a PR: the body is a scanned population, and `make check` cannot see it
 
 Two of the repo's sweeps scan **two populations each**, and the make targets reach only one of them:
@@ -299,6 +333,28 @@ general.
 local mirror of CI, so a surprise in CI is a bug in the Makefile) meeting the one check whose subject
 does not exist yet when the Makefile runs. The mirror is incomplete **by construction** here, which is
 why the sequence above is written down instead of a Makefile target being fixed.
+
+### A target's name is a claim about which population was scanned
+
+Running both channels is half the discipline. The other half is on the **report**, and it is a citation
+rule: the name you write beside a figure says which population produced it, so `make close` and
+`closecheck.sh --pr N` are not two spellings of one verdict. They scan different populations — the table
+above is the whole reason — and attributing one arm's green to the other arm's name is a false claim about
+what was checked, in the sentence whose entire job is to say what was checked.
+
+**The specimen is #613's own Board line**, which read *"`make close`: 0 banned constructs"*. The figure was
+real and the run was real; it came from `closecheck.sh --pr 613`, the **body** arm. The commit-message arm
+was red at that moment — that is what the two message rewrites one section up exist for — so the sentence
+named the failing channel and reported the passing channel's number. Nothing in it was invented; the
+attribution was.
+
+**And the wrong name is the more likely error, because the target is the habitual name for the check.**
+`make close` is what a person types, what the Makefile declares, and what `CLAUDE.md` names; `closecheck.sh
+--pr N` is the arm that exists only in the opening sequence above. So the drift runs one way, toward the
+familiar name, and the remedy is the same one the whole citation family runs on: **name the invocation, not
+the check** — `closecheck.sh --pr 613`, with the population it scanned, and a second sentence for the
+commit-message arm with its own number or its own red. A Board line reporting one figure under a target's
+name is asserting the union of two populations from one of them.
 
 ## The maxim's precondition: the mirror holds where the Makefile observes a superset of CI
 

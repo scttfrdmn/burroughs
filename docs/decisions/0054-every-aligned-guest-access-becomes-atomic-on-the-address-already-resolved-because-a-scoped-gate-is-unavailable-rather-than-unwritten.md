@@ -144,6 +144,40 @@ cheaper plain accesses; it is a racy region with no boundary anyone can state.
 - **#10's coverage statement is fixed in advance by the stamp: aligned only, with unaligned named as
   uncovered.** Stated in the battery rather than left to be inferred from what it happens to contain,
   because a suite's silence otherwise reads as coverage.
+
+### Amendment, 2026-09-04 — the covered population is typed word accesses, not aligned ones (#627)
+
+The decision stands and nothing about the mechanism changes; what is corrected is **this ADR's account of
+which accesses it reaches**, measured in the tree while #10's B-MM-2 witness was being redesigned and filed
+as [#627](https://github.com/scttfrdmn/burroughs/issues/627).
+
+- **The title's "every aligned guest access" is true of typed word accesses and false of the tree as a
+  whole.** For the typed path the reach is *wider* than the bullets above imply — `atomicLoadWord` /
+  `atomicStoreWord` serve widths 4 and 8, and `atomicCell` covers 1 and 2, so all four aligned widths are
+  atomic. But the **bulk family** (`memory.fill`, `memory.copy`, `memory.init`) and the **SIMD family**
+  (`v128.store`, `v128.store*_lane`, the SIMD reads) go through plain `copy` and plain byte loops at *every*
+  alignment, and this ADR's mechanism never touches them.
+- **So the partition is not alignment.** It is *typed word access* versus *bulk and SIMD*, and the second
+  group is uncovered at every address. Three of the six sites are reachable from instructions needing **no
+  gate at all** (the `0xFC` bulk family), so the uncovered region is not confined to a proposal's blast
+  radius the way ADR 0051's rejected option C priced it.
+- **The bullet above about the unaligned path is true and was read as exhaustive.** It named the one
+  uncovered region this ADR had thought about, and a reader — including this project, in #10's stamped
+  coverage sentence — took the complement to be covered. *An unmeasured complement is not an empty one*: the
+  region was never measured, and naming one part of it made the rest invisible.
+- **The title is not being changed, deliberately.** Every citation to this ADR resolves through its
+  filename, and a rename would break them all to repair a scope that a Consequences bullet can state
+  precisely. What the title claims is therefore read as scoped by this amendment, which is why the amendment
+  sits here rather than in a successor ADR.
+- **Whether the bulk and SIMD families join the atomic regime is #627's question and is not decided here.**
+  The trade is different in kind from the one this ADR priced: a `memory.copy` of a page is one `copy` today
+  and would become a per-word atomic loop, so it is a bulk-throughput cost with no figure in hand, and it is
+  Scott's the way #567 was.
+- **One thing the gap is already good for, stated so it is not mistaken for a silver lining.** #10's
+  `b-mm-2-sibling-field-after-wake` uses `memory.fill`'s plain write as the **carrier** for a `-race`
+  verdict, because a detector needs one non-atomic side to have anything to say. That makes #627's repair a
+  change that would silently void a litmus case, which is recorded in the pre-registration and on both
+  issues. It is a use for the gap, not an argument for keeping it.
 - **This does not discharge #568's tripwire, and the reason is a distinction worth keeping.** The
   tripwire guards `allocate`'s *reservation* — whether an unshared memory reserves its maximum so `grow`
   cannot move the backing array. An atomic access to a **relocated** array is a correct atomic operation
