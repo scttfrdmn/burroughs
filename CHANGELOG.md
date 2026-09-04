@@ -89,6 +89,36 @@ weakly-ordered platform.
     exit — the first version of that trap accumulated its paths inside a command substitution, so
     cleanup ran over an empty list and left three `prunable` registrations behind.
 
+- **§4 B-MM-2 has a case with a verdict: `b-mm-2-sibling-field-after-wake` is implemented, and its oracle
+  is the race detector** ([#628](https://github.com/scttfrdmn/burroughs/issues/628),
+  [#10](https://github.com/scttfrdmn/burroughs/issues/10)). `TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify`
+  is the case the contract names by hand — §4 B-MM-5 requires the conformance suite to contain it — against
+  the witness re-registered after the value-comparison form was found stillborn. A `memory.fill`s `1` over a
+  naturally-aligned 4-byte sibling extent and notifies, **never storing to the futex word at all** since a
+  fresh word already holds the 0 the waiter waits for; the waiter reads the sibling after waking. The fill is
+  the plain side, and a detector needs one non-atomic side to have anything to say. Fresh
+  16-byte-aligned pairs per round, because with one reused pair round *i*'s fill races round *i−1*'s read and
+  the detector reports **the harness's** race. `R = 1000`.
+  - **The verdict channel is `-race`, and the test's comment says where it lives**: CI's `race` *step* inside
+    the two-architecture `build` job, not a job of its own, so a reader scanning a run's job list cannot tell
+    a skipped verdict from a misnamed one. `make check` does not pass `-race`, so its green exercises the
+    floor alone — *a verdict channel named wrongly is worse than one left unnamed*.
+  - **The floor is the vacuity guard, and both halves are asserted every round** — woken, *and* the published
+    sibling value read. A detector is silent when the two accesses never overlap and equally silent when they
+    never landed on one address; the second half is what establishes the pair the silence is about.
+  - **Watched die.** With `notify`'s channel send and `wait`'s receive replaced by a plain unsynchronised
+    `bool` — the missing-edge defect the clause forbids — the detector reported the located pair, the write in
+    `internal/interp/bulk.go:execMemoryFill` against the woken agent's load through
+    `internal/interp/memory.go:memAccess`, one address, two goroutines. It reported a **second** race on the
+    injected flag itself, which is why the registration forbids a *located* report rather than any report.
+  - **The carrier is an open finding and this case goes vacuous silently if it is repaired**
+    ([#627](https://github.com/scttfrdmn/burroughs/issues/627)): the sibling write is plain only because the
+    bulk family is. Route it through the atomic regime and the detector has two atomics, nothing to report,
+    and a passing test. `execMemoryFill` names the landed test so a diff touching the loop sees the coupling.
+  - **§4 B-MM-5's blocker is discharged with it**, on the reading now stated in the document: the clause asks
+    for a battery *including* the named case, not for every §4 row to be landed — read the second way it
+    could only ever discharge last and would be a proxy for the whole of §§2–5.
+
 - **The §§2–5 litmus battery has its first landed case, and its two agents are two instances sharing one
   imported memory** ([#10](https://github.com/scttfrdmn/burroughs/issues/10), [ADR
   0062](docs/decisions/0062-the-litmus-batterys-two-agents-are-two-instances-sharing-an-imported-memory-because-a-shared-memory-spans-instances-and-spawn-does-not-gate-that.md)).
@@ -1366,6 +1396,22 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **"Blocked on the multiple-memories gate" was a claim about a `binary.Features` bool the harness already
+  sets** (grave [#630](https://github.com/scttfrdmn/burroughs/issues/630)). B-MM-2's second registered case
+  read `blocked — #628, and the multiple-memories gate`, and both halves were wrong. A gate's **default**
+  governs what ships on; a test's `Features` literal governs what the harness can build, and the battery's
+  own vehicle sets `Threads: true` for exactly that reason — so no battery case has ever been blocked on a
+  proposal's default. Probed: a module with two shared memories, an explicit-index `(memory.fill 1 …)` and a
+  `(memory.atomic.notify 0 …)`, decodes, links and instantiates. This is grave #606's shape one document
+  down — *a blocker that names a proposal gate is a claim about the harness, not about the default* — and
+  #607's five re-derived blockers missed it because that sweep was keyed on `Spawn` rather than on the
+  shape. The `#628` half was forbidden by #628's own body (*"so the row's blocker does not silently become
+  this number"*) and would have become a `blocked` row citing a closed issue the moment the named case
+  landed: **a `Status:` written in the PR that files the blocker is written before the blocker has a body.**
+  Re-pointed at [#631](https://github.com/scttfrdmn/burroughs/issues/631), which is what is actually left —
+  the vehicle taking its features from a parameter, `exportsOf` over two shared memories, and the identity
+  assertion holding per memory rather than for `mems[0]` alone.
 
 - **`ab.sh` hashed its arms with `shasum`, which the lab host does not have — so `make lab-ab` had never
   run, and the failure was reported as a claim about the code** (grave

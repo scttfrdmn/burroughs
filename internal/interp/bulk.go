@@ -79,6 +79,11 @@ import (
 // repair**: #10's `b-mm-2-sibling-field-after-wake` uses this write as the carrier for a `-race` verdict,
 // so making it atomic leaves that case passing with nothing to detect. #627 carries the obligation; it is
 // named here because a diff that routes this loop through `atomicCell` would show no sign of it.
+//
+// That case is landed, and it is `TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify` — named so the
+// obligation resolves to a function rather than to a plan. The detector reported *this* line against
+// `memAccess` when the engine's wake edge was deleted by hand, which is what makes the carrier claim a
+// measurement rather than a reading of this comment.
 func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 	mem, err := in.memoryFor("instruction", ins.Imm0)
 	if err != nil {
