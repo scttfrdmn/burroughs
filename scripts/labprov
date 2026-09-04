@@ -1,0 +1,81 @@
+#!/bin/sh
+# labprov — the lab-run provenance block for a measured run, printed as Go benchmark
+# `key: value` configuration lines.
+#
+# Prepended to every arm log of a two-arm run (scripts/ab.sh) so a figure that reaches an
+# ADR carries the machine it came from, the queue slot it held, and whether that box was
+# otherwise busy. PUEUE.md's "Recording provenance" is the requirement; the reason is that
+# contention which is not recorded turns into a mystery later, and unexplained divergence
+# between two boxes is exactly what the queue exists to stop producing.
+#
+# **This extends the arm log's existing schema rather than adding a second file.** A Go
+# test binary already writes `goos:`, `goarch:`, `pkg:` and `cpu:` into the log it produces,
+# so architecture provenance is present and only the *lab* facts are missing. The keys carry
+# a `lab-` prefix so they cannot collide with a key Go emits or benchstat interprets.
+#
+# **Every key printed here must hold the same value across the arms of one comparison.**
+# benchstat reads `key: value` lines as configuration and splits its table on any key whose
+# value differs between the files — measured, not assumed: with one `lab-task-id` differing,
+# a two-arm comparison became two one-arm summaries, the `vs base` column and the p-value
+# both gone, and nothing in the output saying a comparison had been declined. That is why
+# ab.sh calls this **once** and writes the same bytes into every arm, and it is the second
+# reason a whole A/B run is submitted as one queued task rather than one task per arm.
+#
+# Runs on the runner, inside the pueue task. **It never fails and never blocks**: any fact
+# it cannot establish prints as `unknown` with the reason, because a provenance line that
+# cannot be filled in must not redden or abort a measurement that otherwise ran correctly.
+set -u
+
+host=$(hostname -s 2>/dev/null || echo unknown)
+group=${PUEUE_GROUP:-}
+worker=${PUEUE_WORKER_ID:-}
+
+# The submit-time concurrency count cannot be taken here: it is a fact about the moment the
+# task was queued, and by the time this runs the task is already at the head of its group.
+# The submitter samples it and injects it (see scripts/xcheck-amd64.sh).
+concurrent=${LAB_CONCURRENT:-}
+
+task=unknown
+if [ -z "$group" ]; then
+	# Not inside a queued task at all — a local run on the laptop, which is a legitimate
+	# invocation and not an error. Said in words rather than left blank, so a log without a
+	# queue slot is distinguishable from a log whose queue slot went unrecorded.
+	group="none (not queued)"
+	task="none (not queued)"
+elif ! command -v pueue >/dev/null 2>&1 || ! command -v uv >/dev/null 2>&1; then
+	task="unknown (pueue or uv absent on the runner)"
+else
+	# **A task's own id is not in its environment** — probed rather than assumed: pueue exports
+	# PUEUE_GROUP and PUEUE_WORKER_ID into the task and nothing else, and the `Running` status
+	# object carries no worker id either. So self-identification goes the other way round: ask
+	# the daemon for the Running task whose captured environment holds *this* group and *this*
+	# worker id. A group's worker ids are unique among its running tasks, so that pair names one
+	# task even in a wide group like `build`.
+	#
+	# If it does not name exactly one, the count is reported instead of a guess. A wrong task id
+	# in a committed record is worse than an absent one: it is a citation that resolves to the
+	# wrong task, and nothing downstream could tell.
+	task=$(pueue status --json 2>/dev/null | uv run --no-project python3 -c '
+import json, sys
+group, worker = sys.argv[1], sys.argv[2]
+try:
+    tasks = json.load(sys.stdin)["tasks"]
+except Exception as e:
+    print("unknown (%s)" % type(e).__name__); raise SystemExit
+hits = [
+    t["id"] for t in tasks.values()
+    if isinstance(t.get("status"), dict) and "Running" in t["status"]
+    and (t.get("envs") or {}).get("PUEUE_GROUP") == group
+    and (t.get("envs") or {}).get("PUEUE_WORKER_ID") == worker
+]
+print(hits[0] if len(hits) == 1 else "ambiguous (%d running tasks match group/worker)" % len(hits))
+' "$group" "$worker" 2>/dev/null) || task="unknown (status query failed)"
+	[ -n "$task" ] || task="unknown (status query returned nothing)"
+fi
+
+[ -n "$concurrent" ] || concurrent="unknown (not injected by the submitter)"
+
+printf 'lab-host: %s\n' "$host"
+printf 'lab-group: %s\n' "$group"
+printf 'lab-task-id: %s\n' "$task"
+printf 'lab-concurrent-at-submit: %s\n' "$concurrent"

@@ -236,3 +236,302 @@ prose can still name a law that does not exist.
   `internal/testenv` has `CLAUDE.md` in its domain and `MEMORY.md` in nobody's. Stated because a gap
   named on the page is a gap a reader can price, and because the alternative was an open issue no
   work in this tree could ever discharge (#319, retired for exactly that reason).
+
+## The lab-hardware section is a verbatim copy, and the no-figures rider does not reach it
+
+What follows is copied byte-for-byte from the fleet's own page, and is **replaced wholesale
+rather than merged** when that page moves ahead of this one. Kept above the heading so a
+re-copy of the section does not delete it. What a reader arriving at the core counts, memory
+sizes and driver versions below has grounds to ask about:
+
+- **The no-measured-figure rider at the top of this file does not govern that block.** Its
+  subject is *this project's* measured quantities — board counts, suite tallies, benchmark
+  deltas — which rot silently because the tree they describe keeps moving, so they are
+  generated or deleted rather than written down. The hardware inventory below is an external
+  fact with an external owner. It goes stale when the *fleet* changes, and the repair is
+  re-copying the block, not asking an instrument here for a figure it cannot take.
+- **Nothing in `internal/testenv` can assert anything about it**, for `MEMORY.md`'s reason one
+  level out: the authority is a file outside this repository, so no control here has it in its
+  domain. Drift between this copy and the fleet's page is invisible from inside the tree, and
+  that is the standing price of holding a copy at all rather than a defect to file.
+- **The fleet table is an inventory, not this project's runners.** A host appears in it because
+  it has a daemon, which is a fact about the host and not an instruction here. **This repo uses
+  `janus.local`** — `XCHECK_HOST` / `LABHOST`'s default, and the machine every landed x86-64
+  figure in `docs/decisions/` was taken on. *The queues are per host precisely so that a project
+  uses the boxes it uses*, so the rest of the table is capacity this project has no standing
+  claim on, and reaching for a second lab host is a decision doc's business rather than a
+  convenience: it changes which hardware a figure was taken on. (Scott's order, 2026-09-03,
+  recorded by the actor it was given to — so no independent provenance, and any commit resting
+  on it stays `Ratio-Class: carried`.)
+
+## Running tests and benchmarks on lab hardware
+
+Lab machines are shared by several projects at once. Historically nothing
+coordinated them, so two projects would land on the same box simultaneously and
+each would see the interference as unexplained performance divergence in its own
+results. All runs on lab hardware now go through **pueue**, a per-machine job
+queue with a daemon on every host.
+
+**Rule: nothing that gets measured runs outside the queue.** Anything whose
+timing, throughput, or memory-bandwidth numbers will be recorded, compared, or
+committed must be submitted to an exclusive group. Interactive pokes and
+one-off debugging are fine to run directly, but their numbers are not results.
+
+### Fleet and groups
+
+A group is a named queue on one host with its own concurrency limit. Every host
+has exactly three:
+
+- **`measured`** — parallel=1. The single measurement slot on that box. Every
+  run whose numbers get recorded goes here, *whatever* it exercises: Metal,
+  CUDA, ROCm, or plain CPU.
+- **`build`** — wide. Anything unmeasured: compiles, unit tests, lint.
+- **`default`** — parallel=1. A deliberate fallback, so a job someone forgets to
+  assign a group serializes instead of quietly stomping a benchmark.
+
+`fleet.conf` is the source of truth; this table is a convenience copy.
+
+| Host | Hardware | Accelerator | `measured` | `build` |
+|---|---|---|---|---|
+| `juno.local` | M4 Max, 16 core, 64GB | Metal | yes | 6 |
+| `orion.local` | M4 Pro, 14 core, 48GB | Metal | yes | 6 |
+| `maya.local` | M4, 10 core, 16GB | Metal | **no** | 4 |
+| `indigo.local` | M4, 10 core, 32GB | Metal | **no** | 4 |
+| `castor.local` | DGX Spark, GB10, 20 core, 121GB | CUDA `sm_121` (unified mem) | yes | 8 |
+| `pollux.local` | DGX Spark, GB10, 20 core, 121GB | CUDA `sm_121` (unified mem) | yes | 8 |
+| `antares.local` | Ryzen AI MAX+ 395, Radeon 8060S, 60GB | ROCm/HIP `gfx1151` (unified mem) | yes | 8 |
+| `vesta.local` | Ryzen 9 7950X3D, RTX 4070 Ti SUPER, 61GB | CUDA — no toolkit installed | yes | 8 |
+| `ceres.local` | Ryzen 9 9950X3D, RTX 5090, 123GB | CUDA `sm_120` | yes | 8 |
+| `janus.local` | i9-9960X, 32 core, 62GB, 2× TITAN RTX | CUDA `sm_75` | yes | 8 |
+
+**`maya` and `indigo` are `build`-only on purpose.** Their GUI console user is
+somebody else, so they are in daily interactive use. pueue serializes queued jobs
+against each other; it cannot serialize against a person. A measurement slot on a
+machine you don't control is worse than none — it produces numbers that look
+valid. Send compiles there, never benchmarks.
+
+The group is not named after the device on purpose. **Exclusivity in pueue is
+per group, not per host** — two parallel=1 groups on one box run at the same
+time as each other, which is precisely the interference this setup exists to
+prevent. Verified on 4.0.4: a task in `gpu` and a task in a second exclusive
+group both went `Running` in the same second. So there is one exclusive group
+per machine and it takes all measured work.
+
+### CPU-only runs on a GPU box
+
+Yes — submit them to that host's `measured` group like anything else. Do **not**
+add a separate CPU group to get a second slot; you would get concurrency, not
+isolation. A CPU-only run in `measured` waits for the GPU run ahead of it and
+vice versa, which is what you want, because "CPU-only" never means "isolated":
+
+- On `castor` / `pollux` (GB10) and `antares` (Strix Halo) the CPU and the
+  accelerator share one LPDDR5X memory system. A bandwidth-hungry CPU run and a
+  GPU run degrade each other badly. Exclusivity matters *more* here, not less.
+- Even on `vesta` / `ceres` / `janus` with discrete VRAM, they share cores for
+  the host-side driver threads, PCIe, and power/thermal headroom — a 32-thread
+  CPU run will move a GPU benchmark's numbers.
+
+If you genuinely want two things overlapping on one box, that is what `build`
+is for, and its results are not results.
+
+### CUDA
+
+| Host | Toolkit | `nvcc` | Driver | Arch |
+|---|---|---|---|---|
+| `castor.local` | 13.2.2-1 | V13.2.86 | 595.84 | `sm_121` |
+| `pollux.local` | 13.2.2-1 | V13.2.86 | 595.84 | `sm_121` |
+| `ceres.local` | 13.2.2-1 | V13.2.86 | 595.71.05 | `sm_120` |
+| `janus.local` | 12.9 | V12.9.86 | 610.57.04 | `sm_75` |
+| `vesta.local` | **none** | — | 595.84 | `sm_89` |
+
+`janus` is Rocky 9 and deliberately not on 13.2: its TITAN RTXs are Turing
+(`sm_75`), a different generation from the Blackwell/GB10 hosts, so cross-host
+number comparison isn't meaningful there anyway. Its driver (610.57.04, supports
+CUDA 13.3) is well ahead of its 12.9 toolkit, which is the safe direction — the
+error-222 trap below only bites when the driver is *behind* the toolkit.
+
+`/usr/local/cuda/bin` is prepended to PATH in `~/.bashrc` — deliberately there and
+not in an interactive rc, because pueue captures the environment at submit time
+from the non-interactive ssh env, so a login-shell-only PATH is invisible to every
+queued build. `/usr/local/cuda` is an `update-alternatives` symlink, so naming it
+rather than a versioned directory means bumping the alternative moves the fleet.
+
+Watch for a second `nvcc`: Ubuntu's own `nvidia-cuda-toolkit` package installs one
+at `/usr/bin/nvcc` a whole major version behind (12.0.140 next to a 13.2 install on
+`ceres`) and it wins on the default PATH. That package is still installed on
+`ceres`; the PATH order is what keeps it from being used.
+
+**Prefer `-arch=sm_NN` over relying on PTX JIT.** Not required any more, but still
+right for benchmarking: JIT-compiling PTX at first kernel launch puts a compile
+cost inside your timings. It used to be mandatory on the Sparks, and the failure
+mode is worth recognising because it will recur if driver and toolkit ever drift
+apart again — a default-arch build compiles cleanly and then dies at launch with
+
+```
+CUDA error 222: the provided PTX was compiled with an unsupported toolchain.
+```
+
+which means the driver's JIT is older than the toolkit that emitted the PTX. Check
+`cudaDriverGetVersion` against `cudaRuntimeGetVersion`: if the driver number is
+lower, that's the bug. Compiling native SASS sidesteps it; matching the driver to
+the toolkit fixes it properly.
+
+`vesta` has a driver but **no CUDA toolkit at all** — it can run CUDA binaries, not
+build them.
+
+Hostnames are `.local` (mDNS) throughout. Some also resolve bare, but the
+manifest and every example use the `.local` form.
+
+### Submitting
+
+```bash
+# fire and forget — a notification arrives when it finishes
+ssh juno.local "pueue add -g measured -w ~/src/umami -l umami/$(git rev-parse --short HEAD) -- ./bench.sh --full"
+
+# watch it
+ssh juno.local "pueue status"
+ssh juno.local "pueue follow 12"      # live stdout, like tail -f
+ssh juno.local "pueue log 12"         # after the fact
+
+# submit and block on the result (see scripts/labrun below)
+scripts/labrun juno.local measured -- ./bench.sh --full
+```
+
+`-w` sets the working directory, `-l` a human label, and everything after `--`
+is the command. Do not wrap the command in `tmux` — pueue already detaches it,
+captures stdout and stderr, and survives your ssh session ending. Wrapping in
+`tmux new-session -d` breaks queueing, because the task returns immediately and
+frees the slot while the real work is still running.
+
+### `scripts/labrun` — submit, wait, propagate the exit code
+
+Use this for anything scripted or CI-like. It exists because **`pueue wait`
+exits 0 even when the task failed**, so a naive submit-and-wait silently passes.
+
+```bash
+#!/usr/bin/env bash
+# labrun <host> <group> -- <command...>
+set -euo pipefail
+host=$1; group=$2; shift 2
+# not `[ ... ] && shift` — under set -e a false test there exits the script
+if [ "${1:-}" = "--" ]; then shift; fi
+label="$(basename "$PWD")/$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+remote_dir=${LABRUN_DIR:-$PWD}
+
+# Two levels of quoting, both required. pueue re-joins argv with plain spaces and
+# runs the result through a shell, so the command has to arrive as ONE
+# already-shell-safe argument or its grouping is silently lost — `sh -c 'exit 42'`
+# becomes `sh -c exit 42`, which exits 0 and reports Success.
+cmd=$(printf '%q ' "$@")
+id=$(ssh "$host" "pueue add -g '$group' -w '$remote_dir' -l '$label' -p -- $(printf '%q' "$cmd")")
+echo "submitted $host:$group task $id ($label)" >&2
+ssh "$host" "pueue wait -q $id" >/dev/null
+
+read -r code state < <(ssh "$host" "pueue status --json" | uv run --no-project python3 -c '
+import json,sys
+t=json.load(sys.stdin)["tasks"][sys.argv[1]]
+d=(t.get("status") or {}).get("Done")
+if not d: print("99 Unfinished"); raise SystemExit
+r=d["result"]
+if r=="Success": print("0 Success")
+elif isinstance(r,dict) and "Failed" in r: print(r["Failed"],"Failed")
+else: print(1, r if isinstance(r,str) else list(r)[0])
+' "$id")
+[ -n "${code:-}" ] || { code=98; state=NoResult; }
+
+ssh "$host" "pueue log $id --lines 40" >&2
+echo "task $id: $state (exit $code)" >&2
+exit "$code"
+```
+
+### Python: uv, always
+
+**uv is the only Python toolchain on the fleet.** Never call the system
+`python3` directly, and never use pyenv, conda, or a hand-rolled venv. Every
+host is bootstrapped with a pinned uv (0.12.9) and a pinned uv-managed
+interpreter (3.13.15 — the patch is pinned too) installed as the default
+`python3` in `~/.local/bin`, ahead of `/usr/bin` and Homebrew. `UV_MANAGED_PYTHON=1` is
+exported fleet-wide, so uv will refuse to fall back to an OS interpreter even if
+one is closer at hand.
+
+The point is the same as pinning pueue itself: an interpreter that is 3.9 on one
+box and 3.14 on another turns into performance divergence that looks like it
+came from your code.
+
+```bash
+# in a project with a pyproject.toml — uv resolves and syncs the environment
+ssh juno.local "pueue add -g measured -w ~/src/umami -- uv run pytest -q bench/"
+
+# a throwaway snippet with no project around it
+uv run --no-project python3 -c 'import json,sys; ...'
+
+# stdlib isn't enough? declare deps inline, no venv to manage
+uv run --no-project --with numpy python3 analyze.py
+```
+
+`--no-project` matters more than it looks: without it, `uv run` walks up from
+the working directory, finds a `pyproject.toml`, and syncs that project's
+environment before running your one-liner. Inside a queued job that is a
+surprise write and a surprise delay.
+
+Do not export `UV_PYTHON` to force a version fleet-wide. It overrides
+`requires-python` rather than deferring to it, so any project pinned to a
+different version fails outright. Pin the provider, let the project pick the
+version.
+
+### Recording provenance
+
+Every recorded result must carry the host, the group, and whether the box was
+otherwise busy. Contention that isn't recorded turns into a mystery later.
+Capture at minimum:
+
+```bash
+ssh "$host" "pueue status --json"   # concurrent tasks at submit time
+uname -sm; hostname -s              # on the runner
+```
+
+and store `host`, `group`, `task_id`, and the concurrent-task count alongside
+the numbers.
+
+### Gotchas that will bite
+
+- **`pueue wait` always exits 0.** Check the task result explicitly.
+- **On Secure Boot hosts, never `dkms install --force` an NVIDIA module.** All the
+  Linux GPU hosts have Secure Boot enabled. Ubuntu's prebuilt
+  `linux-modules-nvidia-*` packages are signed with an enrolled key; a DKMS build
+  is signed with a local key that is not, so it loads fine on paper and then fails
+  at boot with `modprobe: ERROR: could not insert 'nvidia': Key was rejected by
+  service` — GPU gone. If a kernel upgrade leaves DKMS and the prebuilt package
+  fighting over the same module ("already installed, override by specifying
+  --force"), the fix is `dkms uninstall nvidia/<ver> -k <kernel>` to restore the
+  signed original, *not* `--force`. Install the driver and
+  `linux-modules-nvidia-<ver>-open-nvidia-hwe-24.04` in one apt transaction and the
+  collision doesn't arise.
+- **A driver bump on the Sparks drags a new kernel with it.** The `nvidia-hwe`
+  stack moves together, so verify `modinfo -k <new-kernel> nvidia` resolves to
+  `kernel/nvidia-595-open/nvidia.ko` (signed, prebuilt) and not `updates/dkms/`
+  *before* rebooting. Rebooting into a kernel with no matching module is precisely
+  what leaves a box in janus's state.
+- **Two parallel=1 groups on one host do not exclude each other.** They run
+  concurrently, so adding a second exclusive group to "separate" CPU from GPU
+  work buys you nothing but a false sense of isolation. One `measured` group per
+  host, always. Verified on 4.0.4.
+- **Commands run through a shell — twice.** pueue joins the argv you give it back
+  into a single string with plain spaces, then hands that to your shell, so inner
+  quoting must survive two levels of parsing. `pueue add -- sh -c 'exit 42'`
+  arrives as `sh -c exit 42`, which exits **0 and reports Success**. Verified on
+  4.0.4. Wrap the whole command in quotes (`pueue add -- "sh -c \"exit 42\""`),
+  or use `-e/--escape`, or just use `labrun`, which handles it. Also put `--`
+  before the command so pueue doesn't eat your flags.
+- **The environment is captured at submit time**, from the non-interactive ssh
+  environment — not your interactive shell. Anything set in `.zshrc` will not be
+  there. Pass what you need explicitly on the command line.
+- **Client and daemon versions must match** (pinned fleet-wide to 4.0.4). If
+  pueue starts erroring after an upgrade, the daemon needs a restart.
+- **uv and the interpreter are pinned too.** `pueue-fleet.sh doctor` reports
+  both, and flags a `python3` that isn't uv-managed. Bump `UV_VERSION` /
+  `UV_PYTHON` in `fleet.conf` and re-run `bootstrap` (or `python`) — never
+  upgrade one host by hand.
+- **Labels are not available to the completion notification** — only id, group,
+  command, path, result, exit code, and timing. Keep `-w` pointed at the repo
+  root so the notification can identify the project by directory.

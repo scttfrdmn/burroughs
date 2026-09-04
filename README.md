@@ -241,6 +241,38 @@ bugs found and lessons learned.
 green on a fresh clone with nothing vendored. `make conformance` is the other
 half, and needs the suite.
 
+## Running on lab hardware
+
+Everything above runs locally and needs nothing but a Go toolchain. The x86-64
+arm is the exception: `scripts/xcheck-amd64.sh` runs a command on a shared lab
+box, and those boxes carry several projects at once. **A run on shared hardware
+goes through that host's [pueue](https://github.com/Nukesor/pueue) queue**, so
+contention waits instead of quietly moving somebody's numbers — an unqueued
+benchmark landing on top of a running one shows up in both projects' results as
+divergence with no cause in either codebase.
+
+Two group names on every host: **`measured`** (one slot, for anything whose
+timing gets recorded, compared, or committed) and **`build`** (wide, for
+compiles, unit tests, lint). `scripts/labrun` submits, waits, and — the reason
+it exists — propagates the real exit code, because `pueue wait` returns 0 even
+for a task that failed.
+
+```console
+$ make lab-test                                      # unmeasured -> 'build'
+$ make lab-ab AB='--pkg ./internal/interp/membench --base main --head HEAD'
+                                                     # measured -> 'measured'
+```
+
+`LABHOST` selects the host and defaults to `janus.local`, the machine every
+landed x86-64 figure in `docs/decisions/` was taken on. The whole two-arm
+protocol is submitted as **one** task, not one per arm: another project's job
+interleaving between rounds is the confounder the interleaving exists to remove.
+Measured runs record the host, group, pueue task id, and how busy the box was at
+submit time into the benchmark log alongside the numbers.
+
+`make bench` and `make ab` stay local and unqueued — this dev box is not lab
+hardware and is nobody else's measurement slot.
+
 ## License
 
 Apache 2.0 — see `LICENSE` and `NOTICE`. © 2026 Scott Friedman.

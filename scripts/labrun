@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# labrun <host> <group> -- <command...>
+set -euo pipefail
+host=$1; group=$2; shift 2
+# not `[ ... ] && shift` — under set -e a false test there exits the script
+if [ "${1:-}" = "--" ]; then shift; fi
+label="$(basename "$PWD")/$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+remote_dir=${LABRUN_DIR:-$PWD}
+
+# Two levels of quoting, both required. pueue re-joins argv with plain spaces and
+# runs the result through a shell, so the command has to arrive as ONE
+# already-shell-safe argument or its grouping is silently lost — `sh -c 'exit 42'`
+# becomes `sh -c exit 42`, which exits 0 and reports Success.
+cmd=$(printf '%q ' "$@")
+id=$(ssh "$host" "pueue add -g '$group' -w '$remote_dir' -l '$label' -p -- $(printf '%q' "$cmd")")
+echo "submitted $host:$group task $id ($label)" >&2
+ssh "$host" "pueue wait -q $id" >/dev/null
+
+read -r code state < <(ssh "$host" "pueue status --json" | uv run --no-project python3 -c '
+import json,sys
+t=json.load(sys.stdin)["tasks"][sys.argv[1]]
+d=(t.get("status") or {}).get("Done")
+if not d: print("99 Unfinished"); raise SystemExit
+r=d["result"]
+if r=="Success": print("0 Success")
+elif isinstance(r,dict) and "Failed" in r: print(r["Failed"],"Failed")
+else: print(1, r if isinstance(r,str) else list(r)[0])
+' "$id")
+[ -n "${code:-}" ] || { code=98; state=NoResult; }
+
+ssh "$host" "pueue log $id --lines 40" >&2
+echo "task $id: $state (exit $code)" >&2
+exit "$code"

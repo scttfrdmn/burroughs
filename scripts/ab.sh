@@ -257,7 +257,22 @@ arm_at() {
 
 NARMS=0
 for a in $ARMS; do NARMS=$((NARMS + 1)); done
-for a in $ARMS; do : > "$OUTDIR/$a.txt" || die "cannot write $OUTDIR/$a.txt"; done
+# The lab-run provenance block, sampled **once** and written identically into every arm.
+#
+# Once, not per arm, and the reason is measured rather than tidy: benchstat treats `key: value`
+# lines as configuration and splits its table on any key whose value differs between the files,
+# so two arms disagreeing on one provenance key turn a comparison into two one-arm summaries —
+# `vs base` column gone, p-value gone, and no line in the output saying a comparison had been
+# declined. Sampling once and writing the same bytes makes that unreachable by construction
+# rather than by care. scripts/labprov's header carries the measurement.
+#
+# Never fatal: labprov reports an unavailable fact as `unknown` and this tolerates its absence
+# entirely, because an unrecordable provenance line must not redden a run that measured fine.
+PROV="$(sh "$(dirname "$0")/labprov" 2>/dev/null || true)"
+for a in $ARMS; do
+	: > "$OUTDIR/$a.txt" || die "cannot write $OUTDIR/$a.txt"
+	[ -z "$PROV" ] || printf '%s\n\n' "$PROV" >> "$OUTDIR/$a.txt"
+done
 
 r=0
 while [ "$r" -lt "$ROUNDS" ]; do

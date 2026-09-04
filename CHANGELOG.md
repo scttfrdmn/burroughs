@@ -21,6 +21,38 @@ weakly-ordered platform.
 
 ### Added
 
+- **Runs on shared lab hardware go through a per-host job queue — `scripts/labrun`, `scripts/labprov`,
+  `make lab-ab`, `make lab-test`.** The lab boxes carry several projects at once and nothing used to
+  stop two of them landing on one machine together; each then read the interference as unexplained
+  performance divergence in its own numbers. `scripts/xcheck-amd64.sh`'s native arm now submits into the
+  host's pueue group instead of running the command directly — `measured` (one slot) by default,
+  `XCHECK_GROUP=build` for a run the caller knows is unmeasured, the asymmetric default taken because
+  over-serialising an unmeasured run costs wall-clock while under-serialising a measured one corrupts a
+  figure silently. `scripts/labrun` is the fleet's script, copied verbatim: `pueue wait` exits 0 even
+  for a task that failed, and pueue re-joins argv through a shell twice, so both the exit-code read and
+  the double quoting are load-bearing. **A whole `ab.sh` run is one task**, never one per arm or per
+  round — another project's job interleaving between rounds is exactly the confounder grave #552's
+  interleaved protocol removes, and per-arm submission would additionally give the arms differing
+  provenance keys, which benchstat answers by splitting its table and dropping the p-value (measured,
+  not assumed). Each arm log gains a `lab-host` / `lab-group` / `lab-task-id` /
+  `lab-concurrent-at-submit` block, sampled **once** per run so the arms cannot disagree; a task's own
+  id is not in its environment, so it is derived by asking the daemon which running task holds this
+  group and worker id. `make bench`, `make ab`, `make check` and the QEMU container arm stay local and
+  unqueued: the dev box is not lab hardware and not anyone else's measurement slot. `xcheck`'s
+  not-run-versus-verdict enumeration grows the queue's three new mechanism failures (labrun's 98 and
+  99, ssh's 255) plus a positive assertion that the task was queued at all, since a failed submit
+  otherwise exits 1 and is indistinguishable from a real test failure — #344's lesson arriving one
+  transport later.
+  - **The pasted fleet section is framed above its own heading, because its figures sit under a rider
+    forbidding them.** `CLAUDE.md`'s rider says no measured figure lives on that page, and the block
+    carries core counts, memory sizes and driver versions; Scott resolved the tension. The note sits
+    outside the verbatim copy so a wholesale re-copy of the block cannot delete it, and says three
+    things: the rider's subject is *this project's* measured quantities, whose staleness comes from the
+    tree moving under them, while the hardware inventory is an external fact whose repair is a re-copy;
+    no control in `internal/testenv` can assert anything about it, for `MEMORY.md`'s reason one level
+    out; and **the fleet table is an inventory, not this project's runners** — this repo uses
+    `janus.local`, the queues are per host so that a project uses the boxes it uses, and reaching for a
+    second lab host changes which hardware a figure was taken on, so it is a decision doc's business.
 - **`make ab` and `scripts/ab.sh` — the A/B protocol every measurement in this tree re-derived by hand
   now has a carrier** ([grave #612](https://github.com/scttfrdmn/burroughs/issues/612), [the
   law](docs/laws/evidence-and-instruments.md#a-protocol-carried-only-by-prose-is-re-derived-per-use-and-the-re-derivation-is-where-a-step-gets-dropped)).
