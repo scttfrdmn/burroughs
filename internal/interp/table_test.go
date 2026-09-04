@@ -1,8 +1,11 @@
 package interp
 
 import (
+	"fmt"
+	"math"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/text"
@@ -531,6 +534,170 @@ func TestTableSlotsHoldTheInitializersValue(t *testing.T) {
 				"`ref.null func`)", i, got)
 		}
 	}
+}
+
+// slotsPastTheAllocationBound is one slot more than `math.MaxInt` bytes of 40-byte `ref` allows:
+// `math.MaxInt/40` is 230584300921369395, so this is the smallest count `newTable` and `grow` must
+// refuse.
+//
+// **Written as a literal on purpose, and this is the whole reason the two rows below can fail.**
+// Spelling it `math.MaxInt/refSize + 1` would make it whatever the code under test thinks a slot
+// weighs, so the guard would refuse it for *any* divisor — including the 8 that #621 filed — and the
+// rows would pass green over the defect. That is the shape where asserting a relation still checks a
+// thing against itself. The literal is an independent claim about `ref`, and `witnessIsPastTheBound`
+// below is what keeps it from going quietly stale.
+const slotsPastTheAllocationBound = 230584300921369396
+
+// witnessIsPastTheBound fails the row if `slotsPastTheAllocationBound` is no longer past what a
+// `ref`-sized slot allows — the vacuity half, because a literal witness stops being a witness the
+// moment `ref` changes width and nothing else here would notice. It reports the measured size so the
+// repair is a substitution rather than a hunt.
+//
+// It reads `unsafe.Sizeof` and not `refSize`: the constant is the subject of these rows, so taking the
+// bound from it would be the tautology the paragraph above declines, one level down.
+func witnessIsPastTheBound(t *testing.T) {
+	t.Helper()
+	if bound := math.MaxInt / uint64(unsafe.Sizeof(ref{})); slotsPastTheAllocationBound <= bound {
+		t.Fatalf("the witness no longer sits past the allocation bound: a ref is %d bytes, so the "+
+			"bound is %d and %d is below it — set the witness to bound+1",
+			unsafe.Sizeof(ref{}), bound, uint64(slotsPastTheAllocationBound))
+	}
+}
+
+// TestATable64MinPastTheAllocationBoundTrapsRatherThanPanicking is grave #621's oracle for
+// `newTable`, on the only path the guard it repairs can fire on.
+//
+// # Why table64 and not a plain table
+//
+// `validTableSize` caps an i32-indexed table at `maxElems32`, which is about 5.4e7 times *below*
+// `math.MaxInt/40`, so on the i32 path this arm cannot fire for any module the decoder admits — before
+// the fix or after it. It is not a weak guard there, it is an absent one, and the bound that path
+// actually wants is a host-allocation limit rather than `MaxInt` (#635). The i64 arm returns true
+// unconditionally, which is the reference's own shape, so a table64 is the one declaration that can
+// reach the check — gated off by default, live in the all-gates-on lane, which is why this row turns
+// `Memory64` on explicitly rather than riding `instantiate1`.
+//
+// # What it distinguishes, and it is not "does a big table fail"
+//
+// With the stale divisor the module below **passes** this check — 230584300921369396 is under
+// `MaxInt/8` — and then dies in `make([]ref, n)` with `runtime error: makeslice: len out of range`, a
+// Go panic escaping `Instantiate` two lines from an arm that intends `&Trap{Reason: "out of memory"}`.
+// Both outcomes are "instantiation did not succeed", so a row asserting only failure would score the
+// defect green. The assertion is therefore on the *channel*: a `*Trap` carrying the reference's reason
+// (`eval.ml`'s `OutOfMemory`), which a panic is not.
+//
+// The second half is the contrast row, since a guard that refused every table64 would satisfy the
+// first half perfectly: a one-slot table64 instantiates. *Assert the arms differ, not only that the
+// null matches.*
+//
+// # Watched die, and the mutation measured two things beyond this row
+//
+// With `refSize` put back to 8 — written `uint64(unsafe.Sizeof(ref{}))/5` so the import stays used and
+// the mutation is only the number — this row fails with `makeslice: len out of range` raised inside
+// internal/interp/table.go:newTable, and TestTable64GrowPastTheAllocationBoundReportsMinusOne fails the
+// same way inside internal/interp/table.go:grow, each at that function's own `make([]ref, …)`.
+// Each had to be run alone to be certified: a panic takes the whole test binary down, so the first
+// row's death hides the second's, which is the reverse of the usual "and control X fails alongside"
+// reading and needs the same treatment — run the mutation against each row's own invocation.
+//
+// **Then the whole tree, with these two rows skipped, was green under the stale divisor** — every
+// package including `internal/spec`'s 61s corpus run. So before this slice nothing in the tree was a
+// witness, which is why the constant drifted through three widenings of `ref` unremarked. Measured
+// rather than argued: *neuter the line and read the board* beats asserting no witness exists.
+//
+// **And TestRefWidthIsMeasuredNotAssumed stayed green under the same mutation**, which is the
+// disjointness the constant's own comment claims — it reads `unsafe.Sizeof` directly and cannot see a
+// divisor. Recorded because "the size pin would have caught it" is exactly the plausible sentence that
+// would retire this row.
+func TestATable64MinPastTheAllocationBoundTrapsRatherThanPanicking(t *testing.T) {
+	witnessIsPastTheBound(t)
+
+	src := fmt.Sprintf(`(module (table i64 %d funcref))`, uint64(slotsPastTheAllocationBound))
+	in, trap := instantiateMemory64(t, src)
+	if trap == nil {
+		t.Fatalf("instantiating a table64 of %d slots succeeded (instance %p), want a trap: "+
+			"%d slots of %d bytes is past what an int can index",
+			uint64(slotsPastTheAllocationBound), in, uint64(slotsPastTheAllocationBound),
+			unsafe.Sizeof(ref{}))
+	}
+	if trap.Reason != "out of memory" {
+		t.Errorf("trap reason = %q, want %q — `table size overflow` would mean the index width "+
+			"refused it, which is a different arm and not what this row is about", trap.Reason,
+			"out of memory")
+	}
+
+	// The contrast row: the same gate, the same construct, a size that fits.
+	if _, trap := instantiateMemory64(t, `(module (table i64 1 funcref))`); trap != nil {
+		t.Errorf("a one-slot table64 trapped with %q — the guard refuses more than the bound", trap.Reason)
+	}
+}
+
+// TestTable64GrowPastTheAllocationBoundReportsMinusOne is the same grave's oracle for the *other*
+// site. Two rows rather than one for grave #34's reason: `newTable`'s guard and `grow`'s are separate
+// comparisons that can be repaired separately, so a single row leaves whichever one it does not touch
+// free to keep the stale divisor.
+//
+// The verdict channel differs from the row above and the difference is the reference's, not a
+// convention here: `table.grow` is total (`table.ml:50-58`), so a refusal is `-1` in the result rather
+// than a trap — TestTableGrowFailureReturnsMinusOneNotATrap pins that for the declared-maximum arm and
+// this pins it for the allocation arm. With the stale divisor the guard is passed and the panic
+// happens inside the invoke instead, which fails this row rather than producing `-1`.
+//
+// The contrast row here grows by one slot and reads back the pre-growth size, so "the guard refuses
+// every delta" cannot pass.
+func TestTable64GrowPastTheAllocationBoundReportsMinusOne(t *testing.T) {
+	witnessIsPastTheBound(t)
+
+	in, trap := instantiateMemory64(t, `(module
+		(table $t i64 0 funcref)
+		(func (export "grow") (param $n i64) (result i64)
+			(table.grow $t (ref.null func) (local.get $n))))`)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+	if err := in.Deferred(); err != nil {
+		t.Fatalf("instantiate fell short: %v", err)
+	}
+
+	got, err := in.Invoke("grow", I64(int64(uint64(slotsPastTheAllocationBound))))
+	if err != nil {
+		t.Fatalf("grow(%d): got an error, want -1 in the result: %v",
+			uint64(slotsPastTheAllocationBound), err)
+	}
+	if len(got) != 1 || int64(got[0].Bits) != -1 {
+		t.Errorf("grow(%d) = %v, want -1 — %d slots of %d bytes is past what an int can index",
+			uint64(slotsPastTheAllocationBound), got, uint64(slotsPastTheAllocationBound),
+			unsafe.Sizeof(ref{}))
+	}
+
+	// The contrast row: a delta the bound admits reports the pre-growth size, which is 0 here and is
+	// also what a refusal would *not* return.
+	if got, err := in.Invoke("grow", I64(1)); err != nil {
+		t.Errorf("grow(1): %v", err)
+	} else if len(got) != 1 || int64(got[0].Bits) != 0 {
+		t.Errorf("grow(1) = %v, want 0 (the pre-growth size) — the guard refuses more than the bound", got)
+	}
+}
+
+// instantiateMemory64 is instantiate1 with the memory64 gate on, handing the trap back.
+//
+// A separate helper for `instantiateGC`'s reason: the lane is part of what these rows assert. A
+// table64 is the only declaration that can reach either `MaxInt` guard, and the flag that admits it is
+// the limits byte's bit 2 — off by default, so nothing on the default board can take these paths at
+// all. Unlike `instantiateGC` it returns the trap, because for the row above the trap *is* the
+// subject.
+func instantiateMemory64(t *testing.T, src string) (*Instance, *Trap) {
+	t.Helper()
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	d := &binary.Decoder{Features: binary.Features{Memory64: true}}
+	m, err := d.DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return Instantiate(m)
 }
 
 // instantiateGC is instantiate1 with the GC gate on, requiring success.

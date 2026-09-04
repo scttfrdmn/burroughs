@@ -1441,6 +1441,43 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`refSize` was 8 where a `ref` is 40 bytes, so both of `table.go`'s allocation guards divided by a number
+  five times too small — and the divisor is now derived from the type**
+  (grave [#621](https://github.com/scttfrdmn/burroughs/issues/621)). `const refSize = 8` was *true* the day it
+  landed ([#148](https://github.com/scttfrdmn/burroughs/pull/148), 2026-08-05), when `ref` was
+  `{Null bool; Addr uint32}`; every field added since falsified it silently, through rung 4's 32-then-40 and
+  rung 5 slice 3's two extra bools. It now reads `uint64(unsafe.Sizeof(ref{}))` — a compile-time constant, so
+  no runtime cost — and the comment states the drift instead of restating the number, since *a comment
+  asserting the property the code lacks makes review confirm the bug*.
+  - **The tree recorded every step of that drift beside the stale copy and no instrument could join them.**
+    `TestRefWidthIsMeasuredNotAssumed` has pinned the real width since
+    [#256](https://github.com/scttfrdmn/burroughs/pull/256) (2026-08-12) and its own comment narrates each
+    widening; the package held two numbers for one fact for the twenty-three days between the commits and for
+    every day after. Measured, not argued: with `refSize` mutated back to 8 that pin stays **green** — it
+    reads `unsafe.Sizeof` directly and cannot see a divisor — so "the size pin would have caught it" is the
+    plausible sentence this repair had to refuse.
+  - **Two front-end oracles on the only path either guard can fire on** —
+    `TestATable64MinPastTheAllocationBoundTrapsRatherThanPanicking` and
+    `TestTable64GrowPastTheAllocationBoundReportsMinusOne`, both under `Features{Memory64: true}` because
+    `validTableSize` caps an i32 table at `maxElems32`, ~5.4e7 times *below* `MaxInt/40`. The witness,
+    230584300921369396 slots, is a **literal**: spelled `MaxInt/refSize + 1` it would be refused for any
+    divisor including the wrong one, which is the shape where asserting a relation still checks a thing
+    against itself; a separate vacuity row fails if `ref`'s width ever moves the witness off the bound. The
+    assertion is on the *channel*, not on failure — with the stale divisor both modules passed the guard and
+    died in `make([]ref, n)` with `runtime error: makeslice: len out of range`, a Go panic escaping two lines
+    from an arm that intends `&Trap{Reason: "out of memory"}`, and "instantiation did not succeed" is true of
+    both. Each carries a contrast row (a one-slot table64 instantiates; `grow(1)` reports 0) so a guard that
+    refused everything cannot pass. **Both watched die, each run alone** — a panic takes the test binary
+    down, so the first row's death hides the second's.
+  - **And with those two rows skipped, the whole tree was green under the stale divisor**, `internal/spec`'s
+    corpus run included. Nothing in the tree was a witness, which is how the constant drifted through three
+    widenings unremarked; *neuter the line and read the board* rather than argue no witness exists.
+  - **What the correct divisor does not buy, named in place rather than fixed here.** Both `table` guards and
+    both `memory` ones stay unreachable on their i32 paths — `MaxInt/40` is ~5.4e7 above `maxElems32`,
+    `MaxInt` is ~2.1e9 above a memory32's largest byte count — so a guard nothing can reach is absent rather
+    than weak, and the bound those paths want is a host-allocation limit rather than `MaxInt`. That is
+    [#635](https://github.com/scttfrdmn/burroughs/issues/635), with its measurement (~172 GB of `ref` for a
+    full i32 table) deliberately **not** taken here: an OOM-killed process is not a verdict channel.
 - **A job's `run_attempt` names the attempt it belongs to, not the attempt it ran in — so this file's own
   entry for "a single-job re-run is a request, not a scope" described a mechanic that does not exist**
   (grave [#633](https://github.com/scttfrdmn/burroughs/issues/633)). The released entry stands as written and
