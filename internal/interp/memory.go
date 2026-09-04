@@ -460,6 +460,15 @@ func (m *memory) read(idx, offset, n uint64) ([]byte, error) {
 // `simd.go`, which reach it on a default-on gate. `execMemoryFill`'s comment carries the finding and the
 // coupling to #10's B-MM-2 carrier; this note exists so a reader arriving from the SIMD side does not infer
 // coverage from 0054's title.
+//
+// **That is now a decision rather than a finding, and the region has a checked extent.**
+// [ADR 0064][0064] keeps this path plain, and the reason it could be kept plain rather than repaired is
+// that the region is *enumerable*: this function and its callers are rows in `guestMemoryRegimes`, which
+// `TestNoGuestMemoryAccessSiteJoinsWithoutAClassification` asserts against the AST. A new caller of `write`
+// fails that control until someone classifies it — which is how the seventh site, `runData`, stopped being
+// a site nobody had counted.
+//
+// [0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
 func (m *memory) write(idx, offset uint64, bs []byte) error {
 	ea, err := effectiveAddress(idx, offset)
 	if err != nil {
@@ -720,6 +729,20 @@ func (m *memory) grow(delta uint64) int64 {
 // *reserved-but-empty* slot, so as soon as import slots became reachable a data segment aimed at
 // an imported memory dereferenced nil and panicked. Two places knowing "how to turn a memory
 // index into a memory" is the shape that produced graves #78, #105 and #106; there is now one.
+//
+// **This is [ADR 0064][0064]'s seventh site, and it is the one no hand-derived list had.** The `write`
+// below is plain at every alignment, like every other caller of `write`, and #627's population was
+// derived from *guest-reachable instructions* — where this arm is instantiation, so it was outside the
+// frame the list was drawn in. *An issue's list is a registry, not an inventory.*
+//
+// **Instantiation looks single-threaded and is not necessarily.** A second module importing an
+// already-shared memory can be instantiated while another instance's threads are running on it, which is
+// why this is a member of the plain region rather than an exception to it. Nothing in the suite exercises
+// that and it has not been measured; it is enumerated because the enumeration's job is to hold the sites
+// nobody has looked at, and `TestNoGuestMemoryAccessSiteJoinsWithoutAClassification` is what keeps the
+// next one from arriving uncounted.
+//
+// [0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
 func (in *Instance) runData(idx int, seg *binary.DataSegment) error {
 	if seg.Passive {
 		return nil

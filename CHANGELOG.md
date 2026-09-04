@@ -21,6 +21,66 @@ weakly-ordered platform.
 
 ### Added
 
+- **The bulk and SIMD region stays plain, and its extent becomes a machine-checked enumeration —
+  [ADR 0064](docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md)
+  plus `TestNoGuestMemoryAccessSiteJoinsWithoutAClassification`**
+  ([#627](https://github.com/scttfrdmn/burroughs/issues/627)). Scott's two rulings, quoted in full on the
+  issue so the ADR's `Status:` has an artifact to cite. **Ruling 1 takes option A**: the threads proposal
+  permits a racing `memory.fill` to be observed torn, so making the bulk paths atomic buys no correctness
+  — it buys **report-freedom**, a testability property, at a bulk-throughput cost on exactly §1's workload,
+  and a Go guest's `memmove`/`memclr` lower to these instructions. **Ruling 2 is what makes A admissible**:
+  *"testimony alone, no — but an enumeration with a control that fails when a new site joins isn't
+  testimony. It's a bounded, checkable claim."* No figure is taken, on his order, so the two-architecture
+  `benchstat` run #627 priced is not spent — recorded in the ADR so a later slice reaching for option B
+  knows the measurement is still owed rather than reading the silence as "throughput was found acceptable".
+  - **What the control checks, and only half of it is a table comparison.** The population is derived from
+    the AST — every function in `internal/interp`'s non-test files calling `(*memory).view`, `read` or
+    `write` — and compared against `guestMemoryRegimes`, keyed `file.go:Receiver.Symbol` with one of four
+    regimes per row (`plain`, `atomic`, `mixed`, `bounds`). The second assertion is derived from the code
+    rather than the table: a `plain` row must call **no** synchronisation helper (a callee whose name begins
+    `atomic` or is `cell` — a prefix, so a *new* helper is caught by the same predicate), and an `atomic` or
+    `mixed` row must call one. That is what stops option B from landing quietly.
+  - **`mixed` is a fourth regime rather than a rounding of the other two.** `writeNum` and `memAccess` are
+    atomic on the aligned arm and a plain byte loop on the unaligned tail, which ADR 0054's own Consequences
+    record; calling them `atomic` would restate the over-claim #627 exists to correct.
+  - **Two of the four arms were witnessed by the tree, before any mutation.** The table was first written
+    from #627's hand-derived population and the first run refused it: `atomic.go:Instance.atomicNotify`
+    reaches guest memory (a `read` whose bytes are discarded, there to make the bounds trap happen) and was
+    in no regime, and two rows written from the issue's prose named nothing — `atomicOp.check`, which does
+    not exist, and `vecLoadSplat`, which is not a function. So the *"a new site joined"* arm and the *"a row
+    names nothing"* arm both fired on real defects in the enumeration this control exists to protect. The
+    other two arms were mutated in: `_ = atomicStoreWord(dst, uint64(k))` in `execMemoryFill`'s loop fires
+    the option-B arm, and re-labelling that row `regimeMixed` fires the reverse arm.
+  - **The seventh site is in the enumeration**, on Scott's order: `runData`'s active-data-segment
+    `mem.write` at instantiation. Instantiation *looks* single-threaded and is not necessarily — a second
+    module importing an already-shared memory can be instantiated while another instance's threads run on it
+    — and it was missing from every hand-derived list because those were drawn from guest-reachable
+    instructions while `write`'s caller set is wider. *An issue's list is a registry, not an inventory.*
+  - **B-MM-2's carrier survives, and the note is now pointed the other way round.**
+    `TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify` takes its verdict from the race detector's
+    silence over *(A's `memory.fill` plain write, B's post-wake atomic load)*, so option A leaves it a plain
+    side. Scott: *"B-MM-2's carrier surviving is a use for the gap, not an argument for it — record that if
+    the gap closes the case needs a new plain side, so the carrier never becomes a reason to keep it open."*
+    Recorded at the case, at `execMemoryFill`, and in 0064's Consequences, with the two things the
+    obligation implies: the only replacement in hand is an **unaligned typed store** (0054 records that the
+    unaligned path has no atomic mechanism at all), and a *complete* repair of every plain path leaves the
+    case with no `-race` oracle in the tree at all.
+  - **#566's ruling is re-stated with its scope**, in
+    [`docs/laws/engine.md`](docs/laws/engine.md#the-guests-data-races-must-not-be-the-hosts-except-where-the-model-permits-the-tear-and-the-region-is-enumerable),
+    in his words: *"the guest's data races must not be the host's, except where the guest model itself
+    permits the tear and the region is statically enumerable with the enumeration asserted by a control."*
+    Option A is literally a position that some of the guest's races are the host's at seven ungated sites,
+    so leaving the unqualified sentence standing would have left the corpus carrying a principle the tree
+    contradicts — *"rather than left to read as narrowed by stealth"* is his phrasing for why it is written
+    down. Both conjuncts are load-bearing and 0054's typed path is the worked example of failing the
+    second: every load and store in the ISA is not an enumeration, which is why #567 bought the throughput
+    cost there and 0064 does not buy it here.
+  - **Option C's refusal is on governance cost, not throughput.** 0054's *"you cannot dodge a free
+    instruction with a branch and come out ahead"* is true per access and false for a branch amortized over
+    up to 4 GiB, so the trade genuinely inverts — but C either reopens declared spawn-capability at
+    instantiation, closed on Scott's stamp as public API surface, or rests on an unanswered §4 question
+    about whether an embedder may call `Spawn` concurrently with an in-flight `Invoke`.
+
 - **B-MM-2's second registered case runs over two shared memories —
   `TestAResumedAgentSeesASiblingFieldInASecondSharedMemory`** ([#631](https://github.com/scttfrdmn/burroughs/issues/631),
   under [#10](https://github.com/scttfrdmn/burroughs/issues/10)). The named case landed on #628 with one

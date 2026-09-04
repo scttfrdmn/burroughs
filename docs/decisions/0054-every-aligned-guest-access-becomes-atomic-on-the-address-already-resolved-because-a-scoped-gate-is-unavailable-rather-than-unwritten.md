@@ -173,6 +173,13 @@ as [#627](https://github.com/scttfrdmn/burroughs/issues/627).
   The trade is different in kind from the one this ADR priced: a `memory.copy` of a page is one `copy` today
   and would become a per-word atomic loop, so it is a bulk-throughput cost with no figure in hand, and it is
   Scott's the way #567 was.
+  **Decided, later the same day, in [ADR 0064](0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md):
+  they do not join it.** The region stays plain, because the guest model permits the tear so no correctness
+  is bought, and it is kept plain on a condition this ADR could not have met for the typed path — the
+  region is *statically enumerable*, and its extent is now asserted by
+  `TestNoGuestMemoryAccessSiteJoinsWithoutAClassification` rather than by comments. This bullet is left
+  standing rather than rewritten because it states what *this* ADR did not decide, which is still true; the
+  pointer is what keeps a reader from concluding the question is open.
 - **One thing the gap is already good for, stated so it is not mistaken for a silver lining.** #10's
   `b-mm-2-sibling-field-after-wake` uses `memory.fill`'s plain write as the **carrier** for a `-race`
   verdict, because a detector needs one non-atomic side to have anything to say. That makes #627's repair a

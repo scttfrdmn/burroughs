@@ -65,7 +65,7 @@ import (
 // (`:35`-`:37`). Without the narrowing a Go `byte()` conversion is the only thing standing
 // between `0xbbaa` and a panic-free wrong answer, which is why the row exists.
 //
-// # The byte loop below is plain at every alignment, and ADR 0054 does not reach it (#627)
+// # The byte loop below is plain at every alignment, ADR 0054 does not reach it, and ADR 0064 keeps it that way (#627)
 //
 // 0054 made *typed word* accesses sequentially consistent — `atomicLoadWord`/`atomicStoreWord` at widths 4
 // and 8, `atomicCell` at 1 and 2 — and its title's "every aligned guest access" was read as covering this
@@ -74,11 +74,22 @@ import (
 // argued. Two atomic readers were observed on the other side of this one write, so the finding is about
 // the write. Ungated, too — `0xFC` needs no proposal — so this is not confined to a gate's blast radius.
 //
-// Whether these paths join the atomic regime is #627's decision and is Scott's, the cost being
-// bulk-throughput rather than the per-access figure 0054 priced. **What must not happen quietly is the
-// repair**: #10's `b-mm-2-sibling-field-after-wake` uses this write as the carrier for a `-race` verdict,
-// so making it atomic leaves that case passing with nothing to detect. #627 carries the obligation; it is
-// named here because a diff that routes this loop through `atomicCell` would show no sign of it.
+// Whether these paths join the atomic regime was #627's decision and was Scott's. **It is decided: they do
+// not.** [ADR 0064][0064] keeps the region plain on his ruling — *"the guest model permits the tear, so B
+// buys no correctness — it buys report-freedom, a testability property, at a throughput cost on exactly
+// the workload §1 targets"* — and the price of keeping it is that the region's extent is now a pinned
+// enumeration with a control over it, `TestNoGuestMemoryAccessSiteJoinsWithoutAClassification`, because
+// *testimony alone* would not have carried the decision.
+//
+// **What must not happen quietly is the repair**: #10's `b-mm-2-sibling-field-after-wake` uses this write
+// as the carrier for a `-race` verdict, so making it atomic leaves that case passing with nothing to
+// detect. A slice that closes this region owes that case a **new plain side in the same slice** — Scott's
+// order on the same rulings, recorded in 0064's Consequences — and the control fails if this function
+// starts calling a synchronisation helper while its row still says `plain`, which is what makes the
+// obligation something a diff cannot walk past. It used to be named here because a diff routing this loop
+// through `atomicCell` would show no sign of it; now the diff also fails a test.
+//
+// [0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
 //
 // That case is landed, and it is `TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify` — named so the
 // obligation resolves to a function rather than to a plan. The detector reported *this* line against
