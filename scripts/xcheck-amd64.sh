@@ -9,9 +9,15 @@
 # Two instruments, in order, and **they are not equivalent**:
 #
 #   1. `janus.local` (or $XCHECK_HOST) — native x86_64. Real TSO hardware rather than
-#      an emulation of it, and fast. Costs a tree copy per run.
+#      an emulation of it, and fast. Costs a tree copy per run. **The command is queued
+#      through scripts/labrun into that host's pueue group, not run directly**: the box is
+#      shared with other projects, and an unqueued run lands on top of whatever is
+#      measuring at the time. $XCHECK_GROUP selects the group; see its default below.
 #   2. the amd64 container — QEMU on the arm64 host. Slower, needs no copy, exact for
-#      this purpose all the same: correctness across memory models, not speed.
+#      this purpose all the same: correctness across memory models, not speed. **Not
+#      queued, and it does not need to be**: it runs on the dev box, which is nobody
+#      else's measurement slot, and it is never a speed instrument — its own reason for
+#      existing is that emulated timings would not be figures.
 #
 # The script exists because the copy in (1) has two traps that a prose recipe records
 # and an executable can *assert*:
@@ -42,11 +48,33 @@
 #
 # Usage: scripts/xcheck-amd64.sh [command...]        (default: go test ./...)
 #        XCHECK_HOST=other.local scripts/xcheck-amd64.sh go test ./internal/spec/
+#        XCHECK_GROUP=build scripts/xcheck-amd64.sh go test ./...     (unmeasured: compiles,
+#                                                                     unit tests, lint)
 set -eu
 
 host=${XCHECK_HOST:-janus.local}
 dest=${XCHECK_DEST:-burroughs-xcheck}
 image=${XCHECK_IMAGE:-golang:1.26}
+
+# The pueue group the far-side command is queued into. `janus.local` is shared with other
+# projects, and an unqueued run lands on top of whatever is measuring at the time — the
+# interference showing up as unexplained divergence in *both* projects' numbers.
+#
+# **The default is `measured`, and that direction is deliberate.** This script's callers are
+# both kinds: a correctness cross-check is unmeasured, an amd64 benchmark arm is measured, and
+# nothing in an argument vector distinguishes them. The two ways to be wrong are not
+# symmetric — over-serialising an unmeasured run costs wall-clock on a queue nobody is
+# waiting on, while under-serialising a measured one corrupts the figure silently and the
+# corruption is indistinguishable from a real effect. So the safe default is taken and
+# `XCHECK_GROUP=build` is passed explicitly where the caller knows its run is unmeasured.
+group=${XCHECK_GROUP:-measured}
+
+# Scratch space for labrun's stderr — captured to a file rather than piped, for the reason
+# stated at the capture site. Removed on every exit path, including the NOT RUN ones, since
+# those exit from inside run_native.
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/xcheck-XXXXXX") ||
+	{ echo "xcheck: NOT RUN — mktemp failed, so nothing could be captured." >&2; exit 4; }
+trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 # Quote each argument for exactly one round of re-parsing on the far side. See the
 # header: this is #344's fix, and the single-quote escape (`'` -> `'\''`) is what makes
 # it total rather than merely usually-right.
@@ -107,9 +135,70 @@ run_native() {
 	fi
 	echo "xcheck: corpus reconciled at $localwast vectors, 0 sidecars; running: $cmd"
 
-	# Bare invocation, status read from its own command. Appending anything to a
-	# command replaces its verdict (#289 and its re-scoping).
-	ssh -o BatchMode=yes "$host" "cd ~/$dest && $cmd"
+	# An absolute far-side path, because pueue's `-w` is not passed through a shell that would
+	# expand a `~`. labrun quotes it into the submission single-quoted, so a tilde would arrive
+	# literally and the task would start in a directory named `~`.
+	remote_root=$(ssh -o BatchMode=yes "$host" 'echo "$HOME"')/$dest
+	case "$remote_root" in
+	/*) ;;
+	*) echo "xcheck: NOT RUN — could not resolve \$HOME on $host (got '$remote_root')." >&2; exit 4 ;;
+	esac
+
+	# The submit-time concurrency count, for the provenance block scripts/labprov writes into
+	# each arm log. Taken here rather than on the runner because it is a fact about the moment
+	# of queueing: by the time the task runs it is at the head of its group, and a count taken
+	# then would describe a different instant and quietly answer a different question.
+	concurrent=$(ssh -o BatchMode=yes "$host" "pueue status --json" 2>/dev/null |
+		uv run --no-project python3 -c '
+import json, sys
+try:
+    tasks = json.load(sys.stdin)["tasks"]
+except Exception:
+    print("unknown"); raise SystemExit
+print(sum(1 for t in tasks.values()
+          if isinstance(t.get("status"), dict) and "Running" in t["status"]))
+' 2>/dev/null) || concurrent=unknown
+	[ -n "$concurrent" ] || concurrent=unknown
+
+	echo "xcheck: queueing into $host:$group — $concurrent task(s) running on that box at submit time"
+	echo "xcheck: follow it live with: ssh $host 'pueue follow <id>' (the id is printed below)"
+
+	# **Queued, not run directly, and the whole command is one task.** Per-round or per-arm
+	# submission would let another project's job interleave between the rounds of an A/B, which
+	# is exactly the confounder grave #552's interleaved protocol exists to remove — and it
+	# would also give the arms differing `lab-task-id` provenance, which benchstat answers by
+	# splitting the table and dropping the p-value (measured; see scripts/labprov).
+	#
+	# `sh -c "$cmd"` preserves this script's #344 contract exactly. The far side reparses once,
+	# as it always did: labrun applies two levels of quoting and pueue's own shell removes one,
+	# so the string handed to `sh -c` is the same string the bare `ssh` used to hand a remote
+	# shell — argument boundaries intact, `-run 'A|B'` still one argument holding a `|`.
+	#
+	# LAB_CONCURRENT rides *inside* the command rather than being exported here: pueue captures
+	# the environment of the `pueue add` process on the far side, so a local export never
+	# reaches the task.
+	#
+	# stderr goes to a file and is replayed rather than piped through `tee`, because this is
+	# `/bin/sh` with no pipefail and the status of a pipeline belongs to its last command — the
+	# mistake would hand back `tee`'s success as the cross-check's verdict.
+	labout="$scratch/labrun.err"
+	st=0
+	LABRUN_DIR="$remote_root" "$(dirname "$0")/labrun" "$host" "$group" -- \
+		sh -c "cd $remote_root && LAB_CONCURRENT=$concurrent $cmd" 2>"$labout" || st=$?
+	cat "$labout" >&2
+
+	# **A positive delivery check, not an inference from the code.** labrun prints its
+	# `submitted …` line only after `pueue add` returned an id, so the line's *absence* means
+	# the task never entered the queue. Without this, a submit failure exits 1 and is
+	# indistinguishable from `go test` reporting a real failure — a mechanism failure wearing a
+	# verdict's clothes, which is precisely what #344 was filed for one transport earlier.
+	if ! grep -q '^submitted ' "$labout"; then
+		echo "xcheck: NOT RUN — the command was never queued on $host:$group." >&2
+		echo "  labrun produced no 'submitted' line, so pueue never returned a task id." >&2
+		echo "  A mechanism failure, not a verdict. Nothing about the code has been learned." >&2
+		exit 4
+	fi
+	return "$st"
 }
 
 docker_state() {
@@ -138,12 +227,32 @@ docker_state() {
 # what this cannot catch and does not claim to: a command that starts, runs partially,
 # and exits 1 is indistinguishable from a real fail, which is why the delivery *shape*
 # is fixed above rather than merely detected here.
+#
+# **The queue adds three more ways to not-run, and they are here for #344's reason rather
+# than by analogy.** labrun spells its own mechanism failures as 98 (the daemon reported no
+# result for the task) and 99 (the task was not Done when `pueue wait` returned), and ssh
+# spells a transport failure as 255. None of the three is the command's own status, and
+# `go test` returns none of them. The residual gap is named rather than papered over: labrun
+# failing in a way that exits 1 is still indistinguishable from a real failure here, which is
+# why run_native additionally asserts the `submitted` line *positively* instead of trying to
+# enumerate every code a broken submit could produce.
 not_run_if_undelivered() {
 	case "$1" in
 	126 | 127)
 		echo "xcheck: NOT RUN — $2 could not run the command (exit $1: $([ "$1" = 127 ] && echo 'not found' || echo 'not executable'))." >&2
 		echo "  Delivered as: $cmd" >&2
 		echo "  A mechanism failure, not a verdict. Nothing about the code has been learned." >&2
+		exit 4
+		;;
+	98 | 99)
+		echo "xcheck: NOT RUN — $2 queued the command but no result came back (labrun exit $1:" >&2
+		echo "  $([ "$1" = 98 ] && echo 'the daemon reported no result' || echo 'the task was not Done when the wait returned'))." >&2
+		echo "  A mechanism failure, not a verdict. Ask the queue: ssh $host 'pueue status'." >&2
+		exit 4
+		;;
+	255)
+		echo "xcheck: NOT RUN — ssh to $host failed during the queued run (exit 255)." >&2
+		echo "  A transport failure, not a verdict. The task may still be running: ssh $host 'pueue status'." >&2
 		exit 4
 		;;
 	esac

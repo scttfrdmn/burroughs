@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
+.PHONY: all build test race vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -434,6 +434,43 @@ ab:
 		exit 1; \
 	}
 	./scripts/ab.sh $(AB)
+
+# The same two runs on shared lab hardware, through that host's pueue queue. See CLAUDE.md's
+# "Running tests and benchmarks on lab hardware" for the fleet table and the group semantics;
+# the short version is that those boxes carry several projects at once and an unqueued run
+# lands on top of whatever is measuring, which both projects then read as divergence in their
+# own numbers.
+#
+# **`bench` and `ab` above are deliberately left local and unqueued.** They run on this dev
+# box, which is not lab hardware and not anyone else's measurement slot, so queueing them
+# would buy nothing and cost a round trip. The queue governs runs on the *shared* machines.
+#
+# LABHOST is not a guess. `janus.local` is this repo's own recorded default — the value
+# scripts/xcheck-amd64.sh has carried since it was written, and the host named in the
+# `verdict from NATIVE x86_64` lines that ADRs 0054, 0058 and 0061 cite, so changing it would
+# silently break comparability with every landed x86-64 figure. Override with LABHOST=<host>;
+# CLAUDE.md's fleet table says which hosts have a `measured` slot and which are build-only.
+LABHOST ?= janus.local
+LABTEST ?= go test ./...
+
+# Measured, so `measured`: the whole two-arm protocol goes over as ONE queued task. Not one
+# task per arm or per round — another project's job interleaving between rounds is exactly the
+# confounder grave #552's interleaving exists to remove, and per-arm tasks would additionally
+# give the arms differing provenance, which benchstat answers by splitting the table and
+# dropping the p-value.
+lab-ab:
+	@test -n "$(AB)" || { \
+		echo "usage: make lab-ab AB='--pkg ./internal/interp/membench --base main --head HEAD'"; \
+		echo "  runs the two-arm protocol on $(LABHOST) in its 'measured' group, as one task."; \
+		echo "  same arguments as 'make ab' — see scripts/ab.sh --help."; \
+		exit 1; \
+	}
+	XCHECK_HOST=$(LABHOST) XCHECK_GROUP=measured ./scripts/xcheck-amd64.sh ./scripts/ab.sh $(AB)
+
+# Unmeasured, so `build`: nothing this produces is a figure, and `build` is wide, so it waits
+# on other compiles rather than on the box's measurement slot.
+lab-test:
+	XCHECK_HOST=$(LABHOST) XCHECK_GROUP=build ./scripts/xcheck-amd64.sh $(LABTEST)
 
 # The engine/instrument ratio every PR's Board line quotes (#117). RATIO defaults to
 # the trailing window; pass a rev or a range for one PR:
