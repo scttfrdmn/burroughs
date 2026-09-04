@@ -996,6 +996,78 @@ weakly-ordered platform.
 
 ### Changed
 
+- **§4's `b-mm-2-sibling-field-after-wake` is re-registered with the race detector as its oracle, not a
+  value comparison** ([#603](https://github.com/scttfrdmn/burroughs/issues/603),
+  [the pre-registration](docs/litmus-battery-preregistration.md)). The registered witness had a woken
+  agent read a sibling field and compare the value, which needs the interleaving where the read lands
+  between the notify and the write — measured at 6 × 10⁻⁷ per round against microseconds of interpreter
+  dispatch, so the case could not be powered by raising `R`. **The oracle was already one clause up in
+  the same document**: B-MM-3's second half writes plainly *on purpose* and reads its verdict from
+  `-race`, because a detector needs one non-atomic side to have anything to say. B-MM-2 had the same
+  problem, and re-deriving it rather than reading the neighbouring clause cost a two-million-round run —
+  *lessons are indexed by shape, not by file*. The amended witness fills a naturally-aligned sibling
+  extent with `memory.fill` and notifies, never storing to the futex word at all since a fresh word holds
+  0; `R` falls from 100 000 to 1000, because the happens-before check answers **per round and
+  deterministically**, so `R` is now about schedule diversity rather than about hitting a window. The
+  forbidden outcome is a report **naming the sibling extent** rather than any report at all: the
+  injection that watched the case die produced a second report on its own flag, so *the forbidden outcome
+  must be located, not counted*. The floor asserts every round was woken and read the published value,
+  which is the premise the detector's silence is only informative under. Both architectures via `-race`,
+  the one §4 case not resting on arm64 discriminating.
+  - **It was re-registered rather than reclassified `structural`, and §4 is why.** Reclassification was
+    the plan: with no plain aligned guest store left after ADR 0054, the case looked like one the engine
+    can no longer host. **B-MM-5 normatively requires the conformance suite to include the
+    sibling-field-after-wake case by name**, so discharging B-MM-2 by deleting the case B-MM-5 names
+    would discharge one clause by falsifying another — the foreclosing-words shape one level up. Had that
+    clause not existed, the honest move was a `type:contract` question for Scott, not a shape field edited
+    to fit.
+  - **The pre-registration ordering was partly spent, and that is stated in the document rather than
+    left to be discovered.** The witness's feasibility was probed before it was registered, both arms,
+    with the probe deleted rather than committed. What the probe did *not* decide is the verdict (the
+    negation of the clause's own words) or `R` (the detector's determinism), and separating the two is
+    the only thing between a registration and a fit.
+  - **[ADR 0054](docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md)
+    gains a dated amendment: its covered population is *typed word* accesses, not aligned ones**
+    ([#627](https://github.com/scttfrdmn/burroughs/issues/627)). Measured while the witness was being
+    redesigned. For the typed path the reach is *wider* than the ADR's own bullets imply — all four
+    aligned widths are atomic — but the bulk family (`memory.fill`, `memory.copy`, `memory.init`) and the
+    SIMD family go through plain `copy` and plain byte loops at **every** alignment, so the partition was
+    never alignment. Three of the six plain sites are reachable from `0xFC` instructions needing no gate
+    at all, so the uncovered region is not confined to a proposal's blast radius. The ADR's unaligned-path
+    bullet was true and was read as exhaustive: *an unmeasured complement is not an empty one*. The title
+    is deliberately unchanged — every citation resolves through the filename — and whether those families
+    join the atomic regime is #627's question and Scott's, the cost being bulk throughput rather than the
+    per-access figure 0054 priced.
+  - **The carrier coupling is recorded in three places because no instrument's domain spans them.** The
+    amended witness's plain side *is* `memory.fill`, so a repair of #627 that routes the bulk paths
+    through the atomic regime leaves this case **passing with nothing to detect**. Testimony now sits at
+    `internal/interp/bulk.go:execMemoryFill` and `internal/interp/memory.go:write` beside the plain loop
+    and the plain `copy`, on both issues, and in the pre-registration.
+- **Three of Scott's ordered lines join the corpus** — two in
+  [operations.md](docs/laws/operations.md#rewriting-a-branchs-commit-messages-is-licensed-and-an-empty-tree-diff-is-the-licence),
+  one in
+  [citations.md](docs/laws/citations.md#an-asserted-deferral-is-a-citation-with-no-target-and-it-reads-as-tracked),
+  each with the specimen that earned it.
+  - **A branch's commit messages are the one licensed history rewrite, and an empty tree diff is the
+    licence.** *Corrections by posting, not editing* cannot reach a commit message bound for a squash
+    merge, for a mechanical reason: the squash body concatenates the branch's messages, so a later commit
+    retracting an earlier one ships both. The safety check is the squash-divergence section's own —
+    `git diff --stat <backup> HEAD` empty — and the durable form of it is that #613's two rewritten
+    commits have byte-identical trees to their originals, still resolvable with `git rev-parse`.
+  - **A target's name is a claim about which population was scanned** ([the
+    entry](docs/laws/operations.md#a-targets-name-is-a-claim-about-which-population-was-scanned)).
+    Running both channels is half the discipline; the other half is on the report. #613's Board line read
+    *"`make close`: 0 banned constructs"* over a figure taken from the **body** arm, while the
+    commit-message arm was red at that moment — which is what those two message rewrites exist for. The
+    drift runs toward the target's name because that is the habitual one, so the remedy is to name the
+    invocation and the population it scanned, with a second sentence for the other arm.
+  - **An asserted deferral is a citation with no target, and it reads as tracked.** *"Worth pursuing"*,
+    *"the obvious candidate, not benchmarked here"* — future work named with no place it lives, which is
+    worse than a dangling number, since a dangling number is a token an instrument can resolve and prose
+    is not. Specimen: ADR 0023's u8-narrowing question, sat unfiled from acceptance until the #612 audit
+    read the decisions directory for exactly this, with its own next finding arguing against it. The
+    repair is a title — [#617](https://github.com/scttfrdmn/burroughs/issues/617) names the defect in its
+    subject line, so the ADR's sentence has something to point at.
 - **Four measured claims are withdrawn across three ADRs, and one of them was re-measured to find
   out** — the disposition of [grave #612](https://github.com/scttfrdmn/burroughs/issues/612)'s audit,
   on Scott's orders. No figure below is repaired in place: an accepted ADR is a tombstone, so each
