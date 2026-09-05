@@ -48,6 +48,13 @@ weakly-ordered platform.
     non-null R1 makes the derivation unsound. What replaces it is a crossover rather than a second bar: the
     atomic pointer loses below roughly 3 reads per write, filed as an unmeasured premise at
     [#640](https://github.com/scttfrdmn/burroughs/issues/640).
+  - **The clause could not deliver the *before* it promised, and that is a law**: one `benchstat`
+    invocation printed the trigger row and the judged row together, so R1's falsification and the +32.29 ns
+    it excused arrived in the same instant. Recorded as
+    [a withdrawal clause buys its ordering only if the trigger arrives on a different instrument than the
+    number it escapes](docs/laws/controls.md#a-withdrawal-clause-buys-its-ordering-only-if-the-trigger-arrives-on-a-different-instrument-than-the-number-it-escapes),
+    with the disclosure that keeps a withdrawal distinguishable from an amendment, and with what does buy
+    the ordering when it is worth buying — the trigger row on its own invocation, read first.
   - **v128 stays under `mu`**, which is what the ruling asked this measurement to settle: the write-side
     carrier is the allocation, which a v128 cell would pay too, and the mechanism that wins both directions
     is the seqlock already filed at [#625](https://github.com/scttfrdmn/burroughs/issues/625).
