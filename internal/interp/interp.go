@@ -631,7 +631,25 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	// delegation to a supplier's `invokeIndex` therefore crosses once per hop in a re-export
 	// chain, which is granularity and not double-counting (`boundary.go`, decision 0052, #516).
 	enterGuest()
-	defer leaveGuest()
+	// **The unwinding path's caller uncount rides this `defer` rather than adding a second one**, which
+	// is the whole shape of [ADR 0070][0070]: a second `defer` here is 0067's measured cliff, and the
+	// straight-line pair below stays straight-line. `guestRunning` is true across exactly `in.run`, so
+	// none of the early returns between here and there can reach the repair — on every one of them no
+	// caller has been counted, and an unconditional uncount would take `callers` to -1.
+	//
+	// `&in.host` is the thread `st.t` takes below, named directly because this `defer` has to be
+	// established *before* the stack literal exists: the delegation return and the two error returns in
+	// between all need `leaveGuest`. `TestEveryStackCreationSiteCarriesAThread` is what keeps the two
+	// namings from drifting apart, since it pins the literal's `t:` field.
+	//
+	// [0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+	guestRunning := false
+	defer func() {
+		if guestRunning {
+			in.host.leaveCall()
+		}
+		leaveGuest()
+	}()
 
 	fn, ok := in.mod.DefinedFunc(idx)
 	if !ok {
@@ -821,8 +839,16 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	// `runtime.deferprocStack` calls where base has none — so the second defer converted the first one
 	// too. Measured, attributed, and recorded here because the next person to add a `defer` to this
 	// function will pay the same cliff and nothing else in the tree says so (decision 0067).
+	//
+	// **What `defer` additionally bought is now bought without one** (ADR 0070): the panic case is
+	// repaired by the flag in this function's existing `defer` above, so the sentence that follows in the
+	// paragraph above — no `recover` on any non-test path, so a panic here is an engine bug — has stopped
+	// being the whole answer. An *embedder* panic is not an engine bug and is recoverable above `Invoke`,
+	// which is #650.
 	st.t.enterCall()
+	guestRunning = true
 	runErr := in.run(fn, locals, st, numResults, refResults)
+	guestRunning = false
 	st.t.leaveCall()
 	if runErr != nil {
 		return nil, runErr

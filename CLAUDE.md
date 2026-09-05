@@ -39,17 +39,33 @@ issues. Do not reach ahead of the phase without a decision doc approving it. The
 ladder is a sequence of *artifacts*, not of instruments: the harness, the controls, and the
 generated tables are how those artifacts are known to be right; they are never the deliverable.
 
-**v1's own artifacts are untouched, and the line names the phase rather than the progress.** The
-§§2–5 boundary work — OS-thread spawn, futex wait/notify, engine-native epochs and STW, the §4 memory
-model with its litmus battery — has not started; what is in flight is gated front-end work for the
-threads proposal (`gate:threads`: the `shared` flag, the keyword table, the 67 atomic mnemonics). This
-is stated because `v0.4.0`'s own release note says *"it is not v1 … v0 closing means v0's conditions
-are discharged, not that the next phase has begun"*, and **that sentence is true about the artifacts
-and was written before the work that followed it** — so a reader who finds it must not read this line
-as claiming §§2–5 exist. What advanced is which phase is current, on the only evidence that can settle
-it: v0's conditions are discharged and its milestone is closed, so *no* phase-line value naming v0 is
+**v1's artifacts have started, and this paragraph said they had not for as long as that was false.** It
+read *"the §§2–5 boundary work … has not started"* — true when written, and left standing across the
+work that falsified it, which is the foreclosing-words shape the ladder above names one level up: a
+sentence telling the next reader the tree is in a state it is not. What is on main: `thread.spawn`
+([0068](docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md)),
+futex wait/notify (§2, [#543](https://github.com/scttfrdmn/burroughs/issues/543)), the safepoint poll
+and the caller count SP-2's predicate needed
+([0059](docs/decisions/0059-the-safepoint-poll-is-guarded-at-the-pc-assignment-because-a-back-edge-is-a-runtime-comparison-and-straight-line-code-pays-nothing.md),
+[0067](docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md)),
+host functions with `Instance.Close`
+([0069](docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md)),
+and §4's data-race repairs (0053–0066). What is not: T-5 exit/join/detach
+([#12](https://github.com/scttfrdmn/burroughs/issues/12)), and §4's litmus battery past what spawn
+needed ([#10](https://github.com/scttfrdmn/burroughs/issues/10),
+[#586](https://github.com/scttfrdmn/burroughs/issues/586)). `v0.4.0`'s release note — *"it is not v1 …
+v0 closing means v0's conditions are discharged, not that the next phase has begun"* — was likewise
+true about the artifacts when written and is overtaken rather than wrong. What advanced the phase line
+was neither: v0's conditions are discharged and its milestone is closed, so *no* value naming v0 is
 true. (Ruling: Scott, on the #534 review — dissolve #527 rather than adjudicate it, since both of its
 readings turn on which phase is current.)
+
+**`gate:threads` is not flipped, and its condition is stated rather than parked.** The front-end work
+is in flight (the `shared` flag, the keyword table, the 67 atomic mnemonics) and the mechanism above is
+landing behind it; the default **flips when #586 is resolved and the §4 battery covers what the default
+would then promise**, which is Scott's condition in his words and is a condition, not a deferral — the
+difference being that a reader can check whether it holds. The flip is still behaviour 4's own
+stamp-tier event when it comes.
 
 ## Where the work is tracked
 
@@ -67,17 +83,24 @@ Scott, *is* the decisions-needed queue, now queryable. **Queryable by the issues
 have just drained reads as full, in a report to the principal whose queue it is. Recipe, and the
 two ways the API arm still under-reports: [reading the tracker's
 state](docs/laws/operations.md#reading-the-trackers-state-the-queue-comes-from-the-issues-api-never-from-a-cached-listing).
-**And the queue is parked: it is not reported at all until spawn runs
-([#554](https://github.com/scttfrdmn/burroughs/issues/554)).** No count, no list, no *"none blocking"* —
+**And the queue is parked: it is not reported at all until v1's threads are complete.** No count, no list, no *"none blocking"* —
 an item is surfaced only when it **blocks code**, and then only that item. Filing is untouched; what is
 parked is the reporting. Scott's order on the #562 review, and the end point is half of it: *"the queue
 parking gets an end point so it stops recurring … Until then, don't report the queue at all — 'twelve
 waiting, none blocking' is itself the surfacing I asked you to stop, and half-parking pays both costs."*
-**The end point moved on the #647 review**, from #10's §4 litmus battery to spawn, and it took two
-companions with it: *"Parked stays parked. The decisions queue, the §4 battery beyond what spawn needs,
-the eight unstamped ADRs. They drain when spawn runs."* So #10 is itself now parked past what spawn
-needs, which is why the end point could not stay pinned to it — **a parked subject cannot be another
-subject's end point.** Recorded here by the actor who was ordered, which is not independent provenance
+**The end point has moved twice, and each move is recorded rather than the line rewritten**, because the
+moves are what say the parking is a schedule and not a verdict on the queue's contents. On the #647
+review it went from #10's §4 litmus battery to spawn, with two companions: *"Parked stays parked. The
+decisions queue, the §4 battery beyond what spawn needs, the eight unstamped ADRs. They drain when spawn
+runs."* So #10 was itself parked past what spawn needed, which is why the end point could not stay pinned
+to it — **a parked subject cannot be another subject's end point.** Spawn then ran, and Scott moved the
+target rather than letting it discharge: *"And the target moves. From 'spawn runs' to 'v1's threads are
+complete': join, [#586](https://github.com/scttfrdmn/burroughs/issues/586)'s resolution, and the battery
+… So the sequence is #650, #12, then §4 for #586's sake, then the flip."* **That move unparks the battery
+by naming it**, on the same lesson read forwards: the §4 work is now scheduled work inside the end point
+rather than deferred past it, and a condition cannot be simultaneously owed and postponed. What stays
+parked is the reporting of the decisions queue and the eight unstamped ADRs. Recorded here by the actor
+who was ordered, which is not independent provenance
 — *durability is not independence* — so commits in the slices this covers stay `Ratio-Class: carried`.
 Graves are closed issues labeled
 `type:grave`, lesson in the closing comment, with a comment at the fix site citing the number.

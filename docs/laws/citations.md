@@ -480,6 +480,20 @@ reach is a law out of context.
   known class rather than a discovery. Reading the tracker before writing the diagnosis is what establishes
   which of the two it is, and the difference decides whether a slice mints a law or cites one.
 
+  **The same reading is owed before a *filing*, and that half was learnt the expensive way** (grave
+  [#654](https://github.com/scttfrdmn/burroughs/issues/654)). The sentence above is scoped to a closure
+  claim and to mint-vs-cite; unscoped, it says that anything found while reading an instrument gets the
+  tracker searched for the **phenomenon** before an issue is opened for it. The specimen: a bar row moved
+  −7.53% on a diff that cannot reach it, which was filed as a discovery
+  ([#653](https://github.com/scttfrdmn/burroughs/issues/653)) while
+  [#580](https://github.com/scttfrdmn/burroughs/issues/580) already held the same mechanism with a wider
+  scope — and **#580's number was four lines above the row being read**, in the package comment of the
+  file the instrument lives in, cited there as the reason the null arm exists. So the cheap half of the
+  search is the local one: read the citations in the file before searching the tracker, because a file
+  that documents its own instrument has usually already named the phenomenon it misbehaves by. The cost
+  of skipping it is a second registry entry for one phenomenon, which the next reader pays by
+  reconciling them, and **no sweep can catch it** — nothing in this tree has the tracker in its domain.
+
   **A re-run after this is not a flake claim.** The verdict changed because the tracker changed, which is
   the check's documented remedy, and the cause is bounded to the one comparison the FAIL line names — the
   bar *[a re-run green doesn't refute a fail](evidence-and-instruments.md#a-re-run-green-doesnt-refute-a-fail--explaining-the-fail-does)*

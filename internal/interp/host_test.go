@@ -876,3 +876,220 @@ func valTypesEqual(a, b []binary.ValType) bool {
 	}
 	return true
 }
+
+// TestAnEmbedderPanicLeavesTheEngineMarksClean is [#650][650]'s acceptance test, and
+// [ADR 0070][0070]'s. Four channels, because the state a panic leaves behind is visible in four
+// places and only one of them is loud.
+//
+// # The test #650 asked for cannot be written, and the measurement is why
+//
+// The issue's closing line asks for *"a `Stop` that must not report arrival"*. That test fails on
+// correct code. `Stop`'s predicate is `blocked == callers`, a **difference**; a panic out of `h.fn`
+// leaks one of each, so the leaked thread and the clean thread both satisfy it. Measured before the
+// repair: `callers=1 blocked=1`, `Stop` returns `nil` — and after it, `callers=0 blocked=0`, `Stop`
+// returns `nil`. Both are *arrived*, and for a genuinely idle thread that is the right answer, because
+// any re-entry reaches `enterFrame`, whose first statement is `st.t.poll()`.
+//
+// So the oracle is the counters and the crossing parity, not `Stop`'s verdict. `Stop` is asserted
+// anyway, and it is not vacuous: it discriminates against **option A** — repairing `callHost` and not
+// `invokeIndex` leaves `callers=1 blocked=0`, and this call then waits out its whole deadline to report
+// `0 of 1 arrived` for a thread executing nothing. That measured state is what the arm is here to catch
+// if either half of the repair is removed.
+//
+// # The crossing number is derived, not read off a run
+//
+// Four: `invokeIndex`'s `enterGuest`/`leaveGuest` pair, plus the excursion `callHost` opens with
+// `leaveGuest` and closes with `enterGuest`. Unrepaired it measured **3**, because the panic skipped the
+// close — an odd delta, which is the one channel `TestEveryBoundaryCrossingIsPaired` could have seen,
+// and only for an odd number of leaks inside its own delta. Pinned here as the exact number for the
+// reason a floor is not a census.
+//
+// # The panic still belongs to the embedder
+//
+// The first arm requires a panic to come *out* of `Invoke`, which is ADR 0070's rejection of option B
+// made falsifiable: a later `recover` at the boundary would convert an embedder's bug into an engine
+// error, and this arm fails the moment one is added.
+//
+// [650]: https://github.com/scttfrdmn/burroughs/issues/650
+// [0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+func TestAnEmbedderPanicLeavesTheEngineMarksClean(t *testing.T) {
+	in := hostLink(t, `(module
+		(import "h" "boom" (func $boom))
+		(func (export "call") (call $boom)))`,
+		binary.Features{}, hostImports(map[string]Extern{
+			"boom": HostExtern(ft(nil, nil), func(*Caller, []Value) ([]Value, error) {
+				panic("the embedder's own panic")
+			}),
+		}))
+
+	before := crossings()
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("nothing panicked out of Invoke, so either the host call did not run or the " +
+					"engine recovered it. ADR 0070 chose not to recover: an embedder's panic is the " +
+					"embedder's bug and it keeps its own value and stack (option B, rejected)")
+			}
+			if s, ok := r.(string); !ok || s != "the embedder's own panic" {
+				t.Errorf("the recovered value is %#v, want the embedder's own panic value — a "+
+					"re-panic wrapping it would lose the original traceback", r)
+			}
+		}()
+		_, _ = in.Invoke("call")
+	}()
+
+	if got := crossings() - before; got != 4 {
+		t.Errorf("the recovered panic moved the boundary counter by %d, want 4: `invokeIndex`'s "+
+			"enter/leave pair plus the excursion `callHost` opens with `leaveGuest` and closes with "+
+			"`enterGuest`. 3 is the unrepaired number — the panic skipped the close, leaving the "+
+			"count odd for whatever runs next (ADR 0070)", got)
+	}
+
+	in.world.mu.Lock()
+	callers, blocked := in.host.callers, in.host.blocked
+	in.world.mu.Unlock()
+	if callers != 0 || blocked != 0 {
+		t.Fatalf("after a recovered embedder panic the thread carries callers=%d blocked=%d, want 0 "+
+			"and 0.\n1 and 1 is the unrepaired leak: `Stop` still reads `blocked == callers` and "+
+			"answers *arrived*, so the breach is silent and the counters grow one pair per panic.\n"+
+			"1 and 0 is option A — `callHost` repaired without `invokeIndex` — where every later "+
+			"`Stop` waits out its deadline for a thread executing nothing (#650, ADR 0070)",
+			callers, blocked)
+	}
+
+	if err := in.Stop(2 * time.Second); err != nil {
+		t.Errorf("Stop: %v — with both marks clean this thread is idle and arrival is immediate. A "+
+			"deadline expiry here is the option-A state (callers leaked, blocked not), which is #650 "+
+			"made loud rather than repaired", err)
+	} else {
+		in.Resume()
+	}
+
+	// The half that always worked, asserted as the contrast: `endHostCall` was already deferred, so the
+	// in-flight count is right and `Close` returns. In its own goroutine because the failure mode is a
+	// hang, and a wedged test reports nothing.
+	closed := make(chan error, 1)
+	go func() { closed <- in.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("Close did not return after a recovered embedder panic — `endHostCall` is the one " +
+			"half of `callHost`'s four that was always deferred, so a hang here means the host-call " +
+			"count leaked and `Close` is waiting for a call that has already unwound")
+	}
+}
+
+// TestASpawnEntryPanicLeavesNoCallerCounted is ADR 0070's third site, and its precondition is stated
+// before its assertion because the two are unusually far apart.
+//
+// **Nothing on a non-test path recovers a panic out of a spawned thread**, so the leak this witnesses is
+// not reachable in a released engine today: a panic in `runEntry` runs the goroutine's `defer`s and ends
+// the process, and a dead process has no marks to misread. The repair is there because
+// [#12](https://github.com/scttfrdmn/burroughs/issues/12) is a `recover` above this frame by
+// construction — a join that reports how a thread died has to catch the death — and on that day a
+// skipped `leaveCall` here is exactly `invokeIndex`'s leak.
+//
+// So this test supplies the `recover` #12 will, and calls `runEntry` directly on its own goroutine,
+// which is what the `go` statement in `spawn` does one frame up. That is the only way the repair can be
+// *watched*: an unfalsifiable protection is not a protection, and going through `Spawn` would take the
+// test binary down with the panic instead of asserting anything.
+func TestASpawnEntryPanicLeavesNoCallerCounted(t *testing.T) {
+	in := hostLink(t, `(module
+		(import "h" "boom" (func $boom))
+		(func (export "entry") (param i32) (call $boom)))`,
+		binary.Features{}, hostImports(map[string]Extern{
+			"boom": HostExtern(ft(nil, nil), func(*Caller, []Value) ([]Value, error) {
+				panic("the embedder's own panic, on a spawned thread")
+			}),
+		}))
+
+	c, err := in.resolveCall(exportedFuncIndex(t, in, "entry"))
+	if err != nil {
+		t.Fatalf("resolveCall: %v", err)
+	}
+	th, err := in.newThread()
+	if err != nil {
+		t.Fatalf("newThread: %v", err)
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("nothing panicked out of runEntry, so this test's premise is absent rather " +
+					"than its assertion failing")
+			}
+		}()
+		_ = in.runEntry(th, c.fn, c.ft, 0, 0)
+	}()
+
+	in.world.mu.Lock()
+	callers, blocked := th.callers, th.blocked
+	in.world.mu.Unlock()
+	if callers != 0 || blocked != 0 {
+		t.Fatalf("the spawned thread's entry panicked and left callers=%d blocked=%d, want 0 and 0 — "+
+			"`runEntry`'s `enterCall`/`leaveCall` is straight-line, so the panic skips the uncount "+
+			"unless the `defer` that already carries `leaveGuest` repairs it (ADR 0070)",
+			callers, blocked)
+	}
+}
+
+// TestAPanicUnwindingDuringAStopDoesNotPark witnesses the half of [ADR 0070][0070] the other two tests
+// cannot see: that the panic path clears the blocked mark **without polling**.
+//
+// With no stop in flight a poll returns immediately, so `unmarkBlocked` and `leaveBlocked` are
+// indistinguishable — which would leave the choice between them asserted and unwatched. This test makes
+// a stop be in flight at the moment the panic unwinds, and it does so without a race: the host function
+// calls `Stop` **itself**. That call returns immediately and successfully, because the thread it is
+// walking is the one inside this very host call and its marks say arrived (`blocked == callers`, SP-2's
+// host-call half). So by the time `panic` runs, `w.resume != nil` and `stopReq` is set on this thread.
+//
+// A poll on the unwind would park there until a `Resume` that only the embedder can issue — and the
+// embedder is the party whose `recover` is still one frame away. That is why `Stop`'s completion must not
+// depend on it: the panic would be held inside the stop's round, and SP-4 has no clause that lets a
+// round's completion wait on an embedder. The failure mode is a hang, so the arm is a timeout rather
+// than a comparison.
+//
+// [0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+func TestAPanicUnwindingDuringAStopDoesNotPark(t *testing.T) {
+	var in *Instance
+	stopErr := make(chan error, 1)
+	in = hostLink(t, `(module
+		(import "h" "boom" (func $boom))
+		(func (export "call") (call $boom)))`,
+		binary.Features{}, hostImports(map[string]Extern{
+			"boom": HostExtern(ft(nil, nil), func(*Caller, []Value) ([]Value, error) {
+				// Arrival is immediate and by the predicate rather than by a park: this thread is
+				// inside a host call, so `blocked == callers` already holds.
+				stopErr <- in.Stop(10 * time.Second)
+				panic("the embedder's own panic, with a stop in flight")
+			}),
+		}))
+
+	unwound := make(chan any, 1)
+	go func() {
+		defer func() { unwound <- recover() }()
+		_, _ = in.Invoke("call")
+	}()
+
+	if err := <-stopErr; err != nil {
+		t.Fatalf("the host function's own Stop returned %v — this test's premise is that a thread "+
+			"inside a host call is already arrived (SP-2's host-call half, ADR 0069), so a failure "+
+			"here is the premise missing rather than the assertion firing", err)
+	}
+	select {
+	case r := <-unwound:
+		if r == nil {
+			t.Fatal("no panic came out of Invoke")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the panic did not reach the embedder within 10s: the unwinding thread parked at a " +
+			"safepoint. That is `leaveBlocked` on the panic path instead of `unmarkBlocked` — it polls, " +
+			"the stop this host function started is still in flight, and the park waits for a `Resume` " +
+			"the embedder cannot issue because its `recover` has not run yet (ADR 0070)")
+	}
+	in.Resume()
+}

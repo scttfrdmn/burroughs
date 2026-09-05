@@ -344,7 +344,22 @@ func (in *Instance) callHost(h *hostFunc, st *stack) error {
 	if err := w.beginHostCall(); err != nil {
 		return err
 	}
-	defer w.endHostCall()
+	// **One `defer`, doing two jobs, because a second one is a measured cliff** — ADR 0070, and 0067's
+	// number is what makes the shape rather than the flag the interesting part. `embedderRunning` is true
+	// across exactly `h.fn` and nowhere else, which is what makes the repair unable to fire on the
+	// argument-marshalling error return below: on that path no crossing has been left open and no mark
+	// set, and an unconditional repair here would take `blocked` to -1.
+	embedderRunning := false
+	defer func() {
+		if embedderRunning {
+			// `unmarkBlocked` and not `leaveBlocked`: no park on an unwinding thread, argued at that
+			// function. `enterGuest` closes the excursion this frame opened, so the crossing count is
+			// even again by the time `invokeIndex`'s own `defer leaveGuest()` runs above us.
+			t.unmarkBlocked()
+			enterGuest()
+		}
+		w.endHostCall()
+	}()
 
 	args, err := hostArgs(st, h.ft.Params)
 	if err != nil {
@@ -360,7 +375,9 @@ func (in *Instance) callHost(h *hostFunc, st *stack) error {
 
 	leaveGuest()
 	t.enterBlocked()
+	embedderRunning = true
 	results, callErr := h.fn(c, args)
+	embedderRunning = false
 	t.leaveBlocked()
 	enterGuest()
 

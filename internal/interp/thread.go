@@ -543,7 +543,23 @@ func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, ar
 	// what this thread reads first — B-MM-1's message-passing case is exactly this pair of edges
 	// observed from two threads, so the site the control named is also the site the clause is about.
 	enterGuest()
-	defer leaveGuest()
+	// The third of [ADR 0070][0070]'s sites, and the one whose leak is **not reachable today**: nothing
+	// on a non-test path recovers a panic out of a spawned thread, so a panic here ends the process and
+	// leaves no state to corrupt. Repaired anyway, for one reason that is a fact about the next slice
+	// rather than about this one — **#12's exit/join is a `recover` above this frame by construction**: a
+	// join that reports how a thread died has to catch the death, and on the day it does, a skipped
+	// `leaveCall` here becomes the same leak `invokeIndex` has. Witnessed by
+	// `TestASpawnEntryPanicLeavesNoCallerCounted`, which supplies the `recover` #12 will, rather than
+	// asserted as a protection nothing can observe.
+	//
+	// [0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+	guestRunning := false
+	defer func() {
+		if guestRunning {
+			t.leaveCall()
+		}
+		leaveGuest()
+	}()
 
 	st := &stack{
 		t:   t,
@@ -561,8 +577,11 @@ func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, ar
 	// A plain call rather than a `defer`, on `invokeIndex`'s measurement — a second `defer` in a
 	// function that already has an open-coded one takes both off that path, at 25–29 ns/call. The one
 	// error path below is `invoke`'s return, which this already covers by uncounting after it.
+	// The panic case is the flag in the `defer` above rather than a second `defer` here — ADR 0070.
 	t.enterCall()
+	guestRunning = true
 	err := in.invoke(fn, ft, st, 0)
+	guestRunning = false
 	t.leaveCall()
 	return err
 }

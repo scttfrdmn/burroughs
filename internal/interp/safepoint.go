@@ -364,7 +364,34 @@ func (t *thread) enterBlocked() {
 //
 // Clearing before polling and not after: with the mark still set, a `Stop` racing this would count the
 // thread as being at a safepoint it has just left.
+//
+// **The two halves are separately callable, and only this one is the normal path.** `unmarkBlocked`
+// below is the clear on its own, for `callHost`'s unwinding path, which must drop the mark and must not
+// park (ADR 0070). Composed here rather than duplicated so that the order — clear, then poll — has one
+// site to be wrong at.
 func (t *thread) leaveBlocked() {
+	t.unmarkBlocked()
+	t.poll()
+}
+
+// unmarkBlocked clears the mark without polling — `leaveBlocked`'s first half, split out for the one
+// caller that must not park: `callHost`'s panic path (ADR 0070).
+//
+// **The poll is omitted there because SP-2's second half has no subject on an unwinding thread.** The
+// clause the poll serves is *"a thread that leaves a wait cannot touch guest memory until it re-enters
+// through a boundary that observes the stop"*, and a thread carrying a panic out of an embedder's
+// function touches no guest memory on its way: it runs `defer`s and returns frames until something
+// above `Invoke` recovers it or the process dies. What it must not do is *park* — a `Stop` in flight
+// would hold a panicking goroutine inside its round, so the stop's completion would depend on an
+// embedder's `recover` running, which is a dependency SP-4 does not have and cannot state.
+//
+// **And the next entry into the guest polls anyway**, which is what makes the omission safe rather than
+// merely convenient: an embedder that recovers and `Invoke`s again reaches `run` → `enterFrame`, whose
+// first statement is `st.t.poll()`, before one guest instruction executes. Same argument `enterCall`
+// makes for not parking, one caller over.
+//
+// A nil thread or a nil world is a no-op, on `poll`'s ground.
+func (t *thread) unmarkBlocked() {
 	if t == nil || t.w == nil {
 		return
 	}
@@ -373,8 +400,6 @@ func (t *thread) leaveBlocked() {
 	w.mu.Lock()
 	t.blocked--
 	w.mu.Unlock()
-
-	t.poll()
 }
 
 // enterCall counts one caller as executing on this thread, and leaveCall uncounts it. Decision 0067's
