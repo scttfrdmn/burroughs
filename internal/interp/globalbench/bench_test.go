@@ -20,6 +20,16 @@
 //	               allocation. R3 says the allocation is the majority of it, which is the forecast most
 //	               likely to embarrass the mechanism and is registered in that direction deliberately.
 //
+// **Two of the four reference forecasts came back falsified, and the table above is the pre-registration
+// rather than the result** — read [ADR 0066] for the board. Said here because the entries are written in
+// the present tense and a reader arriving at `R1 — within the null arm's excursion` would otherwise take
+// it for a finding: `GetRef` came in at **+17.19% (p=0.000)** against a null excursion of 0.05%, so a read
+// under an atomic pointer is *cheaper than a mutex* rather than free, and R4's leading sentence
+// (*"arm64 shows no `SetRef` effect"*) was falsified by the largest effect on either board. R2 and R3 hold,
+// R3 by a grafted `-benchmem` arm rather than by subtracting the pre-registered store figure. The entries
+// are left as written — a pre-registration edited after its measurement is not one — and this paragraph is
+// the pointer that keeps them from reading as conclusions.
+//
 // F4 is the one that decides whether the ADR may say where the cost is. The identical lock/unlock pair
 // is what was added to both v128 arms, so a v128 cost appearing on one side only is *not* the lock, and
 // the mechanism would not be where decision 0063 puts it. F5 — that the i64 and v128 deltas differ in

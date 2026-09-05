@@ -21,6 +21,37 @@ weakly-ordered platform.
 
 ### Added
 
+- **A reference global's 40-byte value is published through an atomic pointer to an immutable cell —
+  #573's third arm, the one ADR 0063 left open —
+  [ADR 0066](docs/decisions/0066-a-reference-globals-forty-byte-value-is-published-through-an-atomic-pointer-because-reads-are-the-hot-direction-and-a-mutex-taxes-every-get.md)
+  plus `TestARefGlobalIsNotWrittenAndReadWithoutSynchronisation` and two `globalbench` rows**
+  ([#573](https://github.com/scttfrdmn/burroughs/issues/573)). `g.ref = st.popRef()` was a plain 40-byte
+  struct assignment the compiler lowers to five word stores, so a concurrent `global.get` could pair one
+  write's discriminator with another write's payload — the v128 arm's defect at 2.5× the width, and the
+  case
+  [ADR 0063](docs/decisions/0063-a-numeric-globals-single-word-goes-atomic-and-a-v128s-pair-goes-under-the-globals-own-mutex.md)
+  left open. `storeRef` copies its parameter into a fresh cell and swaps the pointer, so the published
+  value is reachable only through it and `loadRef`'s single `Load` is the whole synchronisation.
+  - **The witness's oracle is `-race`, and CI's `race` step is where its verdict lives** — inside the
+    two-architecture `build` job, so `make check` says nothing about it. Not a value oracle, because MVP
+    lets a guest ask only `ref.is_null` about a reference it holds, and telling two non-null references
+    apart needs `ref.eq` or `call_ref`, both gated off.
+  - **Two of the four pre-registered forecasts came back falsified, and the mechanism's stated basis
+    changed as a result.** R1 said a read would be free; `GetRef` measured **+17.19% (p=0.000)** against a
+    null-arm excursion of 0.05%. Scott, on the board: *"My rollback was aimed at the wrong row … R1's
+    falsification doesn't reverse the choice, but it changes its basis … reads are cheaper than the
+    alternative — +4.14 ns against the 11.32 ns `Lock`/`Unlock` pair #600 measured on amd64."* R4's
+    leading sentence was falsified by the largest effect on either board. R2 and R3 hold; R3 by a grafted
+    `-benchmem` arm showing one 48-byte cell per `global.set` and an unchanged read path, which attributes
+    the write-side residual instead of leaving it as *"not the store"*.
+  - **The pre-registered 30 ns rollback bar was withdrawn by its own clause**, which said in advance that a
+    non-null R1 makes the derivation unsound. What replaces it is a crossover rather than a second bar: the
+    atomic pointer loses below roughly 3 reads per write, filed as an unmeasured premise at
+    [#640](https://github.com/scttfrdmn/burroughs/issues/640).
+  - **v128 stays under `mu`**, which is what the ruling asked this measurement to settle: the write-side
+    carrier is the allocation, which a v128 cell would pay too, and the mechanism that wins both directions
+    is the seqlock already filed at [#625](https://github.com/scttfrdmn/burroughs/issues/625).
+
 - **The table and both segment kinds publish their slice headers through images, so the racy write stops
   compiling —
   [ADR 0065](docs/decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md)

@@ -78,6 +78,19 @@ type global struct {
 	// that is historical rather than principled — noted rather than resolved, on his order, with #625
 	// carrying the question of whether v128 should follow.
 	//
+	// **The board falsified "free", and the basis is relative rather than absolute.** That last clause of
+	// the ruling is quoted above as what was ruled, not as what is true: R1 forecast a read within the
+	// null arm's excursion and `GetRef` came back **+17.19% (p=0.000)** against a null excursion of 0.05%,
+	// which is +4.14 ns per get on native x86-64. It is not the allocation (the read path's `allocs/op` is
+	// unchanged), not call overhead (both accessors inline), and not the atomic load, which would make
+	// arm64 the worse column and instead makes it 6× better. So the argument for this mechanism is that a
+	// read costs 4.14 ns where the same read under `mu` costs the pair #600 measured at 11.32 ns — 2.7×
+	// cheaper, not free — while a `set` costs +32.29 ns and one 48-byte allocation. **Which way that trades
+	// depends on a read:write ratio nothing here measures**: below roughly 3 reads per write the mutex
+	// wins, and #640 is where that premise gets falsified. Scott's ruling on the board — *"a decision left
+	// resting on a falsified premise is the shape this project keeps digging back out"* — is why the
+	// falsification is recorded at the field and not only in decision 0066.
+	//
 	// **The immutability is what makes one load sufficient, and it is held by the accessors rather than
 	// by prose.** `storeRef` copies its argument into a fresh cell, so no caller retains a writable
 	// alias to a published value and a reader's `Load` needs nothing between it and its dereference.
