@@ -25,9 +25,11 @@ import "sync/atomic"
 // per-object words would, at one atomic instead of one per import. 0052's options A and B.
 //
 // The accepted cost is a single contended cache line once agents cross concurrently. That is a
-// scalability question that needs a second agent to ask — T-1's `Spawn` is parked in **#554** — so it
-// is filed rather than pre-solved, and 0052 records the escape hatch (a depth-aware crossing, which
-// reduces the numerator) as the same change its performance rollback would make.
+// scalability question that now *has* its second agent — T-1's `Spawn` landed under [ADR 0068][0068] —
+// and it is still filed rather than pre-solved, because a contended line is a measurement and no
+// benchmark in this tree yet has two guest threads crossing concurrently. 0052 records the escape hatch
+// (a depth-aware crossing, which reduces the numerator) as the same change its performance rollback
+// would make. What changed is that the question is answerable, not that it is answered.
 //
 // # What the count witnesses, and what it does not
 //
@@ -58,12 +60,13 @@ import "sync/atomic"
 // Every site below is unannotated, and that is the annotation: they are sequentially consistent.
 //
 // [0052]: ../../docs/decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md
+// [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
 var boundaryCrossings atomic.Uint64
 
 // enterGuest establishes B-MM-1's acquire edge: the host is about to run guest code, or to read guest
 // state, and must observe everything every other agent released before now.
 //
-// # The five sites, and why they are not the four §4 names
+// # The six sites, and why they are not the four §4 names
 //
 // §4's B-MM-1 enumerates *"host-call return, trap resume, async wake, stack-switch resume"* and **the
 // engine has none of them**: no host function exists in either direction (`Extern`'s func arm is an
@@ -73,10 +76,16 @@ var boundaryCrossings atomic.Uint64
 // at a smaller radius — a host Go caller entering `internal/interp` and returning.
 //
 // Derived rather than listed, which is what makes the *next* one covered: **entering the interpreter
-// is the same event as creating a stack**, so the three non-test `stack{…}` literals are three of the
+// is the same event as creating a stack**, so the four non-test `stack{…}` literals are four of the
 // sites, and `TestEveryStackCreationSiteCrossesTheBoundary` asserts the pairing over that parsed
 // population. `InstantiateLinked` and `Global` are the two that touch guest state without running any
 // — segment copies and a direct read of a global's storage.
+//
+// **The derivation is what paid off, and this is the instance to point at.** The count went from five to
+// six when T-1's spawn added a `stack` literal in `runEntry`, and no list here had to be edited for the
+// new site to be covered: `TestEveryStackCreationSiteCrossesTheBoundary` parses the population, so the
+// pairing was asserted of `runEntry` before anyone thought to check. The heading's number is prose and
+// is the only thing that needed a hand.
 //
 // **The crossings nest, and that is granularity rather than redundancy.** `build` calling the start
 // function is an entry into the interpreter distinct from `InstantiateLinked`'s, and `runConst` is
@@ -85,8 +94,10 @@ var boundaryCrossings atomic.Uint64
 // (only the outermost pair touches the atomic, on a nesting count on `thread`) and it exists precisely
 // because the count of nested crossings is what the Instantiate row can fail on.
 //
-// **#554's `runEntry` is the next site**, named here so it is not discovered during that merge: a
-// spawned thread's first entry into the guest is a host→guest transition like any other.
+// **`thread.go`'s `runEntry` is the fourth site, and it landed** — named here before the merge so it
+// would not be discovered during it: a spawned thread's first entry into the guest is a host→guest
+// transition like any other. It is also the first site where the edge stops being bookkeeping, since it
+// is the only one whose two ends are on different threads; the argument is at the site.
 //
 // **And a host call's return is the site §4 named first**, which this comment has been able to say
 // since it was written and did not — **grave #645**'s second site: the enumeration above quotes B-MM-1's
@@ -104,6 +115,6 @@ func enterGuest() { boundaryCrossings.Add(1) }
 // **A separate function from `enterGuest` with an identical body, on purpose.** The direction is the
 // only thing a reader at the call site needs and the only thing that can be got wrong there, so it is
 // in the name — `enterGuest(); defer leaveGuest()` says which edge is which without a comment at every
-// one of the five sites. Collapsing them into one `crossBoundary` would save a line here and cost that
+// one of the six sites. Collapsing them into one `crossBoundary` would save a line here and cost that
 // everywhere, and the operation being symmetric is a fact about the RMW rather than about the boundary.
 func leaveGuest() { boundaryCrossings.Add(1) }

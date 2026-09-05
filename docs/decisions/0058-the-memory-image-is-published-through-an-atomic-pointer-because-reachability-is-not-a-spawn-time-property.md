@@ -268,8 +268,10 @@ they are the reason for.
 it can prove is reachable lets that memory grow by reslicing rather than by relocating, which is
 strictly better for the guest — but nothing depends on the walk being complete, which is what #575
 proved it can never be. On `main` the control in this family is
-`internal/testenv/observer_test.go:TestNothingInEngineCodeCreatesASecondObserver` (#568), whose subject
-is untouched by this decision; the walk-pairing form of it,
+`internal/testenv/observer_test.go`'s module-wide `go`-statement census (#568), whose subject is
+untouched by this decision — it was `TestNothingInEngineCodeCreatesASecondObserver` when this was
+written and is `TestEveryEngineGoroutineIsAtASiteADecisionAuthorises` since spawn landed; the
+walk-pairing form of it,
 `TestEveryGoStatementInEngineCodeIsPrecededByTheWalk`, exists only on
 [#554](https://github.com/scttfrdmn/burroughs/pull/554)'s head
 (`refs/pull/554/head`) and is named here as a branch artifact rather than as a control this tree runs.

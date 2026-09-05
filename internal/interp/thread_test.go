@@ -30,14 +30,14 @@ import (
 // rests on — **every stack the engine creates is given a thread** — over every `stack{…}` literal in
 // the package's own non-test sources.
 //
-// **The domain is derived, not enumerated.** Listing today's three sites would inherit today's blind
-// spot — the failure this exists to catch is a *fourth* site added later, and T-1's `runEntry` is
-// exactly that fourth site, parked in #554 behind #10, #543, #573 and #575 rather than behind the
-// ruling it was once waiting on (see `thread`'s own doc comment, and graves **#561** and **#576** for
-// why what it is parked behind has moved twice without clearing). Test
-// files are
-// excluded because a bare `&stack{}` is the right thing there: several tests drive a single opcode arm
-// and have no thread to speak of, which is also the second reason `stack.t`'s nil is legal.
+// **The domain is derived, not enumerated, and the fourth site is why that mattered.** Listing the
+// three sites of the day would have inherited the blind spot of the day: the failure this exists to
+// catch is a *fourth* site added later, and T-1's `runEntry` — parked in #554 behind #10, #543, #573
+// and #575, landed under [ADR 0068][0068] — is exactly that site. It arrived already covered, and the
+// only edits this control needed were to its floor and to a sentence in its failure message that
+// described the three sites' shared shape. Test files are excluded because a bare `&stack{}` is the
+// right thing there: several tests drive a single opcode arm and have no thread to speak of, which is
+// also the second reason `stack.t`'s nil is legal.
 //
 // `os.ReadDir` plus `ParseFile` rather than `parser.ParseDir`, which is deprecated *and* wrong for the
 // job in a way that matters: it does not consider build tags when grouping files into packages, so a
@@ -46,17 +46,19 @@ import (
 // `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` reaches the same conclusion for the same reason
 // one file over, which is why this reads the same way rather than differently.
 //
-// Watched die, four ways: dropping `t:` at any one of the three sites fails naming that site, and
+// Watched die, four ways: dropping `t:` at any one of the four sites fails naming that site, and
 // blinding the type match fails the floor at `found 0`, which is the failure mode that would
 // otherwise make the whole test vacuous.
+//
+// [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
 func TestEveryStackCreationSiteCarriesAThread(t *testing.T) {
-	// Three sites today — `constexpr.go`'s const-expr stack, `interp.go`'s start function and
-	// `invokeIndex`. A count below this means the parser has stopped seeing the literals rather than
-	// that the sites went away, and the assertion beneath it would then pass by asking nothing. A
-	// floor rather than an equality on purpose: a *new* site is exactly what this control should
-	// judge, not refuse to look at. The exact number is stated because a floor alone catches a moved
-	// file and never a silent partial loss.
-	const sitesWhenWritten = 3
+	// Four sites — `constexpr.go`'s const-expr stack, `interp.go`'s start function and `invokeIndex`,
+	// and `thread.go`'s `runEntry`. A count below this means the parser has stopped seeing the
+	// literals rather than that the sites went away, and the assertion beneath it would then pass by
+	// asking nothing. A floor rather than an equality on purpose: a *new* site is exactly what this
+	// control should judge, not refuse to look at. The exact number is stated because a floor alone
+	// catches a moved file and never a silent partial loss.
+	const sitesWhenWritten = 4
 
 	ents, err := os.ReadDir(".")
 	if err != nil {
@@ -116,11 +118,14 @@ func TestEveryStackCreationSiteCarriesAThread(t *testing.T) {
 	}
 	if len(without) != 0 {
 		t.Errorf("these `stack` literals set no thread: %v\n"+
-			"Every stack the engine creates carries the thread it runs on (decision 0050): all "+
-			"three sites pass `&in.host`. #515's safepoint poll is nil-legal by design, so a stack "+
-			"with no thread does not crash — it silently opts out of `Stop`, and a guest running on "+
-			"it is unstoppable while every test still passes. That is why this is checked "+
-			"structurally rather than by running anything.\nSites that do carry one: %v",
+			"Every stack the engine creates carries the thread it runs on (decision 0050). Three of "+
+			"the four sites pass `&in.host`, because a boundary `Invoke` runs on the host's thread; "+
+			"`runEntry` passes the spawned thread it was given, which is the distinction this "+
+			"control partitions on rather than a list it keeps. #515's safepoint poll is nil-legal "+
+			"by design, so a stack with no thread does not crash — it silently opts out of `Stop`, "+
+			"and a guest running on it is unstoppable while every test still passes. That is why "+
+			"this is checked structurally rather than by running anything.\n"+
+			"Sites that do carry one: %v",
 			without, withThread)
 	}
 }

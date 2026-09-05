@@ -21,6 +21,46 @@ weakly-ordered platform.
 
 ### Added
 
+- **`Instance.Spawn` — contract §2 T-1's thread spawn, a wasm thread backed 1:1 by an OS thread, behind
+  `gate:threads` and not a default flip.** [#554](https://github.com/scttfrdmn/burroughs/pull/554),
+  parked since 2026-09-01, re-authored under
+  [ADR 0068](docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md).
+  `runtime.LockOSThread` with no unlock is the 1:1 lifetime — a goroutine that exits while locked
+  terminates its thread, which is what *"this is `newosproc`, not a Worker with a message port"* asks for.
+  **Nothing defaults on:** an instance with no shared memory is refused, and a `shared` limits flag only
+  decodes with `Features.Threads`, so the memory is the gate's own witness rather than a second boolean
+  that could disagree with the decoder.
+  - **The pair in `runEntry` is the load-bearing line, and it is a repair to a defect the parked branch
+    would have landed.** A spawned thread that runs guest code without being counted as a caller has
+    `blocked == callers == 0`, which `Stop` reads as *at a safepoint* — that is
+    [#592](https://github.com/scttfrdmn/burroughs/issues/592) arriving through a new site rather than
+    through a changed predicate, and the branch predates
+    [ADR 0067](docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md)
+    entirely. `TestStopReachesASpawnedThread` is its witness and discriminates on the mechanism `Stop`
+    consults, not on `Stop`'s return value: nil comes back in both the working and the broken engine, so
+    the assertions are `callers == 1` before the round and `reported == true` after it.
+  - **Two cases are refused rather than answered.** `thread.w` is one field, so a thread belongs to
+    exactly one world: `ErrForeignEntry` when the entry function resolves into another instance (both
+    answers are a `Stop` returning nil while guest code runs), and `ErrStopInProgress` when a round is in
+    flight (a member admitted mid-round is an (N+1)th sender into `Stop`'s N slots, and a thread blocked
+    on that send is at a safepoint and unable to say so). Widening either is SP-4's dynamic-membership
+    work, [#515](https://github.com/scttfrdmn/burroughs/issues/515)'s successor.
+  - **`world.admit` makes check-and-register one critical section**, which is what makes the pair
+    indivisible: a thread that is a member cannot be missed by a stop, and a stop that has begun cannot
+    gain a member. Registration is before the `go`, and the window to the first guest instruction is
+    covered by `poll`'s nil-and-early-park behaviour rather than by the predicate — written down at the
+    site because a reader who checks the predicate alone reads it as a hole.
+  - **What landing does *not* close, each named where it would otherwise be implied:** T-5's
+    exit/join/detach are contract §10.3 ([#12](https://github.com/scttfrdmn/burroughs/issues/12)), so a
+    caller gets a tid and no handle and a terminated thread leaks one `world.members` entry; T-2 is
+    satisfied by an atomic id counter and **untested**, since no vector here has a spawned thread spawn
+    again; and [#586](https://github.com/scttfrdmn/burroughs/issues/586) stops being *"a fifth
+    precondition on unparking `Spawn`"* and becomes a named residual over a stated population — an
+    **unshared** memory in an instance that has spawned, grown by one thread while another holds an older
+    image. No shared memory is in that population, because `allocate` reserves and therefore marks every
+    one of them. Waiting for #586 would have parked T-1 behind a subject that is itself parked, and *a
+    parked subject cannot be another subject's end point*.
+
 - **`internal/interp/invokebench` — one `Invoke` per op and the smallest guest body a module can declare,
   because every other bench package here is built to make `Invoke`'s fixed cost invisible and one of them
   was named as the instrument that would price it.** Charged to
@@ -723,9 +763,10 @@ weakly-ordered platform.
   exactly one observer, and `Instance.Spawn` refuses an instance with no shared memory and then runs
   the entry in the *same* instance, which makes that instance's **unshared** memories reachable from
   two threads. `limits.Shared` is therefore not a sound gate.
-  `TestNothingInEngineCodeCreatesASecondObserver` fails on the first `go` statement in any non-test
-  file in the module — the census is exactly zero today, so it needs no allow-list — and its message
-  carried the three ways out. **It no longer does: ADR 0056 chose one of the three and narrowed it, so
+  `TestNothingInEngineCodeCreatesASecondObserver` — formerly, and renamed to
+  `TestEveryEngineGoroutineIsAtASiteADecisionAuthorises` when spawn landed — fails on the first `go`
+  statement in any non-test file in the module, the census being exactly zero at the time, so it needed
+  no allow-list, and its message carried the three ways out. **It no longer does: ADR 0056 chose one of the three and narrowed it, so
   the message now names the decision and the half of it that remains** (see the #572 entry above). The
   trigger is unchanged, which is why that is a message edit and not a re-pointed control. Watched die
   twice: an injected `go` statement, and a neutered walk
@@ -1251,6 +1292,29 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`TestNothingInEngineCodeCreatesASecondObserver` becomes
+  `TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`, and its `internal/interp` sibling keeps its
+  name.** The asymmetry is the lesson: *name a control after the rule, not the property.* The `testenv`
+  form asserted a **property** — that engine code creates no second observer — which T-1's spawn makes
+  flatly false, so a name that survives has to name the rule it is really keeping. `internal/interp`'s
+  `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` already did, so a ruling *satisfies* it and only
+  its trigger narrowed: from "any `go`" to "any `go` outside the ruled site", keyed by enclosing
+  function rather than by line, since *re-key an allow map by content, not by arithmetic*. This tree has
+  now paid for that lesson twice, one proposal apart.
+  - **Each keeps a vacuity arm the narrowing itself needs**, which is the failure mode an allow list
+    usually has: an entry matching nothing leaves its control green while authorising a site that no
+    longer exists, so the next `go` written into that function is permitted by a key nothing checked.
+    Both pin the authorised site's `go` count at exactly **one** and fail in *both* directions — too few
+    means the exemption has rotted, too many means a second goroutine was added at an authorised site,
+    which is not the same as being an authorised goroutine. Pinned rather than floored, because *a floor
+    is not a census*.
+  - **Both were watched die by injection and watched to permit spawn's own `go`**, because *a re-pointed
+    control has not been watched die* and *"it now permits X"* is a forecast to run rather than a claim
+    to make.
+  - Every citation of the old name is re-pointed, and the ones that are *about* the old name are
+    annotated rather than rewritten — a past-tense marker `pastReference` exempts, so the record of what
+    the control used to assert survives the rename instead of being silently corrected away.
+
 - **ADRs 0050, 0052 and 0060 move from `proposed` to `accepted`, stamped by relay** — Scott's order on the
   #647 review: *"Record the relay stamps on 0050, 0052 and 0060 citing my prior report — the stamp was given
   last turn; this is the recording."* The independence mechanism is his own, from the #646 review: *"I
@@ -1758,6 +1822,29 @@ weakly-ordered platform.
   absence — `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` — and the pair of exceptions names the
   boundary: the mirror is incomplete by construction wherever the subject is not in the Makefile's
   domain.
+
+### Removed
+
+- **ADR 0056's spawn-time reachability walk — `reachableMemories`, `reserveForASecondThread` and the
+  eight-row dynamic test over the import closure.** This is *implementing*
+  [ADR 0058](docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md)'s
+  last unbuilt consequence and **not** reversing 0056's stamped ruling: 0058 sanctions it in terms —
+  *"`Spawn` **may** keep it … nothing depends on the walk being complete"* — and 0056's mark, its refusal
+  arm and its named engine limit all stay exactly where they are, with `allocate` still the only site
+  that reserves.
+  - **Keeping it would have been guest-visibly worse.** The walk reserves through `allocate`, capped at
+    `sharedReservePages`, so *every* memory in a spawned instance — including its unshared ones — would
+    become uncapped-growth-refusing at 128 pages / 8 MiB. That narrows which programs run, to buy a
+    coherence guarantee the walk cannot deliver
+    ([#575](https://github.com/scttfrdmn/burroughs/issues/575): a table slot can hold a foreign
+    `funcref`, so the import closure is not the reachable set), and it falsifies 0058's own *"strictly
+    better for the guest."*
+  - **The safety argument that replaces it is checkable rather than inherited.** `allocate` reserves —
+    and therefore marks — every memory whose limits are `Shared`, so no shared memory ever reaches
+    `grow`'s relocating arm, with or without a walk. `grow`'s own comment already said so.
+  - The branch is left intact at `refs/pull/554/head` rather than deleted, because ADR 0058 cites that
+    ref for `TestEveryGoStatementInEngineCodeIsPrecededByTheWalk`, which exists only there. *Cite a PR
+    number, not a branch or SHA*: GitHub retains the diff and the ref independently of the branch.
 
 ### Fixed
 

@@ -3,8 +3,12 @@
 package interp
 
 import (
+	"errors"
 	"fmt"
+	"runtime"
 	"sync/atomic"
+
+	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
 // ThreadID names a wasm thread. Contract §2's T-1 `tid`.
@@ -29,31 +33,43 @@ type ThreadID uint64
 // checked at back-edges and call sites, SP-2's "in a host call, therefore at a safepoint" bit, T-3's
 // futex park token. Every one is per-thread and every one would be per-continuation on `stack`.
 //
-// # T-1's spawn is not here, and a control in this package is why
+// # T-1's spawn is here, and the four preconditions it waited on are why this section is history
 //
-// T-1 is written and lives in **#554**, a PR parked unmerged: `Spawn`, a shared-memory gate, an
-// entry-signature check, and `runEntry` launching a goroutine that calls `runtime.LockOSThread` and
-// never unlocks. Five tests for T-1 there, and it is deliberately red at one test — see below.
+// `Spawn` is below, and it landed under [ADR 0068][0068] after being parked as **#554** from
+// 2026-09-01. The parking is kept as a record rather than deleted because two graves were dug inside
+// it and because *the shape of what survives names the bug*: three of the four preconditions its
+// tripwire named were discharged elsewhere, and the fourth was parked by the principal whose queue it
+// was.
 //
-// It is **withheld** because `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` fires on it. That
-// control watches for the first `go` statement in this package's non-test files, and it names what
-// unparking has to answer: §4's boundary model has its mechanism and no litmus battery (**#10**),
+// It was **withheld** because `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` fired on it. That
+// control watches for a `go` statement in this package's non-test files, and it named what unparking
+// had to answer: §4's boundary model has its mechanism and no litmus battery (**#10**),
 // `memory.atomic.wait` cannot return 0 for woken (**#543**), `Spawn` shares the instance's globals and a
 // **reference** global's `global.set` is still a plain write (**#573**), and the spawn walk's closure is
-// smaller than the reachable set (**#575**). Deleting or re-pointing that control is a principal's call and not a
-// test author's, so this paragraph is a parking notice rather than a to-do list.
+// smaller than the reachable set (**#575**). #543, #573 and #575 are closed — the last by [ADR
+// 0058][0058], which dissolved the walk's question instead of widening it — and #10 is parked by
+// Scott's order past what spawn needs. Deleting or re-pointing that control was a principal's call and
+// not a test author's, and its name is what made the ruling the thing that discharges it: the control
+// now asserts that no *further* `go` lands unruled, keyed by enclosing function.
 //
-// **The blocker has now changed twice without clearing, and this paragraph is where the first change
+// **The blocker changed three times without clearing, and this paragraph is where the first change
 // was noticed too late** (grave **#561**; the second is grave **#576**, in the control's own name and
 // message). It used to quote the control saying *"discharge #542"*, and to assert that all 67 atomics
 // in `atomic.go` were plain read-then-write — true when written, falsified by [ADR 0051][0051], which
 // made them sequentially-consistent word operations over the backing array. It then named **#557**,
 // the tearing of memop.go's aligned plain accesses, and **#516**, §4's boundary edges; both are
-// discharged, #557 by [ADR 0054][0054] and #516 by [ADR 0052][0052]. The watched *event* is unchanged
-// through all of it, so `Spawn` is parked further along the same chain rather than for a new reason,
-// and the way the first of these was settled is the part worth keeping: a `go` statement injected into
+// discharged, #557 by [ADR 0054][0054] and #516 by [ADR 0052][0052]. The watched *event* was unchanged
+// through all of it, so `Spawn` was parked further along one chain rather than for a new reason, and
+// the way the first of these was settled is the part worth keeping: a `go` statement injected into
 // a scratch non-test file and the resulting FAIL read back. **A claim about what an instrument will
 // permit is a forecast about a machine sitting in the tree.**
+//
+// **What the parked branch could not have known, and what therefore is not a rebase.** ADR 0067's
+// `Stop` asks `blocked == callers`, and the branch predates it: a spawned thread that runs guest code
+// without being counted as a caller reads as *at a safepoint* while it executes, which is #592 with a
+// new site instead of a changed predicate. `runEntry` below pairs `enterCall`/`leaveCall` for exactly
+// that reason. The branch is re-authored rather than replayed, and it is left intact at
+// `refs/pull/554/head` because [ADR 0058][0058] cites that ref for a control that exists only there.
 //
 // **Scott ruled that order, and the ruling is what this comment records rather than the question it
 // used to pose.** Option 1: discharge #542 first — **#542 → #516 → #10** — reversing the in-session
@@ -76,6 +92,8 @@ type ThreadID uint64
 //
 // [0050]: ../../docs/decisions/0050-the-per-thread-context-is-its-own-object-reached-by-one-pointer-on-stack-because-3-and-5-need-more-per-thread-state-than-a-slot.md
 // [0051]: ../../docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md
+// [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
+// [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
 // [0052]: ../../docs/decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md
 // [ADR 0059]: ../../docs/decisions/0059-the-safepoint-poll-is-guarded-at-the-pc-assignment-because-a-back-edge-is-a-runtime-comparison-and-straight-line-code-pays-nothing.md
 // [0054]: ../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md
@@ -202,6 +220,25 @@ type thread struct {
 	// on a send forever, with `Resume` unable to free it. See `parkAtSafepoint`.
 	reported bool
 
+	// done closes when the thread has terminated and `err` is final. Nil for the host thread, which
+	// does not terminate.
+	//
+	// **This is not join, and the distinction is contract §10.3's.** T-5 requires exit, join and
+	// detach *defined in the contract* (**#12**, open), so nothing here decides them: there is no
+	// ownership, no detach, no reaping, and no ordering promised between two threads' terminations.
+	// What the channel buys is the one fact the engine needs internally — that a thread has stopped —
+	// plus a happens-before edge that makes `err` readable without a race. A `Join` method would be
+	// answering the open question in the channel that gets no review.
+	done chan struct{}
+
+	// err is the thread's terminal error, written once by the thread itself before `done` closes.
+	//
+	// **Stored rather than surfaced, and stored rather than dropped.** How a thread's failure becomes
+	// visible to a host *is* exit semantics, so it is #12's to answer and no accessor exists.
+	// Swallowing it instead would make a trapping thread indistinguishable from one that returned,
+	// which is a wrong answer rather than a deferred question.
+	err error
+
 	// w is the stop-the-world state this thread participates in, set by `world.register` at creation.
 	//
 	// Nil is legal and means "no world", which is any `thread` this package's own tests build by
@@ -211,6 +248,222 @@ type thread struct {
 	w *world
 }
 
-// String names a thread in an error or a test failure, so a message about one says which. The only
-// method on the type.
+// String names a thread in an error or a test failure, so a message about one says which.
 func (t *thread) String() string { return fmt.Sprintf("thread %d", t.id) }
+
+var (
+	// ErrNotShared refuses a spawn on an instance with no shared memory to share.
+	//
+	// **This is the threads gate, and it is a gate by construction rather than a second flag.** A
+	// `shared` limits flag only decodes with `Features.Threads` on (`decodeLimits`), so an instance
+	// holding a shared memory *is* proof the threads gate was set when its module was decoded. A
+	// duplicate boolean on the instance could disagree with the decoder; this cannot. Behaviour 4 and
+	// contract §9 want the capability behind the proposal's gate, and the memory is the gate's own
+	// witness.
+	ErrNotShared = errors.New("burroughs: spawn needs a shared memory")
+
+	// ErrThreadEntry refuses an entry function whose type is not T-1's `(entry_func, arg)` shape.
+	ErrThreadEntry = errors.New("burroughs: thread entry must take one i32 and return nothing")
+
+	// ErrForeignEntry refuses an entry function that resolves into a different instance — decision
+	// [0068]'s first named limit.
+	//
+	// **A `thread` belongs to exactly one world, and this is the case where "which one" has two
+	// answers.** `resolveCall` follows import chains to the instance that *defined* the body, and
+	// `runEntry` must run it against that instance's state; `thread.w` is one field, so either the
+	// spawner's `Stop` or the entry instance's `Stop` would fail to reach the new thread. Both
+	// alternatives are a `Stop` returning nil while guest code runs, which is #592's failure with a
+	// new cause. Refusing declines to answer instead of answering half, and widening it is SP-4's
+	// dynamic-membership work rather than this function's.
+	ErrForeignEntry = errors.New("burroughs: thread entry must be defined in the instance it is spawned from")
+
+	// ErrStopInProgress refuses a spawn while a stop is in flight — decision [0068]'s second named
+	// limit, and the reason is `Stop`'s arrival channel rather than tidiness.
+	//
+	// `Stop` sizes `world.arrived` to the membership it observed, and every member may send once. A
+	// member admitted mid-round is an (N+1)th potential sender into N slots, and a thread that blocks
+	// on that send is *at a safepoint and unable to say so* — the one deadlock this protocol can have
+	// (`world.arrived`). Unreachable from a guest that spawns while running, since a running guest
+	// means no round is in flight on its own thread; reachable only from an embedder spawning between
+	// `Stop` and `Resume`.
+	ErrStopInProgress = errors.New("burroughs: spawn refused while a stop is in progress")
+)
+
+// newThread makes the instance's next thread **and admits it to the world in the same step**, so that
+// *registration is where creation is* stays an invariant of one function rather than an agreement
+// between two — link.go's `in.host` obeys the same rule, and a thread registered later than its first
+// instruction is a thread a stop can silently fail to reach.
+//
+// The id counter is atomic because T-2 forbids a main-thread special case: any thread may spawn, so two
+// spawns can race for an id. It is bumped *after* `admit` refuses, so a refused spawn consumes no id.
+func (in *Instance) newThread() (*thread, error) {
+	t := &thread{done: make(chan struct{})}
+	if err := in.world.admit(t); err != nil {
+		return nil, err
+	}
+	t.id = ThreadID(in.nextTID.Add(1))
+	return t, nil
+}
+
+// hasSharedMemory reports whether this instance can reach a shared memory.
+//
+// It scans `mems` rather than the module's declarations on purpose: the index space reserves a slot
+// per import (see `Instance.mems`), so an *imported* shared memory is only reachable once a supplier
+// filled it. The question spawn needs answered is "is there a shared memory this instance can
+// actually reach", not "did the module mention one" — and those differ for exactly the module that
+// imports a memory nobody supplied.
+func (in *Instance) hasSharedMemory() bool {
+	for _, m := range in.mems {
+		if m != nil && m.limits.Shared {
+			return true
+		}
+	}
+	return false
+}
+
+// Spawn is contract §2's T-1: `spawn(entry_func, arg, stack_hint) → tid`, a wasm thread backed 1:1
+// by an OS thread, sharing the module's shared linear memory.
+//
+// **1:1 with an OS thread, in pure Go, is a goroutine that locks its thread and never unlocks it.**
+// `runtime.LockOSThread` binds the goroutine to the thread it is running on, and a goroutine that
+// exits while still locked *terminates* that thread — which is the lifetime T-1 asks for
+// (*"this is `newosproc`, not a Worker with a message port"*). There is no unlock, deliberately:
+// unlocking would return the thread to the pool and make the binding 1:N over the thread's life.
+//
+// **Spawn does not make everything it reaches coherent, and this comment is not the place a reader
+// should have to discover that.** What is closed: the backing array may move under a running thread
+// without memory unsafety ([ADR 0058][0058]), the 67 atomics are sequentially consistent ([ADR
+// 0051][0051]), aligned plain accesses do not tear ([ADR 0054][0054]), all three global arms are
+// atomic (#573), the table and segment headers are published images (#622), and `memory.atomic.wait`
+// suspends and wakes (#543). What is **open and reachable from here**: an unshared memory in a
+// spawned instance, grown by one thread while another holds an older image, loses the writes made
+// through that image — [0058]'s coherence residual, **#586**, which needs §4 (**#10**) to say what is
+// permitted before code can be right about it. No *shared* memory is in that population, because
+// `allocate` reserves and therefore marks every one of them and a marked memory never reaches
+// `grow`'s relocating arm.
+//
+// The lifecycle stays open: T-5's exit/join/detach are contract §10.3 (**#12**), so a caller gets a
+// tid and no way to wait on it. See `thread.done` for why the internal channel is not that API, and
+// note that a terminated thread stays in `world.members` — reaping is #12's too.
+func (in *Instance) Spawn(entry uint32, arg int32, stackHint int) (ThreadID, error) {
+	t, err := in.spawn(entry, arg, stackHint)
+	if err != nil {
+		return 0, err
+	}
+	return t.id, nil
+}
+
+// spawn is Spawn's mechanism, and the split is where the lifecycle gap lives.
+//
+// `Spawn` drops the `*thread` and hands back a bare id **because a handle is the lifecycle API**:
+// anything a caller could do with the object — wait, join, detach, read the terminal error — is T-5,
+// contract §10.3, **#12**. Returning it would answer that in the signature. So the object stays
+// inside the package, where the engine's own code and this package's tests can observe that a thread
+// ran, and the exported boundary offers nothing #12 has not decided.
+func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, error) {
+	if !in.hasSharedMemory() {
+		return nil, fmt.Errorf("%w: this instance reaches no shared memory, so a spawned thread "+
+			"would share nothing with its parent", ErrNotShared)
+	}
+	target, fn, ft, err := in.resolveCall(entry)
+	if err != nil {
+		return nil, err
+	}
+	// Decision [0068]'s first named limit. See `ErrForeignEntry` for why this is refused rather than
+	// resolved; the check is `target != in` and not a nil test, because `resolveCall` resolves a
+	// re-exported import transitively and returns the instance that owns the body.
+	if target != in {
+		return nil, fmt.Errorf("%w: function %d resolves into another instance, whose `Stop` and this "+
+			"one cannot both reach the new thread (SP-4)", ErrForeignEntry, entry)
+	}
+	// T-1 fixes the entry shape at one i32 argument and no results, so the check is exact in both
+	// directions rather than a minimum: a function returning a value would leave it on a stack
+	// nothing will ever pop, and the arity debt (#9) would report it as a wrong answer later,
+	// somewhere with no thread in the message.
+	if len(ft.Params) != 1 || ft.Params[0] != binary.I32 || len(ft.Results) != 0 {
+		return nil, fmt.Errorf("%w: function %d takes %v and returns %v",
+			ErrThreadEntry, entry, ft.Params, ft.Results)
+	}
+
+	// **Creation is after every refusal, and admission is inside creation.** A `Spawn` that returns an
+	// error leaves the instance exactly as it found it — no id consumed, no member added to a world
+	// whose `Stop` would then wait for it. ADR 0056's walk used to sit here on the same reasoning
+	// about a mark it could not undo; the walk is deleted (decision [0068]) and the placement rule it
+	// was the reason for is now this.
+	t, err := in.newThread()
+	if err != nil {
+		return nil, err
+	}
+	// **Registration has already happened, and that ordering is the whole soundness argument for the
+	// window this `go` opens.** Between `admit` returning and the goroutine's first guest instruction,
+	// a `Stop` can begin: it sets `stopReq` on this thread because it is already a member, and counts
+	// it as arrived on `blocked == callers` (both zero). That count is *accurate in effect* rather than
+	// by the predicate — the goroutine reaches `enterFrame`, polls, and parks before executing one
+	// guest instruction — and the distinction is written down because a reader who checks the
+	// predicate alone will read it as a hole.
+	go func() {
+		runtime.LockOSThread()
+		// The error is assigned before the deferred close runs, so a reader that has observed the
+		// close has observed the write — the channel supplies the happens-before edge, and this is
+		// the only cross-thread read of `err`.
+		defer close(t.done)
+		t.err = in.runEntry(t, fn, ft, arg, stackHint)
+	}()
+	return t, nil
+}
+
+// runEntry runs a thread's entry function on that thread's own stack.
+//
+// **Through `invoke` rather than building the frame here, and the reason is a grave.** `buildFrame`
+// owns the frame ceiling check, the reverse-order parameter pop, decision 0024's v128 two-slot
+// conversion and grave #246's null fill for reference locals — *"two callers, one place that knows
+// how a frame is built"*, and a third copy here would be grave #105's shape a third time with those
+// four facts as the ones to re-derive wrongly. Pushing the argument and calling `invoke` makes a
+// thread's entry an ordinary call whose stack happens to be new, which is also what it is.
+//
+// `depth` starts at 0 like the start function's call and `Invoke`'s, so the entry frame is depth 1:
+// a thread gets its own full call budget rather than inheriting its spawner's remaining depth, which
+// is the only reading 1:1-with-an-OS-thread supports.
+//
+// **`stackHint` presizes the value stack, and that is a real use rather than a parameter accepted
+// and ignored.** Go's goroutine stacks grow on demand, so T-1's hint has no OS-stack analog to spend
+// it on; the closest thing the engine allocates per thread is the operand stack, whose sizing
+// `invokeIndex` derives from the body length. The hint becomes a floor on that — a caller who knows
+// its guest is deep pays one allocation instead of several regrows, and a caller passing 0 gets
+// exactly `invokeIndex`'s behaviour, including its stated v128 imprecision.
+//
+// This is stack creation site 4 of 4, and the only one that does not hand over `&in.host`: a spawned
+// thread runs on its own. `TestEveryStackCreationSiteCarriesAThread` partitions the sites on exactly
+// that distinction rather than listing them.
+func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, arg int32, stackHint int) error {
+	// §4 B-MM-1, at the enclosing function of the `stack` literal below, same as the other three
+	// sites (`boundary.go`, decision 0052, #516). **This is the site where the edge stops being
+	// bookkeeping.** At the other three the host and the guest are the same thread, so the acquire
+	// and release order a thread against itself and the crossing is recorded rather than needed.
+	// Here the crossing is the *only* thing ordering what the spawner wrote before `Spawn` against
+	// what this thread reads first — B-MM-1's message-passing case is exactly this pair of edges
+	// observed from two threads, so the site the control named is also the site the clause is about.
+	enterGuest()
+	defer leaveGuest()
+
+	st := &stack{
+		t:   t,
+		num: make([]uint64, 0, max(stackHint, len(fn.Body))),
+	}
+	// T-1's single i32 argument, as the operand `buildFrame` will pop into local 0. Through
+	// `pushI32` rather than written into the frame directly, so a negative arg gets the same
+	// `uint64(uint32(...))` widening it would through any other boundary.
+	st.pushI32(arg)
+	// **§3 SP-2's denominator, and the second site to have one** — decision 0067, and without it this
+	// thread would run guest code with `blocked == callers == 0`, which `Stop` reads as *at a
+	// safepoint*. That is #592's failure arriving through a new site rather than a changed predicate,
+	// and it is the single thing the parked branch could not have known: it predates 0067.
+	//
+	// A plain call rather than a `defer`, on `invokeIndex`'s measurement — a second `defer` in a
+	// function that already has an open-coded one takes both off that path, at 25–29 ns/call. The one
+	// error path below is `invoke`'s return, which this already covers by uncounting after it.
+	t.enterCall()
+	err := in.invoke(fn, ft, st, 0)
+	t.leaveCall()
+	return err
+}
