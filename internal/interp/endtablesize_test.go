@@ -292,8 +292,10 @@ func TestEndTablePairingRepresentationsArePriced(t *testing.T) {
 
 	funcType, modType := endSizeUncommittedFunc(t), reflect.TypeOf(binary.Module{})
 	var rows []endSizeRow
+	spreads := make([]endSizeSpread, 0, len(variants))
 	for _, v := range variants {
-		row := endSizeWeigh(v, bodies, stats.modulesOK)
+		row, sp := endSizeWeighBest(v, bodies, stats.modulesOK)
+		spreads = append(spreads, sp)
 		fc, err := endSizeFieldGrowth(funcType, v.fields)
 		if err != nil {
 			t.Fatalf("%s: pricing its fields on %s: %v", v.name, funcType, err)
@@ -355,26 +357,101 @@ func TestEndTablePairingRepresentationsArePriced(t *testing.T) {
 		}
 	}
 
-	// The instrument's own resolution, asserted rather than asserted-about. Every figure below is a
-	// difference of two allocator readings, and a difference is only readable down to the noise in
-	// the readings — so the smallest gap this measurement is used to decide has to be established as
-	// larger than the instrument's jitter. Weighing the first variant a second time over the same
-	// population is the cheap way to establish it, and it is *inside the test* because "I ran it five
-	// times and the bytes were identical" is a measured claim in prose that nothing checks. The
-	// tolerance is deliberately far looser than the observed behaviour — the readings are in fact
-	// bit-identical run to run, retained structures over a revision-pinned corpus being deterministic
-	// — so this fires on a platform where that stops being true instead of on ordinary allocator
-	// variation.
-	const endSizeResolution = 2048
-	again := endSizeWeigh(variants[0], bodies, stats.modulesOK)
-	if d := again.alloc - rows[0].alloc; d > endSizeResolution || d < -endSizeResolution {
-		t.Errorf("weighing %q twice over one population differed by %d B (tolerance %d B): the "+
-			"byte gaps between variants below are differences of two heap readings, and this one "+
-			"says the readings are noisier than the smallest gap they are used to decide",
-			variants[0].name, d, endSizeResolution)
+	// The instrument's own resolution, asserted rather than asserted-about — and asserted as
+	// *reproducibility of the minimum* rather than as a tolerance on two readings, which is grave #570
+	// repaired at its second reading rather than its first.
+	//
+	// # Why a tolerance on a pair was the wrong shape, and why a minimum is the right one
+	//
+	// What stood here weighed the first variant twice and required the two readings within 2048 B. Its
+	// stated ground was that the readings are *"bit-identical run to run, retained structures over a
+	// revision-pinned corpus being deterministic"*, so the tolerance would only fire where that stopped
+	// being true. The premise is right about the quantity and wrong about the window: `TotalAlloc` is
+	// process-wide, so a reading is the structures' bytes **plus whatever else allocated between the two
+	// `ReadMemStats` calls**, and a shuffled full-suite run has other goroutines in it. #570 caught that
+	// on linux/arm64 CI, where the pair read 60008 and 54688 B — the second being the deterministic value
+	// exactly, so one window was clean. This check then fired the same way on darwin/arm64, where the pair
+	// read **54912 and 60232 B against a deterministic 54688**: both members contaminated, by +224 and
+	// +5544. That is what rules out "cold window versus warm" as the mechanism and makes *"compare two
+	// warm readings"* — the first item on #570's repair list — insufficient, because a pair can have no
+	// clean member to be compared against. It also means the **bill** was quoting 54912 for that row, 224
+	// B above the truth, which is the contamination #570 found in three of nine rows arriving in the
+	// figure rather than in the guard. That the two pairs differ by 5320 B each is a coincidence with no
+	// mechanism attached, and is left named rather than explained.
+	//
+	// The property that survives is one-sidedness. Foreign allocation inside a window can only **add**
+	// bytes, never remove them, because `TotalAlloc` is cumulative and the window is a difference of two
+	// of its values. So the clean windows all report the identical true value and the contaminated ones
+	// report more, which makes the **minimum over K weighings the estimator** — every row above is one,
+	// where before every row was a single window and three of nine of them were wrong.
+	//
+	// That the minimum recovers the truth is measured rather than argued, on two whole-suite runs: the
+	// first had nine of ten rows carrying spread, the second six, and **in both runs every spread row's
+	// minimum equalled the deterministic value #570 recorded** for that row on this platform — nine of
+	// nine, then six of six. That the count of noisy rows moved between two runs of the same code over the
+	// same corpus is the same fact from the other side: which windows get hit is a property of the run,
+	// not of the row. The estimator is the repaired half.
+	//
+	// # The assertion is against the gap the decision turned on, because a clean window is not observable
+	//
+	// The first draft asserted the minimum was attained *twice* — "at least two clean windows agree
+	// bit-identically", the original determinism premise in a form that survives one dirty window. The
+	// whole-suite run falsified it immediately: contamination is not a rare event there but roughly half of
+	// all windows (15 of 27 readings clean over nine spread rows), so "two clean of three" fails at a rate
+	// no gate can carry, and raising K only buys an exponent against a probability that is not small. **A
+	// clean window cannot be asserted in this process**; the honest options are to weigh in a process where
+	// nothing else allocates, or to stop claiming a resolution the instrument does not have.
+	//
+	// So what is asserted is the claim the bill actually needs, which was always narrower than
+	// bit-identity: the noise must be small against **the gap the ranking's conclusion turns on** — the
+	// distance from the cheapest total to the next — because that is the comparison 0048 made and the only
+	// one anything downstream rests on. Derived from the table rather than picked, which is what the
+	// replaced `2048` could never be: an arbitrary tolerance is a threshold with no subject, and this one
+	// has the subject printed beside it.
+	//
+	// **And the adjacent pairs the noise does swallow are named rather than left to a reader's arithmetic.**
+	// Some middle rows sit closer together than the spread, so their *ordering* is not resolved by this
+	// instrument, and a printed table always looks totally ordered. Listing them is the disclosure that
+	// keeps the ranking's readable part separable from its unreadable part — *an unasserted distance is the
+	// vacuum*, pointed at the gaps rather than at the bound.
+	maxSpread, maxSpreadOf := int64(0), ""
+	var noisy []string
+	for i, sp := range spreads {
+		if sp.max == sp.min {
+			continue
+		}
+		noisy = append(noisy, fmt.Sprintf("%s %v", rows[i].name, sp.allocs))
+		if d := sp.max - sp.min; d > maxSpread {
+			maxSpread, maxSpreadOf = d, rows[i].name
+		}
 	}
-	t.Logf("instrument resolution: %q weighed twice → %d B and %d B (delta %d B, tolerance %d B)",
-		variants[0].name, rows[0].alloc, again.alloc, again.alloc-rows[0].alloc, endSizeResolution)
+
+	byTotal := make([]endSizeRow, len(rows))
+	copy(byTotal, rows)
+	sort.Slice(byTotal, func(i, j int) bool { return byTotal[i].total < byTotal[j].total })
+	decisive := byTotal[1].total - byTotal[0].total
+	if maxSpread >= decisive {
+		t.Errorf("the noisiest row (%s) spread %d B over %d weighings, and the cheapest two totals are "+
+			"%d B apart (%s at %d B, %s at %d B). The gap the conclusion turns on is no larger than the "+
+			"instrument's own spread, so this board cannot say which representation is cheapest — which "+
+			"is the one thing it is read for",
+			maxSpreadOf, maxSpread, endSizeWeighings, decisive,
+			byTotal[0].name, byTotal[0].total, byTotal[1].name, byTotal[1].total)
+	}
+
+	var unresolved []string
+	for i := 1; i < len(byTotal); i++ {
+		if g := byTotal[i].total - byTotal[i-1].total; g <= maxSpread {
+			unresolved = append(unresolved, fmt.Sprintf("%s vs %s (%d B apart)",
+				byTotal[i-1].name, byTotal[i].name, g))
+		}
+	}
+	t.Logf("instrument resolution: %d variants × %d weighings, each row the minimum; %d row(s) had any "+
+		"spread, the widest %d B (%s); the cheapest-to-second gap this board is read for is %d B\n"+
+		"  rows with spread: %s\n"+
+		"  adjacent pairs this instrument does not order (gap <= the widest spread): %s",
+		len(variants), endSizeWeighings, len(noisy), maxSpread, endSizeOrNone(maxSpreadOf), decisive,
+		endSizeOrNone(strings.Join(noisy, "; ")), endSizeOrNone(strings.Join(unresolved, "; ")))
 
 	// The denominator that makes the bill mean something. An absolute byte count over a corpus is not
 	// a materiality claim — 85 KB is either negligible or ruinous depending on what it is 85 KB *of* —
@@ -1105,6 +1182,67 @@ type endSizeRow struct {
 	hasPay   bool
 	nonNil   int
 	slots    int
+}
+
+// endSizeOrNone renders an empty report field as a word rather than as nothing.
+//
+// A blank where a name or a list belongs reads as a rendering bug, and on this instrument the empty case
+// is the *good* one — no row had spread, no adjacent pair is unresolved — so it is the case most worth
+// stating in words.
+func endSizeOrNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
+}
+
+// endSizeWeighings is how many times each variant is weighed, the bill taking the minimum.
+//
+// Three, and the number is a bet on P(all K windows contaminated) rather than a precision knob: under
+// one-sided contamination the minimum of K is wrong only if *every* one of the K windows caught a
+// foreign allocation, and each extra weighing multiplies that probability by the per-window rate.
+// Measured at roughly 44% of windows under the shuffled whole-module run, so three puts the bet near a
+// tenth. Not two, because at that rate a pair is entirely dirty about a fifth of the time — and two
+// readings cannot say which of them is clean, which is the ambiguity #570 was read wrongly through,
+// where the pair was assumed cold-then-warm and the inflation turned up on both sides. Not more,
+// because each weighing is a full build of the representation over the corpus.
+//
+// **When the bet loses, it loses quietly**, and no assertion here catches it: three dirty windows that
+// happen to be inflated by the same amount report zero spread and read exactly like three clean ones.
+// A row with no spread is the absence of evidence of contamination, never evidence of a clean window;
+// what the printed spread bounds is this instrument's *jitter*, not its *bias*. The direction that
+// would actually retire the bias is weighing in a process where nothing else allocates.
+const endSizeWeighings = 3
+
+// endSizeSpread is one variant's K readings and their extremes — the minimum is the estimator, and the
+// distance to the maximum is what the resolution check has to be small against.
+type endSizeSpread struct {
+	allocs   []int64
+	min, max int64
+}
+
+// endSizeWeighBest weighs one variant endSizeWeighings times and returns the cheapest reading's row.
+//
+// The minimum rather than the mean or the first, because `TotalAlloc` contamination only adds — see the
+// resolution check in the pricing test for the derivation. The returned row is a whole row from the
+// cheapest weighing rather than a row with a patched `alloc` field, so its `heap` cross-check and its
+// slot tallies come from the same weighing as the number the bill quotes; a row assembled from two
+// different weighings would make the printed `live/structures` ratio a comparison of unrelated
+// readings.
+func endSizeWeighBest(v endSizeVariant, bodies []endSizeBody, nmods int) (endSizeRow, endSizeSpread) {
+	best := endSizeWeigh(v, bodies, nmods)
+	sp := endSizeSpread{allocs: []int64{best.alloc}, min: best.alloc, max: best.alloc}
+	for range endSizeWeighings - 1 {
+		r := endSizeWeigh(v, bodies, nmods)
+		sp.allocs = append(sp.allocs, r.alloc)
+		if r.alloc < sp.min {
+			sp.min, best = r.alloc, r
+		}
+		if r.alloc > sp.max {
+			sp.max = r.alloc
+		}
+	}
+	return best, sp
 }
 
 // endSizeWeigh builds one variant over every body and weighs the structures.

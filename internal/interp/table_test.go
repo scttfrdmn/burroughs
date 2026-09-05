@@ -213,7 +213,14 @@ func TestElemExprIndexReachesTheRef(t *testing.T) {
 	// mode #241 fixes is a *rejection*, and a rejection is invisible on a board that reads it as a
 	// missing feature.
 	held := ref{Addr: 4, Inst: in}
-	withGlobal := &Instance{globals: []*global{{typ: binary.FuncRef, ref: held}}}
+	// Built by `storeRef` rather than by a composite literal, and not for style: `ref` is published
+	// through an `atomic.Pointer` (decision 0066), which has no literal form — and a `*global` whose
+	// reference cell was never stored is the one state `loadRef` does not defend against, so the
+	// constructor is the only way to make one. `newGlobal` establishes the same invariant in
+	// production, which is why it stores unconditionally for every shape.
+	heldGlobal := &global{typ: binary.FuncRef}
+	heldGlobal.storeRef(held)
+	withGlobal := &Instance{globals: []*global{heldGlobal}}
 	got, err := withGlobal.constExpr(
 		[]binary.Instr{{Op: 0x23, Imm0: 0}, {Op: opEnd}}, binary.FuncRef, "an element expression")
 	if err != nil {

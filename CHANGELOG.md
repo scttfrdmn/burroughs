@@ -21,6 +21,44 @@ weakly-ordered platform.
 
 ### Added
 
+- **A reference global's 40-byte value is published through an atomic pointer to an immutable cell —
+  #573's third arm, the one ADR 0063 left open —
+  [ADR 0066](docs/decisions/0066-a-reference-globals-forty-byte-value-is-published-through-an-atomic-pointer-because-reads-are-the-hot-direction-and-a-mutex-taxes-every-get.md)
+  plus `TestARefGlobalIsNotWrittenAndReadWithoutSynchronisation` and two `globalbench` rows**
+  ([#573](https://github.com/scttfrdmn/burroughs/issues/573)). `g.ref = st.popRef()` was a plain 40-byte
+  struct assignment the compiler lowers to five word stores, so a concurrent `global.get` could pair one
+  write's discriminator with another write's payload — the v128 arm's defect at 2.5× the width, and the
+  case
+  [ADR 0063](docs/decisions/0063-a-numeric-globals-single-word-goes-atomic-and-a-v128s-pair-goes-under-the-globals-own-mutex.md)
+  left open. `storeRef` copies its parameter into a fresh cell and swaps the pointer, so the published
+  value is reachable only through it and `loadRef`'s single `Load` is the whole synchronisation.
+  - **The witness's oracle is `-race`, and CI's `race` step is where its verdict lives** — inside the
+    two-architecture `build` job, so `make check` says nothing about it. Not a value oracle, because MVP
+    lets a guest ask only `ref.is_null` about a reference it holds, and telling two non-null references
+    apart needs `ref.eq` or `call_ref`, both gated off.
+  - **Two of the four pre-registered forecasts came back falsified, and the mechanism's stated basis
+    changed as a result.** R1 said a read would be free; `GetRef` measured **+17.19% (p=0.000)** against a
+    null-arm excursion of 0.05%. Scott, on the board: *"My rollback was aimed at the wrong row … R1's
+    falsification doesn't reverse the choice, but it changes its basis … reads are cheaper than the
+    alternative — +4.14 ns against the 11.32 ns `Lock`/`Unlock` pair #600 measured on amd64."* R4's
+    leading sentence was falsified by the largest effect on either board. R2 and R3 hold; R3 by a grafted
+    `-benchmem` arm showing one 48-byte cell per `global.set` and an unchanged read path, which attributes
+    the write-side residual instead of leaving it as *"not the store"*.
+  - **The pre-registered 30 ns rollback bar was withdrawn by its own clause**, which said in advance that a
+    non-null R1 makes the derivation unsound. What replaces it is a crossover rather than a second bar: the
+    atomic pointer loses below roughly 3 reads per write, filed as an unmeasured premise at
+    [#640](https://github.com/scttfrdmn/burroughs/issues/640).
+  - **The clause could not deliver the *before* it promised, and that is a law**: one `benchstat`
+    invocation printed the trigger row and the judged row together, so R1's falsification and the +32.29 ns
+    it excused arrived in the same instant. Recorded as
+    [a withdrawal clause buys its ordering only if the trigger arrives on a different instrument than the
+    number it escapes](docs/laws/controls.md#a-withdrawal-clause-buys-its-ordering-only-if-the-trigger-arrives-on-a-different-instrument-than-the-number-it-escapes),
+    with the disclosure that keeps a withdrawal distinguishable from an amendment, and with what does buy
+    the ordering when it is worth buying — the trigger row on its own invocation, read first.
+  - **v128 stays under `mu`**, which is what the ruling asked this measurement to settle: the write-side
+    carrier is the allocation, which a v128 cell would pay too, and the mechanism that wins both directions
+    is the seqlock already filed at [#625](https://github.com/scttfrdmn/burroughs/issues/625).
+
 - **The table and both segment kinds publish their slice headers through images, so the racy write stops
   compiling —
   [ADR 0065](docs/decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md)
@@ -1592,6 +1630,38 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **The end-table pricing instrument's resolution check compared two readings of a process-wide counter,
+  and both of them could be dirty** (grave
+  [#570](https://github.com/scttfrdmn/burroughs/issues/570)). It turned `make check` red on darwin/arm64
+  in this slice, which is what brought it in — *was the PR blockable without it?* Each variant is now
+  weighed **three times and priced at the minimum**, because `runtime.MemStats.TotalAlloc` is cumulative
+  and a weighing is a difference of two of its values, so a foreign allocation inside the window can only
+  **add** bytes. The estimator is measured rather than argued: over two whole-module runs, every row that
+  showed any spread had its minimum equal to the deterministic value #570 recorded for it — nine of nine,
+  then six of six.
+  - **#570's stated ground for deferring the repair was falsified, and so was its title's mechanism.** It
+    recorded nine seed replays with delta 0 on darwin/arm64; those ran the test *alone*, and it fires
+    under the whole-module shuffled run. And against the deterministic value both members of the local
+    pair were contaminated — by 224 B and 5544 B — so the failure is not a cold window against a warm one,
+    and *"compare two warm readings"*, the first item on its own repair list, cannot work when a pair has
+    no clean member. The 224 B was in the **bill**, not the guard.
+  - **The assertion is against the gap the conclusion turns on, because a clean window is not observable
+    here.** The first repair drafted asserted the minimum was attained twice — two clean windows agreeing
+    bit-identically — and the whole-module run killed it at once: roughly 44% of windows are contaminated
+    (15 of 27 readings clean over nine spread rows), so raising K buys an exponent against a probability
+    that is not small. What replaced the picked `2048` B tolerance is derived from the table: the widest
+    observed spread against the distance from the cheapest total to the second, the only comparison
+    [ADR 0048](docs/decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)
+    rests on. The instrument now also prints the adjacent pairs it **cannot** order, since a printed table
+    always looks totally ordered — which is how the replaced tolerance turned out to be 12× coarser than
+    the smallest distinction the table displays.
+  - **What is repaired is the jitter and not the bias**, filed as
+    [#642](https://github.com/scttfrdmn/burroughs/issues/642): three windows inflated by the same amount
+    report zero spread and read exactly like three clean ones, and no comparison *inside* the table can
+    see that, since every row is measured by the same instrument in the same process. Stated at the
+    constant rather than left implicit, because a row with no spread is the absence of evidence of
+    contamination and not evidence of a clean window.
 
 - **Nine false state claims about #573 and #452, in two classes, found by sweeping the parent number rather
   than by recalling the sites.** Both classes resolve every pointer they carry, so no instrument in the tree

@@ -66,23 +66,43 @@ type global struct {
 	num   atomic.Uint64
 	numHi atomic.Uint64
 
-	// ref holds a reference global's value, and is **still written and read without
-	// synchronisation** — the one arm of the three this decision does not cover.
+	// ref holds a reference global's value, **published as a pointer to an immutable 40-byte value**
+	// rather than stored inline (#573's third arm, decision 0066).
 	//
-	// Not an oversight and not implemented around. The ruling that settled the other two priced v128 as
-	// *"the only case above word width, and rare in practice"*; a `ref` is 40 bytes, 2.5× a v128, so the
-	// premise is false and where the cheap/expensive boundary belongs is the question that reopens
-	// (#573, open and unimplemented — the issue is cited, its labels are not, because a label is a claim
-	// about the tracker's state that no instrument here can check). `mu` below would cover this field in
-	// one line, and the
-	// reason that line is not written is that a lock on every `global.get` of a hot `externref` is a
-	// different cost profile from the one the ruling weighed.
+	// **Why not `mu`, which was one line away.** A `ref` is 40 bytes — 2.5× a v128 — which falsified the
+	// premise the earlier ruling rested on (*"the only case above word width, and rare in practice"*),
+	// and a hot `externref` `global.get` is not rare. Scott's ruling: *"`get` is one atomic load; `set`
+	// allocates and swaps. Reads are the hot direction on a global and writes are rare, so this keeps
+	// the common path free where a mutex would tax every get."* So the two shapes above word width sit
+	// under two different mechanisms, v128 under `mu` and this one under an atomic pointer, for a reason
+	// that is historical rather than principled — noted rather than resolved, on his order, with #625
+	// carrying the question of whether v128 should follow.
 	//
-	// What tearing it costs, bounded rather than escalated: Go writes pointer-sized fields whole, so no
-	// torn `ref` carries a forged pointer. It carries one write's discriminator bits with another's
-	// pointer — at worst `Null: false` against three nil pointers, which is a nil dereference. A wrong
-	// value, and at worst a panic; not the address-zero read a torn *slice header* produces (#622).
-	ref ref
+	// **The board falsified "free", and the basis is relative rather than absolute.** That last clause of
+	// the ruling is quoted above as what was ruled, not as what is true: R1 forecast a read within the
+	// null arm's excursion and `GetRef` came back **+17.19% (p=0.000)** against a null excursion of 0.05%,
+	// which is +4.14 ns per get on native x86-64. It is not the allocation (the read path's `allocs/op` is
+	// unchanged), not call overhead (both accessors inline), and not the atomic load, which would make
+	// arm64 the worse column and instead makes it 6× better. So the argument for this mechanism is that a
+	// read costs 4.14 ns where the same read under `mu` costs the pair #600 measured at 11.32 ns — 2.7×
+	// cheaper, not free — while a `set` costs +32.29 ns and one 48-byte allocation. **Which way that trades
+	// depends on a read:write ratio nothing here measures**: below roughly 3 reads per write the mutex
+	// wins, and #640 is where that premise gets falsified. Scott's ruling on the board — *"a decision left
+	// resting on a falsified premise is the shape this project keeps digging back out"* — is why the
+	// falsification is recorded at the field and not only in decision 0066.
+	//
+	// **The immutability is what makes one load sufficient, and it is held by the accessors rather than
+	// by prose.** `storeRef` copies its argument into a fresh cell, so no caller retains a writable
+	// alias to a published value and a reader's `Load` needs nothing between it and its dereference.
+	// That is the same shape decision 0065 gives the table and segment images one struct over: what a
+	// reader holds is a whole value that nothing will overwrite, so the load is the whole
+	// synchronisation.
+	//
+	// **A non-nil pointer is an invariant of construction**, established at `newGlobal` for every shape
+	// — the store there is unconditional, so a numeric global's unread reference slot also holds a
+	// cell. `loadRef` dereferences without a nil check on that invariant, and the invariant is worth
+	// having in exactly one place: `newGlobal` is the only production constructor of a `*global`.
+	ref atomic.Pointer[ref]
 
 	// mu serialises the v128 arm's two-word access — held across both stores in `set` and both loads in
 	// `get` and `value`.
@@ -138,10 +158,35 @@ func (in *Instance) newGlobal(g binary.Global) (*global, error) {
 	// returns it, so these two stores are construction, not shared mutation. That is decision 0058's
 	// title premise arriving on a smaller object — reachability is the property that matters, and it
 	// begins here rather than at spawn.
-	out := &global{typ: g.Type, mutable: g.Mutable, mod: in.mod, ref: v.ref}
+	out := &global{typ: g.Type, mutable: g.Mutable, mod: in.mod}
 	out.num.Store(v.lo)
 	out.numHi.Store(v.hi)
+	// Unconditional for every shape, which is what makes `loadRef`'s missing nil check an invariant
+	// rather than a bet: a numeric global never reads this slot, and it costs one 40-byte cell per
+	// global to have every `*global` this package hands out satisfy the same precondition.
+	out.storeRef(v.ref)
 	return out, nil
+}
+
+// storeRef publishes r as this global's reference value.
+//
+// **The copy is the mechanism, not a defensive habit.** `r` is a parameter, so the cell this stores is
+// reachable only through the pointer it publishes, and no caller — including the one whose value was
+// copied — can write to what a reader is holding. Written as a method rather than as `g.ref.Store(&r)`
+// at each call site so that the copy cannot be skipped at one of them by publishing an address the
+// caller keeps: `g.ref.Store(p)` still compiles, and the reason to route through here is that a reviewer
+// reading a call site sees a value being handed over rather than an address being shared.
+func (g *global) storeRef(r ref) {
+	g.ref.Store(&r)
+}
+
+// loadRef reads the published reference value.
+//
+// One load and one copy out of the cell it names, with nothing in between that could observe a second
+// publication — the point of the mechanism. No nil check, on the invariant `newGlobal` establishes and
+// its comment states.
+func (g *global) loadRef() ref {
+	return *g.ref.Load()
 }
 
 // globalFor resolves a global index to its storage. The *only* place that does, which is what
@@ -224,7 +269,7 @@ func (g *global) shape() globalShape {
 func (g *global) get(st *stack) {
 	switch g.shape() {
 	case shapeRef:
-		st.pushRef(g.ref)
+		st.pushRef(g.loadRef())
 	case shapeV128:
 		// Both halves read under one acquisition, which is the point: two atomic loads with no lock
 		// between them can take `numHi` from one `set` and `num` from the next, and a v128 assembled
@@ -253,7 +298,7 @@ func (g *global) get(st *stack) {
 func (g *global) value() Value {
 	switch g.shape() {
 	case shapeRef:
-		return fromRef(g.ref, g.typ)
+		return fromRef(g.loadRef(), g.typ)
 	case shapeV128:
 		// The same one-acquisition read as `get`'s v128 arm, and it is repeated rather than shared for
 		// the reason this function exists at all: routing the read through `get` would need a stack.
@@ -276,7 +321,9 @@ func (g *global) set(st *stack) error {
 		if err := st.needRef(1); err != nil {
 			return err
 		}
-		g.ref = st.popRef()
+		// Popped before the publication for the v128 arm's reason one case down: the pop touches this
+		// thread's own stack, so nothing is gained by widening the published-value window over it.
+		g.storeRef(st.popRef())
 	case g.typ == binary.V128:
 		// **Two slots asked for as two, not as one twice.** `needNum(2)` is the whole underflow
 		// question for a v128, and `popV128` returns (hi, lo) in that order — `pushV128`'s own

@@ -1072,3 +1072,53 @@ reach is a law out of context.
   buy an exception list is a widening that has found a second failure mode, and then the second control
   is the honest answer. (In-session review; PR #637 carries no comment to cite, and this is recorded by
   the actor the ruling was given to — durable, not independent, so `Ratio-Class: carried`.)
+
+### A withdrawal clause buys its ordering only if the trigger arrives on a different instrument than the number it escapes.
+
+- **A withdrawal clause buys its ordering only if the trigger arrives on a different instrument than
+  the number it escapes.** A pre-registration is allowed — encouraged — to write its own kill switch:
+  *if forecast A comes back non-null, the bar derived for forecast B is unsound, and it is withdrawn
+  before being compared to a number, never after.* The clause is honest, and it does real work: it
+  fixes the criterion in advance, so a withdrawal cannot be invented after the fact. What it silently
+  assumes is that the two readings arrive at different **times**. Where one instrument prints both rows
+  in one output, that assumption is false and the ordering it promises is unpurchasable — the trigger
+  and the number it excuses become visible in the same instant, and *withdrawn before* degrades from a
+  claim about sequence to a claim about intent. The clause is still worth writing. The ordering half
+  has to be **stated as unavailable** rather than asserted.
+
+- **Specimen: [ADR 0066], #573's reference arm.** The pre-registration set a rollback at *"`SetRef`'s
+  per-op delta over plain exceeds 30 ns"*, derived rather than picked, and wrote the kill switch in the
+  same section: the bar credits the read side the entire mutex pair on every `get`, *"which R1 cannot
+  verify against a mutex arm that [#618] prevents building. If R1 comes out non-null the bar's
+  derivation is unsound and the bar is withdrawn before being compared to a number, never after — the
+  ordering is the only thing separating that from amending a threshold."* R1 came out non-null:
+  `GetRef` **+17.19%** against a null-arm excursion of 0.05%. So the clause fired on its own written
+  condition. **And one `benchstat` invocation had printed both rows**, so `SetRef`'s **+32.29 ns** —
+  which crosses the withdrawn bar — was on screen at the same moment as the trigger. There was no
+  instant at which the bar could have been withdrawn in ignorance of the number.
+
+- **The repair is one sentence, and omitting it is what makes the two indistinguishable.** Record the
+  number the withdrawal escaped, in the same breath as the withdrawal, and say that the ordering was
+  not available. A withdrawal that quietly omits the figure it stepped around reads exactly like an
+  amendment that found a reason — which is the thing the clause was written to forbid, arriving through
+  the clause itself. **Do not replace the withdrawn bar with a second bar**: a threshold derived after
+  seeing the numbers is the same defect wearing the other hat. What may replace it is a *reading* —
+  0066's crossover, arithmetic over one measured and one predicted figure, labelled as a reading.
+
+- **What actually buys the ordering, when it is worth buying.** Put the trigger on its own invocation:
+  measure the trigger row alone, record the reading, *then* run the row the bar judges. It costs one
+  extra round of the protocol, which is the whole price, and it is worth paying only where the bar is
+  load-bearing enough that its withdrawal would change the decision. Where it is not worth paying, the
+  clause plus the disclosure above is the honest configuration — and knowing which of the two you
+  bought is the point.
+
+- **Sibling shapes.** *Withdrawing a forecast after measuring it is the shape that makes a threshold
+  amendment look like a discovery* — the same defect without a clause, under [a deadline used as a hang
+  detector](#a-deadline-used-as-a-hang-detector-measures-throughput-and-its-red-names-a-mechanism-it-never-observed).
+  And the disclosure requirement is *second-order honesty* applied to a pre-registration's own escape
+  hatch
+  ([evidence-and-instruments.md](evidence-and-instruments.md#second-order-honesty-apply-the-discipline-to-its-own-output)):
+  the discipline has to survive being pointed at the instrument that enforces it.
+
+[ADR 0066]: ../decisions/0066-a-reference-globals-forty-byte-value-is-published-through-an-atomic-pointer-because-reads-are-the-hot-direction-and-a-mutex-taxes-every-get.md
+[#618]: https://github.com/scttfrdmn/burroughs/issues/618
