@@ -1631,6 +1631,38 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The end-table pricing instrument's resolution check compared two readings of a process-wide counter,
+  and both of them could be dirty** (grave
+  [#570](https://github.com/scttfrdmn/burroughs/issues/570)). It turned `make check` red on darwin/arm64
+  in this slice, which is what brought it in — *was the PR blockable without it?* Each variant is now
+  weighed **three times and priced at the minimum**, because `runtime.MemStats.TotalAlloc` is cumulative
+  and a weighing is a difference of two of its values, so a foreign allocation inside the window can only
+  **add** bytes. The estimator is measured rather than argued: over two whole-module runs, every row that
+  showed any spread had its minimum equal to the deterministic value #570 recorded for it — nine of nine,
+  then six of six.
+  - **#570's stated ground for deferring the repair was falsified, and so was its title's mechanism.** It
+    recorded nine seed replays with delta 0 on darwin/arm64; those ran the test *alone*, and it fires
+    under the whole-module shuffled run. And against the deterministic value both members of the local
+    pair were contaminated — by 224 B and 5544 B — so the failure is not a cold window against a warm one,
+    and *"compare two warm readings"*, the first item on its own repair list, cannot work when a pair has
+    no clean member. The 224 B was in the **bill**, not the guard.
+  - **The assertion is against the gap the conclusion turns on, because a clean window is not observable
+    here.** The first repair drafted asserted the minimum was attained twice — two clean windows agreeing
+    bit-identically — and the whole-module run killed it at once: roughly 44% of windows are contaminated
+    (15 of 27 readings clean over nine spread rows), so raising K buys an exponent against a probability
+    that is not small. What replaced the picked `2048` B tolerance is derived from the table: the widest
+    observed spread against the distance from the cheapest total to the second, the only comparison
+    [ADR 0048](docs/decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)
+    rests on. The instrument now also prints the adjacent pairs it **cannot** order, since a printed table
+    always looks totally ordered — which is how the replaced tolerance turned out to be 12× coarser than
+    the smallest distinction the table displays.
+  - **What is repaired is the jitter and not the bias**, filed as
+    [#642](https://github.com/scttfrdmn/burroughs/issues/642): three windows inflated by the same amount
+    report zero spread and read exactly like three clean ones, and no comparison *inside* the table can
+    see that, since every row is measured by the same instrument in the same process. Stated at the
+    constant rather than left implicit, because a row with no spread is the absence of evidence of
+    contamination and not evidence of a clean window.
+
 - **Nine false state claims about #573 and #452, in two classes, found by sweeping the parent number rather
   than by recalling the sites.** Both classes resolve every pointer they carry, so no instrument in the tree
   could see either.
