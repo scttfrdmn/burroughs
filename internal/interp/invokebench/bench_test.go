@@ -174,3 +174,121 @@ func TestTheArmMeasuresOneInvokeOfAnEmptyBody(t *testing.T) {
 			"non-empty return means the module under measurement is not the one described", len(res))
 	}
 }
+
+// hostSrc is the host-call fixture: one imported host function and one exported wrapper whose whole body
+// is the call to it. Added by [ADR 0070][0070], which folds a repair into the `defer` `callHost` already
+// had — and **nothing in this tree could price that site**, because every row above stops at the guest
+// boundary and never crosses back out to an embedder.
+//
+// [0070]: ../../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+const hostSrc = `(module (import "h" "nop" (func $nop)) (func (export "call") (call $nop)))`
+
+// buildHost is `build` with the import supplied. Separate rather than parameterised, because the two
+// fixtures differ in the *linking* call as well as the source and a shared helper would have to branch on
+// which one it was building.
+func buildHost(tb testing.TB, calls *int) *interp.Instance {
+	tb.Helper()
+	img, err := text.EncodeModule([]byte(hostSrc))
+	if err != nil {
+		tb.Fatalf("encode: %v", err)
+	}
+	m, err := (&binary.Decoder{}).DecodeModule(img)
+	if err != nil {
+		tb.Fatalf("decode: %v", err)
+	}
+	// The cheapest host function that can exist: no parameters, no results, no allocation, and a
+	// counter the control below reads. The row is the *boundary*, so anything the embedder's own
+	// function does is dilution of exactly the kind this package was built to remove.
+	nop := interp.HostExtern(binary.FuncType{}, func(*interp.Caller, []interp.Value) ([]interp.Value, error) {
+		*calls++
+		return nil, nil
+	})
+	in, trap, lerr := interp.InstantiateLinked(m, func(module, name string) (interp.Extern, bool) {
+		if module == "h" && name == "nop" {
+			return nop, true
+		}
+		return interp.Extern{}, false
+	})
+	if lerr != nil {
+		tb.Fatalf("link: %v", lerr)
+	}
+	if trap != nil {
+		tb.Fatalf("instantiate: %v", trap)
+	}
+	if derr := in.Deferred(); derr != nil {
+		tb.Fatalf("instantiate fell short: %v", derr)
+	}
+	return in
+}
+
+// hostCall is the timed body for both host-call rows: one `Invoke` and one host call per op.
+//
+// **The counter is incremented inside the timed loop on purpose, and it is one integer store.** The
+// alternative — a host function that does nothing at all — cannot be told apart from a fixture whose call
+// never happens, and the control below is what reads it.
+func hostCall(b *testing.B) {
+	b.Helper()
+	calls := 0
+	in := buildHost(b, &calls)
+	if _, err := in.Invoke("call"); err != nil {
+		b.Fatalf("invoke call: %v", err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		if _, err := in.Invoke("call"); err != nil {
+			b.Fatalf("invoke call: %v", err)
+		}
+	}
+	b.StopTimer()
+	if calls != b.N+1 {
+		b.Fatalf("the host function ran %d times over %d timed ops plus one warm-up: the row is "+
+			"priced per host call, so any other count means it is measuring something else", calls, b.N)
+	}
+}
+
+// BenchmarkHostCall is the sensitive arm for the host-call boundary: one `Invoke` plus one crossing out to
+// an embedder and back, with no guest work behind either.
+//
+// It carries `Empty`'s cost as well as its own, so a reader comparing the two rows is reading the *host
+// call's* share as the difference and not this row's absolute.
+func BenchmarkHostCall(b *testing.B) { hostCall(b) }
+
+// BenchmarkHostCallNull is byte-identical in source to BenchmarkHostCall and is this row's own within-run
+// floor. `EmptyNull`'s floor does not transfer: it was measured on a row of a different magnitude, and a
+// resolution is a fraction of what it was taken on.
+func BenchmarkHostCallNull(b *testing.B) { hostCall(b) }
+
+// TestTheHostArmMeasuresOneHostCallPerInvoke pins the host fixture's properties, on the same ground as the
+// control above: every one of them is an assertion about the *source* that an edit falsifies silently.
+func TestTheHostArmMeasuresOneHostCallPerInvoke(t *testing.T) {
+	// Exactly one import and one defined function, so the row is one crossing out and one back rather
+	// than a chain. Counted as two `(func` — the import's declaration and the definition — with the
+	// import counted separately so that deleting the import changes both numbers rather than neither.
+	if got := strings.Count(hostSrc, "(func"); got != 2 {
+		t.Errorf("the host fixture declares %d `(func`, want 2 (one imported, one defined): more means\n"+
+			"a row could be timing a call chain rather than one host boundary crossing", got)
+	}
+	if got := strings.Count(hostSrc, "(import"); got != 1 {
+		t.Errorf("the host fixture has %d imports, want 1", got)
+	}
+	// And the exported wrapper's body is the call and nothing else: the closing parens follow it
+	// immediately. `(export "call")` then `(call $nop)` then three closes — wrapper, func, module.
+	if !strings.Contains(hostSrc, `(export "call") (call $nop)))`) {
+		t.Errorf("the host fixture's exported body is no longer just the host call, so the row has\n"+
+			"guest work in it and stops being a boundary measurement:\n%s", hostSrc)
+	}
+
+	// The host function really runs, once per `Invoke`. A fixture whose import resolved to something
+	// else, or whose wrapper stopped calling it, would print a plausible number for a row that never
+	// crosses the boundary it claims to price.
+	calls := 0
+	in := buildHost(t, &calls)
+	for i := range 3 {
+		if _, err := in.Invoke("call"); err != nil {
+			t.Fatalf("invoke call: %v", err)
+		}
+		if calls != i+1 {
+			t.Fatalf("after %d invokes the host function has run %d times, want %d", i+1, calls, i+1)
+		}
+	}
+}

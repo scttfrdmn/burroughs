@@ -113,6 +113,31 @@ counter's invariant is the parity of nested brackets: `callHost` opened an excur
 must be closed before `invokeIndex`'s outer `defer leaveGuest()` runs above it. Leaving it open is what
 made the measured delta odd.
 
+## Pre-registration of the fixed-cost forecast
+
+Written **before the A/B ran** and left standing whichever way it came out, because *only the ordering
+distinguishes a pre-registration from an amended threshold*. Codegen is evidence that the cliff is not
+approached; it is not a price, and 0067 is the ADR that established that this boundary's fixed cost gets
+measured rather than argued.
+
+- **Instrument:** `internal/interp/invokebench` on `janus.local`'s `measured` group, `scripts/ab.sh` at 12
+  rounds with `--null --graft`, base `main`, head this branch. The same protocol 0067 used, so its landed
+  figure is comparable to this one.
+- **The rows, and the reason there are two new ones.** `Empty` prices `invokeIndex`'s fold alone.
+  **`HostCall` is new in this slice** and prices `callHost`'s fold — no row in this package crossed back out
+  to an embedder, so `callHost`'s half would otherwise have rested on codegen with no number at all. Each
+  has its own byte-identical null twin; `EmptyNull`'s resolution does not transfer to a row of a different
+  magnitude.
+- **Bar:** `TwoUncontendedLockUnlock`, as in 0067. It is a *generous* ceiling here and is said to be:
+  this slice adds no lock to either path, so a delta approaching one would mean the closure did something
+  structural rather than storing a bool.
+- **Forecast:** both deltas at or under **0.25× the bar**, i.e. two stores and a capture, not a lock.
+- **Vacuity check, in the direction that matters:** each null delta must be **narrower than the bar**, or
+  the board does not adjudicate the forecast at all and the figure is reported without being weighed.
+- **If the forecast fails**, the fold is narrowed to `callHost` — the only site with a *measured* defect
+  (row one's odd crossing) — and `invokeIndex`/`runEntry` fall back to option C owing a per-thread field.
+  Narrowing happens before landing, not after: a failed forecast narrows, it does not license.
+
 ## Consequences
 
 - **0067's cliff is measured, not assumed absent.** `go build -gcflags=-S` reports **no
