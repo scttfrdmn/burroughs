@@ -3,6 +3,7 @@
 package interp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -63,6 +64,90 @@ type world struct {
 	// contract §10.3, **#12**. Until then a long-lived instance that spawns in a loop leaks one entry
 	// per spawn, and every `Stop` walks them all.
 	members []*thread
+
+	// closed is `Instance.Close`'s terminal mark — contract §5 H-3, [ADR 0069][0069].
+	//
+	// **Terminal, and therefore not a second `resume`.** `Stop`/`Resume` are a *pause* and this is a
+	// *teardown*, which is the distinction that dissolved the apparent SP-4-versus-H-3 conflict
+	// (*"A pause must not disturb a blocked host call; a teardown must interrupt it"* — Scott, on the
+	// #646 review, recorded at #602). So nothing here is cleared, there is no `Reopen`, and this flag
+	// does not participate in the arrival protocol at all: its only readers refuse rather than wait.
+	closed bool
+
+	// hostCalls counts host calls currently inside an embedder's function, and hostIdle is closed when
+	// that count reaches zero with a `Close` waiting.
+	//
+	// **A count plus a channel rather than a `sync.Cond`, because a `world` is used as a zero value.**
+	// `sync.Cond` must be built with `sync.NewCond(&w.mu)`, so it would need a lazy initialisation
+	// under the mutex at every touch — where a nil channel created once by whoever waits is the idiom
+	// `resume` above already uses, for the reason stated there: *a closed channel is the only release
+	// that cannot be missed by a thread that started waiting after the close.*
+	//
+	// **The count is of calls and not of threads**, for `thread.blocked`'s reason one level out: an
+	// embedder may drive N concurrent `Invoke`s through one instance, each of which can be inside a
+	// host call, and `Close` must wait for all of them. Guarded by `mu` like everything else here, so
+	// that the "is anyone still inside" question and the answer to it cannot interleave.
+	//
+	// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
+	hostCalls int
+	hostIdle  chan struct{}
+}
+
+// beginHostCall admits one host call, or refuses because the instance is closed.
+//
+// **The check and the increment are one critical section, and it is `admit`'s argument one subject
+// over.** `Close` reads `hostCalls` under this mutex and then waits for it to reach zero; a call that
+// tested `closed` and incremented later could slip in *after* that wait completed, so `Close` would
+// have returned while an embedder's function was still running — a teardown reporting a completion it
+// does not have. Split into two operations, the refusal would be advisory in exactly the way `admit`'s
+// would.
+//
+// **No thread argument, because the thread is what selects the receiver.** `callHost` resolves the world
+// from `st.t` rather than from the instance that declared the import, and the reason is at
+// `thread.world`: the two differ on any cross-instance call, and a counter in one world with a
+// cancellation in another is a `Close` that waits on something it cannot interrupt.
+func (w *world) beginHostCall() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("%w: a host call cannot begin on a closed instance (contract §5 H-3)", ErrClosed)
+	}
+	w.hostCalls++
+	return nil
+}
+
+// endHostCall retires one host call and releases a waiting `Close` when it was the last.
+//
+// # The claim, and the state under the lock, and the close outside it
+//
+// **The channel is claimed under the mutex and closed after it, which is contract §4 B-MM-3 and not a
+// preference.** The first draft closed it inside the critical section and
+// `TestNoEngineLockIsHeldAcrossAChannelOperation` failed it on sight — an engine-internal lock must not
+// be held across a guest resume, and a `close` on a release channel *is* the resume. The repair is the
+// one that control's own message prescribes: clear the guarded state under the lock, act on it after.
+//
+// Nil'ing the field is what makes the close safe to do outside: exactly one caller can observe a
+// non-nil `hostIdle`, so a double close is impossible by construction rather than by a happens-before
+// argument about who got there first. Nothing can create a second channel in the window either —
+// `Close` only makes one while `hostCalls > 0`, and it has already set `closed`, so `beginHostCall`
+// refuses every new call and the count can only fall.
+//
+// A second `Close` racing this one returns as soon as it sees `hostCalls == 0`, possibly before this
+// `close` executes, and that is the correct reading rather than a gap: the predicate H-3 waits on is
+// *"no embedder function is still running"*, and a count of zero is exactly that. The channel is how a
+// waiter is woken, not what the waiting is about.
+func (w *world) endHostCall() {
+	w.mu.Lock()
+	w.hostCalls--
+	var idle chan struct{}
+	if w.hostCalls == 0 && w.hostIdle != nil {
+		idle, w.hostIdle = w.hostIdle, nil
+	}
+	w.mu.Unlock()
+
+	if idle != nil {
+		close(idle)
+	}
 }
 
 // register adds the instantiation-time thread to the world. Called once, from `link.go`, and it
@@ -89,6 +174,17 @@ func (w *world) register(t *thread) {
 func (w *world) admit(t *thread) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		// **§5 H-3's teardown refuses a new thread, where SP-1's pause merely delays one.** The two
+		// refusals sit together and are not the same refusal: `ErrStopInProgress` below is about a
+		// round's arrival slots and is transient — the caller retries after `Resume` — while this one
+		// is terminal, because `Close` has already cancelled every member and returned. A thread
+		// admitted after that would be a member no `Close` will ever wait for, running guest code on
+		// an instance the embedder believes is torn down. Checked here rather than only in `spawn` so
+		// that the guarantee belongs to the same critical section as membership itself.
+		return fmt.Errorf("%w: this instance is closed, so a new thread would outlive the teardown "+
+			"that has already completed (contract §5 H-3)", ErrClosed)
+	}
 	if w.resume != nil {
 		return fmt.Errorf("%w: this instance has %d threads at or heading for a safepoint, and a "+
 			"member admitted mid-round would have no slot to announce itself in", ErrStopInProgress,
@@ -98,11 +194,31 @@ func (w *world) admit(t *thread) error {
 	return nil
 }
 
-// addLocked is the one place membership and `t.w` are established, so the invariant that a member's
-// `w` points back at the world holding it cannot be half-kept by one of two callers. `w.mu` held.
+// addLocked is the one place membership, `t.w` and `t.ctx` are established, so the invariant that a
+// member's `w` points back at the world holding it — and that the world can cancel it — cannot be
+// half-kept by one of two callers. `w.mu` held.
+//
+// **The context is created here rather than at either creation site, and that is a correction to
+// [ADR 0069][0069]'s third choice, which named `newThread`.** `newThread` is `Spawn`'s alone, and the
+// *ordinary* host call runs on `in.host`, which link.go builds by literal and hands to `register`. A
+// context created in `newThread` would be nil on exactly the thread every host call in the tree today
+// runs on, so `Instance.Close` would cancel nothing while looking correct — a teardown that reports
+// completion having interrupted no one. This function is where the membership invariant already lives,
+// so it is where the cancellation invariant belongs too.
+//
+// **A `Close` that has already run cancels the new thread immediately**, rather than handing it a live
+// context a closed world would never cancel. `admit` refuses a spawn during a *stop*, and nothing
+// refuses one on a closed world here — `spawn` does that, above this layer — so this is the belt to
+// that braces: a member added to a closed world is born cancelled.
+//
+// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
 func (w *world) addLocked(t *thread) {
 	w.members = append(w.members, t)
 	t.w = w
+	t.ctx, t.cancel = context.WithCancel(context.Background())
+	if w.closed {
+		t.cancel()
+	}
 }
 
 // Stop is contract §3 SP-1's host request: bring every guest thread of this instance to a safepoint,

@@ -99,14 +99,27 @@ var boundaryCrossings atomic.Uint64
 // transition like any other. It is also the first site where the edge stops being bookkeeping, since it
 // is the only one whose two ends are on different threads; the argument is at the site.
 //
-// **And a host call's return is the site §4 named first**, which this comment has been able to say
-// since it was written and did not — **grave #645**'s second site: the enumeration above quotes B-MM-1's
-// *"host-call return"* and then records that the engine has none, so the one absent site with a clause of
-// its own was the one missing from the list of sites to come. It arrives with the host-function surface —
-// a decision, **#602**, not a merge — and it is two crossings rather than one, because a host call leaves
-// the guest and re-enters it: `leaveGuest` out, `enterGuest` back, which is the same pairing every site
-// here has and the first one where the *guest* is what continues afterwards. B-MM-4's annotation
-// convention above is fixed so that call shape has a spelling to use on arrival.
+// **And a host call's return is the site §4 named first, and it has landed** — **#602**, [ADR 0069][0069]'s
+// `callHost`. This comment predicted it as **grave #645**'s second site: the enumeration above quotes
+// B-MM-1's *"host-call return"* and then records that the engine has none, so the one absent site with a
+// clause of its own was the one missing from the list of sites to come. It arrived exactly as forecast,
+// two crossings rather than one, because a host call leaves the guest and re-enters it: `leaveGuest` out,
+// `enterGuest` back, the same pairing every site here has and the first one where the *guest* is what
+// continues afterwards. Unannotated, so B-MM-4's default holds and the call is sequentially consistent.
+//
+// **The enumeration's "the engine has none of them" is now false of one of the four, and is left standing
+// as written with this sentence beside it** rather than edited into agreement. The clause it explains is
+// still that §4's four names are not this engine's sites; what changed is that one of §4's names finally
+// *is* one, and a reader who finds the old sentence needs to know which one and when — not to find a
+// tidied paragraph that no longer records that the site was predicted a merge before it existed.
+//
+// **It is the second site whose crossing is not a `stack` literal's**, so it is outside
+// `TestEveryStackCreationSiteCrossesTheBoundary`'s parsed domain — `callHost` runs on the caller's stack
+// and creates none, which is the whole of option A. Its pairing is a hand-written row in
+// `TestEveryBoundaryCrossingIsPaired` instead, beside `Global`'s, for the reason that test's own comment
+// gives about the two sites that create no stack.
+//
+// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
 func enterGuest() { boundaryCrossings.Add(1) }
 
 // leaveGuest establishes B-MM-1's release edge: everything the host wrote while inside becomes visible

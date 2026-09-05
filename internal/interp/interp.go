@@ -649,6 +649,25 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		if ierr != nil {
 			return nil, ierr
 		}
+		if ext.host != nil {
+			// **An embedder invoking its own host function through the engine is refused, and this is
+			// the one of [ADR 0069][0069]'s five resolved-callee sites where refusing is a choice
+			// rather than a necessity.** The guest-side sites must dispatch (a `call` to a host import
+			// is the whole feature) and two must refuse for want of an identity or a body; this one
+			// *could* dispatch — the arguments are already `[]Value` and the results come back as
+			// `[]Value`, so no conversion is even needed.
+			//
+			// It refuses because the round trip buys the caller nothing and costs the engine a
+			// question it has no good answer to: `Caller.Thread` would name `in.host`, a thread that
+			// is not the caller's, and the boundary counters would record a guest entry and exit for
+			// a call that ran no guest code. An embedder that wants to call its own function calls
+			// it. Named as a limit rather than silently dispatched, per `tableFor`'s rule — nothing
+			// is wrong with the module, so the refusal names the engine.
+			//
+			// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
+			return nil, fmt.Errorf("%w: %q re-exports a host function, which this boundary does not "+
+				"call back out to (decision 0069; call it directly)", ErrUnsupportedOp, name)
+		}
 		return ext.owner.invokeIndex(ext.fnIdx, name, args)
 	}
 	ft, err := in.funcType(fn)

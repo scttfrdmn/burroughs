@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
 // crossings reads the boundary counter. A helper rather than the field, because **every assertion
@@ -81,6 +83,57 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 		tc.run()
 		if got := crossings() - before; got != tc.want {
 			t.Errorf("%s crossed the boundary %d times, want %d", tc.name, got, tc.want)
+		}
+	}
+
+	// # The host-call rows, which are here because they can be nowhere else
+	//
+	// A host call is the site §4's B-MM-1 names *first* — *"host-call return"* — and it landed with
+	// **#602**. It is also the second site whose crossing is not a `stack{…}` literal's: `callHost` runs
+	// on the caller's stack and creates none, so it is outside
+	// `TestEveryStackCreationSiteCrossesTheBoundary`'s parsed domain and inside this test's enumerated
+	// one, for the same reason `Global` is. The enumeration is the weaker instrument — a *third* such
+	// site added later is covered by neither until somebody writes a row — and that is said plainly here
+	// rather than left for a reader to infer from the absence.
+	//
+	// **Four, not two, and the extra pair is not a nested crossing.** The invoke contributes its pair;
+	// the host call contributes a second, because leaving the guest for the embedder and coming back is
+	// a transition in each direction. This is the one place where the *start function* reasoning above
+	// inverts: a start function runs inside an already-open crossing and adds nothing, while a host call
+	// is an exit and a re-entry through the same boundary at the same depth.
+	//
+	// **A trapping host call costs the same, and for a different reason than the trapping invoke above.**
+	// That row is paired by `defer`; these two edges are on `callHost`'s straight-line path, because
+	// `enterGuest` has to be established *before* `pushHostResults` touches guest state and a `defer`
+	// would run it after. So the two rows agreeing here is a fact about an error return specifically,
+	// and it does not extend to a panic — see `callHost`'s own comment on what an embedder panic tears.
+	hostIn := hostLink(t, `(module
+		(import "h" "ok" (func $ok (result i32)))
+		(import "h" "bad" (func $bad (result i32)))
+		(func (export "callOK") (result i32) (call $ok))
+		(func (export "callBad") (result i32) (call $bad)))`, binary.Features{},
+		hostImports(map[string]Extern{
+			"ok": HostExtern(ft(nil, []binary.ValType{binary.I32}), func(*Caller, []Value) ([]Value, error) {
+				return []Value{I32(1)}, nil
+			}),
+			"bad": HostExtern(ft(nil, []binary.ValType{binary.I32}), func(*Caller, []Value) ([]Value, error) {
+				return nil, fmt.Errorf("the embedder declines")
+			}),
+		}))
+	for _, tc := range []struct {
+		name string
+		fn   string
+	}{
+		{"an invoke making one returning host call", "callOK"},
+		{"an invoke making one host call that errors", "callBad"},
+	} {
+		before := crossings()
+		_, _ = hostIn.Invoke(tc.fn)
+		if got := crossings() - before; got != 4 {
+			t.Errorf("%s crossed the boundary %d times, want 4: the invoke's pair and the host "+
+				"call's. 2 means the host call established no edge at all, and 3 means it left the "+
+				"guest and never acquired on the way back in — which is the release a later agent "+
+				"would be ordering against", tc.name, got)
 		}
 	}
 

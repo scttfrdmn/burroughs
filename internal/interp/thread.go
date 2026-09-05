@@ -3,6 +3,7 @@
 package interp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -246,6 +247,92 @@ type thread struct {
 	// path nothing: an unregistered thread can never have `stopReq` set, because the only writer is
 	// the `Stop` that walks a world's members.
 	w *world
+
+	// ctx/cancel are contract §5 H-3's cancellation channel: what a host function running on this
+	// thread sees through `Caller.Context`, and what `Instance.Close` cancels. [ADR 0069][0069]'s
+	// third choice.
+	//
+	// **Per thread and not per call, which is the ruled shape** — Scott's second sub-choice on the
+	// #647 review, *"created once per thread so it is not a per-call allocation"* — so a host call
+	// costs no `context.WithCancel` and a `Caller` is one small struct.
+	//
+	// **Established in `world.addLocked` and not in `newThread`, and the difference is load-bearing.**
+	// `newThread` is `Spawn`'s alone. The *ordinary* host call — an embedder `Invoke`s and the guest
+	// calls a host import — runs on `in.host`, which link.go builds by literal and hands to
+	// `register`. A context created in `newThread` would be nil on exactly the thread every host call
+	// in the tree today runs on, so `Close` would cancel nothing while looking correct. `addLocked` is
+	// documented as *"the one place membership and `t.w` are established, so the invariant … cannot be
+	// half-kept by one of two callers"*, and a cancellable thread needs that same invariant.
+	//
+	// **Nil is legal, for `w`'s reason and with the same consequence.** A `thread` built by literal in
+	// this package's tests has neither, so `context()` answers `context.Background()` — a context that
+	// is never `Done` — and `cancelCtx` is a no-op. That is the honest reading: a thread no world
+	// holds has no `Close` that could cancel it.
+	//
+	// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// context is what `Caller.Context` hands an embedder, nil-safe on the receiver and on the field.
+//
+// **`context.Background()` rather than a nil `context.Context`, because a nil interface is not a
+// context and every method on it panics.** An embedder calling `c.Context().Done()` on a thread built
+// by literal would take the engine down inside its own host function — a crash in the embedder's frame
+// blamed on the embedder. A background context is the truthful answer instead: this thread has no
+// shutdown signal, because nothing holds it that could shut it down.
+func (t *thread) context() context.Context {
+	if t == nil || t.ctx == nil {
+		return context.Background()
+	}
+	return t.ctx
+}
+
+// cancelCtx cancels this thread's context, nil-safe both ways. `Close`'s per-member call.
+func (t *thread) cancelCtx() {
+	if t == nil || t.cancel == nil {
+		return
+	}
+	t.cancel()
+}
+
+// world is the world holding this thread, or nil for a thread no world admitted.
+//
+// # A host call belongs to the running thread's world, not to the instance that declared the import
+//
+// The two are the same instance for every single-module host call and they come apart the moment a
+// module imports a *defined* function whose body calls a host import: the guest entry is instance `A`,
+// the host import belongs to instance `B`, and the thread is `A`'s. `callHost` runs as a method on `B`
+// — the declared result types are `B`'s, so `B`'s module is what a type check must resolve against —
+// and takes its **world** from here instead.
+//
+// **Because the counter and the cancellation must have the same subject.** `Close` cancels the contexts
+// of *its own members* and then waits for its own `hostCalls` to reach zero. Count the call in `B`'s
+// world and `B.Close()` waits for a call whose thread is not `B`'s to cancel, which nothing will ever
+// do — a teardown that hangs on a thread it has no handle on, and the engine's fault rather than the
+// non-cooperating embedder's that `Instance.Close` already documents. Counting it in the thread's world
+// makes `A.Close()` the call that both cancels and waits, which is the pairing H-3 describes.
+//
+// The consequence, stated because it is a real limit and not a detail: **`B.Close()` does not wait for
+// a host call of `B`'s that is running on `A`'s thread.** `B` declared the import; `A` owns the agent
+// executing it. Closing the instance whose threads are running is what H-3's wait is about, and an
+// embedder tearing down a linked graph closes the instances it drove `Invoke` on.
+func (t *thread) world() *world {
+	if t == nil {
+		return nil
+	}
+	return t.w
+}
+
+// threadID is `t.id` for a possibly-nil thread. Zero for a nil one, which is the value `ThreadID`
+// documents as *"the one thing it must not be able to mean is 'the first thread'"* — so a host function
+// reading 0 out of `Caller.Thread` is being told there is no thread here rather than being told a wrong
+// one.
+func (t *thread) threadID() ThreadID {
+	if t == nil {
+		return 0
+	}
+	return t.id
 }
 
 // String names a thread in an error or a test failure, so a message about one says which.
@@ -365,14 +452,26 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 		return nil, fmt.Errorf("%w: this instance reaches no shared memory, so a spawned thread "+
 			"would share nothing with its parent", ErrNotShared)
 	}
-	target, fn, ft, err := in.resolveCall(entry)
+	c, err := in.resolveCall(entry)
 	if err != nil {
 		return nil, err
 	}
+	// **A host function is refused as a thread entry, and the reason is not the type check below.** A
+	// host entry could satisfy T-1's `(i32) -> ()` shape exactly, so the arity check would pass it; what
+	// it cannot satisfy is what a thread *is* here. `runEntry` builds a frame and runs a body, and a host
+	// function has neither — so a spawned host entry would be a thread whose whole life is one Go call,
+	// with no back-edge to poll, no safepoint it could reach, and therefore a `Stop` that waits out its
+	// deadline on a member that will never arrive. Refused rather than special-cased, because the useful
+	// version of it is an embedder starting its own goroutine, which needs nothing from this engine.
+	if c.host != nil {
+		return nil, fmt.Errorf("%w: function %d is a host function, which runs no guest body and could "+
+			"reach no safepoint (contract §5, decision 0069)", ErrThreadEntry, entry)
+	}
+	fn, ft := c.fn, c.ft
 	// Decision [0068]'s first named limit. See `ErrForeignEntry` for why this is refused rather than
-	// resolved; the check is `target != in` and not a nil test, because `resolveCall` resolves a
+	// resolved; the check is `c.inst != in` and not a nil test, because `resolveCall` resolves a
 	// re-exported import transitively and returns the instance that owns the body.
-	if target != in {
+	if c.inst != in {
 		return nil, fmt.Errorf("%w: function %d resolves into another instance, whose `Stop` and this "+
 			"one cannot both reach the new thread (SP-4)", ErrForeignEntry, entry)
 	}

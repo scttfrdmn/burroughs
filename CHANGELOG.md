@@ -21,6 +21,42 @@ weakly-ordered platform.
 
 ### Added
 
+- **Host functions — a Go function satisfies a wasm import, contract §5's `Caller` and its §3 SP-2/SP-4
+  obligations, plus `Instance.Close`.** [#602](https://github.com/scttfrdmn/burroughs/issues/602),
+  [ADR 0069](docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md).
+  `HostExtern(binary.FuncType, HostFunc)` links against any function import; the embedder's function
+  receives a `*Caller` and a `[]Value` and returns `([]Value, error)`. Not a gate flip: nothing defaults
+  on, because a module with no host import cannot reach any of it.
+  - **§5 H-2 is enforced by absence.** `Caller` has no `Invoke` and no accessor that reaches an
+    `*Instance`, so the method that would re-enter the guest on the caller's stack does not exist. There
+    is deliberately no control for it — the compiler asserts a missing method for every embedder in the
+    world.
+  - **The host-call return is the §4 B-MM-1 site the contract names *first*, and the engine had none of
+    them until now** — forecast at `enterGuest`'s own comment as grave
+    [#645](https://github.com/scttfrdmn/burroughs/issues/645)'s second site, and it arrived as two
+    crossings rather than one because a host call leaves the guest and re-enters it. It creates no
+    `stack{…}` literal, so it is outside `TestEveryStackCreationSiteCrossesTheBoundary`'s derived domain
+    and gets enumerated rows in `TestEveryBoundaryCrossingIsPaired` instead — stated in both places,
+    because a derived population that silently excludes a new site reads as covering it.
+  - **A host call marks its thread blocked**, so ADR 0067's `blocked == callers` predicate counts a thread
+    parked in an embedder's `select` as arrived instead of waiting out `Stop`'s whole deadline. That is §3
+    SP-2 and SP-4's *"a pause must not disturb a blocked host call"* in one pair of calls.
+  - **`Instance.Close` is §5 H-3's teardown and is terminal, deliberately unlike `Stop`.** It cancels every
+    member thread's context, waits for every in-flight host call to return, and thereafter refuses both a
+    host call and a `Spawn` with `ErrClosed`. There is no `Resume` counterpart: *"a pause must not disturb a
+    blocked host call; a teardown must interrupt it"* (Scott, on the #646 review).
+  - **A host call belongs to the running thread's world, not to the instance that declared the import** —
+    a defect found by writing the two-instance test, where the declarer's `Close` would wait on a thread
+    it cannot cancel and the caller's would not wait at all.
+    `TestAHostCallIsCountedAndWaitedForByTheCallersWorld` is the whole package's only witness, which is
+    measured rather than assumed.
+  - **An embedder panic tears three of the four bookkeeping halves and no guard fires**, because `blocked`
+    and `callers` leak together into exactly SP-2's *arrived* predicate. The mechanism predates this
+    slice; the trigger does not, since embedder code now runs inside the interpreter's own call frames.
+    Filed with four options rather than repaired here, as every candidate either pays ADR 0067's measured
+    defer cliff or changes what an embedder observes:
+    [#650](https://github.com/scttfrdmn/burroughs/issues/650).
+
 - **`Instance.Spawn` — contract §2 T-1's thread spawn, a wasm thread backed 1:1 by an OS thread, behind
   `gate:threads` and not a default flip.** [#554](https://github.com/scttfrdmn/burroughs/pull/554),
   parked since 2026-09-01, re-authored under

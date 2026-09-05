@@ -146,11 +146,45 @@ func (in *Instance) call(idx uint32, st *stack, depth int) error {
 	if depth >= callBudget {
 		return trapExhaustion
 	}
-	target, fn, ft, err := in.resolveCall(idx)
+	c, err := in.resolveCall(idx)
 	if err != nil {
 		return err
 	}
-	return target.invoke(fn, ft, st, depth)
+	if c.host != nil {
+		// The host arm builds no frame and costs no depth, so it is answered before `invoke` rather
+		// than inside it — see `funcTarget` for why the branch is here and at every sibling site.
+		return c.inst.callHost(c.host, st)
+	}
+	return c.inst.invoke(c.fn, c.ft, st, depth)
+}
+
+// funcTarget is what a function index finally names once the import chain has been walked: either a
+// wasm function in some instance, or an embedder's host function. **Exactly one of `fn` and `host` is
+// non-nil**, and `inst` is set on both arms.
+//
+// # Why `resolveCall` returns this rather than keeping its triple and being probed at each call site
+//
+// [ADR 0069][0069] settles that the dispatch seam is where the callee is *named*, and the shape of the
+// seam is this type. The alternative considered and rejected was leaving `resolveCall`'s
+// `(*Instance, *binary.Func, *binary.FuncType, error)` alone and asking `in.hostImport(idx)` at each
+// site that can reach an import. It loses on **who is forced to look**: a probe is a line a new call
+// site can omit and still compile, and what it gets for omitting it is `ext.owner` — nil for a host
+// extern — dereferenced one line later. Five sites reach a resolved callee (`call`, the tail call,
+// `Spawn`'s entry, `invokeIndex`'s delegation, `funcRefTarget`), of which two dispatch and three refuse,
+// so the property worth buying is that a sixth cannot be written without the compiler making its author
+// name an arm.
+//
+// `inst` on the host arm is the instance whose **import slot** held the host function, not an owner:
+// there is no owner. It is carried because `callHost` needs an instance for two things a host function
+// has none of — `pushHostResults`'s `castTarget` needs a module to read a result type's indices in, and
+// `world` is where the call is counted for `Close`.
+//
+// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
+type funcTarget struct {
+	inst *Instance
+	fn   *binary.Func
+	ft   *binary.FuncType
+	host *hostFunc
 }
 
 // resolveCall is `call`'s half that answers *which function* — the index lookup, the import
@@ -180,25 +214,37 @@ func (in *Instance) call(idx uint32, st *stack, depth int) error {
 //
 // An unfilled slot is contract §3's gap, reported as the engine gap it is rather than as a module
 // fault (`tableFor`'s rule: nothing is wrong with the module); `importedFunc` renders it.
-func (in *Instance) resolveCall(idx uint32) (*Instance, *binary.Func, *binary.FuncType, error) {
+// **The host arm terminates the walk instead of recursing, and it must, because `ext.owner` is nil for
+// a host extern.** The recursion below is `ext.owner.resolveCall(ext.fnIdx)`, so a host function
+// reached through any number of re-export hops would nil-deref on the receiver — and *through any
+// number* is the load-bearing part: a probe at `call` would catch a directly-imported host function and
+// miss `A imports from B, B imports the host`, which is the shape that compiles, passes a one-module
+// test, and crashes on a two-module one.
+func (in *Instance) resolveCall(idx uint32) (funcTarget, error) {
 	fn, ok := in.mod.DefinedFunc(idx)
 	if !ok {
 		if idx < uint32(in.mod.ImportedFuncs()) {
 			ext, err := in.importedFunc(idx)
 			if err != nil {
-				return nil, nil, nil, err
+				return funcTarget{}, err
+			}
+			if ext.host != nil {
+				// `in` and not `ext.owner`: the instance carried is the one whose import slot holds
+				// the host function, which is *this* one, and is what `funcTarget.inst` documents
+				// itself as. A host function has no owner to hand over.
+				return funcTarget{inst: in, host: ext.host}, nil
 			}
 			return ext.owner.resolveCall(ext.fnIdx)
 		}
 		// Past the end of the index space, which is #9's `unknown function`.
-		return nil, nil, nil, fmt.Errorf("%w: call names function %d of %d",
+		return funcTarget{}, fmt.Errorf("%w: call names function %d of %d",
 			ErrNotValidated, idx, in.mod.ImportedFuncs()+len(in.mod.Funcs))
 	}
 	ft, err := in.funcType(fn)
 	if err != nil {
-		return nil, nil, nil, err
+		return funcTarget{}, err
 	}
-	return in, fn, ft, nil
+	return funcTarget{inst: in, fn: fn, ft: ft}, nil
 }
 
 // importedFunc resolves an imported function index to whatever fills its slot.
@@ -448,6 +494,28 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 	ext, ierr := target.importedFunc(r.Addr)
 	if ierr != nil {
 		return nil, nil, fmt.Errorf("%w (%s)", ierr, site)
+	}
+	if ext.host != nil {
+		// **A host function cannot be a `funcref` value, and this is the refusal that says so** —
+		// [ADR 0069][0069]'s deferral of option C's identity widening, at the one line that would
+		// otherwise nil-deref: `target = ext.owner` immediately below, where a host extern's `owner`
+		// is nil by construction.
+		//
+		// The reason it is a limit rather than a bug is that a `ref` names a function by a
+		// module-local index (`ref.Addr`) resolved in an instance (`ref.Inst`), and a host function
+		// has neither — so `ref.func`, `call_indirect` and `call_ref` would need an identity for it
+		// before they could carry one. Scott ruled C *"a later additive widening"* on the #647
+		// review; until it lands, an embedder's function is callable by name and not by reference.
+		//
+		// Reachable from a guest that puts an imported function in a table with `elem` or
+		// `table.set` and then calls it indirectly, so it is a named engine limit rather than an
+		// unreachable branch — `ErrUnsupportedOp`, which is the register for *this engine cannot*,
+		// never `ErrNotValidated`, which would blame a module that is well-formed.
+		//
+		// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
+		return nil, nil, fmt.Errorf("%w: %s resolves to a host function, which has no reference "+
+			"identity in this engine (decision 0069 defers it; call it by name instead)",
+			ErrUnsupportedOp, site)
 	}
 	target = ext.owner
 	fn, ok = target.mod.DefinedFunc(ext.fnIdx)
