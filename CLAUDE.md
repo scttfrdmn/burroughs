@@ -67,14 +67,18 @@ Scott, *is* the decisions-needed queue, now queryable. **Queryable by the issues
 have just drained reads as full, in a report to the principal whose queue it is. Recipe, and the
 two ways the API arm still under-reports: [reading the tracker's
 state](docs/laws/operations.md#reading-the-trackers-state-the-queue-comes-from-the-issues-api-never-from-a-cached-listing).
-**And the queue is parked: it is not reported at all until the §4 litmus battery ([#10](https://github.com/scttfrdmn/burroughs/issues/10))
-completes.** No count, no list, no *"none blocking"* — an item is surfaced only when it **blocks code**,
-and then only that item. Filing is untouched; what is parked is the reporting. Scott's order on the
-#562 review, and the end point is half of it: *"the queue parking gets an end point so it stops
-recurring … Until then, don't report the queue at all — 'twelve waiting, none blocking' is itself the
-surfacing I asked you to stop, and half-parking pays both costs."* Recorded here by the actor who was
-ordered, which is not independent provenance — *durability is not independence* — so commits in the
-slices this covers stay `Ratio-Class: carried`.
+**And the queue is parked: it is not reported at all until spawn runs
+([#554](https://github.com/scttfrdmn/burroughs/issues/554)).** No count, no list, no *"none blocking"* —
+an item is surfaced only when it **blocks code**, and then only that item. Filing is untouched; what is
+parked is the reporting. Scott's order on the #562 review, and the end point is half of it: *"the queue
+parking gets an end point so it stops recurring … Until then, don't report the queue at all — 'twelve
+waiting, none blocking' is itself the surfacing I asked you to stop, and half-parking pays both costs."*
+**The end point moved on the #647 review**, from #10's §4 litmus battery to spawn, and it took two
+companions with it: *"Parked stays parked. The decisions queue, the §4 battery beyond what spawn needs,
+the eight unstamped ADRs. They drain when spawn runs."* So #10 is itself now parked past what spawn
+needs, which is why the end point could not stay pinned to it — **a parked subject cannot be another
+subject's end point.** Recorded here by the actor who was ordered, which is not independent provenance
+— *durability is not independence* — so commits in the slices this covers stay `Ratio-Class: carried`.
 Graves are closed issues labeled
 `type:grave`, lesson in the closing comment, with a comment at the fix site citing the number.
 
@@ -94,11 +98,16 @@ Their bodies — specimens, minting records, the token each was granted on — a
      word, naming the product work it is overhead *for*. The column moves only when what the
      harness *can ask* changes, so where a PR cannot change that, the zero is **structural**, is
      said to be structural, and the reward figure that does have a subject is named instead.
-   - **Two consecutive instrument-only PRs is a stop condition.** The counter counts a PR's
-     *purpose*, not its line-majority; the classification is named in the PR body and is
-     challengeable. It is discharged only by a principal's explicit order or stamp, never by
-     self-classification — because **the actor never chooses the instrument that judges the
-     actor**. State the case and flag it; a principal rules.
+   - **The instrument-only counter is retired; the ratio outlives it.** Two consecutive
+     instrument-only PRs was a stop condition until the #647 review retired it: *"the
+     instrument/product counter is retired. Keep quoting the ratio; gate nothing on it."* What the
+     counter was built for was a tree at 0 fail, where the gradient inverts toward instruments and
+     nothing priced the drift; what retires it is that the ratio prices the same drift every PR
+     with no threshold to argue over. A PR may still *name* its class where the class is
+     interesting, and **nothing is gated on the count** — no stop condition, no principal's
+     discharge to seek, and no self-classification hazard, because a figure nothing acts on cannot
+     be gamed. *The actor never chooses the instrument that judges the actor* stands for every
+     **live** instrument, which is why the comparator survived and only the gate went.
    - **Instrument-to-engine ratio is quoted, not felt** — every PR, from `make ratio RATIO=<rev>`
      (`scripts/ratio.sh`), uniform comparator (engine = code in the module path; instrument =
      tests, generators, harness), **never compared to a threshold**, and with its provenance
@@ -110,9 +119,16 @@ Their bodies — specimens, minting records, the token each was granted on — a
    above) · **Landed** · **Decisions taken** · **Decisions needed from Scott** · **Graves** ·
    **Done since last review** · **Next**. Two principals review: **Scott** (owner, all decisions)
    and **chat-Claude** (contract author, architecture review), who is reached through Scott. Keep it
-   terse and factual, written for a reader who wasn't in the session; anything Scott must decide is
-   *flagged*, never decided for him, and a PR that would change the contract says so in
-   **Decisions needed** and labels the issue `type:contract`. **A Landed section is a changelog
+   terse and factual, written for a reader who wasn't in the session, and a PR that would change the
+   contract says so in **Decisions needed** and labels the issue `type:contract`. **Decide and
+   proceed** — the #647 review narrowed what reaches Scott to three subjects, and everything else is
+   decided in the slice and reported as taken: *"Report decisions taken, not rulings requested.
+   Escalate only for: contract (§) text, public API surface, reversing a stamped ADR."* This replaces
+   *"anything Scott must decide is flagged, never decided for him"*, which was true while the
+   escalation set was open and is now false as written: outside those three, a flagged question is
+   **work not done**, and the load-bearing section became **Decisions taken**. The three are what
+   they are because each is a thing the actor cannot unwind alone — normative text, an embedder's
+   dependency, and another principal's stamp. **A Landed section is a changelog
    entry wearing a different hat** — update `CHANGELOG.md`'s `[Unreleased]` in the same PR.
    **Done since last review** is Scott's, ordered on the #387 review after he asked three times for
    the disposition of work that was already on main: *"I asked three times for something that was

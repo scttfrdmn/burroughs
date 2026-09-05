@@ -1,8 +1,19 @@
 # 0060 — The futex queue hangs off `memory`, keyed by effective address, because a pointer key would borrow its soundness from another package
 
-Date: 2026-09-02 · Status: **proposed** — no stamp exists to cite, and *a `Status:` field is a citation
-to an approval*, so it stays open until one does. Nothing here needs one to proceed: this is mechanism,
-which is product work and self-merges on a bound green. What it is **not** is a gate flip — the 67
+Date: 2026-09-02 · Status: **accepted**, **stamped by relay** — Scott, on the #647 review:
+*"Record the relay stamps on 0050, 0052 and 0060 citing my prior report — the stamp was given last turn; this is the recording."* The independence
+mechanism is his, stated on the #646 review: *"I reviewed each in the report that landed it."* For this ADR
+that report is **PR 594**.
+
+**What this citation is, and what it is not.** It resolves to a principal's approval and to the PR whose
+report carried this document to him, which is what the `Status:` rule asks for. It does **not** resolve to a
+GitHub review artifact: the review was a session turn and the recording is made by the actor who was
+reviewed, so *durability is not independence* and the commit that records it is `Ratio-Class: carried`. That
+is stated here rather than left for a reader to discover, because a forged provenance about the project's own
+governance is worse than a wrong option.
+
+It needed no stamp to *proceed*, which is why it landed without one: mechanism is product work and
+self-merges on a bound green. What it is **not** is a gate flip — the 67
 atomic mnemonics and `shared` are already on their own gate and this document changes none of their
 defaults.
 
