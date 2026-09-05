@@ -314,9 +314,10 @@ func TestAtomicFenceNeedsNoMemory(t *testing.T) {
 	}
 }
 
-// TestNoEngineGoroutineLandsWithoutAPrincipalsRuling watches for the first `go` statement in a
-// non-test file in this package. The *event* has never changed. Its stated reason has now been
-// falsified twice, and grave **#576** is the second time.
+// TestNoEngineGoroutineLandsWithoutAPrincipalsRuling watches for a `go` statement in a non-test file
+// in this package, outside the one site a principal's ruling authorised. The *event* has changed
+// exactly once, on the arrival of that ruling; its stated reason had been falsified twice before then,
+// and grave **#576** is the second time.
 //
 // **Two names have died here for one reason: each asserted a code property, and the next proposal
 // discharged it.** It was formerly `TestAtomicsArePlainWhileTheInterpreterIsSingleThreaded`, on the
@@ -336,23 +337,50 @@ func TestAtomicFenceNeedsNoMemory(t *testing.T) {
 // across the proposals it is waiting on, and a third state-assertion would be the third occurrence
 // already written.
 //
-// **The reason a rename is not a retirement**: four preconditions for a second agent are open, and
-// they fail differently, which is why the message names all four rather than a representative one.
-// §4's boundary model has its mechanism ([ADR 0052][0052], #516) and no litmus battery (**#10**).
-// `memory.atomic.wait` cannot return 0/woken (**#543**). `Spawn` shares the instance's globals, and a
-// **reference** global's `global.set` is still a plain write (**#573**). The spawn walk of [0056][0056]'s second half has
-// a closure smaller than the reachable set, so a table slot holding a foreign funcref escapes it
-// (**#575**).
-// *A tripwire whose subject dissolves is re-pointed*; retiring this one would drop all four.
+// **The reason a rename was not a retirement**: four preconditions for a second agent were open, and
+// they failed differently, which is why the message named all four rather than a representative one.
+// §4's boundary model had its mechanism ([ADR 0052][0052], #516) and no litmus battery (**#10**).
+// `memory.atomic.wait` could not return 0/woken (**#543**). `Spawn` shares the instance's globals, and
+// a **reference** global's `global.set` was still a plain write (**#573**). The spawn walk of
+// [0056][0056]'s second half had a closure smaller than the reachable set, so a table slot holding a
+// foreign funcref escaped it (**#575**).
+// *A tripwire whose subject dissolves is re-pointed*; retiring this one would have dropped all four.
 //
-// **Its discharge is a principal's call and not a test author's.** Whoever merges T-1 deletes or
-// re-points it, and forcing that conversation is the whole value of the control — a successor
-// quietly deciding the preconditions are met is the failure it is placed against.
+// # The ruling arrived, and this is what it changed — and did not change
+//
+// Three of the four are closed: #543, #573, and #575 by [ADR 0058][0058], which dissolved the walk's
+// completeness premise rather than widening it. #10 is parked by Scott's order past what spawn needs.
+// T-1's spawn landed under [ADR 0068][0068], so **the ruled site now exists** and the trigger narrows
+// from *"any `go` in this package"* to *"any `go` outside the ruled site"*.
+//
+// **The name is unchanged, and that is the point of having chosen it.** It asserts the rule — a
+// goroutine here needs a principal's ruling — so the arrival of a ruling *satisfies* it instead of
+// falsifying it. Both dead names would have had to be renamed a third time. Compare
+// `internal/testenv`'s module-wide sibling, which named a *property* (*"nothing creates a second
+// observer"*) and had to be renamed when this slice made it flatly false.
+//
+// **The allow entry is keyed by enclosing function, not by line or by file.** A file key would permit
+// every future `go` in `thread.go`, which is the largest thing the ruling did not authorise; a line key
+// re-points itself wrongly on the next insertion (*re-key an allow map by content, not by arithmetic*).
+// So the key is `(*Instance).spawn` and the count there is pinned at exactly one — a second goroutine
+// inside the ruled function is as unruled as one anywhere else.
+//
+// **The entry is also asserted to be reachable, which is the failure mode a narrowing usually has.**
+// If `spawn`'s `go` moves or is deleted, an allow entry matching nothing would leave the control green
+// while silently permitting nothing — a passing test whose exemption has rotted. So a missing ruled
+// site is a FAIL in its own right, with its own message, and *that* is what makes the narrowing
+// observable rather than assumed.
+//
+// Watched three ways rather than one, because *a re-pointed control has not been watched die* and
+// *"it now permits X"* is a forecast to run: a `go` injected into a second function in this package
+// FAILs; a second `go` injected into `spawn` itself FAILs on the pinned count; and `spawn`'s own `go`
+// commented out FAILs on the reachability arm. The permit direction is the ordinary green.
 //
 // **A control's failure message is an unscanned claim**, which is how both stale reasons survived:
 // nothing in `internal/testenv` reads string literals, so a message can name landed work
 // indefinitely and the control still looks satisfied, because it is green. It was green only because
-// nothing had started a goroutine yet.
+// nothing had started a goroutine yet — which is why the message below is rewritten in this slice
+// rather than left to be read by whoever trips it next. Three of the four it named are closed.
 //
 // Both historical names above are deliberate, and one of them was overwritten once — grave **#561**,
 // a bulk re-point of the live citations that ran over this sentence. The sweep that would catch a
@@ -362,17 +390,21 @@ func TestAtomicFenceNeedsNoMemory(t *testing.T) {
 // trigger's lessons.*
 //
 // It stays in this file rather than moving with each subject. The domain is the whole package, so no
-// file is its natural home, and moving it would re-point every citation twice for no gain —
-// thread.go and thread_test.go cite it as the reason `Spawn` is withheld, which is a fact about the
-// package rather than about either file.
+// file is its natural home, and moving it would re-point every citation twice for no gain — thread.go
+// and thread_test.go cite it, formerly as the reason `Spawn` was withheld and now as the record of
+// what authorised it, which is a fact about the package rather than about either file.
 //
-// It fails **loudly and by design**. The fix is not to delete the check and not to add a file to an
-// exception list; it is to discharge the four above and get a ruling.
+// It fails **loudly and by design**. The fix for a *new* `go` is not to delete the check, not to add a
+// file to an exception list, and not to add a second key beside `(*Instance).spawn`: it is to say what
+// the new goroutine does about the four above, and get a ruling of its own. One ruling authorised one
+// site.
 //
 // [0051]: ../../docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md
 // [0052]: ../../docs/decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md
 // [0054]: ../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md
 // [0056]: ../../docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md
+// [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
+// [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
 func TestNoEngineGoroutineLandsWithoutAPrincipalsRuling(t *testing.T) {
 	// `os.ReadDir` plus `ParseFile` rather than `parser.ParseDir`, which is deprecated *and* for a
 	// reason that matters to a tripwire: it does not consider build tags when grouping files into
@@ -383,7 +415,16 @@ func TestNoEngineGoroutineLandsWithoutAPrincipalsRuling(t *testing.T) {
 		t.Fatalf("reading internal/interp: %v", err)
 	}
 	fset := token.NewFileSet()
-	files := 0
+	// The one authorised site, keyed by file and enclosing function. Not by line, and not by file
+	// alone. `ruledGoStatements` is the count that site is permitted, so *adding* a goroutine inside
+	// `spawn` trips this as surely as adding one elsewhere.
+	const (
+		ruledFile         = "thread.go"
+		ruledFunc         = "(*Instance).spawn"
+		ruledGoStatements = 1
+		ruledBy           = "ADR 0068, ordered by Scott's own instruction to land T-1"
+	)
+	files, ruledSeen := 0, 0
 	for _, ent := range ents {
 		name := ent.Name()
 		if ent.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -394,34 +435,49 @@ func TestNoEngineGoroutineLandsWithoutAPrincipalsRuling(t *testing.T) {
 			t.Fatalf("parsing %s: %v", name, err)
 		}
 		files++
-		ast.Inspect(file, func(n ast.Node) bool {
-			g, ok := n.(*ast.GoStmt)
-			if !ok {
-				return true
+		// The enclosing function is tracked by walking `Decls` rather than by asking a `GoStmt` for
+		// its parent, which the AST cannot answer. A `go` outside every `FuncDecl` — inside a package
+		// level `var x = func() { go f() }` — therefore lands in the empty key and is an offender,
+		// which is the safe direction and the one a `FuncDecl`-only walk would have missed.
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			key := ""
+			if isFunc {
+				key = funcKey(fn)
 			}
-			t.Errorf("%s:%d launches a goroutine.\n"+
-				"Four preconditions for a second agent in this engine are open, and "+
-				"they fail differently, so all four are named rather than a "+
-				"representative one: §4's boundary memory model has its mechanism "+
-				"and no litmus battery (#10); `memory.atomic.wait` cannot return 0 "+
-				"for woken, so a woken thread reports an engine gap rather than a "+
-				"plausible number (#543); `Spawn` shares the instance's globals, and "+
-				"a reference global's `global.set` is still a plain write (#573); "+
-				"and the spawn "+
-				"walk's closure is smaller than the reachable set, so a table slot "+
-				"holding another instance's funcref escapes it (#575).\n"+
-				"No vector in the threads suite will fail to tell you about any of "+
-				"them, because the corpus is single-agent by construction.\n"+
-				"Do not exempt this file and do not move the `go` statement to a "+
-				"sibling package: both put the statement outside the domain instead "+
-				"of answering it. Deleting or re-pointing this control is a "+
-				"principal's call and not a test author's — say which of the four "+
-				"are discharged, and get a ruling. The tearing claim this message "+
-				"used to make is itself discharged (#557, ADR 0054), which is the "+
-				"defect grave #576 records.",
-				name, fset.Position(g.Pos()).Line)
-			return true
-		})
+			ast.Inspect(decl, func(n ast.Node) bool {
+				g, isGo := n.(*ast.GoStmt)
+				if !isGo {
+					return true
+				}
+				if name == ruledFile && key == ruledFunc {
+					ruledSeen++
+					return true
+				}
+				t.Errorf("%s:%d in %s launches an unruled goroutine.\n"+
+					"One site in this package is authorised to start one, and it is "+
+					"%s's %s (%s). This is not it.\n"+
+					"Three of the four preconditions this message used to name are "+
+					"closed: `memory.atomic.wait` returns 0 for woken (#543), all "+
+					"three global arms are atomic (#573), and the spawn walk's "+
+					"closure premise was dissolved rather than widened (#575, ADR "+
+					"0058). The fourth is open and parked: §4's boundary memory "+
+					"model has its mechanism and its litmus battery is parked past "+
+					"what spawn needed (#10). So a *new* goroutine here is not "+
+					"covered by the ruling that covered spawn's — it inherits an "+
+					"open memory model and no vector that will report a violation, "+
+					"because the threads corpus exercises the model it cannot yet "+
+					"state.\n"+
+					"Do not add a key beside the ruled one, do not exempt this file, "+
+					"and do not move the statement to a sibling package: the first "+
+					"forges the ruling, and the other two put the statement outside "+
+					"the domain instead of answering it. Say what this goroutine "+
+					"does about #10, and get a ruling of its own.",
+					name, fset.Position(g.Pos()).Line, key,
+					ruledFile, ruledFunc, ruledBy)
+				return true
+			})
+		}
 	}
 	// The domain has to be non-empty or the sweep above proves nothing — an empty parse is a
 	// clean bill of health from an instrument that read nothing.
@@ -429,6 +485,43 @@ func TestNoEngineGoroutineLandsWithoutAPrincipalsRuling(t *testing.T) {
 		t.Errorf("parsed %d non-test files in internal/interp, expected at least 20; "+
 			"the walk is reading the wrong directory and its silence means nothing", files)
 	}
+	// **The narrowing's own vacuity check, and the arm that makes it observable.** An allow entry
+	// matching nothing is worse than no entry: the control stays green while permitting a site that no
+	// longer exists, so the next `go` written *into* `spawn` would be silently allowed by a key that
+	// was never checked to resolve. Pinned to the exact count rather than to a floor, because *a floor
+	// is not a census* and the census here is 1.
+	if ruledSeen != ruledGoStatements {
+		t.Errorf("found %d `go` statement(s) at the one ruled site (%s's %s), want exactly %d.\n"+
+			"Too few: the ruled site has moved or gone, and this control's exemption now resolves to "+
+			"nothing — re-point the key at where spawn's goroutine actually is, or delete the "+
+			"exemption if spawn no longer starts one.\n"+
+			"Too many: a second goroutine has been added inside the ruled function, and %s "+
+			"authorised one. Being inside `spawn` is not the ruling; being the goroutine the ruling "+
+			"was about is.",
+			ruledSeen, ruledFile, ruledFunc, ruledGoStatements, ruledBy)
+	}
+}
+
+// funcKey names a declaration the way this file's allow entry does: `Func`, `(Recv).Func` or
+// `(*Recv).Func`. Deliberately not `fn.Name.Name` alone — two methods on different types can share a
+// name, and a key that collides would authorise a `go` in whichever of them a later author wrote.
+func funcKey(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	recv := ""
+	switch e := fn.Recv.List[0].Type.(type) {
+	case *ast.StarExpr:
+		if id, ok := e.X.(*ast.Ident); ok {
+			recv = "*" + id.Name
+		}
+	case *ast.Ident:
+		recv = e.Name
+	}
+	if recv == "" {
+		return fn.Name.Name
+	}
+	return "(" + recv + ")." + fn.Name.Name
 }
 
 // TestAtomicCellAgreesWithTheByteLoop checks ADR 0051's word arithmetic against the authority that

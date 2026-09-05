@@ -769,11 +769,11 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		// number nobody ran.
 		num: make([]uint64, 0, len(fn.Body)),
 
-		// Propagation site 3 of 3 (decision 0050). A boundary `Invoke` runs on the host's thread,
-		// and all three of this engine's stack creation sites do, because there is no second thread
-		// to run on: T-1's spawn is withheld (see `thread`'s doc comment). Its entry would be the
-		// fourth site and the first not to use `&in.host`, which is why
-		// `TestEveryStackCreationSiteCarriesAThread` derives its domain rather than listing these three.
+		// Propagation site 3 of 4 (decision 0050). A boundary `Invoke` runs on the host's thread, as
+		// do the other two sites that hand over `&in.host`. The fourth is `runEntry`, T-1's spawn
+		// ([ADR 0068][0068]), and it is the one site that does *not* pass `&in.host`, because a
+		// spawned thread runs on its own — which is why `TestEveryStackCreationSiteCarriesAThread`
+		// partitions the sites on that distinction and derives its domain rather than listing them.
 		t: &in.host,
 	}
 	numResults, refResults := countByArray(ft.Results)

@@ -334,8 +334,8 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
   aliasing. So SP-3's discharge is a control over the timer path's write set — every address the timer
   machinery writes must lie outside every linear memory — registered here so that landing the timer
   facility without that control is a visible omission rather than an oversight. Its shape's sibling is
-  `TestNothingInEngineCodeCreatesASecondObserver`: a syntactic total over engine code rather than a
-  reachability argument.
+  `TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`: a syntactic total over engine code rather
+  than a reachability argument.
 
 ### SP-4 — stop composes with parked agents
 

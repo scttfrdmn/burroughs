@@ -132,25 +132,27 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 // no stack, so they are outside this control's reach and inside
 // `TestEveryBoundaryCrossingIsPaired`'s — which is why both exist.
 //
-// **#554's `runEntry` is the site this is aimed at.** T-1's spawn creates a stack for a new thread,
-// which is a host→guest transition, and it is parked in a PR whose merge would otherwise be the
-// moment nobody thought about §4.
+// **`runEntry` is the site this was aimed at, and it landed already covered.** T-1's spawn creates a
+// stack for a new thread, which is a host→guest transition; the merge that would otherwise have been
+// the moment nobody thought about §4 needed no new assertion here, only a floor bump. It is also the
+// first site whose two ends are on different threads, so it is the first where these edges do
+// something rather than record something — see `runEntry`'s own comment.
 //
 // Per enclosing function rather than per literal, following `TestEveryTreeWalkStopsAtTheRepoBoundary`:
 // the crossing is at the top of the function and the literal is wherever it is, so the two are in one
 // body and never in one expression.
 //
-// Watched die three ways: dropping either call at any of the three sites fails naming that site;
+// Watched die three ways: dropping either call at any of the four sites fails naming that site;
 // blinding the literal match fails the floor at `found 0`; and a scratch non-test file containing a
 // crossing-free function with a `stack{…}` literal in it fails naming the scratch file — the
 // injection method grave **#561** paid for, because *a claim about what an instrument will permit is
 // a forecast about a machine sitting in the tree.*
 func TestEveryStackCreationSiteCrossesTheBoundary(t *testing.T) {
-	// Three sites today — `constexpr.go`'s `runConst`, `interp.go`'s `build` (the start function)
-	// and `invokeIndex`. A floor rather than an equality because a *new* site is exactly what this
-	// should judge; the exact number is stated beside it because a floor alone catches a moved file
-	// and never a silent partial loss.
-	const sitesWhenWritten = 3
+	// Four sites — `constexpr.go`'s `runConst`, `interp.go`'s `build` (the start function) and
+	// `invokeIndex`, and `thread.go`'s `runEntry`. A floor rather than an equality because a *new*
+	// site is exactly what this should judge; the exact number is stated beside it because a floor
+	// alone catches a moved file and never a silent partial loss.
+	const sitesWhenWritten = 4
 
 	ents, err := os.ReadDir(".")
 	if err != nil {

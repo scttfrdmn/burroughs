@@ -18,7 +18,8 @@ because every ADR above cites a comment, and a reader is entitled to know what t
 cannot carry.
 
 Filed against **#572**. Implements the mechanism `TestNothingInEngineCodeCreatesASecondObserver` demands
-before T-1's `Spawn` (**#554**) may land. Does not supersede
+before T-1's `Spawn` (**#554**) may land (that control was formerly so named, and is now
+`TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`). Does not supersede
 [0051](0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md);
 it supplies the premise 0051 rests on — that the array an atomic holds a pointer into is not replaced
 underneath it.
@@ -33,7 +34,8 @@ ground that it *"has no second observer by construction"*.
 
 T-1's `Spawn` falsifies that ground: it refuses an instance with no shared memory and then runs the entry
 **in the same instance**, so a spawn-capable instance's unshared memories are reachable from two threads.
-`TestNothingInEngineCodeCreatesASecondObserver` is the tripwire, and it offers three ways out.
+`TestNothingInEngineCodeCreatesASecondObserver` is the tripwire — formerly so named; see above — and
+it offers three ways out.
 
 **Way (1) as the tripwire words it — "reserve for every memory an executing instance can reach" — is not
 sufficient, and finding that out is what produced this ADR.** The reservation is **capped**:

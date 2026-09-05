@@ -97,15 +97,17 @@ type memory struct {
 	// rather than an agreement between two that can drift.
 	//
 	// **Why a mark and not the flag it replaces.** `limits.Shared` is not a sound answer to "can a
-	// second thread reach this array": T-1's `Spawn` (#554) refuses an instance with no shared
-	// memory and then runs the entry in the *same* instance, so a spawn-capable instance's
-	// **unshared** memories are reachable from two threads too. The flag stays the producer's
-	// input at `allocate`; it stops being the consumer's question.
+	// second thread reach this array": T-1's `Spawn` refuses an instance with no shared memory and
+	// then runs the entry in the *same* instance, so a spawn-capable instance's **unshared** memories
+	// are reachable from two threads too. The flag stays the producer's input at `allocate`; it stops
+	// being the consumer's question. That reading is now load-bearing rather than anticipatory: spawn
+	// has landed ([ADR 0068][0068]), so the two-thread instance is a state the engine reaches.
 	//
-	// **Never read racily, by construction rather than by care.** The only writers are `allocate`,
-	// before the memory is reachable at all, and — with #554 — `Spawn`'s walk, which runs while
-	// exactly one thread exists. A flag written before any second thread starts is a fact about
-	// the past, which is precisely what decision 0056 rejects option (C) for not being.
+	// **Never read racily, and now for one reason instead of two.** `allocate` is the *only* writer,
+	// and it runs before the memory is reachable at all. This used to name `Spawn`'s walk as a second
+	// writer, safe because it ran while exactly one thread existed; [ADR 0068][0068] deleted the walk,
+	// so the "fact about the past" argument no longer rests on a spawn-time window at all. A flag
+	// written before any second thread starts is what decision 0056 rejects option (C) for not being.
 	noMove bool
 
 	// growMu serialises `grow` against `grow`, which is decision 0061 and is what makes the length
@@ -225,28 +227,38 @@ func (m *memory) view() []byte { return m.img.Load().bytes }
 // known on the branch that needs it. Cited by symbol rather than by line per ADR 0047, so that
 // `TestSymbolCitationsResolveToADeclaration` checks it and an insertion above it cannot re-point it.
 //
-// The branch on `Shared` is stated rather than hidden: an unshared memory has no second observer by
-// construction, so §0's performance partisanship says leave its allocate-and-blit alone rather than
-// reserve address space no guest can race for.
+// The branch on `Shared` is stated rather than hidden: §0's performance partisanship says leave an
+// unshared memory's allocate-and-blit alone rather than reserve address space for a guarantee it does
+// not need.
 //
-// **"By construction" now has a tripwire, because it is a claim about reachability that this tree is
-// about to falsify.** `TestNothingInEngineCodeCreatesASecondObserver` fails on the first `go` statement
-// in engine code and carries the instruction to whoever writes it. The gate that looks obvious —
-// `limits.Shared` — is not sound: T-1's `Spawn` (#554) refuses an instance with no shared memory and
-// then runs the entry in the *same* instance, so a spawn-capable instance's unshared memories are
-// reachable from two threads too. **Decided in ADR 0056 (#572), and the `noMove` return value is this
-// function's half of it**: the flag below decides whether to reserve, and the mark it hands back is what
-// `grow` refuses on, so `limits.Shared` stops being the consumer's question. The other half is `Spawn`'s
-// walk, which relocates and marks the unreserved memories while exactly one thread exists (#554) — until
-// it lands, the sentence above is still true of every instance this engine can build, because no engine
-// code starts a goroutine. What the control cannot see is an embedder calling `Invoke` on one instance
-// from two goroutines, which nothing here documents either way.
+// **The reason used to be "an unshared memory has no second observer by construction", and spawn
+// falsified it.** T-1's `Spawn` refuses an instance with no shared memory and then runs the entry in
+// the *same* instance, so a spawn-capable instance's **unshared** memories are reachable from two
+// threads — which is why `limits.Shared` was never a sound gate for anything downstream, and why ADR
+// 0056 (#572) moved `grow`'s refusal onto the `noMove` mark this function returns. That is not what
+// makes the branch sound now.
+//
+// **What makes it sound is [ADR 0058][0058]'s publication, not a reachability claim at all.** `img` is
+// an `atomic.Pointer[memImage]`, so replacing a backing array is memory-safe for *every* memory, marked
+// or not: a concurrent reader either sees the whole old image or the whole new one, never a fresh length
+// against a stale pointer (#556). So an unreserved memory relocating under a second thread is no longer
+// a safety question, and the reservation is a pure optimisation — which is the form §0 lets this
+// function decide on its own. What remains is coherence: writes made through the older image are lost,
+// which the spec permits for plain accesses on a non-shared memory and does not describe for atomics.
+// Filed as **#586**, needing §4 (**#10**) to speak.
+//
+// The census that keeps the *authorisation* honest is
+// `internal/testenv/observer_test.go:TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`: every `go`
+// in engine code must be at a site a decision names, module-wide. What it cannot see is an embedder
+// calling `Invoke` on one instance from two goroutines, which nothing here documents either way.
 //
 // **The reservation is capped, because reserving `max` outright was pre-registered and measured too
 // expensive.** ADR 0051 forecast under 1 ms for the largest declaration the address width allows and
 // stated the rollback in advance; the measurement came back at 4.3 ms best and **855 ms worst** for
 // `(memory 1 65535 shared)`, three orders over, so the rollback fired. `sharedReservePages` is that
 // cap. What is *not* the registered rollback is what happens above it — see `grow`.
+//
+// [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
 func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 	if !lim.Shared || !lim.HasMax {
 		return make([]byte, n), false, nil
@@ -267,8 +279,10 @@ func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 	// because it looks like it needs code.** Where the declared max is at or below the cap the
 	// reservation *is* the max, so arm 1 covers every legal growth and the engine limit can never
 	// bite: `grow` refuses above `limits.Max` on the module's own declaration, one check earlier.
-	// The refusal therefore reaches only a memory whose max exceeds the cap — or, once #554's walk
-	// marks memories that never declared one, a memory with no max at all.
+	// The refusal therefore reaches only a memory whose max exceeds the cap, and that is now the whole
+	// population rather than the first half of one. This used to add *"or, once #554's walk marks
+	// memories that never declared one, a memory with no max at all"*; [ADR 0068][0068] deleted the
+	// walk, so no memory without a declared max is ever marked and the second arm has no members.
 	return make([]byte, n, reserve), true, nil
 }
 
@@ -284,10 +298,19 @@ func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 // `TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal` does with it.
 //
 // **The excluded programs, stated because the limit changes which programs run.** A memory carrying
-// `noMove` whose declared max exceeds `sharedReservePages` cannot grow past that cap. Today that is a
-// shared memory declaring more than 128 pages — and nothing in either corpus reaches it, since no
-// vector grows a shared memory at all. With #554 it is also every memory in an instance that has
-// spawned, including the unshared ones, which is the population that makes this worth naming.
+// `noMove` whose declared max exceeds `sharedReservePages` cannot grow past that cap. That is a shared
+// memory declaring more than 128 pages, and nothing in either corpus reaches it, since no vector grows
+// a shared memory at all.
+//
+// **The population did not widen when spawn landed, and it would have.** This used to read *"with #554
+// it is also every memory in an instance that has spawned, including the unshared ones"* — which was
+// true of ADR 0056's walk, since the walk reserved through `allocate` and every reservation is capped
+// here. [ADR 0068][0068] deleted the walk on exactly that finding: keeping it would have narrowed which
+// programs run, capping *unshared* memories in a spawned instance at 8 MiB of growth, in exchange for a
+// coherence guarantee #575 proved the walk cannot deliver. So the excluded set is the same set it was
+// before spawn existed.
+//
+// [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
 var growthRefusedPastReservation atomic.Uint64
 
 // sharedReservePages caps how much capacity a shared memory reserves at instantiation, in pages.
@@ -568,8 +591,15 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 // array racing the reallocating arm's `copy` is still lost — it landed in the array this function is
 // abandoning. That is decision 0058's coherence residual, it is filed as **#586**, it needs §4 to say
 // what is permitted before code can be right about it, and `noMove` below is what excludes it for a
-// shared memory. `Spawn` reaches none of this today: no engine code starts a goroutine, so the
-// population is an embedder calling `Invoke` on two goroutines.
+// shared memory. **`Spawn` now reaches it, and that is the population change this slice makes.** This
+// used to say no engine code starts a goroutine, so the only racing party was an embedder calling
+// `Invoke` on two goroutines; [ADR 0068][0068] lands T-1, so the population is also a spawned thread of
+// the same instance storing into an **unshared** memory that another thread grows. Not memory unsafety —
+// [0058]'s atomic publication covers that for every memory — and not reachable on a shared memory,
+// which `allocate` reserves and therefore marks.
+//
+// [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
+// [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
 func (m *memory) grow(delta uint64) int64 {
 	m.growMu.Lock()
 	defer m.growMu.Unlock()
@@ -660,12 +690,16 @@ func (m *memory) grow(delta uint64) int64 {
 		//
 		// **The condition is `noMove` and not `limits.Shared`, which is decision 0056.**
 		// `limits.Shared` is not a sound answer to "may this array be replaced": T-1's
-		// `Spawn` (#554) runs a second thread in the *same* instance, so a spawn-capable
+		// `Spawn` runs a second thread in the *same* instance, so a spawn-capable
 		// instance's **unshared** memories are reachable from two threads too, and a
 		// `Shared`-gated refusal drops them onto the arm below that moves the pointer. The
 		// mark says what this arm needs to know; the flag says what `allocate` needed to
-		// know. Behaviour today is identical — shared ⇒ reserved ⇒ marked — which is why the
-		// unit control above is the only witness there can be.
+		// know. Behaviour is identical — shared ⇒ reserved ⇒ marked — which is why the
+		// unit control above is the only witness there can be, and why spawn landing did
+		// not change which memories reach which arm: ADR 0068 deleted the walk that would
+		// have marked the unshared ones, deliberately, so the two-thread case just
+		// described reaches the relocating arm below and is answered there by publication
+		// rather than by refusal.
 		//
 		// **And it is a named engine limit rather than an anonymous `-1`**, which is the
 		// second of the two conditions decision 0056's ruling carries. The `-1` is shared
@@ -687,8 +721,16 @@ func (m *memory) grow(delta uint64) int64 {
 		// changed from memory unsafety to a lost update in the value domain, which the spec permits
 		// for plain accesses on a memory that is not shared and does not describe for atomics on one.
 		// That is why `noMove` stays: a reserved memory never reaches this arm, so no agent is ever
-		// left behind on a shared memory. The residual is filed as **#586**, a fifth precondition on
-		// unparking `Spawn` rather than a defect in this arm.
+		// left behind on a shared memory. The residual is filed as **#586**.
+		//
+		// **It used to call #586 "a fifth precondition on unparking `Spawn`", and landing spawn
+		// falsified that word rather than discharging the residual.** ADR 0068 states why: the
+		// population #586 names is an **unshared** memory in an instance that has spawned, grown
+		// while another thread holds an older image — narrow, not memory unsafety, and needing §4
+		// (**#10**) to say what is permitted before code here can be right about it. Waiting for
+		// that would have parked T-1 behind a subject that is itself parked. So spawn landed and
+		// #586 is a named residual with a stated population instead of a gate, which is the honest
+		// of the two readings and the one a reader of this arm needs.
 		grown := make([]byte, n)
 		copy(grown, cur)
 		m.img.Store(&memImage{bytes: grown})

@@ -24,11 +24,16 @@ var ErrStopDeadline = errors.New("burroughs: stop deadline expired before every 
 // **Its extent is one `Instance`, and that is a named limit rather than the intended end state.** A
 // shared memory spans instances — [ADR 0052]'s own reason for making the §4 boundary edge a
 // package-level counter — so a stop that covers one instance does not cover every thread that can
-// touch a given memory. What makes this the right scope *today* is that `Spawn` is parked (see
-// `thread`), so an instance has exactly one thread and "every thread of this instance" and "every
-// thread that can reach this memory" name the same set. They stop naming the same set the moment
-// spawn unparks across instances, which is #515's own SP-4 work and is tracked there rather than
-// implied to be handled here.
+// touch a given memory.
+//
+// This paragraph used to say the scope was right *today* because `Spawn` was parked, so "every thread
+// of this instance" and "every thread that can reach this memory" named the same set. **`Spawn` has
+// landed and that sentence is now false**, which is why it is replaced rather than annotated: an
+// instance can have N threads, and a second instance sharing the memory has its own world. What
+// [ADR 0068] does about it is refuse the case it cannot express — a spawn whose entry resolves into
+// another instance (`ErrForeignEntry`) — so a *reachable* thread is still always a member of the world
+// that would stop it. What stays out of reach is a thread of an instance that reached the same shared
+// memory by importing it, which was already true before spawn and is #515's own SP-4 work.
 //
 // [ADR 0052]: ../../docs/decisions/0052-the-4-boundary-edge-is-one-package-level-sequentially-consistent-counter-because-a-shared-memory-spans-instances.md
 type world struct {
@@ -48,16 +53,54 @@ type world struct {
 	// safepoint and unable to say so, which is the one deadlock this protocol can have.
 	arrived chan ThreadID
 
-	// members is every thread of this instance. One entry today, because spawn is parked; the slice
-	// rather than a single field is what lets `Stop`'s arrival count be a count rather than a bool,
-	// so SP-4's N-thread case changes the population and not the protocol.
+	// members is every thread of this instance: the instantiation-time thread plus one per `Spawn`.
+	// The slice rather than a single field is what let SP-4's N-thread case change the population and
+	// not the protocol, which is now a landed fact rather than a forecast.
+	//
+	// **It only grows.** A terminated thread stays here, and reads as at a safepoint on
+	// `blocked == callers == 0`, so it never holds up a round — true rather than lucky, since a dead
+	// thread cannot touch guest memory. Reaping needs a thread lifecycle to hook it to, which is T-5,
+	// contract §10.3, **#12**. Until then a long-lived instance that spawns in a loop leaks one entry
+	// per spawn, and every `Stop` walks them all.
 	members []*thread
 }
 
-// register adds a thread to the world. Called once per thread at creation.
+// register adds the instantiation-time thread to the world. Called once, from `link.go`, and it
+// cannot fail: no stop can be in progress on an instance no caller has been handed yet.
 func (w *world) register(t *thread) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.addLocked(t)
+}
+
+// admit adds a spawned thread to the world, or refuses because a stop is in progress.
+//
+// **The check and the append are one critical section, and that indivisibility is the whole
+// soundness argument** ([ADR 0068][0068]). `Stop` sizes `arrived` to the membership it observed under
+// this same mutex, so a member appended mid-round is an (N+1)th potential sender into N slots, and a
+// thread that blocks on that send is *at a safepoint and unable to say so* — see `arrived`. Split
+// into a read and a later append, the refusal would be advisory: a `Stop` could begin between them
+// and the new thread would join a round that has already counted its senders.
+//
+// The complementary direction is `Stop`'s own `w.resume != nil` guard, so the two orderings are the
+// only two: either this refuses, or `Stop` observes the new member from the start.
+//
+// [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
+func (w *world) admit(t *thread) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.resume != nil {
+		return fmt.Errorf("%w: this instance has %d threads at or heading for a safepoint, and a "+
+			"member admitted mid-round would have no slot to announce itself in", ErrStopInProgress,
+			len(w.members))
+	}
+	w.addLocked(t)
+	return nil
+}
+
+// addLocked is the one place membership and `t.w` are established, so the invariant that a member's
+// `w` points back at the world holding it cannot be half-kept by one of two callers. `w.mu` held.
+func (w *world) addLocked(t *thread) {
 	w.members = append(w.members, t)
 	t.w = w
 }
