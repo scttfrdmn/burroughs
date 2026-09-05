@@ -75,6 +75,13 @@ weakly-ordered platform.
       would promise a tear-free read of bytes the guest may write plainly. The granularity is asserted:
       a host call reading once costs 6 crossings, reading and writing costs 8, and a refusal for want of a
       memory costs none.
+    - **A closure claim in the tree is a precondition of the merge, not a consequence of it** — minted by
+      this slice's own red `citations` job, which read one added line saying *"the slice that closed #602"*
+      against a tracker where #602 was still open, exactly the class
+      [#325](https://github.com/scttfrdmn/burroughs/issues/325) filed
+      ([citations.md](docs/laws/citations.md#a-closure-claim-in-the-tree-is-a-precondition-of-the-merge-not-a-consequence-of-it)).
+      The repair is closing the issue, never rewording the sentence, and `make check` cannot mirror the
+      check because its oracle is the tracker.
 
 - **`Instance.Spawn` — contract §2 T-1's thread spawn, a wasm thread backed 1:1 by an OS thread, behind
   `gate:threads` and not a default flip.** [#554](https://github.com/scttfrdmn/burroughs/pull/554),

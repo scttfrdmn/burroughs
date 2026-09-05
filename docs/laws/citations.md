@@ -447,3 +447,42 @@ reach is a law out of context.
   cannot attribute, a principal's statement about capability can**, and it is worth asking for before
   a provenance question is written down as unanswerable. (In-session ruling on the #622 slice,
   recorded by the actor it was given to; `Ratio-Class: carried`.)
+
+### A closure claim in the tree is a precondition of the merge, not a consequence of it.
+
+- **A closure claim in the tree is a precondition of the merge, not a consequence of it.** `citecheck.sh`'s
+  closure-claim check reads the lines a diff *adds* and compares each closure-shaped sentence about `#N`
+  against the tracker's live state, so a slice whose prose says *"the slice that closed #N"* fails its own
+  CI while `#N` is open. The ordering is not negotiable and it is the opposite of the intuitive one: the
+  issue is closed **before** the run that lands the sentence, not after the merge that discharges it.
+
+  **Specimen: PR [#652](https://github.com/scttfrdmn/burroughs/pull/652), red on `citations` at the first
+  push.** One added line in `docs/litmus-battery-preregistration.md` — *"The rows were re-pointed in the
+  slice that closed #602 rather than left for the …"* — with #602 still open, because the plan stated in
+  that PR's own body was to close it by hand after the merge. `make check` cannot see this: `cite` is a
+  separate target from `check`, and the half that fires needs the network and a base revision, so the
+  local mirror does not observe it. This is *[the maxim's
+  precondition](operations.md#the-maxims-precondition-the-mirror-holds-where-the-makefile-observes-a-superset-of-ci)*
+  and the gap is the answer rather than a Makefile bug: a check whose oracle is the tracker cannot be
+  mirrored by a target that reads the tree.
+
+  **The repair is the closure, not a rewording**, and the distinction is the whole entry. The sentence was
+  true about the slice and false about the world at the moment CI asked; the check's own message offers
+  exactly two remedies — close the issue, or say what the code does instead — and reaching for the second
+  when the work *is* done is phrasing around the instrument. So #602 was closed first, with its lesson in
+  the closing comment (#325) and its `decision-needed:scott` label dropped, because the queue-label
+  amendment under *[artifacts become oracles](graves-and-sweeps.md#artifacts-become-oracles)* says a label
+  is a claim about the world that a state transition does not make for you.
+
+  **The class was already filed, which is the part worth carrying.** [#325](https://github.com/scttfrdmn/burroughs/issues/325)
+  is open and its title names this exact shape — *"#204's fix says 'closing #204' in the tree while #204 is
+  open"* — so the check that fired is the instrument #325 asked for, and this entry is a fresh instance of a
+  known class rather than a discovery. Reading the tracker before writing the diagnosis is what establishes
+  which of the two it is, and the difference decides whether a slice mints a law or cites one.
+
+  **A re-run after this is not a flake claim.** The verdict changed because the tracker changed, which is
+  the check's documented remedy, and the cause is bounded to the one comparison the FAIL line names — the
+  bar *[a re-run green doesn't refute a fail](evidence-and-instruments.md#a-re-run-green-doesnt-refute-a-fail--explaining-the-fail-does)*
+  sets. What makes it citable
+  rather than convenient is that the fix ran in the failing direction first: the check was watched to fail
+  on the real defect before the tracker was touched.
