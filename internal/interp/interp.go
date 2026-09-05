@@ -788,7 +788,8 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	// `Stop` on that instance would wait out its whole deadline. Wrapping `in.run` counts exactly the
 	// thread the guest code runs on.
 	//
-	// **A plain call rather than a `defer`, and the draft that used `defer` cost 29 ns/call for it.** The
+	// **A plain call rather than a `defer`, and the draft that used `defer` paid 25–29 ns/call for it** —
+	// two independent measurements that do not quite agree, both in 0067's table. The
 	// reasoning for `defer` was that every error return below is a caller that has stopped executing —
 	// true, and it is exactly why the plain call covers them: all of them are *after* `in.run` returns, so
 	// uncounting here is not merely equivalent but tighter, dropping `callers` when guest execution ends
@@ -796,7 +797,7 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	// panic, and there is no `recover` on any non-test path in this package, so that case is an engine bug
 	// that has already left the instance undefined.
 	//
-	// The 29 ns is a compiler cliff and not one defer's cost: `invokeIndex`'s `defer leaveGuest()` is
+	// That cost is a compiler cliff and not one defer's: `invokeIndex`'s `defer leaveGuest()` is
 	// *open-coded*, a second defer took the function off that path, and `-gcflags=-S` shows four
 	// `runtime.deferprocStack` calls where base has none — so the second defer converted the first one
 	// too. Measured, attributed, and recorded here because the next person to add a `defer` to this

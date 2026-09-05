@@ -187,3 +187,45 @@ because it is the one place guest code runs outside `Invoke`.
   count of **threads**. With two callers on one thread it can say *"of 1"* while two callers exist. That is
   the same confusion in the *reporting* channel rather than in the predicate, it changes no verdict, and
   no witness here asserts it. Named so that a reader who finds it knows it was seen and left.
+
+## Measured — the rollback fired, and what it caught was not the design
+
+Three runs on `janus.local`'s `measured` group (Intel i9-9960X, linux/amd64, 0 concurrent tasks at submit),
+`scripts/ab.sh` at 12 rounds with `--null --graft`. The bar sat at **20.96–20.98 ns** in all three, and the
+`EmptyNull` arm tracked `Empty` to within 1% in all three, so the floor is an order of magnitude narrower
+than the bar and *compare the floor to the bar* is satisfied: this board adjudicates.
+
+| head | `Empty` base → head | delta | vs. the bar |
+|---|---|---|---|
+| the draft, `defer st.t.leaveCall()` | 157.8n → 197.0n | **+39.2 ns** | 1.87× — **rollback fired** |
+| attribution only, an unsound lockless pair | 158.6n → 187.8n | +29.2 ns | 1.39× |
+| **landed, a plain call after `in.run`** | 158.0n → 171.7n | **+13.7 ns** | **0.65× — criterion met** |
+
+**The rollback fired as pre-registered, and its own words were right: something other than the two pairs
+was being paid.** The middle row is what found it — an unsound lockless `enterCall`/`leaveCall`, never
+committed and restored the same hour, run purely to split the cost. With the mutexes gone the pair inlines
+(cost 18 against a budget of 80) and 29.2 ns of the 39.2 survived, so the mutex was never the subject.
+
+**What was being paid is a compiler cliff.** `invokeIndex` already had `defer leaveGuest()` and it was
+*open-coded*; a second defer takes the whole function off that path. `go build -gcflags=-S` shows **four
+`runtime.deferprocStack` calls in `invokeIndex` at the draft's head and none at base** — so the second defer
+converted the first one too, which is why the price was several times one defer's. The repair is a plain
+`st.t.leaveCall()` after `in.run` returns; the assembly returns to base's profile exactly, and the delta
+falls to +13.7 ns.
+
+Two independent routes to the defer's share, reported together because they do not agree exactly: removing
+it recovered **25.5 ns** (39.2 − 13.7), while the lockless arm isolated it at **~29.2 ns**. The ~4 ns gap is
+about a fifth of the bar and neither figure is derived from the other.
+
+**The plain call is also tighter than the defer, not merely cheaper.** The draft's comment justified `defer`
+on the ground that every error return below `in.run` is a caller that has stopped executing — which is true
+and is exactly why the plain call covers them: all of them are *after* `in.run` returns. `callers` now drops
+when guest execution ends rather than when result marshalling does. The only case `defer` additionally
+covered is a panic between the two, and this package has no `recover` on any non-test path, so that case is
+an engine bug that has already left the instance undefined.
+
+**The criterion was not touched.** No head-versus-base number existed when it was written; it was met on its
+third measurement by changing the code, and the two boards that failed it are in the table above rather than
+deleted. The delta that landed is **65% of the bar on the arm that is an upper bound by construction** —
+every other `Invoke`-driving package in the tree amortises the same pair across ≥1000 guest operations.
+

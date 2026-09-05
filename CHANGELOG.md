@@ -35,12 +35,15 @@ weakly-ordered platform.
     arm named as most sensitive was the tree's most diluted, by three orders of magnitude. Withdrawn
     **before** any number was taken, which is the only ordering that separates a withdrawal from shopping
     for a threshold.
-  - **Its own resolution was measured before the board existed, and it does not reach the effect.**
-    Identical source against identical source on the dev box: 131.9, 145.5, 168.5 and 312.9 ns/op on a row
-    of 5 allocs and 184 B per op, against a 4.249 ns bar — GC-dominated, so the floor is roughly an order of
-    magnitude wider than the two mutex pairs it was built to see. *Compare the floor to the bar*: the A/B on
-    the public path therefore excludes a gross regression and cannot confirm the pre-registered bound, which
-    is what it is reported as. The criterion did not move; the instrument's standing did.
+  - **Its own resolution was measured before the board existed, and the answer differed by host — which is
+    why it was measured on the host the verdict came from.** Identical source against identical source on the
+    dev box spanned 131.9, 145.5, 168.5 and 312.9 ns/op against a 4.249 ns bar, GC-dominated, a floor an
+    order of magnitude wider than the effect; that reading was recorded first and would have made the A/B a
+    gross-regression filter only. On `janus.local`'s `measured` group under `scripts/ab.sh`'s protocol the
+    same `EmptyNull` pair tracks `Empty` to **±1%** across all three runs taken, a floor far narrower than
+    the 20.96 ns bar. *Compare the floor to the bar* is therefore satisfied on the host that adjudicates and
+    was not on the one that does not, and the dev-box figure is kept rather than replaced because it is what
+    a reader reproducing this locally will see.
   - **No amplified arm is available, and that was checked rather than assumed.** `enterCall` sits at
     `invokeIndex` around `in.run`, so it fires once per `Invoke` — a guest `call` does not reach it, and a
     re-exported import's delegation chain returns through `ext.owner.invokeIndex` to a single `in.run`, so a
@@ -1739,6 +1742,18 @@ weakly-ordered platform.
   - **`ErrStopDeadline`'s message reports a count of threads**, so with two callers on one thread it can say
     *"of 1"* — the same confusion in the reporting channel rather than the predicate. It changes no verdict,
     nothing asserts it, and 0067 names it so a reader who finds it knows it was seen.
+  - **0067's pre-registered rollback fired at +39.2 ns against a 20.96 ns bar, and the mechanism landed
+    anyway because what fired it was a compiler cliff rather than the design.** The draft uncounted with
+    `defer st.t.leaveCall()`. An attribution run against an unsound lockless pair — never committed, restored
+    the same hour — kept 29.2 ns of the 39.2 with the mutexes gone, so the mutex was never the subject:
+    `invokeIndex`'s pre-existing `defer leaveGuest()` is *open-coded*, a second defer takes the whole function
+    off that path, and `-gcflags=-S` shows four `runtime.deferprocStack` calls at the draft's head and **none**
+    at base — the second defer converted the first. A plain `leaveCall()` after `in.run` restores base's
+    assembly profile exactly and brings the delta to **+13.7 ns, 0.65× the bar, criterion met on an unchanged
+    criterion.** It is also tighter than the defer rather than only cheaper: every error return the defer's
+    comment cited is *after* `in.run` returns, so `callers` drops when guest execution ends instead of when
+    result marshalling does, and the only case `defer` additionally covered is a panic in a package with no
+    `recover` on any non-test path.
 
 - **Two comments that described today's only caller in the shape of a restriction**
   ([grave #645](https://github.com/scttfrdmn/burroughs/issues/645)), found by scoping
