@@ -3,6 +3,8 @@ package interp
 import (
 	"fmt"
 	"math"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -71,22 +73,62 @@ func uninitializedElem(i uint64) *Trap {
 	return &Trap{Reason: fmt.Sprintf("uninitialized element %d", i)}
 }
 
-// table is one table: its slots and the type that bounds them.
+// tabImage is the published header of a table's slots — [decision 0065][0065]'s transfer of
+// [0058][0058]'s `memImage` to this subject, and the two comments there carry over without
+// alteration: the *contents* are written all the time, the three words naming the array are written
+// once before the descriptor is reachable and never again, and it is a struct rather than an
+// `atomic.Pointer[[]ref]` because the type is where the immutability is stated.
+//
+// **The field lives here and nowhere else, which is 0065's own increment.** `table` below holds no
+// slice, so `t.slots` is a compile error rather than a shape a control has to watch for — the
+// difference between a claim that holds by construction and one that holds by a scan (ADR 0064 had
+// to buy the second kind).
+//
+// [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
+// [0065]: ../../docs/decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md
+type tabImage struct {
+	// slots is the table's contents. Its length is the current size — the reference reads
+	// `size` back out of the array (`table.ml:36-37`) rather than keeping a counter, and a
+	// second place holding the same fact is how the two drift.
+	slots []ref
+}
+
+// table is one table: a published image of its slots and the type that bounds them.
 //
 // **A flat `[]ref` grown by reallocation**, which is `table.ml`'s own shape (`create` makes an
-// array of a fill value, `grow` allocates and blits) — the same non-decision memory's flat
-// `[]byte` is, and for the same §1 reason: the thesis workload wants a steady state with no
-// indirection per access.
+// array of a fill value, `grow` allocates and blits), behind the one indirection
+// [decision 0065][0065] pays for. What §1's workload wants is a table whose *steady state* is a
+// single contiguous slice, which this is; the sentence here used to add *"with no indirection per
+// access"* and 0065 falsifies that half exactly as 0058 falsified memory's, so it is removed rather
+// than left for a reader to trust.
+//
+// **Every grow relocates, and there is no `noMove` mark**, which is a stated difference from memory
+// rather than an omission — 0065's decision 6. Memory reserves capacity because ADR 0051's atomics
+// hold a raw pointer into the array across an access; nothing addresses a table atomically, and the
+// threads proposal at this pin has no shared tables, so there is no reservation to reslice into.
 //
 // The element type is `ref`, the struct 0002 pinned before it had a consumer, and this is that
 // consumer arriving. A `[]uint32` of function indices would have been smaller and would have
 // conflated `ref.null func` with function 0 — precisely the fact `ref.Null` exists to carry, and
 // precisely the distinction `uninitialized element` versus a successful call turns on.
+//
+// [0065]: ../../docs/decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md
 type table struct {
-	// slots is the table's contents. Its length is the current size — the reference reads
-	// `size` back out of the array (`table.ml:36-37`) rather than keeping a counter, and a
-	// second place holding the same fact is how the two drift.
-	slots []ref
+	// img is the current published image. Read it once per operation and use the slice it names for
+	// the whole of that operation — **two loads in one bounds-check-then-access pair is the defect
+	// this field exists to prevent**, since the second load may name a different array than the one
+	// the check approved. `TestEveryOperationLoadsAPublishedImageAtMostOnce` is the control.
+	img atomic.Pointer[tabImage]
+
+	// growMu serialises `grow` against `grow`, which is ADR 0061 transferred to this subject with its
+	// reason and not only its shape: the length lives in two places — this image's slice length and
+	// `limits.Min` below — and only one of them is in the descriptor, so a compare-and-swap over
+	// `img` would relocate the defect to the copy it cannot reach. Both writes are inside the
+	// section.
+	//
+	// There is no lock order to get wrong, for memory's reason one file over: `grow` is the only
+	// taker and it takes nothing else.
+	growMu sync.Mutex
 
 	// limits is the declared type, kept for the same reason memory.limits is: `grow` needs the
 	// max and the index width to decide whether a delta is legal, and `table.grow` is the next
@@ -170,7 +212,12 @@ func (in *Instance) newTable(t binary.Table) (*table, error) {
 	for i := range slots {
 		slots[i] = v.ref
 	}
-	return &table{slots: slots, limits: lim, elemType: t.ElemType, mod: in.mod}, nil
+	tab := &table{limits: lim, elemType: t.ElemType, mod: in.mod}
+	// The first publication, and it happens here rather than lazily in `view` for 0058's reason on
+	// `allocate`: a lazily-initialised image would need a nil check on every access, and every path
+	// out of this constructor either returns an error above or a table whose image is stored.
+	tab.img.Store(&tabImage{slots: slots})
+	return tab, nil
 }
 
 // refSize is one slot's size in bytes for the allocation checks above and in `grow`. It bounds
@@ -225,9 +272,21 @@ func validTableSize(lim binary.Limits, n uint64) bool {
 	return n <= maxElems32
 }
 
+// view is the currently published slot array — `(*memory).view`'s twin, and it carries that name
+// deliberately rather than for symmetry: `TestEveryOperationLoadsAPublishedImageAtMostOnce` matches
+// on the selector, so naming this `view` puts tables inside the existing load-once control instead
+// of asking for a fourth one (0065's decision 2).
+//
+// Hold the result for the whole of one operation; do not call this twice in one.
+func (t *table) view() []ref { return t.img.Load().slots }
+
 // size is the table's size in elements, read from the backing slice rather than from a counter
 // (`table.ml:36-37`).
-func (t *table) size() uint64 { return uint64(len(t.slots)) }
+//
+// **This is itself an image load**, which is why the control counts `size` alongside `view`: a caller
+// that checks a bound against `size()` and then indexes `view()` has taken two loads and may check
+// one array while accessing another.
+func (t *table) size() uint64 { return uint64(len(t.view())) }
 
 // load reads slot i for `call_indirect`'s dispatch, trapping `undefined element i` when it is
 // out of bounds — `any_ref`'s wrapper (`eval.ml:122-124`), which is the string only `func_ref`
@@ -243,10 +302,11 @@ func (t *table) size() uint64 { return uint64(len(t.slots)) }
 // wraps one shared primitive differently at each call site rather than sharing a wrapper. `get`
 // below is that second wrapper.
 func (t *table) load(i uint64) (ref, error) {
-	if i >= t.size() {
+	slots := t.view()
+	if i >= uint64(len(slots)) {
 		return ref{}, undefinedElem(i)
 	}
-	return t.slots[i], nil
+	return slots[i], nil
 }
 
 // get reads slot i for `table.get`, trapping `out of bounds table access` when it is out of
@@ -254,10 +314,11 @@ func (t *table) load(i uint64) (ref, error) {
 // Unlike `call_indirect`'s dispatch, `table.get` returns a null slot as a value rather than
 // resolving it further, so there is no second question for a `func_ref`-shaped wrapper to ask.
 func (t *table) get(i uint64) (ref, error) {
-	if i >= t.size() {
+	slots := t.view()
+	if i >= uint64(len(slots)) {
 		return ref{}, trapOOBTable
 	}
-	return t.slots[i], nil
+	return slots[i], nil
 }
 
 // store writes r into slot i, trapping `out of bounds table access` when i is out of bounds —
@@ -272,10 +333,11 @@ func (t *table) get(i uint64) (ref, error) {
 // `store`'s own guard; `load` and `blit` have no such check because *they* never receive a value
 // to compare.
 func (t *table) store(i uint64, r ref) error {
-	if i >= t.size() {
+	slots := t.view()
+	if i >= uint64(len(slots)) {
 		return trapOOBTable
 	}
-	t.slots[i] = r
+	slots[i] = r
 	return nil
 }
 
@@ -291,8 +353,30 @@ func (t *table) store(i uint64, r ref) error {
 // declaration matches reality. `table_grow.wast`'s own corpus vectors are the sibling of
 // `imports4.wast`'s memory case, not yet measured because this arm did not exist to grow
 // anything for them to see.
+// # Serialised against itself, and both copies of the size are inside the section
+//
+// `growMu` is ADR 0061's mutex with the subject swapped, and 0061's title is why a compare-and-swap
+// over `img` is not the answer: the length lives in two places — the image's slice and
+// `t.limits.Min`, which `type_of` reads at import-match time — and a CAS reaches only the one in the
+// descriptor, relocating the read-compute-write to the copy it cannot see. Two threads growing one
+// table would then both read the same old size and one of the two successes would be a lie.
+//
+// The section is also why `img` is loaded **once** here: two loads would be correct under the lock,
+// and one is what makes them obviously so.
+//
+// **What the lock does not buy, because the racing party takes no lock:** a `table.set` into the old
+// array is lost, having landed in the array this function abandons. That is 0058's coherence residual
+// with the subject swapped — the table's twin of **#586** — it needs §4 (#10) to say what is
+// permitted before code can be right about it, and it is the half 0065's mechanism deliberately does
+// not repair. What the mechanism *does* buy is that the abandoned array stays alive and in bounds for
+// every reader still holding the descriptor that names it, so a stale read is a stale value rather
+// than an out-of-bounds access.
 func (t *table) grow(delta uint64, r ref) int64 {
-	old := t.size()
+	t.growMu.Lock()
+	defer t.growMu.Unlock()
+
+	cur := t.view()
+	old := uint64(len(cur))
 	newSize := old + delta
 	if newSize < old { // 64-bit wrap: `I64.gt_u old_size new_size`
 		return -1
@@ -307,11 +391,14 @@ func (t *table) grow(delta uint64, r ref) int64 {
 		return -1
 	}
 	grown := make([]ref, newSize)
-	copy(grown, t.slots)
+	copy(grown, cur)
 	for i := old; i < newSize; i++ {
 		grown[i] = r
 	}
-	t.slots = grown
+	// A fresh descriptor, stored once — never an assignment through `t.img.Load()`, which would
+	// rewrite the three words a reader may be dereferencing and restore the exact hazard 0065 removes.
+	// `TestAPublishedImageIsImmutableOnceStored` is the control on that.
+	t.img.Store(&tabImage{slots: grown})
 	t.limits.Min = newSize
 	return int64(old)
 }
@@ -322,12 +409,13 @@ func (t *table) grow(delta uint64, r ref) int64 {
 // (`eval.ml:375-392`) is a recursive store-then-recurse; a loop over the reference's own bound
 // check is the same effect without staging n synthetic instructions to re-enter this opcode.
 func (t *table) fill(i, n uint64, r ref) error {
+	slots := t.view()
 	end := i + n
-	if end < i || end > t.size() { // `lt_u (add i n) i || gt_u (add i n) j`
+	if end < i || end > uint64(len(slots)) { // `lt_u (add i n) i || gt_u (add i n) j`
 		return trapOOBTable
 	}
 	for k := i; k < end; k++ {
-		t.slots[k] = r
+		slots[k] = r
 	}
 	return nil
 }
@@ -343,11 +431,12 @@ func (t *table) fill(i, n uint64, r ref) error {
 // and that is what this is. An empty run at exactly the end stays in bounds either way, which
 // is the case the two forms are most easily assumed to differ on.
 func (t *table) blit(offset uint64, rs []ref) error {
+	slots := t.view()
 	end := offset + uint64(len(rs))
-	if end < offset || end > t.size() { // `lt_u (add i n) i || gt_u (add i n) j`
+	if end < offset || end > uint64(len(slots)) { // `lt_u (add i n) i || gt_u (add i n) j`
 		return trapOOBTable
 	}
-	copy(t.slots[offset:], rs)
+	copy(slots[offset:], rs)
 	return nil
 }
 
@@ -427,7 +516,7 @@ func (in *Instance) runElem(idx int, seg *binary.ElemSegment) error {
 		}
 		// Offset 0 with an empty segment is in bounds for a zero-length table, which blit gets
 		// right for free — the same freebie write gets, and for the same reason.
-		if err := tab.blit(off, inst.refs); err != nil {
+		if err := tab.blit(off, inst.view()); err != nil {
 			return err
 		}
 	}

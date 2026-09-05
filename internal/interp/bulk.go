@@ -203,13 +203,19 @@ func (in *Instance) execTableCopy(ins binary.Instr, st *stack) error {
 	s := tableAddr(srcTab, st.popNum())
 	d := tableAddr(dstTab, st.popNum())
 
-	if outOfBounds(d, n, dstTab.size()) || outOfBounds(s, n, srcTab.size()) {
+	// **Two tables, so two image loads, and each is used for both of its own uses** (decision 0065,
+	// which is 0058's rule with the subject swapped). `x` and `y` may be the same table, in which case
+	// the two descriptors are the same pointer and the copy is within one array exactly as before.
+	dstSlots := dstTab.view()
+	srcSlots := srcTab.view()
+	if outOfBounds(d, n, uint64(len(dstSlots))) ||
+		outOfBounds(s, n, uint64(len(srcSlots))) {
 		return trapOOBTable
 	}
 	if n == 0 {
 		return nil
 	}
-	copy(dstTab.slots[d:d+n], srcTab.slots[s:s+n])
+	copy(dstSlots[d:d+n], srcSlots[s:s+n])
 	return nil
 }
 
@@ -262,13 +268,18 @@ func (in *Instance) execTableInit(ins binary.Instr, st *stack) error {
 	s := st.popNum()
 	d := tableAddr(tab, st.popNum())
 
-	if outOfBounds(d, n, tab.size()) || outOfBounds(s, n, seg.size()) {
+	// One image load per subject, each used for its own bound and its own access (decision 0065). The
+	// segment needs one now too: `drop` publishes an empty image, so a `size()` here followed by a
+	// separate read of the refs could bound against the pre-drop length and index the dropped image.
+	slots := tab.view()
+	refs := seg.view()
+	if outOfBounds(d, n, uint64(len(slots))) || outOfBounds(s, n, uint64(len(refs))) {
 		return trapOOBTable
 	}
 	if n == 0 {
 		return nil
 	}
-	copy(tab.slots[d:d+n], seg.refs[s:s+n])
+	copy(slots[d:d+n], refs[s:s+n])
 	return nil
 }
 
@@ -296,17 +307,20 @@ func (in *Instance) execMemoryInit(ins binary.Instr, st *stack) error {
 	s := st.popNum()
 	d := mem.addr(st.popNum())
 
-	// One image load for both of the memory's uses (decision 0058). The segment needs none: a
-	// `dataInstance`'s bytes are replaced only by `drop`, which is not concurrent with anything in
-	// this slice, and #573 rather than 0058 is where that question lives.
+	// One image load for both of the memory's uses (decision 0058), and one for the segment's — which
+	// this comment used to say was unnecessary, on the ground that *"a `dataInstance`'s bytes are
+	// replaced only by `drop`, which is not concurrent with anything in this slice, and #573 rather
+	// than 0058 is where that question lives."* #573 split, #622 took that half, and decision 0065 is
+	// where it landed: the segment publishes an image too, so the pair here is symmetric.
 	bs := mem.view()
-	if outOfBounds(d, n, uint64(len(bs))) || outOfBounds(s, n, seg.size()) {
+	segBs := seg.view()
+	if outOfBounds(d, n, uint64(len(bs))) || outOfBounds(s, n, uint64(len(segBs))) {
 		return trapOOB
 	}
 	if n == 0 {
 		return nil
 	}
-	copy(bs[d:d+n], seg.bytes[s:s+n])
+	copy(bs[d:d+n], segBs[s:s+n])
 	return nil
 }
 

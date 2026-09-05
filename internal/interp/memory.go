@@ -199,7 +199,9 @@ func newMemory(m binary.Memory) (*memory, error) {
 // local and does its bounds check and its access against that one slice, because two calls can return
 // two different arrays and a check against the first authorises nothing about the second. That is not
 // a style preference — it is the entire content of [decision 0058][0058], and
-// `TestEveryMemoryOperationLoadsTheImageAtMostOnce` is what keeps it true as arms are added.
+// `TestEveryOperationLoadsAPublishedImageAtMostOnce` is what keeps it true as arms are added — named
+// for four subjects rather than one since decision 0065 gave `table` and both segment kinds the same
+// mechanism and the same `view` selector, which is what let one control cover all four.
 //
 // [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
 func (m *memory) view() []byte { return m.img.Load().bytes }
@@ -763,7 +765,7 @@ func (in *Instance) runData(idx int, seg *binary.DataSegment) error {
 	// gets right for free: `n == 0` makes the extent check `ea > len`, and ea is 0.
 	//
 	// A trapping copy does not drop, for `runElem`'s reason and with the same ordering.
-	if err := mem.write(off, 0, inst.bytes); err != nil {
+	if err := mem.write(off, 0, inst.view()); err != nil {
 		return err
 	}
 	inst.drop()

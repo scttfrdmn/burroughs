@@ -343,12 +343,12 @@ func (in *Instance) build() *Trap {
 			// comment: a later `table.init` then reports out-of-bounds instead of panicking, and
 			// the real reason travels on `deferred`.
 			in.deferred = errors.Join(in.deferred, err)
-			seg = &elemInstance{}
+			seg = newElemInstance(nil)
 		}
 		in.elems[i] = seg
 	}
 	for i := range m.Datas {
-		in.datas[i] = &dataInstance{bytes: m.Datas[i].Init}
+		in.datas[i] = newDataInstance(m.Datas[i].Init)
 	}
 	for i := range m.Elems {
 		if err := in.runElem(i, &m.Elems[i]); err != nil {

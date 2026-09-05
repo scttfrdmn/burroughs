@@ -1409,10 +1409,17 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// The result's *type* follows the memory's address width: an i64 memory's
 			// size is an i64. `addrtype_of` is what the reference consults, which is
 			// why Limits.Addr64 is retained.
+			//
+			// **One `size()` call, hoisted above the branch**, because `size` is an
+			// image load (decision 0058) and the load-once control counts it as one:
+			// the two arms are mutually exclusive, so a call in each was never two
+			// loads on any single execution — but it reads as two to a scan, and
+			// hoisting is what the rule asks for anyway.
+			sz := mem.size()
 			if mem.limits.Addr64 {
-				st.pushI64(int64(mem.size()))
+				st.pushI64(int64(sz))
 			} else {
-				st.pushI32(int32(uint32(mem.size())))
+				st.pushI32(int32(uint32(sz)))
 			}
 
 		case 0x40: // memory.grow

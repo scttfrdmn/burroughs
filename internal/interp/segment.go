@@ -2,6 +2,7 @@ package interp
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
@@ -39,42 +40,92 @@ import (
 // parameter earning one line; the cost of not sharing is that `drop` is written twice, and the
 // cost of sharing would be a generic in the load-bearing spot for it (0006).
 
+// The two published images — [decision 0065][0065]'s transfer of `memImage` to the two segment
+// kinds, one struct each for the reason `tabImage`'s comment gives: the slice field lives inside the
+// image and nowhere else, so `s.refs` is a compile error rather than a shape a control has to watch
+// for. A drop then *publishes* the empty state instead of writing three words into an object another
+// thread may be dereferencing, which is the whole of #622 on this side.
+//
+// [0065]: ../../docs/decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md
+type elemImage struct {
+	refs []ref
+}
+
+type dataImage struct {
+	bytes []byte
+}
+
+// The dropped state, shared by every segment of its kind, because a published image is never written
+// after publication and therefore has nothing to distinguish one instance's from another's.
+//
+// **Shared rather than allocated per drop, and the reason is a guest loop.** `elem.drop` on an
+// already-dropped segment is legal and does nothing (`bulk.wast:261` drops twice), so a guest can
+// execute the opcode as often as it likes; a `&elemImage{}` per execution would be a
+// guest-triggered allocation per instruction for a value that is always the same one. 0065's
+// decision 5.
+var (
+	droppedElem = &elemImage{}
+	droppedData = &dataImage{}
+)
+
 // elemInstance is one element segment's runtime contents — `elem.ml`'s `Value.ref_ list ref`.
 //
-// `refs` nil and `refs` empty are the same state here, deliberately: the reference's `drop` is
+// The image's `refs` nil and empty are the same state here, deliberately: the reference's `drop` is
 // `seg := []`, and `Elem.size` of a dropped segment is 0. Nothing distinguishes "dropped" from
 // "declared empty", because nothing in the semantics asks — `elem.drop` on an already-dropped
 // segment is legal and does nothing (`bulk.wast:261` drops twice), which is only true if the
 // dropped state is a *value* rather than a flag.
 type elemInstance struct {
-	refs []ref
+	// img is the published image. One load per operation; see `tabImage`'s field comment and
+	// `TestEveryOperationLoadsAPublishedImageAtMostOnce`.
+	img atomic.Pointer[elemImage]
 }
 
+// view is the currently published references — named `view` for `table.view`'s reason: the load-once
+// control matches on the selector, so the name is what puts this subject inside it.
+func (s *elemInstance) view() []ref { return s.img.Load().refs }
+
 // size is the segment's length in elements — `Elem.size`, read off the slice rather than kept as
-// a counter, for the reason `table.slots` gives.
-func (s *elemInstance) size() uint64 { return uint64(len(s.refs)) }
+// a counter, for the reason `tabImage.slots` gives. It is itself an image load.
+func (s *elemInstance) size() uint64 { return uint64(len(s.view())) }
 
 // drop empties the segment — `Elem.drop`, `seg := []`.
 //
-// Set to nil rather than truncated to `refs[:0]`: the segment's backing array is the instance's
-// only reference to those refs, and a dropped segment that keeps it alive is a leak whose size is
-// the module's, not a subtlety. Semantically identical, since only `size` and `load` read it.
-func (s *elemInstance) drop() { s.refs = nil }
+// **A published empty image rather than an assignment**, which is #622: writing `s.refs = nil` into a
+// reachable object publishes three words one at a time, and a reader pairing the new nil pointer with
+// the old length indexes off address 0. Publishing a descriptor instead means a reader holds either
+// the old image entire or the empty one entire.
+//
+// The dropped image names no array, rather than a truncated `refs[:0]`: the segment's backing array is
+// the instance's only reference to those refs, and a dropped segment that keeps it alive is a leak
+// whose size is the module's, not a subtlety. Semantically identical, since only `size` and the bulk
+// arms read it.
+func (s *elemInstance) drop() { s.img.Store(droppedElem) }
+
+// newElemInstance publishes a segment's initial contents. It exists because the image field is
+// unexported *and* unnamed at the call sites by construction, so every construction of a segment goes
+// through one place — which is what makes "the image is stored before the instance is reachable" a
+// property of one function rather than an agreement between several.
+func newElemInstance(rs []ref) *elemInstance {
+	s := &elemInstance{}
+	s.img.Store(&elemImage{refs: rs})
+	return s
+}
 
 // A `load` method transcribing `Elem.load` stood here and had **no caller**, which `golangci-lint`
 // found and which is the classification question decision 0005 asks rather than an automatic bug.
 // The classification: delete it. `eval.ml:427` checks `elem_oob` over the whole extent *before*
 // reading, so the per-element bounds test is the redundant half of a belt-and-suspenders pair, and
-// `execTableInit` does the copy in one `copy(tab.slots[d:d+n], seg.refs[s:s+n])` — there is no
-// per-element read anywhere on this side.
+// `execTableInit` does the copy in one `copy(slots[d:d+n], refs[s:s+n])` off two loaded images —
+// there is no per-element read anywhere on this side.
 //
 // **The tell was the asymmetry, not the lint finding.** `dataInstance` has no `load` twin and never
 // needed one, because `execMemoryInit` slices its bytes the same way; a method written for one of two
 // parallel types is a method written from the *reference's* shape rather than from a consumer's
 // requirement. That is design in the load-bearing spot with no witness (0006), and it is the same
 // call `memory.go`'s closing note records for `errIsTrap`. Recorded rather than silently deleted
-// because the live requirement — the element-index bound is `outOfBounds(s, n, seg.size())`, on the
-// segment's own size and not the table's — is a real fact that `execTableInit` now carries alone.
+// because the live requirement — the element-index bound is on the *segment's* own length and not the
+// table's — is a real fact that `execTableInit` now carries alone.
 
 // dataInstance is one data segment's runtime contents — `data.ml`'s `string ref`.
 //
@@ -84,14 +135,27 @@ func (s *elemInstance) drop() { s.refs = nil }
 // already documents, carried one layer inward rather than copied — a copy per segment would
 // duplicate every module's data at instantiation for no semantic gain.
 type dataInstance struct {
-	bytes []byte
+	// img is the published image; `elemInstance.img`'s twin, and the same one-load-per-operation rule.
+	img atomic.Pointer[dataImage]
 }
 
-// size is the segment's length in bytes — `Data.size`.
-func (s *dataInstance) size() uint64 { return uint64(len(s.bytes)) }
+// view is the currently published bytes — `elemInstance.view`'s twin, same name for the same reason.
+func (s *dataInstance) view() []byte { return s.img.Load().bytes }
 
-// drop empties the segment — `Data.drop`, `seg := ""`.
-func (s *dataInstance) drop() { s.bytes = nil }
+// size is the segment's length in bytes — `Data.size`. Itself an image load.
+func (s *dataInstance) size() uint64 { return uint64(len(s.view())) }
+
+// drop empties the segment — `Data.drop`, `seg := ""`. `elemInstance.drop`'s twin; the argument for
+// publishing rather than assigning is there.
+func (s *dataInstance) drop() { s.img.Store(droppedData) }
+
+// newDataInstance publishes a segment's initial bytes — `newElemInstance`'s twin, and the same
+// single-construction-site reason.
+func newDataInstance(bs []byte) *dataInstance {
+	s := &dataInstance{}
+	s.img.Store(&dataImage{bytes: bs})
+	return s
+}
 
 // elemFor resolves an element segment index to its instance.
 //
@@ -129,5 +193,5 @@ func (in *Instance) allocElem(seg *binary.ElemSegment) (*elemInstance, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &elemInstance{refs: rs}, nil
+	return newElemInstance(rs), nil
 }
