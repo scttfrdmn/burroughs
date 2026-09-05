@@ -220,3 +220,109 @@ func TestANumericGlobalIsNotWrittenAndReadWithoutSynchronisation(t *testing.T) {
 			other, tearAgentIters)
 	}
 }
+
+// TestARefGlobalIsNotWrittenAndReadWithoutSynchronisation is the reference arm's witness — #573's third
+// arm, the one decision 0063 left open and decision 0066 settles with an atomic pointer.
+//
+// # The defect, and why it is worse than the numeric arm's
+//
+// A `ref` is **40 bytes**: two discriminator bools, two `uint32`s and three pointers
+// (`TestRefWidthIsMeasuredNotAssumed` pins the width). `set` wrote it as one plain struct assignment,
+// which the compiler lowers to five word stores, so a concurrent `global.get` can pair one write's
+// discriminator with another write's payload — a value no `global.set` in the module ever wrote. That is
+// the v128 arm's defect at 2.5× the width, and it is what falsified the *"only case above word width,
+// and rare in practice"* premise the earlier ruling rested on.
+//
+// # The oracle is `-race`, and the reason is not the one the numeric arm gives
+//
+// The numeric arm cannot tear on either architecture this engine targets, so its wrongness is
+// definitional — an unsynchronised read/write pair, undefined by the Go memory model — and only a
+// detector can see it. Here a tear is genuinely possible, and the oracle is still `-race`, because a
+// **guest-visible** value-level oracle is not available: the only thing wasm MVP lets a guest ask about
+// a reference it holds is `ref.is_null`, so distinguishing two *non-null* references from inside the
+// module needs `ref.eq` or `call_ref` — the function-references and GC proposals, both gated off here.
+// A host-side comparison through `value()` would be a different measurement (one boundary crossing per
+// observation) and would price the read loop rather than the field. So the value arm below is the weak
+// one and is kept for the same reason its numeric sibling keeps its own: it costs one comparison and it
+// is what would fire if the assumption behind the strong arm's absence were wrong.
+//
+// **So this control's verdict lives in CI's `race` step, not in `make check`** — inside the `build` job,
+// which is a two-architecture matrix, so the verdict is two readings. The numeric sibling above states
+// the same thing and states why naming that channel wrongly would be worse than not naming it.
+//
+// # Watched die
+//
+// With `ref` a plain field and `storeRef`/`loadRef` a plain assignment and a plain read — the shape
+// `main` carried before decision 0066 — `go test -race -run
+// TestARefGlobalIsNotWrittenAndReadWithoutSynchronisation ./internal/interp/` reports `WARNING: DATA
+// RACE`, the write at `interp.(*global).storeRef` inside `set` against the previous read at
+// `interp.(*global).get` — the read side is named for `get` rather than `loadRef` because the accessor
+// inlines, which is worth recording so a reader matching the report against this paragraph is not
+// looking for a frame the compiler removed. The mutation is the pre-0066 code, so the arm needs no
+// invention.
+//
+// # The vacuity arm
+//
+// A detector reports nothing if the agents never overlap. The reader therefore counts null and non-null
+// observations and **both must be non-zero**, which is what establishes that the window was open. The
+// writer alternates `ref.null func` and `ref.func $f`, so those two counts partition its reads.
+func TestARefGlobalIsNotWrittenAndReadWithoutSynchronisation(t *testing.T) {
+	src := fmt.Sprintf(`(module
+	  (func $f)
+	  (elem declare func $f)
+	  (global $g (mut funcref) (ref.null func))
+	  (func (export "write") (local $i i32)
+	    (block $done (loop $l
+	      (br_if $done (i32.eq (local.get $i) (i32.const %d)))
+	      (global.set $g (ref.null func))
+	      (global.set $g (ref.func $f))
+	      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+	      (br $l))))
+	  (func (export "read") (result i32 i32)
+	    (local $i i32) (local $nulls i32) (local $funcs i32)
+	    (block $done (loop $l
+	      (br_if $done (i32.eq (local.get $i) (i32.const %d)))
+	      (if (ref.is_null (global.get $g))
+	        (then (local.set $nulls (i32.add (local.get $nulls) (i32.const 1))))
+	        (else (local.set $funcs (i32.add (local.get $funcs) (i32.const 1)))))
+	      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+	      (br $l)))
+	    (local.get $nulls) (local.get $funcs)))`,
+		tearAgentIters, tearAgentIters)
+
+	in := buildTearModule(t, src)
+
+	werr := make(chan error, 1)
+	go func() {
+		_, err := in.Invoke("write")
+		werr <- err
+	}()
+	got, rerr := in.Invoke("read")
+	if err := <-werr; err != nil {
+		t.Fatalf("write agent: %v", err)
+	}
+	if rerr != nil {
+		t.Fatalf("read agent: %v", rerr)
+	}
+	if len(got) != 2 {
+		t.Fatalf("read returned %d values, want 2", len(got))
+	}
+	nulls, funcs := got[0].Int32(), got[1].Int32()
+
+	if nulls == 0 || funcs == 0 {
+		t.Fatalf("the reader saw %d nulls and %d function references in %d reads of a funcref global, "+
+			"so it never observed both values the writer stores — the agents did not overlap, and under "+
+			"`-race` this run exercised no concurrent access at all. This control measures nothing in "+
+			"this state", nulls, funcs, tearAgentIters)
+	}
+	// The two counts must also account for every read, which is the arm that fires if a torn reference
+	// were ever *reported* as neither — it cannot be, since `ref.is_null` is one bit and the `if` above
+	// is total. Written as an accounting check rather than dropped, because that totality is the reason
+	// the value-level oracle is unavailable here and a reader who does not know that will look for it.
+	if int(nulls)+int(funcs) != tearAgentIters {
+		t.Errorf("the reader accounted for %d + %d = %d of %d reads. `ref.is_null` partitions every "+
+			"observation, so any other total means the read loop did not run the advertised number of "+
+			"times and the vacuity arm above is checking a different population",
+			nulls, funcs, int(nulls)+int(funcs), tearAgentIters)
+	}
+}

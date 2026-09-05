@@ -1,21 +1,37 @@
 // Copyright 2026 Scott Friedman. SPDX-License-Identifier: Apache-2.0
 
-// Package globalbench measures [ADR 0063]'s cost on the two axes the decision splits: a numeric
-// global's single atomic word, and a v128 global's mutex-published pair.
+// Package globalbench measures the cost of publishing a global's value on the three axes the two
+// decisions split: [ADR 0063]'s numeric single atomic word and mutex-published v128 pair, and
+// [ADR 0066]'s atomic-pointer reference slot.
 //
-// # The four rows are the pre-registration's rows
+// # The six rows are two pre-registrations' rows
 //
-// #573's pre-registration names four forecasts and this package exists to answer them, one row each:
+// #573's first pre-registration names four forecasts and its second names four more about the reference
+// arm; this package exists to answer them, one row each:
 //
 //	GetI64    F1 — within noise. An atomic load is a MOVQ on amd64, an LDAR on arm64.
 //	SetI64    F2 — measurably slower. Direction only; a Store is a locked XCHG / an STLR.
 //	GetV128   F3 — measurably slower. A lock pair appears on a read path that had neither.
 //	SetV128   F4 — slower by roughly the same absolute amount as GetV128. **The discriminating row.**
+//	GetRef    R1 — within the null arm's excursion. An atomic pointer load is a MOVQ and the 40-byte
+//	               copy out happens in both arms, so the mechanism adds nothing to a read.
+//	SetRef    R2/R3 — measurably slower, direction only, and **decomposed**: the store's own share is
+//	               pre-registered at 0063's locked-XCHG figure, so the residual attributes to the
+//	               allocation. R3 says the allocation is the majority of it, which is the forecast most
+//	               likely to embarrass the mechanism and is registered in that direction deliberately.
 //
 // F4 is the one that decides whether the ADR may say where the cost is. The identical lock/unlock pair
 // is what was added to both v128 arms, so a v128 cost appearing on one side only is *not* the lock, and
 // the mechanism would not be where decision 0063 puts it. F5 — that the i64 and v128 deltas differ in
-// kind rather than degree — is read off the pair of pairs rather than measured by a fifth row.
+// kind rather than degree — is read off the pair of pairs rather than measured by a fifth row. R4 is
+// arm64's own bound and is read off the second architecture's board rather than from a seventh row.
+//
+// **The reference arm's base is the defect, not an alternative mechanism.** `main`'s plain 40-byte field
+// is wrong, so a delta against it is a *cost of correctness*. The comparison decision 0066 actually made
+// — atomic pointer against a mutex — is not a measured arm here, because
+// [#618](https://github.com/scttfrdmn/burroughs/issues/618) records `ab.sh` cannot A/B two mechanisms
+// inside one revision; the mutex comparator is 0063's decomposed `Lock`/`Unlock` figure, a **predicted**
+// comparator stated as predicted.
 //
 // # On loopbench's shape, and why that is not a stylistic choice
 //
@@ -37,8 +53,10 @@
 // Every arm has the identical shape and the identical trip count, differing only in *which* global
 // instruction fills the 16 slots. `TestTheArmsAreDenseAndDifferOnlyInTheGlobalOp` asserts both the
 // density and the difference, because a generator is only as trustworthy as the last edit to it, and
-// *a comparison needs a vacuity check*: four arms that had drifted to the same body would still print
-// four tidy percentages.
+// *a comparison needs a vacuity check*: arms that had drifted to the same body would still print a row
+// of tidy percentages. Its population is `arms`, so the reference pair joined it by being declared and
+// not by an edit to the control — which is the property #573's second pre-registration asked for when
+// it said the control is extended to six arms so the new pair cannot collapse onto an existing one.
 //
 // A null on any row is read against that density **and** against `--null`'s own spread — *compare the
 // floor to the bar*. Where the null arm's interval is no narrower than the effect being claimed, this
@@ -46,9 +64,10 @@
 //
 // # What this package does not do
 //
-// It does not measure the reference arm. `ref` is 40 bytes and out of #573's scope by the
-// pre-registration: which mechanism the wide cases get is still open on #573, so there is no
-// mechanism there to price. It also does not compare a mutex against a seqlock — that would need two
+// It no longer omits the reference arm — the two rows above are it, and the sentence that stood here
+// (*"`ref` is 40 bytes and out of #573's scope by the pre-registration"*) was true only while there was
+// no mechanism to price. Decision 0066 built one, so the omission would now be a claim about scope that
+// the tree contradicts. It does not compare a mutex against a seqlock — that would need two
 // mechanisms in one revision, which is exactly the comparison
 // [#618](https://github.com/scttfrdmn/burroughs/issues/618) records `ab.sh` cannot make. F3 *did* come
 // back dominated by the acquire — `GetV128` +41.73% on native x86-64, all of it the `Lock`/`Unlock` pair
@@ -58,6 +77,7 @@
 // conditional left standing after its condition is decided tells the next reader the question is open.
 //
 // [ADR 0063]: ../../../docs/decisions/0063-a-numeric-globals-single-word-goes-atomic-and-a-v128s-pair-goes-under-the-globals-own-mutex.md
+// [ADR 0066]: ../../../docs/decisions/0066-a-reference-globals-forty-byte-value-is-published-through-an-atomic-pointer-because-reads-are-the-hot-direction-and-a-mutex-taxes-every-get.md
 package globalbench
 
 import (
@@ -119,6 +139,8 @@ var arms = []arm{
 	{name: "setI64", op: "(global.set $gi64 (i64.const 1))"},
 	{name: "getV128", op: "(drop (global.get $gv128))"},
 	{name: "setV128", op: "(global.set $gv128 (v128.const i64x2 1 1))"},
+	{name: "getRef", op: "(drop (global.get $gref))"},
+	{name: "setRef", op: "(global.set $gref (ref.func $f))"},
 }
 
 // buildModule renders all four bodies into one module, so every arm runs against the same instance and
@@ -130,8 +152,14 @@ var arms = []arm{
 func buildModule() string {
 	var b strings.Builder
 	b.WriteString("(module\n")
+	// `$f` and its declare segment are the reference arm's payload: `ref.func` needs a *declared*
+	// function, and an empty body is the right one — the arm prices publishing a reference, not calling
+	// through it, and `setRef` never calls `$f`.
+	b.WriteString("\t(func $f)\n")
+	b.WriteString("\t(elem declare func $f)\n")
 	b.WriteString("\t(global $gi64 (mut i64) (i64.const 0))\n")
 	b.WriteString("\t(global $gv128 (mut v128) (v128.const i64x2 0 0))\n")
+	b.WriteString("\t(global $gref (mut funcref) (ref.null func))\n")
 	for _, a := range arms {
 		fmt.Fprintf(&b, "\t(func (export %q) (param $n i32) (result i32)\n", a.name)
 		b.WriteString("\t\t(loop $l\n")
@@ -190,6 +218,8 @@ func BenchmarkGetI64(b *testing.B)  { run(b, "getI64") }
 func BenchmarkSetI64(b *testing.B)  { run(b, "setI64") }
 func BenchmarkGetV128(b *testing.B) { run(b, "getV128") }
 func BenchmarkSetV128(b *testing.B) { run(b, "setV128") }
+func BenchmarkGetRef(b *testing.B)  { run(b, "getRef") }
+func BenchmarkSetRef(b *testing.B)  { run(b, "setRef") }
 
 // TestTheArmsAreDenseAndDifferOnlyInTheGlobalOp is the instrument's own control, and it is a test rather
 // than a benchmark because a benchmark cannot fail an assertion — `make bench` is not `make check`, so an
@@ -201,12 +231,12 @@ func BenchmarkSetV128(b *testing.B) { run(b, "setV128") }
 //
 //  1. **The density is what the header advertises.** A null row is readable only against it, so a body
 //     that had drifted sparse would print the same tidy percentage and mean nothing.
-//  2. **All four arms execute the same number of back-edges and the same op count.** Otherwise a delta
+//  2. **Every arm executes the same number of back-edges and the same op count.** Otherwise a delta
 //     between rows is partly a fact about their shapes, and F4 — same absolute cost on both v128 sides
-//     — becomes unreadable.
-//  3. **The four arms actually differ.** Four bodies that had collapsed onto one global instruction
-//     would still produce four rows and a p-value. *Assert the arms differ, not only that the null
-//     matches.*
+//     — becomes unreadable. R2's decomposition rests on the same premise from the other side: a
+//     residual after subtracting a predicted store cost is only an allocation's if nothing else differs.
+//  3. **The arms actually differ.** Bodies that had collapsed onto one global instruction would still
+//     produce a row each and a p-value. *Assert the arms differ, not only that the null matches.*
 func TestTheArmsAreDenseAndDifferOnlyInTheGlobalOp(t *testing.T) {
 	src := buildModule()
 

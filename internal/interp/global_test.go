@@ -197,8 +197,11 @@ func TestGlobalSetOfARefWritesTheRefSlot(t *testing.T) {
 	if err := g.set(st); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if g.ref.Null || g.ref.Addr != 5 {
-		t.Errorf("got %+v, want {Null:false Addr:5}", g.ref)
+	// Read back through `loadRef` because the slot is an `atomic.Pointer` (decision 0066) — the
+	// assertion is on the published *value*, which is what a concurrent reader would see, and not on the
+	// pointer that carries it.
+	if got := g.loadRef(); got.Null || got.Addr != 5 {
+		t.Errorf("got %+v, want {Null:false Addr:5}", got)
 	}
 	if len(st.refs) != 0 {
 		t.Errorf("reference stack has %d slots after set, want 0: the value was not popped", len(st.refs))
