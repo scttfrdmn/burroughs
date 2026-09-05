@@ -347,3 +347,89 @@ reach is a law out of context.
   self-firing as a result to publish rather than an inconvenience to route around, and to say which of
   the two kinds it was. (Ruling: Scott, on the #502 review — *"that's the strongest evidence available
   that they're aimed correctly, and it's worth a sentence in their own documentation."*)
+
+### When an issue splits, every message naming it is re-derived, not re-numbered.
+
+- **When an issue splits, every message naming it is re-derived, not re-numbered.** Scott, on the
+  #637 review: *"When an issue splits, every control message naming it must be re-derived, not
+  re-numbered. The #573 clause stayed pointed at the half that kept the number, so nothing in the
+  tree names the header-publication class at all. That's a live message one class short of its
+  subject — a different failure from a stale name, and harder to see because everything resolves."*
+  The last clause is why this is a law rather than a reminder: **no instrument here can see it.**
+  `citecheck.sh` asks whether `#573` names a live issue and it does; the sentence wrapped around the
+  number is the part that went wrong, and that is *[a `file:N` resolves to a line, not to the thing it
+  names](#a-filen-resolves-to-a-line-not-to-the-thing-it-names--and-the-miss-is-systematic-not-careless)*
+  with an issue number in place of the line.
+
+  **Specimen.** Three sites carried the clause *"`Spawn` shares the instance's globals, so
+  `global.set`'s plain writes are data races (#573)"* — `internal/interp/thread.go`'s parking notice
+  and both halves of `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling`, its doc comment and its
+  failure message. Two events then moved underneath that sentence without touching it. #573's
+  slice-header class split out to [#622](https://github.com/scttfrdmn/burroughs/issues/622), and
+  [ADR 0063](../decisions/0063-a-numeric-globals-single-word-goes-atomic-and-a-v128s-pair-goes-under-the-globals-own-mutex.md)
+  synchronised two of the three arms that stayed — so the clause was simultaneously **too broad**
+  (only the reference slot is still a plain write) and **silent** about the class that had left.
+  Every pointer in it resolved throughout.
+
+  **The repair is a narrowing, and the absent addition is the instructive half.** The sites now say a
+  *reference* global's `global.set` is still a plain write; no clause was added for #622, because
+  #622's defect was fixed in the slice that found this — a precondition that is discharged does not
+  need naming, and adding it would have been a message written to be immediately false in the other
+  direction.
+
+  **The practice: at split time, grep the parent number.** The quantifier is unreadable by any sweep,
+  but a *split* is an enumerable event, so the population to re-read is derivable — every occurrence
+  of the parent number, read as a sentence rather than as a pointer. Running it that way is what
+  found the label class in the entry below. Scott, same review: *"Running the addition as a sweep
+  rather than filing it as a lesson is what turned one known instance into five — and found a class
+  nobody was looking for."* (Both quotations are from an in-session review; PR #637 carries no
+  comment to cite, and this is recorded by the actor the ruling was given to, so it is durable and
+  not independent — commits in the slice stay `Ratio-Class: carried`.)
+
+### The tree may cite an issue; it may not claim that issue's labels.
+
+- **The tree may cite an issue; it may not claim that issue's labels.** Scott's rule, given on the
+  #622 slice: *"don't assert tracker state in the tree. A sentence about a label is a predicate about
+  a world no control here can see — everything in `internal/testenv` reads the tree, and a label
+  lives in the tracker. It rots on a mutation nothing observes. The tree may cite an issue; it may
+  not claim that issue's labels. Same shape as the quantifier problem, one notch further out."*
+
+  **Specimen: five sites claiming `decision-needed:scott`** — `internal/interp/global.go`,
+  `internal/interp/globalbench/bench_test.go`, two sentences in ADR 0063, and one in ADR 0042. **All
+  five were false when they were read**: #573 does not carry the label (all three of its arms are
+  ruled), and #452, which ADR 0042 says is waiting on a decision, is **closed** carrying `phase:v0`
+  and `gate:gc`. Nothing failed, in exactly the way *[an asserted
+  deferral](#an-asserted-deferral-is-a-citation-with-no-target-and-it-reads-as-tracked)* does not fail —
+  and the sentence reads to the next agent as though someone had looked.
+
+  **The mechanism is not that a label is unreachable, and the first draft of this entry got that
+  wrong.** Every control in `internal/testenv` reads the tree, so those five sites are out of their
+  domain for Scott's reason. But `citecheck.sh` **already fetches the labels** — one request per
+  citation returning kind, labels, state and title — and prints them on every `ok` line. State is
+  compared (a sentence saying an issue is open is checked against the tracker) and *one* label claim is
+  compared: `grave #N` must resolve to an issue carrying `type:grave`. So the gap is a **missing
+  comparison over data already in hand**, which is a much smaller thing than an unreachable fact, and
+  worth saying because *a predicate over already-fetched data is not a new instrument* — a later slice
+  can close it cheaply, and the reason this one did not is that the principal chose the ban over the
+  checker. **The ban is what makes the class empty rather than checked**, and `grave #N` is the
+  standing exception that proves the shape: a label claim the tree is allowed to make is one a gate
+  compares.
+
+  **What to write instead is what the tree can hold**: the issue's number and what it is *for*, with
+  the state named only where the code itself is the evidence — `#573, open and unimplemented` is
+  carried by the missing mechanism beside the sentence; `still decision-needed:scott` is carried by
+  nothing. The repair form follows the `Status:` rule: a `proposed` ADR is edited, an **accepted** one
+  takes a postscript, because amending a stamped record makes the stamp cite a sentence its signer
+  never read. Four of the five were repaired in the slice that found them; ADR 0042's was **filed**
+  instead, because nothing blocked that slice on it and *a repair the verdict did not compel is its
+  own work* — an accepted ADR's postscript is a slice, not a rider.
+
+  **The attribution needed a fact from outside the tree, and the capability split supplied it.** The
+  `scttfrdmn` account performs both principals' tracker mutations, and the API's fields are identical
+  for both, so a timeline cannot say who removed a label. Scott closed that: *"I can supply the fact
+  you can't. The account is shared but the capability isn't. I act only in this session and never
+  touch the tracker. So every tracker mutation under that account is mine"* — the agent's, that is;
+  the removal was the agent's and was correct. Recorded because it generalises: **where the artifact
+  cannot attribute, a principal's statement about capability can**, and it is worth asking for before
+  a provenance question is written down as unanswerable. (In-session ruling on the #622 slice,
+  recorded by the actor it was given to; `Ratio-Class: carried`.)

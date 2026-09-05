@@ -1084,3 +1084,49 @@ reach is a law out of context.
     differing. It is off by default and announces itself on every run, because it is the one option
     that changes what the arms have in common, and a flag that quietly redefines the comparison is how
     a driver becomes a worse carrier than the prose it replaced.
+
+### A checkable claim gets the instrument whose domain is its subject, and a count gets both counts recorded.
+
+- **A checkable claim gets the instrument whose domain is its subject, and a count gets both counts
+  recorded.** Scott, on the #637 review: *"The wrong instrument for a checkable claim. Seventeen call
+  sites was the wrong premise **and** the wrong grep; the declarations are what bound the receiver
+  type. Recording both counts so a re-runner reconciles rather than suspecting drift is the detail
+  that makes the correction durable."*
+
+  **Specimen.** A doc comment justified a scan that matched on the selector name `view` by asserting
+  *"all seventeen call sites have a `*memory` receiver, checked with grep."* Two things are wrong and
+  they are wrong in different ways. The **premise**: the call-site grep returns **twenty** hits, three
+  of which are prose inside doc comments — *a grep measures text*, and a population counted over a
+  channel that contains its own documentation counts the documentation. The **instrument**: no
+  quantity of call sites can settle whether some *other* type in the package owns a method of that
+  name, because a call site shows a receiver *expression* and the claim is about a receiver *type*.
+  The declarations are the domain that answers it — `grep -n '^func (.*) \(view\|size\)(' *.go` over
+  the non-test files, eight lines, two per subject — and that grep is small, exact, and about the
+  thing the sentence is about.
+
+  **Both counts go in the comment.** Twenty hits, seventeen of them calls: a later reader re-running
+  the grep gets twenty, and a comment that recorded only seventeen would read as drift and send them
+  looking for three sites that were never there. The general form is that **a corrected figure
+  carries what the naive instrument reports next to what the right one reports**, because the next
+  reader's first act is to re-run the naive one.
+
+  **Where the name is not enough, resolve the type.** The same package's regime enumeration
+  (`internal/interp/memregime_test.go`) had exactly this shape one step further out: it selected its
+  population by accessor *name*, and once [ADR 0065](../decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md)
+  gave `table`, `elemInstance` and `dataInstance` a `view` of their own, that name selected **sixteen**
+  sites belonging to types the enumeration has no business classifying. Widening an exception list
+  would have been the cheap repair and the wrong one — *an exemption inherits none of the trigger's
+  lessons* — so the scan now type-checks the package with `go/types` and compares each selection's
+  receiver against `memory` by `types.Identical`. The soundness assertion moved with it: the package
+  does not type-check cleanly by construction (#136's two build lanes redeclare one function), so
+  *"no errors"* cannot be the check and **"every accessor selector resolved"** is, with an unresolved
+  receiver failing the control rather than quietly leaving the population — *a skip is not a verdict*,
+  applied to a population's membership rather than to a test's execution.
+
+  **The count in that correction was itself first read by eye**, from a truncated log, and came out
+  thirteen; re-measured with a counter it is sixteen. Recorded rather than tidied away, because it is
+  a firing of *count with a counter, not by eye* inside the very repair that establishes the rule, and
+  because the figure had already been told to a principal — where *a figure told to a principal comes
+  back as a premise in their order*. (In-session
+  review; PR #637 carries no comment to cite, and this is recorded by the actor the ruling was given
+  to — durable, not independent, so `Ratio-Class: carried`.)

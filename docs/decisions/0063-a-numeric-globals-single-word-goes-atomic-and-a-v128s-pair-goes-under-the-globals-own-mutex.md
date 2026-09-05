@@ -7,7 +7,7 @@ five options below is this document's, decided by the pre-registration on #573, 
 the mechanism existed to measure.
 
 Filed against **[#573](https://github.com/scttfrdmn/burroughs/issues/573)**, whose third arm — the
-reference slot — stays open and `decision-needed:scott`. This document covers two of the three.
+reference slot — stays open. This document covers two of the three.
 
 ## Context
 
@@ -194,7 +194,11 @@ mutex was providing for free), and a seqlock reader can be *worse* under write c
   three nil pointers, a nil dereference. That is not the address-zero read a torn *slice header* produces
   ([#622](https://github.com/scttfrdmn/burroughs/issues/622)). `mu` would cover it in one line; the line
   is unwritten because a lock on every `global.get` of a hot `externref` is a different cost profile
-  from the one the ruling weighed, and #573 stays `decision-needed:scott` for it.
+  from the one the ruling weighed, and #573 stays open for it. (This sentence and the one at the top of
+  this document both claimed #573 carried `decision-needed:scott`; the label is not on it, and **the tree
+  may cite an issue but may not claim that issue's labels** — a label is tracker state, and no instrument
+  in this repository has it in its domain. Corrected in #622's slice rather than by a postscript, because
+  this document is still `proposed`.)
 - **A v128 `global.get` is 41.73% slower on amd64 and unchanged on arm64.** Both figures are the price
   of returning values the module actually wrote; the previous behaviour was cheaper and wrong.
 - **Two witnesses, two oracles, and neither covers the other.**
