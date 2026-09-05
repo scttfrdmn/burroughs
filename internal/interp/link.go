@@ -48,6 +48,24 @@ type Extern struct {
 	// Keeping them apart is what stops this from pre-deciding Q2 in the load-bearing spot.
 	owner *Instance
 	fnIdx uint32
+
+	// host is an embedder's Go function filling a function import — contract §5, [ADR 0069][0069]'s
+	// option A. Non-nil **only** with `Kind == binary.ExternFunc`, and mutually exclusive with `owner`
+	// on that arm: a host function belongs to no instance, so it has no index space and no type
+	// section.
+	//
+	// **This is the fifth thing an `Extern` can hold, and it widens the closed taxonomy the type's own
+	// doc comment leans on.** That comment says the taxonomy is *"the wire format's and is closed"* —
+	// which remains true of what a *module* can export, and is what a host function is precisely not:
+	// `externtype` has no arm for an embedder's function, because the embedder is outside the wire
+	// format. So this field does not make the taxonomy open; it records that one arm of it can be
+	// satisfied from outside. The consequence a reader must carry away is that every site reading
+	// `owner` on the func arm has a nil to answer for, which is why four of them now do so by name:
+	// `resolveCall` dispatches, `funcRefTarget` refuses, `invokeIndex` refuses, and `typeSpace`
+	// reports no module.
+	//
+	// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
+	host *hostFunc
 }
 
 // typeSpace is the module this extern's type indices are read in.
@@ -60,8 +78,16 @@ type Extern struct {
 // allocation is where it is stored (see `global.mod`).
 //
 // A memory has no type indices at all, so it falls through to the owner and nothing consults the
-// answer. Nil is reachable only for the zero Extern, which `Export` only ever returns alongside
-// `false`; importTypeMismatch reports it rather than dereferencing it.
+// answer.
+//
+// **Nil has a second cause now, and this used to say it had one.** It read *"nil is reachable only for
+// the zero Extern"* — true until `host` above arrived, and a host function has a nil `owner` by
+// construction because it belongs to no instance. The sentence is replaced rather than annotated
+// because it was a completeness claim about a population, and the population changed:
+// `importTypeMismatch` renders a nil as *"a supplier with no defining module"*, which is the right
+// sentence for the zero Extern and the **wrong subject** for a host function — so `InstantiateLinked`
+// intercepts the host arm before that check rather than letting this nil reach it. Both causes still
+// answer nil here; what differs is who is entitled to ask.
 func (e Extern) typeSpace() *binary.Module {
 	switch e.Kind {
 	case binary.ExternTable:
@@ -311,7 +337,20 @@ func (in *Instance) link(imp Imports) error {
 			return fmt.Errorf("incompatible import type: %q %q is a %s but the supplier offers a %s (%w)",
 				im.Module, im.Name, im.Kind, ext.Kind, ErrLinkFailed)
 		}
-		if detail := in.importTypeMismatch(im, ext); detail != "" {
+		// **A host function is type-checked here and not by `importTypeMismatch`, because that
+		// function cannot see one at all.** Its first act is `ext.typeSpace()`, which reads the
+		// module a supplier's type indices are named in; a host function has no module, so
+		// `typeSpace` answers nil and the check would render *"a supplier with no defining
+		// module"* — a true sentence about the wrong subject, and a refusal of every host import
+		// in the tree. Intercepted before it rather than taught to it, because what the two arms
+		// compare is genuinely different: that one relates two modules' type spaces, and this one
+		// has one type space and a bare `binary.FuncType`.
+		if ext.host != nil {
+			if detail := in.hostImportMismatch(im, ext.host); detail != "" {
+				return fmt.Errorf("incompatible import type: %q %q %s (%w)",
+					im.Module, im.Name, detail, ErrLinkFailed)
+			}
+		} else if detail := in.importTypeMismatch(im, ext); detail != "" {
 			// `incompatible import type` again, for a name that resolves to the *right kind*
 			// with the wrong signature, limits or mutability — `match_externtype`'s other
 			// failure mode (match.ml), and the one #164 exists for: a matching kind was

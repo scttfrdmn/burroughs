@@ -547,14 +547,35 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// than a reading of the reduction that makes the omission checkable. `tailFrom`
 			// discards this frame's `ctrl` by construction: it is a local of this function, and
 			// this function is returning.
-			// `callee`/`calleeType` rather than shadowing this function's own `fn`: the frame
-			// being *replaced* and the frame being *entered* are two different functions, and one
-			// name for both is how a tail call would come to build the wrong frame.
-			target, callee, calleeType, err := in.resolveCall(uint32(ins.Imm0))
+			c, err := in.resolveCall(uint32(ins.Imm0))
 			if err != nil {
 				return err
 			}
-			return tailFrom(target, callee, calleeType, st, base)
+			if c.host != nil {
+				// **A tail call to a host function is a host call followed by a `return`, and the
+				// order is the whole content of it.** There is no frame to replace: `callHost` pops
+				// the arguments this frame pushed and leaves the results on the same stack, so what
+				// remains is exactly what `return` does — truncate to `base` keeping the results.
+				//
+				// `results`/`refResults` are *this* frame's declared counts and are the right ones
+				// to keep, because a `return_call` is only valid where the callee's results match
+				// the caller's; using the host's own arity here would be the same number arrived at
+				// by a route that stops being true the day the validator (#9) is what enforces it.
+				//
+				// **Not routed through `tailFrom`**, whose three steps are build-the-frame,
+				// check-base, truncate-to-base-keeping-nothing. A host callee has no frame to build
+				// and its results must be *kept*, so two of the three steps invert; reusing it would
+				// mean a fourth mode inside a function whose doc comment is an argument about why
+				// its order is load-bearing.
+				if herr := c.inst.callHost(c.host, st); herr != nil {
+					return herr
+				}
+				return returnFrom(st, base, results, refResults)
+			}
+			// `c.fn`/`c.ft` rather than shadowing this function's own `fn`: the frame being
+			// *replaced* and the frame being *entered* are two different functions, and one name for
+			// both is how a tail call would come to build the wrong frame.
+			return tailFrom(c.inst, c.fn, c.ft, st, base)
 
 		case opCallIndirect:
 			if err := in.callIndirect(ins, st, depth); err != nil {
