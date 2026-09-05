@@ -1,8 +1,19 @@
 # 0050 — The per-thread context is its own object reached by one pointer on `stack`, because §§3–5 need more per-thread state than a slot
 
-Date: 2026-08-30 · Status: **proposed** — no stamp exists to cite yet, and *a `Status:` field is a
-citation to an approval*, so it stays open until one does. Scott's order sequencing this work is
-in-session and therefore unciteable: *"the real v1 work is next, not after. Spawn, the per-thread
+Date: 2026-08-30 · Status: **accepted**, **stamped by relay** — Scott, on the #647 review:
+*"Record the relay stamps on 0050, 0052 and 0060 citing my prior report — the stamp was given last turn; this is the recording."* The independence
+mechanism is his, stated on the #646 review: *"I reviewed each in the report that landed it."* For this ADR
+that report is **PR 553**.
+
+**What this citation is, and what it is not.** It resolves to a principal's approval and to the PR whose
+report carried this document to him, which is what the `Status:` rule asks for. It does **not** resolve to a
+GitHub review artifact: the review was a session turn and the recording is made by the actor who was
+reviewed, so *durability is not independence* and the commit that records it is `Ratio-Class: carried`. That
+is stated here rather than left for a reader to discover, because a forged provenance about the project's own
+governance is worse than a wrong option.
+
+Separately, and still unciteable because it was never carried by a PR report, Scott's order sequencing this
+work: *"the real v1 work is next, not after. Spawn, the per-thread
 slot, safepoint checks at back-edges and call sites, stop composing with parked threads."*
 
 Filed against **#514**, which scopes it: contract §2 **T-1** (`spawn(entry_func, arg, stack_hint) →

@@ -205,10 +205,22 @@ reach is a law out of context.
       (Ruling: Scott, on the #601 review — *"it's structurally forced here … That's a fact about the
       defect class rather than about discipline — and it doesn't generalise to slices where a corpus
       vector could have been the witness."*)
-  - **Two consecutive instrument-only PRs is a stop condition.** Not a soft
-    preference — stop and take product work, or get Scott's word to continue. The
-    ratchet only turns one way otherwise, because control work is always available,
-    always passes review, and always produces a clean green.
+  - **Two consecutive instrument-only PRs is a stop condition — RETIRED on the #647 review, and
+    everything below it is the minting record rather than a live rule.** Scott's words: *"the
+    instrument/product counter is retired. Keep quoting the ratio; gate nothing on it."* Nothing is
+    gated on the count any more — no stop, no principal's discharge to seek, no classification to
+    defend. **The sub-bullets are kept, and kept in the present tense they were written in, because
+    what they establish outlived the gate they were establishing it for**: the runtime-vs-harness
+    test, the purpose-not-line-majority reading, the structurally-forced carve-out and its
+    non-generalisation, and the exemption tokens are all still how a *class* is read when a report
+    names one. What went is the consequence, not the vocabulary. Read what follows as: this is how
+    the classification works, for a counter that no longer stops anything.
+    - It was, while it ran, not a soft preference — stop and take product work, or get Scott's word
+      to continue — because the ratchet only turns one way otherwise: control work is always
+      available, always passes review, and always produces a clean green. **That asymmetry did not
+      go away with the counter**, which is why the ratio is still quoted every PR and still compared
+      to no threshold. The retirement's own argument is that the ratio prices the drift the counter
+      was built to catch, so the drift is *observed* where it used to be *gated*.
     - **The counter counts PRs whose *purpose* is non-product, not PRs whose line-majority is
       instrument.** The refinement was forced by #159, which lands `table.init`/`memory.init` end
       to end — board strata moving on engine answers, 1702 fails drained — and reads **1:1.4**, so

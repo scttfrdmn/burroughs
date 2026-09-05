@@ -1,8 +1,19 @@
 # 0052 — The §4 boundary edge is one package-level sequentially-consistent counter, because a shared memory spans instances
 
-Date: 2026-08-31 · Status: **proposed** — no stamp exists to cite for the mechanism, and *a `Status:`
-field is a citation to an approval*, so it stays open until one does. What is stamped is the
-**scheduling**: Scott's option-1 ruling recorded on [ADR
+Date: 2026-08-31 · Status: **accepted**, **stamped by relay** — Scott, on the #647 review:
+*"Record the relay stamps on 0050, 0052 and 0060 citing my prior report — the stamp was given last turn; this is the recording."* The independence
+mechanism is his, stated on the #646 review: *"I reviewed each in the report that landed it."* For this ADR
+that report is **PR 564**.
+
+**What this citation is, and what it is not.** It resolves to a principal's approval and to the PR whose
+report carried this document to him, which is what the `Status:` rule asks for. It does **not** resolve to a
+GitHub review artifact: the review was a session turn and the recording is made by the actor who was
+reviewed, so *durability is not independence* and the commit that records it is `Ratio-Class: carried`. That
+is stated here rather than left for a reader to discover, because a forged provenance about the project's own
+governance is worse than a wrong option.
+
+The **scheduling** was stamped earlier and separately, and is left recorded because it is what put this ADR
+in its place in the chain: Scott's option-1 ruling on [ADR
 0050](0050-the-per-thread-context-is-its-own-object-reached-by-one-pointer-on-stack-because-3-and-5-need-more-per-thread-state-than-a-slot.md)
 and in `internal/interp/thread.go` — *"discharge #542 first — #542 → #516 → #10"* — with #542
 discharged by [ADR

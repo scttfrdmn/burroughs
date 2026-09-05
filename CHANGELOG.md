@@ -1251,6 +1251,61 @@ weakly-ordered platform.
 
 ### Changed
 
+- **ADRs 0050, 0052 and 0060 move from `proposed` to `accepted`, stamped by relay** — Scott's order on the
+  #647 review: *"Record the relay stamps on 0050, 0052 and 0060 citing my prior report — the stamp was given
+  last turn; this is the recording."* The independence mechanism is his own, from the #646 review: *"I
+  reviewed each in the report that landed it,"* so each `Status:` now cites the PR whose report carried that
+  ADR to him — **0050 → PR #553, 0052 → PR #564, 0060 → PR #594**.
+  - **Each stamp states what its citation is *not*.** It resolves to a principal's approval and to a PR, which
+    is what *a `Status:` field is a citation to an approval* asks for; it does **not** resolve to a GitHub
+    review artifact, because the review was a session turn and the recording is made by the actor who was
+    reviewed. *Durability is not independence*, so the commit is `Ratio-Class: carried` and the ADRs say so
+    rather than leaving a reader to discover it — a forged provenance about the project's own governance is
+    worse than a wrong option.
+  - **Three splice defects were repaired in the same edit, because a stamp falsifies the prose written
+    against its absence.** 0052 read *"What is stamped is the **scheduling**"* — true only while the mechanism
+    was unstamped, and a contradiction the moment it was not; 0060's *"Nothing here needs one to proceed"*
+    referred to a stamp that now exists; 0050's in-session sequencing order had become a trailing clause on a
+    citation paragraph. *Second-order honesty*: the change had to be applied to the sentences that existed
+    because of what it changed.
+  - **ADR 0051 stays `proposed` and is not collateral.** It cites 0050 for the scheduling ruling only and
+    asserts nothing about 0050's status, which was checked rather than assumed; it is not in the three Scott
+    named.
+
+- **Three operating rules change on Scott's #647 review, and each is recorded where it changes what a PR
+  does** — `CLAUDE.md` and, for the one with a law body,
+  [product-and-overhead.md](docs/laws/product-and-overhead.md#the-phases-product-is-the-work-instruments-are-overhead-on-it).
+  All three are in-session orders recorded by the actor who received them, so *durability is not
+  independence* and this commit is `Ratio-Class: carried`.
+  - **The instrument-only counter is retired; the ratio outlives it.** *"The instrument/product counter is
+    retired. Keep quoting the ratio; gate nothing on it."* Two consecutive instrument-only PRs is no longer
+    a stop condition, there is no discharge to seek and no classification to defend. The ratio is still
+    quoted every PR and still compared to no threshold — the retirement's own argument being that the ratio
+    *prices* the drift the counter was built to *gate*. The law body keeps its sub-bullets in the present
+    tense they were written in, marked as a minting record, because **what they establish outlived the gate
+    they were establishing it for**: the runtime-vs-harness test, purpose-not-line-majority, and the
+    structurally-forced carve-out are still how a class is read when a report names one.
+  - **Decide and proceed — the escalation set narrows to three subjects.** *"Report decisions taken, not
+    rulings requested. Escalate only for: contract (§) text, public API surface, reversing a stamped ADR."*
+    This falsifies *"anything Scott must decide is flagged, never decided for him"* as written: outside
+    those three, a flagged question is now **work not done**. The three cohere as the things the actor
+    cannot unwind alone — normative text, an embedder's dependency, another principal's stamp.
+  - **The queue parking's end point moves from #10 to spawn**
+    ([#554](https://github.com/scttfrdmn/burroughs/issues/554)), and takes two companions with it: *"Parked
+    stays parked. The decisions queue, the §4 battery beyond what spawn needs, the eight unstamped ADRs.
+    They drain when spawn runs."* The move was forced rather than preferred — #10 is itself now parked past
+    what spawn needs, and **a parked subject cannot be another subject's end point.**
+
+- **#602's signature is ruled, so the eight §4 cases behind it have a mechanism to wait on rather than a
+  question** ([#602](https://github.com/scttfrdmn/burroughs/issues/602)). Option **A** — a `HostFunc`
+  closure mirroring `Invoke` — with C's identity as a later additive widening and B named as a possible
+  fast path, never the default; all four sub-choices confirmed; and the shutdown trigger spelled
+  **`Instance.Close() error`**, terminal, cancelling the per-thread contexts and returning once host calls
+  have returned. Scott: *"The asymmetric-reversibility argument is decisive by itself — a soundness burden
+  pushed onto embedders can't be taken back once anyone depends on it."* **No ADR is written here**, and
+  that is the rule rather than an omission: *one ADR earns one implementation*, so 0068 rides the
+  implementing slice. The ruling's durable home is a comment on #602.
+
 - **Three laws land in the corpus and a fourth is retired by its own count** — Scott's four keepers from the
   #641 review, and this slice is **instrument-only** because every reachable v1 product candidate is
   decision-blocked (stated as a classification in the PR body, not as a discharge).
