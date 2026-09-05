@@ -2,11 +2,26 @@
 
 # 0069 — A host function is a `Caller` and a `[]Value`, a host call marks its thread blocked, and shutdown is its own terminal method
 
-Date: 2026-09-05 · Status: **proposed** — Scott ruled the surface, and the record of that ruling is a
-comment on [#602](https://github.com/scttfrdmn/burroughs/issues/602) *posted by the actor it was given
-to*, so it is durable and **not** independent provenance. *A `Status:` field is a citation to an
-approval*, and this one holds open for a stamp on the report that carries it. Commits in this slice are
-`Ratio-Class: carried` for the same reason.
+Date: 2026-09-05 · Status: **accepted**, **stamped by relay** — Scott, on the
+[#651](https://github.com/scttfrdmn/burroughs/pull/651) review: *"ADR 0069 is stamped by relay, on the
+same terms as 0050/0052/0060 — recorded citing the report that carried it, saying what the citation is
+not."* The independence mechanism is his, stated on the #646 review: *"I reviewed each in the report that
+landed it."* For this ADR that report is **PR 651**, which carried the option-A implementation and this
+document to him together.
+
+**What this citation is, and what it is not.** It resolves to a principal's approval and to the PR whose
+report carried this document to him, which is what the `Status:` rule asks for. It does **not** resolve to
+a GitHub review artifact: the review was a session turn and the recording is made by the actor who was
+reviewed, so *durability is not independence* and every commit resting on it is `Ratio-Class: carried`.
+Stated here rather than left for a reader to discover, because a forged provenance about the project's own
+governance is worse than a wrong option.
+
+**The line this replaces held the status open for exactly this event**, and it is worth recording that the
+mechanism worked as written rather than being waived: *"A `Status:` field is a citation to an approval, and
+this one holds open for a stamp on the report that carries it."* The report carried it, the stamp came back
+on that report, and the citation now has a target. The implementation landed *before* the stamp, which is
+the order the mechanism intends — the ADR held a status it could not yet cite while the code it describes
+was reviewable.
 
 Filed against **[#602](https://github.com/scttfrdmn/burroughs/issues/602)**. It settles the surface and
 the dispatch seam; it does **not** settle
@@ -149,6 +164,47 @@ silently, because *an ADR is testimony* and the finding is the useful part.
   the correctness argument is unchanged and only its *location* moved. Recorded because the rule was
   satisfied by a control rather than by this ADR's reasoning, and the next mechanism that waits on a signal
   will meet the same rule.
+
+## Amended by the #651 ruling — `Caller` reaches guest memory, by copy
+
+This ADR's Consequences said `Caller` *"has no entry point"* and the implementation's own comment said there
+was no guest-memory accessor, naming it as escalated public surface. Scott ruled it on the
+[#651](https://github.com/scttfrdmn/burroughs/pull/651) review, and the ruling is additive to option A
+rather than a change to it: *"`Caller` gets guest-memory access — but as copying accessors, not a view.
+`Caller.Read(offset, n) ([]byte, error)` and `Caller.Write(offset, buf) error`."*
+
+**H-2 is untouched, and the distinction is what makes the widening safe.** H-2 forbids *re-entering the
+guest*; these accessors read and write bytes and call nothing. `Caller` still holds no `*Instance` — the new
+field is a `*memory`, chosen for exactly the containment reason `tid` is a `ThreadID` — so the method that
+would violate H-2 still does not exist.
+
+**Why copying, in his words:** *"A retained slice would alias a memory that can grow and relocate — #575
+and #622's exact subject — which is the soundness burden option B was rejected for. Exposing a view reopens
+the story A was chosen to close."* The engine's own mechanism agrees: `memory.grow`'s second arm reallocates
+and blits, so a slice handed out before it names an abandoned array afterwards, and a *write* through such a
+slice lands in an image nothing will load again — a store silently lost, with no channel reporting it.
+`noMove` exists because ADR 0051's atomics hold a raw pointer for one access; a slice an embedder holds for
+as long as it likes is that hazard unbounded.
+
+**The cost, and the escape hatch, both his:** *"Copying costs an allocation per access, the same trade A
+already makes with boxed `[]Value`, so it's consistent rather than a new tax"* and *"A view stays addable
+later as an additive fast path, exactly like C's identity and B's stack form."*
+
+Three things the implementation decided under this ruling, recorded here because none of them is in its text:
+
+- **Memory 0 of the *declaring* instance, not the running thread's.** The neighbouring world question has
+  the opposite answer — cancellation follows the running agent — and a reader transferring one to the other
+  gets a defect either way. An index space belongs to the module that wrote the import; a thread's world
+  belongs to whoever may cancel it.
+- **`ErrNoMemory` is not the only reason there is no memory**, so `memoryFor`'s two other reasons (an
+  unsupplied import, §3; a declared memory that failed to allocate) are carried on the `Caller` and reported
+  instead of being flattened. An error telling an embedder their module "defines and imports no memory" when
+  it imports one nothing supplied is grave #36's shape.
+- **The two accessors join ADR 0064's plain region**, which
+  `TestNoGuestMemoryAccessSiteJoinsWithoutAClassification` demanded before it would go green again, and
+  [0064's own amendment](0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md)
+  records why plain is right there — an atomic accessor would promise an embedder an atomicity the guest side
+  cannot supply.
 
 ## Pre-registration
 

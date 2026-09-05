@@ -79,6 +79,20 @@ var guestMemoryRegimes = map[string]memRegime{
 	// instantiated while another instance's threads run on it.
 	"memory.go:Instance.runData": regimePlain,
 
+	// The eighth and ninth sites, and the first that are not the guest's at all: an **embedder**
+	// reading and writing guest memory through `Caller` (Scott's ruling on the #651 review, ADR 0069's
+	// amendment). Plain, and ADR 0064's own amendment says so, because this control's failure message
+	// demands that a `plain` answer be recorded in the decision rather than in a diff.
+	//
+	// **Why plain is right and not a shortcut.** An atomic accessor here would promise the embedder a
+	// tear-free read of bytes the *guest* may write plainly at every alignment — one side of a race
+	// cannot supply atomicity the other side does not have, so the promise would be unkeepable in
+	// exactly the case it was made for. What the embedder gets instead is §4 B-MM-1's edge on each
+	// access, which is what the message-passing row needs and is strictly stronger than per-access
+	// atomicity for that purpose.
+	"host.go:Caller.Read":  regimePlain,
+	"host.go:Caller.Write": regimePlain,
+
 	// Bounds and length only: no guest byte crosses these. `atomicNotify`'s `read` is the clearest
 	// case in the package — it discards both return values but the error, so the call is there to
 	// make the trap happen and nothing is read.

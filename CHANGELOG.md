@@ -56,6 +56,25 @@ weakly-ordered platform.
     Filed with four options rather than repaired here, as every candidate either pays ADR 0067's measured
     defer cliff or changes what an embedder observes:
     [#650](https://github.com/scttfrdmn/burroughs/issues/650).
+  - **`Caller.Read(offset, n)` and `Caller.Write(offset, buf)` reach guest memory, and they copy rather
+    than view.** Scott's ruling on the [#651](https://github.com/scttfrdmn/burroughs/pull/651) review,
+    additive to ADR 0069's option A: a returned slice would alias a memory that `grow` can reallocate, and
+    a *write* through such a slice lands in an image nothing will load again — silently lost, with no
+    channel reporting it. H-2 is untouched, since these read and write bytes and re-enter nothing.
+    `Caller` still holds no `*Instance`; the new field is a `*memory`.
+    - Memory 0 of the **declaring** instance, which is the opposite answer to the neighbouring world
+      question — cancellation follows the running agent, an index space belongs to the module that wrote
+      the import. There is only one reachable candidate today, so
+      `TestACallerReachesTheDeclaringInstancesMemory` says in its own comment that it is a regression
+      oracle and discriminated no defect.
+    - `ErrNoMemory` for a valid memoryless module, and `memoryFor`'s two other reasons — an unsupplied
+      import (§3), a memory that failed to allocate — reported rather than flattened into it.
+    - **§4 B-MM-1's edge per access, which is what an embedder gets in place of atomicity.** Both sites
+      join [ADR 0064](docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md)'s
+      plain region — the first members of it no guest instruction reaches — because an atomic accessor
+      would promise a tear-free read of bytes the guest may write plainly. The granularity is asserted:
+      a host call reading once costs 6 crossings, reading and writing costs 8, and a refusal for want of a
+      memory costs none.
 
 - **`Instance.Spawn` — contract §2 T-1's thread spawn, a wasm thread backed 1:1 by an OS thread, behind
   `gate:threads` and not a default flip.** [#554](https://github.com/scttfrdmn/burroughs/pull/554),

@@ -96,6 +96,19 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 	// site added later is covered by neither until somebody writes a row — and that is said plainly here
 	// rather than left for a reader to infer from the absence.
 	//
+	// **Two more arrived one slice later, and the sentence above is why they have rows.** `Caller.Read` and
+	// `Caller.Write` — Scott's ruling on the #651 review — read and write guest storage from host code
+	// without running any, exactly `Global`'s shape, so they create no stack either. The prediction was made
+	// a merge before the sites existed and the rows below are it being paid; what the paragraph above got
+	// right is that nothing would have fired.
+	//
+	// **"the second site" above is off by one and is left standing with this line beside it.** By this
+	// file's own reckoning `InstantiateLinked` and `Global` are both boundary sites that create no stack,
+	// so `callHost` was the third of them, not the second. It is my own miscount from #602 and the repair
+	// is to stop counting: `boundary.go` now names the family as a set — `InstantiateLinked`, `Global`,
+	// `callHost`, `Caller.Read`, `Caller.Write` — because a membership claim can be checked with a grep and
+	// a position in an unwritten list cannot.
+	//
 	// **Four, not two, and the extra pair is not a nested crossing.** The invoke contributes its pair;
 	// the host call contributes a second, because leaving the guest for the embedder and coming back is
 	// a transition in each direction. This is the one place where the *start function* reasoning above
@@ -134,6 +147,92 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 				"call's. 2 means the host call established no edge at all, and 3 means it left the "+
 				"guest and never acquired on the way back in — which is the release a later agent "+
 				"would be ordering against", tc.name, got)
+		}
+	}
+
+	// # The guest-memory accessor rows: **an edge per access**, and a refusal that buys none
+	//
+	// `Caller.Read` and `Caller.Write` are the third and fourth sites that touch guest state without
+	// running any, so their pairing is enumerated here beside `Global`'s and `callHost`'s. What the three
+	// rows below assert is not merely presence but the *granularity*: **six** for one access, **eight** for
+	// two, because each accessor establishes its own pair. That is what makes ADR 0064's amendment true
+	// rather than hoped for — an embedder gets no atomicity from these accessors and gets §4 B-MM-1's edge
+	// per access instead, which is a claim about the count and is therefore checkable exactly here.
+	//
+	// **And a refused access crosses nothing, which is `Invoke`'s asymmetry and not `Global`'s.** In a
+	// memoryless module both accessors return `ErrNoMemory` from `guestMemory` *before* `enterGuest`, so
+	// they never touch guest storage and buy no edge — the placement `Invoke`'s missing-name row wants,
+	// where `Global`'s missing-name row wants the other one because its lookup is already inside. The
+	// asymmetry is asserted rather than tidied for the reason stated below: an author who makes them agree
+	// should have to change a test that says why.
+	//
+	// Watched die over the whole package: dropping `Caller.Read`'s `enterGuest()`/`defer leaveGuest()` pair
+	// takes the first row to 4 and the second to 6, naming the accessor in each, and nothing else in the
+	// package moves. Two things that did **not** fire are the interesting half. The memoryless row still
+	// wants 4 and still gets it, because a site that never crossed cannot lose a crossing — it is asserting
+	// the placement of the refusal and not the presence of the edge. And the parity check at the end of this
+	// test stays clean, because a deleted *pair* is an even loss: exactly the blindness its own comment
+	// measures, here confirmed on a third case rather than assumed to carry.
+	hostMemIn := hostLink(t, `(module
+		(import "h" "peek" (func $peek))
+		(import "h" "poke" (func $poke))
+		(memory 1)
+		(func (export "callPeek") (call $peek))
+		(func (export "callPoke") (call $poke)))`, binary.Features{},
+		hostImports(map[string]Extern{
+			"peek": HostExtern(ft(nil, nil), func(c *Caller, _ []Value) ([]Value, error) {
+				_, err := c.Read(0, 4)
+				return nil, err
+			}),
+			"poke": HostExtern(ft(nil, nil), func(c *Caller, _ []Value) ([]Value, error) {
+				if _, err := c.Read(0, 4); err != nil {
+					return nil, err
+				}
+				return nil, c.Write(0, []byte{1, 2, 3, 4})
+			}),
+		}))
+	noMemIn := hostLink(t, `(module
+		(import "h" "peek" (func $peek))
+		(func (export "callPeek") (call $peek)))`, binary.Features{},
+		hostImports(map[string]Extern{
+			"peek": HostExtern(ft(nil, nil), func(c *Caller, _ []Value) ([]Value, error) {
+				// The error is deliberately dropped: this row measures the crossing, and
+				// `TestACallerInAModuleWithNoMemoryIsRefusedWithErrNoMemory` measures the error.
+				_, _ = c.Read(0, 4)
+				_ = c.Write(0, []byte{1})
+				return nil, nil
+			}),
+		}))
+	for _, tc := range []struct {
+		name string
+		in   *Instance
+		fn   string
+		want uint64
+		why  string
+	}{
+		{
+			"a host call reading guest memory once", hostMemIn, "callPeek", 6,
+			"the invoke's pair, the host call's, and `Caller.Read`'s",
+		},
+		{
+			"a host call reading and then writing", hostMemIn, "callPoke", 8,
+			"the same four plus a pair each for the `Read` and the `Write`. 6 here means one accessor " +
+				"crosses and the other does not, or that a single pair is being shared across both — " +
+				"either way the per-access edge ADR 0064's amendment promises is not what runs",
+		},
+		{
+			"a host call whose accessors are refused for want of a memory", noMemIn, "callPeek", 4,
+			"the invoke's pair and the host call's, and nothing for either refused accessor: " +
+				"`guestMemory` answers before `enterGuest`, so a call that reaches no guest storage " +
+				"establishes no edge over it",
+		},
+	} {
+		before := crossings()
+		if _, trap := tc.in.Invoke(tc.fn); trap != nil {
+			t.Fatalf("%s: %v", tc.name, trap)
+		}
+		if got := crossings() - before; got != tc.want {
+			t.Errorf("%s crossed the boundary %d times, want %d: %s", tc.name, got, tc.want, tc.why)
 		}
 	}
 
