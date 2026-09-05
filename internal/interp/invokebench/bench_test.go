@@ -25,12 +25,14 @@
 //     engine, which is the point and also the caveat: **this row is an upper bound on 0067's cost, not a
 //     typical one.** A workload that runs a thousand guest operations per call dilutes the same two pairs
 //     by a thousand.
+//
 //   - `EmptyNull` — byte-identical in source to `Empty`, so the pair is the within-run floor.
 //     `growbench`'s `ResliceNull` is the precedent and [#580](https://github.com/scttfrdmn/burroughs/issues/580)
 //     is the reason it is a row and not a sentence: a semantically inert diff moved unrelated rows 6–9%
 //     on amd64, so a null at an unmeasured resolution cannot tell *no effect* from *an effect under the
 //     floor*. 0067's criterion reads this arm explicitly — *compare the floor to the bar* — and if the
 //     floor is not narrower than the bar, the board does not adjudicate.
+//
 //   - `TwoUncontendedLockUnlock` — the **bar**, measured here rather than recalled. Two `Lock`/`Unlock`
 //     pairs on one uncontended `sync.Mutex`, which is exactly what 0067 adds per call: `enterCall` and
 //     `leaveCall` both take `world.mu`. Plain Go, touching no engine code, deliberately — the claim it
@@ -38,6 +40,15 @@
 //     `growbench`'s `UncontendedLockUnlock` is the same device at a different multiplicity, and the
 //     multiplicity is the whole reason this is a separate row: **two pairs per op there would be a
 //     thousandth of the row and unreadable.**
+//
+//     **It is not invariant across the arms of one A/B, which is what #580 says arriving on the row a
+//     criterion divides by.** Measured on #650's board: −7.53% at p=0.000 with ±0% spreads in the head
+//     arm, while base and null agreed at 20.98–20.99 ns, on a diff that cannot reach a function-local
+//     mutex and with `--graft` giving all three arms this exact source. So *"on this run"* above is not
+//     enough — the value is per **binary**, and a fraction-of-bar figure carries the slop of whichever
+//     arm's bar it was divided by ([#653](https://github.com/scttfrdmn/burroughs/issues/653), which is
+//     the denominator half of [#580](https://github.com/scttfrdmn/burroughs/issues/580)). Take the bar
+//     from the base arm until one of them is decided, and quote the arms that agree.
 //
 // # Two things a reader has to know before comparing rows
 //

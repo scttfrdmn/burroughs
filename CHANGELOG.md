@@ -1910,6 +1910,45 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **An embedder panic left the engine's blocked and caller marks torn, and no guard could say so, because
+  the two leak together into exactly SP-2's *arrived* predicate**
+  ([#650](https://github.com/scttfrdmn/burroughs/issues/650)),
+  [ADR 0070](docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md).
+  Three sites — `callHost` across `h.fn`, `invokeIndex` across `in.run`, `runEntry` across `in.invoke` —
+  each fold the repair into the one `defer` they already had, gated on a flag true across exactly the call
+  that can carry the panic. **No function gains a second `defer`**, which is
+  [ADR 0067](docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md)'s
+  measured cliff honoured rather than paid: codegen reports no `runtime.deferprocStack` anywhere in
+  `internal/interp`, and *"func literal does not escape"* at all three sites.
+  - **The panic still reaches the embedder, with its value and its stack.** Converting it to an
+    `ErrHostTrap` would have paired every count with no flag, and was declined as a public-API-surface
+    change that also swallows the traceback of a bug that is the embedder's to read. The acceptance test
+    fails if nothing panics out of `Invoke`, so a later `recover` cannot be added quietly.
+  - **The acceptance test #650 filed could not be written as filed** — *"a `Stop` that must not report
+    arrival"* fails on correct code, because the marks leak in pairs and `Stop`'s difference predicate
+    cancels: measured `nil` on the leaked state and `nil` on the repaired one. The real observable is the
+    **crossing count**, measured at 3 where the mechanism predicts 4, and the `Stop` arm survives only
+    because it discriminates against the partial repair — repairing `callHost` alone is measured waiting
+    out a whole 2s deadline to report *"0 of 1 arrived"* for a thread executing nothing.
+  - **The unwinding path clears the blocked mark without polling** (`unmarkBlocked`, now `leaveBlocked`'s
+    first half), because parking a panicking goroutine would make a `Stop`'s completion depend on an
+    embedder's `recover` running — a dependency SP-4 cannot state — and because the next entry into the
+    guest polls anyway at `enterFrame`.
+  - **`runEntry`'s copy is unreachable today** and says so: nothing on a non-test path recovers a panic out
+    of a spawned thread, so it is witnessed by a test supplying the `recover` that
+    [#12](https://github.com/scttfrdmn/burroughs/issues/12)'s join will supply by construction.
+  - **Priced, against a criterion pre-registered before the run.** `janus.local` `measured` task 16,
+    12 rounds, `--null --graft`: `invokeIndex`'s fold is undetectable (`Empty` −0.4 ns, p=0.486) and
+    `callHost`'s costs **+3.2 ns**, 0.15× the bar against a forecast of 0.25×. `HostCall`/`HostCallNull`
+    are new rows in `invokebench`, since no arm in the tree crossed back out to an embedder. The same
+    board measured the **bar itself** moving −7.53% in the head arm on a diff that cannot reach a
+    function-local mutex — [#580](https://github.com/scttfrdmn/burroughs/issues/580)'s layout effect
+    landing on the row a criterion divides by, filed as
+    [#653](https://github.com/scttfrdmn/burroughs/issues/653) and reported rather than smoothed.
+  - **A panic from *engine* code still leaks `callers` alone, named rather than implied.** ADR 0067 already
+    holds that case to be an engine bug that has left the instance undefined; what this removes is the case
+    where the panicking party is the embedder.
+
 - **`Stop` returned `nil` while a caller was still executing guest code, because SP-2's predicate asked a
   question about a thread and the mark it read is a count of callers**
   ([#592](https://github.com/scttfrdmn/burroughs/issues/592)),

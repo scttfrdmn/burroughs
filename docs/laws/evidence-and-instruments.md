@@ -1192,3 +1192,33 @@ reach is a law out of context.
   spread bounds jitter, not bias — no comparison inside the table can witness a uniform inflation of every
   row. That's the right limit to file #642 on rather than claiming the repair covered it."* (Grave
   [#570](https://github.com/scttfrdmn/burroughs/issues/570).)
+
+### A filed acceptance test can be unfalsifiable, so re-derive its oracle from the mechanism before writing it.
+
+- **A filed acceptance test can be unfalsifiable, so re-derive its oracle from the mechanism before
+  writing it.** [#650](https://github.com/scttfrdmn/burroughs/issues/650) was filed with an acceptance
+  criterion in one line — *"a `Stop` that must not report arrival"* — and it **fails on correct code**.
+  The bug leaks a `blocked` mark and a `callers` mark together, and `Stop`'s predicate is
+  `blocked == callers`, so the leak preserves the difference the predicate reads: measured `nil` on the
+  broken state and `nil` on the repaired one. Writing the filed test would have produced a red arm on
+  main that goes green when the *mechanism* changes for unrelated reasons, and nobody would have caught
+  it, because a test that fails before a fix and passes after it looks exactly like a working one.
+
+  The general shape is that **a filing records the symptom the filer noticed, and an acceptance test
+  needs the observable the mechanism actually moves** — which is a different question, answered by
+  reading the code rather than the issue. Here the mechanism predicts a *crossing count* of 4 and main
+  measures 3; that number is the oracle, and the `Stop` arm survives only for a second reason the filing
+  did not have: it discriminates against the **partial** repair, which is measured waiting out a whole
+  deadline to report *"0 of 1 arrived"* for a thread executing nothing. So the test kept the arm and
+  changed what it is for.
+
+  Two properties of the filing made the wrong criterion easy to write, and both are worth recognising
+  in the next one. The leak was **symmetric**, so the guard whose job is to notice could not — a
+  difference predicate is blind to a common-mode error in exactly the way
+  [a spread is blind to bias](#a-spread-bounds-jitter-not-bias--no-comparison-inside-a-table-witnesses-an-offset-every-row-carries).
+  And the filing's headline claim was *true* while not being the harm, which is the more dangerous of
+  the two: a false premise gets checked, and a true-but-irrelevant one gets built on. The repair is to
+  correct the filing in the ADR that answers it — 0070 has a "two corrections follow" paragraph and a
+  measured three-row table — rather than to quietly write a different test than the one that was asked
+  for. (ADR
+  [0070](../decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md).)

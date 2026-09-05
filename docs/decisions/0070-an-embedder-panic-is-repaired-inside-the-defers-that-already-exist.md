@@ -138,6 +138,49 @@ measured rather than argued.
   (row one's odd crossing) — and `invokeIndex`/`runEntry` fall back to option C owing a per-thread field.
   Narrowing happens before landing, not after: a failed forecast narrows, it does not license.
 
+### The result, and the one thing on the board that was not forecast
+
+`janus.local` `measured` task 16, 0 concurrent at submit, linux/amd64, i9-9960X, base `1d16643`'s parent
+(`main`), 12 rounds, `--null --graft`:
+
+```
+                            │    base     │                head                │                null                │
+Empty-32                      172.3n ± 1%   171.9n ± 1%       ~ (p=0.486 n=12)   172.5n ± 1%       ~ (p=0.943 n=12)
+EmptyNull-32                  172.0n ± 0%   172.4n ± 1%       ~ (p=0.943 n=12)   173.0n ± 1%       ~ (p=0.339 n=12)
+TwoUncontendedLockUnlock-32   20.99n ± 0%   19.41n ± 0%  -7.53% (p=0.000 n=12)   20.98n ± 0%       ~ (p=0.199 n=12)
+HostCall-32                   278.6n ± 0%   281.8n ± 1%  +1.17% (p=0.000 n=12)   278.2n ± 0%       ~ (p=0.504 n=12)
+HostCallNull-32               278.6n ± 0%   281.0n ± 1%  +0.86% (p=0.001 n=12)   279.1n ± 1%       ~ (p=0.898 n=12)
+geomean                       137.0n        135.4n       -1.16%                  137.2n       +0.12%
+```
+
+- **The forecast holds on both rows it was made about.** `invokeIndex`'s fold is not detectable at this
+  resolution (`Empty` −0.4 ns, p=0.486); `callHost`'s costs **+3.2 ns**, which is **0.15× the bar** against
+  the criterion's 0.25×. The two host rows are byte-identical twins and move together (+3.2 ns, +2.4 ns),
+  which is the effect measured twice rather than once — a host call's fixed cost rose from 278.6 ns to
+  ~281 ns, of which the *boundary* share is what this ADR bought.
+- **The vacuity check passes in the direction it was pointed.** Every null delta is inside ±1 ns against a
+  20.99 ns bar, so the board has the resolution to adjudicate a 5.25 ns criterion.
+- **The bar row moved, and it is the row that cannot have been changed.** −7.53%, p=0.000, ±0% spreads,
+  while base and null agree at 20.98–20.99 ns. `BenchmarkTwoUncontendedLockUnlock` is a function-local
+  `sync.Mutex` calling no engine code, and `--graft` gave all three arms a byte-identical copy of it, so
+  the residual explanation is code layout in head's binary. That makes head an arm carrying an
+  **offset**, which is bias rather than jitter and is normally the thing no comparison inside a table can
+  witness — here one row happens to witness it, being the only row required to be invariant. **The
+  phenomenon was already filed**: [#580](https://github.com/scttfrdmn/burroughs/issues/580) records a
+  semantically inert diff moving unrelated rows 6–9%, and its number is four lines above the bar row in
+  `invokebench`'s own package comment, which is where it should have been read before a second issue was
+  opened. What is new is the denominator, filed as
+  [#653](https://github.com/scttfrdmn/burroughs/issues/653) with four candidate repairs. **Not repaired
+  here**, because the perturbation is row-specific (bar −7.53%, `Empty` ~0%, `HostCall` +1.17%): no
+  single-number correction exists, and a per-arm normaliser would import the bar's own layout luck into
+  every other row.
+- **What that limit does and does not do to this decision.** The criterion is met against the bar value
+  base and null agree on, and the alternative reading — that some of `HostCall`'s +3.2 ns is layout rather
+  than the two stores — moves the figure only *downward*. Either way the fold is bounded well under a
+  lock, which is the quantity option E was chosen for. It is stated rather than smoothed because the
+  honest version of *"forecast met"* here includes that one of the instrument's own assumptions was
+  measured false on the same board.
+
 ## Consequences
 
 - **0067's cliff is measured, not assumed absent.** `go build -gcflags=-S` reports **no
