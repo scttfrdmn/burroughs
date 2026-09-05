@@ -154,9 +154,43 @@ type thread struct {
 	// `Invoke` calls through it — the engine's own `TestAtomicRmwIsNotObservablyTornAcrossThreads`
 	// does, with N=2. A flag would be cleared by the first of those to leave a wait while the others
 	// were still in one, which is the mark saying "running" about a thread that is not. The count is
-	// exact for that shape; what it cannot fix is a *mixed* one, where one caller is suspended and
-	// another is executing guest code on the same `thread` — see #592.
+	// exact for that shape; what it cannot fix alone is a *mixed* one, where one caller is suspended
+	// and another is executing guest code on the same `thread` — #592, and `callers` below is the
+	// other half of that repair.
 	blocked int
+
+	// callers is how many callers are currently executing on this thread, moved by
+	// `enterCall`/`leaveCall` (safepoint.go) around each `Invoke`'s guest execution. Decision
+	// [0067]'s mechanism, and the second half of the mark above.
+	//
+	// **It exists because `blocked` is a count of callers and `Stop` was reading it as a fact about
+	// the thread.** The predicate was `blocked > 0`, which is *"some caller here is suspended"* asked
+	// in place of *"no caller here is running"*. Those coincide only while a thread has at most one
+	// caller, and one `thread` per instance against an ungated exported `Invoke` means it does not.
+	// With A suspended in a wait and B in a loop, `blocked` is 1, the old predicate answered "at a
+	// safepoint", and `Stop` returned `nil` while B ran — contract §3 SP-2 failing on its own terms,
+	// since a thread reported at a safepoint *"cannot touch guest memory until it re-enters through a
+	// boundary that observes the stop."* `Stop` now asks `blocked == callers`.
+	//
+	// **`blocked <= callers` holds by construction, and the invariant is load-bearing rather than
+	// incidental**, which is why `Stop` asserts it rather than trusting it: `enterBlocked` is reached
+	// only from `futex.go`'s `wait`, which is reached only from guest code, which runs only inside a
+	// call that has already incremented this field. A `blocked` above `callers` would make an equality
+	// predicate unsatisfiable and hang every `Stop` — a worse failure than the one being fixed, and
+	// silent.
+	//
+	// **Guarded by `world.mu` for `blocked`'s reason and not for a weaker version of it.** An atomic
+	// count would put this field outside the critical section that makes 0060's three-way race a
+	// two-way one, and would need its own ordering argument against a `Stop` that reads both fields.
+	// 0067 records that as option B′, rejected: the failure it re-opens is the one 0060 names as the
+	// outcome that must not exist.
+	//
+	// **Instantiate-time guest execution is not wrapped, and is not a gap.** `build`'s start function
+	// and `runConst` run before `InstantiateLinked` returns, so no external reference to the instance
+	// exists and no `Stop` can be in flight against it. That is the only guest code outside `Invoke`.
+	//
+	// [0067]: ../../docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md
+	callers int
 
 	// reported records that this thread's arrival has been sent for the round `world.resume` names,
 	// so that N callers sharing one thread produce one arrival and not N.

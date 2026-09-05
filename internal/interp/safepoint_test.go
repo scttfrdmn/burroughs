@@ -434,47 +434,124 @@ func TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish(t *testing.T) {
 	}
 }
 
-// TestStopReportsItsDeadlineWhenNothingPolls is the vacuity refutation for the test above, and it
-// **pins a limit rather than a guarantee** — which is why its name says what `Stop` reports rather than
-// what the engine promises.
+// TestStopSucceedsWhenNoCallerIsExecuting is the arm that `TestStopReportsItsDeadlineWhenNothingPolls`
+// turned into, a name that no longer exists in this package, and the rename is the point: it was a
+// requirement for the deadline **error** on an idle instance, and its own doc comment pre-registered this
+// replacement —
 //
-// A `Stop` that returned nil unconditionally passes the arrival test perfectly. So this arm asks for a
-// stop on an instance with no execution in flight, where nothing will ever reach a poll, and requires
-// the deadline error. That distinguishes "the world stopped" from "the call returned".
+//	When SP-2 lands, this test **changes** — the expected outcome becomes nil, immediately — and its
+//	name survives that, because it is still what `Stop` reports.
 //
-// **The behaviour it pins is not the end state, and contract §3 SP-2 is why.** A thread that is not in
-// guest code is morally at a safepoint — SP-2 says as much for a thread blocked in a host call, and
-// requires the engine to guarantee it *"cannot touch guest memory until it re-enters through a boundary
-// that observes the stop."* That needs a per-thread in-guest bit set and cleared at the boundary, which
-// is SP-2's half of #515 and is not in this slice. Until it lands, an idle instance times out, and this
-// test says so rather than leaving a reader to infer that a timeout here is correct. When SP-2 lands,
-// this test **changes** — the expected outcome becomes nil, immediately — and its name survives that,
-// because it is still what `Stop` reports.
-func TestStopReportsItsDeadlineWhenNothingPolls(t *testing.T) {
+// The forecast was right about the expectation and wrong about the name. *A control is named after the
+// rule, not the property*, and `…ReportsItsDeadlineWhenNothingPolls` states an outcome that is now false
+// of the engine: nothing polls here and the deadline is not reported. So the name went with the
+// expectation, and the vacuity refutation the old arm also carried moved to the arm below rather than
+// being quietly dropped with it.
+//
+// **What landed to falsify it is [decision 0067](../../docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md)'s
+// caller count**, whose subject was #592 and whose side effect this is. The old comment named exactly
+// what was missing — *"a per-thread in-guest bit set and cleared at the boundary"* — and `callers` is
+// that, as a count rather than a bit because one `thread` serves N concurrent `Invoke` calls. With it,
+// `Stop`'s predicate is `blocked == callers`, an idle instance satisfies it at `0 == 0`, and the world is
+// stopped the moment it is asked for.
+//
+// **The old behaviour was worse than a pinned limit and this is worth stating plainly: `Stop` on an idle
+// instance could never succeed.** `want` counted a thread with no caller on it, no guest code existed to
+// reach a poll, and every such call burned its whole deadline and returned an error. That is not a
+// missing guarantee, it is a `Stop` an embedder cannot use on the one state where stopping is trivial.
+//
+// **The generous deadline is the assertion's mechanism, not padding.** If `Stop` waited for an arrival
+// here it would wait the full 30s and then return `ErrStopDeadline`, so `err == nil` is by itself the
+// proof that it did not wait — no elapsed time is measured, and none needs to be.
+func TestStopSucceedsWhenNoCallerIsExecuting(t *testing.T) {
 	in := spinModule(t)
 
-	// Short, because this arm is waiting for a bound to *expire* rather than for work to finish, and
-	// a long one would only make the suite slower. Not so short that a scheduling hiccup on a
-	// loaded runner could be mistaken for the mechanism: the thing being asserted is which error
-	// comes back, not how fast.
+	if err := in.Stop(30 * time.Second); err != nil {
+		t.Fatalf("Stop on an instance with no caller executing returned %v, want nil.\n"+
+			"No guest code is running, so no caller can touch guest memory before observing the "+
+			"stop, which is contract §3 SP-2's condition satisfied at `blocked == callers` with "+
+			"both zero. An error here — and it can only be the deadline, since this call has "+
+			"30s — means `Stop` is waiting for an arrival from a thread that has no caller to "+
+			"send one (decision 0067, #592)", err)
+	}
+
+	in.Resume()
+
+	// The instance still runs afterwards, which is the half a cleanup test usually omits: a stop
+	// that left `stopReq` set would park the next guest forever.
+	out, err := in.Invoke("spin", I32(3))
+	if err != nil {
+		t.Fatalf("after a Stop and a Resume, the guest failed: %v — the request was not cleared, "+
+			"so the instance is stopped with nobody to release it", err)
+	}
+	if len(out) != 1 || out[0].Bits != 3 {
+		t.Errorf("after a Stop and a Resume the guest returned %v, want 3", out)
+	}
+}
+
+// TestStopReportsItsDeadlineWhenACountedCallerNeverArrives is the vacuity refutation for
+// `TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish`, re-pointed from the subject that
+// dissolved above.
+//
+// **A `Stop` that returned nil unconditionally passes every arrival test in this file perfectly**, so
+// something has to require the deadline error, or a green from the loop test distinguishes *"the world
+// stopped"* from nothing at all. The old arm got that from an idle instance, which now — correctly —
+// succeeds. *A tripwire whose subject dissolves is re-pointed*: the rule it was protecting is that
+// `Stop`'s failure path is reachable, and that rule is untouched by 0067.
+//
+// # Why the state is constructed rather than driven, and what that costs
+//
+// The natural subject is a caller that is executing guest code and cannot reach a poll before the
+// deadline. It is available and it is **not deterministic**: `poll` is reached from a back-edge in
+// `jumpTo`, from `enterFrame`, and from `tailcall.go`, so an unpolled interval is exactly one
+// straight-line stretch long, and holding a caller in one for a bounded wall-clock interval is a race
+// between the deadline and the stretch. It would be a test whose *false* direction is a false FAIL,
+// which is the flake shape rather than the conservative one.
+//
+// **A caller can be held unpolled indefinitely, and the mechanism for it is a blocking host call — which
+// does not exist yet ([#602](https://github.com/scttfrdmn/burroughs/issues/602)).** That is the
+// deterministic program-driven form of this control and it arrives with host functions; until then the
+// state is built directly, which this package's tests already do with `thread` literals (see `thread`'s
+// own doc comment on a nil `w`).
+//
+// So: a second thread joins the world with one counted caller and no goroutine. `blocked == callers` is
+// `0 == 1`, it is counted in `want`, nothing will ever send its arrival, and the deadline is the only
+// outcome available. Zero timing dependence, and it exercises the *mixed* accounting at the same time —
+// the instance's own thread is at a safepoint while this one is not, which is what makes the message
+// below read `1 of 2` rather than `0 of 1`.
+func TestStopReportsItsDeadlineWhenACountedCallerNeverArrives(t *testing.T) {
+	in := spinModule(t)
+
+	// No goroutine, and that is the construction: a counted caller that cannot arrive. The id is
+	// out of the way of any the engine assigns, so a failure message naming it is unambiguous.
+	ghost := &thread{id: 9999}
+	in.world.register(ghost)
+	in.world.mu.Lock()
+	ghost.callers = 1
+	in.world.mu.Unlock()
+
+	// Short, because this arm waits for a bound to *expire* rather than for work to finish. Nothing
+	// here depends on how short: the arrival it waits for cannot happen at any deadline.
 	const deadline = 100 * time.Millisecond
 
 	err := in.Stop(deadline)
 	if !errors.Is(err, ErrStopDeadline) {
-		t.Fatalf("Stop on an idle instance returned %v, want %v.\n"+
-			"A nil here means arrival was reported by something other than a thread reaching a "+
-			"safepoint — no guest code is running, so nothing can have polled — and that would "+
-			"make TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish pass without "+
-			"measuring anything.\n"+
-			"If contract §3 SP-2 has landed (a thread outside guest code counts as at a "+
-			"safepoint, observed at the boundary), then nil is the *correct* answer and this "+
-			"expectation is what changes — not the control's name, which is still about what "+
-			"`Stop` reports.", err, ErrStopDeadline)
+		t.Fatalf("Stop with a counted caller that cannot arrive returned %v, want %v.\n"+
+			"%s carries one caller and no goroutine, so `blocked == callers` is `0 == 1` and it "+
+			"is counted in `want` — nothing exists to send its arrival. A nil here means "+
+			"arrival was reported by something other than a thread reaching a safepoint, and "+
+			"that would make TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish pass "+
+			"without measuring anything", err, ErrStopDeadline, ghost)
 	}
 	// The message must carry the shortfall, or a caller learns only that something expired. Checked
 	// because a failure message is a claim nothing else in this tree scans.
-	if got := err.Error(); !strings.Contains(got, "0 of 1 arrived") {
-		t.Errorf("the deadline error reads %q, want it to name the shortfall as `0 of 1 "+
+	//
+	// `1 of 2` and not `0 of 2`: the instance's own thread has no caller executing, so it is at a
+	// safepoint and counted, and this thread is the one that never arrives. A message reading `0 of
+	// 2` would mean the at-safepoint thread was not credited, which is a different bug in the same
+	// arithmetic.
+	if got := err.Error(); !strings.Contains(got, "1 of 2 arrived") {
+		t.Errorf("the deadline error reads %q, want it to name the shortfall as `1 of 2 "+
 			"arrived` — a partial stop and a total one leave the world in different states, "+
 			"and a caller deciding what to do next has no other channel for the difference", got)
 	}

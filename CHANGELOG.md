@@ -21,6 +21,40 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/interp/invokebench` — one `Invoke` per op and the smallest guest body a module can declare,
+  because every other bench package here is built to make `Invoke`'s fixed cost invisible and one of them
+  was named as the instrument that would price it.** Charged to
+  [#592](https://github.com/scttfrdmn/burroughs/issues/592)'s slice, whose
+  [ADR 0067](docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md)
+  adds two critical sections to that boundary. Three rows: `Empty`, its byte-identical `EmptyNull` floor,
+  and `TwoUncontendedLockUnlock` as the bar, matching `enterCall`/`leaveCall`'s two pairs on one mutex.
+  - **The forecast it replaces named `growbench` on an unread fixture.** 0067's first draft said that arm
+    prices the boundary most sharply *"because its guest body is a single `memory.grow`"*; it is **1000** of
+    them, under that package's own note that *"`Invoke`'s own fixed cost has to be a small share of the
+    row."* `membench` and `rmwbench` are 1000 accesses, `loopbench` and `globalbench` 100,000 trips. The
+    arm named as most sensitive was the tree's most diluted, by three orders of magnitude. Withdrawn
+    **before** any number was taken, which is the only ordering that separates a withdrawal from shopping
+    for a threshold.
+  - **Its own resolution was measured before the board existed, and the answer differed by host — which is
+    why it was measured on the host the verdict came from.** Identical source against identical source on the
+    dev box spanned 131.9, 145.5, 168.5 and 312.9 ns/op against a 4.249 ns bar, GC-dominated, a floor an
+    order of magnitude wider than the effect; that reading was recorded first and would have made the A/B a
+    gross-regression filter only. On `janus.local`'s `measured` group under `scripts/ab.sh`'s protocol the
+    same `EmptyNull` pair tracks `Empty` to **±1%** across all three runs taken, a floor far narrower than
+    the 20.96 ns bar. *Compare the floor to the bar* is therefore satisfied on the host that adjudicates and
+    was not on the one that does not, and the dev-box figure is kept rather than replaced because it is what
+    a reader reproducing this locally will see.
+  - **No amplified arm is available, and that was checked rather than assumed.** `enterCall` sits at
+    `invokeIndex` around `in.run`, so it fires once per `Invoke` — a guest `call` does not reach it, and a
+    re-exported import's delegation chain returns through `ext.owner.invokeIndex` to a single `in.run`, so a
+    chain pays one pair and not one per link.
+  - **`TestTheArmMeasuresOneInvokeOfAnEmptyBody` pins the two fixture properties the rows rest on**, since
+    a trip count grown to 1000 here would turn this package into the diluted instrument it replaces while
+    still printing a plausible number. Its function-count clause was **stillborn** and the watched mutation
+    is what found it: `strings.Count(src, "(func ")` misses a bodyless `(func)`, so a second function slipped
+    past a control written to catch exactly that. *A pattern carries conditions a predicate drops* — and the
+    dropped condition was one character.
+
 - **A reference global's 40-byte value is published through an atomic pointer to an immutable cell —
   #573's third arm, the one ADR 0063 left open —
   [ADR 0066](docs/decisions/0066-a-reference-globals-forty-byte-value-is-published-through-an-atomic-pointer-because-reads-are-the-hot-direction-and-a-mutex-taxes-every-get.md)
@@ -467,8 +501,14 @@ weakly-ordered platform.
     walk's one blind spot instead of leaving it as a caveat. `TestStopBringsATailCallLoopToASafepoint`
     is behavioural, and it is the arm without which the trampoline poll could be deleted silently.
   - **What is absent is stated rather than implied.** A thread blocked in a *host* call is SP-2's
-    clause and is not covered: `TestStopReportsItsDeadlineWhenNothingPolls` asserts the deadline
-    behaviour that SP-2 will invert. `world`'s extent is one `Instance`, which is a named limit — a
+    clause and is not covered: the arm here was named `TestStopReportsItsDeadlineWhenNothingPolls`, which
+    no longer exists — it asserted the deadline behaviour that SP-2 would invert, and #592's caller count
+    inverted it, so the arm is now `TestStopSucceedsWhenNoCallerIsExecuting` and the deadline assertion
+    moved to `TestStopReportsItsDeadlineWhenACountedCallerNeverArrives`. Amended here rather than left
+    standing because **the rename made this sentence false in a channel no sweep reads**: `citecheck` and
+    `TestEveryCitedTestNameResolves` both fired on the `.go` site and neither has `CHANGELOG.md` in its
+    domain, so *a FAIL names a site, not the population* — and this one is the renamer's own drift, not the
+    population's. `world`'s extent is one `Instance`, which is a named limit — a
     shared memory spans instances (ADR 0052), and "every thread of this instance" and "every thread that
     can reach this memory" coincide only while `Spawn` is parked, which is SP-4's work.
   - **The world's mutex made §4 B-MM-3 a live clause, and the tripwire waiting for it fired.** #516
@@ -1665,6 +1705,55 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **`Stop` returned `nil` while a caller was still executing guest code, because SP-2's predicate asked a
+  question about a thread and the mark it read is a count of callers**
+  ([#592](https://github.com/scttfrdmn/burroughs/issues/592)),
+  [ADR 0067](docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md).
+  `link.go` registers exactly one `thread` per instance while `Invoke` is exported and gated by nothing, so
+  N concurrent callers share one `thread` — the engine's own
+  `TestAtomicRmwIsNotObservablyTornAcrossThreads` drives two. With caller A suspended in
+  `memory.atomic.wait` and caller B in a loop, `blocked` was 1, `blocked > 0` answered *"at a safepoint"*,
+  and `Stop` returned without waiting for anybody while B ran — §3 SP-2 failing on its own terms, since a
+  thread reported at a safepoint *"cannot touch guest memory until it re-enters through a boundary that
+  observes the stop."* The predicate is now `blocked == callers`, with `callers` moved under `world.mu` by
+  an `enterCall`/`leaveCall` pair around `invokeIndex`'s `in.run`.
+  - **The hang half of #592 was already closed and this is the residual, which is a race window rather than
+    a steady state** — grave #593's per-round `reported` flag fixed the arrival-buffer overflow, and a dedup
+    cannot decide how many callers are running. `Stop` sets `stopReq`, so B parks at its next poll; the
+    violation is one inter-poll interval wide.
+  - **The witness was stillborn and the fix was structural, not a tuned sleep.** With a three-instruction
+    loop body it passed on the broken engine, because B had already parked before the host's first read.
+    `poll` has exactly three call sites — a back-edge in `jumpTo`, `enterFrame`, and `leaveBlocked` — so a
+    guest body with no branch, no call and no tail call is an unpolled stretch of whatever length it is
+    written to. `TestAThreadIsAtASafepointOnlyWhenEveryCallerOnItIsSuspended` unrolls 40,000 atomic adds
+    and reads the counter through the memory rather than through `Invoke`; on the unfixed engine it died 5
+    of 5 rounds with 95–99% of the body still to run.
+  - **`blocked <= callers` is asserted with a panic rather than trusted**, because `enterBlocked` is
+    reachable only from guest code inside a counted call, and a violation would make an equality predicate
+    unsatisfiable and hang every `Stop` — silently, and worse than the defect being fixed.
+  - **`Stop` on an idle instance could never have succeeded before this**, which is why a test changed
+    rather than being added: `TestStopReportsItsDeadlineWhenNothingPolls` asserted `ErrStopDeadline` there,
+    and its own failure message had pre-registered that *"if contract §3 SP-2 has landed … then nil is the
+    correct answer."* It is now `TestStopSucceedsWhenNoCallerIsExecuting`, and its second job — refuting
+    vacuity for the arrival loop — is re-homed on
+    `TestStopReportsItsDeadlineWhenACountedCallerNeverArrives`, which constructs the state from a
+    registered `thread` because the program-driven form needs #602's blocking host call.
+  - **`ErrStopDeadline`'s message reports a count of threads**, so with two callers on one thread it can say
+    *"of 1"* — the same confusion in the reporting channel rather than the predicate. It changes no verdict,
+    nothing asserts it, and 0067 names it so a reader who finds it knows it was seen.
+  - **0067's pre-registered rollback fired at +39.2 ns against a 20.96 ns bar, and the mechanism landed
+    anyway because what fired it was a compiler cliff rather than the design.** The draft uncounted with
+    `defer st.t.leaveCall()`. An attribution run against an unsound lockless pair — never committed, restored
+    the same hour — kept 29.2 ns of the 39.2 with the mutexes gone, so the mutex was never the subject:
+    `invokeIndex`'s pre-existing `defer leaveGuest()` is *open-coded*, a second defer takes the whole function
+    off that path, and `-gcflags=-S` shows four `runtime.deferprocStack` calls at the draft's head and **none**
+    at base — the second defer converted the first. A plain `leaveCall()` after `in.run` restores base's
+    assembly profile exactly and brings the delta to **+13.7 ns, 0.65× the bar, criterion met on an unchanged
+    criterion.** It is also tighter than the defer rather than only cheaper: every error return the defer's
+    comment cited is *after* `in.run` returns, so `callers` drops when guest execution ends instead of when
+    result marshalling does, and the only case `defer` additionally covered is a panic in a package with no
+    `recover` on any non-test path.
 
 - **Two comments that described today's only caller in the shape of a restriction**
   ([grave #645](https://github.com/scttfrdmn/burroughs/issues/645)), found by scoping

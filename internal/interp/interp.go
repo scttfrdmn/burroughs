@@ -777,8 +777,36 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		t: &in.host,
 	}
 	numResults, refResults := countByArray(ft.Results)
-	if err := in.run(fn, locals, st, numResults, refResults); err != nil {
-		return nil, err
+	// §3 SP-2's denominator, decision 0067 and the repair for #592: `Stop` asks whether *every* caller
+	// on this thread is suspended, and this pair is what tells it how many there are.
+	//
+	// **Here and not at the top of the function, which is the load-bearing part of the placement.** The
+	// delegation above returns `ext.owner.invokeIndex(...)`, so exactly one `in.run` executes per
+	// re-export chain while every instance in the chain has its own `thread`. Counting on entry would
+	// leave a delegating instance's thread with a caller counted and no guest code running on it — an
+	// unsatisfiable `blocked == callers` for a thread that will never poll and never arrive, so every
+	// `Stop` on that instance would wait out its whole deadline. Wrapping `in.run` counts exactly the
+	// thread the guest code runs on.
+	//
+	// **A plain call rather than a `defer`, and the draft that used `defer` paid 25–29 ns/call for it** —
+	// two independent measurements that do not quite agree, both in 0067's table. The
+	// reasoning for `defer` was that every error return below is a caller that has stopped executing —
+	// true, and it is exactly why the plain call covers them: all of them are *after* `in.run` returns, so
+	// uncounting here is not merely equivalent but tighter, dropping `callers` when guest execution ends
+	// instead of when result marshalling does. What `defer` additionally bought was uncounting after a
+	// panic, and there is no `recover` on any non-test path in this package, so that case is an engine bug
+	// that has already left the instance undefined.
+	//
+	// That cost is a compiler cliff and not one defer's: `invokeIndex`'s `defer leaveGuest()` is
+	// *open-coded*, a second defer took the function off that path, and `-gcflags=-S` shows four
+	// `runtime.deferprocStack` calls where base has none — so the second defer converted the first one
+	// too. Measured, attributed, and recorded here because the next person to add a `defer` to this
+	// function will pay the same cliff and nothing else in the tree says so (decision 0067).
+	st.t.enterCall()
+	runErr := in.run(fn, locals, st, numResults, refResults)
+	st.t.leaveCall()
+	if runErr != nil {
+		return nil, runErr
 	}
 	if len(st.num) != numResults {
 		// #9's arity check, arriving late. Stated as the layering debt it is rather than
