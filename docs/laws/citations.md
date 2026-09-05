@@ -307,6 +307,20 @@ reach is a law out of context.
   checked against the world as it stands when the body is written, and *a plan to make a
   citation true later is a citation that is false now*.
 
+  **And the label in front of a run of numbers distributes over the whole run.** The form
+  `grave #A and #B` claims `type:grave` for *both*, because a reader distributes it and so does the
+  scanner: the joined-run arm of `scripts/citecheck.sh`'s label-claim check carries the claim across a
+  separator of `and`, a comma, or a slash. So a run whose first member is a grave and whose second is
+  `type:harness` is a false label claim about the second, written by an author who was thinking only
+  about the first. Specimen: #641's body did it twice on one SHA — once in the Board and once, joined by
+  a comma rather than by *and*, in Landed — and the second site was found only by reading the scanner's
+  trigger instead of the line it had pointed at, which is *a FAIL names a site, not the population*
+  arriving inside a two-line body edit. The repair is to split the run into one clause per number, and
+  the reason this class is worth a clause of its own is that **it is the quantifier problem in a form a
+  checker can see**: the same distributivity defect over a run of prose claims is invisible, and the
+  only thing that makes this one catchable is that `type:grave` is a label a fetch can compare.
+  (Ruling: Scott, on the #641 review.)
+
 ### A `Status:` written in the PR that files its blocker is written before the blocker has a body.
 
 - **A `Status:` written in the PR that files its blocker is written before the blocker has a body.**
