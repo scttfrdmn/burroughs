@@ -128,8 +128,19 @@ type thread struct {
 	// another goroutine writes is a data race — undefined behaviour, not a slightly-stale answer.
 	stopReq atomic.Bool
 
-	// blocked is contract §3 SP-2's mark: this thread is suspended in `memory.atomic.wait` and
-	// therefore *at a safepoint* — decision 0060's third choice.
+	// blocked is contract §3 SP-2's mark: this thread is suspended and therefore *at a safepoint* —
+	// decision 0060's third choice.
+	//
+	// **The mark names no reason, and the omission is the design.** SP-2 is one clause over two
+	// consumers — *"a thread blocked in a host call **or** in `memory.atomic.wait`"* — and
+	// `enterBlocked`/`leaveBlocked` (safepoint.go) mention neither: they take a `*thread`, move this
+	// count under `world.mu`, and park if a stop is in flight. `memory.atomic.wait` is merely the
+	// consumer that exists, not the thing being counted. This sentence said *"suspended in
+	// `memory.atomic.wait`"* until #602's scoping — a true description of a population of size one
+	// wearing the grammar of a constraint on it, which is **grave #645**. The cost is a reader who
+	// wants a blocking host call concluding they must build a second mechanism instead of reusing
+	// this one, and that reading happened once before the repair. A blocking host call wraps its call
+	// in the same pair and inherits SP-2 and SP-4 whole.
 	//
 	// **Guarded by `world.mu`, and deliberately not an atomic.** Both writers (`enterBlocked`,
 	// `leaveBlocked`) and the only reader (`Stop`) hold that mutex, and the whole point is that the

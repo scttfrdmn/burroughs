@@ -87,6 +87,15 @@ var boundaryCrossings atomic.Uint64
 //
 // **#554's `runEntry` is the next site**, named here so it is not discovered during that merge: a
 // spawned thread's first entry into the guest is a host→guest transition like any other.
+//
+// **And a host call's return is the site §4 named first**, which this comment has been able to say
+// since it was written and did not — **grave #645**'s second site: the enumeration above quotes B-MM-1's
+// *"host-call return"* and then records that the engine has none, so the one absent site with a clause of
+// its own was the one missing from the list of sites to come. It arrives with the host-function surface —
+// a decision, **#602**, not a merge — and it is two crossings rather than one, because a host call leaves
+// the guest and re-enters it: `leaveGuest` out, `enterGuest` back, which is the same pairing every site
+// here has and the first one where the *guest* is what continues afterwards. B-MM-4's annotation
+// convention above is fixed so that call shape has a spelling to use on arrival.
 func enterGuest() { boundaryCrossings.Add(1) }
 
 // leaveGuest establishes B-MM-1's release edge: everything the host wrote while inside becomes visible
