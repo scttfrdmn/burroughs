@@ -1666,6 +1666,26 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Two comments that described today's only caller in the shape of a restriction**
+  ([grave #645](https://github.com/scttfrdmn/burroughs/issues/645)), found by scoping
+  [#602](https://github.com/scttfrdmn/burroughs/issues/602)'s common core rather than by recalling either
+  site. Both are testimony repairs: the mechanisms are unchanged and correct, and what was wrong is what a
+  reader of them would conclude. Neither is reachable by any sweep — both are prose inside a correct
+  mechanism, so the checkers see nothing and the only oracle is a reader who wanted the second consumer.
+  - **`thread.blocked`'s doc comment said the mark means *"suspended in `memory.atomic.wait`"***, where §3
+    SP-2 is one clause over two consumers — *"a thread blocked in a host call **or** in
+    `memory.atomic.wait`"* — and `enterBlocked`/`leaveBlocked` name neither: they take a `*thread`, move the
+    count under `world.mu`, and park if a stop is in flight. The futex wait is the consumer that exists, not
+    the thing counted. The cost of the old wording is specific: a reader wanting a blocking host call
+    concludes they must build a second suspension mechanism, when wrapping the call in the same pair
+    inherits SP-2 and SP-4 whole.
+  - **`boundary.go`'s list of sites-to-come named #554's `runEntry` and not the host-call edge**, which the
+    same comment had the material to name all along — its enumeration quotes B-MM-1's *"host-call return"*
+    and then records that the engine has none of §4's four examples, so the one absent site with a clause of
+    its own was the one missing from the list of sites to come. Now named, with the two facts a reader needs
+    on arrival: it is **two** crossings rather than one (`leaveGuest` out, `enterGuest` back), and it comes
+    with a decision rather than a merge.
+
 - **The end-table pricing instrument's resolution check compared two readings of a process-wide counter,
   and both of them could be dirty** (grave
   [#570](https://github.com/scttfrdmn/burroughs/issues/570)). It turned `make check` red on darwin/arm64
