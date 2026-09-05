@@ -38,9 +38,9 @@ type ThreadID uint64
 // It is **withheld** because `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` fires on it. That
 // control watches for the first `go` statement in this package's non-test files, and it names what
 // unparking has to answer: §4's boundary model has its mechanism and no litmus battery (**#10**),
-// `memory.atomic.wait` cannot return 0 for woken (**#543**), `Spawn` shares the instance's globals so
-// `global.set`'s plain writes are data races (**#573**), and the spawn walk's closure is smaller than
-// the reachable set (**#575**). Deleting or re-pointing that control is a principal's call and not a
+// `memory.atomic.wait` cannot return 0 for woken (**#543**), `Spawn` shares the instance's globals and a
+// **reference** global's `global.set` is still a plain write (**#573**), and the spawn walk's closure is
+// smaller than the reachable set (**#575**). Deleting or re-pointing that control is a principal's call and not a
 // test author's, so this paragraph is a parking notice rather than a to-do list.
 //
 // **The blocker has now changed twice without clearing, and this paragraph is where the first change

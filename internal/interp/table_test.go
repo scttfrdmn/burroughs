@@ -515,7 +515,7 @@ func TestTableSlotsHoldTheInitializersValue(t *testing.T) {
 		t.Fatalf("table size = %d, want 2", got)
 	}
 	want := ref{Addr: 1, Inst: in}
-	for i, got := range tab.slots {
+	for i, got := range tab.view() {
 		if got != want {
 			t.Errorf("explicit form: slot %d = %+v, want %+v (ref.func $f, function 1)", i, got, want)
 		}
@@ -528,7 +528,7 @@ func TestTableSlotsHoldTheInitializersValue(t *testing.T) {
 	if got := tab.size(); got != 2 {
 		t.Fatalf("plain table size = %d, want 2", got)
 	}
-	for i, got := range tab.slots {
+	for i, got := range tab.view() {
 		if !got.Null {
 			t.Errorf("plain form: slot %d = %+v, want a null ref (the decoder's synthesized "+
 				"`ref.null func`)", i, got)

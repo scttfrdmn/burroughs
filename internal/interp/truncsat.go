@@ -70,10 +70,13 @@ func (in *Instance) execFC(ins binary.Instr, st *stack) error {
 		if err != nil {
 			return err
 		}
+		// One `size()`, hoisted above the branch, for `memory.size`'s reason in exec.go: `size`
+		// is an image load and the load-once control counts it as one.
+		sz := tab.size()
 		if tab.limits.Addr64 {
-			st.pushI64(int64(tab.size()))
+			st.pushI64(int64(sz))
 		} else {
-			st.pushI32(int32(uint32(tab.size())))
+			st.pushI32(int32(uint32(sz)))
 		}
 
 	case 0x0f: // table.grow — `eval.ml:366-373`

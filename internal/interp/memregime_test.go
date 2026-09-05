@@ -4,8 +4,10 @@ package interp
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"sort"
 	"strings"
@@ -127,23 +129,46 @@ var guestMemoryRegimes = map[string]memRegime{
 // catches today's. `cell` is named explicitly because it is the constructor for `atomicCell`, and every
 // width-1 and width-2 atomic access reaches the regime through it.
 //
-// # Two soundness notes, because the scan is name-based
+// # The population is type-resolved, and it had to become so
 //
-// **No type resolution.** `parser.ParseFile` gives no types, so `x.write(...)` matches on the selector
-// name alone. Today that is exact, and the check is on the declarations rather than on the calls:
-// `grep -n '^func (.*) \(view\|read\|write\)('` over the non-test files returns three lines and all
-// three receivers are `*memory`, so no other type in this package can supply one of these selectors.
-// (The call-site grep is the wrong instrument for this and is recorded here because it was tried
-// first: `grep -n '\.read(\|\.write(\|\.view('` returns twenty hits, of which seventeen are calls and
-// three are prose inside doc comments — *a grep measures text*.) If another type ever grows one of those names the
-// control **over**-reports — a function joins the population that does not touch guest memory — and
-// that is the safe direction: it fails, and the failure is discharged by classifying the row, not by
-// widening an exception list.
+// **This scan used to match on the selector name alone**, on a premise it stated and checked:
+// *"`grep -n '^func (.*) \(view\|read\|write\)('` over the non-test files returns three lines and all
+// three receivers are `*memory`, so no other type in this package can supply one of these selectors."*
+// It also named the failure mode — another type growing one of those names — and called it the safe
+// direction, *"discharged by classifying the row, not by widening an exception list."*
 //
-// **The directory walk takes every `.go` file regardless of build tag**, `os.ReadDir` plus
-// `parser.ParseFile` rather than the deprecated `parser.ParseDir`, for the reason
+// **[Decision 0065][0065] falsified the premise and the escape hatch did not fit.** `table`,
+// `elemInstance` and `dataInstance` now publish images through methods deliberately *named* `view`, so
+// that one load-once control covers all four subjects. The name-based scan duly over-reported: sixteen
+// table and segment functions arrived as unclassified sites in the run that landed 0065 — the whole of
+// `table`'s access surface, both segments' `size`, the two table arms in `bulk.go` and the four
+// segment-reading arms in `arrayop.go`. But
+// classifying them is not available here, because this table is **ADR 0064's extent** and 0064 is about
+// guest *memory* — writing `table.go:table.get` into it would make the enumeration a decision rests on
+// claim a region that decision never reached. A table is guest-visible state and its own tearing
+// question is real; it is not this one, and v0's threads pin shares no tables.
+//
+// So the population is resolved with `go/types` instead: a call reaches guest memory when its receiver
+// is `*memory` **by type**, compared against the `memory` object in the checked package's own scope
+// rather than by name. That retires the caveat above rather than widening an exception list, and it
+// makes the earlier "safe direction" argument moot — the scan no longer has that failure mode.
+//
+// **Type-checking here reports errors by construction, and the check tolerates exactly that.** The
+// directory walk takes every `.go` file regardless of build tag — `os.ReadDir` plus `parser.ParseFile`
+// rather than the deprecated `parser.ParseDir`, for the reason
 // `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` states: a plain access behind a build tag is
-// still a plain access.
+// still a plain access — and `ends_scan.go` / `ends_table.go` are #136's two lanes of one function, so
+// the union redeclares `endOf` and `Instance.frameEnds`. Those errors are collected and ignored.
+// **What is asserted instead of "no errors" is that the type information arrived**: every `view`,
+// `read` and `write` selector in the tree must resolve to a receiver type, and one that does not fails
+// the control by name. A silent type-check collapse would otherwise empty the population, which is the
+// vacuity a green over an unresolved scan would hide.
+//
+// **The synchronisation half stays name-based**, and that premise is checked the same way the old one
+// was: `grep -n '^func .*\b\(cell\|atomic[A-Za-z]*\)('` over the non-test files returns nine lines —
+// `memory.cell`, six `Instance.atomic*` arms and the two free `atomic*Word` helpers — so no unrelated
+// type supplies one of those names. It stays a prefix rather than a list so a *new* helper is caught by
+// the same predicate.
 //
 // # Watched die, all four arms, and two of them without being asked
 //
@@ -164,6 +189,20 @@ var guestMemoryRegimes = map[string]memRegime{
 //   - **0054's mechanism leaving a typed site**, by mutating the *table* rather than the code —
 //     re-labelling `execMemoryFill` as `regimeMixed` — since that arm's subject is a row claiming
 //     synchronisation the code does not have.
+//
+// A fifth witness arrived from the tree when 0065 landed, and it is the one that bought the type
+// resolution above: dropping the receiver-type filter — `receiverIsMemory` returning `true, true`, which
+// is what this control did before 0065 — fails with sixteen unclassified table and segment sites
+// (`table.go:table.get`, `segment.go:elemInstance.size`, `bulk.go:Instance.execTableInit` and thirteen
+// more). That mutation is the pre-0065 control run against the post-0065 tree, so the arm needs no
+// invention; the count is the mutation's own output through `grep -c`, not a reading of a truncated log,
+// which is where a first draft of this sentence got thirteen.
+//
+// The two arms the type resolution brought with it were watched too, because an instrument that reports
+// its own blindness has to be able to: `receiverIsMemory` returning `false, false` fails naming every
+// accessor call site as unresolved rather than emptying the population, and looking the receiver type up
+// under a name the package does not declare fails at *"has lost its subject"* rather than treating no
+// memory type as no memory sites.
 //
 // [0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
 // [law]: ../../docs/laws/engine.md#the-guests-data-races-must-not-be-the-hosts-except-where-the-model-permits-the-tear-and-the-region-is-enumerable
@@ -244,6 +283,11 @@ func TestNoGuestMemoryAccessSiteJoinsWithoutAClassification(t *testing.T) {
 	}
 }
 
+// memoryAccessors are `*memory`'s image accessors: a call to one of these on a memory is a guest-memory
+// reach. The receiver's *type* is what decides, but the name set still bounds which selectors have to
+// resolve at all, so it is named once here and used for both.
+var memoryAccessors = map[string]bool{"view": true, "read": true, "write": true}
+
 // scanGuestMemorySites returns, for every function in this package's non-test files that reaches
 // guest memory, whether it also calls a synchronisation helper, plus the number of files parsed.
 func scanGuestMemorySites(t *testing.T) (map[string]bool, int) {
@@ -253,18 +297,53 @@ func scanGuestMemorySites(t *testing.T) (map[string]bool, int) {
 		t.Fatalf("reading internal/interp: %v", err)
 	}
 	fset := token.NewFileSet()
-	sites := map[string]bool{}
-	files := 0
+	// Parsed once and type-checked as one package, because a receiver's type is a property of the
+	// package and not of the file the call is in. `SkipObjectResolution` is gone for the same reason:
+	// the type-checker does that resolution itself and wants the declarations intact.
+	var parsed []*ast.File
+	inFile := map[*ast.File]string{}
 	for _, ent := range ents {
 		name := ent.Name()
 		if ent.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		file, err := parser.ParseFile(fset, name, nil, 0)
 		if err != nil {
 			t.Fatalf("parsing %s: %v", name, err)
 		}
-		files++
+		parsed = append(parsed, file)
+		inFile[file] = name
+	}
+
+	info := &types.Info{
+		Types:      map[ast.Expr]types.TypeAndValue{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
+	}
+	// Errors are collected and ignored: the two build lanes of #136 redeclare one function between
+	// them, which is a property of the walk taking every file regardless of tag. What replaces "no
+	// errors" as the soundness assertion is that every accessor selector below resolves.
+	cfg := &types.Config{
+		Importer: importer.ForCompiler(fset, "source", nil),
+		Error:    func(error) {},
+	}
+	pkg, _ := cfg.Check("github.com/scttfrdmn/burroughs/internal/interp", fset, parsed, info)
+	if pkg == nil {
+		t.Fatalf("type-checking internal/interp returned no package, so no receiver type below can " +
+			"be resolved and the population would be empty. This control's predicate is the receiver's " +
+			"type; repair the type-check rather than falling back to selector names, which decision " +
+			"0065 made ambiguous")
+	}
+	memObj := pkg.Scope().Lookup("memory")
+	if memObj == nil {
+		t.Fatalf("no `memory` type in internal/interp's package scope: this control resolves guest "+
+			"memory reaches by comparing receiver types against that object, so it has lost its "+
+			"subject. Package %q held %d names", pkg.Path(), len(pkg.Scope().Names()))
+	}
+	memType := memObj.Type()
+
+	sites := map[string]bool{}
+	for _, file := range parsed {
+		name := inFile[file]
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok {
@@ -276,15 +355,34 @@ func scanGuestMemorySites(t *testing.T) (map[string]bool, int) {
 				if !ok {
 					return true
 				}
-				switch callee := calleeName(call.Fun); callee {
-				case "view", "read", "write":
-					reaches = true
-				case "cell":
-					sync = true
-				default:
-					if strings.HasPrefix(callee, "atomic") {
-						sync = true
+				callee := calleeName(call.Fun)
+				if memoryAccessors[callee] {
+					sel, isSel := call.Fun.(*ast.SelectorExpr)
+					if !isSel {
+						// A package-level function of that name would be a different thing entirely;
+						// there is none, and if one appears this says so rather than guessing.
+						t.Errorf("%s:%s calls a bare %s(), which is not a method on any receiver. "+
+							"This control decides guest-memory reaches by the receiver's type and "+
+							"cannot classify a call that has none", name, declName(fn), callee)
+						return true
 					}
+					isMem, resolved := receiverIsMemory(info, sel, memType)
+					switch {
+					case !resolved:
+						t.Errorf("%s:%s calls %s() on a receiver whose type did not resolve, so this "+
+							"control cannot tell whether it reaches guest memory.\nThe population is "+
+							"type-resolved because decision 0065 named `table`, `elemInstance` and "+
+							"`dataInstance` accessors `view` too — the selector name no longer "+
+							"identifies the subject. An unresolved receiver is this scan failing, not "+
+							"a site to skip: repair the type-check, do not widen the name set",
+							name, declName(fn), callee)
+					case isMem:
+						reaches = true
+					}
+					return true
+				}
+				if callee == "cell" || strings.HasPrefix(callee, "atomic") {
+					sync = true
 				}
 				return true
 			})
@@ -293,7 +391,25 @@ func scanGuestMemorySites(t *testing.T) (map[string]bool, int) {
 			}
 		}
 	}
-	return sites, files
+	return sites, len(parsed)
+}
+
+// receiverIsMemory reports whether a selector's receiver is the package's `memory` type, and whether
+// the receiver's type resolved at all. The two are separate answers because "not a memory" and "the
+// type-checker could not say" are different verdicts and only one of them is a skip.
+//
+// The comparison is against the `memory` object from the checked package's scope rather than against
+// the string "memory", so a type from another package that happens to share the name cannot pass.
+func receiverIsMemory(info *types.Info, sel *ast.SelectorExpr, memType types.Type) (isMem, resolved bool) {
+	s := info.Selections[sel]
+	if s == nil || s.Recv() == nil {
+		return false, false
+	}
+	recv := s.Recv()
+	if ptr, ok := types.Unalias(recv).(*types.Pointer); ok {
+		recv = ptr.Elem()
+	}
+	return types.Identical(recv, memType), true
 }
 
 // calleeName is the called function's own name — the identifier for a package-level call, the

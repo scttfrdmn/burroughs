@@ -21,6 +21,71 @@ weakly-ordered platform.
 
 ### Added
 
+- **The table and both segment kinds publish their slice headers through images, so the racy write stops
+  compiling —
+  [ADR 0065](docs/decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md)
+  plus `TestAPublishedImageIsImmutableOnceStored` and
+  `TestARelocatingTableGrowDoesNotRaceAConcurrentReader`**
+  ([#622](https://github.com/scttfrdmn/burroughs/issues/622)). Three sites wrote a three-word slice header
+  into an object another goroutine was already dereferencing: `table.grow`'s `t.slots = grown`,
+  `elemInstance.drop`'s `s.refs = nil`, `dataInstance.drop`'s `s.bytes = nil`. This is the **memory-unsafe**
+  half of #573's domain rather than a torn value — a drop pairs a fresh nil pointer with the old length, and
+  a reader that observes that pair indexes off address 0 — and `table.grow` *also* relocates, so publishing
+  the header atomically would still leave a reader bounds-checking one array and reading another. `table`,
+  `elemInstance` and `dataInstance` now each hold a `tabImage`/`elemImage`/`dataImage` through an
+  `atomic.Pointer`, which is [ADR 0058](docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md)'s
+  mechanism with the subject swapped three times.
+  - **The slice moved *inside* the image, which is what makes the confinement structural.** `t.slots` is now
+    a compile error, so the class cannot be re-entered by a later arm and no scan has to assert that it
+    hasn't been. Scott, on the #637 review: *"moving `slots`/`refs`/`bytes` inside the image structs so a
+    direct field access stops compiling makes the enumeration hold by construction rather than by a scan,
+    which is the same dissolving move as #575."* Recorded as a law in
+    [`docs/laws/engine.md`](docs/laws/engine.md#an-enumeration-held-by-construction-outranks-one-held-by-a-scan),
+    with the limit stated: 0064's plain bulk region has nothing to move, so there the
+    enumeration-plus-control still stands.
+  - **All three accessors are named `view()` for the existing control's sake**, so
+    `TestEveryMemoryOperationLoadsTheImageAtMostOnce` becomes
+    `TestEveryOperationLoadsAPublishedImageAtMostOnce` and covers four subjects — a rename rather than a
+    fourth control, and rather than a domain widened by hand
+    ([controls.md](docs/laws/controls.md#bringing-new-subjects-under-an-existing-control-is-a-rename-not-a-fourth-control)).
+    **`size()` joined the predicate** because it *is* a load — each is `uint64(len(x.view()))` — which
+    turned up two sites calling it once per arm in mutually exclusive branches (`memory.size` in `exec.go`,
+    `table.size` in `truncsat.go`); both were **hoisted above the branch rather than exempted**, since *an
+    exemption inherits none of the trigger's lessons*. Its census pin was **counted by running the scan**
+    after a hand-estimated first draft was refused by the control itself.
+  - **`grow` serialises on its own mutex with the descriptor length updated inside the critical section**,
+    which is [ADR 0061](docs/decisions/0061-grow-serialises-on-its-own-mutex-rather-than-a-compare-and-swap-over-the-descriptor-because-the-length-lives-in-two-places-and-only-one-is-in-the-descriptor.md)'s
+    reason repeated for tables: `limits.Min` is the second home of the length and is not in the image, so a
+    compare-and-swap over the image alone cannot carry it. **There is no reslice arm and no `noMove` mark** —
+    a table reserves no capacity, so every `table.grow` relocates, which is why the race test above needs no
+    fixture check where memory's twin needs one to prove it reached the relocating path.
+  - **Both drops publish a shared empty image** (`droppedElem`, `droppedData`), so a guest looping on
+    `elem.drop` allocates nothing, and dropping twice is legal by construction rather than by a flag —
+    asserted, because sharing the value is exactly what could have cost that property (`bulk.wast:261`).
+  - **The immutability witness is written against the regression 0065 *creates*, not the defect it fixes.**
+    #622's own defect has no single-threaded witness — a Go slice is a value, so a reader that already
+    copied the header is unaffected by what the owning struct does next, and a test of that shape is an
+    analytic zero. What is live is an arm that writes `t.img.Load().slots = grown`: it compiles, passes every
+    conformance vector, and restores the hazard. So the asserted property is that a descriptor held across
+    the operation still names the same array at the same length, per subject, three subtests. The
+    memory-safety half is the race test, whose **oracle is the detector rather than any assertion in it** —
+    said plainly at the test, because without `-race` it asserts only that nothing panicked.
+  - **#627's enumeration control had to be re-based on types, and the premise it lost is recorded.** Its
+    population was selected by accessor *name*, which was sound while `memory` was the only owner of `view`;
+    0065 gave three more types the same selector and the scan began demanding classifications for **sixteen**
+    table and segment sites that ADR 0064's regimes have no business classifying — 0064 is about guest
+    *memory*. Classifying them would have corrupted the decision's extent and an exception list would have
+    taught the next author to phrase around the instrument, so the scan now type-checks the package with
+    `go/types` and compares each selection's receiver against `memory` by `types.Identical`. **"No errors"
+    could not be the soundness check** — the package does not type-check cleanly by construction, since
+    #136's two build lanes redeclare one function — so it is **"every accessor selector resolved"**, with an
+    unresolved receiver failing the control rather than quietly leaving the population. The synchronisation
+    half stays name-based, bounded by a declarations grep rather than by a call-site count
+    ([evidence-and-instruments.md](docs/laws/evidence-and-instruments.md#a-checkable-claim-gets-the-instrument-whose-domain-is-its-subject-and-a-count-gets-both-counts-recorded)).
+  - **Option E is deferred, not rejected**: folding `limits.Min` into `tabImage` would put the length in one
+    place, and it reaches the descriptor every reader loads, so it is a separate decision with its own
+    measurement rather than a tidy-up inside this one.
+
 - **The bulk and SIMD region stays plain, and its extent becomes a machine-checked enumeration —
   [ADR 0064](docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md)
   plus `TestNoGuestMemoryAccessSiteJoinsWithoutAClassification`**
@@ -1108,6 +1173,33 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Four laws land in the corpus, charged to #622's slice as its overhead** — three kept from Scott's #637
+  review and one given on this slice. Each is stated in the family whose subject it is, not in `CLAUDE.md`.
+  - **When an issue splits, every message naming it is re-derived, not re-numbered**
+    ([citations.md](docs/laws/citations.md#when-an-issue-splits-every-message-naming-it-is-re-derived-not-re-numbered)).
+    His words: *"a live message one class short of its subject — a different failure from a stale name, and
+    harder to see because everything resolves."* Three sites said `global.set`'s plain writes are races and
+    named #573; after #622 split off and ADR 0063 synchronised two arms, the clause was at once too broad and
+    silent about the class that had left, with every pointer in it resolving. The practice is the derivable
+    part: **at split time, grep the parent number and read the sentences, not the pointers.**
+  - **The tree may cite an issue; it may not claim that issue's labels**
+    ([citations.md](docs/laws/citations.md#the-tree-may-cite-an-issue-it-may-not-claim-that-issues-labels)).
+    Scott, on this slice: *"a label is a predicate about a world no control here can see … it rots on a
+    mutation nothing observes."* Includes the attribution half — where an artifact cannot say which principal
+    acted, a principal's statement about **capability** can, and the shared account's tracker mutations are
+    the agent's because Scott does not touch the tracker.
+  - **A checkable claim gets the instrument whose domain is its subject, and a count gets both counts
+    recorded**
+    ([evidence-and-instruments.md](docs/laws/evidence-and-instruments.md#a-checkable-claim-gets-the-instrument-whose-domain-is-its-subject-and-a-count-gets-both-counts-recorded)).
+    *"Seventeen call sites was the wrong premise **and** the wrong grep; the declarations are what bound the
+    receiver type."* Both counts go in the comment — twenty hits, seventeen of them calls — so a re-runner
+    reconciles instead of suspecting drift.
+  - **Bringing new subjects under an existing control is a rename, not a fourth control**
+    ([controls.md](docs/laws/controls.md#bringing-new-subjects-under-an-existing-control-is-a-rename-not-a-fourth-control)),
+    with grave #34's rule read forwards: separate controls are for failures with unrelated causes, so **count
+    the failure modes, not the subjects.** Its construction-side twin is in
+    [engine.md](docs/laws/engine.md#an-enumeration-held-by-construction-outranks-one-held-by-a-scan).
+
 - **Three ordered lines land in the corpus, charged to #631's slice as its overhead.** Each is stated where
   its subject is rather than in `CLAUDE.md`, which is a pointer page.
   - **The B-MM-5 discharge records what the narrow reading cost**
@@ -1500,6 +1592,25 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **Nine false state claims about #573 and #452, in two classes, found by sweeping the parent number rather
+  than by recalling the sites.** Both classes resolve every pointer they carry, so no instrument in the tree
+  could see either.
+  - **Four over-broad quantifiers**: `internal/interp/thread.go`'s parking notice, both halves of
+    `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` (its doc comment and its failure message), and
+    [ADR 0056](docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md)'s
+    #573 bullet all said `global.set`'s plain writes are data races. After ADR 0063 only the **reference**
+    arm is a plain write, so the sentence claimed a class larger than the number now covers. The three Go
+    sites are narrowed; **0056 takes a postscript rather than an edit**, on Scott's disposition — *"the
+    accepted one gets a postscript rather than an edit"* — because amending a stamped record would make the
+    stamp cite a sentence its signer never read. No #622 clause was added in their place: #622's defect is
+    fixed in this slice, and a discharged precondition does not need naming.
+  - **Five label claims**, four repaired and one filed. `internal/interp/global.go`,
+    `internal/interp/globalbench/bench_test.go` and two sentences in ADR 0063 (`proposed`, so edited) said
+    #573 was still `decision-needed:scott`; the label is not on it and all three of its arms are ruled. The
+    fifth is in ADR 0042, which is `accepted` and whose repair is therefore a postscript in its own slice —
+    filed as [#638](https://github.com/scttfrdmn/burroughs/issues/638), where the claim is doubly false:
+    #452 carries `phase:v0` and `gate:gc`, and it is **closed**.
 
 - **`refSize` was 8 where a `ref` is 40 bytes, so both of `table.go`'s allocation guards divided by a number
   five times too small — and the divisor is now derived from the type**

@@ -339,8 +339,8 @@ func TestAtomicFenceNeedsNoMemory(t *testing.T) {
 // **The reason a rename is not a retirement**: four preconditions for a second agent are open, and
 // they fail differently, which is why the message names all four rather than a representative one.
 // §4's boundary model has its mechanism ([ADR 0052][0052], #516) and no litmus battery (**#10**).
-// `memory.atomic.wait` cannot return 0/woken (**#543**). `Spawn` shares the instance's globals, so
-// `global.set`'s plain writes are races (**#573**). The spawn walk of [0056][0056]'s second half has
+// `memory.atomic.wait` cannot return 0/woken (**#543**). `Spawn` shares the instance's globals, and a
+// **reference** global's `global.set` is still a plain write (**#573**). The spawn walk of [0056][0056]'s second half has
 // a closure smaller than the reachable set, so a table slot holding a foreign funcref escapes it
 // (**#575**).
 // *A tripwire whose subject dissolves is re-pointed*; retiring this one would drop all four.
@@ -405,8 +405,9 @@ func TestNoEngineGoroutineLandsWithoutAPrincipalsRuling(t *testing.T) {
 				"representative one: §4's boundary memory model has its mechanism "+
 				"and no litmus battery (#10); `memory.atomic.wait` cannot return 0 "+
 				"for woken, so a woken thread reports an engine gap rather than a "+
-				"plausible number (#543); `Spawn` shares the instance's globals, so "+
-				"`global.set`'s plain writes are data races (#573); and the spawn "+
+				"plausible number (#543); `Spawn` shares the instance's globals, and "+
+				"a reference global's `global.set` is still a plain write (#573); "+
+				"and the spawn "+
 				"walk's closure is smaller than the reachable set, so a table slot "+
 				"holding another instance's funcref escapes it (#575).\n"+
 				"No vector in the threads suite will fail to tell you about any of "+

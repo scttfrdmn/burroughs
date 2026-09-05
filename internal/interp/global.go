@@ -72,7 +72,9 @@ type global struct {
 	// Not an oversight and not implemented around. The ruling that settled the other two priced v128 as
 	// *"the only case above word width, and rare in practice"*; a `ref` is 40 bytes, 2.5× a v128, so the
 	// premise is false and where the cheap/expensive boundary belongs is the question that reopens
-	// (#573, still `decision-needed:scott`). `mu` below would cover this field in one line, and the
+	// (#573, open and unimplemented — the issue is cited, its labels are not, because a label is a claim
+	// about the tracker's state that no instrument here can check). `mu` below would cover this field in
+	// one line, and the
 	// reason that line is not written is that a lock on every `global.get` of a hot `externref` is a
 	// different cost profile from the one the ruling weighed.
 	//

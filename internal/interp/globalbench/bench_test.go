@@ -47,7 +47,7 @@
 // # What this package does not do
 //
 // It does not measure the reference arm. `ref` is 40 bytes and out of #573's scope by the
-// pre-registration: which mechanism the wide cases get is still `decision-needed:scott`, so there is no
+// pre-registration: which mechanism the wide cases get is still open on #573, so there is no
 // mechanism there to price. It also does not compare a mutex against a seqlock — that would need two
 // mechanisms in one revision, which is exactly the comparison
 // [#618](https://github.com/scttfrdmn/burroughs/issues/618) records `ab.sh` cannot make. F3 *did* come

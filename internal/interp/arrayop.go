@@ -202,13 +202,16 @@ func (in *Instance) execArrayNewData(ins binary.Instr, st *stack) error {
 	}
 	n := st.popNum()
 	src := st.popNum()
-	if outOfBounds(src, n*width, seg.size()) {
+	// One image load for the bound and the reads both (decision 0065): `size()` is itself a load, so
+	// bounding against it and then reading the bytes separately could approve one image and read another.
+	bs := seg.view()
+	if outOfBounds(src, n*width, uint64(len(bs))) {
 		return trapOOB
 	}
 	fields := make([]gcField, n)
 	for i := range fields {
 		a := src + uint64(i)*width
-		fields[i] = loadStorage(seg.bytes[a:a+width], ft.Storage)
+		fields[i] = loadStorage(bs[a:a+width], ft.Storage)
 	}
 	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
@@ -233,12 +236,13 @@ func (in *Instance) execArrayNewElem(ins binary.Instr, st *stack) error {
 	}
 	n := st.popNum()
 	src := st.popNum()
-	if outOfBounds(src, n, seg.size()) {
+	refs := seg.view() // one load, decision 0065
+	if outOfBounds(src, n, uint64(len(refs))) {
 		return trapOOBTable
 	}
 	fields := make([]gcField, n)
 	for i := range fields {
-		fields[i] = gcField{r: seg.refs[src+uint64(i)]}
+		fields[i] = gcField{r: refs[src+uint64(i)]}
 	}
 	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
@@ -530,12 +534,13 @@ func (in *Instance) execArrayInitData(ins binary.Instr, st *stack) error {
 	if outOfBounds(dstIdx, n, uint64(len(obj.fields))) {
 		return trapOOBArray
 	}
-	if outOfBounds(src, n*width, seg.size()) {
+	bs := seg.view() // one load, decision 0065
+	if outOfBounds(src, n*width, uint64(len(bs))) {
 		return trapOOB
 	}
 	for j := range n {
 		a := src + j*width
-		obj.fields[dstIdx+j] = loadStorage(seg.bytes[a:a+width], ft.Storage)
+		obj.fields[dstIdx+j] = loadStorage(bs[a:a+width], ft.Storage)
 	}
 	return nil
 }
@@ -566,11 +571,12 @@ func (in *Instance) execArrayInitElem(ins binary.Instr, st *stack) error {
 	if outOfBounds(dstIdx, n, uint64(len(obj.fields))) {
 		return trapOOBArray
 	}
-	if outOfBounds(src, n, seg.size()) {
+	refs := seg.view() // one load, decision 0065
+	if outOfBounds(src, n, uint64(len(refs))) {
 		return trapOOBTable
 	}
 	for j := range n {
-		obj.fields[dstIdx+j] = gcField{r: seg.refs[src+j]}
+		obj.fields[dstIdx+j] = gcField{r: refs[src+j]}
 	}
 	return nil
 }

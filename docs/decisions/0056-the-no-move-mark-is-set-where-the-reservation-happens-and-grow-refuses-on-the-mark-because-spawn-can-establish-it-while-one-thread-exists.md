@@ -118,3 +118,23 @@ caller is a test, which `deadcode` would refuse and which would in any case be
 - **#554 does not merge on this ADR.** #573 blocks it independently: `Spawn` shares the whole instance,
   so `global.set`'s plain writes to `in.globals` are data races, and a `v128` global is two plain word
   writes that tear in the value sense. That is a separate decision with its own measurement.
+
+## Postscript, 2026-09-04 — the #573 sentence above is now over-broad, and this is a postscript rather than an edit
+
+The Consequences bullet *"#554 does not merge on this ADR"* says #573 blocks it because *"`global.set`'s
+plain writes to `in.globals` are data races, and a `v128` global is two plain word writes that tear in the
+value sense."* That was true when this document was stamped. It is no longer: [ADR 0063][0063] made a
+numeric global's word `atomic.Uint64` and put a v128's pair under the global's own mutex, so **the only
+plain write left in `global.set` is a reference global's**, which is 40 bytes and the arm 0063 declined on
+a falsified cost premise. #573 still blocks #554, for that narrower reason.
+
+**The text above is left standing.** This ADR is `accepted` — stamped by Scott and relayed to a durable
+comment — and an accepted record is testimony about what was decided and on what grounds, so amending its
+body would make the stamp cite a sentence Scott never read. The correction goes here, where a reader
+arrives after the claim rather than instead of it. (Scott's disposition on the #637 review: *"the accepted
+one gets a postscript rather than an edit."*)
+
+Found by deriving the population of the sentence rather than recalling where it was written — three Go
+sites carried it besides this one, and #622's slice edited those, since none of them is a stamped record.
+
+[0063]: 0063-a-numeric-globals-single-word-goes-atomic-and-a-v128s-pair-goes-under-the-globals-own-mutex.md

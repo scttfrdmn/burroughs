@@ -1032,3 +1032,43 @@ reach is a law out of context.
   is a bound too far from its subject to fire at all,
   and this is a bound near enough to fire on the wrong side. A ceiling and a floor are not
   interchangeable and neither is a substitute for asking which way the finding could go.
+
+### Bringing new subjects under an existing control is a rename, not a fourth control.
+
+- **Bringing new subjects under an existing control is a rename, not a fourth control.** Scott, on
+  the #637 review: *"Naming all three accessors `view()` so the existing load-once control covers all
+  four subjects is a rename rather than a fourth control, which is better than either building one or
+  widening a domain by hand."* The two rejected options are the ones that present themselves first —
+  write a second control shaped like the first, or list the new call sites in the existing one — and
+  both charge the phase for coverage that a naming choice in the *mechanism* gives away free.
+
+  **Specimen.** `TestEveryMemoryOperationLoadsTheImageAtMostOnce` asserted the rule that one operation
+  loads a published descriptor once and does its bounds check and its access against that one slice.
+  [ADR 0065](../decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md)
+  gave `table`, `elemInstance` and `dataInstance` the same mechanism, and named all three accessors
+  `view` **for the control's sake**: the predicate matches on the selector, so a shared name puts
+  three new subjects inside one existing control. The whole cost was renaming the test to
+  `TestEveryOperationLoadsAPublishedImageAtMostOnce`, re-pinning its census, and repairing the one
+  live citation to the old name — which is what `TestEveryCitedTestNameResolves` is for, and it fired.
+
+  **The condition is that the subjects fail for one reason.** [Grave
+  #34](https://github.com/scttfrdmn/burroughs/issues/34) is why three controls guard `CLAUDE.md`'s
+  pointers: they fail for *unrelated* reasons. Read forwards, the same rule licenses one control here
+  — four subjects, one property, one failure mode — and it is why the sibling immutability witness is
+  one function with three subtests rather than three tests. **Count the failure modes, not the
+  subjects.**
+
+  **A shared name is a claim about the package, so it gets the declarations grep** — that no unrelated
+  type can join the population by owning a method of that name — and where a name cannot carry the
+  claim, the population is resolved by type instead
+  ([a checkable claim gets the instrument whose domain is its
+  subject](evidence-and-instruments.md#a-checkable-claim-gets-the-instrument-whose-domain-is-its-subject-and-a-count-gets-both-counts-recorded)).
+
+  **Widening the predicate is the same move and takes the same discipline.** `size()` is
+  `uint64(len(x.view()))`, so it *is* a load, and adding it to the predicate turned up two sites that
+  called it once per arm in mutually exclusive branches — one load on any execution, two to a scan.
+  They were **hoisted above the branch rather than exempted**, because that is the shape the rule asks
+  for anyway and because *an exemption inherits none of the trigger's lessons*. A widening that has to
+  buy an exception list is a widening that has found a second failure mode, and then the second control
+  is the honest answer. (In-session review; PR #637 carries no comment to cite, and this is recorded by
+  the actor the ruling was given to — durable, not independent, so `Ratio-Class: carried`.)
