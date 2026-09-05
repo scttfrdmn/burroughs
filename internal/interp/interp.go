@@ -777,6 +777,21 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		t: &in.host,
 	}
 	numResults, refResults := countByArray(ft.Results)
+	// §3 SP-2's denominator, decision 0067 and the repair for #592: `Stop` asks whether *every* caller
+	// on this thread is suspended, and this pair is what tells it how many there are.
+	//
+	// **Here and not at the top of the function, which is the load-bearing part of the placement.** The
+	// delegation above returns `ext.owner.invokeIndex(...)`, so exactly one `in.run` executes per
+	// re-export chain while every instance in the chain has its own `thread`. Counting on entry would
+	// leave a delegating instance's thread with a caller counted and no guest code running on it — an
+	// unsatisfiable `blocked == callers` for a thread that will never poll and never arrive, so every
+	// `Stop` on that instance would wait out its whole deadline. Wrapping `in.run` counts exactly the
+	// thread the guest code runs on.
+	//
+	// `defer` rather than a plain call after `run`, because every error return between here and the end
+	// of the function is a caller that has stopped executing.
+	st.t.enterCall()
+	defer st.t.leaveCall()
 	if err := in.run(fn, locals, st, numResults, refResults); err != nil {
 		return nil, err
 	}

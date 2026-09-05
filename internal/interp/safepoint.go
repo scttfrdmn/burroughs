@@ -113,7 +113,27 @@ func (in *Instance) Stop(deadline time.Duration) error {
 		// and installing a new one is the only moment at which a previous round's arrivals stop
 		// counting. Grave #593.
 		t.reported = false
-		if t.blocked > 0 {
+		// **`blocked == callers` and not `blocked > 0`**, which is decision 0067's mechanism and the
+		// repair for #592. `blocked` counts *callers* that are suspended, and the old predicate read
+		// it as a fact about the *thread* — asking "is some caller here suspended" in place of "is no
+		// caller here running". One `thread` per instance against an ungated exported `Invoke` makes
+		// those different: with one caller suspended in a wait and another executing a loop, the old
+		// form counted the thread as arrived and this function returned `nil` while guest code ran,
+		// which is SP-2 failing on its own terms.
+		//
+		// The panic is not defensive noise. `blocked <= callers` holds by construction — the only
+		// route into `enterBlocked` is guest code, which runs inside a call that has already been
+		// counted — and if it were ever violated the equality would be unsatisfiable, so every `Stop`
+		// would wait out its whole deadline for an arrival that cannot come. That failure is worse
+		// than the one being fixed and it is silent, so the invariant the predicate rests on is
+		// asserted where it is relied upon.
+		if t.blocked > t.callers {
+			w.mu.Unlock()
+			panic(fmt.Sprintf("burroughs: %s has %d blocked callers of %d — a suspended caller is "+
+				"by construction inside a counted call, so this is an unpaired enterBlocked or "+
+				"leaveCall (decision 0067)", t, t.blocked, t.callers))
+		}
+		if t.blocked == t.callers {
 			atSafepoint++
 			continue
 		}
@@ -196,6 +216,65 @@ func (t *thread) leaveBlocked() {
 	w.mu.Unlock()
 
 	t.poll()
+}
+
+// enterCall counts one caller as executing on this thread, and leaveCall uncounts it. Decision 0067's
+// mechanism, the repair for **#592**, and the pair that gives `Stop`'s predicate its denominator.
+//
+// **The pair exists because `blocked` alone cannot express the mixed state.** `blocked` counts callers
+// that are suspended; `Stop` was reading it as a fact about the thread, which is *"is some caller here
+// suspended"* asked in place of *"is no caller here running"*. Those coincide only while a thread has one
+// caller, and one `thread` per instance against an exported `Invoke` that nothing gates means it does
+// not. `Stop` now asks `blocked == callers`, and this is where the right-hand side comes from.
+//
+// # Three things it deliberately does not do
+//
+// **It does not park.** `enterBlocked` parks, because a thread about to suspend must announce itself
+// before it becomes unable to; a thread about to *run* is already covered — `run` calls `enterFrame`,
+// whose first statement is `st.t.poll()`, so a caller that arrives while a stop is in flight parks at
+// frame entry before executing one guest instruction. Adding a park here would fence twice for one edge
+// and put a second announcement site on the `Invoke` path.
+//
+// **It does not wrap the whole of `invokeIndex`, and the placement is load-bearing rather than tidy.**
+// `invokeIndex` delegates for a re-exported import by returning `ext.owner.invokeIndex(...)`, so exactly
+// one `in.run` executes per chain — but the *delegating* instance has its own `thread`. Counting on entry
+// to `invokeIndex` would leave that thread with a caller counted and no guest code running on it, which
+// makes `blocked == callers` false for a thread that will never poll and never arrive: every `Stop` on
+// that instance would wait out its full deadline. So the pair wraps `in.run` and nothing wider.
+//
+// **It does not wrap instantiate-time execution.** `build`'s start function and `runConst` run before
+// `InstantiateLinked` returns, so no external reference to the instance exists and no `Stop` can be in
+// flight against it. That is the only guest code that runs outside `Invoke`, and it is named here rather
+// than left as a silent asymmetry between this pair and the `enterGuest`/`leaveGuest` one.
+//
+// A nil thread or a nil world is a no-op, on `poll`'s ground: a thread with no world has no `Stop` that
+// could be walking it.
+func (t *thread) enterCall() {
+	if t == nil || t.w == nil {
+		return
+	}
+	w := t.w
+
+	w.mu.Lock()
+	t.callers++
+	w.mu.Unlock()
+}
+
+// leaveCall uncounts a caller that has finished executing guest code. See `enterCall`.
+//
+// No poll, and unlike `leaveBlocked` that is not an omission: `leaveBlocked`'s poll is SP-2's second half
+// — a thread leaving a wait must not touch guest memory before observing a stop — and this function is
+// reached when the caller has *stopped* touching guest memory and is on its way back across the boundary
+// to host code. There is nothing left for a stop to protect from it.
+func (t *thread) leaveCall() {
+	if t == nil || t.w == nil {
+		return
+	}
+	w := t.w
+
+	w.mu.Lock()
+	t.callers--
+	w.mu.Unlock()
 }
 
 // Resume releases every thread parked by `Stop` and clears the request.
