@@ -359,6 +359,36 @@ local mirror of CI, so a surprise in CI is a bug in the Makefile) meeting the on
 does not exist yet when the Makefile runs. The mirror is incomplete **by construction** here, which is
 why the sequence above is written down instead of a Makefile target being fixed.
 
+### Sweep the file, then publish it — and only one sibling can
+
+**Sweep the file, then publish it.** A body is a file before it is a PR, so the sweep belongs on the
+file, where a failure costs an edit and nothing else. `closecheck.sh` has that form
+(`--body <file>`, offline, with its own control in `internal/testenv/closebody_test.go`).
+`citecheck.sh` **does not** — it names the gap in its own error output, pointing at `--body` as a
+closecheck form — so its body channel is reachable only through `--pr`, and `--pr` reads what has already
+been published. The cycle the missing flag forces is: edit, publish, check, find, edit again.
+
+**Each turn of that cycle costs two things, and the second is the one worth writing down.**
+
+- **A red run attached to the PR.** On #641's SHA `16b33c1`, two of five runs are `edited`-event failures
+  — one defect published twice, a label claim distributed over a run of two numbers — and neither is
+  tree-state. Nothing in a run's name says so: `ci` / `failure` is what a reviewer sees, so the disposal
+  is to state both reds in the Board rather than leave a reviewer to walk over them.
+- **A fourth trap for verdict resolution.** [Waiting on CI](#waiting-on-ci) already says the newest run
+  on a SHA is the emptiest; body edits are what make that concrete. Four of that SHA's five runs are
+  `citations`-only with the other **six jobs skipped**, so anything resolving `.workflow_runs[0]` after an
+  edit reads a green over almost nothing. That SHA's verdict file was correct only because it was written
+  before the first edit — the ordering saved it, not the method.
+
+So the practice is the ordering, and it holds even where the tool cooperates: run every sweep that has a
+file form against the file, and treat a published-then-checked body as a body whose check has already cost
+a run. The missing flag is filed as
+[#643](https://github.com/scttfrdmn/burroughs/issues/643) rather than built where it was found, because it
+is a new instrument and *a repair the verdict did not compel is its own work*. Scott, on the #641 review:
+*"**Sweep the file, then publish it** is the practice, and the asymmetry it exposes is real — `closecheck`
+has a `--body` form and `citecheck` doesn't, so one sibling can check before publishing and the other
+can't."*
+
 ### A target's name is a claim about which population was scanned
 
 Running both channels is half the discipline. The other half is on the **report**, and it is a citation

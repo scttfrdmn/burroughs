@@ -922,6 +922,38 @@ reach is a law out of context.
   this produces a confident nothing. (Mint: Scott, on the #498 relay. Specimen and retraction:
   [#456](https://github.com/scttfrdmn/burroughs/issues/456#issuecomment-5383301564).)
 
+  **A hedge does not launder a recollection — it makes it unfalsifiable.** The sharper form of the
+  sibling rule, and the defect it names is not imprecision. *"The third or fourth time"* reads as
+  scrupulous, because the range looks like an admission of uncertainty; what it actually does is remove
+  every value that could refute it. An eye-count of *"three"* is checkable and can come back wrong, which
+  is the property that makes it repairable. Scott, about his own figure on the #641 review: *"a hedge
+  doesn't launder a recollection, it just makes it unfalsifiable. Count it. If the population turns out to
+  be two instances, that's what the corpus should say, and the law either earns itself or doesn't."*
+
+  **Counted, and the count is the specimen.** The figure was about option sets proposing to build
+  something the tree already had, enumerated over all 378 issues and 764 issue comments through the issues
+  API rather than the search index. On the strict reading — an *option set*, i.e. a decision's enumerated
+  options — the population is **one**: #535's option 2 asked for a cumulative or `runtime.GC()`-fenced
+  reading, which `internal/interp/endtablesize_test.go:endSizeHeapLive` had been since the file's only
+  commit. On the widest defensible reading — any proposal to build what the tree already had, whatever
+  artifact carries it — it is **four**: that one, plus #440 (a slice scoped as *"a call-depth trap is real
+  engine capability"* where `internal/interp/call.go:callBudget` and `trapExhaustion` were both already
+  there), #64 (a partition read off as a work order, calling for a blocktype reader the text parser's own
+  block-signature reader already implemented, so 38 vectors needed wiring rather than a reader), and #258
+  (counterfactual — a stale title figure that *would* have selected implementing arms that already
+  existed, had it been selected).
+
+  **What the count settles is that the hedge's real defect was an unfixed population, not a missing
+  digit.** *"Third or fourth"* is consistent with 1 and with 4, so no enumeration could have refuted it —
+  the range floated across two readings of *which proposals count* without naming either. And the result
+  retires the proposed law rather than minting it: at n=1 the option-set form does not earn an entry, and
+  the wide form is already law next door — *lessons are indexed by shape, not by file* says to read the
+  sibling's version before writing what a sibling already has
+  ([graves-and-sweeps.md](graves-and-sweeps.md#lessons-are-indexed-by-shape-not-by-file-so-the-sweep-runs-backwards-too)).
+  **A count that dissolves the law it was ordered for is the count working**, which is the whole reason to
+  run it before writing the entry. (Recorded by the actor the order was given to — durable, not
+  independent, so `Ratio-Class: carried`.)
+
   **The other half of the same relay: name which grounds are load-bearing after a retraction.**
   Removing a false argument changes what the conclusion rests on, and a record that only deletes
   the argument leaves the next reader to assume the case is unchanged. Scott's term — *"the record
@@ -1130,3 +1162,33 @@ reach is a law out of context.
   back as a premise in their order*. (In-session
   review; PR #637 carries no comment to cite, and this is recorded by the actor the ruling was given
   to — durable, not independent, so `Ratio-Class: carried`.)
+
+### A spread bounds jitter, not bias — no comparison inside a table witnesses an offset every row carries.
+
+- **A spread bounds jitter, not bias — no comparison inside a table witnesses an offset every row
+  carries.** `TestEndTablePairingRepresentationsArePriced` weighs each variant K times and prices it at
+  the **minimum**,
+  which is the right estimator for the mechanism behind it: a weighing is a difference of two readings of
+  `runtime.MemStats.TotalAlloc`, a process-wide cumulative counter, so a foreign allocation inside the
+  window can only **add** bytes. Contamination is one-sided, clean readings are bit-identical, and the
+  minimum of K is therefore an estimate and not an average. The printed per-row spread then looks like the
+  instrument reporting its own error, and it is not: **K equally-dirty windows report zero spread and read
+  exactly like K clean ones.** A row with no spread is the absence of evidence of contamination, never
+  evidence of a clean window.
+
+  What generalises past `TotalAlloc` is the reason the table cannot fix this from inside. Every row is
+  measured by the same instrument in the same process, so an inflation common to all of them is invisible
+  to any *comparison* between rows — and a table of comparisons is exactly what a pricing test is. The
+  distinction to state in the instrument's own comment is which of the two it bounds: *jitter* is the
+  spread of repeated readings and is what a spread measures; *bias* is the offset the whole population
+  shares and needs a **different process**, not more readings. Measured here: roughly 44% of windows are
+  contaminated under `make check`'s shuffled whole-module run and none are when the test runs alone, so
+  "a clean window" is not an observable this process has — which is also why K is a bet on
+  P(all K dirty) rather than a precision knob, and why the resolution check asserts the widest spread
+  against **the gap the ranking's conclusion turns on** instead of against a picked tolerance.
+
+  The honest disposal of the residue is to file it rather than to let the repair's own prose imply it was
+  covered: [#642](https://github.com/scttfrdmn/burroughs/issues/642). Scott, on the #641 review: *"a
+  spread bounds jitter, not bias — no comparison inside the table can witness a uniform inflation of every
+  row. That's the right limit to file #642 on rather than claiming the repair covered it."* (Grave
+  [#570](https://github.com/scttfrdmn/burroughs/issues/570).)

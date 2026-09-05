@@ -1211,6 +1211,41 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Three laws land in the corpus and a fourth is retired by its own count** — Scott's four keepers from the
+  #641 review, and this slice is **instrument-only** because every reachable v1 product candidate is
+  decision-blocked (stated as a classification in the PR body, not as a discharge).
+  - **A label in front of a run of numbers distributes over the whole run**
+    ([citations.md](docs/laws/citations.md#the-word-grave-is-a-citation-to-a-label-so-the-label-lands-before-the-body-that-cites-it)).
+    Scott: *"that's the quantifier problem in miniature, and unlike the #573 case it's one a checker can
+    actually see, which is why it got caught twice rather than surviving."* Filed as a clause on the
+    label-citation law rather than on the tree-may-not-claim-labels law, because the distinguishing fact is
+    that `citecheck.sh` **can** compare this claim — its joined-run arm carries a label claim across `and`,
+    a comma, or a slash, so a run whose second member is `type:harness` is a false claim about that member.
+  - **A spread bounds jitter, not bias**
+    ([evidence-and-instruments.md](docs/laws/evidence-and-instruments.md#a-spread-bounds-jitter-not-bias--no-comparison-inside-a-table-witnesses-an-offset-every-row-carries)).
+    Every row of a pricing table is measured by one instrument in one process, so an inflation common to all
+    of them is invisible to any comparison *between* rows — and K equally-dirty windows report zero spread
+    and read exactly like K clean ones. The residue is filed
+    ([#642](https://github.com/scttfrdmn/burroughs/issues/642)) rather than implied covered by the repair
+    that found it.
+  - **Sweep the file, then publish it — and only one sibling can**
+    ([operations.md](docs/laws/operations.md#sweep-the-file-then-publish-it--and-only-one-sibling-can)).
+    `closecheck.sh` has a `--body <file>` form and `citecheck.sh` does not, so citecheck's body channel is
+    reachable only through an already-published body. Each turn of the resulting edit-publish-check cycle
+    attaches a red run to the PR and adds a trap to verdict resolution: a body edit spawns a `citations`-only
+    `edited` run with the other six jobs **skipped**, so `.workflow_runs[0]` after an edit reads a green over
+    almost nothing. Filed as [#643](https://github.com/scttfrdmn/burroughs/issues/643).
+  - **A hedge does not launder a recollection — it makes it unfalsifiable**
+    ([evidence-and-instruments.md](docs/laws/evidence-and-instruments.md#a-truncated-search-proves-nothing-about-absence-because-a-display-limit-is-not-a-result-set)),
+    Scott about his own figure: *"Count it. If the population turns out to be two instances, that's what the
+    corpus should say, and the law either earns itself or doesn't."* **Counted over all 378 issues and 764
+    issue comments through the issues API: the strict population is one** (#535), and the widest defensible
+    one is four (#535, #440, #64, and #258 counterfactually). So the option-set law Scott's figure was about
+    **does not earn an entry** and the wide form was already law next door; what the count mints instead is
+    the unfalsifiability clause, whose specimen is the count itself — *"third or fourth"* is consistent with
+    both 1 and 4, so no enumeration could have refuted it, and the defect was an unfixed **population**
+    rather than a missing digit.
+
 - **Four laws land in the corpus, charged to #622's slice as its overhead** — three kept from Scott's #637
   review and one given on this slice. Each is stated in the family whose subject it is, not in `CLAUDE.md`.
   - **When an issue splits, every message naming it is re-derived, not re-numbered**
