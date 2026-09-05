@@ -788,12 +788,24 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	// `Stop` on that instance would wait out its whole deadline. Wrapping `in.run` counts exactly the
 	// thread the guest code runs on.
 	//
-	// `defer` rather than a plain call after `run`, because every error return between here and the end
-	// of the function is a caller that has stopped executing.
+	// **A plain call rather than a `defer`, and the draft that used `defer` cost 29 ns/call for it.** The
+	// reasoning for `defer` was that every error return below is a caller that has stopped executing —
+	// true, and it is exactly why the plain call covers them: all of them are *after* `in.run` returns, so
+	// uncounting here is not merely equivalent but tighter, dropping `callers` when guest execution ends
+	// instead of when result marshalling does. What `defer` additionally bought was uncounting after a
+	// panic, and there is no `recover` on any non-test path in this package, so that case is an engine bug
+	// that has already left the instance undefined.
+	//
+	// The 29 ns is a compiler cliff and not one defer's cost: `invokeIndex`'s `defer leaveGuest()` is
+	// *open-coded*, a second defer took the function off that path, and `-gcflags=-S` shows four
+	// `runtime.deferprocStack` calls where base has none — so the second defer converted the first one
+	// too. Measured, attributed, and recorded here because the next person to add a `defer` to this
+	// function will pay the same cliff and nothing else in the tree says so (decision 0067).
 	st.t.enterCall()
-	defer st.t.leaveCall()
-	if err := in.run(fn, locals, st, numResults, refResults); err != nil {
-		return nil, err
+	runErr := in.run(fn, locals, st, numResults, refResults)
+	st.t.leaveCall()
+	if runErr != nil {
+		return nil, runErr
 	}
 	if len(st.num) != numResults {
 		// #9's arity check, arriving late. Stated as the layering debt it is rather than
