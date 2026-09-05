@@ -41,13 +41,51 @@ type HostFunc func(c *Caller, args []Value) ([]Value, error)
 // violate it will not exist."* A control asserting "no reentrancy method" would be a control over a
 // method's absence, which the compiler already asserts for every embedder in the world.
 //
-// # There is no guest-memory accessor yet, and that is a surface decision rather than an omission
+// # Guest memory is reachable, and it is **copied rather than viewed**
 //
-// Four of the five litmus rows #602 unblocks need only a host call that parks and returns; the fifth,
-// `b-mm-1-message-passing-across-a-host-call-return`, needs the host to write a guest word. Nothing in
-// this engine exposes guest memory publicly today — `Instance` has `Global` and no memory method at all
-// — so an accessor here would be **new public API surface**, which is one of the three subjects that go
-// to Scott rather than being decided in a slice. Named here so the gap is priced rather than discovered.
+// This paragraph replaces one that said there was no accessor and named the gap as escalated surface.
+// Scott ruled it on the #651 review: *"`Caller` gets guest-memory access — but as copying accessors,
+// not a view. `Caller.Read(offset, n) ([]byte, error)` and `Caller.Write(offset, buf) error`."*
+//
+// **The reason is a soundness burden and not a taste in APIs**, and it is his: *"A retained slice would
+// alias a memory that can grow and relocate — #575 and #622's exact subject — which is the soundness
+// burden option B was rejected for. Exposing a view reopens the story A was chosen to close."* The
+// mechanism is in `memory.grow`: the reserved-capacity arm reslices and the pointer holds, but the arm
+// below it **reallocates and blits**, and a slice handed out before that runs names the abandoned array
+// afterwards. A read through it is stale, and a *write* through it is worse than stale — it lands in an
+// image no guest will ever load again, so the store is silently lost with nothing anywhere reporting it.
+// `noMove` exists because ADR 0051's atomics hold a raw pointer for the duration of one access; a slice
+// an embedder may hold for the duration of its own choosing is that hazard with no bound on it.
+//
+// **The cost is named rather than discovered, and it is a cost A has already agreed to pay.** Copying is
+// an allocation per access — *"the same trade A already makes with boxed `[]Value`, so it's consistent
+// rather than a new tax"* — and the escape hatch is additive: *"A view stays addable later as an additive
+// fast path, exactly like C's identity and B's stack form."* So the shape of the eventual widening is
+// known and none of it is foreclosed here.
+//
+// # Which memory, and why that is not the question the world was
+//
+// **Memory 0 of the instance that *declared* the import**, which is `callHost`'s receiver — deliberately
+// *not* the thread-derived choice the world question took. The two look alike and are different
+// questions. A world answers *who may cancel this thread*, which is a fact about the running agent, and
+// taking it from the receiver was the defect `TestAHostCallIsCountedAndWaitedForByTheCallersWorld` now
+// pins. "Memory 0" answers *whose index space is that*, which is a fact about the module that wrote
+// `(import "h" "f" …)` — the embedder's function was written against that module's memory, so in the
+// two-instance shape where `top` reaches a host import `mid` declared, the bytes are `mid`'s. Stated at
+// length because the neighbouring question has the opposite answer, and a later reader who transfers one
+// to the other has a defect in whichever direction they carry it.
+//
+// A module with no memory at all is `ErrNoMemory` rather than a panic or a zero-length success.
+//
+// # A `Caller` outliving its call is memory-safe, and that is not the same as being meaningful
+//
+// Nothing here refuses a retained `Caller`, and the accessors are safe on one anyway: they copy, and they
+// load the image through `m.img` atomically, so a late read yields whatever image was current and never a
+// freed array. What a late read does *not* have is a meaning — the call has returned, and after `Close`
+// the bytes are a corpse the embedder is measuring. Invalidation was considered and not taken: nil'ing
+// the field after the call is one store, but an embedder reading from another goroutine races that store,
+// and buying a diagnostic with a data race is the wrong trade. The ruling asked for copying accessors and
+// this is a copying accessor; the lifetime rule stays addable beside the view.
 type Caller struct {
 	// ctx is the *thread's* context, created in `world.addLocked` and cancelled by `Instance.Close`.
 	// Per thread rather than per call, which is Scott's second sub-choice and the reason a host call
@@ -68,6 +106,24 @@ type Caller struct {
 	// tid identifies the calling thread. A `ThreadID` rather than a `*thread`, so nothing an
 	// embedder holds can reach the world, the mutex, or the safepoint state.
 	tid ThreadID
+
+	// mem is memory 0 of the declaring instance, or nil when there is no memory to reach. A `*memory`
+	// and not an `*Instance`, which is the same containment `tid` buys one field up: the accessors
+	// need bytes, and handing over the instance would hand over `Invoke` and void H-2 by widening.
+	mem *memory
+
+	// memErr is why `mem` is nil, when the reason is one `memoryFor` can state better than
+	// `ErrNoMemory` can. **It exists to stop a flattening, not to add a field.** Three different
+	// facts produce no reachable memory 0: the module declares and imports none, an *imported* memory
+	// went unsupplied (§3, `ErrUnsupported`), or a declared one failed to allocate
+	// (`ErrNotValidated`). Only the first is what `ErrNoMemory`'s words say, and reporting the other
+	// two as "defines and imports no memory" would be an error message asserting something the engine
+	// knows to be false — `memoryFor`'s own comment is about that exact mistake, and grave #36 is
+	// where this project paid for it.
+	//
+	// Resolved once in `callHost` rather than on each access, because a `Caller` holds no `*Instance`
+	// to resolve through later, which is H-2 doing its job at a small cost in a field.
+	memErr error
 }
 
 // Context is the thread's cancellation channel — §5 H-3's *"interruptible by engine shutdown"* half.
@@ -83,6 +139,99 @@ func (c *Caller) Context() context.Context { return c.ctx }
 // which every one of §§3–5's N-agent litmus rows needs, and which is the whole reason this is here
 // rather than a later widening.
 func (c *Caller) Thread() ThreadID { return c.tid }
+
+// Read copies n bytes of guest memory from offset, or reports why it could not.
+//
+// **The copy is the whole ruling** — see `Caller`'s own comment for why a view is refused. `memory.read`
+// hands back a sub-slice of the live image, so returning its result would be exactly the aliasing
+// forbidden; the `copy` here is what makes the returned bytes the embedder's own.
+//
+// **Bounds before allocation, and the order is load-bearing.** `read` checks the extent against the image
+// it loaded and only then is `n` known to be no larger than the memory, so `Read(0, 1<<40)` fails with a
+// trap rather than asking the allocator for a terabyte first. Writing the `make` above the check would be
+// an out-of-memory kill on a path whose whole job is to refuse the access.
+//
+// **One image, entire.** `read` takes a single `m.view()` load and both checks and slices against it
+// (decision 0058), so a concurrent `grow` cannot make one `Read` straddle two images. The copy is plain
+// and a concurrent guest write to the same bytes may therefore be observed torn — permitted, since the
+// threads proposal permits the guest's own racing accesses to tear, and classified as such in
+// `guestMemoryRegimes`. An out-of-bounds `Read` returns the identical `*Trap` a guest `i32.load` would
+// get, so an embedder's overrun and a guest's overrun are one error value rather than two dialects.
+func (c *Caller) Read(offset, n uint64) ([]byte, error) {
+	mem, err := c.guestMemory()
+	if err != nil {
+		return nil, err
+	}
+	// §4 B-MM-1, at the third site that runs no guest code: this reads guest storage directly, and a
+	// stale read is what the acquire edge forbids — `Global`'s reason, one type over.
+	enterGuest()
+	defer leaveGuest()
+
+	// `offset` arrives as `read`'s *first* parameter and the second is zero. The pair is a wasm
+	// address operand plus a static `offset` immediate, and a host access has no immediate; passing
+	// the whole address as the dynamic half is what keeps `effectiveAddress`'s wrap check meaningful.
+	bs, err := mem.read(offset, 0, n)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, n)
+	copy(out, bs)
+	return out, nil
+}
+
+// guestMemory answers with memory 0 or with the best available reason there is none — `memErr`'s
+// distinction, at the one place both accessors reach it.
+func (c *Caller) guestMemory() (*memory, error) {
+	if c.memErr != nil {
+		return nil, c.memErr
+	}
+	if c.mem == nil {
+		return nil, ErrNoMemory
+	}
+	return c.mem, nil
+}
+
+// Write copies buf into guest memory at offset, or reports why it could not.
+//
+// **The copy runs the other way and the engine retains nothing** — `memory.write` copies out of `buf`, so
+// an embedder may reuse or mutate the slice the instant this returns. That is the same no-aliasing
+// property `Read` buys in the other direction, and it holds here for free rather than by a deliberate
+// copy, which is why this method is the short one.
+//
+// **Nothing is written when the access is out of bounds**, inherited from `write`: the whole extent is
+// checked before a byte moves, so a refused `Write` leaves the memory as it was. A partial write followed
+// by an error would be the worst of the available behaviours, and it is the one `memory_trap.wast` reads
+// the memory back to exclude for the guest's stores.
+func (c *Caller) Write(offset uint64, buf []byte) error {
+	mem, err := c.guestMemory()
+	if err != nil {
+		return err
+	}
+	enterGuest()
+	defer leaveGuest()
+	return mem.write(offset, 0, buf)
+}
+
+// hostMemory resolves the memory a `Caller`'s accessors reach, keeping `memoryFor`'s three distinct
+// reasons for having none instead of flattening them (see `Caller.memErr`).
+//
+// **`(nil, nil)` is a real answer here and means "this module has no memory".** `memoryFor` would call
+// that `ErrNotValidated: … names memory 0 of 0`, which is false of a perfectly valid memoryless module —
+// so the empty index space is answered before asking it, and the accessor supplies `ErrNoMemory` as the
+// word for it. A host function in a memoryless module must still *run*, so this cannot be an error on the
+// call path: it is only an error when somebody asks for bytes.
+func (in *Instance) hostMemory() (*memory, error) {
+	if len(in.mems) == 0 {
+		return nil, nil
+	}
+	return in.memoryFor("a host function's guest-memory access", 0)
+}
+
+// ErrNoMemory reports a guest-memory access from a host function whose declaring module defines and
+// imports no memory. Distinct from a trap on purpose: an out-of-bounds access is the guest's error
+// vocabulary and is reported in it, while asking a module with no memory for bytes is a mismatch between
+// the embedder's function and the module it was linked into — nothing the guest did.
+var ErrNoMemory = errors.New("the instance that declared this host function has no memory 0")
 
 // hostFunc is a host function plus the type it presents to the linker. Unexported, and reached only
 // through `HostExtern`, so an embedder cannot build one with a type that does not match its body.
@@ -202,7 +351,12 @@ func (in *Instance) callHost(h *hostFunc, st *stack) error {
 		return err
 	}
 
-	c := &Caller{ctx: t.context(), tid: t.threadID()}
+	// `in` and not `t`, and the neighbouring line is why the distinction is worth a comment: the world
+	// three lines up comes from the *thread*, because cancellation follows the running agent, while
+	// memory 0 comes from the *declaring instance*, because an index space belongs to the module that
+	// wrote the import. `Caller`'s own comment argues both directions at length.
+	mem, memErr := in.hostMemory()
+	c := &Caller{ctx: t.context(), tid: t.threadID(), mem: mem, memErr: memErr}
 
 	leaveGuest()
 	t.enterBlocked()

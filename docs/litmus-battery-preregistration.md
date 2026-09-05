@@ -127,10 +127,25 @@ records the vehicle and the experiment that verified it, and it names the one ca
 used for: `t1-n-agents-block-simultaneously` would pass on it while leaving T-1's clause unsatisfied, because
 Go parks N goroutines happily and the clause is about 1:1 OS threads.
 
-**The third blocker is the host-call surface**, [#602](https://github.com/scttfrdmn/burroughs/issues/602).
-Five cases below park an agent in a *blocking host call*, and this engine has no host function surface at all —
-so spawn is neither necessary (the vehicle above) nor sufficient (nothing to park in) for any of them. Their
-`Blocked by` rows named #554 and are re-pointed.
+**The third blocker was the host-call surface**, [#602](https://github.com/scttfrdmn/burroughs/issues/602),
+**and it has landed** —
+[ADR 0069](decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md)'s
+`HostExtern`, the blocked mark, and `Instance.Close`. Five cases below park an agent in a *blocking host
+call*, and the surface they were waiting for now exists in both directions, guest-memory accessors included.
+Their `Blocked by` rows named #554, were re-pointed to #602, and are re-pointed again here.
+
+**All three mechanical blockers are now discharged, and every one of the five cases is still unwritten**, so
+the five rows read `blocked — #10`: the battery's own issue, because what remains is writing them and there
+is no other subject left to name. **That is a degenerate state and the grammar has no better one.** Check 7
+of `internal/testenv/litmus_test.go` admits exactly two statuses — `blocked — #N` and
+`implemented — TestName` — so a row whose mechanism has arrived and whose test has not cannot say so in the
+one field a control reads, and its own comment names this as the rot it *"cannot see from the inside"*: the
+census line printing *N blocked, 0 implemented* after the blockers close is a document describing a battery
+nobody wrote. Pointing the rows at #10 is honest about who owes the work and buys nothing else; a third
+status is a change to that control and to this grammar, and it is #10's own slice to make or refuse rather
+than a re-pointing's. **The rows were re-pointed in the slice that closed #602 rather than left for the
+battery's** because leaving them would cite a closed issue as a live blocker — a citation this project's own
+merge falsified, which is the author's repair and not the population's.
 
 **Statuses reading `blocked — #543` were stale from the moment #594 merged, and no control saw it.** The
 inverse tripwire in `internal/testenv/litmus_test.go` requires the *form* `blocked — #N` and never asks
@@ -299,10 +314,16 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 > through a boundary that observes the stop
 
 - **Shape:** outcome
-- **Blocked by:** #602 — the host-call surface — and the epoch mechanism. Re-pointed from #554: the witness
-  parks in a blocking host call whose *return path* is the thing that writes, so the host-call surface is what
-  the case is built out of. `world`'s extent being one instance is why ADR 0062's vehicle does not substitute
-  for spawn here either — two instances are two worlds, and one `Stop` cannot reach N agents.
+- **Blocked by:** nothing mechanical, as of #602. Re-pointed twice — #554, then #602 — and this is the
+  re-point that runs out of blockers: the witness parks in a blocking host call whose *return path* is the
+  thing that writes, and `HostExtern` supplies it, marking the parked thread `blocked` for the call's whole
+  duration, which is ADR 0067's `blocked == callers` predicate and therefore SP-2's arrival half. `Spawn`
+  supplies the N agents in one `world`, which is why ADR 0062's two-instance vehicle is not needed here and
+  would not have served: two instances are two worlds and one `Stop` cannot reach N agents.
+  **What remains is writing the case**, which is #10. Whether the case then *witnesses* the clause on these
+  mechanisms is the battery's own finding and is not claimed here — a mechanism existing is not a case
+  passing, and this document has already recorded once that *"a mechanism arriving is not what satisfies a
+  clause"*.
 
 #### Case `sp2-a-parked-agent-touches-no-guest-memory-during-the-stop`
 
@@ -318,7 +339,7 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 - **Floor:** every run must confirm all N parked before the request.
 - **Arbiter:** **arm64 is expected to discriminate.** A too-weak re-entry edge lets the parked agent's
   write become visible early, which is a reordering TSO structurally cannot exhibit.
-- **Status:** blocked — #602
+- **Status:** blocked — #10
 
 ### SP-3 — the timer channel is disjoint from guest sync state
 
@@ -343,9 +364,9 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 > without waking them.
 
 - **Shape:** outcome
-- **Blocked by:** #602 — the host-call surface — and the epoch mechanism, for SP-2's reasons: the witness's N
-  agents park in a blocking host call that records its own wake, and the one `Stop` reaching all of them needs
-  one `world`.
+- **Blocked by:** nothing mechanical, as of #602, for SP-2's reasons: the witness's N agents park in a
+  blocking host call that records its own wake, `HostExtern` is that call, and `Spawn` puts all of them in the
+  one `world` a single `Stop` reaches. Writing the case is #10.
 
 #### Case `sp4-stop-completes-without-waking-parked-agents`
 
@@ -359,7 +380,7 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
   loop so the stop has something to stop.
 - **Floor:** every run must confirm all N parked before the request.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #602
+- **Status:** blocked — #10
 
 ## §4. The boundary memory model
 
@@ -370,9 +391,13 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 > guest→host transition MUST constitute the corresponding release edge.
 
 - **Shape:** outcome
-- **Blocked by:** #602 — the host-call surface. Re-pointed from #554: the witness below passes its message
-  through host `publish`/`poll` calls, so spawn is neither necessary (ADR 0062's vehicle supplies the two
-  agents) nor sufficient (there is nothing to call).
+- **Blocked by:** nothing, as of #602. Re-pointed from #554 and then discharged: the witness below passes its
+  message through host `publish`/`poll` calls, so spawn was neither necessary (ADR 0062's vehicle supplies the
+  two agents) nor sufficient (there was nothing to call), and `HostExtern` is now the thing to call. The
+  crossing the case is *about* is on main and counted — `callHost`'s `leaveGuest`/`enterGuest` pair, asserted
+  by `TestEveryBoundaryCrossingIsPaired`, which is a **presence** oracle and precisely not this case: it
+  witnesses that the edge was established, never that a write before it is visible after it. That gap is what
+  the case below is for, and writing it is #10.
 
 #### Case `b-mm-1-message-passing-across-a-host-call-return`
 
@@ -394,7 +419,7 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
   after the boundary, which x86-TSO's store ordering structurally forbids — B-MM-5's provenance is this
   exact asymmetry, so a case observed on neither architecture is reported as *not observed on either* and
   never merged into one green.
-- **Status:** blocked — #602
+- **Status:** blocked — #10
 
 ### B-MM-2 — a wake synchronizes every write, not the futex word
 
@@ -586,8 +611,14 @@ the test's own comment; it is recorded in three places because no instrument's d
   `b-mm-1-message-passing-across-a-host-call-return`, which observes exactly the sequentially consistent
   boundary an un-annotated host call promises. The documentation half is discharged at
   `internal/interp/boundary.go`, whose comment states the default and where it is established; the
-  per-host-call annotations arrive with the host-call surface, which does not exist yet. Registered so that
-  a host call landing without its annotation is a visible omission.
+  per-host-call annotations arrive with the host-call surface, **which has now landed** (#602, ADR 0069).
+  Registered so that a host call landing without its annotation is a visible omission — and the first one
+  landed **unannotated**, which is the *conforming* outcome rather than the omission this row watches for:
+  the clause's own default is sequential consistency absent annotation, `callHost`'s pair is sequentially
+  consistent, so silence is the correct annotation and saying so in a `// Publication:` line would be
+  stating the default. The same holds of `Caller.Read` and `Caller.Write` (the #651 ruling). The row stays
+  registered because what it is aimed at is the *first* boundary call whose publication semantics are
+  weaker than SC, and there is still none.
 
 ### B-MM-5 — the guarantees are testable
 
@@ -608,7 +639,10 @@ the test's own comment; it is recorded in three places because no instrument's d
   include one case by name. It does not require every §4 row to be landed — read that way, B-MM-5 could only
   ever discharge last and would be a proxy for the whole of §§2–5 rather than a coverage requirement, which
   is a clause standing in for its neighbours. §4's own remaining rows say what is still owed on their own
-  lines: B-MM-1 and B-MM-4's host-call half on #602.
+  lines: B-MM-1's case and B-MM-4's host-call annotations, both of which were owed to #602 and are now owed
+  to #10 — the surface landed, the case and the first `// Publication:` annotation did not. B-MM-4's default
+  is *satisfied* by silence, so the host call landing unannotated is conforming rather than owed; what is
+  owed is the first call that needs the annotation having one.
 
   **What the narrow reading costs, and where the obligation went.** Scott's affirmation of it came with a
   caveat to record at this site, and it is this: **B-MM-5 was the only clause-level pressure toward the
@@ -648,8 +682,10 @@ the test's own comment; it is recorded in three places because no instrument's d
 > requirement that the guest reach an event-loop turn for siblings to make progress.
 
 - **Shape:** outcome
-- **Blocked by:** #602 — the host-call surface. Re-pointed from #554: the clause's subject *is* the blocking
-  host call, so no vehicle for the agents can unblock it.
+- **Blocked by:** nothing, as of #602. Re-pointed from #554 and then discharged: the clause's subject *is*
+  the blocking host call, so no vehicle for the agents could ever have unblocked it, and ADR 0069's ruling
+  that blocking is *unconditional* — no opt-in flag — is what makes the clause's subject exist rather than a
+  mode of it. Writing the case is #10.
 
 #### Case `h1-a-parked-agent-does-not-starve-its-siblings`
 
@@ -664,7 +700,7 @@ the test's own comment; it is recorded in three places because no instrument's d
   host call, so its progress cannot be an artifact of the boundary.
 - **Floor:** every run must confirm A parked before sampling.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #602
+- **Status:** blocked — #10
 
 ### H-2 — no surprise reentrancy
 
@@ -688,9 +724,11 @@ the test's own comment; it is recorded in three places because no instrument's d
 > be interruptible by a guest-visible cancel primitive (open: §10.4).
 
 - **Shape:** outcome
-- **Blocked by:** #602 — the host-call surface, for H-1's reason, and specifically the cancellation error a
-  parked call returns: this case forbids a cancelled call reporting *success*, so the error channel is part of
-  the surface rather than a detail after it.
+- **Blocked by:** nothing, as of #602, for H-1's reason — and the specific thing this case needed, the
+  cancellation error a parked call returns, is part of what landed: `Instance.Close` cancels every member's
+  `context.Context` and waits on the in-flight host calls rather than on a deadline, so a cancelled call has an
+  error channel to report through. This case forbids a cancelled call reporting *success*, which is why the
+  error channel was named as part of the surface rather than a detail after it. Writing the case is #10.
 
 #### Case `h3-shutdown-interrupts-a-parked-agent`
 
@@ -703,7 +741,7 @@ the test's own comment; it is recorded in three places because no instrument's d
 - **Witness:** all N confirmed parked host-side before shutdown is requested.
 - **Floor:** every run must confirm all N parked.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #602
+- **Status:** blocked — #10
 
 The MAY half — a guest-visible cancel primitive — is contract-deferred to §10.4 and gets its cases in the PR
 that closes it, for T-5's reason: an allowed-outcome set authored now would be this battery inventing the

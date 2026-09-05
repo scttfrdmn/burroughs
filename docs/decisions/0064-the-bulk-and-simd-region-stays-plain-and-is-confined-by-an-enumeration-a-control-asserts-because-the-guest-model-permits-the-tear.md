@@ -175,3 +175,37 @@ narrowing happens either way, and the choice is only whether the corpus says so.
   families join the atomic regime is #627's question and is not decided here"* finds where it was decided.
 - **Nothing in the engine changes**, which makes this document plus its control overhead in the sense of
   behaviour 1 — charged to #622, the product slice that follows it and touches the same files.
+
+## Amended by the #651 ruling — the plain region gains two sites, and neither is the guest's
+
+`TestNoGuestMemoryAccessSiteJoinsWithoutAClassification` fired on `host.go:Caller.Read` and
+`host.go:Caller.Write` the moment they were written, and its failure message is what sends the answer
+here: *"if the answer is 'plain', say so in ADR 0064, because widening that region is the decision's
+business and not a diff's."* The answer is plain, and this section is the saying.
+
+**They are the first members of this region that no guest instruction reaches.** Every one of the seven
+sites above is a wasm opcode's implementation or an instantiation step; these two are an **embedder**
+reading and writing guest memory through `Caller`, added by Scott's ruling on the
+[#651](https://github.com/scttfrdmn/burroughs/pull/651) review as copying accessors. So the region's
+extent is no longer describable as "the bulk and SIMD families", which is what this document's own
+**title** says. The title is left as it is — its filename is a citation target and every reference to
+this decision resolves through it — and the widening is recorded here instead. A reader who arrives from
+the title needs to know the region outgrew it, not to find a file that renamed itself.
+
+**Why plain rather than atomic, which is a different argument from the one ruling 1 made.** For the seven
+guest sites the argument was a trade: the model permits the tear, so atomicity buys report-freedom at a
+throughput cost. Here it is not a trade at all. An atomic host accessor would promise an embedder a
+tear-free read of bytes the guest may write plainly at every alignment, and one side of a race cannot
+supply an atomicity the other side lacks — the promise would be void in precisely the case it was made
+for. What the embedder gets instead is §4 B-MM-1's edge on every access, which is stronger than
+per-access atomicity for the thing the accessors exist to do (`b-mm-1-message-passing-across-a-host-call-return`)
+and orthogonal to it for everything else.
+
+**The B-MM-2 obligation above is untouched.** It fires if this region ever *closes*; two sites joining it
+widens the region and leaves the carrier's plain side exactly where it was.
+
+**A `-race` report is still real and still bounded the same way.** These are byte-element races on a
+`[]byte`, with no slice header, pointer or interface word in them — the class
+[#622](https://github.com/scttfrdmn/burroughs/issues/622) buried, and not this one. What is new is only
+*who* can be the racing party: an embedder's goroutine can now be one, where before every party was a
+guest thread.

@@ -66,7 +66,14 @@ var boundaryCrossings atomic.Uint64
 // enterGuest establishes B-MM-1's acquire edge: the host is about to run guest code, or to read guest
 // state, and must observe everything every other agent released before now.
 //
-// # The six sites, and why they are not the four §4 names
+// # The nine sites, and why they are not the four §4 names
+//
+// **The heading read "six" while seven sites existed, and the sentence that caused it is still below.**
+// It says the number *"is prose and is the only thing that needed a hand"* — written in the slice that
+// added `runEntry`, then not given that hand in the very next slice, which added `callHost`'s pair. This
+// is my own drift and not the population's, so it is repaired here rather than filed: the count is now
+// nine, and the two arriving with it are the accessors named at the end of this comment. A number in a
+// heading is the one figure in this file no control reads, which is exactly why it is the one that rots.
 //
 // §4's B-MM-1 enumerates *"host-call return, trap resume, async wake, stack-switch resume"* and **the
 // engine has none of them**: no host function exists in either direction (`Extern`'s func arm is an
@@ -119,6 +126,32 @@ var boundaryCrossings atomic.Uint64
 // `TestEveryBoundaryCrossingIsPaired` instead, beside `Global`'s, for the reason that test's own comment
 // gives about the two sites that create no stack.
 //
+// **`Caller.Read` and `Caller.Write` join the family that creates no stack** — Scott's ruling on the #651
+// review, which gave `Caller` guest-memory access as copying accessors. They are `Global`'s shape exactly:
+// host code reading and writing guest storage without running any guest instruction, so the parsed
+// population cannot see them and their pairing is enumerated in `TestEveryBoundaryCrossingIsPaired` with
+// `Global`'s and `callHost`'s. **The family, in full, is the enumeration that matters**:
+// `InstantiateLinked`, `Global`, `callHost`, `Caller.Read`, `Caller.Write`.
+//
+// Named as a set and not by ordinal on purpose. The ordinals in this comment family have now gone stale
+// twice in two slices — the heading's count above, and #602 calling `callHost` *"the second site whose
+// crossing is not a `stack` literal's"* when this file's own text already made `InstantiateLinked` and
+// `Global` two such sites, so it was the third. Both were mine. A membership claim is checkable against a
+// grep; a position in an unwritten list is checkable against nothing.
+//
+// **One pair per access, not one per host call, and the count is where that claim is checkable.** A host
+// call that reads once costs six crossings and one that reads then writes costs eight — asserted, because
+// it is what an embedder is *given in place of atomicity*: [ADR 0064][0064]'s amendment records that these
+// two sites are plain, since an atomic accessor would promise a tear-free read of bytes the guest may write
+// plainly, and one side of a race cannot supply an atomicity the other lacks. §4's edge per access is the
+// thing that is actually on offer, so a slice that collapsed the two pairs into one would be quietly
+// withdrawing it.
+//
+// **A refusal buys no edge**: both accessors answer `ErrNoMemory` before `enterGuest`, so an access that
+// reaches no guest storage establishes nothing over it. That is `Invoke`'s placement rather than
+// `Global`'s, and the asymmetry between those two is already asserted one file over.
+//
+// [0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
 // [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
 func enterGuest() { boundaryCrossings.Add(1) }
 
@@ -128,6 +161,6 @@ func enterGuest() { boundaryCrossings.Add(1) }
 // **A separate function from `enterGuest` with an identical body, on purpose.** The direction is the
 // only thing a reader at the call site needs and the only thing that can be got wrong there, so it is
 // in the name — `enterGuest(); defer leaveGuest()` says which edge is which without a comment at every
-// one of the six sites. Collapsing them into one `crossBoundary` would save a line here and cost that
+// one of the nine sites. Collapsing them into one `crossBoundary` would save a line here and cost that
 // everywhere, and the operation being symmetric is a fact about the RMW rather than about the boundary.
 func leaveGuest() { boundaryCrossings.Add(1) }
