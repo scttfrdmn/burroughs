@@ -1944,7 +1944,10 @@ weakly-ordered platform.
     board measured the **bar itself** moving −7.53% in the head arm on a diff that cannot reach a
     function-local mutex — [#580](https://github.com/scttfrdmn/burroughs/issues/580)'s layout effect
     landing on the row a criterion divides by, filed as
-    [#653](https://github.com/scttfrdmn/burroughs/issues/653) and reported rather than smoothed.
+    [#653](https://github.com/scttfrdmn/burroughs/issues/653) and reported rather than smoothed — and
+    grave [#654](https://github.com/scttfrdmn/burroughs/issues/654), because that filing was made as a
+    discovery while #580's number sat four lines above the row being read, in the package comment of the
+    file the instrument lives in.
   - **A panic from *engine* code still leaks `callers` alone, named rather than implied.** ADR 0067 already
     holds that case to be an engine bug that has left the instance undefined; what this removes is the case
     where the panicking party is the embedder.

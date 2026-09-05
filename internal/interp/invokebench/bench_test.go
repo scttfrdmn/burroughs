@@ -50,6 +50,11 @@
 //     the denominator half of [#580](https://github.com/scttfrdmn/burroughs/issues/580)). Take the bar
 //     from the base arm until one of them is decided, and quote the arms that agree.
 //
+//     **#580's citation four lines above this one is why grave
+//     [#654](https://github.com/scttfrdmn/burroughs/issues/654) exists**: the phenomenon was filed as a
+//     discovery with its prior filing already cited in this comment. Read the citations in the file
+//     before opening an issue about the instrument the file documents.
+//
 // # Two things a reader has to know before comparing rows
 //
 // **`Empty` is per `Invoke`, not per guest instruction**, unlike every other bench package here. No
