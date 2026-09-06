@@ -2060,6 +2060,72 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A relocating `table.grow` abandoned an array a sibling agent was still writing into, so those
+  `table.set`s were lost — and the repair is a *reservation*, not only a refusal**
+  ([#662](https://github.com/scttfrdmn/burroughs/issues/662)),
+  [decision 0075](docs/decisions/0075-a-table-reserves-to-its-declared-max-under-a-measured-ceiling-and-refuses-to-relocate-with-a-sibling-agent.md).
+  #586's defect one subject over: `table.grow` had a single arm that always allocated, blitted and
+  published, so an agent holding the older `tabImage` wrote into the abandoned array through `table.set`,
+  `table.fill`, `table.copy` or `table.init` — in bounds and memory-safe since
+  [decision 0065](docs/decisions/0065-the-table-and-segment-headers-move-inside-published-images-because-a-field-that-cannot-be-named-needs-no-enumeration-to-confine-it.md),
+  and gone.
+  - **No contract text, for ADR 0073's reason read as a claim about the shape rather than about memories.**
+    A stranded agent that stores a slot and reloads it fails to read its own store back in its own program
+    order, so the permitted-outcome set is empty and there is no §4 clause to write. The state is made
+    unreachable instead.
+  - **The refusal alone would not have been affordable here, and that is the whole difference from #586.**
+    A memory reaches 0073's refusal only when *unreserved*, since `allocate` reserves every shared memory;
+    a table reserved nothing at all (`cap == len`), so the bare refusal would have reached **every**
+    multi-agent table growth. So a table now reserves to its declared max under a ceiling, and the refusal
+    is the fallback past it: two arms where memory has three, the `noMove` mark having no table twin
+    because nothing addresses a table atomically.
+  - **The ceiling's rule is deliberately not memory's, because the element type is not a byte.**
+    `sharedReservePages` is the largest reservation whose worst allocation clears a 1 ms bar; a table's
+    reservation is `[]ref` — five words, three of them pointers — so the whole capacity is scanned on
+    every mark cycle whether the guest grows into it or not. An allocation ladder cannot see that, so
+    `tableReserveSlots` is the **smallest rung covering the corpus's largest reservable declaration**: a
+    census of all 694 tables the corpus builds found 320 slots the largest declared max any of them can
+    reserve, 113 declaring no max at all, and two declaring maxima (65536 and 4294967295) that make a
+    ceiling mandatory rather than a tuning choice — reserving the second outright is an attempted 172 GB
+    allocation.
+  - **The ceiling is measured, both pre-registered forecasts came back wrong, and 1024 stands anyway.**
+    `BenchmarkTableReservationLadder` on `janus.local` in group `measured` (task 19, 0 concurrent), gated
+    behind an env var and `-benchtime=1x` so `make bench` cannot detonate a harness that allocates 420 MB
+    at its top rung. Arm A's allocation bar bites at **2^18**, one rung earlier than forecast; 1024 comes
+    in at **719 ns** worst against a 1 ms bar, so the rollback — conditioned on 1024 itself missing — did
+    not fire. Arm B's mark cost rises 10× across the ladder, which is the asymmetry the rule rests on, but
+    the *monotonicity* half of that forecast is falsified below 16384, where 10 reservations sit under the
+    collector's own baseline and the ladder measures its floor. Recorded as a falsified forecast rather
+    than a confirmed conclusion, because the rollback fires on flatness and non-monotonic is not flat.
+  - **The reslicing arm fills the new slots, which is the one place memory's twin must not be copied.**
+    `memory`'s reslice publishes `cur[:n]` and says nothing about the new bytes, because `make` zeroed them
+    and zero is what fresh memory must read as. A zeroed `ref` is `{Null: false, Addr: 0, Inst: nil}` —
+    deliberately **not** `ref.null` — so a fill-free reslice hands the guest non-null references naming no
+    function where it asked for `ref.null func`. What the guest then does with one was measured rather than
+    reasoned, and the reasoning was wrong in the guest's favour: this entry read that a `call_indirect`
+    through such a slot *succeeds* instead of trapping `uninitialized element`, and deleting the fill loop
+    shows it **panicking** instead — `internal/interp/call.go:funcRefTarget` dereferences the nil `Inst`
+    ([#669](https://github.com/scttfrdmn/burroughs/issues/669)), a host-visible crash rather than an
+    accept-direction wrong answer. The *success* reading came from grave #246's prose, true until #170 made
+    resolution go through the reference's own instance. The corpus reaches this arm — a planted `panic` dies
+    in `table_grow.wast` — and stays green without the fill, so the hole is invisible to it by measurement
+    now and not by construction.
+  - **`relocMu` is reused rather than twinned**, because a second process-wide ticket would restore the
+    cycle the first exists to prevent — a table relocation holding world A's mutex and reaching for B's
+    while a memory relocation holds B and reaches for A. The lock order is `growMu` → `relocMu` →
+    `world.mu`.
+  - **The excluded programs are stated at the counter that reports them**
+    (`tableGrowthRefusedWithASiblingAgent`, a third counter beside memory's two so that a test asserting a
+    table refusal cannot be satisfied by a memory refusal elsewhere in the process): a table whose declared
+    max exceeds the ceiling, and a table declaring no max — the larger population, 113 of the 694. Growth
+    *within* a reservation is unaffected, and that arm is witnessed with a sibling agent live precisely
+    because it is what the reservation was bought for.
+  - **#622's concurrent-reader control is re-pointed rather than retired, as memory's was under 0073.** It
+    was `TestARelocatingTableGrowDoesNotRaceAConcurrentReader`, named for the arm it rode; that arm is now
+    unreachable with a concurrent reader by construction, and the test **failed on its own vacuity guard**
+    rather than passing quietly — the return on having written the guard. It rides the reslicing arm now,
+    with the base pointer asserted stationary, and the relocating arm's refusal has its own witness.
+
 - **`Stop` waited for a count of arrivals, and an arrival is a caller — so it could report the world
   stopped while guest code ran** ([#656](https://github.com/scttfrdmn/burroughs/issues/656)),
   [ADR 0074](docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md).

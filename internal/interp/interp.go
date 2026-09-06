@@ -322,6 +322,17 @@ func (in *Instance) build() *Trap {
 			mem.attachWorld(&in.world)
 		}
 	}
+	// **And every table, for decision 0075's arm of the same mechanism.** A second loop rather than a
+	// widened one: the two index spaces are separate slices of unrelated types, and the paragraph above
+	// holds word for word with `table.grow` in place of `memory.grow` — after the definitions loop because
+	// `link` fills the imported slots, before the start function because a start function may grow a table.
+	// `linking.wast` is the cross-instance shape for tables, so the imports are attached here for the same
+	// reason `memory_grow.wast` made it the ordinary case for memories.
+	for _, tab := range in.tables {
+		if tab != nil {
+			tab.attachWorld(&in.world)
+		}
+	}
 	// **Elements before data, which is the reference's order** — `eval.ml:1316-1317` builds
 	// `es_elem @ es_data @ es_start` and evaluates the concatenation, so every active element
 	// segment is copied before any data segment is.
