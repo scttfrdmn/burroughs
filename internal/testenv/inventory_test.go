@@ -96,6 +96,18 @@ var licensed = map[string]string{
 	// measures its own five repetitions. Losing the two-condition resolution is the price of the
 	// key, so both are written out here rather than left to the reader's grep.
 	"internal/interp/tabladder_test.go:BenchmarkTableReservationLadder": "decision 0075's reservation ladder runs by invitation — BURROUGHS_TABLE_LADDER plus -benchtime=1x — and no workflow passes -bench, so the flag has no question to un-decline; CI's `no test declined to answer` step is what catches it if one ever does",
+	// The sixth door is the fifth one's twin, and the entry is separate rather than shared
+	// because the *reason* is not the same reason. The table ladder declines because its top
+	// rung allocates 420 MB of `ref`; this one declines because its top rung reserves 4 GiB of
+	// address space — one is a heap that has to be found, the other is a mapping the kernel
+	// hands out for free and a `make bench` sweep would take ten of. A shared entry would have
+	// had to describe both in one sentence and would have described neither.
+	//
+	// It also carries a limitation the fifth does not: arm C needs `/proc/self/status`, so on
+	// the dev box the harness runs and reports one arm as **not taken** rather than skipping.
+	// That is deliberate — a skip would put the gap in this file, where it would read as
+	// licensed, instead of in the printed table where the ADR's reader will see it.
+	"internal/interp/memladder_test.go:BenchmarkMemoryReservationLadder": "decision 0076's reservation ladder runs by invitation — BURROUGHS_MEM_LADDER plus -benchtime=1x — because its top rung reserves 4 GiB of address space per rep and its result is five printed tables rather than an ns/op; no workflow passes -bench, so the flag has no question to un-decline",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.
