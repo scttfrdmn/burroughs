@@ -366,11 +366,24 @@ func (t *table) store(i uint64, r ref) error {
 //
 // **What the lock does not buy, because the racing party takes no lock:** a `table.set` into the old
 // array is lost, having landed in the array this function abandons. That is 0058's coherence residual
-// with the subject swapped — the table's twin of **#586** — it needs §4 (#10) to say what is
-// permitted before code can be right about it, and it is the half 0065's mechanism deliberately does
-// not repair. What the mechanism *does* buy is that the abandoned array stays alive and in bounds for
-// every reader still holding the descriptor that names it, so a stale read is a stale value rather
-// than an out-of-bounds access.
+// with the subject swapped, and it is the half 0065's mechanism deliberately does not repair. What the
+// mechanism *does* buy is that the abandoned array stays alive and in bounds for every reader still
+// holding the descriptor that names it, so a stale read is a stale value rather than an out-of-bounds
+// access.
+//
+// **This said *"the table's twin of #586 — it needs §4 (#10) to say what is permitted"*, and both halves
+// of that are now wrong.** [ADR 0073][0073] closed #586 by finding the question's answer set *empty*
+// rather than by adding a clause: an agent that stores through an abandoned array and reloads the same
+// slot at its next instruction fails to read its own store back in its own program order, which no memory
+// model permits. That reading is about the shape and not about memories, so the table half needs no §4
+// clause either. The live number is **[#662][662]**, ADR 0073's residual 1, which also records why
+// `memory`'s refusal does not simply copy across: a shared memory is *reserved*, so its refusal excludes a
+// narrow set of programs, where a table reserves nothing and the same refusal would reach every
+// multi-agent growth. This cited #664 for part of #586's slice, which was a duplicate of #662 filed by
+// diagnosing the dangling citation without searching the tracker; it is closed as one.
+//
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+// [662]: https://github.com/scttfrdmn/burroughs/issues/662
 func (t *table) grow(delta uint64, r ref) int64 {
 	t.growMu.Lock()
 	defer t.growMu.Unlock()

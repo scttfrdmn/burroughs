@@ -86,7 +86,18 @@ type memory struct {
 	//
 	// **`grow`'s write to `Min` is still a plain write**, which 0058 names as a residual rather than
 	// fixing: it is one word rather than three, so it cannot produce an out-of-bounds access, and its
-	// only cross-thread reader is import matching. Filed with 0058's coherence residual, #586.
+	// only cross-thread reader is import matching (`matchMemoryType`, from another goroutine's `link`).
+	//
+	// **Filed as [#663], and this citation is a repair.** It said *"filed with 0058's coherence residual,
+	// #586"*, which was not true of #586's body: that issue is about a thread left on an abandoned array
+	// and says nothing about this field. A tracking number that leads to an issue not about the subject
+	// still reads as tracked, which is the only reason the wrong citation survived ADR 0073's own reading
+	// of #586. The repair there is a *deletion* rather than a lock — the published image's length is
+	// already the authority for the current size, so this field should carry the declared minimum only —
+	// which is also why it is a separate issue: its oracle is `-race` plus `imports4.wast`, not a
+	// lost-write witness.
+	//
+	// [#663]: https://github.com/scttfrdmn/burroughs/issues/663
 	limits binary.Limits
 
 	// noMove records that this memory's backing array must never be replaced — decision 0056's
@@ -110,6 +121,41 @@ type memory struct {
 	// written before any second thread starts is what decision 0056 rejects option (C) for not being.
 	noMove bool
 
+	// ws is every world whose index space holds this memory — one entry per instance that defines or
+	// imports it, deduplicated by identity, and empty until an instance installs it.
+	//
+	// **This is the handle `grow`'s relocating arm needs and the reason it can have one at all**
+	// ([ADR 0073][0073]): relocation is coherent exactly when no *other* agent holds the image being
+	// abandoned, which is a question about a `world`'s callers, and a `memory` had no way to ask it.
+	//
+	// **A slice and not a `*world` plus a `manyWorlds` bool, because the board falsified the bool.** The
+	// first draft kept one world and refused every relocation once a second instance appeared, on the
+	// argument that answering for two worlds means holding two `world.mu`s and two concurrent grows could
+	// take them in opposite orders. The premise about the locks was true; the premise about the *cost* was
+	// asserted rather than measured, and it was wrong by 30 vectors — `memory_grow.wast` alone exports two
+	// memories from one module and imports them into a second, so *the ordinary spec fixture for growing a
+	// memory is the cross-instance case*. Refusing it turned 30 default-lane passes into fails. The
+	// deadlock is closed by `relocMu` instead (see `relocate`), which is the smaller mechanism: one
+	// process-wide mutex on an arm that is already O(size), rather than a total order over worlds that
+	// somebody has to maintain.
+	//
+	// **Registered where reach is granted, not found by walking.** Every route to these bytes goes through
+	// some instance's `mems` index space — `memoryFor` for instructions, `vecMemarg` for SIMD,
+	// `hostMemory` for the boundary — so `build` attaches over the fully populated slice and an instance
+	// created *later* that imports this memory attaches on its own pass. That is the inverse of ADR 0056's
+	// walk, which traversed outward from a spawning instance to find memories and whose completeness
+	// premise #575 falsified for exactly this reason: reachability grows after the walk has run. The event
+	// that broke the walk is the event that maintains this.
+	//
+	// **Written under `growMu`, and read only there.** `attachWorld` takes it and `grow` already holds it,
+	// so this field needs no atomic and appears on no access path: two goroutines instantiating modules
+	// that import one memory is a real race on it, and the lock the grower already needs is the cheapest
+	// place to settle it. Append-only — nothing ever un-installs a memory from an index space, and a
+	// *missing* world is the unsafe answer, because its agents are the ones a relocation would strand.
+	//
+	// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+	ws []*world
+
 	// growMu serialises `grow` against `grow`, which is decision 0061 and is what makes the length
 	// change the single atomic read-modify-write the proposal's model calls for
 	// (`relaxed.rst:246`).
@@ -120,12 +166,30 @@ type memory struct {
 	// `memory.atomic.wait` and `memory.atomic.notify` on this memory for the duration of a
 	// multi-megabyte blit, and those paths have nothing to do with growing.
 	//
-	// **There is no lock order to get wrong, and that is a property of the call graph rather than a
-	// rule anyone is keeping.** `grow` takes this and never `waitMu`; `wait`, `notify` and `detach`
-	// take `waitMu` and never this. Neither section nests inside the other, so no ordering exists to
-	// be violated — which is worth writing down because a second mutex on one struct is exactly where
-	// such a rule usually has to appear, and a later edit that nests them would need to invent one.
-	growMu sync.Mutex
+	// **There is no lock order to get wrong *among the two mutexes on this struct*, and that is a
+	// property of the call graph rather than a rule anyone is keeping.** `grow` takes this and never
+	// `waitMu`; `wait`, `notify` and `detach` take `waitMu` and never this. Neither section nests inside
+	// the other, so no ordering exists to be violated between them — which is worth writing down because
+	// a second mutex on one struct is exactly where such a rule usually has to appear.
+	//
+	// **A lock order does exist now, and it is `growMu` → `world.mu`.** This sentence said *"there is no
+	// lock order to get wrong"* without the qualifier, and ADR 0073 falsified it: the relocating arm takes
+	// the world's mutex inside this one, so the rule the paragraph above says nobody is keeping is now a
+	// rule somebody is. It is one-directional by the call graph on the other side too — `spawn` calls
+	// `hasSharedMemory` and `admit` without holding `w.mu` at the call site, and `Stop`, `Resume`,
+	// `retire` and `beginHostCall` touch no memory at all — so no path runs `world.mu` → `growMu`. Stated
+	// rather than left standing, because a comment asserting the absence of the constraint the code now
+	// carries is the defect-stated-as-the-rule shape: review would confirm a nesting for a reason that
+	// stopped holding.
+	//
+	// **An `RWMutex` and not a `Mutex`, which is ADR 0073's decision 6.** `Caller.Read` and `Caller.Write`
+	// hold `RLock` across their image load and copy, because a **retained `Caller`** is an agent no
+	// `world` count sees (`Caller`: *"Nothing here refuses a retained `Caller`"*) and the relocating arm
+	// must exclude it some other way. Read-shared so two embedder accesses do not serialise on each other,
+	// and taken at the boundary accessors and **not** inside `read`/`write`, whose other callers are
+	// `memAccess`, the SIMD accessors and `atomicNotify` — the guest path 0073's option (C) exists to keep
+	// free of an acquisition.
+	growMu sync.RWMutex
 
 	// waitMu guards `waiters`, and holding it across a compare-and-enqueue is what closes the futex
 	// miss — decision 0060, and the argument is on `wait`. It adds no constraint on callers of this
@@ -245,12 +309,18 @@ func (m *memory) view() []byte { return m.img.Load().bytes }
 // a safety question, and the reservation is a pure optimisation — which is the form §0 lets this
 // function decide on its own. What remains is coherence: writes made through the older image are lost,
 // which the spec permits for plain accesses on a non-shared memory and does not describe for atomics.
-// Filed as **#586**, needing §4 (**#10**) to speak.
+// That was filed as **#586** and read *"needing §4 (#10) to speak"*; [ADR 0073][0073] closed it without §4
+// speaking, because the question turned out to have an empty answer set rather than a clause — an agent
+// that cannot read its own store back is outside every memory model. `grow`'s relocating arm now refuses
+// while any agent other than the grower could hold the image, so *"the reservation is a pure
+// optimisation"* stands and the coherence residual it names does not.
 //
 // The census that keeps the *authorisation* honest is
 // `internal/testenv/observer_test.go:TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`: every `go`
 // in engine code must be at a site a decision names, module-wide. What it cannot see is an embedder
-// calling `Invoke` on one instance from two goroutines, which nothing here documents either way.
+// calling `Invoke` on one instance from two goroutines — which used to be *"documented neither way"* and
+// is now ADR 0073's central population: two callers on `in.host` are two agents, and `soleAgentLocked`
+// counts them.
 //
 // **The reservation is capped, because reserving `max` outright was pre-registered and measured too
 // expensive.** ADR 0051 forecast under 1 ms for the largest declaration the address width allows and
@@ -259,6 +329,7 @@ func (m *memory) view() []byte { return m.img.Load().bytes }
 // cap. What is *not* the registered rollback is what happens above it — see `grow`.
 //
 // [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 	if !lim.Shared || !lim.HasMax {
 		return make([]byte, n), false, nil
@@ -312,6 +383,58 @@ func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 //
 // [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
 var growthRefusedPastReservation atomic.Uint64
+
+// growthRefusedWithASiblingAgent counts ADR 0073's refusal: a relocation declined because some agent
+// other than the grower could be holding the image it would abandon.
+//
+// **A second counter rather than a wider meaning for the first**, on `growthRefusedPastReservation`'s own
+// argument. The two answer different questions — *"this memory is past its reservation"* and *"this memory
+// has company"* — and one counter over both would make the board unable to say which engine limit a guest
+// hit, which is the whole reason the first one exists rather than an anonymous `-1`.
+//
+// **The excluded programs, stated because the limit changes which programs run.** A program with two agents
+// on one instance cannot grow an *unreserved* memory past its allocated capacity: the grow returns `-1`
+// where it succeeds in a single-agent program. Reserved memories are unaffected (they never reach the
+// relocating arm), the reslicing arm is unaffected (the array does not move, so a stale descriptor names the
+// same bytes), and a memory whose allocator rounded its size class up grows into that slack first. The
+// refusal covers the whole window in which a sibling agent is inside `Invoke` rather than the instant it
+// touches memory, because the engine cannot tell those apart at grow time without putting a reader
+// indicator on every guest access — 0073's option (C), rejected on cost.
+//
+// No vector in either corpus reaches this arm — none spawns, and none grows past its capacity with a second
+// agent live — so the witnesses are unit ones, in a pair: the refusal *and* a sole-agent grow that still
+// relocates and succeeds, because a fix that refused everything would satisfy "no lost write" vacuously.
+//
+// **The pair is the whole guard, and the first draft of this comment shows why it has to be.** It said
+// *"nothing in either corpus reaches this arm"* — one clause wider than the sentence above, covering the
+// refusal's *cost* as well as its trigger, and it was asserted from reading the fixtures rather than from a
+// board. The cost arm was reached 30 times: the draft also refused every memory held in two index spaces,
+// and `memory_grow.wast` is exactly that shape. *An unmeasured stability claim is not a protection* — the
+// over-refusal has a level, and only the board could name it. See `ws` for the mechanism that replaced it.
+var growthRefusedWithASiblingAgent atomic.Uint64
+
+// attachWorld records that `w`'s instance holds this memory in its index space — ADR 0073's registration,
+// called from `build` over the fully populated `mems` slice.
+//
+// **Idempotent for one world, and that is a real case rather than defensiveness.** A module may import the
+// same memory twice, which fills two slots with one `*memory`; a second entry for the same world would make
+// `relocate` take that world's mutex twice and deadlock on the second. The identity test is what
+// distinguishes *two slots* from *two instances*, and it is a linear scan because the slice is one entry
+// long for every module in either corpus and two for the longest import chain in `linking.wast`.
+//
+// **Under `growMu`, so two concurrent instantiations of importers cannot both miss the other's entry.** The
+// lock is the one the only reader already holds, which is why this field needs no atomic — see the field's
+// comment for why the read side is off every access path.
+func (m *memory) attachWorld(w *world) {
+	m.growMu.Lock()
+	defer m.growMu.Unlock()
+	for _, have := range m.ws {
+		if have == w {
+			return // the same instance naming this memory at a second index
+		}
+	}
+	m.ws = append(m.ws, w)
+}
 
 // sharedReservePages caps how much capacity a shared memory reserves at instantiation, in pages.
 //
@@ -587,20 +710,32 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 // correct now; one is what the lock makes *obviously* correct, so the argument that they agree no
 // longer has to be made.
 //
-// **What the lock does not buy, because the racing party takes no lock:** a guest store into the old
-// array racing the reallocating arm's `copy` is still lost — it landed in the array this function is
-// abandoning. That is decision 0058's coherence residual, it is filed as **#586**, it needs §4 to say
-// what is permitted before code can be right about it, and `noMove` below is what excludes it for a
-// shared memory. **`Spawn` now reaches it, and that is the population change this slice makes.** This
-// used to say no engine code starts a goroutine, so the only racing party was an embedder calling
-// `Invoke` on two goroutines; [ADR 0068][0068] lands T-1, so the population is also a spawned thread of
-// the same instance storing into an **unshared** memory that another thread grows. Not memory unsafety —
-// [0058]'s atomic publication covers that for every memory — and not reachable on a shared memory,
-// which `allocate` reserves and therefore marks.
+// **What the lock did not buy, because the racing party takes no lock:** a guest store into the old
+// array racing the reallocating arm's `copy` was lost — it landed in the array this function was
+// abandoning. That was decision 0058's coherence residual, filed as **#586**; it read *"it needs §4 to
+// say what is permitted before code can be right about it"*, and `noMove` below excluded it for a shared
+// memory. **`Spawn` reached it, which was the population change ADR 0068's slice made**: this used to say
+// no engine code starts a goroutine, so the only racing party was an embedder calling `Invoke` on two
+// goroutines, and [ADR 0068][0068] landed T-1, adding a spawned thread of the same instance storing into
+// an **unshared** memory that another thread grows.
+//
+// **[ADR 0073][0073] closed it, so the whole paragraph above is history and is kept as history.** §4 did
+// not have to speak: the answer set is empty, because an agent that stores through an abandoned array and
+// reloads the same address at its next instruction fails to read its own store back in its own program
+// order. The relocating arm now refuses while any agent other than the grower could hold the image, so
+// there is no window for this critical section not to cover — the store either lands in the live image or
+// the growth did not happen. The `growMu` section is still what makes `grow` atomic against `grow`
+// (decision 0061); it is no longer the boundary of an unrepaired residual.
+//
+// **`self` is the thread asking to grow, and it is a parameter because the predicate is about the
+// *other* agents** — ADR 0073. Nil is the conservative reading rather than an error: a caller with no
+// thread is not a member of any world, so it is excluded from nothing and every live caller counts against
+// it. `exec.go` passes `st.t`, which is never nil on any path that executes an instruction.
 //
 // [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
 // [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
-func (m *memory) grow(delta uint64) int64 {
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+func (m *memory) grow(delta uint64, self *thread) int64 {
 	m.growMu.Lock()
 	defer m.growMu.Unlock()
 
@@ -731,9 +866,23 @@ func (m *memory) grow(delta uint64) int64 {
 		// that would have parked T-1 behind a subject that is itself parked. So spawn landed and
 		// #586 is a named residual with a stated population instead of a gate, which is the honest
 		// of the two readings and the one a reader of this arm needs.
-		grown := make([]byte, n)
-		copy(grown, cur)
-		m.img.Store(&memImage{bytes: grown})
+		//
+		// **And the residual is closed here rather than described, which is [ADR 0073][0073].** The
+		// two paragraphs above are kept because they are the record of how the defect's class moved
+		// — use-after-free to lost update — and the sentence they end on is overtaken: what #586
+		// needed from §4 turned out to be a *reading* rather than a clause. An agent that stores
+		// through an abandoned array and reloads the same address at its next instruction fails to
+		// read its own store back **in its own program order**, which no memory model permits, and a
+		// permanently invisible write also makes any later wake non-conforming under §4 B-MM-2's
+		// *"MUST synchronize all writes that happened-before the wake"*. The outcome set is empty,
+		// so the engine makes the state unreachable instead of stating what a stranded agent
+		// observes.
+		//
+		// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+		if !m.relocate(n, cur, self) {
+			growthRefusedWithASiblingAgent.Add(1)
+			return -1
+		}
 	}
 	// **The declared type grows with the memory, and it is mutable for exactly this
 	// reason.** `memory.ml:64`'s `grow` sets `mem.ty <- MemoryT (at, lim')` with `lim'.min`
@@ -744,6 +893,93 @@ func (m *memory) grow(delta uint64) int64 {
 	// limits should match, because external memory size is 2 now."
 	m.limits.Min = newSize
 	return int64(old)
+}
+
+// relocMu serialises `relocate` against every other `relocate` in the process, and it is what lets a
+// relocation hold more than one `world.mu` at a time.
+//
+// **A global mutex is here in place of a total order over worlds, and the trade is deliberate.** The hazard
+// is two grows on two memories that each span the same two instances, taking those two `world.mu`s in
+// opposite orders. The textbook repair is to give every `world` a rank and lock in rank order; this instead
+// admits one relocation at a time, so the second holder of a `world.mu` never exists and no cycle can form.
+// It is the smaller mechanism: no field on `world`, no rank to assign at a construction site `world` does
+// not have (it is an embedded value in `Instance`, never built by a literal), and nothing for a later
+// `world`-creating path to remember.
+//
+// **What it costs is bounded by what already costs more.** The arm it guards is the relocating one — a `make`
+// plus a full-memory `copy`, taken only when a memory grows past its allocated capacity — so the
+// serialisation it adds is over an operation that is already O(size) and already behind this memory's own
+// `growMu`. It is off every guest access path, off the reslicing arm, and off the boundary accessors.
+//
+// The order is `growMu` → `relocMu` → `world.mu`…, and the last step is where the ordering property is
+// spent: nothing in the engine takes a `world.mu` and then a `growMu` (see `growMu`'s comment), so a
+// relocation blocked on a world can never be blocking that world's holder in turn.
+var relocMu sync.Mutex
+
+// relocate blits this memory into a fresh array of `n` bytes and publishes it, or reports that some agent
+// other than `self` could be holding the image it would abandon. `growMu` held; ADR 0073's decision 1.
+//
+// # Two arms, and the empty one is what makes every unit fixture reach the subject
+//
+//   - **No world: relocate.** A `memory` that no instance has installed is unreachable by any agent — the
+//     `newMemory`-and-nothing-else state, which is where every unit test starts. Not a special case for
+//     tests: `build` attaches before the start function runs, so no *instantiated* memory is ever in it.
+//   - **One world or several: hold every one of their mutexes across the check, the blit and the
+//     publication, and refuse unless `self` is the sole agent in all of them.** A memory in two index
+//     spaces has agents in two worlds and both must answer; `relocMu` above is what makes holding two locks
+//     safe. The first draft refused this case outright and the board priced that refusal at 30 vectors —
+//     see `ws`.
+//
+// # Why the locks span the blit and are not merely taken before it
+//
+// Checking and then blitting leaves the arrival window open: a caller admitted during a multi-megabyte
+// `copy` loads the **old** image, writes into it after the copy has read those bytes, and the `Store` below
+// swallows that write — the defect moved rather than repaired. `enterCall` and `admit` both take `w.mu`, so
+// holding it is what makes *"no sibling agent"* true for the duration instead of at an instant.
+//
+// The section is O(size), which is unusual and is bounded by what it excludes: the only caller it can block
+// is one whose arrival would have made this relocation unsafe. That is also why the locks are the *worlds*'
+// and not the futex queue's — `growMu`'s comment rejects holding `waitMu` here for the same shape of reason,
+// and every `memory.atomic.wait` on this memory would otherwise stall on a blit it has nothing to do with.
+//
+// `Stop` releases `w.mu` before it waits for arrivals (`Stop`, at the `total := len(w.live)` line), so a
+// grower queued behind a stop's *setup* proceeds and then parks at its own next safepoint. There is no
+// deadlock to argue about, only latency.
+func (m *memory) relocate(n uint64, cur []byte, self *thread) bool {
+	if len(m.ws) == 0 {
+		m.publish(n, cur)
+		return true
+	}
+	relocMu.Lock()
+	defer relocMu.Unlock()
+	for _, w := range m.ws {
+		w.mu.Lock()
+	}
+	// Released in reverse, in one deferred pass rather than a `defer` per iteration: `m.ws` cannot change
+	// while `growMu` is held, so the set unlocked here is exactly the set locked above.
+	defer func() {
+		for i := len(m.ws) - 1; i >= 0; i-- {
+			m.ws[i].mu.Unlock()
+		}
+	}()
+	for _, w := range m.ws {
+		if !w.soleAgentLocked(self) {
+			return false
+		}
+	}
+	m.publish(n, cur)
+	return true
+}
+
+// publish allocates the new array, copies the old one into it, and stores the image. `grow`'s
+// allocate-and-blit, split out only so that `relocate`'s three arms each name one operation.
+//
+// An explicit `make` rather than `append`: it keeps the length an exact multiple of `pageSize`, which
+// `size` reads back as the authority. See `grow`'s reslicing arm for the rest of that argument.
+func (m *memory) publish(n uint64, cur []byte) {
+	grown := make([]byte, n)
+	copy(grown, cur)
+	m.img.Store(&memImage{bytes: grown})
 }
 
 // runData performs one data segment's instantiation-time effect — `run_data`

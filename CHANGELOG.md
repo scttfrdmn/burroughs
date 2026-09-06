@@ -2018,6 +2018,48 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A relocating `memory.grow` abandoned an array a sibling agent was still writing into, so those writes
+  were lost** ([#586](https://github.com/scttfrdmn/burroughs/issues/586)),
+  [ADR 0073](docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md).
+  An unshared memory's `grow` allocated a fresh array, blitted, and published it; a thread already holding
+  the old `[]byte` kept storing into the abandoned one — in bounds and memory-safe since
+  [ADR 0058](docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md),
+  and gone. Guest-visible data loss, reachable through `Spawn` or two concurrent `Invoke`s.
+  - **The §4 clause it was waiting on turned out to be empty, which is why this needed no contract text.**
+    A stranded agent that stores and reloads the same address fails to read *its own store* back in its own
+    program order, which no memory model permits, and a permanently invisible write also makes any later
+    wake non-conforming under §4 B-MM-2. With no permitted observation to describe, the engine makes the
+    state unreachable instead: the relocating arm **refuses** unless the growing thread is the sole agent —
+    no other thread with `callers > 0`, and itself entered at most once — asked of **every** instance whose
+    index space holds the memory, since any of their threads can reach the bytes.
+  - **A memory held in two index spaces relocates, and the first draft refusing it was priced by the
+    board.** That draft answered for one world and gave up as soon as a second appeared, on a lock-ordering
+    cost that was argued rather than measured; `memory_grow.wast` exports two memories from one module and
+    grows them from a second, so **the ordinary spec fixture for growing a memory is the cross-instance
+    case** and refusing it turned 30 default-lane passes into fails. The deadlock the draft feared is closed
+    by a process-wide `relocMu` on an arm that is already a full-memory `copy`, so two relocations can never
+    hold two `world.mu`s in opposite orders. The witness that had pinned the refusal asserted the defect as
+    the rule and is replaced, not narrowed.
+  - **A threaded program's unreserved memory therefore stops growing past its capacity**, returning the
+    spec's `-1` where a single-agent program succeeds. The refusal is over-broad on purpose: the engine
+    cannot tell at grow time whether a sibling is mid-access, so it refuses the *window* rather than the
+    event, and the excluded programs are named at the counter that reports it
+    (`growthRefusedWithASiblingAgent`, beside ADR 0056's reservation counter). Shared memories are
+    unaffected — reserved, marked, and they reslice.
+  - **The boundary accessors take the growth lock for read**, so a host function's `Caller.Read`/`Write`
+    cannot straddle a blit. `growMu` widens to an `RWMutex` and the guest hot path does not take it. The
+    widening is a layout change to the struct every guest access dereferences, so it was pre-registered
+    against a 2.0% bar on `membench`'s four rows and measured on both memory models: geomean **+0.75%** on
+    `darwin/arm64` (null +0.05%) and **−0.87%** on `linux/amd64` (`janus.local`, group `measured`, task 18,
+    null −0.66%), every row `~`. An earlier amd64 run whose null arm sat at −2.42% is recorded in the ADR as
+    not adjudicating rather than as the −3.39% it nominally showed.
+  - **#600's witness loses its stronger arm, and the loss is stated rather than absorbed.** Two concurrent
+    relocating grows are now unreachable, so `TestConcurrentGrowLosesNoPages`'s reallocate arm can no longer
+    pin an exact grant census, and removing ADR 0061's mutex reproduces on the reslice arm only. The arm
+    keeps an exact **partition** instead — every attempt is a grant or a counted refusal, summing to the
+    attempt count while the memory is short of its max — with both phases asserted non-empty so a
+    refuse-everything regression cannot pass vacuously.
+
 - **An embedder panic left the engine's blocked and caller marks torn, and no guard could say so, because
   the two leak together into exactly SP-2's *arrived* predicate**
   ([#650](https://github.com/scttfrdmn/burroughs/issues/650)),

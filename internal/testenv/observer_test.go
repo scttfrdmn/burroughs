@@ -42,10 +42,13 @@ import (
 // pointer (#556). **That half is closed by mechanism rather than by census.** [ADR 0058][0058] made
 // `memory.img` an `atomic.Pointer[memImage]`, so moving the array is memory-safe for every memory,
 // marked or not; [ADR 0056][0056] moved `grow`'s refusal onto a per-memory `noMove` mark that
-// `allocate` sets wherever it reserves (#572). What is left of the original worry is a **coherence**
+// `allocate` sets wherever it reserves (#572). What was left of the original worry is a **coherence**
 // residual with a stated population — an unshared memory in an instance that has spawned, grown while
-// another thread holds an older image — filed as **#586**, needing §4 (**#10**) to say what is
-// permitted. It is not memory unsafety and it is not what this control watches.
+// another thread holds an older image — filed as **#586**, and this said it was *"needing §4 (#10) to
+// say what is permitted"*. [ADR 0073][0073] closed it without §4 speaking: the outcome set is empty,
+// because an agent that stores through the abandoned array cannot read its own store back in its own
+// program order, so `grow`'s relocating arm refuses while any agent other than the grower could hold the
+// image. It was never memory unsafety and it was never what this control watches.
 //
 // So this control is no longer the tripwire for `allocate`'s prose. It is the census that keeps the
 // *authorisation* honest: engine concurrency arrives one decided site at a time, and an undecided
@@ -89,6 +92,7 @@ import (
 // [0056]: ../../docs/decisions/0056-the-no-move-mark-is-set-where-the-reservation-happens-and-grow-refuses-on-the-mark-because-spawn-can-establish-it-while-one-thread-exists.md
 // [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
 // [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 	// Keyed by repo-relative slash path and enclosing function, with the count each site may have and
 	// the decision that says so. Adding an entry here is not a way to make this control pass: the
@@ -185,11 +189,10 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 			"litmus battery is parked past what spawn needed (#10), so there is no vector that will "+
 			"report a violation of the model this engine has not finished stating — the threads "+
 			"corpus is not that instrument.\n"+
-			"There is also a coherence residual with a named population (#586): an unshared memory "+
-			"in an instance that has spawned, grown by one thread while another holds an older "+
-			"image, loses the writes made through that image. Not memory unsafety — ADR 0058 "+
-			"publishes the image through an atomic pointer, so a moving array is safe for every "+
-			"memory — but undescribed for atomics until §4 speaks.\n"+
+			"The coherence residual that used to be named here (#586) is closed: ADR 0073 refuses "+
+			"a relocation while any agent other than the grower could hold the image, so a write "+
+			"through an abandoned array is unreachable rather than undescribed. Its table twin is "+
+			"not (#662) — a `table.set` through an abandoned image is still lost.\n"+
 			"The way through is a decision doc that names this site and says what it does about "+
 			"both, then an entry above citing it. Adding the entry without the decision forges the "+
 			"authorisation, and moving the statement to a sibling package does not help: this "+
