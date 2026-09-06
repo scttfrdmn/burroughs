@@ -165,7 +165,7 @@ compares the two fields.
 > linear memory.
 
 - **Shape:** outcome
-- **Blocked by:** #554
+- **Blocked by:** nothing — #554 closed with [ADR 0068](decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md), and the vehicle is `Instance.Spawn` itself.
 
 #### Case `t1-n-agents-block-simultaneously`
 
@@ -181,11 +181,42 @@ compares the two fields.
   miss here, so a discard would be an instrument fault.
 - **Arbiter:** neither — this is a scheduling claim, and both architectures are expected to agree. Run
   on both anyway, because "expected to agree" is a prediction this suite is in a position to check.
-- **Status:** blocked — #554. **This case is the one the ADR 0062 vehicle is forbidden to run**, and the
-  prohibition is what makes the blocker load-bearing rather than a formality: two instances driven by two
-  goroutines would report `blocked == N` for any N, because Go parks N goroutines happily, so the case would
-  score a pass on precisely the M:N mapping its forbidden set exists to exclude. It read `blocked — #543`
-  until #605's derivation — a second blocker for a row whose clause names #554.
+- **Status:** implemented — TestNAgentsAreAllParkedInAWaitAtOneInstant
+
+**What the implementation measured, recorded against the registration rather than instead of it.** The row
+read `blocked — #554` until this slice, and before that `blocked — #543` until #605's derivation found a
+second blocker for a row whose clause names #554. **This case is the one the ADR 0062 vehicle is forbidden
+to run**, and the prohibition is what made the blocker load-bearing rather than a formality: two instances
+driven by two goroutines report `blocked == N` for any N, because Go parks N goroutines happily, so the case
+would have scored a pass on precisely the M:N mapping its forbidden set exists to exclude. The implemented
+case therefore rides `Instance.Spawn`, and lives in `internal/interp/battery_spawn_test.go` rather than
+beside the ADR 0062 rows, so that the file a reader opens names the vehicle that ran.
+
+Four things the registration did not anticipate, all four measured by injection into the engine — never into
+the harness — with each injection run over the whole package rather than over this test alone:
+
+- **Of the forbidden set's three readings, this case witnesses two.** A capacity-4 pool acquired *inside*
+  `spawn`'s goroutine reports `4 of 8` with the per-address depths `[0 0 0 1 1 0 1 1]`; at capacity 1 —
+  which is the **event loop** reading — it reports `1 of 8`. Both kill this test and nothing else in the
+  package. The third reading, an **M:N mapping**, is *not* discriminated: Go's scheduler is M:N and parks 8
+  goroutines happily, so the sentence *"a pool, an event loop, or an M:N mapping cannot hold N agents parked
+  at once"* is false of the third term in this language. 1:1-ness comes from `spawn`'s `runtime.LockOSThread`
+  and is **structural** rather than witnessed here.
+- **A wait that serializes *after* the enqueue survives.** A package-level mutex held across
+  `memory.wait`'s `select` passes the whole package, because the parked counter is the futex queue and an
+  agent joins the queue before it parks. Recorded as a bound on the reading rather than repaired: eight
+  agents each holding an OS thread inside the instruction is what T-1 asks for whatever the engine
+  serializes internally, so the survivor is arguably not a violation at all.
+- **A pool has a second shape that wedged the harness, and the repair is in this slice.** A capacity-4
+  semaphore acquired *before* the goroutine blocks the **spawner**, so the fifth `Spawn` never returns and
+  the unbounded spawn loop produced the test binary's own 120s panic and a goroutine dump instead of a
+  verdict. The loop now runs off a goroutine under a 30s bound and reports `only 4 of 8 Spawn calls
+  returned` — grave [#608](https://github.com/scttfrdmn/burroughs/issues/608)'s rule one clause over, *no
+  answer is spelled FAIL*.
+- **The forbidden count has a fourth route, so the message stopped enumerating causes.** A clamp turning the
+  `-1` operand into a finite timeout lands here at `0 of 8`, and a wait that returns without parking is none
+  of the registration's three readings. The failure message names the outcome and offers the readings as
+  readings.
 
 ### T-2 — no main-thread special case
 
@@ -193,10 +224,10 @@ compares the two fields.
 > block in `memory.atomic.wait` and in blocking host calls. No agent is forbidden from sleeping.
 
 - **Shape:** outcome
-- **Blocked by:** #554. Re-pointed from #543, which closed with #594: the suspend path exists, and what this
-  clause's case still lacks is a **spawned child** specifically. The witness below names one, and a witness is
-  part of a registration rather than a suggestion about how to build it — two peer instances would discharge a
-  *no main-thread special case* clause with an interleaving containing no child at all.
+- **Blocked by:** nothing — #554 closed with ADR 0068, which is the **spawned child** this clause's case
+  needed and which #543/#594's suspend path could not supply on its own. The witness below names one, and a
+  witness is part of a registration rather than a suggestion about how to build it — two peer instances would
+  discharge a *no main-thread special case* clause with an interleaving containing no child at all.
 
 #### Case `t2-the-first-agent-waits-and-a-child-wakes-it`
 
@@ -211,7 +242,46 @@ compares the two fields.
 - **Floor:** at least 90% of runs must report `0`; below that the case fails as un-witnessed, since a run
   whose wait returned `1` (not-equal) never tested the clause.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #554
+- **Status:** implemented — TestTheInstantiatingAgentWaitsAndASpawnedChildWakesIt
+
+**What the implementation measured, recorded against the registration rather than instead of it.** The case
+lives in `internal/interp/battery_spawn_test.go` beside T-1's, for T-1's reason: the vehicle is
+`Instance.Spawn`, and the file a reader opens should name the vehicle that ran. `K = 200` rounds is the
+implementation's number — the registration fixes a floor and not a round count — with a fresh futex word per
+round so no round inherits the previous one's queue.
+
+- **The registered means does not deliver the registered floor, and the number is here rather than in an
+  amended threshold.** With the flag set by a host call executed immediately before the wait instruction —
+  the witness exactly as registered — 99–100% of rounds reported `0` on the default path and only 81–87.5%
+  under `-race`, which breaches the 90% floor **on the instrument CI actually runs**. What landed keeps the
+  requirement and replaces the means: the child's `armed` host function reports ready when it observes the
+  round's word **in the futex queue**, which is the edge the flag was standing in for rather than a proxy
+  for it. The registration's own argument for the flag survives the substitution — the queue is engine state
+  read host-side, not a guest-memory write, so observing it still cannot supply the edge under test.
+  Amending the floor after measuring it was the other available repair, and the ordering is the whole
+  difference between the two.
+- **With that gate, the floor is satisfied analytically and the discard is unreachable — and both checks are
+  kept.** The child stores only after the wait is queued, so a return of `1` (not-equal) cannot occur and the
+  witnessed fraction is 200 of 200 by construction. **That fraction is therefore not a measurement**, and is
+  not reported as one. The floor check stays for what would falsify it: a gate that regresses to a timing
+  guess, at which point the fraction becomes a measurement again and the registered 90% is the bar it faces.
+- **The child is released unconditionally once the wait returns, and that arm is what turns this row's own
+  defect into a verdict.** Under the defect T-2 forbids — a refusal on the instantiation thread — a child
+  gated on the wait's *success* would spin forever and `Join` would never return, producing the test binary's
+  120s panic and a goroutine dump instead of a FAIL. So the release is set from the wait's outcome in hand,
+  whatever that outcome is: grave [#608](https://github.com/scttfrdmn/burroughs/issues/608)'s rule, that no
+  answer is spelled FAIL.
+- **The forbidden reading `0` with no notify issued is checked against the guest's own notify return.** The
+  child stores its `memory.atomic.notify` result at the round's result word, biased by one, and the host
+  reads it back after `Join`; a `0` there beside a wait result of `waitWoken` is the forbidden pair and
+  reports naming both engine readings rather than one. The bias exists because `waitWoken` is `0` and a fresh
+  linear-memory word is `0`, so an unbiased result word would be satisfied by a word nobody wrote.
+- **Injection: a main-thread special case kills 17 tests in the package, this one first and with the only
+  message naming T-2.** Refusing the wait on the instantiation thread is the clause's own negation, and the
+  collateral is the finding: the clause is load-bearing well beyond this row, so this case's value is not
+  that it is the only detector but that it is the only one whose failure says which contract sentence broke.
+  T-1's clamp injection — the `-1` operand made finite — kills exactly the two cases in this file and nothing
+  else, since here it surfaces as a return of `2` under an infinite timeout, T-2's forbidden reading verbatim.
 
 ### T-3 — futex-backed wake latency
 

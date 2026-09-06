@@ -21,6 +21,48 @@ weakly-ordered platform.
 
 ### Added
 
+- **§2's two spawn-vehicle litmus cases — T-1's *N agents parked at one instant* and T-2's *the first agent
+  waits and a child wakes it*.** [#10](https://github.com/scttfrdmn/burroughs/issues/10) slice 1,
+  `gate:threads`, against [the pre-registration](docs/litmus-battery-preregistration.md)'s rows for both
+  clauses, whose `Status:` moves from a stale `blocked — #554` to the test each now names.
+  `internal/interp/battery_spawn_test.go` is a separate file from the ADR 0062 rows **because T-1 forbids
+  their vehicle**: two instances driven by two goroutines report `blocked == N` for any N, since Go parks N
+  goroutines happily, so the case would have scored a pass on precisely the M:N mapping its forbidden set
+  exists to exclude. The vehicle is `Instance.Spawn`, and the file a reader opens names it.
+  - **The parked count is read from the futex queue, not from the `blocked` mark.** `blocked` counts callers
+    suspended for any reason — a host call is one ([ADR
+    0069](docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md))
+    — and is incremented *before* the enqueue, so it reaches N while an agent may still be short of the
+    queue. `len(waiters[ea])` names the instruction and the word T-1's clause is about; the `blocked` mark is
+    kept as a **second mechanism** beside it rather than as the reading.
+  - **Both cases were watched die, by injection into the engine and never into the harness, each injection
+    run over the whole package.** Three kill T-1 with no collateral: a capacity-4 pool inside `spawn`'s
+    goroutine (`4 of 8`, depths `[0 0 0 1 1 0 1 1]`), the same at capacity 1 — the event-loop reading —
+    (`1 of 8`), and a clamp turning the `-1` timeout operand finite (`0 of 8`). The clamp kills exactly the
+    two cases in this file and nothing else. A **main-thread special case**, T-2's own negation, kills 17
+    tests in the package, T-2 first and with the only message naming the clause.
+  - **Two registration bounds are recorded rather than repaired.** T-1's forbidden set claims three
+    architectures cannot hold N agents parked; the third, an **M:N mapping**, is not discriminated here,
+    because Go's scheduler is one — 1:1-ness is structural, from `runtime.LockOSThread`. And a wait that
+    serializes *after* the enqueue survives the whole package, which is arguably no violation at all: eight
+    agents each holding an OS thread inside the instruction is what the clause asks for whatever the engine
+    serializes internally.
+  - **T-2's registered witness does not deliver T-2's registered floor, and the number is in the document
+    rather than in an amended threshold.** With the flag set by a host call immediately before the wait —
+    the means as registered — 99–100% of rounds were woken on the default path and only 81–87.5% under
+    `-race`, breaching the 90% floor **on the instrument CI actually runs**. What landed keeps the
+    requirement and replaces the means with the observation it was standing in for: the child spins until it
+    sees the round's word *in the futex queue*, which is engine state read host-side and so still cannot
+    supply the edge under test. The floor is then satisfied analytically, is not reported as a measurement,
+    and the check is kept for what would falsify it — a gate regressing to a timing guess.
+  - **A capacity-4 semaphore taken *before* the goroutine wedged the harness, and that repair is in this
+    slice.** It blocks the **spawner**, so the fifth `Spawn` never returns and an unbounded spawn loop
+    produced the test binary's own 120s panic and a goroutine dump instead of a verdict. The loop runs off a
+    goroutine under a 30s bound and reports `only 4 of 8 Spawn calls returned`. T-2 carries the same rule in
+    its release arm: the child is released once the wait's outcome is in hand, whatever the outcome, so the
+    defect the row exists for reports as a FAIL instead of hanging in `Join` — grave
+    [#608](https://github.com/scttfrdmn/burroughs/issues/608)'s rule, *no answer is spelled FAIL*.
+
 - **`scripts/detach.sh` — a launched process is a claim that something will end it.**
   [#659](https://github.com/scttfrdmn/burroughs/issues/659),
   [ADR 0072](docs/decisions/0072-a-detached-run-is-bounded-by-a-wall-clock-timeout-and-the-sessions-liveness-because-the-launching-shell-exits-before-the-work-does.md),
