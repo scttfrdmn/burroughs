@@ -273,8 +273,10 @@ func armC(b *testing.B) {
 	fmt.Printf("\narm C — RSS delta for a %d-page reservation, minimum touched, bar: under 1MiB per 4GiB\n",
 		maxPages32)
 
-	before, ok := residentBytes()
-	if !ok {
+	// The availability probe discards its value on purpose: the number that matters is taken after the
+	// collection below, so reading one here and overwriting it would be an ineffectual assignment — and
+	// `ineffassign` said so, which is the linter noticing that this function asks the question twice.
+	if _, ok := residentBytes(); !ok {
 		fmt.Printf("| unavailable | — | — |\n\nThis host has no /proc/self/status, so **arm C was not " +
 			"taken**. That is a gap in the run and not a null result: rule 2 reserves an address-type " +
 			"ceiling and its soundness is exactly this number.\n")
@@ -282,7 +284,7 @@ func armC(b *testing.B) {
 	}
 	// One collection first, so the delta is not the previous arm's garbage being reclaimed under it.
 	runtime.GC()
-	before, _ = residentBytes()
+	before, _ := residentBytes()
 
 	mem, err := newMemory(binary.Memory{Limits: binary.Limits{Min: 1, Max: maxPages32, HasMax: true}})
 	if err != nil {

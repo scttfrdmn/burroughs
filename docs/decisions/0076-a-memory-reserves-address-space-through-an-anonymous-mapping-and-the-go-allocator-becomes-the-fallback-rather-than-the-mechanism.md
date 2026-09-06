@@ -216,3 +216,122 @@ Registered in #672 before any number existed, restated here so it can be checked
 Two guards on the instrument itself: **assert the arms differ**, since a run whose mapping path silently
 fell back to `make` would print two agreeing columns and read as a null result, and **assert the
 reservation happened** from the mapped capacity rather than from the absence of an error.
+
+### Measured
+
+`internal/interp/memladder_test.go:BenchmarkMemoryReservationLadder`, on the queue as required.
+**Provenance:** host `janus.local` (i9-9960X, linux/amd64), pueue group `measured`, **task 20**, label
+`burroughs/fc19e76`, **0 concurrent tasks running on the box at submit time**, submitted through
+`scripts/xcheck-amd64.sh` (which copies the working tree and reconciled the corpus at 257 vectors, 0
+sidecars). Five arms, one invocation, exit 0.
+
+**No rollback arm fired.** Every bar registered in #672 was cleared, and the arm that decides M-1's sentence
+was cleared on both statistics rather than one.
+
+**Arm A — `newMemory` at the rung** (bar: worst of five under 1 ms):
+
+| rung (pages) | reserved bytes | best | worst | clears 1 ms |
+| --- | --- | --- | --- | --- |
+| 1 | 131072 | 1.663µs | 18.709µs | yes |
+| 16 | 1048576 | 1.663µs | 2.771µs | yes |
+| 256 | 16777216 | 1.654µs | 2.876µs | yes |
+| 4096 | 268435456 | 1.719µs | 5.852µs | yes |
+| 16384 | 1073741824 | 1.596µs | 1.895µs | yes |
+| 32768 | 2147483648 | 1.626µs | 3.158µs | yes |
+| 65535 | 4294901760 | 1.61µs | 1.774µs | yes |
+
+The top rung's worst is **1.774 µs against a 1 ms bar**. What matters more than the margin is the *shape*:
+the column does not rise with the rung at all — 1.61 µs of best at 4 GiB and 1.663 µs at 128 KiB — which is
+what it looks like when the cost is one `mmap` and not a function of the size. ADR 0051's cap
+(`sharedReservePages = 128`) existed because the same bar was missed at 4 GiB; on this host, with this
+mechanism, it is cleared by about **560×**, and the largest rung is the *fastest* row in the worst column.
+
+**Arm B — one-page `grow` at increasing current size** (bar: flat within 2×), 5 reps of 64 grows each:
+
+| current pages | best per grow | worst per grow |
+| --- | --- | --- |
+| 2 | 50ns | 71ns |
+| 17 | 50ns | 56ns |
+| 257 | 50ns | 55ns |
+| 4097 | 50ns | 56ns |
+| 16385 | 50ns | 58ns |
+| 32769 | 50ns | 56ns |
+| 65001 | 50ns | 57ns |
+
+Best **1.00×** across the ladder, worst **1.29×**, and the worst column's maximum sits at the **smallest**
+rung — the opposite of the M-1-falsifying shape, which would put it at the largest. This is the arm the
+sentence *"amortized O(pages touched)"* rests on, and it is the one this document was least entitled to
+assume: a one-page grow at 65001 pages costs what a one-page grow at 2 pages costs.
+
+**Arm C — RSS with only the minimum touched** (bar: under 1 MiB per 4 GiB reserved):
+
+| reserved bytes | RSS delta | bar | clears |
+| --- | --- | --- | --- |
+| 4294901760 | 8192 | 1048576 | yes |
+
+**8 KiB of resident memory for 4 GiB of reserved address space** — two OS pages, against a bar of one
+mebibyte. This is rule 2's premise measured rather than argued: reserving an address-type ceiling for a
+memory that declared no maximum is sound because the reservation is not a commitment. Without this figure
+rule 2 would have had to keep a cap, which is the arm the rollback registered.
+
+**Arm D — mark time with ten reservations live** (expected flat):
+
+| rung (pages) | reserved bytes live | best | worst |
+| --- | --- | --- | --- |
+| 1 | 1310720 | 280.924µs | 358.109µs |
+| 16 | 10485760 | 200.657µs | 265.241µs |
+| 256 | 167772160 | 209.744µs | 277.713µs |
+| 4096 | 2684354560 | 240.273µs | 284.321µs |
+| 16384 | 10737418240 | 237.776µs | 282.511µs |
+| 32768 | 21474836480 | 242.031µs | 300.185µs |
+| 65535 | 42949017600 | 248.131µs | 296.209µs |
+
+Flat, and the highest row is again the smallest rung. **42.9 GB of live reservations do not move mark
+time**, which is the direct contrast with ADR 0075 arm B's **10×** rise across the reserved-`[]ref` ladder
+and is why memories could go first while tables cannot: a `[]byte` is pointer-free and a mapping is
+off-heap, so there is nothing in it for the collector to walk. Had this arm risen, the analysis in this
+document would have been wrong and the rollback said so.
+
+**Arm E — the control**, `make([]byte, pageSize, rung*pageSize)` at the same rungs, on the same host, in
+the same invocation:
+
+| rung (pages) | reserved bytes | best | worst | RSS delta |
+| --- | --- | --- | --- | --- |
+| 1 | 131072 | 558ns | 28.056µs | -110592 |
+| 16 | 1048576 | 3.135µs | 564.587µs | 5316608 |
+| 256 | 16777216 | 19.281µs | 1.721808ms | 17997824 |
+| 4096 | 268435456 | 236.12µs | 24.38729ms | 253583360 |
+| 16384 | 1073741824 | 612.901µs | 97.057255ms | 1880989696 |
+| 32768 | 2147483648 | 1.41721ms | 193.324088ms | 4298805248 |
+| 65535 | 4294901760 | 2.709965ms | 389.043337ms | 6454640640 |
+
+Three readings, in descending order of how much they were needed:
+
+1. **The control fails the bar at the top rung on both statistics** — 2.709965 ms best and 389.043337 ms
+   worst against 1 ms — so ADR 0051's rollback was not a fluke of one host or one Go version. Against arm
+   A's top rung this is about **1 680× on best and 219 000× on worst**. The remembered 855 ms figure is
+   *corroborated* rather than assumed: 389 ms on different hardware is the same phenomenon, not a
+   coincidence, and the point of re-taking the column here was that a remembered number cannot be compared
+   to a fresh one.
+2. **The control's cost is a function of the reservation and arm A's is not.** Read down the two `worst`
+   columns: arm E rises by five orders of magnitude across the ladder while arm A does not rise at all.
+   That is the mechanism claim — `make` commits and clears what it reserves, a kernel commits what is
+   touched — visible as two shapes rather than as two numbers.
+3. **The RSS column is guard 2, in the printed-not-asserted form this document registered.** 6.45 GB
+   resident for a 4.29 GB reservation, against the mapping's 8 KiB: the control commits *more* than it
+   reserved, because a growing `make` holds an old span while it fills a new one. The reason this is
+   reported and not asserted is in the harness's own comment — a `make` landing on a fresh span skips its
+   clear, which is 0051's own 4.288 ms best-case column, so an assertion here would fail for the reason
+   0051 was right about. The rung-1 row's **negative** delta is the same instrument telling the truth about
+   itself: at that size the figure is collector noise, not a measurement.
+
+**Guard 1 held throughout** — every one of arm A's 35 reps asserted, from the mapped capacity *and* from
+`reservationUnavailable` not moving, that it had actually taken the mapping. The suite-wide counter line
+from the same run reads `unavailable=0 … declined=0, released=113, release failures=0`, so nothing on this
+host quietly fell back and every mapping the run made was unmapped by its cleanup.
+
+**What is still not measured.** Arm C is Linux-only by construction (`/proc/self/status`, no cgo), so the
+`darwin` dev box reports it as *not taken* rather than skipping it. And the one rule-3 population that costs
+something — a memory64 declaring a minimum above 4 GiB, which keeps relocate-and-copy — is not on any of
+these ladders, because asserting it means committing 4 GiB;
+`internal/interp/reserve.go:reservationDeclined` is what makes that population countable instead.

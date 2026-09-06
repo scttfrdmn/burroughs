@@ -21,6 +21,37 @@ weakly-ordered platform.
 
 ### Added
 
+- **§8 M-1: a memory reserves address space through an anonymous mapping, and the Go allocator becomes the
+  fallback rather than the mechanism.** [#672](https://github.com/scttfrdmn/burroughs/issues/672), [ADR
+  0076](docs/decisions/0076-a-memory-reserves-address-space-through-an-anonymous-mapping-and-the-go-allocator-becomes-the-fallback-rather-than-the-mechanism.md).
+  `memory.grow` is now amortized O(pages touched) on every `unix` port: `newMemory` maps the reservation,
+  `grow` reslices into it, and a page becomes resident when the guest first stores to it. The Go allocator
+  could not serve M-1's sentence for a measured reason rather than an aesthetic one — `make([]byte, n,
+  reserve)` **commits** what it reserves and clears a recycled span — which is what left [ADR
+  0051](docs/decisions/0051-the-atomics-become-sequentially-consistent-word-operations-over-the-backing-array-because-the-proposal-fixes-the-ordering-and-leaves-only-the-mechanism.md)'s
+  reservation capped at 128 pages.
+  - **One reserve-to-what rule, and it does not branch on the address type.** A declared max is the
+    reservation; no declared max reserves `maxPages32` for both i32 and memory64; **no headroom reserves
+    nothing**, which is the arm that keeps this change from narrowing which programs run — a memory64
+    declaring a minimum above 4 GiB keeps today's relocate-and-copy `grow` rather than gaining a refusal.
+  - **The unmap is a `runtime.AddCleanup`, not an `Instance.Close`**, because an imported memory spans
+    instances and the closing one cannot know it is the last. Sound only while no exported method hands an
+    embedder a slice aliasing the backing array, which is now a reflection-derived control over every
+    exported `[]byte`-returning method on `Caller` and `Instance` rather than a sentence in a comment.
+  - **Measured on the queue, five pre-registered arms, no rollback fired** — `janus.local`, group
+    `measured`, task 20, 0 concurrent tasks at submit. Reservation cost **1.774 µs worst at 4 GiB** against a
+    1 ms bar and flat across the ladder; a one-page grow at 65001 pages costs what one at 2 pages costs
+    (**1.00×** best, **1.29×** worst, bar 2×); **8 KiB resident for 4 GiB reserved**; mark time flat with
+    42.9 GB of reservations live, against ADR 0075 arm B's 10× rise on the table twin. The control re-took
+    0051's column on the same host in the same invocation: **389 ms worst at the top rung**, about 219 000×
+    arm A's, and 6.45 GB resident for a 4.29 GB reservation.
+  - **`unix` only, and stated rather than silent.** `windows`, `plan9` and the wasm ports have no primitive
+    and take the fallback, so M-1's MUST is unmet there and
+    `internal/interp/reserve.go:reservationUnavailable` counts every memory that got no mapping — a figure an
+    instrument can read rather than a property a reader has to infer. Whether contract §8 gains a port scope
+    is [#671](https://github.com/scttfrdmn/burroughs/issues/671), which this change does not decide. `make
+    build` gains one `GOOS=windows` cross-compile so the unbuilt arm cannot rot.
+
 - **§2's two spawn-vehicle litmus cases — T-1's *N agents parked at one instant* and T-2's *the first agent
   waits and a child wakes it*.** [#10](https://github.com/scttfrdmn/burroughs/issues/10) slice 1,
   `gate:threads`, against [the pre-registration](docs/litmus-battery-preregistration.md)'s rows for both
