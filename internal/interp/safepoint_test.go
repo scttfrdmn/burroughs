@@ -298,11 +298,17 @@ func spinModule(t *testing.T) *Instance {
 //     blocked rather than slow. *An unasserted distance is the vacuum*, and this is the direction that
 //     asserts it.
 //
-// **What it still does not buy is three parks in one round**, and that is worth saying because the
-// gate makes it tempting to claim. `Stop` returns on the first arrival and `Resume` clears `stopReq`,
-// so a caller that has not reached a back-edge by then never parks — the window is now a few
-// instructions wide rather than a whole loop, but it is not zero, and *narrow is not closed*. The arm
-// that closes it by construction is `expiringWaits` below, which is why there are two.
+// **It now does buy three parks in one round, and it is the engine that changed rather than this
+// builder.** The sentence here read *"what it still does not buy is three parks in one round … `Stop`
+// returns on the first arrival and `Resume` clears `stopReq`, so a caller that has not reached a back-edge
+// by then never parks — the window is now a few instructions wide rather than a whole loop, but it is not
+// zero, and narrow is not closed."* Every clause of that was true of the arrival protocol and is the defect
+// #656's C1 measured as a false success reachable through the public API: the gap the note called a window
+// in a *test* was `Stop`'s own predicate counting receives instead of callers. Decision [0074] replaced it
+// with `parked+blocked >= callers` over every live thread, so `Stop` cannot return until all three callers
+// are parked, and the property is bought by construction here as well as in `expiringWaits`. The two arms
+// stay two because they reach the third caller from opposite directions — running versus waking — not
+// because one of them was the only one that closed this.
 //
 // What is given up is the exact trip count, and with it this arm's incidental frame-integrity check:
 // a gated loop's return value is whatever the schedule made it. That claim is asserted exactly, on a
@@ -316,6 +322,8 @@ func spinModule(t *testing.T) *Instance {
 // and `-race` is an authority this package answers to (`TestAtomicRmwIsNotObservablyTornAcrossThreads`
 // is the same reasoning one file over). That makes the threads feature a decoder requirement here, so
 // this builder configures the decoder where `spinModule` can use the default.
+//
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 func gatedSpinModule(t *testing.T) *Instance {
 	t.Helper()
 	const src = `(module
@@ -353,14 +361,14 @@ func gatedSpinModule(t *testing.T) *Instance {
 // configurable interval."*
 //
 // **Three claims, and the third is the one a weaker test would miss.** That `Stop` returns nil rather
-// than its deadline error — arrival happened. That it returns *while the guest is still inside its
+// than its deadline error — the world reached a safepoint. That it returns *while the guest is still inside its
 // loop* — the guest's own return value is the trip count, so a stop that had merely waited for the
 // call to finish would be indistinguishable from one that worked, which is why the loop is long enough
 // that finishing before the stop is not the plausible reading. And that after `Resume` the guest
 // **finishes with the right answer**: a safepoint that corrupted the frame, the value stack or `pc`
 // would still satisfy the first two.
 //
-// The deadline is generous on purpose. This asserts that arrival happens within *a* bound, which is
+// The deadline is generous on purpose. This asserts that the safepoint is reached within *a* bound, which is
 // what the clause says; the *tightness* of that bound is `loopbench`'s subject and a pre-registered
 // figure, not a timing assertion in a test that has to pass on a loaded CI runner. *An unmeasured
 // stability claim is not a protection.*
@@ -407,8 +415,9 @@ func TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish(t *testing.T) {
 	select {
 	case out := <-done:
 		t.Fatalf("the guest finished (%v) before the stop — impossible if the stop worked, "+
-			"since arrival is reported from inside the park, so read this as the loop being "+
-			"too short for the test to be about safepoints at all and raise `trips`", out)
+			"since `Stop`'s predicate is satisfied from inside the park and a finished caller "+
+			"would have satisfied it by leaving instead, so read this as the loop being too "+
+			"short for the test to be about safepoints at all and raise `trips`", out)
 	case err := <-errs:
 		t.Fatalf("the guest failed: %v", err)
 	default:
@@ -452,27 +461,29 @@ func TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish(t *testing.T) {
 // caller count**, whose subject was #592 and whose side effect this is. The old comment named exactly
 // what was missing — *"a per-thread in-guest bit set and cleared at the boundary"* — and `callers` is
 // that, as a count rather than a bit because one `thread` serves N concurrent `Invoke` calls. With it,
-// `Stop`'s predicate is `blocked == callers`, an idle instance satisfies it at `0 == 0`, and the world is
-// stopped the moment it is asked for.
+// `Stop`'s predicate is `parked+blocked >= callers` (decision 0074 added the left-hand term; 0067's was
+// `blocked == callers`), an idle instance satisfies it at `0 >= 0`, and the world is stopped the moment it
+// is asked for.
 //
 // **The old behaviour was worse than a pinned limit and this is worth stating plainly: `Stop` on an idle
-// instance could never succeed.** `want` counted a thread with no caller on it, no guest code existed to
-// reach a poll, and every such call burned its whole deadline and returned an error. That is not a
-// missing guarantee, it is a `Stop` an embedder cannot use on the one state where stopping is trivial.
+// instance could never succeed.** It counted a thread with no caller on it among the senders it would wait
+// for, no guest code existed to reach a poll, and every such call burned its whole deadline and returned an
+// error. That is not a missing guarantee, it is a `Stop` an embedder cannot use on the one state where
+// stopping is trivial.
 //
-// **The generous deadline is the assertion's mechanism, not padding.** If `Stop` waited for an arrival
-// here it would wait the full 30s and then return `ErrStopDeadline`, so `err == nil` is by itself the
-// proof that it did not wait — no elapsed time is measured, and none needs to be.
+// **The generous deadline is the assertion's mechanism, not padding.** If `Stop` waited here it would wait
+// the full 30s and then return `ErrStopDeadline`, so `err == nil` is by itself the proof that it did not
+// wait — no elapsed time is measured, and none needs to be.
 func TestStopSucceedsWhenNoCallerIsExecuting(t *testing.T) {
 	in := spinModule(t)
 
 	if err := in.Stop(30 * time.Second); err != nil {
 		t.Fatalf("Stop on an instance with no caller executing returned %v, want nil.\n"+
 			"No guest code is running, so no caller can touch guest memory before observing the "+
-			"stop, which is contract §3 SP-2's condition satisfied at `blocked == callers` with "+
-			"both zero. An error here — and it can only be the deadline, since this call has "+
-			"30s — means `Stop` is waiting for an arrival from a thread that has no caller to "+
-			"send one (decision 0067, #592)", err)
+			"stop, which is contract §3 SP-2's condition satisfied at `parked+blocked >= "+
+			"callers` with all three zero. An error here — and it can only be the deadline, "+
+			"since this call has 30s — means `Stop` is waiting on a thread that has no caller "+
+			"to wait for (decisions 0067 and 0074, #592)", err)
 	}
 
 	in.Resume()
@@ -493,7 +504,12 @@ func TestStopSucceedsWhenNoCallerIsExecuting(t *testing.T) {
 // `TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish`, re-pointed from the subject that
 // dissolved above.
 //
-// **A `Stop` that returned nil unconditionally passes every arrival test in this file perfectly**, so
+// The name's *"never arrives"* is §3 SP-1's own word for reaching a safepoint — *"arrival within a bounded,
+// configurable interval"* — and not the deleted arrival protocol. Said because decision 0074 removed a
+// mechanism that used the same noun, and a reader sweeping for its remains would otherwise read this name as
+// one of them. What the ghost below never does is *park*; the rule the name states is unchanged.
+//
+// **A `Stop` that returned nil unconditionally passes every safepoint test in this file perfectly**, so
 // something has to require the deadline error, or a green from the loop test distinguishes *"the world
 // stopped"* from nothing at all. The old arm got that from an idle instance, which now — correctly —
 // succeeds. *A tripwire whose subject dissolves is re-pointed*: the rule it was protecting is that
@@ -514,11 +530,11 @@ func TestStopSucceedsWhenNoCallerIsExecuting(t *testing.T) {
 // state is built directly, which this package's tests already do with `thread` literals (see `thread`'s
 // own doc comment on a nil `w`).
 //
-// So: a second thread joins the world with one counted caller and no goroutine. `blocked == callers` is
-// `0 == 1`, it is counted in `want`, nothing will ever send its arrival, and the deadline is the only
-// outcome available. Zero timing dependence, and it exercises the *mixed* accounting at the same time —
-// the instance's own thread is at a safepoint while this one is not, which is what makes the message
-// below read `1 of 2` rather than `0 of 1`.
+// So: a second thread joins the world with one counted caller and no goroutine. `parked+blocked >= callers`
+// is `0 >= 1`, false, and no transition will ever make it true — there is no agent to park, to unblock, or
+// to leave the call — so the deadline is the only outcome available. Zero timing dependence, and it
+// exercises the *mixed* accounting at the same time: the instance's own thread is at a safepoint while this
+// one is not, which is what makes the message below read `1 of 2` rather than `1 of 1`.
 func TestStopReportsItsDeadlineWhenACountedCallerNeverArrives(t *testing.T) {
 	in := spinModule(t)
 
@@ -531,29 +547,42 @@ func TestStopReportsItsDeadlineWhenACountedCallerNeverArrives(t *testing.T) {
 	in.world.mu.Unlock()
 
 	// Short, because this arm waits for a bound to *expire* rather than for work to finish. Nothing
-	// here depends on how short: the arrival it waits for cannot happen at any deadline.
+	// here depends on how short: the predicate it waits on cannot become true at any deadline.
 	const deadline = 100 * time.Millisecond
 
 	err := in.Stop(deadline)
 	if !errors.Is(err, ErrStopDeadline) {
 		t.Fatalf("Stop with a counted caller that cannot arrive returned %v, want %v.\n"+
-			"%s carries one caller and no goroutine, so `blocked == callers` is `0 == 1` and it "+
-			"is counted in `want` — nothing exists to send its arrival. A nil here means "+
-			"arrival was reported by something other than a thread reaching a safepoint, and "+
-			"that would make TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish pass "+
-			"without measuring anything", err, ErrStopDeadline, ghost)
+			"%s carries one caller and no goroutine, so `parked+blocked >= callers` is `0 >= 1` "+
+			"— false, with no agent that could park, unblock or leave the call to change it. A "+
+			"nil here means the predicate was satisfied by something other than a caller "+
+			"reaching a safepoint, and that would make "+
+			"TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish pass without measuring "+
+			"anything", err, ErrStopDeadline, ghost)
 	}
 	// The message must carry the shortfall, or a caller learns only that something expired. Checked
 	// because a failure message is a claim nothing else in this tree scans.
 	//
-	// `1 of 2` and not `0 of 2`: the instance's own thread has no caller executing, so it is at a
-	// safepoint and counted, and this thread is the one that never arrives. A message reading `0 of
-	// 2` would mean the at-safepoint thread was not credited, which is a different bug in the same
-	// arithmetic.
-	if got := err.Error(); !strings.Contains(got, "1 of 2 arrived") {
-		t.Errorf("the deadline error reads %q, want it to name the shortfall as `1 of 2 "+
-			"arrived` — a partial stop and a total one leave the world in different states, "+
-			"and a caller deciding what to do next has no other channel for the difference", got)
+	// `1 of 2` and not `2 of 2`: the instance's own thread has no caller executing, so it is at a
+	// safepoint and is *not* named as still running, and this thread is the one that never parks. A
+	// message reading `2 of 2` would mean the at-safepoint thread was reported as running, which is a
+	// different bug in the same predicate.
+	//
+	// **The shortfall is now the count of threads still running rather than the count that arrived**
+	// (decision 0074), so the direction of this substring is the opposite of the one it replaces — that
+	// read `1 of 2 arrived` for the same world. Both halves are asserted, because a message that named
+	// the count without naming the thread would leave a bug report with no site: #656's C2 witness
+	// printed a shortfall about a caller that had already returned.
+	if got := err.Error(); !strings.Contains(got, "1 of 2 threads still had a caller executing") {
+		t.Errorf("the deadline error reads %q, want it to name the shortfall as `1 of 2 threads "+
+			"still had a caller executing` — a partial stop and a total one leave the world in "+
+			"different states, and a caller deciding what to do next has no other channel for "+
+			"the difference", got)
+	}
+	if want := ghost.String(); !strings.Contains(err.Error(), want) {
+		t.Errorf("the deadline error reads %q, want it to name %s — the count says how many "+
+			"threads are still running and this says which, which is the half that gives a bug "+
+			"report a site (decision 0074)", err.Error(), want)
 	}
 
 	// Resume after a failed stop is the documented cleanup, and it must not wedge: nothing is
@@ -807,20 +836,37 @@ func TestAResumedGuestSeesAHostWriteFromTheStop(t *testing.T) {
 // block would surface as the package timeout killing every other test in it, which reports the harness
 // and not the engine.
 //
+// **The send is gone, and so is the class of defect this test was written for** — decision [0074], for
+// #656. `Stop` no longer receives arrivals; it waits on `parked+blocked >= callers` over the live set, so
+// there is no buffer to size, no sender to block, and the deduplication (`thread.reported`) that closed
+// #593 is deleted along with it. Kept as a regression anyway, and not out of sentiment: what it asserts is
+// that N concurrent callers on one `thread` all park and are all released, which is the property #593 broke
+// through a buffer and #656's C1 broke through the dedup that repaired it. *A tripwire names a risk, not a
+// code shape.*
+//
 // # Two arms, because the grave's own sequence reproduces the defect only in one direction
 //
 // `spinningCallers` is the sequence the issue describes: three goroutines invoking a looping export, one
-// `Stop`. It used to have a false-negative window, conceded here in prose — `Stop` returns as soon as
-// *one* arrival lands, and callers B and C had to reach a poll before the `Resume` that followed, which
-// they did "in practice". Grave **#598** closed it, from the other end than expected: the loop is now
-// gated on a word the host writes (`gatedSpinModule`), so every caller is inside it when `Stop` runs by
-// construction, and the post-`Resume` deadline bounds only whether `Resume` freed them.
+// `Stop`. It used to have a false-negative window, conceded here in prose — *"`Stop` returns as soon as one
+// arrival lands, and callers B and C had to reach a poll before the `Resume` that followed, which they did
+// in practice."* Grave **#598** closed the scheduling half of it: the loop is gated on a word the host
+// writes (`gatedSpinModule`), so every caller is inside it when `Stop` runs by construction. **The other
+// half was the engine's, not the test's, and that sentence is what #656's C1 measured.** A `Stop` that
+// returned on one arrival while two callers ran was a false success available through the public API, and
+// the prose here had described it as a window in a test for as long as it stood. It is no longer sayable:
+// `Stop` returns only when every caller of every live thread is accounted for, so all three are parked when
+// it returns and the post-`Resume` deadline bounds whether `Resume` freed them.
 //
-// `expiringWaits` closes that: three callers suspended in `memory.atomic.wait` whose intervals expire
-// while the world is stopped. `awaitQueued` is an exact signal that all three are suspended before the
-// stop begins, and each one's wake runs `leaveBlocked` → `poll` → `parkAtSafepoint`, so the round
-// contains three parks by construction rather than by scheduling. With `thread.reported` removed this
-// arm reports **1 of 3** callers back, and with it, three.
+// `expiringWaits` is the other direction: three callers suspended in `memory.atomic.wait` whose intervals
+// expire while the world is stopped. `awaitQueued` is an exact signal that all three are suspended before
+// the stop begins — which under SP-2 means `blocked == callers` and `Stop`'s opening walk completes the
+// round with no channel and no timer allocated. What the arm then exercises is the wake side: each
+// interval's expiry runs `leaveBlocked` → `poll` → `parkAtSafepoint` *inside* a round that is already
+// complete, so three callers park on `<-release` and three must come back from the `Resume`. Under the old
+// protocol that was three sends into one buffer slot; under this one it is three parks and one close, and
+// the third caller is the one both defects reached.
+//
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 func TestThreeConcurrentCallersAndAStopDoNotHang(t *testing.T) {
 	const callers = 3
 
@@ -925,10 +971,12 @@ func TestThreeConcurrentCallersAndAStopDoNotHang(t *testing.T) {
 				// were `[runnable]` in the interpreter. Run the package with `-timeout` just
 				// under this interval and the runtime prints the stacks that answer it.
 				t.Fatalf("%d of %d callers returned within 30s after Resume and after the gate "+
-					"was opened, so at least one was not freed. The hang grave #593 names is "+
-					"the arrival send inside `parkAtSafepoint`, which happens *before* "+
-					"`<-release` — but this arm observes only that a caller did not return, "+
-					"so read the goroutine dump before believing that", back, callers)
+					"was opened, so at least one was not freed. Grave #593's hang was a send "+
+					"inside `parkAtSafepoint` before `<-release`; that send is deleted "+
+					"(decision 0074), so the candidates now are a `parked` term never "+
+					"incremented and a `world.stopped` claimed but never closed. This arm "+
+					"observes only that a caller did not return, so read the goroutine dump "+
+					"before believing either", back, callers)
 			}
 		}
 	})
@@ -966,10 +1014,12 @@ func TestThreeConcurrentCallersAndAStopDoNotHang(t *testing.T) {
 					t.Errorf("a wait returned %d, want %d (\"timed-out\")", got, waitTimedOut)
 				}
 			case <-time.After(30 * time.Second):
-				t.Fatalf("%d of %d callers returned within 30s after Resume — the arrival send is "+
-					"per caller rather than per thread per round, so the buffer `Stop` sized from "+
-					"the membership is full and the rest are wedged before `<-release` "+
-					"(grave #593)", i, callers)
+				t.Fatalf("%d of %d callers returned within 30s after Resume — three callers of one "+
+					"`thread` each parked on `<-release` inside a completed round, so a caller "+
+					"missing here is one the `Resume` did not free. Grave #593's form of this was "+
+					"a per-caller send into a buffer `Stop` sized from the membership; there is no "+
+					"send now (decision 0074), and `Resume`'s close of `w.resume` is what has to "+
+					"reach all three", i, callers)
 			}
 		}
 	})

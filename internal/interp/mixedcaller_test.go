@@ -158,9 +158,17 @@ func releaseEverything(in *Instance) func() {
 // possible. The engine's own `TestAtomicRmwIsNotObservablyTornAcrossThreads` drives two.
 //
 // **The mixed state is the one the mark cannot represent.** Caller A suspends in a wait, so `blocked` is
-// 1; caller B executes a loop on the same `thread`. `Stop`'s arrival loop asks `blocked > 0`, answers
-// *"at a safepoint"*, adds nothing to `want`, and returns `nil` without waiting for anybody — while B is
-// running. The host called `Stop` in order to look at guest memory, and the guest is changing it.
+// 1; caller B executes a loop on the same `thread`. `Stop`'s walk asked `blocked > 0`, answered *"at a
+// safepoint"*, waited for nobody, and returned `nil` — while B is running. The host called `Stop` in order
+// to look at guest memory, and the guest is changing it.
+//
+// **The same two callers hold a second defect, and it is [#656][656]'s C1 rather than this one.** Here A's
+// wait outlives the round, so `blocked` is a mark that is *true throughout*. If A's interval expires
+// instead, A wakes, clears `blocked`, parks — and under the arrival protocol its park satisfied the slot
+// the walk had opened for B, which is a false success this test cannot reach because its wait is 120
+// seconds long by construction. #592 was *which* threads to wait for and #656 was *what* satisfies the
+// wait; both live in this state, which is why the fix for one did not close the other. Decision [0074]
+// closes the second, and what the two decisions leave is one predicate over per-caller terms.
 //
 // # What this instrument can and cannot prove, and why the body is 40000 instructions long
 //
@@ -179,8 +187,8 @@ func releaseEverything(in *Instance) func() {
 //
 // What that gets, stated exactly, because the two directions are not symmetric:
 //
-//   - **On a fixed engine the assertion is deterministic.** `Stop` waits for B's arrival, B arrives at
-//     the back-edge, and the counter is quiescent from before `Stop` returns until `Resume`. No timing
+//   - **On a fixed engine the assertion is deterministic.** `Stop` waits for B, B parks at its next
+//     back-edge, and the counter is quiescent from before `Stop` returns until `Resume`. No timing
 //     relation is involved, so a failure here is a real regression and never a slow machine.
 //   - **On a broken engine it is probabilistic**, and the probability is what the widening buys: the
 //     host has to read the counter while B is somewhere inside a stretch it takes B many microseconds
@@ -191,18 +199,21 @@ func releaseEverything(in *Instance) func() {
 //
 // # The five clauses
 //
-//  1. `Stop` returns nil. Both callers are accounted for, so arrival happened.
+//  1. `Stop` returns nil. Both callers are accounted for, so the world reached a safepoint.
 //  2. **The counter does not advance across the stop.** The assertion the defect fails. An advance is a
 //     guest write inside a stopped world, which no schedule makes legitimate.
 //  3. B has not returned. A stop that let the loop finish would satisfy clauses 1 and 2 by accident.
 //  4. A is still suspended — SP-4's half, composed here rather than re-derived: this stop must not have
-//     woken the waiter in order to collect its arrival.
+//     woken the waiter in order to satisfy its predicate.
 //  5. After the last `Resume`, B runs again, the gate releases it, and it returns a positive trip count;
 //     and a notify still finds A queued. A safepoint that corrupted either caller's frame, value stack
 //     or `pc` would pass everything above.
 //
 // `release` and `notify` are called **after** the final `Resume` and not before, for `mixedCounter`'s
 // reason: they are `Invoke`s, and an `Invoke` into a stopped world parks the caller — here, the test.
+//
+// [656]: https://github.com/scttfrdmn/burroughs/issues/656
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 func TestAThreadIsAtASafepointOnlyWhenEveryCallerOnItIsSuspended(t *testing.T) {
 	in := mixedSuspendAndSpinModule(t)
 	t.Cleanup(releaseEverything(in))
@@ -234,9 +245,9 @@ func TestAThreadIsAtASafepointOnlyWhenEveryCallerOnItIsSuspended(t *testing.T) {
 	for round := range mixedStopRounds {
 		if err := in.Stop(5 * time.Second); err != nil {
 			t.Fatalf("round %d: Stop with one caller suspended in a wait and one executing a loop: "+
-				"%v.\nBoth callers share one `thread`, so this stop has one arrival to collect — "+
-				"from the loop, at a back-edge. A deadline expiry means the suspended caller is "+
-				"being waited for as well, which SP-4 forbids (contract §3, decision 0060)",
+				"%v.\nBoth callers share one `thread`, so this stop has exactly one caller left to "+
+				"account for — the loop, at a back-edge. A deadline expiry means the suspended "+
+				"caller is being waited for as well, which SP-4 forbids (contract §3, decision 0060)",
 				round, err)
 		}
 

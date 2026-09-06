@@ -59,9 +59,14 @@ which this list called *"what is not"* until the slice that landed it, and the a
 litmus battery"* until answering it needed no §4 clause at all
 ([#586](https://github.com/scttfrdmn/burroughs/issues/586),
 [0073](docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md)).
+and SP-1's arrival protocol replaced by the predicate the marks already express, which this list called
+*"the arrival-protocol repair `Stop` needs before the flip"* until the slice that landed it
+([#656](https://github.com/scttfrdmn/burroughs/issues/656),
+[0074](docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md)).
 What is not: §4's litmus battery past what spawn needed
-([#10](https://github.com/scttfrdmn/burroughs/issues/10)), and the arrival-protocol repair `Stop` needs
-before the flip ([#656](https://github.com/scttfrdmn/burroughs/issues/656)). `v0.4.0`'s release note — *"it is not v1 …
+([#10](https://github.com/scttfrdmn/burroughs/issues/10)), which is now the **only** outstanding half of
+the flip's condition — two graves in this paragraph's *"what is not"* list have been discharged one slice
+apart, so the list is repaired each time rather than annotated. `v0.4.0`'s release note — *"it is not v1 …
 v0 closing means v0's conditions are discharged, not that the next phase has begun"* — was likewise
 true about the artifacts when written and is overtaken rather than wrong. What advanced the phase line
 was neither: v0's conditions are discharged and its milestone is closed, so *no* value naming v0 is

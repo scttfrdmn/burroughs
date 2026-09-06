@@ -494,13 +494,14 @@ func TestAWait64AndAWait32ShareOneQueuePerAddress(t *testing.T) {
 // run**, and it is the pair of clauses this slice is what made checkable.
 //
 // SP-2: a thread suspended in `memory.atomic.wait` *"counts as at a safepoint"*. SP-4: a stop *"with N
-// threads parked in host calls completes without waking them."* Together they forbid the obvious
-// implementation — SP-1's protocol has the *thread* announce its arrival, a suspended thread cannot
-// announce anything, and SP-4 forbids waking it to ask — so `Stop` counts the mark itself
-// (decision 0060's third choice).
+// threads parked in host calls completes without waking them."* Together they forbid asking the suspended
+// caller anything — it cannot answer, and waking it to make it able to is what SP-4 rules out — so `Stop`
+// reads the mark itself (decision 0060's third choice). Decision 0074 made that the general rule rather
+// than SP-2's exception: `Stop`'s whole predicate is now marks the engine already keeps, so *every* stopped
+// caller is a mark and none of them is a message.
 //
 // **Both halves are asserted, because either one alone passes on a wrong engine.** A `Stop` that woke
-// the waiter to collect its arrival would return nil here and satisfy SP-2 while breaking SP-4; an
+// the waiter to make it report would return nil here and satisfy SP-2 while breaking SP-4; an
 // engine with no mark at all leaves SP-4 intact and returns `ErrStopDeadline`. The second assertion is
 // therefore that the wait has *not* returned while the world is stopped, and the third is that it is
 // still queued afterwards — a notify of count 1 waking it is what says the stop passed through without
@@ -522,12 +523,12 @@ func TestAStopCompletesWithAThreadSuspendedInAWaitAndDoesNotWakeIt(t *testing.T)
 	if err := in.Stop(2 * time.Second); err != nil {
 		t.Fatalf("Stop with one thread suspended in memory.atomic.wait: %v.\n"+
 			"Contract §3 SP-2 makes that thread *at a safepoint*, so this stop has nothing left to "+
-			"wait for. A deadline expiry means the suspension is not marked — `Stop` is waiting for "+
-			"an arrival from a thread that is blocked and cannot send one, and SP-4 forbids waking "+
-			"it to ask (decision 0060)", err)
+			"wait for. A deadline expiry means the suspension is not marked — `Stop` is waiting "+
+			"on a caller that is blocked and can do nothing to satisfy the predicate, and SP-4 "+
+			"forbids waking it to ask (decision 0060)", err)
 	}
 
-	// SP-4's half. A stop that collected the arrival by waking the waiter would have delivered here.
+	// SP-4's half. A stop that satisfied its predicate by waking the waiter would have delivered here.
 	select {
 	case r := <-res:
 		t.Fatalf("the suspended thread returned %d during the stop, want it still suspended — "+

@@ -369,16 +369,20 @@ func TestSpawnRefusesTheCasesItCannotAnswer(t *testing.T) {
 // # What discriminates, and why it is not `Stop`'s return value
 //
 // `Stop` returns nil in both the working and the broken engine, so its verdict cannot be the
-// assertion. In the working one it returns nil because an arrival was received; in the broken one
-// because there was nothing to wait for. The two are told apart by two reads of the mechanism `Stop`
+// assertion. In the working one it returns nil because the thread parked; in the broken one because
+// there was nothing to wait for. The two are told apart by two reads of the mechanism `Stop`
 // consults, both under `world.mu`:
 //
-//   - **Before the stop, `callers` is 1 and `blocked` is 0**, so `blocked == callers` is false and this
-//     thread is a *sender* rather than a member counted as already arrived. Delete the pair from
-//     `runEntry` and this is the assertion that fires, immediately and with the count in the message.
-//   - **After the stop returns nil, `reported` is true.** `parkAtSafepoint` is the only writer, so
-//     this is a positive signal that the thread genuinely parked at a back-edge — not an inference
-//     from elapsed time, which is what a *"did it not finish?"* arm would be reduced to.
+//   - **Before the stop, `callers` is 1 and `blocked` is 0**, so `parked+blocked >= callers` is false and
+//     this thread is one the round must wait for rather than one it counts as already at a safepoint.
+//     Delete the pair from `runEntry` and this is the assertion that fires, immediately and with the count
+//     in the message.
+//   - **After the stop returns nil, `parked` is 1.** `parkAtSafepoint` is the only site that increments
+//     it, so this is a positive signal that the thread genuinely parked at a back-edge — not an inference
+//     from elapsed time, which is what a *"did it not finish?"* arm would be reduced to. This read was
+//     `reported == true` until decision 0074 deleted that field with the arrival protocol; the property is
+//     the same one and the term is per caller rather than deduplicated per thread, which is the difference
+//     #656's C1 turned on.
 //
 // The third claim is that the thread is still *usable* afterwards: `Resume`, then the gate, then a
 // terminated thread with no error and its sentinel stored. A safepoint that corrupted the frame, the
@@ -405,10 +409,11 @@ func TestStopReachesASpawnedThread(t *testing.T) {
 	in.world.mu.Unlock()
 	if callers != 1 || blocked != 0 {
 		t.Fatalf("the spawned thread is in its loop with callers=%d blocked=%d, want 1 and 0.\n"+
-			"`Stop` asks `blocked == callers` (decision 0067), so callers=0 here makes a thread "+
-			"executing guest instructions read as *at a safepoint* — #592's failure with "+
-			"`runEntry` as the new site. `enterCall`/`leaveCall` around `in.invoke` is the "+
-			"denominator that makes the predicate false while this thread runs.", callers, blocked)
+			"`Stop` asks `parked+blocked >= callers` (decision 0067 for the denominator, 0074 for "+
+			"the left-hand side), so callers=0 here makes a thread executing guest instructions "+
+			"read as *at a safepoint* — #592's failure with `runEntry` as the new site. "+
+			"`enterCall`/`leaveCall` around `in.invoke` is the denominator that makes the "+
+			"predicate false while this thread runs.", callers, blocked)
 	}
 
 	if err := in.Stop(30 * time.Second); err != nil {
@@ -416,13 +421,18 @@ func TestStopReachesASpawnedThread(t *testing.T) {
 			"iteration, so a deadline expiry here means the poll did not reach it", err)
 	}
 	in.world.mu.Lock()
-	reported := sp.reported
+	parked := sp.parked
 	in.world.mu.Unlock()
-	if !reported {
-		t.Errorf("Stop returned nil and the spawned thread never reported an arrival.\n" +
-			"`parkAtSafepoint` is the only writer of `reported`, so this is the reading that " +
-			"tells a stop that *waited* from one that counted this thread as already arrived — " +
-			"and the latter is a `Stop` returning nil while guest code runs.")
+	if parked != 1 {
+		t.Errorf("Stop returned nil with the spawned thread's parked=%d, want 1.\n"+
+			"`parkAtSafepoint` is the only site that increments `parked`, so this is the reading "+
+			"that tells a stop that *waited* from one whose predicate was already satisfied "+
+			"without this thread doing anything — and the latter is a `Stop` returning nil while "+
+			"guest code runs. It replaces a read of `thread.reported`, deleted with the arrival "+
+			"protocol by decision 0074; the property asserted is the same one and the term is "+
+			"exact rather than deduplicated, which is what #656's C1 turned on. Read before "+
+			"`Resume` because the field is round-scoped: `Stop`'s own opening walk is what clears "+
+			"it, so the value here belongs to the round that just completed.", parked)
 	}
 	in.Resume()
 

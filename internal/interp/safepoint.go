@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,7 +21,7 @@ import (
 // still the correct next call either way, which is why this is an error and not a panic.
 var ErrStopDeadline = errors.New("burroughs: stop deadline expired before every thread reached a safepoint")
 
-// world is the engine's stop-the-world state: contract §3's SP-1 arrival protocol.
+// world is the engine's stop-the-world state: contract §3's SP-1 marks and the round that reads them.
 //
 // **Its extent is one `Instance`, and that is a named limit rather than the intended end state.** A
 // shared memory spans instances — [ADR 0052]'s own reason for making the §4 boundary edge a
@@ -49,10 +50,23 @@ type world struct {
 	// cannot be missed by a thread that started waiting after the close.
 	resume chan struct{}
 
-	// arrived carries one send per thread that reaches a safepoint. Buffered to the thread count so
-	// a parking thread never blocks on the send — a thread that blocked here would be *at* a
-	// safepoint and unable to say so, which is the one deadlock this protocol can have.
-	arrived chan ThreadID
+	// stopped is closed when SP-1's promise holds for the round `resume` names: no agent of this world
+	// is executing guest code. Non-nil only while a round is waiting for one — a `Stop` over a world
+	// that is already at a safepoint allocates nothing.
+	//
+	// **It replaces a `chan ThreadID` carrying one arrival per parking thread, and the replacement is a
+	// bug fix rather than a simplification** ([ADR 0074][0074]). That channel made `Stop` wait for a
+	// *count of sends*, and the sender is a **caller** while the count was of threads — four reachable
+	// shapes followed, two of them a `nil` returned while guest code ran, and the one that convicts the
+	// design is a thread with two callers whose blocked one wakes and fills its sibling's slot. Neither a
+	// token nor a `ThreadID` names a caller, so no repair that keeps the count can tell those apart. What
+	// SP-1 promises is a *state*, and `atSafepointLocked` is that state read from the marks that already
+	// express it; this channel is only how a waiter is woken.
+	//
+	// Claimed under `mu` and closed outside it, `releaseIfQuiescent`'s shape and §4 B-MM-3's requirement.
+	//
+	// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
+	stopped chan struct{}
 
 	// live is every thread of this instance that has not exited: the instantiation-time thread plus
 	// one per `Spawn` that is still running. The slice rather than a single field is what let SP-4's
@@ -108,7 +122,7 @@ type world struct {
 	// *teardown*, which is the distinction that dissolved the apparent SP-4-versus-H-3 conflict
 	// (*"A pause must not disturb a blocked host call; a teardown must interrupt it"* — Scott, on the
 	// #646 review, recorded at #602). So nothing here is cleared, there is no `Reopen`, and this flag
-	// does not participate in the arrival protocol at all: its only readers refuse rather than wait.
+	// is not one of SP-1's marks at all: its only readers refuse rather than wait.
 	closed bool
 
 	// hostCalls counts host calls currently inside an embedder's function, and idle is closed when the
@@ -169,6 +183,82 @@ func (w *world) quiescentLocked() bool {
 		}
 	}
 	return true
+}
+
+// atSafepointLocked reports whether SP-1's promise holds: no agent of this world is executing guest code.
+// [ADR 0074][0074]'s predicate, and what `Stop` waits on. `mu` held.
+//
+// # It is a state and not a count of messages, which is the whole of 0074
+//
+// The protocol this replaces had `Stop` decide how many threads would *announce* an arrival and then
+// receive that many times. The announcer is a **caller** — one `thread` per instance serves N concurrent
+// `Invoke`s ([ADR 0067][0067]) — so the count was of one thing and the sends of another, and four shapes
+// followed. The one that refutes every count-preserving repair: two callers on one thread, the blocked one
+// wakes mid-round and its announcement satisfies its **sibling's** slot, measured as *"`Stop` -> nil after
+// 200.9ms with the running caller's last guest instruction unrun"*. One id, one row in `live`, one
+// per-thread mark — nothing that names a thread can separate those two callers.
+//
+// So the marks answer it instead. Each caller admitted to the guest is one unit of `callers`
+// (`enterCall`), and a caller that is not executing has said so in exactly one of two ways: `blocked` for
+// a suspension (SP-2, `enterBlocked`) or `parked` for a safepoint (`parkAtSafepoint`). The world is
+// stopped when every live thread's callers are all accounted for that way.
+//
+// # `>=` rather than `==`, and the `parked` bookkeeping that makes it exact anyway
+//
+// `parked+blocked <= callers` holds by construction — `parkAtSafepoint`'s `counted` parameter is what
+// keeps `enterBlocked`'s caller from holding two terms at once, and that argument is at the parameter. The
+// comparison is still written loosely for the reason 0067's panic states one clause over: an
+// unsatisfiable equality makes *every* `Stop` wait out its whole deadline, which is a worse failure than
+// the one being fixed and a silent one. `>=` cannot be unsatisfiable, so a violated invariant degrades to
+// an early return rather than to a hang.
+//
+// # What it deliberately does not consult
+//
+// **`hostCalls` adds nothing**, for `soleAgentLocked`'s reason: a host call is made from guest code, so
+// its caller is inside a counted call *and* marked `blocked` by `callHost` (ADR 0069) — already both
+// terms of this predicate. `quiescentLocked` consults it because a *teardown* must wait for the embedder's
+// function to return, where a pause must not (SP-4: a stop *"with N threads parked in host calls completes
+// without waking them"*).
+//
+// **`done` adds nothing either.** A thread whose goroutine has left but which has not been retired has
+// `callers == 0` and is at a safepoint by this predicate, which is the right answer here and the wrong one
+// for quiescence: it can execute no guest instruction, which is all SP-1 promises. T-5.4 asks for more, so
+// `quiescentLocked` waits for the retirement and this does not.
+//
+// [0067]: ../../docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
+func (w *world) atSafepointLocked() bool {
+	for _, t := range w.live {
+		if t.parked+t.blocked < t.callers {
+			return false
+		}
+	}
+	return true
+}
+
+// releaseIfAtSafepoint claims the waiting `Stop`'s channel when SP-1's predicate holds, and returns it for
+// the caller to close **outside** `mu`. `mu` held; nil when there is nothing to release.
+//
+// `releaseIfQuiescent`'s shape exactly, for its two stated reasons: §4 B-MM-3 forbids holding an engine
+// lock across a channel operation, and nil'ing the field under the lock makes exactly one caller able to
+// observe a non-nil channel, so a double close is impossible by construction.
+//
+// **Four call sites, one per transition that can make the predicate newly true**, and the enumeration is
+// the soundness argument rather than a list of conveniences: `parked` rises only in `parkAtSafepoint`,
+// `blocked` only in `enterBlocked` (which parks immediately after, so this is evaluated on that path too),
+// `callers` falls only in `leaveCall`, and `live` shrinks only in `retire`. `Stop` evaluates the predicate
+// itself before installing the channel, under the same acquisition, so no site can satisfy it in the
+// window before there is a channel to claim. The transitions that make it *less* true — `enterCall`,
+// `unmarkBlocked`, `admit` — need no site, and `admit` is refused mid-round for its own reason.
+//
+// The `w.stopped != nil` guard is first, so the walk costs nothing when no `Stop` is waiting.
+func (w *world) releaseIfAtSafepoint() chan struct{} {
+	if w.stopped == nil || !w.atSafepointLocked() {
+		return nil
+	}
+	stopped := w.stopped
+	w.stopped = nil
+	return stopped
 }
 
 // soleAgentLocked reports whether `self` is the only agent of this world that could be executing guest
@@ -328,16 +418,19 @@ func (w *world) endHostCall() {
 // write and a join could find nothing for a thread it had just watched finish. `spawn`'s goroutine
 // therefore holds both in one `defer`, in this order.
 //
-// **It does not send an arrival, and the omission is deliberate rather than an oversight.** A thread that
-// `Stop` counted as a sender and that exits before its next safepoint never announces, so that round
-// waits out its whole deadline and reports a false expiry — measured, **`ErrStopDeadline` after
-// 2.0011575s for a thread that had already exited**. Sending here would repair that arm and break the
-// other: `Stop` counts *receives*, not identities, so an arrival on behalf of a thread the round did not
-// await satisfies a still-running thread's slot instead. Both directions are one defect in the arrival
-// protocol, they are filed together with their witnesses as **[#656]**, and the repair is that issue's
-// rather than this one's: live-only membership neither creates nor worsens either arm.
+// **It still sends no arrival, and it is now one of SP-1's four release sites** — [#656]'s exit arm, repaired
+// by [ADR 0074][0074] without a message. The paragraph this replaces was right about the defect and right
+// that it was not this function's to fix: a thread `Stop` had counted as a sender and that exited before its
+// next safepoint never announced, so the round waited out its interval and reported a false expiry
+// (**`ErrStopDeadline` after 2.0011575s for a thread that had already exited**), and sending here would have
+// broken the other arm, because a protocol that counts *receives* lets an arrival on behalf of a thread the
+// round did not await satisfy a still-running thread's slot. Both are dissolved by the wait becoming a
+// predicate over the live set: the removal below **is** the transition, since a thread that has left `live`
+// is no longer walked, and `releaseIfAtSafepoint` is where that is read. No arrival, no identity, and the
+// two arms stop being in tension.
 //
 // [0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 // [#656]: https://github.com/scttfrdmn/burroughs/issues/656
 func (w *world) retire(t *thread, err error) {
 	w.mu.Lock()
@@ -361,10 +454,14 @@ func (w *world) retire(t *thread, err error) {
 		w.fault = fmt.Errorf("%w: %s: %w", ErrThreadFault, t, err)
 	}
 	idle := w.releaseIfQuiescent()
+	stopped := w.releaseIfAtSafepoint()
 	w.mu.Unlock()
 
 	if idle != nil {
 		close(idle)
+	}
+	if stopped != nil {
+		close(stopped)
 	}
 }
 
@@ -403,23 +500,25 @@ func (w *world) register(t *thread) {
 // admit adds a spawned thread to the world, or refuses because a stop is in progress.
 //
 // **The check and the append are one critical section, and that indivisibility is the whole
-// soundness argument** ([ADR 0068][0068]). `Stop` sizes `arrived` to the membership it observed under
-// this same mutex, so a member appended mid-round is an (N+1)th potential sender into N slots, and a
-// thread that blocks on that send is *at a safepoint and unable to say so* — see `arrived`. Split
-// into a read and a later append, the refusal would be advisory: a `Stop` could begin between them
-// and the new thread would join a round that has already counted its senders.
+// soundness argument** ([ADR 0068][0068]). `Stop` broadcasts `stopReq` over the membership it observed
+// under this same mutex, so a member appended mid-round never receives the request: it would never park,
+// and would run guest code inside a round the host believes is in effect — see `ErrStopInProgress`, whose
+// older reason about arrival slots this replaces ([ADR 0074][0074]). Split into a read and a later append,
+// the refusal would be advisory: a `Stop` could begin between them and the new thread would join a round
+// whose broadcast has already happened.
 //
 // The complementary direction is `Stop`'s own `w.resume != nil` guard, so the two orderings are the
 // only two: either this refuses, or `Stop` observes the new member from the start.
 //
 // [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 func (w *world) admit(t *thread) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
 		// **§5 H-3's teardown refuses a new thread, where SP-1's pause merely delays one.** The two
 		// refusals sit together and are not the same refusal: `ErrStopInProgress` below is about a
-		// round's arrival slots and is transient — the caller retries after `Resume` — while this one
+		// round's one-shot broadcast and is transient — the caller retries after `Resume` — while this one
 		// is terminal, because `Close` has already cancelled every member and returned. A thread
 		// admitted after that would be a member no `Close` will ever wait for, running guest code on
 		// an instance the embedder believes is torn down. Checked here rather than only in `spawn` so
@@ -428,9 +527,9 @@ func (w *world) admit(t *thread) error {
 			"that has already completed (contract §5 H-3)", ErrClosed)
 	}
 	if w.resume != nil {
-		return fmt.Errorf("%w: this instance has %d threads at or heading for a safepoint, and a "+
-			"member admitted mid-round would have no slot to announce itself in", ErrStopInProgress,
-			len(w.live))
+		return fmt.Errorf("%w: this instance has %d threads at or heading for a safepoint, and the "+
+			"round's stop request has already been broadcast, so a member admitted now would never "+
+			"receive it", ErrStopInProgress, len(w.live))
 	}
 	w.addLocked(t)
 	return nil
@@ -473,28 +572,46 @@ func (w *world) addLocked(t *thread) {
 // Stop is contract §3 SP-1's host request: bring every guest thread of this instance to a safepoint,
 // within `deadline`.
 //
-// Returns nil when every thread has arrived, `ErrStopDeadline` when the interval expired first. On
+// Returns nil when no caller of the instance is executing guest code, `ErrStopDeadline` when the interval
+// expired first. On
 // either outcome the world is *stopped* and `Resume` must be called: a partial stop still has threads
 // parked, and leaving them parked is a hang rather than a degraded mode.
 //
-// **The wait is on the arrival signal and not on a timer that is then re-checked.** Each running thread
-// sends once as it parks, and this loop receives exactly as many times as there are such threads, with
-// the deadline as the competing case. Polling an arrival counter with a sleep in between would report
-// the stop's completion at the granularity of the sleep rather than of the event, and would make the
-// bound this clause promises a property of the poll interval instead of the engine.
+// **The wait is on a signal and not on a timer that is then re-checked.** The last agent to reach a
+// safepoint closes `world.stopped`, and this function receives it, with the deadline as the competing case.
+// Polling a counter with a sleep in between would report the stop's completion at the granularity of the
+// sleep rather than of the event, and would make the bound this clause promises a property of the poll
+// interval instead of the engine.
 //
-// # SP-2 inverts the protocol for a thread that is already parked, and SP-4 is why
+// **What is waited *for* is `atSafepointLocked`, not a number of announcements** — [ADR 0074][0074], the
+// repair for #656. The paragraph this replaces said *"each running thread sends once as it parks, and this
+// loop receives exactly as many times as there are such threads"*: both halves were true of *threads* and
+// the sender is a **caller**, which made four shapes reachable, two of them a `nil` returned while guest
+// code ran. The predicate is at `atSafepointLocked`; this function's part is to install the channel under
+// the same acquisition that evaluates it, so that no agent can satisfy the predicate in a window where
+// there is nothing to close.
+//
+// **A world already at a safepoint allocates neither channel nor timer**, which is the common case for an
+// embedder stopping an idle instance, and is strictly cheaper than the protocol it replaces.
+//
+// # SP-2 is why a suspended caller is a *mark* and not a message, and SP-4 is why it is never woken
 //
 // §3 SP-2 makes a thread suspended in `memory.atomic.wait` count as *at a safepoint*, and SP-4 requires
-// that a stop *"with N threads parked in host calls completes without waking them."* Together they
-// forbid the obvious implementation: SP-1's protocol has the *thread* announce its arrival, a thread
-// already blocked in a wait cannot announce anything, and SP-4 forbids waking it to ask. So the
-// direction inverts — **this function counts a blocked thread as arrived itself**, reading `blocked`
-// under the same mutex the transition takes so that the two cannot interleave. Decision 0060's third
-// choice, and `futex.go`'s `wait` is the other half.
+// that a stop *"with N threads parked in host calls completes without waking them."* Together they forbid
+// asking a suspended caller anything: it cannot answer, and waking it to make it able to is exactly what
+// SP-4 rules out. So the suspension records itself on the way in — `enterBlocked` — and `atSafepointLocked`
+// reads that mark under the same mutex the transition takes, so the two cannot interleave. Decision 0060's
+// third choice, and `futex.go`'s `wait` is the other half.
+//
+// **This is the clause the token-counting protocol was reverse-engineered from, and getting it right for
+// `blocked` while leaving the other terms as messages is what produced #656.** SP-2's inversion is the
+// general case rather than the exception: *every* way a caller stops executing is a state the engine already
+// records, so `parked` joins `blocked` and there is no direction left to invert.
 //
 // `stopReq` is still set on a blocked thread, which is what makes its wake path park: it clears
 // `blocked` and polls before it pushes anything.
+//
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 func (in *Instance) Stop(deadline time.Duration) error {
 	w := &in.world
 
@@ -515,71 +632,107 @@ func (in *Instance) Stop(deadline time.Duration) error {
 			"safepoint (contract §2 T-5.4, §5 H-3)", ErrClosed)
 	}
 	w.resume = make(chan struct{})
-	w.arrived = make(chan ThreadID, len(w.live))
-	// Captured under the lock and read from the local below. Reading `w.arrived` after the unlock
-	// would be a plain read of a field `Resume` nils, which is a data race on the field itself even
-	// though every *channel* operation on it is safe — the distinction that makes `-race` the
-	// authority here rather than "channels are concurrency-safe".
-	//
-	// `want` is the number of threads that will *send*, which is no longer the member count: a thread
-	// already blocked in a wait is at a safepoint by SP-2 and must not be waited for. The buffer stays
-	// sized to the full membership, because a counted-as-arrived thread still sends once when it wakes
-	// into a stop that is in progress, and that send must not block a thread that is at a safepoint.
-	arrived, want, atSafepoint := w.arrived, 0, 0
 	for _, t := range w.live {
 		t.stopReq.Store(true)
-		// Cleared here because the flag belongs to *this* round: the round is what `w.resume` names,
-		// and installing a new one is the only moment at which a previous round's arrivals stop
-		// counting. Grave #593.
-		t.reported = false
-		// **`blocked == callers` and not `blocked > 0`**, which is decision 0067's mechanism and the
-		// repair for #592. `blocked` counts *callers* that are suspended, and the old predicate read
-		// it as a fact about the *thread* — asking "is some caller here suspended" in place of "is no
-		// caller here running". One `thread` per instance against an ungated exported `Invoke` makes
-		// those different: with one caller suspended in a wait and another executing a loop, the old
-		// form counted the thread as arrived and this function returned `nil` while guest code ran,
-		// which is SP-2 failing on its own terms.
+		// Zeroed here because the count belongs to *this* round, and the round's start is the only
+		// moment at which a previous round's parks stop counting — `w.resume` is what names the round,
+		// and installing a new one is this line's occasion. The sentence this replaces cleared
+		// `thread.reported` for the same reason (grave #593).
 		//
-		// The panic is not defensive noise. `blocked <= callers` holds by construction — the only
-		// route into `enterBlocked` is guest code, which runs inside a call that has already been
-		// counted — and if it were ever violated the equality would be unsatisfiable, so every `Stop`
-		// would wait out its whole deadline for an arrival that cannot come. That failure is worse
-		// than the one being fixed and it is silent, so the invariant the predicate rests on is
-		// asserted where it is relied upon.
+		// **Nothing decrements it, and no other site clears it.** A caller released by `Resume` and
+		// woken later could not decrement safely: the decrement would lag a `Stop` that had already
+		// begun, and a stale `parked` reads as a caller at a safepoint — the false success this whole
+		// decision is about, with a new cause. `Resume` and `Close` therefore leave the field alone
+		// too, which is sound because `releaseIfAtSafepoint`'s `w.stopped != nil` guard means it is
+		// never *read* outside a round.
+		t.parked = 0
+		// **The panic is 0067's and its subject is unchanged.** `blocked <= callers` holds by
+		// construction — the only route into `enterBlocked` is guest code, which runs inside a call
+		// that has already been counted — and the reason to assert it here is that the predicate rests
+		// on it. What changed is the consequence of a violation: with `atSafepointLocked` reading
+		// `>=`, a stray `blocked` no longer makes the wait unsatisfiable, so this is the check that
+		// keeps an unpaired `enterBlocked`/`leaveCall` from silently *shortening* a round instead of
+		// silently hanging it. Kept for the stronger of the two reasons rather than dropped with the
+		// weaker one.
 		if t.blocked > t.callers {
 			w.mu.Unlock()
 			panic(fmt.Sprintf("burroughs: %s has %d blocked callers of %d — a suspended caller is "+
 				"by construction inside a counted call, so this is an unpaired enterBlocked or "+
 				"leaveCall (decision 0067)", t, t.blocked, t.callers))
 		}
-		if t.blocked == t.callers {
-			atSafepoint++
-			continue
-		}
-		want++
 	}
-	total := len(w.live)
+	// Evaluated and acted on under the acquisition that installed `w.resume`, which is what makes the
+	// four release sites unable to miss their channel: any agent that satisfies the predicate after this
+	// point must take `mu` to do it, and finds `w.stopped` already there.
+	if w.atSafepointLocked() {
+		w.mu.Unlock()
+		return nil
+	}
+	w.stopped = make(chan struct{})
+	// Captured under the lock and read from the local below. Reading `w.stopped` after the unlock would
+	// be a plain read of a field the release sites nil, which is a data race on the field itself even
+	// though every *channel* operation on the value is safe — the distinction that makes `-race` the
+	// authority here rather than "channels are concurrency-safe".
+	stopped := w.stopped
 	w.mu.Unlock()
 
 	timer := time.NewTimer(deadline)
 	defer timer.Stop()
-	// `i` and not `len(arrived)`: a channel's length is its buffer's current occupancy, which this
-	// loop has been *draining*, so `len` would report what is still waiting rather than what has
-	// arrived — plausibly, and wrong in the direction that under-reports a partial stop. The loop
-	// index counts completed receives, which is the quantity the message claims.
-	//
-	// The message counts against `total` rather than against `want`, and adds the threads that were
-	// already at a safepoint: a caller reading *"1 of 3"* is asking how much of the world is stopped,
-	// and reporting the number of *senders* would answer a question about this function's protocol.
-	for i := range want {
-		select {
-		case <-arrived:
-		case <-timer.C:
-			return fmt.Errorf("%w: %d of %d arrived within %s",
-				ErrStopDeadline, atSafepoint+i, total, deadline)
-		}
+	select {
+	case <-stopped:
+		return nil
+	case <-timer.C:
 	}
-	return nil
+	// **The timer expiring is not the verdict, because both cases can be ready at once and `select`
+	// picks arbitrarily between two ready cases.** A round that completed in the same instant the
+	// interval ran out would otherwise be reported as an expiry — a false red of exactly the kind this
+	// decision removes from the other direction. A closed channel is always ready, so this second,
+	// non-blocking read is the tie-break, and it reads the *local* rather than the field: `Resume` and
+	// `Close` nil `w.stopped` without closing it, so a round absorbed by either still reports the
+	// expiry it reported before.
+	select {
+	case <-stopped:
+		return nil
+	default:
+	}
+	return w.stopExpired(deadline)
+}
+
+// stopExpired builds `ErrStopDeadline`'s diagnostic by walking the threads whose callers have not all
+// reached a safepoint. Takes `mu`.
+//
+// **It names who is still running, where the form it replaces counted receives.** That message was
+// *"%d of %d arrived within %s"*, and #656's C2 witness printed *"0 of 1 arrived within 3s"* about a caller
+// that had already returned from the guest — a report whose subject did not exist, arrived at by counting
+// announcements rather than by asking the world. The three marks are printed per thread because they are
+// what an embedder or a bug report needs to tell the two remaining causes apart: a caller genuinely inside a
+// long un-pollable stretch of guest code, against a mark left unpaired by an engine defect.
+func (w *world) stopExpired(deadline time.Duration) error {
+	w.mu.Lock()
+	running := make([]string, 0, len(w.live))
+	for _, t := range w.live {
+		if t.parked+t.blocked >= t.callers {
+			continue
+		}
+		running = append(running, fmt.Sprintf("%s has %d of %d callers at a safepoint (%d parked, "+
+			"%d blocked)", t, t.parked+t.blocked, t.callers, t.parked, t.blocked))
+	}
+	total := len(w.live)
+	w.mu.Unlock()
+
+	if len(running) == 0 {
+		// **Reachable, and it is the absorbed round rather than a lost wake.** `Resume` and `Close` nil
+		// `w.stopped` without closing it, so a round either of them ends leaves this function's caller
+		// waiting out its interval over a world that may by then be at a safepoint — or torn down. The
+		// expiry is still the right outcome (`Stop`'s own closed-world refusal argues why a `nil` about a
+		// torn-down world is worse), and saying *which* of the two happened is what keeps this from
+		// reading as an engine defect with no site.
+		return fmt.Errorf("%w: no caller of this instance's %d threads was executing guest code after "+
+			"%s, so this round was ended by a Resume or a Close rather than by a safepoint",
+			ErrStopDeadline, total, deadline)
+	}
+	return fmt.Errorf("%w: %d of %d threads still had a caller executing guest code after %s: %s",
+		ErrStopDeadline, len(running), total, deadline, strings.Join(running, "; "))
 }
 
 // enterBlocked marks this thread as at a safepoint for the duration of a suspension it is about to
@@ -588,10 +741,10 @@ func (in *Instance) Stop(deadline time.Duration) error {
 //
 // **The mark and the stop check are one critical section, which is what makes the three-way race a
 // two-way one.** Either this runs first, and the `Stop` that follows reads the mark and counts this
-// thread as arrived without waiting for it; or `Stop` runs first, and this thread finds a round in
-// progress and announces itself through the ordinary park before suspending. The outcome that must not
-// exist is the third: a `Stop` that neither observes the mark nor receives an arrival, which is a
-// deadline expiry reported for a thread that is by definition not running.
+// thread as stopped without waiting for it; or `Stop` runs first, and this thread finds a round in
+// progress and parks through the ordinary route before suspending. The outcome that must not exist is the
+// third: a `Stop` that observes neither the mark nor the park, which is a deadline expiry reported for a
+// thread that is by definition not running.
 //
 // Parking *before* the suspension rather than during it is what keeps SP-4's promise: this thread
 // reaches its safepoint by the existing route, and no round ever needs to wake a waiter to complete.
@@ -610,7 +763,12 @@ func (t *thread) enterBlocked() {
 	w.mu.Unlock()
 
 	if stopping {
-		t.parkAtSafepoint()
+		// **`counted` is true, and the parameter exists for this one call.** This caller has just added
+		// itself to `blocked`, so it already holds one of its thread's terms in `atSafepointLocked`;
+		// counting it in `parked` as well would let one caller satisfy two, and on a thread with a second
+		// caller running guest code the sum would reach `callers` and the round would report a stopped
+		// world — #656's C1 witness rebuilt out of its own repair. See `parkAtSafepoint`.
+		t.parkAtSafepoint(true)
 	}
 }
 
@@ -618,12 +776,18 @@ func (t *thread) enterBlocked() {
 //
 // **The poll is what SP-2's second half asks for**: a thread that leaves a wait *"cannot touch guest
 // memory until it re-enters through a boundary that observes the stop"*, and the wake is that boundary.
-// A stop in progress at this moment parks this thread here — where `Stop` may already have counted it
-// as arrived, which is why the arrival channel is buffered to the full membership rather than to the
-// number of expected senders.
+// A stop in progress at this moment parks this thread here, which is where the caller's term in
+// `atSafepointLocked` moves from `blocked` to `parked`.
 //
 // Clearing before polling and not after: with the mark still set, a `Stop` racing this would count the
 // thread as being at a safepoint it has just left.
+//
+// **The two steps are not one critical section, and the window between them is safe rather than
+// tolerated.** For the instant after `unmarkBlocked` and before `parkAtSafepoint` increments `parked`, this
+// caller holds no term and `atSafepointLocked` reads false for its thread. It executes no guest
+// instruction there — that is exactly what this ordering exists to guarantee — so the only effect is that a
+// round waiting on the predicate is not satisfied *yet*, and the park that follows satisfies it. A round
+// that had already completed is unaffected: `w.stopped` is nil by then, so nothing re-reads the predicate.
 //
 // **The two halves are separately callable, and only this one is the normal path.** `unmarkBlocked`
 // below is the clear on its own, for `callHost`'s unwinding path, which must drop the mark and must not
@@ -669,22 +833,28 @@ func (t *thread) unmarkBlocked() {
 // that are suspended; `Stop` was reading it as a fact about the thread, which is *"is some caller here
 // suspended"* asked in place of *"is no caller here running"*. Those coincide only while a thread has one
 // caller, and one `thread` per instance against an exported `Invoke` that nothing gates means it does
-// not. `Stop` now asks `blocked == callers`, and this is where the right-hand side comes from.
+// not. `Stop` now asks `parked+blocked >= callers`, and this is where the right-hand side comes from.
 //
 // # Three things it deliberately does not do
 //
-// **It does not park.** `enterBlocked` parks, because a thread about to suspend must announce itself
+// **It does not park.** `enterBlocked` parks, because a thread about to suspend must reach a safepoint
 // before it becomes unable to; a thread about to *run* is already covered — `run` calls `enterFrame`,
 // whose first statement is `st.t.poll()`, so a caller that arrives while a stop is in flight parks at
 // frame entry before executing one guest instruction. Adding a park here would fence twice for one edge
-// and put a second announcement site on the `Invoke` path.
+// and put a second release site on the `Invoke` path.
+//
+// **`enterCall` is not a release site at all, and the reason is the direction it moves the predicate.**
+// It increments `callers`, which can only make `parked+blocked >= callers` *less* true — and a transition
+// that cannot newly satisfy a condition has nothing to signal. [ADR 0074][0074]'s four sites are exactly
+// the four that raise a left-hand term or lower the right one; this pair's other half, `leaveCall`, is one
+// of them for that reason and this half is none.
 //
 // **It does not wrap the whole of `invokeIndex`, and the placement is load-bearing rather than tidy.**
 // `invokeIndex` delegates for a re-exported import by returning `ext.owner.invokeIndex(...)`, so exactly
 // one `in.run` executes per chain — but the *delegating* instance has its own `thread`. Counting on entry
 // to `invokeIndex` would leave that thread with a caller counted and no guest code running on it, which
-// makes `blocked == callers` false for a thread that will never poll and never arrive: every `Stop` on
-// that instance would wait out its full deadline. So the pair wraps `in.run` and nothing wider.
+// makes `parked+blocked >= callers` false for a thread that will never poll and never park: every `Stop`
+// on that instance would wait out its full deadline. So the pair wraps `in.run` and nothing wider.
 //
 // **It does not wrap instantiate-time execution.** `build`'s start function and `runConst` run before
 // `InstantiateLinked` returns, so no external reference to the instance exists and no `Stop` can be in
@@ -693,6 +863,8 @@ func (t *thread) unmarkBlocked() {
 //
 // A nil thread or a nil world is a no-op, on `poll`'s ground: a thread with no world has no `Stop` that
 // could be walking it.
+//
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 func (t *thread) enterCall() {
 	if t == nil || t.w == nil {
 		return
@@ -714,6 +886,16 @@ func (t *thread) enterCall() {
 // **It is one of the three release sites for T-5.4's quiescence wait** (`quiescentLocked`), because a
 // caller inside `Invoke` is one of the three ways guest code can be in flight. Costs the ordinary path a
 // nil test: `releaseIfQuiescent` returns immediately unless a `Close` is actually waiting.
+//
+// **And it is one of the four release sites for SP-1's own predicate, which is #656's C2 repair** ([ADR
+// 0074][0074]). A caller that runs to the end of its function reaches a safepoint by *leaving*, and the old
+// arrival protocol had no message for that: one `Invoke` of an un-pollable body and one `Stop` waited out
+// its whole interval and reported *"0 of 1 arrived within 3s"* about a caller that had already returned —
+// measured on an unshared memory with no atomics, no `Spawn` and no gate, so it was reachable on the
+// default engine. The decrement above is the transition; this is where it is read. Same nil test, same
+// reason.
+//
+// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 func (t *thread) leaveCall() {
 	if t == nil || t.w == nil {
 		return
@@ -723,10 +905,14 @@ func (t *thread) leaveCall() {
 	w.mu.Lock()
 	t.callers--
 	idle := w.releaseIfQuiescent()
+	stopped := w.releaseIfAtSafepoint()
 	w.mu.Unlock()
 
 	if idle != nil {
 		close(idle)
+	}
+	if stopped != nil {
+		close(stopped)
 	}
 }
 
@@ -762,15 +948,28 @@ func (in *Instance) Resume() {
 		t.stopReq.Store(false)
 	}
 	w.resume = nil
-	w.arrived = nil
+	// Nil'd and **not closed**, which is the difference between ending a round and completing one. A
+	// `Stop` still waiting on this channel must not be told the world reached a safepoint by a `Resume`
+	// that has just put every parked thread back on the dispatch loop; it reaches its deadline and says so,
+	// naming this case (`stopExpired`). `thread.parked` is deliberately not cleared here either — the round
+	// that installs the next channel clears it, and nothing reads it in between (`Stop`).
+	w.stopped = nil
 	w.mu.Unlock()
 
 	close(release)
 }
 
-// parkAtSafepoint reports arrival and blocks until the world resumes. Contract §3 SP-1's guest half.
+// parkAtSafepoint marks this caller as parked and blocks until the world resumes. Contract §3 SP-1's guest
+// half.
 //
-// Called only from `poll`, and only once `stopReq` has been observed set. The re-read of `w.resume`
+// **`counted` says this caller's term in `atSafepointLocked` is already held by `blocked`**, which is true
+// for exactly one caller — `enterBlocked`'s, which increments `blocked` and then parks. Without the
+// distinction one caller would hold two of its thread's terms, and on a thread whose second caller is
+// running guest code the sum would reach `callers` and the round would report a stopped world: #656's C1
+// witness rebuilt out of its own repair. The parameter is what makes the predicate exact; the `>=` in it is
+// a separate hedge against an unpaired mark, argued there.
+//
+// Called from `poll` with `counted` false, and only once `stopReq` has been observed set. The re-read of `w.resume`
 // under the lock is the race this function exists to close: `Resume` can run between the atomic load
 // in `poll` and the lock here, in which case there is nothing left to park for and returning is
 // correct rather than a missed stop.
@@ -788,8 +987,15 @@ func (in *Instance) Resume() {
 //
 // **The edge is the channel pair, and it is an edge over everything rather than over one word.** A
 // receive from a closed channel synchronizes with the close, so this thread observes every write
-// `Resume`'s caller made before calling it; the send above synchronizes the other direction, so the
-// host that observes an arrival observes the guest's writes before it. That is B-MM-1 in both
+// `Resume`'s caller made before calling it; the close of `w.stopped` synchronizes the other direction, so
+// the host whose `Stop` returned observes the guest's writes before it.
+//
+// **The guest→host half is now the mutex chain rather than this thread's own send**, and it is the same
+// edge reached by one more hop. A parking caller's writes precede its release of `w.mu`; every later
+// release site acquires that same mutex, so the site that finally closes `w.stopped` — which may be another
+// thread, or `leaveCall`, or `retire` — releases after every earlier parker. `Stop`'s receive synchronizes
+// with that close, and transitively with all of them. Worth stating rather than assuming, because the
+// protocol this replaced had the edge per sender and by inspection. That is B-MM-1 in both
 // directions, and it is worth noticing that the clause exists because the *browser* host's
 // `Atomics.notify` gives the narrow version — an edge for the notified word only (D20, the gap this
 // whole section descends from). Go's channel is the wide version, so the engine gets the clause for
@@ -823,7 +1029,7 @@ func (in *Instance) Resume() {
 //     the post-release read is the only one that can see the mark.
 //
 // [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
-func (t *thread) parkAtSafepoint() {
+func (t *thread) parkAtSafepoint(counted bool) {
 	w := t.w
 	if w == nil {
 		return
@@ -834,37 +1040,35 @@ func (t *thread) parkAtSafepoint() {
 	}
 
 	w.mu.Lock()
-	release, arrived := w.resume, w.arrived
+	release := w.resume
 	if release == nil {
 		w.mu.Unlock()
 		return
 	}
-	// One arrival per thread per round, decided here because `mu` is the only place it can be
-	// decided — grave #593, and the sentence this replaces is the reason it is a grave rather than a
-	// refinement. That sentence argued the send could not block because *"the buffer is
-	// `len(w.members)` and each thread sends once per round"*, and deferred the hazard to SP-4's
-	// dynamic membership. It was already reachable: the sender is a **caller**, not a thread, one
-	// `thread` serves N concurrent `Invoke` calls (#592), and the third caller of three parked by one
-	// `Stop` blocked on this send forever with `Resume` unable to free it.
-	//
-	// A non-blocking send would also not hang, and is worse: it drops arrivals, and a dropped arrival
-	// lets `Stop` count two from one member and report a stopped world with another member running.
-	// A hang is visible; a wrong verdict is not.
-	report := !t.reported
-	t.reported = true
+	if !counted {
+		t.parked++
+	}
+	// **Grave #593 is dissolved here rather than guarded here**, which is why the dedup this replaces is
+	// gone. That grave was *"the one deadlock this protocol can have"*: the announcement was a send on a
+	// buffer sized from the thread count, the announcer is a **caller**, and the third of three concurrent
+	// `Invoke`s parked by one `Stop` blocked on the send forever with `Resume` unable to free it. The
+	// repair was one announcement per thread per round (`thread.reported`) — which is also what let a
+	// sibling caller's announcement satisfy a runner's slot, #656's C1. There is no send now, so neither
+	// the hang nor the dedup that caused the false success has a subject.
+	stopped := w.releaseIfAtSafepoint()
 	w.mu.Unlock()
 
 	// Both channel operations are outside the lock, for the two halves of B-MM-3. The receive is the
 	// obvious one: blocking on a resume while holding an engine lock is the clause's own hazard, and
-	// `Resume` needs `mu` to run at all, so it would be a deadlock and not merely a violation. The
-	// send is outside for the same reason it is now deduplicated: its safety must not rest on a count
-	// of anything, and under `mu` a send that blocked for any reason would take `Resume` with it.
+	// `Resume` needs `mu` to run at all, so it would be a deadlock and not merely a violation. The close
+	// is outside because the clause names a *guest resume* and a `Stop` returning is what precedes one —
+	// and because `releaseIfAtSafepoint` claimed the channel under the lock, which is what makes exactly
+	// one closer possible.
 	//
-	// Both are read from locals captured above: `Resume` nils the fields, so reading `w.arrived` here
-	// would be a plain read of a word another goroutine writes — a race on the *field*, even though
-	// every channel operation on the value is safe.
-	if report {
-		arrived <- t.id
+	// The order is close-then-wait and not the reverse, which is the whole of this function's liveness: a
+	// caller that waited first would be the last agent to reach a safepoint, holding the news of it.
+	if stopped != nil {
+		close(stopped)
 	}
 	<-release
 
@@ -907,7 +1111,9 @@ func (t *thread) poll() {
 	if t == nil || !t.stopReq.Load() {
 		return
 	}
-	t.parkAtSafepoint()
+	// `counted` false: a caller reaching a back-edge or a frame entry holds no `blocked` mark, so its term
+	// in `atSafepointLocked` is the `parked` one this is about to take. See `parkAtSafepoint`.
+	t.parkAtSafepoint(false)
 }
 
 // jumpTo returns `target` for the dispatch loop to adopt as its next `pc`, polling first when the
