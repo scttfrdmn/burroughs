@@ -335,3 +335,94 @@ host quietly fell back and every mapping the run made was unmapped by its cleanu
 something — a memory64 declaring a minimum above 4 GiB, which keeps relocate-and-copy — is not on any of
 these ladders, because asserting it means committing 4 GiB;
 `internal/interp/reserve.go:reservationDeclined` is what makes that population countable instead.
+
+## The platform gap: ruled non-conformant, not port-scoped (#671)
+
+**Scott ruled [#671](https://github.com/scttfrdmn/burroughs/issues/671) after this decision landed, and it
+resolves the one question this document deliberately left open.** The mechanism above meets §8 M-1 on
+`unix` and cannot meet it where there is no mapping primitive, so the question was whether the MUST is
+scoped to the ports that can express it or whether those ports stand as failing it. His words:
+
+> The full-copy fallback is correct; programs run and pay O(size) per grow. So this is a performance
+> property, not a correctness one. But port-scoping makes the clause true by construction everywhere and
+> erases the fact that three ports are worse. **Record windows, plan9 and the wasm ports as non-conformant
+> with a measured figure.** That keeps the gap visible — reconcile an extent, never floor it.
+
+So **§8 is not amended.** M-1's MUST stays unconditional, and the following ports do not meet it:
+
+```text non-conformant-ports
+js
+plan9
+wasip1
+windows
+```
+
+**That list is derived, not maintained.** `internal/testenv:TestTheNonConformantPortsAreTheOnesWithoutAMapping`
+reads the fence above, asks `go tool dist list` for every GOOS the toolchain knows, and asks `go list` under
+each which of the two reserve files the build constraints select — then asserts set equality **in both
+directions**. The reverse direction is the one worth having: when
+[#674](https://github.com/scttfrdmn/burroughs/issues/674) gives windows a `VirtualAlloc` reservation, a hand-kept
+list would go on naming it as non-conformant, and a document that over-reports its own gap is one the next
+reader has to re-verify line by line. Cross-compilation proves file selection and nothing more, which is why
+the figure below is a separate instrument: *the classification test is runtime-vs-harness*, and this half is
+entirely harness.
+
+**`windows` is on that list as a defect with a filed repair, not as a platform limit.** `VirtualAlloc` with
+`MEM_RESERVE` does exactly what M-1 asks; what is missing is Go's *portable* syscall surface, not the
+capability. `syscall.VirtualAlloc` does not exist on any GOOS — `GOOS=windows go doc syscall.VirtualAlloc`
+reports no such symbol, which is why this is #674 and not a two-line port — but `syscall.NewLazyDLL`,
+`LoadDLL`, `GetProcAddress` and `Syscall9` are all present, a 4 GiB `MEM_RESERVE` written that way
+cross-compiles under `GOOS=windows GOARCH=amd64` with no cgo and nothing added to `go.mod`, and the `build`
+gate now compiles that port on every PR. `plan9` and the wasm ports are not in #674's scope and are their own
+question: `js` and `wasip1` have no address-space primitive to reach for at all, and plan9's `segattach` is a
+different mechanism with a different decision behind it.
+
+### The measured figure: arm F
+
+**Scott's ruling asks for a number, not an adjective — *"reconcile an extent, never floor it"* — so the
+non-conformance has an arm of its own.** `internal/interp/memladder_test.go:BenchmarkMemoryReservationLadder`
+arm F times a **one-page** `memory.grow` at seven rungs of existing size, twice at each rung: once with
+`reserveMapping` refused, which is what those four ports run unconditionally, and once on the mapping. Both
+columns report time *per grow*.
+
+`janus.local`, group `measured`, pueue task 23, 0 concurrent tasks at submit, native x86-64, `go test
+-benchtime=1x`, 5 reps per cell:
+
+| current pages | fallback best | fallback worst | mapped best | mapped worst | worst ratio |
+| --- | --- | --- | --- | --- | --- |
+| 2 | 24.76µs | 99.059µs | 53ns | 176ns | 562.8x |
+| 17 | 233.109µs | 735.091µs | 84ns | 149ns | 4933.5x |
+| 257 | 1.873329ms | 3.612156ms | 44ns | 45ns | 80270.1x |
+| 4097 | 45.669866ms | 60.68681ms | 68ns | 116ns | 523162.2x |
+| 16385 | 186.346939ms | 344.914566ms | 70ns | 380ns | 907669.9x |
+| 32769 | 353.818634ms | 693.273177ms | 40ns | 44ns | 15756208.6x |
+| 65001 | 695.004914ms | 1.378040963s | 40ns | 44ns | 31319112.8x |
+
+**The extent, stated as the ratio the ruling asks for: growing an unshared memory by one page costs 28070x
+more at 65001 pages than at 2 on the four non-conformant ports, and does not vary with size at all on the
+mapping.** The fallback's own ladder is the load-bearing half — `695.004914ms` against `24.76µs`,
+best-against-best — and the mapped column beside it spans 40 ns to 84 ns across a 32000x range of memory
+size with no trend, which is arm B's *amortized O(pages touched)* claim reproduced inside this arm, on the
+same invocation. That matters because it makes the comparison internal: the two columns of any one row were
+measured microseconds apart on one box, so the ratio is not a cross-run difference wearing a result's
+clothes.
+
+**Which statistic is quoted was decided after seeing numbers, and that ordering is disclosed rather than
+hidden.** The forecast registered on #671 was *above 100x*; every reading of the data clears it by three to
+four orders of magnitude, so nothing turns on the choice. The ladder ran three times from an identical tree,
+and the two candidate forms are not equally stable: best-against-best spans 1.42x across the three runs,
+worst-against-worst 2.78x. Decomposed by term, the *numerator* is stable to 4% and the *denominator* moves
+47% — a one-second `memcpy` at the top rung is a quantity nothing perturbs, while a 64 KiB copy at the bottom
+is tens of microseconds, where the allocator and the scheduler are the same order as the signal. An extent
+divided by its noisiest term is *a near-miss on an extreme statistic* waiting to happen, so both forms are
+printed and the stable one is quoted. The three runs are tabulated on
+[#671](https://github.com/scttfrdmn/burroughs/issues/671).
+
+**What the figure does not say.** It is an amd64 Linux measurement of the *fallback path*, taken on a host
+that has a mapping primitive and was told to refuse it. It is therefore the cost of the mechanism those four
+ports use, not a measurement taken on any of them — no runner in this project's CI or lab is `windows`,
+`plan9`, `js` or `wasip1`. Nothing here asserts they are otherwise identical; what is asserted is that they
+take this path, which is the build-tag half held by
+`internal/testenv:TestTheNonConformantPortsAreTheOnesWithoutAMapping`, and that this path costs this much.
+*The classification test is runtime-vs-harness*, and the composite claim — *these ports are non-conformant,
+by this much* — is deliberately two instruments rather than one that would have to pretend to be both.

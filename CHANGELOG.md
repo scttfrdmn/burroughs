@@ -45,12 +45,30 @@ weakly-ordered platform.
     42.9 GB of reservations live, against ADR 0075 arm B's 10× rise on the table twin. The control re-took
     0051's column on the same host in the same invocation: **389 ms worst at the top rung**, about 219 000×
     arm A's, and 6.45 GB resident for a 4.29 GB reservation.
-  - **`unix` only, and stated rather than silent.** `windows`, `plan9` and the wasm ports have no primitive
-    and take the fallback, so M-1's MUST is unmet there and
-    `internal/interp/reserve.go:reservationUnavailable` counts every memory that got no mapping — a figure an
-    instrument can read rather than a property a reader has to infer. Whether contract §8 gains a port scope
-    is [#671](https://github.com/scttfrdmn/burroughs/issues/671), which this change does not decide. `make
-    build` gains one `GOOS=windows` cross-compile so the unbuilt arm cannot rot.
+  - **One counted refusal seam in the tests, because the ladder's fallback arm needed a second one.** The
+    package's `TestMain` prints `reservationUnavailable` beside the share of it the tests caused
+    deliberately, so a reader can subtract one from the other and get host address-space pressure; that share
+    was counted inside the `withoutReservation` helper, and arm F — needing the refusal from a `*testing.B`,
+    which cannot call a helper taking `*testing.T` — installed a closure of its own that counted nothing.
+    There is now one `refuseReservation` closure installed by both seams, and
+    `internal/interp:TestTheDeliberateRefusalSeamIsTheOnlyOne` parses this package's test files over the
+    syntax tree to assert no other closure is ever installed and that installs and restores balance.
+
+  - **`unix` only, and four ports are recorded as failing the MUST rather than excused from it.**
+    `windows`, `plan9`, `js` and `wasip1` have no primitive and take the fallback, so `memory.grow` is a full
+    copy there. Scott ruled [#671](https://github.com/scttfrdmn/burroughs/issues/671) after the mechanism
+    landed — **contract §8 is not amended and gains no port scope**, because *"port-scoping makes the clause
+    true by construction everywhere and erases the fact that three ports are worse"* — so the gap is carried
+    as a measured extent in the ADR: **a one-page grow at 65001 pages costs 695 ms on the fallback against
+    40 ns on the mapping**, and 28070× what the same grow costs at 2 pages, while the mapping shows no trend
+    across the ladder at all. This bullet read *"whether contract §8 gains a port scope … this change does
+    not decide"* until that ruling, which it did not survive. The port list is **derived, not maintained**:
+    `internal/testenv:TestTheNonConformantPortsAreTheOnesWithoutAMapping` cross-compiles every GOOS the
+    toolchain knows and asserts set equality against the ADR's list in both directions, so the record cannot
+    go on naming `windows` once [#674](https://github.com/scttfrdmn/burroughs/issues/674) gives it a
+    `VirtualAlloc` reservation — that port is a filed defect, not a platform limit.
+    `internal/interp/reserve.go:reservationUnavailable` still counts every memory that got no mapping, and
+    `make build` gains one `GOOS=windows` cross-compile so the unbuilt arm cannot rot.
 
 - **§2's two spawn-vehicle litmus cases — T-1's *N agents parked at one instant* and T-2's *the first agent
   waits and a child wakes it*.** [#10](https://github.com/scttfrdmn/burroughs/issues/10) slice 1,
