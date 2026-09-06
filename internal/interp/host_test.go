@@ -726,11 +726,12 @@ func TestAClosedInstanceBeginsNoHostCallAndSpawnsNoThread(t *testing.T) {
 // TestAHostCallMarksItsThreadBlockedSoAStopArrives is the SP-2/SP-4 row, and it is the reason the
 // blocked mark is in `callHost` at all.
 //
-// ADR 0067's arrival predicate is `blocked == callers`. A thread inside a host call still has its guest
-// frame counted as a caller, so **without `enterBlocked` the thread reads to `Stop` as running guest
-// code**: it will not reach a safepoint (it is parked in the embedder's channel receive), so `Stop` waits
-// out its whole deadline and returns `ErrStopDeadline`. With the mark, SP-2 counts it as arrived without
-// waking it, which is SP-4's *"a pause must not disturb a blocked host call"* in the same clause.
+// `Stop`'s predicate is `parked+blocked >= callers` — ADR 0067's denominator, ADR 0074's left-hand side. A
+// thread inside a host call still has its guest frame counted as a caller, so **without `enterBlocked` the
+// thread reads to `Stop` as running guest code**: it will not reach a safepoint (it is parked in the
+// embedder's channel receive), so `Stop` waits out its whole deadline and returns `ErrStopDeadline`. With
+// the mark, SP-2 counts it as at a safepoint without waking it, which is SP-4's *"a pause must not disturb
+// a blocked host call"* in the same clause.
 //
 // **Nothing here is timing-shaped except the deadline, and the deadline is not the assertion.** The
 // premise — the thread is inside the host call — is established by the embedder signalling, not hoped
@@ -919,17 +920,20 @@ func valTypesEqual(a, b []binary.ValType) bool {
 // # The test #650 asked for cannot be written, and the measurement is why
 //
 // The issue's closing line asks for *"a `Stop` that must not report arrival"*. That test fails on
-// correct code. `Stop`'s predicate is `blocked == callers`, a **difference**; a panic out of `h.fn`
-// leaks one of each, so the leaked thread and the clean thread both satisfy it. Measured before the
-// repair: `callers=1 blocked=1`, `Stop` returns `nil` — and after it, `callers=0 blocked=0`, `Stop`
-// returns `nil`. Both are *arrived*, and for a genuinely idle thread that is the right answer, because
-// any re-entry reaches `enterFrame`, whose first statement is `st.t.poll()`.
+// correct code. `Stop`'s predicate compares a **sum against a bound** — `parked+blocked >= callers`, ADR
+// 0067's denominator and ADR 0074's left-hand side — and a panic out of `h.fn` leaks one term from each
+// side, so the leaked thread and the clean thread both satisfy it. Measured before the repair:
+// `callers=1 blocked=1`, `Stop` returns `nil` — and after it, `callers=0 blocked=0`, `Stop` returns `nil`.
+// Both are at a safepoint, and for a genuinely idle thread that is the right answer, because any re-entry
+// reaches `enterFrame`, whose first statement is `st.t.poll()`. 0074 did not change this reading: it added
+// a term to the same side `blocked` is on, so a leak that inflates that side is invisible to it for the
+// same reason.
 //
 // So the oracle is the counters and the crossing parity, not `Stop`'s verdict. `Stop` is asserted
 // anyway, and it is not vacuous: it discriminates against **option A** — repairing `callHost` and not
 // `invokeIndex` leaves `callers=1 blocked=0`, and this call then waits out its whole deadline to report
-// `0 of 1 arrived` for a thread executing nothing. That measured state is what the arm is here to catch
-// if either half of the repair is removed.
+// one thread still executing guest code, for a thread executing nothing. That measured state is what the
+// arm is here to catch if either half of the repair is removed.
 //
 // # The crossing number is derived, not read off a run
 //
@@ -986,15 +990,16 @@ func TestAnEmbedderPanicLeavesTheEngineMarksClean(t *testing.T) {
 	in.world.mu.Unlock()
 	if callers != 0 || blocked != 0 {
 		t.Fatalf("after a recovered embedder panic the thread carries callers=%d blocked=%d, want 0 "+
-			"and 0.\n1 and 1 is the unrepaired leak: `Stop` still reads `blocked == callers` and "+
-			"answers *arrived*, so the breach is silent and the counters grow one pair per panic.\n"+
+			"and 0.\n1 and 1 is the unrepaired leak: `Stop` still reads `parked+blocked >= callers` "+
+			"as satisfied, so the breach is silent and the counters grow one pair per panic.\n"+
 			"1 and 0 is option A — `callHost` repaired without `invokeIndex` — where every later "+
 			"`Stop` waits out its deadline for a thread executing nothing (#650, ADR 0070)",
 			callers, blocked)
 	}
 
 	if err := in.Stop(2 * time.Second); err != nil {
-		t.Errorf("Stop: %v — with both marks clean this thread is idle and arrival is immediate. A "+
+		t.Errorf("Stop: %v — with both marks clean this thread is idle and the predicate holds at "+
+			"the opening walk. A "+
 			"deadline expiry here is the option-A state (callers leaked, blocked not), which is #650 "+
 			"made loud rather than repaired", err)
 	} else {

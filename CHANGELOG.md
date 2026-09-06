@@ -2018,6 +2018,38 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`Stop` waited for a count of arrivals, and an arrival is a caller — so it could report the world
+  stopped while guest code ran** ([#656](https://github.com/scttfrdmn/burroughs/issues/656)),
+  [ADR 0074](docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md).
+  SP-1's round counted receives on a `chan ThreadID`: the walk sized a slot per thread not already at a
+  safepoint, and every parking caller sent one. But a `thread` is per instance while a caller is per
+  goroutine, so the sender and the thing counted were different units — and **four shapes follow from that
+  one sentence**, two of them a `nil` returned while a guest instruction had not yet run. Contract §3 SP-1
+  promises *every* guest thread at a safepoint; a host that calls `Stop` in order to read guest memory was
+  being told it could while the guest was changing it.
+  - **The shape that convicts the design is a thread with two callers.** One suspended in
+    `memory.atomic.wait32`, one running; the waiter's interval expires mid-round, it wakes, parks, and its
+    send fills the slot opened for its **sibling on the same `thread`** — same `ThreadID`, same row in
+    `world.live`, same per-thread mark. Both repairs the issue proposed (wait on the awaited ids; gate the
+    send on a per-thread `awaited` flag) are refuted by it, because neither a token nor a thread id names a
+    caller.
+  - **A second shape needs no gate at all**, which is what moved this past the `gate:threads` flip it was
+    filed under: one `Invoke`, one `Stop`, an unshared memory, no atomics and no `Spawn`. The caller
+    *returns* from the guest, which was no arrival, so the round waited out its whole deadline and reported
+    *"0 of 1 arrived"* about a caller that had finished — a red whose subject did not exist.
+  - **The wait becomes SP-1's own predicate over the marks that already express it**: for every live
+    thread, `parked + blocked >= callers`. The channel carries no payload and only wakes the waiter, so the
+    `reported` dedup goes too and grave [#593](https://github.com/scttfrdmn/burroughs/issues/593)'s
+    blocking-send deadlock is dissolved rather than re-guarded — there is no send. Four release sites, one
+    per transition that can make the predicate newly true, and that enumeration is the soundness argument.
+    `ErrStopDeadline` now walks the threads still running and prints each one's three marks, so an expiry
+    names the agent the engine is waiting for.
+  - **Each shape was watched to die against a mutation of the landed mechanism**, not of the protocol it
+    replaces, since a green over a re-pointed control proves nothing about the new sites. Five mutations,
+    applied one at a time under `-race`; the fifth killed nothing, because `leaveCall` always precedes
+    `retire` and so the reaper's site has no witness — recorded in the ADR and in the test file's header
+    rather than left as an unstated gap.
+
 - **A relocating `memory.grow` abandoned an array a sibling agent was still writing into, so those writes
   were lost** ([#586](https://github.com/scttfrdmn/burroughs/issues/586)),
   [ADR 0073](docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md).

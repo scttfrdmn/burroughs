@@ -184,8 +184,8 @@ type thread struct {
 	// **Guarded by `world.mu`, and deliberately not an atomic.** Both writers (`enterBlocked`,
 	// `leaveBlocked`) and the only reader (`Stop`) hold that mutex, and the whole point is that the
 	// transition and the count cannot interleave: an atomic read would let `Stop` observe "not
-	// blocked" from a thread that is one instruction from blocking, and then wait for an arrival that
-	// will never come. `stopReq` above is atomic for the opposite reason — its reader is the hot path
+	// blocked" from a thread that is one instruction from blocking, and then wait on a predicate no
+	// later transition will make true. `stopReq` above is atomic for the opposite reason — its reader is the hot path
 	// and must not take a lock.
 	//
 	// **A count and not a flag, because a `thread` is per *instance* and a caller is per *call*.**
@@ -231,15 +231,32 @@ type thread struct {
 	// [0067]: ../../docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md
 	callers int
 
-	// reported records that this thread's arrival has been sent for the round `world.resume` names,
-	// so that N callers sharing one thread produce one arrival and not N.
+	// parked is how many of this thread's callers are stopped at a safepoint for the round
+	// `world.resume` names — the third term of `world.atSafepointLocked`, beside `blocked` and
+	// `callers`. Moved by `parkAtSafepoint`; [ADR 0074][0074]'s one new field.
 	//
-	// **This is a bug fix to #591's arrival protocol and not a new requirement.** `parkAtSafepoint`
-	// argued that its send could not block because *"the buffer is `len(w.members)` and each thread
-	// sends once per round"* — and each *thread* does, while each *caller* also sends, so three
-	// concurrent `Invoke`s and one `Stop` filled a one-slot buffer and left the third caller blocked
-	// on a send forever, with `Resume` unable to free it. See `parkAtSafepoint`.
-	reported bool
+	// **A count of callers for `blocked`'s reason, one step further in.** `blocked` is a count because a
+	// `thread` is per instance and a caller is per call; so is this, and the shape that forced it is the
+	// same shape one level over: with two callers on one thread, a *flag* saying "this thread has parked"
+	// is true as soon as either of them does, which is `Stop` reporting a stopped world while the other
+	// runs. That is #656's C1 witness, and it is the same mistake available in the same place a third
+	// time (#592, then #586's `soleAgentLocked`, then here).
+	//
+	// **It replaces `reported bool`, which was an announcement's receipt rather than a state.** That field
+	// existed so that N callers sharing one thread produced one arrival and not N — grave #593's repair
+	// for a blocking send — and the deduplication is exactly what made a sibling's arrival satisfy a
+	// runner's slot. There is no send to deduplicate now.
+	//
+	// **Round-scoped, zeroed by `Stop` at the round's start, and never decremented.** A caller released by
+	// `Resume` must not decrement on its way out: the decrement would lag a `Stop` that had already begun,
+	// and a stale `parked` reads as a caller at a safepoint. Nothing reads the field outside a round
+	// (`releaseIfAtSafepoint` guards on `world.stopped`), so the next round's walk is a sufficient clear.
+	//
+	// **Guarded by `world.mu`**, for `blocked`'s reason and not a weaker version of it: the transition and
+	// the predicate that reads it must not interleave.
+	//
+	// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
+	parked int
 
 	// done closes when the thread has terminated, it has been retired, and its record in `world.exited`
 	// is final. Nil for the instantiation thread, which does not terminate — and `quiescentLocked` reads
@@ -397,14 +414,24 @@ var (
 	ErrForeignEntry = errors.New("burroughs: thread entry must be defined in the instance it is spawned from")
 
 	// ErrStopInProgress refuses a spawn while a stop is in flight — decision [0068]'s second named
-	// limit, and the reason is `Stop`'s arrival channel rather than tidiness.
+	// limit, and the reason is `Stop`'s one-shot broadcast rather than tidiness.
 	//
-	// `Stop` sizes `world.arrived` to the membership it observed, and every member may send once. A
-	// member admitted mid-round is an (N+1)th potential sender into N slots, and a thread that blocks
-	// on that send is *at a safepoint and unable to say so* — the one deadlock this protocol can have
-	// (`world.arrived`). Unreachable from a guest that spawns while running, since a running guest
-	// means no round is in flight on its own thread; reachable only from an embedder spawning between
-	// `Stop` and `Resume`.
+	// `Stop` sets `stopReq` on the membership it observed, once, under `world.mu`. A member admitted
+	// mid-round is never sent that request: it would never park, so it would run guest code inside a round
+	// the host believes is in effect, and `atSafepointLocked` would count it as running until it exited, so
+	// the round would also report a false expiry. Unreachable from a guest that spawns while running, since
+	// a running guest means no round is in flight on its own thread; reachable only from an embedder
+	// spawning between `Stop` and `Resume`.
+	//
+	// **The reason above replaces one about arrival slots, and the replacement is [ADR 0074][0074]'s.** That
+	// sentence read *"`Stop` sizes `world.arrived` to the membership it observed … an (N+1)th potential
+	// sender into N slots"* — a correct argument about a channel this engine no longer has. The refusal
+	// survives its own justification because the broadcast is what a new member misses, which is the
+	// stronger of the two reasons and was true all along. It is a refusal rather than a repair (setting
+	// `stopReq` in `world.addLocked` would serve) because widening it is a change to a public error's
+	// meaning, which is 0068's named limit and not a bug fix's business.
+	//
+	// [0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 	ErrStopInProgress = errors.New("burroughs: spawn refused while a stop is in progress")
 
 	// ErrTerminated is the terminal status of a thread the engine ended: contract §2 T-5.4's shutdown,
@@ -604,11 +631,11 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 	}
 	// **Registration has already happened, and that ordering is the whole soundness argument for the
 	// window this `go` opens.** Between `admit` returning and the goroutine's first guest instruction,
-	// a `Stop` can begin: it sets `stopReq` on this thread because it is already a member, and counts
-	// it as arrived on `blocked == callers` (both zero). That count is *accurate in effect* rather than
-	// by the predicate — the goroutine reaches `enterFrame`, polls, and parks before executing one
-	// guest instruction — and the distinction is written down because a reader who checks the
-	// predicate alone will read it as a hole.
+	// a `Stop` can begin: it sets `stopReq` on this thread because it is already a member, and
+	// `atSafepointLocked` reads it as stopped on `parked+blocked >= callers` (all three zero). That
+	// reading is *accurate in effect* rather than by the predicate — the goroutine reaches
+	// `enterFrame`, polls, and parks before executing one guest instruction — and the distinction is
+	// written down because a reader who checks the predicate alone will read it as a hole.
 	go func() {
 		runtime.LockOSThread()
 		// **Retire, then close, in one `defer` and in that order** — T-5.2, [ADR 0071]. `retire` writes

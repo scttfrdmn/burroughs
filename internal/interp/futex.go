@@ -67,9 +67,9 @@ type waiter struct {
 //
 // Contract §3 SP-2 makes a thread blocked here *"count as at a safepoint"*, and SP-4 requires a stop
 // to complete *"without waking"* it. `enterBlocked`/`leaveBlocked` are that protocol — see `world`.
-// The mark is taken **before** the compare, so a `Stop` racing this either observes it and counts this
-// thread as arrived, or does not and is announced to by `enterBlocked`'s own park. What must not happen
-// is the third thing: a `Stop` that neither sees the mark nor receives an arrival, which is
+// The mark is taken **before** the compare, so a `Stop` racing this either observes it in the `blocked`
+// term of its own predicate, or does not and is released by `enterBlocked`'s own park. What must not
+// happen is the third thing: a `Stop` that sees neither the mark nor the park, which is
 // `ErrStopDeadline` reported for a thread that is by definition not running.
 //
 // `leaveBlocked` is deferred, so it runs before `atomicWait` pushes the result — nothing at all happens
@@ -106,8 +106,8 @@ type waiter struct {
 // unwinding through a thread that is also inside a wait. The bare form polls that thread, and
 // `parkAtSafepoint` does one of two things to it depending on which mark is set: with `exitReq` it
 // terminates, converting a live panic value into the sentinel and losing what the embedder raised; with
-// only `stopReq` it **parks** an unwinding thread on `<-release` until some `Resume`, and counts its
-// arrival for the round. The `recover` form clears the mark through `unmarkBlocked` and re-panics, so the
+// only `stopReq` it **parks** an unwinding thread on `<-release` until some `Resume`, counting it toward
+// the round's predicate. The `recover` form clears the mark through `unmarkBlocked` and re-panics, so the
 // value raised is the value that arrives — exactly what `callHost`'s panic path does, for the reason
 // stated on `unmarkBlocked` itself: SP-2's second half has no subject on a thread that will execute no
 // further guest instruction.

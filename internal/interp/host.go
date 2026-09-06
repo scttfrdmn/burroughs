@@ -312,11 +312,12 @@ var ErrCloseDeadline = errors.New("burroughs: close deadline expired before the 
 // had (grave #645). Unannotated, so sequentially consistent under B-MM-4's convention in `boundary.go`.
 //
 // **The blocked mark.** `enterBlocked`/`leaveBlocked`, the same pair `memory.atomic.wait` uses, and the
-// line that makes three litmus rows true rather than hoped for. ADR 0067's predicate is
-// `blocked == callers`: the guest frame that made this call is still counted as a caller, so **without
-// the mark a thread parked in an embedder's `select` reads to `Stop` as running guest code** and the stop
-// waits out its whole deadline. With it, SP-2 counts the parked thread as arrived without waking it,
-// which is SP-4's requirement in the same clause. `enterBlocked` also parks first when a stop is already
+// line that makes three litmus rows true rather than hoped for. SP-1's predicate counts a caller as
+// stopped when it is `blocked` or `parked` (ADR 0067's `callers` denominator, [ADR 0074]'s numerator): the
+// guest frame that made this call is still counted as a caller, so **without the mark a thread parked in an
+// embedder's `select` reads to `Stop` as running guest code** and the stop waits out its whole deadline.
+// With it, SP-2 counts the parked thread as stopped without waking it, which is SP-4's requirement in the
+// same clause. `enterBlocked` also parks first when a stop is already
 // in flight, so a host call cannot *begin* during a stop.
 //
 // **The closed check.** A `Close`d instance refuses to begin a host call, because `Close` returns when
@@ -332,9 +333,9 @@ var ErrCloseDeadline = errors.New("burroughs: close deadline expired before the 
 // open-coded path — ADR 0067). So a panic out of `h.fn` skips `leaveBlocked`, `enterGuest`, and
 // `leaveCall`.
 //
-// **And `blocked` and `callers` leak *together*, which is why nothing fires.** The arrival predicate's
-// guard panics on `blocked > callers`; here both are one too high, so the predicate reads
-// `blocked == callers` — SP-2's *arrived* — on a thread that is executing nothing. An embedder that
+// **And `blocked` and `callers` leak *together*, which is why nothing fires.** `Stop`'s walk panics on
+// `blocked > callers`; here both are one too high, so `atSafepointLocked` reads `parked+blocked >= callers`
+// — SP-1's *stopped* — on a thread that is executing nothing. An embedder that
 // recovers the panic above its own `Invoke` then has a live instance whose next `Stop` returns `nil` while
 // that thread is free to re-enter the guest. A silent §3 SP-2 breach, and the boundary counter left odd
 // beside it.
@@ -355,6 +356,8 @@ var ErrCloseDeadline = errors.New("burroughs: close deadline expired before the 
 // embedder's Go function returns, and a host function returning two values where its type declares one
 // would corrupt the caller's operand stack exactly as a wasm callee doing so would — which is why
 // `invoke` checks its callee's arity too, and for the same reason.
+//
+// [ADR 0074]: ../../docs/decisions/0074-stop-waits-on-sp-1s-own-predicate-over-the-caller-marks-because-an-arrival-is-a-caller-and-the-protocol-named-neither-end-of-it.md
 func (in *Instance) callHost(h *hostFunc, st *stack) error {
 	t := st.t
 	// **The world comes from the thread and not from `in`**, and the two differ on a cross-instance
@@ -767,7 +770,11 @@ func (in *Instance) Close() error {
 	// `Resume`'s own — and nil'd so that a later `Resume` is a no-op and cannot clear the terminal
 	// `stopReq` this just set.
 	release := w.resume
-	w.resume, w.arrived = nil, nil
+	// `stopped` is nil'd and **not closed**, which is the same asymmetry `Resume` states: a `Stop` still
+	// waiting must not be told the world reached a safepoint by a teardown, because a `nil` about a
+	// torn-down world is the outcome `Stop`'s own closed-world refusal calls worse than refusing. It
+	// reaches its deadline and names this case (`world.stopExpired`).
+	w.resume, w.stopped = nil, nil
 	// A `Close` racing another `Close` must wait on the *same* channel rather than replace it, or the first
 	// waiter's channel is dropped on the floor and never closed. The predicate is quiescence rather than
 	// `hostCalls > 0`, which is T-5.4's widening of what shutdown waits for.
