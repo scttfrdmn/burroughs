@@ -268,15 +268,34 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 
 ### T-5 — thread exit, join, detach
 
-> Thread exit, join, and detach semantics MUST be defined in this contract (open: §10.3) rather than
-> inherited implicitly from the host OS.
+> A thread **exits** when its entry function returns or traps, and exit is the only termination directed
+> at an individual thread: there is no cancel and no kill aimed at one thread. Exit, join, and detach
+> semantics are T-5.1–T-5.5 below rather than inherited implicitly from the host OS.
 
-- **Shape:** contract-deferred
-- **Blocked by:** contract §10.3, which is Scott's and chat-Claude's to close rather than this battery's.
-- **Why no outcome set:** the clause's normative content is *that the semantics be written down*, and they
-  are not written down yet. An allowed-outcome set authored now would be this project inventing the
-  semantics in a test file, which is decision-before-code inverted. When §10.3 closes, T-5 gets its cases
-  in the PR that closes it.
+- **Shape:** structural
+- **Registration changed when the clause did**, which is the one thing this entry records that no other
+  entry has to: the quotation above is the *amended* T-5, and the ellipsis that used to stand in the
+  middle of it was not a shortening of the old clause but a span the amendment filled in. An elided
+  quotation also cannot be checked — check 3 is a substring test, deliberately, so `…` inside a
+  blockquote is unverifiable by construction and read as a paraphrase.
+- **Blocked by:** nothing. §10.3 was resolved by Scott's stamp on
+  [#12](https://github.com/scttfrdmn/burroughs/issues/12) (ADR 0071), which replaced the deferral with
+  T-5.1–T-5.5.
+- **What it said while the clause was deferred**, recorded rather than overwritten because a
+  pre-registration whose entries can be silently rewritten registers nothing: *"Blocked by: contract
+  §10.3, which is Scott's and chat-Claude's to close rather than this battery's. The clause's normative
+  content is that the semantics be written down, and they are not written down yet. An allowed-outcome
+  set authored now would be this project inventing the semantics in a test file, which is
+  decision-before-code inverted. When §10.3 closes, T-5 gets its cases in the PR that closes it."* That
+  is the promise this entry now discharges.
+- **Why no outcome set:** even now, the five sub-clauses are each a statement about one thread's own
+  lifecycle and about what the *host* can observe of it — a join's answer, a retained trap's two
+  channels, shutdown's wait — so their oracles are direct assertions on engine API, not allowed-outcome
+  tuples over an interleaving. The one clause with a genuine race in it is T-5.4's *"no guest instruction
+  executes after shutdown returns"*, whose witness is a counter read after `Close`, and that lives with
+  T-5's own tests in the PR that implements them rather than in this battery. Registered as **covered by
+  T-5's tests, uncovered by this battery**, so the distinction is on the page rather than inferred from
+  a blank.
 
 ## §3. Safepoints and preemption
 

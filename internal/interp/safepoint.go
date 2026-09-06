@@ -54,16 +54,53 @@ type world struct {
 	// safepoint and unable to say so, which is the one deadlock this protocol can have.
 	arrived chan ThreadID
 
-	// members is every thread of this instance: the instantiation-time thread plus one per `Spawn`.
-	// The slice rather than a single field is what let SP-4's N-thread case change the population and
-	// not the protocol, which is now a landed fact rather than a forecast.
+	// live is every thread of this instance that has not exited: the instantiation-time thread plus
+	// one per `Spawn` that is still running. The slice rather than a single field is what let SP-4's
+	// N-thread case change the population and not the protocol.
 	//
-	// **It only grows.** A terminated thread stays here, and reads as at a safepoint on
-	// `blocked == callers == 0`, so it never holds up a round — true rather than lucky, since a dead
-	// thread cannot touch guest memory. Reaping needs a thread lifecycle to hook it to, which is T-5,
-	// contract §10.3, **#12**. Until then a long-lived instance that spawns in a loop leaks one entry
-	// per spawn, and every `Stop` walks them all.
-	members []*thread
+	// **It shrinks now, and the sentence it replaces is the leak T-5 was filed to close.** This field
+	// was `members` and *only grew*: a terminated thread stayed, reading as at a safepoint on
+	// `blocked == callers == 0` — never wrong, since a dead thread cannot touch guest memory, and
+	// never bounded either. **51 members after 50 completed spawns** is the measurement, and every
+	// `Stop` walked them all. `retire` is the reaper contract §10.3 had no lifecycle to hook one to;
+	// T-5.2 (ADR 0071) is the lifecycle.
+	live []*thread
+
+	// exited is T-5.2's `tid`→terminal-status record: what a `Join` answers for a thread that has
+	// already gone. Nil until the first exit, so an instance that never spawns carries no map.
+	//
+	// **A `nil` value is a clean exit and absence is "no record", which is why the reader tests the
+	// second return.** Those are different answers to a join — *"it returned"* against *"nothing here
+	// knows"* — and an `error`-valued map collapses them if the presence bit is dropped.
+	//
+	// **Bounded by consumption, which is the stamped half of T-5.2** (*"consumed by a join, or dropped
+	// at `Close`"* — Scott, on #12). Retention is what makes join-after-exit answerable at all, so the
+	// bound cannot be "do not retain"; it has to be a rule about who takes the entry out. A record
+	// nobody joins is dropped by `Close`, and until then a spawn loop with no joins holds one `error`
+	// and one map slot per exited thread rather than one whole `thread` — the leak's shape, an order of
+	// magnitude smaller, and stated rather than left to be discovered as fact 3 wearing a smaller
+	// struct.
+	exited map[ThreadID]error
+
+	// fault is T-5.3's retained trap: the first trap that ended any thread of this instance, wrapped
+	// in `ErrThreadFault`, readable through `Instance.Fault` forever and reported once through the next
+	// `Invoke`.
+	//
+	// **Sticky and never consumed, where `exited` above is consumed, and the asymmetry is the two
+	// channels T-5.3 asks for.** If the `Invoke` channel took the value away, the retrieval channel
+	// would answer nil to an embedder that happened to make a host entry first — two channels racing
+	// over one payload, which is one channel with a lottery attached. So `faultReported` gates only the
+	// report and the value stays.
+	//
+	// **First trap wins.** A later thread's trap is not overwritten in, because the second report
+	// would displace the first cause with a consequence — and it is still joinable by `tid` through
+	// `exited`, which is where per-thread detail lives.
+	//
+	// **A shutdown-induced termination is not a fault.** `retire` records `ErrTerminated` in `exited`
+	// and never here: an embedder that calls `Close` and then reads `Fault` must not be told its guest
+	// trapped when what happened is that it shut the guest down.
+	fault         error
+	faultReported bool
 
 	// closed is `Instance.Close`'s terminal mark — contract §5 H-3, [ADR 0069][0069].
 	//
@@ -74,8 +111,16 @@ type world struct {
 	// does not participate in the arrival protocol at all: its only readers refuse rather than wait.
 	closed bool
 
-	// hostCalls counts host calls currently inside an embedder's function, and hostIdle is closed when
-	// that count reaches zero with a `Close` waiting.
+	// hostCalls counts host calls currently inside an embedder's function, and idle is closed when the
+	// instance reaches quiescence with a `Close` waiting.
+	//
+	// **`idle` was `hostIdle` and the widening is T-5.4's *"and waits"*.** The old channel answered one
+	// question — is any embedder function still running — because that was all §5 H-3's teardown had to
+	// wait for. T-5.4 asks for more: *"no guest instruction of the instance executes after shutdown
+	// returns"*, which also covers a thread executing guest code and a caller inside `Invoke`. So the
+	// predicate moved to `quiescentLocked` and the three sites that can satisfy it — `endHostCall`,
+	// `leaveCall`, `retire` — each release the channel. Renamed rather than joined by a second channel,
+	// because two release channels for one wait is two places for the release to be missed.
 	//
 	// **A count plus a channel rather than a `sync.Cond`, because a `world` is used as a zero value.**
 	// `sync.Cond` must be built with `sync.NewCond(&w.mu)`, so it would need a lazy initialisation
@@ -90,7 +135,76 @@ type world struct {
 	//
 	// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
 	hostCalls int
-	hostIdle  chan struct{}
+	idle      chan struct{}
+}
+
+// quiescentLocked reports whether no guest instruction of this instance can execute before something
+// enters it again — T-5.4's *"Shutdown MUST wait for the resulting unwinds, so that no guest instruction
+// of the instance executes after shutdown returns."* `mu` held.
+//
+// Three conditions, one per way guest code can be in flight, and each is the reason the corresponding
+// release site exists:
+//
+//   - **No embedder function is running** (`hostCalls == 0`), which is §5 H-3's original predicate and
+//     `endHostCall`'s release.
+//   - **No caller is inside `Invoke`** (`callers == 0` on every live thread), which is `leaveCall`'s.
+//     Without it, `Close` could return while a `Stop`-less `Invoke` was mid-loop on the instantiation
+//     thread — the measured fact 4 (**Close returned in 39µs while a spawned counter ran on to 23008**)
+//     is that hole on the spawned side.
+//   - **Every spawned thread has retired** (`done == nil` on every live thread), which is `retire`'s.
+//     A thread whose goroutine has left `runEntry` but has not yet been retired has `callers == 0`
+//     already, so the caller condition alone would call it quiescent while its unwind was still
+//     running. Waiting for the retirement is strictly stronger and needs no argument about how much of
+//     the engine a departing thread still touches.
+//
+// The instantiation thread is `done == nil` by construction — it *"does not terminate"* (`thread.done`)
+// — so the second condition is what covers it and the third does not exclude it.
+func (w *world) quiescentLocked() bool {
+	if w.hostCalls > 0 {
+		return false
+	}
+	for _, t := range w.live {
+		if t.done != nil || t.callers > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// releaseIfQuiescent claims the waiting `Close`'s channel when the instance has reached quiescence, and
+// returns it for the caller to close **outside** `mu`. `mu` held; nil when there is nothing to release.
+//
+// **The claim-under-the-lock-and-close-outside split is contract §4 B-MM-3**, whose control
+// (`TestNoEngineLockIsHeldAcrossAChannelOperation`) already failed `endHostCall`'s first draft for
+// closing inside the critical section. Nil'ing the field under the lock is what makes the close safe to
+// do outside it: exactly one caller can observe a non-nil channel, so a double close is impossible by
+// construction rather than by an argument about who got there first.
+//
+// The guard is `w.idle != nil` first, so the walk in `quiescentLocked` costs nothing on the ordinary
+// path — no `Close` is waiting, so there is no question to answer.
+func (w *world) releaseIfQuiescent() chan struct{} {
+	if w.idle == nil || !w.quiescentLocked() {
+		return nil
+	}
+	idle := w.idle
+	w.idle = nil
+	return idle
+}
+
+// isClosed reports whether `Close` has run. Advisory by construction and used only where advisory is the
+// right strength: `invokeIndex`'s refusal, which has a correct second answer if it loses the race.
+//
+// **It is deliberately not the shape `beginHostCall` and `admit` have.** Those two must decide *and* act
+// under one acquisition, because a call or a member admitted after `Close`'s wait completed is outside a
+// wait that has already returned — the indivisibility argument stated at both. Nothing here is admitted:
+// a `Close` landing just after this reads true finds the thread through the ordinary terminal marks and
+// the caller is told `ErrTerminated` instead of `ErrClosed`. Two right answers about one instant, which
+// is what makes a separate load legitimate here and not there.
+func (w *world) isClosed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.closed
 }
 
 // beginHostCall admits one host call, or refuses because the instance is closed.
@@ -139,15 +253,84 @@ func (w *world) beginHostCall() error {
 func (w *world) endHostCall() {
 	w.mu.Lock()
 	w.hostCalls--
-	var idle chan struct{}
-	if w.hostCalls == 0 && w.hostIdle != nil {
-		idle, w.hostIdle = w.hostIdle, nil
-	}
+	idle := w.releaseIfQuiescent()
 	w.mu.Unlock()
 
 	if idle != nil {
 		close(idle)
 	}
+}
+
+// retire moves a thread out of the live set and records its terminal status — T-5.2's reaper and
+// T-5.3's fault channel, [ADR 0071][0071].
+//
+// **Called before `done` closes, and that ordering is what makes `Join` answerable.** A joiner waits on
+// `done` and then reads the record; if the record were written after the close, the wake would race the
+// write and a join could find nothing for a thread it had just watched finish. `spawn`'s goroutine
+// therefore holds both in one `defer`, in this order.
+//
+// **It does not send an arrival, and the omission is deliberate rather than an oversight.** A thread that
+// `Stop` counted as a sender and that exits before its next safepoint never announces, so that round
+// waits out its whole deadline and reports a false expiry — measured, **`ErrStopDeadline` after
+// 2.0011575s for a thread that had already exited**. Sending here would repair that arm and break the
+// other: `Stop` counts *receives*, not identities, so an arrival on behalf of a thread the round did not
+// await satisfies a still-running thread's slot instead. Both directions are one defect in the arrival
+// protocol, they are filed together with their witnesses as **[#656]**, and the repair is that issue's
+// rather than this one's: live-only membership neither creates nor worsens either arm.
+//
+// [0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+// [#656]: https://github.com/scttfrdmn/burroughs/issues/656
+func (w *world) retire(t *thread, err error) {
+	w.mu.Lock()
+	for i, m := range w.live {
+		if m != t {
+			continue
+		}
+		w.live = append(w.live[:i], w.live[i+1:]...)
+		break
+	}
+	if w.exited == nil {
+		w.exited = make(map[ThreadID]error)
+	}
+	w.exited[t.id] = err
+	// T-5.3's retention, and the two exclusions are both load-bearing: a shutdown-induced termination
+	// is not a guest fault (see `world.fault`), and a later trap does not displace the first cause.
+	if err != nil && w.fault == nil && !errors.Is(err, ErrTerminated) {
+		// Two `%w` verbs, so the reported error matches `ErrThreadFault` *and* the trap it carries —
+		// an embedder testing for either gets the same answer from `Fault` and from `Invoke`, which is
+		// what makes T-5.3's two channels two views of one value.
+		w.fault = fmt.Errorf("%w: %s: %w", ErrThreadFault, t, err)
+	}
+	idle := w.releaseIfQuiescent()
+	w.mu.Unlock()
+
+	if idle != nil {
+		close(idle)
+	}
+}
+
+// takeFaultReport answers the retained fault the *first* time it is asked and nil thereafter — T-5.3's
+// host-entry channel, consumed once. `Instance.Invoke`'s pre-emption.
+//
+// **What is consumed is the report and not the value**, which is the asymmetry `world.fault` documents: an
+// instance whose spawned thread trapped once must not fail every subsequent `Invoke` with the same news,
+// and an embedder that reads `Instance.Fault` after the report must still be told what happened.
+func (w *world) takeFaultReport() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.fault == nil || w.faultReported {
+		return nil
+	}
+	w.faultReported = true
+	return w.fault
+}
+
+// faultValue is the retained fault with no consumption at all — T-5.3's retrieval channel, behind
+// `Instance.Fault`.
+func (w *world) faultValue() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.fault
 }
 
 // register adds the instantiation-time thread to the world. Called once, from `link.go`, and it
@@ -188,7 +371,7 @@ func (w *world) admit(t *thread) error {
 	if w.resume != nil {
 		return fmt.Errorf("%w: this instance has %d threads at or heading for a safepoint, and a "+
 			"member admitted mid-round would have no slot to announce itself in", ErrStopInProgress,
-			len(w.members))
+			len(w.live))
 	}
 	w.addLocked(t)
 	return nil
@@ -213,11 +396,18 @@ func (w *world) admit(t *thread) error {
 //
 // [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
 func (w *world) addLocked(t *thread) {
-	w.members = append(w.members, t)
+	w.live = append(w.live, t)
 	t.w = w
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 	if w.closed {
 		t.cancel()
+		// **Born cancelled *and* born terminal**, which is the T-5.4 half of the same belt. A closed
+		// world's `Close` has already chosen its live set and may already have returned, so a thread
+		// added here would be one nothing waits for; the cancellation ends it if it enters a host call
+		// or a wait, and this ends it at its first safepoint if it enters neither. `spawn` refuses
+		// above this layer, so the reachable caller is `register` on an instance closed mid-build.
+		t.exitReq.Store(true)
+		t.stopReq.Store(true)
 	}
 }
 
@@ -254,8 +444,19 @@ func (in *Instance) Stop(deadline time.Duration) error {
 		w.mu.Unlock()
 		return errors.New("burroughs: Stop called while a stop is already in progress")
 	}
+	// **A stop over a closed world would report a verdict about nothing**, which is worse than
+	// refusing: `Close` has set every live thread terminal, so each one either has already unwound or
+	// is about to, and both of this function's outcomes would then be meaningless — a `nil` claiming a
+	// stopped world that is a *torn-down* world, or an expiry blaming threads for not arriving at a
+	// safepoint they are dying instead of reaching. `admit` already treats `closed` as terminal for the
+	// other direction (a new member), on the same reasoning one clause over.
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("%w: this instance is closed, so a stop has no world to bring to a "+
+			"safepoint (contract §2 T-5.4, §5 H-3)", ErrClosed)
+	}
 	w.resume = make(chan struct{})
-	w.arrived = make(chan ThreadID, len(w.members))
+	w.arrived = make(chan ThreadID, len(w.live))
 	// Captured under the lock and read from the local below. Reading `w.arrived` after the unlock
 	// would be a plain read of a field `Resume` nils, which is a data race on the field itself even
 	// though every *channel* operation on it is safe — the distinction that makes `-race` the
@@ -266,7 +467,7 @@ func (in *Instance) Stop(deadline time.Duration) error {
 	// sized to the full membership, because a counted-as-arrived thread still sends once when it wakes
 	// into a stop that is in progress, and that send must not block a thread that is at a safepoint.
 	arrived, want, atSafepoint := w.arrived, 0, 0
-	for _, t := range w.members {
+	for _, t := range w.live {
 		t.stopReq.Store(true)
 		// Cleared here because the flag belongs to *this* round: the round is what `w.resume` names,
 		// and installing a new one is the only moment at which a previous round's arrivals stop
@@ -298,7 +499,7 @@ func (in *Instance) Stop(deadline time.Duration) error {
 		}
 		want++
 	}
-	total := len(w.members)
+	total := len(w.live)
 	w.mu.Unlock()
 
 	timer := time.NewTimer(deadline)
@@ -450,6 +651,10 @@ func (t *thread) enterCall() {
 // — a thread leaving a wait must not touch guest memory before observing a stop — and this function is
 // reached when the caller has *stopped* touching guest memory and is on its way back across the boundary
 // to host code. There is nothing left for a stop to protect from it.
+//
+// **It is one of the three release sites for T-5.4's quiescence wait** (`quiescentLocked`), because a
+// caller inside `Invoke` is one of the three ways guest code can be in flight. Costs the ordinary path a
+// nil test: `releaseIfQuiescent` returns immediately unless a `Close` is actually waiting.
 func (t *thread) leaveCall() {
 	if t == nil || t.w == nil {
 		return
@@ -458,7 +663,12 @@ func (t *thread) leaveCall() {
 
 	w.mu.Lock()
 	t.callers--
+	idle := w.releaseIfQuiescent()
 	w.mu.Unlock()
+
+	if idle != nil {
+		close(idle)
+	}
 }
 
 // Resume releases every thread parked by `Stop` and clears the request.
@@ -489,7 +699,7 @@ func (in *Instance) Resume() {
 		w.mu.Unlock()
 		return
 	}
-	for _, t := range w.members {
+	for _, t := range w.live {
 		t.stopReq.Store(false)
 	}
 	w.resume = nil
@@ -537,10 +747,31 @@ func (in *Instance) Resume() {
 // asserts.
 //
 // **No error return, and that is a decision rather than an omission** — see `poll`.
+//
+// # The terminal check runs twice, and the first one is not redundant
+//
+// T-5.4's *"shutdown ends every thread"* arrives here: `Close` sets `exitReq` and `stopReq` on every
+// live thread, so the next poll lands in this function and `terminate` panics the sentinel out of it
+// ([ADR 0071]). Both checks are needed because the two callers reach this function in different world
+// states:
+//
+//   - **Before the `release == nil` early return**, because `Close` nils `w.resume` on its way out. A
+//     thread that polls after that returns from the check above without ever reading `exitReq`, and runs
+//     on — which is fact 4 (`Close` returned in 39µs while a spawned counter ran to 23008) reproduced by
+//     the very mechanism meant to fix it.
+//   - **After `<-release`**, for the thread that was already parked in a `Stop` round when `Close` ran.
+//     Its `exitReq` was set while it sat on the receive, so the pre-park read observed nothing to do and
+//     the post-release read is the only one that can see the mark.
+//
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 func (t *thread) parkAtSafepoint() {
 	w := t.w
 	if w == nil {
 		return
+	}
+
+	if t.exitReq.Load() {
+		t.terminate()
 	}
 
 	w.mu.Lock()
@@ -577,6 +808,10 @@ func (t *thread) parkAtSafepoint() {
 		arrived <- t.id
 	}
 	<-release
+
+	if t.exitReq.Load() {
+		t.terminate()
+	}
 }
 
 // poll is contract §3 SP-1's safepoint check — [ADR 0059]'s chosen mechanism, and the first reader of

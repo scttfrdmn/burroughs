@@ -77,10 +77,63 @@ type waiter struct {
 // guest memory until it re-enters through a boundary that observes the stop"* and costs nothing to
 // arrange in this order.
 //
+// # T-5.4's third case, and why it is a panic rather than a fourth result
+//
+// Contract §2 T-5.4 ends a suspended thread *"by trapping it out of the wait rather than by returning one
+// of that instruction's defined results"*, and the third `select` arm below is that: `Instance.Close`
+// cancels every thread's context (§5 H-3), this arm observes it, leaves the queue, and terminates. The
+// three results are fixed by the proposal at *woken*, *not-equal* and *timed-out*, so a shutdown spelled
+// as any of them would tell the guest one of those happened when none did — and `notify`'s return count
+// is guest-visible, so *woken* in particular is a number another thread can already have read.
+//
+// **The termination is `thread.terminate`'s sentinel panic and not an error result** ([ADR 0071]), which
+// keeps this signature at `int32` and needs no check at `atomicWait`. An error return would be observed
+// by nothing: `Close` sets `exitReq` *and* `stopReq`, so the deferred safepoint below would panic the
+// sentinel before the value reached its caller — an always-nil-in-effect error, which is the shape this
+// project has `unparam` enabled for.
+//
+// **The deferred cleanup does not poll while a termination is unwinding — and the reason first written
+// here was false.** It said that a poll on a thread carrying the sentinel *"panics during a panic — which
+// Go reports as a double panic and which takes the process down."* Go does no such thing. A panic raised
+// inside a deferred function while another is active *replaces* the active one and is recovered normally
+// by any `recover` above it, so the bare `t.leaveBlocked()` this closure replaced would reach
+// `parkAtSafepoint`, re-panic the same sentinel, and be recovered by the same frame with the same value.
+// Measured by injection: with the bare form restored, every test in this package still passes. The
+// `recover` form buys **nothing at all** for the sentinel, and the sentence claiming otherwise was
+// arguing for the right line from a crash that does not happen.
+//
+// What it is for is the panic that is *not* the sentinel — [ADR 0070]'s subject, an embedder panic
+// unwinding through a thread that is also inside a wait. The bare form polls that thread, and
+// `parkAtSafepoint` does one of two things to it depending on which mark is set: with `exitReq` it
+// terminates, converting a live panic value into the sentinel and losing what the embedder raised; with
+// only `stopReq` it **parks** an unwinding thread on `<-release` until some `Resume`, and counts its
+// arrival for the round. The `recover` form clears the mark through `unmarkBlocked` and re-panics, so the
+// value raised is the value that arrives — exactly what `callHost`'s panic path does, for the reason
+// stated on `unmarkBlocked` itself: SP-2's second half has no subject on a thread that will execute no
+// further guest instruction.
+//
+// **No test discriminates this line, and none is claimed to.** Nothing in `internal/interp` panics
+// through `memory.wait` except `terminate`, so the case above is unreachable in this tree today and the
+// injection that removes the `recover` survives. Named rather than covered, on the terms [ADR 0070] set
+// for this same fold when it called the third one *"unreachable today"*: that is a reason to write the
+// line and say so, not a licence to assert a witness that does not exist.
+//
+// A flag set on the cancellation arm is the third option and is rejected: it would need clearing at the
+// three ordinary exits, and a missed one silently skips the boundary poll SP-2 asks for — a wrong answer
+// where the `recover` form is structurally unable to have one, since the two cases *are* panicking and not.
+//
 // [ADR 0060]: ../../docs/decisions/0060-the-futex-queue-hangs-off-memory-keyed-by-effective-address-because-a-pointer-key-would-borrow-its-soundness-from-another-package.md
+// [ADR 0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 func (m *memory) wait(t *thread, ea uint64, c atomicCell, expected uint64, timeout int64) int32 {
 	t.enterBlocked()
-	defer t.leaveBlocked()
+	defer func() {
+		if r := recover(); r != nil {
+			t.unmarkBlocked()
+			panic(r)
+		}
+		t.leaveBlocked()
+	}()
 
 	w := m.enqueueIfEqual(ea, c, expected)
 	if w == nil {
@@ -102,9 +155,39 @@ func (m *memory) wait(t *thread, ea uint64, c atomicCell, expected uint64, timeo
 	select {
 	case <-w.ch:
 		return waitWoken
+	case <-t.context().Done():
+		// T-5.4. Leave the queue first, so no later `notify` spends part of its `count` on a waiter that
+		// is already unwinding — a wake budget spent on a thread that has left is `resolveExpiry`'s own
+		// reason for dequeuing, one termination cause over.
+		m.abandon(ea, w)
+
+		// **`terminate` here is undiscriminated by every test in this package, and the measurement says so
+		// rather than an argument.** The injection that drops this one call — leaving `abandon` — survives
+		// the whole suite, because the arm then falls to `resolveExpiry`, the deferred `leaveBlocked` polls
+		// a thread whose `exitReq` is already set, and `parkAtSafepoint` panics the sentinel one frame
+		// later. The termination happens either way and the guest observes no value either way, since the
+		// panic discards the return. What this line buys is *where*: the thread ends before a result is
+		// chosen, so no reading of `resolveExpiry` can be mistaken for an answer this wait was entitled to
+		// give. Kept for that, not for a behaviour difference, and named because a line with no witness
+		// that reads as load-bearing is how a later reader ends up trusting it for the wrong reason.
+		t.terminate()
 	case <-expiry:
 	}
 	return m.resolveExpiry(ea, w)
+}
+
+// abandon takes a terminating thread's waiter out of the queue. T-5.4's dequeue, and `resolveExpiry`
+// without the question: a thread that is ending needs no answer about *why* it stopped waiting, so there
+// is nothing for `claimed` to break a tie about.
+//
+// A waiter a `notify` had already detached is not in the queue, and `dequeue` finds nothing — the right
+// outcome rather than a missed case: that `notify` has already counted the wake in a number another guest
+// thread may have read, and this thread is terminating either way.
+func (m *memory) abandon(ea uint64, w *waiter) {
+	m.waitMu.Lock()
+	defer m.waitMu.Unlock()
+
+	m.dequeue(ea, w)
 }
 
 // enqueueIfEqual compares the cell and queues a waiter under one acquisition of `waitMu`, reporting nil

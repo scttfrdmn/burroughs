@@ -986,17 +986,25 @@ func TestAnEmbedderPanicLeavesTheEngineMarksClean(t *testing.T) {
 // TestASpawnEntryPanicLeavesNoCallerCounted is ADR 0070's third site, and its precondition is stated
 // before its assertion because the two are unusually far apart.
 //
-// **Nothing on a non-test path recovers a panic out of a spawned thread**, so the leak this witnesses is
-// not reachable in a released engine today: a panic in `runEntry` runs the goroutine's `defer`s and ends
-// the process, and a dead process has no marks to misread. The repair is there because
-// [#12](https://github.com/scttfrdmn/burroughs/issues/12) is a `recover` above this frame by
-// construction — a join that reports how a thread died has to catch the death — and on that day a
-// skipped `leaveCall` here is exactly `invokeIndex`'s leak.
+// **An embedder's panic still ends the process, and the frame that now recovers is `runEntry`'s own.**
+// This doc used to say the repair was there because
+// [#12](https://github.com/scttfrdmn/burroughs/issues/12) *"is a `recover` above this frame by
+// construction"* — a forecast about a join that had not been built. #12 landed ([ADR 0071][0071]) and the
+// forecast is half right in a way worth stating rather than deleting: there *is* a `recover` now, and it
+// is **inside** this frame rather than above it, because T-5.4's terminal unwind is a sentinel panic that
+// `runEntry`'s existing `defer` folds into an `ErrTerminated`. What it deliberately does not catch is any
+// *other* panic value: a non-sentinel `r` is re-panicked, so an embedder's `panic("boom")` reaches the
+// goroutine's `defer`s and ends the process exactly as before. The leak this witnesses is therefore still
+// not reachable in a released engine — and the repair still matters, because the sentinel path *is* now a
+// recovered unwind through this same straight-line region, and a skipped `leaveCall` there is
+// `invokeIndex`'s leak with `Close` waiting on it.
 //
-// So this test supplies the `recover` #12 will, and calls `runEntry` directly on its own goroutine,
-// which is what the `go` statement in `spawn` does one frame up. That is the only way the repair can be
-// *watched*: an unfalsifiable protection is not a protection, and going through `Spawn` would take the
-// test binary down with the panic instead of asserting anything.
+// So this test supplies the outer `recover` that the re-panic reaches, and calls `runEntry` directly on
+// its own goroutine, which is what the `go` statement in `spawn` does one frame up. That is the only way
+// the repair can be *watched*: an unfalsifiable protection is not a protection, and going through `Spawn`
+// would take the test binary down with the panic instead of asserting anything.
+//
+// [0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 func TestASpawnEntryPanicLeavesNoCallerCounted(t *testing.T) {
 	in := hostLink(t, `(module
 		(import "h" "boom" (func $boom))

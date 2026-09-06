@@ -50,10 +50,14 @@ and the caller count SP-2's predicate needed
 [0067](docs/decisions/0067-a-caller-count-joins-the-blocked-mark-because-sp-2s-predicate-is-about-callers-and-a-thread-is-not-one.md)),
 host functions with `Instance.Close`
 ([0069](docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md)),
-and §4's data-race repairs (0053–0066). What is not: T-5 exit/join/detach
-([#12](https://github.com/scttfrdmn/burroughs/issues/12)), and §4's litmus battery past what spawn
-needed ([#10](https://github.com/scttfrdmn/burroughs/issues/10),
-[#586](https://github.com/scttfrdmn/burroughs/issues/586)). `v0.4.0`'s release note — *"it is not v1 …
+§4's data-race repairs (0053–0066), and T-5's exit/join/detach — `Instance.Join`, `Instance.Fault`, and a
+`Close` that ends every thread and waits
+([#12](https://github.com/scttfrdmn/burroughs/issues/12),
+[0071](docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md)),
+which this list called *"what is not"* until the slice that landed it. What is not: §4's litmus battery
+past what spawn needed ([#10](https://github.com/scttfrdmn/burroughs/issues/10),
+[#586](https://github.com/scttfrdmn/burroughs/issues/586)), and the arrival-protocol repair `Stop` needs
+before the flip ([#656](https://github.com/scttfrdmn/burroughs/issues/656)). `v0.4.0`'s release note — *"it is not v1 …
 v0 closing means v0's conditions are discharged, not that the next phase has begun"* — was likewise
 true about the artifacts when written and is overtaken rather than wrong. What advanced the phase line
 was neither: v0's conditions are discharged and its milestone is closed, so *no* value naming v0 is

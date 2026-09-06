@@ -21,6 +21,71 @@ weakly-ordered platform.
 
 ### Added
 
+- **Thread exit, join and detach — contract §2 T-5.1–T-5.5, `Instance.Join` and `Instance.Fault`, and an
+  `Instance.Close` that ends every thread and waits for the unwinds.**
+  [#12](https://github.com/scttfrdmn/burroughs/issues/12),
+  [ADR 0071](docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md),
+  on Scott's stamp resolving contract §10.3. Threads stay **detached by default** (T-5.1): nothing joins,
+  and a join is a host API over a record the engine bounds. Not a gate flip — every one of these is
+  reachable only through `Spawn`, which is still behind `gate:threads`.
+  - **`Instance.Join(tid) error` blocks until the thread ends, answers with its terminal status, and
+    **consumes** the record** — T-5.2's bound in Scott's words, *"consumed by a join, or dropped at
+    `Close`"*. An error and not a value, because T-1 fixes a thread entry at one `i32` parameter and no
+    results, so there is nothing else for it to carry. `ErrNotSpawned` for the instantiation thread and
+    `ErrUnknownThread` for an id this instance never issued or has already answered for.
+  - **A trap that ends a spawned thread reaches two channels** (T-5.3): the next `Invoke` reports it once
+    as `ErrThreadFault`, and `Instance.Fault()` answers it any number of times thereafter. Two channels
+    because one of them is not always available — *"a guest that spawns, traps, then blocks forever in a
+    futex never makes a host entry"* (Scott, on #12). First fault wins, and a shutdown-induced
+    termination is recorded as a thread's *status* and never as a fault: an embedder that calls `Close`
+    must not be told its guest trapped.
+  - **`Instance.Close` ends every thread and waits for the unwinds** (T-5.4), which is measured rather
+    than argued: the shipped `Close` returned in 39µs while a spawned counter ran on to 23008. A thread
+    running guest code ends at its next safepoint; a thread suspended in `memory.atomic.wait` is
+    **trapped out of the wait** rather than handed one of that instruction's three defined results, since
+    all three are claims about something that did not happen and `notify`'s wake count is guest-visible;
+    a thread inside a host call ends on the way back in. The wait is on quiescence — a signal, not a
+    duration — and on expiry `Close` returns `ErrCloseDeadline` naming the threads still live, because
+    T-5.4 requires a case that cannot be ended to be **named**. Two such cases are named on `Close`
+    itself, and the error deliberately claims neither: from outside, slow and impossible look the same.
+  - **`Stop` after `Close` is refused with `ErrClosed`, and so is an `Invoke`.** The refusal moved from
+    the host-call boundary to `invokeIndex`, where it covers a module with no host import at all — and the
+    distinction it buys is not cosmetic: the alternative answer was `ErrTerminated`, a *termination*
+    claimed for a call that never started.
+  - **Membership is live-only, and the leak it repairs is the third of the ADR's four measured facts:
+    51 members after 50 completed spawns.** `world.retire` splices a finished thread out and records its
+    status, so the two records are bounded differently on purpose — membership by liveness, needing
+    nothing from the embedder, and the status record by consumption. Not a grave: §10.3 was open, so no
+    lifecycle existed for a reaper to hook onto, and specifying T-5 is what creates one.
+  - **The terminal unwind is a sentinel panic recovered in the two `defer`s that already existed** —
+    `runEntry`'s and `invokeIndex`'s — which is the third fold
+    [ADR 0070](docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md)
+    forecast as *"unreachable today"*, discharged rather than restated. No hot-path signature moves and no
+    function gains a second `defer`, which is ADR 0067's measured 25–29 ns/call cliff. Pre-registered and
+    checked by disassembly, because a benchmark cannot tell *unchanged* from *changed below its noise
+    floor*: `internal/interp.(*thread).poll` emits the same instruction stream as main on arm64
+    (`size=96`) and amd64 (`size=60`), and is inlined at the same three call sites on both arms. *Not*
+    byte-identical, which is what the pre-registration said and could not have got: `-S` embeds the source
+    path and line, and the function moved. The forecast's content held; its own wording overclaimed, and
+    so did its population — it said *"all fifteen call sites"*, where fifteen is the number of sites the
+    **safepoint** is reached at (fourteen `jumpTo` back-edges plus `enterFrame`) and three is the number
+    `poll` itself has.
+  - **The `recover` re-panics anything that is not the sentinel**, so ADR 0070's subject — an embedder
+    panic — still ends the process instead of being silently converted into an error return. That is the
+    one line whose absence no ordinary test can see, so it has its own: the injection that neuters the
+    type test was watched to kill `TestASpawnEntryPanicLeavesNoCallerCounted`. **Two lines in the futex
+    arm have no such witness and are named rather than covered** — `terminate()` in the cancellation arm,
+    and the `recover`-form `defer` itself. Both survive their injections, because the deferred poll
+    terminates the thread one frame later anyway; the `recover` earns its place only against a
+    *non-sentinel* panic unwinding through a wait, which nothing in the engine can raise today.
+  - **T-5.5's *"a tid is never reused"* gets a test because row 1 made it a live risk**: a set that only
+    grows cannot reissue an id by accident, and a set with holes is exactly what invites a reaper to fill
+    them.
+  - **What landing does not do:** it does not flip `gate:threads`, and it does not repair
+    [#656](https://github.com/scttfrdmn/burroughs/issues/656) — `Stop` counts arrival *receives* rather
+    than identities, in both directions, which live-only membership neither creates nor worsens. That one
+    blocks the flip and is sequenced there.
+
 - **Host functions — a Go function satisfies a wasm import, contract §5's `Caller` and its §3 SP-2/SP-4
   obligations, plus `Instance.Close`.** [#602](https://github.com/scttfrdmn/burroughs/issues/602),
   [ADR 0069](docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md).
@@ -1353,6 +1418,33 @@ weakly-ordered platform.
     failure had no entry.
 
 ### Changed
+
+- **`TestNoEngineLockIsHeldAcrossAChannelOperation` pairs a lock with an unlock in the same statement
+  list, where it used to run from a function's first `Lock` to its last `Unlock`.** The first-to-last
+  interval was chosen to over-report, on its own stated ground that *"a false positive is a comment away
+  from being a narrowed rule"*, and T-5's `Instance.Close` and `Instance.Join` are that comment arriving:
+  both are *lock → read the guarded state → unlock → block on a channel → lock → read what the wait
+  produced*, which is not a near-miss of contract §4 B-MM-3 but the shape the clause **requires** — and
+  under first-to-last the two sections merged and the compliant shape reported four violations. The
+  narrowing is the sanctioned exit the control's own message names (*"narrow the rule … do not add a name
+  to a list"*), taken rather than the two alternatives, which were to contort the engine into one
+  critical section or to exempt the one file B-MM-3 is written for.
+  - **An unlock nested one block deeper does not close the section**, so the early release in
+    `if release == nil { w.mu.Unlock(); return }` still leaves the lock held for the rest of the
+    function, and a channel operation after that branch is still reported. This is the case a naive
+    lock-depth counter gets wrong, and it is not hypothetical: `parkAtSafepoint` has exactly that shape.
+    A deferred `Unlock` anywhere in the function keeps the whole-function interval untouched, because
+    `defer` is precisely where pairing is not textual.
+  - **Four injections, run and read**, because *a re-pointed control has not been watched die*: the
+    deferred arm (`Resume`'s first form) fails, blinding the `Lock` match fails the vacuity floor,
+    moving `parkAtSafepoint`'s `<-release` above its body-level unlock fails, and deleting that unlock
+    fails on **both** of its channel operations. That last one is the pair the old rule would have caught
+    for the wrong reason: it passed `parkAtSafepoint` only because the body-level unlock happened to be
+    the textually last one in the function.
+  - **The locked-function floor goes from 9 to 20 against a measured 27**, and the stale enumeration
+    beside it is deleted rather than corrected — it named a `leaveBlocked` that #592 had already replaced
+    with `unmarkBlocked`, so nine names had rotted into eight and a wrong one. Third restatement of that
+    figure in three slices, which makes the pattern the fact.
 
 - **`TestNothingInEngineCodeCreatesASecondObserver` becomes
   `TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`, and its `internal/interp` sibling keeps its

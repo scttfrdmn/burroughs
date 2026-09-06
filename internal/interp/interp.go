@@ -571,7 +571,29 @@ var ErrUnsupported = errors.New("interp: feature not implemented in this phase")
 // right, so popping fills the slice from the end. Getting that backwards is invisible for the
 // 12799 single-result vectors in the corpus and wrong for the 1188 multi-result ones, which is
 // the shape of defect a majority-of-the-corpus check scores green.
+//
+// # T-5.3's first channel: a spawned thread's trap is reported here, once
+//
+// Contract §2 T-5.3 requires a trap that ends a spawned thread to reach the embedder *"at the next host
+// entry into the instance"*, and this is that entry. The report **pre-empts the call**: a pending fault is
+// returned instead of running the function, wrapped in `ErrThreadFault`, and the flag that says it has
+// been reported is set in the same critical section so exactly one caller gets it.
+//
+// **Ahead of the name lookup, deliberately.** A fault is a fact about the instance and a bad name is a
+// fact about the call; reporting the fault first means an embedder whose guest has already broken is told
+// so rather than being told about the argument it got wrong on the way in. The narrower ordering would
+// make the report depend on the caller passing a name that resolves.
+//
+// **Reported once, retained forever** — [ADR 0071]. The value itself is never consumed, so
+// `Instance.Fault` keeps answering after this; what is consumed is the *report*, because an instance whose
+// thread trapped once must not fail every subsequent `Invoke` with the same news. That is T-5.3's two
+// channels being two views of one value rather than a race over one payload.
+//
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
+	if fault := in.world.takeFaultReport(); fault != nil {
+		return nil, fault
+	}
 	idx, ok := in.exportedFunc(name)
 	if !ok {
 		return nil, fmt.Errorf("interp: no exported function %q", name)
@@ -625,7 +647,24 @@ func (in *Instance) Global(name string) (Value, error) {
 // to happen after the name resolves and before anything is checked, which is precisely this seam.
 // `name` travels along for the error messages only: a host that asked for `"call"` should be told
 // about `"call"`, not about whatever index it turned out to be two instances away.
-func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value, error) {
+func (in *Instance) invokeIndex(idx uint32, name string, args []Value) (results []Value, err error) {
+	// **A closed instance runs no guest code, and after [ADR 0071] the refusal has to be here rather than
+	// at the host-call boundary.** `beginHostCall` was the only site that knew, so a closed instance ran the
+	// guest until it happened to reach a host import and refused there — correct for the module that has
+	// one, silent for every module that does not. Row 4 makes the difference visible: `Close` marks
+	// `in.host` terminal like any other thread, so without this the same call is ended at `enterFrame`'s
+	// poll and reported as `ErrTerminated` — a *termination* claimed for a call that never started.
+	// `TestAClosedInstanceBeginsNoHostCallAndSpawnsNoThread` is what says which of the two an embedder is
+	// owed, and it asks for `ErrClosed`.
+	//
+	// **Before `enterGuest`, so there is no crossing to unwind**, and at the top of `invokeIndex` rather
+	// than in `Invoke` so the delegating hop is covered too: a re-export chain calls
+	// `ext.owner.invokeIndex`, and both instances have to be open for the call to mean anything.
+	//
+	// A `Close` that lands after this check is the other right answer — see `world.isClosed`.
+	if in.world.isClosed() {
+		return nil, fmt.Errorf("%w: %q was not called (contract §5 H-3)", ErrClosed, name)
+	}
 	// §4 B-MM-1. Here rather than in `Invoke` because this is the enclosing function of the
 	// `stack` literal below, so the structural control's parsed population covers it; the
 	// delegation to a supplier's `invokeIndex` therefore crosses once per hop in a re-export
@@ -642,13 +681,32 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	// between all need `leaveGuest`. `TestEveryStackCreationSiteCarriesAThread` is what keeps the two
 	// namings from drifting apart, since it pins the literal's `t:` field.
 	//
+	// **It now also carries #12's `recover`**, which is [ADR 0071]'s row 4 arriving on the embedder's own
+	// thread: `Instance.Close` marks *every* live thread terminal, `in.host` included, so an `Invoke` in
+	// flight when a `Close` lands is ended at its next safepoint like any other. Without the conversion the
+	// sentinel would escape into the embedder's frame as a panic from a method that returns an error.
+	//
+	// The order inside is `runEntry`'s, for `runEntry`'s reason: the marks are repaired before anything is
+	// decided about `r`, and anything that is not the sentinel is re-panicked — converting a foreign panic
+	// here would make this boundary promise what [ADR 0070] declined to promise.
+	//
 	// [0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+	// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 	guestRunning := false
 	defer func() {
+		r := recover()
 		if guestRunning {
 			in.host.leaveCall()
 		}
 		leaveGuest()
+		if r == nil {
+			return
+		}
+		if _, ok := r.(threadTerminated); !ok {
+			panic(r)
+		}
+		results, err = nil, fmt.Errorf("%w: %s ended at a safepoint after `Close`, so %q did not "+
+			"complete (contract §2 T-5.4)", ErrTerminated, &in.host, name)
 	}()
 
 	fn, ok := in.mod.DefinedFunc(idx)
@@ -831,8 +889,10 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	// true, and it is exactly why the plain call covers them: all of them are *after* `in.run` returns, so
 	// uncounting here is not merely equivalent but tighter, dropping `callers` when guest execution ends
 	// instead of when result marshalling does. What `defer` additionally bought was uncounting after a
-	// panic, and there is no `recover` on any non-test path in this package, so that case is an engine bug
-	// that has already left the instance undefined.
+	// panic, which this function's existing `defer` now does — see it above, and note that the clause this
+	// sentence used to carry (*"there is no `recover` on any non-test path in this package"*) became false
+	// in the commit that added one: [ADR 0071]'s terminal safepoint is recovered in that `defer` and in
+	// `runEntry`'s. It is stated here rather than only there because it was this paragraph's premise.
 	//
 	// That cost is a compiler cliff and not one defer's: `invokeIndex`'s `defer leaveGuest()` is
 	// *open-coded*, a second defer took the function off that path, and `-gcflags=-S` shows four
@@ -841,10 +901,9 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	// function will pay the same cliff and nothing else in the tree says so (decision 0067).
 	//
 	// **What `defer` additionally bought is now bought without one** (ADR 0070): the panic case is
-	// repaired by the flag in this function's existing `defer` above, so the sentence that follows in the
-	// paragraph above — no `recover` on any non-test path, so a panic here is an engine bug — has stopped
-	// being the whole answer. An *embedder* panic is not an engine bug and is recoverable above `Invoke`,
-	// which is #650.
+	// repaired by the flag in this function's existing `defer` above. An *embedder* panic is not an engine
+	// bug and is recoverable above `Invoke`, which is #650 — and a *terminal safepoint* is neither, which
+	// is #12: [ADR 0071]'s sentinel is the one panic this boundary converts rather than re-throws.
 	st.t.enterCall()
 	guestRunning = true
 	runErr := in.run(fn, locals, st, numResults, refResults)

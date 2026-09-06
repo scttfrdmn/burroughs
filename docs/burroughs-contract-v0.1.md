@@ -57,8 +57,55 @@ wasmtime is for.
 - **T-4.** The engine MUST provide a per-thread slot readable at
   register-like cost (the `g` register analog), stable across host calls and
   stack switches.
-- **T-5.** Thread exit, join, and detach semantics MUST be defined in this
-  contract (open: §10.3) rather than inherited implicitly from the host OS.
+- **T-5.** A thread **exits** when its entry function returns or traps, and
+  exit is the only termination directed at an individual thread: there is no
+  cancel and no kill aimed at one thread. Exit, join, and detach semantics
+  are T-5.1–T-5.5 below rather than inherited implicitly from the host OS.
+- **T-5.1 (detached by default).** A thread carries no join obligation.
+  Nothing in the guest and nothing in the host is required to observe an
+  exit, and an unobserved exit MUST leak neither a wasm thread nor an OS
+  thread.
+- **T-5.2 (join is a host API, over a bounded record).** The engine MUST
+  provide a host-side join taking a `tid` and answering that thread's
+  terminal status — a clean exit, or the trap that ended it — and join MUST
+  remain answerable for a thread that has already exited. A returned *value*
+  is not part of that status: T-1's entry shape has no results, so a clause
+  promising one would promise a surface `spawn` cannot produce. The
+  record that makes it answerable MUST be bounded: **consumed by a join, or
+  dropped at shutdown.** There is **no guest-visible join primitive**; a
+  guest that needs one builds it over T-3's futex.
+- **T-5.3 (a trap does not stay silent, in two channels).** A trap that ends
+  a thread MUST be retained and reported to the host without a join, through
+  **both** the next host entry into the instance **and** a retrieval that
+  requires no host entry at all.
+  *Because a guest-side join built over a futex is never notified by a
+  thread that trapped, and because a guest whose only live thread is parked
+  in `memory.atomic.wait` never makes a next host entry.*
+- **T-5.4 (shutdown ends every thread, and waits).** Engine shutdown MUST
+  end every thread of the instance: one executing guest code at its next
+  safepoint (§3 SP-1's interval), one suspended in `memory.atomic.wait` by
+  trapping it out of the wait rather than by returning one of that
+  instruction's defined results, one parked in a blocking host call by §5
+  H-3's cancellation. Shutdown MUST wait for the resulting unwinds, so that
+  no guest instruction of the instance executes after shutdown returns. A
+  case that provably cannot be ended MUST be named in the engine's
+  documentation and reported as shutdown's error rather than returned over
+  silently.
+- **T-5.5 (no reuse).** A `tid` is never reused within an instance.
+  *T-5.1–T-5.5 stamped by Scott on #12 (ADR 0071), resolving §10.3, which
+  the clause previously deferred its whole subject to. Three of the five
+  carry a correction the stamp made to what was recommended, recorded
+  because each names a hole the recommendation had. T-5.3's second channel:
+  "reported at the next host entry" leaves exactly the silence it repairs
+  for a guest whose last live thread is parked in a futex. T-5.2's bound: a
+  status record nobody joins is otherwise retained forever, which is the
+  measured `world.members` growth wearing a smaller struct. T-5.4's wait:
+  trapping a waiter out is itself what converts the unbounded case into a
+  bounded one — after it every thread is on a terminating path — so
+  declining to wait bought nothing and left a shutdown that returns while
+  guest code runs. What the amendment does not do is invent guest grammar:
+  no join instruction, so §9's gate accounting and the `gate:threads` board
+  are untouched by it.*
 
 ## §3. Safepoints and preemption
 
@@ -280,7 +327,10 @@ commits to that reading.*
 2. **Component model scope**: own canonical-ABI implementation vs
    interoperating through wasm-tools/jco for lifting/lowering while owning
    the async/task machinery.
-3. Thread exit/join/detach semantics (T-5).
+3. Thread exit/join/detach semantics (T-5) — **resolved** by Scott's stamp
+   on #12 (ADR 0071); the answer is T-5.1–T-5.5. Kept in place rather than
+   struck, because deleting an item renumbers every item below it and every
+   citation to §10.4 (H-3) with them.
 4. Cancellation of blocked host calls (H-3).
 5. The continuation walk interface for GC scanning (S-3) — cooperative
    metadata vs engine-maintained maps.
