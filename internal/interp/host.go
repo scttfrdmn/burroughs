@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
@@ -275,6 +276,15 @@ var ErrHostSignature = errors.New("host function result does not match its decla
 // call; a teardown must interrupt it."*
 var ErrClosed = errors.New("instance is closed")
 
+// ErrCloseDeadline reports a `Close` that could not bring the instance to quiescence within
+// `closeQuiesceInterval` — contract §2 T-5.4's *"reported as shutdown's error"*.
+//
+// **Distinct from `ErrStopDeadline` because the two say different things about what to do next.** A stop's
+// expiry leaves a world that `Resume` puts back; this one leaves a world with no next call at all — the
+// instance is closed, its threads are marked terminal, and nothing the embedder can do will end the thing
+// that is not cooperating. It is a report, not a state to recover from.
+var ErrCloseDeadline = errors.New("burroughs: close deadline expired before the instance fell quiet")
+
 // callHost runs a host function with the arguments already on the shared operand stack, and leaves its
 // results there — `invoke`'s contract with none of `invoke`'s frame.
 //
@@ -378,12 +388,45 @@ func (in *Instance) callHost(h *hostFunc, st *stack) error {
 	embedderRunning = true
 	results, callErr := h.fn(c, args)
 	embedderRunning = false
-	t.leaveBlocked()
+	// **`enterGuest` comes before `leaveBlocked`, and the order is a repair rather than a tidy-up.**
+	// `leaveBlocked` polls, and after [ADR 0071] a poll can *terminate* the thread — `Close` during a host
+	// call is the ordinary way to reach it: the context is cancelled, the embedder returns here, and the
+	// safepoint this poll reaches is terminal. With the calls the other way round the sentinel would unwind
+	// with the excursion still open: `leaveGuest` above would have no `enterGuest` to pair with, and
+	// `invokeIndex`'s `defer leaveGuest()` would run on top of it. The `defer` above cannot repair it
+	// either, because `embedderRunning` is already false by then — correctly, since `h.fn` has returned.
+	//
+	// Closing the crossing first is also the reading `parkAtSafepoint` already documents for an ordinary
+	// stop: a parking thread *"never leaves: it is already inside the crossing `Invoke` opened"*, which was
+	// true of every other park site and not of this one.
 	enterGuest()
 
+	// **A trap unmarks without polling, so a shutdown cannot overwrite §5 H-3's own answer.**
+	//
+	// This is the one branch where the two clauses want different words for the same event. H-3 says a call
+	// interrupted by shutdown *"must not return success"* and the mechanism is the embedder returning
+	// `ctx.Err()`, which arrives here as `callErr` and becomes an `ErrHostTrap` wrapping
+	// `context.Canceled` — the identity `TestCloseCancelsTheHostCallsContextAndWaitsForItToReturn` reads.
+	// T-5.4 says shutdown ends the thread, and after [ADR 0071] the poll below is where that happens. Run
+	// in that order, the terminal unwind discards `callErr` and the embedder is told `ErrTerminated` for a
+	// call that had already told it *why* — the specific cause replaced by the generic one.
+	//
+	// So the trap path takes `unmarkBlocked`, which is **ADR 0070's argument with "panic" replaced by
+	// "trap"**: SP-2's second half — *"cannot touch guest memory until it re-enters through a boundary that
+	// observes the stop"* — has no subject on a thread that touches no guest memory on its way out. A trap
+	// is terminal for the invocation in this engine (the exception-handling family is validated and not
+	// executed), so what follows is `defer`s and returning frames.
+	//
+	// **The thread still ends, and that is what keeps T-5.4 true rather than merely unbroken.** `exitReq`
+	// and `stopReq` stay set, so a thread that somehow does execute guest code again terminates at its
+	// next safepoint; a spawned one reaches `retire` with this trap as its record; the embedder's own gets
+	// this error back out of `Invoke`. Skipping the poll defers the termination, it does not decline it.
 	if callErr != nil {
+		t.unmarkBlocked()
 		return fmt.Errorf("%w: %w", ErrHostTrap, callErr)
 	}
+	t.leaveBlocked()
+
 	return in.pushHostResults(st, h.ft.Results, results)
 }
 
@@ -595,23 +638,94 @@ func hostTypeMatches(want, got binary.FuncType) bool {
 	return true
 }
 
-// Close is contract §5 H-3's engine shutdown: terminal, cancelling, and waiting.
+// closeQuiesceInterval bounds how long `Close` waits for the instance to fall quiet — contract §2 T-5.4's
+// *"named in the engine's documentation and reported as shutdown's error"* for a case that cannot be
+// ended.
+//
+// **An engine constant and not a parameter**, because `Close() error` is public API and widening a
+// published signature is an escalation subject rather than an implementation choice. A configurable form
+// is a later decision if an embedder asks for one; the two cases the bound exists for are named on `Close`
+// and neither is made better by being waited on longer.
+//
+// **Generous on purpose, for the reason the expiry error does not claim un-endability.** A non-polling
+// guest tail is measurable on this engine — 40 `memory.fill`s of 4MiB run for the better part of a second
+// with no back-edge and no call, so no poll — and slow is not distinguishable from impossible from out
+// here. The interval is set well above any such stretch a real module has, so that an expiry means
+// *something is not cooperating* rather than *something was busy*.
+//
+// **A `var` and not a `const`, and the reason is that the alternative is an untested arm.** The only way to
+// witness the expiry on the real path is to reach it, and at ten seconds that is a test whose cost is the
+// bound itself — so the arm would be covered by a helper call, which is *a control can test the helper, not
+// the path* stated as a design. `TestCloseReportsAnInstanceItCouldNotQuiesce` shortens it through
+// `withCloseInterval` and restores it, which is safe because no test in this tree calls `t.Parallel()` (the
+// premise `boundary.go` already relies on and states). Unexported, so nothing outside this package can
+// reach it and no embedder inherits a tunable the API does not offer.
+var closeQuiesceInterval = 10 * time.Second
+
+// Fault is contract §2 T-5.3's second channel: the first trap that ended any thread of this instance,
+// wrapped in `ErrThreadFault`, or nil if none has.
+//
+// **It needs no host entry, which is the whole reason it exists** — Scott's addition to the T-5 ruling,
+// *"the retained trap must also be retrievable by the embedder independently of any host entry"*, on the
+// ground that *"a guest that spawns, traps, then blocks forever in a futex never makes a host entry."*
+// `Invoke` reports the same value once; this answers it any number of times and takes nothing away.
+//
+// **First trap wins, and a shutdown is not a trap.** A later thread's trap does not displace the first,
+// because the second report would replace a cause with a consequence; and a thread the engine itself ended
+// records `ErrTerminated` as its *status* and never as a fault, so an embedder that calls `Close` and then
+// reads this is not told its guest trapped. Per-thread detail is `Join`'s.
+//
+// Safe after `Close`: the fault slot is one slot and is never dropped, where the per-`tid` records are.
+func (in *Instance) Fault() error { return in.world.faultValue() }
+
+// Close is contract §5 H-3's engine shutdown and §2 T-5.4's: terminal, cancelling, *ending every thread*,
+// and waiting for the unwinds.
 //
 // **Terminal, with no `Resume` after it.** `Stop`/`Resume` are a pause and this is a teardown, which is
 // the distinction that dissolved the apparent SP-4-versus-H-3 conflict: *"A pause must not disturb a
-// blocked host call; a teardown must interrupt it"* (Scott, on the #646 review, recorded at #602). So
-// this does not touch `stopReq`, does not park anything, and does not interact with a stop in progress
-// beyond refusing to begin new host calls.
+// blocked host call; a teardown must interrupt it"* (Scott, on the #646 review, recorded at #602). A stop
+// in progress is *absorbed* rather than respected: the parked threads are released so that they can
+// observe the terminal mark, and `w.resume` is nil'd so no later `Resume` can revive them.
 //
-// **It waits on the calls, not on a timer.** Every member's context is cancelled, then this returns once
-// every in-flight host call has returned — waited on a signal, because *a duration is not a completion
-// signal* and a deadline here would report shutdown's completion at the granularity of the deadline.
-// The consequence is stated on `Caller.Context`: an embedder who ignores cancellation makes this wait
-// forever, and abandoning a running Go function is not something Go can do.
+// # What "ends every thread" is, mechanically
 //
-// Idempotent: a second `Close` returns nil, having nothing left to cancel. It returns an error only for
-// what it cannot complete, which today is nothing — the signature is `error` because H-3's shutdown will
-// grow a report (§6's loop, for one), and a method that starts as `func()` cannot gain one.
+// The paragraph this replaces said shutdown *"does not touch `stopReq`, does not park anything"*, and that
+// was H-3 alone. T-5.4 asks for more, and it is measured: **`Close` returned in 39µs while a spawned
+// counter ran on to 23008** — a terminal operation returning while guest code executed ([ADR 0071]'s fact
+// 4). Three routes in, one per way a thread can be:
+//
+//   - **Running guest code** — `exitReq` and `stopReq` are set, so its next safepoint is terminal
+//     (`parkAtSafepoint`). It unwinds through `runEntry`'s `recover` and retires.
+//   - **Suspended in `memory.atomic.wait`** — its context is cancelled, and `wait`'s third `select` arm
+//     leaves the queue and terminates. T-5.4's *"trapping it out of the wait"*, rather than returning one
+//     of that instruction's three defined results, which would lie to the guest about what happened.
+//   - **Inside a host call** — §5 H-3's cancellation, unchanged. The embedder returns, and the poll on the
+//     way back into the engine is the terminal safepoint.
+//
+// # The wait, and the two cases that can defeat it
+//
+// It waits on a *signal* — quiescence, released from `endHostCall`, `leaveCall` and `retire` — because *a
+// duration is not a completion signal*. The bound on top of it is not a substitute for the signal but a
+// report of its absence, and T-5.4 requires the case be **named**:
+//
+//  1. **A host function that ignores its cancelled context.** Stated on `Caller.Context`: pure Go cannot
+//     take a running function's goroutine away.
+//  2. **`Close` called from inside a host function of the same instance.** That call's own marks are what
+//     quiescence waits for, so the wait is on the caller itself. Detecting it needs goroutine identity,
+//     which Go does not offer, so it is nameable but **not distinguishable** from a sibling thread's host
+//     call that is about to return.
+//
+// **The expiry error does not claim the case was un-endable**, and names the threads still live instead of
+// a reason. See `closeQuiesceInterval` for why: from out here, slow and impossible look the same.
+//
+// # Idempotence, and what is dropped
+//
+// A second `Close` returns nil once the instance is quiet, having nothing left to cancel. On the way out
+// the per-`tid` status records go — T-5.2's other bound, *"consumed by a join, or dropped at `Close`"* — so
+// a `Join` after a `Close` is `ErrUnknownThread`. The fault slot is *not* dropped: `Fault` stays answerable,
+// which is the asymmetry [ADR 0071] argues for at length.
+//
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 func (in *Instance) Close() error {
 	w := &in.world
 
@@ -621,29 +735,82 @@ func (in *Instance) Close() error {
 	// concurrent `Spawn` would otherwise be a data race on the header. Cancelling happens outside
 	// the lock: `context.CancelFunc` runs the context's own machinery, and a host function's
 	// `select` waking while we hold `w.mu` would find `endHostCall` unable to take it.
-	members := make([]*thread, len(w.members))
-	copy(members, w.members)
-	// A `Close` racing another `Close` must wait on the *same* channel rather than replace it, or
-	// the first waiter's channel is dropped on the floor and never closed.
-	if w.hostCalls > 0 && w.hostIdle == nil {
-		w.hostIdle = make(chan struct{})
+	live := make([]*thread, len(w.live))
+	copy(live, w.live)
+	// **`exitReq` before `stopReq`, on every live thread including the instantiation thread.** A poll
+	// diverts on `stopReq` and decides on `exitReq`, so setting the deciding flag first is what makes the
+	// two reads in `parkAtSafepoint` unable to see a half-set request. The instantiation thread is included
+	// because an `Invoke` in flight is guest code executing, which is exactly what T-5.4 forbids after this
+	// returns.
+	for _, t := range live {
+		t.exitReq.Store(true)
+		t.stopReq.Store(true)
 	}
-	idle := w.hostIdle
+	// A stop in progress is absorbed. Claimed here and closed below `mu` for §4 B-MM-3's reason —
+	// `Resume`'s own — and nil'd so that a later `Resume` is a no-op and cannot clear the terminal
+	// `stopReq` this just set.
+	release := w.resume
+	w.resume, w.arrived = nil, nil
+	// A `Close` racing another `Close` must wait on the *same* channel rather than replace it, or the first
+	// waiter's channel is dropped on the floor and never closed. The predicate is quiescence rather than
+	// `hostCalls > 0`, which is T-5.4's widening of what shutdown waits for.
+	if !w.quiescentLocked() && w.idle == nil {
+		w.idle = make(chan struct{})
+	}
+	idle := w.idle
 	w.mu.Unlock()
 
-	for _, t := range members {
+	if release != nil {
+		close(release)
+	}
+	for _, t := range live {
 		t.cancelCtx()
 	}
 
 	if idle != nil {
 		// A closed channel rather than a re-checked count, for `world.resume`'s own stated reason:
 		// *"a closed channel is the only release that cannot be missed by a thread that started
-		// waiting after the close."* The channel is created under the same mutex `endHostCall`
-		// *claims* it under — the close itself is outside both critical sections, because §4 B-MM-3
-		// forbids holding an engine lock across a channel operation — so a call returning in the
-		// window between the unlock above and this receive has already claimed the channel under the
+		// waiting after the close."* The channel is created under the same mutex the release sites
+		// *claim* it under — the close itself is outside both critical sections, because §4 B-MM-3
+		// forbids holding an engine lock across a channel operation — so a thread reaching quiescence in
+		// the window between the unlock above and this receive has already claimed the channel under the
 		// lock and will close it, and this receive completes when it does.
-		<-idle
+		timer := time.NewTimer(closeQuiesceInterval)
+		defer timer.Stop()
+		select {
+		case <-idle:
+		case <-timer.C:
+			return in.unquiesced()
+		}
 	}
+
+	// T-5.2's other bound. Under the lock because `retire` writes this map, and after the wait because
+	// until then there are threads that will still write to it.
+	w.mu.Lock()
+	w.exited = nil
+	w.mu.Unlock()
 	return nil
+}
+
+// unquiesced is `Close`'s expiry report: which threads were still live, and no claim about why.
+//
+// **The `exited` records are *not* dropped on this path**, which is the one place the bound and the report
+// disagree and it is deliberate: threads are still running, so `retire` will still write to the map, and
+// clearing it here would be a write racing them for no benefit. An embedder holding an expired `Close` has
+// a live instance it could not tear down, and a `Join` is one of the few things left that can tell it
+// anything.
+func (in *Instance) unquiesced() error {
+	w := &in.world
+
+	w.mu.Lock()
+	names := make([]string, 0, len(w.live))
+	for _, t := range w.live {
+		names = append(names, t.String())
+	}
+	hostCalls := w.hostCalls
+	w.mu.Unlock()
+
+	return fmt.Errorf("%w: %s elapsed with %s still live and %d host call(s) in flight (contract §2 "+
+		"T-5.4; see Instance.Close for the two cases that cannot be ended)",
+		ErrCloseDeadline, closeQuiesceInterval, strings.Join(names, ", "), hostCalls)
 }

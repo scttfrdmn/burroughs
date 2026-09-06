@@ -77,10 +77,45 @@ type waiter struct {
 // guest memory until it re-enters through a boundary that observes the stop"* and costs nothing to
 // arrange in this order.
 //
+// # T-5.4's third case, and why it is a panic rather than a fourth result
+//
+// Contract §2 T-5.4 ends a suspended thread *"by trapping it out of the wait rather than by returning one
+// of that instruction's defined results"*, and the third `select` arm below is that: `Instance.Close`
+// cancels every thread's context (§5 H-3), this arm observes it, leaves the queue, and terminates. The
+// three results are fixed by the proposal at *woken*, *not-equal* and *timed-out*, so a shutdown spelled
+// as any of them would tell the guest one of those happened when none did — and `notify`'s return count
+// is guest-visible, so *woken* in particular is a number another thread can already have read.
+//
+// **The termination is `thread.terminate`'s sentinel panic and not an error result** ([ADR 0071]), which
+// keeps this signature at `int32` and needs no check at `atomicWait`. An error return would be observed
+// by nothing: `Close` sets `exitReq` *and* `stopReq`, so the deferred safepoint below would panic the
+// sentinel before the value reached its caller — an always-nil-in-effect error, which is the shape this
+// project has `unparam` enabled for.
+//
+// **The deferred cleanup must not poll while a termination is unwinding**, which is why the `defer` is a
+// closure with a `recover` in it rather than the bare `t.leaveBlocked()` it used to be. `leaveBlocked`
+// polls, and a poll on a thread carrying the sentinel reaches `parkAtSafepoint`, reads `exitReq`, and
+// panics *during* a panic — which Go reports as a double panic and which takes the process down. So the
+// unwinding path clears the mark through `unmarkBlocked` and re-panics, exactly as `callHost`'s panic
+// path does for [ADR 0070]'s subject, and for the same stated reason: SP-2's second half has no subject
+// on a thread that will execute no further guest instruction.
+//
+// A flag set on the cancellation arm would also work and is rejected: it would need clearing at the three
+// ordinary exits, and a missed one silently skips the boundary poll SP-2 asks for — a wrong answer where
+// the `recover` form is structurally unable to have one, since the two cases *are* panicking and not.
+//
 // [ADR 0060]: ../../docs/decisions/0060-the-futex-queue-hangs-off-memory-keyed-by-effective-address-because-a-pointer-key-would-borrow-its-soundness-from-another-package.md
+// [ADR 0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 func (m *memory) wait(t *thread, ea uint64, c atomicCell, expected uint64, timeout int64) int32 {
 	t.enterBlocked()
-	defer t.leaveBlocked()
+	defer func() {
+		if r := recover(); r != nil {
+			t.unmarkBlocked()
+			panic(r)
+		}
+		t.leaveBlocked()
+	}()
 
 	w := m.enqueueIfEqual(ea, c, expected)
 	if w == nil {
@@ -102,9 +137,29 @@ func (m *memory) wait(t *thread, ea uint64, c atomicCell, expected uint64, timeo
 	select {
 	case <-w.ch:
 		return waitWoken
+	case <-t.context().Done():
+		// T-5.4. Leave the queue first, so no later `notify` spends part of its `count` on a waiter that
+		// is already unwinding — a wake budget spent on a thread that has left is `resolveExpiry`'s own
+		// reason for dequeuing, one termination cause over.
+		m.abandon(ea, w)
+		t.terminate()
 	case <-expiry:
 	}
 	return m.resolveExpiry(ea, w)
+}
+
+// abandon takes a terminating thread's waiter out of the queue. T-5.4's dequeue, and `resolveExpiry`
+// without the question: a thread that is ending needs no answer about *why* it stopped waiting, so there
+// is nothing for `claimed` to break a tie about.
+//
+// A waiter a `notify` had already detached is not in the queue, and `dequeue` finds nothing — the right
+// outcome rather than a missed case: that `notify` has already counted the wake in a number another guest
+// thread may have read, and this thread is terminating either way.
+func (m *memory) abandon(ea uint64, w *waiter) {
+	m.waitMu.Lock()
+	defer m.waitMu.Unlock()
+
+	m.dequeue(ea, w)
 }
 
 // enqueueIfEqual compares the cell and queues a waiter under one acquisition of `waitMu`, reporting nil

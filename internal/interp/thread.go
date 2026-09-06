@@ -147,6 +147,26 @@ type thread struct {
 	// another goroutine writes is a data race — undefined behaviour, not a slightly-stale answer.
 	stopReq atomic.Bool
 
+	// exitReq is contract §2 T-5.4's terminal mark: `Instance.Close` has asked this thread to end, and
+	// its next safepoint must not resume it. [ADR 0071]'s row 4.
+	//
+	// **Read only inside `parkAtSafepoint`, never by `poll`, and that placement is the whole cost
+	// argument.** A thread reaches `parkAtSafepoint` only because `stopReq` was already set, so the fast
+	// path still loads exactly one atomic and this field is read on a path taken once per thread per
+	// lifetime. `Close` sets this one *and* `stopReq`, in that order, so the flag that steers is always
+	// visible by the time the flag that diverts is observed.
+	//
+	// **Atomic for `stopReq`'s reason and not a weaker version of it**: the writer is `Close` on another
+	// goroutine, and `parkAtSafepoint` reads it outside `world.mu` — before taking the lock, and again
+	// after the release, where holding `mu` across the receive is B-MM-3's own hazard.
+	//
+	// **Terminal, so nothing clears it.** `Resume` clears `stopReq` on every live thread; it cannot clear
+	// this, and it cannot revive a closed world either, because `Close` nils `w.resume` and a nil
+	// `w.resume` makes `Resume` a no-op. A thread marked here ends.
+	//
+	// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+	exitReq atomic.Bool
+
 	// blocked is contract §3 SP-2's mark: this thread is suspended and therefore *at a safepoint* —
 	// decision 0060's third choice.
 	//
@@ -221,31 +241,43 @@ type thread struct {
 	// on a send forever, with `Resume` unable to free it. See `parkAtSafepoint`.
 	reported bool
 
-	// done closes when the thread has terminated and `err` is final. Nil for the host thread, which
-	// does not terminate.
+	// done closes when the thread has terminated, it has been retired, and its record in `world.exited`
+	// is final. Nil for the instantiation thread, which does not terminate — and `quiescentLocked` reads
+	// that nil as *"this one is not a spawned thread"*, so it is load-bearing rather than decorative.
 	//
-	// **This is not join, and the distinction is contract §10.3's.** T-5 requires exit, join and
-	// detach *defined in the contract* (**#12**, open), so nothing here decides them: there is no
-	// ownership, no detach, no reaping, and no ordering promised between two threads' terminations.
-	// What the channel buys is the one fact the engine needs internally — that a thread has stopped —
-	// plus a happens-before edge that makes `err` readable without a race. A `Join` method would be
-	// answering the open question in the channel that gets no review.
+	// **This is now join's mechanism, where it used to be the reason there was none.** The sentence here
+	// said *"This is not join, and the distinction is contract §10.3's"*, on the ground that T-5's
+	// exit/join/detach were undefined and *"a `Join` method would be answering the open question in the
+	// channel that gets no review."* §2 T-5 is amended and [ADR 0071] is the review, so the ground is
+	// gone: `Instance.Join` waits on this channel. Replaced rather than annotated, because a comment that
+	// tells the next reader a settled question is open is the foreclosing-words shape.
+	//
+	// **The close is still not the record**, which is the part of the old reading that survives. What a
+	// joiner reads is `world.exited`, written by `retire` *before* this closes; the channel supplies only
+	// the happens-before edge and the wake. That ordering is why a join cannot observe a finished thread
+	// with no status.
 	done chan struct{}
 
-	// err is the thread's terminal error, written once by the thread itself before `done` closes.
+	// err is the thread's terminal error, written once by the thread itself before `retire` copies it
+	// into `world.exited` and `done` closes.
 	//
-	// **Stored rather than surfaced, and stored rather than dropped.** How a thread's failure becomes
-	// visible to a host *is* exit semantics, so it is #12's to answer and no accessor exists.
-	// Swallowing it instead would make a trapping thread indistinguishable from one that returned,
-	// which is a wrong answer rather than a deferred question.
+	// **Retained as the writer's own copy, and it is the record in `world.exited` that a `Join` answers
+	// from.** The two exist for different lifetimes: this field lives as long as the `thread`, and the
+	// record is bounded — *"consumed by a join, or dropped at `Close`"* (T-5.2) — so a joined thread's
+	// status leaves the world while the object that carried it is already unreachable.
+	//
+	// The paragraph here used to say *"How a thread's failure becomes visible to a host *is* exit
+	// semantics, so it is #12's to answer and no accessor exists."* It is answered: T-5.3's two channels
+	// are `Instance.Join` for this thread's status and `Instance.Fault` for the instance's first trap.
 	err error
 
 	// w is the stop-the-world state this thread participates in, set by `world.register` at creation.
 	//
 	// Nil is legal and means "no world", which is any `thread` this package's own tests build by
 	// literal. `poll` reads `stopReq` before it ever reaches this field, so a nil `w` costs the hot
-	// path nothing: an unregistered thread can never have `stopReq` set, because the only writer is
-	// the `Stop` that walks a world's members.
+	// path nothing: an unregistered thread can never have `stopReq` set, because the only writers are
+	// `Stop` and `Close`, and both walk a world's `live` set. (`Close` joined that sentence with T-5.4's
+	// terminal mark, and the set it names was `members` until row 1 of [ADR 0071] made it live-only.)
 	w *world
 
 	// ctx/cancel are contract §5 H-3's cancellation channel: what a host function running on this
@@ -374,7 +406,68 @@ var (
 	// means no round is in flight on its own thread; reachable only from an embedder spawning between
 	// `Stop` and `Resume`.
 	ErrStopInProgress = errors.New("burroughs: spawn refused while a stop is in progress")
+
+	// ErrTerminated is the terminal status of a thread the engine ended: contract §2 T-5.4's shutdown,
+	// reaching a running thread at its next safepoint and a suspended one by trapping it out of the wait.
+	//
+	// **It is a status and not a fault**, which is the one place T-5.3's two channels carry different
+	// contents. `world.retire` records this in the per-`tid` record a `Join` answers from and never in the
+	// fault slot `Instance.Fault` reads, because an embedder that calls `Close` and then reads `Fault`
+	// must not be told its guest trapped when what happened is that it shut the guest down.
+	ErrTerminated = errors.New("burroughs: thread terminated by shutdown")
+
+	// ErrThreadFault wraps the first trap that ended any thread of an instance — contract §2 T-5.3's
+	// retained trap, reported once through the next `Invoke` and readable forever through
+	// `Instance.Fault`.
+	//
+	// **Wrapped rather than returned bare, so that a caller can tell where a trap happened.** An `Invoke`
+	// that returns a plain trap says *"this call trapped"*; T-5.3's report is about a **different**
+	// thread, and an embedder that could not distinguish the two would attribute a spawned thread's
+	// out-of-bounds access to the host call that merely happened to be next. The wrapped trap is still
+	// matched by `errors.Is`, so a caller testing for a specific trap gets the same answer either way.
+	ErrThreadFault = errors.New("burroughs: a thread of this instance ended in a trap")
+
+	// ErrUnknownThread refuses a `Join` on a `tid` this instance has no answer for.
+	//
+	// **Three causes, one error, and the message names all three because the caller cannot tell them
+	// apart and neither can the engine.** T-5.5 forbids `tid` reuse, so an unanswerable id was never
+	// spawned here, has already been joined (T-5.2's record is *consumed* by a join), or had its record
+	// dropped at `Close`. Distinguishing the second and third from the first needs a record of every id
+	// ever issued, which is the unbounded retention T-5.2's bound exists to forbid — so the honest answer
+	// is *"nothing here knows"* with the reasons enumerated, rather than a guess dressed as three errors.
+	ErrUnknownThread = errors.New("burroughs: no terminal status for this thread")
+
+	// ErrNotSpawned refuses a `Join` on the instantiation thread, which is live, not spawned, and does
+	// not terminate (`thread.done`). Distinct from `ErrUnknownThread` because the id *is* known: joining
+	// it would block until the instance was closed, which is a hang wearing the shape of a wait.
+	ErrNotSpawned = errors.New("burroughs: this thread is the instance's own and does not terminate")
 )
+
+// threadTerminated is the sentinel a terminal safepoint panics — [ADR 0071]'s option B, the reason
+// `poll` and `jumpTo` keep their no-error signatures, and the *"`recover` above this frame"* [ADR
+// 0070] forecast for #12.
+//
+// **Its own type rather than a sentinel `error` value, so the `recover` can discriminate on a type
+// assertion and re-panic everything else.** The alternative — panicking an `error` and testing it with
+// `errors.Is` — would recover an embedder's panic that happened to carry an error and convert it into
+// this engine's clean termination, which is precisely the promise [ADR 0070] declined to make. An
+// unexported type no other package can construct makes the discrimination exact.
+//
+// [ADR 0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+type threadTerminated struct{}
+
+// terminate ends this thread from inside its own safepoint. Called from `parkAtSafepoint`, both before
+// the park and after the release, and it never returns.
+//
+// **A panic and not an error return, because the two functions between here and a frame that could
+// carry one are `poll` and `jumpTo`** — the fourteen back-edge arms and every frame entry, which is the
+// hot path [ADR 0059] withdrew an always-nil error from. T-5.4 supplies the clause that error would
+// have carried, and it fires once per thread per lifetime, so paying for it at every back-edge is the
+// trade [ADR 0071] declines.
+func (t *thread) terminate() {
+	panic(threadTerminated{})
+}
 
 // newThread makes the instance's next thread **and admits it to the world in the same step**, so that
 // *registration is where creation is* stays an invariant of one function rather than an agreement
@@ -429,9 +522,16 @@ func (in *Instance) hasSharedMemory() bool {
 // `allocate` reserves and therefore marks every one of them and a marked memory never reaches
 // `grow`'s relocating arm.
 //
-// The lifecycle stays open: T-5's exit/join/detach are contract §10.3 (**#12**), so a caller gets a
-// tid and no way to wait on it. See `thread.done` for why the internal channel is not that API, and
-// note that a terminated thread stays in `world.members` — reaping is #12's too.
+// **The lifecycle is T-5's, and it is settled** — §2 T-5.1–T-5.5, [ADR 0071]. A spawned thread is
+// **detached by default**: this returns a tid and no obligation, and a caller that wants to wait calls
+// `Instance.Join`. A thread that traps is reported twice, at the next `Invoke` and through
+// `Instance.Fault`, and `Instance.Close` ends every thread and waits for the unwinds.
+//
+// This paragraph said the lifecycle *"stays open"* and that a terminated thread *"stays in
+// `world.members` — reaping is #12's too"*. Both are false as written: the reaper is `world.retire`, and
+// the field is `world.live`.
+//
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 func (in *Instance) Spawn(entry uint32, arg int32, stackHint int) (ThreadID, error) {
 	t, err := in.spawn(entry, arg, stackHint)
 	if err != nil {
@@ -440,13 +540,17 @@ func (in *Instance) Spawn(entry uint32, arg int32, stackHint int) (ThreadID, err
 	return t.id, nil
 }
 
-// spawn is Spawn's mechanism, and the split is where the lifecycle gap lives.
+// spawn is Spawn's mechanism, and the split is where the lifecycle *used* to be undecided.
 //
-// `Spawn` drops the `*thread` and hands back a bare id **because a handle is the lifecycle API**:
-// anything a caller could do with the object — wait, join, detach, read the terminal error — is T-5,
-// contract §10.3, **#12**. Returning it would answer that in the signature. So the object stays
-// inside the package, where the engine's own code and this package's tests can observe that a thread
-// ran, and the exported boundary offers nothing #12 has not decided.
+// `Spawn` drops the `*thread` and hands back a bare id, and the reason has changed rather than
+// evaporated. It used to be that *"a handle is the lifecycle API"* and T-5 had not been decided, so
+// returning the object would have answered an open question in a signature. T-5 is decided, and the
+// answer it gives is **still a tid**: `Instance.Join` takes one, T-5.2 asks for a host-side join *"taking
+// a `tid`"*, and T-5.5's no-reuse rule is what makes an id a safe key for a thread that no longer exists.
+// A `Thread` handle would be a second way to name the same thing, and would tempt a lifetime — an object
+// held after its record was consumed — that a bounded record does not have. So the object stays inside
+// the package, where the engine's own code and this package's tests use it, and the exported surface is
+// the narrowest rendering of the stamped words.
 func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, error) {
 	if !in.hasSharedMemory() {
 		return nil, fmt.Errorf("%w: this instance reaches no shared memory, so a spawned thread "+
@@ -502,10 +606,16 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 	// predicate alone will read it as a hole.
 	go func() {
 		runtime.LockOSThread()
-		// The error is assigned before the deferred close runs, so a reader that has observed the
-		// close has observed the write — the channel supplies the happens-before edge, and this is
-		// the only cross-thread read of `err`.
-		defer close(t.done)
+		// **Retire, then close, in one `defer` and in that order** — T-5.2, [ADR 0071]. `retire` writes
+		// the record `Join` answers from, so it must be complete before a joiner can be woken; a close
+		// first would let a join observe a finished thread with no status. One `defer` rather than two so
+		// the order is a statement rather than a consequence of LIFO, and because the deferred call is
+		// where the error is already final: `runEntry` returns before this runs, so the assignment below
+		// happens-before both the record and the close.
+		defer func() {
+			in.world.retire(t, t.err)
+			close(t.done)
+		}()
 		t.err = in.runEntry(t, fn, ft, arg, stackHint)
 	}()
 	return t, nil
@@ -534,7 +644,7 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 // This is stack creation site 4 of 4, and the only one that does not hand over `&in.host`: a spawned
 // thread runs on its own. `TestEveryStackCreationSiteCarriesAThread` partitions the sites on exactly
 // that distinction rather than listing them.
-func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, arg int32, stackHint int) error {
+func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, arg int32, stackHint int) (err error) {
 	// §4 B-MM-1, at the enclosing function of the `stack` literal below, same as the other three
 	// sites (`boundary.go`, decision 0052, #516). **This is the site where the edge stops being
 	// bookkeeping.** At the other three the host and the guest are the same thread, so the acquire
@@ -543,22 +653,46 @@ func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, ar
 	// what this thread reads first — B-MM-1's message-passing case is exactly this pair of edges
 	// observed from two threads, so the site the control named is also the site the clause is about.
 	enterGuest()
-	// The third of [ADR 0070][0070]'s sites, and the one whose leak is **not reachable today**: nothing
-	// on a non-test path recovers a panic out of a spawned thread, so a panic here ends the process and
-	// leaves no state to corrupt. Repaired anyway, for one reason that is a fact about the next slice
-	// rather than about this one — **#12's exit/join is a `recover` above this frame by construction**: a
-	// join that reports how a thread died has to catch the death, and on the day it does, a skipped
-	// `leaveCall` here becomes the same leak `invokeIndex` has. Witnessed by
-	// `TestASpawnEntryPanicLeavesNoCallerCounted`, which supplies the `recover` #12 will, rather than
-	// asserted as a protection nothing can observe.
+	// The third of [ADR 0070][0070]'s sites, and it now carries #12's `recover` as well — the fold 0070
+	// forecast, in the words *"#12's exit/join is a `recover` above this frame by construction"*. It is
+	// *in* this frame rather than above it, and 0070's forecast is discharged rather than restated: the
+	// leak it repaired here (a panic skipping `leaveCall`) is now reachable on a non-test path, because
+	// T-5.4's terminal safepoint panics through exactly these frames.
+	//
+	// # The order inside the defer, and why the re-panic is last
+	//
+	// The marks are repaired **before** anything is decided about `r`, so an embedder's panic leaves the
+	// same state whether it is converted or re-thrown: that is 0070's repair, and putting the re-panic
+	// first would undo it for exactly the case 0070 exists for.
+	//
+	// **Anything that is not the sentinel is re-panicked** ([ADR 0071]). Converting it would turn an
+	// embedder's panic into `runEntry`'s error return — a promise 0070 declined to make, and one no test
+	// that does not panic on purpose could notice was made. `TestASpawnEntryPanicLeavesNoCallerCounted`
+	// is the witness that a foreign panic still escapes, and the sentinel's own conversion is witnessed
+	// separately.
+	//
+	// **A single `defer`, still.** ADR 0067's constraint is that no function here may gain a *second*
+	// one (25–29 ns/call once the first stops being open-coded), and a `recover` folded into the existing
+	// one adds none.
 	//
 	// [0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
 	guestRunning := false
 	defer func() {
+		r := recover()
 		if guestRunning {
 			t.leaveCall()
 		}
 		leaveGuest()
+		if r == nil {
+			return
+		}
+		if _, ok := r.(threadTerminated); !ok {
+			panic(r)
+		}
+		// T-5.4's terminal exit, spelled as this thread's status rather than as a trap. `retire` reads
+		// `ErrTerminated` and keeps it out of the fault slot — see `ErrTerminated`.
+		err = fmt.Errorf("%w: %s ended at a safepoint after `Close` (contract §2 T-5.4)",
+			ErrTerminated, t)
 	}()
 
 	st := &stack{
@@ -580,8 +714,95 @@ func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, ar
 	// The panic case is the flag in the `defer` above rather than a second `defer` here — ADR 0070.
 	t.enterCall()
 	guestRunning = true
-	err := in.invoke(fn, ft, st, 0)
+	// Assigned to the named result rather than declared, which is not a style choice: the `defer` above
+	// writes `err` on the sentinel path, and a `:=` here would shadow nothing but would make the two
+	// writers two variables to a later reader.
+	err = in.invoke(fn, ft, st, 0)
 	guestRunning = false
 	t.leaveCall()
+	return err
+}
+
+// Join waits for the thread `tid` to terminate and answers its terminal status: nil for a clean return,
+// the trap that ended it otherwise. Contract §2 T-5.2.
+//
+// **The record is consumed**, which is the stamped half of T-5.2 (*"consumed by a join, or dropped at
+// `Close`"* — Scott, on #12). A second `Join` on the same `tid` therefore returns `ErrUnknownThread`, and
+// that is the bound rather than a rough edge: retention is what makes join-after-exit answerable at all,
+// so the limit on it has to be a rule about who takes the entry out. The measured alternative is fact 3
+// of [ADR 0071]'s table — **51 members after 50 completed spawns**, a per-thread record nothing removes.
+//
+// **Join-after-exit is answerable, and that is the clause this method exists for.** T-5.2 requires it in
+// those words, so the ordinary case — spawn, let it finish, then join — must not be the failing one. It
+// works because `world.retire` writes the record before `thread.done` closes, so there is no window in
+// which a finished thread has no status.
+//
+// **Not a guest primitive.** T-5.1 makes threads detached by default and T-5.2 says there is *"no
+// guest-visible join primitive"*; a guest that wants one builds it over T-3's futex, which is what the
+// threads proposal and wasi-threads both assume.
+//
+// **No value, only an error, and the reason is T-1 rather than parsimony.** A thread entry takes one
+// `i32` and returns nothing — checked exactly, in both directions, at `Instance.spawn` — so there is no
+// value for a join to answer with. A signature promising one would promise a surface `Spawn` cannot
+// produce.
+//
+// Three refusals, each naming a different thing the caller got wrong:
+//
+//   - `ErrNotSpawned` for the instantiation thread, which is live and does not terminate. Joining it
+//     would block until `Close`, which is a hang wearing a wait's shape.
+//   - `ErrUnknownThread` for an id with no record and no live thread: never spawned here, already
+//     joined, or dropped at `Close`. See that error for why the three are one.
+//   - `ErrClosed` is *not* among them: a closed instance has dropped its records, so a `Join` after
+//     `Close` is `ErrUnknownThread` — the honest answer, since the status genuinely is not here.
+//
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+func (in *Instance) Join(tid ThreadID) error {
+	w := &in.world
+
+	// The record is checked before the live set, and the order is what makes the common case lock-free of
+	// any waiting: a thread that has already exited is not in `live` at all, so a live-set-first reader
+	// would fall through to the refusal for exactly the case T-5.2 names as required.
+	w.mu.Lock()
+	if err, ok := w.exited[tid]; ok {
+		delete(w.exited, tid)
+		w.mu.Unlock()
+		return err
+	}
+	var found *thread
+	for _, t := range w.live {
+		if t.id == tid {
+			found = t
+			break
+		}
+	}
+	w.mu.Unlock()
+
+	if found == nil {
+		return fmt.Errorf("%w: thread %d was never spawned by this instance, has already been joined, "+
+			"or had its status dropped at `Close` (contract §2 T-5.2, T-5.5)", ErrUnknownThread, tid)
+	}
+	if found.done == nil {
+		return fmt.Errorf("%w: thread %d is the thread this instance was built on (contract §2 T-5.2)",
+			ErrNotSpawned, tid)
+	}
+
+	// Outside `mu`, necessarily: this blocks until the thread terminates, and `retire` needs the same
+	// mutex to record the status this then reads. Holding it across the receive is contract §4 B-MM-3's
+	// own hazard and would be a deadlock rather than merely a violation.
+	<-found.done
+
+	// Second lookup rather than `found.err`, because the *record* is what T-5.2 bounds and reading the
+	// thread's own field would leave the entry in the map forever — the leak, one field over. It is
+	// present by construction: `retire` writes it before the close this just observed. Absent only if
+	// another `Join` on the same id won the race, which is the double-join refusal arriving by a
+	// different route and is answered as such.
+	w.mu.Lock()
+	err, ok := w.exited[tid]
+	delete(w.exited, tid)
+	w.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("%w: thread %d terminated, and its status was taken by a concurrent join "+
+			"(contract §2 T-5.2 — a record is consumed by a join)", ErrUnknownThread, tid)
+	}
 	return err
 }

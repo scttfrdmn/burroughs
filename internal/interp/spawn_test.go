@@ -149,24 +149,32 @@ func TestSpawnRunsItsEntryFunctionConcurrentlyWithItsArgument(t *testing.T) {
 	// The concurrency claim. Nothing below this line could run if `Spawn` had executed the entry
 	// itself: the gate is still zero, so the guest is in its loop, and the host is what releases it.
 	awaitGuestWord(t, in, spawnArrived, 1)
+
+	// The handle is taken **before** the gate is released, and the ordering is load-bearing after
+	// ADR 0071: `world.live` is live-only, so a thread reaped between the release and this
+	// lookup would leave the world holding only the host and `onlySpawnedThread` would fail with a
+	// count of 0. The guest is provably still in its loop here, because it announced itself.
+	sp := onlySpawnedThread(t, in)
 	callVoid(t, in, "store", I32(spawnGate), I32(1))
 
-	// `spawn` rather than `Spawn` for the wait, because the handle is what T-5 has not decided:
-	// `Spawn` hands back a bare id on purpose (#12, contract §10.3), so the engine's own tests reach
-	// the object through the unexported entry point rather than through an API this slice invents.
-	// Re-spawning for the wait would be a second thread; instead this arm asks the world for the
-	// member it just admitted.
-	sp := onlySpawnedThread(t, in)
+	// The wait is on `done` rather than on `Join` so the failure has a bounded message: `Join` blocks
+	// until the thread ends and a wedge there is the test binary's own timeout, ten minutes later and
+	// with nothing said about which announcement had been made.
 	select {
 	case <-sp.done:
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the spawned thread never terminated after the gate was released — it announced "+
 			"itself at %d, so it reached guest code and then failed to leave it", spawnArrived)
 	}
-	if sp.err != nil {
-		t.Errorf("the spawned thread terminated with %v, want nil.\n"+
-			"Read after `done` closed, which is the happens-before edge `thread.err` documents; "+
-			"a trap here is a finding about `runEntry`'s frame rather than about spawning.", sp.err)
+
+	// The *outcome* is read through `Join`, which is T-5.2's surface and is answerable after exit by
+	// construction — the goroutine retires into `world.exited` before it closes `done`, so this join
+	// resolves from the record rather than by waiting again.
+	if err := in.Join(tid); err != nil {
+		t.Errorf("Join(%d) returned %v, want nil.\n"+
+			"Called after `done` closed, so this is the record `world.retire` wrote and not a "+
+			"second wait; a trap here is a finding about `runEntry`'s frame rather than about "+
+			"spawning.", tid, err)
 	}
 	if got := call(t, in, "read", I32(spawnSentinel)); got != spawnMark {
 		t.Errorf("sentinel at %d is %d, want %d — the entry function ran its loop and then did not "+
@@ -179,15 +187,24 @@ func TestSpawnRunsItsEntryFunctionConcurrentlyWithItsArgument(t *testing.T) {
 // onlySpawnedThread hands back the one member of the world that is not the host thread, failing when
 // there is not exactly one.
 //
-// It exists because `Spawn` returns an id and no handle — contract §10.3's T-5 is **#12**, open, so
-// there is deliberately no `Join`, no lookup by tid, and no accessor for the terminal error. The
-// engine's own tests observe a thread through the package rather than through an exported surface
-// this slice would otherwise have to invent, which is `spawn`'s stated reason for being split from
-// `Spawn`.
+// **It is only usable while that thread is live, and the reason changed under it.** This doc used to
+// say `Spawn` returned an id and no handle because T-5 was open (§10.3, #12), so the package's own
+// tests reached the object rather than an exported surface. T-5 is decided ([ADR 0071][0071]) and
+// `Instance.Join` exists, so the surface argument is gone; what survives is that `Join` answers with
+// an *error* and the assertions below want `callers`, `blocked` and `reported`, which no exported
+// surface reports and none should. **Anything about a thread's outcome goes through `Join`**; this
+// helper is for its safepoint state, taken while it has one.
+//
+// `world.live` is live-only membership after 0071, so a caller must hold this thread in its loop when
+// it asks. A lookup after the thread could have been reaped finds only the host and fails with a count
+// of 0 — a real failure of this helper's contract rather than a flake to retry, since the caller asked
+// a question about a thread that no longer exists.
 //
 // The exactness is the point rather than convenience: "not exactly one" covers both a spawn that
 // registered nothing — which would make every assertion below it a claim about the host thread — and
 // one that registered twice.
+//
+// [0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
 func onlySpawnedThread(t *testing.T, in *Instance) *thread {
 	t.Helper()
 	w := &in.world
@@ -195,7 +212,7 @@ func onlySpawnedThread(t *testing.T, in *Instance) *thread {
 	defer w.mu.Unlock()
 
 	var found []*thread
-	for _, m := range w.members {
+	for _, m := range w.live {
 		if m != &in.host {
 			found = append(found, m)
 		}
@@ -205,7 +222,7 @@ func onlySpawnedThread(t *testing.T, in *Instance) *thread {
 			"1.\nRegistration happens inside `newThread`, before the `go` statement, so a count "+
 			"of 0 means the spawn was refused or admitted nowhere — and a thread in no world "+
 			"opts out of stopping entirely, since `poll` and `enterCall` are both nil-legal.",
-			len(w.members), len(found))
+			len(w.live), len(found))
 	}
 	return found[0]
 }
@@ -310,7 +327,7 @@ func TestSpawnRefusesTheCasesItCannotAnswer(t *testing.T) {
 
 			idsBefore := in.nextTID.Load()
 			in.world.mu.Lock()
-			membersBefore := len(in.world.members)
+			liveBefore := len(in.world.live)
 			in.world.mu.Unlock()
 
 			tid, err := in.Spawn(entry, spawnBase, 0)
@@ -331,13 +348,13 @@ func TestSpawnRefusesTheCasesItCannotAnswer(t *testing.T) {
 					"threads.", idsBefore, got)
 			}
 			in.world.mu.Lock()
-			membersAfter := len(in.world.members)
+			liveAfter := len(in.world.live)
 			in.world.mu.Unlock()
-			if membersAfter != membersBefore {
+			if liveAfter != liveBefore {
 				t.Errorf("the world's membership moved from %d to %d across a refused spawn.\n"+
 					"This is the half with teeth: a leaked member is not a wrong answer here, "+
 					"it is a later `Stop` waiting out its whole deadline for a thread that was "+
-					"never started.", membersBefore, membersAfter)
+					"never started.", liveBefore, liveAfter)
 			}
 		})
 	}
