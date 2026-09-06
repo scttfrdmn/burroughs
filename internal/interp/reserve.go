@@ -82,9 +82,14 @@ func releaseMapping(bs []byte) {
 	reservationReleased.Add(1)
 }
 
-// reservationUnavailable counts decision 0076's rule 3: a memory that asked for a mapping and did not get
-// one, and therefore took the Go allocator's path with everything that implies — a capped reservation, a
-// reachable `publish`, and the two engine limits that exist because of it.
+// reservationUnavailable counts a memory that **asked** for a mapping and did not get one, and therefore
+// took the Go allocator's path with everything that implies — a capped reservation, a reachable `publish`,
+// and the two engine limits that exist because of it.
+//
+// **It is not rule 3, and an earlier draft of this comment said it was.** Rule 3 returns zero *before*
+// anything is asked, so a no-headroom memory never touches this counter; `reservationDeclined` is that
+// population. The distinction is the file's own two-questions-two-counters rule read once more: "the host
+// refused" and "we never asked" have different repairs, and one number over both can name neither.
 //
 // **The counter is what makes the fallback observable, and M-1 is unfalsifiable without it.** An engine
 // that silently degrades to O(size) growth looks exactly like one that reserved successfully, from
@@ -99,6 +104,18 @@ var reservationUnavailable atomic.Uint64
 // lifetime: a mapping is not garbage, so nothing else in this process can say whether reachability and
 // unmapping actually coincide.
 var reservationReleased atomic.Uint64
+
+// reservationDeclined counts `reservationFor`'s rule 3: a memory the engine did not ask for a mapping for,
+// because the ceiling the rule would reserve to is at or below the memory's own minimum.
+//
+// **Most of this population is uninteresting and one part of it is not.** A max at or below the minimum
+// cannot grow at all, so a reservation would buy nothing and its absence costs nothing. A memory64
+// declaring a minimum over 4 GiB is the other part: it keeps today's relocate-and-copy `grow`, which is
+// contract §8 M-1 unmet, and rule 3 is deliberately the arm that keeps such a module *running* rather than
+// refusing it. That is a trade this decision made knowingly, and this counter is what keeps it from being
+// made silently — without it the only observable difference between "reserved" and "declined to reserve"
+// is the growth cost, which is exactly what M-1 is about.
+var reservationDeclined atomic.Uint64
 
 // reservationReleaseFailed counts an `Munmap` that returned an error, which would mean the engine is
 // leaking address space and — worse — that the slice it handed `Munmap` was not the one it mapped.

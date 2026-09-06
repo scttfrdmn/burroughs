@@ -3,12 +3,47 @@
 package interp
 
 import (
+	"fmt"
+	"os"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
+
+// TestMain prints decision 0076's three reservation counters after the whole package has run, which is the
+// **board figure** `internal/interp/reserve.go:reservationUnavailable` says it is read as.
+//
+// **The figure is a claim about the host, not about this code, and that is why it is printed rather than
+// asserted.** Several hundred live memories each reserving just under 4 GiB is address-space pressure, and
+// a threshold here would be a bound on the runner rather than on the engine — it would go red on a
+// container with an address-space rlimit and stay green on a host that had quietly stopped mapping
+// anything. So this reports and does not gate. What *is* asserted lives in the two directions of the seam:
+// `TestAMemoryReservesAddressSpaceRatherThanCommittingIt` on the mapping arm and
+// `TestTheFallbackPathIsTheOneWithoutAMapping` on the other.
+//
+// **The unavailable count is not all involuntary**, and reading it as pressure without that correction
+// would over-report: `withoutReservation` refuses on purpose once per test that names the relocating arm,
+// so a floor of those deliberate refusals is inside every number this prints. The line names the floor
+// beside the count for exactly that reason — *a floor is not a census*, and a count with a known
+// deliberate component is not pressure until the component is subtracted.
+//
+// On the `!unix` ports every memory is on the fallback and this line is the M-1 non-conformance figure
+// `internal/interp/reserve_other.go` promises the counter would make readable.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	fmt.Printf("0076 reservations: unavailable=%d (of which %d are deliberate refusals by "+
+		"withoutReservation), declined=%d, released=%d, release failures=%d\n",
+		reservationUnavailable.Load(), deliberateRefusals.Load(), reservationDeclined.Load(),
+		reservationReleased.Load(), reservationReleaseFailed.Load())
+	os.Exit(code)
+}
+
+// deliberateRefusals counts `withoutReservation`'s own refusals, so `TestMain`'s line can name the part of
+// the unavailable count that this package caused on purpose.
+var deliberateRefusals atomic.Uint64
 
 // withoutReservation makes `reserveMapping` refuse for one test and restores it.
 //
@@ -31,7 +66,7 @@ func withoutReservation(t *testing.T) {
 	t.Helper()
 
 	was := reserveMapping
-	reserveMapping = func(int) ([]byte, bool) { return nil, false }
+	reserveMapping = func(int) ([]byte, bool) { deliberateRefusals.Add(1); return nil, false }
 	t.Cleanup(func() { reserveMapping = was })
 }
 
@@ -65,6 +100,50 @@ func TestTheFallbackPathIsTheOneWithoutAMapping(t *testing.T) {
 	if mem.noMove {
 		t.Errorf("noMove is set on a memory that reserved nothing, which would put every " +
 			"growth on the engine-limit refusal arm rather than on the relocating one")
+	}
+}
+
+// TestAMemoryWithNoRoomToGrowIsAskedForNothing is decision 0076's rule 3, and it is here rather than in
+// `internal/interp/reserve_unix_test.go` because it is the one arm whose answer is the same on every port.
+//
+// **What it certifies is the distinction between the two counters**, which is otherwise only a paragraph:
+// `reservationDeclined` moves and `reservationUnavailable` does not, because the engine never asked. A
+// single counter over both populations would read identically here and on a host that had refused, and
+// those have opposite repairs — one is a rule working as written, the other is address-space pressure.
+//
+// The half of rule 3 that matters most is **not** tested here and cannot cheaply be: a memory64 declaring a
+// minimum above 4 GiB is the case where declining costs something real (it keeps relocate-and-copy, so
+// §8 M-1 is unmet for that module), and asserting it means committing 4 GiB. This is the affordable half —
+// a max at or below the minimum, where declining costs nothing because `grow` refuses one check earlier.
+func TestAMemoryWithNoRoomToGrowIsAskedForNothing(t *testing.T) {
+	declined := reservationDeclined.Load()
+	unavailable := reservationUnavailable.Load()
+
+	mem, err := newMemory(binary.Memory{Limits: binary.Limits{Min: 2, Max: 2, HasMax: true}})
+	if err != nil {
+		t.Fatalf("newMemory: %v", err)
+	}
+	if got := reservationDeclined.Load() - declined; got != 1 {
+		t.Errorf("reservationDeclined moved by %d, want 1: a memory whose max equals its minimum "+
+			"has nothing to reserve into, and rule 3 is the arm that says so", got)
+	}
+	if got := reservationUnavailable.Load() - unavailable; got != 0 {
+		t.Errorf("reservationUnavailable moved by %d, want 0: nothing was asked for here, and a "+
+			"counter that cannot tell a declined reservation from a refused one reports host "+
+			"address-space pressure that does not exist", got)
+	}
+	if img := mem.img.Load().bytes; cap(img) != len(img) {
+		t.Errorf("a declined memory has %d bytes of capacity behind %d of length, want none: "+
+			"rule 3 sends it to `make([]byte, n)`", cap(img), len(img))
+	}
+	if mem.noMove {
+		t.Error("noMove is set on a memory that reserved nothing, which would turn its every " +
+			"growth into the engine-limit refusal rather than leaving it the relocating path — " +
+			"the narrowing rule 3 exists to prevent")
+	}
+	if got := mem.grow(1, nil); got != -1 {
+		t.Errorf("grow returned %d, want -1: the premise that declining costs this population "+
+			"nothing is that `grow` refuses past `limits.Max` before a reservation could matter", got)
 	}
 }
 

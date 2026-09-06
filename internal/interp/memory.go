@@ -373,7 +373,11 @@ func (m *memory) view() []byte { return m.img.Load().bytes }
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 // [0076]: ../../docs/decisions/0076-a-memory-reserves-address-space-through-an-anonymous-mapping-and-the-go-allocator-becomes-the-fallback-rather-than-the-mechanism.md
 func allocate(lim binary.Limits, n uint64) (bs []byte, noMove, mapped bool, err error) {
-	if reserve := reservationFor(lim, n); reserve > 0 {
+	if reserve := reservationFor(lim, n); reserve == 0 {
+		// Rule 3: nothing was asked for, so `reservationUnavailable` must not move — see its
+		// doc comment for why the two populations are two counters.
+		reservationDeclined.Add(1)
+	} else {
 		// The `math.MaxInt` bound is where the 32-bit ports drop out, and it is arithmetic rather
 		// than a build tag: `linux/386` and `linux/arm` compile `reserveMapping` and cannot hold a
 		// 4 GiB reservation in a 32-bit address space. Skipping the call is not a failure to count —

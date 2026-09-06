@@ -7,8 +7,12 @@ package interp
 import "errors"
 
 // mapReservation reports that this port has no reservation primitive, which sends every memory down
-// [decision 0076][0076]'s rule 3 — the Go allocator's path, with `sharedReservePages`' cap and a
+// [decision 0076][0076]'s fallback — the Go allocator's path, with `sharedReservePages`' cap and a
 // reachable `internal/interp/memory.go:memory.publish`.
+//
+// The arm is the refused-mapping one and not the decision's rule 3: every memory here *asks* and is told
+// no, so `internal/interp/reserve.go:reservationUnavailable` is the counter that moves, which is what makes
+// the port's non-conformance a figure rather than an inference.
 //
 // **The ports this file is compiled for are `windows`, `plan9`, `js/wasm` and `wasip1/wasm`**, measured by
 // the compile probe recorded on `internal/interp/reserve_unix.go:mapReservation`. Two of them are
