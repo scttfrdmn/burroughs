@@ -39,6 +39,11 @@ import (
 //   - **Arm E — the control**, `make([]byte, n, reserve)` at the same rungs. It re-takes 0051's column *on
 //     this host* rather than comparing the mapping against a remembered number, which is the only form in
 //     which the two are the same measurement.
+//   - **Arm F — the non-conformance extent**, added on Scott's [#671](https://github.com/scttfrdmn/burroughs/issues/671)
+//     ruling. He declined to port-scope §8 M-1's MUST — *"port-scoping makes the clause true by construction
+//     everywhere and erases the fact that three ports are worse"* — and ordered the gap recorded with a
+//     measured figure instead: *"reconcile an extent, never floor it."* This arm is that extent, and it is
+//     the only arm here whose subject is a **defect** rather than a mechanism.
 //
 // **Worst is the column that decides, so the statistic is not a mean and this is not `benchstat` work.**
 // *Match the statistic on both sides*: the bars are worst cases because an instantiation pays whichever
@@ -107,6 +112,7 @@ func BenchmarkMemoryReservationLadder(b *testing.B) {
 	armC(b)
 	armD(b, rungs, reps)
 	armE(b, rungs, reps)
+	armF(b, reps)
 }
 
 // armA times `newMemory` at each rung against ADR 0051's 1 ms bar, and is where guard 1 lives.
@@ -386,6 +392,162 @@ func armE(b *testing.B, rungs []uint64, reps int) {
 		runtime.KeepAlive(live)
 	}
 	fmt.Printf("\n%s\n", strings.Repeat("=", 78))
+}
+
+// armF measures how far the allocator's fallback misses §8 M-1 by, which is the figure Scott's #671 ruling
+// requires instead of a port-scoped clause.
+//
+// # Why this arm exists at all, when arm B already passed
+//
+// Arm B says the mapped path is flat. That is a statement about the ports that *have* a mapping, and
+// #671 asked what the clause means on `windows`, `plan9` and the wasm ports, which have none. Scott ruled
+// the MUST unconditional and those three ports **non-conformant**, with one condition on how it is written
+// down: *"reconcile an extent, never floor it."* An adjective with no number behind it is the floor — this
+// arm is the number, and the record in [ADR 0076][0076] cites it rather than the word "slower".
+//
+// # The paired column, and why it is not just arm B's landed table
+//
+// Each rung measures the fallback **and** the mapping back to back, in the same loop iteration, so the
+// ratio is a within-rung delta rather than a comparison across two invocations of the harness. The landed
+// arm B column is still the pre-registered comparator and is quoted as such; this pairing is an addition
+// that can only tighten it, which is why it was posted to #671 *before* the run rather than after. A
+// disagreement between the adjacent mapped column here and arm B's landed one is itself a finding, and it
+// is printed for that reason.
+//
+// # What this arm can and cannot testify about
+//
+// It runs on a `unix` host with `reserveMapping` refused, so its subject is **the fallback arm**, not
+// Windows. *"windows, plan9 and the wasm ports are non-conformant"* is a composite of two different kinds
+// of fact: which ports take the fallback is a **build-tag** fact, checked by
+// `internal/testenv:TestTheNonConformantPortsAreTheOnesWithoutAMapping` through cross-compilation and by no
+// timing anywhere; what the fallback **costs** is this measurement. Presenting the composite as one measured
+// claim would be the second-order dishonesty a figure taken on Linux cannot support.
+//
+// [0076]: ../../docs/decisions/0076-a-memory-reserves-address-space-through-an-anonymous-mapping-and-the-go-allocator-becomes-the-fallback-rather-than-the-mechanism.md
+func armF(b *testing.B, reps int) {
+	b.Helper()
+	rungs := []uint64{1, 16, 256, 4096, 16384, 32768, 65000}
+
+	// **The two columns are batched differently, and the reason is arithmetic rather than taste.**
+	// Batching exists to lift a per-grow cost above the clock's granularity, which is arm B's problem
+	// and not this arm's: a fallback grow at the top rung copies about 4 GiB, so it is already six
+	// orders of magnitude above the resolution that made arm B report `0s`. Running the registered
+	// 64-grow batch on it would have been 320 full copies for one table row — roughly **1.4 TB** of
+	// `memcpy` at rung 65000 alone, which is how the local sanity run found this before the queue did.
+	// The reported statistic is per-grow on both sides, so the units are the same and the ratio is
+	// still worst-against-worst; the deviation from the registration is the batch size only, and it
+	// was posted to #671 before the measured run.
+	const mappedBatch = 64
+	const fallbackBatch = 1
+
+	// Arm E leaves five large arrays live per rung and they go out of scope when it returns. Collecting
+	// here rather than inheriting that heap matters in the direction that would flatter this arm's
+	// forecast: the fallback's cost is `make` plus a copy, so residual garbage biases it *upward*.
+	runtime.GC()
+
+	fmt.Printf("\narm F — the non-conformance extent: one-page grow with the reservation refused, "+
+		"%d reps (fallback %d grow/rep, mapped %d grows/rep)\n", reps, fallbackBatch, mappedBatch)
+	fmt.Printf("| current pages | fallback best | fallback worst | mapped best | mapped worst | worst ratio |\n")
+	fmt.Printf("| --- | --- | --- | --- | --- | --- |\n")
+
+	var firstRatio, lastRatio float64
+	var fbBestFirst, fbBestLast, fbWorstFirst, fbWorstLast time.Duration
+	for i, rung := range rungs {
+		fbBest, fbWorst := growLadderRung(b, rung, reps, fallbackBatch, false)
+		mpBest, mpWorst := growLadderRung(b, rung, reps, mappedBatch, true)
+		ratio := 0.0
+		if mpWorst > 0 {
+			ratio = float64(fbWorst) / float64(mpWorst)
+		}
+		fmt.Printf("| %d | %v | %v | %v | %v | %.1fx |\n", rung+1, fbBest, fbWorst, mpBest, mpWorst, ratio)
+		if i == 0 {
+			firstRatio, fbBestFirst, fbWorstFirst = ratio, fbBest, fbWorst
+		}
+		lastRatio, fbBestLast, fbWorstLast = ratio, fbBest, fbWorst
+	}
+
+	// The extent, in the two forms #671 registered — the fallback against itself across the ladder, and
+	// the fallback against the mapping at the top rung — with each ratio taken between like columns,
+	// because *match the statistic on both sides*.
+	//
+	// **The best-against-best form is printed beside the worst-against-worst one, and which of them is
+	// load-bearing is a measurement rather than a preference.** Two runs of an identical tree on the same
+	// queued slot disagreed by 2.3x on the worst-column extent and by 15% on the best-column one, and the
+	// whole disagreement is in the *denominator*: rung 2's fallback grow copies 64 KiB in tens of
+	// microseconds, so at the small end allocator and scheduler noise is the same order as the signal,
+	// while the numerator at 65001 pages is a second of memcpy that nothing perturbs. An extent divided by
+	// its noisiest term is *a near-miss on an extreme statistic* waiting to happen — so both are printed,
+	// and the ADR quotes the stable one as the figure. Neither reading is near the registered 100x.
+	if fbWorstFirst > 0 && fbBestFirst > 0 {
+		fmt.Printf("\nextent: the fallback's own cost across the ladder, %d pages to %d — %.1fx "+
+			"best-against-best, %.1fx worst-against-worst (registered forecast: above 100x)\n",
+			rungs[0]+1, rungs[len(rungs)-1]+1,
+			float64(fbBestLast)/float64(fbBestFirst), float64(fbWorstLast)/float64(fbWorstFirst))
+	}
+	fmt.Printf("extent: fallback against mapping, %.1fx at the smallest rung and %.1fx at the largest "+
+		"(registered forecast: above 100x at the largest)\n", firstRatio, lastRatio)
+	fmt.Printf("\n%s\n", strings.Repeat("=", 78))
+}
+
+// growLadderRung times a batch of one-page grows on one memory, on whichever arm `mapped` names, and
+// **asserts it got the arm it was asked for** before returning a number.
+//
+// The assertion is not ceremony. The two arms are selected by a package-level function variable, so a
+// mis-set seam produces two identical columns and a ratio of 1.0 — which would read as *"the fallback is
+// fine"*, the one conclusion this arm exists to be able to refute. Capacity is the discriminator rather
+// than the counter, because it is a property of the memory that came back rather than of a global anyone
+// else in the run could also have moved.
+func growLadderRung(b *testing.B, rung uint64, reps, batch int, mapped bool) (best, worst time.Duration) {
+	b.Helper()
+
+	if !mapped {
+		// `refuseReservation` and not a closure of this arm's own: the shared one keeps
+		// `deliberateRefusals` counting, and a private one printed `of which 0` over seven
+		// refusals that were all deliberate. See `internal/interp/reserve_test.go:TestMain`.
+		was := reserveMapping
+		reserveMapping = refuseReservation
+		defer func() { reserveMapping = was }()
+	}
+	lim := binary.Limits{Min: 1, Max: maxPages32, HasMax: true}
+	mem, err := newMemory(binary.Memory{Limits: lim})
+	if err != nil {
+		b.Fatalf("newMemory at rung %d (mapped=%v): %v", rung, mapped, err)
+	}
+	img := mem.img.Load().bytes
+	switch {
+	case mapped && uint64(cap(img)) != maxPages32*pageSize:
+		b.Fatalf("rung %d asked for the mapped arm and got %d bytes of capacity, want the "+
+			"reservation's %d: a mapped column measured on the fallback makes arm F's ratio "+
+			"1.0 and reports the defect as absent", rung, cap(img), maxPages32*pageSize)
+	case !mapped && cap(img) != len(img):
+		b.Fatalf("rung %d asked for the fallback and got %d bytes of capacity behind %d of "+
+			"length, so the seam did not take effect and this column is the mapping wearing "+
+			"the fallback's heading", rung, cap(img), len(img))
+	}
+
+	// Untimed, at every rung including the first, for arm B's reason: the row that skips it pays its
+	// memory's first-ever grow inside a timed batch and is not a data point about size.
+	if got := mem.grow(rung, nil); got != 1 {
+		b.Fatalf("setup grow past %d pages returned %d, want 1", rung, got)
+	}
+	for j := range reps {
+		start := time.Now()
+		for range batch {
+			if got := mem.grow(1, nil); got < 0 {
+				b.Fatalf("grow was refused (%d) at rung %d, so this row measures a refusal "+
+					"rather than a growth", got, rung)
+			}
+		}
+		per := time.Since(start) / time.Duration(batch)
+		if j == 0 || per < best {
+			best = per
+		}
+		if per > worst {
+			worst = per
+		}
+	}
+	runtime.KeepAlive(mem)
+	return best, worst
 }
 
 // residentBytes reads this process's resident set size, and reports `false` where it cannot.
