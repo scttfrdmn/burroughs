@@ -210,6 +210,16 @@ build:
 # without a signal, which is the *unbuilt arm* shape rather than a new instrument: this is the same
 # build over the same tree, one flag different, not a second oracle.
 	$(GO) build -tags burroughs_endtable ./...
+# The same argument for a *port* arm, which decision 0076 created. `internal/interp/reserve_other.go`
+# is the whole of §8 M-1's non-conformant half, and nothing in this tree compiles it: `make check`
+# runs on the dev box and CI runs on linux, both `unix`. So one non-`unix` cross-compile, for the
+# same reason and with the same bound — one build, one flag different, not a second oracle.
+#
+# `windows/amd64` and not `plan9` or a wasm port, because it is the arm that has somewhere to go:
+# `VirtualAlloc` is reachable through `syscall.NewLazyDLL` with no cgo, so this file is expected to
+# gain a real `mapReservation` rather than stay a stub. The other three are covered incidentally —
+# the tag is `!unix`, so a break in the shared body breaks all four and this build sees it.
+	GOOS=windows GOARCH=amd64 $(GO) build ./...
 
 # -shuffle=on so test order is never load-bearing.
 test:

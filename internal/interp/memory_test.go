@@ -626,7 +626,17 @@ func TestMemoryIndexSpaceCountsImportsFirst(t *testing.T) {
 // refusal is distinguishable from the other three — are
 // `TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal`'s, and saying so here is what
 // keeps this test from being read as covering them.
+//
+// **All three arms are decision 0076's fallback path, and the test says so by disabling the mapping.** The
+// reservation this test is about is `sharedReservePages`', which 0076 demoted from the mechanism to the
+// fallback: where a mapping is available, arm 1's memory is reserved to its declared max rather than to the
+// cap, arm 2's unshared memory does not move at all, and arm 3's refusal has no population. That does not
+// weaken the test — it names where its subject lives, which is the `!unix` ports and any host that refuses
+// a mapping. Arms 2 and 3 are the ones that said so: both are asked in the failing direction, and both
+// failed the moment the mapping landed.
 func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
+	withoutReservation(t)
+
 	base := func(m *memory) uintptr {
 		if len(m.view()) == 0 {
 			t.Fatal("a zero-length memory has no base to read, so this arm asserts nothing")
@@ -731,7 +741,19 @@ func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 // It also pins *reserved ⇒ marked*, the invariant that lets the mark live at `allocate`: the one
 // function that reserves is the one that marks, so there is no second site to drift from it. `Spawn`'s
 // walk becomes a second writer with #554, and it writes while exactly one thread exists.
+//
+// **Decision 0076 answered the complement's argument rather than falsifying its arithmetic, so this test
+// runs on the fallback path.** The unmarked arm below reads *"a mark on everything would put every program
+// on the refusal arm, which is option (A) that 0056 rejected for charging single-threaded programs"* — and
+// on the mapping path every memory *is* marked, without any program being charged. Both are true: option
+// (A)'s charge was that a marked memory cannot grow past a **cap**, and 0076 makes the reservation the
+// address type's ceiling instead, where growth past it is impossible for an i32 memory anyway. So the
+// complement is a claim about the allocator's path, which is where it is asserted; the mapping path's
+// version of it — marked, and refused nothing — is
+// `TestAMemoryReservesAddressSpaceRatherThanCommittingIt`'s.
 func TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal(t *testing.T) {
+	withoutReservation(t)
+
 	build := func(lim binary.Limits) *memory {
 		m, err := newMemory(binary.Memory{Limits: lim})
 		if err != nil {
@@ -961,11 +983,21 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 		// census is whether every attempt on this arm is permitted, so `wantOK` is the exact grant
 		// count rather than a ceiling. False on the arm ADR 0073 refuses.
 		census bool
+		// fallback disables decision 0076's mapping for this arm, because a memory reserved to its
+		// declared max reslices and this arm's whole subject is the *relocating* grow. Named as its
+		// own field rather than derived from `census` because they are two facts that happen to
+		// agree today: one is about which attempts are permitted, the other about which reservation
+		// the memory got. The refusal floor below is what noticed — it read 0 the moment the mapping
+		// landed, which is the vacuity it was written to catch.
+		fallback bool
 	}{
-		{"reslice", fmt.Sprintf("(memory 1 %d shared)", maxPages), true},
-		{"reallocate", fmt.Sprintf("(memory 1 %d)", maxPages), false},
+		{"reslice", fmt.Sprintf("(memory 1 %d shared)", maxPages), true, false},
+		{"reallocate", fmt.Sprintf("(memory 1 %d)", maxPages), false, true},
 	} {
 		t.Run(arm.name, func(t *testing.T) {
+			if arm.fallback {
+				withoutReservation(t)
+			}
 			type report struct {
 				ok  int
 				err error

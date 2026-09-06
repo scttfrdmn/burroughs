@@ -66,7 +66,13 @@ and SP-1's arrival protocol replaced by the predicate the marks already express,
 What is not: §4's litmus battery past what spawn needed
 ([#10](https://github.com/scttfrdmn/burroughs/issues/10)), which is now the **only** outstanding half of
 the flip's condition — two graves in this paragraph's *"what is not"* list have been discharged one slice
-apart, so the list is repaired each time rather than annotated. `v0.4.0`'s release note — *"it is not v1 …
+apart, so the list is repaired each time rather than annotated. **That half is outstanding and no longer
+scheduled**, by Scott's #670 ruling below, and the two facts are separate: the condition is unmet, and
+nobody is working on meeting it. What is on main instead is §8 M-1's address-space reservation
+([#672](https://github.com/scttfrdmn/burroughs/issues/672),
+[0076](docs/decisions/0076-a-memory-reserves-address-space-through-an-anonymous-mapping-and-the-go-allocator-becomes-the-fallback-rather-than-the-mechanism.md)),
+which is not a §§2–5 artifact and is on this list only to say why the list did not shrink: Scott named it
+himself when he unscheduled the battery, as *"the dissolving move at platform level"*. `v0.4.0`'s release note — *"it is not v1 …
 v0 closing means v0's conditions are discharged, not that the next phase has begun"* — was likewise
 true about the artifacts when written and is overtaken rather than wrong. What advanced the phase line
 was neither: v0's conditions are discharged and its milestone is closed, so *no* value naming v0 is
@@ -83,6 +89,17 @@ held and the second not**: #586 is resolved by
 and #10's battery still does not cover what the default would promise. The half that holds is recorded here
 rather than the condition rewritten, because the condition is quoted and its state is the reader's to
 derive. The flip is still behaviour 4's own stamp-tier event when it comes.
+
+**And on the #670 review Scott took his own flip off the schedule, which took the battery with it.** His
+words: *"those six rows have exactly one consumer, and it's a condition I invented … The condition stands,
+but the flip isn't scheduled — which means the battery isn't either."* Read carefully, because it is a
+narrower move than it looks: the **condition above is untouched** and still says what it said, so a reader
+can still check it and still find the second half unmet. What changed is that nothing is currently working
+toward making it hold. A principal may unschedule work; **what a principal may not do silently is leave a
+condition standing that reads as though someone were discharging it**, which is why the unscheduling is
+recorded against the condition rather than folded into it. The consequence for a future actor is one line:
+do not pick up #10's battery as though the flip were pending, and do not treat the flip as available
+because #586 is resolved — the schedule, not the condition, is what is empty.
 
 ## Where the work is tracked
 
@@ -116,7 +133,17 @@ complete': join, [#586](https://github.com/scttfrdmn/burroughs/issues/586)'s res
 … So the sequence is #650, #12, then §4 for #586's sake, then the flip."* **That move unparks the battery
 by naming it**, on the same lesson read forwards: the §4 work is now scheduled work inside the end point
 rather than deferred past it, and a condition cannot be simultaneously owed and postponed. What stays
-parked is the reporting of the decisions queue and the eight unstamped ADRs. Recorded here by the actor
+parked is the reporting of the decisions queue and the eight unstamped ADRs. **And on the #670 review the
+battery went back off the schedule** — Scott unscheduled his own `gate:threads` flip and said so of the
+battery in the same breath (the paragraph above quotes him), which means **the end point above now names an
+unscheduled subject again**: "v1's threads are complete" is join, #586, *and the battery*, and the third of
+those is nobody's current work. That is this page's own lesson landing for the **third** time — *a parked
+subject cannot be another subject's end point* — and it is recorded rather than repaired here because
+re-pinning it is Scott's move and not the actor's: the #562 order that created the parking is the same order
+that required it to have an end point, so an actor who quietly chose a new one would be discharging half of
+that order by overriding the other half. What a reader should take from it: **the two discharged components
+are discharged** (join in #12, #586 in 0073), the parking is in force, and its end point is not currently
+reachable. Recorded here by the actor
 who was ordered, which is not independent provenance
 — *durability is not independence* — so commits in the slices this covers stay `Ratio-Class: carried`.
 Graves are closed issues labeled

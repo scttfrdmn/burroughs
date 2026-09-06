@@ -362,6 +362,15 @@ func TestWordAlignedAnswersTheProposalsGuestSpaceCondition(t *testing.T) {
 // through the reslicing arm and fails on the vacuity check instead, naming the unmoved pointer — which
 // is the arm that proves this control is not silently re-testing construction.
 func TestAGrownMemorysPublishedImageIsWordAlignedToo(t *testing.T) {
+	// **The reallocating arm is decision 0076's fallback, so the control runs there.** A memory backed
+	// by an anonymous mapping never reallocates on grow, and its base is *page*-aligned rather than
+	// merely word-aligned — a stronger premise than `sync/atomic`'s note, asserted by
+	// `TestAMemoryReservesAddressSpaceRatherThanCommittingIt`. The arm this control covers is still
+	// live wherever the mapping is not, and the vacuity check below is what said so: it fired on the
+	// unmoved pointer the moment the mapping landed, which is the third way it has now been watched
+	// die.
+	withoutReservation(t)
+
 	in, trap := instantiate1(t, `(module (memory 1))`)
 	if trap != nil {
 		t.Fatalf("instantiate: %v", trap)
