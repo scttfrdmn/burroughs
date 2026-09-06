@@ -32,9 +32,12 @@ if [ -z "$RUN" ]; then   # no run — say WHICH no, don't just time out
 fi
 V=/tmp/ci-verdict-$SHA.txt
 echo "SHA=$SHA RUN=$RUN" > "$V"                # stamp the identity FIRST — see below
-gh run watch "$RUN" --compact --exit-status > /tmp/ci-frames.log 2>&1   # run_in_background
-echo "WATCH_EXIT=$?" >> "$V"
-gh run view "$RUN" --json jobs -q '.jobs[] | "\(.conclusion)\t\(.name)"' >> "$V"   # the verdict
+# The watch goes through scripts/detach.sh, which writes its own pid and process group into $V
+# before starting and bounds the run four ways. Launch it with run_in_background.
+scripts/detach.sh "$V" 1800 -- sh -c "
+  gh run watch $RUN --compact --exit-status > /tmp/ci-frames.log 2>&1
+  echo \"WATCH_EXIT=\$?\" >> $V
+  gh run view $RUN --json jobs -q '.jobs[] | \"\(.conclusion)\t\(.name)\"' >> $V"
 ```
 
 **The loop's negative has two meanings and must say which.** `ci.yml` triggers on
@@ -232,6 +235,46 @@ jobs fresh where one was) and it is the direction nobody re-checks — *an unmea
 empty one*, and a forecast beaten is a forecast falsified. (Scott ordered a line here on the re-run
 mechanic; taking the measurement it needed is what produced the grave. Ordered in session and held by no
 artifact, so the commit carrying it is `Ratio-Class: carried`.)
+
+### A launched process is a claim that something will end it
+
+Every one of the mistakes above is about *reading* a verdict. This one is about the process that does the
+reading, and it is a different failure: a watcher that outlives its verdict is a leak. One session launched
+several, relaunched them after the harness killed one mid-run, and at one point had two on the same run.
+The rule Scott stated for it: **no process starts without naming what ends it** — the same shape as a hard
+limit being a claim about a distribution, and this project has now paid for both.
+
+The claim is made once, in `scripts/detach.sh` ([ADR
+0072](../decisions/0072-a-detached-run-is-bounded-by-a-wall-clock-timeout-and-the-sessions-liveness-because-the-launching-shell-exits-before-the-work-does.md)),
+rather than re-typed per launch. **Why an artifact and not a discipline:** a habit cannot hold a timeout,
+cannot record a pid *before* the work starts, and cannot be read by a later session looking for an orphan.
+This is not policing typed commands — that ruling stands — it is removing this command from the set that is
+typed.
+
+Four things about it are worth knowing away from the script:
+
+- **The bound is a timeout *and* a liveness poll, and the liveness subject is the session, not the parent.**
+  Measured: the shell that types a background command is **gone within about two seconds** while its child
+  runs on, so *"exit when your parent dies"* read against the immediate parent would end a watcher having
+  watched nothing. And `$PPID` cannot see the truth anyway — in `zsh` a subshell inherits the variable
+  rather than recomputing it, so a child reads its *grandparent* and never updates on reparenting. What a
+  watcher must not outlive is the session that wanted the answer.
+- **The pid goes in the stamp file before the work starts.** A pid written at exit is recorded exactly in
+  the runs that did not leak. The process *group* goes beside it, because a watcher spawns `gh` and the
+  killable handle is the group.
+- **A terminal line is written on every path, including expiry.** A verdict file that does not exist cannot
+  say whether the run was green or whether the watcher died, and that ambiguity is what one killed watcher
+  actually cost.
+- **The launcher must not outlive its own child.** Found by the certification battery, and found by the row
+  that *used* the kill handle the script advertises: killing the group takes the status-recording wrapper
+  with it, so a naive loop polls out the whole remaining deadline over a child that no longer exists — the
+  leak class reproduced inside its own repair. Anything that ends the child from outside must end the
+  launcher too.
+
+**A second watcher on one run is still possible**, so *one run, one watcher, one verdict file* remains a
+discipline rather than a mechanism. What changed is that the first watcher's pid is now in the file, so the
+collision is visible instead of silent. (Scott's order, in session on the #658 review, held by no artifact —
+so every commit in the slice carrying it is `Ratio-Class: carried`.)
 
 ## Local cross-architecture verification
 
