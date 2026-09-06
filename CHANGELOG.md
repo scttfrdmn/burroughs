@@ -63,11 +63,21 @@ weakly-ordered platform.
     forecast as *"unreachable today"*, discharged rather than restated. No hot-path signature moves and no
     function gains a second `defer`, which is ADR 0067's measured 25–29 ns/call cliff. Pre-registered and
     checked by disassembly, because a benchmark cannot tell *unchanged* from *changed below its noise
-    floor*: `internal/interp.(*thread).poll`'s emitted code is byte-identical to main.
+    floor*: `internal/interp.(*thread).poll` emits the same instruction stream as main on arm64
+    (`size=96`) and amd64 (`size=60`), and is inlined at the same three call sites on both arms. *Not*
+    byte-identical, which is what the pre-registration said and could not have got: `-S` embeds the source
+    path and line, and the function moved. The forecast's content held; its own wording overclaimed, and
+    so did its population — it said *"all fifteen call sites"*, where fifteen is the number of sites the
+    **safepoint** is reached at (fourteen `jumpTo` back-edges plus `enterFrame`) and three is the number
+    `poll` itself has.
   - **The `recover` re-panics anything that is not the sentinel**, so ADR 0070's subject — an embedder
     panic — still ends the process instead of being silently converted into an error return. That is the
-    one line whose absence no ordinary test can see, so it has its own, and the injection that neuters it
-    was watched to kill it.
+    one line whose absence no ordinary test can see, so it has its own: the injection that neuters the
+    type test was watched to kill `TestASpawnEntryPanicLeavesNoCallerCounted`. **Two lines in the futex
+    arm have no such witness and are named rather than covered** — `terminate()` in the cancellation arm,
+    and the `recover`-form `defer` itself. Both survive their injections, because the deferred poll
+    terminates the thread one frame later anyway; the `recover` earns its place only against a
+    *non-sentinel* panic unwinding through a wait, which nothing in the engine can raise today.
   - **T-5.5's *"a tid is never reused"* gets a test because row 1 made it a live risk**: a set that only
     grows cannot reissue an id by accident, and a set with holes is exactly what invites a reaper to fill
     them.
@@ -1408,6 +1418,33 @@ weakly-ordered platform.
     failure had no entry.
 
 ### Changed
+
+- **`TestNoEngineLockIsHeldAcrossAChannelOperation` pairs a lock with an unlock in the same statement
+  list, where it used to run from a function's first `Lock` to its last `Unlock`.** The first-to-last
+  interval was chosen to over-report, on its own stated ground that *"a false positive is a comment away
+  from being a narrowed rule"*, and T-5's `Instance.Close` and `Instance.Join` are that comment arriving:
+  both are *lock → read the guarded state → unlock → block on a channel → lock → read what the wait
+  produced*, which is not a near-miss of contract §4 B-MM-3 but the shape the clause **requires** — and
+  under first-to-last the two sections merged and the compliant shape reported four violations. The
+  narrowing is the sanctioned exit the control's own message names (*"narrow the rule … do not add a name
+  to a list"*), taken rather than the two alternatives, which were to contort the engine into one
+  critical section or to exempt the one file B-MM-3 is written for.
+  - **An unlock nested one block deeper does not close the section**, so the early release in
+    `if release == nil { w.mu.Unlock(); return }` still leaves the lock held for the rest of the
+    function, and a channel operation after that branch is still reported. This is the case a naive
+    lock-depth counter gets wrong, and it is not hypothetical: `parkAtSafepoint` has exactly that shape.
+    A deferred `Unlock` anywhere in the function keeps the whole-function interval untouched, because
+    `defer` is precisely where pairing is not textual.
+  - **Four injections, run and read**, because *a re-pointed control has not been watched die*: the
+    deferred arm (`Resume`'s first form) fails, blinding the `Lock` match fails the vacuity floor,
+    moving `parkAtSafepoint`'s `<-release` above its body-level unlock fails, and deleting that unlock
+    fails on **both** of its channel operations. That last one is the pair the old rule would have caught
+    for the wrong reason: it passed `parkAtSafepoint` only because the body-level unlock happened to be
+    the textually last one in the function.
+  - **The locked-function floor goes from 9 to 20 against a measured 27**, and the stale enumeration
+    beside it is deleted rather than corrected — it named a `leaveBlocked` that #592 had already replaced
+    with `unmarkBlocked`, so nine names had rotted into eight and a wrong one. Third restatement of that
+    figure in three slices, which makes the pattern the fact.
 
 - **`TestNothingInEngineCodeCreatesASecondObserver` becomes
   `TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`, and its `internal/interp` sibling keeps its

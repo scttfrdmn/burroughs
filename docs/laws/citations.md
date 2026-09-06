@@ -144,6 +144,35 @@ reach is a law out of context.
     description that names one is a description somebody had to read the reference to write.
     (Ruling: Scott, PR #335 relay.)
 
+### An ADR's measured-facts table cites the code the decision then changes, so its citations dangle by design.
+
+- **An ADR's measured-facts table cites the code the decision then changes, so its
+  citations dangle by design.** A before/after ADR opens with what was measured on
+  `main`, and every path-qualified symbol in that table names the tree the decision
+  exists to move — so the ones the mechanism renames stop resolving the moment it
+  lands, and `TestSymbolCitationsResolveToADeclaration` reports them as citations
+  "describing code that is not there", which is exactly what they are and exactly what
+  they are for. Measured on [ADR 0071]: of its two path-qualified citations, `thread.err`
+  survived because the mechanism kept the field and added a reader, and `world.members`
+  did not, because renaming it to `world.live` *is* the mechanism. **The repair is to
+  name the old symbol bare and cite the new one in the same cell** — the fact stays
+  attached to a resolvable pointer, and the rename becomes part of the record rather
+  than a broken link. A table of pre-change facts is the one place in an ADR where a
+  dangling citation is the expected outcome rather than a slip, which is why it is worth
+  a shape of its own: the sweep resolves symbols, not tenses.
+- **A citation inside a quotation is still a citation, so a paragraph whose subject is a
+  wrong citation must not spell it the way a live one is spelled.** The same ADR
+  corrected a draft that had cited `Instance.memoryWait`, a symbol that never existed,
+  and quoted the draft verbatim — in the path-qualified form. The sweep resolves the
+  form, not the quotation marks, so *the correction re-committed the defect it was
+  correcting*: the ADR now failed the gate on a name it was in the middle of calling
+  fictional. Quote the bare symbol, note the elided prefix, and the point survives with
+  nothing left to resolve. This is *a ban reported in the banned form is still the banned
+  form* one family over — a scanner reads tokens, and testimony about a token is made of
+  the token.
+
+[ADR 0071]: ../decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+
 ### Three provenance categories: cited, derived, synthetic.
 
 - **Three provenance categories: cited, derived, synthetic.** *Entailment from

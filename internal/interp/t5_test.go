@@ -166,7 +166,7 @@ func TestMembershipAndStatusRecordsAreBothBounded(t *testing.T) {
 	entry := exportedFuncIndex(t, in, "entry")
 
 	tids := make([]ThreadID, 0, spawnCount)
-	for i := 0; i < spawnCount; i++ {
+	for i := range spawnCount {
 		tid, err := in.Spawn(entry, spawnBase, 0)
 		if err != nil {
 			t.Fatalf("Spawn %d: %v", i, err)
@@ -237,9 +237,9 @@ func TestATidNeverComesBackAfterItsThreadRetires(t *testing.T) {
 	entry := exportedFuncIndex(t, in, "entry")
 
 	seen := make(map[ThreadID]int, 2*perGeneration)
-	for gen := 0; gen < 2; gen++ {
+	for gen := range 2 {
 		tids := make([]ThreadID, 0, perGeneration)
-		for i := 0; i < perGeneration; i++ {
+		for i := range perGeneration {
 			tid, err := in.Spawn(entry, spawnBase, 0)
 			if err != nil {
 				t.Fatalf("Spawn (generation %d, %d): %v", gen, i, err)

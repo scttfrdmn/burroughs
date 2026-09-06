@@ -39,10 +39,18 @@ reproduced here because the choice is only legible against them.
 |---|---|
 | 1 | A trap that ends a spawned thread is stored in `internal/interp/thread.go:thread.err` and read by nothing outside the package. An embedder cannot see it at all. |
 | 2 | `Instance.Join` does not exist. `thread.done` is unexported; a spawned trap is unobservable by construction. |
-| 3 | `internal/interp/safepoint.go:world.members` only grows: **51 members after 50 completed spawns**, and every completed thread is walked by every subsequent `Stop`. |
+| 3 | The membership slice only grows: **51 members after 50 completed spawns**, and every completed thread is walked by every subsequent `Stop`. It was called `members` when this was measured; the field this decision leaves behind is `internal/interp/safepoint.go:world.live`, and the rename is the mechanism, not a tidy-up. |
 | 4 | `Instance.Close` returned in **39µs** while a spawned counter ran on to 23008 — a terminal operation returning while guest code executes. |
 
-Fact 3 is the leak the `members` comment already names, citing T-5 and §10.3 as its reason for existing.
+Fact 3 is the leak the field's own comment already named before this decision, citing T-5 and §10.3 as its
+reason for existing. **Every citation in this table describes code that the decision below then changed**,
+which is what a measured-facts table is for and is also why one of its two path-qualified symbol citations
+went stale the moment the mechanism landed: a fact measured on `main` is a fact about a tree this ADR
+exists to move. `thread.err` survived because the mechanism kept the field and added a reader; `members`
+did not, because renaming it *is* the mechanism. Written out because the sweep that caught it resolves
+symbols, not tenses — a table of pre-change facts is the one place in an ADR where a dangling citation is
+the expected outcome rather than a slip, and the repair is to name the old symbol bare and cite the new
+one.
 Fact 4 is the hazard the ruling calls *"the hazard `Close` exists to remove"*.
 
 ## The stamped answers
@@ -98,10 +106,13 @@ one line in the mechanism whose absence is invisible to every test that does not
 gets its own test.
 
 **A waiter takes the same sentinel, and the draft of this paragraph said it needed none of it.** It read
-*"`internal/interp/futex.go:Instance.memoryWait` already returns an error, so … a third `select` case … plus
-a dequeue"* — two errors in one sentence, and the second is the load-bearing one. There is no
-`Instance.memoryWait`: the site is `internal/interp/futex.go:memory.wait`, and it returns `int32`, the
-instruction's result. So there is no error channel to put a shutdown in, and an added one would be observed
+*"`Instance.memoryWait` already returns an error, so … a third `select` case … plus a dequeue"* — two
+errors in one sentence, and the second is the load-bearing one. There is no `Instance.memoryWait` at all:
+the site is `internal/interp/futex.go:memory.wait`, and it returns `int32`, the instruction's result.
+*(The draft wrote its wrong name in the path-qualified form. It is quoted bare here because ADR 0047's
+sweep resolves that form against a declaration and cannot tell a quotation from a claim — so a paragraph
+whose subject is a citation naming nothing must not spell it the way a live citation is spelled. The
+quotation is otherwise verbatim; the elision is the `internal/interp/futex.go:` prefix.)* So there is no error channel to put a shutdown in, and an added one would be observed
 by nothing — `Close` sets `exitReq` *and* `stopReq`, so the deferred safepoint on the way out panics the
 sentinel before any value reaches `atomicWait`. An always-nil-in-effect error is the shape `unparam` is
 enabled for. The third `select` arm therefore dequeues and calls `thread.terminate`, and the signature does
