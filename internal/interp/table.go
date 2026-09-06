@@ -372,7 +372,7 @@ func (t *table) store(i uint64, r ref) error {
 // access.
 //
 // **This said *"the table's twin of #586 — it needs §4 (#10) to say what is permitted"*, and both halves
-// of that are now wrong.** [ADR 0073][0073] closed #586 by finding the question's answer set *empty*
+// of that are now wrong.** [ADR 0073][0073] answers #586's §4 question by finding its answer set *empty*
 // rather than by adding a clause: an agent that stores through an abandoned array and reloads the same
 // slot at its next instruction fails to read its own store back in its own program order, which no memory
 // model permits. That reading is about the shape and not about memories, so the table half needs no §4
