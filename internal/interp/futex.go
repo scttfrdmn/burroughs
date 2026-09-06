@@ -92,17 +92,35 @@ type waiter struct {
 // sentinel before the value reached its caller — an always-nil-in-effect error, which is the shape this
 // project has `unparam` enabled for.
 //
-// **The deferred cleanup must not poll while a termination is unwinding**, which is why the `defer` is a
-// closure with a `recover` in it rather than the bare `t.leaveBlocked()` it used to be. `leaveBlocked`
-// polls, and a poll on a thread carrying the sentinel reaches `parkAtSafepoint`, reads `exitReq`, and
-// panics *during* a panic — which Go reports as a double panic and which takes the process down. So the
-// unwinding path clears the mark through `unmarkBlocked` and re-panics, exactly as `callHost`'s panic
-// path does for [ADR 0070]'s subject, and for the same stated reason: SP-2's second half has no subject
-// on a thread that will execute no further guest instruction.
+// **The deferred cleanup does not poll while a termination is unwinding — and the reason first written
+// here was false.** It said that a poll on a thread carrying the sentinel *"panics during a panic — which
+// Go reports as a double panic and which takes the process down."* Go does no such thing. A panic raised
+// inside a deferred function while another is active *replaces* the active one and is recovered normally
+// by any `recover` above it, so the bare `t.leaveBlocked()` this closure replaced would reach
+// `parkAtSafepoint`, re-panic the same sentinel, and be recovered by the same frame with the same value.
+// Measured by injection: with the bare form restored, every test in this package still passes. The
+// `recover` form buys **nothing at all** for the sentinel, and the sentence claiming otherwise was
+// arguing for the right line from a crash that does not happen.
 //
-// A flag set on the cancellation arm would also work and is rejected: it would need clearing at the three
-// ordinary exits, and a missed one silently skips the boundary poll SP-2 asks for — a wrong answer where
-// the `recover` form is structurally unable to have one, since the two cases *are* panicking and not.
+// What it is for is the panic that is *not* the sentinel — [ADR 0070]'s subject, an embedder panic
+// unwinding through a thread that is also inside a wait. The bare form polls that thread, and
+// `parkAtSafepoint` does one of two things to it depending on which mark is set: with `exitReq` it
+// terminates, converting a live panic value into the sentinel and losing what the embedder raised; with
+// only `stopReq` it **parks** an unwinding thread on `<-release` until some `Resume`, and counts its
+// arrival for the round. The `recover` form clears the mark through `unmarkBlocked` and re-panics, so the
+// value raised is the value that arrives — exactly what `callHost`'s panic path does, for the reason
+// stated on `unmarkBlocked` itself: SP-2's second half has no subject on a thread that will execute no
+// further guest instruction.
+//
+// **No test discriminates this line, and none is claimed to.** Nothing in `internal/interp` panics
+// through `memory.wait` except `terminate`, so the case above is unreachable in this tree today and the
+// injection that removes the `recover` survives. Named rather than covered, on the terms [ADR 0070] set
+// for this same fold when it called the third one *"unreachable today"*: that is a reason to write the
+// line and say so, not a licence to assert a witness that does not exist.
+//
+// A flag set on the cancellation arm is the third option and is rejected: it would need clearing at the
+// three ordinary exits, and a missed one silently skips the boundary poll SP-2 asks for — a wrong answer
+// where the `recover` form is structurally unable to have one, since the two cases *are* panicking and not.
 //
 // [ADR 0060]: ../../docs/decisions/0060-the-futex-queue-hangs-off-memory-keyed-by-effective-address-because-a-pointer-key-would-borrow-its-soundness-from-another-package.md
 // [ADR 0070]: ../../docs/decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md
@@ -142,6 +160,16 @@ func (m *memory) wait(t *thread, ea uint64, c atomicCell, expected uint64, timeo
 		// is already unwinding — a wake budget spent on a thread that has left is `resolveExpiry`'s own
 		// reason for dequeuing, one termination cause over.
 		m.abandon(ea, w)
+
+		// **`terminate` here is undiscriminated by every test in this package, and the measurement says so
+		// rather than an argument.** The injection that drops this one call — leaving `abandon` — survives
+		// the whole suite, because the arm then falls to `resolveExpiry`, the deferred `leaveBlocked` polls
+		// a thread whose `exitReq` is already set, and `parkAtSafepoint` panics the sentinel one frame
+		// later. The termination happens either way and the guest observes no value either way, since the
+		// panic discards the return. What this line buys is *where*: the thread ends before a result is
+		// chosen, so no reading of `resolveExpiry` can be mistaken for an answer this wait was entitled to
+		// give. Kept for that, not for a behaviour difference, and named because a line with no witness
+		// that reads as load-bearing is how a later reader ends up trusting it for the wrong reason.
 		t.terminate()
 	case <-expiry:
 	}

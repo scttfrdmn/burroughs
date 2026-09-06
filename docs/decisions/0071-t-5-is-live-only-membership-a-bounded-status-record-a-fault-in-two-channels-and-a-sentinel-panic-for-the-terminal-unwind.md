@@ -110,16 +110,37 @@ proposal, so a shutdown cannot be spelled as one of them without telling the gue
 *not-equal* or *timed-out* happened when none did — and `notify`'s wake count is guest-visible, so *woken*
 in particular is a number another thread may already have read.
 
-**The unwind must not poll, and the flag this ADR first proposed is rejected in favour of a `recover`.**
-`memory.wait`'s `defer t.leaveBlocked()` polls, and a poll on a thread carrying the sentinel reaches
-`parkAtSafepoint`, reads `exitReq`, and panics *during* a panic — a double panic, which takes the process
-down. The draft's repair was *"switch on an `unwinding` flag and call `unmarkBlocked`"*; what is implemented
-is a `recover`-and-re-panic closure in the defer that already exists, which is `callHost`'s panic path from
-[ADR 0070](0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md) with *"panic"* read
-as *"any panic"*. The flag would have to be **cleared** at the three ordinary exits, and a missed one
-silently skips the boundary poll SP-2 asks for; the two cases the `recover` distinguishes *are* panicking
-and not, so it has no missable state at all. Either way the next guest entry polls at `enterFrame`, so
-nothing SP-2 asks for is lost.
+**The unwind does not poll, and the reason this ADR gave for it was false — measured, in this slice,
+before landing.** The sentence standing here said that `memory.wait`'s `defer t.leaveBlocked()` polls, that
+a poll on a thread carrying the sentinel *"panics during a panic — a double panic, which takes the process
+down"*, and that this is what compels the `recover`. Go does not behave that way: a panic raised inside a
+deferred function while another is active replaces it and is recovered normally above, so the bare
+`t.leaveBlocked()` re-panics the *same* sentinel and reaches the *same* `recover` with the same value. The
+injection that restores the bare form **survives the whole package suite**, which is the finding rather
+than a footnote to it: the `recover` form buys nothing for the sentinel, and the paragraph was arguing for
+the right line from a crash that does not occur.
+
+**What the `recover` is actually for is the panic that is not the sentinel** — [ADR
+0070](0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md)'s subject, unwinding
+through a thread inside a wait. The bare form polls it, and `parkAtSafepoint` does one of two things by
+mark: with `exitReq` it terminates, converting a live panic value into the sentinel; with only `stopReq` it
+**parks** an unwinding thread on `<-release` and counts its arrival. So the choice is `callHost`'s panic
+path from 0070 with *"panic"* read as *"any panic"*, and it is **undiscriminated by every test here**:
+nothing in `internal/interp` panics through `memory.wait` except `terminate`, so the case is unreachable in
+this tree and the line is named rather than claimed as covered — 0070's own *"unreachable today"* standard
+for this same fold. The flag the draft proposed (*"switch on an `unwinding` flag and call `unmarkBlocked`"*)
+stays rejected against both: it would have to be **cleared** at the three ordinary exits, and a missed one
+silently skips the boundary poll SP-2 asks for, where the `recover`'s two cases *are* panicking and not and
+so have no missable state. Either way the next guest entry polls at `enterFrame`, so nothing SP-2 asks for
+is lost.
+
+**A second line in row 5 has no witness either, and is recorded for the same reason.** Dropping the
+`t.terminate()` call from the cancellation arm — keeping the dequeue — also survives the suite: the arm
+falls through to `resolveExpiry`, the deferred cleanup polls a thread whose `exitReq` is set, and the
+sentinel is panicked one frame later. It is kept for *where* the termination lands (before a result is
+chosen, so no reading of `resolveExpiry` can be mistaken for an answer the wait was entitled to give), not
+for a behaviour difference. Two named undiscriminated lines is what an injection battery is for; the
+alternative was two lines a later reader would trust for reasons that do not hold.
 
 **And the same argument reaches one site the draft did not name: a host call that returns a trap.**
 `callHost` unmarks without polling on that path too, for the reason above plus one that is only visible from

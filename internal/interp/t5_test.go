@@ -79,6 +79,48 @@ func liveAndExited(in *Instance) (live, exited int) {
 	return len(w.live), len(w.exited)
 }
 
+// awaitRetired blocks until `world.retire` has recorded every one of these threads — the state a
+// *join-after-exit* needs, established rather than assumed.
+//
+// **It exists because `Join` has two paths and the arrival counter cannot say which one a test takes.** A
+// join reaching a thread that is still in `live` waits on `done` and consumes the record on the far side;
+// a join reaching one already retired answers straight from the record. Both are correct, and T-5.2's
+// required case is the *second*, so a test that only waits for the guest's arrival word is asserting the
+// clause on whichever path the scheduler happened to give it. Measured: with the fast path's `delete`
+// removed, `TestJoinAnswersAfterExitAndConsumesTheRecord` still passed — it had been taking the live path.
+//
+// A bounded state poll, which is `awaitGuestWord`'s idiom and not a `sleep` standing in for a signal: the
+// state is `world.exited`'s contents and there is no channel an embedder can wait on for it, by design —
+// T-5.2's surface is `Join`, and `Join` is the thing under test.
+func awaitRetired(t *testing.T, in *Instance, tids []ThreadID) {
+	t.Helper()
+
+	w := &in.world
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		w.mu.Lock()
+		missing := 0
+		for _, tid := range tids {
+			if _, ok := w.exited[tid]; !ok {
+				missing++
+			}
+		}
+		live := len(w.live)
+		w.mu.Unlock()
+
+		if missing == 0 {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("%d of %d spawned threads never reached `world.retire` (%d still live).\n"+
+				"A premise and not an assertion: these threads run through an open gate, so a timeout "+
+				"here says they did not finish rather than that the record is wrong.",
+				missing, len(tids), live)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // quiescent asks the engine its own T-5.4 question — `world.quiescentLocked`, under the mutex that owns it
 // — and returns the detail a failure needs beside the answer.
 //
@@ -133,10 +175,21 @@ func TestMembershipAndStatusRecordsAreBothBounded(t *testing.T) {
 	}
 
 	// Every thread has ended once it has bumped the arrival counter and left the open gate: the store
-	// after it is the last instruction of the body. Sequencing, not an assertion — but the *wait* has to
-	// be on each thread's own termination rather than on the counter, so it is the joins below that
-	// establish it, and this only bounds the case where a spawn never ran at all.
+	// after it is the last instruction of the body. Sequencing, not an assertion — the counter says the
+	// bodies ran, and `awaitRetired` says the engine has finished with them, which is what makes every
+	// join below the join-after-exit path rather than whichever path the scheduler supplied.
 	awaitGuestWord(t, in, spawnArrived, spawnCount)
+	awaitRetired(t, in, tids)
+
+	// Before any join: membership has already returned to the host alone and every record is waiting to be
+	// asked for. This is the reading that separates the two bounds, and it is `retire`'s half of it.
+	if live, exited := liveAndExited(in); live != 1 || exited != spawnCount {
+		t.Fatalf("after %d completed spawns and no join, live=%d exited=%d, want 1 and %d.\n"+
+			"`live` is bounded by `world.retire` and needs nothing from the embedder. A live count of "+
+			"%d is fact 3 of ADR 0071 — the set that only grew.",
+			spawnCount, live, exited, spawnCount, spawnCount+1)
+	}
+
 	for i, tid := range tids {
 		if err := in.Join(tid); err != nil {
 			t.Fatalf("Join(%d) (spawn %d) returned %v, want nil — the entry runs to completion "+
@@ -144,15 +197,14 @@ func TestMembershipAndStatusRecordsAreBothBounded(t *testing.T) {
 				"rather than about the record", tid, i, err)
 		}
 		if i == 0 {
-			// After exactly one consumption: live is already back to the host alone, and the other
-			// 49 records are still there to be asked for.
-			live, exited := liveAndExited(in)
-			if live != 1 || exited != spawnCount-1 {
+			// And after exactly one consumption: one record fewer, nothing else moved. The pair of
+			// readings is what says `exited` is bounded by the embedder's joins and by nothing else.
+			if live, exited := liveAndExited(in); live != 1 || exited != spawnCount-1 {
 				t.Errorf("after %d completed spawns and one join, live=%d exited=%d, want 1 and %d.\n"+
-					"`live` is bounded by `world.retire` and needs nothing from the embedder; "+
-					"`exited` is bounded by consumption and needs a `Join` each. A live count "+
-					"of %d is fact 3 of ADR 0071 — the set that only grew.",
-					spawnCount, live, exited, spawnCount-1, spawnCount+1)
+					"`exited` is bounded by consumption and needs a `Join` each, so a count that "+
+					"did not move is a `Join` answering from `thread.err` and leaving the map "+
+					"alone — the leak one field over (contract §2 T-5.2).",
+					spawnCount, live, exited, spawnCount-1)
 			}
 		}
 	}
@@ -234,9 +286,14 @@ func TestJoinAnswersAfterExitAndConsumesTheRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	// The join is the wait. Nothing sequences ahead of it deliberately: this arm's whole subject is that a
-	// thread which may already have exited is still answerable, so establishing that it *has* exited first
-	// would test the other half of the same method.
+	// **The exit is established first, and the paragraph here argued the opposite.** It said *"nothing
+	// sequences ahead of it deliberately … establishing that it *has* exited first would test the other half
+	// of the same method"* — which has it backwards: the *live* path is `TestJoinBlocksUntilTheThreadEnds`'s
+	// subject, and leaving this one unsequenced means the scheduler picks which path this test takes.
+	// Measured, by the injection that drops the fast path's `delete`: this test passed with it gone, because
+	// it had been reaching a thread still in `live` and consuming the record on the far side of `done`.
+	awaitRetired(t, in, []ThreadID{tid})
+
 	if jerr := in.Join(tid); jerr != nil {
 		t.Fatalf("Join(%d) returned %v, want nil", tid, jerr)
 	}
@@ -288,6 +345,18 @@ func TestJoinBlocksUntilTheThreadEnds(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatalf("Join(%d) did not return 30s after the gate opened — `world.retire` closes `done` "+
 			"after writing the record, so a wedge here is the receive never being released", tid)
+	}
+
+	// **The consumption arm belongs here too, because `Join` has two `delete` sites on two different
+	// paths.** `TestJoinAnswersAfterExitAndConsumesTheRecord` is sequenced onto the record fast path by
+	// `awaitRetired`, so it reaches the `delete` before the live scan; the join above blocks on `done` and
+	// reaches the one after it. Measured rather than reasoned: with the after-exit test sequenced, the
+	// injection that drops the post-`done` `delete` survived the whole package — this arm is the witness it
+	// was missing, and *one property asserted once* is not the same as *once per path that can hold it*.
+	if _, exited := liveAndExited(in); exited != 0 {
+		t.Errorf("the status map holds %d record(s) after the joined thread's record was consumed, "+
+			"want 0 — a join that answers and leaves the entry behind is fact 3's leak one field over "+
+			"(contract §2 T-5.2 — a record is consumed by a join)", exited)
 	}
 }
 
