@@ -21,6 +21,22 @@ weakly-ordered platform.
 
 ### Added
 
+- **`scripts/detach.sh` — a launched process is a claim that something will end it.**
+  [#659](https://github.com/scttfrdmn/burroughs/issues/659),
+  [ADR 0072](docs/decisions/0072-a-detached-run-is-bounded-by-a-wall-clock-timeout-and-the-sessions-liveness-because-the-launching-shell-exits-before-the-work-does.md),
+  on Scott's order ahead of #586. A detached run's bound stops being a property of the operator's memory
+  and becomes a property of an artifact: the launcher writes its pid, its child's process group and the
+  session handle into the stamp file **before** starting anything, and four conditions end the child —
+  its own exit, a wall-clock deadline, the session going away, or the child being ended from outside.
+  A terminal line is written on every path, expiry included, because a verdict file that does not exist
+  cannot say whether the run was green or whether the watcher died. The liveness subject is the
+  **session**, on a measurement rather than a preference: the shell that types a background command is
+  gone within about two seconds while its child runs on, so the literal *"exit when your parent dies"*
+  would end a CI watcher having watched nothing. The waiting-on-CI recipe in
+  [operations.md](docs/laws/operations.md#a-launched-process-is-a-claim-that-something-will-end-it) now
+  goes through it. Certified by a five-row battery, 19 assertions — one of which found the design's own
+  version of the defect it repairs, by using the kill handle the script advertises.
+
 - **Thread exit, join and detach — contract §2 T-5.1–T-5.5, `Instance.Join` and `Instance.Fault`, and an
   `Instance.Close` that ends every thread and waits for the unwinds.**
   [#12](https://github.com/scttfrdmn/burroughs/issues/12),

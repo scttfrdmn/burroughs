@@ -187,6 +187,13 @@ Their bodies — specimens, minting records, the token each was granted on — a
    *a command's exit status belongs to whatever ran last*. `sleep` is never how you wait for a
    signal that exists. The recipe, its two-meanings-of-no branch, and the three mistakes in the
    order they were made: [operations.md](docs/laws/operations.md#waiting-on-ci).
+   **And a launched process is a claim that something will end it** — Scott's rule on the #658 review,
+   after a session launched several watchers, relaunched them after an external kill, and at one point
+   had two on one run. The wait is launched through `scripts/detach.sh`, which records its pid and
+   process group in the stamp file *before* starting and bounds the run four ways; the liveness subject
+   is the **session**, because the shell that types a background command is measurably gone within
+   seconds while its child runs on. [The rule and its
+   four parts](docs/laws/operations.md#a-launched-process-is-a-claim-that-something-will-end-it).
 
 ## The law corpus — `docs/laws/`
 
