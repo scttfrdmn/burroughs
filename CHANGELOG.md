@@ -2060,6 +2060,26 @@ weakly-ordered platform.
     attempt count while the memory is short of its max — with both phases asserted non-empty so a
     refuse-everything regression cannot pass vacuously.
 
+- **A test that spawned a thread and never joined it donated a boundary crossing to whichever test ran
+  next** (grave [#666](https://github.com/scttfrdmn/burroughs/issues/666)). `TestEveryBoundaryCrossingIsPaired`
+  went red on `-shuffle=on` reporting an engine site that pairs `enterGuest`/`leaveGuest` by hand and returns
+  early. There is none. Two tests in `host_test.go` waited on a channel their *host function* signalled from
+  inside the call — which says the spawned thread reached the call, not that it left the guest — and returned
+  while it was still unwinding through `callHost`'s re-entry and `runEntry`'s `defer`. Both now `Join`.
+  - **A fresh instance of grave [#599](https://github.com/scttfrdmn/burroughs/issues/599)'s class with the
+    opposite mechanism**: #599's leaker abandoned its callers permanently on a *failing* arm, and these leak
+    transiently on their *passing* arms, in the microseconds between a test returning and a thread retiring.
+    #599's repair made the parity read a delta and recorded that a delta is "immune to whatever the rest of
+    the binary did" — true of the binary's **history** and false of its **concurrency**, so the failure
+    message named one cause for a red caused by the other and sent its reader to audit correct engine sites.
+    Both reads now name the second cause first, and the sentence stays with the distinction beside it.
+  - **Attributed rather than asserted, and it splits the two sites.** A fixed-seed reproducer (the two
+    spawning tests plus the control, `-shuffle=3`/`5`, `-count=30`) reddens 37 runs in 60 with only the
+    `Stop` test's join removed and **0 in 1200** with only the other's — the first thread parks and waits for
+    a `Resume` after its channel closed, the second has a host-function return and two guest instructions.
+    The second join lands anyway because the structure is identical, and both the issue and the comment at
+    the site record that it is structural with no witness.
+
 - **An embedder panic left the engine's blocked and caller marks torn, and no guard could say so, because
   the two leak together into exactly SP-2's *arrived* predicate**
   ([#650](https://github.com/scttfrdmn/burroughs/issues/650)),

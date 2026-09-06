@@ -62,7 +62,9 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 			"InstantiateLinked's pair, build's pair, and runConst's pair for the one global "+
 			"initializer. A number below this is a site that stopped crossing; above it is a site "+
 			"nobody accounted for, and either way decision 0052's Instantiate forecast is measuring "+
-			"something other than what it says", got)
+			"something other than what it says. A count *above* 6 has a third reading that is not "+
+			"about any site here — another test's goroutine crossing concurrently, grave #666; see the "+
+			"parity read at the end of this test", got)
 	}
 
 	// Cases run against one instance, each measuring its own delta. Ordered so that the two that
@@ -260,14 +262,30 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 	// claimed above — an odd number of missed releases *in the cases above* — and is immune to whatever
 	// the rest of the binary did, which an absolute over a global never was.
 	//
+	// **That last clause is true of the binary's history and false of its concurrency, which is grave
+	// #666.** A delta subtracts what earlier tests *finished* doing; it subtracts nothing from a
+	// goroutine that is still between `enterGuest` and `leaveGuest` while these cases run.
+	// `TestAHostCallMarksItsThreadBlockedSoAStopArrives` spawned a thread, waited on a channel the host
+	// function closed from *inside* the call, and returned while that thread was still unwinding — so its
+	// remaining crossings landed here, on the passing arm, with no failing test anywhere to suggest an
+	// abandoned caller. `TestCallerNamesTheThreadTheHostCallRanOn` has the same structure and no witness
+	// at 1200 runs; its window is a host-function return and two guest instructions, where the other's
+	// holds a park and a `Resume`. The sentence above is left standing with this one beside it because the
+	// distinction is the whole lesson: the repair is always at the leaking test (`Join`, `Close`, or
+	// `<-t.done`), never a weaker read here.
+	//
 	// `atStart` rather than `before`, because the baseline is now live across the per-case loop that
 	// takes its own `before` and `govet`'s `shadow` says so. Worth a line: the shadow was *unreportable*
 	// while the outer name died before the loop, so the lint arriving with this repair is the repair
 	// making a variable matter rather than a new defect.
 	if got := (crossings() - atStart) % 2; got != 0 {
-		t.Errorf("this test's own boundary delta is odd (%d) after every case above, so one of them "+
-			"entered the guest and never left it. Every crossing is `enterGuest()` with a `defer "+
-			"leaveGuest()`, so an odd delta means a site paired them by hand and returned early",
+		t.Errorf("this test's own boundary delta is odd (%d) after every case above, so a crossing was "+
+			"opened and not closed. Two causes, and the second is the likelier one: an engine site that "+
+			"pairs `enterGuest()`/`leaveGuest()` by hand and returns early, or — grave #666 — another "+
+			"test's goroutine still inside the guest while these cases ran, because a delta subtracts "+
+			"what the binary has *finished* doing and nothing from what it is still doing. Before "+
+			"auditing engine sites, look for a test that spawns a thread and returns without `Join`, "+
+			"`Close` or `<-t.done`",
 			crossings()-atStart)
 	}
 }

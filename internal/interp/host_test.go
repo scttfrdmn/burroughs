@@ -594,6 +594,30 @@ func TestCallerNamesTheThreadTheHostCallRanOn(t *testing.T) {
 		t.Errorf("both host calls reported thread %d, so `Caller.Thread` is not distinguishing the "+
 			"two threads it ran on at all", onSpawned)
 	}
+
+	// **The spawned thread is joined, and that is grave #666 rather than tidiness.** Both `seen` sends
+	// happen *inside* the host function, so `<-seen` says the thread reached the call — not that it left
+	// the guest. Afterwards it still re-enters through `callHost`, finishes `entry`, and unwinds
+	// `runEntry`'s single `defer` through `leaveCall` and `leaveGuest`, and every one of those touches
+	// `boundaryCrossings`, which is process-global and never reset. A test that returns first donates
+	// them to whatever runs next, where they read as an engine site that pairs its crossings by hand.
+	//
+	// **Structural here, and witnessed one test down.** #666's reproducer — this test and
+	// `TestAHostCallMarksItsThreadBlockedSoAStopArrives` shuffled against
+	// `TestEveryBoundaryCrossingIsPaired` — reddened 37 runs in 60 with the *other* test's join removed
+	// and 0 in 1200 with only this one's removed, because the window here is a host-function return and
+	// two guest instructions while the other's holds a park and a `Resume`. The join stays because the
+	// structure is identical and it costs one call; the measurement is recorded so nobody reads this
+	// comment as a claim that a witness exists.
+	//
+	// `Join` is the signal that the crossing is closed rather than merely reached: `spawn`'s goroutine
+	// closes `done` in a `defer` that runs *after* `runEntry` has returned, so the release edge is
+	// already established when a joiner is woken. `Instance.Close` and `<-t.done` are the other two
+	// sound joiners; a channel the host function itself signals is not one.
+	if err := in.Join(tid); err != nil {
+		t.Errorf("joining the spawned thread: %v — an unjoined thread leaves a boundary crossing open "+
+			"past this test's return and lands it in another test's delta (grave #666)", err)
+	}
 }
 
 // TestCloseCancelsTheHostCallsContextAndWaitsForItToReturn is contract §5 H-3's teardown, both clauses.
@@ -737,7 +761,8 @@ func TestAHostCallMarksItsThreadBlockedSoAStopArrives(t *testing.T) {
 	if !ok {
 		t.Fatal("no exported entry")
 	}
-	if _, err := in.Spawn(entry, 0, 0); err != nil {
+	tid, err := in.Spawn(entry, 0, 0)
+	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
 	<-entered
@@ -758,6 +783,16 @@ func TestAHostCallMarksItsThreadBlockedSoAStopArrives(t *testing.T) {
 	close(release)
 	<-returned
 	in.Resume()
+
+	// Joined for grave #666's reason, spelled out at `TestCallerNamesTheThreadTheHostCallRanOn`:
+	// `close(returned)` runs inside the host function, so it cannot say the thread has left the guest.
+	// **`Resume` first, and that order is load-bearing** — on its way out of the host call the thread
+	// re-enters the guest and polls, and the stop this test began is still in flight, so a `Join` placed
+	// above the `Resume` would wait for a release nothing had issued.
+	if err := in.Join(tid); err != nil {
+		t.Errorf("joining the spawned thread: %v — an unjoined thread leaves a boundary crossing open "+
+			"past this test's return and lands it in another test's delta (grave #666)", err)
+	}
 }
 
 // TestTheThreeSitesThatRefuseAResolvedHostCallee walks the arms of [ADR 0069][0069]'s five-site split
