@@ -1455,10 +1455,14 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// reference's SizeOverflow and SizeLimit become the sentinel value, so
 			// returning an error here would convert ~53 assert_return vectors into
 			// assert_trap answers — the right failure reported on the wrong channel.
+			// **`st.t` is the growing agent, and passing it is ADR 0073.** The relocating
+			// arm may abandon the image every *other* agent of this instance is holding, so
+			// it needs to know which one of them is asking — see `world.soleAgentLocked` for
+			// why the identity and not a count is what discounts the grower.
 			if mem.limits.Addr64 {
-				st.pushI64(mem.grow(uint64(st.popI64())))
+				st.pushI64(mem.grow(uint64(st.popI64()), st.t))
 			} else {
-				st.pushI32(int32(mem.grow(uint64(uint32(st.popI32())))))
+				st.pushI32(int32(mem.grow(uint64(uint32(st.popI32())), st.t)))
 			}
 
 		default:

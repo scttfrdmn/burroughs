@@ -168,6 +168,16 @@ func (c *Caller) Read(offset, n uint64) ([]byte, error) {
 	enterGuest()
 	defer leaveGuest()
 
+	// **The growth lock, read-shared, for the duration of the load and the copy** — ADR 0073's decision
+	// 6. A retained `Caller` is permitted (see `Caller`) and is an agent no `world` count can see: it
+	// holds no `callers`, marks no `hostCalls`, and may be used from a goroutine that is in no world at
+	// all, so `grow`'s sibling-agent predicate cannot exclude it and a relocation would strand it. This
+	// is the exclusion instead, and it is here rather than inside `read` on purpose: `read`'s other
+	// callers are `memAccess`, the SIMD accessors and `atomicNotify`, which is the guest path that must
+	// not pay for an acquisition.
+	mem.growMu.RLock()
+	defer mem.growMu.RUnlock()
+
 	// `offset` arrives as `read`'s *first* parameter and the second is zero. The pair is a wasm
 	// address operand plus a static `offset` immediate, and a host access has no immediate; passing
 	// the whole address as the dynamic half is what keeps `effectiveAddress`'s wrap check meaningful.
@@ -210,6 +220,13 @@ func (c *Caller) Write(offset uint64, buf []byte) error {
 	}
 	enterGuest()
 	defer leaveGuest()
+
+	// The retained-`Caller` exclusion, and this is the direction it was built for: a write through an
+	// abandoned image is the lost write #586 names. See `Read` for the whole argument and for why the lock
+	// is at the boundary rather than inside `write`.
+	mem.growMu.RLock()
+	defer mem.growMu.RUnlock()
+
 	return mem.write(offset, 0, buf)
 }
 

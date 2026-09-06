@@ -288,7 +288,7 @@ func TestAPublishedImageIsImmutableOnceStored(t *testing.T) {
 
 // TestARelocatingTableGrowDoesNotRaceAConcurrentReader is #622's memory-safety half for the table, and
 // **its oracle is the race detector rather than any assertion in it** —
-// `TestARelocatingGrowDoesNotRaceAConcurrentReader`'s argument one subject over, and it is repeated
+// `TestAPublishingGrowDoesNotRaceAConcurrentReader`'s argument one subject over, and it is repeated
 // rather than cross-referenced because a reader who lands here needs to know what a green means.
 //
 // Without `-race` this asserts only that nothing panicked and that the reads answered in bounds, which

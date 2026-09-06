@@ -514,13 +514,16 @@ func (in *Instance) hasSharedMemory() bool {
 // should have to discover that.** What is closed: the backing array may move under a running thread
 // without memory unsafety ([ADR 0058][0058]), the 67 atomics are sequentially consistent ([ADR
 // 0051][0051]), aligned plain accesses do not tear ([ADR 0054][0054]), all three global arms are
-// atomic (#573), the table and segment headers are published images (#622), and `memory.atomic.wait`
-// suspends and wakes (#543). What is **open and reachable from here**: an unshared memory in a
-// spawned instance, grown by one thread while another holds an older image, loses the writes made
-// through that image — [0058]'s coherence residual, **#586**, which needs §4 (**#10**) to say what is
-// permitted before code can be right about it. No *shared* memory is in that population, because
-// `allocate` reserves and therefore marks every one of them and a marked memory never reaches
-// `grow`'s relocating arm.
+// atomic (#573), the table and segment headers are published images (#622), `memory.atomic.wait`
+// suspends and wakes (#543), and an unshared memory grown while another thread holds an older image no
+// longer loses the writes made through it — [0058]'s coherence residual, **#586**, closed by [ADR
+// 0073][0073] by refusing the relocation rather than by describing what a stranded agent observes. That
+// last clause stood in this list under *"what is open and reachable from here"* and read *"needs §4
+// (#10) to say what is permitted before code can be right about it"*; #586's slice found the outcome set
+// empty, so there was no clause to wait for. What is **open and reachable from here**: the table's twin
+// of the same residual — a `table.set` through an abandoned `tabImage` is still lost —
+// **[#662][662]**, ADR 0073's residual 1, which is where that half is tracked now that #586 can no
+// longer carry it.
 //
 // **The lifecycle is T-5's, and it is settled** — §2 T-5.1–T-5.5, [ADR 0071]. A spawned thread is
 // **detached by default**: this returns a tid and no obligation, and a caller that wants to wait calls
@@ -532,6 +535,8 @@ func (in *Instance) hasSharedMemory() bool {
 // the field is `world.live`.
 //
 // [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+// [662]: https://github.com/scttfrdmn/burroughs/issues/662
 func (in *Instance) Spawn(entry uint32, arg int32, stackHint int) (ThreadID, error) {
 	t, err := in.spawn(entry, arg, stackHint)
 	if err != nil {

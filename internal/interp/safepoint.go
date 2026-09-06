@@ -171,6 +171,65 @@ func (w *world) quiescentLocked() bool {
 	return true
 }
 
+// soleAgentLocked reports whether `self` is the only agent of this world that could be executing guest
+// code — ADR 0073's predicate, read by `memory.relocate` to decide whether abandoning an image can strand
+// anybody. `mu` held.
+//
+// # It counts callers, and `len(live) == 1` is the unsound answer it replaces
+//
+// The plausible predicate is *"this world has one live thread"*, and it is **wrong**: an embedder calling
+// `Invoke` from two goroutines has two agents on **one** thread object, because `link.go` builds `in.host`
+// by literal and registers that single value. So the count that answers the question is `thread.callers` —
+// which is decision 0067's subject one level over (*SP-2's predicate is about callers and a thread is not
+// one*), and it is the same lesson because it is the same mistake available in the same place.
+//
+// # Self is excluded by identity, and by identity rather than by arithmetic
+//
+// The grower is one of the callers it is counting, so it must be discounted — but *"total callers == 1"* is
+// not the way to do it. `build`'s start function and `runConst` run guest code **outside** any
+// `enterCall`/`leaveCall` pair, deliberately (see `enterCall`), so a grow from a start function has
+// `callers == 0` on `in.host`: a total of 1 would read instantiation as a second agent and refuse, and a
+// subtraction would underflow. Identity answers both, and `self.callers <= 1` is what still catches the
+// two-concurrent-`Invoke` case, where the second agent is on `self` itself.
+//
+// A nil `self` matches no member, so every live caller counts against it. That is the conservative reading
+// and the right one: a caller with no thread is in no world, so it is not the agent any of these counts is
+// about.
+//
+// **The same reading is what makes this correct when `relocate` asks it of several worlds.** A memory in two
+// index spaces has `relocate` call this once per world, and `self` is a member of at most one of them — so in
+// every *other* world the discount does not apply and one caller is enough to refuse. That is the answer the
+// question wants: an agent inside `Invoke` on an instance that imported this memory can reach these bytes,
+// and it is not the grower.
+//
+// # What it deliberately does not consult
+//
+// **`hostCalls` adds nothing.** A host call is made *from* guest code, so its thread is already inside a
+// counted call and the walk below has refused on its account before `hostCalls` could be asked. A retained
+// `Caller` used off-thread is the agent no count here can see, and it is excluded by `growMu` at the
+// boundary accessors instead ([ADR 0073][0073], decision 6) — stated because the omission looks like the
+// hole and the actual hole is elsewhere.
+//
+// **`done` and `blocked` add nothing either.** A spawned thread that has been admitted but has not reached
+// `enterCall` holds no image — it has executed no memory instruction — and cannot acquire one during a
+// relocation, because `enterCall` needs the mutex the relocation holds. A thread parked in a futex wait has
+// `callers >= 1` and is refused, which is over-broad on purpose: the engine cannot tell a sibling that is
+// *mid-access* from one that merely could be without putting an indicator on every guest access.
+//
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+func (w *world) soleAgentLocked(self *thread) bool {
+	for _, t := range w.live {
+		limit := 0
+		if t == self {
+			limit = 1
+		}
+		if t.callers > limit {
+			return false
+		}
+	}
+	return true
+}
+
 // releaseIfQuiescent claims the waiting `Close`'s channel when the instance has reached quiescence, and
 // returns it for the caller to close **outside** `mu`. `mu` held; nil when there is nothing to release.
 //

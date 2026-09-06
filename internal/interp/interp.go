@@ -305,6 +305,23 @@ func (in *Instance) build() *Trap {
 		}
 		in.mems[memOff+i] = mem
 	}
+	// **Every memory this instance can reach learns which world's agents can reach it** — ADR 0073's
+	// registration, and the position is forced twice over. It is *after* the memories loop because the
+	// index space is not fully populated until then (imports are filled by `link`, definitions here), and
+	// it is *before* the start function below because a start function may call `memory.grow` and the
+	// relocating arm's predicate is unanswerable without the handle.
+	//
+	// **The whole index space, imports included, and that is the ordinary case rather than the exotic one.**
+	// An imported memory collects a second world here, and from then on a relocation must find `self` sole
+	// in both — `memory_grow.wast` is precisely this shape, exporting two memories from one module and
+	// growing them from a second, so a mechanism that refused two worlds would refuse the suite's own
+	// fixture for growing a memory. Skipping nil slots is not defensiveness — a `newMemory` that failed left
+	// one, and its reason is already on `deferred`.
+	for _, mem := range in.mems {
+		if mem != nil {
+			mem.attachWorld(&in.world)
+		}
+	}
 	// **Elements before data, which is the reference's order** — `eval.ml:1316-1317` builds
 	// `es_elem @ es_data @ es_start` and evaluates the concatenation, so every active element
 	// segment is copied before any data segment is.

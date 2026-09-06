@@ -375,7 +375,7 @@ func TestAGrownMemorysPublishedImageIsWordAlignedToo(t *testing.T) {
 	moved := 0
 	for round := range rounds {
 		before := uintptr(unsafe.Pointer(&mem.view()[0]))
-		if got := mem.grow(1); got < 0 {
+		if got := mem.grow(1, &in.host); got < 0 {
 			t.Fatalf("round %d: grow(1) refused with %d on an unshared memory with no declared "+
 				"max, so no round after this one asserts anything", round, got)
 		}

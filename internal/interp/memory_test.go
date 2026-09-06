@@ -604,8 +604,10 @@ func TestMemoryIndexSpaceCountsImportsFirst(t *testing.T) {
 // test would otherwise read as still covering memory safety. **It does not**: the memory-safety property
 // is now unconditional, and its witnesses are
 // `TestGrowPublishesAFreshImageRatherThanMutatingTheHeldOne` for the publication and
-// `TestARelocatingGrowDoesNotRaceAConcurrentReader` — whose oracle is the race detector — for the
-// concurrent header itself.
+// `TestAPublishingGrowDoesNotRaceAConcurrentReader` — whose oracle is the race detector — for the
+// concurrent header itself, which since decision 0073 it watches on the *reslicing* arm: a
+// relocation with a concurrent agent on the instance is refused, so the unshared arm's concurrent
+// header is unreachable rather than unwatched.
 //
 // Three arms, and the third is the one a rule-shaped test would miss:
 //
@@ -643,7 +645,7 @@ func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 	shared := build(binary.Limits{Min: 1, Max: 4, HasMax: true, Shared: true})
 	before := base(shared)
 	shared.view()[0] = 0xAB // a byte the reslice must carry, so "same pointer" is not vacuous
-	if got := shared.grow(3); got != 1 {
+	if got := shared.grow(3, nil); got != 1 {
 		t.Fatalf("shared grow(3) = %d, want the previous size 1", got)
 	}
 	if after := base(shared); after != before {
@@ -670,7 +672,7 @@ func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 
 	// Unshared: expected to move. Asked in the failing direction on purpose.
 	unshared := build(binary.Limits{Min: 1})
-	if got := unshared.grow(1); got != 1 {
+	if got := unshared.grow(1, nil); got != 1 {
 		t.Fatalf("unshared grow(1) = %d, want 1", got)
 	}
 	if unshared.size() != 2 {
@@ -685,11 +687,11 @@ func TestSharedMemoryGrowthKeepsItsBackingArray(t *testing.T) {
 			got, sharedReservePages+8, sharedReservePages)
 	}
 	atCap := base(capped)
-	if got := capped.grow(sharedReservePages - 1); got != 1 {
+	if got := capped.grow(sharedReservePages-1, nil); got != 1 {
 		t.Fatalf("growing to exactly the reservation returned %d, want 1: the cap is a "+
 			"reservation, not a smaller maximum", got)
 	}
-	if got := capped.grow(1); got != -1 {
+	if got := capped.grow(1, nil); got != -1 {
 		t.Errorf("growing one page past the reservation returned %d, want -1.\n"+
 			"Since decision 0058 reallocating here is memory-safe — the abandoned array stays "+
 			"alive and in bounds for every thread holding a descriptor naming it — so the "+
@@ -800,7 +802,7 @@ func TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal(t *testing.
 			// the package's history rather than this call.
 			before := growthRefusedPastReservation.Load()
 			size := m.size()
-			if got := m.grow(c.delta); got != -1 {
+			if got := m.grow(c.delta, nil); got != -1 {
 				t.Fatalf("grow(%d) = %d, want -1: every one of these four is a refusal, and the "+
 					"guest-visible answer is the same for all of them by design", c.delta, got)
 			}
@@ -865,20 +867,39 @@ func instantiateThreads1(t *testing.T, src string) *Instance {
 // are asserted: the first catches a lost page that a subsequent success happens to replace, and the
 // second catches the arithmetic directly.
 //
+// **That census is the reslice arm's alone since [ADR 0073][0073], and the reallocate arm gets an exact
+// accounting rather than a weakened one.** 0073 refuses a relocation while any agent other than the
+// grower is inside `Invoke`, and this fixture's two agents are exactly that pair, so most of the
+// reallocate arm's 120 attempts now return `-1` — the census cannot hold there and pinning a *floor*
+// under it would put a bound below the quantity the defect moves. What replaces it is a partition:
+// every attempt is either a grant or a `growthRefusedWithASiblingAgent`, the counter is read per round,
+// and the two buckets must sum to `agents * attempts`. The third bucket — the declared max, which needs
+// `size == 100` — is empty while the arm asserts `size < maxPages`, so the sum is an equality and not an
+// inequality. A lost page still shows up in `size != 1+granted`, and a grant beyond 99 is still counted;
+// what is gone is only the *exactness of the expected grant count* on that one arm.
+//
 // # The two arms are different mechanisms, not two samples
 //
 //   - **reslice** — a shared memory, whose reservation (`sharedReservePages` is 128) covers all 100
 //     declared pages, so every grow takes the reslicing arm: bounds checks and one `Store`. The window
-//     between the read and the publication is a handful of instructions.
-//   - **reallocate** — an unshared memory, `cap == len`, so every grow is `make` plus a `copy` of the
-//     whole memory, and the window is as wide as the copy. This is also the arm where a lost *store*
-//     would be possible — which this test deliberately does not probe, because that residual is #586's
-//     and needs §4 to say what is permitted.
+//     between the read and the publication is a handful of instructions. No attempt reaches 0073's
+//     refusal, and the arm asserts that the counter did not move.
+//   - **reallocate** — an unshared memory, `cap == len`, so a grow that is *permitted* is `make` plus a
+//     `copy` of the whole memory, and the window is as wide as the copy. This used to be the arm where a
+//     lost *store* was possible, and this test deliberately does not probe that — it was #586's residual,
+//     said here to *"need §4 to say what is permitted"*, and ADR 0073 closed it by refusing the
+//     relocation instead. So this arm now runs in two phases: while both agents are inside `Invoke` every
+//     attempt is refused, and once one agent has returned the survivor is sole and its remaining attempts
+//     relocate. Both phases are asserted to be non-empty, because an arm that refused everything would
+//     satisfy "no page lost" vacuously and an arm that refused nothing would mean the mechanism never ran.
 //
 // The window widths are not a guess: with the mechanism removed the reallocate arm reported bad rounds
-// in **20 of 20** and the reslice arm in **7 of 20** on the first run of this file. So a green on
-// reslice alone is the weaker evidence of the two, which is why both arms are here rather than the one
-// that reproduces more readily.
+// in **20 of 20** and the reslice arm in **7 of 20** on the first run of this file. **That comparison is
+// history, and the reallocate half of it is no longer reproducible**: two concurrent relocating grows are
+// the state 0073 makes unreachable, so removing decision 0061's mutex can only be witnessed on the
+// reslice arm's 7-in-20 now. The weaker of the two reproductions is what is left, which is a real loss of
+// evidence for #600's mechanism and is stated here rather than discovered by whoever next removes that
+// mutex and reads a green.
 //
 // # The falsification battery, and what each arm rules out
 //
@@ -895,20 +916,28 @@ func instantiateThreads1(t *testing.T, src string) *Instance {
 // A version of this test without the observer scored B green, and that green was measured rather than
 // reasoned about.
 //
+// **The battery was run when both arms could carry it, and A's reallocate row is now history for the
+// reason above.** Re-running A after 0073 reproduces on reslice only; B and the shipped row are
+// unaffected, because the `limits.Min` copy is written on both arms and the reslice arm is where the
+// observer already caught B.
+//
 // `Spawn` is not used and is not needed: two goroutines calling `Invoke` on one instance get their own
 // frames and share `in.mems[0]`, the same shape `TestAtomicRmwIsNotObservablyTornAcrossThreads` uses.
 // The `go` statement is in a test file, so `TestNoEngineGoroutineLandsWithoutAPrincipalsRuling` — which
 // scans non-test files only — is not being evaded.
 //
 // [600]: https://github.com/scttfrdmn/burroughs/issues/600
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 func TestConcurrentGrowLosesNoPages(t *testing.T) {
 	const (
 		agents   = 2
 		attempts = 60
 		rounds   = 20
 		maxPages = 100
-		// wantOK is the only success count a serialised run can produce: every page from the
-		// declared min to the declared max is granted once and nothing else is.
+		// wantOK is the only success count a serialised run can produce **on an arm where every
+		// attempt is permitted**: every page from the declared min to the declared max is granted
+		// once and nothing else is. On the reallocate arm ADR 0073 refuses most of them, so there it
+		// is a ceiling rather than an expectation and the partition below is what pins the round.
 		wantOK = maxPages - 1
 	)
 
@@ -929,9 +958,12 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 	for _, arm := range []struct {
 		name string
 		decl string
+		// census is whether every attempt on this arm is permitted, so `wantOK` is the exact grant
+		// count rather than a ceiling. False on the arm ADR 0073 refuses.
+		census bool
 	}{
-		{"reslice", fmt.Sprintf("(memory 1 %d shared)", maxPages)},
-		{"reallocate", fmt.Sprintf("(memory 1 %d)", maxPages)},
+		{"reslice", fmt.Sprintf("(memory 1 %d shared)", maxPages), true},
+		{"reallocate", fmt.Sprintf("(memory 1 %d)", maxPages), false},
 	} {
 		t.Run(arm.name, func(t *testing.T) {
 			type report struct {
@@ -939,10 +971,13 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 				err error
 			}
 			var (
-				lostPages   int
-				extraGrants int
-				badRounds   int
-				minDrift    int
+				lostPages    int
+				extraGrants  int
+				badRounds    int
+				minDrift     int
+				totalGranted int
+				totalRefused int
+				unaccounted  int
 			)
 			for range rounds {
 				in := instantiateThreads1(t, body(arm.decl))
@@ -985,6 +1020,7 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 				}()
 
 				reports := make(chan report, agents)
+				refusedBefore := growthRefusedWithASiblingAgent.Load()
 				for range agents {
 					go func() {
 						out, err := in.Invoke("grow")
@@ -1003,6 +1039,7 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 					}
 					granted += r.ok
 				}
+				refused := int(growthRefusedWithASiblingAgent.Load() - refusedBefore)
 				close(observing)
 				out, err := in.Invoke("size")
 				if err != nil {
@@ -1013,12 +1050,34 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 					lostPages += 1 + granted - size
 					badRounds++
 				}
-				if granted != wantOK {
-					extraGrants += granted - wantOK
+				totalGranted += granted
+				totalRefused += refused
+				if arm.census {
+					if granted != wantOK {
+						extraGrants += granted - wantOK
+					}
+				} else {
+					// A grant beyond the 99 free pages is still the defect's direction and is still
+					// counted; the equality is what ADR 0073's refusals take away. What replaces it is
+					// the partition: every one of the `agents * attempts` calls is a grant or a 0073
+					// refusal. The declared max is the only third possibility and it needs `size ==
+					// maxPages`, which is asserted rather than assumed — a round that did reach the cap
+					// is excluded from the sum instead of being silently absorbed into it.
+					if granted > wantOK {
+						extraGrants += granted - wantOK
+					}
+					// Summed as a magnitude, so two rounds missing in opposite directions cannot
+					// cancel into a green.
+					if gap := agents*attempts - granted - refused; size < maxPages && gap != 0 {
+						if gap < 0 {
+							gap = -gap
+						}
+						unaccounted += gap
+					}
 				}
 				minDrift += <-drift
 			}
-			if lostPages != 0 || extraGrants != 0 || minDrift != 0 {
+			if lostPages != 0 || extraGrants != 0 || minDrift != 0 || unaccounted != 0 {
 				t.Errorf("%d agents x %d grow attempts on one memory, %d rounds: %d pages lost "+
 					"across %d bad rounds, %d grants beyond the %d a serialised run can make, "+
 					"and %d observations where `limits.Min` disagreed with `memory.size` under `growMu`.\n"+
@@ -1029,16 +1088,45 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 					"0061). No corpus vector can see it: `memory_grow.wast` is single-threaded.\n"+
 					"A non-zero drift count with the other two at zero means the mechanism covers "+
 					"the descriptor and not `limits.Min` — the two copies of the length — which is "+
-					"the specific failure 0061 rejected a compare-and-swap over `img` for.",
-					agents, attempts, rounds, lostPages, badRounds, extraGrants, wantOK, minDrift)
+					"the specific failure 0061 rejected a compare-and-swap over `img` for.\n"+
+					"%d attempts landed in neither bucket: on the reallocate arm every call is a "+
+					"grant or an ADR 0073 refusal while the memory is short of its declared max, so "+
+					"a gap means a third outcome this test cannot name — which is the reading that "+
+					"replaced the exact grant census when 0073 made most of that arm's grows refuse.",
+					agents, attempts, rounds, lostPages, badRounds, extraGrants, wantOK, minDrift,
+					unaccounted)
 			}
 			// The premise, asserted rather than assumed: a run in which the agents never overlapped,
 			// or in which `grow` refused everything, would report zero losses while measuring
-			// nothing. `wantOK` grants per round is what a live memory that actually reached its
-			// declared maximum produces, so the equality above doubles as the vacuity check — but
-			// only if it is reached, which is what this logs.
-			t.Logf("%d rounds x %d agents x %d attempts, %d grants expected per round, %d pages "+
-				"lost, %d observations of Min drift", rounds, agents, attempts, wantOK, lostPages, minDrift)
+			// nothing. On the census arm `wantOK` grants per round is what a live memory that actually
+			// reached its declared maximum produces, so the equality above doubles as the vacuity
+			// check. On the other arm it cannot, so both phases are asserted non-empty directly.
+			if arm.census {
+				if totalRefused != 0 {
+					t.Errorf("%d ADR 0073 refusals on the reslice arm, want 0: this arm's memory is "+
+						"reserved to its declared max, so no attempt reaches the relocating branch at "+
+						"all. A non-zero count means the reservation stopped covering the fixture, and "+
+						"the exact grant census above is then measuring a different arm than it names",
+						totalRefused)
+				}
+			} else {
+				if totalRefused == 0 {
+					t.Errorf("no attempt was refused by ADR 0073 across %d rounds: this arm's two "+
+						"agents are siblings on one instance, so the refusal is the expected outcome "+
+						"while both are inside `Invoke`. Zero means the partition asserted above is "+
+						"vacuous — it would hold of a run in which 0073's arm never executed", rounds)
+				}
+				if totalGranted == 0 {
+					t.Errorf("no grow succeeded across %d rounds: 'no page lost' is satisfied by "+
+						"refusing everything, which is the vacuous pass ADR 0073's over-refusal has to "+
+						"be pinned against. The sole-agent tail — one agent returns, the survivor "+
+						"relocates — is what this arm needs to reach", rounds)
+				}
+			}
+			t.Logf("%d rounds x %d agents x %d attempts: %d grants (%d per round; a serialised "+
+				"all-permitted run makes %d), %d ADR 0073 refusals, %d pages lost, %d observations of "+
+				"Min drift", rounds, agents, attempts, totalGranted, totalGranted/rounds, wantOK,
+				totalRefused, lostPages, minDrift)
 		})
 	}
 }

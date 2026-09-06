@@ -495,8 +495,12 @@ func guestWord64(v uint64) uint64 {
 // `unsafe.Pointer` conversion are against the same array — a second load between them would take the
 // address of an offset the first array holds and the second may not. What the descriptor does *not*
 // buy is coherence: an RMW on an array `grow` has abandoned is invisible to the agents on the
-// replacement, which is a lost update rather than a memory-safety failure (**#586**), and `noMove` is
-// what keeps it off the shared path. See `grow`'s reallocating arm.
+// replacement, which is a lost update rather than a memory-safety failure (**#586**). `noMove` kept that
+// off the shared path, and [ADR 0073][0073] closed the rest of it — the relocating arm now refuses while
+// any agent other than the grower could hold the image, so there is no abandoned array for an RMW to
+// operate on. See `grow`'s reallocating arm.
+//
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 type atomicCell struct {
 	// Exactly one of these is non-nil; p64 means the containing word is the access itself.
 	p32 *uint32
