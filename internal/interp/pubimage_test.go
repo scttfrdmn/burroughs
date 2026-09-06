@@ -180,7 +180,7 @@ func TestEveryOperationLoadsAPublishedImageAtMostOnce(t *testing.T) {
 // a valid pointer and length whatever the owning struct does next. A test that took the slice, grew or
 // dropped, and read it back would pass identically on both engines. That is an analytic zero. The
 // memory-safety property is about a header observed *mid-write*, which needs two threads and the race
-// detector — `TestARelocatingTableGrowDoesNotRaceAConcurrentReader` below.
+// detector — `TestAPublishingTableGrowDoesNotRaceAConcurrentReader` below.
 //
 // **The live regression is an arm that assigns through `img.Load()`** — `t.img.Load().slots = grown`,
 // `s.img.Load().refs = nil` — which compiles, passes every conformance vector, and restores the exact
@@ -206,7 +206,11 @@ func TestAPublishedImageIsImmutableOnceStored(t *testing.T) {
 		heldLen := len(held.slots)
 		based := &held.slots[0]
 
-		if got := tab.grow(3, ref{Null: true}); got != 2 {
+		// `nil` for the growing agent, which is the conservative reading and still reaches the
+		// relocating arm here: `invoke1t` has returned, so no caller is live in this world and
+		// decision 0075's predicate finds nobody to strand. A table with no declared max reserves
+		// nothing, so `grow` cannot take the reslicing arm — which is the arm this test needs.
+		if got := tab.grow(3, ref{Null: true}, nil); got != 2 {
 			t.Fatalf("grow(3) = %d, want the previous size 2", got)
 		}
 		if tab.img.Load() == held {
@@ -286,7 +290,7 @@ func TestAPublishedImageIsImmutableOnceStored(t *testing.T) {
 	})
 }
 
-// TestARelocatingTableGrowDoesNotRaceAConcurrentReader is #622's memory-safety half for the table, and
+// TestAPublishingTableGrowDoesNotRaceAConcurrentReader is #622's memory-safety half for the table, and
 // **its oracle is the race detector rather than any assertion in it** —
 // `TestAPublishingGrowDoesNotRaceAConcurrentReader`'s argument one subject over, and it is repeated
 // rather than cross-referenced because a reader who lands here needs to know what a green means.
@@ -298,6 +302,28 @@ func TestAPublishedImageIsImmutableOnceStored(t *testing.T) {
 // `make race` and CI's `race` step are where this test has an oracle; `make check` runs it as a smoke
 // test and that is all.
 //
+// # It rides the reslicing arm now, and [decision 0075][0075] is why
+//
+// It was `TestARelocatingTableGrowDoesNotRaceAConcurrentReader` and it grew a table declaring **no** max —
+// which under 0065's decision 6 reserved nothing, so every grow relocated. [#662][662] closes that arm to
+// exactly this fixture: a relocation is refused while any agent other than the grower is inside `Invoke`,
+// and a second goroutine calling `Invoke` on one instance is that agent. Left as it was, the test failed on
+// its own *"the relocating arm stopped being reached"* guard — the guard doing its job, on a fixture that
+// no longer reaches what it names. That it failed rather than passing quietly is the whole return on having
+// written the guard.
+//
+// So the control is **re-pointed rather than retired**, exactly as memory's twin was under ADR 0073,
+// because the risk it names is not the arm it used to ride: *a published descriptor must never be mutated
+// under a reader*, which is 0065's whole subject and is a property of both arms. The arm still concurrently
+// reachable is the reslicing one — a table declaring a max inside `tableReserveSlots` grows under a
+// concurrent reader as often as this loop asks, and the mutation the detector is here to catch
+// (`t.img.Load().slots = grown` in place of the `Store`) lives on that arm unchanged. The relocating arm's
+// own concurrent-reader case is not left uncovered so much as made *unreachable*, and
+// `TestARelocatingTableGrowRefusesWhileASiblingAgentCouldHoldTheImage` is the witness for that.
+//
+// **The base pointer is asserted stationary at the end, and that is the fixture's vacuity check** — the
+// same role `cap == len` plays in the refusal witness, in the opposite direction.
+//
 // **Only the grow is witnessed, not the drops**, and that is a property of the mechanism rather than an
 // omission: a drop publishes an *empty* image, so there is no second array for a reader to be left
 // holding and no relocation to race. The drops' regression is the immutability arm above.
@@ -306,11 +332,14 @@ func TestAPublishedImageIsImmutableOnceStored(t *testing.T) {
 // the interpreter takes — resolve the table, load the image, bounds-check, access — and it is the
 // *pair* of loads inside one operation that 0065 forbids. `ref.is_null` is there so the result is an
 // i32 the harness can carry; a null slot is the expected answer for every index this test reads.
-func TestARelocatingTableGrowDoesNotRaceAConcurrentReader(t *testing.T) {
-	// Every `table.grow` relocates — a table reserves no capacity, which is 0065's decision 6 — so no
-	// fixture check is needed to reach the relocating arm the way memory's twin needs one.
+//
+// [662]: https://github.com/scttfrdmn/burroughs/issues/662
+// [0075]: ../../docs/decisions/0075-a-table-reserves-to-its-declared-max-under-a-measured-ceiling-and-refuses-to-relocate-with-a-sibling-agent.md
+func TestAPublishingTableGrowDoesNotRaceAConcurrentReader(t *testing.T) {
+	// A table declaring a max inside the reservation cap: `newTable` reserves all 32 slots, so every grow
+	// below reslices into that capacity and republishes the same array at a greater length.
 	in := invoke1t(t, `(module
-	  (table 1 funcref)
+	  (table 1 32 funcref)
 	  (func (export "get") (result i32) (ref.is_null (table.get (i32.const 0))))
 	  (func (export "up") (result i32) (table.grow (ref.null func) (i32.const 1))))`)
 	if len(in.tables) != 1 || in.tables[0] == nil {
@@ -321,6 +350,13 @@ func TestARelocatingTableGrowDoesNotRaceAConcurrentReader(t *testing.T) {
 		grows = 24
 		reads = 2000
 	)
+	if got := cap(in.tables[0].view()); uint64(got) < 1+grows {
+		t.Fatalf("the fixture reserved %d slots and this loop grows to %d, so the run would leave the "+
+			"reslicing arm partway through and be refused by #662's predicate", got, 1+grows)
+	}
+	// Read before the goroutines start and compared after they join: the whole run must stay on the
+	// reslicing arm, and this is the pointer that says so.
+	base := &in.tables[0].view()[0]
 	done := make(chan error, 2)
 	go func() {
 		for range reads {
@@ -347,7 +383,7 @@ func TestARelocatingTableGrowDoesNotRaceAConcurrentReader(t *testing.T) {
 				return
 			}
 			if got := out[0].Int32(); got < 0 {
-				done <- fmt.Errorf("grow %d refused with %d, so the relocating arm stopped being "+
+				done <- fmt.Errorf("grow %d refused with %d, so the reslicing arm stopped being "+
 					"reached and the rest of this test asserts nothing", i, got)
 				return
 			}
@@ -364,5 +400,13 @@ func TestARelocatingTableGrowDoesNotRaceAConcurrentReader(t *testing.T) {
 	// concurrent `grow`s in general, and 0065's coherence residual says so.
 	if got := in.tables[0].size(); got != 1+grows {
 		t.Errorf("after %d serial grows the table is %d slots, want %d", grows, got, 1+grows)
+	}
+	if now := &in.tables[0].view()[0]; now != base {
+		t.Errorf("the backing array moved from %p to %p, so this run left the reslicing arm and nothing "+
+			"above asserted what it claims to.\n"+
+			"A reserved table must reslice: the reservation is what makes the pointer stationary, and "+
+			"after #662 the relocating arm would have *refused* under the concurrent reader rather "+
+			"than moving. Rebuild the fixture so the reservation covers every grow — do not drop this "+
+			"check", base, now)
 	}
 }

@@ -898,6 +898,14 @@ func (m *memory) grow(delta uint64, self *thread) int64 {
 // relocMu serialises `relocate` against every other `relocate` in the process, and it is what lets a
 // relocation hold more than one `world.mu` at a time.
 //
+// **Its subject is an *image*, not a memory, and that is decision 0075's decision 4 rather than a
+// generalisation for tidiness.** `internal/interp/table.go:table.relocate` takes this same mutex, because a
+// second process-wide ticket for tables would restore exactly the cycle this one exists to prevent: a table
+// relocation holding world A's mutex and reaching for world B's, against a memory relocation holding B and
+// reaching for A. One admission ticket for every relocation of every kind is what makes the multi-lock
+// section safe. The sentence above therefore reads "every other `relocate`" literally, and it did not when
+// only one existed.
+//
 // **A global mutex is here in place of a total order over worlds, and the trade is deliberate.** The hazard
 // is two grows on two memories that each span the same two instances, taking those two `world.mu`s in
 // opposite orders. The textbook repair is to give every `world` a rank and lock in rank order; this instead

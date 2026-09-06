@@ -102,10 +102,18 @@ type tabImage struct {
 // access"* and 0065 falsifies that half exactly as 0058 falsified memory's, so it is removed rather
 // than left for a reader to trust.
 //
-// **Every grow relocates, and there is no `noMove` mark**, which is a stated difference from memory
-// rather than an omission — 0065's decision 6. Memory reserves capacity because ADR 0051's atomics
-// hold a raw pointer into the array across an access; nothing addresses a table atomically, and the
-// threads proposal at this pin has no shared tables, so there is no reservation to reslice into.
+// **A grow reslices into a reservation where the module declared a max, and relocates otherwise**, which
+// is [decision 0075][0075] replacing 0065's decision 6. That paragraph read *"every grow relocates, and
+// there is no `noMove` mark … nothing addresses a table atomically, and the threads proposal at this pin
+// has no shared tables, so there is no reservation to reslice into"* — the two premises were about
+// *atomics* and *sharing*, and the defect they missed needs neither: an agent holding an older image writes
+// into the array a relocation abandons, and its write is lost
+// ([#662](https://github.com/scttfrdmn/burroughs/issues/662)). So the conclusion is falsified while both of
+// its premises stand, and one half of it survives: there is still **no `noMove` mark**, because the whole
+// of what a stranded table agent loses is plain writes and `ws` below answers that case exactly, where a
+// memory's atomics need the categorical refusal a mark buys (0075, decision 5).
+//
+// [0075]: ../../docs/decisions/0075-a-table-reserves-to-its-declared-max-under-a-measured-ceiling-and-refuses-to-relocate-with-a-sibling-agent.md
 //
 // The element type is `ref`, the struct 0002 pinned before it had a consumer, and this is that
 // consumer arriving. A `[]uint32` of function indices would have been smaller and would have
@@ -126,9 +134,30 @@ type table struct {
 	// `img` would relocate the defect to the copy it cannot reach. Both writes are inside the
 	// section.
 	//
-	// There is no lock order to get wrong, for memory's reason one file over: `grow` is the only
-	// taker and it takes nothing else.
+	// The order is `growMu` → `relocMu` → `world.mu`…, which this comment said did not exist —
+	// *"there is no lock order to get wrong … `grow` is the only taker and it takes nothing else"* —
+	// until `relocate` below gave the relocating arm two more locks to take (decision 0075, decision 3).
+	// It is memory's order, and it is memory's *mutex*: `relocMu` is process-wide and covers both
+	// subjects, so a table relocation and a memory relocation cannot take two worlds' mutexes in
+	// opposite orders. `attachWorld` takes this lock too, which is what keeps `ws` off every access path.
 	growMu sync.Mutex
+
+	// ws is every world whose index space holds this table — memory's field with the subject swapped,
+	// and every paragraph on `memory.ws` carries over: one entry per instance that defines or imports it,
+	// deduplicated by identity, empty until an instance installs it, registered by `build` where reach is
+	// granted rather than found by a walk, written and read only under `growMu`, append-only.
+	//
+	// **It is here because `relocate` needs to ask a question a `table` could not ask** (decision 0075):
+	// abandoning an image is coherent exactly when no *other* agent could be holding it, which is a
+	// question about a world's callers.
+	//
+	// **The cross-instance case is the ordinary one for tables too, and it was measured for memories
+	// before being assumed here**: `memory.ws`' own comment records a first draft that refused every
+	// relocation once a second instance appeared and cost 30 default-lane passes, because the spec's own
+	// growth fixture exports two memories from one module and imports them into another. `linking.wast`
+	// is the table shape of the same fixture, so a slice-and-not-a-bool is transferred with the finding
+	// rather than re-derived from a fresh guess.
+	ws []*world
 
 	// limits is the declared type, kept for the same reason memory.limits is: `grow` needs the
 	// max and the index width to decide whether a delta is legal, and `table.grow` is the next
@@ -208,7 +237,31 @@ func (in *Instance) newTable(t binary.Table) (*table, error) {
 	// the field is retained and this fill reads it — and a fresh table's slots are still not
 	// "empty": they hold whatever `v.ref` is, and reading a null one is `uninitialized element`
 	// rather than an out-of-bounds access.
-	slots := make([]ref, lim.Min)
+	//
+	// **The capacity is the declared max under a ceiling; the length is still the declared minimum** —
+	// [decision 0075][0075]'s reservation, which is what lets `grow` reslice instead of abandoning an
+	// image a sibling agent may be holding (#662). `reserve` never falls below `lim.Min`, so a minimum
+	// above the ceiling is allocated in full and simply cannot grow — `allocate`'s arm one file over,
+	// reported by `grow` as the spec's `-1`. A table that declared **no** max reserves nothing: the engine
+	// reserves what the module declared and never what the engine would guess (0075, decision 1).
+	//
+	// **The reserved tail is left zeroed here and filled by `grow`, which is the opposite of memory's
+	// arrangement and has to be.** A zeroed `ref` is `{Null: false, Addr: 0}` — function 0 — so the tail
+	// is not merely uninitialised, it is *wrong* for every fill value; `grow`'s reslicing arm writes `r`
+	// across the new slots before publishing the longer image, and filling with `v.ref` here would be a
+	// second, staler claim about slots nobody can see yet.
+	//
+	// **No fourth `math.MaxInt` guard, deliberately.** `reserve` is at most the larger of `lim.Min` —
+	// guarded two lines up — and `tableReserveSlots`, which is this package's own constant rather than a
+	// module input, so a guard here could not fire for anything a module can declare, and
+	// [#635](https://github.com/scttfrdmn/burroughs/issues/635) is already about three guards that cannot.
+	//
+	// [0075]: ../../docs/decisions/0075-a-table-reserves-to-its-declared-max-under-a-measured-ceiling-and-refuses-to-relocate-with-a-sibling-agent.md
+	reserve := lim.Min
+	if lim.HasMax {
+		reserve = max(lim.Min, min(lim.Max, tableReserveSlots))
+	}
+	slots := make([]ref, lim.Min, reserve)
 	for i := range slots {
 		slots[i] = v.ref
 	}
@@ -376,15 +429,22 @@ func (t *table) store(i uint64, r ref) error {
 // rather than by adding a clause: an agent that stores through an abandoned array and reloads the same
 // slot at its next instruction fails to read its own store back in its own program order, which no memory
 // model permits. That reading is about the shape and not about memories, so the table half needs no §4
-// clause either. The live number is **[#662][662]**, ADR 0073's residual 1, which also records why
+// clause either. The live number was **[#662][662]**, ADR 0073's residual 1, which also records why
 // `memory`'s refusal does not simply copy across: a shared memory is *reserved*, so its refusal excludes a
 // narrow set of programs, where a table reserves nothing and the same refusal would reach every
 // multi-agent growth. This cited #664 for part of #586's slice, which was a duplicate of #662 filed by
 // diagnosing the dangling citation without searching the tracker; it is closed as one.
 //
+// **[Decision 0075][0075] closes #662, and the paragraph above is kept as the record of what it cost to
+// get here.** The price #662 named — *"a threaded program's table would stop growing at its initial
+// capacity"* — is paid down by giving a table the reservation it did not have, bounded by the module's own
+// declared max under a measured ceiling, so the two arms below are memory's two arms minus the `noMove`
+// one: reslice into the reservation, or relocate only while no sibling agent could hold the image.
+//
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+// [0075]: ../../docs/decisions/0075-a-table-reserves-to-its-declared-max-under-a-measured-ceiling-and-refuses-to-relocate-with-a-sibling-agent.md
 // [662]: https://github.com/scttfrdmn/burroughs/issues/662
-func (t *table) grow(delta uint64, r ref) int64 {
+func (t *table) grow(delta uint64, r ref, self *thread) int64 {
 	t.growMu.Lock()
 	defer t.growMu.Unlock()
 
@@ -403,18 +463,174 @@ func (t *table) grow(delta uint64, r ref) int64 {
 	if newSize > math.MaxInt/refSize {
 		return -1
 	}
-	grown := make([]ref, newSize)
-	copy(grown, cur)
-	for i := old; i < newSize; i++ {
-		grown[i] = r
+	// Both arms store a **fresh** descriptor, once — never an assignment through `t.img.Load()`, which
+	// would rewrite the three words a reader may be dereferencing and restore the exact hazard 0065
+	// removes. `TestAPublishedImageIsImmutableOnceStored` is the control on that.
+	switch {
+	case newSize <= uint64(cap(cur)):
+		// **The reservation arm: the same array at a greater length, so no image is abandoned and
+		// there is nothing for a sibling agent to be stranded on.** An older descriptor names the
+		// identical pointer with a smaller length, so an agent still holding one writes into slots
+		// this array still owns and every such write is visible through the new image.
+		//
+		// **The fill is not optional and is where memory's twin must not be copied.** `memory`'s
+		// reslicing arm publishes `cur[:n]` and says nothing about the new bytes, because `make`
+		// zeroed them and zero is what the spec requires of fresh memory. A zeroed `ref` is
+		// `{Null: false, Addr: 0}` — **function 0** — so publishing without this loop would hand the
+		// guest `delta` references to the module's first function where it asked for `r`, and a
+		// `call_indirect` through one would *succeed* instead of trapping `uninitialized element`.
+		// That is the same fact `newTable`'s initializer fill is written for, one arm over.
+		//
+		// No lock beyond `growMu`: every published image has length at most `old`, so no reader can
+		// reach the slots being filled, and the atomic `Store` below is what makes the fill visible
+		// to anyone who loads the longer image.
+		grown := cur[:newSize]
+		for i := old; i < newSize; i++ {
+			grown[i] = r
+		}
+		t.img.Store(&tabImage{slots: grown})
+	default:
+		// **Past the reservation — or on a table that declared no max and therefore has none — the
+		// old array is abandoned, so this arm asks first whether abandoning it can strand anybody**
+		// (decision 0075, decision 3; ADR 0073's predicate unchanged). A refusal is the spec's `-1`,
+		// which `table.grow` already reports for four other reasons, so the *record* of which one
+		// happened is the counter rather than the result.
+		//
+		// **There is no `noMove` arm above this one, and its absence is decided rather than
+		// inherited.** A memory carries the mark because an atomic RMW on an abandoned array is
+		// invisible to every agent on the new one; nothing addresses a table atomically, so the whole
+		// of what a stranded table agent loses is plain writes — exactly the case the predicate
+		// answers — and a categorical refusal would exclude strictly more programs for nothing.
+		if !t.relocate(newSize, cur, r, self) {
+			tableGrowthRefusedWithASiblingAgent.Add(1)
+			return -1
+		}
 	}
-	// A fresh descriptor, stored once — never an assignment through `t.img.Load()`, which would
-	// rewrite the three words a reader may be dereferencing and restore the exact hazard 0065 removes.
-	// `TestAPublishedImageIsImmutableOnceStored` is the control on that.
-	t.img.Store(&tabImage{slots: grown})
 	t.limits.Min = newSize
 	return int64(old)
 }
+
+// relocate blits this table into a fresh array of `newSize` slots, fills the new ones with `r` and
+// publishes it, or reports that some agent other than `self` could be holding the image it would abandon.
+// `growMu` held; decision 0075's transfer of ADR 0073's decision 1, whose comment on
+// `internal/interp/memory.go:memory.relocate` carries the whole argument:
+//
+//   - **No world: publish.** A table no instance has installed is unreachable by any agent — the
+//     `newTable`-and-nothing-else state every unit fixture starts in. `build` attaches before the start
+//     function runs, so no *instantiated* table is ever in it.
+//   - **One world or several: hold every one of their mutexes across the check, the blit and the
+//     publication**, and refuse unless `self` is the sole agent in all of them. The locks span the blit
+//     rather than merely preceding it because `enterCall` and `admit` both take `w.mu`: holding it is what
+//     makes *"no sibling agent"* true for the duration instead of at an instant, and a caller admitted
+//     mid-blit would write into the old array after the copy had read it.
+//
+// **`relocMu` is memory's mutex and not a twin of it**, which is decision 0075's decision 4: a second
+// process-wide ticket would restore the cycle the first exists to prevent — this holding world A's mutex
+// and reaching for B's while a memory relocation holds B and reaches for A.
+func (t *table) relocate(newSize uint64, cur []ref, r ref, self *thread) bool {
+	if len(t.ws) == 0 {
+		t.publish(newSize, cur, r)
+		return true
+	}
+	relocMu.Lock()
+	defer relocMu.Unlock()
+	for _, w := range t.ws {
+		w.mu.Lock()
+	}
+	// Released in reverse, in one deferred pass rather than a `defer` per iteration: `t.ws` cannot change
+	// while `growMu` is held, so the set unlocked here is exactly the set locked above.
+	defer func() {
+		for i := len(t.ws) - 1; i >= 0; i-- {
+			t.ws[i].mu.Unlock()
+		}
+	}()
+	for _, w := range t.ws {
+		if !w.soleAgentLocked(self) {
+			return false
+		}
+	}
+	t.publish(newSize, cur, r)
+	return true
+}
+
+// publish allocates the new array, copies the old one into it, fills the new slots with `r` and stores the
+// image — `grow`'s allocate-and-blit, split out only so that `relocate`'s two arms each name one operation.
+func (t *table) publish(newSize uint64, cur []ref, r ref) {
+	grown := make([]ref, newSize)
+	copy(grown, cur)
+	for i := uint64(len(cur)); i < newSize; i++ {
+		grown[i] = r
+	}
+	t.img.Store(&tabImage{slots: grown})
+}
+
+// attachWorld records that `w`'s instance holds this table in its index space — decision 0075's
+// registration, called from `build` over the fully populated `tables` slice.
+//
+// Idempotent for one world, for `internal/interp/memory.go:memory.attachWorld`'s reason exactly: a module
+// may import the same table twice, filling two slots with one `*table`, and a second entry for the same
+// world would make `relocate` take that world's mutex twice and deadlock on the second. The identity test
+// is what distinguishes *two slots* from *two instances*.
+//
+// Under `growMu`, so two concurrent instantiations of importers cannot both miss the other's entry.
+func (t *table) attachWorld(w *world) {
+	t.growMu.Lock()
+	defer t.growMu.Unlock()
+	for _, have := range t.ws {
+		if have == w {
+			return // the same instance naming this table at a second index
+		}
+	}
+	t.ws = append(t.ws, w)
+}
+
+// tableGrowthRefusedWithASiblingAgent counts decision 0075's refusal: a table relocation declined because
+// some agent other than the grower could be holding the image it would abandon.
+//
+// **A third counter rather than a wider meaning for either of memory's two**, on
+// `growthRefusedPastReservation`'s own argument. `table.grow` reports failure as `-1` and shares that answer
+// with four spec refusals, so the record that makes an engine limit distinguishable has to be the
+// engine's — and it has to be a *table's*, or a test asserting a table refusal would be satisfiable by a
+// memory refusal elsewhere in the process.
+//
+// **The excluded programs, stated because the limit changes which programs run.** A program with two agents
+// on one instance cannot grow a table past its reservation, where a single-agent program can: the grow
+// returns `-1`. `tableReserveSlots` is what bounds that set, so the two shapes it covers are a table whose
+// declared max exceeds the ceiling and a table that declared **no** max — the second being the larger
+// population by far, 113 of the 694 tables the corpus builds. Growth *within* a reservation is unaffected,
+// since the array does not move and a stale descriptor names the same slots.
+//
+// No vector in either corpus reaches this arm — none spawns, and none grows a table with a second agent
+// live — so the witnesses are unit ones, in a pair: the refusal *and* a sole-agent grow that still
+// relocates and succeeds, because a fix that refused everything would satisfy "no lost write" vacuously.
+// `memory.ws` records what the missing half of that pair cost when it was a draft: 30 default-lane passes.
+var tableGrowthRefusedWithASiblingAgent atomic.Uint64
+
+// tableReserveSlots caps how much capacity a table reserves at instantiation, in slots.
+//
+// **The value is derived by a rule that is deliberately not memory's**, and the difference is the element
+// type. `sharedReservePages` is the largest reservation whose *worst* allocation clears a 1 ms bar, because
+// a memory's reservation is `[]byte` — pointer-free, never scanned, paid once. A table's is `[]ref`: five
+// words with three pointers in them, so the whole capacity is scanned on every mark cycle whether or not
+// the guest ever grows into it. An allocation ladder cannot see that cost, so the rule here is **the
+// smallest ceiling that covers the largest reservable declaration in the corpus** (320 slots, four tables),
+// with the ladder used to show where the allocation bar would bite if the ceiling is ever raised.
+//
+// Best and worst of five, `janus.local`, `measured`:
+//
+//	MEASUREMENT PENDING — decision 0075's pre-registered ladder
+//
+// **The number limits which programs run** — a table whose declared max exceeds it cannot grow past it
+// while a sibling agent is live — so it is flagged for review rather than treated as a tuning constant,
+// and the excluded programs are stated on `tableGrowthRefusedWithASiblingAgent`. A package-level `var`
+// rather than a field for `sharedReservePages`' reason: making it configurable is API-surface design, which
+// §0 makes partisan and which is therefore Scott's and chat-Claude's rather than this slice's.
+//
+// **It is not [#635](https://github.com/scttfrdmn/burroughs/issues/635)'s limit.** That issue is about how
+// large a table may *be* — the vacuous `math.MaxInt` guards — and this is how much capacity is reserved
+// *ahead* of a growth. Reserving less never admits a larger table, and #635's guards are as vacuous after
+// this slice as before it.
+var tableReserveSlots uint64 = 1024
 
 // fill writes r into n consecutive slots starting at i, trapping `out of bounds table access`
 // when the run does not fit — `table.ml:80-84`'s bound, the same `blit` already checks, stated

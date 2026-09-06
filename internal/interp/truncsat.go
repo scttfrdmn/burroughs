@@ -95,10 +95,13 @@ func (in *Instance) execFC(ins binary.Instr, st *stack) error {
 		// before or after the delta reads the same two values either way, since each pop
 		// only ever touches its own array.
 		r := st.popRef()
+		// `st.t` is the growing agent, and it is passed for the reason `memory.grow`'s call site
+		// states: decision 0075's relocating arm is about the *other* agents of this table's worlds,
+		// so it needs to know which one of them is asking — see `world.soleAgentLocked`.
 		if tab.limits.Addr64 {
-			st.pushI64(tab.grow(uint64(st.popI64()), r))
+			st.pushI64(tab.grow(uint64(st.popI64()), r, st.t))
 		} else {
-			st.pushI32(int32(tab.grow(uint64(uint32(st.popI32())), r)))
+			st.pushI32(int32(tab.grow(uint64(uint32(st.popI32())), r, st.t)))
 		}
 
 	case 0x11: // table.fill — `eval.ml:375-392`
