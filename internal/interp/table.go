@@ -435,15 +435,17 @@ func (t *table) store(i uint64, r ref) error {
 // multi-agent growth. This cited #664 for part of #586's slice, which was a duplicate of #662 filed by
 // diagnosing the dangling citation without searching the tracker; it is closed as one.
 //
-// **[Decision 0075][0075] closes #662, and the paragraph above is kept as the record of what it cost to
-// get here.** The price #662 named — *"a threaded program's table would stop growing at its initial
-// capacity"* — is paid down by giving a table the reservation it did not have, bounded by the module's own
-// declared max under a measured ceiling, so the two arms below are memory's two arms minus the `noMove`
-// one: reslice into the reservation, or relocate only while no sibling agent could hold the image.
+// **[Decision 0075][0075] is why the two arms below exist, and the paragraph above is kept as the record
+// of what it cost to get here.** The price #662 named — *"a threaded program's table would stop growing
+// at its initial capacity"* — is paid down by giving a table the reservation it did not have, bounded by
+// the module's own declared max under a measured ceiling, so the two arms below are memory's two arms
+// minus the `noMove` one: reslice into the reservation, or relocate only while no sibling agent could
+// hold the image.
 //
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 // [0075]: ../../docs/decisions/0075-a-table-reserves-to-its-declared-max-under-a-measured-ceiling-and-refuses-to-relocate-with-a-sibling-agent.md
 // [662]: https://github.com/scttfrdmn/burroughs/issues/662
+// [669]: https://github.com/scttfrdmn/burroughs/issues/669
 func (t *table) grow(delta uint64, r ref, self *thread) int64 {
 	t.growMu.Lock()
 	defer t.growMu.Unlock()
@@ -476,10 +478,21 @@ func (t *table) grow(delta uint64, r ref, self *thread) int64 {
 		// **The fill is not optional and is where memory's twin must not be copied.** `memory`'s
 		// reslicing arm publishes `cur[:n]` and says nothing about the new bytes, because `make`
 		// zeroed them and zero is what the spec requires of fresh memory. A zeroed `ref` is
-		// `{Null: false, Addr: 0}` — **function 0** — so publishing without this loop would hand the
-		// guest `delta` references to the module's first function where it asked for `r`, and a
-		// `call_indirect` through one would *succeed* instead of trapping `uninitialized element`.
-		// That is the same fact `newTable`'s initializer fill is written for, one arm over.
+		// `{Null: false, Addr: 0, Inst: nil}` — **not** `ref.null`, by `ref`'s deliberate design — so
+		// publishing without this loop hands the guest `delta` non-null references that name no
+		// function at all where it asked for `r`. That is the same fact `newTable`'s initializer fill
+		// is written for, one arm over, and grave #246's in frame locals two over.
+		//
+		// **What the guest then observes was measured rather than reasoned, and the reasoning was
+		// wrong.** This comment read *"a `call_indirect` through one would succeed instead of trapping
+		// `uninitialized element`"* until deleting the loop and running it: `ref.is_null` does answer
+		// 0, but the call reaches `internal/interp/call.go:funcRefTarget`, which dereferences `r.Inst`
+		// unguarded, and the run dies with a nil-pointer panic repanicked out of `invokeIndex`. The
+		// *success* reading is inherited from grave #246, which described these bits as "function 0 of
+		// the current instance" — true before #170 made resolution go through the reference's own
+		// `Inst`, and a wrong answer turned into a crash the day it landed. The unguarded deref is
+		// filed as [#669][669]; it is unreachable on main precisely because every `[]ref` allocation
+		// site, this one included, fills.
 		//
 		// No lock beyond `growMu`: every published image has length at most `old`, so no reader can
 		// reach the slots being filled, and the atomic `Store` below is what makes the fill visible
@@ -616,9 +629,37 @@ var tableGrowthRefusedWithASiblingAgent atomic.Uint64
 // smallest ceiling that covers the largest reservable declaration in the corpus** (320 slots, four tables),
 // with the ladder used to show where the allocation bar would bite if the ceiling is ever raised.
 //
-// Best and worst of five, `janus.local`, `measured`:
+// Best and worst of five, `janus.local` (linux/amd64, i9-9960X), group `measured`, task 19, 0 concurrent
+// tasks at submit time, from `BenchmarkTableReservationLadder`. Worst is the column that decides, because a
+// fresh arena span is handed out already zeroed and a recycled one is cleared first — an instantiation pays
+// whichever it lands on. **Arm A, `newTable` at the rung, against a 1 ms bar:**
 //
-//	MEASUREMENT PENDING — decision 0075's pre-registered ladder
+//	rung        bytes      best        worst        clears 1ms
+//	320         12800      360ns       12.346µs     yes
+//	1024        40960      590ns       719ns        yes
+//	4096        163840     2.498µs     12.728µs     yes
+//	16384       655360     8.969µs     290.712µs    yes
+//	65536       2621440    138.511µs   570.046µs    yes
+//	262144      10485760   38.059µs    4.976204ms   no
+//	524288      20971520   65.281µs    11.054218ms  no
+//	1048576     41943040   131.939µs   18.06912ms   no
+//
+// **Arm B, `runtime.GC()` with ten reservations live** — the cost memory's bar cannot see:
+//
+//	rung        bytes live   best         worst
+//	320         128000       372.712µs    618.511µs
+//	1024        409600       291.497µs    687.092µs
+//	4096        1638400      351.144µs    525.961µs
+//	16384       6553600      605.036µs    664.795µs
+//	65536       26214400     1.114301ms   1.59612ms
+//	262144      104857600    1.876345ms   2.567789ms
+//	524288      209715200    3.025685ms   3.602766ms
+//	1048576     419430400    5.194508ms   6.231733ms
+//
+// **1024 is the registered rule's answer and the ladder does not move it**: the smallest rung covering the
+// corpus's largest reservable declaration, at 719 ns worst against a 1 ms bar. Neither pre-registered
+// rollback fired, and both forecasts were wrong in ways that leave the rule standing — 0075's *Measured*
+// section scores them, including the half of forecast (b) that failed.
 //
 // **The number limits which programs run** — a table whose declared max exceeds it cannot grow past it
 // while a sibling agent is live — so it is flagged for review rather than treated as a tuning constant,

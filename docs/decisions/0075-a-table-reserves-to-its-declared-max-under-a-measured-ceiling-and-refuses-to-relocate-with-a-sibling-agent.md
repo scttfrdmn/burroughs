@@ -116,11 +116,11 @@ memory twin's shape does *not* simply carry over.
 2. **The reslicing arm fills the new slots explicitly, and memory's argument for why it need not is the
    one thing that must not be copied.** `memory.grow`'s reslice arm publishes `cur[:n]` and relies on
    `make` having zeroed the reservation, because zero *is* the value the spec requires of fresh memory.
-   `ref`'s zero value is `{Null: false, Addr: 0}` — **function 0**, not a null reference — which is the
-   grave `newTable`'s own comment records for its initializer fill. So this arm writes `r` into
-   `cur[old:newSize]` before publishing the longer image, and a witness covers a reslicing grow whose fill
-   value is null: without the fill, `table.get` on a grown slot returns a reference to the module's first
-   function instead of trapping `uninitialized element`. No lock is needed for that write: every published
+   `ref`'s zero value is `{Null: false, Addr: 0, Inst: nil}` — deliberately **not** a null reference —
+   which is the grave `newTable`'s own comment records for its initializer fill. So this arm writes `r`
+   into `cur[old:newSize]` before publishing the longer image, and a witness covers a reslicing grow whose
+   fill value is null: without the fill, `table.get` on a grown slot returns a non-null reference that
+   names no function instead of trapping `uninitialized element`. No lock is needed for that write: every published
    image has length at most `old`, so no reader can see the slots being filled, and `growMu` excludes the
    only other writer of the length.
 
@@ -191,6 +191,71 @@ and the ceiling is re-derived as the largest rung clearing 1 ms. If forecast (a)
 1024's worst exceeding 1 ms — the ceiling drops to the largest rung that clears, and if no rung at or
 above 320 clears, the reservation is abandoned and option 1 stands alone with its exclusions stated.
 
+### Measured
+
+`janus.local` (linux/amd64, Intel i9-9960X), group `measured`, task 19, label `burroughs/50d1175`, **0
+concurrent tasks at submit time**, through `scripts/xcheck-amd64.sh`. Harness:
+`internal/interp/tabladder_test.go:BenchmarkTableReservationLadder`, gated behind
+`BURROUGHS_TABLE_LADDER` and `-benchtime=1x` so `make bench` cannot detonate it.
+
+**Arm A — `newTable` at the rung**, bar: worst of five under 1 ms.
+
+| rung | bytes | best | worst | clears 1 ms |
+| --- | --- | --- | --- | --- |
+| 320 | 12 800 | 360 ns | 12.346 µs | yes |
+| **1024** | **40 960** | **590 ns** | **719 ns** | **yes** |
+| 4096 | 163 840 | 2.498 µs | 12.728 µs | yes |
+| 16384 | 655 360 | 8.969 µs | 290.712 µs | yes |
+| 65536 | 2 621 440 | 138.511 µs | 570.046 µs | yes |
+| 2^18 | 10 485 760 | 38.059 µs | 4.976 ms | **no** |
+| 2^19 | 20 971 520 | 65.281 µs | 11.054 ms | **no** |
+| 2^20 | 41 943 040 | 131.939 µs | 18.069 ms | **no** |
+
+**Arm B — `runtime.GC()` with ten reservations live.**
+
+| rung | bytes live | best | worst |
+| --- | --- | --- | --- |
+| 320 | 128 000 | 372.712 µs | 618.511 µs |
+| 1024 | 409 600 | 291.497 µs | 687.092 µs |
+| 4096 | 1 638 400 | 351.144 µs | 525.961 µs |
+| 16384 | 6 553 600 | 605.036 µs | 664.795 µs |
+| 65536 | 26 214 400 | 1.114 ms | 1.596 ms |
+| 2^18 | 104 857 600 | 1.876 ms | 2.568 ms |
+| 2^19 | 209 715 200 | 3.026 ms | 3.603 ms |
+| 2^20 | 419 430 400 | 5.195 ms | 6.232 ms |
+
+**Forecast (a) is falsified, downward, and the ceiling does not move.** Registered: arm A clears the bar
+at every rung up to and including 2^18 and crosses at 2^19 or 2^20. It crosses at **2^18** — one rung
+early, 4.976 ms against a 1 ms bar. The registered rollback for a downward failure was conditioned on
+*1024's* worst exceeding the bar, and 1024 comes in at **719 ns**, three orders of magnitude under it. So
+the clause does not fire: the derivation rule takes the smallest rung covering the corpus's largest
+reservable declaration, not the largest rung clearing the bar, and being wrong about where the bar bites
+four rungs above the answer changes nothing about the answer. What the miss does buy is a narrower
+statement for anyone who later wants a bigger ceiling: the allocation bar bites at 2^18, not 2^19.
+
+**Forecast (b) is half falsified, and the half that failed is not the half the rollback names.**
+Registered: arm B rises monotonically with the rung, 320 and 1024 indistinguishable, 2^18 measurably
+above both.
+
+- *Indistinguishable at the bottom:* **holds.** 618.5 µs against 687.1 µs worst, and the best column
+  inverts the order (372.7 vs 291.5 µs), which is what indistinguishable looks like.
+- *2^18 measurably above both:* **holds**, by roughly 4× on the worst column.
+- *Monotonic:* **falsified below 16384.** 4096 (525.961 µs worst) comes in under both 320 and 1024, and
+  16384 under 1024. The reservations at those rungs — 128 KB to 1.6 MB live — are below the collector's
+  own baseline on this heap, so the ladder is measuring its floor rather than the reservation. *Compare
+  the floor to the bar*: arm B's signal only separates from that floor at 65536 and above, and the
+  measurement says nothing about the rungs beneath it in either direction.
+
+The rollback registered against (b) fires on **flatness** — *"mark cost flat across the ladder"* — which
+would have falsified the `[]ref`-versus-`[]byte` asymmetry and reverted the derivation to memory's rule.
+The cost is not flat: it rises 10× from 320 to 2^20 and is unambiguously above the floor for the top four
+rungs. So the asymmetry stands and the rule stands. Recorded this way rather than as "(b) confirmed"
+because a forecast that was registered as monotonic and came back non-monotonic is a falsified forecast,
+whatever the conclusion it was supporting: *a failed pre-registration narrows, it does not licence*.
+
+**`tableReserveSlots = 1024`**, unchanged from the value the implementation landed with — which is what
+the pre-registration was for. Had the ladder said otherwise, the constant would have moved before the PR.
+
 ## Consequences
 
 - **What the runtime can do afterwards that it cannot now:** grow a table in a multi-agent instance
@@ -216,3 +281,22 @@ above 320 clears, the reservation is abandoned and option 1 stands alone with it
   visible.** Nothing in this slice benchmarks `table.grow`, and a reslicing grow is now a materially
   different operation from a relocating one. Named rather than built: the pre-registration above measures
   the reservation, not the grow, and a harness for the grow has no consumer until a claim is made about it.
+- **Decision 2's stated consequence was wrong in the guest's favour, and the injection battery is what
+  said so.** This document, the changelog entry and the arm's own comment all read that a fill-free reslice
+  makes `call_indirect` *succeed* where the spec requires `uninitialized element` — an accept-direction
+  wrong answer. Deleting the fill loop and running it: `table.get` does read the slot as non-null, and the
+  call then **panics**. `internal/interp/call.go:funcRefTarget` dereferences the reference's own `Inst`,
+  which is nil in a zeroed `ref`, and the nil-pointer panic is repanicked out of `invokeIndex` — a
+  host-visible engine crash rather than a wrong answer. The *success* reading is inherited from grave #246,
+  which described these bits as "function 0 of the current instance"; that was accurate until #170 made
+  resolution go through the reference's own instance, so the consequence sentence outlived the mechanism it
+  described and this slice transcribed it three times before measuring it. The unguarded deref is filed as
+  [#669](https://github.com/scttfrdmn/burroughs/issues/669) and is unreachable on main for the reason this
+  decision exists: every `[]ref` allocation site fills. **Decision 2 itself is unchanged** — the fill is
+  still not optional, and the case for it is now stronger than the case written for it.
+- **The upstream corpus reaches this arm and cannot see its fill value**, which was assumed and is now
+  measured both ways. With the fill deleted, `TestPhase1Files` stays green; with a `panic` planted in the
+  arm instead, the same run dies inside `table_grow.wast`. So the vectors exercise the reslicing arm and
+  none of them observes what the new slots hold — the accept-direction hole stated as a run rather than as
+  an argument, and the reason the witness is not redundant with the board. Skipping the witness leaves the
+  whole `internal/interp` package green under the same mutation: it is the only oracle on the fill.

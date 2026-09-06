@@ -43,6 +43,20 @@ import (
 // accept direction, at the lexer). Recorded because the near-miss is the lesson: **a
 // pre-registered control that wants a skip has usually not found the layer where its
 // property is already checkable.** Look for that layer before asking for a license.
+//
+// **A fifth door that the flag cannot revoke — and why it is not the withdrawn one.** The
+// paragraph above turned down a skip whose condition BURROUGHS_NO_SKIP=1 could not reach;
+// decision 0075's reservation ladder has that same shape and is licensed anyway, on a
+// distinction the withdrawn door could not claim. A test declines a question CI asks: `go
+// test ./...` runs it, so its skip is a hole in the board and closing that hole is the flag's
+// whole job. A benchmark is asked nothing — **no workflow in this tree passes `-bench`** —
+// so there is no verdict for the flag to compel, and the harness's skip refuses an
+// *invitation* rather than a question. What stops that from being a standing hole is the
+// outside check that already backs the flag: the first time a workflow does pass `-bench`,
+// the SKIP line lands in the output channel and CI's `no test declined to answer` step fails
+// on it. The exemption expires by itself the moment its premise stops holding, which is the
+// property the withdrawn door lacked. Its cost is stated too: the convention this file's
+// header rests on — every skip routed through testenv — now has one member outside it.
 var licensed = map[string]string{
 	"internal/testenv/testenv.go:RequireSuite": "local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
 	// The 0007 authority is a separate corpus from the suite with a separate fetch
@@ -74,6 +88,14 @@ var licensed = map[string]string{
 	// keywordgen's citation check and TestEverySkipSiteIsLicensed failed the build.
 	// Twice now the mechanism has caught an author who knew the rule.
 	"internal/testenv/testenv.go:RequireSuiteFile": "local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
+	// The fifth door (see the header): the first entry that is not an absent-corpus
+	// precondition, and the first that does not route through testenv. Two conditions under one
+	// key, because the inventory is keyed by *function* and both guards live in
+	// `BenchmarkTableReservationLadder` — the invitation is absent (nobody asked for a harness
+	// that allocates 420 MB at its top rung), or the framework tried to iterate a body that
+	// measures its own five repetitions. Losing the two-condition resolution is the price of the
+	// key, so both are written out here rather than left to the reader's grep.
+	"internal/interp/tabladder_test.go:BenchmarkTableReservationLadder": "decision 0075's reservation ladder runs by invitation — BURROUGHS_TABLE_LADDER plus -benchtime=1x — and no workflow passes -bench, so the flag has no question to un-decline; CI's `no test declined to answer` step is what catches it if one ever does",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.

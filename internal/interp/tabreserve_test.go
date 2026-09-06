@@ -116,21 +116,31 @@ func TestATableReservesToItsDeclaredMaxUnderTheCeiling(t *testing.T) {
 // the second is the one that must **not** be transcribed from memory's twin.
 //
 // `memory`'s reslicing arm publishes `cur[:n]` and says nothing about the new bytes, because `make` zeroed
-// them and zero is what the spec requires of fresh memory. A zeroed `ref` is `{Null: false, Addr: 0}` —
-// **function 0** — so a table that reslices without filling hands the guest references to the module's first
-// function where it asked for `ref.null func`. That is an accept-direction wrong answer: a `call_indirect`
-// through such a slot *succeeds* where the spec requires `uninitialized element`.
+// them and zero is what the spec requires of fresh memory. A zeroed `ref` is `{Null: false, Addr: 0, Inst:
+// nil}` — deliberately **not** `ref.null`, which is `ref`'s own documented design — so a table that reslices
+// without filling hands the guest non-null references naming no function where it asked for `ref.null func`.
 //
 // **So the fill is witnessed through the guest, twice, and the second form is the one that scores.**
-// `table.get` reading null is the direct assertion; `call_indirect` trapping `uninitialized element 1` is the
-// same fact where a guest can act on it, and it is the form a corpus vector would have used had any vector
-// reached this arm — none does, because no vector grows a table at all in a module that also calls through it.
+// `table.get` reading null is the direct assertion; `call_indirect` on slot 1 is the same fact where a guest
+// can act on it, and it is the form a corpus vector would have used.
+//
+// **No vector does, and that is measured rather than assumed.** Deleting the fill loop and running
+// `TestPhase1Files` leaves the corpus green, and a `panic` planted in the arm shows the corpus *does* reach it
+// — at `table_grow.wast`, in the same run. So the arm is exercised upstream and its fill value is never
+// observed, which is what makes this an accept-direction hole rather than an unreached branch. The package is
+// green too with this one test skipped: it is the only oracle on the fill in the tree.
 //
 // The pointer is asserted stationary at the end because that is what says the *reslicing* arm ran: on the
 // relocating arm the fill happens in `publish` instead, and a green here would be about the wrong code.
 //
 // Watched die: deleting the `for i := old; i < newSize; i++ { grown[i] = r }` loop from `grow`'s reslicing arm
-// fails both halves — `table.get` reads a non-null slot, and the `call_indirect` reaches function 0.
+// fails the `table.get` half four times over, then **kills the test binary** on the `call_indirect` half —
+// `internal/interp/call.go:funcRefTarget` dereferences the zero `ref`'s nil `Inst` ([#669][669]), so the run
+// dies with a nil-pointer panic repanicked out of `invokeIndex` rather than returning the wrong answer. Both
+// halves score; the second scores louder than it was written to. Because a panic ends the run, that mutation's
+// collateral was read from a second invocation with this test skipped — a panic hides the next test's death.
+//
+// [669]: https://github.com/scttfrdmn/burroughs/issues/669
 func TestAGrowWithinTheReservationKeepsTheArrayAndFillsTheNewSlots(t *testing.T) {
 	// Slot 0 holds `$f` so that a *correct* engine can still call through the table, which is what keeps
 	// the `call_indirect` arm from passing because indirect calls are broken in general.
@@ -173,18 +183,20 @@ func TestAGrowWithinTheReservationKeepsTheArrayAndFillsTheNewSlots(t *testing.T)
 		if got := seen[0].Int32(); got != 1 {
 			t.Errorf("slot %d reads as non-null after a grow whose fill value was `ref.null func`.\n"+
 				"The reslicing arm must write the fill value across the new slots: a zeroed `ref` is "+
-				"{Null:false, Addr:0}, which is function 0 and not null, so publishing `cur[:n]` "+
-				"without the fill hands the guest the module's first function (decision 0075)", i)
+				"{Null:false, Addr:0, Inst:nil}, which is not null and names no function, so publishing "+
+				"`cur[:n]` without the fill hands the guest a reference nothing can resolve "+
+				"(decision 0075)", i)
 		}
 	}
 
 	// The same fact where the guest can act on it. `uninitialized element 1` is the spec's answer
-	// (`eval.ml:126-129`); function 0 in that slot would make this call *succeed*.
+	// (`eval.ml:126-129`). An unfilled slot does not reach this assertion at all: it holds the zero
+	// `ref`, whose nil `Inst` panics inside `funcRefTarget` before any verdict is produced (#669).
 	_, err = in.Invoke("call", Value{Type: binary.I32, Bits: 1})
 	if err == nil {
 		t.Fatalf("call_indirect through grown slot 1 succeeded.\n" +
 			"A slot filled with `ref.null func` must trap `uninitialized element 1`. Succeeding means " +
-			"the slot holds a reference to function 0 — the zero `ref` — which is the accept-direction " +
+			"the slot holds a resolvable reference where the guest asked for null — the accept-direction " +
 			"wrong answer no rejection corpus can see (decision 0075)")
 	}
 	if want := "uninitialized element 1"; !strings.Contains(err.Error(), want) {

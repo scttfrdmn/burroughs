@@ -2088,12 +2088,28 @@ weakly-ordered platform.
     reserve, 113 declaring no max at all, and two declaring maxima (65536 and 4294967295) that make a
     ceiling mandatory rather than a tuning choice — reserving the second outright is an attempted 172 GB
     allocation.
+  - **The ceiling is measured, both pre-registered forecasts came back wrong, and 1024 stands anyway.**
+    `BenchmarkTableReservationLadder` on `janus.local` in group `measured` (task 19, 0 concurrent), gated
+    behind an env var and `-benchtime=1x` so `make bench` cannot detonate a harness that allocates 420 MB
+    at its top rung. Arm A's allocation bar bites at **2^18**, one rung earlier than forecast; 1024 comes
+    in at **719 ns** worst against a 1 ms bar, so the rollback — conditioned on 1024 itself missing — did
+    not fire. Arm B's mark cost rises 10× across the ladder, which is the asymmetry the rule rests on, but
+    the *monotonicity* half of that forecast is falsified below 16384, where 10 reservations sit under the
+    collector's own baseline and the ladder measures its floor. Recorded as a falsified forecast rather
+    than a confirmed conclusion, because the rollback fires on flatness and non-monotonic is not flat.
   - **The reslicing arm fills the new slots, which is the one place memory's twin must not be copied.**
     `memory`'s reslice publishes `cur[:n]` and says nothing about the new bytes, because `make` zeroed them
-    and zero is what fresh memory must read as. A zeroed `ref` is `{Null: false, Addr: 0}` — **function
-    0** — so a fill-free reslice hands the guest references to the module's first function where it asked
-    for `ref.null func`, and a `call_indirect` through one *succeeds* instead of trapping `uninitialized
-    element`. An accept-direction wrong answer, invisible to a rejection corpus by construction.
+    and zero is what fresh memory must read as. A zeroed `ref` is `{Null: false, Addr: 0, Inst: nil}` —
+    deliberately **not** `ref.null` — so a fill-free reslice hands the guest non-null references naming no
+    function where it asked for `ref.null func`. What the guest then does with one was measured rather than
+    reasoned, and the reasoning was wrong in the guest's favour: this entry read that a `call_indirect`
+    through such a slot *succeeds* instead of trapping `uninitialized element`, and deleting the fill loop
+    shows it **panicking** instead — `internal/interp/call.go:funcRefTarget` dereferences the nil `Inst`
+    ([#669](https://github.com/scttfrdmn/burroughs/issues/669)), a host-visible crash rather than an
+    accept-direction wrong answer. The *success* reading came from grave #246's prose, true until #170 made
+    resolution go through the reference's own instance. The corpus reaches this arm — a planted `panic` dies
+    in `table_grow.wast` — and stays green without the fill, so the hole is invisible to it by measurement
+    now and not by construction.
   - **`relocMu` is reused rather than twinned**, because a second process-wide ticket would restore the
     cycle the first exists to prevent — a table relocation holding world A's mutex and reaching for B's
     while a memory relocation holds B and reaches for A. The lock order is `growMu` → `relocMu` →
