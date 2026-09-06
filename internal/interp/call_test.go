@@ -3,6 +3,7 @@ package interp
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -624,5 +625,115 @@ func TestCallIndirectComparisonRecGroupBoundary(t *testing.T) {
 			"here means the rec-group facts stopped reaching this comparison — which is what the " +
 			"predecessor of this test asserted, deliberately, for as long as call_indirect and " +
 			"the cast arms had their own comparator")
+	}
+}
+
+// TestAFuncrefWithNoDefiningInstanceIsReportedNotDereferenced is [#669][669]'s control, and its
+// subject is the *shape* of the failure: a reference the engine cannot resolve must arrive as an
+// error naming the engine, not as a nil-pointer panic out of an embedder's `Invoke`.
+//
+// # Why the value has to be planted, and why that is not a mutation
+//
+// The zero `ref` — `{Null: false, Addr: 0, Inst: nil}`, grave #246's value — is non-null and names
+// no function, and **no engine path produces one in a funcref slot**: `newTable`'s initializer fill,
+// `table.grow`'s reservation arm, `publish`, and `newFrame` all fill. That is why #669 is an issue
+// and not a grave, and it is also why no source is available to *reach* the guard from a guest.
+//
+// So the value is written into a live slot from here — `tab.view()` is the published `[]ref`, and
+// this test is in the package — and then invoked through. #669 found the panic by deleting
+// `table.grow`'s fill loop instead, which works and is the mutation
+// `TestAGrowWithinTheReservationKeepsTheArrayAndFillsTheNewSlots` records. The difference is that a
+// mutation has to be remembered and re-run by hand while this arrives at the same value on the same
+// path and stays green forever after.
+// *A control can test the helper, not the path*: the plant is on the state, and the call is a real
+// guest `call_indirect` reaching `funcRefTarget` through `resolveCallIndirect`, exactly the two
+// frames in #669's trace.
+//
+// # Both reachable call sites, and the third one is named as not reachable
+//
+// `funcRefTarget` has three callers. `call_indirect` and `call_ref` can both be handed this value;
+// `typeOfRef`'s call cannot, because it dispatches on `case r.Inst != nil:` and so is guarded by the
+// discriminator it is switching on ([decision 0077][0077] has the table). Both reachable ones are
+// exercised here off one planted slot, because a guard placed in the shared resolver is only shared
+// while every caller still goes through it.
+//
+// # What is asserted beyond "an error came back"
+//
+// `ErrEngineInvariant` specifically, and the site string in the text. The register is the decision
+// 0077 made and the reason the control checks it: `ErrNotValidated` — #669's own proposed option —
+// reads *"module reached the interpreter unvalidated"*, and `publicError` passes this text to an
+// embedder unchanged, so the wrong sentinel here sends someone to audit a module that is well-formed.
+// A test asserting only `err != nil` would score every one of those choices the same.
+//
+// [669]: https://github.com/scttfrdmn/burroughs/issues/669
+// [0077]: ../../docs/decisions/0077-a-non-null-reference-with-no-defining-instance-is-the-engines-own-broken-invariant-so-it-gets-its-own-sentinel-rather-than-the-modules-blame.md
+func TestAFuncrefWithNoDefiningInstanceIsReportedNotDereferenced(t *testing.T) {
+	// **Two fixtures because the two arms are two lanes**, not for the fixtures' sake: `call_ref`
+	// is `0x14`, which `internal/binary/gatemap.go` maps to the GC gate (decision 0008 — the
+	// function-references five fold into GC rather than taking a gate of their own), so the two
+	// callers cannot share a module without putting the default-lane row behind a gate it has no
+	// business needing. One fixture would have been tidier and would have made the `call_indirect`
+	// row silent about whether it holds with every proposal off.
+	const indirectSrc = `(module
+  (type $v (func))
+  (func $f)
+  (table 2 funcref)
+  (elem (i32.const 0) $f)
+  (func (export "go") (param i32) (call_indirect (type $v) (local.get 0))))`
+	const callRefSrc = `(module
+  (type $v (func))
+  (func $f)
+  (table 2 funcref)
+  (elem (i32.const 0) $f)
+  (func (export "go") (param i32) (call_ref $v (table.get (local.get 0)))))`
+
+	for _, tc := range []struct {
+		name  string
+		src   string
+		site  string
+		build func(*testing.T, string) *Instance
+	}{
+		{"call_indirect", indirectSrc, "table slot 1", invoke1t},
+		{"call_ref", callRefSrc, "call_ref operand", instantiateGC},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := tc.build(t, tc.src)
+
+			// The floor under the row: slot 0 holds `$f`, so a correct engine calls through
+			// this table by both routes. Without it a green below could mean indirect calls
+			// are broken in general rather than that the guard fired.
+			if _, err := in.Invoke("go", Value{Type: binary.I32, Bits: 0}); err != nil {
+				t.Fatalf("%s through slot 0, which holds $f: %v\n"+
+					"the fixture is broken, so nothing below is about the guard", tc.name, err)
+			}
+
+			tab := in.tables[0]
+			if got := len(tab.view()); got != 2 {
+				t.Fatalf("table has %d slots, want 2 — slot 1 is what this row plants into", got)
+			}
+			tab.view()[1] = ref{}
+
+			_, err := in.Invoke("go", Value{Type: binary.I32, Bits: 1})
+			if err == nil {
+				t.Fatalf("%s through a slot holding a non-null reference with a nil defining "+
+					"instance returned no error.\n"+
+					"There is no function for it to have called: `Addr` is 0 and `Inst` is "+
+					"nil, so resolving it would have to have picked an index space out of "+
+					"the air (#669)", tc.name)
+			}
+			if !errors.Is(err, ErrEngineInvariant) {
+				t.Errorf("got %v, want ErrEngineInvariant.\n"+
+					"The engine published an unfilled slot; the module is well-formed, the "+
+					"opcode has an arm, and nothing unimplemented was asked for — so the "+
+					"other three sentinels each say something false, and `ErrNotValidated` "+
+					"says it to an embedder whose module is fine (decision 0077)", err)
+			}
+			if !strings.Contains(err.Error(), tc.site) {
+				t.Errorf("error %q does not name the site %q.\n"+
+					"`site` is pre-rendered by each caller precisely so this message can "+
+					"say which one produced the reference; a message without it leaves the "+
+					"reader to guess between a table slot and an operand", err, tc.site)
+			}
+		})
 	}
 }

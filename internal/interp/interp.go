@@ -588,6 +588,32 @@ var ErrNotValidated = errors.New("interp: module reached the interpreter unvalid
 // memory and never touches it still runs.
 var ErrUnsupported = errors.New("interp: feature not implemented in this phase")
 
+// ErrEngineInvariant is this engine reporting that its own internal state is inconsistent.
+//
+// **The fourth category, and it exists for the reason the third one states**: the first three would
+// have lied. A guest reaching one of these sites has a well-formed module (not ErrNotValidated), an
+// instruction with a real arm that ran (not ErrUnsupportedOp), and asked for nothing this phase
+// lacks (not ErrUnsupported). What failed is a property some *other* part of this package was
+// supposed to establish and did not.
+//
+// **The register matters because this text is what an embedder reads.** `publicError` translates
+// traps and the two unsupported sentinels and passes everything else through, so reporting an
+// unfilled engine array as `module reached the interpreter unvalidated` would send someone to audit
+// a module with nothing wrong with it. This sentinel names the engine, so the bug gets filed here.
+//
+// **Returned, never panicked**, on grave 0003's argument as `funcRefTarget`'s own last arm cites it:
+// a condition asserting a property of *sibling* code is one a future arm can falsify silently, and a
+// crash out of an embedder's call is a worse report than a named error. It is also **not** a trap —
+// dressing an engine bug as a spec verdict the guest earned is what makes it invisible rather than
+// merely misfiled ([decision 0077][0077] option 5).
+//
+// Unlike ErrNotValidated this carries no retirement promise, because no validator can make any of
+// its call sites unreachable: their conditions are properties of this engine's own allocation and
+// initialization sites, which is precisely what distinguishes the two categories.
+//
+// [0077]: ../../docs/decisions/0077-a-non-null-reference-with-no-defining-instance-is-the-engines-own-broken-invariant-so-it-gets-its-own-sentinel-rather-than-the-modules-blame.md
+var ErrEngineInvariant = errors.New("interp: engine invariant broken")
+
 // Invoke calls an exported function by name.
 //
 // Argument checking is by type and arity against the declared functype, and it happens *before*

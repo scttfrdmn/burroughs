@@ -469,6 +469,32 @@ func buildFrame(fn *binary.Func, ft *binary.FuncType, st *stack) (*frame, error)
 // carries its definer with it, and reading `Addr` against the *current* instance is the same bug
 // with a shorter path to it.
 func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
+	// **A non-null reference with no defining instance is this engine's bug, not the module's**, and
+	// the line below is why it needs saying here rather than at the fill sites alone: `target.mod`
+	// dereferences a pointer that Go's zero `ref` leaves nil (`{Null: false, Addr: 0, Inst: nil}` —
+	// grave #246's value), so without this branch the failure is a panic repanicked out of
+	// `invokeIndex` and an embedder sees a crash instead of a report ([#669][669]).
+	//
+	// **Second line of defence, and the fill sites are still the first.** Every `[]ref` allocation in
+	// the engine fills — `newTable`'s initializer, the reservation arm, `publish`, `newFrame` — which
+	// is what makes this branch unreachable on main, and #246's lesson is that a property
+	// re-established by hand once per site is a property a new site will forget. Reached from
+	// `call_indirect` and `call_ref`; `typeOfRef`'s call is guarded already by the `r.Inst != nil`
+	// discriminator it dispatches on, so two of the three callers are the ones this can fire for.
+	//
+	// `ErrEngineInvariant` and **not `ErrNotValidated`**, which is the register [#669][669]'s own
+	// option 1 proposed: that sentinel's text blames the module, its doc promises its call sites go
+	// unreachable when a validator lands, and a validator cannot reach an engine allocation site.
+	// [Decision 0077][0077] has the option set, including why a `uninitialized element` trap here
+	// would be worse than either — it would score as a verdict the guest earned.
+	//
+	// [669]: https://github.com/scttfrdmn/burroughs/issues/669
+	// [0077]: ../../docs/decisions/0077-a-non-null-reference-with-no-defining-instance-is-the-engines-own-broken-invariant-so-it-gets-its-own-sentinel-rather-than-the-modules-blame.md
+	if r.Inst == nil {
+		return nil, nil, fmt.Errorf("%w: %s holds a non-null reference with no defining instance, "+
+			"so function %d has no index space to resolve in (an engine []ref allocation site "+
+			"published unfilled slots; decision 0077)", ErrEngineInvariant, site, r.Addr)
+	}
 	target := r.Inst
 	fn, ok := target.mod.DefinedFunc(r.Addr)
 	if ok {
