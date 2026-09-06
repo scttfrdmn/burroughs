@@ -3,6 +3,7 @@ package interp
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -243,7 +244,7 @@ func newMemory(m binary.Memory) (*memory, error) {
 	if n > math.MaxInt {
 		return nil, &Trap{Reason: "out of memory"}
 	}
-	bs, noMove, err := allocate(lim, n)
+	bs, noMove, mapped, err := allocate(lim, n)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +252,21 @@ func newMemory(m binary.Memory) (*memory, error) {
 		return nil, err
 	}
 	mem := &memory{limits: lim, noMove: noMove}
+	if mapped {
+		// **A mapping is not garbage, so something has to unmap it, and reachability is the only
+		// lifetime that is already correct** (decision 0076, cited on `allocate` below).
+		// `Instance.Close` cannot do it:
+		// a memory may be imported into several instances and the closing one has no way to know it
+		// is the last. When nothing can reach this `*memory`, nothing can reach the mapping either.
+		//
+		// The argument is the mapping at its full extent, which is what `Munmap` needs — it takes a
+		// base and a length — and which holds no pointer back to `mem`, the condition `AddCleanup`
+		// imposes. What makes this safe rather than a use-after-free with the GC's help is that no
+		// exported method hands an embedder a slice aliasing this array:
+		// `internal/interp/host.go:Caller.Read` copies. That property has a control rather than a
+		// sentence, because it is what a future edit would break.
+		runtime.AddCleanup(mem, releaseMapping, bs[:cap(bs):cap(bs)])
+	}
 	// The store is the publication, and it happens before the memory is reachable from anything.
 	// `img` is therefore never nil for a memory this constructor returns, which is what lets `view`
 	// dereference without a check — and a hand-assembled `&memory{}` would break that, which is
@@ -272,8 +288,22 @@ func newMemory(m binary.Memory) (*memory, error) {
 // [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
 func (m *memory) view() []byte { return m.img.Load().bytes }
 
-// allocate reserves the backing array, and for a **shared** memory it reserves the declared
-// maximum as capacity so that `grow` never has to move the array (#556).
+// allocate reserves the backing array: **address space through an anonymous mapping wherever the port
+// and the host can serve one, and the Go allocator as the fallback** ([decision 0076][0076]).
+//
+// The mapping arm is the whole of contract §8 M-1 — *"address space reserved up front, commit on grow,
+// no full-copy growth path"* — and it is the ordinary path rather than a special case: every memory with
+// room to grow into gets one, shared or not, because M-1 does not distinguish them.
+// `internal/interp/reserve.go:reservationFor` is the size rule,
+// `internal/interp/reserve.go:reserveMapping` the primitive, and the `mapped` return says which arm ran,
+// because `newMemory` owes a mapping a `runtime.AddCleanup` and owes an allocator array nothing.
+//
+// **Everything below this line describes the fallback**, kept in full rather than trimmed: it is the
+// live path on the `!unix` ports and on any host that refuses a mapping, and it carries two measured
+// results — #556's safety argument and ADR 0051's fired rollback — that deleting the prose would delete.
+// This paragraph read *"and for a **shared** memory it reserves the declared maximum as capacity so that
+// `grow` never has to move the array (#556)"* until 0076, which was true of the whole function and is now
+// true of one of its two arms.
 //
 // The array moving is not a performance question, it is a memory-safety one. A slice header is
 // three words and `grow` writes all three; a concurrent reader can observe the new length paired
@@ -294,6 +324,11 @@ func (m *memory) view() []byte { return m.img.Load().bytes }
 // The branch on `Shared` is stated rather than hidden: §0's performance partisanship says leave an
 // unshared memory's allocate-and-blit alone rather than reserve address space for a guarantee it does
 // not need.
+//
+// **That reason is cost, and 0076 removed the cost rather than answering the argument.** The branch
+// survives here because on this arm `make` still *commits* what it reserves, so reserving for an unshared
+// memory really would charge it for a guarantee it does not need. On the mapping arm there is nothing to
+// charge, so there is no branch: `reservationFor` never reads `lim.Shared`.
 //
 // **The reason used to be "an unshared memory has no second observer by construction", and spawn
 // falsified it.** T-1's `Spawn` refuses an instance with no shared memory and then runs the entry in
@@ -328,11 +363,34 @@ func (m *memory) view() []byte { return m.img.Load().bytes }
 // `(memory 1 65535 shared)`, three orders over, so the rollback fired. `sharedReservePages` is that
 // cap. What is *not* the registered rollback is what happens above it — see `grow`.
 //
+// **And that measurement's diagnosis is what licensed 0076**, so the cap is not merely inherited here.
+// The 855 ms is `needzero`: `make` hands back a fresh arena span already zero and clears a recycled one
+// first, which means a capacity is committed and may be memset. That is a guarantee the language makes
+// about `make` and not a cost to tune away, so the cap is right for *this* arm and the mapping arm exists
+// because no cap can make this one conformant.
+//
 // [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
-func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
+// [0076]: ../../docs/decisions/0076-a-memory-reserves-address-space-through-an-anonymous-mapping-and-the-go-allocator-becomes-the-fallback-rather-than-the-mechanism.md
+func allocate(lim binary.Limits, n uint64) (bs []byte, noMove, mapped bool, err error) {
+	if reserve := reservationFor(lim, n); reserve > 0 {
+		// The `math.MaxInt` bound is where the 32-bit ports drop out, and it is arithmetic rather
+		// than a build tag: `linux/386` and `linux/arm` compile `reserveMapping` and cannot hold a
+		// 4 GiB reservation in a 32-bit address space. Skipping the call is not a failure to count —
+		// the memory took the fallback, which is what `reservationUnavailable` records.
+		if reserve <= math.MaxInt {
+			if full, ok := reserveMapping(int(reserve)); ok {
+				// Length is the guest's current size and capacity is the reservation, which
+				// is exactly the shape `grow`'s reslicing arm already expects. `noMove` is
+				// set because the array must not be replaced: `releaseMapping` unmaps this
+				// base, and 0073's refusal is what keeps a relocation from orphaning it.
+				return full[:n:reserve], true, true, nil
+			}
+		}
+		reservationUnavailable.Add(1)
+	}
 	if !lim.Shared || !lim.HasMax {
-		return make([]byte, n), false, nil
+		return make([]byte, n), false, false, nil
 	}
 	reserve := min(lim.Max, sharedReservePages) * pageSize
 	if reserve < n {
@@ -344,7 +402,7 @@ func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 		// The reservation itself is what cannot be served. Reported as the same
 		// out-of-memory trap the minimum would have raised, because from the module's
 		// side that is what happened.
-		return nil, false, &Trap{Reason: "out of memory"}
+		return nil, false, false, &Trap{Reason: "out of memory"}
 	}
 	// **Decision 0056's condition 1 is this `min` and nothing more, which is worth stating
 	// because it looks like it needs code.** Where the declared max is at or below the cap the
@@ -354,7 +412,7 @@ func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 	// population rather than the first half of one. This used to add *"or, once #554's walk marks
 	// memories that never declared one, a memory with no max at all"*; [ADR 0068][0068] deleted the
 	// walk, so no memory without a declared max is ever marked and the second arm has no members.
-	return make([]byte, n, reserve), true, nil
+	return make([]byte, n, reserve), true, false, nil
 }
 
 // growthRefusedPastReservation counts decision 0056's condition 2: the named engine limit, kept
@@ -368,10 +426,25 @@ func allocate(lim binary.Limits, n uint64) (bs []byte, noMove bool, err error) {
 // refusal by something an instrument can read. Testing that the two are distinguishable is what
 // `TestTheEngineLimitRefusalIsDistinguishableFromEveryOtherRefusal` does with it.
 //
-// **The excluded programs, stated because the limit changes which programs run.** A memory carrying
-// `noMove` whose declared max exceeds `sharedReservePages` cannot grow past that cap. That is a shared
-// memory declaring more than 128 pages, and nothing in either corpus reaches it, since no vector grows
-// a shared memory at all.
+// **The excluded programs, stated because the limit changes which programs run.** Decision 0076 changed
+// this set on both sides, so it is stated as two populations rather than one:
+//
+//   - **On the fallback path** — the `!unix` ports and any host that refuses a mapping — a memory carrying
+//     `noMove` whose declared max exceeds `sharedReservePages` cannot grow past that cap. That is a shared
+//     memory declaring more than 128 pages, and nothing in either corpus reaches it, since no vector grows
+//     a shared memory at all. This was the *whole* set before 0076.
+//   - **On the mapping path** it is one program shape and a new one: a **memory64 that declares no
+//     maximum**, which `internal/interp/reserve.go:reservationFor` rule 2 reserves to `maxPages32` because
+//     the address type names no ceiling for it. Such a memory is refused past just under 4 GiB where it
+//     would previously have relocated and copied. A memory with a declared max is refused *never* on this
+//     path — the reservation is the max, and `grow` refuses past `limits.Max` a check earlier — and an i32
+//     memory with no max is refused never either, since `maxPages32` is its own ceiling. Nothing in either
+//     corpus declares a memory64 at all.
+//
+// **So this counter's population shrank rather than grew, and it is unreachable rather than repealed.** A
+// memory reserved to its declared max never reaches the arm that increments this. That is not a reason to
+// delete the counter: the fallback path reaches it, and a limit nothing currently hits is exactly the limit
+// a board needs to be able to report.
 //
 // **The population did not widen when spawn landed, and it would have.** This used to read *"with #554
 // it is also every memory in an instance that has spawned, including the unshared ones"* — which was
@@ -411,6 +484,13 @@ var growthRefusedPastReservation atomic.Uint64
 // board. The cost arm was reached 30 times: the draft also refused every memory held in two index spaces,
 // and `memory_grow.wast` is exactly that shape. *An unmeasured stability claim is not a protection* — the
 // over-refusal has a level, and only the board could name it. See `ws` for the mechanism that replaced it.
+//
+// **Decision 0076 emptied this arm on the mapping path, and the sentence above is why that is not a
+// deletion.** The refusal only fires where a grow would *relocate*, and a memory reserved to its ceiling
+// never relocates — so on `unix` with a mapping available, ADR 0073's refusal for memories has no
+// population. It keeps the whole of its mechanism and both of its witnesses because the fallback path
+// reaches it, and because the analogous refusal for *tables* (ADR 0075) is not affected by 0076 at all: a
+// table slot is a `ref` and a mapping is `[]byte`.
 var growthRefusedWithASiblingAgent atomic.Uint64
 
 // attachWorld records that `w`'s instance holds this memory in its index space — ADR 0073's registration,
@@ -436,7 +516,15 @@ func (m *memory) attachWorld(w *world) {
 	m.ws = append(m.ws, w)
 }
 
-// sharedReservePages caps how much capacity a shared memory reserves at instantiation, in pages.
+// sharedReservePages caps how much capacity a shared memory reserves at instantiation, in pages, **on
+// the Go allocator's path** — which decision 0076 made `allocate`'s fallback rather than its mechanism.
+// Where a mapping is available the reservation is `internal/interp/reserve.go:reservationFor`'s and this
+// number is not consulted at all.
+//
+// **It survives the demotion because the table below is the reason 0076 exists.** Deleting the cap would
+// delete a measured result: this is what asking the Go allocator to reserve costs, and it is the control
+// arm every figure in 0076 is compared against. The population it now bounds is the `!unix` ports and any
+// host that refuses a mapping.
 //
 // **The value comes from the measurement that falsified ADR 0051's forecast, not from taste.** Best
 // and worst of five `newMemory` calls per size, this host:
@@ -462,8 +550,12 @@ func (m *memory) attachWorld(w *world) {
 //
 // The number limits which programs run — a shared memory declaring a larger max cannot grow past
 // this — so it is flagged for review rather than merely recorded. Nothing observable in this tree
-// depends on it yet: no vector grows a shared memory, and no threaded guest can run at all until
-// T-1 lands. That makes it cheap to move on evidence later and wrong to pick generously now.
+// depends on it: no vector grows a shared memory. This read *"nothing … depends on it **yet** … and no
+// threaded guest can run at all until T-1 lands"*, which was a claim about the future that ADR 0068's
+// spawn has since falsified — a threaded guest runs now — while leaving the present-tense half true. The
+// clause is repaired rather than annotated, because a sentence that dates itself to an event that has
+// happened tells the next reader the tree is in a state it is not. What decides the number now is 0076's
+// arm E, and on the mapping path nothing decides it at all.
 var sharedReservePages uint64 = 128
 
 // checkBaseAlignment asserts the premise ADR 0051's atomics rest on: the backing array's base is

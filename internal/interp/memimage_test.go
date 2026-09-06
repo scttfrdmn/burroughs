@@ -36,6 +36,13 @@ import (
 // mutation on the reallocating arm fails at the pointer assertion for the unshared one. Reverting the
 // whole mechanism to `m.bytes = …` does not compile, which is a weaker but real signal.
 func TestGrowPublishesAFreshImageRatherThanMutatingTheHeldOne(t *testing.T) {
+	// **The relocating arm lives on decision 0076's fallback path, so this test runs there.** A memory
+	// reserved through an anonymous mapping is reserved to its ceiling and never relocates, which is
+	// what M-1 buys; the arm this test is about is still real on the `!unix` ports and on any host that
+	// refuses a mapping, and it is still the arm ADR 0058's publication exists for. The `cap == len`
+	// guard below is what said so, unprompted, when the mapping landed.
+	withoutReservation(t)
+
 	build := func(lim binary.Limits) *memory {
 		m, err := newMemory(binary.Memory{Limits: lim})
 		if err != nil {
@@ -264,6 +271,13 @@ func TestAPublishingGrowDoesNotRaceAConcurrentReader(t *testing.T) {
 // [586]: https://github.com/scttfrdmn/burroughs/issues/586
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 func TestARelocatingGrowRefusesWhileASiblingAgentCouldHoldTheImage(t *testing.T) {
+	// **The relocating arm lives on decision 0076's fallback path, so this test runs there.** A memory
+	// reserved through an anonymous mapping is reserved to its ceiling and never relocates, which is
+	// what M-1 buys; the arm this test is about is still real on the `!unix` ports and on any host that
+	// refuses a mapping, and it is still the arm ADR 0058's publication exists for. The `cap == len`
+	// guard below is what said so, unprompted, when the mapping landed.
+	withoutReservation(t)
+
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	in := hostLink(t, `(module
@@ -425,6 +439,13 @@ func TestARelocatingGrowRefusesWhileASiblingAgentCouldHoldTheImage(t *testing.T)
 //
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 func TestAMemoryInTwoIndexSpacesRelocatesOnlyWhenEveryWorldIsIdle(t *testing.T) {
+	// **The relocating arm lives on decision 0076's fallback path, so this test runs there.** A memory
+	// reserved through an anonymous mapping is reserved to its ceiling and never relocates, which is
+	// what M-1 buys; the arm this test is about is still real on the `!unix` ports and on any host that
+	// refuses a mapping, and it is still the arm ADR 0058's publication exists for. The `cap == len`
+	// guard below is what said so, unprompted, when the mapping landed.
+	withoutReservation(t)
+
 	// One parkable host function per instance. `entered` is closed by the host call and `release` closes
 	// it back, so a pair is single-use and part 3's two directions cannot share one.
 	type parkable struct {
