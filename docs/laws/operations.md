@@ -64,6 +64,22 @@ Three separate mistakes are being avoided, and they were made in that order:
    pushed SHA. `--exit-status` then makes failure non-zero. This is *a verdict
    without an identity check is hearsay*: binding the verdict to the SHA it
    judges is the CI face of stamp-don't-deduce.
+   - **`--exit-status` has a third meaning, and it is *the watcher lost the API*.** Non-zero
+     from `gh run watch` says the watch did not complete successfully, which includes
+     failing to *fetch* the run at all: on PR #681 it printed `failed to get run: HTTP 502`
+     eleven minutes in and exited **1** while the run was still `in_progress` with every
+     completed job `success`. Read as a verdict that is a red on a green run, and the whole
+     slice gets re-diagnosed. So the watcher's status answers *did the watch survive* and
+     the run's `.jobs[]` answers *did the work pass* — which is why the recipe above writes
+     `WATCH_EXIT` and the job list to **separate lines** of the verdict file rather than
+     treating the first as a summary of the second. This is [verdict channel and mechanism
+     channel are different
+     instruments](evidence-and-instruments.md#verdict-channel-and-mechanism-channel-are-different-instruments)
+     at the CI boundary, and it is the one case where relaunching a watcher on the same run
+     id does **not** breach *one run, one watcher*: the first watcher is gone, and the
+     `detach: end reason=` line in its stamp file is what says so. Read that line before
+     launching the second — a relaunch on a live watcher is the #658 collision, and the two
+     situations differ only in a fact the stamp file already holds.
 3. **Blocking the tool call wastes the wait.** Watch with `run_in_background` and
    keep working; the completion arrives as a notification. A five-minute CI run
    should cost five minutes of *CI*, not five minutes of doing nothing.

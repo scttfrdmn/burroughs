@@ -2232,6 +2232,15 @@ weakly-ordered platform.
     artifact; widened rather than split into five sentinels distinguishing gaps an embedder acts on
     identically, since `publicError` maps all of it to `ErrUnsupported` anyway. This slice touches it
     because 0079 cites that sentinel's meaning as the authority for its own register choice.
+  - **A third meaning of `gh run watch --exit-status`'s non-zero, met while waiting on this slice's own CI
+    and recorded in `docs/laws/operations.md`.** The watcher exited **1** on `failed to get run: HTTP 502`
+    eleven minutes in, while the run was still `in_progress` and every completed job was `success` — so a
+    non-zero watcher can mean *the watch lost the API* rather than *the work failed*, which is why the
+    recipe keeps `WATCH_EXIT` and the job list on separate lines of the verdict file instead of reading the
+    first as a summary of the second. Read the other way it is a red on a green run and the slice gets
+    re-diagnosed. It is also the one case where relaunching a watcher on the same run id does not breach
+    *one run, one watcher*, and the discriminator is a fact the stamp file already holds: the
+    `detach: end reason=` line, which must be read **before** the second watcher is launched.
 
 - **A memory's and a table's current size was stored twice, and `grow`'s write to the second copy raced
   import matching — so the copy is deleted rather than synchronised.**
