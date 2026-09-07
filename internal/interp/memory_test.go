@@ -925,23 +925,37 @@ func instantiateThreads1(t *testing.T, src string) *Instance {
 //
 // # The falsification battery, and what each arm rules out
 //
-//	| injection into `grow`                          | pages lost | extra grants | Min drift |
-//	| ---------------------------------------------- | ---------- | ------------ | --------- |
-//	| A — no lock at all (`main` before 0061)         | yes        | yes          | yes       |
-//	| B — lock released before the `limits.Min` write | **0**      | **0**        | **yes**   |
-//	| the shipped mechanism                           | 0          | 0            | 0         |
+//	| injection into `grow`                            | pages lost | extra grants | `limits.Min` |
+//	| ------------------------------------------------ | ---------- | ------------ | ------------ |
+//	| A — no lock at all (`main` before 0061)           | yes        | yes          | yes          |
+//	| B — lock released before the `limits.Min` write   | **0**      | **0**        | **yes**      |
+//	| the mechanism as 0061 shipped it                 | 0          | 0            | 0            |
+//	| C — the `limits.Min` write put back, under 0061's lock, on 0078's mechanism | **0** | **0** | **yes** |
+//	| the mechanism as 0078 shipped it                 | 0          | 0            | 0            |
 //
-// **B is why this test has an observer at all.** It is the CAS-over-`img` shape in miniature: the
-// descriptor's copy of the length is serialised and the second copy is not. It passes every
-// page-accounting assertion here — the accounting all derives from `img` — and fails only the
-// two-copies one, which is exactly the discrimination decision 0061 rejected the compare-and-swap on.
-// A version of this test without the observer scored B green, and that green was measured rather than
-// reasoned about.
+// **B is why this test has an observer at all, and C is why the observer outlived the shape it was
+// built for.** B is the CAS-over-`img` shape in miniature: the descriptor's copy of the length is
+// serialised and the second copy is not. It passes every page-accounting assertion here — the
+// accounting all derives from `img` — and failed only the two-copies one, which is exactly the
+// discrimination decision 0061 rejected the compare-and-swap on. A version of this test without the
+// observer scored B green, and that green was measured rather than reasoned about.
+//
+// **[Decision 0078][0078] deleted the second copy, so B is no longer a reachable shape** — there is no
+// `limits.Min` write left to release the lock before — and the injection that reproduces the live risk
+// is the opposite one, C: put the write back. The third column is re-pointed onto that, from *"the two
+// copies agree"* to *"`limits.Min` is the declared minimum"* (the observer's own comment carries the
+// argument), and C is the row that was watched fire on it. C is **locked**, which is the half
+// `growmatch_test.go`'s `-race` controls cannot see, so the two instruments cover the re-introduction
+// from both sides rather than overlapping. A and B are kept as the record of what the column was built
+// to catch; a table rewritten to hide them would take the evidence for the observer's existence with
+// it.
 //
 // **The battery was run when both arms could carry it, and A's reallocate row is now history for the
-// reason above.** Re-running A after 0073 reproduces on reslice only; B and the shipped row are
-// unaffected, because the `limits.Min` copy is written on both arms and the reslice arm is where the
+// reason above.** Re-running A after 0073 reproduces on reslice only; B and the 0061 row were
+// unaffected, because the `limits.Min` copy was written on both arms and the reslice arm is where the
 // observer already caught B.
+//
+// [0078]: ../../docs/decisions/0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md
 //
 // `Spawn` is not used and is not needed: two goroutines calling `Invoke` on one instance get their own
 // frames and share `in.mems[0]`, the same shape `TestAtomicRmwIsNotObservablyTornAcrossThreads` uses.
@@ -956,6 +970,10 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 		attempts = 60
 		rounds   = 20
 		maxPages = 100
+		// declaredMin is the fixture's declared minimum, and it is a constant rather than a literal
+		// inside the two decls because the observer below now asserts `limits.Min` *equals* it — a
+		// literal duplicating the property it is checked against is correct exactly once.
+		declaredMin = 1
 		// wantOK is the only success count a serialised run can produce **on an arm where every
 		// attempt is permitted**: every page from the declared min to the declared max is granted
 		// once and nothing else is. On the reallocate arm ADR 0073 refuses most of them, so there it
@@ -991,8 +1009,8 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 		// landed, which is the vacuity it was written to catch.
 		fallback bool
 	}{
-		{"reslice", fmt.Sprintf("(memory 1 %d shared)", maxPages), true, false},
-		{"reallocate", fmt.Sprintf("(memory 1 %d)", maxPages), false, true},
+		{"reslice", fmt.Sprintf("(memory %d %d shared)", declaredMin, maxPages), true, false},
+		{"reallocate", fmt.Sprintf("(memory %d %d)", declaredMin, maxPages), false, true},
 	} {
 		t.Run(arm.name, func(t *testing.T) {
 			if arm.fallback {
@@ -1006,7 +1024,7 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 				lostPages    int
 				extraGrants  int
 				badRounds    int
-				minDrift     int
+				minRewritten int
 				totalGranted int
 				totalRefused int
 				unaccounted  int
@@ -1014,32 +1032,46 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 			for range rounds {
 				in := instantiateThreads1(t, body(arm.decl))
 
-				// **The observer, and it is what discriminates decision 0061's lock from a
-				// compare-and-swap over `img`.** The size is stored twice — `memImage.bytes`' length
-				// and `limits.Min`, which import matching reads back (`instance.ml:76`) — and a
-				// mechanism covering only the descriptor leaves the second copy racing.
+				// **The observer, re-pointed by decision 0078 rather than deleted, and the two
+				// readings are inverses of each other.** It used to assert that the size's *two
+				// copies agreed* — `memImage.bytes`' length and `limits.Min`, which import matching
+				// read back (`instance.ml:76`) — because a mechanism covering only the descriptor
+				// left the second copy racing, and that is the discrimination decision 0061 rejected
+				// a compare-and-swap over `img` on. 0078 deleted the second copy (#663): `grow` no
+				// longer writes `limits.Min` at all, `memory.typeOf` computes the current type from
+				// the published image, and the old assertion is now false of correct code — it
+				// counted 60879 and 167101 "drift" observations on the two arms, which is the
+				// instrument reporting that its subject is gone.
 				//
-				// **It reads the pair while holding `growMu`, because that is the only place the
-				// invariant is claimed.** A reader that does not take the lock can catch the true
-				// mechanism mid-section, between the publication and the `Min` write, and would
-				// report a mismatch against correct code. A reader that does take it sees a memory
-				// with no grow in flight, where the two copies must agree.
+				// **What it asserts instead is the property the deletion establishes**: `limits.Min`
+				// *is* the declared minimum, at every sample, however far the memory has grown. A
+				// control names a risk and not a code shape, and the risk is unchanged in substance —
+				// a second copy of the size, kept current by somebody — so the tripwire is aimed at
+				// its re-introduction from the other side. Re-adding `m.limits.Min = newSize` under
+				// the lock fails this, which the old reading could not see and which the `-race`
+				// controls in `growmatch_test.go` see only when the write is *un*locked.
+				//
+				// **It still reads while holding `growMu`**, for a reason that also changed: not
+				// because the invariant is claimed only there — nothing writes the field now, so it
+				// holds everywhere — but so that a re-introduced *locked* write cannot be missed by
+				// sampling between the publication and it. A lock-free observer would still catch an
+				// unlocked write and would let the locked one hide inside the section.
 				//
 				// **And it samples continuously rather than at the end, which is the repair to this
-				// test's own first draft.** That draft compared the two copies once, after the agents
-				// finished, and a CAS-shaped mechanism *passed* it: the last successful grow rewrites
-				// `Min` to the right value, so the drift heals before anything looks. An end-state
-				// sample of a healing invariant asserts nothing about the window it is supposed to be
-				// watching.
+				// test's own first draft and survives the re-pointing unchanged.** That draft
+				// compared the copies once, after the agents finished, and a CAS-shaped mechanism
+				// *passed* it: the last successful grow rewrote `Min` to the right value, so the
+				// drift healed before anything looked. Read forwards, a re-introduced write is
+				// likewise invisible to an end-state sample that has nothing left to disagree with.
 				observing := make(chan struct{})
 				drift := make(chan int, 1)
 				go func() {
 					mem, seen := in.mems[0], 0
 					for {
 						mem.growMu.Lock()
-						declared, published := mem.limits.Min, mem.size()
+						declared := mem.limits.Min
 						mem.growMu.Unlock()
-						if declared != published {
+						if declared != declaredMin {
 							seen++
 						}
 						select {
@@ -1107,26 +1139,29 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 						unaccounted += gap
 					}
 				}
-				minDrift += <-drift
+				minRewritten += <-drift
 			}
-			if lostPages != 0 || extraGrants != 0 || minDrift != 0 || unaccounted != 0 {
+			if lostPages != 0 || extraGrants != 0 || minRewritten != 0 || unaccounted != 0 {
 				t.Errorf("%d agents x %d grow attempts on one memory, %d rounds: %d pages lost "+
 					"across %d bad rounds, %d grants beyond the %d a serialised run can make, "+
-					"and %d observations where `limits.Min` disagreed with `memory.size` under `growMu`.\n"+
+					"and %d observations where `limits.Min` was not the declared minimum %d, read "+
+					"under `growMu`.\n"+
 					"Each successful `memory.grow` must add its delta, and the length change is "+
 					"one atomic read-modify-write in the proposal's model "+
 					"(`relaxed.rst:246`). This engine reads the size, computes and publishes as "+
 					"three steps, so two agents can be granted the same page (#600, decision "+
 					"0061). No corpus vector can see it: `memory_grow.wast` is single-threaded.\n"+
-					"A non-zero drift count with the other two at zero means the mechanism covers "+
-					"the descriptor and not `limits.Min` — the two copies of the length — which is "+
-					"the specific failure 0061 rejected a compare-and-swap over `img` for.\n"+
+					"A non-zero `limits.Min` count with the other two at zero means somebody has "+
+					"re-introduced a second copy of the current size in the declared type — the "+
+					"shape decision 0078 deleted for #663, where `grow` kept `Min` current with a "+
+					"plain write and import matching read it holding no lock. `memory.typeOf` is "+
+					"where a current size comes from; `limits` is what the module declared.\n"+
 					"%d attempts landed in neither bucket: on the reallocate arm every call is a "+
 					"grant or an ADR 0073 refusal while the memory is short of its declared max, so "+
 					"a gap means a third outcome this test cannot name — which is the reading that "+
 					"replaced the exact grant census when 0073 made most of that arm's grows refuse.",
-					agents, attempts, rounds, lostPages, badRounds, extraGrants, wantOK, minDrift,
-					unaccounted)
+					agents, attempts, rounds, lostPages, badRounds, extraGrants, wantOK, minRewritten,
+					declaredMin, unaccounted)
 			}
 			// The premise, asserted rather than assumed: a run in which the agents never overlapped,
 			// or in which `grow` refused everything, would report zero losses while measuring
@@ -1157,8 +1192,8 @@ func TestConcurrentGrowLosesNoPages(t *testing.T) {
 			}
 			t.Logf("%d rounds x %d agents x %d attempts: %d grants (%d per round; a serialised "+
 				"all-permitted run makes %d), %d ADR 0073 refusals, %d pages lost, %d observations of "+
-				"Min drift", rounds, agents, attempts, totalGranted, totalGranted/rounds, wantOK,
-				totalRefused, lostPages, minDrift)
+				"`limits.Min` away from the declared %d", rounds, agents, attempts, totalGranted,
+				totalGranted/rounds, wantOK, totalRefused, lostPages, minRewritten, declaredMin)
 		})
 	}
 }

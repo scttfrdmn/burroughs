@@ -11,6 +11,38 @@ Filed against **[#600](https://github.com/scttfrdmn/burroughs/issues/600)**, spl
 witness test and a benchmark, and #586's other half needs [#10](https://github.com/scttfrdmn/burroughs/issues/10)'s
 allowed-outcome tables to say what is permitted before any code can be right.
 
+## Note, 2026-09-06 — the title's premise is retired; the decision is not
+
+**The length no longer lives in two places.**
+[Decision 0078](0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md),
+the repair for [#663](https://github.com/scttfrdmn/burroughs/issues/663), deleted `grow`'s
+`m.limits.Min = newSize` — and `table.grow`'s twin, which this ADR's mutex was transferred to by
+[ADR 0075](0075-a-table-reserves-to-its-declared-max-under-a-measured-ceiling-and-refuses-to-relocate-with-a-sibling-agent.md).
+`memory.typeOf` / `table.typeOf` now compute the current type from the published image at import-match
+time, the way `instance.ml:76`'s `type_of` does, so `limits` is the *declared* type and nothing writes
+it after construction.
+
+**What that changes here is one reason among several, and the decision stands.** `growMu` is still what
+makes a grow indivisible, on the reason 0078 records: a grow is read-compute-publish, and the
+reallocating arm is more than that — a second process-wide mutex, [ADR 0073][0073]'s sibling-agent
+predicate, a blit, and a publish — which no single-word compare-and-swap can make indivisible. So
+option 1 is still rejected and the mutex is still the mechanism; what retires is the *particular*
+argument this document's title leads with, and with it the second bullet under option 1 (*"it leaves
+`limits.Min` racing"*) and the heading *"The fact that decides this ADR: the size is stored twice"*.
+The pre-registration, the measured board, and the falsified absolute forecast are untouched — they
+measured the lock, not the field.
+
+**The registered rollback is moot rather than fired.** Option 2 — fold `Limits` into `memImage` and CAS
+the whole descriptor — existed to remove the two-copies problem without a lock. 0078 removed the
+problem by deleting the copy, which is neither the rollback nor a case of it, and the rollback's own
+trigger (`Reslice` rising by materially more than one Lock/Unlock pair) did not fire.
+
+**The title is not rewritten**, because a title is what incoming citations name and this document's
+filename carries it. This note is the record instead, dated, per *a sentence written before a change and
+left standing after it tells the next reader the tree is in a state it is not*.
+
+[0073]: 0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+
 ## Context
 
 The threads proposal's memory model, at the revision
@@ -92,6 +124,18 @@ call graph that a later edit could remove.
 - **`limits.Min` against an import-matching reader.** Serialised against other grows now; still a plain
   write against `type_of`. No path today runs import matching concurrently with a running thread, and
   0058's residual for that half stays filed on #586 rather than being quietly counted as closed here.
+
+  **Both sentences in that bullet were overtaken and it is annotated rather than rewritten**, being the
+  residual the note above closes. *"No path today runs import matching concurrently with a running
+  thread"* was true of the engine's own paths and false of an embedder's — two goroutines, one calling
+  `Invoke` and one calling `InstantiateLinked` against the same supplier, are exactly what
+  `TestImportMatchingDoesNotRaceAGrowingMemory` and `…Table` do, and they were watched die on `main`.
+  And the residual did not stay on #586: #586 is resolved by
+  [ADR 0073][0073] on its own subject, so this half became
+  [#663](https://github.com/scttfrdmn/burroughs/issues/663) and is discharged by
+  [0078](0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md)
+  deleting the write. *A deferral's citation outlives its subject*, which is why the number is corrected
+  here and not merely the verdict.
 
 ## Options considered
 

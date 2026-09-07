@@ -767,6 +767,13 @@ func TestSharedMemoryImportsMatchOnTheSharedFlag(t *testing.T) {
 // missing table.grow arm) because `memory.grow` reallocated `m.bytes` without updating
 // `m.limits.Min`, so a grown-then-reexported memory reported its stale pre-growth minimum to an
 // importer whose declaration matched the actual, current size.
+//
+// **What supplies the fact changed under this test and its assertions did not**, which is the whole
+// reason to say so: decision 0078 deleted `grow`'s write to `m.limits.Min` — a second copy of the
+// size that an import-matching goroutine read unsynchronised (#663) — and `memory.typeOf` computes
+// the current type from the published image instead. So the paragraph above is the historical
+// finding, `limits` really is *"a copy of the declared minimum"* with nothing updating it now, and
+// this row is what would catch a deletion that lost the fact rather than moved it.
 func TestGrownMemoryReexportsItsCurrentSize(t *testing.T) {
 	sup := supplier(t, `(module
 		(memory (export "mem") 1)
@@ -790,6 +797,69 @@ func TestGrownMemoryReexportsItsCurrentSize(t *testing.T) {
 	// size, so this is not merely the old bug's absence.
 	if _, _, err := link1(t, `(module (memory (import "s" "mem") 3))`, exportsOf(sup)); err == nil {
 		t.Error("importing above the grown size: link accepted a mismatched import")
+	}
+}
+
+// TestGrownTableReexportsItsCurrentSize is the table sibling of the row above, and **it exists
+// because the corpus has no such vector**. `imports4.wast:19-37` pins the memory case in its own
+// words; nothing in the suite grows a table and then re-imports it, so before this row
+// `table.grow`'s write to `t.limits.Min` was unwitnessed in *both* directions — no vector would have
+// caught its deletion, and no vector would have caught its absence in the first place. That is §9
+// G-3's shape: an accept-direction fact the corpus cannot ask about gets a unit witness, not a note
+// claiming the corpus covers it. `table.grow`'s own comment used to record the gap as *"not yet
+// measured"*; this row is what retires that clause (decision 0078, the repair for #663).
+//
+// It is the accept-direction half of `TestImportMatchingDoesNotRaceAGrowingTable`'s subject, and the
+// division of labour is deliberate: that control's oracle is `-race`, so it asserts nothing about
+// *which* size the matcher read, and a repair that lost the current-size fact entirely would leave it
+// green. This row is the one that fails in that case.
+//
+// # Watched die, and one of the two forecasts was too broad
+//
+// Mutating `table.typeOf` to return the declared minimum — `lim.Min = t.size()` deleted, which is the
+// deletion-lost-the-fact case this row exists for — fails it with
+// `expected table i32 2, got table i32 1`, and fails the memory row above alongside it for the
+// corresponding mutation. That is the assertion this row was written to make.
+//
+// **The element-type assertion at the end is narrower than its first comment claimed, and the claim
+// is corrected rather than the assertion strengthened.** It said a wiring mistake in decision 0078's
+// signature change *"would show up as an accepted `externref` import against a `funcref` table"*.
+// Measured: dropping both `MatchValType` terms from `matchTableType` does fail this row. Duplicating
+// the first direction in place of the second — a plausible wiring slip, since the two calls differ
+// only by argument order — does **not**, because `funcref` against `externref` mismatches in both
+// directions and either call catches it. What catches that one is the corpus: the all-gates-on lane
+// goes from 0 fail to 1. So this assertion covers the *presence* of element-type matching and not its
+// *bidirectionality*, and the row does not get widened to cover the second, because a subtype pair
+// that discriminates direction is `linking.wast`'s business and it already does it.
+func TestGrownTableReexportsItsCurrentSize(t *testing.T) {
+	sup := supplier(t, `(module
+		(table (export "tab") 1 funcref)
+		(func (export "grow") (result i32) (table.grow (ref.null func) (i32.const 1))))`)
+
+	got, err := sup.Invoke("grow")
+	if err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != 1 {
+		t.Fatalf("grow = %v, want 1 (old size)", got)
+	}
+
+	// The table is now size 2, and an importer declaring a minimum of 2 must link.
+	if _, _, err := link1(t, `(module (table (import "s" "tab") 2 funcref))`, exportsOf(sup)); err != nil {
+		t.Errorf("importing at the grown size: %v, want link to succeed", err)
+	}
+	// And the negative, so this is the current size rather than the absence of a bound: 3 exceeds
+	// even the grown size and must still reject. Without it the row would pass on a matcher that
+	// stopped comparing minimums at all.
+	if _, _, err := link1(t, `(module (table (import "s" "tab") 3 funcref))`, exportsOf(sup)); err == nil {
+		t.Error("importing above the grown size: link accepted a mismatched import")
+	}
+	// The element type is still compared, which the signature change in decision 0078 moved: the
+	// matcher now takes the limits and the element type as separate arguments rather than the
+	// `*table`, and a wiring mistake there would show up as an accepted `externref` import against a
+	// `funcref` table rather than as a size defect.
+	if _, _, err := link1(t, `(module (table (import "s" "tab") 2 externref))`, exportsOf(sup)); err == nil {
+		t.Error("importing at the grown size with the wrong element type: link accepted it")
 	}
 }
 
