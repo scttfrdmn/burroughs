@@ -201,6 +201,38 @@ reach is a law out of context.
   everything the decision contradicts has been found. Grep for the old answer, not
   just for the place you expect it. (Ruling: Scott, #28.)
 
+### A claim whose truth is about the tree rather than the diff becomes true and checkable in past tense, with its carrier named.
+
+- **A claim whose truth is about the tree rather than the diff becomes true and checkable in
+  past tense, with its carrier named.** Scott's rule on the #679 review, and it is a phrasing
+  rule with a mechanical test behind it. Two kinds of sentence get written in the same present
+  tense and they have opposite lifetimes:
+
+  - a claim about **the diff** — *"this deletes the guard at both call sites"* — is about an
+    artifact that is frozen the moment it merges. Present tense is right and it stays right,
+    because the diff never changes again.
+  - a claim about **the tree** — *"the guard is gone from both call sites"*, *"the queue is
+    empty"*, *"nothing outside this package calls it"* — is a snapshot. It was true when
+    written and the next commit is entitled to falsify it, silently, with no instrument in a
+    position to notice: the sentence still parses, every citation in it still resolves, and only
+    a reader who re-derives the fact can tell.
+
+  The repair is not *"stop making tree claims"* — reports are full of them and have to be. It is
+  to write the tree claim in the form that survives: **past tense, with the carrier named.**
+  *"As of #663 nothing outside this package called it"* is permanently true, says exactly as
+  much as the present-tense version said when it was written, and hands the reader the artifact
+  to re-derive it against. *"Nothing outside this package calls it"* is a claim about a tree the
+  reader has, not the tree the writer had, and it is wrong as often as the tree has moved.
+
+  This is [a stale citation is a cheap tell for an expired claim](#a-stale-citation-is-a-cheap-tell-for-an-expired-claim-so-a-repaired-pointer-gets-its-sentence-read)
+  with the tell removed — that section's stated gap is *"the tell only fires when the referent's
+  line moves"*, and a bare tree claim has no referent to move at all, so nothing routes a reader
+  to it ever. It is a drafting instruction rather than a review one, and it is the same shape
+  `CLAUDE.md` names in the phase ladder — *a sentence written before a change and left standing
+  after it tells the next reader the tree is in a state it is not*. The difference is where the
+  cost lands: the ladder's version is paid by whoever finds the rotted sentence, and this one is
+  paid by the writer, once, in the choice of tense.
+
 ### A claim that an obligation was paid cites the artifact that pays it, never a description of it.
 
 - **A claim that an obligation was paid cites the artifact that pays it — a diff hunk, a

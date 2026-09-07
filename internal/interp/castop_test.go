@@ -594,11 +594,19 @@ func TestCovariantImmutableFieldIsNotADisagreement(t *testing.T) {
 // well-formed, the export exists, the parameter type is right, and the thing that cannot be honoured is
 // the caller's `Value`. That half is asserted and will outlive any repair.
 //
-// The register itself is asserted too, and is expected to change: [#677][677] is filed to refuse these
-// four kinds at `invokeIndex`'s parameter loop beside the existing non-null-funcref refusal, where the
-// message can name the boundary instead of the engine's internal state. When that lands this line
-// fails, and that is the control working — *name a control after the rule, not the property*, so the
-// row survives the repair and the assertion is what makes the change visible rather than silent.
+// The register itself is asserted too, and it changed once, on the schedule this comment predicted.
+// It read *"[#677][677] is filed to refuse these four kinds … when that lands this line fails, and
+// that is the control working"* — and it did: [#677][677] landed as [decision 0079][0079], which moved
+// the refusal ahead of `toRef` so the message names the boundary instead of the engine's internal
+// state, and the `ErrEngineInvariant` row failed on all four kinds. That is the whole value of *name a
+// control after the rule, not the property*: the rows survived the repair and the register assertion is
+// re-pointed below rather than deleted, so the change was visible in a verdict instead of silent.
+//
+// **The re-pointed register is two registers, not one**, which the forecast did not anticipate and 0079
+// argues for: `PayloadStruct`/`PayloadArray`/`PayloadExn` are real references a widening could carry
+// later, so they keep `ErrUnsupportedOp`; a non-null reference naming *no* kind is a malformed `Value`
+// no widening rescues, so it carries no sentinel at all. A single re-pointed assertion would have had
+// to pick one and would have stopped discriminating them.
 //
 // # Four kinds, one shape, and why they are enumerated rather than sampled
 //
@@ -614,6 +622,7 @@ func TestCovariantImmutableFieldIsNotADisagreement(t *testing.T) {
 //
 // [676]: https://github.com/scttfrdmn/burroughs/issues/676
 // [677]: https://github.com/scttfrdmn/burroughs/issues/677
+// [0079]: ../../docs/decisions/0079-the-boundary-refuses-a-reference-argument-by-its-own-payload-kind-rather-than-by-the-parameters-spelling-and-the-register-splits-on-whether-a-widening-could-lift-it.md
 func TestAnUnrepresentableReferenceArgumentIsReportedNotResolved(t *testing.T) {
 	anyRef, ok := binary.AbstractRefType(binary.HeapAny, true)
 	if !ok {
@@ -645,13 +654,32 @@ func TestAnUnrepresentableReferenceArgumentIsReportedNotResolved(t *testing.T) {
 					"here is well-formed and the argument is the caller's own, so it sends "+
 					"them to audit the wrong artifact (decision 0077)", err)
 			}
-			if !errors.Is(err, ErrEngineInvariant) {
-				t.Errorf("got %v, want ErrEngineInvariant.\n"+
-					"If #677 has landed and the boundary now refuses this argument by name, "+
-					"this is the expected failure and the line above it is the durable half "+
-					"— re-point this assertion at the new register rather than deleting it", err)
+			// The register, re-pointed at 0079's split. `PayloadNone` is a malformed `Value`
+			// and carries no sentinel *on purpose*, so its row asserts the absence — an
+			// `ErrUnsupportedOp` here would tell an embedder a feature is missing when their
+			// argument is wrong, which is the confusion the split exists to prevent.
+			if kind == PayloadNone {
+				if errors.Is(err, ErrUnsupportedOp) {
+					t.Errorf("got %v, want no sentinel.\n"+
+						"A non-null reference naming no payload kind is a malformed Value, not "+
+						"a reference this engine declines to carry: no widening makes it "+
+						"meaningful, and ErrUnsupportedOp reaches an embedder as "+
+						"ErrUnsupported through publicError (decision 0079's register split)", err)
+				}
+			} else if !errors.Is(err, ErrUnsupportedOp) {
+				t.Errorf("got %v, want ErrUnsupportedOp.\n"+
+					"A %s reference is a real reference whose payload is guest-allocated, so "+
+					"the register is `this engine cannot` — the one a widening could lift "+
+					"(#680), and the one the sibling non-null-funcref refusal already uses "+
+					"(decision 0079's register split)", err, kind)
 			}
-			if !strings.Contains(err.Error(), `"g" parameter 0`) {
+			// Both spellings of the site are accepted because two of them reach this call site:
+			// `parameter %d of %q` from the refusal ahead of `toRef`, whose text is the funcref
+			// guard's preserved byte for byte, and `%q parameter %d` from `typeOfRef` for
+			// anything that gets past it. The durable claim is that the export and the index are
+			// both named, so it is asserted as two independent substrings rather than as one
+			// concatenation that also pins the word order.
+			if !strings.Contains(err.Error(), `"g"`) || !strings.Contains(err.Error(), "parameter 0") {
 				t.Errorf("error %q names neither the export nor the parameter index.\n"+
 					"An embedder holding a several-argument call cannot act on a message "+
 					"that does not say which argument it is about", err)

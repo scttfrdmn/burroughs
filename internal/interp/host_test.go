@@ -372,33 +372,57 @@ func TestAHostFunctionsErrorArrivesAsErrHostTrapWithTheEmbeddersCauseInside(t *t
 //   - **a non-null funcref** — `ErrUnsupportedOp` and deliberately *not* `ErrHostSignature`: nothing is
 //     wrong with the module or with the declared type, so the refusal names the engine, per
 //     `Value.RefID`'s stated boundary and `invokeIndex`'s identical refusal on the way in.
+//   - **a non-null reference naming no payload kind** — an error carrying **no sentinel**, and this row
+//     exists because the row above it was not testing its own subject. Its specimen was
+//     `{Type: binary.FuncRef, RefID: 1}`, whose `RefKind` is the zero value `PayloadNone`, so it was a
+//     no-kind reference wearing a funcref's static type; [decision 0079][0079] ordered a refusal for
+//     that shape ahead of the funcref one, and the row would have gone on passing on `ErrUnsupportedOp`
+//     while asserting nothing about funcrefs — *a refusal ordered ahead of the one under test steals its
+//     row silently*. The funcref row now sets `RefKind: PayloadFunc` and the shape it used to carry gets
+//     this row, at `externref`, which is where the pre-0079 engine admitted it without a word.
+//
+// [0079]: ../../docs/decisions/0079-the-boundary-refuses-a-reference-argument-by-its-own-payload-kind-rather-than-by-the-parameters-spelling-and-the-register-splits-on-whether-a-widening-could-lift-it.md
 func TestAHostFunctionThatDoesNotHonourItsDeclaredTypeIsRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		decl binary.FuncType
 		give []Value
+		// want is the sentinel the refusal must carry, and a nil want is a claim in its own
+		// right — *this refusal carries none of them* — checked against the two that could
+		// plausibly reach the site rather than against nothing.
 		want error
+		// text is asserted when set, because a sentinel-free row has nothing else to key on.
+		text string
 	}{
-		{"no results where one is declared", ft(nil, []binary.ValType{binary.I32}), nil, ErrHostSignature},
+		{
+			"no results where one is declared", ft(nil, []binary.ValType{binary.I32}), nil,
+			ErrHostSignature, "",
+		},
 		{
 			"two results where one is declared", ft(nil, []binary.ValType{binary.I32}),
 			[]Value{I32(1), I32(2)},
-			ErrHostSignature,
+			ErrHostSignature, "",
 		},
 		{
 			"an i64 where an i32 is declared", ft(nil, []binary.ValType{binary.I32}),
 			[]Value{I64(1)},
-			ErrHostSignature,
+			ErrHostSignature, "",
 		},
 		{
 			"a numeric value where a reference is declared", ft(nil, []binary.ValType{binary.ExternRef}),
 			[]Value{I32(0)},
-			ErrHostSignature,
+			ErrHostSignature, "",
 		},
 		{
 			"a non-null funcref", ft(nil, []binary.ValType{binary.FuncRef}),
-			[]Value{{Type: binary.FuncRef, RefID: 1}},
-			ErrUnsupportedOp,
+			[]Value{{Type: binary.FuncRef, RefKind: PayloadFunc, Bits: 1}},
+			ErrUnsupportedOp, "is a non-null funcref",
+		},
+		{
+			"a non-null reference naming no payload kind",
+			ft(nil, []binary.ValType{binary.ExternRef}),
+			[]Value{{Type: binary.ExternRef}},
+			nil, "naming no payload kind",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -415,8 +439,27 @@ func TestAHostFunctionThatDoesNotHonourItsDeclaredTypeIsRefused(t *testing.T) {
 				}),
 			}))
 
-			if _, err := in.Invoke("call"); !errors.Is(err, tc.want) {
-				t.Fatalf("got %v, want %v", err, tc.want)
+			_, err := in.Invoke("call")
+			switch {
+			case err == nil:
+				t.Fatalf("the host result was accepted, so the check under test did not run")
+			case tc.want != nil:
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("got %v, want %v", err, tc.want)
+				}
+			default:
+				for _, s := range []error{ErrUnsupportedOp, ErrHostSignature} {
+					if errors.Is(err, s) {
+						t.Fatalf("got %v, which carries %v; want an error carrying no sentinel.\n"+
+							"A malformed Value is neither a missing engine arm nor a signature "+
+							"mismatch — the declared type and the returned type agree, and it is "+
+							"the payload that names nothing (decision 0079's register split)", err, s)
+					}
+				}
+			}
+			if tc.text != "" && !strings.Contains(err.Error(), tc.text) {
+				t.Errorf("error %q does not contain %q, so this row is keyed on a sentinel that "+
+					"several refusals at this site share and cannot tell them apart", err, tc.text)
 			}
 			// The refusal left no debris: a check that pushed before it finished checking would
 			// leave the *instance* wrong rather than just this call, and the second invoke is the
