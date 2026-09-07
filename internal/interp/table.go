@@ -129,10 +129,15 @@ type table struct {
 	img atomic.Pointer[tabImage]
 
 	// growMu serialises `grow` against `grow`, which is ADR 0061 transferred to this subject with its
-	// reason and not only its shape: the length lives in two places — this image's slice length and
-	// `limits.Min` below — and only one of them is in the descriptor, so a compare-and-swap over
-	// `img` would relocate the defect to the copy it cannot reach. Both writes are inside the
-	// section.
+	// reason and not only its shape.
+	//
+	// **That reason was *the length lives in two places* — this image's slice length and `limits.Min`
+	// below — and [decision 0078][0078] retired it by deleting the second one (#663).** `grow` no
+	// longer writes the descriptor, so a compare-and-swap has no unreachable copy left to strand. The
+	// lock stays on what a CAS still cannot do: `relocate` is a protocol rather than a word — a second
+	// process-wide mutex, the sibling-agent predicate, a blit and a publish — and memory's own `growMu`
+	// comment carries the same retirement. Recorded rather than rewritten, because a reader arriving
+	// here from ADR 0061 needs to know which of its sentences this tree stopped resting on.
 	//
 	// The order is `growMu` → `relocMu` → `world.mu`…, which this comment said did not exist —
 	// *"there is no lock order to get wrong … `grow` is the only taker and it takes nothing else"* —
@@ -140,6 +145,8 @@ type table struct {
 	// It is memory's order, and it is memory's *mutex*: `relocMu` is process-wide and covers both
 	// subjects, so a table relocation and a memory relocation cannot take two worlds' mutexes in
 	// opposite orders. `attachWorld` takes this lock too, which is what keeps `ws` off every access path.
+	//
+	// [0078]: ../../docs/decisions/0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md
 	growMu sync.Mutex
 
 	// ws is every world whose index space holds this table — memory's field with the subject swapped,
@@ -341,6 +348,23 @@ func (t *table) view() []ref { return t.img.Load().slots }
 // one array while accessing another.
 func (t *table) size() uint64 { return uint64(len(t.view())) }
 
+// typeOf is `instance.ml:76`'s `type_of` for a table — `(*memory).typeOf`'s twin, and that comment
+// carries the whole argument for why this computes instead of reading a field ([decision 0078][0078],
+// [#663](https://github.com/scttfrdmn/burroughs/issues/663)).
+//
+// **The table copy is repaired in the same slice as the memory one although the issue names only the
+// memory**, because the writers of the field are what fix the domain and there were two of them.
+// This side had less behind it, not more: no `.wast` file in the suite grows a table and re-imports
+// it, so `TestGrownTableReexportsItsCurrentSize` is the accept-direction witness that stops the
+// deletion from silently losing the fact `grow`'s deleted line was keeping.
+//
+// [0078]: ../../docs/decisions/0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md
+func (t *table) typeOf() binary.Limits {
+	lim := t.limits
+	lim.Min = t.size()
+	return lim
+}
+
 // load reads slot i for `call_indirect`'s dispatch, trapping `undefined element i` when it is
 // out of bounds — `any_ref`'s wrapper (`eval.ml:122-124`), which is the string only `func_ref`
 // (line 274, `call_indirect`'s own resolution) ever produces. It does **not** trap for a null
@@ -400,19 +424,30 @@ func (t *table) store(i uint64, r ref) error {
 // -1 here rather than errors. Returning an error would turn every failed grow into a trap and
 // answer `table_grow.wast`'s negative rows with the wrong verdict.
 //
-// **`limits.Min` grows with the table, for `memory.grow`'s reason exactly** (memory.go's own
-// comment): `type_of` — read at import-match time — must see the *current* size, or a table
-// grown and then re-exported reports its stale pre-growth minimum to an importer whose
-// declaration matches reality. `table_grow.wast`'s own corpus vectors are the sibling of
-// `imports4.wast`'s memory case, not yet measured because this arm did not exist to grow
-// anything for them to see.
-// # Serialised against itself, and both copies of the size are inside the section
+// **`limits.Min` does not grow with the table, and this function no longer writes it** — decision
+// [0078], the repair for [#663][663]. It used to end `t.limits.Min = newSize`, for `memory.grow`'s reason
+// exactly (memory.go's own comment): `type_of` — read at import-match time — must see the *current*
+// size, or a table grown and then re-exported reports its stale pre-growth minimum to an importer
+// whose declaration matches reality. **That fact is still required and none of it needed a second
+// copy**: `typeOf` above computes it from the published image, which is where the current size has
+// always actually lived. This paragraph also said `imports4.wast`'s memory case had a table sibling
+// *"not yet measured because this arm did not exist to grow anything for them to see"* — the arm
+// exists now, and what measures it is `TestGrownTableReexportsItsCurrentSize` rather than a corpus
+// vector, because **no `.wast` file in the suite grows a table and then re-imports it**. That clause
+// is retired by measurement rather than kept as a standing note.
 //
-// `growMu` is ADR 0061's mutex with the subject swapped, and 0061's title is why a compare-and-swap
-// over `img` is not the answer: the length lives in two places — the image's slice and
-// `t.limits.Min`, which `type_of` reads at import-match time — and a CAS reaches only the one in the
-// descriptor, relocating the read-compute-write to the copy it cannot see. Two threads growing one
-// table would then both read the same old size and one of the two successes would be a lie.
+// # Serialised against itself
+//
+// `growMu` is ADR 0061's mutex with the subject swapped, and 0061's *title* argued that a
+// compare-and-swap over `img` was not the answer because the length lived in two places — the image's
+// slice and `t.limits.Min`, which `type_of` read at import-match time — so a CAS would reach only the
+// one in the descriptor. **[0078] deleted the second place, so that reason is retired**, and the lock
+// stays on the reason that outlives it: a grow here is read-compute-publish, and the `default` arm
+// below is more than that — a second process-wide mutex, [0073]'s sibling-agent predicate, a blit and
+// a publish — which no single word's CAS can make indivisible. Two threads growing one table under a
+// CAS over `img` alone would still interleave across that sequence. 0061 carries a dated note
+// recording the retirement; its title is not rewritten, because a title is what incoming citations
+// name.
 //
 // The section is also why `img` is loaded **once** here: two loads would be correct under the lock,
 // and one is what makes them obviously so.
@@ -444,7 +479,9 @@ func (t *table) store(i uint64, r ref) error {
 //
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 // [0075]: ../../docs/decisions/0075-a-table-reserves-to-its-declared-max-under-a-measured-ceiling-and-refuses-to-relocate-with-a-sibling-agent.md
+// [0078]: ../../docs/decisions/0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md
 // [662]: https://github.com/scttfrdmn/burroughs/issues/662
+// [663]: https://github.com/scttfrdmn/burroughs/issues/663
 // [669]: https://github.com/scttfrdmn/burroughs/issues/669
 func (t *table) grow(delta uint64, r ref, self *thread) int64 {
 	t.growMu.Lock()
@@ -519,7 +556,11 @@ func (t *table) grow(delta uint64, r ref, self *thread) int64 {
 			return -1
 		}
 	}
-	t.limits.Min = newSize
+	// **The declared type does not grow with the table, and this function no longer writes it** —
+	// decision 0078, the repair for #663, whose whole argument is on
+	// `internal/interp/memory.go:memory.grow`'s corresponding paragraph. This arm ended
+	// `t.limits.Min = newSize`; `table.typeOf` computes the current type from the published image
+	// instead, and the plain write the matcher was reading on another goroutine is gone with it.
 	return int64(old)
 }
 

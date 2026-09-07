@@ -77,8 +77,17 @@ func TestEveryOperationLoadsAPublishedImageAtMostOnce(t *testing.T) {
 	// ten to this when 0065 added three subjects and `size` joined the predicate; *a floor is not a
 	// census*, so the pin is the count and the comparison below is the floor. **Counted by running the
 	// scan, not forecast**: the first draft pinned 46 from a hand estimate and the control refused it
-	// at 28, which is the pin now — a floor written from a guess is a floor that fires on the guess.
-	const sitesWhenWritten = 28
+	// at 28, which is the pin then — a floor written from a guess is a floor that fires on the guess.
+	//
+	// **28 → 30 on decision 0078's slice**, and the reason to note it is that the comparison below is a
+	// floor, so a *rise* passes silently and the sentence above claiming the pin is the count would have
+	// gone quietly false. `memory.typeOf` and `table.typeOf` each call `size()` once, to compute the
+	// current type at import-match time instead of reading the second copy `grow` used to keep (#663).
+	// Two new sites, one per subject, neither a double load. Measured by raising the pin until the
+	// control printed its own figure — `found 30 view()/size() call sites across 37 non-test files` —
+	// rather than by adding two to the old number, since *count with a counter, not by eye* and an
+	// arithmetic re-key carries the previous justification unread.
+	const sitesWhenWritten = 30
 
 	ents, err := os.ReadDir(".")
 	if err != nil {

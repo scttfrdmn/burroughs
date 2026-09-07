@@ -82,23 +82,28 @@ type memory struct {
 	// the check approved.
 	img atomic.Pointer[memImage]
 
-	// limits is the declared type, kept because `grow` needs the max and the address width
-	// to decide whether a delta is legal.
+	// limits is the **declared** type: what the module asked for, never what the memory currently is.
+	// `grow` needs the max and the address width from it to decide whether a delta is legal, and
+	// `newMemory` sizes the first image from `Min`.
 	//
-	// **`grow`'s write to `Min` is still a plain write**, which 0058 names as a residual rather than
-	// fixing: it is one word rather than three, so it cannot produce an out-of-bounds access, and its
-	// only cross-thread reader is import matching (`matchMemoryType`, from another goroutine's `link`).
+	// **Nothing writes it after construction, which is [#663]'s repair and [decision 0078][0078].**
+	// `grow` used to end `m.limits.Min = newSize`, making the current size a fact stored twice — once
+	// here and once as the published image's length — and that write was plain while its cross-thread
+	// reader, import matching on another goroutine's `link`, held nothing. The repair is the deletion:
+	// `typeOf` computes the current type from the image on demand, as the reference's `type_of` does,
+	// so there is no second copy to keep current and no unsynchronised read of one. A reader who adds a
+	// cached size back — under a lock, under an atomic, or as a third copy — is caught by
+	// `TestImportMatchingDoesNotRaceAGrowingMemory` and its table twin, whose names are about the rule
+	// rather than about the line this one was.
 	//
-	// **Filed as [#663], and this citation is a repair.** It said *"filed with 0058's coherence residual,
-	// #586"*, which was not true of #586's body: that issue is about a thread left on an abandoned array
-	// and says nothing about this field. A tracking number that leads to an issue not about the subject
-	// still reads as tracked, which is the only reason the wrong citation survived ADR 0073's own reading
-	// of #586. The repair there is a *deletion* rather than a lock — the published image's length is
-	// already the authority for the current size, so this field should carry the declared minimum only —
-	// which is also why it is a separate issue: its oracle is `-race` plus `imports4.wast`, not a
-	// lost-write witness.
+	// **The citation was itself a repair, and it is kept because the trail is the point.** This
+	// paragraph said *"filed with 0058's coherence residual, #586"*, which was not true of #586's body:
+	// that issue is about a thread left on an abandoned array and says nothing about this field. A
+	// tracking number that leads to an issue not about the subject still reads as tracked, which is the
+	// only reason the wrong citation survived ADR 0073's own reading of #586.
 	//
 	// [#663]: https://github.com/scttfrdmn/burroughs/issues/663
+	// [0078]: ../../docs/decisions/0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md
 	limits binary.Limits
 
 	// noMove records that this memory's backing array must never be replaced — decision 0056's
@@ -634,6 +639,30 @@ func validSize(lim binary.Limits, pages uint64) bool {
 // (`memory.ml:47-50`).
 func (m *memory) size() uint64 { return uint64(len(m.view())) / pageSize }
 
+// typeOf is `instance.ml:76`'s `type_of` for a memory: the declared type with the minimum replaced
+// by the size the memory *currently* has, which is what import matching must compare against
+// (`imports4.wast:19-37`: "imported memory limits should match, because external memory size is 2
+// now").
+//
+// **It computes rather than reads, and that is [decision 0078][0078] — the repair for
+// [#663](https://github.com/scttfrdmn/burroughs/issues/663).** `grow` used to keep `limits.Min`
+// equal to the current size with a plain write, which made the size a fact stored twice and gave
+// import matching — running on another goroutine's `link`, holding nothing — an unsynchronised read
+// of it. The repair is the deletion rather than a lock over the copy, because the published image's
+// length is already the authority and a lock would only make two writers agree about a duplicate.
+// The reference has no copy to keep current: `type_of` builds the type from the instance on demand,
+// which is what this does.
+//
+// The maximum and the address type are **not** recomputed, because neither moves when a memory
+// grows — `matchLimits`' `HasMax`/`Max` terms are about the declaration and stay declared.
+//
+// [0078]: ../../docs/decisions/0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md
+func (m *memory) typeOf() binary.Limits {
+	lim := m.limits
+	lim.Min = m.size()
+	return lim
+}
+
 // effectiveAddress is `memory.ml:96`'s `effective_address`: the 64-bit sum of the dynamic index
 // and the static offset, trapping when it wraps.
 //
@@ -795,12 +824,17 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 //
 // **The whole function runs under `growMu`, which is what makes the length change one operation** —
 // `relaxed.rst:246` models it as an atomic read-modify-write, and this reads the size, computes a new
-// one and publishes, which is three. Decision 0061 (#600) chose the lock over a compare-and-swap on
-// `img` for a reason visible only in the last statement of this function: **the size is stored twice.**
-// `memImage.bytes`' length is the authority, and `limits.Min` below is a second copy that import
-// matching reads back. A CAS over `img` would make the descriptor's copy indivisible and leave the
-// other a plain three-step write — the same defect, relocated to the copy the CAS cannot reach. One
-// critical section covers both.
+// one and publishes, which is three.
+//
+// **Decision 0061 (#600) chose the lock over a compare-and-swap for a reason [decision 0078][0078]
+// has since retired, and the lock stands on the others.** The retired one was *the size is stored
+// twice*: `limits.Min` was a second copy that import matching read back, a CAS over `img` would have
+// made only the image indivisible, and one critical section covered both. #663 deleted that copy, so
+// there is now one size and that argument names nothing. What still rules a CAS out is the arm
+// below: `relocate` is a multi-step protocol — it takes a second process-wide mutex, evaluates the
+// sibling-agent predicate, blits and publishes — and a compare-and-swap cannot make a protocol
+// indivisible, only a word. The retirement is recorded in ADR 0061 too rather than only here,
+// because that document's *title* is the sentence this paragraph just gave up.
 //
 // The section is also why `img` is loaded **once** here. Two loads were correct before and would be
 // correct now; one is what the lock makes *obviously* correct, so the argument that they agree no
@@ -831,6 +865,7 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 // [0058]: ../../docs/decisions/0058-the-memory-image-is-published-through-an-atomic-pointer-because-reachability-is-not-a-spawn-time-property.md
 // [0068]: ../../docs/decisions/0068-spawn-drops-0056s-walk-and-refuses-the-two-cases-a-per-instance-world-cannot-express-because-a-thread-belongs-to-exactly-one-stop.md
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
+// [0078]: ../../docs/decisions/0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md
 func (m *memory) grow(delta uint64, self *thread) int64 {
 	m.growMu.Lock()
 	defer m.growMu.Unlock()
@@ -980,14 +1015,20 @@ func (m *memory) grow(delta uint64, self *thread) int64 {
 			return -1
 		}
 	}
-	// **The declared type grows with the memory, and it is mutable for exactly this
-	// reason.** `memory.ml:64`'s `grow` sets `mem.ty <- MemoryT (at, lim')` with `lim'.min`
-	// the new size — `type_of` (called at import-match time, `instance.ml:76`) reads that
-	// field back, so a memory this instance re-exports after growing must satisfy an
-	// importer against its *current* size, not the size it had when this instance was
-	// built. `imports4.wast:22-37` pins exactly this, in its own comment: "imported memory
-	// limits should match, because external memory size is 2 now."
-	m.limits.Min = newSize
+	// **The declared type does not grow with the memory, and this function no longer writes
+	// it** — decision 0078, the repair for #663. It used to end `m.limits.Min = newSize`, with
+	// this argument: `memory.ml:64`'s `grow` sets `mem.ty <- MemoryT (at, lim')` with `lim'.min`
+	// the new size, `type_of` (`instance.ml:76`) reads it back at import-match time, so a memory
+	// re-exported after growing must satisfy an importer against its *current* size
+	// (`imports4.wast:19-37`: "imported memory limits should match, because external memory size
+	// is 2 now").
+	//
+	// **Every word of that is still true and none of it needed a second copy.** The published
+	// image's length is the authority — `size()` reads it and `newSize` above is computed from it
+	// — so `memory.typeOf` builds the current type on demand exactly as the reference's `type_of`
+	// does, and the field that used to shadow it went with the write. What that removes is the
+	// race: the write was plain, its reader is `link`'s matcher on another goroutine holding
+	// nothing, and a lock over the copy would only have made two writers agree about a duplicate.
 	return int64(old)
 }
 

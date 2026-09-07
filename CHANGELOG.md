@@ -2143,6 +2143,73 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A memory's and a table's current size was stored twice, and `grow`'s write to the second copy raced
+  import matching — so the copy is deleted rather than synchronised.**
+  [#663](https://github.com/scttfrdmn/burroughs/issues/663), [ADR
+  0078](docs/decisions/0078-the-sizes-second-copy-is-deleted-rather-than-locked-and-the-matchers-compute-the-current-type-on-demand-like-the-references-type-of.md).
+  `internal/interp/memory.go:memory.grow` ended `m.limits.Min = newSize` and
+  `internal/interp/table.go:table.grow` ended `t.limits.Min = newSize`, each a plain write under `growMu`;
+  `internal/interp/link.go:importTypeMismatch` read the same field holding no lock, from an embedder's
+  second goroutine instantiating a module that imports the memory or table. Unlike
+  [#586](https://github.com/scttfrdmn/burroughs/issues/586) this is a race `-race` can see, and it was
+  watched fire on `main` before the repair. `memory.typeOf` / `table.typeOf` now compute the current type
+  from the published image the way `instance.ml:76`'s `type_of` does — the reference *computes* an
+  instance's type on demand and this engine had *cached* it — so `limits` is the declared type and nothing
+  writes it after construction.
+  - **The issue named one copy and the field's writers named two.** #663's body is about the memory;
+    `table.grow` carried the identical statement with the identical unsynchronised reader and the issue
+    says nothing about it. Both are repaired here — *an issue's list is a registry of where someone
+    noticed, not an inventory* — and the table arm was the one with no accept-direction coverage at all:
+    `imports4.wast:19-37` pins the memory case, and **no `.wast` file in the suite grows a table and then
+    re-imports it**, so `TestGrownTableReexportsItsCurrentSize` is that fact's first witness (§9 G-3).
+  - **Each arm had two read sites, which decided part of the mechanism.** `importTypeMismatch` read the
+    limits once to *decide* the match and again to *render* the refusal through
+    `internal/interp/typestring.go`. `link` now computes the current type once per arm and feeds both from
+    it, and `matchTableType` takes the limits and element type instead of the `*table` so neither arm can
+    grow a second read later. A repair feeding only the verdict would have left the message racing and
+    could have let it name a size the verdict did not refuse on.
+  - **Two `-race` controls, named for the rule rather than for the field**, so a future cached size — under
+    a lock, under an atomic, or as a third copy — trips them even though the lines they first fired on are
+    gone: `TestImportMatchingDoesNotRaceAGrowingMemory` and `…Table`. Their verdict is CI's `race` step;
+    **`make check` does not pass `-race`**, and both comments say so rather than leaving a green from it to
+    be read as covering them. An interleaving-vacuity arm copied from `globaltear_test.go` was tried and
+    removed: it failed 0 accepted / 200 refused while the same run reported the race anyway, because the
+    detector's question is the absence of a happens-before edge and not an order of arrival — *copying a
+    control inherits its visible property, not its load-bearing one.*
+  - **Three instruments for one risk, because they fail for unrelated reasons.** The two `-race` arms catch
+    an *unsynchronised* write and need a detector `make check` does not run.
+    `TestConcurrentGrowLosesNoPages`'s observer catches a write **under `growMu`** — the correctly
+    synchronised wrong answer — and it is the one instrument this change *broke*: it asserted the two copies
+    agree, so the deletion dissolved its subject and it failed `make check` at 60879 and 167101
+    disagreements. It is **re-pointed rather than deleted**, its assertion inverted to *"`limits.Min` is the
+    declared minimum"*, because *a control names a risk and not a code shape*; the battery table in its
+    comment gains a row C for the locked re-introduction, watched fire. Memory only, though — there is no
+    concurrent-grow twin for tables, and a text search for the write would report its own documentation now
+    that four comments quote it (*a grep measures text*). So the third is
+    `TestNothingWritesADeclaredTypeAfterConstruction`, an **AST** scan over every non-test file in
+    `internal/interp` flagging any assignment or increment whose target is `x.limits` or `x.limits.<Field>`,
+    on either subject, in any function, in the default lane. Both injections were run in one pass and it
+    named both sites; its two vacuity arms were watched fire **separately**, which is what produced the
+    finding — a combined arm would have shown the control dying and said nothing about which half was
+    load-bearing.
+  - **A vacuity floor on files bounds the wrong axis, so this control floors the bodies it entered.** The
+    blinded-body arm above leaves the *file* floor passing: 37 files existing certifies nothing about
+    whether the walk entered any of them. `bodiesWhenWritten = 452` closes it, at its measured count, and
+    the case only it can see was watched fail — with bodies walked for `memory.go` alone, `entered 20
+    function bodies` is the **sole** arm that fires, because 20 bodies still supply enough of the package's
+    1394 assignments to satisfy `assignments == 0` while the write list comes back clean over 4% of the
+    tree. *A zero-check bounds a population's emptiness and says nothing about its size*, and both floors
+    sit **at** their measured counts rather than below, since slack in a floor is *an unasserted distance*
+    and the distance is the vacuum. Scott's call on the #679 review.
+  - **[ADR 0061](docs/decisions/0061-grow-serialises-on-its-own-mutex-rather-than-a-compare-and-swap-over-the-descriptor-because-the-length-lives-in-two-places-and-only-one-is-in-the-descriptor.md)'s
+    title names the premise this removes, and it gets a dated note rather than a rewrite.** Its decision
+    stands — `growMu` is still what makes a grow indivisible, because a relocation is a second
+    process-wide mutex, a sibling-agent predicate, a blit and a publish, which no single-word CAS can make
+    indivisible — but *"the length lives in two places"* stops being true, and a sentence left standing
+    after the change would tell the next reader the tree is in a state it is not. The note also corrects
+    that ADR's residual bullet, which parked this half on #586 (resolved on its own subject by ADR 0073)
+    and asserted *"no path today runs import matching concurrently with a running thread"*, which the two
+    new controls falsify by being that path.
 - **An unreachability clause was false, so a live public-boundary arm told four kinds of host argument that
   their module was unvalidated** (grave [#676](https://github.com/scttfrdmn/burroughs/issues/676)).
   `internal/interp/castop.go:typeOfRef`'s default arm called its own condition *"a non-null reference with no

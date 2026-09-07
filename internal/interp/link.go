@@ -446,21 +446,30 @@ func (in *Instance) importTypeMismatch(im *binary.Import, ext Extern) string {
 	case binary.ExternMemory:
 		// `match_memorytype c (MemoryT (at1, lim1)) (MemoryT (at2, lim2))` =
 		// `at1 = at2 && match_limits c lim1 lim2`.
-		if matchMemoryType(ext.mem.limits, im.Memory.Limits) {
+		//
+		// **The supplier's type is computed once and both the verdict and the message read that
+		// one value** — decision 0078, the repair for #663. It used to be `ext.mem.limits` at
+		// both, a field `grow` kept current with a plain write, so each arm had two
+		// unsynchronised reads of a growing memory's size and the message could name a size the
+		// verdict had not refused on. One local is also what makes them obviously agree, which is
+		// `memory.go:memory.grow`'s own argument for loading its image once.
+		gotMem := ext.mem.typeOf()
+		if matchMemoryType(gotMem, im.Memory.Limits) {
 			return ""
 		}
 		return fmt.Sprintf("expected %s, got %s",
-			want.externMemory(im.Memory.Limits), got.externMemory(ext.mem.limits))
+			want.externMemory(im.Memory.Limits), got.externMemory(gotMem))
 	case binary.ExternTable:
 		// `match_tabletype` = `at1 = at2 && match_limits c lim1 lim2 && match_reftype c t1 t2 &&
 		// match_reftype c t2 t1` — the element type **mutually**, so it is the subtype relation
 		// used as an equality rather than an `==` on the representation.
-		if matchTableType(gotMod, ext.tab, in.mod, im.Table) {
+		gotTab := ext.tab.typeOf()
+		if matchTableType(gotMod, gotTab, ext.tab.elemType, in.mod, im.Table) {
 			return ""
 		}
 		return fmt.Sprintf("expected %s, got %s",
 			want.externTable(im.Table.Limits, im.Table.ElemType),
-			got.externTable(ext.tab.limits, ext.tab.elemType))
+			got.externTable(gotTab, ext.tab.elemType))
 	case binary.ExternGlobal:
 		// `match_globaltype` = `mut1 = mut2 && match_valtype c t1 t2 && (Cons -> true | Var ->
 		// match_valtype c t2 t1)`: mutability invariant, a const global **covariant** in its value
@@ -531,11 +540,17 @@ func matchMemoryType(got, want binary.Limits) bool {
 }
 
 // matchTableType is `match_tabletype` (match.ml:170-172).
-func matchTableType(gotMod *binary.Module, got *table, wantMod *binary.Module, want binary.TableType) bool {
-	return got.limits.Addr64 == want.Limits.Addr64 &&
-		matchLimits(got.limits, want.Limits) &&
-		validate.MatchValType(gotMod, got.elemType, wantMod, want.ElemType) &&
-		validate.MatchValType(wantMod, want.ElemType, gotMod, got.elemType)
+//
+// **It takes the supplier's limits and element type rather than the `*table` they came from**, which
+// is decision 0078's third part: the caller computes the current type once (`table.typeOf`) and
+// hands it to both this and the mismatch message, so the two cannot come to disagree and this
+// function cannot grow a second read of a size that moves. Its memory sibling was already shaped
+// this way; the asymmetry was what let the table arm keep reading the descriptor directly.
+func matchTableType(gotMod *binary.Module, got binary.Limits, gotElem binary.ValType, wantMod *binary.Module, want binary.TableType) bool {
+	return got.Addr64 == want.Limits.Addr64 &&
+		matchLimits(got, want.Limits) &&
+		validate.MatchValType(gotMod, gotElem, wantMod, want.ElemType) &&
+		validate.MatchValType(wantMod, want.ElemType, gotMod, gotElem)
 }
 
 // matchGlobalType is `match_globaltype` (match.ml:162-165).
