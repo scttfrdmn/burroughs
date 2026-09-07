@@ -2143,6 +2143,96 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The boundary resolved a reference argument whose payload it cannot carry instead of refusing it, and at
+  an `externref` parameter it did so silently.**
+  [#677](https://github.com/scttfrdmn/burroughs/issues/677), [ADR
+  0079](docs/decisions/0079-the-boundary-refuses-a-reference-argument-by-its-own-payload-kind-rather-than-by-the-parameters-spelling-and-the-register-splits-on-whether-a-widening-could-lift-it.md).
+  `internal/interp/value.go:Value.toRef` turned a `PayloadStruct`, `PayloadArray`, `PayloadExn` or
+  no-kind-at-all argument into a non-null `ref` with no discriminator set; `internal/interp/castop.go:typeOfRef`
+  dispatches on `Externalized` **first**, deliberately and for grave #36's reason, so under an `externref`
+  parameter every one of those was answered `extern`, matched, and **admitted with no error at any point** —
+  reaching the embedder as `RefKind: none, RefID: 0`, which is `(ref.extern 0)`, a host identity the value
+  does not have. #677's own body describes the milder half, the `ErrEngineInvariant` an `anyref` parameter
+  produces several frames later; the measured table in 0079's Context is where the silent arm was found.
+  `toRef` now returns an error and both of its call sites are compiler-forced to handle it, so the refusal
+  lives in the one function that already enumerates the payload kinds rather than in two copies of a
+  predicate.
+  - **The refusal was keyed on the parameter and is now keyed on the argument, which fixes an
+    over-refusal and an under-refusal at once.** The guard that stood one line ahead of the conversion was
+    `p == binary.FuncRef && !args[i].Null`, and `binary.FuncRef` is the **nullable abstract** spelling
+    alone: a `(ref func)` parameter therefore did not fire it, so a fabricated funcref index reached
+    `toRef` and was resolved against the *callee's* own index space — admitted outright at index 0, and
+    caught for out-of-range only downstream and in the wrong register. In the other direction an
+    `externref` argument at a `funcref` parameter *did* fire it and was told it *"is a non-null funcref"*,
+    which it is not, preempting the `matchRefType` two lines later that answers it correctly as
+    `is funcref, got (ref extern)`. Both follow from one thing: the shape being refused is a property of
+    the argument and the guard read the parameter.
+  - **The population is two call sites, and #677's scope named one.**
+    `internal/interp/host.go:pushHostResults` is a deliberate copy of `invokeIndex`'s loop — its own
+    comment says a host result travels inward so it *"borrows that loop's discipline"* — and it had every
+    row of the same table. That is *an issue's list is a registry, not an inventory* for the second
+    consecutive slice, after [#663](https://github.com/scttfrdmn/burroughs/issues/663) named one of two
+    `limits.Min` copies.
+  - **Two registers, split on whether a widening could lift the refusal.** `PayloadFunc` and the three
+    aggregate kinds are real references this engine declines to carry inward and
+    [#680](https://github.com/scttfrdmn/burroughs/issues/680) could carry later, so they keep
+    `ErrUnsupportedOp` — which preserves the funcref refusal's existing public class through
+    `publicError` exactly, rather than giving three sibling kinds a class of their own. A non-null
+    reference naming *no* payload kind, and one naming the domain's `PayloadPastEnd` bound, carry **no
+    sentinel at all**: no widening makes them meaningful, they are malformed arguments, and
+    `ErrUnsupportedOp` would tell an embedder a feature is missing when their `Value` is wrong. `site` is a
+    pre-rendered string rather than a format argument, `funcRefTarget`'s arrangement, so both existing
+    funcref messages survive byte for byte.
+  - **An existing control's row had stopped testing its own subject, and the refusal ordering is what
+    exposed it.** `TestAHostFunctionThatDoesNotHonourItsDeclaredTypeIsRefused`'s *"a non-null funcref"* row
+    passed `{Type: binary.FuncRef, RefID: 1}`, whose `RefKind` is the zero value `PayloadNone` — so the
+    specimen was a no-kind reference wearing a funcref's static type, and under the new switch it was
+    refused by the wrong arm while still asserting `ErrUnsupportedOp` and still going green. *A refusal
+    ordered ahead of the one under test steals its row silently.* The row now sets `RefKind: PayloadFunc`
+    and the shape it used to carry gets a row of its own, at `externref`, which is where the pre-0079
+    engine admitted it without a word.
+  - **`TestAnUnrepresentableReferenceArgumentIsReportedNotResolved` failed on the schedule its own comment
+    predicted, and was re-pointed rather than deleted.** Grave #676's control was written with the
+    register it asserted marked as expected to change when #677 landed — *"when that lands this line
+    fails, and that is the control working"* — which is what *name a control after the rule, not the
+    property* buys: the durable half (*reported, not resolved*, and specifically not `ErrNotValidated`)
+    was untouched, and the change arrived as a verdict instead of silently. The forecast was one register
+    short, so the re-pointed assertion is two.
+  - **`toRef` no longer takes an `*Instance`, and that was `unparam`'s finding rather than the plan.** The
+    only arm that read it was `PayloadFunc`'s, which built `ref{Inst: in, Addr: index}` — the caller's
+    bare index resolved against the callee's index space, which *is* the under-refusal's mechanism. With
+    the arm refusing, the parameter went unused and was deleted rather than kept for symmetry: a
+    conversion that cannot reach an instance's index space cannot fabricate a reference into one, which
+    is a stronger closure than the refusal alone, since a future edit can delete a switch arm and cannot
+    un-delete a parameter by accident.
+  - **Two new controls, five injections read.** `TestAnUnexpressibleReferenceArgumentIsRefusedAtTheBoundary`
+    walks the derived domain `PayloadNone`..`PayloadPastEnd+1` at an `externref` parameter, an `anyref`
+    parameter and a host-function result, with the expectation *computed* from the kind — crosses iff the
+    payload rides in the `Value` — rather than tabulated, so a kind added without an arm fails here as
+    well as breaking the `exhaustive` build; the externref column is the one that matters, since a
+    control run only at `anyref` would have reported the boundary fixed while the corpus's most-used
+    reference type still admitted the fabrication. The battery **measured** that, and one reading is
+    sharper than the argument for it: with the no-kind arm's refusal removed the `externref` and
+    host-result columns failed and the `anyref` column did **not**, because at that spelling
+    `typeOfRef`'s default arm stands behind the refusal and errors plainly and without a sentinel, which
+    is exactly what the walk asserts for a no-kind row. That is the stolen row above arriving inside the
+    control written to repair it, so it is recorded in the control's own comment rather than left as a
+    green nobody has read. Every other kind failed in all three columns.
+    `TestTheFuncrefRefusalKeysOnTheArgumentAndNotOnTheParameterSpelling` is the over/under pair, asserts
+    the *messages* rather than only the outcomes — both directions already produced errors of some kind,
+    and only the text distinguishes the guard from the repair — and is the only control that can see the
+    deleted guard come back.
+  - **`ErrUnsupportedOp`'s doc comment was narrower than its five landed call sites, and the sentence is
+    what changed.** It read *"the engine saying it has no arm for an instruction"*, while the two
+    reference-argument refusals, `funcRefTarget`'s host-function-has-no-reference-identity limit,
+    `invokeIndex`'s re-exported-host-function refusal and `checkBaseAlignment`'s unaligned-atomic-base
+    limit have no opcode between them — and `funcRefTarget`'s own comment already stated the broader
+    reading as the rule, *"the register for **this engine cannot**, never `ErrNotValidated`, which would
+    blame a module that is well-formed"*. So the practice was settled and the prose was the stale
+    artifact; widened rather than split into five sentinels distinguishing gaps an embedder acts on
+    identically, since `publicError` maps all of it to `ErrUnsupported` anyway. This slice touches it
+    because 0079 cites that sentinel's meaning as the authority for its own register choice.
+
 - **A memory's and a table's current size was stored twice, and `grow`'s write to the second copy raced
   import matching — so the copy is deleted rather than synchronised.**
   [#663](https://github.com/scttfrdmn/burroughs/issues/663), [ADR

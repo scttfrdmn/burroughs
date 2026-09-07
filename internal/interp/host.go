@@ -517,11 +517,20 @@ func (in *Instance) pushHostResults(st *stack, want []binary.ValType, got []Valu
 				return fmt.Errorf("%w: result %d is %s and returned %s",
 					ErrHostSignature, i, w, got[i].Type)
 			}
-			if w == binary.FuncRef && !got[i].Null {
-				return fmt.Errorf("%w: result %d is a non-null funcref, which this boundary cannot "+
-					"accept from outside the engine (see interp.Value.RefID)", ErrUnsupportedOp, i)
+			// **The conversion refuses what it cannot carry, keyed on the result's own payload
+			// kind** — [decision 0079][0079]. What stood here was `if w == binary.FuncRef &&
+			// !got[i].Null`, the outward loop's guard borrowed along with the rest of its
+			// discipline, and it read the *declared result type*: `binary.FuncRef` is the nullable
+			// abstract spelling alone, so a `(ref func)` result let a fabricated index through and
+			// an externref result at a `funcref` result type was told it "is a non-null funcref"
+			// when it is not one. The externref case now reaches `matchRefType` below, which
+			// answers it as the `ErrHostSignature` mismatch it is.
+			//
+			// [0079]: ../../docs/decisions/0079-the-boundary-refuses-a-reference-argument-by-its-own-payload-kind-rather-than-by-the-parameters-spelling-and-the-register-splits-on-whether-a-widening-could-lift-it.md
+			r, rerr := got[i].toRef(fmt.Sprintf("result %d", i))
+			if rerr != nil {
+				return rerr
 			}
-			r := got[i].toRef(in)
 			dyn, terr := typeOfRef(r, fmt.Sprintf("host function result %d", i))
 			if terr != nil {
 				return terr

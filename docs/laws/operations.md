@@ -132,6 +132,18 @@ Three separate mistakes are being avoided, and they were made in that order:
      for about ninety seconds is
      the unavoidable shape of a sweep that runs after delivery: `closecheck` has a `--body <file>`
      form and can run before posting, `citecheck` has only `--pr`, which reads the *posted* body.
+   - **`run_attempt` names membership in an attempt, not execution during it, so a job's attempt
+     number is not evidence the job ran.** A `--job`-scoped re-run bumps the *run's* attempt
+     counter, and every job on that run then reports the new number — including the jobs nobody
+     re-executed, whose conclusions are carried forward from the previous attempt. So a verdict
+     file recording `attempt=2` above seven `success` lines is, in the `--job` case, one job's
+     attempt-2 result plus six of attempt 1's, and the attempt stamp says nothing about which is
+     which. `started_at` is what separates them: a job that actually ran in the attempt started
+     after the attempt did. This is the identity discipline of mistake 2 pointed one level down —
+     binding the verdict to a SHA does not bind a *job's* verdict to the attempt whose number it
+     carries — and it matters most exactly where the `--job` re-run is most attractive, namely a
+     single red job on an otherwise-green run, where the carried-forward six are what the reader
+     wants to trust. (Directive: Scott, on the #679 review.)
 
 **And `sleep` is never how you wait for a signal that exists — background it and let the
 wake-up arrive.** This is mistake 1 restated because restating it was necessary: it was

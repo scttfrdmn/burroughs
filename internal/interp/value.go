@@ -1052,20 +1052,71 @@ func (v Value) Int32() int32 { return int32(uint32(v.Bits)) }
 // Int64 reads a Value as an i64.
 func (v Value) Int64() int64 { return int64(v.Bits) }
 
-// toRef converts a reference-typed Value to the internal ref shape, resolving a non-null
-// funcref's instance to in — the caller's own instance, per RefID's doc comment on why a
-// cross-instance funcref argument is out of scope: an externally-supplied funcref can only
-// mean "a function index in the callee's own instance", and the corpus never supplies a
-// non-null one at all, so this path is reachable only via a future widening's own arm, not by
-// anything in today's corpus.
-// **Externalization is read off the static type and not off the payload**, which is the one place
-// this pair deliberately does not mirror `typeOfRef`'s dispatch: `ref.Externalized` is set exactly
-// when t is `externref`, because that is what the two spellings differ in (`ExternRef` vs `HostRef`
-// above) and what `any.convert_extern` clears. The payload kind says what is *underneath* the
-// wrapper; the type says whether there is one.
-func (v Value) toRef(in *Instance) ref {
+// toRef converts a reference-typed Value to the internal ref shape, **or refuses it** — the two
+// halves of one question, which is why this returns an error rather than leaving the refusal to its
+// callers ([decision 0079][0079]).
+//
+// # What the error is for, and why it lives here rather than at the two call sites
+//
+// A `Value` carries a reference as Null/RefKind/RefID/I31, and only two of the payload kinds have
+// their whole payload in those fields: PayloadHost's is RefID and PayloadI31's is I31. Every other
+// non-null kind names something this boundary cannot rebuild — a guest-allocated `*gcObj` or
+// `*excObj` (0002's GC-precision pin), or a bare function index that names no instance (RefID's own
+// scope statement) — and a `Value` naming *no* kind on a non-null reference is malformed outright.
+//
+// This function is the only place that enumerates the kinds, so it is where the refusal belongs: the
+// alternative is the same predicate copied at each call site, which is one fact in two places and
+// the shape #663 paid for. The switch names every member from PayloadNone to PayloadPastEnd so
+// `exhaustive` fails the build when a kind is added without a stated reading, which is what
+// PayloadPastEnd is exported to make possible.
+//
+// **The refused set's complement is exactly what this package's own constructors build** — NullRef,
+// ExternRef, HostRef — and `TestAnUnexpressibleReferenceArgumentIsRefusedAtTheBoundary` checks that
+// property rather than a hand-written list of expectations.
+//
+// # Two registers, split on whether a widening could lift the refusal
+//
+// PayloadFunc and the three aggregate kinds are real references the engine declines to carry *inward*
+// and [#680][680] could carry later, so they get `ErrUnsupportedOp` — the register for *this engine
+// cannot*, which `funcRefTarget`'s own host-function arm states as the rule. A non-null reference
+// naming no kind, and the domain's PayloadPastEnd bound, get a plain error: no widening makes them
+// meaningful, they are a bad argument, and `publicError` puts a bad argument in its
+// travels-unchanged class.
+//
+// # It takes no *Instance, and that absence is the under-refusal made structural
+//
+// This used to take one, and the only arm that read it was PayloadFunc's — it built
+// `ref{Inst: in, Addr: index}`, resolving a bare index the caller supplied against the *callee's*
+// index space, which is what made a fabricated funcref admissible at a `(ref func)` parameter. With
+// that arm refusing, `unparam` reported the parameter unused, and the honest response was to delete
+// it rather than to keep a parameter for symmetry: **a conversion that cannot reach an instance's
+// index space cannot fabricate a reference into one.** The lint finding is the defect's own shape
+// arriving from the other direction.
+//
+// # site is pre-rendered, not a format argument
+//
+// `funcRefTarget`'s arrangement and for its reason: the caller supplies `parameter 3 of "f"` or
+// `result 0` already spelled, so the funcref message both call sites had before 0079 survives byte
+// for byte — and that text is what the board's bucket keys were measured against.
+//
+// # Externalization is read off the static type and not off the payload
+//
+// The one place this pair deliberately does not mirror `typeOfRef`'s dispatch: `ref.Externalized` is
+// set exactly when t is `externref`, because that is what the two spellings differ in (`ExternRef`
+// vs `HostRef` above) and what `any.convert_extern` clears. The payload kind says what is
+// *underneath* the wrapper; the type says whether there is one. It is also why the refusal cannot
+// live in `typeOfRef` instead: that function answers `extern` from its first arm without reading the
+// discriminator at all, so for an `externref` parameter a discriminator-less reference used to be
+// *admitted* rather than reported — the silent half of #677, measured rather than assumed.
+//
+// [0079]: ../../docs/decisions/0079-the-boundary-refuses-a-reference-argument-by-its-own-payload-kind-rather-than-by-the-parameters-spelling-and-the-register-splits-on-whether-a-widening-could-lift-it.md
+// [680]: https://github.com/scttfrdmn/burroughs/issues/680
+func (v Value) toRef(site string) (ref, error) {
 	if v.Null {
-		return ref{Null: true}
+		// RefKind is not read for a null and must not be: there is exactly one heaptype-free null
+		// (grave #266), so `NullRef(t)` leaves the field at PayloadNone and a null spelled at any
+		// reference type is the null every nullable reference type admits.
+		return ref{Null: true}, nil
 	}
 	// Set for an `externref` and clear for every other reference type — including `anyref`, which
 	// is how a bare `(ref.host N)` stays bare. `any.convert_extern` refuses a non-null operand
@@ -1078,36 +1129,62 @@ func (v Value) toRef(in *Instance) ref {
 		// the two never collide because a slot's Kind decides which reading applies, exactly as
 		// ref's own Addr field comment already states for the function-index case. Inst is left
 		// nil: a host reference never resolves through an instance's index space.
-		return ref{Externalized: ext, IsHost: true, Addr: v.RefID}
+		return ref{Externalized: ext, IsHost: true, Addr: v.RefID}, nil
 	case PayloadI31:
-		return ref{Externalized: ext, IsI31: true, I31: v.I31}
+		return ref{Externalized: ext, IsI31: true, I31: v.I31}, nil
 	case PayloadFunc:
-		// The instance is the *caller's*, per RefID's doc comment on why a cross-instance funcref
-		// argument is out of scope: an externally-supplied funcref can only mean "a function index
-		// in the callee's own instance". Measured at 0 corpus vectors, so this arm is reachable
-		// only through a future widening rather than by anything the suite passes today — and
-		// `invokeIndex`'s parameter loop refuses a non-null funcref argument before it gets here.
-		return ref{Externalized: ext, Addr: uint32(v.Bits), Inst: in}
+		// **Refused, and the refusal keys on this kind rather than on the parameter's declared
+		// type** — which is 0079's own repair, because the guard it replaces read
+		// `p == binary.FuncRef` and that value is the *nullable abstract* spelling alone. A
+		// `(ref func)` parameter is a different ValType, so the old guard let a fabricated funcref
+		// through to be resolved against the callee's own index space, and an `externref` argument
+		// at a `funcref` parameter was told it "is a non-null funcref" when it is not one. Both
+		// follow from reading the parameter for a property of the argument.
+		//
+		// What cannot cross is `Value.RefID`'s stated scope: a bare module-local index names no
+		// instance, so the only reading available would be "a function index in the callee's own
+		// module", which is a reference the caller did not have. Measured at 0 corpus vectors.
+		return ref{}, fmt.Errorf("%w: %s is a non-null funcref, which this "+
+			"boundary cannot accept from outside the engine (see interp.Value.RefID)",
+			ErrUnsupportedOp, site)
 	case PayloadStruct, PayloadArray, PayloadExn:
-		// **The payload cannot cross inward and the result says so rather than inventing one.** A
-		// `*gcObj`/`*excObj` is guest-allocated and not expressible in a Value (0002's GC-precision
-		// pin), so the kind arrives here with nothing to rebuild from. The returned reference is
-		// non-null with **no discriminator set** — precisely the shape `typeOfRef`'s default arm
-		// exists to report as an engine inconsistency — so a future caller that starts passing one
-		// gets a named error at its first use and not a wrong value. Measured: 0 corpus vectors
-		// pass a GC payload back as an argument, the same scope boundary RefID's own comment states
-		// for a non-null funcref.
-		return ref{Externalized: ext}
-	case PayloadNone, PayloadPastEnd:
-		// A non-null reference naming no kind is not a shape this boundary can honour either; it is
-		// the same engine inconsistency, arriving from the other direction. Named rather than
-		// folded into the arm above because the cause is different: there, a kind with an
-		// unexpressible payload; here, no kind at all.
-		return ref{Externalized: ext}
+		// **The payload cannot cross inward, so the argument is refused rather than converted.** A
+		// `*gcObj`/`*excObj` is guest-allocated and not expressible in a Value (0002's
+		// GC-precision pin), so the kind arrives here with nothing to rebuild from.
+		//
+		// This used to return `ref{Externalized: ext}` — a non-null reference with no discriminator
+		// — on the argument that `typeOfRef`'s default arm would report it as an engine
+		// inconsistency. Measurement falsified the argument for the reference type the corpus uses
+		// most: `typeOfRef`'s first arm answers `extern` off the Externalized bit without reading
+		// the discriminator, so at an `externref` parameter the value was *admitted*, and an
+		// embedder who handed back a reference the engine itself produced got `(ref.extern 0)` — a
+		// host identity it does not have. Same register as PayloadFunc above: a real reference this
+		// engine declines to carry inward, which [#680][680] is the widening for.
+		return ref{}, fmt.Errorf("%w: %s is a non-null %s reference, whose payload is "+
+			"guest-allocated and cannot cross into the engine (0002's precision pin; see "+
+			"interp.Value.RefKind)", ErrUnsupportedOp, site, v.RefKind)
+	case PayloadNone:
+		// A non-null reference naming no kind is malformed rather than unsupported, so it gets a
+		// plain error and no sentinel: there is no widening that gives it a meaning, and
+		// `publicError` puts a bad argument in its travels-unchanged class. Separate from the arm
+		// above because the cause is different — there, a kind whose payload cannot cross; here, no
+		// kind at all — and separate registers is 0079's decision on the split #677 left open.
+		return ref{}, fmt.Errorf("interp: %s is a non-null reference naming no payload kind, so "+
+			"there is nothing to convert (interp.Value.RefKind selects the payload, and a non-null "+
+			"reference must name one)", site)
+	case PayloadPastEnd:
+		// The domain's upper bound is not a kind, and this arm exists so `exhaustive` can confirm a
+		// stated reading for it rather than letting a default absorb it — the same reason every
+		// other switch over this type names it. A Value carrying it is a caller that computed a
+		// RefPayload arithmetically; same register as PayloadNone, for the same reason.
+		return ref{}, fmt.Errorf("interp: %s names payload kind %s, which is the domain's bound "+
+			"and not a reference constructor (see interp.PayloadPastEnd)", site, v.RefKind)
 	}
-	// Unreachable: the switch above names every RefPayload member, and `exhaustive` fails the build
-	// if a new one arrives without an arm. Present because Go requires a terminating statement.
-	return ref{Externalized: ext}
+	// Reached only by a RefPayload above the domain's bound, which `exhaustive` cannot see because it
+	// is not a member: a caller that built one arithmetically rather than by name. Also Go's required
+	// terminating statement.
+	return ref{}, fmt.Errorf("interp: %s names payload kind %s, which is not a member of "+
+		"interp.RefPayload", site, v.RefKind)
 }
 
 // payloadOf reports which constructor a non-null internal ref is, and is the one place `ref`'s

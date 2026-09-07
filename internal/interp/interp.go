@@ -533,13 +533,34 @@ var (
 // is valid. It is an engine capability limit, which is why it reports ErrUnsupported.
 const maxFrameLocals = 1 << 24
 
-// ErrUnsupportedOp is the engine saying it has no arm for an instruction.
+// ErrUnsupportedOp is the engine saying **this engine cannot**, and its commonest instance is having
+// no arm for an instruction.
 //
 // **Not a verdict on the module, and the distinction is the whole reason it is a separate
 // sentinel from Trap.** The module is well-formed and the instruction is a real one; what is
 // missing is engine, and the honest report names the engine's gap. That makes the board's
 // failure bucket a work plan keyed by opcode — `interp: no arm for opcode 0xfd 0x03` names SIMD,
 // `0x3f` names memory — which is the bucketed-failures discipline pointed at this layer.
+//
+// **The first sentence read *"the engine saying it has no arm for an instruction"* until
+// [decision 0079][0079], and five landed call sites had no opcode at all**: the reference-argument
+// refusals in `invokeIndex`'s parameter loop and in `pushHostResults` (`Value.toRef`'s two
+// `ErrUnsupportedOp` arms), the host-function-has-no-reference-identity limit in `funcRefTarget`, the
+// re-exported-host-function refusal in `invokeIndex`, and the unaligned-atomic-base limit in
+// `checkBaseAlignment`. `funcRefTarget`'s own comment already stated the broader reading as the rule —
+// *"the register for **this engine cannot**, never `ErrNotValidated`, which would blame a module that
+// is well-formed"* — so the practice was settled and the sentence was the stale artifact. Widened
+// rather than narrowed, because the alternative was five new sentinels distinguishing gaps that an
+// embedder acts on identically: `publicError` maps all of it to `ErrUnsupported`.
+//
+// The bucket-keyed-by-opcode property survives the widening because none of the five is keyed by an
+// opcode: each names its own subject — a Go caller's argument, a host function's result or identity,
+// the allocator's alignment — so a bucket built by grouping these messages separates them from the
+// opcode gaps rather than diluting them. What the widening gives up is the inference *from the
+// sentinel alone* that an opcode is missing, and reading the message was always required to name which
+// one.
+//
+// [0079]: ../../docs/decisions/0079-the-boundary-refuses-a-reference-argument-by-its-own-payload-kind-rather-than-by-the-parameters-spelling-and-the-register-splits-on-whether-a-widening-could-lift-it.md
 //
 // It is reported when the instruction is *reached*, never by scanning a body in advance. A
 // pre-scan would refuse a function over an instruction on a path that never executes, which
@@ -865,16 +886,20 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) (results 
 			if !args[i].Type.IsRef() {
 				return nil, fmt.Errorf("interp: %q parameter %d is %s, got %s", name, i, p, args[i].Type)
 			}
-			// The funcref scope refusal comes first, ahead of `toRef`: it is Value.RefID's own
-			// stated boundary rather than a type error, and the shape it declines is one `toRef`
-			// would resolve against the *caller's* instance on the way to a check that would then
-			// pass. externref (null or not) and a null funcref both convert cleanly.
-			if p == binary.FuncRef && !args[i].Null {
-				return nil, fmt.Errorf("%w: parameter %d of %q is a non-null funcref, which this "+
-					"boundary cannot accept from outside the engine (see interp.Value.RefID)",
-					ErrUnsupportedOp, i, name)
+			// **The conversion refuses what it cannot carry, keyed on the argument's own payload
+			// kind** — [decision 0079][0079], and `Value.toRef` holds the kinds and the two
+			// registers. What stood here was `if p == binary.FuncRef && !args[i].Null`, which read
+			// the *parameter*: `binary.FuncRef` is the nullable abstract spelling alone, so a
+			// `(ref func)` parameter let a fabricated funcref through to be resolved against this
+			// instance's own index space, and an `externref` argument at a `funcref` parameter was
+			// told it "is a non-null funcref" when it is not one. The externref case now reaches
+			// `matchRefType` below, which had the right answer all along.
+			//
+			// [0079]: ../../docs/decisions/0079-the-boundary-refuses-a-reference-argument-by-its-own-payload-kind-rather-than-by-the-parameters-spelling-and-the-register-splits-on-whether-a-widening-could-lift-it.md
+			r, rerr := args[i].toRef(fmt.Sprintf("parameter %d of %q", i, name))
+			if rerr != nil {
+				return nil, rerr
 			}
-			r := args[i].toRef(in)
 			got, terr := typeOfRef(r, fmt.Sprintf("%q parameter %d", name, i))
 			if terr != nil {
 				return nil, terr
