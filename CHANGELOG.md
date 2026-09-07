@@ -21,6 +21,40 @@ weakly-ordered platform.
 
 ### Added
 
+- **`interp.ErrEngineInvariant` — a fourth sentinel, because a broken engine invariant was being reported as
+  the module's fault.** [#669](https://github.com/scttfrdmn/burroughs/issues/669), [ADR
+  0077](docs/decisions/0077-a-non-null-reference-with-no-defining-instance-is-the-engines-own-broken-invariant-so-it-gets-its-own-sentinel-rather-than-the-modules-blame.md).
+  `internal/interp/call.go:funcRefTarget` dereferenced a reference's instance pointer with nothing between,
+  so Go's zero `ref` — `{Null: false, Addr: 0, Inst: nil}`, grave #246's value — reaching a funcref slot was
+  a nil-pointer panic out through `invokeIndex`'s recover rather than a report. The guard is at the point of
+  *use*, where a fourth caller arrives without knowing to check; the fill sites keep filling, and this is a
+  second line of defence rather than a licence to stop establishing the invariant where the `[]ref`s are
+  made. **Not live on main**, which is why #669 was an issue and not a grave: it is reached by deleting a
+  fill, and the oracle reaches it instead by writing a zero `ref` into a live table slot through
+  `table.view()` and then invoking — the real path from #669's trace, so the regression is covered by a
+  committed test rather than by a source mutation someone has to remember to re-run.
+  - **The register is the decision, and it is what an embedder reads.** `publicError` translates only
+    `*interp.Trap` and the two unsupported sentinels, so anything else travels out as its own text.
+    `ErrNotValidated` — *"module reached the interpreter unvalidated"* — sends a host to audit a module whose
+    every relevant property is correct, and its own doc promises each of its call sites *"becomes unreachable
+    when a validator refuses these modules before they reach this package"*, which no validator can do to a
+    condition that is a property of an engine construction site. So the universal was **already false on
+    main**, and the fourth sentinel repairs it instead of widening it: `internal/interp/castop.go:typeOfRef`'s
+    default arm is re-pointed onto `ErrEngineInvariant` in the same slice, on the verdict-compelled test —
+    two sites, one value, two registers is an inconsistency this change would itself have created.
+  - **Returned, never panicked, and not a trap.** Grave 0003's argument, cited inside `funcRefTarget`'s own
+    last arm: the condition asserts a property of *sibling* code, and a future arm could falsify it silently.
+    A `uninitialized element` trap was the tempting option and is rejected in the ADR by name — it is what
+    `table.grow`'s comment assumed would happen, and it would put an engine bug behind a verdict the spec
+    reserves for a guest's own mistake, which is the one outcome that makes the defect invisible rather than
+    merely misfiled.
+  - **The re-point was pre-registered against the board and the board held**, same corpus pin `de54fd27`,
+    identical before and after with no failure stratum non-zero — `internal/spec` keys failure buckets by
+    error text, and *"module reached the interpreter unvalidated"* is the head ADR 0025's G-1 carve-out is
+    counted by, so a moved bucket would have been the finding. The unchanged board is **not** evidence the
+    arm is unreachable, which would have been the analytic zero: every corpus vector is guest-side and the
+    live path is host-side.
+
 - **§8 M-1: a memory reserves address space through an anonymous mapping, and the Go allocator becomes the
   fallback rather than the mechanism.** [#672](https://github.com/scttfrdmn/burroughs/issues/672), [ADR
   0076](docs/decisions/0076-a-memory-reserves-address-space-through-an-anonymous-mapping-and-the-go-allocator-becomes-the-fallback-rather-than-the-mechanism.md).
@@ -2108,6 +2142,25 @@ weakly-ordered platform.
     number, not a branch or SHA*: GitHub retains the diff and the ref independently of the branch.
 
 ### Fixed
+
+- **An unreachability clause was false, so a live public-boundary arm told four kinds of host argument that
+  their module was unvalidated** (grave [#676](https://github.com/scttfrdmn/burroughs/issues/676)).
+  `internal/interp/castop.go:typeOfRef`'s default arm called its own condition *"a non-null reference with no
+  discriminator set at all, which no construction site produces"*, and
+  `internal/interp/value.go:Value.toRef` produces exactly that shape at four arms and says so in its own
+  comment: a `*gcObj`/`*excObj` is guest-allocated and inexpressible in a public `Value` (0002's GC-precision
+  pin), so `PayloadStruct`, `PayloadArray` and `PayloadExn` arrive with nothing to rebuild from, and
+  `PayloadNone` names no kind at all. All four reach the arm **from an ordinary `Invoke`** through
+  `invokeIndex`'s parameter loop, measured against `(module (func (export "g") (param anyref)))` with no
+  plant and no mutation. The clause is why the arm had no oracle — nobody writes one for a branch a comment
+  calls unreachable — and it is the reason ADR 0077 could quote a false sentence as support for its own
+  choice. Repaired with the truth, the measurement, and the arm's first oracle,
+  `internal/interp:TestAnUnrepresentableReferenceArgumentIsReportedNotResolved`, which asserts the register is
+  **not** `ErrNotValidated` as its durable half and `ErrEngineInvariant` as today's reading, so
+  [#677](https://github.com/scttfrdmn/burroughs/issues/677) — what the boundary *should* say to a host who
+  builds an argument it cannot represent, which #669 does not settle — re-points it rather than deletes it.
+  The lesson is the shape: **a comment asserting a branch is unreachable is an unchecked claim that buys the
+  branch an exemption from testing**, and following the caller list instead of the comment is what found it.
 
 - **A relocating `table.grow` abandoned an array a sibling agent was still writing into, so those
   `table.set`s were lost — and the repair is a *reservation*, not only a refusal**

@@ -577,3 +577,85 @@ func TestCovariantImmutableFieldIsNotADisagreement(t *testing.T) {
 		t.Errorf("got %v, want a single i32 1 (the field holds a null reference)", out)
 	}
 }
+
+// TestAnUnrepresentableReferenceArgumentIsReportedNotResolved is [grave #676][676]'s oracle, and it
+// exists because the arm it covers spent its life described as unreachable.
+//
+// # The clause that kept it uncovered
+//
+// `typeOfRef`'s default arm read *"a non-null reference with no discriminator set at all, **which no
+// construction site produces**"*, and `Value.toRef` produces it at three arms while saying so in its
+// own comment. Nobody writes an oracle for an arm a comment calls unreachable, so nobody had.
+//
+// # The rule this is named for, and the register it does not pin
+//
+// The durable claim is *reported, not resolved*: an argument this boundary cannot represent comes back
+// as an error that names the parameter, and specifically **not** as `ErrNotValidated` — the module is
+// well-formed, the export exists, the parameter type is right, and the thing that cannot be honoured is
+// the caller's `Value`. That half is asserted and will outlive any repair.
+//
+// The register itself is asserted too, and is expected to change: [#677][677] is filed to refuse these
+// four kinds at `invokeIndex`'s parameter loop beside the existing non-null-funcref refusal, where the
+// message can name the boundary instead of the engine's internal state. When that lands this line
+// fails, and that is the control working — *name a control after the rule, not the property*, so the
+// row survives the repair and the assertion is what makes the change visible rather than silent.
+//
+// # Four kinds, one shape, and why they are enumerated rather than sampled
+//
+// `toRef` funnels `PayloadStruct`, `PayloadArray`, `PayloadExn` (a guest-allocated payload that cannot
+// cross inward — 0002's GC-precision pin) and `PayloadNone`/`PayloadPastEnd` (no kind at all) into the
+// same `ref{Externalized: ext}`. Two different causes, one value, so a row that sampled one would say
+// nothing about the other; the arms are separate in `toRef` for exactly that reason.
+//
+// **`anyref` and not `externref`**, because `toRef` sets `Externalized` from the *static* type and
+// `typeOfRef` checks that arm first: under an `externref` parameter every one of these would report
+// `extern` and never reach the arm under test. A row that got that wrong would pass for the wrong
+// reason on all four kinds at once.
+//
+// [676]: https://github.com/scttfrdmn/burroughs/issues/676
+// [677]: https://github.com/scttfrdmn/burroughs/issues/677
+func TestAnUnrepresentableReferenceArgumentIsReportedNotResolved(t *testing.T) {
+	anyRef, ok := binary.AbstractRefType(binary.HeapAny, true)
+	if !ok {
+		t.Fatal("no anyref valtype, so the fixture below cannot be built and nothing here is about " +
+			"the arm under test")
+	}
+	in := instantiateGC(t, `(module (func (export "g") (param anyref)))`)
+
+	// The floor: a null under the same parameter is accepted, so a failure below is about the
+	// payload kind and not about `anyref` parameters being broken in general.
+	if _, err := in.Invoke("g", Value{Type: anyRef, Null: true}); err != nil {
+		t.Fatalf("a null anyref argument was refused: %v\n"+
+			"the fixture is broken, so nothing below is about an unrepresentable payload", err)
+	}
+
+	for _, kind := range []RefPayload{PayloadNone, PayloadStruct, PayloadArray, PayloadExn} {
+		t.Run(kind.String(), func(t *testing.T) {
+			_, err := in.Invoke("g", Value{Type: anyRef, RefKind: kind})
+			if err == nil {
+				t.Fatalf("a non-null %s reference argument was accepted.\n"+
+					"`toRef` cannot rebuild one, so what reached the frame would be a "+
+					"reference with no discriminator set — a value every later reader "+
+					"classifies as something else or crashes on (grave #676)", kind)
+			}
+			if errors.Is(err, ErrNotValidated) {
+				t.Errorf("got %v, want anything but ErrNotValidated.\n"+
+					"That sentinel reads `module reached the interpreter unvalidated` and "+
+					"`publicError` passes the text to an embedder unchanged: the module "+
+					"here is well-formed and the argument is the caller's own, so it sends "+
+					"them to audit the wrong artifact (decision 0077)", err)
+			}
+			if !errors.Is(err, ErrEngineInvariant) {
+				t.Errorf("got %v, want ErrEngineInvariant.\n"+
+					"If #677 has landed and the boundary now refuses this argument by name, "+
+					"this is the expected failure and the line above it is the durable half "+
+					"— re-point this assertion at the new register rather than deleting it", err)
+			}
+			if !strings.Contains(err.Error(), `"g" parameter 0`) {
+				t.Errorf("error %q names neither the export nor the parameter index.\n"+
+					"An embedder holding a several-argument call cannot act on a message "+
+					"that does not say which argument it is about", err)
+			}
+		})
+	}
+}

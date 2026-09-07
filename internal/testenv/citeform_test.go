@@ -557,6 +557,16 @@ func TestSymbolCitationsResolveToADeclaration(t *testing.T) {
 //     lessons*; the pin rose by three and this paragraph is the receipt. The datum #497 should carry is
 //     that its convertible population is smaller than its total by however many specimens the
 //     conversion work itself writes down.
+//   - **A fourth is positional by construction, and it is a panic frame.** ADR 0077 quotes the trace
+//     #669 measured — `interp.funcRefTarget(...) <file>:<line>` — as evidence that the deref panics
+//     rather than reports. A runtime artifact's coordinate *is* the datum: converting it to a symbol
+//     would replace the measurement with a paraphrase of it, and the frame is already stale against
+//     main because it was taken on an injected tree that no longer exists, which is the correct state
+//     for a dated observation. Same treatment as the three above — **counted, not exempted**, pin
+//     183 → 184 and `bare basename, unique` 158 → 159, receipt here. The other eleven locations that
+//     ADR landed were written positionally first and converted to `path/to/file.go:SymbolName` in the
+//     same slice, so the +12 the census caught became +1; the conversion is why this bullet can be
+//     about one specimen and not twelve.
 //   - **57 name no file**, because their basename is ambiguous. Those are broken now, and no drift
 //     was needed to break them.
 //   - **No bucket for a positional citation naming a file that does not exist**, because there are
@@ -568,11 +578,11 @@ var (
 		chanComment:  92,
 		chanDataKey:  23,
 		chanLitValue: 7,
-		chanMarkdown: 183,
+		chanMarkdown: 184,
 	}
 	positionalByResolution = map[string]int{
 		resPathQualified: 90,
-		resBasenameUniq:  158,
+		resBasenameUniq:  159,
 		resBasenameAmbig: 57,
 	}
 )

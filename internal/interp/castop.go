@@ -422,16 +422,41 @@ func typeOfRef(r ref, site string) (refType, error) {
 	// **Two of the three kinds this comment used to defer to slice 3 now have arms above** — an
 	// externalized reference reporting `extern`, and a host reference reporting `any` — so the
 	// paragraph is rewritten rather than left standing, a deferral's prose being exactly the kind
-	// that reads as current after its subject has landed. The slot that remains is genuinely empty:
-	// a non-null reference with no discriminator set at all, which no construction site produces and
-	// which is therefore an engine inconsistency rather than a missing feature. Kept as an error for
-	// that reason.
+	// that reads as current after its subject has landed. The slot that remains is a non-null
+	// reference with no discriminator set at all, which is an engine inconsistency rather than a
+	// missing feature, and is kept as an error for that reason.
+	//
+	// **It said *"which no construction site produces"* until [grave #676][676], and that clause was
+	// false when it was written.** `internal/interp/value.go:Value.toRef` produces exactly this shape
+	// at three of its arms and says so in its own comment — a `*gcObj`/`*excObj` cannot cross inward,
+	// so `PayloadStruct`/`PayloadArray`/`PayloadExn` arrive with nothing to rebuild from, and
+	// `PayloadNone` on a non-null reference names no kind at all. Measured from the public boundary:
+	// all four reach this arm from an ordinary `Invoke` through `invokeIndex`'s parameter loop, no
+	// plant and no mutation. The clause mattered because it is the premise for reading the arm as
+	// unreachable, and an unreachable arm is one nobody writes an oracle for — which is what had
+	// happened. `TestAnUnrepresentableReferenceArgumentIsReportedNotResolved` is that oracle.
+	//
+	// What the boundary *should* say to a host that passes one is [#677][677] and not settled here:
+	// the fault there is the caller's, and this arm reports the engine's own state.
 	//
 	// The design that filled the other two is 0027 decision 3, accepted on the #267 relay
 	// (chat-Claude, relayed by Scott, Scott's veto standing) — recorded here as history now that the
 	// arms exist, the ADR's own header being where the status lives.
+	//
+	// **`ErrEngineInvariant` since [decision 0077][0077], and this arm is the reason that sentinel
+	// exists.** It read `ErrNotValidated` while saying, two paragraphs up, that the condition is *"an
+	// engine inconsistency rather than a missing feature"* — so the comment and the register
+	// disagreed, and the register was the one an embedder reads. It also made `ErrNotValidated`'s
+	// documented promise false: no validator can make this arm unreachable, its condition being a
+	// property of this engine's own construction sites. 0077's guard in `funcRefTarget` would have
+	// been a second site reporting the same value a second way, which is what put the re-point in
+	// that slice rather than a later one.
+	//
+	// [0077]: ../../docs/decisions/0077-a-non-null-reference-with-no-defining-instance-is-the-engines-own-broken-invariant-so-it-gets-its-own-sentinel-rather-than-the-modules-blame.md
+	// [676]: https://github.com/scttfrdmn/burroughs/issues/676
+	// [677]: https://github.com/scttfrdmn/burroughs/issues/677
 	return refType{}, fmt.Errorf("%w: %s on a non-null reference with no payload discriminator set",
-		ErrNotValidated, site)
+		ErrEngineInvariant, site)
 }
 
 // castTypeAt resolves the reftype `ref.test`/`ref.cast` was decoded with, out of `Func.Casts`.
