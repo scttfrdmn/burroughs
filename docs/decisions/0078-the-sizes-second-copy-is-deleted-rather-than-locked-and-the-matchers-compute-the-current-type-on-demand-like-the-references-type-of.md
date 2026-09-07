@@ -136,6 +136,22 @@ its storage is in question.
   even though the lines they first fired on are gone. Their verdict lives in CI's `race` step inside the
   two-architecture `build` job; **`make check` does not pass `-race`**, so a green from it says nothing
   about their subject, and that is stated in both comments rather than assumed.
+- **A third, static control, and its own vacuity floor bounds bodies rather than files.**
+  `TestNothingWritesADeclaredTypeAfterConstruction` is an AST scan over every non-test file in
+  `internal/interp` flagging any assignment or increment whose target is `x.limits` or `x.limits.<Field>`,
+  on either subject, in any function, in the default lane. It is deliberately **not** a grep: four comments
+  in the package now quote `m.limits.Min = newSize` as the shape that was deleted, so a textual search
+  would report its own documentation (*a grep measures text*). Watching its two vacuity arms fail
+  **separately** is what produced the finding, and a combined arm would have shown the control dying while
+  saying nothing about which half was load-bearing: blinding the field name fires both subject checks,
+  while blinding the body walk fires the assignment count and leaves the **file** floor passing. That floor
+  bounds the wrong axis — it certifies that 37 files exist, not that any was entered. So a **body floor**
+  closes it, at its measured count of 452, and the case only it can see was watched: with bodies walked for
+  `memory.go` alone, `entered 20 function bodies` is the sole arm that fires, because 20 bodies still
+  supply enough of the package's 1394 assignments to satisfy a zero-check while the write list comes back
+  clean over 4% of the tree. *A zero-check bounds a population's emptiness and says nothing about its
+  size.* (Scott's call on the #679 review, recorded by the actor it was given to, so
+  `Ratio-Class: carried` — *durability is not independence*.)
 - **A vacuity arm copied from the sibling control would have been wrong, and the reason is recorded in
   the control.** `globaltear_test.go`'s controls require the two agents to have observably overlapped,
   because a tear is a real-time event. Written that way here — counting iterations that observed size 1

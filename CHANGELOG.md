@@ -2189,8 +2189,18 @@ weakly-ordered platform.
     `TestNothingWritesADeclaredTypeAfterConstruction`, an **AST** scan over every non-test file in
     `internal/interp` flagging any assignment or increment whose target is `x.limits` or `x.limits.<Field>`,
     on either subject, in any function, in the default lane. Both injections were run in one pass and it
-    named both sites; its two vacuity arms were watched fire separately, and the blinded-body arm is what
-    showed the file floor cannot see a walk that reaches no function body.
+    named both sites; its two vacuity arms were watched fire **separately**, which is what produced the
+    finding — a combined arm would have shown the control dying and said nothing about which half was
+    load-bearing.
+  - **A vacuity floor on files bounds the wrong axis, so this control floors the bodies it entered.** The
+    blinded-body arm above leaves the *file* floor passing: 37 files existing certifies nothing about
+    whether the walk entered any of them. `bodiesWhenWritten = 452` closes it, at its measured count, and
+    the case only it can see was watched fail — with bodies walked for `memory.go` alone, `entered 20
+    function bodies` is the **sole** arm that fires, because 20 bodies still supply enough of the package's
+    1394 assignments to satisfy `assignments == 0` while the write list comes back clean over 4% of the
+    tree. *A zero-check bounds a population's emptiness and says nothing about its size*, and both floors
+    sit **at** their measured counts rather than below, since slack in a floor is *an unasserted distance*
+    and the distance is the vacuum. Scott's call on the #679 review.
   - **[ADR 0061](docs/decisions/0061-grow-serialises-on-its-own-mutex-rather-than-a-compare-and-swap-over-the-descriptor-because-the-length-lives-in-two-places-and-only-one-is-in-the-descriptor.md)'s
     title names the premise this removes, and it gets a dated note rather than a rewrite.** Its decision
     stands — `growMu` is still what makes a grow indivisible, because a relocation is a second

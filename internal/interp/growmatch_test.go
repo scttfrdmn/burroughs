@@ -227,7 +227,7 @@ func TestImportMatchingDoesNotRaceAGrowingTable(t *testing.T) {
 // `Min` to a sibling field would satisfy a `Min`-only check. So `x.limits = …` and `x.limits.Anything
 // = …` both fail.
 //
-// # Watched die — three of the four assertions, and which one was not
+// # Watched die — four of the five assertions, and which one was not
 //
 // Both writes put back in one run, `m.limits.Min = newSize` before `memory.grow`'s return and
 // `t.limits.Min = newSize` before `table.grow`'s: **both fired**, naming `memory.go:grow` with
@@ -241,15 +241,33 @@ func TestImportMatchingDoesNotRaceAGrowingTable(t *testing.T) {
 //   - **The field name blinded** to something nothing declares: both subject checks fire, reporting
 //     the subject *renamed* rather than the population empty. That is the failure mode a scan keyed to
 //     an identifier has, and the clean write list underneath it means nothing.
-//   - **The body walk blinded** (iterating no declarations): the assignment arm fires alone — the file
-//     floor and both subject checks still pass, because the declarations are read by a separate walk
-//     over the file. So a scan that reaches no function body reports a clean population and **the floor
-//     cannot see it**, which is why the assignment count is asserted and not just the file count.
+//   - **The body walk blinded** (iterating no declarations): the assignment arm fires — and so, now, does
+//     the body floor. The **file** floor and both subject checks still pass, because the declarations are
+//     read by a separate walk over the file, and that is the finding: a scan that reaches no function body
+//     reports a clean population and **the file floor cannot see it**, because it bounds the wrong axis.
+//     It certifies that 37 files exist, not that any was entered.
 //
-// **The file floor was not watched fail**, and it is a floor rather than a census on purpose: 37 is the
-// measured count at the time of writing, not a figure above it, so falsifying it means deleting files
-// from the package. What it catches is the walk's directory moving out from under it. *A floor bounds
-// the catastrophic case only* — the blinded-body arm above is what covers the silent half.
+// # The body floor, and the case that only it can see
+//
+// `bodiesWhenWritten` exists because the arm above proved the silence rather than supposing it, and
+// because `assignments == 0` closes only the *total* case. Watched die on both, and the second is the
+// load-bearing one:
+//
+//   - **No declarations walked at all**: `entered 0 function bodies` and `no assignment statement was
+//     visited`, both firing. Redundant here, which is fine — that is the catastrophic end.
+//   - **Bodies walked for one file only** (`memory.go`): **`entered 20 function bodies`, and this is the
+//     only arm that fires.** `assignments` is 1394 across the package and 20 bodies still supply plenty of
+//     them, so the zero-check passes, both subject checks pass, the file floor passes, and the write list
+//     comes back clean over 4% of the package. A zero-check bounds a population's emptiness; it says
+//     nothing about its size. (Scott's call on the #679 review: *"a floor on bodies walked closes a hole
+//     you've now demonstrated rather than supposed."*)
+//
+// **The file floor is the one assertion still not watched fail**, and it stays because it names a
+// different failure — the walk's *directory* moving, which leaves the bodies count healthy in whatever
+// tree the walk did find. Falsifying it means deleting files from the package. Both floors sit **at**
+// their measured counts and not below: *an unasserted distance is the vacuum*, so slack in a floor is
+// the defect and not the safety margin. A legitimate deletion re-measures the figure from the control's
+// own count with a receipt naming what went, the way `pubimage_test.go`'s pin is raised.
 func TestNothingWritesADeclaredTypeAfterConstruction(t *testing.T) {
 	// The subjects, and the field name the scan is keyed to. Both are checked to still *declare* it
 	// below, because a scan keyed to an identifier reports a clean population the moment the
@@ -262,12 +280,19 @@ func TestNothingWritesADeclaredTypeAfterConstruction(t *testing.T) {
 	// running it, not forecast.
 	const filesWhenWritten = 37
 
+	// bodiesWhenWritten is the floor that matters, and it is a separate figure because the file floor
+	// **bounds the wrong axis**: 37 files existing says nothing about whether the walk entered any of
+	// them, which is the silence the blinded-body mutation in this control's comment demonstrated. Both
+	// floors sit *at* their measured counts rather than below them — a floor with slack is an unasserted
+	// distance, and the distance is the vacuum. (Scott's call on the #679 review.)
+	const bodiesWhenWritten = 452
+
 	ents, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("reading internal/interp: %v", err)
 	}
 	fset := token.NewFileSet()
-	files, assignments := 0, 0
+	files, bodies, assignments := 0, 0, 0
 	type write struct {
 		where string
 		expr  string
@@ -315,6 +340,7 @@ func TestNothingWritesADeclaredTypeAfterConstruction(t *testing.T) {
 			if !ok || fn.Body == nil {
 				continue
 			}
+			bodies++
 			where := name + ":" + fn.Name.Name
 			flag := func(e ast.Expr) {
 				sel, ok := e.(*ast.SelectorExpr)
@@ -357,6 +383,14 @@ func TestNothingWritesADeclaredTypeAfterConstruction(t *testing.T) {
 		t.Errorf("scanned %d non-test files, and there were %d when this control was written: below "+
 			"that the walk has stopped seeing the package rather than the package having shrunk, and "+
 			"every assertion here would pass by asking nothing", files, filesWhenWritten)
+	}
+	if bodies < bodiesWhenWritten {
+		t.Errorf("entered %d function bodies, and there were %d when this control was written: the "+
+			"file floor above bounds the wrong axis — it certifies that the files exist, not that any "+
+			"was entered — and a walk that reaches a fraction of the bodies reports a clean write list "+
+			"with nothing able to see it. A legitimate deletion re-measures this figure from the "+
+			"control's own count and says which function went, the way `pubimage_test.go`'s pin is "+
+			"raised with a receipt", bodies, bodiesWhenWritten)
 	}
 	if assignments == 0 {
 		t.Error("no assignment statement was visited at all: the walk is not reaching function " +
