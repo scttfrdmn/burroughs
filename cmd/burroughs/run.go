@@ -39,8 +39,10 @@ import (
 func runCmd(stdout, stderr io.Writer, argv []string) error {
 	err := run(stdout, stderr, argv)
 	// A usage error has already printed the usage; adding "burroughs: usage" to it would be this
-	// process reporting its own control flow as a diagnostic.
-	if err != nil && !errors.Is(err, errUsage) {
+	// process reporting its own control flow as a diagnostic. A wasiExit is not a diagnostic either —
+	// it is the guest's own exit code, and the guest has already written whatever it meant to stderr.
+	var we wasiExit
+	if err != nil && !errors.Is(err, errUsage) && !errors.As(err, &we) {
 		diagnose(stderr, err)
 	}
 	return err
@@ -54,7 +56,9 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		"refuse a module the validator could not fully check, instead of running it")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: burroughs run [--strict] <file.wasm> [<func> [<value>...]]")
-		fmt.Fprintln(stderr, "\nWith no function named, lists the module's exported functions.")
+		fmt.Fprintln(stderr, "\nWith no function named: a wasip1 command (imports wasi_snapshot_preview1, "+
+			"exports _start) runs and its exit code is this process's; any other module's exported "+
+			"functions are listed.")
 		fmt.Fprintln(stderr, "\nValues are typed: i32:42  i64:-1  f32:nan  f64:inf  v128:0x0:0x0  extern:3  null:func")
 		fs.PrintDefaults()
 	}
@@ -69,6 +73,33 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	wasm, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
 		return err
+	}
+
+	// No function named and the module is a wasip1 command: run it (decision 0081). Detection reads
+	// the module's import and export sections and routes here **before** any plain instantiate, so it
+	// never depends on #686's nil-resolver behavior. IsCommand's decode error is ignored on purpose —
+	// an undecodable module falls through to Instantiate below, which classifies it onto the public
+	// sentinels (a malformed module must exit `refused`, not `error`, whichever path reached it).
+	if fs.NArg() == 1 {
+		// A decode error here is not handled: it means "route this elsewhere", and the Instantiate
+		// below classifies a malformed module onto the public sentinels. So detection routes to WASI
+		// only on a clean `(true, nil)`; every other answer falls through.
+		if isCmd, derr := burroughs.IsCommand(wasm); derr == nil && isCmd {
+			code, rerr := burroughs.WASIConfig{
+				Args:   []string{fs.Arg(0)},
+				Env:    os.Environ(),
+				Stdin:  os.Stdin,
+				Stdout: stdout,
+				Stderr: stderr,
+			}.Run(wasm)
+			if rerr != nil {
+				return rerr
+			}
+			if code != 0 {
+				return wasiExit(code)
+			}
+			return nil
+		}
 	}
 
 	in, err := burroughs.Config{Strict: *strict}.Instantiate(wasm)
@@ -142,6 +173,14 @@ func listExports(stdout io.Writer, in *burroughs.Instance) error {
 // set has already said what was wrong, so this carries no message of its own.
 var errUsage = errors.New("usage")
 
+// wasiExit carries a wasip1 guest's own `proc_exit` code so it becomes this process's exit code
+// (decision 0081). It is not a diagnostic — a guest exiting non-zero is the guest's verdict, not the
+// CLI's — so `runCmd` does not print it, and `exitCode` returns it verbatim ahead of the CLI's own
+// taxonomy. A guest that exits 0 returns a nil error instead, so 0 is never spelled as this type.
+type wasiExit int
+
+func (e wasiExit) Error() string { return fmt.Sprintf("wasi guest exited %d", int(e)) }
+
 // Exit codes, one per question a caller can ask about the run.
 //
 // **A single non-zero code would be the board's mixture error wearing a shell's clothes.** "Your
@@ -173,6 +212,14 @@ const (
 // TestExitCodesCoverEveryPublicSentinel is the guard, derived from the sentinel set rather than
 // from this switch.
 func exitCode(err error) int {
+	// A wasip1 guest's own exit code is propagated verbatim, ahead of the CLI's taxonomy: it is the
+	// guest's verdict, not the CLI's, and a process runner exits with its child's status (decision
+	// 0081). The overlap with the CLI's own codes (a guest exiting 4, exitTrap = 4) is resolved in the
+	// guest's favor — it chose the code.
+	var we wasiExit
+	if errors.As(err, &we) {
+		return int(we)
+	}
 	switch {
 	case err == nil:
 		return exitOK

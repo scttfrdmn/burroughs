@@ -114,6 +114,13 @@ var licensed = map[string]string{
 	// target. A present toolchain that *fails* to build is a `t.Fatalf`, not this skip — a build
 	// failure is a regression, not an absent input.
 	"internal/wasi/runner_test.go:buildGuest": "local dev without a wasip1-capable Go toolchain; CI builds the guest so this never fires there, and a present-but-failing toolchain is fatal rather than skipped",
+	// The eighth and ninth doors: decision 0081's public WASI path is covered from two more sites —
+	// the public differential test (root package) and the CLI's end-to-end test — and both build the
+	// same shared wasip1 guest. Same reason as the seventh door, three call sites because the AST
+	// scanner keys by function and the guest-build lives in each package's test; a present-but-failing
+	// toolchain is fatal at each, not skipped.
+	"wasi_test.go:buildWASIGuest":               "local dev without a wasip1-capable Go toolchain; CI builds the guest so this never fires there (decision 0081, public differential test)",
+	"cmd/burroughs/wasi_test.go:buildGuestFile": "local dev without a wasip1-capable Go toolchain; CI builds the guest so this never fires there (decision 0081, `burroughs run` end-to-end test)",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.
