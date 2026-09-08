@@ -25,7 +25,7 @@ import (
 //
 // [0080]: ../../docs/decisions/0080-a-go-wasip1-guest-runs-to-main-on-the-host-surface-and-the-preview1-import-set-is-supplied-whole-because-link-refuses-a-gap.md
 func TestAGoGuestRunsToMainAndWritesStdout(t *testing.T) {
-	guest := buildGuest(t)
+	guest := buildGuest(t, "hello")
 
 	var out, errBuf bytes.Buffer
 	code, err := Run(Config{
@@ -54,7 +54,7 @@ func TestTheGoGuestNeedsNoThreadsFeature(t *testing.T) {
 	if GuestFeatures().Threads {
 		t.Fatal("GuestFeatures has Threads on, so decoding it proves nothing about the guest's needs")
 	}
-	guest := buildGuest(t)
+	guest := buildGuest(t, "hello")
 	if _, err := (&bin.Decoder{Features: GuestFeatures()}).DecodeModule(guest); err != nil {
 		t.Errorf("the guest failed to decode with Threads off: %v\n"+
 			"That would mean the Go wasip1 runtime now emits a threads-gated opcode, and gate:threads "+
@@ -62,20 +62,52 @@ func TestTheGoGuestNeedsNoThreadsFeature(t *testing.T) {
 	}
 }
 
-// buildGuest compiles testdata/hello to GOOS=wasip1 and returns the module bytes.
-func buildGuest(t *testing.T) []byte {
+// TestAGuestReadsStdinSleepsAndWritesTheResult is the second program (ADR 0080's stub-growth): it
+// exercises fd_read (stdin — absent from the hello guest's imports) and poll_oneoff's clock arm
+// (time.Sleep), and it is the second data point that showed `Config` needed a `Stdin` field. The
+// output is deterministic for a fixed input, so this is a real verdict rather than a "it did not
+// crash".
+func TestAGuestReadsStdinSleepsAndWritesTheResult(t *testing.T) {
+	guest := buildGuest(t, "echo")
+
+	var out, errBuf bytes.Buffer
+	code, err := Run(Config{
+		Wasm:   guest,
+		Args:   []string{"echo.wasm"},
+		Stdin:  strings.NewReader("hello\nworld\n"),
+		Stdout: &out,
+		Stderr: &errBuf,
+	})
+	if err != nil {
+		t.Fatalf("running the guest failed: %v\nstderr: %q", err, errBuf.String())
+	}
+	if code != 0 {
+		t.Errorf("guest exited %d, want 0\nstdout: %q\nstderr: %q", code, out.String(), errBuf.String())
+	}
+	got := out.String()
+	for _, want := range []string{"HELLO", "WORLD", "lines: 2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout = %q, want it to contain %q — the guest read stdin, transformed it, "+
+				"slept, and wrote the result back through the preview-1 module", got, want)
+		}
+	}
+}
+
+// buildGuest compiles testdata/<pkg> to GOOS=wasip1 and returns the module bytes.
+func buildGuest(t *testing.T, pkg string) []byte {
 	t.Helper()
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		t.Skipf("no go toolchain on PATH, so a wasip1 guest cannot be built: %v", err)
 	}
-	out := filepath.Join(t.TempDir(), "hello.wasm")
-	cmd := exec.Command(goBin, "build", "-o", out, "./testdata/hello")
+	out := filepath.Join(t.TempDir(), pkg+".wasm")
+	src := "./testdata/" + pkg
+	cmd := exec.Command(goBin, "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
 	if combined, berr := cmd.CombinedOutput(); berr != nil {
 		// Present-but-cannot-build is a failure, not a skip: the wasip1 target ships with Go >= 1.21,
 		// so a build failure here is a real regression, not an environment gap.
-		t.Fatalf("go build -o %s ./testdata/hello (GOOS=wasip1 GOARCH=wasm) failed: %v\n%s", out, berr, combined)
+		t.Fatalf("go build -o %s %s (GOOS=wasip1 GOARCH=wasm) failed: %v\n%s", out, src, berr, combined)
 	}
 	b, err := os.ReadFile(out)
 	if err != nil {

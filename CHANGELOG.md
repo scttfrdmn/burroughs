@@ -43,6 +43,19 @@ weakly-ordered platform.
     binary out of the tree. A missing toolchain is a loud skip; a present toolchain that cannot build
     is a failure.
 
+- **A second WASI guest reads stdin, sleeps, and writes a result — growing `fd_read` and a real
+  `poll_oneoff` from stubs, guest-driven.** [#683](https://github.com/scttfrdmn/burroughs/issues/683),
+  ADR 0080's anticipated stub-growth. Measured: the stdin-reading guest imports **16** functions — the
+  hello guest's 15 plus `fd_read`.
+  - **`fd_read`** fills a guest `iovec` array from stdin (fd 0), stopping at the first short read or
+    EOF; a file fd is `EBADF` (the filesystem is a later slice).
+  - **`poll_oneoff`** grows a real clock arm: it parses each subscription, waits the earliest clock
+    timeout on a `select` against `Caller.Context().Done()` (§5 H-3, so a `Close` mid-sleep returns
+    rather than hanging), and reports the fired events. A non-clock (fd) subscription is `ENOSYS`
+    rather than a hang — still a floor, now a smaller one.
+  - **`Config` gained a `Stdin io.Reader` field** — the second program was the second data point on
+    `Config`'s shape, and it needed one.
+
 ## [0.5.0] - 2026-09-07
 *Implements contract v0.1.*
 

@@ -23,6 +23,7 @@ type Config struct {
 	Wasm   []byte    // the guest module
 	Args   []string  // argv; defaults to {"program"}
 	Env    []string  // "KEY=VALUE" pairs; defaults to none
+	Stdin  io.Reader // fd 0; defaults to os.Stdin
 	Stdout io.Writer // defaults to os.Stdout
 	Stderr io.Writer // defaults to os.Stderr
 }
@@ -42,6 +43,9 @@ func GuestFeatures() bin.Features { return bin.DefaultFeatures() }
 // exit is never a silent success and a trap is never exit 0 — the same one-channel discipline
 // [interp.HostFunc] uses, applied at the top.
 func Run(cfg Config) (int, error) {
+	if cfg.Stdin == nil {
+		cfg.Stdin = os.Stdin
+	}
 	if cfg.Stdout == nil {
 		cfg.Stdout = os.Stdout
 	}
@@ -63,6 +67,7 @@ func Run(cfg Config) (int, error) {
 	h := &host{
 		args:   cfg.Args,
 		env:    cfg.Env,
+		stdin:  cfg.Stdin,
 		stdout: cfg.Stdout,
 		stderr: cfg.Stderr,
 		start:  time.Now(),
