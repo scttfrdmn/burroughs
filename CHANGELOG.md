@@ -21,6 +21,22 @@ weakly-ordered platform.
 
 ### Added
 
+- **`burroughs run <cmd.wasm>` runs a `wasip1` guest from the command line — the capability invocable
+  from outside the tree.** [#683](https://github.com/scttfrdmn/burroughs/issues/683),
+  [ADR 0081](docs/decisions/0081-burroughs-run-detects-a-wasip1-command-from-the-modules-sections-and-routes-to-a-public-wasi-entry-before-any-plain-instantiate.md).
+  Two public symbols on the `burroughs` package: **`WASIConfig{Args, Env, Stdin, Stdout, Stderr}` with
+  `Run(wasm) (int, error)`** (the run entry, committed against the two guests that shaped it), and
+  **`IsCommand(wasm) (bool, error)`** (true iff the module imports `wasi_snapshot_preview1` and exports
+  `_start`). ADR 0029 confines the CLI to the public package, so the CLI reaches the runner only
+  through these — the public differential test covers the WASI path from its first commit.
+  - **`burroughs run` autodetects from the module's sections and routes before any instantiate:** a
+    named function is invoked as before; with no function, a `wasip1` command runs and *its* exit code
+    becomes the process's, and any other module's exports are listed as before.
+  - **A carried finding, filed not built on:** a plain `Instantiate` (nil resolver) accepts a module
+    with unresolved imports and defers the failure to call time, against the refuse-at-boundary rule
+    ([#686](https://github.com/scttfrdmn/burroughs/issues/686)). Detection reads the module's sections
+    rather than instantiating, so `run` does not depend on it.
+
 - **Burroughs runs a program compiled by a third-party toolchain: a Go `GOOS=wasip1` guest reaches
   `main`, writes to stdout, and exits 0.** [#683](https://github.com/scttfrdmn/burroughs/issues/683),
   [ADR 0080](docs/decisions/0080-a-go-wasip1-guest-runs-to-main-on-the-host-surface-and-the-preview1-import-set-is-supplied-whole-because-link-refuses-a-gap.md).
