@@ -17,18 +17,29 @@ is not a second, unprobed path to the interpreter. So the CLI cannot call `inter
 wiring the CLI and committing the public embedder API are the **same commitment**, and option (B)
 (exempting the CLI from 0029) was rejected on 0029's own grounds. The public entry is that commitment.
 
+**Preview 1 is the compatibility on-ramp, not the target (Scott's ruling).** The thesis is "host real
+Go, track the spec edge to wasip3", and the contract's §6 ("The event loop and readiness (wasip3)") is
+where the design points. Preview 1 exists here for a measured reason: the stock Go toolchain emits
+`wasip1` only — `GOOS=wasip2`/`wasip3` are `unsupported GOOS/GOARCH pair` on `go1.27.1`, and a p3 Go
+guest is producible today only from the componentize-go family as a *component*, a different artifact
+class (recon: [#688](https://github.com/scttfrdmn/burroughs/issues/688)). "Programs people write" is
+therefore `wasip1` guests today — the no-consumer logic in the other direction, p1 where the consumers
+are and p3 where the design points. **Retirement condition:** a p3-emitting toolchain Go programs can
+actually use. Until then p3 stays a readiness constraint on the design, not a track, and no p3 work is
+scheduled.
+
 ## Decision
 
 **A public WASI run entry and a public command-detector on the `burroughs` package; the CLI reads the
 module's sections to detect a `wasip1` command and routes to the entry before any plain instantiate.**
 
-1. **Public run entry.** `WASIConfig{Args, Env []string; Stdin io.Reader; Stdout, Stderr io.Writer}`
-   with `func (WASIConfig) Run(wasm []byte) (exitCode int, err error)`, mirroring `internal/wasi.Config`.
+1. **Public run entry.** `WASIP1Config{Args, Env []string; Stdin io.Reader; Stdout, Stderr io.Writer}`
+   with `func (WASIP1Config) Run(wasm []byte) (exitCode int, err error)`, mirroring `internal/wasi.Config`.
    The `burroughs` package imports `internal/wasi` (an internal-to-internal dependency; the CLI reaches
-   it only through this public method, so 0029 holds). The spelling is `WASIConfig.Run(wasm)` to parallel
+   it only through this public method, so 0029 holds). The spelling is `WASIP1Config.Run(wasm)` to parallel
    the existing `Config{Strict}.Instantiate(wasm)`, chosen against the two programs now in hand.
 
-2. **Public command-detector, reading the module's sections.** `func IsCommand(wasm []byte) (bool,
+2. **Public command-detector, reading the module's sections.** `func IsWASIP1Command(wasm []byte) (bool,
    error)` decodes and answers true iff the module **imports `wasi_snapshot_preview1`** *and* **exports
    `_start`** (a function). This is the ruled autodetect — *the module's import section is the fact*,
    read through the public surface — and it does **not** instantiate, so it is independent of
@@ -37,7 +48,7 @@ module's sections to detect a `wasip1` command and routes to the entry before an
 
 3. **CLI routing (`cmd/burroughs/run.go`), the ruled rule.** After reading the file:
    - **A function name is given → invoke it as today** (`Instantiate` + `Call`), unchanged.
-   - **No function + `IsCommand` → run as WASI** through `WASIConfig.Run`, with `argv[0]` the file path,
+   - **No function + `IsWASIP1Command` → run as WASI** through `WASIP1Config.Run`, with `argv[0]` the file path,
      `Env` the process environment, and the CLI's own stdin/stdout/stderr; the guest's exit status is
      the CLI's exit status.
    - **No function + not a command → list exports as today.** Scott's ruling (i): listing the exports
@@ -55,14 +66,20 @@ module's sections to detect a `wasip1` command and routes to the entry before an
 
 5. **The public differential test covers the WASI path from the first commit** — 0029's reason for
    funnelling the CLI through the public package. A `burroughs`-package test runs a real guest through
-   `WASIConfig.Run` (and asserts `IsCommand`), so the public WASI surface is not a second unprobed path.
+   `WASIP1Config.Run` (and asserts `IsWASIP1Command`), so the public WASI surface is not a second unprobed path.
 
 ## Consequences
 
 - **Capability line:** a program compiled by a third-party toolchain is invocable from outside the tree
   — `burroughs run hello.wasm` runs it to `main`, writes its stdout, and exits with its code.
 - **`Config`'s shape held across two programs** (hello needed no stdin; echo did), so the public
-  `WASIConfig` is committed against two data points, which is what (C)-then-(A) existed to gather.
+  `WASIP1Config` is committed against two data points, which is what (C)-then-(A) existed to gather.
+- **The public names carry the ABI version — `WASIP1Config`, `IsWASIP1Command` — not a bare `WASI`.**
+  Measured: the surface as first drafted (`WASIConfig`, `IsCommand`) read as WASI *tout court* while
+  `IsWASIP1Command` detects specifically `wasi_snapshot_preview1` and `Run` runs only preview 1. Naming
+  the version means the eventual p3 entry is a *new* symbol, not a rename of one that had claimed to be
+  all of WASI. Done at the identifier because the surface was unreleased — a rename now costs nothing
+  and makes the lie unrepresentable rather than guarded against.
 - **A limitation, named not hidden:** passing `argv` to a `wasip1` command is not yet expressible —
   trailing args are the invoke rule's function-plus-values, so a command runs with `argv = [path]`. A
   grammar extension (e.g. `run cmd.wasm -- args…`) is a later slice, when a guest that reads `argv`
