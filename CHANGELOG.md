@@ -19,6 +19,30 @@ weakly-ordered platform.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Added
+
+- **Burroughs runs a program compiled by a third-party toolchain: a Go `GOOS=wasip1` guest reaches
+  `main`, writes to stdout, and exits 0.** [#683](https://github.com/scttfrdmn/burroughs/issues/683),
+  [ADR 0080](docs/decisions/0080-a-go-wasip1-guest-runs-to-main-on-the-host-surface-and-the-preview1-import-set-is-supplied-whole-because-link-refuses-a-gap.md).
+  A new internal `internal/wasi` package implements a minimal WASI **preview 1** host module on §5's
+  host-function surface ([ADR 0069](docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md),
+  option A) — its first real consumer. This is preview 1, **not** the contract's §6 WASI 0.3; it
+  advances no phase and changes no contract text.
+  - **The import set is supplied whole because `link` refuses a gap.** The measured Go guest declares
+    **15** distinct `wasi_snapshot_preview1` imports, not the ~10 a hello-world suggests — the extras
+    are runtime startup probes (`sched_yield`, `poll_oneoff`, `fd_prestat_get`/`fd_prestat_dir_name`,
+    `fd_fdstat_get`/`fd_fdstat_set_flags`, `random_get`). Eleven are implemented for real and four are
+    stubbed with a WASI errno; all fifteen are present, because `internal/interp/link.go` refuses an
+    unsatisfied import outright.
+  - **`gate:threads` is not load-bearing for this workload**, measured and asserted:
+    `TestTheGoGuestNeedsNoThreadsFeature` decodes the guest with `Threads` off, so the Go `wasip1`
+    runtime's cooperatively-scheduled goroutines emit no wasm atomics and no shared memory. Running a
+    real program and flipping the threads gate are independent.
+  - **The guest is compiled by the test, not committed as a `.wasm`** — `internal/wasi/testdata/hello`
+    built to `wasip1` on each run, proving the third-party toolchain freshly and keeping a 2.4 MB
+    binary out of the tree. A missing toolchain is a loud skip; a present toolchain that cannot build
+    is a failure.
+
 ## [0.5.0] - 2026-09-07
 *Implements contract v0.1.*
 

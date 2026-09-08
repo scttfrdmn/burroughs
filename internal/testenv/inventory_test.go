@@ -108,6 +108,12 @@ var licensed = map[string]string{
 	// That is deliberate — a skip would put the gap in this file, where it would read as
 	// licensed, instead of in the printed table where the ADR's reader will see it.
 	"internal/interp/memladder_test.go:BenchmarkMemoryReservationLadder": "decision 0076's reservation ladder runs by invitation — BURROUGHS_MEM_LADDER plus -benchtime=1x — because its top rung reserves 4 GiB of address space per rep and its result is five printed tables rather than an ns/op; no workflow passes -bench, so the flag has no question to un-decline",
+	// The seventh door: ADR 0080's wasi runner test compiles a Go guest to GOOS=wasip1, which needs
+	// a Go toolchain whose wasip1 target is present. CI has it (the target ships with Go >= 1.21), so
+	// the guest is built and run rather than skipped; the skip only fires on a dev machine without the
+	// target. A present toolchain that *fails* to build is a `t.Fatalf`, not this skip — a build
+	// failure is a regression, not an absent input.
+	"internal/wasi/runner_test.go:buildGuest": "local dev without a wasip1-capable Go toolchain; CI builds the guest so this never fires there, and a present-but-failing toolchain is fatal rather than skipped",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.
