@@ -77,15 +77,15 @@ func run(stdout, stderr io.Writer, argv []string) error {
 
 	// No function named and the module is a wasip1 command: run it (decision 0081). Detection reads
 	// the module's import and export sections and routes here **before** any plain instantiate, so it
-	// never depends on #686's nil-resolver behavior. IsCommand's decode error is ignored on purpose —
+	// never depends on #686's nil-resolver behavior. IsWASIP1Command's decode error is ignored on purpose —
 	// an undecodable module falls through to Instantiate below, which classifies it onto the public
 	// sentinels (a malformed module must exit `refused`, not `error`, whichever path reached it).
 	if fs.NArg() == 1 {
 		// A decode error here is not handled: it means "route this elsewhere", and the Instantiate
 		// below classifies a malformed module onto the public sentinels. So detection routes to WASI
 		// only on a clean `(true, nil)`; every other answer falls through.
-		if isCmd, derr := burroughs.IsCommand(wasm); derr == nil && isCmd {
-			code, rerr := burroughs.WASIConfig{
+		if isCmd, derr := burroughs.IsWASIP1Command(wasm); derr == nil && isCmd {
+			code, rerr := burroughs.WASIP1Config{
 				Args:   []string{fs.Arg(0)},
 				Env:    os.Environ(),
 				Stdin:  os.Stdin,

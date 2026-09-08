@@ -15,22 +15,22 @@ import (
 // TestAWASICommandRunsThroughThePublicPath is [decision 0081][0081]'s rider: the public WASI path is
 // covered from its first commit, which is [ADR 0029]'s reason for funnelling the CLI through this
 // package rather than letting it reach `internal/`. A Go `wasip1` guest is detected as a command and
-// run through `WASIConfig.Run`, reaching `main`, writing stdout, and exiting 0 — the same evidence the
+// run through `WASIP1Config.Run`, reaching `main`, writing stdout, and exiting 0 — the same evidence the
 // internal test carries, now proven on the public surface an embedder and the CLI both use.
 //
 // [0081]: docs/decisions/0081-burroughs-run-detects-a-wasip1-command-from-the-modules-sections-and-routes-to-a-public-wasi-entry-before-any-plain-instantiate.md
 func TestAWASICommandRunsThroughThePublicPath(t *testing.T) {
 	wasm := buildWASIGuest(t)
 
-	if ok, err := IsCommand(wasm); err != nil || !ok {
-		t.Fatalf("IsCommand = (%v, %v), want (true, nil): a Go wasip1 guest imports "+
+	if ok, err := IsWASIP1Command(wasm); err != nil || !ok {
+		t.Fatalf("IsWASIP1Command = (%v, %v), want (true, nil): a Go wasip1 guest imports "+
 			"wasi_snapshot_preview1 and exports _start", ok, err)
 	}
 
 	var out, errBuf bytes.Buffer
-	code, err := WASIConfig{Args: []string{"hello.wasm"}, Stdout: &out, Stderr: &errBuf}.Run(wasm)
+	code, err := WASIP1Config{Args: []string{"hello.wasm"}, Stdout: &out, Stderr: &errBuf}.Run(wasm)
 	if err != nil {
-		t.Fatalf("WASIConfig.Run failed: %v\nstderr: %q", err, errBuf.String())
+		t.Fatalf("WASIP1Config.Run failed: %v\nstderr: %q", err, errBuf.String())
 	}
 	if code != 0 {
 		t.Errorf("guest exited %d, want 0\nstdout: %q\nstderr: %q", code, out.String(), errBuf.String())
@@ -40,17 +40,17 @@ func TestAWASICommandRunsThroughThePublicPath(t *testing.T) {
 	}
 }
 
-// TestANonCommandIsNotDetectedAsAWASICommand is IsCommand's false direction, and it needs no guest: an
+// TestANonCommandIsNotDetectedAsAWASICommand is IsWASIP1Command's false direction, and it needs no guest: an
 // empty module imports nothing and exports no _start, so it is not a command. Without this, a detector
 // that answered true for everything would satisfy the row above.
 func TestANonCommandIsNotDetectedAsAWASICommand(t *testing.T) {
 	empty := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00} // "\0asm" + version 1
-	ok, err := IsCommand(empty)
+	ok, err := IsWASIP1Command(empty)
 	if err != nil {
-		t.Fatalf("IsCommand(empty module) errored: %v", err)
+		t.Fatalf("IsWASIP1Command(empty module) errored: %v", err)
 	}
 	if ok {
-		t.Error("IsCommand(empty module) = true; a module that imports no wasi and exports no _start " +
+		t.Error("IsWASIP1Command(empty module) = true; a module that imports no wasi and exports no _start " +
 			"is not a command, and routing it to the WASI runner would run a module that is not one")
 	}
 }
