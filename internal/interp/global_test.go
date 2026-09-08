@@ -43,7 +43,7 @@ func TestGlobalInitializerSeesEarlierGlobals(t *testing.T) {
 			{Type: binary.I32, Init: globalGet(1)},
 		},
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
@@ -73,25 +73,40 @@ func TestGlobalInitializerSeesEarlierGlobals(t *testing.T) {
 // `InstantiateLinked` fills this slot precisely because it was reserved.
 func TestGlobalIndexSpacePutsImportsFirst(t *testing.T) {
 	m := &binary.Module{
-		Imports: []binary.Import{{Kind: binary.ExternGlobal, Module: "m", Name: "g"}},
+		Imports: []binary.Import{{Kind: binary.ExternGlobal, Module: "m", Name: "g", GlobalType: binary.I32}},
 		Globals: []binary.Global{{Type: binary.I32, Init: i32Const(99)}},
 	}
-	in, _ := Instantiate(m)
+	// **The imported global is supplied, and the index space is read through the filled slot** —
+	// decision 0082's re-vehicle. This used to instantiate with a nil resolver, leaving slot 0 nil,
+	// and assert slot 0 reported the unsupplied import at use; refuse-at-link ended that, so the
+	// import is supplied. The subject — imports first, the definition at the import offset — is read
+	// through slot 0 (the supplied import, 42) and slot 1 (the definition, 99).
+	sup := supplier(t, `(module (global (export "g") i32 (i32.const 42)))`)
+	in, trap, err := InstantiateLinked(m, exportsOf(sup))
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
 	if len(in.globals) != 2 {
 		t.Fatalf("global index space is %d wide, want 2 (one import, one definition)", len(in.globals))
 	}
-	// Slot 0 is the import: reserved, nil, and reported as an *unsupplied import* rather than as a
-	// bad module — the two facts globalFor keeps apart.
-	if _, err := in.globalFor("test", 0); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("global 0 (imported): got %v, want ErrUnsupported naming the unsupplied import", err)
+	// Slot 0 is the import, now filled by the supplier at the head of the space.
+	g0, err := in.globalFor("test", 0)
+	if err != nil {
+		t.Fatalf("globalFor(0) (imported): %v", err)
+	}
+	if g0.num.Load() != 42 {
+		t.Errorf("global 0 (imported) = %d, want 42 — the import did not resolve at slot 0", g0.num.Load())
 	}
 	// Slot 1 is the definition, at the offset the import consumed.
-	g, err := in.globalFor("test", 1)
+	g1, err := in.globalFor("test", 1)
 	if err != nil {
 		t.Fatalf("globalFor(1): %v", err)
 	}
-	if g.num.Load() != 99 {
-		t.Errorf("global 1 = %d, want 99; the defined global is not at the import offset", g.num.Load())
+	if g1.num.Load() != 99 {
+		t.Errorf("global 1 = %d, want 99; the defined global is not at the import offset", g1.num.Load())
 	}
 }
 
@@ -117,7 +132,7 @@ func TestGlobalGetSetRoundTrip(t *testing.T) {
 		Globals: []binary.Global{{Type: binary.I32, Mutable: true, Init: i32Const(3)}},
 		Exports: []binary.Export{{Name: "f", Kind: binary.ExternFunc, Index: 0}},
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
@@ -145,7 +160,7 @@ func TestGlobalGetOfARefUsesTheRefStack(t *testing.T) {
 			Init: []binary.Instr{{Op: opRefNull}, {Op: opEnd}},
 		}},
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
@@ -184,7 +199,7 @@ func TestGlobalSetOfARefWritesTheRefSlot(t *testing.T) {
 			Init:    []binary.Instr{{Op: opRefNull}, {Op: opEnd}},
 		}},
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
@@ -264,7 +279,7 @@ func TestV128GlobalRoundTripsAllFourLanes(t *testing.T) {
 		Exports: []binary.Export{{Name: "lanes", Kind: binary.ExternFunc, Index: 0}},
 	}
 
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
@@ -298,7 +313,7 @@ func TestV128GlobalRoundTripsAllFourLanes(t *testing.T) {
 // Both directions of globalFor's index check are covered: past the end, and the empty-slot case
 // above. A single row would leave the other arm asserting nothing.
 func TestGlobalOutOfRangeIsTheLayeringDebt(t *testing.T) {
-	in, trap := Instantiate(&binary.Module{
+	in, trap := mustInst(t, &binary.Module{
 		Globals: []binary.Global{{Type: binary.I32, Init: i32Const(1)}},
 	})
 	if trap != nil {
@@ -330,7 +345,7 @@ func TestGlobalOutOfRangeIsTheLayeringDebt(t *testing.T) {
 // umbrella can close with this rule unimplemented and a tripwire silent on the day its subject
 // changes is worth nothing (ADR 0043).
 func TestImmutableGlobalIsNotRefusedHere(t *testing.T) {
-	in, trap := Instantiate(&binary.Module{
+	in, trap := mustInst(t, &binary.Module{
 		Globals: []binary.Global{{Type: binary.I32, Mutable: false, Init: i32Const(1)}},
 	})
 	if trap != nil {
@@ -465,7 +480,7 @@ func TestGlobalReadsWhatTheInterpreterHolds(t *testing.T) {
 			binary.Export{Name: "g_" + r.name, Kind: binary.ExternGlobal, Index: uint32(i)})
 	}
 
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
@@ -559,7 +574,7 @@ func TestGlobalExportKindIsNotDeclarationOrder(t *testing.T) {
 		{"function first", []binary.Export{fn, gl, onlyFunc}},
 		{"global first", []binary.Export{gl, fn, onlyFunc}},
 	} {
-		in, trap := Instantiate(base(order.exports))
+		in, trap := mustInst(t, base(order.exports))
 		if trap != nil {
 			t.Fatalf("%s: trap: %v", order.what, trap)
 		}

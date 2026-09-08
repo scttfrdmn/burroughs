@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"testing"
 	"unsafe"
 
@@ -28,7 +27,7 @@ func instantiate1(t *testing.T, src string) (*Instance, *Trap) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	return Instantiate(m)
+	return mustInst(t, m)
 }
 
 // invoke1 instantiates and invokes, requiring both to succeed.
@@ -491,28 +490,27 @@ func TestImportedMemoryOccupiesItsIndex(t *testing.T) {
 		(import "spectest" "memory" (memory 1 2))
 		(func (export "size0") (result i32) (memory.size))
 	)`
-	in, trap := instantiate1(t, src)
+	// **The import is supplied, and the index is read through the filled slot** — decision 0082's
+	// re-vehicle. This used to instantiate with a nil resolver, leaving the slot nil, and assert the
+	// §3 "import nothing supplied" message when `memory.size` touched it. Refuse-at-link ended that
+	// (the unsupplied module refuses at load — TestUnsatisfiedImportKeepsItsSentinel is its witness),
+	// so the memory is supplied here; the subject — an imported memory occupying its index — is read
+	// by `memory.size` answering the *supplied* memory's size, which it can only do if the import
+	// resolved at index 0.
+	sup := supplier(t, `(module (memory (export "memory") 1 2))`)
+	in, trap, err := link1(t, src, exportsOf(sup))
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
 	if trap != nil {
 		t.Fatalf("instantiate: %v", trap)
 	}
-	// A module that imports a memory and never touches it instantiates fine; the shortfall
-	// is reported when the feature is *reached*, like ErrUnsupportedOp.
-	if err := in.Deferred(); err != nil {
-		t.Fatalf("an untouched import should not be a shortfall: %v", err)
+	out, err := in.Invoke("size0")
+	if err != nil {
+		t.Fatalf("invoke size0: %v", err)
 	}
-	_, err := in.Invoke("size0")
-	if err == nil {
-		t.Fatal("memory.size against an unsupplied imported memory succeeded; nothing filled that slot, so there is no size to report")
-	}
-	if !errors.Is(err, ErrUnsupported) {
-		t.Errorf("err = %v, want ErrUnsupported: an imported memory is a missing engine component, not a fault in a well-formed module", err)
-	}
-	// The error names the unsupplied import rather than an index or an opcode, because the
-	// board's buckets are a work plan only while each key names the thing actually missing.
-	// It read `linking is not implemented` until the linker landed and made that false; the
-	// wording's four sites are pinned together in TestUnsatisfiedImportKeepsItsSentinel.
-	if !strings.Contains(err.Error(), "is an import nothing supplied") {
-		t.Errorf("err = %q, want it to name the unsupplied import", err)
+	if len(out) != 1 || out[0].Int32() != 1 {
+		t.Errorf("memory.size = %v, want [1] — the imported memory did not resolve at index 0", out)
 	}
 }
 
@@ -560,19 +558,37 @@ func TestMemoryIndexSpaceCountsImportsFirst(t *testing.T) {
 			if got := len(m.Memories); got != c.wantDefined {
 				t.Errorf("len(Memories) = %d, want %d", got, c.wantDefined)
 			}
-			in, trap := instantiate1(t, c.src)
-			if trap != nil {
-				t.Fatalf("instantiate: %v", trap)
+			// Import-bearing rows are *supplied* now — decision 0082 refuses an unsupplied import at
+			// load — so the index space is read through filled import slots rather than nil ones. The
+			// arithmetic under test (imports first, each index reserved) is the same either way; a
+			// shared supplier exports both the func and the memory these rows import.
+			var in *Instance
+			if c.wantImports > 0 {
+				var trap *Trap
+				var lerr error
+				in, trap, lerr = link1(t, c.src, exportsOf(supplier(t,
+					`(module (func (export "f")) (memory (export "m") 1))`)))
+				if lerr != nil {
+					t.Fatalf("link: %v", lerr)
+				}
+				if trap != nil {
+					t.Fatalf("instantiate: %v", trap)
+				}
+			} else {
+				var trap *Trap
+				in, trap = instantiate1(t, c.src)
+				if trap != nil {
+					t.Fatalf("instantiate: %v", trap)
+				}
 			}
-			// The index space is imports + definitions, and every index in it resolves
-			// to a slot — nil for an import, allocated for a definition. A shorter
-			// slice would shift every defined memory's index.
+			// The index space is imports + definitions, and every index resolves to a slot — a
+			// shorter slice would shift every defined memory's index.
 			if got, want := len(in.mems), c.wantImports+c.wantDefined; got != want {
 				t.Fatalf("the memory index space is %d slots, want %d", got, want)
 			}
 			for i := range c.wantImports {
-				if in.mems[i] != nil {
-					t.Errorf("slot %d is an import and should be nil; this row goes through Instantiate, which supplies nothing", i)
+				if in.mems[i] == nil {
+					t.Errorf("slot %d is a supplied import and should be filled", i)
 				}
 			}
 			for i := c.wantImports; i < len(in.mems); i++ {
@@ -856,7 +872,7 @@ func instantiateThreads1(t *testing.T, src string) *Instance {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiate: %v", trap)
 	}

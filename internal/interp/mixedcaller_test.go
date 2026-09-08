@@ -81,7 +81,7 @@ func mixedSuspendAndSpinModule(t *testing.T) *Instance {
 	if err != nil {
 		t.Fatalf("decoding the mixed suspend-and-spin module: %v", err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiating the mixed suspend-and-spin module: %v", trap)
 	}

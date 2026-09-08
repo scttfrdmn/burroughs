@@ -112,3 +112,36 @@ Found the way the census rule prescribes — by resolving the sweep's own classi
 against the text rather than against recollection of it. This site had been filed as "a
 statement *about* `CLAUDE.md`", which is what it looks like until you check whether the
 quantity it quotes is still there.
+
+## Amendment, 2026-09-08 — a typed link failure is a third channel, and it is not the bare error this ADR refused
+
+Appended, not edited, on the rule above (records append-corrected, stale claims wear pointers). Nothing
+in the Decision or Consequences is retracted; refuse-at-link ([decision 0082][0082],
+[#686](https://github.com/scttfrdmn/burroughs/issues/686)) added a return this ADR did not anticipate,
+and this states why it is consistent with the split rather than a breach of it.
+
+`interp.Instantiate` now returns `(*Instance, *Trap, error)`. The third value is **not** option B —
+*"the constructor returns `error`, unconstrained"* — which this ADR rejected as *a second place judging
+modules*. It is a **typed link failure** (`ErrLinkFailed`, the `assert_unlinkable` category), and only
+that: the validator's verdicts still do not travel it, because validation runs *before* `Instantiate`
+(in the public `Config.Instantiate`), so the constructor still gains no opinion about a module's
+validity. What the split forbade was an **open** error channel collapsing verdicts, traps, and link
+facts into one untyped return; what it did not forbid is a *distinct value that says exactly what it
+is*.
+
+The reading was error-vs-**trap**, not a claim about arity — *"never a bare error"* meant no untyped
+channel that could hide a trap or a verdict, not "no third return ever." This is the argument [decision
+0026][0026] made for `*tailCall`: the taxonomy grows *"one honest member at a time — error, trap,
+`*thrown`, `*tailCall`"*, and a link failure is the next such member. A module that *could not be
+linked* is a different claim from one that *died coming to life* — `assert_unlinkable` ≠ `assert_trap`,
+and the suite's own vocabulary already separates them — so sharing a channel would be the very
+conflation this ADR exists to prevent, one door over. Surfacing the link failure as a `*Trap` (the
+rejected option on #686) was declined for exactly that reason.
+
+**What retires this:** the day `Instantiate` is asked to carry a claim that is *neither* a trap, a link
+failure, nor a validator verdict — a genuinely new kind — this amendment reopens to ask whether the
+taxonomy is still four honest siblings or has begun collecting a catch-all. Until then the rule holds:
+an open error channel out of the constructor is forbidden, a typed sibling is permitted.
+
+[0026]: 0026-a-tail-call-is-a-fourth-control-transfer-value-the-frame-owners-trampoline-re-enters.md
+[0082]: 0082-instantiate-refuses-unresolved-imports-at-link-and-surfaces-the-failure-as-a-typed-link-error-not-a-trap.md

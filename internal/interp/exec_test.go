@@ -25,7 +25,7 @@ func run1(t *testing.T, src string) []Value {
 	if err != nil {
 		t.Fatalf("decode %s: %v", src, err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		// Reported rather than ignored: these sources declare no memory, so a trap here
 		// means instantiation grew a failure mode this helper's modules can reach, which is
@@ -284,7 +284,7 @@ func TestFrameLocalsCeilingRefusesRatherThanAllocating(t *testing.T) {
 		{name: "the grave's count", n: 1<<32 - 2, wantErr: ErrUnsupported},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			in, trap := Instantiate(build(tc.n))
+			in, trap := mustInst(t, build(tc.n))
 			if trap != nil {
 				t.Fatalf("instantiate: %v — this module declares no memory, so a trap here is "+
 					"a finding about instantiation rather than about the frame ceiling", trap)

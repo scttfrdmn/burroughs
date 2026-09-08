@@ -39,7 +39,7 @@ func runSIMDFeatures1(t *testing.T, features binary.Features, src string, args .
 	if err != nil {
 		t.Fatalf("decode %s: %v", src, err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiate %s: %v", src, trap)
 	}

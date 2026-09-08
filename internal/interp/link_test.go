@@ -229,66 +229,37 @@ func TestUnknownImportIsALinkFailure(t *testing.T) {
 // Scoped to all four kinds rather than to the one that regressed, because a control scoped to
 // today's sample inherits today's blind spot.
 func TestUnsatisfiedImportKeepsItsSentinel(t *testing.T) {
+	// **The sentinel moved from use to load with decision 0082.** This used to instantiate with a nil
+	// resolver (leaving the import's slot nil), invoke an export that touched the import, and assert
+	// the §3 "import nothing supplied" message at the point of *use*. Refuse-at-link ended that: a nil
+	// resolver supplies nothing, so an unsatisfied import is refused at *load* with `ErrLinkFailed`
+	// naming module and field. There is no longer a use-site failure to reach — the module never
+	// instantiates — so each row is a bare import, and the sentinel it keeps is the link one, not the
+	// trap channel (`assert_unlinkable` ≠ `assert_trap`).
 	for _, row := range []struct {
 		kind string
 		src  string
-		fn   string
 		want string
 	}{
-		{
-			kind: "memory",
-			src: `(module (import "s" "m" (memory 1 8))
-				(func (export "f") (result i32) (memory.size)))`,
-			fn:   "f",
-			want: "memory 0 is an import nothing supplied (contract §3)",
-		},
-		{
-			// Through `call_indirect` rather than `table.size`, and the difference is a
-			// measurement: `table.size` is `0xfc 0x10`, which has no arm, so that row
-			// reported `no arm for opcode fc 10` and asserted nothing about linking. Caught by
-			// running the control — a row that reaches a *different* missing feature is the
-			// coverage defect a green cannot show, since the test would have been red for the
-			// right-looking reason once `table.size` landed.
-			kind: "table",
-			src: `(module (import "s" "t" (table 1 8 funcref))
-				(type $v (func))
-				(func (export "f") (call_indirect (type $v) (i32.const 0))))`,
-			fn:   "f",
-			want: "table 0 is an import nothing supplied (contract §3)",
-		},
-		{
-			kind: "global",
-			src: `(module (import "s" "g" (global i32))
-				(func (export "f") (result i32) (global.get 0)))`,
-			fn:   "f",
-			want: "global 0 is an import nothing supplied (contract §3)",
-		},
-		{
-			kind: "func",
-			src: `(module (import "s" "f" (func (result i32)))
-				(func (export "g") (result i32) (call 0)))`,
-			fn:   "g",
-			want: "function 0 is an import nothing supplied (contract §3)",
-		},
+		{kind: "memory", src: `(module (import "s" "m" (memory 1 8)))`, want: `unknown import: "s" "m"`},
+		{kind: "table", src: `(module (import "s" "t" (table 1 8 funcref)))`, want: `unknown import: "s" "t"`},
+		{kind: "global", src: `(module (import "s" "g" (global i32)))`, want: `unknown import: "s" "g"`},
+		{kind: "func", src: `(module (import "s" "f" (func (result i32))))`, want: `unknown import: "s" "f"`},
 	} {
 		t.Run(row.kind, func(t *testing.T) {
 			// A nil resolver: "supply nothing", which is what an unregistered module meets.
-			in, trap, err := link1(t, row.src, nil)
-			if err != nil {
-				t.Fatalf("link: %v", err)
+			_, trap, err := link1(t, row.src, nil)
+			if err == nil {
+				t.Fatalf("link answered, but nothing supplied the %s import — 0082 refuses this at load", row.kind)
 			}
 			if trap != nil {
-				t.Fatalf("instantiate trapped: %v", trap)
+				t.Fatalf("got a trap alongside the link failure: %v — a link fact is not a trap", trap)
 			}
-			_, err = in.Invoke(row.fn)
-			if err == nil {
-				t.Fatalf("invoke answered, but nothing supplied the %s import", row.kind)
-			}
-			if !errors.Is(err, ErrUnsupported) {
-				t.Errorf("invoke: %v, want ErrUnsupported", err)
+			if !errors.Is(err, ErrLinkFailed) {
+				t.Errorf("link: %v, want ErrLinkFailed", err)
 			}
 			if !strings.Contains(err.Error(), row.want) {
-				t.Errorf("invoke: %v\nwant substring: %s", err, row.want)
+				t.Errorf("link: %v\nwant substring: %s", err, row.want)
 			}
 		})
 	}
@@ -457,38 +428,40 @@ func TestLinkKindMismatchIsAnErrorNotATrap(t *testing.T) {
 	}
 }
 
-// TestExportOfAnUnfilledSlotIsAbsent pins `Export`'s decision to report false rather than hand
-// back a nil-carrying Extern.
+// TestExportOfANilDefinedSlotIsAbsent witnesses `Export`'s nil-slot guard — that a slot left nil is
+// reported *absent* rather than handed back as a nil-carrying `Extern`.
 //
-// The chain it protects is two links long, which is why it needs a control of its own: a module
-// that imports a memory nothing supplied and *re-exports* it would otherwise offer that export to
-// a third module, whose own slot would then be filled with nil — and the failure would surface
-// two instantiations away from its cause, as a nil dereference rather than as a missing import.
+// **It replaces the retired TestExportOfAnUnfilledSlotIsAbsent (decision 0082).** That one produced the
+// nil slot from an unsupplied *import* — and argued the risk survived refuse-at-link through a
+// re-export chain reached via the nil resolver, which 0082 falsifies: the nil resolver now refuses, so
+// an import slot is never nil at `Export` time and a name claiming an *unfilled import slot* would
+// claim a state that can no longer exist. The reachable producer that survives is a *defined* entity
+// whose allocation failed — `Instance.build` records it as a deferred shortfall and leaves the slot
+// nil — so the coverage moves to a test named for that cause rather than vanishing (a deletion is not
+// a control, #143).
 //
-// **The chain is longer than the refusal arm, which is why this row survives it.** With `link`
-// refusing an unknown import, the *importer* here can only exist unlinked — so the unfilled slot
-// arrives through the nil resolver, and the third module in the chain is precisely a script that
-// registers a module instantiated before its own supplier was available. That is the live shape
-// (`linking.wast` registers as it goes), so the risk is not the refusal arm's to retire.
-func TestExportOfAnUnfilledSlotIsAbsent(t *testing.T) {
-	const src = `(module
-		(import "s" "m" (memory 1 8))
-		(export "reexported" (memory 0)))`
-
-	in, trap, err := link1(t, src, nil)
+// The nil slot is constructed directly: a reliable allocation failure is platform-dependent, and the
+// guard's contract — "a nil slot exports as absent" — is what is under test, over a module that
+// genuinely declares and exports memory 0.
+func TestExportOfANilDefinedSlotIsAbsent(t *testing.T) {
+	in := &Instance{
+		mod: &binary.Module{
+			Memories: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+			Exports:  []binary.Export{{Name: "m", Kind: binary.ExternMemory, Index: 0}},
+		},
+		mems: []*memory{nil}, // a defined memory whose allocation left the slot nil
+	}
+	if ext, ok := in.Export("m"); ok {
+		t.Errorf("Export reported a nil defined slot as present: %+v", ext)
+	}
+	// The vacuity guard: a filled slot of the same shape resolves, so the row above is not a lookup
+	// that reports false for every name.
+	mem, err := newMemory(in.mod.Memories[0])
 	if err != nil {
-		t.Fatalf("link: %v", err)
+		t.Fatalf("newMemory: %v", err)
 	}
-	if trap != nil {
-		t.Fatalf("instantiate trapped: %v", trap)
-	}
-	if ext, ok := in.Export("reexported"); ok {
-		t.Errorf("Export reported a re-exported unfilled slot as present: %+v", ext)
-	}
-	// The vacuity guard: a lookup that reports false for *every* name would pass the assertion
-	// above while saying nothing, so a name that must resolve is checked beside it.
-	sup := supplier(t, `(module (memory (export "m") 1 8))`)
-	if _, ok := sup.Export("m"); !ok {
+	in.mems[0] = mem
+	if _, ok := in.Export("m"); !ok {
 		t.Error("Export reported a filled slot as absent — the row above proves nothing")
 	}
 }

@@ -152,7 +152,11 @@ func TestHarnessAndEngineLiteralReadersAgree(t *testing.T) {
 			t.Errorf("%s.const %s: the engine's own output did not decode: %v", l.kind, l.text, err)
 			continue
 		}
-		in, trap := interp.Instantiate(m)
+		in, trap, lerr := interp.Instantiate(m)
+		if lerr != nil {
+			t.Errorf("%s.const %s: an import-free literal module was unlinkable: %v", l.kind, l.text, lerr)
+			continue
+		}
 		if trap != nil {
 			// These modules are a single const and an END with no memory, so a trap is a
 			// finding about instantiation rather than about the literal. Counted as

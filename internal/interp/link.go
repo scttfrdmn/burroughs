@@ -289,15 +289,17 @@ func (in *Instance) link(imp Imports) error {
 		if imp != nil {
 			ext, ok = imp(im.Module, im.Name)
 		}
-		if imp == nil {
-			// **No resolver at all is the unlinked path, and it degrades rather than refuses.**
-			// Leaving every slot nil preserves the §3 reporting exactly — `memoryFor` and friends
-			// discriminate on the import offset and name §3 — so `Instantiate` stays this function
-			// with a nil resolver rather than a second body. Distinguished from a resolver that
-			// *answers no* below, which is a different fact: the script was asked and had nothing.
-			continue
-		}
 		if !ok {
+			// **A nil resolver lands here too, and that is decision 0082's refuse-at-link.** "Supply
+			// nothing" resolves every import to nothing, so a nil resolver refuses an import-bearing
+			// module rather than leaving its slots nil and deferring the failure to call time. It
+			// rides the *same* channel as a resolver that answers no — same error value, same return
+			// position — because an unresolved import is one link fact however the resolver arrived at
+			// it. An import-free module reaches no iteration of this loop and instantiates unchanged,
+			// so `interp.Instantiate` stays the no-resolver convenience for exactly those. This
+			// replaces the degrade path, whose deferred failure arrived at the wrong site and named
+			// the wrong thing (#686).
+			//
 			// `unknown import` — `link` in `eval.ml`, whose `Link.error` for a name the registry
 			// does not hold is `"unknown import"`. 16 vectors expect this string.
 			//

@@ -71,7 +71,7 @@ func TestDropAfterCatchRefRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiate: %v", trap)
 	}

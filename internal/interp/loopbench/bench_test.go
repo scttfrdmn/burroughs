@@ -140,7 +140,10 @@ func build(src string) (*interp.Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	in, trap := interp.Instantiate(m)
+	in, trap, lerr := interp.Instantiate(m)
+	if lerr != nil {
+		return nil, fmt.Errorf("instantiate: %w", lerr)
+	}
 	if trap != nil {
 		return nil, fmt.Errorf("instantiate: %w", trap)
 	}

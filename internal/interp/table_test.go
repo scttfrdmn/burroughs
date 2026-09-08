@@ -704,7 +704,7 @@ func instantiateMemory64(t *testing.T, src string) (*Instance, *Trap) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	return Instantiate(m)
+	return mustInst(t, m)
 }
 
 // instantiateGC is instantiate1 with the GC gate on, requiring success.
@@ -725,7 +725,7 @@ func instantiateGC(t *testing.T, src string) *Instance {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiate: %v", trap)
 	}

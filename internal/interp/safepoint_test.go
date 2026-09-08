@@ -261,7 +261,7 @@ func spinModule(t *testing.T) *Instance {
 	if err != nil {
 		t.Fatalf("decoding the spin module: %v", err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiating the spin module: %v — it declares no memory, so a trap here is "+
 			"a finding about instantiation rather than about safepoints", trap)
@@ -346,7 +346,7 @@ func gatedSpinModule(t *testing.T) *Instance {
 	if err != nil {
 		t.Fatalf("decoding the gated spin module: %v", err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiating the gated spin module: %v", trap)
 	}
@@ -777,7 +777,7 @@ func TestAResumedGuestSeesAHostWriteFromTheStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decoding the flag module: %v", err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiating the flag module: %v", trap)
 	}
