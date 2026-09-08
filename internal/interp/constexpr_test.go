@@ -129,7 +129,7 @@ func TestConstExprMessageNamesItsOwnCallerNotAnother(t *testing.T) {
 	}
 
 	for _, r := range rows {
-		in, trap := Instantiate(r.mod)
+		in, trap := mustInst(t, r.mod)
 		if trap != nil {
 			t.Errorf("%s: trap %v, want the arity failure on the deferred channel", r.site, trap)
 			continue
@@ -174,7 +174,7 @@ func TestConstExprMessageNamesItsOwnCallerNotAnother(t *testing.T) {
 // instantiated with a plausible value. That is the accept direction, where §9 G-3 says the suite
 // scores the defect green by construction.
 func TestConstExprChecksBothStackArrays(t *testing.T) {
-	in, trap := Instantiate(&binary.Module{
+	in, trap := mustInst(t, &binary.Module{
 		Globals: []binary.Global{{Type: binary.I32, Init: []binary.Instr{
 			{Op: 0x41, Imm0: 1}, {Op: opRefNull}, {Op: opEnd},
 		}}},
@@ -272,7 +272,7 @@ func TestV128GlobalSetWritesBothHalves(t *testing.T) {
 		}}},
 		Exports: []binary.Export{{Name: "f", Kind: binary.ExternFunc, Index: 0}},
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}

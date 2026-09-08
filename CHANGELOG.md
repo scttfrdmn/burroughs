@@ -78,6 +78,24 @@ weakly-ordered platform.
   - **`Config` gained a `Stdin io.Reader` field** — the second program was the second data point on
     `Config`'s shape, and it needed one.
 
+### Changed
+
+- **`Config.Instantiate` refuses a module with unsupplied imports at load, rather than instantiating
+  it with nil slots and deferring the failure to first use.** [#686](https://github.com/scttfrdmn/burroughs/issues/686),
+  [ADR 0082](docs/decisions/0082-instantiate-refuses-unresolved-imports-at-link-and-surfaces-the-failure-as-a-typed-link-error-not-a-trap.md).
+  The runtime's law is refuse-at-the-boundary; an import nothing supplied is a link fact, and a nil
+  slot that traps on use reported at the wrong site.
+  - **New public sentinel `ErrUnlinkable`** — the `assert_unlinkable` category at the public boundary,
+    wrapping the engine's `interp.ErrLinkFailed`. Distinct from `ErrUnsupported` (an engine gap at
+    *use*); this is a link gap at *load*. `burroughs run` exits `refused` (3) on it. `ErrUnsupported`'s
+    and `Instance.Deferred`'s docs move the unsupplied-import case out to load; `Deferred` now carries
+    only a *defined* entity's allocation shortfall.
+  - **The refusal is a typed link error, not a trap.** `interp.Instantiate` grew a third,
+    link-error return, on [ADR 0015](docs/decisions/0015-instantiation-is-execution-at-time-zero.md)'s
+    2026-09-08 append: the channel split forbade an *unconstrained* error, not a *typed* sibling — the
+    argument ADR 0026 made for `*tailCall`. Surfacing it as a trap was rejected: `assert_unlinkable` is
+    not `assert_trap`.
+
 ## [0.5.0] - 2026-09-07
 *Implements contract v0.1.*
 

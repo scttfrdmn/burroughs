@@ -104,7 +104,10 @@ func build(tb testing.TB) *interp.Instance {
 	if err != nil {
 		tb.Fatalf("decode: %v", err)
 	}
-	in, trap := interp.Instantiate(m)
+	in, trap, lerr := interp.Instantiate(m)
+	if lerr != nil {
+		tb.Fatalf("instantiate: %v", lerr)
+	}
 	if trap != nil {
 		tb.Fatalf("instantiate: %v", trap)
 	}

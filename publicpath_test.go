@@ -373,11 +373,12 @@ type publicTally struct {
 	refusedOther      int // a trap at time zero, an unsupplied import, an encoder frontier
 	gateMisclassified int // a gate refusal wearing another sentinel — asserted at zero
 
-	// importing is **not one of the buckets above** — it cuts across them, which is why it is
-	// stated apart from a partition whose whole readability rests on membership being exclusive. A
-	// module carrying imports still instantiates, so it lands in `ran`, `declined` or a refusal
-	// like any other; what this counts is that it was not *driven*, because nothing supplied what
-	// it imports. Grave #421's counter.
+	// importing counts import-bearing modules, and since decision 0082 it **is** one of the buckets —
+	// an exclusive one. It used to cut across the partition because a module carrying imports still
+	// instantiated (with nil slots) and landed in `ran` or a refusal like any other; refuse-at-link
+	// ended that — an import-bearing module now refuses at load as `ErrUnlinkable` and lands here and
+	// nowhere else. So it joins the module reconciliation sum below rather than sitting apart from it.
+	// Grave #421's counter, now the refusal that subsumes #421's hazard.
 	importing int
 	// incomplete counts armed, import-free modules whose `Deferred` is non-nil — asserted at zero,
 	// and orthogonal to the buckets for `importing`'s reason. Grave #421's other half.
@@ -494,6 +495,37 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 				case errors.Is(ierr, ErrMalformed):
 					tally.refusedMalformed++
 					continue
+				case errors.Is(ierr, ErrUnlinkable):
+					// **Refuse-at-link (decision 0082), and where grave #421's hazard is now
+					// foreclosed.** An import-bearing module used to instantiate with nil slots and be
+					// marked untrusted so its unsupplied-import exports were never judged (the branch
+					// this replaces, below); it now refuses at load, so there are no such exports to
+					// mis-judge. The lockstep coverage is **preserved on the refusal, not routed
+					// around**: the raw path must refuse the same module by the same identity
+					// (`interp.ErrLinkFailed`, which the public `ErrUnlinkable` wraps), or the two
+					// paths disagree here (the rider on #686).
+					//
+					// `unlinkedNow` is set so a later assert against this module counts as `unlinked`
+					// (a scope exclusion this API implies) rather than `noInstance` (an upstream
+					// failure) — the distinction the removed branch used to carry, kept here.
+					tally.importing++
+					unlinkedNow = true
+					m, derr := (&binary.Decoder{Features: binary.DefaultFeatures()}).DecodeModule(image)
+					if derr != nil {
+						tally.disagreed++
+						disagreements = append(disagreements, fmt.Sprintf(
+							"%s:%d: the public path decoded an image the raw decoder refused: %v",
+							base, c.Line, derr))
+						continue
+					}
+					if _, _, rerr := interp.Instantiate(m); !errors.Is(rerr, interp.ErrLinkFailed) {
+						tally.disagreed++
+						disagreements = append(disagreements, fmt.Sprintf(
+							"%s:%d: the public path refused an import-bearing module as unlinkable, "+
+								"but the raw path did not refuse it as a link failure: %v",
+							base, c.Line, rerr))
+					}
+					continue
 				default:
 					tally.refusedOther++
 					continue
@@ -511,7 +543,17 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 						base, c.Line, derr))
 					continue
 				}
-				rin, rtrap := interp.Instantiate(m)
+				rin, rtrap, rlerr := interp.Instantiate(m)
+				if rlerr != nil {
+					// The public path linked this module (it reached this arm), so the raw path
+					// finding it unlinkable is a disagreement — the import-free half of refuse-at-link
+					// (decision 0082): both paths link an import-free module, or neither does.
+					tally.disagreed++
+					disagreements = append(disagreements, fmt.Sprintf(
+						"%s:%d: the raw path refused as unlinkable a module the public path linked: %v",
+						base, c.Line, rlerr))
+					continue
+				}
 				if rtrap != nil {
 					tally.disagreed++
 					disagreements = append(disagreements, fmt.Sprintf(
@@ -519,47 +561,17 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 						base, c.Line, rtrap))
 					continue
 				}
-				// **A module whose imports nothing supplied is not the script's module, and this is
-				// grave #421.** The trust break for linking was installed on the *supply* side —
-				// `(register …)` sets `trusted = false` three arms down — and a module command
-				// clears the flag again, so it protected nothing: the demand side, an `(import …)`
-				// in the module itself, armed and was driven with the imported global reading zero,
-				// the imported function absent, the imported memory a different memory. The
-				// condition arises at two places and the guard was at one of them, which is this
-				// file's own grave twice already (`publicArgs` above, in both of its arms).
-				//
-				// Latent rather than harmless: `global.wast:634` is the module that surfaced it, an
-				// imported `i32` read by two *defined* globals which are in turn two active segment
-				// offsets, so the corpus asks a question whose answer survives instantiation and is
-				// readable from an export. It reached this driver for the first time in #419 — its
-				// table carries a spelled initializer, so the emitter had refused it — and answered
-				// `ref.null` for a `funcref` at index 4 and 0 for `0x44444444` at address 4, both of
-				// them the offsets collapsing to zero because global 0 was never supplied. Every
-				// other import-bearing module in the corpus had been trusted too and got away with
-				// it, because an absent import is usually reached *through a call*, which then fails
-				// identically on both paths and lands in `callFailed`.
-				//
-				// The property is read off the module rather than off the failure: `len(m.Imports)`
-				// is total and syntactic, where matching the decline's text would be a guess about
-				// which absences the instance happened to notice. Imports are unsupplied *by
-				// construction* here — this API has no linking surface at all (0029's scope, stated
-				// at the `KindRegister` arm) — so the predicate needs no second condition.
-				if len(m.Imports) > 0 {
-					tally.importing++
-					pub, raw, trusted, unlinkedNow = in, rin, false, true
-					continue
-				}
-				// **And the channel the boundary already published for this fact, now read.**
-				// `Instance.Deferred` exists precisely to say "a nil trap is not the same claim as
-				// this module came to life completely", and its doc names the unsupplied-import case
-				// as its example — so the fact was available at the boundary all along and this
-				// driver did not ask. That is the other half of #421, and the reason the import
-				// predicate above is not written as `Deferred() != nil`: the two catch different
-				// populations. A shortfall is only recorded where instantiation *reached* it, so an
-				// imported function nothing calls at load defers nothing while still being absent;
-				// and conversely a module with **no imports at all** that defers anything is a
-				// finding, since every other cause is an engine shortfall this driver would
-				// otherwise drive straight past and judge.
+				// **The deferred channel, read for an import-free module — and grave #421's hazard,
+				// foreclosed upstream now.** #421 was an import-bearing module driven with its imports
+				// absent (the imported global at `global.wast:634` collapsing to zero, readable from an
+				// export) and trusted anyway. Refuse-at-link (decision 0082) refuses such a module at
+				// the `ErrUnlinkable` case above, so it never reaches this arm — the guard the removed
+				// `len(m.Imports) > 0` branch provided is now provided by the refusal itself. What can
+				// still reach here is a module with **no imports at all** that defers a shortfall,
+				// which is a finding: `Instance.Deferred` says "a nil trap is not the same claim as
+				// this module came to life completely", and for an import-free module every deferred
+				// shortfall is a *defined* entity's allocation limit this driver would otherwise judge
+				// straight past.
 				//
 				// Asserted at zero rather than counted, on the same argument as `refusedInvalid`
 				// below: the population is not a legitimate exclusion, it is a claim that the
@@ -748,8 +760,8 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	}
 
 	t.Logf("the public path over %d scripts:\n"+
-		"  modules  %5d = %d ran + %d declined + %d gated + %d malformed + %d other + %d INVALID\n"+
-		"  of the %d modules, %d carry imports and are therefore not driven (no linking surface)\n"+
+		"  modules  %5d = %d ran + %d declined + %d gated + %d malformed + %d other + %d INVALID + %d unlinkable\n"+
+		"  of the %d modules, %d carry imports and are therefore refused at load (no linking surface)\n"+
 		"  asserts  %5d = %d compared + %d no-instance + %d unlinked + %d unpassable + "+
 		"%d call-failed + %d DISAGREED\n"+
 		"  of the %d compared, %d ran on a fully-checked module and %d on a declining one\n"+
@@ -757,7 +769,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 		"  which is a reading the zero above licenses and nothing else would",
 		tally.files,
 		tally.modules, tally.ran, tally.declined, tally.refusedGated, tally.refusedMalformed,
-		tally.refusedOther, tally.refusedInvalid,
+		tally.refusedOther, tally.refusedInvalid, tally.importing,
 		tally.modules, tally.importing,
 		tally.asserts, tally.compared, tally.noInstance, tally.unlinked, tally.unpassable,
 		tally.callFailed, tally.disagreed,
@@ -771,7 +783,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	// The buckets partition their populations. Without this, a command lost between two arms of the
 	// switch would quietly shrink the denominator that every floor below is measured against.
 	if got := tally.ran + tally.declined + tally.refusedGated + tally.refusedInvalid +
-		tally.refusedMalformed + tally.refusedOther; got != tally.modules {
+		tally.refusedMalformed + tally.refusedOther + tally.importing; got != tally.modules {
 		t.Errorf("the module buckets sum to %d, not %d", got, tally.modules)
 	}
 	if got := tally.compared + tally.noInstance + tally.unlinked + tally.unpassable +

@@ -42,9 +42,14 @@ var (
 	ErrDeclined = errors.New("burroughs: validator declined a construct")
 
 	// ErrUnsupported is the engine reaching a feature it does not implement in this phase — an
-	// instruction with no arm, an import nothing supplied. Distinct from ErrDeclined, which is
-	// the *validator's* gap: this one is the interpreter's, it fires at the point of use rather
-	// than at load, and the two drain by different work.
+	// instruction with no arm — and the channel Instance.Deferred travels. Distinct from ErrDeclined,
+	// which is the *validator's* gap: this one is the interpreter's, it fires at the point of use
+	// rather than at load, and the two drain by different work.
+	//
+	// **The "an import nothing supplied" case left this sentinel** (decision 0082): an unsupplied
+	// import is now refused at load as ErrUnlinkable rather than deferred into a call-time
+	// ErrUnsupported. What Deferred still carries is a *defined* entity's allocation shortfall, which
+	// is an engine limit and stays here.
 	ErrUnsupported = errors.New("burroughs: feature not implemented in this phase")
 
 	// ErrGated is a well-formed module using a proposal whose gate is off in this build. The
@@ -65,6 +70,17 @@ var (
 	// stamped flip at a time and §9 keeps admitting new proposals, so this classification is
 	// permanent furniture rather than a carve-out.
 	ErrGated = errors.New("burroughs: proposal gate is off in this build")
+
+	// ErrUnlinkable is a module this API cannot instantiate because an import is unsupplied — the
+	// spec's `assert_unlinkable` category, at the public boundary. `Config.Instantiate` has no linking
+	// surface (decision 0029), so an import-bearing module reaches it unresolved and is **refused at
+	// load** rather than instantiated with nil slots and left to trap at first use (decision 0082,
+	// #686). It wraps the engine's `interp.ErrLinkFailed`, so a caller matching on either answers.
+	//
+	// **Distinct from ErrUnsupported, which is one channel over.** That one is an *engine* gap reached
+	// at the point of *use*; this is a *link* gap seen at *load*. The two were one smudge while an
+	// unsupplied import degraded into a call-time failure; refuse-at-link is what lets them be two.
+	ErrUnlinkable = errors.New("burroughs: module has unsupplied imports")
 )
 
 // Trap is a wasm trap: the module executed correctly and the program went wrong.
@@ -167,7 +183,14 @@ func (c Config) Instantiate(wasm []byte) (*Instance, error) {
 		}
 	}
 
-	in, trap := interp.Instantiate(m)
+	in, trap, lerr := interp.Instantiate(m)
+	if lerr != nil {
+		// Refuse-at-link (decision 0082): a nil resolver supplies nothing, so an import-bearing
+		// module is unlinkable through this surface. Reported at load, ahead of the trap channel,
+		// because a link failure is not a trap (`assert_unlinkable` ≠ `assert_trap`). The engine's
+		// `ErrLinkFailed` is wrapped so `errors.Is` answers on either identity.
+		return nil, fmt.Errorf("%w: %w", ErrUnlinkable, lerr)
+	}
 	if trap != nil {
 		return nil, &Trap{Reason: trap.Reason}
 	}
@@ -183,8 +206,14 @@ func (c Config) Instantiate(wasm []byte) (*Instance, error) {
 // looks complete. Decision 0029 records it.
 func (in *Instance) Decline() error { return in.decline }
 
-// Deferred reports a shortfall instantiation met that could not travel the trap channel — today,
-// an active data segment whose target memory is imported and unsupplied.
+// Deferred reports a shortfall instantiation met that could not travel the trap channel — a *defined*
+// entity's allocation failure whose nil slot a later initializer reads.
+//
+// **Its population shrank with decision 0082.** It used to include the unsupplied-import shortfalls
+// (an active data segment whose target memory is imported and unsupplied; a global initializer reading
+// an unsupplied imported global) — but an unsupplied import is now refused at load as ErrUnlinkable,
+// before `build` runs, so those never reach this channel. What remains is the import-free shortfall: a
+// defined memory or table that fails to allocate.
 //
 // Exposed for the engine's own reason for exposing it: a nil trap says "this module did not die
 // coming to life", which is not the same claim as "this module came to life completely", and a

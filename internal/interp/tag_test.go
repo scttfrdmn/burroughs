@@ -30,7 +30,7 @@ func run1EH(t *testing.T, src string) ([]Value, error) {
 	if err != nil {
 		t.Fatalf("decode %s: %v", src, err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiate %s: %v", src, trap)
 	}

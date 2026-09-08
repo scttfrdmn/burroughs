@@ -232,7 +232,11 @@ func exitCode(err error) int {
 		return exitGated
 	case errors.Is(err, burroughs.ErrMalformed),
 		errors.Is(err, burroughs.ErrInvalid),
-		errors.Is(err, burroughs.ErrDeclined):
+		errors.Is(err, burroughs.ErrDeclined),
+		errors.Is(err, burroughs.ErrUnlinkable):
+		// ErrUnlinkable joins the refused class (decision 0082): a module with unsupplied imports is
+		// refused at load, the same outcome family as malformed/invalid/declined — the module cannot
+		// be run as given, which is `assert_unlinkable`, not a trap or an engine gap.
 		return exitRefused
 	case errors.Is(err, burroughs.ErrUnsupported):
 		return exitUnsupported

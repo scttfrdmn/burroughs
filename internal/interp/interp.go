@@ -184,24 +184,18 @@ type Instance struct {
 // bytes under the illusion of ownership. The segments' bytes are copied, because a memory is
 // mutable and the image is not.
 //
-// **Returns `*Trap`, never a bare error** — 0015's channel split, in the signature. A caller
-// getting a non-nil trap has a module that came to life and died doing it, which is exactly what
-// `assert_trap` wrapping a module form asserts.
-func Instantiate(m *binary.Module) (*Instance, *Trap) {
-	in, trap, err := InstantiateLinked(m, nil)
-	if err != nil {
-		// Unreachable with a nil resolver: the only error `link` produces is a kind
-		// mismatch, and nothing can mismatch when nothing is supplied. Joined onto
-		// `deferred` rather than dropped or panicked on, because an error constant with no
-		// reachable path is a missing check wearing a disguise (grave 0003) — and a
-		// `//nolint`-worthy panic here would assert a property of a *sibling function* that
-		// a future arm could falsify silently.
-		//
-		// It cannot reach `in`, which is nil on this path, so it is reported by the only
-		// channel this signature has left.
-		return nil, &Trap{Reason: "link failed with no imports supplied: " + err.Error()}
-	}
-	return in, trap
+// **Three channels, because a link failure is now reachable here** — decision 0082's refuse-at-link.
+// `Instantiate` is `InstantiateLinked` with a nil resolver, and a nil resolver supplies nothing, so an
+// import-bearing module refuses with a *link error* (the third return). The three are 0015's split made
+// whole: the trap is *came to life and died* (`assert_trap`), the error is *could not be linked*
+// (`assert_unlinkable`), and they are different claims that must not share a channel — which is the
+// same category `#686` fixed one site down, not repeated here as a link failure wearing a trap's
+// clothes. An import-free module never reaches `link`'s refusal, so its error is always nil and
+// `Instantiate` stays the no-resolver convenience for exactly those modules. 0015's *"never a bare
+// error"* is preserved in spirit and amended in letter: it forbade an untyped `error` hiding traps,
+// not a *typed* link failure as a distinct value (0015's 2026-09-08 append).
+func Instantiate(m *binary.Module) (*Instance, *Trap, error) {
+	return InstantiateLinked(m, nil)
 }
 
 // build allocates and initializes an instance whose import slots are already filled.

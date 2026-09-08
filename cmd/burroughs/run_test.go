@@ -39,6 +39,7 @@ var publicSentinels = map[string]error{
 	"ErrDeclined":    burroughs.ErrDeclined,
 	"ErrUnsupported": burroughs.ErrUnsupported,
 	"ErrGated":       burroughs.ErrGated,
+	"ErrUnlinkable":  burroughs.ErrUnlinkable,
 }
 
 // declaredSentinels reads the exported `Err*` variables out of the public package's source.
@@ -109,6 +110,7 @@ func TestExitCodesCoverEveryPublicSentinel(t *testing.T) {
 		"ErrMalformed":   exitRefused,
 		"ErrInvalid":     exitRefused,
 		"ErrDeclined":    exitRefused,
+		"ErrUnlinkable":  exitRefused,
 		"ErrUnsupported": exitUnsupported,
 		// Deliberately *not* exitRefused, which is grave #301 stated as a number: a gated module is
 		// well-formed, so a caller told "refused" would go looking for the defect in their module.

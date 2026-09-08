@@ -152,7 +152,7 @@ func ladderFixture(b *testing.B) (*Instance, binary.Table) {
 	if err != nil {
 		b.Fatalf("decode: %v", err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(b, m)
 	if trap != nil {
 		b.Fatalf("instantiate: %v", trap)
 	}

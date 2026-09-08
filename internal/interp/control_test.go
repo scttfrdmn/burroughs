@@ -24,7 +24,10 @@ func encodeDecodeInvoke(src string) ([]Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	in, trap := Instantiate(m)
+	in, trap, lerr := Instantiate(m)
+	if lerr != nil {
+		return nil, lerr
+	}
 	if trap != nil {
 		return nil, trap
 	}

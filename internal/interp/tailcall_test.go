@@ -41,7 +41,7 @@ func tailModule(t *testing.T, src string) *Instance {
 	if err != nil {
 		t.Fatalf("decode at %+v: %v", tailGate, err)
 	}
-	in, trap := Instantiate(m)
+	in, trap := mustInst(t, m)
 	if trap != nil {
 		t.Fatalf("instantiate trapped: %v", trap)
 	}
