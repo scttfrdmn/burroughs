@@ -19,6 +19,39 @@ weakly-ordered platform.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+## [0.5.0] - 2026-09-07
+*Implements contract v0.1.*
+
+**This is an ordinary interim number over the v1-phase capability accumulated since `v0.4.0`, and it
+closes no milestone.** ADR 0004's table would map a minor to a milestone, but its own 2026-08-28
+amendment already decoupled the digit from that mapping — *"the meaning now travels in the changelog
+entry"* — after the SIMD gate flipped ahead of GC and the number skipped `v0.1.0`/`v0.2.0`. The digit
+therefore carries no claim on its own; what is being claimed is written here, in the terms 0004
+requires of a version:
+
+- **The board over 256 files: 60957 pass, 0 fail, 0 unsupported, 4187 gated, 0 unimplemented**, at
+  suite pin `de54fd27ecf3e68dfd16b6199c548df77b6a2cc1`, identical under `-tags burroughs_endtable`,
+  measured at this release's own HEAD. The zero in `unimplemented` is ADR 0004 guard 4's hard
+  condition on cutting a minor, and it is measured rather than asserted: `go test ./internal/spec/
+  -run TestPhase1Files -v` prints it.
+- **Default-on gates are unchanged: `gate:simd` and `gate:relaxed-simd`** (`binary.DefaultFeatures()`,
+  ADRs 0025 and 0028). **`gate:threads` is present and off by default** — every thread and atomics
+  mechanism below lands behind it, and its flip remains its own stamp-tier event (behaviour 4), not
+  part of this release.
+- **What this release is:** the v1 phase's mechanism, landed behind its gate. OS-thread `thread.spawn`,
+  futex `memory.atomic.wait`/`notify`, the safepoint poll with SP-1/SP-2's caller-mark predicates,
+  T-4's per-thread context and T-5's exit/join/detach with `Instance.Close`, §5 host functions with
+  `Caller`, §4's data-race repairs (word-atomic guest access, atomic-pointer-published memory/table/
+  global images, the `grow` mutex and its sibling-agent refusal), the 0xFE atomics region (67
+  mnemonics), and §8 M-1's anonymous-mapping address-space reservation.
+- **What this release is not:** it is **not v1.0.0**, which stays reserved and gated on the §4 litmus
+  battery passing on both a TSO and a weakly-ordered platform *and* on the contract stabilizing (ADR
+  0004, §1 non-goal 4) — neither of which has happened. Concretely: `gate:threads` is off by default;
+  the §§2–5 litmus battery carries a landed test for **5 of its 11 registered cases** (T-1, T-2, T-3,
+  and the two B-MM-2 cases), with the other six blocked; and by Scott's #670 ruling the remainder of
+  the §4 battery is unscheduled. The `v1 threads + safepoints` milestone has 4 open issues. The
+  contract is still v0.1.
+
 ### Added
 
 - **`interp.ErrEngineInvariant` — a fourth sentinel, because a broken engine invariant was being reported as
