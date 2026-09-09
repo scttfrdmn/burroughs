@@ -19,5 +19,14 @@
   {"name": "list-u8-bytes", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [1, 2, 3, 4, 5]},
   {"name": "list-u8-empty", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": []},
   {"name": "list-u8-hello", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [72, 105]},
-  {"name": "list-u32", "type": {"kind": "list", "elem": {"kind": "u32"}}, "value": [1, 256, 65536]}
+  {"name": "list-u32", "type": {"kind": "list", "elem": {"kind": "u32"}}, "value": [1, 256, 65536]},
+
+  {"name": "f32-one", "type": {"kind": "f32"}, "value": "0x3f800000"},
+  {"name": "f32-neg-zero", "type": {"kind": "f32"}, "value": "0x80000000"},
+  {"name": "f32-canonical-nan", "type": {"kind": "f32"}, "value": "0x7fc00000"},
+  {"name": "f32-noncanonical-nan", "type": {"kind": "f32"}, "value": "0x7f800001"},
+  {"name": "f64-one", "type": {"kind": "f64"}, "value": "0x3ff0000000000000"},
+  {"name": "f64-neg-zero", "type": {"kind": "f64"}, "value": "0x8000000000000000"},
+  {"name": "f64-canonical-nan", "type": {"kind": "f64"}, "value": "0x7ff8000000000000"},
+  {"name": "f64-noncanonical-nan", "type": {"kind": "f64"}, "value": "0x7ff8000000000001"}
 ]

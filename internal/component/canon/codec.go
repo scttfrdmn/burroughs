@@ -17,9 +17,9 @@ func alignment(t Type) int {
 		return 1
 	case KindU16, KindS16:
 		return 2
-	case KindU32, KindS32, KindChar, KindString, KindList:
+	case KindU32, KindS32, KindF32, KindChar, KindString, KindList:
 		return 4
-	case KindU64, KindS64:
+	case KindU64, KindS64, KindF64:
 		return 8
 	default:
 		panic(fmt.Sprintf("canon: alignment: unmodeled kind %s", t.Kind))
@@ -34,9 +34,9 @@ func size(t Type) int {
 		return 1
 	case KindU16, KindS16:
 		return 2
-	case KindU32, KindS32, KindChar:
+	case KindU32, KindS32, KindF32, KindChar:
 		return 4
-	case KindU64, KindS64:
+	case KindU64, KindS64, KindF64:
 		return 8
 	case KindString, KindList:
 		return 2 * ptrSize
@@ -100,6 +100,29 @@ func (h *heap) realloc(origPtr, origSize, align, newSize int) (int, error) {
 	return ret, nil
 }
 
+// Canonical NaN bit patterns (CanonicalABI.md; DETERMINISTIC_PROFILE in the reference model). A NaN is
+// canonicalized on lower and lift; a non-NaN (including negative zero) is passed through unchanged.
+const (
+	canonicalNaN32 = 0x7fc00000
+	canonicalNaN64 = 0x7ff8000000000000
+)
+
+// canonicalizeNaN32 returns bits unchanged unless they are a NaN, in which case the canonical NaN. A
+// negative zero is not a NaN and is preserved.
+func canonicalizeNaN32(bits uint32) uint32 {
+	if bits&0x7f800000 == 0x7f800000 && bits&0x007fffff != 0 {
+		return canonicalNaN32
+	}
+	return bits
+}
+
+func canonicalizeNaN64(bits uint64) uint64 {
+	if bits&0x7ff0000000000000 == 0x7ff0000000000000 && bits&0x000fffffffffffff != 0 {
+		return canonicalNaN64
+	}
+	return bits
+}
+
 // storeInt writes the low nbytes of v little-endian at ptr. A signed value is held in Value.u as its
 // two's-complement bits, so the same low-byte copy serves signed and unsigned.
 func (h *heap) storeInt(v uint64, ptr, nbytes int) {
@@ -117,6 +140,12 @@ func (h *heap) store(v Value, ptr int) error {
 		return nil
 	}
 	switch v.Type.Kind {
+	case KindF32:
+		h.storeInt(uint64(canonicalizeNaN32(uint32(v.u))), ptr, 4)
+		return nil
+	case KindF64:
+		h.storeInt(canonicalizeNaN64(v.u), ptr, 8)
+		return nil
 	case KindString:
 		data := []byte(v.s)
 		p, err := h.realloc(0, 0, 1, len(data))
@@ -171,6 +200,10 @@ func (h *heap) lowerFlat(v Value) ([]flatVal, error) {
 		return []flatVal{{"i32", uint64(uint32(v.u))}}, nil
 	case KindU64, KindS64:
 		return []flatVal{{"i64", v.u}}, nil
+	case KindF32:
+		return []flatVal{{"f32", uint64(canonicalizeNaN32(uint32(v.u)))}}, nil
+	case KindF64:
+		return []flatVal{{"f64", canonicalizeNaN64(v.u)}}, nil
 	case KindString:
 		data := []byte(v.s)
 		p, err := h.realloc(0, 0, 1, len(data))

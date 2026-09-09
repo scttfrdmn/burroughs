@@ -16,6 +16,7 @@
 
 import json
 import os
+import struct
 import sys
 
 PIN = "2bed77e4228841c1d2721996d3ecc169ff96b158"
@@ -105,6 +106,13 @@ def build_type(spec):
 # ABI representation, not resource-table semantics — those are PR B/C).
 def build_value(spec, value):
     k = spec["kind"]
+    if k in ("f32", "f64"):
+        # A float case gives its IEEE bit pattern as a hex string, so a non-canonical NaN payload and a
+        # negative zero survive to the model exactly. The model canonicalizes NaN on lower/lift.
+        bits = int(value, 16)
+        if k == "f32":
+            return struct.unpack("<f", struct.pack("<I", bits))[0]
+        return struct.unpack("<d", struct.pack("<Q", bits))[0]
     if k == "string":
         return (value, "utf8", len(value.encode("utf-8")))
     if k == "list":
@@ -118,6 +126,14 @@ def build_value(spec, value):
         sub = spec.get("ok") if arm == "ok" else spec.get("err")
         return {arm: build_value(sub, payload) if sub else None}
     return value  # primitives, char (a 1-char str), own/borrow (an int)
+
+
+def flat_to_bits(ty, val):
+    if ty == "f32":
+        return definitions.core_i32_reinterpret_f32(val)
+    if ty == "f64":
+        return definitions.core_i64_reinterpret_f64(val)
+    return val
 
 
 def emit(case):
@@ -135,6 +151,9 @@ def emit(case):
     fcx = mk_cx(flat_heap)
     flat_types = flatten_types([t], fcx.opts)
     flat_vals = lower_flat_values(fcx, 16, [v], [t])
+    # Record a float flat slot as its IEEE bits, not the Python float: Go's == makes every NaN unequal
+    # to itself, so the differential compares bit patterns (Scott's PR-A refinement 1).
+    flat_vals = [flat_to_bits(ty, x) for ty, x in zip(flat_types, flat_vals)]
 
     return {
         "name": case["name"],
