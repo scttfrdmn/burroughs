@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **The Canonical ABI value codec — lift/lower scalars, char, string, and lists, against a hermetic differential (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  Phase 2 slice 2, PR A (first increment): `internal/component/canon` stores and flat-lowers `bool`, the
+  integer primitives, `char`, `string` (UTF-8), and `list`, per `CanonicalABI.md` at the pinned
+  `component-model @ 2bed77e`. The codec is checked byte-for-byte against fixtures the reference model
+  (`definitions.py`) itself emits — an **offline generator** (`gen/`, `make canon-fixtures`) drives the
+  pinned model and commits its reading; the test compares with **no Python in the loop**, so
+  `BURROUGHS_NO_SKIP=1` passes with no interpreter present (the wabt precedent). A **mis-lowered-string
+  positive assertion** witnesses that lowering by rune count rather than UTF-8 byte length is refused,
+  not assumed absent. The value constructors carry their WIT type and refuse a mis-typed element at
+  construction (ADR 0085). Floats, variant/result, and resource handles extend this loop next.
+
 - **A component-model binary loader — load a component and reach its core modules (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
