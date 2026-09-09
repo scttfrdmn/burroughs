@@ -17,7 +17,7 @@ func alignment(t Type) int {
 		return 1
 	case KindU16, KindS16:
 		return 2
-	case KindU32, KindS32, KindF32, KindChar, KindString, KindList:
+	case KindU32, KindS32, KindF32, KindChar, KindString, KindList, KindOwn, KindBorrow:
 		return 4
 	case KindU64, KindS64, KindF64:
 		return 8
@@ -36,7 +36,7 @@ func size(t Type) int {
 		return 1
 	case KindU16, KindS16:
 		return 2
-	case KindU32, KindS32, KindF32, KindChar:
+	case KindU32, KindS32, KindF32, KindChar, KindOwn, KindBorrow:
 		return 4
 	case KindU64, KindS64, KindF64:
 		return 8
@@ -110,6 +110,8 @@ func flattenType(t Type) []string {
 		return []string{"f64"}
 	case KindString, KindList:
 		return []string{"i32", "i32"}
+	case KindOwn, KindBorrow:
+		return []string{"i32"}
 	case KindVariant:
 		return flattenVariant(t.Cases)
 	default:
@@ -177,9 +179,57 @@ type heap struct {
 	mem       []byte
 	lastAlloc int
 	calls     []reallocCall
+	table     *resourceTable // the instance's handle table (own/borrow), CanonicalABI.md's Table
 }
 
-func newHeap(size int) *heap { return &heap{mem: make([]byte, size)} }
+func newHeap(size int) *heap { return &heap{mem: make([]byte, size), table: newResourceTable()} }
+
+// resourceHandle is one entry in a component instance's handle table.
+type resourceHandle struct {
+	rt       int
+	rep      uint32
+	own      bool
+	numLends int // bumped only under a borrow scope (PR B); always 0 in PR A's own-only paths
+}
+
+// resourceTable is a component instance's handle table (CanonicalABI.md Table): a slot array whose
+// index 0 is a reserved sentinel, plus a free list. add/remove/get mirror the reference model, so a
+// lowered handle's index and the table's shape match byte-for-byte.
+type resourceTable struct {
+	array []*resourceHandle // array[0] is the reserved nil sentinel
+	free  []int
+}
+
+func newResourceTable() *resourceTable { return &resourceTable{array: []*resourceHandle{nil}} }
+
+func (tb *resourceTable) add(h *resourceHandle) int {
+	if n := len(tb.free); n > 0 {
+		i := tb.free[n-1]
+		tb.free = tb.free[:n-1]
+		tb.array[i] = h
+		return i
+	}
+	i := len(tb.array)
+	tb.array = append(tb.array, h)
+	return i
+}
+
+func (tb *resourceTable) get(i int) (*resourceHandle, error) {
+	if i < 0 || i >= len(tb.array) || tb.array[i] == nil {
+		return nil, fmt.Errorf("canon: handle index %d is not live", i)
+	}
+	return tb.array[i], nil
+}
+
+func (tb *resourceTable) remove(i int) (*resourceHandle, error) {
+	h, err := tb.get(i)
+	if err != nil {
+		return nil, err
+	}
+	tb.array[i] = nil
+	tb.free = append(tb.free, i)
+	return h, nil
+}
 
 // realloc is the four-argument cabi_realloc contract (origPtr, origSize, align, newSize). Current
 // callers all allocate fresh (origPtr 0); the grow path (utf16/latin1 string re-encode, list realloc)
@@ -275,6 +325,9 @@ func (h *heap) store(v Value, ptr int) error {
 			return h.store(*v.payload, off)
 		}
 		return nil
+	case KindOwn:
+		h.storeInt(uint64(h.lowerOwn(v)), ptr, 4)
+		return nil
 	default:
 		return fmt.Errorf("canon: store: unmodeled kind %s", v.Type.Kind)
 	}
@@ -331,9 +384,50 @@ func (h *heap) lowerFlat(v Value) ([]flatVal, error) {
 		return []flatVal{{"i32", uint64(p)}, {"i32", uint64(len(v.list))}}, nil
 	case KindVariant:
 		return h.lowerFlatVariant(v)
+	case KindOwn:
+		return []flatVal{{"i32", uint64(h.lowerOwn(v))}}, nil
 	default:
 		return nil, fmt.Errorf("canon: lowerFlat: unmodeled kind %s", v.Type.Kind)
 	}
+}
+
+// lowerOwn adds an owned handle to the instance table and returns its index (CanonicalABI.md
+// lower_own). num_lends starts at 0; the lend accounting is PR B's, at the borrow scope.
+func (h *heap) lowerOwn(v Value) int {
+	return h.table.add(&resourceHandle{rt: v.Type.RT, rep: uint32(v.u), own: true})
+}
+
+// load lifts a value from linear memory. This slice implements the lift direction only for own handles
+// (lift_own): the general lift path for the value types is a later increment; an unmodeled kind is
+// refused by name.
+func (h *heap) load(ptr int, t Type) (Value, error) {
+	if t.Kind != KindOwn {
+		return Value{}, fmt.Errorf("canon: load: kind %s not implemented this increment", t.Kind)
+	}
+	i := int(h.loadInt(ptr, 4))
+	hnd, err := h.table.remove(i) // lift_own consumes the handle
+	if err != nil {
+		return Value{}, err
+	}
+	if hnd.rt != t.RT {
+		return Value{}, fmt.Errorf("canon: lift_own: handle rt %d != expected %d", hnd.rt, t.RT)
+	}
+	if hnd.numLends != 0 {
+		return Value{}, fmt.Errorf("canon: lift_own: handle has %d active lends", hnd.numLends)
+	}
+	if !hnd.own {
+		return Value{}, fmt.Errorf("canon: lift_own: handle is a borrow, not an own")
+	}
+	return Own(t.RT, hnd.rep), nil
+}
+
+// loadInt reads the low nbytes little-endian at ptr.
+func (h *heap) loadInt(ptr, nbytes int) uint64 {
+	var v uint64
+	for i := range nbytes {
+		v |= uint64(h.mem[ptr+i]) << (8 * i)
+	}
+	return v
 }
 
 // lowerFlatVariant lowers a variant to [case_index] + the payload coerced to the joined flat types +
