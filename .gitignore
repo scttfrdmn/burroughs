@@ -15,3 +15,6 @@ old.txt
 # regression test we authored, and it belongs in history (decision 0005). Only
 # the upstream spec corpora are gitignored, because we did not write those.
 /testdata/fuzz-cache/
+
+# Upstream component-model Canonical ABI model, vendored at the pin for the offline fixture generator (ADR 0084); never committed.
+internal/component/canon/gen/vendor/

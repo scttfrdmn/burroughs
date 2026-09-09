@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
+.PHONY: all build test race vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -564,6 +564,19 @@ spec-ref:
 # contract §§2-5 needs is behind this target and nowhere else.
 threads-ref:
 	./scripts/fetch-threads-ref.sh
+
+# Regenerate the Canonical ABI differential fixtures from the pinned reference model (ADR 0084, slice 2).
+# It fetches `definitions.py` @ the pin into a gitignored vendor dir and drives it over gen/cases.json.
+# Run offline when the cases or the pin change; the output (testdata/fixtures.json) is committed and CI
+# compares to it with no Python in the loop — the wabt precedent (`spec-images`), so BURROUGHS_NO_SKIP=1
+# passes with no interpreter present.
+CANON_PIN := 2bed77e4228841c1d2721996d3ecc169ff96b158
+canon-fixtures:
+	@mkdir -p internal/component/canon/gen/vendor
+	curl -fsSL "https://raw.githubusercontent.com/WebAssembly/component-model/$(CANON_PIN)/design/mvp/canonical-abi/definitions.py" \
+		-o internal/component/canon/gen/vendor/definitions.py
+	cd internal/component/canon/gen && uv run --no-project python3 gen.py > ../testdata/fixtures.json
+	@echo "regenerated internal/component/canon/testdata/fixtures.json from definitions.py @ $(CANON_PIN)"
 
 # Regenerate the opcode table from the vendored reference (decision 0007). The output
 # is committed, so this is run when the pin moves, not on every build.

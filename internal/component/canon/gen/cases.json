@@ -1,0 +1,23 @@
+[
+  {"name": "bool-false", "type": {"kind": "bool"}, "value": false},
+  {"name": "bool-true", "type": {"kind": "bool"}, "value": true},
+  {"name": "u8-max", "type": {"kind": "u8"}, "value": 255},
+  {"name": "u16-max", "type": {"kind": "u16"}, "value": 65535},
+  {"name": "u32-42", "type": {"kind": "u32"}, "value": 42},
+  {"name": "u32-max", "type": {"kind": "u32"}, "value": 4294967295},
+  {"name": "u64-big", "type": {"kind": "u64"}, "value": 1234605616436508552},
+  {"name": "s8-neg", "type": {"kind": "s8"}, "value": -1},
+  {"name": "s16-neg", "type": {"kind": "s16"}, "value": -1000},
+  {"name": "s32-neg", "type": {"kind": "s32"}, "value": -70000},
+  {"name": "s64-neg", "type": {"kind": "s64"}, "value": -1234605616436508552},
+  {"name": "char-ascii", "type": {"kind": "char"}, "value": "A"},
+  {"name": "char-nonascii", "type": {"kind": "char"}, "value": "é"},
+  {"name": "char-astral", "type": {"kind": "char"}, "value": "😀"},
+  {"name": "string-hello", "type": {"kind": "string"}, "value": "Hello, world!"},
+  {"name": "string-empty", "type": {"kind": "string"}, "value": ""},
+  {"name": "string-utf8", "type": {"kind": "string"}, "value": "café éé"},
+  {"name": "list-u8-bytes", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [1, 2, 3, 4, 5]},
+  {"name": "list-u8-empty", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": []},
+  {"name": "list-u8-hello", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [72, 105]},
+  {"name": "list-u32", "type": {"kind": "list", "elem": {"kind": "u32"}}, "value": [1, 256, 65536]}
+]
