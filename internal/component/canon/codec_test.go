@@ -32,8 +32,16 @@ type fixtureCase struct {
 }
 
 type typeSpec struct {
-	Kind string    `json:"kind"`
-	Elem *typeSpec `json:"elem"`
+	Kind  string     `json:"kind"`
+	Elem  *typeSpec  `json:"elem"`
+	Cases []caseSpec `json:"cases"`
+	Ok    *typeSpec  `json:"ok"`
+	Err   *typeSpec  `json:"err"`
+}
+
+type caseSpec struct {
+	Name string    `json:"name"`
+	Type *typeSpec `json:"type"`
 }
 
 type memFix struct {
@@ -66,18 +74,33 @@ func loadFixtures(t *testing.T) fixtureFile {
 
 func typeFromSpec(t *testing.T, s typeSpec) Type {
 	t.Helper()
+	optType := func(ts *typeSpec) *Type {
+		if ts == nil {
+			return nil
+		}
+		x := typeFromSpec(t, *ts)
+		return &x
+	}
+	switch s.Kind {
+	case "list":
+		return Type{Kind: KindList, Elem: optType(s.Elem)}
+	case "variant":
+		cases := make([]Case, len(s.Cases))
+		for i, cs := range s.Cases {
+			cases[i] = Case{Name: cs.Name, Type: optType(cs.Type)}
+		}
+		return VariantType(cases...)
+	case "result":
+		return ResultType(optType(s.Ok), optType(s.Err))
+	}
 	k, ok := map[string]Kind{
 		"bool": KindBool, "u8": KindU8, "u16": KindU16, "u32": KindU32, "u64": KindU64,
 		"s8": KindS8, "s16": KindS16, "s32": KindS32, "s64": KindS64,
 		"f32": KindF32, "f64": KindF64,
-		"char": KindChar, "string": KindString, "list": KindList,
+		"char": KindChar, "string": KindString,
 	}[s.Kind]
 	if !ok {
 		t.Fatalf("fixture type kind %q is outside the modeled scope", s.Kind)
-	}
-	if k == KindList {
-		elem := typeFromSpec(t, *s.Elem)
-		return Type{Kind: KindList, Elem: &elem}
 	}
 	return Type{Kind: k}
 }
@@ -129,6 +152,25 @@ func valueFromJSON(t *testing.T, typ Type, raw any) Value {
 			vals[i] = valueFromJSON(t, *typ.Elem, e)
 		}
 		v, err := List(*typ.Elem, vals...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	case KindVariant:
+		m := raw.(map[string]any)
+		var name string
+		var rawPayload any
+		for k, val := range m { // a variant value is a single {case: payload} pair
+			name, rawPayload = k, val
+		}
+		var payload *Value
+		for _, c := range typ.Cases {
+			if c.Name == name && c.Type != nil {
+				p := valueFromJSON(t, *c.Type, rawPayload)
+				payload = &p
+			}
+		}
+		v, err := Variant(typ, name, payload)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,6 +264,70 @@ func assertRealloc(t *testing.T, what string, got, want []reallocCall) {
 		if got[i] != want[i] {
 			t.Errorf("%s realloc[%d] = %+v, want %+v", what, i, got[i], want[i])
 		}
+	}
+}
+
+// TestMisLoweredVariantIsRefused is #694 refinement 2's positive assertion: a variant sent down the
+// wrong branch reads as a plausible value, so the two silent mis-layouts are witnessed refused. A wrong
+// payload offset (not aligned to the cases' max alignment) and a wrong discriminant width (u16 where
+// the case count needs only u8) each produce a plausible-but-wrong image the model does not.
+func TestMisLoweredVariantIsRefused(t *testing.T) {
+	u8t := Type{Kind: KindU8}
+	u64t := Type{Kind: KindU64}
+
+	// (1) Payload offset: the largest case is u64, so the payload aligns to offset 8 after the 1-byte
+	// discriminant. A codec that packed it right after the discriminant would put it at offset 1.
+	vt := VariantType(Case{Name: "a", Type: &u8t}, Case{Name: "b", Type: &u64t})
+	const pval = uint64(0x1122334455667788)
+	pv := U64(pval)
+	v, err := Variant(vt, "b", &pv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHeap(64)
+	p, err := h.realloc(0, 0, alignment(vt), size(vt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serr := h.store(v, p); serr != nil {
+		t.Fatal(serr)
+	}
+	if h.mem[0] != 1 {
+		t.Fatalf("discriminant = %d, want case index 1", h.mem[0])
+	}
+	var pbuf [8]byte
+	for i := range 8 {
+		pbuf[i] = byte(pval >> (8 * i))
+	}
+	off := alignTo(1, 8) // = 8
+	if !bytes.Equal(h.mem[off:off+8], pbuf[:]) {
+		t.Errorf("payload at offset %d = % x, want % x", off, h.mem[off:off+8], pbuf)
+	}
+	if bytes.Equal(h.mem[1:9], pbuf[:]) {
+		t.Error("payload packed at offset 1 — the mis-alignment this asserts against")
+	}
+
+	// (2) Discriminant width: all-u8 cases have max alignment 1, so a 1-byte discriminant puts the
+	// payload at offset 1. A 2-byte discriminant (wrong for ≤256 cases) would push it to offset 2.
+	vt2 := VariantType(Case{Name: "a", Type: &u8t}, Case{Name: "b", Type: &u8t})
+	pv2 := U8(0x42)
+	v2, err := Variant(vt2, "b", &pv2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2 := newHeap(64)
+	p2, err := h2.realloc(0, 0, alignment(vt2), size(vt2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serr := h2.store(v2, p2); serr != nil {
+		t.Fatal(serr)
+	}
+	if h2.mem[0] != 1 {
+		t.Fatalf("discriminant = %d, want case index 1", h2.mem[0])
+	}
+	if h2.mem[1] != 0x42 {
+		t.Fatalf("payload at offset 1 = %#x, want 0x42 — a wider discriminant would push it to offset 2", h2.mem[1])
 	}
 }
 

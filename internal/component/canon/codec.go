@@ -21,6 +21,8 @@ func alignment(t Type) int {
 		return 4
 	case KindU64, KindS64, KindF64:
 		return 8
+	case KindVariant:
+		return alignmentVariant(t.Cases)
 	default:
 		panic(fmt.Sprintf("canon: alignment: unmodeled kind %s", t.Kind))
 	}
@@ -40,8 +42,108 @@ func size(t Type) int {
 		return 8
 	case KindString, KindList:
 		return 2 * ptrSize
+	case KindVariant:
+		return sizeVariant(t.Cases)
 	default:
 		panic(fmt.Sprintf("canon: size: unmodeled kind %s", t.Kind))
+	}
+}
+
+// discriminantType is a variant's case-index integer type, sized to the case count (CanonicalABI.md
+// discriminant_type): u8 for ≤256 cases, u16 for ≤65536, else u32.
+func discriminantType(nCases int) Kind {
+	switch {
+	case nCases <= 1<<8:
+		return KindU8
+	case nCases <= 1<<16:
+		return KindU16
+	default:
+		return KindU32
+	}
+}
+
+func maxCaseAlignment(cases []Case) int {
+	a := 1
+	for _, c := range cases {
+		if c.Type != nil {
+			if ca := alignment(*c.Type); ca > a {
+				a = ca
+			}
+		}
+	}
+	return a
+}
+
+func alignmentVariant(cases []Case) int {
+	da := alignment(Type{Kind: discriminantType(len(cases))})
+	if m := maxCaseAlignment(cases); m > da {
+		return m
+	}
+	return da
+}
+
+func sizeVariant(cases []Case) int {
+	s := size(Type{Kind: discriminantType(len(cases))})
+	s = alignTo(s, maxCaseAlignment(cases))
+	cs := 0
+	for _, c := range cases {
+		if c.Type != nil {
+			if z := size(*c.Type); z > cs {
+				cs = z
+			}
+		}
+	}
+	s += cs
+	return alignTo(s, alignmentVariant(cases))
+}
+
+// flattenType is a type's core flat representation (CanonicalABI.md flatten_type).
+func flattenType(t Type) []string {
+	switch t.Kind {
+	case KindBool, KindU8, KindU16, KindU32, KindS8, KindS16, KindS32, KindChar:
+		return []string{"i32"}
+	case KindU64, KindS64:
+		return []string{"i64"}
+	case KindF32:
+		return []string{"f32"}
+	case KindF64:
+		return []string{"f64"}
+	case KindString, KindList:
+		return []string{"i32", "i32"}
+	case KindVariant:
+		return flattenVariant(t.Cases)
+	default:
+		panic(fmt.Sprintf("canon: flattenType: unmodeled kind %s", t.Kind))
+	}
+}
+
+// flattenVariant is the discriminant's flat type followed by the join of the cases' flat types
+// (CanonicalABI.md flatten_variant / join).
+func flattenVariant(cases []Case) []string {
+	var flat []string
+	for _, c := range cases {
+		if c.Type == nil {
+			continue
+		}
+		for i, ft := range flattenType(*c.Type) {
+			if i < len(flat) {
+				flat[i] = join(flat[i], ft)
+			} else {
+				flat = append(flat, ft)
+			}
+		}
+	}
+	return append([]string{"i32"}, flat...)
+}
+
+func join(a, b string) string {
+	switch {
+	case a == b:
+		return a
+	case a == "i32" && b == "f32", a == "f32" && b == "i32":
+		return "i32"
+	default:
+		return "i64"
 	}
 }
 
@@ -164,6 +266,15 @@ func (h *heap) store(v Value, ptr int) error {
 		h.storeInt(uint64(p), ptr, ptrSize)
 		h.storeInt(uint64(len(v.list)), ptr+ptrSize, ptrSize)
 		return nil
+	case KindVariant:
+		cases := v.Type.Cases
+		discSize := size(Type{Kind: discriminantType(len(cases))})
+		h.storeInt(v.u, ptr, discSize)
+		if v.payload != nil {
+			off := alignTo(ptr+discSize, maxCaseAlignment(cases))
+			return h.store(*v.payload, off)
+		}
+		return nil
 	default:
 		return fmt.Errorf("canon: store: unmodeled kind %s", v.Type.Kind)
 	}
@@ -218,7 +329,53 @@ func (h *heap) lowerFlat(v Value) ([]flatVal, error) {
 			return nil, err
 		}
 		return []flatVal{{"i32", uint64(p)}, {"i32", uint64(len(v.list))}}, nil
+	case KindVariant:
+		return h.lowerFlatVariant(v)
 	default:
 		return nil, fmt.Errorf("canon: lowerFlat: unmodeled kind %s", v.Type.Kind)
 	}
+}
+
+// lowerFlatVariant lowers a variant to [case_index] + the payload coerced to the joined flat types +
+// zero padding for the slots a shorter case does not fill (CanonicalABI.md lower_flat_variant). The
+// coercion is a widening only — a float bit pattern already lives in flatVal.bits, so every allowed
+// (have, want) pair keeps the bits and takes the wider slot type.
+func (h *heap) lowerFlatVariant(v Value) ([]flatVal, error) {
+	cases := v.Type.Cases
+	flatTypes := flattenVariant(cases)
+	out := []flatVal{{"i32", v.u}} // flatTypes[0] is the "i32" discriminant
+	rest := flatTypes[1:]
+	if v.payload != nil {
+		payload, err := h.lowerFlat(*v.payload)
+		if err != nil {
+			return nil, err
+		}
+		have := flattenType(v.payload.Type)
+		for i, fv := range payload {
+			c, err := coerceFlat(have[i], rest[i], fv)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, c)
+		}
+		rest = rest[len(payload):]
+	}
+	for _, want := range rest {
+		out = append(out, flatVal{want, 0})
+	}
+	return out, nil
+}
+
+// coerceFlat widens one payload flat value to the variant's joined slot type. Only the widenings the
+// spec allows are legal (equal, or f32→i32, i32→i64, f32→i64, f64→i64); the bits are unchanged because
+// flatVal already holds a float's bit pattern.
+func coerceFlat(have, want string, fv flatVal) (flatVal, error) {
+	if have == want ||
+		(have == "f32" && want == "i32") ||
+		(have == "i32" && want == "i64") ||
+		(have == "f32" && want == "i64") ||
+		(have == "f64" && want == "i64") {
+		return flatVal{want, fv.bits}, nil
+	}
+	return flatVal{}, fmt.Errorf("canon: variant flat coercion %s->%s is not allowed", have, want)
 }

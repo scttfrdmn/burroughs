@@ -21,7 +21,7 @@ weakly-ordered platform.
 
 ### Added
 
-- **The Canonical ABI value codec — lift/lower scalars, floats, char, string, and lists, against a hermetic differential (behind `gate:components`, off).**
+- **The Canonical ABI value codec — lift/lower scalars, floats, char, string, lists, variants, and results, against a hermetic differential (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
   Phase 2 slice 2, PR A (first increment): `internal/component/canon` stores and flat-lowers `bool`, the
