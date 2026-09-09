@@ -18,8 +18,10 @@ import (
 const fixturesPath = "testdata/fixtures.json"
 
 type fixtureFile struct {
-	Pin   string        `json:"pin"`
-	Cases []fixtureCase `json:"cases"`
+	Pin     string        `json:"pin"`
+	Cases   []fixtureCase `json:"cases"`
+	Handles []handleFix   `json:"handles"`
+	Shapes  []shapeFix    `json:"shapes"`
 }
 
 type fixtureCase struct {

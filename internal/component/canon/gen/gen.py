@@ -27,8 +27,8 @@ from definitions import (  # noqa: E402
     BoolType, U8Type, U16Type, U32Type, U64Type, S8Type, S16Type, S32Type, S64Type,
     F32Type, F64Type, CharType, StringType, ListType, VariantType, ResultType,
     OwnType, BorrowType, CaseType, MemInst, CanonicalOptions, ComponentInstance,
-    LiftLowerContext, Store, store, lower_flat_values, flatten_types, align_to,
-    alignment, elem_size,
+    LiftLowerContext, Store, store, load, lower_flat_values, flatten_types, align_to,
+    alignment, elem_size, ResourceType, ResourceHandle,
 )
 
 definitions.DETERMINISTIC_PROFILE = True
@@ -96,8 +96,6 @@ def build_type(spec):
             ok = build_type(spec["ok"]) if spec.get("ok") else None
             err = build_type(spec["err"]) if spec.get("err") else None
             return ResultType(ok, err)
-        case "own": return OwnType(spec.get("rt", 0))
-        case "borrow": return BorrowType(spec.get("rt", 0))
     raise ValueError(f"unknown type kind {k!r}")
 
 
@@ -174,10 +172,65 @@ def emit(case):
     }
 
 
+# Own-handle round-trip cases. A handle's value is a resource representation (an int); lower_own adds an
+# owned entry to the instance table and stores its index, lift_own consumes it. The borrow value path is
+# PR B's (its lend accounting lives at the call scope), so no borrow round-trip here.
+OWN_CASES = [
+    {"name": "own-rep-42", "rt": 0, "rep": 42},
+    {"name": "own-rep-zero", "rt": 0, "rep": 0},
+    {"name": "own-rep-max", "rt": 0, "rep": 4294967295},
+]
+
+
+def serialize_table(tbl):
+    out = []
+    for i, h in enumerate(tbl.array):
+        if h is not None and isinstance(h, ResourceHandle):
+            out.append({"index": i, "rep": h.rep, "own": h.own, "num_lends": h.num_lends})
+    return out
+
+
+def emit_own(c):
+    heap = TracingHeap(64)
+    cx = mk_cx(heap)
+    rt = ResourceType(cx.inst)
+    t = OwnType(rt)
+    ptr = heap.realloc([0, 0, alignment(t, "i32"), elem_size(t, "i32")])[0]
+    store(cx, c["rep"], t, ptr)  # lower_own: add owned handle, store its index
+    idx = int.from_bytes(heap.memory[ptr:ptr + 4], "little")
+    lower_table = serialize_table(cx.inst.handles)
+    lifted = load(cx, ptr, t)  # lift_own: consume the handle, return the rep
+    return {
+        "name": c["name"], "rt": c.get("rt", 0), "rep": c["rep"],
+        "lower": {"memory_hex": heap.memory.hex(), "index": idx, "table": lower_table, "realloc": heap.calls},
+        "lift": {"rep": lifted, "table": serialize_table(cx.inst.handles)},
+    }
+
+
+def emit_shapes():
+    heap = TracingHeap(64)
+    cx = mk_cx(heap)
+    rt = ResourceType(cx.inst)
+    shapes = []
+    for kind, t in (("own", OwnType(rt)), ("borrow", BorrowType(rt))):
+        shapes.append({
+            "kind": kind,
+            "size": elem_size(t, "i32"),
+            "align": alignment(t, "i32"),
+            "flat": flatten_types([t], cx.opts),
+        })
+    return shapes
+
+
 def main():
     with open(os.path.join(os.path.dirname(__file__), "cases.json")) as f:
         cases = json.load(f)
-    out = {"pin": PIN, "cases": [emit(c) for c in cases]}
+    out = {
+        "pin": PIN,
+        "cases": [emit(c) for c in cases],
+        "handles": [emit_own(c) for c in OWN_CASES],
+        "shapes": emit_shapes(),
+    }
     json.dump(out, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

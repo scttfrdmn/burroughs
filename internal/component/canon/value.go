@@ -34,6 +34,8 @@ const (
 	KindString
 	KindList
 	KindVariant
+	KindOwn
+	KindBorrow
 )
 
 func (k Kind) String() string {
@@ -68,6 +70,10 @@ func (k Kind) String() string {
 		return "list"
 	case KindVariant:
 		return "variant"
+	case KindOwn:
+		return "own"
+	case KindBorrow:
+		return "borrow"
 	default:
 		return fmt.Sprintf("kind(%d)", uint8(k))
 	}
@@ -79,6 +85,7 @@ type Type struct {
 	Kind  Kind
 	Elem  *Type
 	Cases []Case
+	RT    int // resource-type id for own/borrow (PR A models a resource type as an opaque id)
 }
 
 // Case is one variant case: its name and payload type (nil for a payload-less case, like `closed` or an
@@ -91,7 +98,7 @@ type Case struct {
 // typeEqual reports structural equality. Type carries slices (Cases) and pointers (Elem), so it is not
 // comparable with ==; a constructor's type check uses this.
 func typeEqual(a, b Type) bool {
-	if a.Kind != b.Kind {
+	if a.Kind != b.Kind || a.RT != b.RT {
 		return false
 	}
 	if (a.Elem == nil) != (b.Elem == nil) {
@@ -200,3 +207,11 @@ func Variant(vt Type, caseName string, payload *Value) (Value, error) {
 	}
 	return Value{}, fmt.Errorf("canon: variant has no case %q", caseName)
 }
+
+// OwnType and BorrowType build handle types over a resource-type id. Own constructs an owned-handle
+// value from a resource representation (an i32); the borrow value path is PR B's (its lend accounting
+// lives at the call scope), so there is no Borrow value constructor here.
+func OwnType(rt int) Type    { return Type{Kind: KindOwn, RT: rt} }
+func BorrowType(rt int) Type { return Type{Kind: KindBorrow, RT: rt} }
+
+func Own(rt int, rep uint32) Value { return Value{Type: OwnType(rt), u: uint64(rep)} }
