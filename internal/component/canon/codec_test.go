@@ -69,6 +69,7 @@ func typeFromSpec(t *testing.T, s typeSpec) Type {
 	k, ok := map[string]Kind{
 		"bool": KindBool, "u8": KindU8, "u16": KindU16, "u32": KindU32, "u64": KindU64,
 		"s8": KindS8, "s16": KindS16, "s32": KindS32, "s64": KindS64,
+		"f32": KindF32, "f64": KindF64,
 		"char": KindChar, "string": KindString, "list": KindList,
 	}[s.Kind]
 	if !ok {
@@ -105,6 +106,14 @@ func valueFromJSON(t *testing.T, typ Type, raw any) Value {
 		return S32(int32(mustParseInt(t, raw.(json.Number))))
 	case KindS64:
 		return S64(mustParseInt(t, raw.(json.Number)))
+	case KindF32, KindF64:
+		// A float case gives its IEEE bits as a hex string, so a non-canonical NaN payload survives to
+		// the codec (Go's float32() would not preserve it). The codec canonicalizes NaN on lower.
+		bits, err := strconv.ParseUint(raw.(string)[2:], 16, 64)
+		if err != nil {
+			t.Fatalf("float bits %v: %v", raw, err)
+		}
+		return Value{Type: typ, u: bits}
 	case KindChar:
 		v, err := Char([]rune(raw.(string))[0])
 		if err != nil {

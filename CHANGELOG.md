@@ -21,11 +21,11 @@ weakly-ordered platform.
 
 ### Added
 
-- **The Canonical ABI value codec — lift/lower scalars, char, string, and lists, against a hermetic differential (behind `gate:components`, off).**
+- **The Canonical ABI value codec — lift/lower scalars, floats, char, string, and lists, against a hermetic differential (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
   Phase 2 slice 2, PR A (first increment): `internal/component/canon` stores and flat-lowers `bool`, the
-  integer primitives, `char`, `string` (UTF-8), and `list`, per `CanonicalABI.md` at the pinned
+  integer and float primitives (NaN canonicalized, negative zero preserved, compared as bits), `char`, `string` (UTF-8), and `list`, per `CanonicalABI.md` at the pinned
   `component-model @ 2bed77e`. The codec is checked byte-for-byte against fixtures the reference model
   (`definitions.py`) itself emits — an **offline generator** (`gen/`, `make canon-fixtures`) drives the
   pinned model and commits its reading; the test compares with **no Python in the loop**, so

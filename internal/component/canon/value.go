@@ -28,6 +28,8 @@ const (
 	KindS16
 	KindS32
 	KindS64
+	KindF32
+	KindF64
 	KindChar
 	KindString
 	KindList
@@ -53,6 +55,10 @@ func (k Kind) String() string {
 		return "s32"
 	case KindS64:
 		return "s64"
+	case KindF32:
+		return "f32"
+	case KindF64:
+		return "f64"
 	case KindChar:
 		return "char"
 	case KindString:
