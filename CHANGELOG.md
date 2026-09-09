@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **A component-model binary loader — load a component and reach its core modules (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  Phase 2 slice 1 of the p3 track, **structural only** (no lift/lower — that is slice 2): `internal/component`
+  parses the component preamble, the top-level section sequence, the embedded core modules (decoded through the
+  existing core decoder), and the component-level import and export names and kinds, per `Binary.md` at the
+  pinned `component-model @ 2bed77e`. An undefined section id refuses at load with the id named — the
+  unknown-opcode discipline (contract §9). The loader is internal and unrouted; `burroughs run` stays
+  `wasip1`-only, which is what `gate:components` being off means, and the flip is a later stamp-tier event.
+  - **Differential exit condition met:** the Step-0 Rust component (`testdata/p3hello.wasm`) loads, reaches its
+    4 core modules, and enumerates 10 imports and 1 export whose names and kinds match `wasm-tools component wit`
+    and `wasm-tools print` for the same bytes. The oracle's reading is committed (`testdata/p3hello.wit`, the
+    wabt precedent) and a `LookPath`-guarded local test proves it still equals the live tool.
+
 - **A read-only WASI preview-1 filesystem: a `wasip1` guest reads a file the user granted it.**
   [#690](https://github.com/scttfrdmn/burroughs/issues/690), [ADR 0083](docs/decisions/0083-a-read-only-wasi-preview1-filesystem-a-per-run-fd-table-capability-preopens-and-path-open-scoped-to-reading.md).
   A per-run fd table, `path_open` (`O_RDONLY`), `fd_read` from a file fd, `fd_close`,
