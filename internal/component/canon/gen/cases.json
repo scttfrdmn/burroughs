@@ -28,5 +28,17 @@
   {"name": "f64-one", "type": {"kind": "f64"}, "value": "0x3ff0000000000000"},
   {"name": "f64-neg-zero", "type": {"kind": "f64"}, "value": "0x8000000000000000"},
   {"name": "f64-canonical-nan", "type": {"kind": "f64"}, "value": "0x7ff8000000000000"},
-  {"name": "f64-noncanonical-nan", "type": {"kind": "f64"}, "value": "0x7ff8000000000001"}
+  {"name": "f64-noncanonical-nan", "type": {"kind": "f64"}, "value": "0x7ff8000000000001"},
+
+  {"name": "result-ok-empty", "type": {"kind": "result"}, "value": {"ok": null}},
+  {"name": "result-err-empty", "type": {"kind": "result"}, "value": {"error": null}},
+  {"name": "result-ok-u32", "type": {"kind": "result", "ok": {"kind": "u32"}, "err": {"kind": "u32"}}, "value": {"ok": 42}},
+  {"name": "result-err-u32", "type": {"kind": "result", "ok": {"kind": "u32"}, "err": {"kind": "u32"}}, "value": {"error": 7}},
+  {"name": "result-ok-u32-err-string-ok", "type": {"kind": "result", "ok": {"kind": "u32"}, "err": {"kind": "string"}}, "value": {"ok": 5}},
+  {"name": "result-ok-u32-err-string-err", "type": {"kind": "result", "ok": {"kind": "u32"}, "err": {"kind": "string"}}, "value": {"error": "boom"}},
+  {"name": "variant-u8-u64", "type": {"kind": "variant", "cases": [{"name": "a", "type": {"kind": "u8"}}, {"name": "b", "type": {"kind": "u64"}}]}, "value": {"b": 1234605616436508552}},
+  {"name": "variant-u8-a", "type": {"kind": "variant", "cases": [{"name": "a", "type": {"kind": "u8"}}, {"name": "b", "type": {"kind": "u64"}}]}, "value": {"a": 200}},
+  {"name": "variant-mixed-flat", "type": {"kind": "variant", "cases": [{"name": "x", "type": {"kind": "u32"}}, {"name": "y", "type": {"kind": "f64"}}]}, "value": {"y": "0x3ff0000000000000"}},
+  {"name": "variant-payloadless", "type": {"kind": "variant", "cases": [{"name": "first"}, {"name": "second"}]}, "value": {"second": null}},
+  {"name": "stream-error-like", "type": {"kind": "variant", "cases": [{"name": "last-operation-failed", "type": {"kind": "u32"}}, {"name": "closed"}]}, "value": {"last-operation-failed": 3}}
 ]
