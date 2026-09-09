@@ -397,15 +397,86 @@ func (h *heap) lowerOwn(v Value) int {
 	return h.table.add(&resourceHandle{rt: v.Type.RT, rep: uint32(v.u), own: true})
 }
 
-// load lifts a value from linear memory. This slice implements the lift direction only for own handles
-// (lift_own): the general lift path for the value types is a later increment; an unmodeled kind is
-// refused by name.
+// load lifts a value from linear memory (CanonicalABI.md `load`), the inverse of store. A float's NaN
+// is canonicalized on lift as on lower; an own handle is consumed from the table (lift_own).
 func (h *heap) load(ptr int, t Type) (Value, error) {
-	if t.Kind != KindOwn {
-		return Value{}, fmt.Errorf("canon: load: kind %s not implemented this increment", t.Kind)
+	switch t.Kind {
+	case KindBool:
+		return Bool(h.loadInt(ptr, 1) != 0), nil
+	case KindU8:
+		return Value{Type: t, u: h.loadInt(ptr, 1)}, nil
+	case KindU16:
+		return Value{Type: t, u: h.loadInt(ptr, 2)}, nil
+	case KindU32:
+		return Value{Type: t, u: h.loadInt(ptr, 4)}, nil
+	case KindU64:
+		return Value{Type: t, u: h.loadInt(ptr, 8)}, nil
+	case KindS8:
+		return Value{Type: t, u: uint64(int64(int8(h.loadInt(ptr, 1))))}, nil
+	case KindS16:
+		return Value{Type: t, u: uint64(int64(int16(h.loadInt(ptr, 2))))}, nil
+	case KindS32:
+		return Value{Type: t, u: uint64(int64(int32(h.loadInt(ptr, 4))))}, nil
+	case KindS64:
+		return Value{Type: t, u: h.loadInt(ptr, 8)}, nil
+	case KindF32:
+		return Value{Type: t, u: uint64(canonicalizeNaN32(uint32(h.loadInt(ptr, 4))))}, nil
+	case KindF64:
+		return Value{Type: t, u: canonicalizeNaN64(h.loadInt(ptr, 8))}, nil
+	case KindChar:
+		return Char(rune(h.loadInt(ptr, 4)))
+	case KindString:
+		begin := int(h.loadInt(ptr, ptrSize))
+		n := int(h.loadInt(ptr+ptrSize, ptrSize))
+		return Str(string(h.mem[begin : begin+n])), nil
+	case KindList:
+		begin := int(h.loadInt(ptr, ptrSize))
+		n := int(h.loadInt(ptr+ptrSize, ptrSize))
+		es := size(*t.Elem)
+		vals := make([]Value, n)
+		for i := range n {
+			ev, err := h.load(begin+i*es, *t.Elem)
+			if err != nil {
+				return Value{}, err
+			}
+			vals[i] = ev
+		}
+		return List(*t.Elem, vals...)
+	case KindVariant:
+		return h.loadVariant(ptr, t)
+	case KindOwn:
+		return h.liftOwn(int(h.loadInt(ptr, 4)), t)
+	default:
+		return Value{}, fmt.Errorf("canon: load: unmodeled kind %s", t.Kind)
 	}
-	i := int(h.loadInt(ptr, 4))
-	hnd, err := h.table.remove(i) // lift_own consumes the handle
+}
+
+// loadVariant reads a variant's discriminant, aligns to the cases' max alignment, and loads the
+// selected case's payload (CanonicalABI.md load_variant).
+func (h *heap) loadVariant(ptr int, t Type) (Value, error) {
+	cases := t.Cases
+	discSize := size(Type{Kind: discriminantType(len(cases))})
+	ci := int(h.loadInt(ptr, discSize))
+	if ci >= len(cases) {
+		return Value{}, fmt.Errorf("canon: load_variant: case index %d out of range", ci)
+	}
+	c := cases[ci]
+	var payload *Value
+	if c.Type != nil {
+		off := alignTo(ptr+discSize, maxCaseAlignment(cases))
+		pv, err := h.load(off, *c.Type)
+		if err != nil {
+			return Value{}, err
+		}
+		payload = &pv
+	}
+	return Variant(t, c.Name, payload)
+}
+
+// liftOwn consumes an owned handle at table index i (CanonicalABI.md lift_own), trapping a missing
+// slot, a wrong resource type, a lent handle, or a borrow in an own position.
+func (h *heap) liftOwn(i int, t Type) (Value, error) {
+	hnd, err := h.table.remove(i)
 	if err != nil {
 		return Value{}, err
 	}
@@ -419,6 +490,108 @@ func (h *heap) load(ptr int, t Type) (Value, error) {
 		return Value{}, fmt.Errorf("canon: lift_own: handle is a borrow, not an own")
 	}
 	return Own(t.RT, hnd.rep), nil
+}
+
+// coreValueIter is a cursor over a flat core-value sequence (CanonicalABI.md CoreValueIter). next
+// coerces the slot's declared type to the wanted type — the inverse of the variant flat widening.
+type coreValueIter struct {
+	types []string
+	vals  []uint64
+	i     int
+}
+
+func (it *coreValueIter) next(want string) uint64 {
+	have := it.types[it.i]
+	v := it.vals[it.i]
+	it.i++
+	return coerce(have, want, v)
+}
+
+// coerce narrows a joined variant slot back to a payload's own flat type. Bits are preserved (a float
+// already lives as its bit pattern); a wider integer slot is truncated to its low word.
+func coerce(have, want string, bits uint64) uint64 {
+	switch {
+	case have == want, have == "i32" && want == "f32":
+		return bits
+	case have == "i64" && (want == "i32" || want == "f32"):
+		return bits & 0xffffffff
+	case have == "i64" && want == "f64":
+		return bits
+	default:
+		panic(fmt.Sprintf("canon: coerce %s->%s is not a variant widening inverse", have, want))
+	}
+}
+
+// liftFlat reconstructs a value from a flat core-value sequence (CanonicalABI.md lift_flat), the inverse
+// of lowerFlat. A string or list reads its (pointer, length) from the flat values and its elements from
+// memory; a variant reads the discriminant, lifts the selected case's payload with slot coercion, and
+// drains the unused joined slots.
+func (h *heap) liftFlat(it *coreValueIter, t Type) (Value, error) {
+	switch t.Kind {
+	case KindBool:
+		return Bool(it.next("i32") != 0), nil
+	case KindU8:
+		return Value{Type: t, u: it.next("i32") & 0xff}, nil
+	case KindU16:
+		return Value{Type: t, u: it.next("i32") & 0xffff}, nil
+	case KindU32:
+		return Value{Type: t, u: it.next("i32") & 0xffffffff}, nil
+	case KindU64:
+		return Value{Type: t, u: it.next("i64")}, nil
+	case KindS8:
+		return Value{Type: t, u: uint64(int64(int8(it.next("i32"))))}, nil
+	case KindS16:
+		return Value{Type: t, u: uint64(int64(int16(it.next("i32"))))}, nil
+	case KindS32:
+		return Value{Type: t, u: uint64(int64(int32(it.next("i32"))))}, nil
+	case KindS64:
+		return Value{Type: t, u: it.next("i64")}, nil
+	case KindF32:
+		return Value{Type: t, u: uint64(canonicalizeNaN32(uint32(it.next("f32"))))}, nil
+	case KindF64:
+		return Value{Type: t, u: canonicalizeNaN64(it.next("f64"))}, nil
+	case KindChar:
+		return Char(rune(it.next("i32")))
+	case KindString:
+		begin := int(it.next("i32"))
+		n := int(it.next("i32"))
+		return Str(string(h.mem[begin : begin+n])), nil
+	case KindList:
+		begin := int(it.next("i32"))
+		n := int(it.next("i32"))
+		es := size(*t.Elem)
+		vals := make([]Value, n)
+		for i := range n {
+			ev, err := h.load(begin+i*es, *t.Elem)
+			if err != nil {
+				return Value{}, err
+			}
+			vals[i] = ev
+		}
+		return List(*t.Elem, vals...)
+	case KindVariant:
+		total := flattenVariant(t.Cases)
+		start := it.i
+		ci := int(it.next("i32"))
+		if ci >= len(t.Cases) {
+			return Value{}, fmt.Errorf("canon: lift_flat_variant: case index %d out of range", ci)
+		}
+		c := t.Cases[ci]
+		var payload *Value
+		if c.Type != nil {
+			pv, err := h.liftFlat(it, *c.Type)
+			if err != nil {
+				return Value{}, err
+			}
+			payload = &pv
+		}
+		it.i = start + len(total) // drain the unused joined slots
+		return Variant(t, c.Name, payload)
+	case KindOwn:
+		return h.liftOwn(int(it.next("i32")), t)
+	default:
+		return Value{}, fmt.Errorf("canon: liftFlat: unmodeled kind %s", t.Kind)
+	}
 }
 
 // loadInt reads the low nbytes little-endian at ptr.
