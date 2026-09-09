@@ -17,7 +17,7 @@ import (
 // runs a Go wasip1 command to main and writes its stdout — the capability invoked the way a user
 // invokes it, from outside the tree, through the same public package a host embedder uses.
 func TestRunExecutesAWASICommand(t *testing.T) {
-	guest := buildGuestFile(t)
+	guest := buildGuestFile(t, "hello")
 
 	var out, errBuf bytes.Buffer
 	code := dispatch(&out, &errBuf, []string{"run", guest})
@@ -40,10 +40,43 @@ func TestExitCodeCarriesAWASIGuestsOwnCode(t *testing.T) {
 	}
 }
 
-// buildGuestFile compiles the shared hello guest (internal/wasi/testdata/hello) to GOOS=wasip1 and
-// returns the path to the .wasm, which `run` reads. The path is computed from this test file's own
-// location, and the guest is the one internal/wasi already carries rather than a third copy.
-func buildGuestFile(t *testing.T) string {
+// TestRunGrantsAndDeniesFilesystemAccess is decision 0083's capability model at the command line:
+// `--dir` grants a directory and `--` passes the guest its argv, so a granted read succeeds; with no
+// `--dir` the same read is refused and its bytes never reach stdout. The grant is the only difference
+// between the two halves, so a boundary that leaked would show up here as the ungranted read
+// succeeding.
+func TestRunGrantsAndDeniesFilesystemAccess(t *testing.T) {
+	guest := buildGuestFile(t, "cat")
+	dir := t.TempDir()
+	const body = "cli-granted-body"
+	if err := os.WriteFile(filepath.Join(dir, "in.txt"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Granted: --dir maps the directory, -- passes the path as the guest's argv.
+	var out, errBuf bytes.Buffer
+	if code := dispatch(&out, &errBuf, []string{"run", "--dir", dir + ":/d", guest, "--", "/d/in.txt"}); code != 0 {
+		t.Errorf("granted run exited %d, want 0\nstderr: %q", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), body) {
+		t.Errorf("granted run stdout = %q, want the file's body", out.String())
+	}
+
+	// Denied: the same guest and path, no --dir — the read is unreachable and the guest exits non-zero.
+	out.Reset()
+	errBuf.Reset()
+	if code := dispatch(&out, &errBuf, []string{"run", guest, "--", "/d/in.txt"}); code == 0 {
+		t.Error("ungranted run exited 0; the CLI ran a read it never granted")
+	}
+	if strings.Contains(out.String(), body) {
+		t.Errorf("ungranted run stdout = %q leaked the file with no --dir", out.String())
+	}
+}
+
+// buildGuestFile compiles a shared guest (internal/wasi/testdata/<pkg>) to GOOS=wasip1 and returns the
+// path to the .wasm, which `run` reads. The path is computed from this test file's own location, and
+// the guests are the ones internal/wasi already carries rather than copies.
+func buildGuestFile(t *testing.T, pkg string) string {
 	t.Helper()
 	goBin, err := exec.LookPath("go")
 	if err != nil {
@@ -51,8 +84,8 @@ func buildGuestFile(t *testing.T) string {
 	}
 	_, thisFile, _, _ := runtime.Caller(0)
 	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
-	src := filepath.Join(repoRoot, "internal", "wasi", "testdata", "hello")
-	out := filepath.Join(t.TempDir(), "hello.wasm")
+	src := filepath.Join(repoRoot, "internal", "wasi", "testdata", pkg)
+	out := filepath.Join(t.TempDir(), pkg+".wasm")
 	cmd := exec.Command(goBin, "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
 	if combined, berr := cmd.CombinedOutput(); berr != nil {

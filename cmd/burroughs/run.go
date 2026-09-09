@@ -9,10 +9,39 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/scttfrdmn/burroughs"
 )
+
+// preopenFlag collects repeated `--dir HOST[:GUEST]` grants into preopens for a wasip1 command. HOST
+// alone maps the host directory under its own name; HOST:GUEST maps it under GUEST. Capability-based:
+// only what is named here is visible to the guest (decision 0083).
+type preopenFlag []burroughs.Preopen
+
+func (f *preopenFlag) String() string {
+	parts := make([]string, len(*f))
+	for i, p := range *f {
+		parts[i] = p.Host + ":" + p.Guest
+	}
+	return strings.Join(parts, ",")
+}
+
+func (f *preopenFlag) Set(v string) error {
+	host, guest, found := strings.Cut(v, ":")
+	if host == "" {
+		return fmt.Errorf("empty host directory in --dir %q", v)
+	}
+	if !found || guest == "" {
+		guest = host
+	}
+	*f = append(*f, burroughs.Preopen{Host: host, Guest: guest})
+	return nil
+}
+
+func (f preopenFlag) preopens() []burroughs.Preopen { return []burroughs.Preopen(f) }
 
 // The run subcommand: load a module, call an exported function, print the result.
 //
@@ -54,11 +83,16 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	fs.SetOutput(stderr)
 	strict := fs.Bool("strict", false,
 		"refuse a module the validator could not fully check, instead of running it")
+	var dirs preopenFlag
+	fs.Var(&dirs, "dir", "grant a wasip1 command a directory as HOST[:GUEST] (repeatable); "+
+		"no directory is visible unless named (decision 0083)")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: burroughs run [--strict] <file.wasm> [<func> [<value>...]]")
-		fmt.Fprintln(stderr, "\nWith no function named: a wasip1 command (imports wasi_snapshot_preview1, "+
-			"exports _start) runs and its exit code is this process's; any other module's exported "+
-			"functions are listed.")
+		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:GUEST]]... <file.wasm> "+
+			"[-- <arg>...] | [<func> [<value>...]]")
+		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
+			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
+			"directory, capability-based: nothing is visible unless named.")
+		fmt.Fprintln(stderr, "Any other module: with a function named it is invoked; with none its exports are listed.")
 		fmt.Fprintln(stderr, "\nValues are typed: i32:42  i64:-1  f32:nan  f64:inf  v128:0x0:0x0  extern:3  null:func")
 		fs.PrintDefaults()
 	}
@@ -70,36 +104,55 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		return errUsage
 	}
 
-	wasm, err := os.ReadFile(fs.Arg(0))
+	file := fs.Arg(0)
+	// The tokens after the file split at "--": what follows it is a command's argv, so a guest
+	// argument is never read as a function name (decision 0083); what precedes it is the func-invoke
+	// form. `--` itself is a positional here because it comes after the file, so flag parsing has
+	// already stopped.
+	rest := fs.Args()[1:]
+	var invokeArgs, guestArgs []string
+	if i := slices.Index(rest, "--"); i >= 0 {
+		invokeArgs, guestArgs = rest[:i], rest[i+1:]
+	} else {
+		invokeArgs = rest
+	}
+
+	wasm, err := os.ReadFile(file)
 	if err != nil {
 		return err
 	}
 
-	// No function named and the module is a wasip1 command: run it (decision 0081). Detection reads
-	// the module's import and export sections and routes here **before** any plain instantiate, so it
-	// never depends on #686's nil-resolver behavior. IsWASIP1Command's decode error is ignored on purpose —
-	// an undecodable module falls through to Instantiate below, which classifies it onto the public
-	// sentinels (a malformed module must exit `refused`, not `error`, whichever path reached it).
-	if fs.NArg() == 1 {
-		// A decode error here is not handled: it means "route this elsewhere", and the Instantiate
-		// below classifies a malformed module onto the public sentinels. So detection routes to WASI
-		// only on a clean `(true, nil)`; every other answer falls through.
-		if isCmd, derr := burroughs.IsWASIP1Command(wasm); derr == nil && isCmd {
-			code, rerr := burroughs.WASIP1Config{
-				Args:   []string{fs.Arg(0)},
-				Env:    os.Environ(),
-				Stdin:  os.Stdin,
-				Stdout: stdout,
-				Stderr: stderr,
-			}.Run(wasm)
-			if rerr != nil {
-				return rerr
-			}
-			if code != 0 {
-				return wasiExit(code)
-			}
-			return nil
+	// A wasip1 command runs (decision 0081); detection reads the module's sections before any plain
+	// instantiate, so it never depends on #686's nil-resolver behavior. A decode error is not handled
+	// here — it falls through to Instantiate below, which classifies a malformed module onto the
+	// public sentinels — so detection routes to WASI only on a clean `(true, nil)`.
+	if isCmd, derr := burroughs.IsWASIP1Command(wasm); derr == nil && isCmd {
+		if len(invokeArgs) > 0 {
+			// A command's arguments go after `--`; a bare token before it is not a function to invoke.
+			fmt.Fprintf(stderr, "%sa wasip1 command takes its arguments after --, e.g. run %s -- ARG\n", prefix, file)
+			return errUsage
 		}
+		code, rerr := burroughs.WASIP1Config{
+			Args:     append([]string{filepath.Base(file)}, guestArgs...),
+			Env:      os.Environ(),
+			Stdin:    os.Stdin,
+			Stdout:   stdout,
+			Stderr:   stderr,
+			Preopens: dirs.preopens(),
+		}.Run(wasm)
+		if rerr != nil {
+			return rerr
+		}
+		if code != 0 {
+			return wasiExit(code)
+		}
+		return nil
+	}
+
+	// Not a command: `--` and `--dir` are the command grammar and do not apply.
+	if len(guestArgs) > 0 || len(dirs) > 0 {
+		fmt.Fprintf(stderr, "%s-- and --dir apply to a wasip1 command, and this module is not one\n", prefix)
+		return errUsage
 	}
 
 	in, err := burroughs.Config{Strict: *strict}.Instantiate(wasm)
@@ -124,12 +177,12 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		diagnose(stderr, d)
 	}
 
-	if fs.NArg() == 1 {
+	if len(invokeArgs) == 0 {
 		return listExports(stdout, in)
 	}
 
-	args := make([]burroughs.Value, 0, fs.NArg()-2)
-	for _, spelling := range fs.Args()[2:] {
+	args := make([]burroughs.Value, 0, len(invokeArgs)-1)
+	for _, spelling := range invokeArgs[1:] {
 		v, perr := burroughs.ParseValue(spelling)
 		if perr != nil {
 			return perr
@@ -137,7 +190,7 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		args = append(args, v)
 	}
 
-	res, err := in.Call(fs.Arg(1), args...)
+	res, err := in.Call(invokeArgs[0], args...)
 	if err != nil {
 		return err
 	}

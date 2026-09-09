@@ -21,6 +21,23 @@ weakly-ordered platform.
 
 ### Added
 
+- **A read-only WASI preview-1 filesystem: a `wasip1` guest reads a file the user granted it.**
+  [#690](https://github.com/scttfrdmn/burroughs/issues/690), [ADR 0083](docs/decisions/0083-a-read-only-wasi-preview1-filesystem-a-per-run-fd-table-capability-preopens-and-path-open-scoped-to-reading.md).
+  A per-run fd table, `path_open` (`O_RDONLY`), `fd_read` from a file fd, `fd_close`,
+  `path_filestat_get`/`fd_filestat_get`, and real `fd_prestat_get`/`fd_prestat_dir_name`.
+  `burroughs run cat.wasm --dir DIR -- FILE` reads a granted file; the guest's exit code is the
+  process's.
+  - **Capability-based, no ambient authority:** `WASIP1Config.Preopens` (CLI `--dir HOST[:GUEST]`)
+    grants directories explicitly; with none, a guest reaches no filesystem. **The escape check is on
+    the resolved path against the preopen root**, so a `..`, symlink, or absolute path that resolves
+    outside is refused `ENOTCAPABLE` — witnessed by a control that shows the escape reads the outside
+    file through the check-free resolution and is refused through the whole path.
+  - **Read-only is enforced on the open mode, not the requested rights** (ADR 0083's 2026-09-09
+    append): Go's `os.Open` requests `fd_write` in `fs_rights_base` even for a read, so a
+    create/truncate `oflags` is refused and a write to a file fd fails, rather than refusing on the
+    rights set. Writes, `fd_seek`, and directory enumeration stay deferred.
+  - The `--` separator passes the guest its argv, so a guest argument is never read as a function name.
+
 - **`burroughs run <cmd.wasm>` runs a `wasip1` guest from the command line — the capability invocable
   from outside the tree.** [#683](https://github.com/scttfrdmn/burroughs/issues/683),
   [ADR 0081](docs/decisions/0081-burroughs-run-detects-a-wasip1-command-from-the-modules-sections-and-routes-to-a-public-wasi-entry-before-any-plain-instantiate.md).

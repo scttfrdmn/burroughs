@@ -20,12 +20,21 @@ import (
 // public API surface (ADR 0080, decision 7). A zero Config runs with `program` as argv[0], no
 // environment, and the process's own stdout/stderr.
 type Config struct {
-	Wasm   []byte    // the guest module
-	Args   []string  // argv; defaults to {"program"}
-	Env    []string  // "KEY=VALUE" pairs; defaults to none
-	Stdin  io.Reader // fd 0; defaults to os.Stdin
-	Stdout io.Writer // defaults to os.Stdout
-	Stderr io.Writer // defaults to os.Stderr
+	Wasm     []byte    // the guest module
+	Args     []string  // argv; defaults to {"program"}
+	Env      []string  // "KEY=VALUE" pairs; defaults to none
+	Stdin    io.Reader // fd 0; defaults to os.Stdin
+	Stdout   io.Writer // defaults to os.Stdout
+	Stderr   io.Writer // defaults to os.Stderr
+	Preopens []Preopen // granted directories; empty means no filesystem access (decision 0083)
+}
+
+// Preopen grants the guest a directory: Host is the directory on the host, Guest the name the guest
+// sees for it. The grant is explicit — there is no default preopen, so a guest reaches only what a
+// Preopen names (decision 0083, the capability model).
+type Preopen struct {
+	Host  string
+	Guest string
 }
 
 // GuestFeatures is the decoder feature set for a Go `wasip1` guest: the default proposals (which have
@@ -71,6 +80,9 @@ func Run(cfg Config) (int, error) {
 		stdout: cfg.Stdout,
 		stderr: cfg.Stderr,
 		start:  time.Now(),
+	}
+	if ferr := h.initFDs(cfg.Preopens); ferr != nil {
+		return 0, ferr
 	}
 	in, trap, err := interp.InstantiateLinked(m, h.imports())
 	if err != nil {

@@ -27,11 +27,20 @@ const wasiP1Module = "wasi_snapshot_preview1"
 //
 // [0081]: docs/decisions/0081-burroughs-run-detects-a-wasip1-command-from-the-modules-sections-and-routes-to-a-public-wasi-entry-before-any-plain-instantiate.md
 type WASIP1Config struct {
-	Args   []string  // argv; defaults to {"program"}
-	Env    []string  // "KEY=VALUE" pairs; defaults to none
-	Stdin  io.Reader // fd 0; defaults to os.Stdin
-	Stdout io.Writer // fd 1; defaults to os.Stdout
-	Stderr io.Writer // fd 2; defaults to os.Stderr
+	Args     []string  // argv; defaults to {"program"}
+	Env      []string  // "KEY=VALUE" pairs; defaults to none
+	Stdin    io.Reader // fd 0; defaults to os.Stdin
+	Stdout   io.Writer // fd 1; defaults to os.Stdout
+	Stderr   io.Writer // fd 2; defaults to os.Stderr
+	Preopens []Preopen // granted directories; empty (the default) means no filesystem access
+}
+
+// Preopen grants the guest one directory: Host on the host, Guest the name the guest sees. **There is
+// no default grant** (decision 0083's capability model) — a guest with no Preopen reaches no
+// filesystem, and a `..`, symlink, or absolute path cannot escape a granted directory's resolved root.
+type Preopen struct {
+	Host  string
+	Guest string
 }
 
 // Run decodes, validates, and runs the guest's `_start`, returning the guest's exit code. A
@@ -39,13 +48,18 @@ type WASIP1Config struct {
 // the one-channel discipline that keeps an exit from reading as a silent success and a trap from
 // reading as exit 0.
 func (c WASIP1Config) Run(wasm []byte) (exitCode int, err error) {
+	preopens := make([]wasi.Preopen, len(c.Preopens))
+	for i, p := range c.Preopens {
+		preopens[i] = wasi.Preopen{Host: p.Host, Guest: p.Guest}
+	}
 	return wasi.Run(wasi.Config{
-		Wasm:   wasm,
-		Args:   c.Args,
-		Env:    c.Env,
-		Stdin:  c.Stdin,
-		Stdout: c.Stdout,
-		Stderr: c.Stderr,
+		Wasm:     wasm,
+		Args:     c.Args,
+		Env:      c.Env,
+		Stdin:    c.Stdin,
+		Stdout:   c.Stdout,
+		Stderr:   c.Stderr,
+		Preopens: preopens,
 	})
 }
 

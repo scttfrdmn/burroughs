@@ -94,3 +94,20 @@ host module (ADR 0080).**
   nothing, and the `..`/symlink/absolute path that must be refused.
 - **`fd_prestat_get`/`fd_prestat_dir_name`/`fd_read`/`fd_close` stop being stubs**; `poll_oneoff`'s fd
   arm and everything write-side stay deferred.
+
+## Amendment, 2026-09-09 — requirement 1's write refusal keys on `oflags`, not `fs_rights_base`
+
+Appended on implementing #690, on the rule that records are append-corrected. Requirement 1 said a
+path_open "requesting write access — write bits in `fs_rights_base`, or `oflags` with create/truncate —
+returns `ENOTCAPABLE`." The `fs_rights_base` half was falsified by the guest: **Go's `os.Open` sends
+`oflags=0x0` but `fs_rights_base=0xff7febe`, which includes `fd_write`** — the runtime requests broad
+rights speculatively even for a read, expecting the host to grant the intersection, not to refuse.
+Refusing on those bits refused *every* read.
+
+So read-only is enforced two ways, neither of them the `fs_rights_base` set: a **create/truncate/excl
+`oflags`** open (the shape `os.Create` sends) is refused `ENOTCAPABLE` at path_open, and an actual
+**`fd_write` to an opened file fd fails** (a file entry carries no writer, so `fd_write` answers
+`EBADF`). A plain open is granted a read-only fd. The guarantee requirement 1 wanted — no write reaches
+the host — holds; the mechanism is the open mode and the write call, not the requested rights, because
+the requested rights are not a reliable signal of intent from this runtime. Measured, not assumed
+(`typenames.witx` names the bits; the guest named the value).

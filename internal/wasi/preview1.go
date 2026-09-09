@@ -59,6 +59,16 @@ type host struct {
 	stdout io.Writer
 	stderr io.Writer
 	start  time.Time
+
+	// fds is the per-run file-descriptor table (decision 0083): 0/1/2 are stdio, preopen dirs and
+	// opened files are 3.. A guest fd indexes it and a missing key is `EBADF`. No lock guards it: Go's
+	// wasip1 runtime is cooperatively scheduled on a single wasm thread (no atomics, no shared memory
+	// — the reason gate:threads is not load-bearing here), so host calls are sequential. A guest that
+	// used wasm threads would change that, and would be behind gate:threads, which this workload is
+	// not.
+	fds        map[uint32]*fdEntry
+	nextFD     uint32   // the next fd path_open hands out
+	preopenFDs []uint32 // preopen dir fds in discovery order (3, 4, …)
 }
 
 // entry is one import: the wasm type the linker matches against, and the Go function behind it. The
@@ -104,10 +114,16 @@ func (h *host) imports() interp.Imports {
 		// remain a floor that grows when a guest polls an fd (ADR 0080).
 		"poll_oneoff": {ft([]bin.ValType{i32, i32, i32, i32}, i32), h.pollOneoff},
 
-		// Off both guests' active paths: supplied so the module links, stubbed with a WASI errno.
+		// Read-only filesystem (decision 0083): path_open for reading, the two stats, fd_close, and the
+		// two prestat calls — no longer stubs.
+		"path_open":           {ft([]bin.ValType{i32, i32, i32, i32, i32, i64, i64, i32, i32}, i32), h.pathOpen},
+		"path_filestat_get":   {ft([]bin.ValType{i32, i32, i32, i32, i32}, i32), h.pathFilestatGet},
+		"fd_filestat_get":     {ft([]bin.ValType{i32, i32}, i32), h.fdFilestatGet},
 		"fd_close":            {ft([]bin.ValType{i32}, i32), h.fdClose},
-		"fd_fdstat_set_flags": {ft([]bin.ValType{i32, i32}, i32), h.fdFdstatSetFlags},
 		"fd_prestat_dir_name": {ft([]bin.ValType{i32, i32, i32}, i32), h.fdPrestatDirName},
+
+		// Still stubbed: no guest here exercises it (decision 0083 defers writes, fd_seek, dir enum).
+		"fd_fdstat_set_flags": {ft([]bin.ValType{i32, i32}, i32), h.fdFdstatSetFlags},
 	}
 	return func(mod, name string) (interp.Extern, bool) {
 		if mod != module {
@@ -245,14 +261,10 @@ func (h *host) fdWrite(c *interp.Caller, args []interp.Value) ([]interp.Value, e
 
 // writerFor maps a wasm fd to its sink; only stdout (1) and stderr (2) are writable in this slice.
 func (h *host) writerFor(fd uint32) io.Writer {
-	switch fd {
-	case 1:
-		return h.stdout
-	case 2:
-		return h.stderr
-	default:
-		return nil
+	if e := h.fds[fd]; e != nil {
+		return e.writer
 	}
+	return nil
 }
 
 // fdRead is preview-1's read, into a guest `iovec` array. Only stdin (0) is readable in this slice;
@@ -298,10 +310,14 @@ func (h *host) fdRead(c *interp.Caller, args []interp.Value) ([]interp.Value, er
 
 // readerFor maps a wasm fd to its source; only stdin (0) is readable in this slice.
 func (h *host) readerFor(fd uint32) io.Reader {
-	if fd == 0 {
-		return h.stdin
+	e := h.fds[fd]
+	if e == nil {
+		return nil
 	}
-	return nil
+	if e.file != nil {
+		return e.file
+	}
+	return e.reader
 }
 
 // readSome reads up to n bytes, returning a WASI errno so fdRead carries no error check. EOF is a
@@ -411,22 +427,39 @@ func (h *host) schedYield(_ *interp.Caller, _ []interp.Value) ([]interp.Value, e
 // fdFdstatGet reports stdio (0,1,2) as character devices with generous rights, which is what the Go
 // runtime probes at startup to classify its standard streams. A non-stdio fd is `EBADF`.
 func (h *host) fdFdstatGet(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
-	fd, ptr := u32(args, 0), u32(args, 1)
-	if fd > 2 {
+	e := h.fds[u32(args, 0)]
+	if e == nil {
 		return ret(errBadf), nil
+	}
+	var ft uint8
+	switch {
+	case e.preopen != nil:
+		ft = filetypeDirectory
+	case e.file != nil:
+		ft = filetypeRegular
+	default:
+		ft = filetypeCharDevice // stdio
 	}
 	// fdstat: fs_filetype u8 @0, fs_flags u16 @2, fs_rights_base u64 @8, fs_rights_inheriting u64 @16.
 	var b [24]byte
-	b[0] = 2 // character_device
+	b[0] = ft
 	binary.LittleEndian.PutUint64(b[8:], ^uint64(0))
 	binary.LittleEndian.PutUint64(b[16:], ^uint64(0))
-	return ret(mWrite(c, ptr, b[:])), nil
+	return ret(mWrite(c, u32(args, 1), b[:])), nil
 }
 
 // fdPrestatGet reports no preopens by returning `EBADF` for every fd, which terminates the Go
 // runtime's preopen-discovery loop at its first probe. Filesystem is out of scope for this slice.
-func (h *host) fdPrestatGet(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) {
-	return ret(errBadf), nil
+func (h *host) fdPrestatGet(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
+	e := h.fds[u32(args, 0)]
+	if e == nil || e.preopen == nil {
+		// Not a preopen — `EBADF` ends the runtime's discovery loop past the last granted directory.
+		return ret(errBadf), nil
+	}
+	// prestat: tag u8 @0 (0 = preopentype_dir), pr_name_len u32 @4.
+	var b [8]byte
+	binary.LittleEndian.PutUint32(b[4:], uint32(len(e.preopen.guestName)))
+	return ret(mWrite(c, u32(args, 1), b[:])), nil
 }
 
 // pollOneoff waits on a set of subscriptions and reports the events that fired. This slice handles
@@ -523,7 +556,17 @@ func writeEvent(c *interp.Caller, ptr uint32, userdata uint64, errno uint16, evT
 
 // --- stubs: supplied so the module links, not exercised on either guest's active path (ADR 0080) ---
 
-func (h *host) fdClose(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) {
+func (h *host) fdClose(_ *interp.Caller, args []interp.Value) ([]interp.Value, error) {
+	fd := u32(args, 0)
+	e := h.fds[fd]
+	if e == nil {
+		return ret(errBadf), nil
+	}
+	if e.file != nil {
+		_ = e.file.Close()
+		delete(h.fds, fd)
+	}
+	// stdio and preopens: closing the guest's view succeeds without touching the host stream or dir.
 	return ret(errSuccess), nil
 }
 
@@ -531,6 +574,15 @@ func (h *host) fdFdstatSetFlags(_ *interp.Caller, _ []interp.Value) ([]interp.Va
 	return ret(errSuccess), nil
 }
 
-func (h *host) fdPrestatDirName(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) {
-	return ret(errBadf), nil
+func (h *host) fdPrestatDirName(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
+	fd, pathPtr, pathLen := u32(args, 0), u32(args, 1), u32(args, 2)
+	e := h.fds[fd]
+	if e == nil || e.preopen == nil {
+		return ret(errBadf), nil
+	}
+	name := []byte(e.preopen.guestName)
+	if uint32(len(name)) > pathLen {
+		name = name[:pathLen]
+	}
+	return ret(mWrite(c, pathPtr, name)), nil
 }
