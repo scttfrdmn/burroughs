@@ -252,7 +252,79 @@ func TestCodecMatchesReferenceModel(t *testing.T) {
 				t.Errorf("flat memory:\n got %s\nwant %s", got, c.Flat.MemoryHex)
 			}
 			assertRealloc(t, "flat", fh.calls, c.Flat.Realloc)
+
+			// lift: load the reference model's stored bytes back and check the value round-trips. This
+			// tests load against definitions.py's store output, not against the codec's own store.
+			lh := newHeap(c.HeapSize)
+			raw, derr := hex.DecodeString(c.Store.MemoryHex)
+			if derr != nil {
+				t.Fatal(derr)
+			}
+			copy(lh.mem, raw)
+			got, lerr := lh.load(c.Store.Ptr, typ)
+			if lerr != nil {
+				t.Fatalf("load: %v", lerr)
+			}
+			if !valueEqual(got, v) {
+				t.Errorf("lift: load returned a value unequal to the lowered one (%s)", typ.Kind)
+			}
+
+			// lift-flat: reconstruct from the flat sequence, reading string/list data from the flat
+			// memory. This is the inverse of lowerFlat, completing "every lift and lower" for the type.
+			flatVals := make([]uint64, len(c.Flat.Values))
+			for i, n := range c.Flat.Values {
+				flatVals[i] = mustParseUint(t, n)
+			}
+			flh := newHeap(c.HeapSize)
+			fraw, derr2 := hex.DecodeString(c.Flat.MemoryHex)
+			if derr2 != nil {
+				t.Fatal(derr2)
+			}
+			copy(flh.mem, fraw)
+			gotFlat, ferr := flh.liftFlat(&coreValueIter{types: c.Flat.Types, vals: flatVals}, typ)
+			if ferr != nil {
+				t.Fatalf("liftFlat: %v", ferr)
+			}
+			if !valueEqual(gotFlat, v) {
+				t.Errorf("lift-flat: liftFlat returned a value unequal to the lowered one (%s)", typ.Kind)
+			}
 		})
+	}
+}
+
+// valueEqual compares two values for the differential's lift check. Floats compare as canonicalized
+// bits (a non-canonical NaN lowered then lifted comes back canonical), matching how the codec and the
+// reference model both canonicalize.
+func valueEqual(a, b Value) bool {
+	if a.Type.Kind != b.Type.Kind {
+		return false
+	}
+	switch a.Type.Kind {
+	case KindF32:
+		return canonicalizeNaN32(uint32(a.u)) == canonicalizeNaN32(uint32(b.u))
+	case KindF64:
+		return canonicalizeNaN64(a.u) == canonicalizeNaN64(b.u)
+	case KindString:
+		return a.s == b.s
+	case KindList:
+		if len(a.list) != len(b.list) || !typeEqual(a.Type, b.Type) {
+			return false
+		}
+		for i := range a.list {
+			if !valueEqual(a.list[i], b.list[i]) {
+				return false
+			}
+		}
+		return true
+	case KindVariant:
+		if a.u != b.u || (a.payload == nil) != (b.payload == nil) {
+			return false
+		}
+		return a.payload == nil || valueEqual(*a.payload, *b.payload)
+	case KindOwn:
+		return a.u == b.u && a.Type.RT == b.Type.RT
+	default:
+		return a.u == b.u
 	}
 }
 
