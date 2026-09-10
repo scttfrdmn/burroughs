@@ -21,6 +21,17 @@ weakly-ordered platform.
 
 ### Added
 
+- **Component function types decode to the marshaling's depth (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  PR C increment 1: `internal/component` now parses the component type section (id 7) — framed by slice 1,
+  read only to canon's depth by B.1 — resolving instance types' exported function signatures against each
+  instance's nested type space, per `Binary.md` at the pinned `component-model @ 2bed77e`. `output-stream.blocking-write-and-flush`
+  decodes to `(borrow<output-stream>, list<u8>) -> result<_, stream-error>`, the signature the value
+  marshaling needs. A type form beyond the guest-driven depth (nested component type, async func,
+  map/stream/future) refuses at parse by name; the section is consumed exactly. This is the fourth place
+  slice-1/B.1 framing was shallower than a later consumer required (dated finding on #694).
+
 - **The borrow-lifetime discipline is deferred to Phase 3 / `gate:async` (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
