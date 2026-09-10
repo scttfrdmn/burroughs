@@ -21,6 +21,17 @@ weakly-ordered platform.
 
 ### Added
 
+- **The borrow-lifetime discipline is deferred to Phase 3 / `gate:async` (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  Verified against the pinned `definitions.py`: an own's `num_lends` and a task's `num_borrows` are both
+  force-accounted to 0 at a sync subtask's resolve before the parent resumes (probe: 0→1→0), and the
+  lender is suspended for the callee's duration — so own-dropped-while-lent, borrow-outliving-its-call,
+  and lend-released-at-return are all unreachable in the sync tier and relocate to Phase 3, where a
+  caller runs while a borrow is outstanding. The model's nested-call harness commits as dormant Phase-3
+  fixture tooling (`gen/gen_borrow.py`), no fixtures and no Burroughs lend model. The track's assertion
+  set is unchanged, split across the sync and async tiers.
+
 - **A component's `run` export is callable through Burroughs, reaching the host boundary (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
