@@ -28,6 +28,10 @@ var ErrUnsupportedForm = errors.New("component: unsupported instantiation form")
 type coreDef struct {
 	extern interp.Extern
 	stub   bool
+	// inst and name let a canon lift invoke an aliased core func through its owning instance
+	// (interp exposes invocation only by export name, so the alias's name is retained).
+	inst *interp.Instance
+	name string
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -45,7 +49,7 @@ func (r realInst) export(n string) (coreDef, bool) {
 	if !ok {
 		return coreDef{}, false
 	}
-	return coreDef{extern: e}, true
+	return coreDef{extern: e, inst: r.in, name: n}, true
 }
 
 // synthInst is an inline-export instance: a projection over already-defined core entries, no
@@ -67,6 +71,13 @@ type walker struct {
 	// stream order, so an inline export or module import resolves against earlier definitions.
 	coreSpace map[Space][]coreDef
 	toClose   []*interp.Instance
+	// Component-space resolutions (link_component.go): component funcs (canon lifts, func imports,
+	// aliased exports), component instances (recursive instantiations, instance imports, aliased
+	// exports), and Load'd nested components. host supplies this component's imports.
+	compFuncs     []compDef
+	compInstances []compDef
+	nested        []*Component
+	host          host
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
