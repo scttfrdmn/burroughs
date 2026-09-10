@@ -216,3 +216,57 @@ Three things the implementation decided under this ruling, recorded here because
 - **The cost of a host call itself is not pre-registered** and no figure is offered for it, for ADR 0068's
   reason: there is no baseline to compare against, since the operation did not exist. The first
   measurement will be a `hostbench` arm's own registration.
+
+## Amendment 2026-09-10 — Option C lands: a host function is a first-class funcref
+
+**A guest pulled the deferred capability forward, which is the trigger this decision named.** The p3
+track (contract §6, component model + WASI) reached its first `wasi:cli/run` component — a Rust program
+built by cargo-component, the third-party toolchain the product line targets. Its fused preview-1→2
+adapter routes the wasi imports through an `$imports` **funcref trampoline table**: the lowered imports
+are placed into a table with an `elem` segment and reached with `call_indirect`, not by name. So the
+guest calls an embedder host function *indirectly*, and `funcRefTarget` refused it — the exact limit
+this ADR deferred against ("call it by name instead"). A guest demanding a deferred capability is the
+trigger 0069 was deferred *against*, not a reason to keep deferring; verified by running the component
+(the write path traps at the trampoline, `stdout` still empty), not hypothesized. Ruled Option 1 by
+Scott on the p3 C.2 stop-condition report: Option C comes forward **as its own Phase-1 engine
+increment**, ahead of the component marshaling, so a defect in funcref identity is localized to the
+engine and not entangled with the first live value-marshaling diff.
+
+**What changes, and that it is additive.** Option C is the identity-carrying form C named: a host
+function is a `funcref` value like any other. The representation needs no new field — a funcref is
+already the pair `(ref.Addr = import index, ref.Inst = the instance whose import slot holds it)`, and
+`funcRefTarget` already resolves that pair to the host extern via `importedFunc`; it merely stopped
+there and refused. The widening is at the *dispatch* seam: `funcRefTarget` returns a `funcTarget`
+(host-aware, the type `call` already dispatches), and `call_indirect`/`call_ref` dispatch its host arm
+through `callHost` exactly as `call` does. `ref.func` of an imported host function already produces the
+resolving pair, and a host funcref round-trips through `table.set`/`table.get` as an ordinary reference.
+Nothing on `HostFunc`/`Extern`'s **signatures** changes — `HostExtern` is untouched; what changes is
+that the reference a host function was always addressable by is now callable and storable. **p1 tests
+unchanged**: the spec suite has no embedder host functions (its "imported functions" are other wasm
+modules, resolved through `ext.owner`, which always worked), so no vector's verdict moves and no skip is
+retired — this is why the exit is a new positive assertion rather than a board delta.
+
+**The `call_indirect` type check for a host callee is structural equality, which is `match_deftype` for
+it.** A host function's `binary.FuncType` may not name type indices (`hostTypeIsLinkable` refuses those
+at link time), so it carries no GC subtyping and `match_deftype` reduces to structural equality of value
+types — compared directly rather than through `validate.MatchDefType`, which needs a module and a type
+index a host function has neither of.
+
+**Named limits kept, stated not silent.** A GC `ref.cast`/`br_on_cast` to a concrete function type
+still refuses a host callee (`castop.go`): the cast lattice names a type by a module type-index, which a
+host function has none of. A `return_call_indirect`/`return_call_ref` **tail call** to a host function
+refuses (`ErrUnsupportedOp`): a tail call replaces the current frame with the callee's, and a host
+function builds no frame — the shape is real but no p3 path or spec vector reaches it, so it is a named
+limit rather than modeled speculatively. Both are `gate:gc`/tail-call edges, off the p3 exit's path.
+
+### Pre-registration (this increment)
+
+- **Board unchanged on every lane**, for the reason above (no host functions in the suite). A moved
+  vector is a bug in this slice: the host arm must not leak into the wasm-import resolution path.
+- **No `make bench` arm moves** — every arm runs guest code with no host import, and the host dispatch
+  is off those paths; the `funcRefTarget` change adds one branch on the indirect path only.
+- **Exit is a positive assertion** (`internal/interp`): a host function placed in a table via
+  `table.set` and read back via `table.get` is the same reference; called through `call_indirect` with a
+  matching type it runs, and with a mismatched type it traps `indirect call type mismatch`; `ref.func`
+  of an imported host function is callable via `call_ref`. `BURROUGHS_NO_SKIP=1` stays green (no skip
+  was retired, so nothing new is forced into CI).

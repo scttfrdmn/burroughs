@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **A host function is a first-class `funcref`: callable through `call_indirect` and `call_ref`, storable
+  in tables (ADR 0069 Option C).**
+  [ADR 0069 amendment](docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md),
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694). A guest pulled the deferred capability
+  forward: the p3 track's first `wasi:cli/run` component (cargo-component's fused adapter) reaches its
+  wasi imports through an `$imports` funcref trampoline table and `call_indirect`, which a host function
+  with no reference identity could not be the target of. `funcRefTarget` now resolves a host callee to
+  the host arm of a `funcTarget`, and `call_indirect`/`call_ref` dispatch it through `callHost` exactly
+  as a direct `call` does; a `call_indirect` type mismatch traps structurally. Named limits kept and
+  stated: a `return_call*` tail call to a host function and a GC `ref.cast` of one refuse (`ErrUnsupportedOp`).
+  No suite verdict moves — the spec suite has no embedder host functions — so the exit is a positive
+  assertion (`TestHostFunctionIsAFirstClassFuncref`), not a board delta.
+
 - **Component function types decode to the marshaling's depth (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).

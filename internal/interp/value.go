@@ -1078,7 +1078,8 @@ func (v Value) Int64() int64 { return int64(v.Bits) }
 //
 // PayloadFunc and the three aggregate kinds are real references the engine declines to carry *inward*
 // and [#680][680] could carry later, so they get `ErrUnsupportedOp` — the register for *this engine
-// cannot*, which `funcRefTarget`'s own host-function arm states as the rule. A non-null reference
+// cannot*, which the engine's named host-callee limits (a tail call or GC cast of a host function)
+// state as the rule. A non-null reference
 // naming no kind, and the domain's PayloadPastEnd bound, get a plain error: no widening makes them
 // meaningful, they are a bad argument, and `publicError` puts a bad argument in its
 // travels-unchanged class.

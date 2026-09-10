@@ -839,21 +839,23 @@ func TestAHostCallMarksItsThreadBlockedSoAStopArrives(t *testing.T) {
 	}
 }
 
-// TestTheThreeSitesThatRefuseAResolvedHostCallee walks the arms of [ADR 0069][0069]'s five-site split
-// from the other side: two dispatch (covered by every row above) and three refuse, each for its own
-// reason, and a refusal that silently became a nil-deref is the failure this catches.
+// TestResolvedHostCalleeSites walks the arms of [ADR 0069][0069]'s five-site split from the other side.
+// The Option C amendment changed the count: the funcref site now **dispatches** (a host function is a
+// first-class funcref, covered in full by TestHostFunctionIsAFirstClassFuncref), leaving two sites that
+// refuse, each for a reason Option C does not touch. A refusal that silently became a nil-deref is the
+// failure this catches; the funcref row is kept, flipped, so the site that changed has a record here.
 //
 //   - **`Spawn`'s entry** — `ErrThreadEntry`. A host function runs no guest body, so it could reach no
 //     safepoint and T-1's thread would be unstoppable. Refused on the *entry* channel rather than as an
 //     unsupported op, because the argument is about the entry's shape.
 //   - **the boundary's delegation** — `ErrUnsupportedOp`. This one *could* dispatch and chooses not to;
 //     see `invokeIndex`'s own comment for the two things it would have to lie about.
-//   - **a funcref** — `ErrUnsupportedOp`, reached here through a table slot. Option C's identity widening
-//     is deferred, so a host function is not a `funcref` value and the engine says so rather than
-//     resolving a nil owner.
+//   - **a funcref, now dispatching** — reached through a table slot, it runs the host function (Option C).
+//     The two named limits that remain (a tail call to a host function, a GC cast of one) refuse for
+//     reasons the amendment states, and are off this test's path.
 //
 // [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
-func TestTheThreeSitesThatRefuseAResolvedHostCallee(t *testing.T) {
+func TestResolvedHostCalleeSites(t *testing.T) {
 	host := hostImports(map[string]Extern{
 		"f":     HostExtern(ft(nil, []binary.ValType{binary.I32}), func(*Caller, []Value) ([]Value, error) { return []Value{I32(1)}, nil }),
 		"entry": HostExtern(ft([]binary.ValType{binary.I32}, nil), func(*Caller, []Value) ([]Value, error) { return nil, nil }),
@@ -884,7 +886,7 @@ func TestTheThreeSitesThatRefuseAResolvedHostCallee(t *testing.T) {
 		}
 	})
 
-	t.Run("a host function is not a funcref", func(t *testing.T) {
+	t.Run("a host function is a funcref and dispatches through a table (Option C)", func(t *testing.T) {
 		in := hostLink(t, `(module
 			(type $t (func (result i32)))
 			(import "h" "f" (func $f (result i32)))
@@ -892,9 +894,13 @@ func TestTheThreeSitesThatRefuseAResolvedHostCallee(t *testing.T) {
 			(elem (i32.const 0) func $f)
 			(func (export "indirect") (result i32) (call_indirect (type $t) (i32.const 0))))`,
 			binary.Features{}, host)
-		if _, err := in.Invoke("indirect"); !errors.Is(err, ErrUnsupportedOp) {
-			t.Errorf("call_indirect through a table slot holding a host function gave %v, want "+
-				"ErrUnsupportedOp — resolving it would read a nil owner", err)
+		res, err := in.Invoke("indirect")
+		if err != nil {
+			t.Fatalf("call_indirect through a table slot holding a host function gave %v, want it to "+
+				"dispatch (Option C landed)", err)
+		}
+		if len(res) != 1 || res[0].Int32() != 1 {
+			t.Errorf("indirect() = %v, want [1] (the host function's own result)", res)
 		}
 	})
 }

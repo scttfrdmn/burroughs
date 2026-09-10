@@ -468,7 +468,7 @@ func buildFrame(fn *binary.Func, ft *binary.FuncType, st *stack) (*frame, error)
 // …, Inst: in}`), so a funcref that crossed an instance boundary through a global or a parameter
 // carries its definer with it, and reading `Addr` against the *current* instance is the same bug
 // with a shorter path to it.
-func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
+func funcRefTarget(r ref, site string) (funcTarget, error) {
 	// **A non-null reference with no defining instance is this engine's bug, not the module's**, and
 	// the line below is why it needs saying here rather than at the fill sites alone: `target.mod`
 	// dereferences a pointer that Go's zero `ref` leaves nil (`{Null: false, Addr: 0, Inst: nil}` —
@@ -491,17 +491,17 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 	// [669]: https://github.com/scttfrdmn/burroughs/issues/669
 	// [0077]: ../../docs/decisions/0077-a-non-null-reference-with-no-defining-instance-is-the-engines-own-broken-invariant-so-it-gets-its-own-sentinel-rather-than-the-modules-blame.md
 	if r.Inst == nil {
-		return nil, nil, fmt.Errorf("%w: %s holds a non-null reference with no defining instance, "+
+		return funcTarget{}, fmt.Errorf("%w: %s holds a non-null reference with no defining instance, "+
 			"so function %d has no index space to resolve in (an engine []ref allocation site "+
 			"published unfilled slots; decision 0077)", ErrEngineInvariant, site, r.Addr)
 	}
 	target := r.Inst
 	fn, ok := target.mod.DefinedFunc(r.Addr)
 	if ok {
-		return target, fn, nil
+		return funcTarget{inst: target, fn: fn}, nil
 	}
 	if r.Addr >= uint32(target.mod.ImportedFuncs()) {
-		return nil, nil, fmt.Errorf("%w: %s names function %d of %d",
+		return funcTarget{}, fmt.Errorf("%w: %s names function %d of %d",
 			ErrNotValidated, site, r.Addr, target.mod.ImportedFuncs()+len(target.mod.Funcs))
 	}
 	// **Resolved here and then type-checked by the *caller*, sharing the defined path's check.**
@@ -519,29 +519,21 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 	// instance's own function 0 is itself an import, its resolution lives in its own `funcs` slice.
 	ext, ierr := target.importedFunc(r.Addr)
 	if ierr != nil {
-		return nil, nil, fmt.Errorf("%w (%s)", ierr, site)
+		return funcTarget{}, fmt.Errorf("%w (%s)", ierr, site)
 	}
 	if ext.host != nil {
-		// **A host function cannot be a `funcref` value, and this is the refusal that says so** —
-		// [ADR 0069][0069]'s deferral of option C's identity widening, at the one line that would
-		// otherwise nil-deref: `target = ext.owner` immediately below, where a host extern's `owner`
-		// is nil by construction.
-		//
-		// The reason it is a limit rather than a bug is that a `ref` names a function by a
-		// module-local index (`ref.Addr`) resolved in an instance (`ref.Inst`), and a host function
-		// has neither — so `ref.func`, `call_indirect` and `call_ref` would need an identity for it
-		// before they could carry one. Scott ruled C *"a later additive widening"* on the #647
-		// review; until it lands, an embedder's function is callable by name and not by reference.
-		//
-		// Reachable from a guest that puts an imported function in a table with `elem` or
-		// `table.set` and then calls it indirectly, so it is a named engine limit rather than an
-		// unreachable branch — `ErrUnsupportedOp`, which is the register for *this engine cannot*,
-		// never `ErrNotValidated`, which would blame a module that is well-formed.
+		// **A host function is a first-class funcref (ADR 0069 amendment, Option C).** The reference
+		// already names it — `r.Addr` is the import index and `r.Inst` the instance whose import slot
+		// `importedFunc` just resolved to `ext.host` — so the funcref-is-a-pair representation carries
+		// the host callee with no new field. What lands here is the *dispatch*: the host arm of a
+		// `funcTarget`, the same shape `call` already routes through `callHost`, so `call_indirect` and
+		// `call_ref` reach an embedder's function through a table exactly as a guest built by the
+		// component toolchains (a `$imports` trampoline table + `call_indirect`) requires. `inst` is the
+		// instance whose import slot held it — `callHost`'s `world`/result-type receiver, not an owner
+		// (a host extern has none).
 		//
 		// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
-		return nil, nil, fmt.Errorf("%w: %s resolves to a host function, which has no reference "+
-			"identity in this engine (decision 0069 defers it; call it by name instead)",
-			ErrUnsupportedOp, site)
+		return funcTarget{inst: target, host: ext.host}, nil
 	}
 	target = ext.owner
 	fn, ok = target.mod.DefinedFunc(ext.fnIdx)
@@ -550,10 +542,10 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 		// is the invariant `Instance.funcs` is documented to hold. Stated as a reachable check
 		// rather than a panic, per grave 0003: this asserts a property of a *sibling function*, and
 		// a future arm could falsify it silently.
-		return nil, nil, fmt.Errorf("%w: %s resolves to function %d of a supplier that does not define it",
+		return funcTarget{}, fmt.Errorf("%w: %s resolves to function %d of a supplier that does not define it",
 			ErrNotValidated, site, ext.fnIdx)
 	}
-	return target, fn, nil
+	return funcTarget{inst: target, fn: fn}, nil
 }
 
 // callIndirect resolves a table slot to a function and calls it — `eval.ml:272-280`.
@@ -595,14 +587,19 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 // declared shortfall in the all-gates-on lane — stated rather than left for a reader to discover,
 // per *unreachability is a grave only when it's silent*.
 func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
-	target, fn, ft, err := in.resolveCallIndirect(ins, st)
+	t, ft, err := in.resolveCallIndirect(ins, st)
 	if err != nil {
 		return err
+	}
+	if t.host != nil {
+		// The host arm builds no frame and costs no depth — answered before the budget check, as
+		// `call`'s own host arm is (ADR 0069's dispatch seam, now reached indirectly too).
+		return t.inst.callHost(t.host, st)
 	}
 	if depth >= callBudget {
 		return trapExhaustion
 	}
-	return target.invoke(fn, ft, st, depth)
+	return t.inst.invoke(t.fn, ft, st, depth)
 }
 
 // resolveCallIndirect is `callIndirect`'s half that answers *which function* — the table read, the
@@ -624,7 +621,7 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 // nothing on any of the 141 tail-call vectors and shows up only on a tail call made from the
 // deepest frame the budget permits, which is the row
 // TestTailCallConsumesNoBudgetButNestingStillDoes adds for it.
-func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance, *binary.Func, *binary.FuncType, error) {
+func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (funcTarget, *binary.FuncType, error) {
 	// **Imm0 is the *type* index and Imm1 the *table* index, which is the reverse of how the text
 	// reads them.** `encode.ml:275` is `op 0x11; idx y; idx x` where `x` is the table and `y` the
 	// type, and `decode.ml:397` reads them back in that order — so the wire form puts the type
@@ -633,7 +630,7 @@ func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance,
 	typeIdx, tabIdx := ins.Imm0, ins.Imm1
 	tab, err := in.tableFor("instruction", tabIdx)
 	if err != nil {
-		return nil, nil, nil, err
+		return funcTarget{}, nil, err
 	}
 	// The index operand is an **i32 read unsigned**, and widening it to 64 bits before the bounds
 	// test is what makes the test right: a table64's index is genuinely 64-bit
@@ -653,27 +650,41 @@ func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance,
 	// wrapping into a legal slot describes what would happen *if* a raw i64 could arrive here; it
 	// cannot today, and memory64 is when that changes.
 	if needErr := st.needNum(1); needErr != nil {
-		return nil, nil, nil, needErr
+		return funcTarget{}, nil, needErr
 	}
 	i := tableAddr(tab, st.popNum())
 	r, err := tab.load(i) // `undefined element i` when out of bounds
 	if err != nil {
-		return nil, nil, nil, err
+		return funcTarget{}, nil, err
 	}
 	if r.Null {
-		return nil, nil, nil, uninitializedElem(i)
+		return funcTarget{}, nil, uninitializedElem(i)
 	}
-	target, fn, err := funcRefTarget(r, fmt.Sprintf("table slot %d", i))
+	t, err := funcRefTarget(r, fmt.Sprintf("table slot %d", i))
 	if err != nil {
-		return nil, nil, nil, err
-	}
-	ft, err := target.funcType(fn)
-	if err != nil {
-		return nil, nil, nil, err
+		return funcTarget{}, nil, err
 	}
 	want, err := in.declaredFuncType(typeIdx)
 	if err != nil {
-		return nil, nil, nil, err
+		return funcTarget{}, nil, err
+	}
+	if t.host != nil {
+		// **A host callee's type check is structural equality, which is `match_deftype` for it** (ADR
+		// 0069 amendment): its `binary.FuncType` names no type index (`hostTypeIsLinkable` refuses
+		// those), so it carries no GC subtyping and equality of value types is the whole judgement. It
+		// is compared directly rather than through `validate.MatchDefType`, which needs the module and
+		// type index a host function has neither of. The mismatch trap is the reference's own text.
+		if !funcTypesMatch(want, &t.host.ft) {
+			return funcTarget{}, nil, &Trap{Reason: fmt.Sprintf("indirect call type mismatch, expected %s but got %s",
+				funcTypeString(want), funcTypeString(&t.host.ft))}
+		}
+		ftHost := t.host.ft
+		return t, &ftHost, nil
+	}
+	target, fn := t.inst, t.fn
+	ft, err := target.funcType(fn)
+	if err != nil {
+		return funcTarget{}, nil, err
 	}
 	// **`validate.MatchDefType` is `match_deftype`, and it is the only one in the tree as of
 	// 0042** — this line called `sameFuncType`, a second implementation of the same judgement
@@ -716,10 +727,33 @@ func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance,
 		// sentinel; the citation was invented in the direction of claiming oracle cover for the
 		// half of the message that has none, which is the reverse of the honest reading and the
 		// exact thing #38's refinement exists to keep straight (grave #147).
-		return nil, nil, nil, &Trap{Reason: fmt.Sprintf("indirect call type mismatch, expected %s but got %s",
+		return funcTarget{}, nil, &Trap{Reason: fmt.Sprintf("indirect call type mismatch, expected %s but got %s",
 			funcTypeString(want), funcTypeString(ft))}
 	}
-	return target, fn, ft, nil
+	return t, ft, nil
+}
+
+// funcTypesMatch is structural equality of two function types: same arity and identical value types in
+// order. It is `match_deftype` reduced to equality for index-free MVP functypes — the only shape a host
+// function's declared type can take (`hostTypeIsLinkable` refuses a host type that names type indices),
+// which is why a host callee's `call_indirect` check uses it rather than `validate.MatchDefType`. A
+// `binary.ValType` is a comparable struct (a kind byte, a nullability bool, a resolved index), so `==`
+// is the whole element comparison.
+func funcTypesMatch(a, b *binary.FuncType) bool {
+	if len(a.Params) != len(b.Params) || len(a.Results) != len(b.Results) {
+		return false
+	}
+	for i := range a.Params {
+		if a.Params[i] != b.Params[i] {
+			return false
+		}
+	}
+	for i := range a.Results {
+		if a.Results[i] != b.Results[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // callRef is `call_ref` — `eval.ml:263-267`'s
@@ -750,14 +784,17 @@ func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance,
 // the validator, and an engine that trapped here would be answering a question the suite asks only
 // of #9.
 func (in *Instance) callRef(st *stack, depth int) error {
-	target, fn, ft, err := resolveCallRef(st)
+	t, ft, err := resolveCallRef(st)
 	if err != nil {
 		return err
+	}
+	if t.host != nil {
+		return t.inst.callHost(t.host, st)
 	}
 	if depth >= callBudget {
 		return trapExhaustion
 	}
-	return target.invoke(fn, ft, st, depth)
+	return t.inst.invoke(t.fn, ft, st, depth)
 }
 
 // resolveCallRef is `callRef`'s half that answers *which function* — pop the operand, trap on null,
@@ -770,31 +807,37 @@ func (in *Instance) callRef(st *stack, depth int) error {
 // index are relative to the naming module — and this one does not, which is worth being able to see
 // in the signature. The budget check stays at the two entry points; see `resolveCallIndirect` for
 // why that placement is load-bearing.
-func resolveCallRef(st *stack) (*Instance, *binary.Func, *binary.FuncType, error) {
+func resolveCallRef(st *stack) (funcTarget, *binary.FuncType, error) {
 	if err := st.needRef(1); err != nil {
-		return nil, nil, nil, err
+		return funcTarget{}, nil, err
 	}
 	r := st.popRef()
 	if r.Null {
-		return nil, nil, nil, trapNullFuncRef
+		return funcTarget{}, nil, trapNullFuncRef
 	}
 	// An exnref reaching here is #9's, for refEq's stated reason: `call_ref`'s operand is typed
 	// `(ref null $x)` with `$x` a functype, so nothing under `exn` can arrive in a validated module,
 	// and inventing a verdict in the accept direction is what §9 G-3 says the suite cannot see.
 	if r.Exc != nil {
-		return nil, nil, nil, fmt.Errorf(
+		return funcTarget{}, nil, fmt.Errorf(
 			"%w: call_ref on an exception reference, which is not a function reference",
 			ErrNotValidated)
 	}
-	target, fn, err := funcRefTarget(r, "call_ref operand")
+	t, err := funcRefTarget(r, "call_ref operand")
 	if err != nil {
-		return nil, nil, nil, err
+		return funcTarget{}, nil, err
 	}
-	ft, err := target.funcType(fn)
+	if t.host != nil {
+		// A host funcref reached by call_ref: no type check (the validator established the operand's
+		// static type, `CallRef _x`), just its declared type for `callHost`'s result cast.
+		ftHost := t.host.ft
+		return t, &ftHost, nil
+	}
+	ft, err := t.inst.funcType(t.fn)
 	if err != nil {
-		return nil, nil, nil, err
+		return funcTarget{}, nil, err
 	}
-	return target, fn, ft, nil
+	return t, ft, nil
 }
 
 // declaredFuncType resolves a type index to a functype — `funcType`'s other half, reaching the
