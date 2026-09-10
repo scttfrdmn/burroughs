@@ -26,6 +26,31 @@ func (r *reader) byte() (byte, error) {
 	return v, nil
 }
 
+// sleb reads a signed LEB128. A valtype is a signed LEB: non-negative is a type index; negative is a
+// primitive/type opcode (0x7f = -1 = bool, down to 0x64 = -28 = error-context).
+func (r *reader) sleb() (int64, error) {
+	var result int64
+	var shift uint
+	for i := range 5 {
+		b, err := r.byte()
+		if err != nil {
+			return 0, err
+		}
+		result |= int64(b&0x7f) << shift
+		shift += 7
+		if b&0x80 == 0 {
+			if shift < 64 && b&0x40 != 0 {
+				result |= -1 << shift
+			}
+			return result, nil
+		}
+		if i == 4 {
+			return 0, fmt.Errorf("s33 LEB128 unterminated")
+		}
+	}
+	return 0, fmt.Errorf("s33 LEB128 unterminated")
+}
+
 // u32 reads an unsigned LEB128 in at most five bytes, the core encoding the component format reuses.
 func (r *reader) u32() (uint32, error) {
 	var result uint32

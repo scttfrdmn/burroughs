@@ -179,7 +179,8 @@ type Component struct {
 	Aliases          []Alias
 	Canons           []Canon
 	Instances        []Instance
-	NestedComponents [][]byte // raw bytes of each nested component (id 4), for recursive instantiation
+	Types            []TypeDef // component type definitions (id 7), decoded to the guest-driven depth
+	NestedComponents [][]byte  // raw bytes of each nested component (id 4), for recursive instantiation
 
 	// Defs is every definition in stream order, each tagged with the index space it adds to — the
 	// structure the cross-sort ordering rule needs (the B.1 finding). The engine walks it in order.
@@ -262,6 +263,10 @@ func Load(b []byte) (*Component, error) {
 			}
 		case SectionInstance:
 			if perr := c.parseInstances(body); perr != nil {
+				return nil, perr
+			}
+		case SectionType:
+			if perr := c.parseTypes(body); perr != nil {
 				return nil, perr
 			}
 		case SectionComponent:
