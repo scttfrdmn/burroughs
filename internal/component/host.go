@@ -64,6 +64,13 @@ func (h *Host) wasi() map[string]interp.HostFunc {
 		"wasi:io/streams@0.2.3::[method]output-stream.blocking-flush":           h.okResult(8),
 
 		"wasi:cli/exit@0.2.3::exit": h.exit,
+
+		// Rust's std init probes the environment and the preopened directories before it writes. Both
+		// return a `list` and this host grants neither, so each lowers an **empty list** — a (ptr, len)
+		// pair of zeroes at the return pointer, the func's sole argument.
+		"wasi:cli/environment@0.2.3::get-environment":     h.emptyList,
+		"wasi:filesystem/preopens@0.2.3::get-directories": h.emptyList,
+		"wasi:filesystem/preopens@0.2.2::get-directories": h.emptyList,
 	}
 	// The resource-drop intrinsics the world lowers are no-ops here: the table entry is left in place
 	// (the streams are the process's, not the guest's to free), so a drop neither refuses nor frees.
@@ -149,3 +156,12 @@ func (h *Host) exit(_ *interp.Caller, args []interp.Value) ([]interp.Value, erro
 
 // noop is a resource-drop intrinsic: it accepts the handle argument and returns, freeing nothing.
 func (h *Host) noop(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) { return nil, nil }
+
+// emptyList marshals a `() -> list<T>` import: its sole core argument is the return pointer, and an
+// empty list is a (ptr, len) pair of zeroes written there (8 bytes).
+func (h *Host) emptyList(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("component: list getter: got %d core args, want 1 (ret)", len(args))
+	}
+	return nil, c.Write(uint64(uint32(args[0].Bits)), make([]byte, 8))
+}
