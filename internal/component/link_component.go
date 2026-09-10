@@ -5,6 +5,8 @@ package component
 import (
 	"errors"
 	"fmt"
+
+	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
 // The component-space half of the instantiation walk (PR B, to run-callable): canon lift, component
@@ -71,8 +73,8 @@ func stubHost(name string) (compDef, bool) {
 // walkComponent runs the whole walk (core spaces then component spaces) for a component with a given
 // import host, and returns a walker holding the resolved spaces. A nested component recurses through
 // this same function.
-func (c *Component) walkComponent(h host) (*walker, error) {
-	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h}
+func (c *Component) walkComponent(h host, wasiHost map[string]interp.HostFunc) (*walker, error) {
+	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost}
 	for _, d := range c.Defs {
 		if err := w.stepAll(d); err != nil {
 			w.close()
@@ -192,7 +194,7 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		}
 		return compDef{}, false
 	}
-	nw, err := w.nested[in.ComponentIdx].walkComponent(argHost)
+	nw, err := w.nested[in.ComponentIdx].walkComponent(argHost, w.wasiHost)
 	if err != nil {
 		return compDef{}, err
 	}
@@ -300,7 +302,24 @@ func Instantiate(bytes []byte) (*Instantiated, error) {
 	if err != nil {
 		return nil, err
 	}
-	w, err := c.walkComponent(stubHost)
+	w, err := c.walkComponent(stubHost, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &Instantiated{w: w, export: w.exportInstance()}, nil
+}
+
+// InstantiateWithHost loads and instantiates a component against a real preview-2 host (PR C.2): the
+// wasi imports the guest-driven world reaches are marshaled to the host's impls, and any it does not
+// reach still meet the refusing stub. The component-import host stays the stub (it supplies the named
+// import instances the aliases project through); the host's impls are consulted at the core boundary
+// where the canon-lowered funcs are filled.
+func InstantiateWithHost(bytes []byte, h *Host) (*Instantiated, error) {
+	c, err := Load(bytes)
+	if err != nil {
+		return nil, err
+	}
+	w, err := c.walkComponent(stubHost, h.wasi())
 	if err != nil {
 		return nil, err
 	}

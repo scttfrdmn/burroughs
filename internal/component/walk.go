@@ -32,6 +32,9 @@ type coreDef struct {
 	// (interp exposes invocation only by export name, so the alias's name is retained).
 	inst *interp.Instance
 	name string
+	// lowerName is the wasi identity ("module::export") of a canon-lowered func — the host resolves it
+	// to a real marshaling impl (PR C) or, absent one, the refusing stub.
+	lowerName string
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -78,6 +81,9 @@ type walker struct {
 	compInstances []compDef
 	nested        []*Component
 	host          host
+	// wasiHost maps a canon-lowered func's "module::export" identity to a real marshaling impl (PR C.2).
+	// A lowered func with no entry here reaches the refusing stub — an unexercised import stays refused.
+	wasiHost map[string]interp.HostFunc
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -104,8 +110,17 @@ func (w *walker) step(d Def) error {
 		return w.coreInstanceStep(w.c.CoreInstances[d.Item])
 	case SectionCanon:
 		if d.Space == SpaceCoreFunc {
-			// lower and the resource built-ins add a core func the engine fills with a refusing stub;
-			// their real semantics (value marshaling, resource discipline) are B.3.
+			// A lower adds a core func the host fills; its wasi identity comes from the component func it
+			// lowers (an alias export of an imported instance carries the "module::export" name). The real
+			// marshaling impl, or the refusing stub, is chosen in the resolver by that name. Resource
+			// built-ins keep the stub (their discipline is Phase 3).
+			cn := w.c.Canons[d.Item]
+			if cn.Kind == CanonLower && int(cn.FuncIdx) < len(w.compFuncs) {
+				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName != "" {
+					w.appendCore(SpaceCoreFunc, coreDef{lowerName: cf.stubName})
+					return nil
+				}
+			}
 			w.appendCore(SpaceCoreFunc, coreDef{stub: true})
 		}
 		return nil
@@ -198,12 +213,17 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if !ok {
 			return interp.Extern{}, false
 		}
-		if !d.isStub() {
+		if d.lowerName == "" && !d.isStub() {
 			return d.extern, true // a real export, by reference (memory/global/func sharing)
 		}
 		ft, ok := funcImportType(m, mod, name)
 		if !ok {
 			return interp.Extern{}, false
+		}
+		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
+		// stub — it refuses by name, typed from the importing module's own declaration.
+		if impl, ok := w.wasiHost[d.lowerName]; ok {
+			return interp.HostExtern(ft, impl), true
 		}
 		return interp.HostExtern(ft, refuse(mod, name)), true
 	}
