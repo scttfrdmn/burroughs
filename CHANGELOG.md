@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **A component's `run` export is callable through Burroughs, reaching the host boundary (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  PR B to run-callable: the component-space walk — canon **lift** (a core func lifted to a component
+  func), **recursive nested-component instantiation** (the same walk applied to a nested component's
+  stream, its imports supplied by the instantiation args), and the component-level exports — with
+  `component.Instantiate`/`Call`. The Step-0 `p3hello` component loads, instantiates its four core
+  modules and its nested `run` shim, and `Call("wasi:cli/run@0.2.3")` drives the guest until — with no
+  host supplied — it reaches a wasi import, which the stub host refuses by name. run() moves no values,
+  so it is callable without the value codec. The borrow-lifetime discipline at the call boundary is PR
+  B's remaining exit item.
+
 - **The component instantiation walk brings the core modules up on a stub host (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
