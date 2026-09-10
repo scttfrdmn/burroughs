@@ -256,6 +256,13 @@ var ErrNoMemory = errors.New("the instance that declared this host function has 
 type hostFunc struct {
 	ft binary.FuncType
 	fn HostFunc
+	// mem, when non-nil, is the memory this host function lifts and lowers against, overriding the
+	// declaring instance's memory 0. It is the canonical-ABI adapter's need (ADR 0084): a canon lower's
+	// `(memory $m)` option names the memory the guest's arguments index, which the memory-less
+	// `$imports` trampoline that dispatches the adapter does not have. Reading and writing it runs no
+	// guest code, so H-2 holds; the realloc/post-return half of the options bundle — which does run
+	// guest code — is a later increment behind §5's H-2 amendment.
+	mem *Extern
 }
 
 // HostExtern makes an `Extern` that satisfies a function import with an embedder's Go function.
@@ -274,6 +281,23 @@ type hostFunc struct {
 // (contract §6), and refusing is what keeps this slice from pre-deciding it.
 func HostExtern(ft binary.FuncType, fn HostFunc) Extern {
 	return Extern{Kind: binary.ExternFunc, host: &hostFunc{ft: ft, fn: fn}}
+}
+
+// HostExternWithMemory makes a host function that lifts and lowers against a given memory rather than
+// its declaring instance's memory 0 — the canonical-ABI adapter's shape (ADR 0084). A canon lower runs
+// against the memory named in its `(memory $m)` option, but the guest reaches the lowered function
+// through a `$imports` trampoline whose own core module has no memory; binding the memory here is what
+// lets `Caller.Read`/`Write` reach the guest's arguments. `mem` must be a memory `Extern` (the lower's
+// resolved memory); an embedder never needs this constructor, since a plain host import's memory is
+// correctly its declaring instance's.
+//
+// **This is H-2-clean and only the memory half of the options bundle.** Reading and writing the bound
+// memory runs no guest code. Binding the lower's `realloc` and `post-return` — which the ABI invokes on
+// the calling agent's stack — is a distinct increment behind §5's H-2 amendment, and it will be a
+// distinct adapter form, not this constructor, so that an embedder `HostExtern` still has no way to
+// re-enter the guest.
+func HostExternWithMemory(ft binary.FuncType, fn HostFunc, mem Extern) Extern {
+	return Extern{Kind: binary.ExternFunc, host: &hostFunc{ft: ft, fn: fn, mem: &mem}}
 }
 
 // ErrHostTrap wraps whatever a host function returned as an error. The guest sees a trap; the
@@ -401,6 +425,16 @@ func (in *Instance) callHost(h *hostFunc, st *stack) error {
 	// memory 0 comes from the *declaring instance*, because an index space belongs to the module that
 	// wrote the import. `Caller`'s own comment argues both directions at length.
 	mem, memErr := in.hostMemory()
+	if h.mem != nil {
+		// A memory-bound host function (the canon-lower adapter) lifts/lowers against the memory named
+		// in its options, not the declaring instance's — the guest reaches it through a memory-less
+		// trampoline (ADR 0084). Reading/writing this memory runs no guest code, so H-2 is untouched.
+		if h.mem.mem != nil {
+			mem, memErr = h.mem.mem, nil
+		} else {
+			mem, memErr = nil, fmt.Errorf("%w: a memory-bound host function's bound memory is nil", ErrNotValidated)
+		}
+	}
 	c := &Caller{ctx: t.context(), tid: t.threadID(), mem: mem, memErr: memErr}
 
 	leaveGuest()
