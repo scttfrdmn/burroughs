@@ -60,9 +60,10 @@ type Extern struct {
 	// `externtype` has no arm for an embedder's function, because the embedder is outside the wire
 	// format. So this field does not make the taxonomy open; it records that one arm of it can be
 	// satisfied from outside. The consequence a reader must carry away is that every site reading
-	// `owner` on the func arm has a nil to answer for, which is why four of them now do so by name:
-	// `resolveCall` dispatches, `funcRefTarget` refuses, `invokeIndex` refuses, and `typeSpace`
-	// reports no module.
+	// `owner` on the func arm has a nil to answer for, which is why each now does so by name:
+	// `resolveCall` and `funcRefTarget` dispatch (the latter through the host arm of a `funcTarget`,
+	// since ADR 0069's Option C amendment made a host function a first-class funcref), `invokeIndex`
+	// refuses, and `typeSpace` reports no module.
 	//
 	// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
 	host *hostFunc

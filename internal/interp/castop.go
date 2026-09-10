@@ -407,11 +407,18 @@ func typeOfRef(r ref, site string) (refType, error) {
 		// imported slot reports the definer's type index in the definer's type space: the
 		// importing module's own type index would be an index into the wrong space, which is
 		// the funcref-is-a-pair finding (grave #163) reaching the cast relation.
-		target, fn, err := funcRefTarget(r, site)
+		t, err := funcRefTarget(r, site)
 		if err != nil {
 			return refType{}, err
 		}
-		return refType{heap: heapType{idx: fn.TypeIndex, mod: target.mod}}, nil
+		if t.host != nil {
+			// A cast names the concrete type by a module type-index; a host function's type carries
+			// none (ADR 0069 amendment's named limit — `hostTypeIsLinkable` refuses index-bearing host
+			// types), so its dynamic type has no index to report into the cast lattice. Off the p3 path
+			// (a `gate:gc` edge); refused by name rather than nil-dereferenced.
+			return refType{}, fmt.Errorf("%w: ref.cast / br_on_cast of a host function to a concrete func type is not modeled (a host function has no module type index; ADR 0069)", ErrUnsupportedOp)
+		}
+		return refType{heap: heapType{idx: t.fn.TypeIndex, mod: t.inst.mod}}, nil
 	}
 
 	// No discriminator set on a non-null reference. Reported as the engine inconsistency it is,

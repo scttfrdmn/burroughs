@@ -537,23 +537,26 @@ const maxFrameLocals = 1 << 24
 // `0x3f` names memory — which is the bucketed-failures discipline pointed at this layer.
 //
 // **The first sentence read *"the engine saying it has no arm for an instruction"* until
-// [decision 0079][0079], and five landed call sites had no opcode at all**: the reference-argument
+// [decision 0079][0079], and landed call sites had no opcode at all**: the reference-argument
 // refusals in `invokeIndex`'s parameter loop and in `pushHostResults` (`Value.toRef`'s two
-// `ErrUnsupportedOp` arms), the host-function-has-no-reference-identity limit in `funcRefTarget`, the
-// re-exported-host-function refusal in `invokeIndex`, and the unaligned-atomic-base limit in
-// `checkBaseAlignment`. `funcRefTarget`'s own comment already stated the broader reading as the rule —
-// *"the register for **this engine cannot**, never `ErrNotValidated`, which would blame a module that
-// is well-formed"* — so the practice was settled and the sentence was the stale artifact. Widened
-// rather than narrowed, because the alternative was five new sentinels distinguishing gaps that an
-// embedder acts on identically: `publicError` maps all of it to `ErrUnsupported`.
+// `ErrUnsupportedOp` arms), the re-exported-host-function refusal in `invokeIndex`, the
+// unaligned-atomic-base limit in `checkBaseAlignment`, and — since [ADR 0069][0069]'s Option C
+// amendment retired the funcref-identity refusal in `funcRefTarget` — the two named host-callee limits
+// that remain: a `return_call*` tail call to a host function and a GC cast of one, each refusing for a
+// reason its own comment states. The broader reading is the rule these share, *"the register for **this
+// engine cannot**, never `ErrNotValidated`, which would blame a module that is well-formed"* — so the
+// practice was settled and the sentence was the stale artifact. Widened rather than narrowed, because
+// the alternative was a sentinel per gap distinguishing gaps that an embedder acts on identically:
+// `publicError` maps all of it to `ErrUnsupported`.
 //
-// The bucket-keyed-by-opcode property survives the widening because none of the five is keyed by an
-// opcode: each names its own subject — a Go caller's argument, a host function's result or identity,
-// the allocator's alignment — so a bucket built by grouping these messages separates them from the
-// opcode gaps rather than diluting them. What the widening gives up is the inference *from the
-// sentinel alone* that an opcode is missing, and reading the message was always required to name which
-// one.
+// The bucket-keyed-by-opcode property survives the widening because none of these is keyed by an
+// opcode: each names its own subject — a Go caller's argument, a host function's result, a tail call or
+// GC cast of a host function, the allocator's alignment — so a bucket built by grouping these messages
+// separates them from the opcode gaps rather than diluting them. What the widening gives up is the
+// inference *from the sentinel alone* that an opcode is missing, and reading the message was always
+// required to name which one.
 //
+// [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
 // [0079]: ../../docs/decisions/0079-the-boundary-refuses-a-reference-argument-by-its-own-payload-kind-rather-than-by-the-parameters-spelling-and-the-register-splits-on-whether-a-widening-could-lift-it.md
 //
 // It is reported when the instruction is *reached*, never by scanning a body in advance. A

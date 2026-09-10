@@ -621,11 +621,17 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// `assert_exception`, i.e. *not* caught by the handler the tail call sits inside.
 			// `tailFrom` gets that by construction, this frame's `ctrl` being a local of a
 			// function that is returning.
-			target, callee, calleeType, err := in.resolveCallIndirect(ins, st)
+			t, calleeType, err := in.resolveCallIndirect(ins, st)
 			if err != nil {
 				return err
 			}
-			return tailFrom(target, callee, calleeType, st, base)
+			if t.host != nil {
+				// A tail call replaces this frame with the callee's; a host function builds none, so
+				// there is no frame to replace (ADR 0069 amendment's named limit). Off every p3 path and
+				// every spec vector — the suite's tail calls target wasm imports, not host functions.
+				return fmt.Errorf("%w: return_call_indirect to a host function is not modeled (a tail call replaces a frame a host function does not build; ADR 0069)", ErrUnsupportedOp)
+			}
+			return tailFrom(t.inst, t.fn, calleeType, st, base)
 
 		case opCallRef: // 0x14 — `eval.ml:266-270` (`gate:gc`, #172 rung 1)
 			if err := in.callRef(st, depth); err != nil {
@@ -691,11 +697,14 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// try_table vector, so for *this* opcode pair the authority is the reduction; the
 			// corpus checks the same property one arm up, where `try_table.wast:334` asserts it
 			// for `return_call`.
-			target, callee, calleeType, err := resolveCallRef(st)
+			t, calleeType, err := resolveCallRef(st)
 			if err != nil {
 				return err
 			}
-			return tailFrom(target, callee, calleeType, st, base)
+			if t.host != nil {
+				return fmt.Errorf("%w: return_call_ref to a host function is not modeled (a tail call replaces a frame a host function does not build; ADR 0069)", ErrUnsupportedOp)
+			}
+			return tailFrom(t.inst, t.fn, calleeType, st, base)
 
 		case opEnd:
 			// **Two meanings, and the control stack is what tells them apart** — which is
