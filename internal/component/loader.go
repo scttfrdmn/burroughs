@@ -170,15 +170,20 @@ type Section struct {
 // and the component-level imports and exports. It is the structural view slice 1 produces; it holds no
 // lift/lower state (slice 2).
 type Component struct {
-	Version       uint16
-	Sections      []Section
-	CoreModules   []*bin.Module
-	Imports       []Import
-	Exports       []Export
-	CoreInstances []CoreInstance
-	Aliases       []Alias
-	Canons        []Canon
-	Instances     []Instance
+	Version          uint16
+	Sections         []Section
+	CoreModules      []*bin.Module
+	Imports          []Import
+	Exports          []Export
+	CoreInstances    []CoreInstance
+	Aliases          []Alias
+	Canons           []Canon
+	Instances        []Instance
+	NestedComponents [][]byte // raw bytes of each nested component (id 4), for recursive instantiation
+
+	// Defs is every definition in stream order, each tagged with the index space it adds to — the
+	// structure the cross-sort ordering rule needs (the B.1 finding). The engine walks it in order.
+	Defs []Def
 }
 
 // componentVersion is the format version at the pin (Binary.md @ 2bed77e: version 0x000d, layer
@@ -234,6 +239,7 @@ func Load(b []byte) (*Component, error) {
 				return nil, fmt.Errorf("component: core module %d: %w", len(c.CoreModules), derr)
 			}
 			c.CoreModules = append(c.CoreModules, m)
+			c.def(SpaceCoreModule, SectionCoreModule, len(c.CoreModules)-1)
 		case SectionImport:
 			if perr := c.parseImports(body); perr != nil {
 				return nil, perr
@@ -258,10 +264,20 @@ func Load(b []byte) (*Component, error) {
 			if perr := c.parseInstances(body); perr != nil {
 				return nil, perr
 			}
+		case SectionComponent:
+			// A nested component is one component (not a vec). Its bytes are kept for recursive
+			// instantiation, and it adds one entry to the component index space.
+			c.NestedComponents = append(c.NestedComponents, append([]byte(nil), body...))
+			c.def(SpaceComponent, SectionComponent, len(c.NestedComponents)-1)
 		default:
 			// Framed and recorded; the type sections (parsed to canon's depth) and the custom/start/value
 			// sections are not this increment's subject.
 		}
+	}
+	// The ordering rule runs across sorts on the definition stream (the B.1 finding): a reference must
+	// name an index defined earlier. Checked here, over the whole stream, once every definition is in.
+	if err := c.checkForwardRefs(); err != nil {
+		return nil, err
 	}
 	return c, nil
 }
@@ -284,6 +300,7 @@ func (c *Component) parseImports(body []byte) error {
 			return fmt.Errorf("component: import %d (%q) externtype: %w", i, name, err)
 		}
 		c.Imports = append(c.Imports, Import{Name: name, Kind: kind})
+		c.def(externKindSpace(kind), SectionImport, len(c.Imports)-1)
 	}
 	if r.pos != len(body) {
 		return fmt.Errorf("component: import section: consumed %d of %d bytes", r.pos, len(body))

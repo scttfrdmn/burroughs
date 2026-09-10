@@ -106,3 +106,28 @@ func TestConsumedEqualsSizeCatchesADesync(t *testing.T) {
 		t.Fatal("Load accepted an alias section with a trailing unparsed byte")
 	}
 }
+
+// TestForwardReferenceRefusedOnTheStream is the B.1-finding fix witnessed on the right structure: the
+// ordering rule is enforced across sorts on the definition stream, so a reference to an index not yet
+// defined is refused — including a cross-sort case (a canon lift, which defines a component func,
+// referencing a core func that no earlier definition provides). p3hello, valid, passes.
+func TestForwardReferenceRefusedOnTheStream(t *testing.T) {
+	b, err := os.ReadFile(fixtureWasm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, e := Load(b); e != nil {
+		t.Fatalf("valid p3hello refused: %v", e)
+	}
+
+	// A component whose only definition is a `canon lift` referencing core func 0 — a cross-sort
+	// forward reference (the lift is a component-func definition; the core-func space is empty). Encoding:
+	// canon section, count 1, then 0x00 (lift) 0x00 (func sort) 0x00 (corefuncidx) 0x00 (opts count)
+	// 0x00 (typeidx).
+	canonBody := []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00}
+	comp := append(append([]byte(nil), componentPreamble...), section(byte(SectionCanon), canonBody...)...)
+	_, err = Load(comp)
+	if err == nil {
+		t.Fatal("Load accepted a canon lift referencing an undefined core func — a cross-sort forward reference")
+	}
+}

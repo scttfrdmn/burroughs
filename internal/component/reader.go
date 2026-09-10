@@ -160,36 +160,39 @@ func (r *reader) valueBound() error {
 }
 
 // sort reads a `sort` (Binary.md): a discriminant, with the core case carrying a second core:sort byte.
-func (r *reader) sort() (Sort, error) {
+// The core sub-sort is returned too (meaningful only when the sort is SortCore), because an alias's or
+// sortidx's target space depends on it — a core func and a core memory are different spaces.
+func (r *reader) sort() (Sort, CoreSort, error) {
 	disc, err := r.byte()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	switch disc {
-	case 0x00: // core cs — consume the core:sort sub-byte
-		if _, serr := r.byte(); serr != nil {
-			return 0, serr
+	case 0x00: // core cs — the core:sort sub-byte names the core space
+		cs, serr := r.byte()
+		if serr != nil {
+			return 0, 0, serr
 		}
-		return SortCore, nil
+		return SortCore, CoreSort(cs), nil
 	case 0x01:
-		return SortFunc, nil
+		return SortFunc, 0, nil
 	case 0x02:
-		return SortValue, nil
+		return SortValue, 0, nil
 	case 0x03:
-		return SortType, nil
+		return SortType, 0, nil
 	case 0x04:
-		return SortComponent, nil
+		return SortComponent, 0, nil
 	case 0x05:
-		return SortInstance, nil
+		return SortInstance, 0, nil
 	default:
-		return 0, fmt.Errorf("sort discriminant %#x is undefined", disc)
+		return 0, 0, fmt.Errorf("sort discriminant %#x is undefined", disc)
 	}
 }
 
 // sortIdx reads a `sortidx` and returns the sort, discarding the index — the export enumeration reports
 // the kind, not the target.
 func (r *reader) sortIdx() (Sort, error) {
-	s, err := r.sort()
+	s, _, err := r.sort()
 	if err != nil {
 		return 0, err
 	}
@@ -199,18 +202,18 @@ func (r *reader) sortIdx() (Sort, error) {
 	return s, nil
 }
 
-// sortIdxFull reads a `sortidx` and returns both the sort and the index, for instantiation args that
-// must resolve the target.
-func (r *reader) sortIdxFull() (Sort, uint32, error) {
-	s, err := r.sort()
+// sortIdxFull reads a `sortidx` and returns the sort, its core sub-sort, and the index, for
+// instantiation args that must resolve the target's space.
+func (r *reader) sortIdxFull() (Sort, CoreSort, uint32, error) {
+	s, cs, err := r.sort()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	idx, err := r.u32()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	return s, idx, nil
+	return s, cs, idx, nil
 }
 
 // coreName reads a `core:name`: a u32 length and that many UTF-8 bytes (no discriminant, unlike a
