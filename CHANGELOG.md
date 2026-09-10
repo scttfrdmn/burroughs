@@ -21,6 +21,17 @@ weakly-ordered platform.
 
 ### Added
 
+- **The component instantiation sections parse — `core:instance`, `alias`, `canon`, `instance` (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  PR B increment 1 of the p3 track: `internal/component` parses the instantiation grammar slice 1 framed
+  — core-instance instantiate/inline-exports, the three alias forms, canon lift/lower and the resource
+  built-ins, and component instances — per `Binary.md` at the pinned `component-model @ 2bed77e`. A canon
+  built-in outside lift/lower/resource.* (the async/thread family) refuses at parse by name, and each
+  parser requires its body consumed exactly. `p3hello`'s graph parses to `wasm-tools`' reading: 17 core
+  instances, 51 aliases (27 export + 24 core-export), 20 canons (1 lift, 15 lower, 4 resource.drop), 1
+  component instance.
+
 - **The Canonical ABI value codec — lift and lower scalars, floats, char, string, lists, variants, results, and own handles (both directions), against a hermetic differential (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
