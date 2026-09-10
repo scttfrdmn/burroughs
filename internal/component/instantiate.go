@@ -4,6 +4,76 @@ package component
 
 import "fmt"
 
+// Space is a component index space. The ordering rule runs across sorts on the definition stream, so a
+// reference names a (Space, index) whose defining stream position must precede the referrer's; the
+// per-sort slices cannot express that, which is the B.1 finding (dated, on #694).
+type Space uint8
+
+const (
+	SpaceCoreFunc Space = iota
+	SpaceCoreTable
+	SpaceCoreMemory
+	SpaceCoreGlobal
+	SpaceCoreType
+	SpaceCoreModule
+	SpaceCoreInstance
+	SpaceFunc
+	SpaceValue
+	SpaceType
+	SpaceComponent
+	SpaceInstance
+)
+
+// Def is one definition in stream order: the index space it adds an entry to, the section that defined
+// it, and the item's position within that section's parsed slice. The engine walks Defs in order,
+// growing each space, so a reference resolves against exactly the definitions that precede it.
+type Def struct {
+	Space   Space
+	Section SectionKind
+	Item    int
+}
+
+// def records a definition in the stream as it is parsed.
+func (c *Component) def(space Space, section SectionKind, item int) {
+	c.Defs = append(c.Defs, Def{Space: space, Section: section, Item: item})
+}
+
+// coreSortSpace maps a core:sort to its index space (for alias core-export targets and inline exports).
+func coreSortSpace(s CoreSort) Space {
+	switch s {
+	case CoreSortFunc:
+		return SpaceCoreFunc
+	case CoreSortTable:
+		return SpaceCoreTable
+	case CoreSortMemory:
+		return SpaceCoreMemory
+	case CoreSortGlobal:
+		return SpaceCoreGlobal
+	case CoreSortType:
+		return SpaceCoreType
+	case CoreSortModule:
+		return SpaceCoreModule
+	default: // CoreSortInstance
+		return SpaceCoreInstance
+	}
+}
+
+// sortSpace maps a component sort to its index space (for alias export targets).
+func sortSpace(s Sort) Space {
+	switch s {
+	case SortFunc:
+		return SpaceFunc
+	case SortValue:
+		return SpaceValue
+	case SortType:
+		return SpaceType
+	case SortComponent:
+		return SpaceComponent
+	default: // SortInstance, SortCore handled by the caller
+		return SpaceInstance
+	}
+}
+
 // The instantiation sections (Binary.md @ 2bed77e), parsed structurally here so PR B's engine can wire
 // them. Slice 1 framed these; this parses their contents. An unmodeled form refuses at parse with the
 // discriminant named, and every parser requires its body consumed exactly — the loader's discipline
@@ -59,11 +129,21 @@ const (
 // definition. Sort is what is aliased.
 type Alias struct {
 	Sort        Sort
+	CoreSort    CoreSort // meaningful when Sort is SortCore (a core-export alias): which core space
 	Kind        AliasKind
 	InstanceIdx uint32 // export / core-export
 	Name        string // export / core-export
 	Count       uint32 // outer
 	Index       uint32 // outer
+}
+
+// space is the index space an alias adds an entry to — the aliased sort, or its core sub-sort for a
+// core-export.
+func (a Alias) space() Space {
+	if a.Sort == SortCore {
+		return coreSortSpace(a.CoreSort)
+	}
+	return sortSpace(a.Sort)
 }
 
 // CanonOpts is a canonical function's options (Binary.md canonopt). StringEncoding defaults to "utf8"
@@ -97,11 +177,48 @@ type Canon struct {
 	TypeIdx uint32
 }
 
+// space is the index space a canon adds to: lift yields a component func; lower and the resource
+// built-ins yield core funcs.
+func (cn Canon) space() Space {
+	if cn.Kind == CanonLift {
+		return SpaceFunc
+	}
+	return SpaceCoreFunc
+}
+
+// externKindSpace maps a component import's extern kind to its index space.
+func externKindSpace(k ExternKind) Space {
+	switch k {
+	case ExternFunc:
+		return SpaceFunc
+	case ExternValue:
+		return SpaceValue
+	case ExternType:
+		return SpaceType
+	case ExternComponent:
+		return SpaceComponent
+	case ExternInstance:
+		return SpaceInstance
+	default: // ExternCoreModule
+		return SpaceCoreModule
+	}
+}
+
 // InstantiateArg names a definition (by sortidx) supplied to a component instantiation.
 type InstantiateArg struct {
-	Name string
-	Sort Sort
-	Idx  uint32
+	Name     string
+	Sort     Sort
+	CoreSort CoreSort
+	Idx      uint32
+}
+
+// InlineExport is one export of an inline-exports component instance: a name and the
+// definition it projects (by sortidx).
+type InlineExport struct {
+	Name     string
+	Sort     Sort
+	CoreSort CoreSort
+	Idx      uint32
 }
 
 // Instance is a component instance: an instantiation of a component with named args, or inline exports.
@@ -109,7 +226,7 @@ type Instance struct {
 	Instantiate   bool
 	ComponentIdx  uint32
 	Args          []InstantiateArg
-	InlineExports []Export
+	InlineExports []InlineExport
 }
 
 func (c *Component) parseCoreInstances(body []byte) error {
@@ -124,6 +241,7 @@ func (c *Component) parseCoreInstances(body []byte) error {
 			return fmt.Errorf("component: core:instance %d: %w", i, err)
 		}
 		c.CoreInstances = append(c.CoreInstances, ci)
+		c.def(SpaceCoreInstance, SectionCoreInstance, len(c.CoreInstances)-1)
 	}
 	return endOf("core:instance", r, len(body))
 }
@@ -198,12 +316,13 @@ func (c *Component) parseAliases(body []byte) error {
 			return fmt.Errorf("component: alias %d: %w", i, err)
 		}
 		c.Aliases = append(c.Aliases, a)
+		c.def(a.space(), SectionAlias, len(c.Aliases)-1)
 	}
 	return endOf("alias", r, len(body))
 }
 
 func (r *reader) alias() (Alias, error) {
-	sort, err := r.sort()
+	sort, cs, err := r.sort()
 	if err != nil {
 		return Alias{}, err
 	}
@@ -225,7 +344,7 @@ func (r *reader) alias() (Alias, error) {
 		if disc == 0x01 {
 			kind = AliasCoreExport
 		}
-		return Alias{Sort: sort, Kind: kind, InstanceIdx: idx, Name: name}, nil
+		return Alias{Sort: sort, CoreSort: cs, Kind: kind, InstanceIdx: idx, Name: name}, nil
 	case 0x02:
 		ct, err := r.u32()
 		if err != nil {
@@ -235,7 +354,7 @@ func (r *reader) alias() (Alias, error) {
 		if err != nil {
 			return Alias{}, err
 		}
-		return Alias{Sort: sort, Kind: AliasOuter, Count: ct, Index: idx}, nil
+		return Alias{Sort: sort, CoreSort: cs, Kind: AliasOuter, Count: ct, Index: idx}, nil
 	default:
 		return Alias{}, fmt.Errorf("alias discriminant %#x is not 0x00/0x01/0x02", disc)
 	}
@@ -253,6 +372,7 @@ func (c *Component) parseCanons(body []byte) error {
 			return fmt.Errorf("component: canon %d: %w", i, err)
 		}
 		c.Canons = append(c.Canons, cn)
+		c.def(cn.space(), SectionCanon, len(c.Canons)-1)
 	}
 	return endOf("canon", r, len(body))
 }
@@ -357,6 +477,7 @@ func (c *Component) parseInstances(body []byte) error {
 			return fmt.Errorf("component: instance %d: %w", i, err)
 		}
 		c.Instances = append(c.Instances, in)
+		c.def(SpaceInstance, SectionInstance, len(c.Instances)-1)
 	}
 	return endOf("instance", r, len(body))
 }
@@ -382,11 +503,11 @@ func (r *reader) instance() (Instance, error) {
 			if err != nil {
 				return Instance{}, err
 			}
-			sort, idx, err := r.sortIdxFull()
+			sort, cs, idx, err := r.sortIdxFull()
 			if err != nil {
 				return Instance{}, err
 			}
-			args[i] = InstantiateArg{Name: name, Sort: sort, Idx: idx}
+			args[i] = InstantiateArg{Name: name, Sort: sort, CoreSort: cs, Idx: idx}
 		}
 		return Instance{Instantiate: true, ComponentIdx: ci, Args: args}, nil
 	case 0x01:
@@ -394,17 +515,17 @@ func (r *reader) instance() (Instance, error) {
 		if err != nil {
 			return Instance{}, err
 		}
-		exps := make([]Export, n)
+		exps := make([]InlineExport, n)
 		for i := range n {
 			name, err := r.name()
 			if err != nil {
 				return Instance{}, err
 			}
-			sort, err := r.sortIdx()
+			sort, cs, idx, err := r.sortIdxFull()
 			if err != nil {
 				return Instance{}, err
 			}
-			exps[i] = Export{Name: name, Kind: sort}
+			exps[i] = InlineExport{Name: name, Sort: sort, CoreSort: cs, Idx: idx}
 		}
 		return Instance{InlineExports: exps}, nil
 	default:

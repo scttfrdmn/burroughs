@@ -21,6 +21,16 @@ weakly-ordered platform.
 
 ### Added
 
+- **The component definition stream and its cross-sort forward-reference check (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  PR B, the engine's foundation: the loader now records every definition in stream order tagged with its
+  index space (`internal/component`), and enforces the component grammar's ordering rule **across sorts**
+  — a definition may reference only an index defined earlier in the stream. A cross-sort forward reference
+  (e.g. a `canon lift` naming a core func no earlier definition provides) refuses at load. This is the
+  fix for the B.1 finding that the per-sort model could not express the cross-sort rule. p3hello (104
+  definitions, including its nested component) passes.
+
 - **The component instantiation sections parse — `core:instance`, `alias`, `canon`, `instance` (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
