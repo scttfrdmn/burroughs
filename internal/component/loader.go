@@ -170,11 +170,15 @@ type Section struct {
 // and the component-level imports and exports. It is the structural view slice 1 produces; it holds no
 // lift/lower state (slice 2).
 type Component struct {
-	Version     uint16
-	Sections    []Section
-	CoreModules []*bin.Module
-	Imports     []Import
-	Exports     []Export
+	Version       uint16
+	Sections      []Section
+	CoreModules   []*bin.Module
+	Imports       []Import
+	Exports       []Export
+	CoreInstances []CoreInstance
+	Aliases       []Alias
+	Canons        []Canon
+	Instances     []Instance
 }
 
 // componentVersion is the format version at the pin (Binary.md @ 2bed77e: version 0x000d, layer
@@ -238,8 +242,25 @@ func Load(b []byte) (*Component, error) {
 			if perr := c.parseExports(body); perr != nil {
 				return nil, perr
 			}
+		case SectionCoreInstance:
+			if perr := c.parseCoreInstances(body); perr != nil {
+				return nil, perr
+			}
+		case SectionAlias:
+			if perr := c.parseAliases(body); perr != nil {
+				return nil, perr
+			}
+		case SectionCanon:
+			if perr := c.parseCanons(body); perr != nil {
+				return nil, perr
+			}
+		case SectionInstance:
+			if perr := c.parseInstances(body); perr != nil {
+				return nil, perr
+			}
 		default:
-			// Framed and recorded; its contents are a later slice's subject.
+			// Framed and recorded; the type sections (parsed to canon's depth) and the custom/start/value
+			// sections are not this increment's subject.
 		}
 	}
 	return c, nil

@@ -159,35 +159,89 @@ func (r *reader) valueBound() error {
 	}
 }
 
-// sortIdx reads a `sortidx`: a sort followed by a u32 index. It returns the sort (the export's kind)
-// and discards the index — the enumeration reports the kind, not the target, this slice.
-func (r *reader) sortIdx() (Sort, error) {
+// sort reads a `sort` (Binary.md): a discriminant, with the core case carrying a second core:sort byte.
+func (r *reader) sort() (Sort, error) {
 	disc, err := r.byte()
 	if err != nil {
 		return 0, err
 	}
-	var s Sort
 	switch disc {
 	case 0x00: // core cs — consume the core:sort sub-byte
 		if _, serr := r.byte(); serr != nil {
 			return 0, serr
 		}
-		s = SortCore
+		return SortCore, nil
 	case 0x01:
-		s = SortFunc
+		return SortFunc, nil
 	case 0x02:
-		s = SortValue
+		return SortValue, nil
 	case 0x03:
-		s = SortType
+		return SortType, nil
 	case 0x04:
-		s = SortComponent
+		return SortComponent, nil
 	case 0x05:
-		s = SortInstance
+		return SortInstance, nil
 	default:
 		return 0, fmt.Errorf("sort discriminant %#x is undefined", disc)
+	}
+}
+
+// sortIdx reads a `sortidx` and returns the sort, discarding the index — the export enumeration reports
+// the kind, not the target.
+func (r *reader) sortIdx() (Sort, error) {
+	s, err := r.sort()
+	if err != nil {
+		return 0, err
 	}
 	if _, err = r.u32(); err != nil {
 		return 0, err
 	}
 	return s, nil
+}
+
+// sortIdxFull reads a `sortidx` and returns both the sort and the index, for instantiation args that
+// must resolve the target.
+func (r *reader) sortIdxFull() (Sort, uint32, error) {
+	s, err := r.sort()
+	if err != nil {
+		return 0, 0, err
+	}
+	idx, err := r.u32()
+	if err != nil {
+		return 0, 0, err
+	}
+	return s, idx, nil
+}
+
+// coreName reads a `core:name`: a u32 length and that many UTF-8 bytes (no discriminant, unlike a
+// component `nameattributes`).
+func (r *reader) coreName() (string, error) {
+	n, err := r.u32()
+	if err != nil {
+		return "", err
+	}
+	s, err := r.take(int(n))
+	if err != nil {
+		return "", err
+	}
+	return string(s), nil
+}
+
+// coreSortIdx reads a `core:sortidx`: a core:sort byte and a u32 index.
+func (r *reader) coreSortIdx() (CoreSort, uint32, error) {
+	b, err := r.byte()
+	if err != nil {
+		return 0, 0, err
+	}
+	switch CoreSort(b) {
+	case CoreSortFunc, CoreSortTable, CoreSortMemory, CoreSortGlobal, CoreSortTag,
+		CoreSortType, CoreSortModule, CoreSortInstance:
+	default:
+		return 0, 0, fmt.Errorf("core:sort byte %#x is undefined", b)
+	}
+	idx, err := r.u32()
+	if err != nil {
+		return 0, 0, err
+	}
+	return CoreSort(b), idx, nil
 }
