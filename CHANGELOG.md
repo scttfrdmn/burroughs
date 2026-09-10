@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **The component instantiation walk brings the core modules up on a stub host (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  PR B: the engine walks the definition stream in index order and instantiates a component's real core
+  modules through the interpreter, resolving each module's imports from earlier instances' exports **by
+  reference** (shared memory/globals) and filling the canon-lowered wasi funcs with a **stub host that
+  refuses each by name**. Synthetic inline-export instances are projections doing no interpreter work.
+  p3hello's four core modules instantiate; two reference-semantics assertions (a write through an
+  importer's memory extern visible via the exporter's; an imported func running on the exporter's
+  globals) are witnessed. Recursive nested-component instantiation, canon lift, and `run`-callability are
+  the next increment.
+
 - **The component definition stream and its cross-sort forward-reference check (behind `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
