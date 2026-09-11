@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **`list<string>` lowering verified against `definitions.py` through the pluggable-heap codec; the hand
+  path is deleted (behind `gate:components`, off).**
+  [#718](https://github.com/scttfrdmn/burroughs/issues/718),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  Second on the flip's blocking list (#720). The codec's list lowering is generalized over #719's
+  `canon.Heap`: `canon.StoreList` is the one list **framing** (outer `realloc`, per-element stride,
+  (ptr,count) header) with the element store injected, and `storeListData` is a shared `Heap` core used
+  by both `store` and the flat lower. `get-arguments` lowers its `list<string>` through it
+  (`canon.StoreVia` against guest memory) and `storeStringList` is deleted — one lowering, the model heap
+  and the guest heap sharing it (ADR 0083). New nested-realloc `list<string>` fixtures (empty/one/several,
+  ASCII+utf-8) pin the outer allocation, each per-element string allocation, and the realloc call
+  sequence; p3echo's `args=["p3echo.wasm"]` is the second oracle. Board unchanged.
+
+
 - **The string lowering is a pluggable-heap codec (`canon.StoreString`/`canon.Heap`); the host routes
   through it, no hand path (behind `gate:components`, off).**
   [#719](https://github.com/scttfrdmn/burroughs/issues/719), ADR 0084 / 0083.

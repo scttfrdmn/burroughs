@@ -235,40 +235,18 @@ func (h *Host) getArguments(c *interp.CanonCaller, args []interp.Value) ([]inter
 	if len(args) != 1 {
 		return nil, fmt.Errorf("component: get-arguments: got %d core args, want 1 (ret)", len(args))
 	}
-	return nil, h.storeStringList(c, uint64(uint32(args[0].Bits)), h.Args)
-}
-
-// storeStringList lowers ss as a list<string> whose header (ptr, len) is written at ret. Each string is
-// allocated separately (realloc, align 1) and recorded as (ptr, byte-len) in the 8-byte-per-record,
-// align-4 backing — the canonical layout, even for an empty list (realloc(0,0,4,0) still runs).
-func (h *Host) storeStringList(c *interp.CanonCaller, ret uint64, ss []string) error {
-	count := uint32(len(ss))
-	listPtr, err := c.Realloc(0, 0, 4, count*8)
+	// list<string> lowered by the codec's shared framing (canon.StoreList/StoreString via StoreVia),
+	// against guest memory — the same code the definitions.py list<string> fixtures verify (#718), not a
+	// hand path.
+	elems := make([]canon.Value, len(h.Args))
+	for i, s := range h.Args {
+		elems[i] = canon.Str(s)
+	}
+	v, err := canon.List(canon.Type{Kind: canon.KindString}, elems...)
 	if err != nil {
-		return fmt.Errorf("component: list<string> backing: %w", err)
+		return nil, err
 	}
-	for i, s := range ss {
-		b := []byte(s)
-		sp, err := c.Realloc(0, 0, 1, uint32(len(b)))
-		if err != nil {
-			return fmt.Errorf("component: string backing: %w", err)
-		}
-		if len(b) > 0 {
-			if err := c.Write(uint64(sp), b); err != nil {
-				return err
-			}
-		}
-		if err := writeU32(c, uint64(listPtr)+uint64(i)*8, sp); err != nil {
-			return err
-		}
-		if err := writeU32(c, uint64(listPtr)+uint64(i)*8+4, uint32(len(b))); err != nil {
-			return err
-		}
-	}
-	if err := writeU32(c, ret, listPtr); err != nil {
-		return err
-	}
-	return writeU32(c, ret+4, count)
+	return nil, canon.StoreVia(guestHeap{c}, v, int(uint32(args[0].Bits)))
 }
 
 // blockingRead marshals input-stream.blocking-read: (self: borrow<input-stream>, len: u64) ->

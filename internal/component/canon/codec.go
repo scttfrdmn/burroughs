@@ -233,6 +233,45 @@ func StoreString(h Heap, s string, ptr int) error {
 	return h.StoreInt(uint64(len(data)), ptr+ptrSize, ptrSize)
 }
 
+// StoreList lowers a `list<T>` (CanonicalABI.md `store_list`): the element backing is allocated through
+// the heap's realloc (element size × count, element alignment), each element is lowered into it by
+// `storeElem`, and the (ptr, count) pair is written at ptr. This is the one list **framing** — the
+// codec's `store` calls it for `KindList` with the full element store, and the host's canon adapter
+// calls it against guest memory (#718) with a heap-composable one; the framing (stride, per-element
+// realloc, header offsets) — the part a hand lowering gets subtly wrong — is thus verified by the
+// definitions.py list fixtures rather than reimplemented. `storeElem` is injected because the model heap
+// can lower any element kind (through `*heap.store`) while a guest heap lowers only the composable ones
+// ([StoreVia]); the framing is shared regardless.
+func StoreList(h Heap, v Value, ptr int, storeElem func(Value, int) error) error {
+	p, err := storeListData(h, v, storeElem)
+	if err != nil {
+		return err
+	}
+	if err := h.StoreInt(uint64(p), ptr, ptrSize); err != nil {
+		return err
+	}
+	return h.StoreInt(uint64(len(v.list)), ptr+ptrSize, ptrSize)
+}
+
+// StoreVia lowers a value through a [Heap] for the kinds a guest lowering composes — integers, `string`,
+// and `list` of those (recursively). It is the host's element store: `get-arguments`'s `list<string>`
+// lowers through it against guest memory, the same [StoreList]/[StoreString] the model heap runs. A kind
+// that needs the concrete heap (own/variant/float NaN-canonicalization) is not composable here and
+// refuses by name — guest-driven, a later guest that lowers one extends this rather than replaces it.
+func StoreVia(h Heap, v Value, ptr int) error {
+	if n := intBytes(v.Type.Kind); n > 0 {
+		return h.StoreInt(v.u, ptr, n)
+	}
+	switch v.Type.Kind {
+	case KindString:
+		return StoreString(h, v.s, ptr)
+	case KindList:
+		return StoreList(h, v, ptr, func(e Value, p int) error { return StoreVia(h, e, p) })
+	default:
+		return fmt.Errorf("canon: StoreVia: kind %s is not heap-composable (guest-driven; the concrete heap lowers it)", v.Type.Kind)
+	}
+}
+
 // resourceHandle is one entry in a component instance's handle table.
 type resourceHandle struct {
 	rt       int
@@ -351,13 +390,10 @@ func (h *heap) store(v Value, ptr int) error {
 		// this is the same code the guest-memory heap runs, verified by the string fixtures.
 		return StoreString(h, v.s, ptr)
 	case KindList:
-		p, err := h.storeListData(v)
-		if err != nil {
-			return err
-		}
-		h.storeInt(uint64(p), ptr, ptrSize)
-		h.storeInt(uint64(len(v.list)), ptr+ptrSize, ptrSize)
-		return nil
+		// The one list framing, shared with the host's canon adapter (#718): `*heap` is a Heap and
+		// `h.store` is the full element store, so this is the same StoreList the guest-memory heap runs,
+		// verified by the definitions.py list fixtures.
+		return StoreList(h, v, ptr, h.store)
 	case KindVariant:
 		cases := v.Type.Cases
 		discSize := size(Type{Kind: discriminantType(len(cases))})
@@ -375,15 +411,19 @@ func (h *heap) store(v Value, ptr int) error {
 	}
 }
 
-// storeListData allocates the element region, stores each element into it, and returns its pointer.
-func (h *heap) storeListData(v Value) (int, error) {
-	es := size(*v.Type.Elem)
-	p, err := h.realloc(0, 0, alignment(*v.Type.Elem), len(v.list)*es)
+// storeListData allocates the element region through the heap's realloc, stores each element into it via
+// storeElem, and returns its pointer — the shared core of a list store ([StoreList], which adds the
+// (ptr, count) header) and a list flat-lower (which returns the pointer and count as flat values). One
+// element loop over a [Heap], not one per operation.
+func storeListData(h Heap, v Value, storeElem func(Value, int) error) (int, error) {
+	elem := *v.Type.Elem
+	es := size(elem)
+	p, err := h.Realloc(0, 0, alignment(elem), len(v.list)*es)
 	if err != nil {
 		return 0, err
 	}
 	for i, e := range v.list {
-		if err := h.store(e, p+i*es); err != nil {
+		if err := storeElem(e, p+i*es); err != nil {
 			return 0, err
 		}
 	}
@@ -419,7 +459,7 @@ func (h *heap) lowerFlat(v Value) ([]flatVal, error) {
 		copy(h.mem[p:p+len(data)], data)
 		return []flatVal{{"i32", uint64(p)}, {"i32", uint64(len(data))}}, nil
 	case KindList:
-		p, err := h.storeListData(v)
+		p, err := storeListData(h, v, h.store)
 		if err != nil {
 			return nil, err
 		}
