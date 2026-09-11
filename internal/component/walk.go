@@ -5,6 +5,7 @@ package component
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -43,6 +44,9 @@ type coreDef struct {
 	// the guest allocator the adapter invokes as agent execution to lower a host-produced list/string
 	// (ADR 0084 / §5 H-2 amended). Bound into the adapter so CanonCaller.Realloc can reach it.
 	lowerRealloc *interp.Extern
+	// resourceDrop marks a canon resource.drop intrinsic — a host resource's drop is a no-op (the
+	// streams and errors are the process's, not the guest's to free), so it neither refuses nor frees.
+	resourceDrop bool
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -132,6 +136,10 @@ func (w *walker) step(d Def) error {
 					})
 					return nil
 				}
+			}
+			if cn.Kind == CanonResourceDrop {
+				w.appendCore(SpaceCoreFunc, coreDef{resourceDrop: true})
+				return nil
 			}
 			w.appendCore(SpaceCoreFunc, coreDef{stub: true})
 		}
@@ -225,16 +233,21 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if !ok {
 			return interp.Extern{}, false
 		}
-		if d.lowerName == "" && !d.isStub() {
+		if d.lowerName == "" && !d.isStub() && !d.resourceDrop {
 			return d.extern, true // a real export, by reference (memory/global/func sharing)
 		}
 		ft, ok := funcImportType(m, mod, name)
 		if !ok {
 			return interp.Extern{}, false
 		}
+		// A canon resource.drop of a host resource is a no-op — the stream/error is the process's, not
+		// the guest's to free — typed from the importing module's own declaration.
+		if d.resourceDrop {
+			return interp.HostExtern(ft, dropNoop), true
+		}
 		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
 		// stub — it refuses by name, typed from the importing module's own declaration.
-		if impl, ok := w.wasiHost[d.lowerName]; ok {
+		if impl, ok := w.wasiHost[stripVersion(d.lowerName)]; ok {
 			// A canon lower with a real impl becomes a canonical-ABI adapter (ADR 0084 / §5 H-2
 			// amended), bound to the memory and realloc its options name — so the marshaling reaches
 			// the guest arguments through the memory-less trampoline and can lower a host-produced list
@@ -281,6 +294,21 @@ func (w *walker) lowerRealloc(cn Canon) *interp.Extern {
 	return &ext
 }
 
+// stripVersion removes the `@x.y.z` version from a lowered func's "interface@version::export" identity,
+// leaving "interface::export" — the version-independent key the host serves (a guest at @0.2.6 and one
+// at @0.2.3 name the same interface). The version sits on the interface, before "::"; the export name
+// (which may itself contain '.', as in "[method]output-stream.write") is left untouched.
+func stripVersion(name string) string {
+	iface, export, found := strings.Cut(name, "::")
+	if !found {
+		return name
+	}
+	if at := strings.IndexByte(iface, '@'); at >= 0 {
+		iface = iface[:at]
+	}
+	return iface + "::" + export
+}
+
 // funcImportType finds a module's declared type for a function import.
 func funcImportType(m *bin.Module, mod, name string) (bin.FuncType, bool) {
 	for i := range m.Imports {
@@ -293,6 +321,10 @@ func funcImportType(m *bin.Module, mod, name string) (bin.FuncType, bool) {
 	}
 	return bin.FuncType{}, false
 }
+
+// dropNoop is a canon resource.drop for a host resource: it takes the handle and returns, freeing
+// nothing (the streams and errors are the process's, not the guest's to free).
+func dropNoop(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) { return nil, nil }
 
 // refuse is the stub host function: called, it refuses by name — the "imports reach a stub host that
 // refuses" boundary (PR B). The real host is PR C.

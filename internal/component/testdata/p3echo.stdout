@@ -1,0 +1,2 @@
+args=["p3echo.wasm"]
+stdin[6]="hello\n"

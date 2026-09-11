@@ -642,6 +642,35 @@ func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32,
 	return uint32(c.st.popNum()), nil
 }
 
+// Blocking runs fn as a blocking excursion of the calling agent — the §5 H-1/H-3 path, now on the canon
+// adapter. For fn's duration the agent is marked blocked (parked, and a concurrent Stop sees it at a
+// safepoint; H-1: only this agent, siblings run); on return the mark is cleared and the thread polls, so
+// a Close that raced fn terminates the agent here (`threadTerminated` → the call reports `ErrTerminated`,
+// H-3).
+//
+// **The H-3 bound is p1's — the wake's poll, not mid-fn.** An fn that selects on `c.Context().Done()`
+// is cancelled *during* the block; an fn that does not — a direct blocking `Read`, the shape
+// `blockingRead` uses and the shape p1's `fd_read`/`readSome` uses — is cancelled only at the poll
+// *after* it returns, and a source that never returns holds Close until it does. That is p1's own
+// limitation, not lifted here: a mid-cancellable read of an indefinite source is a new goroutine site,
+// which the goroutine census (`TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`) admits only behind
+// its own decision doc. So H-1 holds unconditionally; H-3 holds at the wake for a returning read, on the
+// same terms as p1.
+//
+// **realloc/post-return must not run inside fn.** The adapter lifts before Blocking and lowers after it
+// returns; guest allocation while the agent is in the blocked state is the reentrancy-while-blocked
+// hazard the Model-2 adapter avoids by never blocking during the lower (#694/#715 registered assertion).
+// The crossing/blocked pair here is balanced (leaveGuest+enterBlocked … enterGuest+leaveBlocked), the
+// same order `callHost` uses, so `callAdapter`'s own accounting is untouched.
+func (c *CanonCaller) Blocking(fn func() error) error {
+	leaveGuest()
+	c.t.enterBlocked()
+	err := fn()
+	enterGuest()
+	c.t.leaveBlocked()
+	return err
+}
+
 // hostArgs takes the declared parameters off the shared stack, innermost last.
 //
 // **Popped in reverse and filled in place**, because the stack's top is the *last* argument: reading
