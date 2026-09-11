@@ -35,6 +35,10 @@ type coreDef struct {
 	// lowerName is the wasi identity ("module::export") of a canon-lowered func — the host resolves it
 	// to a real marshaling impl (PR C) or, absent one, the refusing stub.
 	lowerName string
+	// lowerMem is the memory named in the canon lower's `(memory $m)` option, if any — the memory the
+	// marshaling lifts and lowers against, which is not the memory-less trampoline's (ADR 0084). Bound
+	// to the host extern via interp.HostExternWithMemory so Caller.Read/Write reach the guest arguments.
+	lowerMem *interp.Extern
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -117,7 +121,7 @@ func (w *walker) step(d Def) error {
 			cn := w.c.Canons[d.Item]
 			if cn.Kind == CanonLower && int(cn.FuncIdx) < len(w.compFuncs) {
 				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName != "" {
-					w.appendCore(SpaceCoreFunc, coreDef{lowerName: cf.stubName})
+					w.appendCore(SpaceCoreFunc, coreDef{lowerName: cf.stubName, lowerMem: w.lowerMemory(cn)})
 					return nil
 				}
 			}
@@ -223,10 +227,32 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
 		// stub — it refuses by name, typed from the importing module's own declaration.
 		if impl, ok := w.wasiHost[d.lowerName]; ok {
+			// The marshaling lifts/lowers against the memory the lower's option names (ADR 0084), bound
+			// here so it reaches the guest arguments though the dispatching trampoline has no memory. A
+			// lower with no memory option (the stdio getters, exit) needs none.
+			if d.lowerMem != nil {
+				return interp.HostExternWithMemory(ft, impl, *d.lowerMem), true
+			}
 			return interp.HostExtern(ft, impl), true
 		}
 		return interp.HostExtern(ft, refuse(mod, name)), true
 	}
+}
+
+// lowerMemory resolves a canon lower's `(memory $m)` option to the core memory extern it names, or nil
+// when the lower carries no memory option (a getter that returns only a handle, or exit). The option is
+// a core memory index, defined earlier in the stream (the forward-reference rule), so the core memory
+// space already holds it when the lower is stepped.
+func (w *walker) lowerMemory(cn Canon) *interp.Extern {
+	if cn.Opts.Memory == nil {
+		return nil
+	}
+	mems := w.coreSpace[SpaceCoreMemory]
+	if int(*cn.Opts.Memory) >= len(mems) {
+		return nil // an out-of-range option is caught by the forward-reference check; nil here declines to bind
+	}
+	ext := mems[*cn.Opts.Memory].extern
+	return &ext
 }
 
 // funcImportType finds a module's declared type for a function import.
