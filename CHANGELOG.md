@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **A host function can bind the memory it lifts and lowers against (`HostExternWithMemory`), for the
+  canonical-ABI adapter.**
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md),
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694). Second interp boundary the p3 track pulled
+  forward: a canon lower runs against the memory named in its `(memory $m)` option, but the guest reaches
+  the lowered function through a `$imports` trampoline whose core module has no memory — so `callHost`
+  binding the Caller to the declaring instance's memory 0 finds none. `HostExternWithMemory` binds the
+  lower's memory instead; reading and writing it runs no guest code, so §5 H-2 is untouched. This is the
+  memory half of the canon options bundle; `realloc`/`post-return` (which do run guest code) follow behind
+  the H-2 amendment. Exit is a positive assertion (`TestHostExternWithMemoryLiftsAgainstTheBoundMemory`):
+  a host func bound to instance A's memory, called from a memory-less instance B, reads A.
+
 - **A host function is a first-class `funcref`: callable through `call_indirect` and `call_ref`, storable
   in tables (ADR 0069 Option C).**
   [ADR 0069 amendment](docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md),
