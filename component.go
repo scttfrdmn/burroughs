@@ -6,9 +6,21 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/scttfrdmn/burroughs/internal/component"
 )
+
+// componentsGateEnv is the config gate for the component mechanism (`gate:components`, ADR 0084, off by
+// default). The mechanism is present and the public entries below are additive surface over it, but a
+// default build refuses to *run* a component — the refuse-by-name discipline the whole track uses — until
+// the gate flip (its own stamp-tier event, behaviour 4, when the full value-type suite is green). Set to
+// "1" to opt into the gated mechanism; a test enabling the exit sets it, a default build does not.
+const componentsGateEnv = "BURROUGHS_COMPONENTS"
+
+// componentsEnabled reports whether the `gate:components` config gate is on. Off is the default: a
+// component is recognized (IsComponent) but not run.
+func componentsEnabled() bool { return os.Getenv(componentsGateEnv) == "1" }
 
 // ComponentConfig runs a WebAssembly **component** whose world is `wasi:cli/run` — the p3 track's
 // public entry (ADR 0084 / 0085, #694), the component analogue of [WASIP1Config].
@@ -37,6 +49,14 @@ type ComponentConfig struct {
 // component host, which writes the guest's `list<u8>` to it — the preview-1 and preview-2 sides marshal
 // different ABIs (iovecs vs a canon list) onto one sink, rather than reimplementing stdio twice.
 func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
+	// `gate:components` is off by default: the mechanism is present but a default build refuses to run a
+	// component, by name (ADR 0084, behaviour 4). The flip to on is its own stamp-tier event, when the
+	// full value-type suite is green — not this slice, whose one path is hello-world's.
+	if !componentsEnabled() {
+		return 0, fmt.Errorf("%w: gate:components is off in this build; set %s=1 to run a component "+
+			"(the mechanism is present, the default-on flip is pending its full value-type suite)",
+			ErrGated, componentsGateEnv)
+	}
 	stdout, stderr := c.Stdout, c.Stderr
 	if stdout == nil {
 		stdout = io.Discard
