@@ -149,6 +149,29 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		return nil
 	}
 
+	// A component (layer 1) runs its `wasi:cli/run` world through the preview-2 host, dispatched on the
+	// preamble like the wasip1 command above (ADR 0084/0085, #694). Detection reads the header before any
+	// instantiate; a bad header falls through to the core-module path, which classifies it. The stdio is
+	// bound at the writer, the same os.Stdout/os.Stderr a wasip1 command receives (ADR 0083, shared).
+	if isComp, cerr := burroughs.IsComponent(wasm); cerr == nil && isComp {
+		if len(invokeArgs) > 0 || len(dirs) > 0 {
+			fmt.Fprintf(stderr, "%sa component runs its wasi:cli/run world; it takes no function name or --dir\n", prefix)
+			return errUsage
+		}
+		code, rerr := burroughs.ComponentConfig{
+			Stdin:  os.Stdin,
+			Stdout: stdout,
+			Stderr: stderr,
+		}.Run(wasm)
+		if rerr != nil {
+			return rerr
+		}
+		if code != 0 {
+			return wasiExit(code)
+		}
+		return nil
+	}
+
 	// Not a command: `--` and `--dir` are the command grammar and do not apply.
 	if len(guestArgs) > 0 || len(dirs) > 0 {
 		fmt.Fprintf(stderr, "%s-- and --dir apply to a wasip1 command, and this module is not one\n", prefix)

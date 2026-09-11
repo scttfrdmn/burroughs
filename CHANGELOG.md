@@ -21,6 +21,15 @@ weakly-ordered platform.
 
 ### Added
 
+- **`burroughs run <component>` runs a `wasi:cli/run` component — the registered p3 slice-2 exit, as a
+  CLI invocation (behind `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  ADR 0081/0084/0085. New public entries mirroring the preview-1 pair: `ComponentConfig.Run` (the
+  component analogue of `WASIP1Config.Run`) and `IsComponent` (a preamble layer sniff mirroring
+  `IsWASIP1Command`); `burroughs run` dispatches a layer-1 binary to it. Stdout binds at the writer, the
+  same `io.Writer` a wasip1 command receives (ADR 0083, shared). `burroughs run p3hello.wasm` prints
+  `Hello, world!`, byte-identical to wasmtime 48.0.1 (`cmd/burroughs` test against the committed reading).
+
 - **A component prints "Hello, world!" — the p3 slice-2 exit, byte-identical to wasmtime 48.0.1 (behind
   `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),

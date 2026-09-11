@@ -5,6 +5,7 @@ package component
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
@@ -346,6 +347,18 @@ func (in *Instantiated) Call(name string) error {
 		return fmt.Errorf("%w: export %q is not a callable function", ErrUnsupportedForm, name)
 	}
 	return fn.invoke()
+}
+
+// CallRun invokes the component's `wasi:cli/run` export, whatever version it names
+// (`wasi:cli/run@0.2.3`, `@0.2.0`, …), so a caller need not know the world's exact version. There is
+// one such export in a `wasi:cli/run` world; if none, ErrNoRun.
+func (in *Instantiated) CallRun() error {
+	for name := range in.export.exports {
+		if strings.HasPrefix(name, "wasi:cli/run") {
+			return in.Call(name)
+		}
+	}
+	return fmt.Errorf("%w: no wasi:cli/run export", ErrNoRun)
 }
 
 // Close tears down the instantiated core instances.
