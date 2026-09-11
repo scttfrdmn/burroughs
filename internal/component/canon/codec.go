@@ -184,6 +184,55 @@ type heap struct {
 
 func newHeap(size int) *heap { return &heap{mem: make([]byte, size), table: newResourceTable()} }
 
+// Heap is the memory a value lowering allocates in and writes through: the model's `[]byte` bump heap in
+// the differential, and guest linear memory in the host (ADR 0084 / #719). Extracting it lets one
+// lowering — [StoreString] here, the list/record lowerings as #718 extends it — run against the
+// definitions.py fixtures and against a live guest without a second implementation to drift from (ADR
+// 0083's implement-once). All offsets are `int` byte positions into the heap.
+type Heap interface {
+	Realloc(origPtr, origSize, align, newSize int) (int, error)
+	WriteBytes(ptr int, data []byte) error
+	StoreInt(v uint64, ptr, nbytes int) error
+}
+
+// The model `*heap` is a [Heap]: its writes never fail (in-bounds by construction), so the error arms
+// are nil — a guest heap's are where an out-of-bounds guest pointer surfaces.
+func (h *heap) Realloc(origPtr, origSize, align, newSize int) (int, error) {
+	return h.realloc(origPtr, origSize, align, newSize)
+}
+
+func (h *heap) WriteBytes(ptr int, data []byte) error {
+	copy(h.mem[ptr:ptr+len(data)], data)
+	return nil
+}
+
+func (h *heap) StoreInt(v uint64, ptr, nbytes int) error {
+	h.storeInt(v, ptr, nbytes)
+	return nil
+}
+
+// StoreString lowers s as a `string` (CanonicalABI.md `store_string`, utf-8): its bytes are allocated
+// through the heap's realloc (align 1) and its (ptr, length) pair is written at ptr. This is the one
+// string lowering — the codec's `store` calls it for `KindString`, so the definitions.py string fixtures
+// (`string-hello`/`-empty`/`-utf8`) verify it, and the host's canon adapter calls it against guest memory
+// (#719), so the bytes the guest reads are lowered by the same verified code, not a hand path.
+func StoreString(h Heap, s string, ptr int) error {
+	data := []byte(s)
+	p, err := h.Realloc(0, 0, 1, len(data))
+	if err != nil {
+		return err
+	}
+	if len(data) > 0 {
+		if err := h.WriteBytes(p, data); err != nil {
+			return err
+		}
+	}
+	if err := h.StoreInt(uint64(p), ptr, ptrSize); err != nil {
+		return err
+	}
+	return h.StoreInt(uint64(len(data)), ptr+ptrSize, ptrSize)
+}
+
 // resourceHandle is one entry in a component instance's handle table.
 type resourceHandle struct {
 	rt       int
@@ -234,8 +283,7 @@ func (tb *resourceTable) remove(i int) (*resourceHandle, error) {
 // realloc is the four-argument cabi_realloc contract (origPtr, origSize, align, newSize). Current
 // callers all allocate fresh (origPtr 0); the grow path (utf16/latin1 string re-encode, list realloc)
 // arrives with a non-zero origPtr in a later increment, so the parameters are the ABI's, not dead.
-//
-//nolint:unparam // origPtr/origSize are the cabi_realloc contract; non-zero callers land next increment
+// (Reached now through the `Heap.Realloc` wrapper too, whose interface signature keeps every parameter.)
 func (h *heap) realloc(origPtr, origSize, align, newSize int) (int, error) {
 	if origPtr != 0 && newSize < origSize {
 		ret := alignTo(origPtr, align)
@@ -299,15 +347,9 @@ func (h *heap) store(v Value, ptr int) error {
 		h.storeInt(canonicalizeNaN64(v.u), ptr, 8)
 		return nil
 	case KindString:
-		data := []byte(v.s)
-		p, err := h.realloc(0, 0, 1, len(data))
-		if err != nil {
-			return err
-		}
-		copy(h.mem[p:p+len(data)], data)
-		h.storeInt(uint64(p), ptr, ptrSize)
-		h.storeInt(uint64(len(data)), ptr+ptrSize, ptrSize)
-		return nil
+		// The one string lowering, shared with the host's canon adapter (#719): `*heap` is a Heap, so
+		// this is the same code the guest-memory heap runs, verified by the string fixtures.
+		return StoreString(h, v.s, ptr)
 	case KindList:
 		p, err := h.storeListData(v)
 		if err != nil {

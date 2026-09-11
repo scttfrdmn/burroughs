@@ -7,8 +7,32 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
+
+// guestHeap adapts a CanonCaller to canon.Heap, so the shared value lowerings (canon.StoreString, and
+// the list/record lowerings as #718 extends the set) write into guest memory through the canon lower's
+// bound realloc and memory — the same code the differential runs against the model heap (#719, ADR
+// 0083's implement-once). Offsets are guest byte positions.
+type guestHeap struct{ c *interp.CanonCaller }
+
+func (g guestHeap) Realloc(origPtr, origSize, align, newSize int) (int, error) {
+	p, err := g.c.Realloc(uint32(origPtr), uint32(origSize), uint32(align), uint32(newSize))
+	return int(p), err
+}
+
+func (g guestHeap) WriteBytes(ptr int, data []byte) error {
+	return g.c.Write(uint64(uint32(ptr)), data)
+}
+
+func (g guestHeap) StoreInt(v uint64, ptr, nbytes int) error {
+	buf := make([]byte, nbytes)
+	for i := range nbytes {
+		buf[i] = byte(v >> (8 * i))
+	}
+	return g.c.Write(uint64(uint32(ptr)), buf)
+}
 
 // The real preview-2 host (PR C.2). The stub host (link_component.go) refuses every wasi import by name;
 // this host provides the ten the guest-driven `wasi:cli/run` world reaches. Each import is a canon
@@ -321,26 +345,9 @@ func (h *Host) errorToDebugString(c *interp.CanonCaller, args []interp.Value) ([
 	if e, ok := h.errors[self]; ok {
 		msg = e.Error()
 	}
-	return nil, h.storeString(c, uint64(uint32(args[1].Bits)), msg)
-}
-
-// storeString lowers s as a `string` whose (ptr, len) header is written at ret; the bytes are allocated
-// in guest memory through the guest's realloc (utf-8, align 1).
-func (h *Host) storeString(c *interp.CanonCaller, ret uint64, s string) error {
-	b := []byte(s)
-	sp, err := c.Realloc(0, 0, 1, uint32(len(b)))
-	if err != nil {
-		return fmt.Errorf("component: string backing: %w", err)
-	}
-	if len(b) > 0 {
-		if err := c.Write(uint64(sp), b); err != nil {
-			return err
-		}
-	}
-	if err := writeU32(c, ret, sp); err != nil {
-		return err
-	}
-	return writeU32(c, ret+4, uint32(len(b)))
+	// The string is lowered by the codec's one string lowering (canon.StoreString), against guest memory
+	// — the same code the definitions.py string fixtures verify (#719), not a hand path.
+	return nil, canon.StoreString(guestHeap{c}, msg, int(uint32(args[1].Bits)))
 }
 
 // emptyList marshals a `() -> list<T>` import that this host grants nothing (get-environment,
