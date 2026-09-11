@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **A component prints "Hello, world!" — the p3 slice-2 exit, byte-identical to wasmtime 48.0.1 (behind
+  `gate:components`, off).**
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  PR C: a real cargo-component `wasi:cli/run` guest runs end-to-end — loader, instantiation walk, ADR
+  0069 funcref dispatch through the `$imports` trampoline, and a real preview-2 host whose ten wasi
+  imports are canon-lower adapters (`internal/component/host.go`). The write lifts its `list<u8>` from
+  the bound guest memory; the empty-list getters lower through the guest's `cabi_realloc` (model-faithful
+  even at length 0). `InstantiateWithHost(p3hello) → Call("wasi:cli/run@0.2.3")` produces `Hello, world!\n`,
+  differenced in CI against the committed wasmtime reading (`testdata/p3hello.stdout`, sha1 `09fac8db`).
+  Board unchanged — the component suite is gated; core boards do not move.
+
 - **The canonical-ABI adapter invokes the guest's `realloc` as agent execution (`CanonLowerExtern`,
   ADR 0084 / §5 H-2 amendment).**
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md),

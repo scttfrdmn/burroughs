@@ -32,6 +32,17 @@ type coreDef struct {
 	// (interp exposes invocation only by export name, so the alias's name is retained).
 	inst *interp.Instance
 	name string
+	// lowerName is the wasi identity ("module::export") of a canon-lowered func — the host resolves it
+	// to a real marshaling impl (PR C) or, absent one, the refusing stub.
+	lowerName string
+	// lowerMem is the memory named in the canon lower's `(memory $m)` option, if any — the memory the
+	// marshaling lifts and lowers against, which is not the memory-less trampoline's (ADR 0084). Bound
+	// into the canon-ABI adapter so CanonCaller.Read/Write reach the guest arguments.
+	lowerMem *interp.Extern
+	// lowerRealloc is the core `cabi_realloc` func named in the lower's `(realloc $f)` option, if any —
+	// the guest allocator the adapter invokes as agent execution to lower a host-produced list/string
+	// (ADR 0084 / §5 H-2 amended). Bound into the adapter so CanonCaller.Realloc can reach it.
+	lowerRealloc *interp.Extern
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -78,6 +89,9 @@ type walker struct {
 	compInstances []compDef
 	nested        []*Component
 	host          host
+	// wasiHost maps a canon-lowered func's "module::export" identity to a real marshaling impl (PR C.2).
+	// A lowered func with no entry here reaches the refusing stub — an unexercised import stays refused.
+	wasiHost map[string]interp.CanonFunc
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -104,8 +118,21 @@ func (w *walker) step(d Def) error {
 		return w.coreInstanceStep(w.c.CoreInstances[d.Item])
 	case SectionCanon:
 		if d.Space == SpaceCoreFunc {
-			// lower and the resource built-ins add a core func the engine fills with a refusing stub;
-			// their real semantics (value marshaling, resource discipline) are B.3.
+			// A lower adds a core func the host fills; its wasi identity comes from the component func it
+			// lowers (an alias export of an imported instance carries the "module::export" name). The real
+			// marshaling impl, or the refusing stub, is chosen in the resolver by that name. Resource
+			// built-ins keep the stub (their discipline is Phase 3).
+			cn := w.c.Canons[d.Item]
+			if cn.Kind == CanonLower && int(cn.FuncIdx) < len(w.compFuncs) {
+				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName != "" {
+					w.appendCore(SpaceCoreFunc, coreDef{
+						lowerName:    cf.stubName,
+						lowerMem:     w.lowerMemory(cn),
+						lowerRealloc: w.lowerRealloc(cn),
+					})
+					return nil
+				}
+			}
 			w.appendCore(SpaceCoreFunc, coreDef{stub: true})
 		}
 		return nil
@@ -198,15 +225,60 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if !ok {
 			return interp.Extern{}, false
 		}
-		if !d.isStub() {
+		if d.lowerName == "" && !d.isStub() {
 			return d.extern, true // a real export, by reference (memory/global/func sharing)
 		}
 		ft, ok := funcImportType(m, mod, name)
 		if !ok {
 			return interp.Extern{}, false
 		}
+		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
+		// stub — it refuses by name, typed from the importing module's own declaration.
+		if impl, ok := w.wasiHost[d.lowerName]; ok {
+			// A canon lower with a real impl becomes a canonical-ABI adapter (ADR 0084 / §5 H-2
+			// amended), bound to the memory and realloc its options name — so the marshaling reaches
+			// the guest arguments through the memory-less trampoline and can lower a host-produced list
+			// through the guest's allocator. A lower with no memory/realloc option (the stdio getters,
+			// exit) binds neither.
+			return interp.CanonLowerExtern(ft, impl, interp.CanonOptions{
+				Memory:  d.lowerMem,
+				Realloc: d.lowerRealloc,
+			}), true
+		}
 		return interp.HostExtern(ft, refuse(mod, name)), true
 	}
+}
+
+// lowerMemory resolves a canon lower's `(memory $m)` option to the core memory extern it names, or nil
+// when the lower carries no memory option (a getter that returns only a handle, or exit). The option is
+// a core memory index, defined earlier in the stream (the forward-reference rule), so the core memory
+// space already holds it when the lower is stepped.
+func (w *walker) lowerMemory(cn Canon) *interp.Extern {
+	if cn.Opts.Memory == nil {
+		return nil
+	}
+	mems := w.coreSpace[SpaceCoreMemory]
+	if int(*cn.Opts.Memory) >= len(mems) {
+		return nil // an out-of-range option is caught by the forward-reference check; nil here declines to bind
+	}
+	ext := mems[*cn.Opts.Memory].extern
+	return &ext
+}
+
+// lowerRealloc resolves a canon lower's `(realloc $f)` option to the core `cabi_realloc` func extern it
+// names, or nil when the lower carries no realloc option (a getter that returns only a handle, or exit,
+// or a method whose result the guest's return pointer already holds). The option is a core func index,
+// defined earlier in the stream, and a real aliased core func (not a lower stub), so its extern is set.
+func (w *walker) lowerRealloc(cn Canon) *interp.Extern {
+	if cn.Opts.Realloc == nil {
+		return nil
+	}
+	funcs := w.coreSpace[SpaceCoreFunc]
+	if int(*cn.Opts.Realloc) >= len(funcs) {
+		return nil // out-of-range is caught by the forward-reference check; nil here declines to bind
+	}
+	ext := funcs[*cn.Opts.Realloc].extern
+	return &ext
 }
 
 // funcImportType finds a module's declared type for a function import.
