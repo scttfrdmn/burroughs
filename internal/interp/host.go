@@ -610,6 +610,27 @@ type CanonCaller struct {
 // as ordinary guest execution: the invoked frame polls at entry, so a Stop parks the agent inside
 // realloc and a Close terminates it there (the `threadTerminated` unwind reaches `invokeIndex`'s
 // recover, so the call reports `ErrTerminated` — guest work, not host code).
+// Blocking runs fn as a blocking excursion of the calling agent — the §5 H-1/H-3 path, now on the
+// canon adapter. For fn's duration the agent is marked blocked (parked, and a concurrent Stop sees it
+// at a safepoint; H-1: only this agent, siblings run); on return the mark is cleared and the thread
+// polls, so a Close that raced fn terminates the agent here (`threadTerminated` → the call reports
+// `ErrTerminated`, H-3). fn MUST select on `c.Context().Done()` so a truly-blocking read is cancelled
+// by Close rather than held forever.
+//
+// **realloc/post-return must not run inside fn.** The adapter lifts before Blocking and lowers after it
+// returns; guest allocation while the agent is in the blocked state is the reentrancy-while-blocked
+// hazard the Model-2 adapter avoids by never blocking during the lower (#694/#715 registered assertion).
+// The crossing/blocked pair here is balanced (leaveGuest+enterBlocked … enterGuest+leaveBlocked), the
+// same order `callHost` uses, so `callAdapter`'s own accounting is untouched.
+func (c *CanonCaller) Blocking(fn func() error) error {
+	leaveGuest()
+	c.t.enterBlocked()
+	err := fn()
+	enterGuest()
+	c.t.leaveBlocked()
+	return err
+}
+
 func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32, error) {
 	if c.realloc == nil {
 		return 0, fmt.Errorf("%w: this canon lower declared no realloc option", ErrUnsupportedOp)

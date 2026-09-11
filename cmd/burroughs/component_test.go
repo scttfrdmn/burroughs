@@ -51,3 +51,33 @@ func TestRunRefusesAComponentWhenGatedOff(t *testing.T) {
 		t.Errorf("stderr = %q, want it to name gate:components (refuse by name)", got)
 	}
 }
+
+// TestRunExecutesTheSecondGuest is #715's CLI exit: `burroughs run p3echo.wasm` (gate on), with stdin
+// piped, echoes its argv and stdin byte-identical to the committed wasmtime reading — the args path
+// (host-lowered list<string>) and the blocking-read path reached through the CLI, not just the API.
+func TestRunExecutesTheSecondGuest(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "1")
+	const guest = "../../internal/component/testdata/p3echo.wasm"
+	want, err := os.ReadFile("../../internal/component/testdata/p3echo.stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pipe "hello\n" as the process stdin the CLI reads (run.go uses os.Stdin).
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = w.WriteString("hello\n"); _ = w.Close() }()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin; _ = r.Close() }()
+
+	var out, errBuf bytes.Buffer
+	code := dispatch(&out, &errBuf, []string{"run", guest})
+	if code != 0 {
+		t.Fatalf("`run p3echo.wasm` exited %d, want 0\nstderr: %q", code, errBuf.String())
+	}
+	if got := out.Bytes(); !bytes.Equal(got, want) {
+		t.Errorf("stdout = %q, want %q (wasmtime 48.0.1's reading)", got, want)
+	}
+}

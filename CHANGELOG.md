@@ -32,6 +32,18 @@ weakly-ordered platform.
   default-on flip stays a later stamp-tier event (its forecast is the full value-type suite). Stdout binds
   at the writer, the same `io.Writer` a wasip1 command receives (ADR 0083, shared).
 
+- **A second component (p3echo) runs — stdin, arguments, and a stream error arm (behind `gate:components`, off).**
+  [#715](https://github.com/scttfrdmn/burroughs/issues/715),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  The p3 track's second guest, byte-identical to wasmtime 48.0.1. New: **version-independent host
+  keying** (p3echo is wasi `@0.2.6`, p3hello `@0.2.3` — the host serves the interface, not a version);
+  `get-arguments` lowering a **non-empty `list<string>`** through the guest's `realloc` (the first
+  host-produced payload); `input-stream.blocking-read` on the **blocking substrate** (`CanonCaller.Blocking`,
+  §5 H-1/H-3 — the agent parks, a Stop completes while it is blocked, a Close terminates it), a direct
+  read mirroring p1's `fd_read`; the `result<_, stream-error>` **`err` arm** with an `own<error>` handle
+  (the #694-deferred non-nested-variant-with-handle-payload, driven live by a failing writer); a canon
+  `resource.drop` no-op; and `ComponentConfig.Args`.
+
 - **A component prints "Hello, world!" — the p3 slice-2 exit, byte-identical to wasmtime 48.0.1 (behind
   `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),

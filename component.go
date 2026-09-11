@@ -34,6 +34,7 @@ func componentsEnabled() bool { return os.Getenv(componentsGateEnv) == "1" }
 // embedder calls with typed arguments are the `ComponentValue` surface (ADR 0085), which lands with its
 // first embedder consumer — a component export called with values, which this stdio-run entry is not.
 type ComponentConfig struct {
+	Args   []string  // the component's argv, lowered by wasi:cli/environment.get-arguments
 	Stdin  io.Reader // the component's stdin; nil means an empty stream
 	Stdout io.Writer // the component's stdout; nil discards
 	Stderr io.Writer // the component's stderr; nil discards
@@ -65,6 +66,7 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 		stderr = io.Discard
 	}
 	h := component.NewHost(stdout, stderr, c.Stdin)
+	h.Args = c.Args
 	in, err := component.InstantiateWithHost(wasm, h)
 	if err != nil {
 		return 0, err

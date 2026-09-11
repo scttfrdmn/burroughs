@@ -158,7 +158,9 @@ func run(stdout, stderr io.Writer, argv []string) error {
 			fmt.Fprintf(stderr, "%sa component runs its wasi:cli/run world; it takes no function name or --dir\n", prefix)
 			return errUsage
 		}
+		// argv is the file's basename followed by anything after `--`, as a wasip1 command's is.
 		code, rerr := burroughs.ComponentConfig{
+			Args:   append([]string{filepath.Base(file)}, guestArgs...),
 			Stdin:  os.Stdin,
 			Stdout: stdout,
 			Stderr: stderr,
