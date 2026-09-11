@@ -37,8 +37,12 @@ type coreDef struct {
 	lowerName string
 	// lowerMem is the memory named in the canon lower's `(memory $m)` option, if any — the memory the
 	// marshaling lifts and lowers against, which is not the memory-less trampoline's (ADR 0084). Bound
-	// to the host extern via interp.HostExternWithMemory so Caller.Read/Write reach the guest arguments.
+	// into the canon-ABI adapter so CanonCaller.Read/Write reach the guest arguments.
 	lowerMem *interp.Extern
+	// lowerRealloc is the core `cabi_realloc` func named in the lower's `(realloc $f)` option, if any —
+	// the guest allocator the adapter invokes as agent execution to lower a host-produced list/string
+	// (ADR 0084 / §5 H-2 amended). Bound into the adapter so CanonCaller.Realloc can reach it.
+	lowerRealloc *interp.Extern
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -87,7 +91,7 @@ type walker struct {
 	host          host
 	// wasiHost maps a canon-lowered func's "module::export" identity to a real marshaling impl (PR C.2).
 	// A lowered func with no entry here reaches the refusing stub — an unexercised import stays refused.
-	wasiHost map[string]interp.HostFunc
+	wasiHost map[string]interp.CanonFunc
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -121,7 +125,11 @@ func (w *walker) step(d Def) error {
 			cn := w.c.Canons[d.Item]
 			if cn.Kind == CanonLower && int(cn.FuncIdx) < len(w.compFuncs) {
 				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName != "" {
-					w.appendCore(SpaceCoreFunc, coreDef{lowerName: cf.stubName, lowerMem: w.lowerMemory(cn)})
+					w.appendCore(SpaceCoreFunc, coreDef{
+						lowerName:    cf.stubName,
+						lowerMem:     w.lowerMemory(cn),
+						lowerRealloc: w.lowerRealloc(cn),
+					})
 					return nil
 				}
 			}
@@ -227,13 +235,15 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
 		// stub — it refuses by name, typed from the importing module's own declaration.
 		if impl, ok := w.wasiHost[d.lowerName]; ok {
-			// The marshaling lifts/lowers against the memory the lower's option names (ADR 0084), bound
-			// here so it reaches the guest arguments though the dispatching trampoline has no memory. A
-			// lower with no memory option (the stdio getters, exit) needs none.
-			if d.lowerMem != nil {
-				return interp.HostExternWithMemory(ft, impl, *d.lowerMem), true
-			}
-			return interp.HostExtern(ft, impl), true
+			// A canon lower with a real impl becomes a canonical-ABI adapter (ADR 0084 / §5 H-2
+			// amended), bound to the memory and realloc its options name — so the marshaling reaches
+			// the guest arguments through the memory-less trampoline and can lower a host-produced list
+			// through the guest's allocator. A lower with no memory/realloc option (the stdio getters,
+			// exit) binds neither.
+			return interp.CanonLowerExtern(ft, impl, interp.CanonOptions{
+				Memory:  d.lowerMem,
+				Realloc: d.lowerRealloc,
+			}), true
 		}
 		return interp.HostExtern(ft, refuse(mod, name)), true
 	}
@@ -252,6 +262,22 @@ func (w *walker) lowerMemory(cn Canon) *interp.Extern {
 		return nil // an out-of-range option is caught by the forward-reference check; nil here declines to bind
 	}
 	ext := mems[*cn.Opts.Memory].extern
+	return &ext
+}
+
+// lowerRealloc resolves a canon lower's `(realloc $f)` option to the core `cabi_realloc` func extern it
+// names, or nil when the lower carries no realloc option (a getter that returns only a handle, or exit,
+// or a method whose result the guest's return pointer already holds). The option is a core func index,
+// defined earlier in the stream, and a real aliased core func (not a lower stub), so its extern is set.
+func (w *walker) lowerRealloc(cn Canon) *interp.Extern {
+	if cn.Opts.Realloc == nil {
+		return nil
+	}
+	funcs := w.coreSpace[SpaceCoreFunc]
+	if int(*cn.Opts.Realloc) >= len(funcs) {
+		return nil // out-of-range is caught by the forward-reference check; nil here declines to bind
+	}
+	ext := funcs[*cn.Opts.Realloc].extern
 	return &ext
 }
 

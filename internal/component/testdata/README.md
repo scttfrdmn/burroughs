@@ -6,10 +6,16 @@ world compiled to a component. `p3hello.wit` is the oracle's reading of it — v
 project's oracle precedent (external tools run once and their reading is committed; CI does not
 install them — see the Makefile `spec-images` target and its note on wabt).
 
+`p3hello.stdout` is the **execution oracle**: the exact stdout `wasmtime run p3hello.wasm` produces,
+committed rather than run at test time (CI installs no wasmtime, the same precedent as `p3hello.wit`).
+`hello_test.go` diffs Burroughs' own output against it — `Hello, world!\n`, sha1
+`09fac8dbfd27bd9b4d23a00eb648aa751789536d`. Regenerate with `wasmtime run p3hello.wasm > p3hello.stdout`.
+
 Provenance (the #694 pinned toolchain):
 
 - `rustc 1.91.1` (rustup), `cargo-component 0.21.1`
 - `wasm-tools 1.258.0` produced `p3hello.wit`
+- `wasmtime 48.0.1 (7bac2c277 2026-08-24)` produced `p3hello.stdout`
 
 To regenerate the golden after the fixture changes (the drift check the wabt model leaves to
 regeneration rather than a CI dependency):
