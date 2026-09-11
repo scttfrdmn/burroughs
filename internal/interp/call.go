@@ -152,7 +152,12 @@ func (in *Instance) call(idx uint32, st *stack, depth int) error {
 	}
 	if c.host != nil {
 		// The host arm builds no frame and costs no depth, so it is answered before `invoke` rather
-		// than inside it — see `funcTarget` for why the branch is here and at every sibling site.
+		// than inside it — see `funcTarget` for why the branch is here and at every sibling site. A
+		// canonical-ABI adapter (canon lower) takes the guest-adjacent `callAdapter` path; an embedder
+		// host function the blocking `callHost` one (§5 H-2 amended, ADR 0084).
+		if c.host.canon != nil {
+			return c.inst.callAdapter(c.host, st, depth)
+		}
 		return c.inst.callHost(c.host, st)
 	}
 	return c.inst.invoke(c.fn, c.ft, st, depth)
@@ -593,7 +598,11 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 	}
 	if t.host != nil {
 		// The host arm builds no frame and costs no depth — answered before the budget check, as
-		// `call`'s own host arm is (ADR 0069's dispatch seam, now reached indirectly too).
+		// `call`'s own host arm is (ADR 0069's dispatch seam, now reached indirectly too). A
+		// canonical-ABI adapter reached through the `$imports` trampoline takes `callAdapter`.
+		if t.host.canon != nil {
+			return t.inst.callAdapter(t.host, st, depth)
+		}
 		return t.inst.callHost(t.host, st)
 	}
 	if depth >= callBudget {
@@ -789,6 +798,9 @@ func (in *Instance) callRef(st *stack, depth int) error {
 		return err
 	}
 	if t.host != nil {
+		if t.host.canon != nil {
+			return t.inst.callAdapter(t.host, st, depth)
+		}
 		return t.inst.callHost(t.host, st)
 	}
 	if depth >= callBudget {
