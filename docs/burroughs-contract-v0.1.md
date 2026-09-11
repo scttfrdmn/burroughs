@@ -173,6 +173,19 @@ that spin is unnecessary.*
 - **H-2.** Host calls MUST NOT re-enter the guest on the caller's stack
   (no surprise reentrancy). Callbacks, if ever offered, are delivered via
   §6 readiness, never by nested guest entry.
+  *Amended by Scott's stamp on #694, dated 2026-09-10. H-2 governs host
+  functions registered by the embedder. The engine's canonical-ABI adapter
+  may invoke, on the calling agent's stack, exactly the `realloc` and
+  `post-return` functions named in the canon lower's options, and no other
+  guest function; these run as ordinary guest execution of that agent —
+  safepoints honored, faults attributed to the guest — not as host code.
+  Provenance: the Component Model's own lowering calls the callee's `realloc`
+  during a lower, on the current stack, even for a zero-length list
+  (`definitions.py` `store_list_into_range` → `cx.opts.realloc`), and runs
+  `post-return` after; the first `wasi:cli/run` component built by
+  cargo-component reaches both through a `$imports` funcref trampoline. The
+  embedder boundary is untouched: a `HostExtern` still has no guest entry
+  point, which stays H-2's enforcement for the case H-2 is about.*
 - **H-3.** Cancellation: a thread parked in a blocking host call MUST be
   interruptible by engine shutdown and MAY be interruptible by a
   guest-visible cancel primitive (open: §10.4).

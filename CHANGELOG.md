@@ -21,6 +21,21 @@ weakly-ordered platform.
 
 ### Added
 
+- **The canonical-ABI adapter invokes the guest's `realloc` as agent execution (`CanonLowerExtern`,
+  ADR 0084 / §5 H-2 amendment).**
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md),
+  [#694](https://github.com/scttfrdmn/burroughs/issues/694). Third interp boundary the p3 track pulled
+  forward: lowering a list or string into the guest calls the callee's `cabi_realloc` during the lower
+  (definitions.py `store_list_into_range` → `cx.opts.realloc`, even at length 0), which is guest
+  re-entry §5 H-2 forbade for embedder host calls. `CanonLowerExtern` is a **distinct** adapter extern,
+  dispatched by `callAdapter` as guest-adjacent work (not a blocking `callHost`); its impl receives a
+  `*CanonCaller` whose `Realloc` invokes the bound `cabi_realloc` on the calling agent's stack as
+  ordinary guest execution — safepoints honored (a `Stop` parks the agent inside realloc), faults
+  attributed to the guest (a `Close` terminates it there with `ErrTerminated`). An embedder `HostExtern`
+  is unchanged: dispatched by `callHost`, handed a plain `Caller` with no guest-entry method, so H-2's
+  enforcement holds for its real subject. Post-return is a `canon lift` option, not a lower's, so it is
+  not part of this adapter. Board unchanged (no host functions in the suite).
+
 - **A host function can bind the memory it lifts and lowers against (`HostExternWithMemory`), for the
   canonical-ABI adapter.**
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md),

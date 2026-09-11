@@ -260,9 +260,22 @@ type hostFunc struct {
 	// declaring instance's memory 0. It is the canonical-ABI adapter's need (ADR 0084): a canon lower's
 	// `(memory $m)` option names the memory the guest's arguments index, which the memory-less
 	// `$imports` trampoline that dispatches the adapter does not have. Reading and writing it runs no
-	// guest code, so H-2 holds; the realloc/post-return half of the options bundle — which does run
-	// guest code — is a later increment behind §5's H-2 amendment.
+	// guest code, so H-2 holds.
 	mem *Extern
+
+	// canon, realloc and stringEncoding are set only for the **canonical-ABI adapter** (a canon lower),
+	// which is dispatched by `callAdapter` rather than `callHost` and is *not* an embedder `HostExtern`.
+	// This is the distinction §5 H-2's amendment turns on: the adapter may invoke, on the calling
+	// agent's stack, the `realloc` its options name (ordinary guest execution — `Realloc` on the
+	// `CanonCaller`), while an embedder host function, dispatched by `callHost`, is handed a plain
+	// `Caller` with no way to re-enter the guest. `canon != nil` selects the adapter dispatch.
+	//
+	// Post-return is deliberately absent: it is a `canon lift` option (definitions.py `canon_lift`
+	// runs `opts.post_return` after lifting results), never a `canon lower` one — the wasi imports this
+	// adapter serves are lowered, so there is no post-return for it to invoke.
+	canon          CanonFunc
+	realloc        *Extern
+	stringEncoding string
 }
 
 // HostExtern makes an `Extern` that satisfies a function import with an embedder's Go function.
@@ -292,12 +305,53 @@ func HostExtern(ft binary.FuncType, fn HostFunc) Extern {
 // correctly its declaring instance's.
 //
 // **This is H-2-clean and only the memory half of the options bundle.** Reading and writing the bound
-// memory runs no guest code. Binding the lower's `realloc` and `post-return` — which the ABI invokes on
-// the calling agent's stack — is a distinct increment behind §5's H-2 amendment, and it will be a
-// distinct adapter form, not this constructor, so that an embedder `HostExtern` still has no way to
-// re-enter the guest.
+// memory runs no guest code. Binding the lower's `realloc` — which the ABI invokes on the calling
+// agent's stack — is `CanonLowerExtern` below, a distinct adapter form (not this constructor) so that an
+// embedder `HostExtern` still has no way to re-enter the guest.
 func HostExternWithMemory(ft binary.FuncType, fn HostFunc, mem Extern) Extern {
 	return Extern{Kind: binary.ExternFunc, host: &hostFunc{ft: ft, fn: fn, mem: &mem}}
+}
+
+// CanonFunc is the impl of a canonical-ABI adapter (a canon lower). Unlike a `HostFunc`, it is handed a
+// `*CanonCaller`, which can invoke the lower's `realloc` — because the Component Model's lowering calls
+// the callee's allocator on the calling agent's stack (§5 H-2's amendment). Its `[]Value` arguments and
+// results are the lower's *flattened core* values, as for a `HostFunc`.
+type CanonFunc func(*CanonCaller, []Value) ([]Value, error)
+
+// CanonOptions is the canon lower's options bundle, resolved to engine `Extern`s (ADR 0084). Memory and
+// Realloc are the memory and `cabi_realloc` the lower names; each is nil when the lower omits it (a
+// lower with no result to lower into guest memory needs neither). StringEncoding defaults to utf-8.
+// Post-return is intentionally not here: it is a `canon lift` option, not a lower's.
+type CanonOptions struct {
+	Memory         *Extern
+	Realloc        *Extern
+	StringEncoding string
+}
+
+// CanonLowerExtern makes the canonical-ABI adapter extern for a canon lower (ADR 0084, §5 H-2 amended).
+// It is **distinct from `HostExtern`**: dispatched by `callAdapter` as guest-adjacent work rather than
+// as a blocking host call, and its impl receives a `*CanonCaller` that can `Realloc` — invoking the
+// lower's `cabi_realloc` as ordinary guest execution of the calling agent (safepoints honored, faults
+// attributed to the guest). An embedder never builds one; the component walk does, from a canon lower's
+// resolved options.
+//
+// **The distinction is H-2's enforcement.** An embedder `HostExtern` is dispatched by `callHost` and
+// handed a plain `Caller` with no guest-entry method; only this adapter, dispatched by `callAdapter`,
+// carries a `realloc` and a `CanonCaller` that can call it. So the amendment's carve-out reaches exactly
+// the engine's own ABI machinery and no embedder function.
+//
+// **Scope: non-blocking impls only.** `callAdapter` does not park the thread (no `enterBlocked`), on the
+// ground that an ABI lower's marshaling is brief and does not block. A host impl that genuinely blocks
+// (a real `stdin` read) needs §5 H-1/H-3's blocked machinery this path skips; that is a later concern,
+// and the p3 exit's impls (stdio, streams write, exit, the empty-list getters) do not block.
+func CanonLowerExtern(ft binary.FuncType, fn CanonFunc, opts CanonOptions) Extern {
+	return Extern{Kind: binary.ExternFunc, host: &hostFunc{
+		ft:             ft,
+		canon:          fn,
+		mem:            opts.Memory,
+		realloc:        opts.Realloc,
+		stringEncoding: opts.StringEncoding,
+	}}
 }
 
 // ErrHostTrap wraps whatever a host function returned as an error. The guest sees a trap; the
@@ -482,6 +536,110 @@ func (in *Instance) callHost(h *hostFunc, st *stack) error {
 	t.leaveBlocked()
 
 	return in.pushHostResults(st, h.ft.Results, results)
+}
+
+// callAdapter dispatches a canonical-ABI adapter (a canon lower) as **guest-adjacent** work (ADR 0084,
+// §5 H-2 amended), distinct from `callHost`. It does not park the thread: an ABI lower's marshaling is
+// brief and does not block, and the `realloc` it may invoke through the `CanonCaller` is ordinary guest
+// execution that polls at frame entry — so a Stop parks the agent *inside* realloc and a Close
+// terminates it there, both attributed to the guest. The thread is already a caller (the adapter is
+// reached from `call_indirect` mid-guest-run), so `Stop`'s predicate stays unsatisfied while the adapter
+// runs, exactly as for any stretch of guest code between safepoints.
+//
+// `beginHostCall`/`endHostCall` are kept — the closed-instance guard, and Close's quiescence accounting
+// (a terminal `realloc` unwinds through the `defer`, releasing Close's wait) — but `enterBlocked` and
+// `leaveGuest` are not: the adapter never leaves guest execution, so there is no blocked mark to restore
+// on a terminal unwind. That absence is why this path, rather than a reentrant fold into `callHost`, is
+// the safe shape.
+func (in *Instance) callAdapter(h *hostFunc, st *stack, depth int) error {
+	t := st.t
+	w := t.world()
+	if w == nil {
+		return fmt.Errorf("%w: an adapter call on a thread no world admitted (engine invariant, "+
+			"world.addLocked)", ErrNotValidated)
+	}
+	if err := w.beginHostCall(); err != nil {
+		return err
+	}
+	defer w.endHostCall()
+
+	args, err := hostArgs(st, h.ft.Params)
+	if err != nil {
+		return err
+	}
+
+	mem, memErr := in.hostMemory()
+	if h.mem != nil {
+		if h.mem.mem != nil {
+			mem, memErr = h.mem.mem, nil
+		} else {
+			mem, memErr = nil, fmt.Errorf("%w: a canon lower's bound memory is nil", ErrNotValidated)
+		}
+	}
+	cc := &CanonCaller{
+		Caller:  &Caller{ctx: t.context(), tid: t.threadID(), mem: mem, memErr: memErr},
+		realloc: h.realloc,
+		t:       t,
+		st:      st,
+		depth:   depth,
+	}
+
+	results, callErr := h.canon(cc, args)
+	if callErr != nil {
+		return fmt.Errorf("%w: %w", ErrHostTrap, callErr)
+	}
+	return in.pushHostResults(st, h.ft.Results, results)
+}
+
+// CanonCaller is what a canonical-ABI adapter's impl is told about its call: everything a `Caller` is
+// (bound guest memory, context, thread identity), plus the ability to invoke the lower's `realloc` as
+// guest execution. It is the type §5 H-2's amendment authorizes to re-enter the guest, and an embedder
+// `HostFunc` never receives one — that is how the carve-out stays confined to the engine's own ABI
+// machinery.
+type CanonCaller struct {
+	*Caller
+	realloc *Extern
+	t       *thread
+	st      *stack
+	depth   int
+}
+
+// Realloc invokes the canon lower's `cabi_realloc(orig_ptr, orig_size, align, new_size) -> i32` on the
+// calling agent's stack and returns the pointer it yields — the Component Model's allocation during a
+// lower (definitions.py `cx.allocate` → `cx.opts.realloc`), called even for a zero-length list. It runs
+// as ordinary guest execution: the invoked frame polls at entry, so a Stop parks the agent inside
+// realloc and a Close terminates it there (the `threadTerminated` unwind reaches `invokeIndex`'s
+// recover, so the call reports `ErrTerminated` — guest work, not host code).
+func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32, error) {
+	if c.realloc == nil {
+		return 0, fmt.Errorf("%w: this canon lower declared no realloc option", ErrUnsupportedOp)
+	}
+	if c.depth >= callBudget {
+		return 0, trapExhaustion
+	}
+	target, err := c.realloc.owner.resolveCall(c.realloc.fnIdx)
+	if err != nil {
+		return 0, err
+	}
+	if target.host != nil {
+		return 0, fmt.Errorf("%w: a canon lower's realloc resolves to a host function", ErrNotValidated)
+	}
+	ft, err := target.inst.funcType(target.fn)
+	if err != nil {
+		return 0, err
+	}
+	if len(ft.Params) != 4 || len(ft.Results) != 1 {
+		return 0, fmt.Errorf("%w: cabi_realloc declares %d params and %d results, want 4 and 1",
+			ErrNotValidated, len(ft.Params), len(ft.Results))
+	}
+	c.st.pushI32(int32(origPtr))
+	c.st.pushI32(int32(origSize))
+	c.st.pushI32(int32(align))
+	c.st.pushI32(int32(newSize))
+	if err := target.inst.invoke(target.fn, ft, c.st, c.depth); err != nil {
+		return 0, err
+	}
+	return uint32(c.st.popNum()), nil
 }
 
 // hostArgs takes the declared parameters off the shared stack, innermost last.
