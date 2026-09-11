@@ -21,6 +21,11 @@
   {"name": "list-u8-hello", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [72, 105]},
   {"name": "list-u32", "type": {"kind": "list", "elem": {"kind": "u32"}}, "value": [1, 256, 65536]},
 
+  {"name": "list-string-empty", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": []},
+  {"name": "list-string-one", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": ["hello"]},
+  {"name": "list-string-several", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": ["a", "bb", "ccc"]},
+  {"name": "list-string-utf8", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": ["café", "☃"]},
+
   {"name": "f32-one", "type": {"kind": "f32"}, "value": "0x3f800000"},
   {"name": "f32-neg-zero", "type": {"kind": "f32"}, "value": "0x80000000"},
   {"name": "f32-canonical-nan", "type": {"kind": "f32"}, "value": "0x7fc00000"},
