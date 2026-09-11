@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **The string lowering is a pluggable-heap codec (`canon.StoreString`/`canon.Heap`); the host routes
+  through it, no hand path (behind `gate:components`, off).**
+  [#719](https://github.com/scttfrdmn/burroughs/issues/719), ADR 0084 / 0083.
+  The codec's single string lowering is extracted behind a `Heap` interface (realloc + write) with two
+  implementations — the model `[]byte` heap the `definitions.py` differential runs against, and a
+  guest-memory heap over the canon adapter's bound realloc/memory. `error.to-debug-string` lowers its
+  string through it and the hand `storeString` is deleted, so the bytes the guest reads are lowered by the
+  same code the string fixtures (`string-hello`/`-empty`/`-utf8`) verify — ADR 0083's implement-once, at
+  the value-lowering layer. Verified twofold: the definitions.py string fixtures (byte-exact) and a
+  Burroughs end-to-end round-trip (a failing stdout makes p3echo debug-string the error and panic; the
+  lowered message surfaces verbatim on stderr). The wasmtime oracle is structurally unavailable — its
+  stdout does not error, so the path is unreachable under it; a stated single-oracle case.
+
 - **`burroughs run <component>` — additive CLI surface over the gated component mechanism (`gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
   ADR 0081/0084/0085. New public entries mirroring the preview-1 pair: `ComponentConfig.Run` (the

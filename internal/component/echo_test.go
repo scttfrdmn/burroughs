@@ -42,10 +42,14 @@ func TestP3EchoMatchesWasmtime(t *testing.T) {
 	}
 }
 
-// errWriter fails every write, standing in for a closed pipe.
+// errWriter fails every write with a distinctive message, standing in for a closed pipe. The message is
+// distinctive so a test can prove it round-tripped: the host lowers it through error.to-debug-string,
+// the guest reads it back, and Rust's panic surfaces it on stderr.
 type errWriter struct{}
 
-func (errWriter) Write(p []byte) (int, error) { return 0, errors.New("broken pipe") }
+const brokenPipeMsg = "burroughs-e2e-pipe-3f9a"
+
+func (errWriter) Write(p []byte) (int, error) { return 0, errors.New(brokenPipeMsg) }
 
 // TestStreamErrArmLowersAnOwnErrorHandle is #694's deferred err arm, driven live: with a stdout that
 // fails, output-stream.blocking-write-and-flush lowers result<_, stream-error> = Err(last-operation-
@@ -57,17 +61,31 @@ func TestStreamErrArmLowersAnOwnErrorHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHost(errWriter{}, errWriter{}, strings.NewReader("hi\n"))
+	// stdout fails (the err arm); stderr is a live buffer so the guest's panic — which carries the
+	// debug-string the host lowered — is captured rather than lost to a second failing writer.
+	var errb bytes.Buffer
+	h := NewHost(errWriter{}, &errb, strings.NewReader("hi\n"))
 	h.Args = []string{"p3echo.wasm"}
 	in, err := InstantiateWithHost(wasm, h)
 	if err != nil {
 		t.Fatalf("instantiate: %v", err)
 	}
 	defer in.Close()
-	// The guest aborts once told its write failed — a trap, which is the guest seeing the err arm, not
-	// the host failing. The err arm having run is what we assert.
+	// The guest, told its write failed, debug-strings the error and aborts — a trap, the guest seeing
+	// the err arm, not the host failing.
 	_ = in.CallRun()
+
+	// The err arm ran: an own<error> was minted.
 	if len(h.errors) == 0 {
-		t.Error("no own<error> was minted — the failing write did not lower the stream-error err arm")
+		t.Fatal("no own<error> was minted — the failing write did not lower the stream-error err arm")
+	}
+	// And error.to-debug-string lowered it correctly, end-to-end: the host lowered the error message
+	// through canon.StoreString into guest memory, the guest read it back, and Rust's panic surfaced it
+	// on stderr — verbatim. A wrong ptr/len from the string lowering would make the guest read garbage,
+	// so the exact message appearing here is the round-trip witness (paired with the definitions.py
+	// string fixtures that verify canon.StoreString's bytes).
+	if got := errb.String(); !strings.Contains(got, brokenPipeMsg) {
+		t.Errorf("stderr = %q, want it to contain %q — the debug-string the host lowered did not "+
+			"round-trip through the guest", got, brokenPipeMsg)
 	}
 }
