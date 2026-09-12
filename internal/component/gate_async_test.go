@@ -103,11 +103,41 @@ func TestAsyncCanonoptDecodesOnLift(t *testing.T) {
 	}
 }
 
-// TestAsyncLiftRefusedAtBindByName is the LIFT arm's refusal witness: a component whose canon section holds
-// an async lift is refused at bind, by name, naming gate:async and the lift arm. Built at the graph level
-// because a real-bytes async lift referencing a core func is refused at Load first (the forward-reference
-// check, TestForwardReferenceRefusedOnTheStream), so a full valid synthetic component would be needed to
-// reach bind; the marker's decode-from-bytes is witnessed by TestAsyncCanonoptDecodesOnLift.
+// TestSynthesizedAsyncLiftRefusedAtBindByName is the LIFT arm's refusal witness on real bytes, mirroring
+// how the real guest witnesses the lower arm: a full, valid synthesized component (async-lift-synth.wasm —
+// a core module exporting a trivial func, a core instance, a core-func alias, then a canon lift with the
+// async canonopt over an async functype) Loads cleanly (the core func exists before the lift references it,
+// so the forward-reference check passes), then is refused at bind, by name, naming gate:async and the lift
+// arm — the refusal firing on synthesized bytes through Load→bind, not on a hand-built graph.
+func TestSynthesizedAsyncLiftRefusedAtBindByName(t *testing.T) {
+	b, err := os.ReadFile("testdata/async-lift-synth.wasm")
+	if err != nil {
+		t.Fatalf("synthesized async-lift fixture missing (it is committed): %v", err)
+	}
+	if _, lerr := Load(b); lerr != nil {
+		t.Fatalf("Load refused the synthesized async-lift component — it must decode so the refusal fires at bind: %v", lerr)
+	}
+	t.Setenv("BURROUGHS_ASYNC", "") // gate:async off
+	_, err = Instantiate(b)
+	if err == nil {
+		t.Fatal("gate:async off: the synthesized async lift instantiated — the lift arm was not refused")
+	}
+	if !errors.Is(err, ErrAsyncGated) {
+		t.Fatalf("gate:async off: refusal is not ErrAsyncGated: %v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "gate:async") || !strings.Contains(got, "lift") {
+		t.Errorf("refusal %q must name gate:async and the async lift (the firing arm)", got)
+	}
+	// With the gate on, the same bytes are not refused by gate:async.
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	if _, onErr := Instantiate(b); onErr != nil && errors.Is(onErr, ErrAsyncGated) {
+		t.Fatalf("gate:async on: synthesized async lift still refused by gate:async: %v", onErr)
+	}
+}
+
+// TestAsyncLiftRefusedAtBindByName is a unit test of gateAsync on the lift arm at the graph level (the
+// bytes path is TestSynthesizedAsyncLiftRefusedAtBindByName): a component whose canon section holds an
+// async lift is refused, by name, naming gate:async and the lift arm.
 func TestAsyncLiftRefusedAtBindByName(t *testing.T) {
 	t.Setenv("BURROUGHS_ASYNC", "") // gate:async off
 	c := &Component{Canons: []Canon{{Kind: CanonLift, Opts: CanonOpts{Async: true}}}}

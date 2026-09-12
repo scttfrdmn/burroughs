@@ -11,6 +11,22 @@ Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)` + `rustup target add 
 precompiled std + wasi-libc; no `-Zbuild-std`); `wasm-tools 1.258.0`; `wasmtime 48.0.1 (7bac2c27)` runs it
 async-on-by-default to `Hello, world!\n`. sha1 `06f965f7d392e762b0324d0e0f86aa8762d0ae61`.
 
+`async-lift-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` lift-arm witness:
+a core module exporting a trivial `func`, a core instance, a core-func alias, then a `canon lift` carrying
+the `async` canonopt over an async functype (`(func async)`). No guest lifts async yet, so this is the
+smallest full, *Loadable* component that reaches the bind refusal on the lift arm (a bare async lift is
+refused at Load by the forward-reference check — the core func must exist first). Authored from this WAT via
+`wasm-tools parse` (wasm-tools 1.258.0; validates `--features all`), committed like the other fixtures:
+
+```wat
+(component
+  (core module $m (func (export "f")))
+  (core instance $i (instantiate $m))
+  (alias core export $i "f" (core func $f))
+  (type $t (func async))
+  (func (export "run") (type $t) (canon lift (core func $f) async)))
+```
+
 `p3hello.wasm` is the Step-0 Rust component from the p3 track (ADR 0084, #694): a `wasi:cli/run`
 world compiled to a component. `p3hello.wit` is the oracle's reading of it — verbatim
 `wasm-tools component wit p3hello.wasm` — committed rather than derived at test time, on the
