@@ -129,6 +129,15 @@ wasmtime is for.
   construction rather than absent by luck.*
 - **SP-4.** `stop()` MUST compose with §2: stopping the world with N threads
   parked in host calls completes without waking them.
+- **SP-5.** An agent suspended in a blocking excursion — whether in a host call
+  under §5 or in a guest-called built-in under H-4 — is not executing guest code
+  and is at a safepoint for the purposes of SP-1. `Stop`'s deadline is therefore
+  satisfiable while agents are suspended; a suspended agent does not require
+  resumption to reach a safepoint, and SP-1's and SP-2's predicates are
+  unaffected.
+  *Added by Scott's stamp on #737, dated 2026-09-12 (`gate:async`, ADR 0086,
+  first guest recon #734). States the consequence of §5 H-4 for stop-the-world;
+  a consequence of text already stamped, so an append rather than an amendment.*
 
 ## §4. The boundary memory model
 
@@ -189,6 +198,27 @@ that spin is unnecessary.*
 - **H-3.** Cancellation: a thread parked in a blocking host call MUST be
   interruptible by engine shutdown and MAY be interruptible by a
   guest-visible cancel primitive (open: §10.4).
+- **H-4.** The canonical built-ins `waitable-set.wait`, `waitable-set.poll`,
+  `stream.read`, `stream.write`, `future.read`, `future.write`, and
+  `subtask.cancel` may suspend the calling agent. These are guest-called
+  suspensions, not host-registered imports, and §5's existing clauses are not
+  extended to them by this clause; H-1's guarantee governs them by the
+  reference made here. A suspension arising from any of these built-ins
+  suspends the calling agent only: sibling agents in the same instance remain
+  runnable, and the runtime introduces no sibling starvation. Such a suspension
+  is resolved by another agent of the same instance executing guest code, by
+  `Close`, or by a fault. The runtime does not detect, arbitrate, or report the
+  case in which every agent of an instance is suspended on waitable sets that no
+  runnable agent can satisfy; that condition is a property of the guest program,
+  and `Close` and the fault path remain its only exits.
+  *Added by Scott's stamp on #737, dated 2026-09-12. Occasioned by the
+  `gate:async` tier (ADR 0086) and its first guest (recon #734): guest-called
+  suspending built-ins are a category §5's host-call clauses do not name. The
+  load-bearing sentence is the reference to H-1 without widening §5's scope, so
+  the stamped H-2 carve-out keeps its original subject; the last sentence settles
+  guest-caused deadlock as a guest property, not an engine fault — placed here
+  rather than in a later amendment because slice 1's first hang is exactly the
+  moment not to be arguing it.*
 
 ## §6. The event loop and readiness (wasip3)
 
@@ -210,6 +240,16 @@ commits to that reading.*
   further synchronization.
 - **R-4.** The loop MUST be shareable across component instances per the
   0.3 model, with per-instance isolation of handle tables.
+- **R-5.** `waitable-set.wait` and `waitable-set.poll` are the guest-facing
+  surface of the R-1 readiness substrate: a return from either is the guest
+  pulling readiness, not the host pushing an event. The async tier introduces no
+  push path. R-2's `findRunnable` discipline is unchanged by the presence of
+  guest-called waiters. A `WaitableSet` is a per-instance object and is subject
+  to R-4's handle-table isolation.
+  *Added by Scott's stamp on #737, dated 2026-09-12 (`gate:async`, ADR 0086,
+  first guest recon #734). A consequence of R-1/R-2/R-4 already stamped — the
+  pull-not-push sentence is what a future async design is checked against — so
+  an append rather than an amendment.*
 
 ## §7. Stacks
 
@@ -221,6 +261,13 @@ commits to that reading.*
   *A stack-switching implementation with fixed-size continuations forces a
   goroutine model into overallocate-or-die. This clause is the single
   largest Go-partisan divergence from current prototypes.*
+  *Added by Scott's stamp on #737, dated 2026-09-12 (`gate:async`, ADR 0086,
+  first guest recon #734). Negative note: Burroughs' async tier as first
+  implemented does not consume S-1. Each task runs on its own agent and the
+  agent's goroutine is the continuation; the first async guest sync-lifts its
+  export, so no continuation is captured or grown. This remains true **until a
+  guest async-lifts an export**, at which point S-1's applicability is reopened —
+  the expiry condition, stated so the note does not read as a settled fact later.*
 - **S-2.** Switch cost SHOULD be O(register save/restore) with no host-call
   round trip on the switch path (the WasmFX libcall→native transition
   measured ~6× on microbenchmarks; Burroughs starts native).
