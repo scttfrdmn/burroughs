@@ -13,9 +13,10 @@ package canon
 
 import "fmt"
 
-// Kind is a WIT value type's discriminant, for the types slice 2's guest drives. Types outside this set
-// (record, tuple, flags, enum, option, and — until their own increments — f32/f64, variant, result,
-// own/borrow) are not modeled here and are refused by name.
+// Kind is a WIT value type's discriminant, for the types slice 2's guest drives. Modeled: the scalars,
+// char, string, list, variant/result, own/borrow, and `tuple`'s size/alignment (for lowering an empty
+// `list<tuple>` — the getters' result; tuple *element* lowering is not modeled). Types outside this set
+// (record, flags, enum, option, non-empty tuple lowering) are refused by name until a guest drives one.
 type Kind uint8
 
 const (
@@ -36,6 +37,7 @@ const (
 	KindVariant
 	KindOwn
 	KindBorrow
+	KindTuple
 )
 
 func (k Kind) String() string {
@@ -74,6 +76,8 @@ func (k Kind) String() string {
 		return "own"
 	case KindBorrow:
 		return "borrow"
+	case KindTuple:
+		return "tuple"
 	default:
 		return fmt.Sprintf("kind(%d)", uint8(k))
 	}
@@ -82,10 +86,11 @@ func (k Kind) String() string {
 // Type is a WIT value type. Elem is the element type of a list; Cases are a variant's cases (a result
 // is a two-case variant, "ok"/"err"). Both are nil/empty for the other kinds.
 type Type struct {
-	Kind  Kind
-	Elem  *Type
-	Cases []Case
-	RT    int // resource-type id for own/borrow (PR A models a resource type as an opaque id)
+	Kind   Kind
+	Elem   *Type
+	Cases  []Case
+	Fields []Type // tuple field types (KindTuple)
+	RT     int    // resource-type id for own/borrow (PR A models a resource type as an opaque id)
 }
 
 // Case is one variant case: its name and payload type (nil for a payload-less case, like `closed` or an
@@ -121,8 +126,22 @@ func typeEqual(a, b Type) bool {
 			return false
 		}
 	}
+	if len(a.Fields) != len(b.Fields) {
+		return false
+	}
+	for i := range a.Fields {
+		if !typeEqual(a.Fields[i], b.Fields[i]) {
+			return false
+		}
+	}
 	return true
 }
+
+// TupleType is a `tuple<…>` of the given field types. This slice models a tuple's size and alignment
+// (needed to lower an *empty* `list<tuple>` — the getters' result — whose backing realloc takes the
+// element alignment) but not its element lowering: a non-empty `list<tuple>` is refused by name until a
+// guest drives one (#725, guest-driven).
+func TupleType(fields ...Type) Type { return Type{Kind: KindTuple, Fields: fields} }
 
 // Value is one component value. Exactly one payload field is meaningful per Type.Kind: u holds the raw
 // bits of bool/ints/char (a signed integer is held as its two's-complement bits, so a fixed-width store

@@ -23,9 +23,33 @@ func alignment(t Type) int {
 		return 8
 	case KindVariant:
 		return alignmentVariant(t.Cases)
+	case KindTuple:
+		return alignmentTuple(t.Fields)
 	default:
 		panic(fmt.Sprintf("canon: alignment: unmodeled kind %s", t.Kind))
 	}
+}
+
+// alignmentTuple is a tuple's alignment: the max of its fields' (CanonicalABI.md, an empty tuple is 1).
+func alignmentTuple(fields []Type) int {
+	a := 1
+	for i := range fields {
+		if fa := alignment(fields[i]); fa > a {
+			a = fa
+		}
+	}
+	return a
+}
+
+// sizeTuple is a tuple's size: each field placed at its aligned offset, the whole aligned to the tuple's
+// alignment (CanonicalABI.md `record`/`tuple` layout).
+func sizeTuple(fields []Type) int {
+	s := 0
+	for i := range fields {
+		s = alignTo(s, alignment(fields[i]))
+		s += size(fields[i])
+	}
+	return alignTo(s, alignmentTuple(fields))
 }
 
 // size is the in-memory element size of a type (CanonicalABI.md `elem_size`). A string and a
@@ -44,6 +68,8 @@ func size(t Type) int {
 		return 2 * ptrSize
 	case KindVariant:
 		return sizeVariant(t.Cases)
+	case KindTuple:
+		return sizeTuple(t.Fields)
 	default:
 		panic(fmt.Sprintf("canon: size: unmodeled kind %s", t.Kind))
 	}

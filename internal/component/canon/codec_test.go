@@ -34,12 +34,13 @@ type fixtureCase struct {
 }
 
 type typeSpec struct {
-	Kind  string     `json:"kind"`
-	Elem  *typeSpec  `json:"elem"`
-	Cases []caseSpec `json:"cases"`
-	Ok    *typeSpec  `json:"ok"`
-	Err   *typeSpec  `json:"err"`
-	Rt    int        `json:"rt"`
+	Kind   string     `json:"kind"`
+	Elem   *typeSpec  `json:"elem"`
+	Cases  []caseSpec `json:"cases"`
+	Fields []typeSpec `json:"fields"`
+	Ok     *typeSpec  `json:"ok"`
+	Err    *typeSpec  `json:"err"`
+	Rt     int        `json:"rt"`
 }
 
 type caseSpec struct {
@@ -99,6 +100,12 @@ func typeFromSpec(t *testing.T, s typeSpec) Type {
 		return OwnType(s.Rt)
 	case "borrow":
 		return BorrowType(s.Rt)
+	case "tuple":
+		fields := make([]Type, len(s.Fields))
+		for i := range s.Fields {
+			fields[i] = typeFromSpec(t, s.Fields[i])
+		}
+		return TupleType(fields...)
 	}
 	k, ok := map[string]Kind{
 		"bool": KindBool, "u8": KindU8, "u16": KindU16, "u32": KindU32, "u64": KindU64,

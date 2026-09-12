@@ -26,7 +26,7 @@ import definitions  # noqa: E402
 from definitions import (  # noqa: E402
     BoolType, U8Type, U16Type, U32Type, U64Type, S8Type, S16Type, S32Type, S64Type,
     F32Type, F64Type, CharType, StringType, ListType, VariantType, ResultType,
-    OwnType, BorrowType, CaseType, MemInst, CanonicalOptions, ComponentInstance,
+    OwnType, BorrowType, TupleType, CaseType, MemInst, CanonicalOptions, ComponentInstance,
     LiftLowerContext, Store, store, load, lower_flat_values, flatten_types, align_to,
     alignment, elem_size, ResourceType, ResourceHandle,
 )
@@ -89,6 +89,7 @@ def build_type(spec):
         case "char": return CharType()
         case "string": return StringType()
         case "list": return ListType(build_type(spec["elem"]))
+        case "tuple": return TupleType([build_type(f) for f in spec["fields"]])
         case "variant":
             return VariantType([CaseType(c["name"], build_type(c["type"]) if c.get("type") else None)
                                 for c in spec["cases"]])
