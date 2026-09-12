@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **The empty-list getters lower through the codec, not a hand path (`gate:components`, off).**
+  [#725](https://github.com/scttfrdmn/burroughs/issues/725),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  `get-environment`/`get-directories` lowered their empty `list<tuple<…>>` by a hand `realloc`+header
+  with a hardcoded align; they now build a `canon` empty list and lower it through `canon.StoreVia`/`StoreList`,
+  so the backing `realloc(0,0,elem_align,0)` takes the element's alignment from the codec. `tuple` gains
+  `size`/`alignment` in the codec (an empty `list<tuple>` needs the element align, not its lowering —
+  tuple element lowering stays refused by name). New `definitions.py` differential fixture
+  `list-tuple-string-empty` (align 4, header `(8,0)`); the hand `emptyList` is deleted. The last hand
+  list-lowering on the component host path is gone.
+
+
 - **`result<T, stream-error>` lowering — the variant + `own<error>` err arm — verified against definitions.py through the pluggable-heap codec (behind `gate:components`, off).**
   [#724](https://github.com/scttfrdmn/burroughs/issues/724),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).

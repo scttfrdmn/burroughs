@@ -3,7 +3,6 @@
 package component
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 
@@ -115,10 +114,14 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 
 		"wasi:cli/exit::exit": h.exit,
 
-		// get-arguments lowers the host's argv as a non-empty list<string>; get-environment stays empty.
-		"wasi:cli/environment::get-arguments":       h.getArguments,
-		"wasi:cli/environment::get-environment":     h.emptyList,
-		"wasi:filesystem/preopens::get-directories": h.emptyList,
+		// get-arguments lowers the host's argv as a non-empty list<string>; get-environment/get-directories
+		// grant nothing, so each lowers an empty list of its element type — through the codec, so the
+		// backing realloc's alignment is the element's, not a hand-hardcoded 4.
+		"wasi:cli/environment::get-arguments": h.getArguments,
+		"wasi:cli/environment::get-environment": h.emptyListOf(
+			canon.TupleType(canon.Type{Kind: canon.KindString}, canon.Type{Kind: canon.KindString})),
+		"wasi:filesystem/preopens::get-directories": h.emptyListOf(
+			canon.TupleType(canon.OwnType(0), canon.Type{Kind: canon.KindString})),
 	}
 	// The resource-drop intrinsics the world lowers are no-ops here: the table entry is left in place
 	// (the streams are the process's, not the guest's to free), so a drop neither refuses nor frees.
@@ -345,31 +348,23 @@ func (h *Host) errorToDebugString(c *interp.CanonCaller, args []interp.Value) ([
 	return nil, canon.StoreString(guestHeap{c}, msg, int(uint32(args[1].Bits)))
 }
 
-// emptyList marshals a `() -> list<T>` import that this host grants nothing (get-environment,
-// get-directories): its sole core argument is the return pointer where the list header (ptr, len) goes.
-//
-// **It allocates through the guest's realloc even though the list is empty**, because the model does:
-// `store_list_into_range` calls `cx.opts.realloc(0, 0, elem_align, byte_length)` and stores the pointer
-// it returns for *any* length, zero included (definitions.py). So the header is (realloc(...), 0), not
-// (0, 0). align 4 is the element alignment of these list-of-tuple-of-string results.
-//
-// **The model behavior is generator-pinned; this composes two verified pieces.** PR A's canon
-// differential has a `list-u8-empty` case whose committed fixture stores an empty list as header (8, 0)
-// — a realloc'd pointer, not zero — matching definitions.py; and the interp control
-// TestCanonAdapterReallocAtLengthZeroReturnsTheGuestPointer proves `CanonCaller.Realloc(0,0,align,0)`
-// invokes the guest's `cabi_realloc` and returns its pointer. This getter is their composition. p3hello
-// reads a zero-length list and never
-// touches the backing, so `burroughs run` is insensitive to realloc-vs-(0,0) — which is exactly why the
-// fixture, not the end-to-end diff, is the witness for condition 3 (#694).
-func (h *Host) emptyList(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("component: list getter: got %d core args, want 1 (ret)", len(args))
+// emptyListOf marshals a `() -> list<elem>` import this host grants nothing (get-environment,
+// get-directories): its sole core argument is the return pointer, and it lowers an *empty* list of the
+// given element type through the codec (`canon.StoreVia`/`StoreList`). The model allocates even for a
+// zero-length list — `store_list` calls `realloc(0, 0, elem_align, 0)` and stores the returned pointer
+// (definitions.py) — so the header is (realloc(...), 0), not (0, 0), and the realloc's alignment is the
+// element's, taken from `elem` by the codec rather than a hand-hardcoded 4. No element is lowered (the
+// list is empty), so a `tuple`/`own` element only needs its size and alignment, not its lowering (#725).
+// The lowering is byte-verified by the canon differential's empty-`list<tuple>` fixture.
+func (h *Host) emptyListOf(elem canon.Type) interp.CanonFunc {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("component: list getter: got %d core args, want 1 (ret)", len(args))
+		}
+		v, err := canon.List(elem)
+		if err != nil {
+			return nil, fmt.Errorf("component: empty list value: %w", err)
+		}
+		return nil, canon.StoreVia(guestHeap{c}, v, int(uint32(args[0].Bits)))
 	}
-	ptr, err := c.Realloc(0, 0, 4, 0)
-	if err != nil {
-		return nil, fmt.Errorf("component: empty list backing: %w", err)
-	}
-	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint32(buf[0:4], ptr) // list pointer; length stays 0
-	return nil, c.Write(uint64(uint32(args[0].Bits)), buf)
 }

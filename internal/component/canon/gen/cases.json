@@ -18,6 +18,7 @@
   {"name": "string-utf8", "type": {"kind": "string"}, "value": "caf\u00e9 \u00e9\u00e9"},
   {"name": "list-u8-bytes", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [1, 2, 3, 4, 5]},
   {"name": "list-u8-empty", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": []},
+  {"name": "list-tuple-string-empty", "type": {"kind": "list", "elem": {"kind": "tuple", "fields": [{"kind": "string"}, {"kind": "string"}]}}, "value": []},
   {"name": "list-u8-hello", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [72, 105]},
   {"name": "list-u32", "type": {"kind": "list", "elem": {"kind": "u32"}}, "value": [1, 256, 65536]},
   {"name": "list-string-empty", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": []},
