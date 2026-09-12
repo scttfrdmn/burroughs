@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **A value of a codec-unmodeled kind is refused by name at the earliest point it would be marshaled —
+  binding for an implemented import, `Call` for an export (ADR 0084 / #720).** The unmodeled set —
+  `record`, `flags`, `enum`, `option`, `error-context` — is derived from the codec's kinds (no
+  `canon.Kind`, no `store`/`StoreVia` arm), scanned through the modeled containers that nest it, so
+  `list<tuple<string,string>>` (get-environment's empty result) is clean while `tuple<record>` is not. An
+  *implemented* host lower whose bound signature carries one refuses at **instantiate** (the binding),
+  naming the import and the kind; an *unimplemented* import is untouched, refusing at **call** through the
+  stub (`filesystem-error-code`, result `option`, still instantiates — the p3 guests run byte-identical);
+  an *exported* function carrying one refuses at **Call** (`run` carries no values, so it never trips).
+  The loader now records an import's instance-type index (`Import.TypeIndex`, from `externType`), and the
+  binding resolves the bound signature through the component type-index space — a compacted map onto the
+  parsed type section (`typeSpaceToTypes`), since aliases and instance-local sub-types grow the space past
+  `c.Types` (p3hello's `filesystem/types` sits at space ordinal 15, `c.Types[8]`).
 - **The own-carrying-variant *lift* is verified directly against definitions.py; the `typeHasOwn`
   conditional is removed (#728).** #724's canon differential skipped the lift of own-bearing types (the
   fresh load heap had no handle table for `lift_own`). Now the generator emits the model's post-store

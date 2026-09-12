@@ -113,39 +113,40 @@ func (r *reader) name() (string, error) {
 // externType reads an `externtype` and returns its kind, consuming the whole production so a caller's
 // vec stays in sync. The value case's `0x01 valtype` form (an inline value type) is not modelled this
 // slice and is refused, named — no in-scope fixture imports a value.
-func (r *reader) externType() (ExternKind, error) {
+// externType reads an `externtype` and returns its kind and, for the func/component/instance cases, the
+// type index it names (0 otherwise). The instance-type index is what lets a binding resolve an
+// imported instance's export signatures (ADR 0084 / #720's binding refusal).
+func (r *reader) externType() (ExternKind, uint32, error) {
 	disc, err := r.byte()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	switch disc {
 	case 0x00: // core:* — only `core module` (0x11) is a valid externtype
 		sub, serr := r.byte()
 		if serr != nil {
-			return 0, serr
+			return 0, 0, serr
 		}
 		if sub != 0x11 {
-			return 0, fmt.Errorf("externtype 0x00: core sort %#x is not module (0x11)", sub)
+			return 0, 0, fmt.Errorf("externtype 0x00: core sort %#x is not module (0x11)", sub)
 		}
-		if _, ierr := r.u32(); ierr != nil {
-			return 0, ierr
-		}
-		return ExternCoreModule, nil
+		i, ierr := r.u32()
+		return ExternCoreModule, i, ierr
 	case 0x01: // func (type i)
-		_, err = r.u32()
-		return ExternFunc, err
+		i, err := r.u32()
+		return ExternFunc, i, err
 	case 0x02: // value b
-		return ExternValue, r.valueBound()
+		return ExternValue, 0, r.valueBound()
 	case 0x03: // type b
-		return ExternType, r.typeBound()
+		return ExternType, 0, r.typeBound()
 	case 0x04: // component (type i)
-		_, err = r.u32()
-		return ExternComponent, err
+		i, err := r.u32()
+		return ExternComponent, i, err
 	case 0x05: // instance (type i)
-		_, err = r.u32()
-		return ExternInstance, err
+		i, err := r.u32()
+		return ExternInstance, i, err
 	default:
-		return 0, fmt.Errorf("externtype discriminant %#x is undefined", disc)
+		return 0, 0, fmt.Errorf("externtype discriminant %#x is undefined", disc)
 	}
 }
 

@@ -129,6 +129,22 @@ func (w *walker) step(d Def) error {
 			cn := w.c.Canons[d.Item]
 			if cn.Kind == CanonLower && int(cn.FuncIdx) < len(w.compFuncs) {
 				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName != "" {
+					// The binding refusal (ADR 0084 / #720): an **implemented** lower whose bound
+					// signature carries a value kind the codec cannot marshal (record/flags/enum/option/
+					// error-context) refuses **by name at instantiate** — the earliest point the impl
+					// would marshal one. An *unimplemented* lower is untouched: it refuses at call through
+					// the stub (`filesystem-error-code`, result `option`, stays exactly as it is, so the
+					// guests keep instantiating). `tuple`/`f32`/`f64` are modeled and refuse at marshal, not
+					// here (so `get-environment`'s empty `list<tuple>` is not refused).
+					if _, implemented := w.wasiHost[stripVersion(cf.stubName)]; implemented {
+						if sig := w.lowerSignature(cf.stubName); sig != nil {
+							if k, bad := unmodeledInSig(sig); bad {
+								return fmt.Errorf("%w: canon lower of %s carries %s, which this engine's "+
+									"Canonical ABI does not model — refused at instantiate rather than mis-lowered",
+									ErrUnsupportedForm, cf.stubName, valKindName(k))
+							}
+						}
+					}
 					w.appendCore(SpaceCoreFunc, coreDef{
 						lowerName:    cf.stubName,
 						lowerMem:     w.lowerMemory(cn),
@@ -339,4 +355,62 @@ func (w *walker) close() {
 	for _, in := range w.toClose {
 		_ = in.Close()
 	}
+}
+
+// lowerSignature resolves a canon lower's "module::export" identity to the component function type it
+// lowers, so the binding refusal can scan it: the module is the import's name, whose recorded instance
+// type index (loader) names the InstanceType in the type space, whose export of that name carries the
+// FuncType (C.1-resolved). Returns nil when the resolution has no answer — an unresolved outer VRef in a
+// checked signature would be a gap, but the guests' implemented lowers resolve fully (a stub host's
+// export names never reach here, only real imports do).
+func (w *walker) lowerSignature(lowerName string) *FuncType {
+	mod, export, found := strings.Cut(lowerName, "::")
+	if !found {
+		return nil
+	}
+	for i := range w.c.Imports {
+		imp := &w.c.Imports[i]
+		if imp.Name != mod || imp.Kind != ExternInstance {
+			continue
+		}
+		// The import's TypeIndex is a component type-index-*space* ordinal; c.Types is the compacted type
+		// *section*, a subset (aliases and instance-local sub-types also grow the space, so a guest-driven
+		// import like filesystem/types sits at a space ordinal well past its c.Types position). Map through.
+		ct := w.c.typeSpaceToTypes(imp.TypeIndex)
+		if ct < 0 || ct >= len(w.c.Types) {
+			return nil
+		}
+		td := w.c.Types[ct]
+		if td.Kind != TDInstance || td.Inst == nil {
+			return nil
+		}
+		for _, e := range td.Inst.Exports {
+			if e.Name == export {
+				return e.Func
+			}
+		}
+	}
+	return nil
+}
+
+// typeSpaceToTypes maps a component type-index-space ordinal to its c.Types index, or -1 when the ordinal
+// names an alias or import rather than a parsed section type. The type section is a compacted subset of
+// the full index space (the loader records every space contribution as a SpaceType def; only the section
+// entries append to c.Types), so a raw index into c.Types is wrong for any ordinal past the first
+// interleaved alias — which is why a guest-driven import resolved to nil before this map.
+func (c *Component) typeSpaceToTypes(ord uint32) int {
+	var seen uint32
+	for i := range c.Defs {
+		if c.Defs[i].Space != SpaceType {
+			continue
+		}
+		if seen == ord {
+			if c.Defs[i].Section == SectionType {
+				return c.Defs[i].Item
+			}
+			return -1
+		}
+		seen++
+	}
+	return -1
 }
