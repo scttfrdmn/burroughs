@@ -315,23 +315,41 @@ func asyncEnabled() bool { return os.Getenv(asyncGateEnv) == "1" }
 // internal caller directly, not only through the root entry.
 var ErrAsyncGated = errors.New("gate:async is off in this build")
 
-// gateAsync refuses a component that carries async surface when `gate:async` is off, by name, naming what
-// tripped it (ADR 0086). The condition keys on the `async` canonopt in any canon lift or lower — the thing
-// the async ABI turns on — read from the canon section, not on a world name or a 0.3 import. Because the
-// first guest is sync-lifted with async-lowered imports (#734), the lower arm is covered as much as the
-// lift; an async canon built-in, an async functype, and a stream/future value type are refused too
-// (defense-in-depth against the same permissiveness hole). Nothing runs behind the gate-on path yet
-// (slice 1); this only refuses.
+// gateAsync refuses a component that carries async surface, by name, naming what tripped it (ADR 0086).
+// The condition keys on the `async` canonopt in any canon lift or lower — the thing the async ABI turns on
+// — read from the canon section, not on a world name or a 0.3 import. Because the first guest is
+// sync-lifted with async-lowered imports (#734), the lower arm is covered as much as the lift; an async
+// canon built-in, an async functype, and a stream/future value type are refused too (defense-in-depth
+// against the same permissiveness hole).
+//
+// **Two refusals, one detector, so gate-on is never a silent no-op** (#739 slice 1). Gate **off** →
+// `ErrAsyncGated`, the #738 refusal ("set BURROUGHS_ASYNC=1"). Gate **on** → `ErrAsyncNotImplemented`: the
+// async tier's execution is being built slice by slice, and until it lands an async component refuses **by
+// name here** rather than instantiating successfully and trapping obscurely at run on a missing async
+// runtime import (the nil no-op Scott's rule forbids — an unimplemented sub-path refuses by name, never
+// appears to succeed). As increments land, this gate-on refusal narrows to the sub-paths still unbuilt and
+// is finally lifted when the guest runs (increment 4).
 func gateAsync(c *Component) error {
-	if asyncEnabled() {
-		return nil
+	what, ok := asyncSurface(c)
+	if !ok {
+		return nil // no async surface — sync components (gate:components) are unaffected
 	}
-	if what, ok := asyncSurface(c); ok {
+	if !asyncEnabled() {
 		return fmt.Errorf("%w: this component uses the async component-model ABI (%s); set %s=1 to opt in "+
 			"(the async tier's mechanism is not yet implemented)", ErrAsyncGated, what, asyncGateEnv)
 	}
-	return nil
+	return fmt.Errorf("%w: this component uses the async component-model ABI (%s), and gate:async is on, but "+
+		"the async tier's execution is not yet implemented — it lands incrementally (#739 slice 1)",
+		ErrAsyncNotImplemented, what)
 }
+
+// ErrAsyncNotImplemented is returned at instantiate when gate:async is ON but the async tier's execution
+// is not yet built (slice 1 is landing incrementally, #739). It is distinct from ErrAsyncGated (the gate
+// being off): the gate is open, the mechanism is not there yet — so it refuses by name rather than
+// instantiating and failing obscurely at run. Not wrapped as ErrGated: a gate that is on but unbuilt is
+// an unsupported operation, not a gate decline (grave #301's classification is for a well-formed module a
+// gate turns away, which is the gate-off case).
+var ErrAsyncNotImplemented = errors.New("component: gate:async is on but the async tier's execution is not yet implemented")
 
 // asyncSurface reports the first async component-model marker in the component and a name for it, in the
 // refusal's priority order: the `async` canonopt (the gate's key) first, then an async canon built-in, an
