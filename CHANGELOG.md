@@ -31,6 +31,13 @@ weakly-ordered platform.
   imports, it fires on the **lower** arm, and the lift arm is witnessed on decoded bytes and a constructed
   async lift. `gate:async` on has no mechanism yet (slice 1's); this shell registers the refusal only. The
   🧵 thread built-ins stay a decode refusal.
+- **`gate:async` on refuses by name rather than instantiating silently (ADR 0086, #739 slice 1 increment 1).**
+  With `BURROUGHS_ASYNC=1`, a component that uses the async ABI no longer instantiates successfully and then
+  traps obscurely at run on a missing async runtime import — it refuses at bind with `ErrAsyncNotImplemented`
+  (CLI exit 5, `exitUnsupported`), naming `gate:async` and that the tier's execution is not yet built. The
+  gate-off refusal (`ErrAsyncGated`, exit 6) is unchanged; both share one detector keyed on the `async`
+  canonopt, so gate-on is never a silent no-op (Scott's rule: an unimplemented sub-path refuses by name). The
+  async lower + subtask + event-loop mechanism lands in the following increments.
 - **`gate:components` flips on by default (ADR 0084 amendment 2026-09-11, #720).** A default build now
   runs a `wasi:cli/run` component: it instantiates against the preview-2 host and marshals, through the
   single `canon` codec, the value-type set #720's pre-registered forecast verifies against two oracles —

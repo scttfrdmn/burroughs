@@ -70,18 +70,30 @@ func TestAsyncGuestRefusedAtBindByName(t *testing.T) {
 	}
 }
 
-// TestGateAsyncOnDoesNotRefuse witnesses that the gate is a gate: with gate:async on, the async surface is
-// NOT refused by gate:async. Nothing runs behind it yet (slice 1 is the enabled exit), so this asserts only
-// that the gate:async refusal does not fire — not that the guest runs.
-func TestGateAsyncOnDoesNotRefuse(t *testing.T) {
+// TestGateAsyncOnRefusesUnimplementedByName is the gate-on no-op kill (#739 slice 1): with gate:async ON,
+// the async guest is NOT silently instantiated (which then trapped obscurely at run on a missing async
+// runtime import) — it refuses at bind, by name, with ErrAsyncNotImplemented naming gate:async and that
+// the tier's execution is not yet built. Distinct from the gate-off ErrAsyncGated: the gate is open, the
+// mechanism is not there yet. As increments land this narrows; increment 4 lifts it and the guest runs.
+func TestGateAsyncOnRefusesUnimplementedByName(t *testing.T) {
 	b, err := os.ReadFile(asyncGuestWasm)
 	if err != nil {
 		t.Fatalf("async guest fixture missing (it is committed): %v", err)
 	}
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	h := NewHost(io.Discard, io.Discard, nil)
-	if _, err := InstantiateWithHost(b, h); err != nil && errors.Is(err, ErrAsyncGated) {
-		t.Fatalf("gate:async on: still refused by gate:async — the gate did not open: %v", err)
+	_, err = InstantiateWithHost(b, h)
+	if err == nil {
+		t.Fatal("gate:async on: the async guest instantiated silently — a nil no-op; an unbuilt sub-path must refuse by name")
+	}
+	if !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Fatalf("gate:async on: refusal is not ErrAsyncNotImplemented: %v", err)
+	}
+	if errors.Is(err, ErrAsyncGated) {
+		t.Fatalf("gate:async on: refused as ErrAsyncGated (gate off), but the gate is on: %v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "gate:async") || !strings.Contains(got, "not yet implemented") {
+		t.Errorf("refusal %q must name gate:async and that execution is not yet implemented", got)
 	}
 }
 
@@ -128,10 +140,15 @@ func TestSynthesizedAsyncLiftRefusedAtBindByName(t *testing.T) {
 	if got := err.Error(); !strings.Contains(got, "gate:async") || !strings.Contains(got, "lift") {
 		t.Errorf("refusal %q must name gate:async and the async lift (the firing arm)", got)
 	}
-	// With the gate on, the same bytes are not refused by gate:async.
+	// With the gate on, the same bytes are refused by ErrAsyncNotImplemented (the gate opened; execution is
+	// unbuilt), not by ErrAsyncGated (the gate off) — the no-op kill on the lift arm.
 	t.Setenv("BURROUGHS_ASYNC", "1")
-	if _, onErr := Instantiate(b); onErr != nil && errors.Is(onErr, ErrAsyncGated) {
-		t.Fatalf("gate:async on: synthesized async lift still refused by gate:async: %v", onErr)
+	_, onErr := Instantiate(b)
+	if onErr == nil || !errors.Is(onErr, ErrAsyncNotImplemented) {
+		t.Fatalf("gate:async on: synthesized async lift not refused by ErrAsyncNotImplemented: %v", onErr)
+	}
+	if errors.Is(onErr, ErrAsyncGated) {
+		t.Fatalf("gate:async on: refused as ErrAsyncGated but the gate is on: %v", onErr)
 	}
 }
 
@@ -151,10 +168,12 @@ func TestAsyncLiftRefusedAtBindByName(t *testing.T) {
 	if got := err.Error(); !strings.Contains(got, "gate:async") || !strings.Contains(got, "lift") {
 		t.Errorf("refusal %q must name gate:async and the async lift", got)
 	}
-	// And with the gate on, the same lift is not refused by gate:async.
+	// And with the gate on, gateAsync refuses the same lift by ErrAsyncNotImplemented (gate open, execution
+	// unbuilt), not by ErrAsyncGated — the no-op kill.
 	t.Setenv("BURROUGHS_ASYNC", "1")
-	if err := gateAsync(c); err != nil {
-		t.Fatalf("gate:async on: async lift still refused: %v", err)
+	onErr := gateAsync(c)
+	if onErr == nil || !errors.Is(onErr, ErrAsyncNotImplemented) {
+		t.Fatalf("gate:async on: async lift not refused by ErrAsyncNotImplemented: %v", onErr)
 	}
 }
 

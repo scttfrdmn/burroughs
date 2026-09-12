@@ -35,6 +35,27 @@ func TestRunRefusesAnAsyncComponentByName(t *testing.T) {
 	}
 }
 
+// TestRunRefusesAnAsyncComponentGateOnUnimplemented is the gate-on no-op kill at the CLI (#739 slice 1):
+// with gate:components on and gate:async ON, `run p3async-hello.wasm` does not silently instantiate and
+// then trap obscurely at run — it exits exitUnsupported (5, "the engine reached something it does not
+// implement in this phase"), stdout empty, stderr naming gate:async. Distinct from the gate-off exitGated:
+// the gate is open, the mechanism is being built incrementally.
+func TestRunRefusesAnAsyncComponentGateOnUnimplemented(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "") // gate:components on (default)
+	t.Setenv("BURROUGHS_ASYNC", "1")     // gate:async ON
+	var out, errBuf bytes.Buffer
+	code := dispatch(&out, &errBuf, []string{"run", p3async})
+	if code != exitUnsupported {
+		t.Fatalf("`run p3async-hello.wasm` (gate on) exited %d, want %d (exitUnsupported)\nstderr: %q", code, exitUnsupported, errBuf.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want empty — the async tier's execution is not built", out.String())
+	}
+	if got := errBuf.String(); !strings.Contains(got, "gate:async") || !strings.Contains(got, "not yet implemented") {
+		t.Errorf("stderr = %q, want it to name gate:async and that execution is not yet implemented", got)
+	}
+}
+
 // TestRunExecutesAComponent asserts the flipped-on default (2026-09-11, ADR 0084, #720): on a default
 // build — the gate unset — `burroughs run p3hello.wasm` runs a cargo-component `wasi:cli/run` guest and
 // writes its stdout, checked byte-for-byte against the committed wasmtime 48.0.1 reading. Before the flip

@@ -77,6 +77,12 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 		if errors.Is(err, component.ErrAsyncGated) {
 			return 0, fmt.Errorf("%w: %w", ErrGated, err)
 		}
+		// `gate:async` on but the async tier's execution not yet built (#739 slice 1): the engine reached
+		// something it does not implement in this phase — exit 5 (exitUnsupported), not a gate decline (the
+		// gate is on) and not the invocation's own failure. It refuses by name, never a silent no-op.
+		if errors.Is(err, component.ErrAsyncNotImplemented) {
+			return 0, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
 		return 0, err
 	}
 	defer in.Close()
