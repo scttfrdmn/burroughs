@@ -26,3 +26,11 @@ wasm-tools component wit p3hello.wasm > p3hello.wit
 
 `wasm-tools print p3hello.wasm` reports 4 `(core module ...)` definitions — the count
 `loader_test.go` asserts.
+
+`p3echo-writefail.txt` is wasmtime 48.0.1's reading of p3echo with stdout to a **closed pipe** (the write
+fails): the stream `err` arm fires and Rust std aborts (exit 134, "failed printing to stdout"). It is the
+**behavioral** second oracle for the `result<_, stream-error>` err arm (#724) — the ABI lowering is
+byte-verified by the canon `definitions.py` fixtures; this records that a real failing write reaches the
+err arm and aborts, which Burroughs matches behaviorally (its own error text). Box: darwin, closed pipe;
+`/dev/full` on Linux gives the same via ENOSPC (deterministic). Regenerate:
+`printf 'hello\n' | wasmtime run p3echo.wasm | true` (capturing stderr and the exit).
