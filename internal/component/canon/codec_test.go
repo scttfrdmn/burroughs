@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -468,5 +469,30 @@ func TestMisLoweredStringIsRefused(t *testing.T) {
 	ptr := int(flats[0].bits)
 	if !bytes.Equal(h.mem[ptr:ptr+byteLen], []byte(s)) {
 		t.Errorf("lowered bytes = % x, want % x", h.mem[ptr:ptr+byteLen], []byte(s))
+	}
+}
+
+// TestStoreViaRefusesUncomposableKinds witnesses the lower-side refuse-by-name boundary: StoreVia — the
+// guest element store the host lowers through — refuses a kind it does not compose, by name, and writes
+// nothing. tuple (as a non-empty list<tuple> element), f32, and f64 are the kinds the concrete `store`
+// lowers but StoreVia does not; a guest that lowers one extends StoreVia rather than mis-lowering (the
+// #720 forecast's bounded claim, the #714 lesson). (char is composed as a 4-byte scalar, not refused.)
+func TestStoreViaRefusesUncomposableKinds(t *testing.T) {
+	for _, k := range []Kind{KindTuple, KindF32, KindF64} {
+		h := newHeap(64)
+		err := StoreVia(h, Value{Type: Type{Kind: k}}, 0)
+		if err == nil {
+			t.Errorf("StoreVia lowered kind %s, want a refusal by name", k)
+			continue
+		}
+		if !strings.Contains(err.Error(), k.String()) {
+			t.Errorf("StoreVia refusal %q does not name the kind %s", err, k)
+		}
+		for i, b := range h.mem {
+			if b != 0 {
+				t.Errorf("kind %s: StoreVia wrote mem[%d]=%#x on a refused kind (must write nothing)", k, i, b)
+				break
+			}
+		}
 	}
 }
