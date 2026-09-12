@@ -4,6 +4,7 @@ package burroughs
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -70,6 +71,12 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	h.Args = c.Args
 	in, err := component.InstantiateWithHost(wasm, h)
 	if err != nil {
+		// `gate:async` (ADR 0086) refuses an async component at bind, by name; it is a distinct gate from
+		// `gate:components`, off by default. Wrap its sentinel as ErrGated so the boundary classifies it
+		// exit 6 (well-formed, gate off — grave #301), the same outcome `gate:components` off produces.
+		if errors.Is(err, component.ErrAsyncGated) {
+			return 0, fmt.Errorf("%w: %w", ErrGated, err)
+		}
 		return 0, err
 	}
 	defer in.Close()

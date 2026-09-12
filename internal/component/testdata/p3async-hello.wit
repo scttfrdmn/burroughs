@@ -1,0 +1,100 @@
+package root:component;
+
+world root {
+  import wasi:cli/environment@0.3.0;
+  import wasi:cli/exit@0.3.0;
+  import wasi:cli/types@0.3.0;
+  import wasi:cli/stdin@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  import wasi:cli/stderr@0.3.0;
+  import wasi:cli/terminal-input@0.3.0;
+  import wasi:cli/terminal-output@0.3.0;
+  import wasi:cli/terminal-stdin@0.3.0;
+  import wasi:cli/terminal-stdout@0.3.0;
+  import wasi:cli/terminal-stderr@0.3.0;
+  import wasi:clocks/types@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+
+  export wasi:cli/run@0.3.0;
+}
+package wasi:cli@0.3.0 {
+  interface environment {
+    get-environment: func() -> list<tuple<string, string>>;
+  }
+  interface exit {
+    exit: func(status: result);
+
+    exit-with-code: func(status-code: u8);
+  }
+  interface types {
+    enum error-code {
+      io,
+      illegal-byte-sequence,
+      pipe,
+    }
+  }
+  interface stdin {
+    use types.{error-code};
+
+    read-via-stream: func() -> tuple<stream<u8>, future<result<_, error-code>>>;
+  }
+  interface stdout {
+    use types.{error-code};
+
+    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+  }
+  interface stderr {
+    use types.{error-code};
+
+    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+  }
+  interface terminal-input {
+    resource terminal-input;
+  }
+  interface terminal-output {
+    resource terminal-output;
+  }
+  interface terminal-stdin {
+    use terminal-input.{terminal-input};
+
+    get-terminal-stdin: func() -> option<terminal-input>;
+  }
+  interface terminal-stdout {
+    use terminal-output.{terminal-output};
+
+    get-terminal-stdout: func() -> option<terminal-output>;
+  }
+  interface terminal-stderr {
+    use terminal-output.{terminal-output};
+
+    get-terminal-stderr: func() -> option<terminal-output>;
+  }
+  interface run {
+    run: async func() -> result;
+  }
+}
+
+
+package wasi:clocks@0.3.0 {
+  interface types {
+    type duration = u64;
+  }
+  interface monotonic-clock {
+    use types.{duration};
+
+    type mark = u64;
+
+    now: func() -> mark;
+
+    wait-for: async func(how-long: duration);
+  }
+  interface system-clock {
+    record instant {
+      seconds: s64,
+      nanoseconds: u32,
+    }
+
+    now: func() -> instant;
+  }
+}

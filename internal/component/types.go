@@ -39,7 +39,9 @@ const (
 	VResult
 	VOwn
 	VBorrow
-	VRef // a typeidx reference to a defined type
+	VRef    // a typeidx reference to a defined type
+	VStream // (stream t?) — async surface, recognized not modeled (gate:async, ADR 0086)
+	VFuture // (future t?) — async surface, recognized not modeled
 )
 
 // ValType is a decoded component value type. Only the fields meaningful to its Kind are set; a
@@ -68,10 +70,13 @@ type VarCase struct {
 	Type *ValType // nil for a payload-less case
 }
 
-// FuncType is a component function type: named params and an optional single result.
+// FuncType is a component function type: named params and an optional single result. Async marks a
+// `0x43` async functype — recognized (decoded like a sync functype) so the type section survives, and
+// treated as async surface the gate:async refusal names (ADR 0086).
 type FuncType struct {
 	Params []NamedVal
 	Result *ValType // nil = no result
+	Async  bool     // a 0x43 async functype
 }
 
 // TypeDefKind is which of the four top-level type-definition forms a TypeDef is.
@@ -158,8 +163,13 @@ func (r *reader) typeDef() (TypeDef, error) {
 		return TypeDef{Kind: TDResource}, nil
 	case 0x41: // componenttype (nested) — not reached by the ten import signatures
 		return TypeDef{}, fmt.Errorf("component: nested component type (0x41) not modeled this slice")
-	case 0x43: // async functype
-		return TypeDef{}, fmt.Errorf("component: async func type (0x43) not modeled this slice")
+	case 0x43: // async functype — recognized (gate:async, ADR 0086): decoded like a functype, marked async
+		ft, err := r.funcType()
+		if err != nil {
+			return TypeDef{}, err
+		}
+		ft.Async = true
+		return TypeDef{Kind: TDFunc, Func: ft}, nil
 	default:
 		// a defvaltype opcode (a negative SLEB single byte): the value type forms.
 		vt, err := valTypeFromOpcode(r, op)
@@ -425,6 +435,12 @@ func valTypeFromOpcode(r *reader, op byte) (ValType, error) {
 		return ValType{Kind: VString}, nil
 	case 0x64:
 		return ValType{Kind: VErrorContext}, nil
+	case 0x66: // stream t? — async surface, recognized not modeled (gate:async, ADR 0086)
+		elem, err := r.optValType()
+		return ValType{Kind: VStream, Elem: elem}, err
+	case 0x65: // future t? — async surface, recognized not modeled
+		elem, err := r.optValType()
+		return ValType{Kind: VFuture, Elem: elem}, err
 	case 0x70: // list
 		elem, err := r.valType()
 		return ValType{Kind: VList, Elem: &elem}, err
@@ -562,7 +578,7 @@ func unmodeledValKind(vt ValType, depth int) (ValKind, bool) {
 		return 0, false // a cyclic/pathological type; the decoder's own depth guards apply first
 	}
 	switch vt.Kind {
-	case VRecord, VFlags, VEnum, VOption, VErrorContext:
+	case VRecord, VFlags, VEnum, VOption, VErrorContext, VStream, VFuture:
 		return vt.Kind, true
 	case VList: // VOption is handled above (it is itself unmodeled); a list recurses into its element
 		if vt.Elem != nil {
@@ -628,6 +644,10 @@ func valKindName(k ValKind) string {
 		return "option"
 	case VErrorContext:
 		return "error-context"
+	case VStream:
+		return "stream"
+	case VFuture:
+		return "future"
 	default:
 		return fmt.Sprintf("valkind(%d)", int(k))
 	}

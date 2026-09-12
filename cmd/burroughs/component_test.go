@@ -10,7 +10,30 @@ import (
 	"testing"
 )
 
-const p3hello = "../../internal/component/testdata/p3hello.wasm"
+const (
+	p3hello = "../../internal/component/testdata/p3hello.wasm"
+	p3async = "../../internal/component/testdata/p3async-hello.wasm"
+)
+
+// TestRunRefusesAnAsyncComponentByName is the gate:async shell's end-to-end witness at the CLI (ADR 0086):
+// with gate:components on (the default) but gate:async off (the default), `run p3async-hello.wasm` exits
+// exitGated, stdout empty, stderr naming gate:async. The refusal fires because the guest's imports are
+// async-lowered — a component the gate:components path alone would otherwise accept.
+func TestRunRefusesAnAsyncComponentByName(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "") // gate:components on (default)
+	t.Setenv("BURROUGHS_ASYNC", "")      // gate:async off (default)
+	var out, errBuf bytes.Buffer
+	code := dispatch(&out, &errBuf, []string{"run", p3async})
+	if code != exitGated {
+		t.Fatalf("`run p3async-hello.wasm` exited %d, want %d (exitGated)\nstderr: %q", code, exitGated, errBuf.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want empty — a gated async component must not run", out.String())
+	}
+	if got := errBuf.String(); !strings.Contains(got, "gate:async") {
+		t.Errorf("stderr = %q, want it to name gate:async (refuse by name)", got)
+	}
+}
 
 // TestRunExecutesAComponent asserts the flipped-on default (2026-09-11, ADR 0084, #720): on a default
 // build — the gate unset — `burroughs run p3hello.wasm` runs a cargo-component `wasi:cli/run` guest and

@@ -1,5 +1,16 @@
 # component loader test fixtures
 
+`p3async-hello.wasm` is the Phase-3 (`gate:async`, ADR 0086, #734) async guest: a Rust `wasm32-wasip3`
+hello-world (`fn main(){ println!("Hello, world!"); }`, dependency-free) whose exported
+`wasi:cli/run@0.3.0` is an async functype **sync-lifted** (`opts.async_` false — the host delivers the
+return) while its 0.3 stdio imports are **async-lowered**, so it binds the waitable-set / stream / future
+event loop. `p3async-hello.wit` is `wasm-tools component wit`'s reading, committed like the others. The
+`gate:async` shell refuses it at bind by name (it decodes: 35 canon defs, matching `wasm-tools print`);
+there is no committed `.stdout` because `gate:async` on has no mechanism yet (slice 1's), so nothing runs.
+Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)` + `rustup target add wasm32-wasip3` (a
+precompiled std + wasi-libc; no `-Zbuild-std`); `wasm-tools 1.258.0`; `wasmtime 48.0.1 (7bac2c27)` runs it
+async-on-by-default to `Hello, world!\n`. sha1 `06f965f7d392e762b0324d0e0f86aa8762d0ae61`.
+
 `p3hello.wasm` is the Step-0 Rust component from the p3 track (ADR 0084, #694): a `wasi:cli/run`
 world compiled to a component. `p3hello.wit` is the oracle's reading of it — verbatim
 `wasm-tools component wit p3hello.wasm` — committed rather than derived at test time, on the
