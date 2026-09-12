@@ -21,6 +21,16 @@ weakly-ordered platform.
 
 ### Added
 
+- **The own-carrying-variant *lift* is verified directly against definitions.py; the `typeHasOwn`
+  conditional is removed (#728).** #724's canon differential skipped the lift of own-bearing types (the
+  fresh load heap had no handle table for `lift_own`). Now the generator emits the model's post-store
+  handle table (`serialize_table`, rt as an int throughout — `emit_own` matches `build_type` and the
+  codec), the differential seeds the load/lift-flat heaps' tables from it, and the composed lift of
+  `result<_, stream-error> = Err(last-operation-failed(own<error>))` runs and matches definitions.py's
+  `lift` — the lifted rep and the emptied table. No conditional remains in the differential; own-bearing
+  types round-trip like every other type. Witness: neutering `lift_own`'s rep fails the case.
+
+
 - **The empty-list getters lower through the codec, not a hand path (`gate:components`, off).**
   [#725](https://github.com/scttfrdmn/burroughs/issues/725),
   [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).

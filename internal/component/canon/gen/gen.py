@@ -165,12 +165,17 @@ def emit(case):
             "ptr": ptr,
             "memory_hex": store_heap.memory.hex(),
             "realloc": store_heap.calls,
+            # The post-store handle table (empty for non-own types). The differential seeds the load
+            # heap's table from this so lift_own can consume the handle a store put here — #728.
+            "table": serialize_table(scx.inst.handles),
         },
         "flat": {
             "types": flat_types,
             "values": flat_vals,
             "memory_hex": flat_heap.memory.hex(),
             "realloc": flat_heap.calls,
+            # The flat lowering's own handle table (empty for non-own), so lift-flat can consume it (#728).
+            "table": serialize_table(fcx.inst.handles),
         },
     }
 
@@ -189,15 +194,16 @@ def serialize_table(tbl):
     out = []
     for i, h in enumerate(tbl.array):
         if h is not None and isinstance(h, ResourceHandle):
-            out.append({"index": i, "rep": h.rep, "own": h.own, "num_lends": h.num_lends})
+            out.append({"index": i, "rt": h.rt, "rep": h.rep, "own": h.own, "num_lends": h.num_lends})
     return out
 
 
 def emit_own(c):
     heap = TracingHeap(64)
     cx = mk_cx(heap)
-    rt = ResourceType(cx.inst)
-    t = OwnType(rt)
+    # An int rt, as build_type uses for the result cases and as the Go codec uses (OwnType(int),
+    # lift_own's int rt check) — so serialize_table's rt is a plain int the fixture can carry (#728).
+    t = OwnType(c.get("rt", 0))
     ptr = heap.realloc([0, 0, alignment(t, "i32"), elem_size(t, "i32")])[0]
     store(cx, c["rep"], t, ptr)  # lower_own: add owned handle, store its index
     idx = int.from_bytes(heap.memory[ptr:ptr + 4], "little")

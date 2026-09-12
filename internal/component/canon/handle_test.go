@@ -28,6 +28,7 @@ type handleFix struct {
 
 type tableEntry struct {
 	Index    int    `json:"index"`
+	RT       int    `json:"rt"`
 	Rep      uint32 `json:"rep"`
 	Own      bool   `json:"own"`
 	NumLends int    `json:"num_lends"`
@@ -44,10 +45,22 @@ func serializeTable(tb *resourceTable) []tableEntry {
 	var out []tableEntry
 	for i, h := range tb.array {
 		if h != nil {
-			out = append(out, tableEntry{Index: i, Rep: h.rep, Own: h.own, NumLends: h.numLends})
+			out = append(out, tableEntry{Index: i, RT: h.rt, Rep: h.rep, Own: h.own, NumLends: h.numLends})
 		}
 	}
 	return out
+}
+
+// seedTable places handles into a table at their fixture indices, so a lift round-trip can consume a
+// handle a store (on a different heap) put in its own table — the handle table is model state the
+// fixture's memory bytes do not carry (#728). Index 0 stays the reserved nil sentinel.
+func seedTable(tb *resourceTable, entries []tableEntry) {
+	for _, e := range entries {
+		for len(tb.array) <= e.Index {
+			tb.array = append(tb.array, nil)
+		}
+		tb.array[e.Index] = &resourceHandle{rt: e.RT, rep: e.Rep, own: e.Own, numLends: e.NumLends}
+	}
 }
 
 func assertTable(t *testing.T, what string, got, want []tableEntry) {
