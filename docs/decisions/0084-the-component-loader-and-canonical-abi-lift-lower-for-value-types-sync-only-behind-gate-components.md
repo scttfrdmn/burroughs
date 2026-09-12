@@ -82,3 +82,35 @@ numbers, because a forecast cannot be written inside the PR that creates them.
 - **The pin ages:** when the mechanism reads a spec behavior, it reads it at `2bed77e`; a later slice
   that needs newer text re-pins with its own date, and the difference is a recorded amendment, not a
   silent drift.
+
+## Amendment 2026-09-11 — the `gate:components` flip (default on)
+
+Scott stamped [#720](https://github.com/scttfrdmn/burroughs/issues/720)'s pre-registered forecast
+([`#720#issuecomment-5643091558`](https://github.com/scttfrdmn/burroughs/issues/720#issuecomment-5643091558)),
+the stamp-tier event behaviour 4 requires for a flip. As of this date `gate:components` is **on by
+default**: `componentsEnabled()` reads on unless an explicit `BURROUGHS_COMPONENTS=0` refuses.
+
+**The claim, at its two evidence levels — not collapsed.** A default build instantiates a `wasi:cli/run`
+component and marshals, through the single `canon` codec, the value-type set the forecast's table
+verifies, refusing by name every kind neither oracle covers. The table carries **two evidence levels,
+both verified in the track's sense, and the claim distinguishes them**: (1) types verified against the
+`definitions.py @ 2bed77e` model **and** observed on a real guest byte-for-byte against wasmtime 48.0.1 —
+`string`, `list<u8>`, `list<string>`, empty `list<tuple<string,string>>`, `result<T,stream-error>`
+(both arms), `own<error>`, and the `u64` bytes-count; (2) types verified against the model **only**
+(no guest on the two flip paths lowers a bare value) — the scalars, `f32`/`f64`, `list<u32>`, and the
+`borrow` i32 encoding (borrow *lifetime* is Phase-3). Level (2) is not weaker verification; it is a
+narrower witness, and the forecast states "differential-only" per row rather than inventing a reading.
+
+**Refused by name, witnessed firing.** Every unmodeled kind is refused at the earliest marshal point —
+decode, `StoreVia`, binding, call, export — and each refusal has a test that witnesses it *firing* on
+real or synthesized bytes naming what it refused, not merely a permit path surviving (the standard the
+two silent-no-op bugs on [#732](https://github.com/scttfrdmn/burroughs/issues/732) set).
+
+**Rollback.** The revert is a one-line default change (`componentsEnabled()` back to `== "1"`) plus the
+inverted test flipping back; no mechanism is removed, the gate stays present, and the refuse-by-name path
+is the same code in both positions. `TestRunRefusesAComponentWhenExplicitlyGatedOff`
+(`BURROUGHS_COMPONENTS=0`) witnesses the rollback pre-need.
+
+This is a minor version bump under the milestone↔SemVer convention (0004); the version number is Scott's,
+assigned at release. Phase 3's opening recon (`gate:async`) follows the flip, not before it.
+Ratio-Class: carried

@@ -12,12 +12,13 @@ import (
 
 const p3hello = "../../internal/component/testdata/p3hello.wasm"
 
-// TestRunExecutesAComponent is PR C's registered exit (ADR 0084, #694): with gate:components on,
-// `burroughs run p3hello.wasm` runs a cargo-component `wasi:cli/run` guest and writes its stdout —
-// checked byte-for-byte against the committed wasmtime 48.0.1 reading. The gate is on here because the
-// exit is a gated capability (behaviour 4); the default-build refusal is the next test.
+// TestRunExecutesAComponent asserts the flipped-on default (2026-09-11, ADR 0084, #720): on a default
+// build — the gate unset — `burroughs run p3hello.wasm` runs a cargo-component `wasi:cli/run` guest and
+// writes its stdout, checked byte-for-byte against the committed wasmtime 48.0.1 reading. Before the flip
+// this test set the gate on explicitly; it now rides the bare default, which is the flip's observable.
+// The explicit-off rollback is TestRunRefusesAComponentWhenExplicitlyGatedOff.
 func TestRunExecutesAComponent(t *testing.T) {
-	t.Setenv("BURROUGHS_COMPONENTS", "1")
+	t.Setenv("BURROUGHS_COMPONENTS", "") // the default build: the gate is on
 	want, err := os.ReadFile("../../internal/component/testdata/p3hello.stdout")
 	if err != nil {
 		t.Fatal(err)
@@ -32,16 +33,18 @@ func TestRunExecutesAComponent(t *testing.T) {
 	}
 }
 
-// TestRunRefusesAComponentWhenGatedOff is the observable that distinguishes additive plumbing from the
-// gate flip (Scott's #694 ruling): on a default build (gate:components off), `burroughs run` recognizes
-// the component but refuses to run it, by name — it does NOT print the string. That refusal, not a
-// default-on run, is what keeps this an additive surface over a gated mechanism.
-func TestRunRefusesAComponentWhenGatedOff(t *testing.T) {
-	t.Setenv("BURROUGHS_COMPONENTS", "") // the default build: the gate is off
+// TestRunRefusesAComponentWhenExplicitlyGatedOff is the flip's rollback, witnessed pre-need (#720's
+// forecast). Before the 2026-09-11 flip "off" was the default and this test set the gate to "" to reach
+// it; now the default is on, so the rollback path is an explicit `BURROUGHS_COMPONENTS=0`. Same three
+// assertions — refuse by exitGated, empty stdout, stderr names gate:components — so the revert is
+// exercised before anyone reaches for it, not discovered when they do. The refuse-by-name path is the
+// same code in both gate positions; only the default differs.
+func TestRunRefusesAComponentWhenExplicitlyGatedOff(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "0") // the rollback: the gate is explicitly off
 	var out, errBuf bytes.Buffer
 	code := dispatch(&out, &errBuf, []string{"run", p3hello})
 	if code != exitGated {
-		t.Errorf("`run p3hello.wasm` (gate off) exited %d, want %d (exitGated)\nstderr: %q",
+		t.Errorf("`run p3hello.wasm` (gate explicitly off) exited %d, want %d (exitGated)\nstderr: %q",
 			code, exitGated, errBuf.String())
 	}
 	if out.Len() != 0 {
