@@ -108,7 +108,7 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 		"wasi:io/streams::[method]output-stream.blocking-write-and-flush": h.streamWrite,
 		"wasi:io/streams::[method]output-stream.write":                    h.streamWrite,
 		"wasi:io/streams::[method]output-stream.check-write":              h.checkWrite,
-		"wasi:io/streams::[method]output-stream.blocking-flush":           h.okResult(8),
+		"wasi:io/streams::[method]output-stream.blocking-flush":           h.blockingFlush,
 		"wasi:io/streams::[method]input-stream.blocking-read":             h.blockingRead,
 
 		"wasi:io/error::[method]error.to-debug-string": h.errorToDebugString,
@@ -146,6 +146,41 @@ func (h *Host) getWriter(pick func() io.Writer) interp.CanonFunc {
 // contents: list<u8>) -> result<_, stream-error>, flattened to (self, ptr, len, ret). It lifts the
 // list<u8> from the bound memory (canon load over u8), writes it to the stream `self` names, and writes
 // the `ok` result at the return pointer. It allocates nothing (the guest owns the bytes and the ret ptr).
+// errorRT is the opaque resource-type id for the own<error> handles the host mints. Only an i32 handle
+// is ever lowered, so the id is unused by the guest-heap lowering; it names the resource type for the
+// value's construction.
+const errorRT = 0
+
+// streamErrorType is the WIT `stream-error` variant: `last-operation-failed(own<error>)` or `closed`.
+func streamErrorType() canon.Type {
+	own := canon.OwnType(errorRT)
+	return canon.VariantType(
+		canon.Case{Name: "last-operation-failed", Type: &own},
+		canon.Case{Name: "closed"},
+	)
+}
+
+// streamResultType builds `result<ok, stream-error>` — `ok == nil` is `result<_, stream-error>`.
+func streamResultType(ok *canon.Type) canon.Type {
+	se := streamErrorType()
+	return canon.ResultType(ok, &se)
+}
+
+// lowerResult lowers a fully-built result value at the guest return pointer through the codec's shared
+// `StoreVia` — the same result/variant/own lowering the definitions.py fixtures verify (#724), not a
+// hand path. A construction error means the value did not match its declared type — an engine bug.
+func lowerResult(c *interp.CanonCaller, ret uint64, v canon.Value, buildErr error) error {
+	if buildErr != nil {
+		return fmt.Errorf("component: build result value: %w", buildErr)
+	}
+	return canon.StoreVia(guestHeap{c}, v, int(uint32(ret)))
+}
+
+// streamWrite marshals output-stream.write / blocking-write-and-flush: (self, contents: list<u8>) ->
+// result<_, stream-error>, flattened to (self, ptr, len, ret). It lifts the list<u8> from guest memory,
+// writes it to the stream `self` names, and lowers Ok — or, when the write fails,
+// Err(last-operation-failed(own<error>)) minted from the underlying error (#694's deferred err arm).
+// Both arms lower through the codec (#724), not a hand path.
 func (h *Host) streamWrite(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 	if len(args) != 4 {
 		return nil, fmt.Errorf("component: stream write: got %d core args, want 4 (self, ptr, len, ret)", len(args))
@@ -163,32 +198,16 @@ func (h *Host) streamWrite(c *interp.CanonCaller, args []interp.Value) ([]interp
 		return nil, fmt.Errorf("component: stream write: reading contents: %w", err)
 	}
 	if _, werr := w.Write(buf); werr != nil {
-		// The err arm: result<_, stream-error> = Err(last-operation-failed(own<error>)). disc(err)=1 @0;
-		// the stream-error variant @4 — case 0 (last-operation-failed) with an own<error> handle @8 the
-		// host mints. The first non-nested variant with a handle payload driven live (#694's deferral).
-		return nil, h.storeStreamErrLastOp(c, ret, h.mintError(werr))
+		own := canon.Own(errorRT, uint32(h.mintError(werr)))
+		se, serr := canon.Variant(streamErrorType(), "last-operation-failed", &own)
+		if serr != nil {
+			return nil, serr
+		}
+		v, verr := canon.Variant(streamResultType(nil), "error", &se)
+		return nil, lowerResult(c, ret, v, verr)
 	}
-	// result<_, stream-error>: discriminant i32 (0 = ok) then the payload slot; the ok arm has no payload.
-	return nil, c.Write(ret, make([]byte, 8))
-}
-
-// storeStreamErrLastOp writes result<_, stream-error> = Err(last-operation-failed(own<error>)) at ret:
-// disc=err(1) @0, the stream-error variant case last-operation-failed(0) @4, its own<error> handle @8.
-func (h *Host) storeStreamErrLastOp(c *interp.CanonCaller, ret uint64, errHandle int32) error {
-	if err := writeU32(c, ret+0, 1); err != nil { // result disc = err
-		return err
-	}
-	if err := writeU32(c, ret+4, 0); err != nil { // stream-error case = last-operation-failed
-		return err
-	}
-	return writeU32(c, ret+8, uint32(errHandle)) // own<error> payload
-}
-
-// writeU32 writes v little-endian at guest offset off through the bound memory.
-func writeU32(c *interp.CanonCaller, off uint64, v uint32) error {
-	var b [4]byte
-	binary.LittleEndian.PutUint32(b[:], v)
-	return c.Write(off, b[:])
+	v, verr := canon.Variant(streamResultType(nil), "ok", nil)
+	return nil, lowerResult(c, ret, v, verr)
 }
 
 // checkWrite marshals output-stream.check-write: (self) -> result<u64, stream-error>, flattened to
@@ -198,21 +217,20 @@ func (h *Host) checkWrite(c *interp.CanonCaller, args []interp.Value) ([]interp.
 		return nil, fmt.Errorf("component: check-write: got %d core args, want 2 (self, ret)", len(args))
 	}
 	ret := uint64(uint32(args[1].Bits))
-	// result<u64, stream-error>: discriminant i32 @0, then the u64 payload at offset 8 (8-byte aligned).
-	buf := make([]byte, 16)
-	binary.LittleEndian.PutUint64(buf[8:], 1<<30)
-	return nil, c.Write(ret, buf)
+	u := canon.U64(1 << 30) // a large writable budget, so the guest never blocks on capacity
+	okT := canon.Type{Kind: canon.KindU64}
+	v, verr := canon.Variant(streamResultType(&okT), "ok", &u)
+	return nil, lowerResult(c, ret, v, verr)
 }
 
-// okResult returns an impl for a (self) -> result<_, stream-error> method (e.g. blocking-flush): it
-// writes `size` zero bytes at the return pointer — the ok discriminant and its (empty) payload slot.
-func (h *Host) okResult(size int) interp.CanonFunc {
-	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-		if len(args) != 2 {
-			return nil, fmt.Errorf("component: stream method: got %d core args, want 2 (self, ret)", len(args))
-		}
-		return nil, c.Write(uint64(uint32(args[1].Bits)), make([]byte, size))
+// blockingFlush marshals output-stream.blocking-flush: (self) -> result<_, stream-error>, always Ok.
+func (h *Host) blockingFlush(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("component: blocking-flush: got %d core args, want 2 (self, ret)", len(args))
 	}
+	ret := uint64(uint32(args[1].Bits))
+	v, verr := canon.Variant(streamResultType(nil), "ok", nil)
+	return nil, lowerResult(c, ret, v, verr)
 }
 
 // exit marshals cli/exit.exit: (status: result<_, _>) -> (), flattened to a single discriminant i32
@@ -288,28 +306,27 @@ func (h *Host) blockingRead(c *interp.CanonCaller, args []interp.Value) ([]inter
 		data = buf[:m]
 	}
 
+	// result<list<u8>, stream-error>, lowered through the codec (#724): Ok(list<u8>) when bytes were
+	// read, else Err(closed) at EOF (the stream-error variant's payloadless `closed` case).
+	listU8 := canon.Type{Kind: canon.KindList, Elem: &canon.Type{Kind: canon.KindU8}}
 	if len(data) > 0 {
-		// Ok(list<u8>): disc(ok)=0 @0, list (ptr @4, len @8).
-		dp, err := c.Realloc(0, 0, 1, uint32(len(data)))
-		if err != nil {
-			return nil, fmt.Errorf("component: read result backing: %w", err)
+		us := make([]canon.Value, len(data))
+		for i, b := range data {
+			us[i] = canon.U8(b)
 		}
-		if err := c.Write(uint64(dp), data); err != nil {
-			return nil, err
+		lst, lerr := canon.List(canon.Type{Kind: canon.KindU8}, us...)
+		if lerr != nil {
+			return nil, lerr
 		}
-		if err := writeU32(c, ret+0, 0); err != nil {
-			return nil, err
-		}
-		if err := writeU32(c, ret+4, dp); err != nil {
-			return nil, err
-		}
-		return nil, writeU32(c, ret+8, uint32(len(data)))
+		v, verr := canon.Variant(streamResultType(&listU8), "ok", &lst)
+		return nil, lowerResult(c, ret, v, verr)
 	}
-	// EOF → Err(closed): disc(err)=1 @0, stream-error variant case `closed`(1) @4, no payload.
-	if err := writeU32(c, ret+0, 1); err != nil {
-		return nil, err
+	closed, cerr := canon.Variant(streamErrorType(), "closed", nil)
+	if cerr != nil {
+		return nil, cerr
 	}
-	return nil, writeU32(c, ret+4, 1)
+	v, verr := canon.Variant(streamResultType(&listU8), "error", &closed)
+	return nil, lowerResult(c, ret, v, verr)
 }
 
 // errorToDebugString marshals error.to-debug-string: (self: borrow<error>) -> string, flattened to

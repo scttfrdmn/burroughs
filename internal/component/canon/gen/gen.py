@@ -96,6 +96,8 @@ def build_type(spec):
             ok = build_type(spec["ok"]) if spec.get("ok") else None
             err = build_type(spec["err"]) if spec.get("err") else None
             return ResultType(ok, err)
+        case "own": return OwnType(spec.get("rt", 0))
+        case "borrow": return BorrowType(spec.get("rt", 0))
     raise ValueError(f"unknown type kind {k!r}")
 
 

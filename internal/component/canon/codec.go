@@ -267,9 +267,34 @@ func StoreVia(h Heap, v Value, ptr int) error {
 		return StoreString(h, v.s, ptr)
 	case KindList:
 		return StoreList(h, v, ptr, func(e Value, p int) error { return StoreVia(h, e, p) })
+	case KindVariant:
+		return StoreVariant(h, v, ptr, func(e Value, p int) error { return StoreVia(h, e, p) })
+	case KindOwn:
+		// The guest heap writes an already-minted handle (the host mints it before building the value,
+		// so `v.u` is the handle index, not a rep). The model heap's KindOwn assigns the index via its
+		// table instead; both write the i32 at `ptr`.
+		return h.StoreInt(v.u, ptr, 4)
 	default:
 		return fmt.Errorf("canon: StoreVia: kind %s is not heap-composable (guest-driven; the concrete heap lowers it)", v.Type.Kind)
 	}
+}
+
+// StoreVariant lowers a `variant`/`result` (CanonicalABI.md `store_variant`): the discriminant, then the
+// selected case's payload — via `storeElem` — at the case offset (aligned to the cases' max alignment).
+// `store`'s `KindVariant` calls it with the full element store (so the definitions.py variant/result
+// fixtures verify the framing), and `StoreVia` calls it against guest memory with the guest element
+// store; the framing is shared regardless (ADR 0083, #724).
+func StoreVariant(h Heap, v Value, ptr int, storeElem func(Value, int) error) error {
+	cases := v.Type.Cases
+	discSize := size(Type{Kind: discriminantType(len(cases))})
+	if err := h.StoreInt(v.u, ptr, discSize); err != nil {
+		return err
+	}
+	if v.payload != nil {
+		off := alignTo(ptr+discSize, maxCaseAlignment(cases))
+		return storeElem(*v.payload, off)
+	}
+	return nil
 }
 
 // resourceHandle is one entry in a component instance's handle table.
@@ -395,15 +420,13 @@ func (h *heap) store(v Value, ptr int) error {
 		// verified by the definitions.py list fixtures.
 		return StoreList(h, v, ptr, h.store)
 	case KindVariant:
-		cases := v.Type.Cases
-		discSize := size(Type{Kind: discriminantType(len(cases))})
-		h.storeInt(v.u, ptr, discSize)
-		if v.payload != nil {
-			off := alignTo(ptr+discSize, maxCaseAlignment(cases))
-			return h.store(*v.payload, off)
-		}
-		return nil
+		// The one variant framing, shared with the host's canon adapter (#724): `h.store` is the full
+		// payload store, so this is the same StoreVariant the guest-memory heap runs, verified by the
+		// definitions.py variant/result fixtures.
+		return StoreVariant(h, v, ptr, h.store)
 	case KindOwn:
+		// The model heap assigns the handle index through its own table (lower_own); the guest heap
+		// receives an already-minted handle (StoreVia's KindOwn). Both write an i32 — the same encoding.
 		h.storeInt(uint64(h.lowerOwn(v)), ptr, 4)
 		return nil
 	default:

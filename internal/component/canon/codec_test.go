@@ -39,6 +39,7 @@ type typeSpec struct {
 	Cases []caseSpec `json:"cases"`
 	Ok    *typeSpec  `json:"ok"`
 	Err   *typeSpec  `json:"err"`
+	Rt    int        `json:"rt"`
 }
 
 type caseSpec struct {
@@ -94,6 +95,10 @@ func typeFromSpec(t *testing.T, s typeSpec) Type {
 		return VariantType(cases...)
 	case "result":
 		return ResultType(optType(s.Ok), optType(s.Err))
+	case "own":
+		return OwnType(s.Rt)
+	case "borrow":
+		return BorrowType(s.Rt)
 	}
 	k, ok := map[string]Kind{
 		"bool": KindBool, "u8": KindU8, "u16": KindU16, "u32": KindU32, "u64": KindU64,
@@ -177,6 +182,10 @@ func valueFromJSON(t *testing.T, typ Type, raw any) Value {
 			t.Fatal(err)
 		}
 		return v
+	case KindOwn:
+		// An own handle's fixture value is its resource representation (an i32 rep); the codec's
+		// lower_own assigns the table index, as the reference model does.
+		return Own(typ.RT, uint32(mustParseUint(t, raw.(json.Number))))
 	default:
 		t.Fatalf("value kind %s outside modeled scope", typ.Kind)
 		return Value{}
@@ -255,6 +264,18 @@ func TestCodecMatchesReferenceModel(t *testing.T) {
 
 			// lift: load the reference model's stored bytes back and check the value round-trips. This
 			// tests load against definitions.py's store output, not against the codec's own store.
+			//
+			// **Skipped for a type that carries an `own` handle.** Lifting an `own` (`lift_own`) consumes
+			// the handle from the *source instance's* table, and this round-trip loads into a fresh heap
+			// whose table is empty — the handle a `store`/`lower_own` put in *its* table is not here. That
+			// is not a codec gap: these types are on the host path to be **lowered** (a stream method's
+			// err arm the host writes and the guest reads), and `store` + `lowerFlat` above — both lowers
+			// — are what verify that. An own's lift is a separate input-side concern (borrow self-args,
+			// PR B), not this lower-side fixture's. So the lower is checked, the lift is not attempted
+			// where it structurally cannot be.
+			if typeHasOwn(typ) {
+				return
+			}
 			lh := newHeap(c.HeapSize)
 			raw, derr := hex.DecodeString(c.Store.MemoryHex)
 			if derr != nil {
@@ -289,6 +310,26 @@ func TestCodecMatchesReferenceModel(t *testing.T) {
 				t.Errorf("lift-flat: liftFlat returned a value unequal to the lowered one (%s)", typ.Kind)
 			}
 		})
+	}
+}
+
+// typeHasOwn reports whether a type carries an `own` handle anywhere, so the lift round-trip (which
+// needs the source instance's handle table) is skipped for it — see the lift block above.
+func typeHasOwn(t Type) bool {
+	switch t.Kind {
+	case KindOwn:
+		return true
+	case KindList:
+		return t.Elem != nil && typeHasOwn(*t.Elem)
+	case KindVariant:
+		for _, c := range t.Cases {
+			if c.Type != nil && typeHasOwn(*c.Type) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
 	}
 }
 

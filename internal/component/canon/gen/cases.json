@@ -11,21 +11,19 @@
   {"name": "s32-neg", "type": {"kind": "s32"}, "value": -70000},
   {"name": "s64-neg", "type": {"kind": "s64"}, "value": -1234605616436508552},
   {"name": "char-ascii", "type": {"kind": "char"}, "value": "A"},
-  {"name": "char-nonascii", "type": {"kind": "char"}, "value": "é"},
-  {"name": "char-astral", "type": {"kind": "char"}, "value": "😀"},
+  {"name": "char-nonascii", "type": {"kind": "char"}, "value": "\u00e9"},
+  {"name": "char-astral", "type": {"kind": "char"}, "value": "\ud83d\ude00"},
   {"name": "string-hello", "type": {"kind": "string"}, "value": "Hello, world!"},
   {"name": "string-empty", "type": {"kind": "string"}, "value": ""},
-  {"name": "string-utf8", "type": {"kind": "string"}, "value": "café éé"},
+  {"name": "string-utf8", "type": {"kind": "string"}, "value": "caf\u00e9 \u00e9\u00e9"},
   {"name": "list-u8-bytes", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [1, 2, 3, 4, 5]},
   {"name": "list-u8-empty", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": []},
   {"name": "list-u8-hello", "type": {"kind": "list", "elem": {"kind": "u8"}}, "value": [72, 105]},
   {"name": "list-u32", "type": {"kind": "list", "elem": {"kind": "u32"}}, "value": [1, 256, 65536]},
-
   {"name": "list-string-empty", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": []},
   {"name": "list-string-one", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": ["hello"]},
   {"name": "list-string-several", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": ["a", "bb", "ccc"]},
-  {"name": "list-string-utf8", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": ["café", "☃"]},
-
+  {"name": "list-string-utf8", "type": {"kind": "list", "elem": {"kind": "string"}}, "value": ["caf\u00e9", "\u2603"]},
   {"name": "f32-one", "type": {"kind": "f32"}, "value": "0x3f800000"},
   {"name": "f32-neg-zero", "type": {"kind": "f32"}, "value": "0x80000000"},
   {"name": "f32-canonical-nan", "type": {"kind": "f32"}, "value": "0x7fc00000"},
@@ -34,7 +32,6 @@
   {"name": "f64-neg-zero", "type": {"kind": "f64"}, "value": "0x8000000000000000"},
   {"name": "f64-canonical-nan", "type": {"kind": "f64"}, "value": "0x7ff8000000000000"},
   {"name": "f64-noncanonical-nan", "type": {"kind": "f64"}, "value": "0x7ff8000000000001"},
-
   {"name": "result-ok-empty", "type": {"kind": "result"}, "value": {"ok": null}},
   {"name": "result-err-empty", "type": {"kind": "result"}, "value": {"error": null}},
   {"name": "result-ok-u32", "type": {"kind": "result", "ok": {"kind": "u32"}, "err": {"kind": "u32"}}, "value": {"ok": 42}},
@@ -45,5 +42,9 @@
   {"name": "variant-u8-a", "type": {"kind": "variant", "cases": [{"name": "a", "type": {"kind": "u8"}}, {"name": "b", "type": {"kind": "u64"}}]}, "value": {"a": 200}},
   {"name": "variant-mixed-flat", "type": {"kind": "variant", "cases": [{"name": "x", "type": {"kind": "u32"}}, {"name": "y", "type": {"kind": "f64"}}]}, "value": {"y": "0x3ff0000000000000"}},
   {"name": "variant-payloadless", "type": {"kind": "variant", "cases": [{"name": "first"}, {"name": "second"}]}, "value": {"second": null}},
-  {"name": "stream-error-like", "type": {"kind": "variant", "cases": [{"name": "last-operation-failed", "type": {"kind": "u32"}}, {"name": "closed"}]}, "value": {"last-operation-failed": 3}}
+  {"name": "stream-error-like", "type": {"kind": "variant", "cases": [{"name": "last-operation-failed", "type": {"kind": "u32"}}, {"name": "closed"}]}, "value": {"last-operation-failed": 3}},
+  {"name": "result-streamerr-ok", "type": {"kind": "result", "err": {"kind": "variant", "cases": [{"name": "last-operation-failed", "type": {"kind": "own", "rt": 0}}, {"name": "closed"}]}}, "value": {"ok": null}},
+  {"name": "result-streamerr-lastop", "type": {"kind": "result", "err": {"kind": "variant", "cases": [{"name": "last-operation-failed", "type": {"kind": "own", "rt": 0}}, {"name": "closed"}]}}, "value": {"error": {"last-operation-failed": 42}}},
+  {"name": "result-u64-streamerr-ok", "type": {"kind": "result", "ok": {"kind": "u64"}, "err": {"kind": "variant", "cases": [{"name": "last-operation-failed", "type": {"kind": "own", "rt": 0}}, {"name": "closed"}]}}, "value": {"ok": 1073741824}},
+  {"name": "result-listu8-streamerr-ok", "type": {"kind": "result", "ok": {"kind": "list", "elem": {"kind": "u8"}}, "err": {"kind": "variant", "cases": [{"name": "last-operation-failed", "type": {"kind": "own", "rt": 0}}, {"name": "closed"}]}}, "value": {"ok": [104, 105]}}
 ]
