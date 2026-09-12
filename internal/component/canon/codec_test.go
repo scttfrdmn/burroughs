@@ -52,6 +52,7 @@ type memFix struct {
 	Ptr       int           `json:"ptr"`
 	MemoryHex string        `json:"memory_hex"`
 	Realloc   []reallocCall `json:"realloc"`
+	Table     []tableEntry  `json:"table"` // the post-store handle table (empty for non-own types); seeds the lift (#728)
 }
 
 type flatFix struct {
@@ -59,6 +60,7 @@ type flatFix struct {
 	Values    []json.Number `json:"values"`
 	MemoryHex string        `json:"memory_hex"`
 	Realloc   []reallocCall `json:"realloc"`
+	Table     []tableEntry  `json:"table"` // the flat lowering's handle table; seeds lift-flat (#728)
 }
 
 func loadFixtures(t *testing.T) fixtureFile {
@@ -246,6 +248,9 @@ func TestCodecMatchesReferenceModel(t *testing.T) {
 				t.Errorf("store memory:\n got %s\nwant %s", got, c.Store.MemoryHex)
 			}
 			assertRealloc(t, "store", sh.calls, c.Store.Realloc)
+			// The store's handle table matches the model's (empty for non-own types; for an own-bearing
+			// type, lower_own's entry — the index the memory holds, its rep/own bit) — #728.
+			assertTable(t, "after store", serializeTable(sh.table), c.Store.Table)
 
 			// flat: lower to core values, compare types, values, and the memory the lowering touched.
 			fh := newHeap(c.HeapSize)
@@ -272,29 +277,29 @@ func TestCodecMatchesReferenceModel(t *testing.T) {
 			// lift: load the reference model's stored bytes back and check the value round-trips. This
 			// tests load against definitions.py's store output, not against the codec's own store.
 			//
-			// **Skipped for a type that carries an `own` handle.** Lifting an `own` (`lift_own`) consumes
-			// the handle from the *source instance's* table, and this round-trip loads into a fresh heap
-			// whose table is empty — the handle a `store`/`lower_own` put in *its* table is not here. That
-			// is not a codec gap: these types are on the host path to be **lowered** (a stream method's
-			// err arm the host writes and the guest reads), and `store` + `lowerFlat` above — both lowers
-			// — are what verify that. An own's lift is a separate input-side concern (borrow self-args,
-			// PR B), not this lower-side fixture's. So the lower is checked, the lift is not attempted
-			// where it structurally cannot be.
-			if typeHasOwn(typ) {
-				return
-			}
+			// **Own-bearing types seed the handle table first (#728).** Lifting an `own` (`lift_own`)
+			// consumes the handle from the instance table, which is model state the fixture's memory
+			// bytes do not carry. The fixture's `store.table` is the model's post-store table, so seeding
+			// the load heap from it lets the composed lift run — and matches definitions.py's `lift`: the
+			// lifted value (the own's rep) and, checked below, the emptied table. For non-own types the
+			// table is empty and the seed is a no-op, so every type round-trips here with no conditional.
 			lh := newHeap(c.HeapSize)
 			raw, derr := hex.DecodeString(c.Store.MemoryHex)
 			if derr != nil {
 				t.Fatal(derr)
 			}
 			copy(lh.mem, raw)
+			seedTable(lh.table, c.Store.Table)
 			got, lerr := lh.load(c.Store.Ptr, typ)
 			if lerr != nil {
 				t.Fatalf("load: %v", lerr)
 			}
 			if !valueEqual(got, v) {
 				t.Errorf("lift: load returned a value unequal to the lowered one (%s)", typ.Kind)
+			}
+			// lift_own consumes the handle, so an own-bearing type's table is emptied afterward.
+			if got := serializeTable(lh.table); len(got) != 0 {
+				t.Errorf("lift: table not emptied after load, still %+v (lift_own must consume the handle)", got)
 			}
 
 			// lift-flat: reconstruct from the flat sequence, reading string/list data from the flat
@@ -309,6 +314,7 @@ func TestCodecMatchesReferenceModel(t *testing.T) {
 				t.Fatal(derr2)
 			}
 			copy(flh.mem, fraw)
+			seedTable(flh.table, c.Flat.Table)
 			gotFlat, ferr := flh.liftFlat(&coreValueIter{types: c.Flat.Types, vals: flatVals}, typ)
 			if ferr != nil {
 				t.Fatalf("liftFlat: %v", ferr)
@@ -317,26 +323,6 @@ func TestCodecMatchesReferenceModel(t *testing.T) {
 				t.Errorf("lift-flat: liftFlat returned a value unequal to the lowered one (%s)", typ.Kind)
 			}
 		})
-	}
-}
-
-// typeHasOwn reports whether a type carries an `own` handle anywhere, so the lift round-trip (which
-// needs the source instance's handle table) is skipped for it — see the lift block above.
-func typeHasOwn(t Type) bool {
-	switch t.Kind {
-	case KindOwn:
-		return true
-	case KindList:
-		return t.Elem != nil && typeHasOwn(*t.Elem)
-	case KindVariant:
-		for _, c := range t.Cases {
-			if c.Type != nil && typeHasOwn(*c.Type) {
-				return true
-			}
-		}
-		return false
-	default:
-		return false
 	}
 }
 
