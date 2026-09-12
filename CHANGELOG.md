@@ -21,6 +21,16 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` shell — the async component-model ABI is refused by name at bind, off by default (ADR
+  0086, #735; recon #734).** The async surface is now *recognized* at decode (stream/future value types,
+  the `async`/`callback` canonopts, and the async canon built-in family `0x05`–`0x25`), so a wasip3 async
+  component *decodes* (35 canon defs on the reference guest, matching `wasm-tools`) rather than dying at the
+  type section — and is refused at **bind**, by name, while `gate:async` (`BURROUGHS_ASYNC`, off by default)
+  is off. The refusal keys on the **`async` canonopt in any canon lift or lower** read from the canon
+  section (ADR 0086), not on a world name; because the first guest is sync-lifted with async-lowered
+  imports, it fires on the **lower** arm, and the lift arm is witnessed on decoded bytes and a constructed
+  async lift. `gate:async` on has no mechanism yet (slice 1's); this shell registers the refusal only. The
+  🧵 thread built-ins stay a decode refusal.
 - **`gate:components` flips on by default (ADR 0084 amendment 2026-09-11, #720).** A default build now
   runs a `wasi:cli/run` component: it instantiates against the preview-2 host and marshals, through the
   single `canon` codec, the value-type set #720's pre-registered forecast verifies against two oracles —

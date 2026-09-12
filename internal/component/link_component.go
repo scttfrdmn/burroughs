@@ -5,6 +5,7 @@ package component
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -297,12 +298,129 @@ type Instantiated struct {
 	export *compInstance
 }
 
+// asyncGateEnv is the config gate for the async component-model ABI (`gate:async`, ADR 0086). Off by
+// default — set to "1" to opt in — the second of the two component gates (`gate:components` on by default
+// is the first). The async tier's mechanism is slice 1's; this shell only recognizes the async surface at
+// decode and refuses it by name at bind while the gate is off.
+const asyncGateEnv = "BURROUGHS_ASYNC"
+
+// asyncEnabled reports whether `gate:async` is on. Off is the default: an async component decodes but is
+// refused at bind, by name.
+func asyncEnabled() bool { return os.Getenv(asyncGateEnv) == "1" }
+
+// ErrAsyncGated is returned at bind when a component uses the async component-model ABI and `gate:async`
+// is off. The root `ComponentConfig.Run` wraps it as `burroughs.ErrGated` so the CLI classifies it exit 6
+// (the module is well-formed; this build has the gate off — grave #301), the same shape `gate:components`
+// has. Kept in this package because the refusal fires at bind (`InstantiateWithHost`), reachable by an
+// internal caller directly, not only through the root entry.
+var ErrAsyncGated = errors.New("gate:async is off in this build")
+
+// gateAsync refuses a component that carries async surface when `gate:async` is off, by name, naming what
+// tripped it (ADR 0086). The condition keys on the `async` canonopt in any canon lift or lower — the thing
+// the async ABI turns on — read from the canon section, not on a world name or a 0.3 import. Because the
+// first guest is sync-lifted with async-lowered imports (#734), the lower arm is covered as much as the
+// lift; an async canon built-in, an async functype, and a stream/future value type are refused too
+// (defense-in-depth against the same permissiveness hole). Nothing runs behind the gate-on path yet
+// (slice 1); this only refuses.
+func gateAsync(c *Component) error {
+	if asyncEnabled() {
+		return nil
+	}
+	if what, ok := asyncSurface(c); ok {
+		return fmt.Errorf("%w: this component uses the async component-model ABI (%s); set %s=1 to opt in "+
+			"(the async tier's mechanism is not yet implemented)", ErrAsyncGated, what, asyncGateEnv)
+	}
+	return nil
+}
+
+// asyncSurface reports the first async component-model marker in the component and a name for it, in the
+// refusal's priority order: the `async` canonopt (the gate's key) first, then an async canon built-in, an
+// async functype, and a stream/future value type anywhere in a type.
+func asyncSurface(c *Component) (string, bool) {
+	for _, cn := range c.Canons {
+		if cn.Opts.Async {
+			if cn.Kind == CanonLift {
+				return "an async canon lift", true
+			}
+			return "an async canon lower", true
+		}
+	}
+	for _, cn := range c.Canons {
+		if cn.Kind == CanonAsyncBuiltin {
+			return fmt.Sprintf("an async canon built-in (%#x)", cn.AsyncOp), true
+		}
+	}
+	for _, td := range c.Types {
+		switch td.Kind {
+		case TDFunc:
+			if td.Func != nil && td.Func.Async {
+				return "an async function type", true
+			}
+		case TDVal:
+			if n, ok := asyncValName(td.Val, 0); ok {
+				return "a " + n + " value type", true
+			}
+		default:
+			// TDInstance/TDResource carry no top-level async value type of their own.
+		}
+	}
+	return "", false
+}
+
+// asyncValName reports a stream/future value type anywhere in vt (recursing the modeled containers), for
+// the gate refusal. error-context is not reported here — it is a separate 📝 feature already refused as an
+// unmodeled kind at marshal, not part of the 🔀 async gate.
+func asyncValName(vt ValType, depth int) (string, bool) {
+	if depth > 32 {
+		return "", false
+	}
+	switch vt.Kind {
+	case VStream:
+		return "stream", true
+	case VFuture:
+		return "future", true
+	case VList, VOption:
+		if vt.Elem != nil {
+			return asyncValName(*vt.Elem, depth+1)
+		}
+	case VResult:
+		if vt.Ok != nil {
+			if n, ok := asyncValName(*vt.Ok, depth+1); ok {
+				return n, true
+			}
+		}
+		if vt.Err != nil {
+			return asyncValName(*vt.Err, depth+1)
+		}
+	case VVariant:
+		for _, ca := range vt.Cases {
+			if ca.Type != nil {
+				if n, ok := asyncValName(*ca.Type, depth+1); ok {
+					return n, true
+				}
+			}
+		}
+	case VTuple:
+		for _, e := range vt.Elems {
+			if n, ok := asyncValName(e, depth+1); ok {
+				return n, true
+			}
+		}
+	default:
+		// scalars, string, char, own/borrow, error-context, ref, record/flags/enum — not stream/future.
+	}
+	return "", false
+}
+
 // Instantiate loads and instantiates a component with the stub host (PR B): its core modules come up,
 // its wasi imports reach the refusing stub, and its exports are resolved. Close tears it down.
 func Instantiate(bytes []byte) (*Instantiated, error) {
 	c, err := Load(bytes)
 	if err != nil {
 		return nil, err
+	}
+	if gerr := gateAsync(c); gerr != nil {
+		return nil, gerr
 	}
 	w, err := c.walkComponent(stubHost, nil)
 	if err != nil {
@@ -320,6 +438,9 @@ func InstantiateWithHost(bytes []byte, h *Host) (*Instantiated, error) {
 	c, err := Load(bytes)
 	if err != nil {
 		return nil, err
+	}
+	if gerr := gateAsync(c); gerr != nil {
+		return nil, gerr
 	}
 	w, err := c.walkComponent(stubHost, h.wasi())
 	if err != nil {

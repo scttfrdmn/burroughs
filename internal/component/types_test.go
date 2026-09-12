@@ -73,18 +73,20 @@ func TestUnmodeledTypeFormRefusedByName(t *testing.T) {
 }
 
 // TestUnmodeledTypeFormsRefuseByName widens TestUnmodeledTypeFormRefusedByName across the refused-by-name
-// set the loader's type decoder bounds (async func, the unmodeled value-type opcodes, an instance-type
-// core:type): each refuses at parse, naming the form, so the flip's claim is bounded by a witnessed
-// boundary rather than an assumed one (#720 forecast; the #714 lesson).
+// set the loader's type decoder bounds (a nested component type, an instance-type core:type): each refuses
+// at parse, naming the form, so the flip's claim is bounded by a witnessed boundary rather than an assumed
+// one (#720 forecast; the #714 lesson).
+//
+// The async type forms (async func 0x43, stream 0x66, future 0x65) that this test once bounded here have
+// **moved to the gate:async bind refusal** (ADR 0086): they now *decode* (recognized async surface) and
+// refuse by name at bind while gate:async is off — witnessed in gate_async_test.go. Decode staying
+// permissive so the refusal fires at bind, naming the gate, is the same shape the value-kind refusals have.
 func TestUnmodeledTypeFormsRefuseByName(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		body []byte // a type section body: count=1 then the form
 	}{
-		{"async-func-0x43", []byte{0x01, 0x43}},
 		{"nested-component-0x41", []byte{0x01, 0x41}},
-		{"unmodeled-valtype-stream-0x66", []byte{0x01, 0x66}},
-		{"unmodeled-valtype-future-0x65", []byte{0x01, 0x65}},
 		{"instancetype-core-type-0x00", []byte{0x01, 0x42, 0x01, 0x00}}, // instancetype, 1 decl, core:type
 	} {
 		t.Run(tc.name, func(t *testing.T) {

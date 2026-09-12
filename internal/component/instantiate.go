@@ -147,17 +147,23 @@ func (a Alias) space() Space {
 }
 
 // CanonOpts is a canonical function's options (Binary.md canonopt). StringEncoding defaults to "utf8"
-// when no encoding option is present.
+// when no encoding option is present. Async/Callback are the async ABI markers (0x06/0x07): Async is the
+// thing the async ABI turns on — the gate:async refusal keys on its presence in any lift or lower, read
+// from the canon section (ADR 0086), not on a world name.
 type CanonOpts struct {
 	StringEncoding string
 	Memory         *uint32
 	Realloc        *uint32
 	PostReturn     *uint32
+	Async          bool    // the `async` canonopt (0x06): this lift/lower uses the async ABI
+	Callback       *uint32 // the `callback` canonopt (0x07): a stackless-async lift's callback core func
 }
 
-// CanonKind is which canonical built-in a Canon is. This slice models the ones p3hello uses — lift,
-// lower, and the resource built-ins (their semantics are PR B.3's; B.1 parses them into the graph). A
-// canon built-in outside this set (the async/thread family) refuses at parse by name.
+// CanonKind is which canonical built-in a Canon is. lift, lower, and the resource built-ins are modeled;
+// the async family (waitable-set / stream / future / task / subtask / context / backpressure /
+// error-context, discriminants 0x05–0x25) is *recognized* — decoded into the graph as CanonAsyncBuiltin
+// so the section survives to bind, where gate:async refuses it by name (ADR 0086; its semantics are
+// slice 1's, not this shell's). The thread family (0x26–0x2d, 0x40–0x42) stays a decode refusal.
 type CanonKind uint8
 
 const (
@@ -166,24 +172,34 @@ const (
 	CanonResourceNew
 	CanonResourceDrop
 	CanonResourceRep
+	CanonAsyncBuiltin
 )
 
 // Canon is a canonical function definition. FuncIdx/Opts apply to lift and lower; TypeIdx is the
-// component function type (lift) or the resource type (resource built-ins).
+// component function type (lift) or the resource type (resource built-ins); AsyncOp is the discriminant
+// of a CanonAsyncBuiltin.
 type Canon struct {
 	Kind    CanonKind
 	FuncIdx uint32
 	Opts    CanonOpts
 	TypeIdx uint32
+	AsyncOp byte
 }
 
-// space is the index space a canon adds to: lift yields a component func; lower and the resource
-// built-ins yield core funcs.
+// space is the index space a canon adds to: lift yields a component func; lower, the resource built-ins,
+// and the async built-ins yield core funcs.
 func (cn Canon) space() Space {
 	if cn.Kind == CanonLift {
 		return SpaceFunc
 	}
 	return SpaceCoreFunc
+}
+
+// isAsync reports whether this canon is async surface — a lift or lower carrying the `async` canonopt
+// (the gate:async key), or an async canon built-in. The stream/future value types are async surface too,
+// but they are caught in the type section (unmodeledValKind); this reports the canon-section markers.
+func (cn Canon) isAsync() bool {
+	return cn.Kind == CanonAsyncBuiltin || cn.Opts.Async
 }
 
 // externKindSpace maps a component import's extern kind to its index space.
@@ -393,9 +409,85 @@ func (r *reader) canon() (Canon, error) {
 			return Canon{}, err
 		}
 		return Canon{Kind: CanonResourceNew + CanonKind(kind-0x02), TypeIdx: ti}, nil
+	case 0x05, 0x06, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+		0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23,
+		0x24, 0x25:
+		// The async family (Binary.md @ 2bed77e, 🔀 + 📝): recognized, not modeled. The operands are read
+		// so the section advances exactly; the built-in refuses by name at bind under gate:async (ADR 0086).
+		return r.canonAsyncBuiltin(kind)
 	default:
-		return Canon{}, fmt.Errorf("canon built-in %#x is not modeled (this slice: lift, lower, resource.new/drop/rep)", kind)
+		return Canon{}, fmt.Errorf("canon built-in %#x is not modeled (this slice: lift, lower, resource.new/drop/rep, the async family)", kind)
 	}
+}
+
+// canonAsyncBuiltin reads one async canon built-in's operands (advancing the reader exactly per Binary.md)
+// and records it as CanonAsyncBuiltin. The semantics are slice 1's; this shell recognizes the shape so
+// the canon section decodes to bind, where gate:async refuses it. The 🧵 thread family is not here — it
+// stays a decode refusal (`canon`'s default), being out of the async tier's scope.
+func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
+	c := Canon{Kind: CanonAsyncBuiltin, AsyncOp: op}
+	// async? is a single byte (0x00 absent / 0x01 async); typeidx and memidx are u32; opts is a canonopt
+	// vec; context.get/set carry a core:valtype byte + u32; task.return a resultlist + opts; the
+	// waitable-set.wait/poll and thread.yield forms carry a fixed 0x00 before their operand.
+	readAsyncQ := func() error { _, err := r.byte(); return err } // 0x00/0x01
+	readIdx := func() error { _, err := r.u32(); return err }
+	readOpts := func() error { _, err := r.canonOpts(); return err }
+	switch op {
+	case 0x05, 0x0d, 0x1e, 0x1f, 0x22, 0x23, 0x24, 0x25:
+		// task.cancel, subtask.drop, error-context.drop, waitable-set.new/.drop, waitable.join,
+		// backpressure.inc/.dec — no operands.
+	case 0x06: // subtask.cancel: async?
+		return c, readAsyncQ()
+	case 0x09: // task.return: resultlist (0x00 valtype) + opts
+		disc, err := r.byte()
+		if err != nil {
+			return Canon{}, err
+		}
+		if disc != 0x00 {
+			return Canon{}, fmt.Errorf("canon task.return resultlist discriminant %#x is not 0x00", disc)
+		}
+		if _, err := r.valType(); err != nil {
+			return Canon{}, err
+		}
+		return c, readOpts()
+	case 0x0a, 0x0b: // context.get / context.set: core:valtype (one byte) + u32
+		if _, err := r.byte(); err != nil {
+			return Canon{}, err
+		}
+		return c, readIdx()
+	case 0x0c: // thread.yield: a fixed 0x00 (the 🔀 form)
+		b, err := r.byte()
+		if err != nil {
+			return Canon{}, err
+		}
+		if b != 0x00 {
+			return Canon{}, fmt.Errorf("canon thread.yield not followed by 0x00 (got %#x)", b)
+		}
+	case 0x0e, 0x13, 0x14, 0x15, 0x1a, 0x1b: // stream/future .new/.drop-*: typeidx
+		return c, readIdx()
+	case 0x0f, 0x10, 0x16, 0x17: // stream/future .read/.write: typeidx + opts
+		if err := readIdx(); err != nil {
+			return Canon{}, err
+		}
+		return c, readOpts()
+	case 0x11, 0x12, 0x18, 0x19: // stream/future .cancel-read/.cancel-write: typeidx + async?
+		if err := readIdx(); err != nil {
+			return Canon{}, err
+		}
+		return c, readAsyncQ()
+	case 0x1c, 0x1d: // error-context.new / .debug-message: opts
+		return c, readOpts()
+	case 0x20, 0x21: // waitable-set.wait / .poll: a fixed 0x00 then a core:memoryidx
+		b, err := r.byte()
+		if err != nil {
+			return Canon{}, err
+		}
+		if b != 0x00 {
+			return Canon{}, fmt.Errorf("canon waitable-set.wait/poll not followed by 0x00 (got %#x)", b)
+		}
+		return c, readIdx()
+	}
+	return c, nil
 }
 
 // canonLiftLower reads the shared tail of lift and lower: a 0x00 func-sort byte, the func index, the
@@ -445,7 +537,7 @@ func (r *reader) canonOpts() (CanonOpts, error) {
 			opts.StringEncoding = "utf16"
 		case 0x02:
 			opts.StringEncoding = "latin1+utf16"
-		case 0x03, 0x04, 0x05:
+		case 0x03, 0x04, 0x05, 0x07:
 			v, err := r.u32()
 			if err != nil {
 				return CanonOpts{}, err
@@ -457,7 +549,11 @@ func (r *reader) canonOpts() (CanonOpts, error) {
 				opts.Realloc = &v
 			case 0x05:
 				opts.PostReturn = &v
+			case 0x07: // callback (core func idx): a stackless-async lift's callback
+				opts.Callback = &v
 			}
+		case 0x06: // async: this lift/lower uses the async ABI — gate:async's key (ADR 0086)
+			opts.Async = true
 		default:
 			return CanonOpts{}, fmt.Errorf("canonopt discriminant %#x is undefined", disc)
 		}
