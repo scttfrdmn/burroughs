@@ -11,16 +11,17 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/component"
 )
 
-// componentsGateEnv is the config gate for the component mechanism (`gate:components`, ADR 0084, off by
-// default). The mechanism is present and the public entries below are additive surface over it, but a
-// default build refuses to *run* a component — the refuse-by-name discipline the whole track uses — until
-// the gate flip (its own stamp-tier event, behaviour 4, when the full value-type suite is green). Set to
-// "1" to opt into the gated mechanism; a test enabling the exit sets it, a default build does not.
+// componentsGateEnv is the config gate for the component mechanism (`gate:components`, ADR 0084). It is
+// **on by default** as of the 2026-09-11 flip (Scott's stamp on #720's pre-registered forecast, the
+// stamp-tier event behaviour 4 requires): the value-type suite is verified against both oracles and every
+// unmodeled kind is refused by name, so a default build runs a `wasi:cli/run` component. The gate remains
+// present as a rollback: set to "0" to refuse — the same refuse-by-name path, only the default differs.
 const componentsGateEnv = "BURROUGHS_COMPONENTS"
 
-// componentsEnabled reports whether the `gate:components` config gate is on. Off is the default: a
-// component is recognized (IsComponent) but not run.
-func componentsEnabled() bool { return os.Getenv(componentsGateEnv) == "1" }
+// componentsEnabled reports whether the `gate:components` config gate is on. **On is the default** (the
+// 2026-09-11 flip); only an explicit "0" refuses. A component is recognized (IsComponent) and, unless
+// explicitly gated off, run.
+func componentsEnabled() bool { return os.Getenv(componentsGateEnv) != "0" }
 
 // ComponentConfig runs a WebAssembly **component** whose world is `wasi:cli/run` — the p3 track's
 // public entry (ADR 0084 / 0085, #694), the component analogue of [WASIP1Config].
@@ -50,12 +51,12 @@ type ComponentConfig struct {
 // component host, which writes the guest's `list<u8>` to it — the preview-1 and preview-2 sides marshal
 // different ABIs (iovecs vs a canon list) onto one sink, rather than reimplementing stdio twice.
 func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
-	// `gate:components` is off by default: the mechanism is present but a default build refuses to run a
-	// component, by name (ADR 0084, behaviour 4). The flip to on is its own stamp-tier event, when the
-	// full value-type suite is green — not this slice, whose one path is hello-world's.
+	// `gate:components` is on by default as of the 2026-09-11 flip (ADR 0084, #720; behaviour 4's
+	// stamp-tier event). The gate remains present as a rollback: an explicit `BURROUGHS_COMPONENTS=0`
+	// refuses to run a component, by name — the same refuse-by-name path, only the default differs.
 	if !componentsEnabled() {
-		return 0, fmt.Errorf("%w: gate:components is off in this build; set %s=1 to run a component "+
-			"(the mechanism is present, the default-on flip is pending its full value-type suite)",
+		return 0, fmt.Errorf("%w: gate:components is off in this build (%s=0); unset it to run a component "+
+			"(the gate is on by default as of the 2026-09-11 flip)",
 			ErrGated, componentsGateEnv)
 	}
 	stdout, stderr := c.Stdout, c.Stderr

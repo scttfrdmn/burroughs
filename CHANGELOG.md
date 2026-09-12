@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:components` flips on by default (ADR 0084 amendment 2026-09-11, #720).** A default build now
+  runs a `wasi:cli/run` component: it instantiates against the preview-2 host and marshals, through the
+  single `canon` codec, the value-type set #720's pre-registered forecast verifies against two oracles —
+  the `definitions.py @ 2bed77e` model (byte-exact) and wasmtime 48.0.1 (behavioral, where a guest path
+  exercises the type). The claim distinguishes the two evidence levels rather than collapsing them: types
+  observed on a real guest (`string`, `list<u8>`, `list<string>`, empty `list<tuple>`,
+  `result<T,stream-error>`, `own<error>`, the `u64` count) versus types verified against the model only
+  (scalars, `f32`/`f64`, `list<u32>`, `borrow`'s i32 encoding). Every codec-unmodeled kind is refused by
+  name at its earliest marshal point, each refusal witnessed firing. The gate remains present as a
+  rollback: `BURROUGHS_COMPONENTS=0` refuses by name (the same code, only the default differs). Flipped on
+  Scott's stamp of the forecast (behaviour 4's stamp-tier event); a minor version bump, the number
+  assigned at release.
 - **A value of a codec-unmodeled kind is refused by name at the earliest point it would be marshaled —
   binding for an implemented import, `Call` for an export (ADR 0084 / #720).** The unmodeled set —
   `record`, `flags`, `enum`, `option`, `error-context` — is derived from the codec's kinds (no
