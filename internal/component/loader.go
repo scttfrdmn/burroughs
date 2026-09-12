@@ -151,6 +151,10 @@ func (k ExternKind) String() string {
 type Import struct {
 	Name string
 	Kind ExternKind
+	// TypeIndex is the component type index the import's externtype names — the instance/func/component
+	// type. Meaningful for ExternInstance (the imported instance's type, whose export signatures a
+	// binding refusal resolves), ExternFunc, and ExternComponent; 0 otherwise.
+	TypeIndex uint32
 }
 
 // Export is one component-level export: its name and the sort it names.
@@ -300,11 +304,11 @@ func (c *Component) parseImports(body []byte) error {
 		if err != nil {
 			return fmt.Errorf("component: import %d name: %w", i, err)
 		}
-		kind, err := r.externType()
+		kind, typeIdx, err := r.externType()
 		if err != nil {
 			return fmt.Errorf("component: import %d (%q) externtype: %w", i, name, err)
 		}
-		c.Imports = append(c.Imports, Import{Name: name, Kind: kind})
+		c.Imports = append(c.Imports, Import{Name: name, Kind: kind, TypeIndex: typeIdx})
 		c.def(externKindSpace(kind), SectionImport, len(c.Imports)-1)
 	}
 	if r.pos != len(body) {
@@ -339,7 +343,7 @@ func (c *Component) parseExports(body []byte) error {
 		case 0x00:
 			// no ascribed externtype
 		case 0x01:
-			if _, terr := r.externType(); terr != nil {
+			if _, _, terr := r.externType(); terr != nil {
 				return fmt.Errorf("component: export %d (%q) ascribed externtype: %w", i, name, terr)
 			}
 		default:

@@ -549,3 +549,86 @@ func (r *reader) labelVec() ([]string, error) {
 	}
 	return out, nil
 }
+
+// unmodeledValKind reports the first component value kind in vt that the canon codec has no value
+// representation for — `record`, `flags`, `enum`, `option`, `error-context` (no `canon.Kind` and no
+// `store`/`StoreVia` arm lowers them; a value can never be constructed). It recurses through the
+// containers the codec *does* model (`list`, `result`, `variant`, `tuple`) so a modeled container of an
+// unmodeled element is caught — `list<tuple<string,string>>` is clean, `tuple<record>` is not — while
+// `tuple`/`result`/`variant` themselves, and every scalar/string/handle, are modeled and pass. Derived
+// from the codec's kinds (ADR 0084 / #720's binding refusal), not a hardcoded list.
+func unmodeledValKind(vt ValType, depth int) (ValKind, bool) {
+	if depth > 32 {
+		return 0, false // a cyclic/pathological type; the decoder's own depth guards apply first
+	}
+	switch vt.Kind {
+	case VRecord, VFlags, VEnum, VOption, VErrorContext:
+		return vt.Kind, true
+	case VList: // VOption is handled above (it is itself unmodeled); a list recurses into its element
+		if vt.Elem != nil {
+			return unmodeledValKind(*vt.Elem, depth+1)
+		}
+	case VResult:
+		if vt.Ok != nil {
+			if k, ok := unmodeledValKind(*vt.Ok, depth+1); ok {
+				return k, true
+			}
+		}
+		if vt.Err != nil {
+			return unmodeledValKind(*vt.Err, depth+1)
+		}
+	case VVariant:
+		for _, c := range vt.Cases {
+			if c.Type != nil {
+				if k, ok := unmodeledValKind(*c.Type, depth+1); ok {
+					return k, true
+				}
+			}
+		}
+	case VTuple:
+		for _, e := range vt.Elems {
+			if k, ok := unmodeledValKind(e, depth+1); ok {
+				return k, true
+			}
+		}
+	default:
+		// every scalar, string, own/borrow handle, and VRef — modeled, so clean.
+	}
+	return 0, false
+}
+
+// unmodeledInSig reports the first unmodeled value kind anywhere in a function type's parameters or
+// result — the check a binding (implemented import) and an export `Call` make before a value of the kind
+// would be marshaled.
+func unmodeledInSig(ft *FuncType) (ValKind, bool) {
+	if ft == nil {
+		return 0, false
+	}
+	for _, p := range ft.Params {
+		if k, ok := unmodeledValKind(p.Type, 0); ok {
+			return k, true
+		}
+	}
+	if ft.Result != nil {
+		return unmodeledValKind(*ft.Result, 0)
+	}
+	return 0, false
+}
+
+// valKindName is the WIT name of a value kind, for a refuse-by-name message.
+func valKindName(k ValKind) string {
+	switch k {
+	case VRecord:
+		return "record"
+	case VFlags:
+		return "flags"
+	case VEnum:
+		return "enum"
+	case VOption:
+		return "option"
+	case VErrorContext:
+		return "error-context"
+	default:
+		return fmt.Sprintf("valkind(%d)", int(k))
+	}
+}

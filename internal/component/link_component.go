@@ -21,7 +21,8 @@ import (
 // parameters and an empty result, so no value marshaling is needed here.
 type compFunc struct {
 	core     coreDef
-	stubName string // non-empty: a refusing host func naming the unfilled import
+	stubName string    // non-empty: a refusing host func naming the unfilled import
+	sig      *FuncType // the component signature of a canon lift (its export type), for the Call refusal
 }
 
 func (f *compFunc) invoke() error {
@@ -110,7 +111,7 @@ func (w *walker) funcStep(d Def) error {
 		if int(cn.FuncIdx) >= len(w.coreSpace[SpaceCoreFunc]) {
 			return fmt.Errorf("component: canon lift names core func %d of %d", cn.FuncIdx, len(w.coreSpace[SpaceCoreFunc]))
 		}
-		w.compFuncs = append(w.compFuncs, compDef{fn: &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx]}})
+		w.compFuncs = append(w.compFuncs, compDef{fn: &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn)}})
 	case SectionImport:
 		cd, ok := w.host(w.c.Imports[d.Item].Name)
 		if !ok {
@@ -346,7 +347,31 @@ func (in *Instantiated) Call(name string) error {
 	if fn == nil {
 		return fmt.Errorf("%w: export %q is not a callable function", ErrUnsupportedForm, name)
 	}
+	// The export refusal (ADR 0084 / #720): an exported function whose signature carries a value kind the
+	// codec cannot marshal refuses **by name at Call** — the earliest point a value crosses. `run` carries
+	// no values, so it never trips; a value-taking export does. Refused here, not at LoadComponent or
+	// instantiate, for the same reason decode stays permissive: the boundary is where the value moves.
+	if fn.sig != nil {
+		if k, bad := unmodeledInSig(fn.sig); bad {
+			return fmt.Errorf("%w: export %q carries %s, which this engine's Canonical ABI does not model",
+				ErrUnsupportedForm, name, valKindName(k))
+		}
+	}
 	return fn.invoke()
+}
+
+// liftSignature resolves a canon lift's type index to the component function type it lifts, for the
+// export refusal. A lift names its type (`ft:typeidx`, unlike a lower); nil when the index is out of
+// range or names a non-function type.
+func (w *walker) liftSignature(cn Canon) *FuncType {
+	if int(cn.TypeIdx) >= len(w.c.Types) {
+		return nil
+	}
+	td := w.c.Types[cn.TypeIdx]
+	if td.Kind != TDFunc {
+		return nil
+	}
+	return td.Func
 }
 
 // CallRun invokes the component's `wasi:cli/run` export, whatever version it names
