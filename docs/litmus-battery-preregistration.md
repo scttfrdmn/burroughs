@@ -31,7 +31,7 @@ run a single one of them: written later, they would be written by someone who ha
 
 ## How to read an entry
 
-One `###` entry per clause in §§2–5 — all seventeen, including the ones no litmus case can reach, so
+One `###` entry per clause in §§2–5 — all nineteen, including the ones no litmus case can reach, so
 that a clause with no case is **visible** rather than absent. Each entry carries:
 
 - **Quotation.** The clause as the contract writes it, verbatim, as a blockquote, checked as a
@@ -471,6 +471,31 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 - **Arbiter:** neither — a scheduling claim.
 - **Status:** blocked — #10
 
+### SP-5 — stop composes with agents suspended in guest-called built-ins
+
+> An agent suspended in a blocking excursion — whether in a host call under §5 or in a guest-called built-in
+> under H-4 — is not executing guest code and is at a safepoint for the purposes of SP-1. `Stop`'s deadline
+> is therefore satisfiable while agents are suspended; a suspended agent does not require resumption to reach
+> a safepoint, and SP-1's and SP-2's predicates are unaffected.
+
+- **Shape:** outcome
+- **Blocked by:** slice 1 — the `gate:async` substrate does not exist yet (ADR 0086; lands after #737). This
+  is SP-4's case for the guest-called-suspend category: the same scheduling claim, whose witness needs an
+  agent that can suspend in a `waitable-set.wait`, which slice 1 builds.
+
+#### Case `sp5-stop-completes-with-agents-suspended-in-builtins`
+
+- **Discharges:** SP-5
+- **Allowed:** `stop(deadline)` returns within `deadline` with all `N = 4` agents suspended in a guest-called
+  built-in still suspended — no agent resumed to reach the safepoint.
+- **Forbidden:** `stop` failing to return within `deadline`; any agent requiring resumption to be stopped —
+  which would make async suspension a non-safepoint and STW-under-async unreachable. **Both halves named.**
+- **Witness:** N agents suspended in `waitable-set.wait`, confirmed before the request, plus one agent in a
+  hot loop so the stop has something to stop.
+- **Floor:** every run must confirm all N suspended before the request.
+- **Arbiter:** neither — a scheduling claim.
+- **Status:** blocked — #739
+
 ## §4. The boundary memory model
 
 ### B-MM-1 — the boundary is an acquire/release edge over the whole address space
@@ -835,3 +860,33 @@ the test's own comment; it is recorded in three places because no instrument's d
 The MAY half — a guest-visible cancel primitive — is contract-deferred to §10.4 and gets its cases in the PR
 that closes it, for T-5's reason: an allowed-outcome set authored now would be this battery inventing the
 semantics.
+
+### H-4 — a guest-called suspension blocks its agent only
+
+> A suspension arising from any of these built-ins suspends the calling agent only: sibling agents in the
+> same instance remain runnable, and the runtime introduces no sibling starvation.
+
+- **Shape:** outcome
+- **Blocked by:** #739 — the `gate:async` substrate (slice 1) does not exist yet (ADR 0086; lands after
+  #737). This is H-1's case for the guest-called-suspend category: the same scheduling claim, whose witness
+  needs an agent that can suspend in a `waitable-set.wait`, which slice 1 builds.
+
+#### Case `h4-a-suspended-agent-does-not-starve-its-siblings`
+
+- **Discharges:** H-4, the no-sibling-starvation half.
+- **Allowed:** with agent A suspended in a guest-called built-in for a held interval `T = 100ms`, sibling
+  agent B's progress counter advances — any nonzero advance.
+- **Forbidden:** B's counter advancing zero times over `T`; **zero is the whole failure** (H-1's reading, for
+  the guest-called suspension) — a merely slow B violates nothing here. B's advance is reported every run.
+- **Witness:** A confirmed suspended in the built-in before B is sampled; B's loop contains no suspending
+  built-in, so its progress is not an artifact of the substrate.
+- **Floor:** every run must confirm A suspended before sampling.
+- **Arbiter:** neither — a scheduling claim.
+- **Status:** blocked — #739
+
+**Why the self-deadlock half has no litmus case:** the clause's last sentence is a *non-guarantee* — the
+runtime does not detect the all-agents-suspended-on-unsatisfiable-waitable-sets case; `Close` and the fault
+path are its only exits. That is a stated property of the surface (a single instance can reach it with no
+race), not an interleaving, so no witness can prove its absence and none is registered — H-2's structural
+shape, one clause down. It is written rather than discovered as a bug because slice 1's first hang is exactly
+when a reader must be able to tell a deadlocked guest from an engine defect.
