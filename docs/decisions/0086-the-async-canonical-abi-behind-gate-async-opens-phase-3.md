@@ -1,12 +1,14 @@
 # 0086 — The async Canonical ABI, behind `gate:async` — opens Phase 3
 
-Date: 2026-09-11 · Status: **proposed** · [#735](https://github.com/scttfrdmn/burroughs/issues/735) · Opens the p3 async tier (contract §§5–6)
+Date: 2026-09-11 · Status: **accepted** · [#735](https://github.com/scttfrdmn/burroughs/issues/735) · Opens the p3 async tier (contract §§5–6)
 Ratio-Class: carried
 
-**Draft — not stamped.** `Status: proposed` cites the decision issue #735, not an approval. Opening the
-tier, the stamp (Status → accepted), and the creation of `gate:async` are Scott's; this ADR is the
-decision-before-code record he stamps against, in the same form #688 → ADR 0084 opened Phase 2. Grounded in
-recon [#734](https://github.com/scttfrdmn/burroughs/issues/734) and a byte-verified guest.
+**Stamped 2026-09-11 (Scott, on #735 — "concur with recommendations", after the #734 async-lift correction).**
+`Status: accepted` cites that concurrence. This ADR opens the tier in the same form #688 → ADR 0084 opened
+Phase 2; grounded in recon [#734](https://github.com/scttfrdmn/burroughs/issues/734) and a byte-verified
+guest. `gate:async` lands **off** (behaviour 4); its flip is a separate later stamp event. The §5/§6/§3
+contract amendment is a precondition for slice-1 **landing**, not for opening (Consequences below). Recorded
+by the actor — durability is not independence — so this ADR stays `Ratio-Class: carried`.
 
 ## Pinned spec commits
 
