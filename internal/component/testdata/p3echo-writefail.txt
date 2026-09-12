@@ -1,0 +1,9 @@
+# wasmtime 48.0.1 (7bac2c277 2026-08-24) — p3echo.wasm, stdout to a closed pipe (write fails)
+# host: darwin (mDNS lab boxes unreachable from here); /dev/full on Linux gives the same via ENOSPC.
+# The stream err arm: blocking-write-and-flush returns result<_,stream-error>=Err(last-operation-failed(own<error>));
+# Rust std surfaces it as a panic. The message text is host-specific (this is wasmtime's); the behavior —
+# write fails -> err arm -> guest aborts nonzero — is the second oracle, matched behaviorally by Burroughs (#724).
+exit: 134
+thread 'main' (1) panicked at library/std/src/io/stdio.rs:1165:9:
+failed printing to stdout: failed to write the buffered data
+Error: failed to run main module `internal/component/testdata/p3echo.wasm`
