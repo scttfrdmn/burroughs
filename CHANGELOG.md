@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **`result<T, stream-error>` lowering — the variant + `own<error>` err arm — verified against definitions.py through the pluggable-heap codec (behind `gate:components`, off).**
+  [#724](https://github.com/scttfrdmn/burroughs/issues/724),
+  [ADR 0084](docs/decisions/0084-the-component-loader-and-canonical-abi-lift-lower-for-value-types-sync-only-behind-gate-components.md).
+  The stream methods (`blocking-write-and-flush`/`write`/`check-write`/`blocking-flush`/`blocking-read`)
+  lowered their `result<T, stream-error>` by hand; now they build a `canon` value and lower it through the
+  codec's `StoreVariant`/`StoreVia` over the `Heap` interface (as #718 did for `list`), and the hand
+  `storeStreamErrLastOp` and inline result writes are deleted. New definitions.py fixtures pin the
+  discriminant, case offset, and `own<error>` payload offset for `result<_|u64|list<u8>, stream-error>`
+  and the `stream-error` variant's `last-operation-failed(own<error>)` case. The err arm has both oracles:
+  the fixture (byte-exact) and wasmtime (behavioral — a failing write, e.g. a broken pipe, reaches it).
+  Board unchanged; p3echo/p3hello still byte-identical.
+
+
 - **`list<string>` lowering verified against `definitions.py` through the pluggable-heap codec; the hand
   path is deleted (behind `gate:components`, off).**
   [#718](https://github.com/scttfrdmn/burroughs/issues/718),
