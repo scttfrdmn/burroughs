@@ -138,6 +138,24 @@ wasmtime is for.
   *Added by Scott's stamp on #737, dated 2026-09-12 (`gate:async`, ADR 0086,
   first guest recon #734). States the consequence of §5 H-4 for stop-the-world;
   a consequence of text already stamped, so an append rather than an amendment.*
+- **SP-6.** Writes performed while every agent is stopped — by the stopping
+  agent or by the host between `Stop` completing and `Resume` being called — are
+  visible to every resumed agent without further synchronization, across the
+  whole of the shared address space, and are ordered before any memory operation
+  the resumed agent performs after `Resume` returns. `Resume` is an acquire edge
+  for every agent it resumes, as `Stop` is a release edge for every agent it
+  stops (SP-2's inverse). A resumed agent requires no fence, no atomic access,
+  and no re-read to observe them.
+  *Added by Scott's stamp on #743, dated 2026-09-12. The consumer is Phase 4's
+  threaded tier — Go's garbage collector stopping the world through host
+  safepoints, mutating the heap, and resuming mutators that read it through
+  ordinary loads. Found by the §4 battery recon (#742, finding F2) before any
+  case was written. The "across the whole of the shared address space" clause is
+  load-bearing: a GC moves and rewrites objects the resumed mutator touches
+  through ordinary loads, so an edge scoped to a narrower set of locations would
+  not carry the guarantee. This is a new normative guarantee (B-MM-1's
+  enumeration was silent on the `Resume`-after-`Stop` crossing), so an amendment,
+  not merely a consequence.*
 
 ## §4. The boundary memory model
 
@@ -155,6 +173,10 @@ that spin is unnecessary.*
   guest→host transition MUST constitute the corresponding release edge.
   Equivalently: a sequentially-consistent fence at the boundary, both
   directions.
+  *Appended by Scott's stamp on #743, dated 2026-09-12. The crossings B-MM-1
+  enumerates are not exhaustive as written. `Resume` following a `Stop` is a
+  further crossing at which the boundary memory model applies; its guarantee is
+  stated at §3 SP-6 and is not restated here (one authority per fact).*
 - **B-MM-2.** A wake delivered to a waiting agent MUST synchronize **all**
   writes that happened-before the wake on the waking agent — not only the
   futex word. "The notified word only" is expressly non-conforming.

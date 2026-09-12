@@ -31,7 +31,7 @@ run a single one of them: written later, they would be written by someone who ha
 
 ## How to read an entry
 
-One `###` entry per clause in §§2–5 — all nineteen, including the ones no litmus case can reach, so
+One `###` entry per clause in §§2–5 — all twenty, including the ones no litmus case can reach, so
 that a clause with no case is **visible** rather than absent. Each entry carries:
 
 - **Quotation.** The clause as the contract writes it, verbatim, as a blockquote, checked as a
@@ -495,6 +495,32 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 - **Floor:** every run must confirm all N suspended before the request.
 - **Arbiter:** neither — a scheduling claim.
 - **Status:** blocked — #739
+
+### SP-6 — a resumed agent sees writes made while the world was stopped
+
+> Writes performed while every agent is stopped — by the stopping agent or by the host between `Stop`
+> completing and `Resume` being called — are visible to every resumed agent without further synchronization,
+> across the whole of the shared address space, and are ordered before any memory operation the resumed
+> agent performs after `Resume` returns.
+
+- **Shape:** outcome
+- **Blocked by:** #10 — the case is not yet written; the SP-6 clause itself landed with #743's append, so the
+  case is ready to write (no mechanism missing). This is the STW-resume publication edge the threaded tier's
+  GC depends on (recon #742, F2), and B-MM-1's landed cases do not witness it.
+
+#### Case `sp6-a-resumed-agent-sees-writes-made-during-the-stop`
+
+- **Discharges:** SP-6
+- **Allowed:** with the world stopped and a write performed to a guest word during the stop, every resumed
+  agent reads the written value through an ordinary load after `Resume`, on both models.
+- **Forbidden:** a resumed agent reading the pre-stop (stale) value — a missing acquire edge at `Resume`;
+  **arm64** is where a narrower-than-whole-address-space edge would show it.
+- **Witness:** N resumed agents each reading a word written during the stop; the write must be confirmed
+  landed before `Resume`; the read is an ordinary load (no fence, no atomic), so a stale read is not masked.
+- **Floor:** repetition sufficient to open the reorder window (b-mm-1 scale, tuned when the case is written);
+  every run reports the discard/observed split.
+- **Arbiter:** **arm64** — the forbidden reorder is one x86-TSO structurally forbids.
+- **Status:** blocked — #10
 
 ## §4. The boundary memory model
 
