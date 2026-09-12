@@ -71,3 +71,28 @@ func TestUnmodeledTypeFormRefusedByName(t *testing.T) {
 		t.Fatal("Load accepted a nested component type (0x41) — an unmodeled type form")
 	}
 }
+
+// TestUnmodeledTypeFormsRefuseByName widens TestUnmodeledTypeFormRefusedByName across the refused-by-name
+// set the loader's type decoder bounds (async func, the unmodeled value-type opcodes, an instance-type
+// core:type): each refuses at parse, naming the form, so the flip's claim is bounded by a witnessed
+// boundary rather than an assumed one (#720 forecast; the #714 lesson).
+func TestUnmodeledTypeFormsRefuseByName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte // a type section body: count=1 then the form
+	}{
+		{"async-func-0x43", []byte{0x01, 0x43}},
+		{"nested-component-0x41", []byte{0x01, 0x41}},
+		{"unmodeled-valtype-stream-0x66", []byte{0x01, 0x66}},
+		{"unmodeled-valtype-future-0x65", []byte{0x01, 0x65}},
+		{"instancetype-core-type-0x00", []byte{0x01, 0x42, 0x01, 0x00}}, // instancetype, 1 decl, core:type
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			comp := append(append([]byte(nil), componentPreamble...), section(byte(SectionType), tc.body...)...)
+			_, err := Load(comp)
+			if err == nil {
+				t.Fatalf("Load accepted %s — an unmodeled type form that must refuse by name", tc.name)
+			}
+		})
+	}
+}

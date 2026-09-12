@@ -106,6 +106,13 @@ weakly-ordered platform.
   (the #694-deferred non-nested-variant-with-handle-payload, driven live by a failing writer); a canon
   `resource.drop` no-op; and `ComponentConfig.Args`.
 
+- **Refuse-by-name tests for the component's refused type/lowering set (behind `gate:components`, off).**
+  [#720](https://github.com/scttfrdmn/burroughs/issues/720). The bounded claim behind the gate — a
+  component using a type outside the modeled set refuses **by name**, never mis-lowers — is witnessed
+  per entry: `TestUnmodeledTypeFormsRefuseByName` (async func `0x43`, nested component `0x41`, unmodeled
+  valtypes `0x66`/`0x65`, instance-type `core:type` `0x00`) at decode, and
+  `TestStoreViaRefusesUncomposableKinds` (tuple, f32, f64) at lower. Test-only.
+
 - **A component prints "Hello, world!" — the p3 slice-2 exit, byte-identical to wasmtime 48.0.1 (behind
   `gate:components`, off).**
   [#694](https://github.com/scttfrdmn/burroughs/issues/694),
