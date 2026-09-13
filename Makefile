@@ -537,6 +537,13 @@ CLOSE ?= --worktree main
 close:
 	@./scripts/closecheck.sh $(CLOSE)
 
+# blockercheck — a litmus case's `Status: blocked — #N` whose #N is CLOSED is stale (recon #742, F1).
+# A separate sweep, NOT a phase of `make check`, for closecheck's reason: it queries issue state over the
+# network and `make check` is hermetic. Reports; it does not edit — a stale case's registration is
+# corrected in that case's own PR.
+blockercheck:
+	@./scripts/blockercheck.sh
+
 # The engine module only. Deliberately NOT tools/go.mod: a tool modfile has no
 # packages of its own, so tidy pulls in the tools' transitive test dependencies
 # and — via the module proxy — adds this very repo as a requirement of its own

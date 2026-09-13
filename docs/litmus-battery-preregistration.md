@@ -426,8 +426,15 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
   holds the call in the host until after the stop is taken, releases it, and observes that the write lands
   only after the stop is lifted.
 - **Floor:** every run must confirm all N parked before the request.
-- **Arbiter:** **arm64 is expected to discriminate.** A too-weak re-entry edge lets the parked agent's
-  write become visible early, which is a reordering TSO structurally cannot exhibit.
+- **Arbiter:** ~~arm64~~ → **neither (re-registered 2026-09-12; ADR-0054 trace, #742 F2).** *SP-2 is **not**
+  vacuous — its subject survives — but its arbiter was mis-registered.* The write is on the **host-call
+  return path**: it is a **host-side write** to guest memory, which ADR 0054 (governing *guest typed
+  instruction* accesses) does not reach, so SP-2 is not stillborn like `b-mm-1`. But its discrimination is
+  the **stop protocol**, not a weak-memory reorder: the forbidden outcome is the parked agent's write
+  **landing while the stop is held**, which is the re-entry gate failing to observe the stop — observable
+  by **value on any architecture** (read the word while stopped; it must hold its pre-stop value), exactly
+  like SP-4. "The write becomes visible early" is a protocol violation (the agent ran when it should have
+  been held), not an arm64 store-reorder. So the arbiter is **neither** — a scheduling/protocol claim.
 - **Status:** blocked — #10
 
 ### SP-3 — the timer channel is disjoint from guest sync state
@@ -510,16 +517,28 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 
 #### Case `sp6-a-resumed-agent-sees-writes-made-during-the-stop`
 
+**Re-registered 2026-09-12 (dated; ADR-0054 trace, #742 F2 — the same recast `b-mm-1` took).** *SP-6 is
+**not** vacuous, but its arbiter was mis-registered as arm64 and its read mis-described as "ordinary."* The
+write during the stop is by the stopping agent or the host (a GC moving objects) — a **host-side plain
+write**, which ADR 0054 does not reach, so it survives. But the resumed agent's read of a guest word is a
+typed access, which ADR 0054 makes **SC, not "ordinary"**; the arm64 **value-observation** window at an SC
+read is ~zero (`b-mm-2`/#603), so the witness is a **`-race`** verdict — a plain host/GC write during the
+stop racing the resumed guest's read when the `Resume` acquire edge is missing — not an arm64 outcome.
+
 - **Discharges:** SP-6
-- **Allowed:** with the world stopped and a write performed to a guest word during the stop, every resumed
-  agent reads the written value through an ordinary load after `Resume`, on both models.
-- **Forbidden:** a resumed agent reading the pre-stop (stale) value — a missing acquire edge at `Resume`;
-  **arm64** is where a narrower-than-whole-address-space edge would show it.
-- **Witness:** N resumed agents each reading a word written during the stop; the write must be confirmed
-  landed before `Resume`; the read is an ordinary load (no fence, no atomic), so a stale read is not masked.
-- **Floor:** repetition sufficient to open the reorder window (b-mm-1 scale, tuned when the case is written);
-  every run reports the discard/observed split.
-- **Arbiter:** **arm64** — the forbidden reorder is one x86-TSO structurally forbids.
+- **Allowed:** no `-race` report on the located pair — a stop-time plain host write to a guest word against
+  the resumed agent's read of that word.
+- **Forbidden:** a `-race` report on that pair, when the `Resume` acquire edge over the whole address space
+  is missing. Silence about the located pair is the pass; a located report is the fail (`b-mm-2`'s framing).
+- **Witness:** a **plain host write** to a guest word while the world is stopped (the GC's move, modeled
+  host-side); the resumed agent reads that word after `Resume`. The read is a guest typed load — SC after
+  ADR 0054, which is why the arm64 value window is ~zero and the oracle is `-race`, not a hardware outcome.
+  Same arbiter limit as `b-mm-1`'s recast: `-race` certifies the host boundary has no data race under the
+  schedules explored; it does not certify the guest-visible memory model, and a §4 gap surfacing as guest
+  heap corruption can coexist with a clean run. Fresh words per round; `R` at the `b-mm-2` scale.
+- **Floor:** every round confirms the write landed before `Resume` and the resumed read reached the word,
+  so the detector's silence is about a formed pair; fresh words per round.
+- **Arbiter:** **`-race` (Go's memory model), both arches — NOT the hardware** (see the limit under Witness).
 - **Status:** blocked — #10
 
 ## §4. The boundary memory model
@@ -541,25 +560,69 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 
 #### Case `b-mm-1-message-passing-across-a-host-call-return`
 
+**Re-registered 2026-09-12 (dated; the original registration is kept visible below it, per the discipline
+that a pre-registration silently rewritten to match what runs is not a pre-registration).**
+
+***Original registration (superseded — stillborn under ADR 0054, the #603 shape).*** *It read: **Allowed**
+`(p,d)` ∈ {`(0,0)`,`(0,1)`,`(1,1)`}; **Forbidden** `(1,0)` (B's `poll` returned 1 but B read the pre-publish
+value); **Witness** A **stores** `1` to a naturally-aligned data word (a typed `i32.store`) and calls host
+`publish`, B spins on host `poll` and on the first `1` **loads** the data word (a typed `i32.load`); **R =
+100_000**; **Arbiter arm64** (`(1,0)` a store-reorder TSO forbids).*
+
+***Why it was insufficient:*** *ADR 0054 (amended #627) makes every aligned **typed word access**
+sequentially consistent — a guest has no plain aligned typed store. So A's `i32.store` is an SC store and
+B's `i32.load` is an SC load, and `(1,0)` is forbidden by **SC, not by B-MM-1's boundary fence**: an SC
+store is globally ordered before A's `publish`, which the floor orders before B's `poll==1`, so B's SC load
+must observe it. The forbidden outcome is unreachable, and the watched-dying injection (break the boundary
+edge) **cannot fire** — SC already forbids `(1,0)`. A control that cannot be watched dying names nothing.
+This is exactly `b-mm-2`'s stillbirth (#603): the value-observation window at SC is ~zero, no `R` closes it.*
+
+- **New registration — the `-race` recast (the `b-mm-2` rescue).**
 - **Discharges:** B-MM-1
-- **Allowed:** observation `(p, d)`, where `p` is what the host `poll` call returned to agent B and `d` is
-  what B then read from the data word: `(0,0)`, `(0,1)`, `(1,1)`.
-- **Forbidden:** `(1,0)` — B's `poll` returned 1, which the host sets only after A's `publish` call has
-  returned, and B nonetheless read the pre-publish value of a word A wrote before calling `publish`. The
-  release edge on A's guest→host transition and the acquire edge on B's host→guest return are the only
-  things that forbid it.
-- **Witness:** A stores `1` to a naturally-aligned data word and calls host `publish`; B spins calling host
-  `poll` and, on the first `1`, loads the data word once. Both words live in one shared memory, and
-  `poll`'s answer travels through host state rather than guest memory, so the data word is the only channel
-  under test. `R = 100_000` rounds, fresh words per round.
-- **Floor:** at least 95% of rounds must observe `p == 1` within their spin bound; below that the case fails
-  as un-witnessed. A round that exhausts its spin bound is discarded and counted, and the discard count is
-  reported on every run.
-- **Arbiter:** **arm64 is expected to discriminate.** `(1,0)` requires the data store to become visible
-  after the boundary, which x86-TSO's store ordering structurally forbids — B-MM-5's provenance is this
-  exact asymmetry, so a case observed on neither architecture is reported as *not observed on either* and
-  never merged into one green.
-- **Status:** blocked — #10
+- **Allowed:** no `-race` report naming the located pair — A's plain `memory.fill` write against B's
+  post-`poll` read of the same word. (A report with no located pair, e.g. the host flag alone, is
+  instrument noise, not the finding — `b-mm-2`'s rule.)
+- **Forbidden:** a `-race` report on that located pair, produced when the host-call boundary's
+  acquire/release edge is missing. Framed as the `b-mm-2` cases are: the detector's silence about the
+  located pair is the pass, a located report is the fail.
+- **Witness:** A writes the data word with a **plain `memory.fill`** (the bulk family is plain at every
+  alignment, ADR 0064) then calls host `publish`; B spins on host `poll` and on the first `1` reads the
+  word — a race between a plain write and an SC read is still a race, so the plain write is what the
+  detector can see. Fresh words per round; `R` at the `b-mm-2` scale (~1000, tuned when written). **The
+  arbiter limit (#742, at the case level):** `-race` observes the **host's** memory operations — it
+  certifies Burroughs' Go implementation of the boundary has no data race under the schedules explored. It
+  does **not** certify the guest-visible memory model, and cannot observe an ordering correct in Go's model
+  but violating §4's guarantee to the guest. The failure mode this case exists to catch — a §4 gap
+  surfacing as guest heap corruption — is precisely one a clean `-race` run can coexist with. A plain
+  carrier plus `-race` is the strongest instrument available here; it is **not** a weak-memory litmus
+  discriminating outcomes on hardware.
+- **Floor:** every round must observe `poll == 1` and read the published word, so the detector's silence is
+  silence about a pair that formed; fresh words per round so round *i*'s write does not race round *i−1*'s
+  read (the harness's race, not the engine's).
+- **Arbiter:** **`-race` (Go's memory model), both arches — NOT the hardware** (see the limit under
+  Witness).
+- **`-race` is DEFEATED — RUN, not reasoned (2026-09-12); b-mm-1 is unwitnessed by `-race`.** The recast
+  above was built and run under `go test -race`, both host-flag configs (the trace, a finding — NOT a
+  subsumption into `b-mm-2`, per the chair):
+  - **atomic host flag → `-race` SILENT** even with **no engine boundary edge at all** — the atomic flag's
+    own happens-before orders A's fill before B's read, so a broken engine boundary is *equally* silent.
+    **The case cannot be watched dying** (this track's law: a control that cannot be watched dying names
+    nothing).
+  - **plain host flag → `-race` FIRES in the CORRECT (unbroken) case** — two `DATA RACE` reports, the flag
+    itself (instrument noise) and the data word. The case **fails when it should pass**.
+  - **Root cause (empirical):** `b-mm-1`'s A→B channel is the **host flag — a Go variable, i.e. harness
+    synchronization, not an engine boundary mechanism.** `publish` runs on A's goroutine, `poll` on B's;
+    neither crosses A→B, so **there is no engine A→B edge to break** (the injection that makes `b-mm-2`
+    work). `b-mm-2` works only because the futex notify/wait *is* the engine's channel **and** the clause's
+    subject.
+  - **So `b-mm-1` is unwitnessed-by-`-race`, and is NOT subsumed by `b-mm-2`** (that would retire a
+    registered guarantee and let the battery reach "complete" with zero weak-memory witnesses — worse for
+    the GC consumer than a visible hole). The **instrument the B-MM-1 host-call-return acquire edge needs is
+    a chair decision (#742):** a real AArch64 weak-memory value carrier is a *live* option (not foreclosed),
+    though it faces `#603`'s ~zero value-observation window (reasoned, not yet run); the alternative is a
+    documented hole (a registered guarantee no available instrument witnesses). The `-race` recast above is
+    kept visible as the shape that was tried and defeated, dated.
+- **Status:** blocked — #742 (the instrument is a chair decision; `-race` defeated by run, above)
 
 ### B-MM-2 — a wake synchronizes every write, not the futex word
 

@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **`make blockercheck` — a litmus case's `Status: blocked — #N` whose `#N` is closed is flagged stale
+  (§4 battery recon #742, finding F1).** The litmus pre-registration control checks the status *format*,
+  not whether the cited blocker is still open, so a case whose blocker landed keeps a green (`sp1` read
+  `blocked — #554` after #554 closed). A separate sweep (network, like `closecheck`), not a phase of
+  `make check`. Reports; correcting a stale case is that case's own PR.
+- **`b-mm-1`, `SP-2`, and `SP-6` litmus registrations re-registered (dated), on the ADR-0054 trace
+  (#742, F2).** A guest aligned typed access is sequentially consistent (ADR 0054), so `b-mm-1`'s
+  typed-store witness was stillborn (its forbidden `(1,0)` is forbidden by SC, not the boundary fence — the
+  #603 shape) and is recast to the `b-mm-2` `-race`+plain-`memory.fill` shape; `SP-6` likewise (arbiter
+  arm64 → `-race`); `SP-2`'s arbiter is corrected arm64 → *neither* (its write is host-side, its
+  discrimination the stop protocol, not a weak-memory reorder). Each keeps its original registration
+  visible with the dated reason. Net: **no §4-memory case discriminates on arm64 hardware post-0054** —
+  all rest on `-race` (Go's model), a stated arbiter limit.
 - **`gate:async` shell — the async component-model ABI is refused by name at bind, off by default (ADR
   0086, #735; recon #734).** The async surface is now *recognized* at decode (stream/future value types,
   the `async`/`callback` canonopts, and the async canon built-in family `0x05`–`0x25`), so a wasip3 async
