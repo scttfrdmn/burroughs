@@ -601,7 +601,19 @@ This is exactly `b-mm-2`'s stillbirth (#603): the value-observation window at SC
   read (the harness's race, not the engine's).
 - **Arbiter:** **`-race` (Go's memory model), both arches — NOT the hardware** (see the limit under
   Witness).
-- **Status:** blocked — #10
+- **Build-uncertainty (reasoned, unrun — a possible second #708-shape, chair item on #742).** Unlike
+  `b-mm-2`, where the futex notify/wait *is* the sole A→B channel (break it and the fill races the load),
+  `b-mm-1`'s message travels through a **host flag** — a *second* channel. If that flag is a Go **atomic**,
+  its release/acquire orders everything-before-`publish` (including the guest fill), so the data edge is
+  **masked** and `-race` sees nothing even with a broken engine boundary; if it is **plain**, the flag
+  write/read itself races in the *correct* case, so `-race` fails the passing run on flag noise. Neither
+  yields a case that passes clean and fails on a broken boundary. So `b-mm-1`'s distinct content (a generic
+  host-call-return acquire edge, message through host state) may be **subsumed by `b-mm-2`'s wait-return
+  crossing**, or need a **different instrument**. This is reasoned, not run (this track's "hypothesis until
+  run" — with force, for a `-race`-behaviour claim); the empirical check is to build both flag configs and
+  observe. Escalated to the chair (#742); the case is not written until it resolves. **The recast above is
+  registered as the intended shape; its buildability is the open item.**
+- **Status:** blocked — #10 (and see Build-uncertainty — the shape itself is a chair item)
 
 ### B-MM-2 — a wake synchronizes every write, not the futex word
 
