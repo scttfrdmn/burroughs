@@ -616,13 +616,24 @@ This is exactly `b-mm-2`'s stillbirth (#603): the value-observation window at SC
     work). `b-mm-2` works only because the futex notify/wait *is* the engine's channel **and** the clause's
     subject.
   - **So `b-mm-1` is unwitnessed-by-`-race`, and is NOT subsumed by `b-mm-2`** (that would retire a
-    registered guarantee and let the battery reach "complete" with zero weak-memory witnesses — worse for
-    the GC consumer than a visible hole). The **instrument the B-MM-1 host-call-return acquire edge needs is
-    a chair decision (#742):** a real AArch64 weak-memory value carrier is a *live* option (not foreclosed),
-    though it faces `#603`'s ~zero value-observation window (reasoned, not yet run); the alternative is a
-    documented hole (a registered guarantee no available instrument witnesses). The `-race` recast above is
-    kept visible as the shape that was tried and defeated, dated.
-- **Status:** blocked — #742 (the instrument is a chair decision; `-race` defeated by run, above)
+    registered guarantee and let the battery reach "complete" with zero weak-memory witnesses).
+- **RULED (Scott, 2026-09-12): a documented hole — and the hole is this REGISTRATION's, not the
+  instrument's.** B-MM-1 as registered here **has no engine-carried A→B channel to instrument**: `publish`
+  and `poll` are separately-scheduled host goroutines and the flag between them is *harness*
+  synchronization, so there is nothing on an engine edge for a witness to break. `b-mm-2` witnesses *its*
+  clause only because the futex notify/wait is **simultaneously the engine's channel and the clause's
+  subject**. This diagnosis — not "`-race` couldn't see it" — is the reason; option (a), a real AArch64
+  weak-memory value carrier, was ruled *not* pursued because it inherits the identical defect (it still
+  needs the host flag to sequence publish/poll) and `#603`'s ~zero value-observation window makes it worse,
+  not better. **The guarantee remains registered and UNWITNESSED; it does not become "covered," and the
+  battery cannot be reported complete while it stands** — that is the point of a visible hole. This is the
+  battery's **first hole** and its **defining limitation**: the host-call-return acquire edge is the
+  crossing Go's GC leans on hardest, and no available instrument witnesses it.
+- **Reopening condition (this hole's expiry, like S-1's note):** if a future case gives the engine an
+  **A→B channel that carries a value across a host-call return** — plausibly the **async tier's subtask
+  completion path**, which *is* an engine-carried A→B edge — B-MM-1 becomes witnessable and the hole
+  closes. Registered now so the hole does not read as permanent.
+- **Status:** blocked — #742 (documented hole, ruled 2026-09-12; unwitnessed by any available instrument — see above)
 
 ### B-MM-2 — a wake synchronizes every write, not the futex word
 
