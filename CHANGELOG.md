@@ -21,6 +21,16 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` slice 1 increment 2a-i-A — the async `canon lower`'s sync-resolving arm (ADR 0086, #739).**
+  With `BURROUGHS_ASYNC=1`, an async-lower-only component no longer refuses at bind: its async lower binds
+  through a separate async-impl source (`Host.asyncWasi`, typed distinctly from the sync `wasi()`) to the
+  async-lower adapter, which — when the callee resolves inline — returns the packed `[RETURNED]` state and
+  lowers the result to the retptr (the flat ABI = params + retptr). The blocking arm is not built (2a-i-B):
+  a would-block signal refuses by name (`ErrAsyncNotImplemented`) with the retptr untouched, and the async
+  lift / async built-in / stream-future surface still refuses by name (`gateAsync` narrowed to permit only
+  what the arm executes). Oracle is a model-faithful differential (`gen.py`'s `async_lowers` over
+  `definitions.py`); four witnesses (fixture-match, refusal-firing, retptr-unchanged, synth binding-branch).
+  Off by default.
 - **`make blockercheck` — a litmus case's `Status: blocked — #N` whose `#N` is closed is flagged stale
   (§4 battery recon #742, finding F1).** The litmus pre-registration control checks the status *format*,
   not whether the cited blocker is still open, so a case whose blocker landed keeps a green (`sp1` read
