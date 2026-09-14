@@ -127,7 +127,7 @@ func TestAsyncLowerMatchesTheOracle(t *testing.T) {
 			if hasResult {
 				args = append(args, interp.I32(retptr))
 			}
-			ret, err := asyncLowerFunc(impl, hasResult, newSubtaskTable())(cc, args)
+			ret, err := asyncLowerFunc(impl, hasResult, newAsyncHandles())(cc, args)
 			if err != nil {
 				t.Fatalf("wrapper returned error on the sync-resolving arm: %v", err)
 			}
@@ -185,7 +185,7 @@ func TestAsyncLowerBlockingMatchesTheOracleLeavingRetptrUnchanged(t *testing.T) 
 			if hasResult {
 				args = append(args, interp.I32(retptr))
 			}
-			ret, err := asyncLowerFunc(blocking, hasResult, newSubtaskTable())(cc, args)
+			ret, err := asyncLowerFunc(blocking, hasResult, newAsyncHandles())(cc, args)
 			if err != nil {
 				t.Fatalf("wrapper returned error on the blocking arm: %v", err)
 			}
@@ -220,7 +220,7 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 		t.Errorf("gate on, async-lower-only: gateAsync refused (%v), want permit — the lower arms execute", err)
 	}
 
-	builtin := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x1f}}} // waitable-set.new
+	builtin := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x21}}} // waitable-set.poll (still refused)
 	if err := gateAsync(builtin); !errors.Is(err, ErrAsyncNotImplemented) {
 		t.Errorf("gate on, async built-in: err = %v, want ErrAsyncNotImplemented (refuse by name — 2a-i-B-2)", err)
 	}

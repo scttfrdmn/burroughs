@@ -2,16 +2,17 @@
 
 package component
 
-// gate:async slice-1 increment 2a-i-B: the async `canon lower`'s BLOCKING arm — the subtask substrate.
+import "sync"
+
+// gate:async slice-1 increment 2a-i-B: the async `canon lower`'s BLOCKING arm — the subtask substrate and
+// the per-instance async handle table.
 //
 // When an async-lowered import's callee does not resolve inline, `canon_lower` registers a subtask in the
-// instance handle table and returns `[state | (subtaski<<4)]` (definitions.py:2235–2251), where `state` is
-// Subtask.State (STARTING/STARTED at the return) and `subtaski` is the subtask's table index. This file
-// introduces the subtask, its per-instance table, and the packing. The waitable-set loop that OBSERVES a
-// subtask's resolution — `waitable-set.new`/`join`/`wait`, the park, and the `(SUBTASK, subtaski, state)`
-// event — is increment 2a-i-B-2, still refused by name at bind (an async canon built-in). The oracle is
-// `canon/testdata/fixtures.json`'s `async_lower_blocking`; this slice matches its return-side pins
-// (`packed`/`subtaski`/`state_at_lower`), not the wake-side event, which 2a-i-B-2 delivers.
+// instance handle table and returns `[state | (subtaski<<4)]` (definitions.py:2235–2251). The guest then
+// creates a waitable set (`waitable-set.new`), joins the subtask to it (`waitable.join`), and blocks on
+// `waitable-set.wait` until the subtask resolves and delivers a `(SUBTASK, subtaski, state)` event
+// (async_waitset.go, increment 2a-i-B-2). Subtasks and waitable-sets share ONE index space per instance —
+// the model's `inst.handles` — so a `subtaski` and an `si` never collide.
 
 // subtaskState mirrors definitions.py Subtask.State (def:802–806). STARTING/STARTED/RETURNED are in
 // slice-1 scope; the two CANCELLED states (3, 4) are not — cancellation is a later increment.
@@ -23,30 +24,35 @@ const (
 	subtaskReturned subtaskState = 2
 )
 
-// subtask is a pending async-lowered call. The blocking arm registers it in the instance table; the impl
-// holds the resolver (onResolve) that later flips it to RETURNED and arms it — `resolved` is the flag the
-// 2a-i-B-2 waitable-set loop will observe to deliver a `(SUBTASK, subtaski, state)` event. In this slice a
-// registered subtask is only ever STARTING/STARTED at the packed return (its resolution is not yet
-// observable in-guest).
+// subtask is a pending async-lowered call. The blocking arm registers it in the instance table (which
+// assigns `index`); the impl holds the resolver (onResolve, in async_lower.go) that later flips it to
+// RETURNED, marks `resolved`, and — if the subtask has been joined to a waitable set — wakes the set's
+// waiters. `delivered` guards against a resolved subtask's event being taken twice. All fields are guarded
+// by the owning asyncHandles' mutex (resolution can fire on the impl's goroutine while a guest agent is
+// parked in waitable-set.wait).
 type subtask struct {
-	state    subtaskState
-	resolved bool
+	state     subtaskState
+	index     int          // this subtask's handle index (the `subtaski` the event carries)
+	resolved  bool         // set by onResolve
+	delivered bool         // set when the SUBTASK event has been taken by a waitable-set.wait
+	set       *waitableSet // the set it is joined to, if any (nil until waitable.join)
 }
 
-// subtaskTable is a per-component-instance handle table for subtasks (and, in 2a-i-B-2, waitable-sets).
-// Index 0 is a reserved nil sentinel, so the first add returns 1 — matching the reference model's Table
-// (which reserves 0) and the oracle's `subtaski=1`. Not concurrency-safe by construction: a lower runs on
-// its calling agent's own thread, and slice-1 scope is a single guest agent (the concurrent-task machinery
-// is deferred, #739).
-type subtaskTable struct {
-	entries []*subtask // entries[0] is the reserved nil sentinel
+// asyncHandles is a component instance's async handle table — subtasks and waitable-sets in one index
+// space, index 0 a reserved nil sentinel so the first add returns 1 (matching the reference model's Table
+// and the oracle's `subtaski=1`). The mutex guards the whole table AND the subtask/waitable-set state it
+// holds: resolution runs on the impl's goroutine while a sibling agent is parked in waitable-set.wait, so
+// the arming write and the parked read are synchronized here rather than per-object.
+type asyncHandles struct {
+	mu      sync.Mutex
+	entries []any // entries[0] is the reserved nil sentinel; each is *subtask or *waitableSet
 }
 
-func newSubtaskTable() *subtaskTable { return &subtaskTable{entries: []*subtask{nil}} }
+func newAsyncHandles() *asyncHandles { return &asyncHandles{entries: []any{nil}} }
 
-// add registers s and returns its index (>= 1). The model asserts 0 < subtaski <= MAX_LENGTH < 2^28.
-func (t *subtaskTable) add(s *subtask) int {
-	t.entries = append(t.entries, s)
+// addLocked registers h and returns its index (>= 1). The caller holds mu.
+func (t *asyncHandles) addLocked(v any) int {
+	t.entries = append(t.entries, v)
 	return len(t.entries) - 1
 }
 

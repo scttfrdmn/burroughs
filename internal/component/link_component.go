@@ -77,7 +77,7 @@ func stubHost(name string) (compDef, bool) {
 // import host, and returns a walker holding the resolved spaces. A nested component recurses through
 // this same function.
 func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl) (*walker, error) {
-	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, subtasks: newSubtaskTable()}
+	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, async: newAsyncHandles()}
 	for _, d := range c.Defs {
 		if err := w.stepAll(d); err != nil {
 			w.close()
@@ -364,7 +364,7 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 		if cn.Kind == CanonLift && cn.Opts.Async {
 			return "an async canon lift", true
 		}
-		if cn.Kind == CanonAsyncBuiltin {
+		if cn.Kind == CanonAsyncBuiltin && !isBuiltWaitableSetOp(cn.AsyncOp) {
 			return fmt.Sprintf("an async canon built-in (%#x)", cn.AsyncOp), true
 		}
 	}
@@ -376,6 +376,18 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// isBuiltWaitableSetOp reports whether an async canon built-in opcode is one the waitable-set loop executes
+// (gate:async 2a-i-B-2): waitable-set.new (0x1f), .wait (0x20), .drop (0x22), waitable.join (0x23). Every
+// other async built-in — including waitable-set.poll (0x21, non-blocking; not needed by the blocking-arm
+// round trip) and the stream/future/task family — stays refused by name.
+func isBuiltWaitableSetOp(op byte) bool {
+	switch op {
+	case 0x1f, 0x20, 0x22, 0x23:
+		return true
+	}
+	return false
 }
 
 // ErrAsyncNotImplemented is returned at instantiate when gate:async is ON but the async tier's execution

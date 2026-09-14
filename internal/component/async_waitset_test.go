@@ -1,0 +1,293 @@
+// Copyright 2026 Scott Friedman. SPDX-License-Identifier: Apache-2.0
+
+package component
+
+import (
+	"encoding/binary"
+	"errors"
+	"io"
+	"os"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
+	"github.com/scttfrdmn/burroughs/internal/interp"
+)
+
+// The gate:async 2a-i-B-2 waitable-set loop witnesses. The event bytes are pinned against the oracle
+// (async_lower_blocking) at the unit level through a production-faithful CanonCaller; the full round trip,
+// the H-4 sibling-progress property, the SP-5 Stop-while-parked property, and H-3 Close-terminates run
+// end-to-end through a real synthesized component (async-waitset-synth.wasm).
+
+// TestWaitableSetWaitDeliversTheOracleEvent pins the event ABI: a resolved subtask joined to a set, and
+// waitable-set.wait returns the SUBTASK code and stores (subtaski, state) as two u32 at the ptr — matching
+// the oracle's async_lower_blocking (event_code 1, event_p1 subtaski 1, event_p2 state RETURNED 2). Uses a
+// pre-resolved subtask so the wait finds the event armed and returns without a real park (the park itself
+// is witnessed end-to-end by the synth tests below).
+func TestWaitableSetWaitDeliversTheOracleEvent(t *testing.T) {
+	for _, fx := range loadAsyncLowerBlocking(t) {
+		t.Run(fx.Name, func(t *testing.T) {
+			h := newAsyncHandles()
+			// Register a subtask exactly as the blocking arm would (index 1), already resolved to RETURNED.
+			st := &subtask{state: subtaskReturned, resolved: true}
+			st.index = h.addLocked(st)
+			if st.index != fx.Subtaski {
+				t.Fatalf("subtaski = %d, want %d (oracle)", st.index, fx.Subtaski)
+			}
+			// waitable-set.new, then waitable.join(subtaski, si).
+			cc, err := interp.NewCanonCallerForTest(1)
+			if err != nil {
+				t.Fatalf("harness caller: %v", err)
+			}
+			siVals, err := waitableSetNew(h)(cc, nil)
+			if err != nil {
+				t.Fatalf("waitable-set.new: %v", err)
+			}
+			si := siVals[0].Int32()
+			if _, jerr := waitableJoin(h)(cc, []interp.Value{interp.I32(int32(st.index)), interp.I32(si)}); jerr != nil {
+				t.Fatalf("waitable.join: %v", jerr)
+			}
+			// waitable-set.wait(si, ptr): the event is already armed, so it returns immediately.
+			const ptr = 16
+			codeVals, err := waitableSetWait(h)(cc, []interp.Value{interp.I32(si), interp.I32(ptr)})
+			if err != nil {
+				t.Fatalf("waitable-set.wait: %v", err)
+			}
+			if got := codeVals[0].Int32(); got != int32(fx.EventCode()) {
+				t.Errorf("event code = %d, want %d (SUBTASK)", got, fx.EventCode())
+			}
+			buf, err := cc.Read(ptr, 8)
+			if err != nil {
+				t.Fatalf("reading event payload: %v", err)
+			}
+			p1 := binary.LittleEndian.Uint32(buf[0:4])
+			p2 := binary.LittleEndian.Uint32(buf[4:8])
+			if int(p1) != fx.Subtaski || int(p2) != subtaskReturnedState {
+				t.Errorf("event payload = (subtaski %d, state %d), want (subtaski %d, state %d) — oracle",
+					p1, p2, fx.Subtaski, subtaskReturnedState)
+			}
+		})
+	}
+}
+
+// subtaskReturnedState is Subtask.State.RETURNED, the state the oracle's event carries (event_p2 = 2).
+const subtaskReturnedState = 2
+
+// EventCode returns the SUBTASK event code the blocking round trip's wait delivers (definitions.py
+// EventCode.SUBTASK = 1). A method on the fixture so the test reads it as the oracle's, not a literal.
+func (asyncLowerBlockingFixture) EventCode() eventCode { return eventSubtask }
+
+// waitsetSynthHost builds a Host for async-waitset-synth.wasm whose `op` impl STARTS but defers resolution,
+// capturing onResolve so the test resolves the subtask when it chooses (the guest parks in
+// waitable-set.wait until then). `resolvers` receives the captured resolver on each call; `entered`
+// counts calls to `op` (the lower ran).
+func waitsetSynthHost() (*Host, chan func(canon.Value), *int32) {
+	h := NewHost(io.Discard, io.Discard, nil)
+	resolvers := make(chan func(canon.Value), 4)
+	var entered int32
+	h.asyncImpls = map[string]asyncLowerImpl{
+		"test:async/ops::op": func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+			onStart()
+			atomic.AddInt32(&entered, 1)
+			resolvers <- onResolve // defer: the test decides when to resolve
+			return func() {}, nil
+		},
+	}
+	return h, resolvers, &entered
+}
+
+// coreInstanceWithExport returns the core instance among the component's instantiated modules that has the
+// named export (the runmod, which carries `run`/`sibling`), for driving Invoke/Stop directly.
+func coreInstanceWithExport(in *Instantiated, name string) *interp.Instance {
+	for _, ci := range in.w.toClose {
+		if _, ok := ci.Export(name); ok {
+			return ci
+		}
+	}
+	return nil
+}
+
+// TestWaitableSetSynthRoundTrip is the end-to-end witness: a real component async-lowers a blocking call,
+// creates a waitable set, joins the subtask, and blocks in waitable-set.wait until the impl resolves
+// (on another goroutine) — then reads the lowered result. The guest returns the result (107), proving the
+// whole chain: blocking arm -> subtask registered -> real park -> wake on resolution -> event delivered ->
+// result lowered to the retptr -> guest read.
+func TestWaitableSetSynthRoundTrip(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-waitset-synth.wasm")
+	if err != nil {
+		t.Fatalf("synth fixture: %v", err)
+	}
+	h, resolvers, entered := waitsetSynthHost()
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+	ci := coreInstanceWithExport(in, "run")
+	if ci == nil {
+		t.Fatal("no core instance exports run")
+	}
+	// Resolve as soon as the lower has run (the subtask exists); the guest may already be parked in wait.
+	go func() {
+		resolve := <-resolvers
+		resolve(canon.U32(107))
+	}()
+	res, err := invokeWithTimeout(t, ci, "run", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Invoke(run): %v", err)
+	}
+	if len(res) != 1 || res[0].Int32() != 107 {
+		t.Errorf("run = %v, want [107] — the round trip did not deliver the lowered result", res)
+	}
+	if atomic.LoadInt32(entered) != 1 {
+		t.Errorf("op impl entered %d times, want 1", atomic.LoadInt32(entered))
+	}
+}
+
+// invokeWithTimeout runs Invoke on a goroutine and fails (rather than hangs) if it does not return in time.
+func invokeWithTimeout(t *testing.T, in *interp.Instance, name string, d time.Duration) ([]interp.Value, error) {
+	t.Helper()
+	select {
+	case o := <-startInvoke(in, name):
+		return o.res, o.err
+	case <-time.After(d):
+		t.Fatalf("Invoke(%q) did not return within %s — a park did not wake", name, d)
+		return nil, errors.New("unreachable")
+	}
+}
+
+type invokeOutcome struct {
+	res []interp.Value
+	err error
+}
+
+// startInvoke runs Invoke on its own goroutine (a distinct agent — a caller on the instance's host thread)
+// and delivers its outcome on a buffered channel, so a test can drive several agents at once and check
+// whether one has returned without consuming the result.
+func startInvoke(in *interp.Instance, name string) chan invokeOutcome {
+	ch := make(chan invokeOutcome, 1)
+	go func() {
+		r, e := in.Invoke(name)
+		ch <- invokeOutcome{r, e}
+	}()
+	return ch
+}
+
+func recvWithin(t *testing.T, ch chan invokeOutcome, d time.Duration, what string) invokeOutcome {
+	t.Helper()
+	select {
+	case o := <-ch:
+		return o
+	case <-time.After(d):
+		t.Fatalf("%s did not complete within %s", what, d)
+		return invokeOutcome{}
+	}
+}
+
+// TestStopCompletesWhileAgentParkedInWaitableSetWait is SP-5: an agent parked in waitable-set.wait is at a
+// safepoint by its blocked mark, so Stop completes within its deadline WITHOUT waking it (definitions:
+// enterBlocked records the mark, atSafepointLocked reads it). The agent is genuinely parked in the §5
+// blocking excursion (CanonCaller.Blocking), not simulated — the impl defers resolution so the wait truly
+// blocks. After Resume, the resolution delivers and the call returns the lowered result.
+func TestStopCompletesWhileAgentParkedInWaitableSetWait(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-waitset-synth.wasm")
+	if err != nil {
+		t.Fatalf("synth fixture: %v", err)
+	}
+	h, resolvers, _ := waitsetSynthHost()
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+	ci := coreInstanceWithExport(in, "run")
+
+	chA := startInvoke(ci, "run")
+	resolve := <-resolvers // the lower ran; agent A is heading into waitable-set.wait
+
+	// Stop must complete within its deadline while A is parked — A never runs to satisfy the round.
+	if err := ci.Stop(5 * time.Second); err != nil {
+		t.Fatalf("Stop did not complete while the agent was parked in waitable-set.wait: %v", err)
+	}
+	// Arm the resolution and resume; A wakes, delivers the event, and returns the lowered result.
+	resolve(canon.U32(107))
+	ci.Resume()
+	o := recvWithin(t, chA, 5*time.Second, "the parked run after Stop/Resume")
+	if o.err != nil {
+		t.Fatalf("run after Stop/Resume: %v", o.err)
+	}
+	if len(o.res) != 1 || o.res[0].Int32() != 107 {
+		t.Errorf("run = %v, want [107]", o.res)
+	}
+}
+
+// TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns is H-4: a suspension in waitable-set.wait suspends
+// the calling agent ONLY — a sibling agent of the same instance stays runnable and observably completes
+// while the first is parked. Agent A blocks in the wait (its subtask unresolved); agent B runs `sibling`
+// to completion and returns; A has not returned. Then A's subtask is resolved and A completes too.
+func TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-waitset-synth.wasm")
+	if err != nil {
+		t.Fatalf("synth fixture: %v", err)
+	}
+	h, resolvers, _ := waitsetSynthHost()
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+	ci := coreInstanceWithExport(in, "run")
+
+	chA := startInvoke(ci, "run")
+	resolve := <-resolvers // A ran the lower and is parking in waitable-set.wait, unresolved
+
+	// A sibling agent runs to completion while A is parked — the H-1/H-4 property.
+	chB := startInvoke(ci, "sibling")
+	oB := recvWithin(t, chB, 5*time.Second, "the sibling agent")
+	if oB.err != nil || len(oB.res) != 1 || oB.res[0].Int32() != 42 {
+		t.Fatalf("sibling = %v (err %v), want [42] — a parked agent starved its sibling", oB.res, oB.err)
+	}
+	// A must still be parked (nothing has resolved its subtask).
+	select {
+	case o := <-chA:
+		t.Fatalf("the parked agent returned (%v) before its subtask resolved", o.res)
+	default:
+	}
+	// Resolve A's subtask; A wakes and completes.
+	resolve(canon.U32(107))
+	oA := recvWithin(t, chA, 5*time.Second, "the parked run after its sibling ran")
+	if oA.err != nil || len(oA.res) != 1 || oA.res[0].Int32() != 107 {
+		t.Errorf("run = %v (err %v), want [107]", oA.res, oA.err)
+	}
+}
+
+// TestCloseTerminatesAgentParkedInWaitableSetWait is H-3/T-5.4: Close tears down an agent parked in
+// waitable-set.wait — the wait's inner select watches the caller's context, so cancellation returns an
+// error rather than hanging. The subtask is never resolved; only Close ends the wait.
+func TestCloseTerminatesAgentParkedInWaitableSetWait(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-waitset-synth.wasm")
+	if err != nil {
+		t.Fatalf("synth fixture: %v", err)
+	}
+	h, resolvers, _ := waitsetSynthHost()
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	ci := coreInstanceWithExport(in, "run")
+
+	chA := startInvoke(ci, "run")
+	<-resolvers // A is parking in waitable-set.wait; we never resolve it
+
+	in.Close() // cancels the agent's context; the wait's select on ctx.Done returns
+
+	o := recvWithin(t, chA, 5*time.Second, "the parked run under Close")
+	if o.err == nil {
+		t.Errorf("run returned %v with no error under Close — a parked agent must terminate, not complete", o.res)
+	}
+}

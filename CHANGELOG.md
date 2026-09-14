@@ -21,6 +21,16 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` slice 1 increment 2a-i-B-2 — the waitable-set loop (ADR 0086, #739).** With
+  `BURROUGHS_ASYNC=1`, a component can now async-lower a blocking call and observe its resolution: the canon
+  built-ins `waitable-set.new` (0x1f), `waitable.join` (0x23), `waitable-set.wait` (0x20), and
+  `waitable-set.drop` (0x22) bind to Go impls (previously all async built-ins refused by name; `gateAsync`
+  narrows to permit exactly these four). `waitable-set.wait` parks the calling agent in a real §5 blocking
+  excursion (`CanonCaller.Blocking`): a sibling agent keeps running (H-1/H-4), a concurrent `Stop` reaches
+  its safepoint on the blocked mark without waking it (SP-5), and `Close` terminates the parked agent (H-3,
+  the wait selects on the caller's context). On resolution the subtask delivers a `(SUBTASK, subtaski,
+  state)` event, matched to the oracle. Other async built-ins, async lift, and stream/future stay refused by
+  name. Off by default.
 - **`gate:async` slice 1 increment 2a-i-B-1 — the async `canon lower`'s blocking-arm return (ADR 0086, #739).**
   When an async-lowered callee starts but defers resolution, the wrapper registers a subtask and returns the
   packed `[state | (subtaski<<4)]` (matched to the oracle's `async_lower_blocking`), leaving the retptr
