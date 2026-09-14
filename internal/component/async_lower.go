@@ -75,7 +75,9 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			}
 			st.state = subtaskReturned
 			st.resolved = true
-			st.signalResolvedLocked()
+			if st.set != nil { // wake any agent parked on the set this subtask was joined to
+				st.set.signalLocked()
+			}
 		}
 
 		onCancel, err := impl(c, onStart, onResolve)
