@@ -47,6 +47,10 @@ type coreDef struct {
 	// resourceDrop marks a canon resource.drop intrinsic — a host resource's drop is a no-op (the
 	// streams and errors are the process's, not the guest's to free), so it neither refuses nor frees.
 	resourceDrop bool
+	// async marks a canon lower carrying the `async` canonopt (gate:async 2a-i-A). Its flat ABI is the
+	// sync lower's args plus a packed i32 return; it binds to the async-lower adapter (asyncLowerFunc),
+	// which executes the sync-resolving arm and refuses the blocking arm by name.
+	async bool
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -96,6 +100,9 @@ type walker struct {
 	// wasiHost maps a canon-lowered func's "module::export" identity to a real marshaling impl (PR C.2).
 	// A lowered func with no entry here reaches the refusing stub — an unexercised import stays refused.
 	wasiHost map[string]interp.CanonFunc
+	// asyncWasiHost is the async-lower impl source (gate:async 2a-i-A), SEPARATE from wasiHost by type so
+	// a wrong-source binding is a compile error. An async lower binds through it, not wasiHost.
+	asyncWasiHost map[string]asyncLowerImpl
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -149,6 +156,7 @@ func (w *walker) step(d Def) error {
 						lowerName:    cf.stubName,
 						lowerMem:     w.lowerMemory(cn),
 						lowerRealloc: w.lowerRealloc(cn),
+						async:        cn.Opts.Async,
 					})
 					return nil
 				}
@@ -260,6 +268,24 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// the guest's to free — typed from the importing module's own declaration.
 		if d.resourceDrop {
 			return interp.HostExtern(ft, dropNoop), true
+		}
+		// A canon lower carrying the `async` canonopt (gate:async 2a-i-A) binds to the async-lower adapter:
+		// its flat ABI is this sync signature plus a packed i32 return, and it executes the sync-resolving
+		// arm (the blocking arm refuses by name at runtime). Bound through the SEPARATE async-impl source
+		// (asyncWasiHost), so a wrong-source binding is a compile error, not a runtime surprise.
+		if d.async {
+			if aimpl, ok := w.asyncWasiHost[stripVersion(d.lowerName)]; ok {
+				sig := w.lowerSignature(d.lowerName)
+				hasResult := sig != nil && sig.Result != nil
+				aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
+				return interp.CanonLowerExtern(aft, asyncLowerFunc(aimpl, hasResult), interp.CanonOptions{
+					Memory:  d.lowerMem,
+					Realloc: d.lowerRealloc,
+				}), true
+			}
+			// An async lower with no async impl falls through: the guest's async lowers are refused at
+			// bind by gateAsync (they accompany async built-ins, 2b) before reaching here; this path is
+			// the synthesized-guest test's when its impl is absent.
 		}
 		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
 		// stub — it refuses by name, typed from the importing module's own declaration.
