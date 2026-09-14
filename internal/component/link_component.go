@@ -77,7 +77,7 @@ func stubHost(name string) (compDef, bool) {
 // import host, and returns a walker holding the resolved spaces. A nested component recurses through
 // this same function.
 func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl) (*walker, error) {
-	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost}
+	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, subtasks: newSubtaskTable()}
 	for _, d := range c.Defs {
 		if err := w.stepAll(d); err != nil {
 			w.close()

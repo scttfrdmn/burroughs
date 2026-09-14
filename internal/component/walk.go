@@ -103,6 +103,10 @@ type walker struct {
 	// asyncWasiHost is the async-lower impl source (gate:async 2a-i-A), SEPARATE from wasiHost by type so
 	// a wrong-source binding is a compile error. An async lower binds through it, not wasiHost.
 	asyncWasiHost map[string]asyncLowerImpl
+	// subtasks is this component instance's subtask handle table (gate:async 2a-i-B): the blocking arm of
+	// an async lower registers a subtask here to return its index. Per-instance, so a nested walk gets its
+	// own (component-model handles are per-ComponentInstance).
+	subtasks *subtaskTable
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -278,7 +282,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				sig := w.lowerSignature(d.lowerName)
 				hasResult := sig != nil && sig.Result != nil
 				aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
-				return interp.CanonLowerExtern(aft, asyncLowerFunc(aimpl, hasResult), interp.CanonOptions{
+				return interp.CanonLowerExtern(aft, asyncLowerFunc(aimpl, hasResult, w.subtasks), interp.CanonOptions{
 					Memory:  d.lowerMem,
 					Realloc: d.lowerRealloc,
 				}), true
