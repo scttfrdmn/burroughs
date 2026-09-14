@@ -11,6 +11,30 @@ Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)` + `rustup target add 
 precompiled std + wasi-libc; no `-Zbuild-std`); `wasm-tools 1.258.0`; `wasmtime 48.0.1 (7bac2c27)` runs it
 async-on-by-default to `Hello, world!\n`. sha1 `06f965f7d392e762b0324d0e0f86aa8762d0ae61`.
 
+`async-lower-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` 2a-i-A
+binding-branch witness: an instance import whose `op` is an async func, a `canon lower` of it carrying the
+`async` canonopt over a bound memory, and a core module that calls the lowered core func — the smallest
+async-**lower**-only component that, gate:async on, the narrowing permits and the walk binds to the
+async-lower adapter (`asyncLowerFunc`). A test Host fills the async impl; `async_lower_test.go` drives it.
+Authored from this WAT via `wasm-tools parse` (wasm-tools 1.258.0; validates `--features all`):
+
+```wat
+(component
+  (core module $memmod (memory (export "m") 1))
+  (core instance $memi (instantiate $memmod))
+  (alias core export $memi "m" (core memory $cm))
+  (type $ft (func async (param "x" u32) (result u32)))
+  (import "test:async/ops" (instance $ops (export "op" (func (type $ft)))))
+  (alias export $ops "op" (func $impf))
+  (core func $lowered (canon lower (func $impf) async (memory $cm)))
+  (core module $runmod
+    (import "" "lower" (func $l (param i32 i32) (result i32)))
+    (func (export "run") (drop (call $l (i32.const 7) (i32.const 32)))))
+  (core instance $runi (instantiate $runmod (with "" (instance (export "lower" (func $lowered))))))
+  (alias core export $runi "run" (core func $runf))
+  (func (export "run") (canon lift (core func $runf))))
+```
+
 `async-lift-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` lift-arm witness:
 a core module exporting a trivial `func`, a core instance, a core-func alias, then a `canon lift` carrying
 the `async` canonopt over an async functype (`(func async)`). No guest lifts async yet, so this is the

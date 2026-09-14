@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"testing"
 
@@ -181,5 +182,44 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	lift := &Component{Canons: []Canon{{Kind: CanonLift, Opts: CanonOpts{Async: true}}}}
 	if err := gateAsync(lift); !errors.Is(err, ErrAsyncNotImplemented) {
 		t.Errorf("gate on, async lift: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	}
+}
+
+// TestSynthAsyncLowerBindsAndReachesTheWrapper is the binding-branch end-to-end witness (Scott's
+// synth live caller): a real-bytes async-lower-only component (testdata/async-lower-synth.wasm), gate on,
+// instantiates (the narrowing permits it) and its async lower binds through the SEPARATE async-impl
+// source to the wrapper — so Call("run") reaches the impl with the lifted param. The wrapper's byte-level
+// behavior is the harness tests' job; this witnesses the permit + binding + reach that the harness cannot.
+func TestSynthAsyncLowerBindsAndReachesTheWrapper(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1") // gate on
+	b, err := os.ReadFile("testdata/async-lower-synth.wasm")
+	if err != nil {
+		t.Fatalf("synth fixture: %v", err)
+	}
+	h := NewHost(io.Discard, io.Discard, nil)
+	called := false
+	var gotX int32
+	h.asyncImpls = map[string]asyncLowerImpl{
+		"test:async/ops::op": func(_ *interp.CanonCaller, params []interp.Value) (canon.Value, bool, error) {
+			called = true
+			if len(params) > 0 {
+				gotX = params[0].Int32()
+			}
+			return canon.U32(107), true, nil // resolves inline
+		},
+	}
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("gate on, async-lower-only synth: instantiate refused (%v), want permit + bind", err)
+	}
+	defer in.Close()
+	if err := in.Call("run"); err != nil {
+		t.Fatalf("Call(run): %v", err)
+	}
+	if !called {
+		t.Error("the async lower's impl was not called — the binding did not route to the async wrapper")
+	}
+	if gotX != 7 {
+		t.Errorf("impl got x=%d, want 7 — the wrapper did not pass the lifted param", gotX)
 	}
 }
