@@ -415,6 +415,99 @@ def emit_async_lower_blocking(case):
     }
 
 
+# Future.read cases (gate:async slice-1 increment 3, first slice — `future<T>` is the degenerate `stream<T>`
+# in the CABI, so the shared copy substrate lands here on the single-value case). The oracle for the async
+# `future.read` path: the read returns BLOCKED, the outcome is delivered as a `(FUTURE_READ, i, payload)`
+# where the payload is the `CopyResult` the guest branches on (definitions.py:919 COMPLETED=0/DROPPED=1/
+# CANCELLED=2), and the readable end's STATE after differs by outcome. Driven model-faithfully with the same
+# sync outer + waitable-set loop as the blocking-arm oracle: read async -> BLOCKED (pending), then the
+# producer/cancel fires on the same task, then the event is retrieved.
+#
+# TWO read outcomes are pinned, and the OUTCOME SET IS PER-DIRECTION (found by running the model, not from
+# the WIT surface): a pending future READ is only ever COMPLETED or CANCELLED. DROPPED is a future.*write*
+# outcome — `shared.drop` notifies a pending write (a ReadableBuffer), and `WritableFutureEnd.drop` traps
+# unless the writable end is already DONE, so a read can never be dropped. DROPPED is pinned when future.write
+# lands, not here.
+#
+# CANCELLED is a DELIBERATE INCLUSION beyond the first slice's guest scope (contrast the deliberate OMISSION
+# of the deadlock case in the async-lower blocking oracle): the #734 stdio guest binds `future.read`/`drop`
+# but NOT `future.cancel-read`, so COMPLETED is its only reachable outcome. CANCELLED is pinned anyway to
+# FORCE the codec's CopyResult encoding to DISTINGUISH the outcomes (payload 2, end state IDLE) rather than
+# hardcode success (payload 0, end state DONE) — a success-only fixture is green against a codec that cannot
+# tell a cancelled read from a completed one, and the end-state half of that (IDLE vs DONE) mis-routes the
+# NEXT operation's trap-legality far from the cause. Do not prune it as unused; the inclusion is the guard.
+FUTURE_READ_CASES = [
+    {"name": "future-read-u32-completed", "value_type": {"kind": "u32"}, "outcome": "completed", "value": 107},
+    {"name": "future-read-u32-cancelled", "value_type": {"kind": "u32"}, "outcome": "cancelled"},
+]
+
+
+def emit_future_read(case):
+    from definitions import (  # noqa: E402
+        FuncType, FutureType,
+        canon_future_new, canon_future_read, canon_future_write, canon_future_cancel_read,
+        canon_waitable_set_new, canon_waitable_join, canon_waitable_set_wait,
+    )
+    heap = TracingHeap(case.get("heap_size", 256))
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    t = build_type(case["value_type"])
+    future_t = FutureType(t)
+    cap = {}
+
+    def outer_core(_flat):
+        packed = canon_future_new(future_t)[0]
+        ri, wi = packed & 0xffffffff, packed >> 32
+        dstptr = heap.realloc([0, 0, alignment(t, "i32"), elem_size(t, "i32")])[0]
+        cap["read_ret"] = [int(x) for x in canon_future_read(future_t, mk_opts(True), ri, dstptr)]
+        if case["outcome"] == "completed":
+            wset = canon_waitable_set_new()[0]
+            canon_waitable_join(ri, wset)
+            srcptr = heap.realloc([0, 0, alignment(t, "i32"), elem_size(t, "i32")])[0]
+            store(mk_cx(heap), case["value"], t, srcptr)
+            canon_future_write(future_t, mk_opts(True), wi, srcptr)
+            evptr = heap.realloc([0, 0, 4, 8])[0]
+            cap["event_code"] = int(canon_waitable_set_wait(mk_opts(True).memory, wset, evptr)[0])
+            cap["event_p1"] = int.from_bytes(heap.memory[evptr:evptr + 4], "little")
+            cap["payload"] = int.from_bytes(heap.memory[evptr + 4:evptr + 8], "little")
+            cap["dst_val"] = int.from_bytes(heap.memory[dstptr:dstptr + int(elem_size(t, "i32"))], "little")
+        else:  # cancelled: cancel-read returns the CANCELLED payload directly (it consumes the event)
+            cap["payload"] = int(canon_future_cancel_read(future_t, False, ri)[0])
+        cap["ri"] = ri
+        cap["ri_state"] = inst.handles.get(ri).state.name
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+
+    return {
+        "name": case["name"],
+        "value_type": case["value_type"]["kind"],
+        "outcome": case["outcome"],
+        "read_ret": cap["read_ret"],                 # [BLOCKED] = [0xffffffff] — the async read parks
+        "subtaski": cap["ri"],                        # the readable end's handle index
+        "event_code": cap.get("event_code"),         # EventCode.FUTURE_READ = 4 (completed path only)
+        "event_p1": cap.get("event_p1"),              # the end index in the delivered event
+        "payload": cap["payload"],                    # CopyResult: COMPLETED=0 / CANCELLED=2
+        "ri_state": cap["ri_state"],                  # DONE (completed) vs IDLE (cancelled) — the second guard
+        "value": case.get("value"),
+        "dst_val": cap.get("dst_val"),                # the copied value at the read ptr (completed only)
+        "memory_hex": heap.memory.hex(),
+        "realloc": heap.calls,
+    }
+
+
 def main():
     with open(os.path.join(os.path.dirname(__file__), "cases.json")) as f:
         cases = json.load(f)
@@ -424,6 +517,7 @@ def main():
         "handles": [emit_own(c) for c in OWN_CASES],
         "async_lowers": [emit_async_lower(c) for c in ASYNC_LOWER_CASES],
         "async_lower_blocking": [emit_async_lower_blocking(c) for c in ASYNC_LOWER_BLOCKING_CASES],
+        "future_reads": [emit_future_read(c) for c in FUTURE_READ_CASES],
         "shapes": emit_shapes(),
     }
     json.dump(out, sys.stdout, indent=2)

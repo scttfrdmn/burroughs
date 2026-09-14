@@ -21,6 +21,14 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 3 oracle — the `future.read` completion-outcome differential (ADR 0086, #739).**
+  The reference model's async `future.read` path, pinned by running (`gen.py`'s `emit_future_read` over
+  `definitions.py`): the read returns `BLOCKED`, and the outcome is a `(FUTURE_READ, i, payload)` event whose
+  payload is the `CopyResult` the guest branches on. Both guest-reachable read outcomes are pinned with their
+  differing end state — COMPLETED (payload 0, end DONE, value copied) and CANCELLED (payload 2, end IDLE) —
+  not just success, so the codec must distinguish rather than hardcode. The outcome set is per-direction:
+  DROPPED is a future.*write* outcome (a read can never be dropped) and is pinned when write lands. CANCELLED
+  is a deliberate inclusion beyond the first slice's guest scope. Oracle only; no engine execution yet.
 - **`gate:async` slice 1 increment 2a-i-B-2 — the waitable-set loop (ADR 0086, #739).** With
   `BURROUGHS_ASYNC=1`, a component can now async-lower a blocking call and observe its resolution: the canon
   built-ins `waitable-set.new` (0x1f), `waitable.join` (0x23), `waitable-set.wait` (0x20), and
