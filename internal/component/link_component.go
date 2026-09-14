@@ -338,9 +338,44 @@ func gateAsync(c *Component) error {
 		return fmt.Errorf("%w: this component uses the async component-model ABI (%s); set %s=1 to opt in "+
 			"(the async tier's mechanism is not yet implemented)", ErrAsyncGated, what, asyncGateEnv)
 	}
-	return fmt.Errorf("%w: this component uses the async component-model ABI (%s), and gate:async is on, but "+
-		"the async tier's execution is not yet implemented — it lands incrementally (#739 slice 1)",
-		ErrAsyncNotImplemented, what)
+	// Gate ON: the async tier lands incrementally, so this refusal NARROWS to the sub-paths still unbuilt
+	// (#739). 2a-i-A executes the async **lower**'s sync-resolving arm, so an async-lower-only component is
+	// permitted through to the walk (its binding drives the adapter, and the blocking arm refuses by name
+	// at runtime). Everything the arm does not execute — an async **lift**, an async canon **built-in**,
+	// a stream/future value type — still refuses **by name here**, so the narrowing is not a #732 no-op:
+	// the refusal for the unbuilt rest fires (witnessed on a blocking-arm/lift/built-in case), not merely
+	// the sync-resolving lower passing.
+	if unbuilt, ok := unbuiltAsyncSurface(c); ok {
+		return fmt.Errorf("%w: this component uses %s, and gate:async is on, but that async surface's "+
+			"execution is not yet implemented — it lands incrementally (#739 slice 1)",
+			ErrAsyncNotImplemented, unbuilt)
+	}
+	return nil // only async lowers (2a-i-A's built surface) — permit; the walk binds the adapter
+}
+
+// unbuiltAsyncSurface reports the first async marker gate:async slice-1 2a-i-A does NOT execute: an async
+// **lift** (the export lift is deferred), an async canon **built-in** (the waitable-set loop is 2b), or a
+// **stream/future** value type (unmodeled by the codec). It deliberately does NOT report an async **lower**
+// (2a-i-A executes its sync-resolving arm) or an async **functype** (that is the *type* of a lower/lift —
+// refusing it would refuse a permitted async-lower-only component). A lower whose result carries a
+// stream/future is caught by the value-type check, not the lower itself.
+func unbuiltAsyncSurface(c *Component) (string, bool) {
+	for _, cn := range c.Canons {
+		if cn.Kind == CanonLift && cn.Opts.Async {
+			return "an async canon lift", true
+		}
+		if cn.Kind == CanonAsyncBuiltin {
+			return fmt.Sprintf("an async canon built-in (%#x)", cn.AsyncOp), true
+		}
+	}
+	for _, td := range c.Types {
+		if td.Kind == TDVal {
+			if n, ok := asyncValName(td.Val, 0); ok {
+				return "a " + n + " value type", true
+			}
+		}
+	}
+	return "", false
 }
 
 // ErrAsyncNotImplemented is returned at instantiate when gate:async is ON but the async tier's execution

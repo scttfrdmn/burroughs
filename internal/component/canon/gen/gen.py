@@ -297,6 +297,9 @@ def emit_async_lower(case):
         "name": case["name"],
         "flat_params": list(flat_ft.params),
         "flat_results": list(flat_ft.results),
+        "args": list(case["args"]),                    # the lower's flat params (before the retptr)
+        "result_kind": case["result"]["kind"] if case["result"] is not None else None,
+        "ret_value": rv,                               # the value the callee resolved with, lowered at retptr
         "ret": captured["ret"],                        # the packed core return ([RETURNED]=2 inline)
         "retptr": captured["retptr"],
         "memory_hex": heap.memory.hex(),               # result lowered at retptr

@@ -2524,6 +2524,11 @@
       "flat_results": [
         "i32"
       ],
+      "args": [
+        7
+      ],
+      "result_kind": "u32",
+      "ret_value": 107,
       "ret": [
         2
       ],
@@ -2547,6 +2552,9 @@
       "flat_results": [
         "i32"
       ],
+      "args": [],
+      "result_kind": null,
+      "ret_value": null,
       "ret": [
         2
       ],
@@ -2563,6 +2571,11 @@
       "flat_results": [
         "i32"
       ],
+      "args": [
+        42
+      ],
+      "result_kind": "u64",
+      "ret_value": 1000042,
       "ret": [
         2
       ],
