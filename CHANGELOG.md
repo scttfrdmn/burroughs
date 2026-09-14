@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` slice 1 increment 2a-i-B-1 — the async `canon lower`'s blocking-arm return (ADR 0086, #739).**
+  When an async-lowered callee starts but defers resolution, the wrapper registers a subtask and returns the
+  packed `[state | (subtaski<<4)]` (matched to the oracle's `async_lower_blocking`), leaving the retptr
+  untouched. The provisional one-shot `asyncLowerImpl` is replaced by the model's callee shape
+  (`onStart`/`onResolve`/`onCancel`); the sync-resolving arm (2a-i-A) migrates onto it and stays byte-identical.
+  New subtask substrate (`subtask`, the per-instance `subtaskTable`, `packSubtaskWait`). The waitable-set loop
+  that observes a blocked subtask's resolution (built-in dispatch, the park, the `(SUBTASK, subtaski, state)`
+  event, H-4/SP-5) is 2a-i-B-2, still refused by name. Off by default.
+- **`gate:async` 2a-i-B oracle — the async-lower blocking-arm differential (ADR 0086, #739).** The reference
+  model's blocking arm, pinned by running (`gen.py`'s `emit_async_lower_blocking` over `definitions.py`): the
+  packed blocking return, the `waitable-set.wait` event `(SUBTASK, subtaski, RETURNED)`, the result at the
+  retptr. The guest-caused-deadlock outcome is a deliberate, load-bearing omission — the model traps there
+  (an executable driver must terminate) but contract H-4 declines to arbitrate, so pinning it would make
+  Burroughs' compliant hang fail against its own oracle.
 - **`gate:async` slice 1 increment 2a-i-A — the async `canon lower`'s sync-resolving arm (ADR 0086, #739).**
   With `BURROUGHS_ASYNC=1`, an async-lower-only component no longer refuses at bind: its async lower binds
   through a separate async-impl source (`Host.asyncWasi`, typed distinctly from the sync `wasi()`) to the
