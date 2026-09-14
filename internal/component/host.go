@@ -62,7 +62,17 @@ type Host struct {
 	errNext  int32
 	Exited   bool
 	ExitCode int32
+	// asyncImpls is the async-lower impl source (gate:async 2a-i-A), kept SEPARATE from wasi(): an async
+	// impl has a distinct signature (asyncLowerImpl — it can signal would-block), so a single source
+	// returning both would let a wrong-source call site compile. Empty in production (no real async impls
+	// until 2b); populated by a synthesized-guest test that exercises the async-lower adapter.
+	asyncImpls map[string]asyncLowerImpl
 }
+
+// asyncWasi is the async-lower impl source — SEPARATE from wasi() by type, so binding an async lower to a
+// sync impl (or vice versa) is a compile error, not a runtime surprise. Nil/empty until 2b lands real
+// async impls; a synthesized-guest test populates it to drive the async-lower adapter.
+func (h *Host) asyncWasi() map[string]asyncLowerImpl { return h.asyncImpls }
 
 // NewHost builds a preview-2 host over the given streams. Handles are minted from 1 (0 is left unused so
 // a zero value is never a live handle).

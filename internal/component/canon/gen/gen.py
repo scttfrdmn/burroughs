@@ -231,6 +231,82 @@ def emit_shapes():
     return shapes
 
 
+# Async-lower cases (gate:async slice-1 2a-i-A): the async `canon lower`'s SYNC-RESOLVING arm. The oracle
+# for the async-lower ABI — flat signature (params + a retptr), the packed return `[RETURNED]` when the
+# callee resolves inline, and the result lowered to the retptr. Driven **model-faithfully**: the ambient
+# `current_thread`/`current_instance` `canon_lower` requires (definitions.py:2188) is established by the
+# model's OWN construction — a sync outer export lifted through `Store.lift`/`invoke` (which builds the
+# Task+Thread and resumes it), whose body drives the lower — never a stub that satisfies the lookup
+# (#728's model-produced-state-only rule, first biting in the async tier). Bounded: one thread, no `tick`
+# loop, since the outer lift is sync and the inner lower resolves inline.
+ASYNC_LOWER_CASES = [
+    {"name": "async-lower-u32-resolves-inline", "params": [{"kind": "u32"}], "result": {"kind": "u32"}, "args": [7], "ret_value": 107},
+    {"name": "async-lower-empty-resolves-inline", "params": [], "result": None, "args": [], "ret_value": None},
+    {"name": "async-lower-u64-resolves-inline", "params": [{"kind": "u64"}], "result": {"kind": "u64"}, "args": [42], "ret_value": 1000042},
+]
+
+
+def emit_async_lower(case):
+    from definitions import FuncType, canon_lower, flatten_functype  # noqa: E402
+    heap = TracingHeap(case.get("heap_size", 64))
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    ptypes = [(f"p{i}", build_type(p)) for i, p in enumerate(case["params"])]
+    rtype = [build_type(case["result"])] if case["result"] is not None else []
+    ft_inner = FuncType(ptypes, rtype, async_=True)
+    opts_async = mk_opts(True)
+    flat_ft = flatten_functype(opts_async, ft_inner, "lower")
+
+    rv = case["ret_value"]
+
+    def callee_inner(on_start, on_resolve):
+        on_start()                                   # lift the lower's params (model-produced)
+        on_resolve([rv] if rv is not None else [])   # resolve INLINE
+        return lambda: None                          # on_cancel
+
+    captured = {}
+
+    def outer_core(flat_args):
+        core_lower = inst.store.lower(callee_inner, ft_inner, opts_async, inst)
+        args = list(case["args"])
+        retptr = None
+        if rtype:  # async results land at a retptr appended to the flat params
+            retptr = heap.realloc([0, 0, alignment(rtype[0], "i32"), elem_size(rtype[0], "i32")])[0]
+            args = args + [retptr]
+        ret = core_lower(args)
+        captured["ret"] = [int(x) for x in ret]
+        captured["retptr"] = retptr
+        return []
+
+    outer_ft = FuncType([], [], async_=False)
+    inst.store.invoke(inst.store.lift(outer_core, outer_ft, mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+
+    return {
+        "name": case["name"],
+        "flat_params": list(flat_ft.params),
+        "flat_results": list(flat_ft.results),
+        "args": list(case["args"]),                    # the lower's flat params (before the retptr)
+        "result_kind": case["result"]["kind"] if case["result"] is not None else None,
+        "ret_value": rv,                               # the value the callee resolved with, lowered at retptr
+        "ret": captured["ret"],                        # the packed core return ([RETURNED]=2 inline)
+        "retptr": captured["retptr"],
+        "memory_hex": heap.memory.hex(),               # result lowered at retptr
+        "realloc": heap.calls,
+    }
+
+
 def main():
     with open(os.path.join(os.path.dirname(__file__), "cases.json")) as f:
         cases = json.load(f)
@@ -238,6 +314,7 @@ def main():
         "pin": PIN,
         "cases": [emit(c) for c in cases],
         "handles": [emit_own(c) for c in OWN_CASES],
+        "async_lowers": [emit_async_lower(c) for c in ASYNC_LOWER_CASES],
         "shapes": emit_shapes(),
     }
     json.dump(out, sys.stdout, indent=2)

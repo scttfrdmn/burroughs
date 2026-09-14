@@ -576,13 +576,7 @@ func (in *Instance) callAdapter(h *hostFunc, st *stack, depth int) error {
 			mem, memErr = nil, fmt.Errorf("%w: a canon lower's bound memory is nil", ErrNotValidated)
 		}
 	}
-	cc := &CanonCaller{
-		Caller:  &Caller{ctx: t.context(), tid: t.threadID(), mem: mem, memErr: memErr},
-		realloc: h.realloc,
-		t:       t,
-		st:      st,
-		depth:   depth,
-	}
+	cc := newCanonCaller(t.context(), t.threadID(), mem, memErr, h.realloc, t, st, depth)
 
 	results, callErr := h.canon(cc, args)
 	if callErr != nil {
@@ -602,6 +596,34 @@ type CanonCaller struct {
 	t       *thread
 	st      *stack
 	depth   int
+}
+
+// newCanonCaller builds the canonical-ABI adapter's caller. `callAdapter` and the test harness
+// (NewCanonCallerForTest) both go through it, so a test drives the *same* caller shape production does —
+// same options bundle, same memory binding — rather than a parallel convenience constructor that could
+// pass tests against a caller no guest produces.
+func newCanonCaller(ctx context.Context, tid ThreadID, mem *memory, memErr error, realloc *Extern, t *thread, st *stack, depth int) *CanonCaller {
+	return &CanonCaller{
+		Caller:  &Caller{ctx: ctx, tid: tid, mem: mem, memErr: memErr},
+		realloc: realloc,
+		t:       t,
+		st:      st,
+		depth:   depth,
+	}
+}
+
+// NewCanonCallerForTest builds a CanonCaller over a fresh memory of `minPages` pages, via the SAME
+// construction `callAdapter` uses (newCanonCaller), for tests of canon-lower adapters in other packages.
+// The memory binding is the production one; `t`/`st`/`realloc` are nil, which are exercised only by
+// `Realloc` and the blocking path — so a lower whose marshaling reaches those is out of this harness's
+// scope, and a scalar retptr write (the async-lower sync-resolving arm's cases) is fully faithful. Read
+// and Write (the embedder methods) inspect and seed the memory for assertions.
+func NewCanonCallerForTest(minPages uint32) (*CanonCaller, error) {
+	mem, err := newMemory(binary.Memory{Limits: binary.Limits{Min: uint64(minPages)}})
+	if err != nil {
+		return nil, err
+	}
+	return newCanonCaller(context.Background(), 0, mem, nil, nil, nil, nil, 0), nil
 }
 
 // Realloc invokes the canon lower's `cabi_realloc(orig_ptr, orig_size, align, new_size) -> i32` on the
