@@ -11,6 +11,55 @@ Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)` + `rustup target add 
 precompiled std + wasi-libc; no `-Zbuild-std`); `wasm-tools 1.258.0`; `wasmtime 48.0.1 (7bac2c27)` runs it
 async-on-by-default to `Hello, world!\n`. sha1 `06f965f7d392e762b0324d0e0f86aa8762d0ae61`.
 
+`async-waitset-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` 2a-i-B-2
+waitable-set loop witnesses: an instance import whose `op` is an async func (declared **inline** in the
+instance type, so its signature resolves — an outer-aliased type would become a placeholder), an async
+`canon lower` of it, the `waitable-set.new`/`waitable.join`/`waitable-set.wait` canon built-ins, and a core
+module whose `run` does the full blocking-arm round trip (lower -> blocked packed return -> new -> join ->
+wait -> read the lowered result) plus a `sibling` export for the H-4 sibling-progress test. `run`/`sibling`
+return their i32 so the tests observe them via the core instance's Invoke. Authored from this WAT via
+`wasm-tools parse` (wasm-tools 1.258.0; validates `--features all`):
+
+```wat
+(component
+  (core module $memmod (memory (export "m") 1))
+  (core instance $memi (instantiate $memmod))
+  (alias core export $memi "m" (core memory $cm))
+  (import "test:async/ops" (instance $ops
+    (export "op" (func async (param "x" u32) (result u32)))))
+  (alias export $ops "op" (func $impf))
+  (core func $lowered (canon lower (func $impf) async (memory $cm)))
+  (core func $wsnew (canon waitable-set.new))
+  (core func $wsjoin (canon waitable.join))
+  (core func $wswait (canon waitable-set.wait (memory $cm)))
+  (core module $runmod
+    (import "" "mem" (memory 1))
+    (import "" "lower" (func $lower (param i32 i32) (result i32)))
+    (import "" "wsnew" (func $wsnew (result i32)))
+    (import "" "wsjoin" (func $wsjoin (param i32 i32)))
+    (import "" "wswait" (func $wswait (param i32 i32) (result i32)))
+    (func (export "run") (result i32)
+      (local $packed i32) (local $subtaski i32) (local $si i32)
+      (local.set $packed (call $lower (i32.const 7) (i32.const 0)))
+      (if (i32.eq (local.get $packed) (i32.const 2))
+        (then (return (i32.load (i32.const 0)))))
+      (local.set $subtaski (i32.shr_u (local.get $packed) (i32.const 4)))
+      (local.set $si (call $wsnew))
+      (call $wsjoin (local.get $subtaski) (local.get $si))
+      (drop (call $wswait (local.get $si) (i32.const 8)))
+      (i32.load (i32.const 0)))
+    (func (export "sibling") (result i32) (i32.const 42)))
+  (core instance $runi (instantiate $runmod
+    (with "" (instance
+      (export "mem" (memory $cm)) (export "lower" (func $lowered))
+      (export "wsnew" (func $wsnew)) (export "wsjoin" (func $wsjoin))
+      (export "wswait" (func $wswait))))))
+  (alias core export $runi "run" (core func $runf))
+  (alias core export $runi "sibling" (core func $sibf))
+  (func (export "run") (result u32) (canon lift (core func $runf)))
+  (func (export "sibling") (result u32) (canon lift (core func $sibf))))
+```
+
 `async-lower-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` 2a-i-A
 binding-branch witness: an instance import whose `op` is an async func, a `canon lower` of it carrying the
 `async` canonopt over a bound memory, and a core module that calls the lowered core func — the smallest

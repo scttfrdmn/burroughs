@@ -485,7 +485,15 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		if b != 0x00 {
 			return Canon{}, fmt.Errorf("canon waitable-set.wait/poll not followed by 0x00 (got %#x)", b)
 		}
-		return c, readIdx()
+		// The memoryidx is where waitable-set.wait stores its event (definitions.py unpack_event). Capture
+		// it into Opts.Memory so the walk resolves it with the same lowerMemory path a canon lower uses
+		// (gate:async 2a-i-B-2).
+		mi, err := r.u32()
+		if err != nil {
+			return Canon{}, err
+		}
+		c.Opts.Memory = &mi
+		return c, nil
 	}
 	return c, nil
 }

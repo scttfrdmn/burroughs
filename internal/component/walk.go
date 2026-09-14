@@ -49,8 +49,13 @@ type coreDef struct {
 	resourceDrop bool
 	// async marks a canon lower carrying the `async` canonopt (gate:async 2a-i-A). Its flat ABI is the
 	// sync lower's args plus a packed i32 return; it binds to the async-lower adapter (asyncLowerFunc),
-	// which executes the sync-resolving arm and refuses the blocking arm by name.
+	// which executes the sync-resolving arm (2a-i-A) or registers a subtask for the blocking arm (2a-i-B-1).
 	async bool
+	// asyncBuiltin marks a canon async built-in core func and carries its opcode (gate:async 2a-i-B-2).
+	// The waitable-set family (new/join/wait/drop) binds to a Go impl (async_waitset.go); other opcodes
+	// are refused at bind by gateAsync and never reach here.
+	asyncBuiltin   bool
+	asyncBuiltinOp byte
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -103,10 +108,10 @@ type walker struct {
 	// asyncWasiHost is the async-lower impl source (gate:async 2a-i-A), SEPARATE from wasiHost by type so
 	// a wrong-source binding is a compile error. An async lower binds through it, not wasiHost.
 	asyncWasiHost map[string]asyncLowerImpl
-	// subtasks is this component instance's subtask handle table (gate:async 2a-i-B): the blocking arm of
-	// an async lower registers a subtask here to return its index. Per-instance, so a nested walk gets its
-	// own (component-model handles are per-ComponentInstance).
-	subtasks *subtaskTable
+	// async is this component instance's async handle table (gate:async 2a-i-B): subtasks and waitable-sets
+	// in one index space. The blocking arm of an async lower registers a subtask here; the waitable-set
+	// built-ins allocate and consume from it. Per-instance (component-model handles are per-ComponentInstance).
+	async *asyncHandles
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -167,6 +172,17 @@ func (w *walker) step(d Def) error {
 			}
 			if cn.Kind == CanonResourceDrop {
 				w.appendCore(SpaceCoreFunc, coreDef{resourceDrop: true})
+				return nil
+			}
+			if cn.Kind == CanonAsyncBuiltin {
+				// A waitable-set built-in (gate:async 2a-i-B-2) binds to a Go impl; waitable-set.wait
+				// carries the memory it stores its event in (the memidx operand, captured into Opts.Memory
+				// at decode). Other async built-ins are refused at bind by gateAsync and never reach here.
+				w.appendCore(SpaceCoreFunc, coreDef{
+					asyncBuiltin:   true,
+					asyncBuiltinOp: cn.AsyncOp,
+					lowerMem:       w.lowerMemory(cn),
+				})
 				return nil
 			}
 			w.appendCore(SpaceCoreFunc, coreDef{stub: true})
@@ -261,7 +277,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if !ok {
 			return interp.Extern{}, false
 		}
-		if d.lowerName == "" && !d.isStub() && !d.resourceDrop {
+		if d.lowerName == "" && !d.isStub() && !d.resourceDrop && !d.asyncBuiltin {
 			return d.extern, true // a real export, by reference (memory/global/func sharing)
 		}
 		ft, ok := funcImportType(m, mod, name)
@@ -273,6 +289,14 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if d.resourceDrop {
 			return interp.HostExtern(ft, dropNoop), true
 		}
+		// A waitable-set canon built-in (gate:async 2a-i-B-2) binds to its Go impl, typed from the guest's
+		// import signature; waitable-set.wait stores its event in the memory it carried (d.lowerMem).
+		if d.asyncBuiltin {
+			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.lowerMem); ok {
+				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
+			}
+			return interp.Extern{}, false
+		}
 		// A canon lower carrying the `async` canonopt (gate:async 2a-i-A) binds to the async-lower adapter:
 		// its flat ABI is this sync signature plus a packed i32 return, and it executes the sync-resolving
 		// arm (the blocking arm refuses by name at runtime). Bound through the SEPARATE async-impl source
@@ -282,7 +306,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				sig := w.lowerSignature(d.lowerName)
 				hasResult := sig != nil && sig.Result != nil
 				aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
-				return interp.CanonLowerExtern(aft, asyncLowerFunc(aimpl, hasResult, w.subtasks), interp.CanonOptions{
+				return interp.CanonLowerExtern(aft, asyncLowerFunc(aimpl, hasResult, w.async), interp.CanonOptions{
 					Memory:  d.lowerMem,
 					Realloc: d.lowerRealloc,
 				}), true
