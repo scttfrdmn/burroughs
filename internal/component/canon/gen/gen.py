@@ -307,6 +307,114 @@ def emit_async_lower(case):
     }
 
 
+# Async-lower BLOCKING-arm cases (gate:async slice-1 2a-i-B): the async `canon lower`'s arm taken when the
+# callee does NOT resolve inline. Same driver as the sync-resolving arm (a sync outer lifted through
+# `Store.lift`/`invoke`, whose own `canon_lift` resume loop self-drives — no concurrent task, confirming
+# the slice-1 scope ruling from the model's side, #739), but the callee STARTS then DEFERS resolve, so at
+# lower time `subtask.resolved()` is False and the blocking arm is taken: the subtask is registered
+# (`subtaski`) and the packed return is `[state | (subtaski<<4)]` (not `[RETURNED]`). The guest then joins
+# the subtask to a waitable set, the callee's progress is armed (the captured `on_resolve` — through the
+# model's own `resolve`→`on_progress`→`set_pending_event`), and `waitable-set.wait` delivers the
+# `(SUBTASK, subtaski, state)` event as two u32 at a ptr.
+#
+# DELIBERATE OMISSION, load-bearing — do NOT add an "unsatisfiable wait" / deadlock case here. Every case
+# below pins the resolve-and-wake path, and the guest-caused-deadlock outcome is intentionally absent. The
+# model's sync-lift driver answers that condition with `trap_if(not candidates)` (definitions.py:2161)
+# because an executable driver must terminate; contract H-4 deliberately DECLINES to arbitrate the same
+# condition, making it a guest property with `Close`/fault as the only exits (Burroughs parks-and-hangs,
+# does not trap — the "first hang" H-4 names; #739). The two answer different questions and neither is
+# wrong. A future reader "completing" the battery with the missing trap case would be adding a defect: it
+# would pin the model's trap as the expected outcome and make Burroughs' *compliant* hang read as a failure
+# against its own oracle. The omission is the correct differential, not a gap.
+ASYNC_LOWER_BLOCKING_CASES = [
+    {"name": "async-lower-u32-blocks-then-resolves", "params": [{"kind": "u32"}], "result": {"kind": "u32"}, "args": [7], "ret_value": 107},
+    {"name": "async-lower-empty-blocks-then-resolves", "params": [], "result": None, "args": [], "ret_value": None},
+    {"name": "async-lower-u64-blocks-then-resolves", "params": [{"kind": "u64"}], "result": {"kind": "u64"}, "args": [42], "ret_value": 1000042},
+]
+
+
+def emit_async_lower_blocking(case):
+    from definitions import (  # noqa: E402
+        FuncType, flatten_functype,
+        canon_waitable_set_new, canon_waitable_join, canon_waitable_set_wait,
+    )
+    heap = TracingHeap(case.get("heap_size", 64))
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    ptypes = [(f"p{i}", build_type(p)) for i, p in enumerate(case["params"])]
+    rtype = [build_type(case["result"])] if case["result"] is not None else []
+    ft_inner = FuncType(ptypes, rtype, async_=True)
+    opts_async = mk_opts(True)
+    flat_ft = flatten_functype(opts_async, ft_inner, "lower")
+
+    rv = case["ret_value"]
+    cap = {}
+
+    def callee_inner(on_start, on_resolve):
+        on_start()                 # lift the lower's params -> STARTED (model-produced)
+        cap["on_resolve"] = on_resolve  # DEFER: the blocking arm — do NOT resolve inline
+        return lambda: None             # on_cancel
+
+    def outer_core(flat_args):
+        core_lower = inst.store.lower(callee_inner, ft_inner, opts_async, inst)
+        args = list(case["args"])
+        retptr = None
+        if rtype:  # async results land at a retptr appended to the flat params
+            retptr = heap.realloc([0, 0, alignment(rtype[0], "i32"), elem_size(rtype[0], "i32")])[0]
+            args = args + [retptr]
+        packed = core_lower(args)
+        cap["packed"] = [int(x) for x in packed]
+        cap["retptr"] = retptr
+        subtaski = cap["packed"][0] >> 4
+        cap["subtaski"] = subtaski
+        cap["state_at_lower"] = cap["packed"][0] & 0xf   # STARTING=0 or STARTED=1
+        # Join the parked subtask to a waitable set, arm its resolution (the callee's progress), then wait.
+        wset_i = canon_waitable_set_new()[0]
+        canon_waitable_join(subtaski, wset_i)
+        cap["on_resolve"]([rv] if rv is not None else [])
+        eventptr = heap.realloc([0, 0, 4, 8])[0]      # two u32: (p1=subtaski, p2=state)
+        code = canon_waitable_set_wait(opts_async.memory, wset_i, eventptr)[0]
+        cap["event_code"] = int(code)
+        cap["eventptr"] = eventptr
+        cap["event_p1"] = int.from_bytes(heap.memory[eventptr:eventptr + 4], "little")
+        cap["event_p2"] = int.from_bytes(heap.memory[eventptr + 4:eventptr + 8], "little")
+        return []
+
+    outer_ft = FuncType([], [], async_=False)
+    inst.store.invoke(inst.store.lift(outer_core, outer_ft, mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+
+    return {
+        "name": case["name"],
+        "flat_params": list(flat_ft.params),
+        "flat_results": list(flat_ft.results),
+        "args": list(case["args"]),
+        "result_kind": case["result"]["kind"] if case["result"] is not None else None,
+        "ret_value": rv,
+        "packed": cap["packed"],                # the blocking packed return [state | (subtaski<<4)]
+        "subtaski": cap["subtaski"],
+        "state_at_lower": cap["state_at_lower"],
+        "retptr": cap["retptr"],
+        "event_code": cap["event_code"],        # EventCode.SUBTASK = 1
+        "event_ptr": cap["eventptr"],
+        "event_p1": cap["event_p1"],            # subtaski
+        "event_p2": cap["event_p2"],            # resolved state (RETURNED = 2)
+        "memory_hex": heap.memory.hex(),        # result lowered at retptr + event stored at event_ptr
+        "realloc": heap.calls,
+    }
+
+
 def main():
     with open(os.path.join(os.path.dirname(__file__), "cases.json")) as f:
         cases = json.load(f)
@@ -315,6 +423,7 @@ def main():
         "cases": [emit(c) for c in cases],
         "handles": [emit_own(c) for c in OWN_CASES],
         "async_lowers": [emit_async_lower(c) for c in ASYNC_LOWER_CASES],
+        "async_lower_blocking": [emit_async_lower_blocking(c) for c in ASYNC_LOWER_BLOCKING_CASES],
         "shapes": emit_shapes(),
     }
     json.dump(out, sys.stdout, indent=2)
