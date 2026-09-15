@@ -56,6 +56,9 @@ type coreDef struct {
 	// are refused at bind by gateAsync and never reach here.
 	asyncBuiltin   bool
 	asyncBuiltinOp byte
+	// asyncBuiltinSlot is the static slot index a context.get/set built-in names (its u32 operand,
+	// captured at decode into Canon.TypeIdx). Unused by the other async built-ins.
+	asyncBuiltinSlot uint32
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -188,9 +191,10 @@ func (w *walker) step(d Def) error {
 				// carries the memory it stores its event in (the memidx operand, captured into Opts.Memory
 				// at decode). Other async built-ins are refused at bind by gateAsync and never reach here.
 				w.appendCore(SpaceCoreFunc, coreDef{
-					asyncBuiltin:   true,
-					asyncBuiltinOp: cn.AsyncOp,
-					lowerMem:       w.lowerMemory(cn),
+					asyncBuiltin:     true,
+					asyncBuiltinOp:   cn.AsyncOp,
+					asyncBuiltinSlot: cn.TypeIdx, // context.get/set's static slot (captured at decode)
+					lowerMem:         w.lowerMemory(cn),
 				})
 				return nil
 			}
@@ -301,7 +305,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// A waitable-set canon built-in (gate:async 2a-i-B-2) binds to its Go impl, typed from the guest's
 		// import signature; waitable-set.wait stores its event in the memory it carried (d.lowerMem).
 		if d.asyncBuiltin {
-			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.lowerMem); ok {
+			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.asyncBuiltinSlot); ok {
 				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
 			}
 			return interp.Extern{}, false

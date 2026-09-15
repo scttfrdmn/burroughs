@@ -293,6 +293,15 @@ type stack struct {
 	// including a "falsified" pre-registration, were thermal drift read through sequentially-run
 	// benchmark arms (grave #552).
 	t *thread
+
+	// ctxSlots is the async component-model context storage for `context.get`/`set` (gate:async
+	// increment 4). It lives on the stack, not on `t`, deliberately: the model's storage is per-thread,
+	// but Burroughs' thread object is shared by concurrent callers (two agents, one `in.host`), so the
+	// per-caller unit is the stack — one per `Invoke`, reused by the run's nested calls (decision 0050).
+	// The zero value is the model's `[0,0]`, so an unset `context.get` reads 0. This coincidence of
+	// per-invocation and per-thread holds under v1 and is revisited when §7 growable continuations split
+	// them (0050's live expiry, recorded on #739). Two slots, matching the model's fixed storage.
+	ctxSlots [2]uint32
 }
 
 // frame is a call's local-variable storage: 0002's parallel-array split applied to *locals*

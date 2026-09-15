@@ -379,12 +379,12 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 // isBuiltAsyncBuiltin reports whether an async canon built-in opcode is one this engine executes: the
 // waitable-set loop (gate:async 2a-i-B-2) — waitable-set.new (0x1f), .wait (0x20), .drop (0x22),
 // waitable.join (0x23); the future.read slice (increment 3) — future.read (0x16), future.drop-readable
-// (0x1a); and the stream write-side slice (increment 3) — stream.write (0x10). Every other async built-in —
-// waitable-set.poll (0x21), future.write/new/cancel-read, stream.read (0x0f)/new/cancel/drop, and the task
-// family — stays refused by name until a guest binds it.
+// (0x1a); the stream write-side slice (increment 3) — stream.write (0x10); and context.get/set (increment 4,
+// 0x0a/0x0b). Every other async built-in — waitable-set.poll (0x21), future.write/new/cancel-read,
+// stream.read (0x0f)/new/cancel/drop, and the task family — stays refused by name until a guest binds it.
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
-	case 0x1f, 0x20, 0x22, 0x23, 0x16, 0x1a, 0x10:
+	case 0x1f, 0x20, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0a, 0x0b:
 		return true
 	}
 	return false

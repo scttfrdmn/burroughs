@@ -191,7 +191,7 @@ func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
 // handle table. Only the four the blocking-arm round trip needs are bound (gate:async 2a-i-B-2); any other
 // async built-in is refused at bind by gateAsync and never reaches here. waitable-set.wait writes its event
 // through the memory bound into its CanonOptions at the call site, so no memory is threaded here.
-func (w *walker) asyncBuiltinFunc(op byte, _ *interp.Extern) (interp.CanonFunc, bool) {
+func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool) {
 	switch op {
 	case 0x1f: // waitable-set.new
 		return waitableSetNew(w.async), true
@@ -207,6 +207,10 @@ func (w *walker) asyncBuiltinFunc(op byte, _ *interp.Extern) (interp.CanonFunc, 
 		return futureDrop(w.async), true
 	case 0x10: // stream.write (gate:async increment 3, write side)
 		return streamWrite(w.async), true
+	case 0x0a: // context.get (gate:async increment 4) — reads the agent's own context slot
+		return contextGet(slot), true
+	case 0x0b: // context.set
+		return contextSet(slot), true
 	}
 	return nil, false
 }

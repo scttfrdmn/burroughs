@@ -11,6 +11,14 @@ Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)` + `rustup target add 
 precompiled std + wasi-libc; no `-Zbuild-std`); `wasm-tools 1.258.0`; `wasmtime 48.0.1 (7bac2c27)` runs it
 async-on-by-default to `Hello, world!\n`. sha1 `06f965f7d392e762b0324d0e0f86aa8762d0ae61`.
 
+`context-synth.wasm` is a hand-authored fixture for the increment-4 context.get/set witness: canon
+`context.get`/`set` core funcs over static slots 0 and 1, and a core module exporting `set-then-get` (set
+slot 0 to its arg, then get slot 0 -> the arg) and `get1-unset` (get slot 1 -> 0). Exercises the built-in +
+decode + binding + the per-agent stack accessor end-to-end via a real Invoke, matched to the `context_ops`
+pin. The per-caller isolation (two agents, distinct slots; a fresh stack starts zeroed) is proved directly
+in the interp test `TestContextStorageIsPerCallerStack`, since no single-agent guest run can witness it.
+Authored via `wasm-tools parse` (1.258.0).
+
 `stream-write-synth.wasm` is a hand-authored fixture for the increment-3 stream write-side binding witness:
 an instance import whose `get-stream` async func returns a `stream<u8>` (declared **inline** to avoid the
 #753 outer-alias path), an async `canon lower` of it, and a `stream.write` canon built-in over a

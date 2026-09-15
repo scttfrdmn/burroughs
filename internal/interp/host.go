@@ -632,6 +632,33 @@ func NewCanonCallerForTest(minPages uint32) (*CanonCaller, error) {
 // as ordinary guest execution: the invoked frame polls at entry, so a Stop parks the agent inside
 // realloc and a Close terminates it there (the `threadTerminated` unwind reaches `invokeIndex`'s
 // recover, so the call reports `ErrTerminated` — guest work, not host code).
+// ContextGet reads the calling agent's async context slot i (gate:async increment 4, canon context.get).
+// The storage is per-caller — on the agent's own stack — so concurrent agents do not share it; an unset
+// slot reads 0 (the stack's zero value). Slot i must be in range or it traps, mirroring the model's
+// `assert(i < len(thread.storage))`.
+func (c *CanonCaller) ContextGet(i uint32) (uint32, error) {
+	if c.st == nil {
+		return 0, fmt.Errorf("%w: context.get on a caller with no stack", ErrUnsupportedOp)
+	}
+	if int(i) >= len(c.st.ctxSlots) {
+		return 0, &Trap{Reason: fmt.Sprintf("context slot %d out of range (%d slots)", i, len(c.st.ctxSlots))}
+	}
+	return c.st.ctxSlots[i], nil
+}
+
+// ContextSet writes the calling agent's async context slot i (canon context.set). Same per-caller storage
+// and bounds as ContextGet.
+func (c *CanonCaller) ContextSet(i, v uint32) error {
+	if c.st == nil {
+		return fmt.Errorf("%w: context.set on a caller with no stack", ErrUnsupportedOp)
+	}
+	if int(i) >= len(c.st.ctxSlots) {
+		return &Trap{Reason: fmt.Sprintf("context slot %d out of range (%d slots)", i, len(c.st.ctxSlots))}
+	}
+	c.st.ctxSlots[i] = v
+	return nil
+}
+
 func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32, error) {
 	if c.realloc == nil {
 		return 0, fmt.Errorf("%w: this canon lower declared no realloc option", ErrUnsupportedOp)
