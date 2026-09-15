@@ -21,6 +21,14 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 3 oracle — the `stream.write` outcome differential (ADR 0086, #739).** The
+  reference model's async `stream.write` path, pinned by running (`gen.py`'s `emit_stream_write`): the write
+  parks (`BLOCKED`), and the `(STREAM_WRITE, i, packed)` event packs `result | (progress<<4)` — not a bare
+  `CopyResult` like `future.read`. Three outcomes pinned with their end state: full COMPLETED (progress = n,
+  end IDLE), **partial** COMPLETED (progress = m < n, end IDLE — the progress-packing hazard: a codec that
+  drops the progress field is green on a full copy and silently wrong on a partial), and DROPPED (progress 0,
+  end DONE). A stream COMPLETED leaves the end **IDLE** (open for more), unlike future's DONE. Oracle only;
+  no engine execution yet.
 - **`gate:async` increment 3, first slice — `future.read` execution (ADR 0086, #739).** With
   `BURROUGHS_ASYNC=1`, a guest can read a host-provided `future<u32>`: an async lower whose result is a
   `future<T>` mints a readable end and returns its handle; the guest's `future.read` (0x16) returns `BLOCKED`

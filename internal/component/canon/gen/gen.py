@@ -508,6 +508,95 @@ def emit_future_read(case):
     }
 
 
+# Stream.write cases (gate:async increment 3, stream write-side slice). `stream_copy` is `future_copy`
+# generalized to n elements with PROGRESS: the write event packs `result | (progress<<4)` (def:2500), not a
+# bare CopyResult. That is the hazard stream adds — a guest reading only the low bits is right on a full copy
+# and WRONG on a partial one — so a partial case (a consumer taking fewer elements than offered) is pinned
+# beside the full one, the same class as the empty-list realloc and the variant discriminant. DROPPED lands
+# here (the write side's outcome future.read could not reach) with its end state, as COMPLETED/CANCELLED did
+# for the read. Unlike future, a COMPLETED stream write leaves the end IDLE (open for more); only DROPPED is
+# DONE. Driven model-faithfully: an async write of n elements parks (BLOCKED); a reader consumes n (full) or
+# m<n (partial), or the readable end drops (DROPPED); waitable-set.wait delivers the STREAM_WRITE event. The
+# reader is the model's own stream.read producing the state — NOT a claim the engine binds stream.read (the
+# guest binds only the write side; stream.read is refused by name in the Go slice).
+STREAM_WRITE_CASES = [
+    {"name": "stream-write-u8-full-completed", "outcome": "full", "n": 4},
+    {"name": "stream-write-u8-partial-progress", "outcome": "partial", "n": 4, "m": 2},
+    {"name": "stream-write-u8-dropped", "outcome": "dropped", "n": 4},
+]
+
+
+def emit_stream_write(case):
+    from definitions import (  # noqa: E402
+        U8Type, StreamType, FuncType,
+        canon_stream_new, canon_stream_write, canon_stream_read, canon_stream_drop_readable,
+        canon_waitable_set_new, canon_waitable_join, canon_waitable_set_wait,
+    )
+    heap = TracingHeap(case.get("heap_size", 256))
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    st = StreamType(U8Type())
+    n = case["n"]
+    cap = {}
+
+    def outer_core(_flat):
+        packed = canon_stream_new(st)[0]
+        ri, wi = packed & 0xffffffff, packed >> 32
+        srcptr = heap.realloc([0, 0, 1, n])[0]
+        for k in range(n):
+            heap.memory[srcptr + k] = 65 + k  # "ABCD…" — the bytes the guest writes
+        cap["write_ret"] = [int(x) for x in canon_stream_write(st, mk_opts(True), wi, srcptr, n)]
+        wset = canon_waitable_set_new()[0]
+        canon_waitable_join(wi, wset)
+        if case["outcome"] == "full":
+            dst = heap.realloc([0, 0, 1, n])[0]
+            canon_stream_read(st, mk_opts(True), ri, dst, n)
+        elif case["outcome"] == "partial":
+            dst = heap.realloc([0, 0, 1, case["m"]])[0]
+            canon_stream_read(st, mk_opts(True), ri, dst, case["m"])
+        elif case["outcome"] == "dropped":
+            canon_stream_drop_readable(st, ri)
+        evptr = heap.realloc([0, 0, 4, 8])[0]
+        cap["event_code"] = int(canon_waitable_set_wait(mk_opts(True).memory, wset, evptr)[0])
+        cap["event_p1"] = int.from_bytes(heap.memory[evptr:evptr + 4], "little")
+        cap["packed"] = int.from_bytes(heap.memory[evptr + 4:evptr + 8], "little")
+        cap["wi"] = wi
+        cap["wi_state"] = inst.handles.get(wi).state.name
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+
+    packed = cap["packed"]
+    return {
+        "name": case["name"],
+        "outcome": case["outcome"],
+        "n": n,
+        "m": case.get("m"),
+        "write_ret": cap["write_ret"],            # [BLOCKED] — the async write parks
+        "wi": cap["wi"],                           # the writable end's handle index
+        "event_code": cap["event_code"],           # EventCode.STREAM_WRITE = 3
+        "event_p1": cap["event_p1"],               # the end index in the delivered event
+        "packed": packed,                          # result | (progress<<4)
+        "result": packed & 0xf,                    # CopyResult: COMPLETED=0 / DROPPED=1
+        "progress": packed >> 4,                   # elements copied — the low-bits-only hazard
+        "wi_state": cap["wi_state"],               # IDLE (completed, open) vs DONE (dropped) — the 2nd guard
+        "memory_hex": heap.memory.hex(),
+        "realloc": heap.calls,
+    }
+
+
 def main():
     with open(os.path.join(os.path.dirname(__file__), "cases.json")) as f:
         cases = json.load(f)
@@ -518,6 +607,7 @@ def main():
         "async_lowers": [emit_async_lower(c) for c in ASYNC_LOWER_CASES],
         "async_lower_blocking": [emit_async_lower_blocking(c) for c in ASYNC_LOWER_BLOCKING_CASES],
         "future_reads": [emit_future_read(c) for c in FUTURE_READ_CASES],
+        "stream_writes": [emit_stream_write(c) for c in STREAM_WRITE_CASES],
         "shapes": emit_shapes(),
     }
     json.dump(out, sys.stdout, indent=2)
