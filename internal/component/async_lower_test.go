@@ -240,14 +240,25 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 		t.Errorf("gate on, future.write: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
-	// A future value type is permitted (the guest reads it); a stream value type still refuses.
+	// Stream write side (increment 3): stream.write (0x10) is permitted; stream.read (0x0f) still refuses.
+	swrite := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x10}}}
+	if err := gateAsync(swrite); err != nil {
+		t.Errorf("gate on, stream.write: gateAsync refused (%v), want permit — stream.write is built", err)
+	}
+	sread := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x0f}}} // stream.read (unbuilt; guest doesn't bind it)
+	if err := gateAsync(sread); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, stream.read: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	}
+
+	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,
+	// stream.write); the unbuilt operations on them refuse at the built-in check, not at the type.
 	futVal := &Component{Types: []TypeDef{{Kind: TDVal, Val: ValType{Kind: VFuture, Elem: &ValType{Kind: VU32}}}}}
 	if err := gateAsync(futVal); err != nil {
-		t.Errorf("gate on, future value type: gateAsync refused (%v), want permit — future.read is built", err)
+		t.Errorf("gate on, future value type: gateAsync refused (%v), want permit", err)
 	}
-	streamVal := &Component{Types: []TypeDef{{Kind: TDVal, Val: ValType{Kind: VStream, Elem: &ValType{Kind: VU32}}}}}
-	if err := gateAsync(streamVal); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, stream value type: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	streamVal := &Component{Types: []TypeDef{{Kind: TDVal, Val: ValType{Kind: VStream, Elem: &ValType{Kind: VU8}}}}}
+	if err := gateAsync(streamVal); err != nil {
+		t.Errorf("gate on, stream value type: gateAsync refused (%v), want permit — stream.write is built", err)
 	}
 }
 

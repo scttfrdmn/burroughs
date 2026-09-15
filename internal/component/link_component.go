@@ -368,59 +368,23 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 			return fmt.Sprintf("an async canon built-in (%#x)", cn.AsyncOp), true
 		}
 	}
-	for _, td := range c.Types {
-		// A stream value type is still unbuilt; a future value type is now built (the guest reads it via
-		// future.read, and an async lower's future result is minted by the wrapper — increment 3), so it is
-		// no longer refused here. Unbuilt future *operations* (future.write/new/cancel-read) still refuse at
-		// the built-in check above.
-		if td.Kind == TDVal && containsStreamVal(td.Val, 0) {
-			return "a stream value type", true
-		}
-	}
+	// Neither a future nor a stream value type is refused here anymore: future.read is built (increment 3)
+	// and stream.write is built (increment 3, write side), and both future and stream handles are direction
+	// -agnostic value types. The unbuilt *operations* on them — future.write/new/cancel-read, stream.read/
+	// new/cancel/drop — refuse at the built-in check above (isBuiltAsyncBuiltin), and an async lift refuses
+	// there too. A value type using an unbuilt op is caught where the op is, not at the type.
 	return "", false
-}
-
-// containsStreamVal reports whether a value type contains a stream anywhere (recursing past futures and
-// other compounds). Streams are unbuilt this slice; futures are built, so only a stream in a type refuses.
-func containsStreamVal(vt ValType, depth int) bool {
-	if depth > 32 {
-		return false
-	}
-	switch vt.Kind {
-	case VStream:
-		return true
-	case VList, VOption:
-		return vt.Elem != nil && containsStreamVal(*vt.Elem, depth+1)
-	case VFuture:
-		return vt.Elem != nil && containsStreamVal(*vt.Elem, depth+1) // future<stream<…>> still has a stream
-	case VResult:
-		return (vt.Ok != nil && containsStreamVal(*vt.Ok, depth+1)) || (vt.Err != nil && containsStreamVal(*vt.Err, depth+1))
-	case VVariant:
-		for _, ca := range vt.Cases {
-			if ca.Type != nil && containsStreamVal(*ca.Type, depth+1) {
-				return true
-			}
-		}
-	case VTuple:
-		for _, e := range vt.Elems {
-			if containsStreamVal(e, depth+1) {
-				return true
-			}
-		}
-	default:
-		// scalars, string, char, own/borrow, error-context, ref, record/flags/enum — no stream.
-	}
-	return false
 }
 
 // isBuiltAsyncBuiltin reports whether an async canon built-in opcode is one this engine executes: the
 // waitable-set loop (gate:async 2a-i-B-2) — waitable-set.new (0x1f), .wait (0x20), .drop (0x22),
-// waitable.join (0x23) — and the future.read slice (increment 3) — future.read (0x16), future.drop-readable
-// (0x1a). Every other async built-in — waitable-set.poll (0x21, non-blocking), future.write/new/cancel-read,
-// and the whole stream/task family — stays refused by name until a guest binds it.
+// waitable.join (0x23); the future.read slice (increment 3) — future.read (0x16), future.drop-readable
+// (0x1a); and the stream write-side slice (increment 3) — stream.write (0x10). Every other async built-in —
+// waitable-set.poll (0x21), future.write/new/cancel-read, stream.read (0x0f)/new/cancel/drop, and the task
+// family — stays refused by name until a guest binds it.
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
-	case 0x1f, 0x20, 0x22, 0x23, 0x16, 0x1a:
+	case 0x1f, 0x20, 0x22, 0x23, 0x16, 0x1a, 0x10:
 		return true
 	}
 	return false

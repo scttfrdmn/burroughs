@@ -44,6 +44,11 @@ const (
 	// result and writes the handle itself. It carries the value the future will deliver (future<u32>, first
 	// slice) in `u`. The codec's Kind switches default-refuse it — it must never reach them.
 	KindFuture
+	// KindStream (gate:async increment 3, write side) is a stream<T> the host returns to a guest to WRITE
+	// to (stdout). Like KindFuture it is wrapper-minted, not codec-lowered — a writable-stream-end handle
+	// in the async handle table. It carries no payload (a stream is a channel, not a single value); the
+	// guest supplies the elements via stream.write.
+	KindStream
 )
 
 func (k Kind) String() string {
@@ -86,6 +91,8 @@ func (k Kind) String() string {
 		return "tuple"
 	case KindFuture:
 		return "future"
+	case KindStream:
+		return "stream"
 	default:
 		return fmt.Sprintf("kind(%d)", uint8(k))
 	}
@@ -179,6 +186,10 @@ func Future(value uint32) Value { return Value{Type: Type{Kind: KindFuture}, u: 
 
 // FutureValue returns the value a KindFuture carries (the wrapper reads it to mint the readable end).
 func (v Value) FutureValue() uint32 { return uint32(v.u) }
+
+// Stream builds a stream<T> result the host returns to a guest to write to. Carries no payload; the
+// async-lower wrapper mints a writable-stream-end handle (component layer), never codec-lowered.
+func Stream() Value { return Value{Type: Type{Kind: KindStream}} }
 
 func U8(v uint8) Value   { return Value{Type: Type{Kind: KindU8}, u: uint64(v)} }
 func U16(v uint16) Value { return Value{Type: Type{Kind: KindU16}, u: uint64(v)} }

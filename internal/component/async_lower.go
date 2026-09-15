@@ -81,6 +81,17 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 						resolveErr = fmt.Errorf("component: async lower: writing future handle to retptr: %w", err)
 						return
 					}
+				} else if v.Type.Kind == canon.KindStream {
+					// A stream<T> result: mint a writable end (the guest writes to it) and write its handle,
+					// the same component-layer minting as a future (gate:async increment 3, write side).
+					se := &writableStreamEnd{}
+					se.index = h.addLocked(se)
+					var buf [4]byte
+					binary.LittleEndian.PutUint32(buf[:], uint32(se.index))
+					if err := c.Write(uint64(uint32(retptr)), buf[:]); err != nil {
+						resolveErr = fmt.Errorf("component: async lower: writing stream handle to retptr: %w", err)
+						return
+					}
 				} else if err := canon.StoreVia(guestHeap{c}, v, int(uint32(retptr))); err != nil {
 					resolveErr = fmt.Errorf("component: async lower: lowering result to retptr: %w", err)
 					return

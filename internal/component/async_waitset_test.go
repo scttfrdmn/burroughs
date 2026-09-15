@@ -75,18 +75,20 @@ func TestWaitableSetWaitDeliversTheOracleEvent(t *testing.T) {
 const subtaskReturnedState = 2
 
 // TestWaitableSetDeliversPerKindEventCodesNotMisrouted is the mixed-kind firing witness (gate:async
-// increment 3): one waitable set holding BOTH a subtask and a readable future end, each resolved. Each
-// waitable-set.wait delivers the member's OWN event code and payload — the subtask a (SUBTASK, index,
-// state) and the future end a (FUTURE_READ, index, result) — so a set with two member kinds routes each
-// correctly. The 2a-i-B tests could not cover this: there was only one kind when they were written. The
-// mis-routing shape (a codec that returns one code for both, or swaps them) fails here — the two delivered
-// events must carry the two distinct, kind-correct codes.
+// increment 3), grown to THREE kinds: one waitable set holding a subtask, a readable future end, AND a
+// writable stream end, each resolved. Each waitable-set.wait delivers the member's OWN event code and
+// payload — SUBTASK (index, state), FUTURE_READ (index, result), STREAM_WRITE (index, result|progress<<4)
+// — so a set with three member kinds routes each correctly through ONE park. The mis-routing shape (a codec
+// that returns a shared code, or swaps them, or drops the stream's progress) fails here. Three kinds
+// through one loop is the evidence the park was built kind-agnostic (2a-i-B-2), not per-kind.
 func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 	h := newAsyncHandles()
 	st := &subtask{state: subtaskReturned, resolved: true}
 	st.index = h.addLocked(st)
 	fe := &readableFutureEnd{resolved: true, result: copyCompleted}
 	fe.index = h.addLocked(fe)
+	se := &writableStreamEnd{resolved: true, result: copyCompleted, progress: 2} // partial write: 2 elements
+	se.index = h.addLocked(se)
 
 	cc, err := interp.NewCanonCallerForTest(1)
 	if err != nil {
@@ -97,15 +99,15 @@ func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 		t.Fatalf("waitable-set.new: %v", err)
 	}
 	si := siVals[0].Int32()
-	for _, wi := range []int{st.index, fe.index} {
+	for _, wi := range []int{st.index, fe.index, se.index} {
 		if _, jerr := waitableJoin(h)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(si)}); jerr != nil {
 			t.Fatalf("waitable.join(%d): %v", wi, jerr)
 		}
 	}
 
-	// Two ready members -> two waits, each delivering one member's event. Collect by code.
+	// Three ready members -> three waits, each delivering one member's event. Collect by code.
 	got := map[eventCode]event{}
-	for i := range 2 {
+	for i := range 3 {
 		ptr := uint32(16 + i*8)
 		codeVals, werr := waitableSetWait(h)(cc, []interp.Value{interp.I32(si), interp.I32(int32(ptr))})
 		if werr != nil {
@@ -119,8 +121,8 @@ func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 		got[code] = event{code: code, p1: binary.LittleEndian.Uint32(buf[0:4]), p2: binary.LittleEndian.Uint32(buf[4:8])}
 	}
 
-	if len(got) != 2 {
-		t.Fatalf("two member kinds delivered %d distinct event codes, want 2 — a shared code is the mis-route: %v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("three member kinds delivered %d distinct event codes, want 3 — a shared code is the mis-route: %v", len(got), got)
 	}
 	sub, ok := got[eventSubtask]
 	if !ok || sub.p1 != uint32(st.index) || sub.p2 != subtaskReturnedState {
@@ -129,6 +131,12 @@ func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 	fut, ok := got[eventFutureRead]
 	if !ok || fut.p1 != uint32(fe.index) || fut.p2 != uint32(copyCompleted) {
 		t.Errorf("FUTURE_READ event = %+v, want (p1 %d, p2 %d)", fut, fe.index, copyCompleted)
+	}
+	// STREAM_WRITE packs result | (progress<<4): COMPLETED(0) with progress 2 -> 32. A codec that drops the
+	// progress field delivers 0 here and fails — the packing hazard, witnessed in the mixed set.
+	strm, ok := got[eventStreamWrite]
+	if !ok || strm.p1 != uint32(se.index) || strm.p2 != uint32(copyCompleted)|(2<<4) {
+		t.Errorf("STREAM_WRITE event = %+v, want (p1 %d, p2 %d)", strm, se.index, uint32(copyCompleted)|(2<<4))
 	}
 }
 

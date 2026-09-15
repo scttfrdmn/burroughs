@@ -27,9 +27,10 @@ import (
 type eventCode uint32
 
 const (
-	eventNone       eventCode = 0
-	eventSubtask    eventCode = 1
-	eventFutureRead eventCode = 4 // definitions.py EventCode.FUTURE_READ (def:701)
+	eventNone        eventCode = 0
+	eventSubtask     eventCode = 1
+	eventStreamWrite eventCode = 3 // definitions.py EventCode.STREAM_WRITE (def:700)
+	eventFutureRead  eventCode = 4 // definitions.py EventCode.FUTURE_READ (def:701)
 )
 
 // event is a waitable-set.wait result (definitions.py EventTuple / unpack_event, def:2367–2372): a code
@@ -204,6 +205,8 @@ func (w *walker) asyncBuiltinFunc(op byte, _ *interp.Extern) (interp.CanonFunc, 
 		return futureRead(w.async), true
 	case 0x1a: // future.drop-readable
 		return futureDrop(w.async), true
+	case 0x10: // stream.write (gate:async increment 3, write side)
+		return streamWrite(w.async), true
 	}
 	return nil, false
 }
