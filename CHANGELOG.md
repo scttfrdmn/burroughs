@@ -21,6 +21,13 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 exit oracle — the committed wasmtime reading (ADR 0086, #739).**
+  `testdata/p3async-hello.stdout` records what the real guest `p3async-hello.wasm` writes on **wasmtime
+  48.0.1** (async-on-by-default): `Hello, world!\n`, exit 0. Committed with its version (testdata README)
+  before the end-to-end test exists, so that test asserts against a recorded reading rather than a live
+  wasmtime run — the second oracle for increment 4, as p3hello's output was for slice 2. Running the guest
+  gate-on names its first unbuilt op (`context.get`, 0xa), which sets the guest-driven order for the
+  remaining ops.
 - **`gate:async` increment 3 — `stream.write` execution (ADR 0086, #739).** With `BURROUGHS_ASYNC=1`, a
   guest can write to a host-provided `stream<u8>` (stdout): an async lower whose result is a `stream<T>`
   mints a writable end and returns its handle; `stream.write` (0x10) returns `BLOCKED` and registers the

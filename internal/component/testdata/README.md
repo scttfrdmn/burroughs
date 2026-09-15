@@ -26,6 +26,13 @@ Before the fix this stack-overflowed `resolveVal` at `Load` (the self-referentia
 it Loads and the lower refuses by name at instantiate (the unresolved outer alias). Authored via
 `wasm-tools parse` (1.258.0). Its inline-typed sibling `future-read-synth.wasm` is the working path.
 
+`p3async-hello.stdout` is the **committed wasmtime reading** — the second oracle for gate:async increment 4
+(the end-to-end guest), the way `p3hello`'s output was for slice 2. It is what the real guest
+`p3async-hello.wasm` writes to stdout when run on **wasmtime 48.0.1** (async-on-by-default, no flag):
+`Hello, world!\n`, exit 0. Committed with its version here so the increment-4 end-to-end test asserts
+against a *recorded reading*, not a live wasmtime run. Regenerate only by re-running the pinned wasmtime on
+the committed `p3async-hello.wasm` and updating this note's version.
+
 `future-read-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` increment-3
 `future.read` binding witness: an instance import whose `get-future` is an async func returning `future<u32>`
 (declared **inline** in the instance type — an outer-aliased future type would hit the placeholder-VRef
