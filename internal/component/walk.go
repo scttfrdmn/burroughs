@@ -145,6 +145,15 @@ func (w *walker) step(d Def) error {
 			cn := w.c.Canons[d.Item]
 			if cn.Kind == CanonLower && int(cn.FuncIdx) < len(w.compFuncs) {
 				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName != "" {
+					// An unresolved outer type alias (#753) in the lowered signature can never be marshaled —
+					// refuse by name at instantiate, for any lower (sync or async), rather than binding a core
+					// func over a type the engine did not resolve. Distinct from the unmodeled-kind refusal
+					// below (keyed on the sync impl source): this fires regardless of which impl fills it.
+					if sig := w.lowerSignature(cf.stubName); sigHasUnresolvedAlias(sig) {
+						return fmt.Errorf("%w: canon lower of %s carries %s, which this engine does not resolve "+
+							"(#753) — refused at instantiate rather than bound over an unresolved type",
+							ErrUnsupportedForm, cf.stubName, valKindName(VUnresolvedAlias))
+					}
 					// The binding refusal (ADR 0084 / #720): an **implemented** lower whose bound
 					// signature carries a value kind the codec cannot marshal (record/flags/enum/option/
 					// error-context) refuses **by name at instantiate** — the earliest point the impl

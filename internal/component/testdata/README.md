@@ -11,6 +11,13 @@ Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)` + `rustup target add 
 precompiled std + wasi-libc; no `-Zbuild-std`); `wasm-tools 1.258.0`; `wasmtime 48.0.1 (7bac2c27)` runs it
 async-on-by-default to `Hello, world!\n`. sha1 `06f965f7d392e762b0324d0e0f86aa8762d0ae61`.
 
+`future-read-outer-alias.wasm` is a hand-authored fixture for the **#753** regression witness: an instance
+import whose `get-future` async func returns a `future<u32>` declared via an **outer type alias** (a
+component-level `(type $fut (future u32))` aliased into the instance type), and an async `canon lower` of it.
+Before the fix this stack-overflowed `resolveVal` at `Load` (the self-referential `VRef{0}` placeholder); now
+it Loads and the lower refuses by name at instantiate (the unresolved outer alias). Authored via
+`wasm-tools parse` (1.258.0). Its inline-typed sibling `future-read-synth.wasm` is the working path.
+
 `future-read-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` increment-3
 `future.read` binding witness: an instance import whose `get-future` is an async func returning `future<u32>`
 (declared **inline** in the instance type — an outer-aliased future type would hit the placeholder-VRef
