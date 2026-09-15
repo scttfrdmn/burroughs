@@ -21,6 +21,13 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 oracle — the `stream.new` differential (ADR 0086, #739).** The next op the real
+  guest hits, pinned by running: `stream.new` creates both ends of a stream inside the guest and returns
+  `ri | (wi<<32)` (=8589934593; ri=1, wi=2), both ends IDLE. This **inverts** every prior slice's
+  host-provided end: `p3async-hello` keeps the writable end (`stream.write`) and hands the readable end to
+  the host via a lowered `write-via-stream(ri)` — the first **guest→host** copy flow, in which the host's
+  *read* of the handed end drives the write's `on_copy_done` (not a direct completion). The write-side
+  outcome pin is unchanged; the wiring is. Oracle only; the execution is the next slice.
 - **`gate:async` increment 4 — `context.get`/`set` execution (ADR 0086, #739).** With `BURROUGHS_ASYNC=1`,
   the async context built-ins (`context.get` 0x0a, `context.set` 0x0b) execute: per-agent i32 storage of a
   fixed 2 slots, an unset `get` returning 0, an out-of-range slot trapping. The storage lives on the
