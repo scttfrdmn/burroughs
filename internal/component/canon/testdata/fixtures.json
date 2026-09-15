@@ -3054,6 +3054,34 @@
       ]
     }
   ],
+  "stream_drops": {
+    "trap_matrix": {
+      "stream_readable": {
+        "IDLE": "ok",
+        "COPYING": "trap",
+        "DONE": "ok"
+      },
+      "stream_writable": {
+        "IDLE": "ok",
+        "COPYING": "trap",
+        "DONE": "ok"
+      },
+      "future_writable_contrast": {
+        "IDLE": "trap",
+        "DONE": "ok"
+      }
+    },
+    "notify": {
+      "read_ret": [
+        4294967295
+      ],
+      "drop_wi_ret": [],
+      "event_code": 2,
+      "result": 1,
+      "progress": 0,
+      "ri_state_after_consume": "DONE"
+    }
+  },
   "context_ops": {
     "slots": 2,
     "get0_unset": 0,

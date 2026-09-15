@@ -765,6 +765,87 @@ def emit_stream_hostfirst(case):
     }
 
 
+def emit_stream_drops():
+    from definitions import (  # noqa: E402
+        U8Type, StreamType, FuncType,
+        ReadableStreamEnd, WritableStreamEnd, SharedStreamImpl,
+        WritableFutureEnd, SharedFutureImpl, CopyState, Trap,
+        canon_stream_new, canon_stream_read, canon_stream_drop_writable,
+        canon_waitable_set_new, canon_waitable_join, canon_waitable_set_wait,
+    )
+    t = U8Type()
+
+    # Trap-guard matrix: CopyEnd.drop traps iff the end is COPYING (def:1040-1043). Driven by calling the
+    # model's drop() directly across states — the trap is synchronous and needs no scheduler. A stream end
+    # (readable OR writable) drops from IDLE or DONE and traps mid-copy; the writable FUTURE end differs (it
+    # traps unless DONE, def:1125) — pinned as a contrast because the guest binds stream drops, not future.
+    def drop_result(EndCls, SharedCls, state):
+        e = EndCls(SharedCls(t))
+        e.state = state
+        try:
+            e.drop()
+            return "ok"
+        except Trap:
+            return "trap"
+
+    states = ["IDLE", "COPYING", "DONE"]
+    matrix = {
+        "stream_readable": {s: drop_result(ReadableStreamEnd, SharedStreamImpl, CopyState[s]) for s in states},
+        "stream_writable": {s: drop_result(WritableStreamEnd, SharedStreamImpl, CopyState[s]) for s in states},
+        "future_writable_contrast": {s: drop_result(WritableFutureEnd, SharedFutureImpl, CopyState[s]) for s in ["IDLE", "DONE"]},
+    }
+
+    # Notify flow: dropping the IDLE counterpart while the other end has a pending copy notifies that end
+    # with DROPPED (SharedStreamImpl.drop -> reset_and_notify_pending(DROPPED), def:968-972). The pending
+    # reader's STREAM_READ event carries result=DROPPED, progress=0, and the end goes DONE on consume — the
+    # anti-hang guarantee: a dropped writer wakes a waiting reader rather than orphaning it.
+    heap = TracingHeap(128)
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    st = StreamType(U8Type())
+    cap = {}
+
+    def outer_core(_flat):
+        packed = canon_stream_new(st)[0]
+        ri, wi = packed & 0xffffffff, packed >> 32
+        dst = heap.realloc([0, 0, 1, 4])[0]
+        wset = canon_waitable_set_new()[0]
+        canon_waitable_join(ri, wset)
+        cap["read_ret"] = [int(x) for x in canon_stream_read(st, mk_opts(True), ri, dst, 4)]  # pends (no writer)
+        cap["drop_wi_ret"] = list(canon_stream_drop_writable(st, wi))                          # drop idle writer
+        evptr = heap.realloc([0, 0, 4, 8])[0]
+        cap["event_code"] = int(canon_waitable_set_wait(mk_opts(True).memory, wset, evptr)[0])
+        cap["packed"] = int.from_bytes(heap.memory[evptr + 4:evptr + 8], "little")
+        cap["ri_state_after_consume"] = inst.handles.get(ri).state.name
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+
+    return {
+        "trap_matrix": matrix,                        # per (kind, state) drop() ok/trap — the trap guard
+        "notify": {
+            "read_ret": cap["read_ret"],              # [BLOCKED] — the read parked
+            "drop_wi_ret": cap["drop_wi_ret"],        # [] — dropping the idle writer does not trap
+            "event_code": cap["event_code"],          # EventCode.STREAM_READ = 2
+            "result": cap["packed"] & 0xf,            # CopyResult.DROPPED = 1
+            "progress": cap["packed"] >> 4,           # 0 — nothing copied
+            "ri_state_after_consume": cap["ri_state_after_consume"],  # DONE — the dropped read is terminal
+        },
+    }
+
+
 def main():
     with open(os.path.join(os.path.dirname(__file__), "cases.json")) as f:
         cases = json.load(f)
@@ -777,6 +858,7 @@ def main():
         "future_reads": [emit_future_read(c) for c in FUTURE_READ_CASES],
         "stream_writes": [emit_stream_write(c) for c in STREAM_WRITE_CASES],
         "stream_hostfirst": [emit_stream_hostfirst(c) for c in STREAM_HOSTFIRST_CASES],  # gate:async inc 4: host-first inline completion
+        "stream_drops": emit_stream_drops(),  # gate:async inc 4: drop-readable/drop-writable end-state audit
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),
