@@ -487,6 +487,54 @@ def emit_context_ops():
     }
 
 
+# Stream.new (gate:async increment 4). The first op that creates BOTH ends of a stream inside the guest —
+# inverting every prior slice's host-provided end. definitions.py:2451: it adds a ReadableStreamEnd and a
+# WritableStreamEnd over one SharedStreamImpl and returns `ri | (wi<<32)`, both ends IDLE. In the real guest
+# (p3async-hello) the guest keeps the writable end (stream.write) and hands the READABLE end to the host via
+# a lowered write-via-stream(ri): the host reads ri, which — whichever side arrives second in the shared
+# impl drives on_copy_done (def:992) — drives the guest's write completion. So this is the first guest->host
+# copy flow, and the write's on_copy_done is driven by the host's READ, not a direct completion (#739 note).
+def emit_stream_new():
+    from definitions import (  # noqa: E402
+        U8Type, StreamType, FuncType, canon_stream_new,
+    )
+    heap = TracingHeap(64)
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    cap = {}
+
+    def outer_core(_flat):
+        packed = canon_stream_new(StreamType(U8Type()))[0]
+        ri, wi = packed & 0xffffffff, packed >> 32
+        cap["packed"] = packed
+        cap["ri"] = ri
+        cap["wi"] = wi
+        cap["ri_state"] = inst.handles.get(ri).state.name
+        cap["wi_state"] = inst.handles.get(wi).state.name
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+    return {
+        "packed": cap["packed"],       # ri | (wi<<32) — the i64 the guest destructures
+        "ri": cap["ri"],               # readable end (handed to the host in the guest->host flow)
+        "wi": cap["wi"],               # writable end (the guest writes to it)
+        "ri_state": cap["ri_state"],   # IDLE at creation
+        "wi_state": cap["wi_state"],   # IDLE at creation
+    }
+
+
 def emit_future_read(case):
     from definitions import (  # noqa: E402
         FuncType, FutureType,
@@ -654,6 +702,7 @@ def main():
         "future_reads": [emit_future_read(c) for c in FUTURE_READ_CASES],
         "stream_writes": [emit_stream_write(c) for c in STREAM_WRITE_CASES],
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
+        "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),
     }
     json.dump(out, sys.stdout, indent=2)
