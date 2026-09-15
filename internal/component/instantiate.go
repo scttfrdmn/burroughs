@@ -450,11 +450,18 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 			return Canon{}, err
 		}
 		return c, readOpts()
-	case 0x0a, 0x0b: // context.get / context.set: core:valtype (one byte) + u32
-		if _, err := r.byte(); err != nil {
+	case 0x0a, 0x0b: // context.get / context.set: core:valtype (one byte) + u32 slot index
+		if _, err := r.byte(); err != nil { // the core:valtype (i32/i64) — i32 in slice-1 scope
 			return Canon{}, err
 		}
-		return c, readIdx()
+		// The slot index is a STATIC operand (which context slot this get/set names), captured into
+		// TypeIdx (unused by non-lift canons) so the walk can bind the built-in to it (gate:async inc 4).
+		slot, err := r.u32()
+		if err != nil {
+			return Canon{}, err
+		}
+		c.TypeIdx = slot
+		return c, nil
 	case 0x0c: // thread.yield: a fixed 0x00 (the 🔀 form)
 		b, err := r.byte()
 		if err != nil {

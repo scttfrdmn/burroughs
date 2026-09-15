@@ -21,6 +21,15 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `context.get`/`set` execution (ADR 0086, #739).** With `BURROUGHS_ASYNC=1`,
+  the async context built-ins (`context.get` 0x0a, `context.set` 0x0b) execute: per-agent i32 storage of a
+  fixed 2 slots, an unset `get` returning 0, an out-of-range slot trapping. The storage lives on the
+  **caller's own stack** (`interp` `CanonCaller.ContextGet`/`Set`) — not on the thread object shared by
+  concurrent callers, nor a per-instance table — so two agents on one instance have independent slots
+  (the interp placement guard proves it; a fresh stack per Invoke means a sequential Invoke starts zeroed).
+  The static slot index is captured at decode. `gateAsync` permits 0x0a/0x0b. Matched to the committed
+  `context_ops` pin. This unblocks the real guest `p3async-hello` past its first op, which now advances to
+  `stream.new` (0x0e). Off by default.
 - **`gate:async` increment 4 oracle — the `context.get`/`set` differential (ADR 0086, #739).** The first op
   the real guest hits, pinned by running (`gen.py`'s `emit_context_ops` over `definitions.py`): context
   storage is **per-thread (per-agent)** — 2 slots, i32 — and an unset `context.get` returns **0, not a trap**
