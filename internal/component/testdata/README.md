@@ -11,6 +11,48 @@ Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)` + `rustup target add 
 precompiled std + wasi-libc; no `-Zbuild-std`); `wasm-tools 1.258.0`; `wasmtime 48.0.1 (7bac2c27)` runs it
 async-on-by-default to `Hello, world!\n`. sha1 `06f965f7d392e762b0324d0e0f86aa8762d0ae61`.
 
+`future-read-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` increment-3
+`future.read` binding witness: an instance import whose `get-future` is an async func returning `future<u32>`
+(declared **inline** in the instance type — an outer-aliased future type would hit the placeholder-VRef
+recursion in `resolveVal`, #753), an async `canon lower` of it, `future.read`/`future.drop-readable` canon
+built-ins over a component-level `(type $fut (future u32))`, and a core module whose `run` async-lowers
+get-future (the wrapper mints a readable end and writes its handle), then `future.read`s that handle and
+returns the `BLOCKED` status. The completion + delivery is unit-tested (`TestFutureReadDeliversTheOracleOutcomes`);
+this witnesses the bind + the `BLOCKED` return. Authored from this WAT via `wasm-tools parse` (wasm-tools
+1.258.0; validates `--features all`):
+
+```wat
+(component
+  (core module $memmod (memory (export "m") 1))
+  (core instance $memi (instantiate $memmod))
+  (alias core export $memi "m" (core memory $cm))
+  (type $fut (future u32))
+  (import "test:async/src" (instance $src
+    (export "get-future" (func async (result (future u32))))))
+  (alias export $src "get-future" (func $getf))
+  (core func $lowered (canon lower (func $getf) async (memory $cm)))
+  (core func $fread (canon future.read $fut (memory $cm)))
+  (core func $fdrop (canon future.drop-readable $fut))
+  (core module $runmod
+    (import "" "mem" (memory 1))
+    (import "" "getf" (func $getf (param i32) (result i32)))
+    (import "" "fread" (func $fread (param i32 i32) (result i32)))
+    (import "" "fdrop" (func $fdrop (param i32)))
+    (func (export "run") (result i32)
+      (local $packed i32) (local $fh i32) (local $rr i32)
+      (local.set $packed (call $getf (i32.const 0)))
+      (local.set $fh (i32.load (i32.const 0)))
+      (local.set $rr (call $fread (local.get $fh) (i32.const 8)))
+      (call $fdrop (local.get $fh))
+      (local.get $rr)))
+  (core instance $runi (instantiate $runmod
+    (with "" (instance
+      (export "mem" (memory $cm)) (export "getf" (func $lowered))
+      (export "fread" (func $fread)) (export "fdrop" (func $fdrop))))))
+  (alias core export $runi "run" (core func $runf))
+  (func (export "run") (result u32) (canon lift (core func $runf))))
+```
+
 `async-waitset-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` 2a-i-B-2
 waitable-set loop witnesses: an instance import whose `op` is an async func (declared **inline** in the
 instance type, so its signature resolves — an outer-aliased type would become a placeholder), an async

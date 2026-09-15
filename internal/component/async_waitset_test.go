@@ -105,7 +105,7 @@ func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 
 	// Two ready members -> two waits, each delivering one member's event. Collect by code.
 	got := map[eventCode]event{}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		ptr := uint32(16 + i*8)
 		codeVals, werr := waitableSetWait(h)(cc, []interp.Value{interp.I32(si), interp.I32(int32(ptr))})
 		if werr != nil {

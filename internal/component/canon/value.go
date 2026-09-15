@@ -38,6 +38,12 @@ const (
 	KindOwn
 	KindBorrow
 	KindTuple
+	// KindFuture (gate:async increment 3) is a future<T> the host returns to a guest. Unlike the other
+	// kinds it is NOT codec-lowered: a future handle is minted in the per-instance async handle table
+	// (component layer), which the codec cannot reach, so the async-lower wrapper intercepts a KindFuture
+	// result and writes the handle itself. It carries the value the future will deliver (future<u32>, first
+	// slice) in `u`. The codec's Kind switches default-refuse it — it must never reach them.
+	KindFuture
 )
 
 func (k Kind) String() string {
@@ -78,6 +84,8 @@ func (k Kind) String() string {
 		return "borrow"
 	case KindTuple:
 		return "tuple"
+	case KindFuture:
+		return "future"
 	default:
 		return fmt.Sprintf("kind(%d)", uint8(k))
 	}
@@ -164,6 +172,13 @@ func Bool(b bool) Value {
 	}
 	return Value{Type: Type{Kind: KindBool}, u: u}
 }
+
+// Future builds a future<u32> result value the host returns to a guest, carrying the value the future will
+// deliver. It is intercepted and minted by the async-lower wrapper (component layer), never codec-lowered.
+func Future(value uint32) Value { return Value{Type: Type{Kind: KindFuture}, u: uint64(value)} }
+
+// FutureValue returns the value a KindFuture carries (the wrapper reads it to mint the readable end).
+func (v Value) FutureValue() uint32 { return uint32(v.u) }
 
 func U8(v uint8) Value   { return Value{Type: Type{Kind: KindU8}, u: uint64(v)} }
 func U16(v uint16) Value { return Value{Type: Type{Kind: KindU16}, u: uint64(v)} }

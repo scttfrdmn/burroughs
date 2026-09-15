@@ -21,6 +21,16 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 3, first slice — `future.read` execution (ADR 0086, #739).** With
+  `BURROUGHS_ASYNC=1`, a guest can read a host-provided `future<u32>`: an async lower whose result is a
+  `future<T>` mints a readable end and returns its handle; the guest's `future.read` (0x16) returns `BLOCKED`
+  and registers the pending read, and the host's completion copies the value and arms a `(FUTURE_READ, i,
+  CopyResult)` event delivered through the **same** `waitable-set.wait` loop as 2a-i-B-2 — one wait
+  mechanism, not two (`future.read`'s readable end is a second `waitable` kind). Both read outcomes are
+  matched to the oracle with their differing end state — COMPLETED (payload 0, DONE, value copied) and
+  CANCELLED (payload 2, IDLE). `future.drop-readable` (0x1a) is built; `gateAsync` narrows to permit
+  future.read/drop and future value types while `future.write`/`new`/`cancel-read` and all stream surface
+  stay refused by name. Off by default.
 - **`gate:async` increment 3 oracle — the `future.read` completion-outcome differential (ADR 0086, #739).**
   The reference model's async `future.read` path, pinned by running (`gen.py`'s `emit_future_read` over
   `definitions.py`): the read returns `BLOCKED`, and the outcome is a `(FUTURE_READ, i, payload)` event whose

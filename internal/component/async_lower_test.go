@@ -229,6 +229,26 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	if err := gateAsync(lift); !errors.Is(err, ErrAsyncNotImplemented) {
 		t.Errorf("gate on, async lift: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
+
+	// Increment 3: future.read (0x16) is permitted; future.write (0x17) still refuses by name.
+	fread := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x16}}}
+	if err := gateAsync(fread); err != nil {
+		t.Errorf("gate on, future.read: gateAsync refused (%v), want permit — future.read is built", err)
+	}
+	fwrite := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x17}}} // future.write (unbuilt)
+	if err := gateAsync(fwrite); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, future.write: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	}
+
+	// A future value type is permitted (the guest reads it); a stream value type still refuses.
+	futVal := &Component{Types: []TypeDef{{Kind: TDVal, Val: ValType{Kind: VFuture, Elem: &ValType{Kind: VU32}}}}}
+	if err := gateAsync(futVal); err != nil {
+		t.Errorf("gate on, future value type: gateAsync refused (%v), want permit — future.read is built", err)
+	}
+	streamVal := &Component{Types: []TypeDef{{Kind: TDVal, Val: ValType{Kind: VStream, Elem: &ValType{Kind: VU32}}}}}
+	if err := gateAsync(streamVal); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, stream value type: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	}
 }
 
 // TestSynthAsyncLowerBindsAndReachesTheWrapper is the binding-branch end-to-end witness: a real-bytes

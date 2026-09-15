@@ -200,6 +200,10 @@ func (w *walker) asyncBuiltinFunc(op byte, _ *interp.Extern) (interp.CanonFunc, 
 		return waitableSetDrop(w.async), true
 	case 0x23: // waitable.join
 		return waitableJoin(w.async), true
+	case 0x16: // future.read (gate:async increment 3)
+		return futureRead(w.async), true
+	case 0x1a: // future.drop-readable
+		return futureDrop(w.async), true
 	}
 	return nil, false
 }
