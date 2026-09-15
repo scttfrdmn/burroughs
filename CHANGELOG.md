@@ -21,6 +21,25 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `stream.new` execution and the host-first inline copy (ADR 0086, #739).** With
+  `BURROUGHS_ASYNC=1`, `stream.new` (0x0e) executes: it mints a connected readable+writable end pair over one
+  shared stream and returns `ri | (wi<<32)`. The **readable end** is the fourth waitable kind. The real
+  `p3async-hello` flow is **host-first** — the host reads the readable end (an internal path, not the guest
+  built-in `stream.read` 0x0f, which stays refused) *before* the guest issues `stream.write` — so the guest's
+  write is the **second arriver**: it drives the copy and **completes inline**, returning the packed payload
+  `result | (progress<<4)` directly rather than `BLOCKED`, and arming no waitable event for the write (it arms
+  the *read* end's `STREAM_READ` event for the host consumer instead). This is the mirror of the guest-first
+  write (write→`BLOCKED`→event). `progress` is `min(read_n, write_n)` — the smaller side, confirmed by an
+  under-read and an over-read row, resolving that it is neither "the pending side's remaining" nor "the
+  arriving side's". The mixed-kind firing witness grows to **four kinds** (subtask, future read, stream
+  write, stream read), verifying `STREAM_READ` (2) is not misrouted to the adjacent `STREAM_WRITE` (3).
+  Matched to the committed `stream_hostfirst` pin. `gateAsync` permits 0x0e; `p3async-hello` now advances to
+  `drop-readable` (0x13), its next refusal. Off by default.
+- **`gate:async` increment 4 oracle — the `stream.new` host-first differential (ADR 0086, #739).** The
+  host-arrives-first orderings, pinned by running: a read parks (`BLOCKED`), the guest's later write completes
+  inline with `result | (progress<<4)` and no event; `progress = min(read_n, write_n)` across full (4/4),
+  under-read (2/4), and over-read (4/2). The pending read end stays `COPYING` (its event armed but untaken);
+  the write end goes `IDLE`. Oracle for the execution landed in the same change.
 - **`gate:async` increment 4 oracle — the `stream.new` differential (ADR 0086, #739).** The next op the real
   guest hits, pinned by running: `stream.new` creates both ends of a stream inside the guest and returns
   `ri | (wi<<32)` (=8589934593; ri=1, wi=2), both ends IDLE. This **inverts** every prior slice's

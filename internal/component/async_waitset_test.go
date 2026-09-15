@@ -75,12 +75,15 @@ func TestWaitableSetWaitDeliversTheOracleEvent(t *testing.T) {
 const subtaskReturnedState = 2
 
 // TestWaitableSetDeliversPerKindEventCodesNotMisrouted is the mixed-kind firing witness (gate:async
-// increment 3), grown to THREE kinds: one waitable set holding a subtask, a readable future end, AND a
-// writable stream end, each resolved. Each waitable-set.wait delivers the member's OWN event code and
-// payload — SUBTASK (index, state), FUTURE_READ (index, result), STREAM_WRITE (index, result|progress<<4)
-// — so a set with three member kinds routes each correctly through ONE park. The mis-routing shape (a codec
-// that returns a shared code, or swaps them, or drops the stream's progress) fails here. Three kinds
-// through one loop is the evidence the park was built kind-agnostic (2a-i-B-2), not per-kind.
+// increment 3, grown to FOUR kinds in increment 4): one waitable set holding a subtask, a readable future
+// end, a writable stream end, AND a readable stream end, each resolved. Each waitable-set.wait delivers the
+// member's OWN event code and payload — SUBTASK (index, state), FUTURE_READ (index, result), STREAM_WRITE
+// (index, result|progress<<4), STREAM_READ (index, result|progress<<4) — so a set with four member kinds
+// routes each correctly through ONE park. STREAM_READ (2) and STREAM_WRITE (3) are the adjacent codes that
+// must not swap: the real p3async-hello path delivers a STREAM_READ on the readable end (the write completes
+// inline and arms no event), so this end is the one the real wiring exercises, not a hypothetical. Distinct
+// progress values (write 2, read 3) make the packed payloads differ, so a code-swap or a dropped-progress
+// codec fails here. Four kinds through one loop is the evidence the park is kind-agnostic (2a-i-B-2).
 func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 	h := newAsyncHandles()
 	st := &subtask{state: subtaskReturned, resolved: true}
@@ -89,6 +92,10 @@ func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 	fe.index = h.addLocked(fe)
 	se := &writableStreamEnd{resolved: true, result: copyCompleted, progress: 2} // partial write: 2 elements
 	se.index = h.addLocked(se)
+	// A readable stream end with an armed-but-untaken event — the real host-first path's live member (its
+	// state stays COPYING until this wait consumes it). progress 3 distinguishes its payload from se's.
+	re := &readableStreamEnd{resolved: true, result: copyCompleted, progress: 3, state: copyStateCopying}
+	re.index = h.addLocked(re)
 
 	cc, err := interp.NewCanonCallerForTest(1)
 	if err != nil {
@@ -99,15 +106,15 @@ func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 		t.Fatalf("waitable-set.new: %v", err)
 	}
 	si := siVals[0].Int32()
-	for _, wi := range []int{st.index, fe.index, se.index} {
+	for _, wi := range []int{st.index, fe.index, se.index, re.index} {
 		if _, jerr := waitableJoin(h)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(si)}); jerr != nil {
 			t.Fatalf("waitable.join(%d): %v", wi, jerr)
 		}
 	}
 
-	// Three ready members -> three waits, each delivering one member's event. Collect by code.
+	// Four ready members -> four waits, each delivering one member's event. Collect by code.
 	got := map[eventCode]event{}
-	for i := range 3 {
+	for i := range 4 {
 		ptr := uint32(16 + i*8)
 		codeVals, werr := waitableSetWait(h)(cc, []interp.Value{interp.I32(si), interp.I32(int32(ptr))})
 		if werr != nil {
@@ -121,8 +128,8 @@ func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 		got[code] = event{code: code, p1: binary.LittleEndian.Uint32(buf[0:4]), p2: binary.LittleEndian.Uint32(buf[4:8])}
 	}
 
-	if len(got) != 3 {
-		t.Fatalf("three member kinds delivered %d distinct event codes, want 3 — a shared code is the mis-route: %v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("four member kinds delivered %d distinct event codes, want 4 — a shared code is the mis-route: %v", len(got), got)
 	}
 	sub, ok := got[eventSubtask]
 	if !ok || sub.p1 != uint32(st.index) || sub.p2 != subtaskReturnedState {
@@ -137,6 +144,16 @@ func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
 	strm, ok := got[eventStreamWrite]
 	if !ok || strm.p1 != uint32(se.index) || strm.p2 != uint32(copyCompleted)|(2<<4) {
 		t.Errorf("STREAM_WRITE event = %+v, want (p1 %d, p2 %d)", strm, se.index, uint32(copyCompleted)|(2<<4))
+	}
+	// STREAM_READ (code 2) with progress 3 -> 48. Adjacent to STREAM_WRITE (3): a swap routes 48 to code 3
+	// or 32 to code 2 and fails. This is the real path's delivered event.
+	rd, ok := got[eventStreamRead]
+	if !ok || rd.p1 != uint32(re.index) || rd.p2 != uint32(copyCompleted)|(3<<4) {
+		t.Errorf("STREAM_READ event = %+v, want (p1 %d, p2 %d)", rd, re.index, uint32(copyCompleted)|(3<<4))
+	}
+	// The consumed read event transitioned the end out of COPYING (COMPLETED -> IDLE).
+	if got := re.endStateName(); got != "IDLE" {
+		t.Errorf("readable end state after consume = %s, want IDLE (COMPLETED read leaves it open)", got)
 	}
 }
 

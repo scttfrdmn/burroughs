@@ -103,3 +103,125 @@ func TestStreamWriteDeliversTheOracleOutcomes(t *testing.T) {
 		})
 	}
 }
+
+type streamHostFirstFixture struct {
+	Name     string `json:"name"`
+	ReadN    int    `json:"read_n"`
+	WriteN   int    `json:"write_n"`
+	ReadRet  []int  `json:"read_ret"`
+	WriteRet []int  `json:"write_ret"`
+	Packed   int    `json:"packed"`
+	Result   int    `json:"result"`
+	Progress int    `json:"progress"`
+	WiState  string `json:"wi_state"`
+	RiState  string `json:"ri_state"`
+	ReadGot  []int  `json:"read_got"`
+}
+
+// TestStreamHostFirstCompletesInline pins the host-arrives-first ordering — the real p3async-hello flow,
+// where the host reads the readable end BEFORE the guest issues its stream.write on the writable end. Here
+// the guest's write is the second arriver: it drives the copy and completes INLINE, returning the packed
+// payload result|(progress<<4) DIRECTLY rather than BLOCKED, and arming no waitable event for the write.
+// This is the mirror image of TestStreamWriteDeliversTheOracleOutcomes (guest-first, write→BLOCKED→event).
+// The under-read (host 2 / guest 4) and over-read (host 4 / guest 2) rows together prove progress is
+// min(read_n, write_n) — neither "the pending side's remaining" nor "the arriving side's". The pending read
+// end stays COPYING (its event armed but not consumed); the write end goes IDLE (its event consumed inline).
+func TestStreamHostFirstCompletesInline(t *testing.T) {
+	var doc struct {
+		StreamHostFirst []streamHostFirstFixture `json:"stream_hostfirst"`
+	}
+	loadFixtures(t, &doc)
+	if len(doc.StreamHostFirst) == 0 {
+		t.Fatal("no stream_hostfirst in fixtures.json")
+	}
+	for _, fx := range doc.StreamHostFirst {
+		t.Run(fx.Name, func(t *testing.T) {
+			h := newAsyncHandles()
+			cc, err := interp.NewCanonCallerForTest(1)
+			if err != nil {
+				t.Fatalf("harness caller: %v", err)
+			}
+
+			// stream.new mints a connected (ri, wi) pair over one shared stream.
+			newRet, err := streamNew(h)(cc, nil)
+			if err != nil {
+				t.Fatalf("stream.new: %v", err)
+			}
+			packed := uint64(newRet[0].Int64())
+			ri, wi := uint32(packed&0xffffffff), uint32(packed>>32)
+			re, ok := handleAt[*readableStreamEnd](h, ri)
+			if !ok {
+				t.Fatalf("stream.new did not mint a readable end at %d", ri)
+			}
+
+			// Seed the guest's write buffer with "AB…" at dstPtr+read_n, disjoint from the read buffer.
+			const dstPtr = 32
+			srcPtr := uint32(dstPtr + fx.ReadN + 8)
+			src := make([]byte, fx.WriteN)
+			for k := range src {
+				src[k] = byte(65 + k)
+			}
+			if werr := cc.Write(uint64(srcPtr), src); werr != nil {
+				t.Fatalf("seeding src: %v", werr)
+			}
+
+			// Host reads FIRST — it parks (no writer yet). completed must be false: the host-first case.
+			h.mu.Lock()
+			_, completed, rerr := re.hostReadLocked(cc, dstPtr, uint32(fx.ReadN))
+			h.mu.Unlock()
+			if rerr != nil {
+				t.Fatalf("host read: %v", rerr)
+			}
+			if completed {
+				t.Fatal("host read completed inline, want parked (host-first: no writer yet)")
+			}
+
+			// Guest writes SECOND — it drives the copy and completes INLINE, returning the packed payload.
+			writeRet, err := streamWrite(h)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(int32(srcPtr)), interp.I32(int32(fx.WriteN))})
+			if err != nil {
+				t.Fatalf("stream.write: %v", err)
+			}
+			gotPacked := uint32(writeRet[0].Int32())
+			if gotPacked == asyncBlocked {
+				t.Fatalf("stream.write returned BLOCKED, want inline payload %#x — host-first must complete inline", fx.Packed)
+			}
+			wantPacked := uint32(fx.Result) | (uint32(fx.Progress) << 4)
+			if gotPacked != wantPacked || int(gotPacked) != fx.Packed {
+				t.Errorf("inline write payload = %d (result %d, progress %d), want %d (fixture)", gotPacked, gotPacked&0xf, gotPacked>>4, fx.Packed)
+			}
+			if int(gotPacked>>4) != fx.Progress {
+				t.Errorf("progress = %d, want %d — min(read_n=%d, write_n=%d)", gotPacked>>4, fx.Progress, fx.ReadN, fx.WriteN)
+			}
+
+			// End states: the write end consumed its event inline (IDLE); the read end's event is armed but
+			// not yet consumed (stays COPYING).
+			we, _ := handleAt[*writableStreamEnd](h, wi)
+			if got := we.endStateName(); got != fx.WiState {
+				t.Errorf("wi state = %s, want %s (COMPLETED write goes IDLE, consumed inline)", got, fx.WiState)
+			}
+			if got := re.endStateName(); got != fx.RiState {
+				t.Errorf("ri state = %s, want %s (armed event untaken stays COPYING)", got, fx.RiState)
+			}
+			// The read end's event must be ARMED (the host consumer that issued the read learns the copy
+			// completed) — with the SAME progress — even though it stays COPYING here (unconsumed). Without
+			// this, the write completes but the reader is never notified: the host never gets its bytes.
+			if !re.resolved {
+				t.Error("read end not armed after the write drove the copy — the host reader would never learn it completed")
+			}
+			if re.progress != uint32(fx.Progress) {
+				t.Errorf("read end progress = %d, want %d (the shared copy count)", re.progress, fx.Progress)
+			}
+
+			// The bytes that landed in the host's read buffer — progress elements, the rest untouched.
+			landed, lerr := cc.Read(dstPtr, uint64(fx.ReadN))
+			if lerr != nil {
+				t.Fatalf("reading landed bytes: %v", lerr)
+			}
+			for k, want := range fx.ReadGot {
+				if int(landed[k]) != want {
+					t.Errorf("read buffer[%d] = %d, want %d", k, landed[k], want)
+				}
+			}
+		})
+	}
+}
