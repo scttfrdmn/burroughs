@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 3 — `stream.write` execution (ADR 0086, #739).** With `BURROUGHS_ASYNC=1`, a
+  guest can write to a host-provided `stream<u8>` (stdout): an async lower whose result is a `stream<T>`
+  mints a writable end and returns its handle; `stream.write` (0x10) returns `BLOCKED` and registers the
+  pending write, and the host consumer's completion arms a `(STREAM_WRITE, i, result | progress<<4)` event
+  delivered through the **same** waitable-set loop — the writable stream end is the **third** `waitable`
+  kind (after subtask and readable future end), and the mixed-kind witness now exercises all three through
+  one park. Two facts differ from `future.read` and are handled explicitly: the event carries **progress**
+  (a partial write is COMPLETED with `progress < n`, matched to the oracle so a codec can't drop the field),
+  and a COMPLETED stream write leaves the end **IDLE** (open for more), where future's is DONE. DROPPED
+  (progress 0, end DONE) is discharged here. `gateAsync` narrows to permit `stream.write` and stream/future
+  value types; `stream.read` (0x0f, which the guest does not bind), `stream.new`/`cancel`/`drop`, and
+  `future.write` stay refused by name — witnessed firing, not unreached branches of the symmetric copy. Off
+  by default.
 - **`gate:async` increment 3 oracle — the `stream.write` outcome differential (ADR 0086, #739).** The
   reference model's async `stream.write` path, pinned by running (`gen.py`'s `emit_stream_write`): the write
   parks (`BLOCKED`), and the `(STREAM_WRITE, i, packed)` event packs `result | (progress<<4)` — not a bare
