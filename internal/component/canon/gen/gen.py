@@ -618,6 +618,20 @@ STREAM_WRITE_CASES = [
     {"name": "stream-write-u8-dropped", "outcome": "dropped", "n": 4},
 ]
 
+# The host-arrives-first orderings — the real p3async-hello flow, where the host's read
+# on the readable end (via a lowered write-via-stream) pends BEFORE the guest issues its
+# stream.write on the writable end. Here the guest's write is the SECOND arriver: it drives
+# the copy and completes INLINE (returns the packed payload directly, not BLOCKED, and arms
+# no waitable event) — the mirror-image of STREAM_WRITE_CASES, which drive guest-first.
+# read_n / write_n differ deliberately: progress is min(read_n, write_n) in every row, so
+# the under-read (2/4) and over-read (4/2) rows together prove it is the minimum and not
+# "the pending side's remaining" (the question the guest-first cases cannot answer).
+STREAM_HOSTFIRST_CASES = [
+    {"name": "stream-hostfirst-u8-full", "read_n": 4, "write_n": 4},
+    {"name": "stream-hostfirst-u8-under-read", "read_n": 2, "write_n": 4},
+    {"name": "stream-hostfirst-u8-over-read", "read_n": 4, "write_n": 2},
+]
+
 
 def emit_stream_write(case):
     from definitions import (  # noqa: E402
@@ -690,6 +704,67 @@ def emit_stream_write(case):
     }
 
 
+def emit_stream_hostfirst(case):
+    from definitions import (  # noqa: E402
+        U8Type, StreamType, FuncType,
+        canon_stream_new, canon_stream_write, canon_stream_read,
+    )
+    heap = TracingHeap(case.get("heap_size", 256))
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    st = StreamType(U8Type())
+    read_n, write_n = case["read_n"], case["write_n"]
+    cap = {}
+
+    def outer_core(_flat):
+        packed = canon_stream_new(st)[0]
+        ri, wi = packed & 0xffffffff, packed >> 32
+        # The host reads FIRST — it pends (no writer yet), returning BLOCKED.
+        dst = heap.realloc([0, 0, 1, read_n])[0]
+        cap["read_ret"] = [int(x) for x in canon_stream_read(st, mk_opts(True), ri, dst, read_n)]
+        # The guest writes SECOND — it drives the copy against the pending read and completes
+        # inline, returning the packed payload directly (no BLOCKED, no waitable event).
+        src = heap.realloc([0, 0, 1, write_n])[0]
+        for k in range(write_n):
+            heap.memory[src + k] = 65 + k  # "AB…" — the bytes the guest writes
+        cap["write_ret"] = [int(x) for x in canon_stream_write(st, mk_opts(True), wi, src, write_n)]
+        cap["wi_state"] = inst.handles.get(wi).state.name
+        cap["ri_state"] = inst.handles.get(ri).state.name
+        cap["read_got"] = list(heap.memory[dst:dst + read_n])
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+
+    packed = cap["write_ret"][0]
+    return {
+        "name": case["name"],
+        "read_n": read_n,
+        "write_n": write_n,
+        "read_ret": cap["read_ret"],       # [BLOCKED] — the host read parks (no writer yet)
+        "write_ret": cap["write_ret"],     # [result | progress<<4] INLINE — no event, no BLOCKED
+        "packed": packed,
+        "result": packed & 0xf,            # CopyResult: COMPLETED=0
+        "progress": packed >> 4,           # min(read_n, write_n) — the smaller side bounds it
+        "wi_state": cap["wi_state"],       # IDLE — the write completed (open, reusable)
+        "ri_state": cap["ri_state"],       # COPYING — the read is still open (under-read leaves it so)
+        "read_got": cap["read_got"],       # the bytes that landed in the host's buffer
+        "memory_hex": heap.memory.hex(),
+        "realloc": heap.calls,
+    }
+
+
 def main():
     with open(os.path.join(os.path.dirname(__file__), "cases.json")) as f:
         cases = json.load(f)
@@ -701,6 +776,7 @@ def main():
         "async_lower_blocking": [emit_async_lower_blocking(c) for c in ASYNC_LOWER_BLOCKING_CASES],
         "future_reads": [emit_future_read(c) for c in FUTURE_READ_CASES],
         "stream_writes": [emit_stream_write(c) for c in STREAM_WRITE_CASES],
+        "stream_hostfirst": [emit_stream_hostfirst(c) for c in STREAM_HOSTFIRST_CASES],  # gate:async inc 4: host-first inline completion
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),

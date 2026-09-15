@@ -249,6 +249,11 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	if err := gateAsync(sread); !errors.Is(err, ErrAsyncNotImplemented) {
 		t.Errorf("gate on, stream.read: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
+	// stream.new (0x0e, increment 4): permitted — the guest mints both ends over one shared stream.
+	snew := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x0e}}}
+	if err := gateAsync(snew); err != nil {
+		t.Errorf("gate on, stream.new: gateAsync refused (%v), want permit — stream.new is built", err)
+	}
 
 	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,
 	// stream.write); the unbuilt operations on them refuse at the built-in check, not at the type.

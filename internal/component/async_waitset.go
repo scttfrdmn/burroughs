@@ -29,6 +29,7 @@ type eventCode uint32
 const (
 	eventNone        eventCode = 0
 	eventSubtask     eventCode = 1
+	eventStreamRead  eventCode = 2 // definitions.py EventCode.STREAM_READ (def:699)
 	eventStreamWrite eventCode = 3 // definitions.py EventCode.STREAM_WRITE (def:700)
 	eventFutureRead  eventCode = 4 // definitions.py EventCode.FUTURE_READ (def:701)
 )
@@ -205,6 +206,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 		return futureRead(w.async), true
 	case 0x1a: // future.drop-readable
 		return futureDrop(w.async), true
+	case 0x0e: // stream.new (gate:async increment 4) — mints a connected readable+writable end pair
+		return streamNew(w.async), true
 	case 0x10: // stream.write (gate:async increment 3, write side)
 		return streamWrite(w.async), true
 	case 0x0a: // context.get (gate:async increment 4) — reads the agent's own context slot

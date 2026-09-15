@@ -29,16 +29,17 @@ import (
 // guarded by the owning asyncHandles' mutex.
 type writableStreamEnd struct {
 	index     int
-	set       *waitableSet // the set it is joined to, if any
-	resolved  bool         // this write has an event to deliver
-	delivered bool         // the STREAM_WRITE event has been taken by a waitable-set.wait
-	done      bool         // the end is DONE (dropped); a COMPLETED write leaves it not-done (IDLE, open)
+	set       *waitableSet       // the set it is joined to, if any
+	conn      *readableStreamEnd // the paired readable end of the same stream (set by stream.new); nil for a lowered end
+	resolved  bool               // this write has an event to deliver
+	delivered bool               // the STREAM_WRITE event has been taken by a waitable-set.wait
+	done      bool               // the end is DONE (dropped); a COMPLETED write leaves it not-done (IDLE, open)
 	result    copyResult
 	progress  uint32              // elements the consumer took (packed into the event as progress<<4)
 	srcPtr    uint32              // where a pending stream.write offered its elements
 	n         uint32              // how many elements the guest offered
 	hasWrite  bool                // a stream.write is pending on this end
-	caller    *interp.CanonCaller // the writing agent's caller (unused this slice; the host consumer reads src)
+	caller    *interp.CanonCaller // the writing agent's caller (used by the inline copy to read src)
 }
 
 // pendingEventLocked delivers the write's (STREAM_WRITE, index, result|progress<<4) event once — progress
@@ -80,10 +81,21 @@ func (e *writableStreamEnd) completeWriteLocked(progress uint32, r copyResult) {
 	}
 }
 
-// streamWrite implements `canon stream.write` (0x10, definitions.py:2473) on the async path: register the
-// pending write (the src ptr + element count) and return BLOCKED. The host consumer later takes elements
-// (completeWriteLocked), which arms the STREAM_WRITE event the existing waitable-set.wait delivers — no
-// second wait mechanism. `stream.read` (0x0f) is NOT built (the guest does not bind it); it refuses by name.
+// streamWrite implements `canon stream.write` (0x10, definitions.py:2473) on the async path. Two orderings,
+// pinned by the oracle (fixtures.json stream_writes and stream_hostfirst):
+//
+//   - Guest-first: the writable end's reader has not yet arrived. Register the pending write (src ptr +
+//     count) and return BLOCKED; the reader that arrives second (a host consumer, or a synthetic completion)
+//     drives the copy, arming the STREAM_WRITE event the existing waitable-set.wait delivers.
+//   - Host-first: a read is already pending on the paired readable end (the real p3async-hello flow, where
+//     the host reads the readable end via a lowered import before the guest issues its write). The write is
+//     the SECOND arriver: it drives the copy inline and completes INLINE — returning the packed payload
+//     `result | (progress<<4)` directly, NOT BLOCKED, and arming no waitable event for the write. `progress`
+//     is min(read_n, write_n), the smaller side (fixtures.json stream_hostfirst: under-read and over-read
+//     both land min).
+//
+// `stream.read` (0x0f) is NOT built as a guest built-in (the guest does not bind it); the host reads the
+// readable end through hostReadLocked, an internal path. It refuses by name.
 func streamWrite(h *asyncHandles) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 3 {
@@ -101,9 +113,179 @@ func streamWrite(h *asyncHandles) interp.CanonFunc {
 		}
 		e.srcPtr = ptr
 		e.n = n
-		e.hasWrite = true
 		e.caller = c
+		// Host-first: the paired readable end already has a pending read. Drive the copy now and complete
+		// inline — the write is the second arriver (SharedStreamImpl.write, def:997–1005).
+		if e.conn != nil && e.conn.hasRead && !e.conn.resolved {
+			progress, err := driveStreamCopyLocked(e.conn, e)
+			if err != nil {
+				return nil, err
+			}
+			// Arm the READ end's event (so the host consumer that issued the read learns the copy completed
+			// and can wake a waiter joined to it); it stays COPYING until that wait consumes it. The WRITE end
+			// consumes its own event inline and returns the packed payload — the guest gets no waitable event.
+			e.conn.armLocked(progress, copyCompleted)
+			e.completeWriteLocked(progress, copyCompleted)
+			ev, _ := e.pendingEventLocked()
+			return []interp.Value{interp.I32(int32(ev.p2))}, nil
+		}
+		// Guest-first: no reader yet. Park the write and return BLOCKED.
+		e.hasWrite = true
 		bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
 		return []interp.Value{interp.I32(int32(bits))}, nil
+	}
+}
+
+// copyState mirrors definitions.py CopyState (def:1017–1021): a stream/future end's lifecycle. Only the
+// three a stream end reaches in this slice are named — IDLE (open, no copy in flight), COPYING (a copy is
+// registered, its event not yet consumed), DONE (dropped). The values match the model's so a name maps
+// straight across. The transition COPYING→IDLE/DONE runs when the pending event is CONSUMED (get_pending_
+// event → stream_event, def:2491–2497), not when it is armed — which is why the pending side of a copy
+// stays COPYING with an armed-but-untaken event (fixtures.json stream_hostfirst: ri stays COPYING).
+type copyState uint32
+
+const (
+	copyStateIdle    copyState = 1
+	copyStateCopying copyState = 2
+	copyStateDone    copyState = 4
+)
+
+func (s copyState) name() string {
+	switch s {
+	case copyStateCopying:
+		return "COPYING"
+	case copyStateDone:
+		return "DONE"
+	default:
+		return "IDLE"
+	}
+}
+
+// readableStreamEnd is the readable half of a stream<T> — the FOURTH waitable kind. It is minted by
+// stream.new paired with a writable end over one shared stream (the `conn` back-pointers), and read by the
+// host consumer (hostReadLocked), NOT by a guest built-in: the guest does not bind stream.read (0x0f), so
+// that opcode stays refused; the host reads this end through an internal path when a lowered import hands
+// it the readable end (the p3async-hello write-via-stream flow). A pending read parks in COPYING; the write
+// that arrives second drives the copy and arms this end's (STREAM_READ, index, result|progress<<4) event,
+// which stays COPYING until a waitable-set.wait consumes it. All fields are guarded by asyncHandles.mu.
+type readableStreamEnd struct {
+	index     int
+	set       *waitableSet       // the set it is joined to, if any
+	conn      *writableStreamEnd // the paired writable end of the same stream (set by stream.new)
+	state     copyState
+	resolved  bool // the copy has ended (COMPLETED or DROPPED)
+	delivered bool // the STREAM_READ event has been taken by a waitable-set.wait
+	result    copyResult
+	progress  uint32              // elements copied into the read buffer (min(read_n, write_n))
+	dstPtr    uint32              // where a pending read wants elements written
+	readN     uint32              // how many elements the read requested
+	hasRead   bool                // a read is pending on this end
+	caller    *interp.CanonCaller // the reader's caller, for the completion's memory write
+}
+
+// pendingEventLocked delivers the read's (STREAM_READ, index, result|progress<<4) event once and, on
+// consumption, transitions the end out of COPYING (COMPLETED→IDLE, DROPPED→DONE) — the model's stream_event
+// runs at get_pending_event, not at arm. readableStreamEnd satisfies the waitable interface. Caller holds mu.
+func (e *readableStreamEnd) pendingEventLocked() (event, bool) {
+	if e.resolved && !e.delivered {
+		e.delivered = true
+		if e.result == copyDropped {
+			e.state = copyStateDone
+		} else {
+			e.state = copyStateIdle
+		}
+		return event{code: eventStreamRead, p1: uint32(e.index), p2: uint32(e.result) | (e.progress << 4)}, true
+	}
+	return event{}, false
+}
+
+// joinTo records the set this end belongs to, so a completed copy can wake its waiters.
+func (e *readableStreamEnd) joinTo(s *waitableSet) { e.set = s }
+
+// endStateName is the read end's lifecycle state — COPYING while a read is registered and its event untaken,
+// IDLE/DONE once consumed. Tracked here (not derived at delivery) because the next op's trap-legality reads it.
+func (e *readableStreamEnd) endStateName() string { return e.state.name() }
+
+// armLocked ends a pending read with result r and progress: mark resolved and wake any joined set. The end
+// stays COPYING until the event is consumed (pendingEventLocked) — matching the model, where only the
+// consume transitions the state. Caller holds mu; may run on the writing agent's goroutine.
+func (e *readableStreamEnd) armLocked(progress uint32, r copyResult) {
+	e.progress = progress
+	e.result = r
+	e.resolved = true
+	if e.set != nil {
+		e.set.signalLocked()
+	}
+}
+
+// driveStreamCopyLocked copies min(read_n, write_n) elements from the writable end's source buffer into the
+// readable end's destination buffer, returning the count (the shared progress both ends report). This is
+// SharedStreamImpl's copy (def:982–987 / 1000–1005): the second arriver moves the bytes; each side supplies
+// its own buffer at its own ptr in its own memory. Caller holds asyncHandles.mu.
+func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, error) {
+	n := w.n
+	if r.readN < n {
+		n = r.readN
+	}
+	if n > 0 {
+		src, err := w.caller.Read(uint64(w.srcPtr), uint64(n))
+		if err != nil {
+			return 0, fmt.Errorf("component: stream copy: reading %d elements from writer at %#x: %w", n, w.srcPtr, err)
+		}
+		if err := r.caller.Write(uint64(r.dstPtr), src); err != nil {
+			return 0, fmt.Errorf("component: stream copy: writing %d elements to reader at %#x: %w", n, r.dstPtr, err)
+		}
+	}
+	return n, nil
+}
+
+// hostReadLocked is the host consumer's read of a readable stream end — the internal counterpart to the
+// guest's stream.write, NOT the guest built-in stream.read (0x0f stays refused). Two orderings mirror
+// stream.write's: if the paired writable end already has a pending write, drive the copy now (the read is
+// the second arriver) and complete both ends; otherwise park the read (state COPYING) for the write to
+// drive. Returns (progress, completed): completed=false means the read parked (the host-first case — the
+// guest's write completes it later). Caller holds asyncHandles.mu.
+func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32) (progress uint32, completed bool, err error) {
+	if e.state != copyStateIdle {
+		return 0, false, fmt.Errorf("component: stream read: end %d is not readable (state %s)", e.index, e.state.name())
+	}
+	e.dstPtr = ptr
+	e.readN = n
+	e.caller = c
+	e.state = copyStateCopying
+	// Read-first (guest-first for the write): a write is already parked — drive the copy now and complete
+	// both ends. The read consumes its own event inline (→ IDLE); the write's event is armed for its wait.
+	if e.conn != nil && e.conn.hasWrite && !e.conn.resolved {
+		progress, err = driveStreamCopyLocked(e, e.conn)
+		if err != nil {
+			return 0, false, err
+		}
+		e.conn.completeWriteLocked(progress, copyCompleted)
+		e.armLocked(progress, copyCompleted)
+		e.pendingEventLocked() // consume inline → IDLE
+		return progress, true, nil
+	}
+	// Host-first: no writer yet. Park the read; the guest's write drives it (streamWrite's inline arm).
+	e.hasRead = true
+	return 0, false, nil
+}
+
+// streamNew implements `canon stream.new` (0x0e, definitions.py:2451): mint a readable and a writable end
+// over ONE shared stream, connect them (the `conn` back-pointers), and return the packed handle
+// `ri | (wi << 32)` as an i64. The two ends are added in that order (ri before wi), so ri is the lower index
+// — matching the oracle (fixtures.json stream_new: ri=1, wi=2, both IDLE). This is the guest→host inversion:
+// the guest keeps wi (stream.write) and hands ri to the host, whose read drives the guest's write to done.
+func streamNew(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		re := &readableStreamEnd{state: copyStateIdle}
+		we := &writableStreamEnd{}
+		re.index = h.addLocked(re)
+		we.index = h.addLocked(we)
+		re.conn = we
+		we.conn = re
+		packed := uint64(uint32(re.index)) | uint64(uint32(we.index))<<32
+		return []interp.Value{interp.I64(int64(packed))}, nil
 	}
 }
