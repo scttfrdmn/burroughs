@@ -4,6 +4,7 @@ package component
 
 import (
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -167,7 +168,7 @@ func TestStreamHostFirstCompletesInline(t *testing.T) {
 
 			// Host reads FIRST — it parks (no writer yet). completed must be false: the host-first case.
 			h.mu.Lock()
-			_, completed, rerr := re.hostReadLocked(cc, dstPtr, uint32(fx.ReadN))
+			completed, rerr := re.hostReadLocked(cc, dstPtr, uint32(fx.ReadN))
 			h.mu.Unlock()
 			if rerr != nil {
 				t.Fatalf("host read: %v", rerr)
@@ -223,5 +224,141 @@ func TestStreamHostFirstCompletesInline(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type streamDropsFixture struct {
+	TrapMatrix struct {
+		StreamReadable         map[string]string `json:"stream_readable"`
+		StreamWritable         map[string]string `json:"stream_writable"`
+		FutureWritableContrast map[string]string `json:"future_writable_contrast"`
+	} `json:"trap_matrix"`
+	Notify struct {
+		ReadRet             []int  `json:"read_ret"`
+		DropWiRet           []int  `json:"drop_wi_ret"`
+		EventCode           int    `json:"event_code"`
+		Result              int    `json:"result"`
+		Progress            int    `json:"progress"`
+		RiStateAfterConsume string `json:"ri_state_after_consume"`
+	} `json:"notify"`
+}
+
+// dropOutcome runs a drop CanonFunc on a handle already in the table and reports "trap" or "ok" — the
+// end-state audit's verdict, compared to the oracle's trap matrix.
+func dropOutcome(t *testing.T, fn interp.CanonFunc, cc *interp.CanonCaller, idx int) string {
+	t.Helper()
+	_, err := fn(cc, []interp.Value{interp.I32(int32(idx))})
+	var tr *interp.Trap
+	if errors.As(err, &tr) {
+		return "trap"
+	}
+	if err != nil {
+		t.Fatalf("drop returned a non-trap error: %v", err)
+	}
+	return "ok"
+}
+
+// TestStreamDropsAuditEndStates pins drop-readable (0x13) and drop-writable (0x14) against the committed
+// oracle (stream_drops). Two things are audited. (1) The trap guard: a stream end drops from IDLE or DONE
+// and TRAPS mid-copy (COPYING) — you cannot drop an end with an in-flight or armed-but-unconsumed copy, so
+// a drop before the host consumer takes the read event traps rather than silently discarding a completed
+// copy. (2) The anti-hang notification: dropping the idle writable end while a read is pending wakes the
+// reader with DROPPED (progress 0), transitioning it to DONE — not leaving it waiting forever, which is the
+// failure the host-first inline flow could otherwise produce.
+func TestStreamDropsAuditEndStates(t *testing.T) {
+	var doc struct {
+		StreamDrops streamDropsFixture `json:"stream_drops"`
+	}
+	loadFixtures(t, &doc)
+	fx := doc.StreamDrops
+	if len(fx.TrapMatrix.StreamReadable) == 0 {
+		t.Fatal("no stream_drops trap matrix in fixtures.json")
+	}
+
+	cc, err := interp.NewCanonCallerForTest(1)
+	if err != nil {
+		t.Fatalf("harness caller: %v", err)
+	}
+
+	// (1) Trap guard, readable end: construct an end in each state, drop it, compare to the oracle.
+	readableStates := map[string]copyState{"IDLE": copyStateIdle, "COPYING": copyStateCopying, "DONE": copyStateDone}
+	for state, want := range fx.TrapMatrix.StreamReadable {
+		h := newAsyncHandles()
+		re := &readableStreamEnd{state: readableStates[state]}
+		re.index = h.addLocked(re)
+		if got := dropOutcome(t, streamDropReadable(h), cc, re.index); got != want {
+			t.Errorf("drop-readable in %s = %s, want %s (oracle trap matrix)", state, got, want)
+		}
+	}
+
+	// (1) Trap guard, writable end: the model's COPYING is a pending unresolved write; IDLE is fresh or a
+	// resolved-open write; DONE is a dropped end. The oracle says IDLE/DONE ok, COPYING traps.
+	writableStates := map[string]*writableStreamEnd{
+		"IDLE":    {},
+		"COPYING": {hasWrite: true},
+		"DONE":    {done: true},
+	}
+	for state, want := range fx.TrapMatrix.StreamWritable {
+		h := newAsyncHandles()
+		we := writableStates[state]
+		we.index = h.addLocked(we)
+		if got := dropOutcome(t, streamDropWritable(h), cc, we.index); got != want {
+			t.Errorf("drop-writable in %s = %s, want %s (oracle trap matrix)", state, got, want)
+		}
+	}
+
+	// (2) Anti-hang notification: stream.new -> join ri -> host read (pends) -> drop wi -> the reader's
+	// STREAM_READ event fires DROPPED (progress 0) and the end goes DONE.
+	h := newAsyncHandles()
+	newRet, err := streamNew(h)(cc, nil)
+	if err != nil {
+		t.Fatalf("stream.new: %v", err)
+	}
+	packed := uint64(newRet[0].Int64())
+	ri, wi := uint32(packed&0xffffffff), uint32(packed>>32)
+	re, _ := handleAt[*readableStreamEnd](h, ri)
+
+	siVals, err := waitableSetNew(h)(cc, nil)
+	if err != nil {
+		t.Fatalf("waitable-set.new: %v", err)
+	}
+	si := siVals[0].Int32()
+	if _, jerr := waitableJoin(h)(cc, []interp.Value{interp.I32(int32(ri)), interp.I32(si)}); jerr != nil {
+		t.Fatalf("waitable.join: %v", jerr)
+	}
+
+	h.mu.Lock()
+	completed, rerr := re.hostReadLocked(cc, 32, 4) // host reads first -> parks
+	h.mu.Unlock()
+	if rerr != nil || completed {
+		t.Fatalf("host read: err=%v completed=%v, want parked", rerr, completed)
+	}
+
+	dropRet, derr := streamDropWritable(h)(cc, []interp.Value{interp.I32(int32(wi))})
+	if derr != nil {
+		t.Fatalf("drop-writable of an idle writer trapped, want ok: %v", derr)
+	}
+	if len(dropRet) != len(fx.Notify.DropWiRet) {
+		t.Errorf("drop-writable return arity = %d, want %d", len(dropRet), len(fx.Notify.DropWiRet))
+	}
+
+	const evptr = 48
+	codeVals, werr := waitableSetWait(h)(cc, []interp.Value{interp.I32(si), interp.I32(evptr)})
+	if werr != nil {
+		t.Fatalf("waitable-set.wait: %v", werr)
+	}
+	if int(codeVals[0].Int32()) != fx.Notify.EventCode {
+		t.Errorf("event code = %d, want %d (STREAM_READ)", codeVals[0].Int32(), fx.Notify.EventCode)
+	}
+	buf, brerr := cc.Read(evptr, 8)
+	if brerr != nil {
+		t.Fatalf("reading event: %v", brerr)
+	}
+	p2 := binary.LittleEndian.Uint32(buf[4:8])
+	if int(p2&0xf) != fx.Notify.Result || int(p2>>4) != fx.Notify.Progress {
+		t.Errorf("notified event = result %d progress %d, want result %d progress %d (DROPPED, nothing copied)", p2&0xf, p2>>4, fx.Notify.Result, fx.Notify.Progress)
+	}
+	if got := re.endStateName(); got != fx.Notify.RiStateAfterConsume {
+		t.Errorf("reader end state after consuming DROPPED = %s, want %s (a dropped read is terminal)", got, fx.Notify.RiStateAfterConsume)
 	}
 }

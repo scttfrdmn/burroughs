@@ -254,6 +254,18 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	if err := gateAsync(snew); err != nil {
 		t.Errorf("gate on, stream.new: gateAsync refused (%v), want permit — stream.new is built", err)
 	}
+	// stream.drop-readable (0x13) and stream.drop-writable (0x14, increment 4): permitted — the guest drops
+	// both ends after the copy. stream.cancel-read (0x11) remains refused (cancellation is a later increment).
+	for _, op := range []byte{0x13, 0x14} {
+		dropc := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: op}}}
+		if err := gateAsync(dropc); err != nil {
+			t.Errorf("gate on, stream drop %#x: gateAsync refused (%v), want permit — the drops are built", op, err)
+		}
+	}
+	scancel := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x11}}} // stream.cancel-read (unbuilt)
+	if err := gateAsync(scancel); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, stream.cancel-read: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	}
 
 	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,
 	// stream.write); the unbuilt operations on them refuse at the built-in check, not at the type.

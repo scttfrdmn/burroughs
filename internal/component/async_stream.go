@@ -245,9 +245,11 @@ func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, 
 // the second arriver) and complete both ends; otherwise park the read (state COPYING) for the write to
 // drive. Returns (progress, completed): completed=false means the read parked (the host-first case — the
 // guest's write completes it later). Caller holds asyncHandles.mu.
-func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32) (progress uint32, completed bool, err error) {
+// completed=false means the read parked (host-first — the guest's write completes it later). On the
+// read-first path the copy's count lands in e.progress for a consumer that wants it.
+func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32) (completed bool, err error) {
 	if e.state != copyStateIdle {
-		return 0, false, fmt.Errorf("component: stream read: end %d is not readable (state %s)", e.index, e.state.name())
+		return false, fmt.Errorf("component: stream read: end %d is not readable (state %s)", e.index, e.state.name())
 	}
 	e.dstPtr = ptr
 	e.readN = n
@@ -256,18 +258,76 @@ func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32)
 	// Read-first (guest-first for the write): a write is already parked — drive the copy now and complete
 	// both ends. The read consumes its own event inline (→ IDLE); the write's event is armed for its wait.
 	if e.conn != nil && e.conn.hasWrite && !e.conn.resolved {
-		progress, err = driveStreamCopyLocked(e, e.conn)
-		if err != nil {
-			return 0, false, err
+		progress, derr := driveStreamCopyLocked(e, e.conn)
+		if derr != nil {
+			return false, derr
 		}
 		e.conn.completeWriteLocked(progress, copyCompleted)
 		e.armLocked(progress, copyCompleted)
 		e.pendingEventLocked() // consume inline → IDLE
-		return progress, true, nil
+		return true, nil
 	}
 	// Host-first: no writer yet. Park the read; the guest's write drives it (streamWrite's inline arm).
 	e.hasRead = true
-	return 0, false, nil
+	return false, nil
+}
+
+// streamDropReadable implements `canon stream.drop-readable` (0x13, definitions.py:2605). Per CopyEnd.drop
+// (def:1040–1043): TRAP if the end is mid-copy (COPYING) — an end with an in-flight or armed-but-unconsumed
+// copy cannot be dropped — then drop the shared stream and remove the handle. Dropping notifies a pending
+// write on the paired writable end with DROPPED (SharedStreamImpl.drop, def:968–972): a dropped reader wakes
+// a waiting writer with DROPPED rather than orphaning it. The COPYING guard is the end-state audit — a
+// readable end stays COPYING from the read until its event is consumed, so a drop before the host consumer
+// takes the STREAM_READ event traps rather than silently discarding a completed copy.
+func streamDropReadable(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: stream.drop-readable: got %d args, want (i)", len(args))
+		}
+		i := uint32(args[0].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		e, ok := handleAt[*readableStreamEnd](h, i)
+		if !ok {
+			return nil, fmt.Errorf("component: stream.drop-readable: handle %d is not a readable stream end", i)
+		}
+		if e.state == copyStateCopying {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.drop-readable: end %d is mid-copy (COPYING); consume its event before dropping", i)}
+		}
+		if e.conn != nil && e.conn.hasWrite && !e.conn.resolved {
+			e.conn.completeWriteLocked(0, copyDropped) // notify the pending writer: DROPPED, progress 0
+		}
+		h.entries[i] = nil
+		return nil, nil
+	}
+}
+
+// streamDropWritable implements `canon stream.drop-writable` (0x14, definitions.py:2608). Same guard as the
+// readable drop (a stream end drops from IDLE or DONE, traps mid-copy) — NOT the writable FUTURE end's rule,
+// which traps unless DONE (def:1125); a writable stream end may be dropped while IDLE. A pending write is the
+// writable end's COPYING (hasWrite && !resolved). Dropping notifies a pending read on the paired readable
+// end with DROPPED — the anti-hang guarantee in the other direction.
+func streamDropWritable(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: stream.drop-writable: got %d args, want (i)", len(args))
+		}
+		i := uint32(args[0].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		e, ok := handleAt[*writableStreamEnd](h, i)
+		if !ok {
+			return nil, fmt.Errorf("component: stream.drop-writable: handle %d is not a writable stream end", i)
+		}
+		if e.hasWrite && !e.resolved {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.drop-writable: end %d is mid-copy (COPYING); a pending write must resolve before dropping", i)}
+		}
+		if e.conn != nil && e.conn.hasRead && !e.conn.resolved {
+			e.conn.armLocked(0, copyDropped) // notify the pending reader: DROPPED, progress 0, -> DONE on consume
+		}
+		h.entries[i] = nil
+		return nil, nil
+	}
 }
 
 // streamNew implements `canon stream.new` (0x0e, definitions.py:2451): mint a readable and a writable end

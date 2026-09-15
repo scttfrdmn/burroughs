@@ -21,6 +21,22 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `stream.drop-readable`/`drop-writable` execution, the end-state audit (ADR 0086, #739).**
+  With `BURROUGHS_ASYNC=1`, the stream drops (0x13, 0x14) execute. Drops are where end-state correctness is
+  audited: a stream end drops from **IDLE** or **DONE** and **traps mid-copy (COPYING)** — an end with an
+  in-flight or armed-but-unconsumed copy cannot be dropped, so a drop before the host consumer takes the read
+  event traps rather than silently discarding a completed copy. Dropping the idle counterpart while the other
+  end has a pending copy **notifies that end with `DROPPED`, progress 0**, transitioning it to `DONE` — the
+  anti-hang guarantee: a dropped writer wakes a waiting reader rather than orphaning it (the failure the
+  host-first inline flow could otherwise produce). The writable *stream* end drops from IDLE, unlike the
+  writable *future* end (which traps unless DONE) — pinned as a contrast; the guest binds stream drops, not
+  future. Matched to the committed `stream_drops` pin (a trap matrix across states + the notify flow).
+  `gateAsync` permits 0x13/0x14; `p3async-hello` now advances to `stream.cancel-read` (0x11), its next
+  refusal. Off by default.
+- **`gate:async` increment 4 oracle — the `stream.drop` end-state differential (ADR 0086, #739).** Pinned by
+  running: `CopyEnd.drop` traps iff the end is COPYING (IDLE/DONE ok); `SharedStreamImpl.drop` notifies a
+  pending copy on the counterpart with `DROPPED`/progress 0/→DONE. The writable-future contrast (traps unless
+  DONE) is pinned alongside. Oracle for the execution landed in the same change.
 - **`gate:async` increment 4 — `stream.new` execution and the host-first inline copy (ADR 0086, #739).** With
   `BURROUGHS_ASYNC=1`, `stream.new` (0x0e) executes: it mints a connected readable+writable end pair over one
   shared stream and returns `ri | (wi<<32)`. The **readable end** is the fourth waitable kind. The real
