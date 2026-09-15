@@ -3,6 +3,7 @@
 package component
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -68,14 +69,28 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			if hasResult {
-				if err := canon.StoreVia(guestHeap{c}, v, int(uint32(retptr))); err != nil {
+				if v.Type.Kind == canon.KindFuture {
+					// A future<T> result: mint a readable end in the async handle table and write its handle
+					// (an i32). The codec cannot lower it — future handles live in the component-layer table,
+					// not the codec's — so the wrapper writes the handle here (gate:async increment 3).
+					fe := &readableFutureEnd{value: v.FutureValue()}
+					fe.index = h.addLocked(fe)
+					var buf [4]byte
+					binary.LittleEndian.PutUint32(buf[:], uint32(fe.index))
+					if err := c.Write(uint64(uint32(retptr)), buf[:]); err != nil {
+						resolveErr = fmt.Errorf("component: async lower: writing future handle to retptr: %w", err)
+						return
+					}
+				} else if err := canon.StoreVia(guestHeap{c}, v, int(uint32(retptr))); err != nil {
 					resolveErr = fmt.Errorf("component: async lower: lowering result to retptr: %w", err)
 					return
 				}
 			}
 			st.state = subtaskReturned
 			st.resolved = true
-			st.signalResolvedLocked()
+			if st.set != nil { // wake any agent parked on the set this subtask was joined to
+				st.set.signalLocked()
+			}
 		}
 
 		onCancel, err := impl(c, onStart, onResolve)

@@ -74,6 +74,64 @@ func TestWaitableSetWaitDeliversTheOracleEvent(t *testing.T) {
 // subtaskReturnedState is Subtask.State.RETURNED, the state the oracle's event carries (event_p2 = 2).
 const subtaskReturnedState = 2
 
+// TestWaitableSetDeliversPerKindEventCodesNotMisrouted is the mixed-kind firing witness (gate:async
+// increment 3): one waitable set holding BOTH a subtask and a readable future end, each resolved. Each
+// waitable-set.wait delivers the member's OWN event code and payload — the subtask a (SUBTASK, index,
+// state) and the future end a (FUTURE_READ, index, result) — so a set with two member kinds routes each
+// correctly. The 2a-i-B tests could not cover this: there was only one kind when they were written. The
+// mis-routing shape (a codec that returns one code for both, or swaps them) fails here — the two delivered
+// events must carry the two distinct, kind-correct codes.
+func TestWaitableSetDeliversPerKindEventCodesNotMisrouted(t *testing.T) {
+	h := newAsyncHandles()
+	st := &subtask{state: subtaskReturned, resolved: true}
+	st.index = h.addLocked(st)
+	fe := &readableFutureEnd{resolved: true, result: copyCompleted}
+	fe.index = h.addLocked(fe)
+
+	cc, err := interp.NewCanonCallerForTest(1)
+	if err != nil {
+		t.Fatalf("harness caller: %v", err)
+	}
+	siVals, err := waitableSetNew(h)(cc, nil)
+	if err != nil {
+		t.Fatalf("waitable-set.new: %v", err)
+	}
+	si := siVals[0].Int32()
+	for _, wi := range []int{st.index, fe.index} {
+		if _, jerr := waitableJoin(h)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(si)}); jerr != nil {
+			t.Fatalf("waitable.join(%d): %v", wi, jerr)
+		}
+	}
+
+	// Two ready members -> two waits, each delivering one member's event. Collect by code.
+	got := map[eventCode]event{}
+	for i := range 2 {
+		ptr := uint32(16 + i*8)
+		codeVals, werr := waitableSetWait(h)(cc, []interp.Value{interp.I32(si), interp.I32(int32(ptr))})
+		if werr != nil {
+			t.Fatalf("waitable-set.wait #%d: %v", i, werr)
+		}
+		buf, rerr := cc.Read(uint64(ptr), 8)
+		if rerr != nil {
+			t.Fatalf("reading event #%d: %v", i, rerr)
+		}
+		code := eventCode(codeVals[0].Int32())
+		got[code] = event{code: code, p1: binary.LittleEndian.Uint32(buf[0:4]), p2: binary.LittleEndian.Uint32(buf[4:8])}
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("two member kinds delivered %d distinct event codes, want 2 — a shared code is the mis-route: %v", len(got), got)
+	}
+	sub, ok := got[eventSubtask]
+	if !ok || sub.p1 != uint32(st.index) || sub.p2 != subtaskReturnedState {
+		t.Errorf("SUBTASK event = %+v, want (p1 %d, p2 %d)", sub, st.index, subtaskReturnedState)
+	}
+	fut, ok := got[eventFutureRead]
+	if !ok || fut.p1 != uint32(fe.index) || fut.p2 != uint32(copyCompleted) {
+		t.Errorf("FUTURE_READ event = %+v, want (p1 %d, p2 %d)", fut, fe.index, copyCompleted)
+	}
+}
+
 // EventCode returns the SUBTASK event code the blocking round trip's wait delivers (definitions.py
 // EventCode.SUBTASK = 1). A method on the fixture so the test reads it as the oracle's, not a literal.
 func (asyncLowerBlockingFixture) EventCode() eventCode { return eventSubtask }

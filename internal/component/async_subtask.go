@@ -48,6 +48,20 @@ type asyncHandles struct {
 	entries []any // entries[0] is the reserved nil sentinel; each is *subtask or *waitableSet
 }
 
+// pendingEventLocked delivers a resolved subtask's (SUBTASK, subtaski, state) event once, mirroring the
+// model's subtask_event closure (def:2243–2246) — the event carries the subtask's live index and state.
+// subtask satisfies the waitable interface (async_waitset.go). The caller holds asyncHandles.mu.
+func (st *subtask) pendingEventLocked() (event, bool) {
+	if st.resolved && !st.delivered {
+		st.delivered = true
+		return event{code: eventSubtask, p1: uint32(st.index), p2: uint32(st.state)}, true
+	}
+	return event{}, false
+}
+
+// joinTo records the set this subtask belongs to, so onResolve can wake its waiters.
+func (st *subtask) joinTo(s *waitableSet) { st.set = s }
+
 func newAsyncHandles() *asyncHandles { return &asyncHandles{entries: []any{nil}} }
 
 // addLocked registers h and returns its index (>= 1). The caller holds mu.

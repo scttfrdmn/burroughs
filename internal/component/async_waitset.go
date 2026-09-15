@@ -27,8 +27,9 @@ import (
 type eventCode uint32
 
 const (
-	eventNone    eventCode = 0
-	eventSubtask eventCode = 1
+	eventNone       eventCode = 0
+	eventSubtask    eventCode = 1
+	eventFutureRead eventCode = 4 // definitions.py EventCode.FUTURE_READ (def:701)
 )
 
 // event is a waitable-set.wait result (definitions.py EventTuple / unpack_event, def:2367–2372): a code
@@ -38,36 +39,46 @@ type event struct {
 	p1, p2 uint32
 }
 
-// waitableSet is a set of waitables (subtasks) a guest agent can block on. `wake` is closed-and-replaced
-// each time a member resolves, so a parked waitable-set.wait selecting on it re-checks for a pending event
-// (a condition variable expressed as a channel, so the same wait can also select on the caller's context
-// for Close). All fields are guarded by the owning asyncHandles' mutex.
+// waitable is a member of a waitable set: a thing that, once its async operation resolves, has a pending
+// event for a parked waitable-set.wait to deliver. It is deliberately MINIMAL — only what the set's
+// delivery loop needs (pendingEventLocked) and the join back-pointer both kinds need (joinTo). Anything
+// specific to one kind (a subtask's resolution, a future end's copy) stays on that kind, reached where the
+// kind is known, so a second kind cannot drift behind a method it stubs out. Implementers: *subtask
+// (gate:async 2a-i-B) and *readableFutureEnd (increment 3).
+type waitable interface {
+	// pendingEventLocked returns this waitable's deliverable event and marks it taken, or (event{}, false)
+	// if it is not yet resolved. The caller holds asyncHandles.mu.
+	pendingEventLocked() (event, bool)
+	// joinTo records the set this waitable belongs to, so its own resolution can wake the set's waiters.
+	joinTo(s *waitableSet)
+}
+
+// waitableSet is a set of waitables a guest agent can block on. `wake` is closed-and-replaced each time a
+// member resolves, so a parked waitable-set.wait selecting on it re-checks for a pending event (a condition
+// variable expressed as a channel, so the same wait can also select on the caller's context for Close). All
+// fields are guarded by the owning asyncHandles' mutex.
 type waitableSet struct {
-	members []*subtask
+	members []waitable
 	wake    chan struct{}
 }
 
-// pendingEventLocked returns the first member's deliverable event (a resolved, not-yet-delivered subtask),
-// marking it delivered, or (event{}, false) if none is ready. The caller holds asyncHandles.mu. Mirrors
-// WaitableSet.get_pending_event + the subtask_event closure (def:2243–2246): the event carries the
-// subtask's live index and state.
+// pendingEventLocked returns the first ready member's deliverable event, or (event{}, false) if none is
+// ready. The caller holds asyncHandles.mu. Mirrors WaitableSet.get_pending_event (def:761–767) — kind
+// -agnostic: whichever member kind is ready supplies its own (code, p1, p2).
 func (s *waitableSet) pendingEventLocked() (event, bool) {
-	for _, st := range s.members {
-		if st.resolved && !st.delivered {
-			st.delivered = true
-			return event{code: eventSubtask, p1: uint32(st.index), p2: uint32(st.state)}, true
+	for _, m := range s.members {
+		if e, ok := m.pendingEventLocked(); ok {
+			return e, true
 		}
 	}
 	return event{}, false
 }
 
-// signalResolvedLocked wakes any agent parked on a set the subtask belongs to. The caller holds mu and has
-// just marked the subtask resolved (async_lower.go onResolve).
-func (st *subtask) signalResolvedLocked() {
-	if st.set != nil {
-		close(st.set.wake)
-		st.set.wake = make(chan struct{})
-	}
+// signalLocked wakes any agent parked on the set. The caller holds mu and has just resolved a member (the
+// member reaches its set through the joinTo back-pointer, where its own kind is known).
+func (s *waitableSet) signalLocked() {
+	close(s.wake)
+	s.wake = make(chan struct{})
 }
 
 // waitableSetNew implements `canon waitable-set.new` (definitions.py:2351): allocate a waitable set in the
@@ -91,16 +102,16 @@ func waitableJoin(h *asyncHandles) interp.CanonFunc {
 		wi, si := uint32(args[0].Bits), uint32(args[1].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		st, ok := handleAt[*subtask](h, wi)
+		w, ok := handleWaitable(h, wi)
 		if !ok {
-			return nil, fmt.Errorf("component: waitable.join: handle %d is not a subtask", wi)
+			return nil, fmt.Errorf("component: waitable.join: handle %d is not a waitable", wi)
 		}
 		set, ok := handleAt[*waitableSet](h, si)
 		if !ok {
 			return nil, fmt.Errorf("component: waitable.join: handle %d is not a waitable set", si)
 		}
-		st.set = set
-		set.members = append(set.members, st)
+		w.joinTo(set)
+		set.members = append(set.members, w)
 		return nil, nil
 	}
 }
@@ -189,8 +200,22 @@ func (w *walker) asyncBuiltinFunc(op byte, _ *interp.Extern) (interp.CanonFunc, 
 		return waitableSetDrop(w.async), true
 	case 0x23: // waitable.join
 		return waitableJoin(w.async), true
+	case 0x16: // future.read (gate:async increment 3)
+		return futureRead(w.async), true
+	case 0x1a: // future.drop-readable
+		return futureDrop(w.async), true
 	}
 	return nil, false
+}
+
+// handleWaitable returns the entry at index i as a waitable (any joinable kind — a subtask or a future
+// end), or (nil, false) if out of range or not a waitable. The caller holds asyncHandles.mu.
+func handleWaitable(h *asyncHandles, i uint32) (waitable, bool) {
+	if i == 0 || int(i) >= len(h.entries) {
+		return nil, false
+	}
+	w, ok := h.entries[i].(waitable)
+	return w, ok
 }
 
 // handleAt returns the entry at index i as type T, or (zero, false) if out of range or a different type.
