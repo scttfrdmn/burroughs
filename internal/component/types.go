@@ -42,6 +42,13 @@ const (
 	VRef    // a typeidx reference to a defined type
 	VStream // (stream t?) — async surface, recognized not modeled (gate:async, ADR 0086)
 	VFuture // (future t?) — async surface, recognized not modeled
+	// VUnresolvedAlias marks an outer type alias inside an instance type that this engine does not resolve
+	// (skipInstanceAlias). It is DISTINCT from VRef so it cannot be mistaken for a legitimate type reference
+	// and so a func signature carrying it refuses by name rather than crashing (the old placeholder was a
+	// self-referential VRef{0} that overflowed resolveVal, #753) or silently mis-lowering. resolveVal also
+	// returns it when it detects a VRef cycle. The proper outer-alias resolution replaces it with the real
+	// type; until then it is refused where a value of it would be marshaled.
+	VUnresolvedAlias
 )
 
 // ValType is a decoded component value type. Only the fields meaningful to its Kind are set; a
@@ -264,10 +271,10 @@ func (r *reader) instanceType() (*InstanceType, error) {
 func resolveFunc(ft *FuncType, local []TypeDef) *FuncType {
 	out := &FuncType{Params: make([]NamedVal, len(ft.Params))}
 	for i, p := range ft.Params {
-		out.Params[i] = NamedVal{Name: p.Name, Type: resolveVal(p.Type, local)}
+		out.Params[i] = NamedVal{Name: p.Name, Type: resolveVal(p.Type, local, nil)}
 	}
 	if ft.Result != nil {
-		r := resolveVal(*ft.Result, local)
+		r := resolveVal(*ft.Result, local, nil)
 		out.Result = &r
 	}
 	return out
@@ -275,26 +282,37 @@ func resolveFunc(ft *FuncType, local []TypeDef) *FuncType {
 
 // resolveVal follows a VRef into the local type space and inlines the referenced value type, recursing
 // into compound elements. own/borrow keep their resource type index (a handle is an i32 regardless).
-func resolveVal(vt ValType, local []TypeDef) ValType {
+// `seen` tracks the VRef indices already entered on the current chain, so a cyclic reference (a
+// self-referential placeholder, or any fuzzer-crafted VRef cycle) is detected and returned as
+// VUnresolvedAlias — a named, refusable outcome — rather than overflowing the stack (#753). It bounds
+// nothing legal: a finite, acyclic type visits each index at most once. `seen` is nil at the top level.
+func resolveVal(vt ValType, local []TypeDef, seen map[uint32]bool) ValType {
 	switch vt.Kind {
 	case VRef:
 		if int(vt.Ref) < len(local) && local[vt.Ref].Kind == TDVal {
-			return resolveVal(local[vt.Ref].Val, local)
+			if seen[vt.Ref] {
+				return ValType{Kind: VUnresolvedAlias} // a cycle — unresolvable, refuse by name downstream
+			}
+			if seen == nil {
+				seen = map[uint32]bool{}
+			}
+			seen[vt.Ref] = true
+			return resolveVal(local[vt.Ref].Val, local, seen)
 		}
 		return vt // a ref to a resource/func/instance type — left as a reference
 	case VList, VOption:
 		if vt.Elem != nil {
-			e := resolveVal(*vt.Elem, local)
+			e := resolveVal(*vt.Elem, local, seen)
 			vt.Elem = &e
 		}
 		return vt
 	case VResult:
 		if vt.Ok != nil {
-			ok := resolveVal(*vt.Ok, local)
+			ok := resolveVal(*vt.Ok, local, seen)
 			vt.Ok = &ok
 		}
 		if vt.Err != nil {
-			e := resolveVal(*vt.Err, local)
+			e := resolveVal(*vt.Err, local, seen)
 			vt.Err = &e
 		}
 		return vt
@@ -303,7 +321,7 @@ func resolveVal(vt ValType, local []TypeDef) ValType {
 		for i, c := range vt.Cases {
 			cs[i] = c
 			if c.Type != nil {
-				t := resolveVal(*c.Type, local)
+				t := resolveVal(*c.Type, local, seen)
 				cs[i].Type = &t
 			}
 		}
@@ -335,7 +353,10 @@ func (r *reader) skipInstanceAlias(local *[]TypeDef) error {
 	if _, err := r.u32(); err != nil { // index
 		return err
 	}
-	*local = append(*local, TypeDef{Kind: TDVal, Val: ValType{Kind: VRef}}) // placeholder, keeps indices aligned
+	// A DISTINCT unresolved-alias marker, not a VRef{0}: the old VRef{0} placeholder pointed at local[0]
+	// (often itself), and resolveVal recursed on it forever (#753). VUnresolvedAlias resolves to itself and
+	// is refused by name where a value of it would be marshaled — the outer type alias is not modeled.
+	*local = append(*local, TypeDef{Kind: TDVal, Val: ValType{Kind: VUnresolvedAlias}}) // keeps indices aligned
 	return nil
 }
 
@@ -578,7 +599,7 @@ func unmodeledValKind(vt ValType, depth int) (ValKind, bool) {
 		return 0, false // a cyclic/pathological type; the decoder's own depth guards apply first
 	}
 	switch vt.Kind {
-	case VRecord, VFlags, VEnum, VOption, VErrorContext, VStream, VFuture:
+	case VRecord, VFlags, VEnum, VOption, VErrorContext, VStream, VFuture, VUnresolvedAlias:
 		return vt.Kind, true
 	case VList: // VOption is handled above (it is itself unmodeled); a list recurses into its element
 		if vt.Elem != nil {
@@ -631,6 +652,51 @@ func unmodeledInSig(ft *FuncType) (ValKind, bool) {
 	return 0, false
 }
 
+// sigHasUnresolvedAlias reports whether a function signature carries a VUnresolvedAlias anywhere — an outer
+// type alias this engine does not resolve (#753). Distinct from unmodeledInSig because it must fire even in
+// a signature that also carries a modeled-elsewhere async kind (a future is handled by the async wrapper,
+// but an unresolved alias beside it is still unmarshalable), so it cannot rely on unmodeledInSig's
+// first-kind-wins result.
+func sigHasUnresolvedAlias(ft *FuncType) bool {
+	if ft == nil {
+		return false
+	}
+	for _, p := range ft.Params {
+		if valHasUnresolvedAlias(p.Type, 0) {
+			return true
+		}
+	}
+	return ft.Result != nil && valHasUnresolvedAlias(*ft.Result, 0)
+}
+
+func valHasUnresolvedAlias(vt ValType, depth int) bool {
+	if depth > 32 {
+		return false
+	}
+	switch vt.Kind {
+	case VUnresolvedAlias:
+		return true
+	case VList, VOption:
+		return vt.Elem != nil && valHasUnresolvedAlias(*vt.Elem, depth+1)
+	case VResult:
+		return (vt.Ok != nil && valHasUnresolvedAlias(*vt.Ok, depth+1)) || (vt.Err != nil && valHasUnresolvedAlias(*vt.Err, depth+1))
+	case VVariant:
+		for _, c := range vt.Cases {
+			if c.Type != nil && valHasUnresolvedAlias(*c.Type, depth+1) {
+				return true
+			}
+		}
+	case VTuple:
+		for _, e := range vt.Elems {
+			if valHasUnresolvedAlias(e, depth+1) {
+				return true
+			}
+		}
+	default:
+	}
+	return false
+}
+
 // valKindName is the WIT name of a value kind, for a refuse-by-name message.
 func valKindName(k ValKind) string {
 	switch k {
@@ -648,6 +714,8 @@ func valKindName(k ValKind) string {
 		return "stream"
 	case VFuture:
 		return "future"
+	case VUnresolvedAlias:
+		return "an unresolved outer type alias"
 	default:
 		return fmt.Sprintf("valkind(%d)", int(k))
 	}

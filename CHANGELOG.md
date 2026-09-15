@@ -458,6 +458,22 @@ weakly-ordered platform.
     argument ADR 0026 made for `*tailCall`. Surfacing it as a trap was rejected: `assert_unlinkable` is
     not `assert_trap`.
 
+### Fixed
+
+- **An outer type alias inside an instance type no longer stack-overflows the decoder ([#753]).** The
+  `skipInstanceAlias` placeholder was a self-referential `VRef{0}` (it pointed at `local[0]`, often itself),
+  and `resolveVal` recursed on it forever — a validly-formed, `wasm-tools`-validating component crashed at
+  `Load` with no name. The placeholder is now a distinct `VUnresolvedAlias` marker (so it cannot be mistaken
+  for a real type reference), `resolveVal` carries a visited set that returns the marker on any reference
+  cycle (bounding nothing legal — an acyclic type visits each index once), and a lower whose signature
+  carries the marker refuses **by name** at instantiate rather than binding over an unresolved type. This is
+  a stopgap floor: the proper outer-alias resolution (resolving the aliased type into the instance's local
+  space) later relaxes the refusal. The same placeholder's *other* face — a silent `nil` signature when the
+  func **type itself** is outer-aliased (#749) — is a different path (`exportDecl`'s kind check) that this
+  fix does not touch and that stays permissive; its closure is the proper resolution.
+
+[#753]: https://github.com/scttfrdmn/burroughs/issues/753
+
 ## [0.5.0] - 2026-09-07
 *Implements contract v0.1.*
 
