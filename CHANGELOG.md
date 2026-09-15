@@ -21,6 +21,13 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 oracle — the `context.get`/`set` differential (ADR 0086, #739).** The first op
+  the real guest hits, pinned by running (`gen.py`'s `emit_context_ops` over `definitions.py`): context
+  storage is **per-thread (per-agent)** — 2 slots, i32 — and an unset `context.get` returns **0, not a trap**
+  (the storage inits to zeros; only an out-of-bounds slot traps). The guest calls `get` as its opening move,
+  so the uninitialized case is the first thing that executes, not an edge case. Behavioral pin (roundtrip,
+  unset-zero, slot count); no byte encoding. Oracle only; the execution (with the store keyed by the agent,
+  not the per-instance async tables) is the next slice.
 - **`gate:async` increment 4 exit oracle — the committed wasmtime reading (ADR 0086, #739).**
   `testdata/p3async-hello.stdout` records what the real guest `p3async-hello.wasm` writes on **wasmtime
   48.0.1** (async-on-by-default): `Hello, world!\n`, exit 0. Committed with its version (testdata README)

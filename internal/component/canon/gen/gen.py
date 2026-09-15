@@ -442,6 +442,51 @@ FUTURE_READ_CASES = [
 ]
 
 
+# Context.get/set (gate:async increment 4, the first op the real guest hits — #739). Per-thread (per-agent)
+# i32 storage of a fixed number of slots (definitions.py: thread.storage = [0,0], canon_context_get/set at
+# def:2293/2303), get returning 0 for an unset slot and the stored value after a set, bounds i < len. No
+# byte encoding — it is slot storage — so the pin is behavioral (roundtrip, unset-zero, slot count); it is
+# pinned anyway, per the discipline that a fast iterate-to-green loop does not skip an op's model pin.
+def emit_context_ops():
+    from definitions import (  # noqa: E402
+        FuncType, canon_context_get, canon_context_set,
+    )
+    heap = TracingHeap(64)
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    cap = {}
+
+    def outer_core(_flat):
+        from definitions import current_thread
+        cap["slots"] = len(current_thread().storage)          # the fixed slot count (thread.storage init)
+        cap["get0_unset"] = int(canon_context_get("i32", 0)[0])  # unset -> 0
+        canon_context_set("i32", 0, 107)
+        cap["get0_after_set"] = int(canon_context_get("i32", 0)[0])  # -> 107
+        cap["get1_unset"] = int(canon_context_get("i32", 1)[0])  # a distinct slot stays 0
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+    return {
+        "slots": cap["slots"],                 # number of per-agent context slots (bounds: i < slots)
+        "get0_unset": cap["get0_unset"],        # get before any set -> 0
+        "set_value": 107,
+        "get0_after_set": cap["get0_after_set"],  # get slot 0 after set(0, 107) -> 107
+        "get1_unset": cap["get1_unset"],        # slot 1 unaffected by writing slot 0 -> 0
+    }
+
+
 def emit_future_read(case):
     from definitions import (  # noqa: E402
         FuncType, FutureType,
@@ -608,6 +653,7 @@ def main():
         "async_lower_blocking": [emit_async_lower_blocking(c) for c in ASYNC_LOWER_BLOCKING_CASES],
         "future_reads": [emit_future_read(c) for c in FUTURE_READ_CASES],
         "stream_writes": [emit_stream_write(c) for c in STREAM_WRITE_CASES],
+        "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "shapes": emit_shapes(),
     }
     json.dump(out, sys.stdout, indent=2)

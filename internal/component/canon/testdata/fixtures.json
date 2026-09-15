@@ -2925,6 +2925,13 @@
       ]
     }
   ],
+  "context_ops": {
+    "slots": 2,
+    "get0_unset": 0,
+    "set_value": 107,
+    "get0_after_set": 107,
+    "get1_unset": 0
+  },
   "shapes": [
     {
       "kind": "own",
