@@ -441,7 +441,18 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
   by **value on any architecture** (read the word while stopped; it must hold its pre-stop value), exactly
   like SP-4. "The write becomes visible early" is a protocol violation (the agent ran when it should have
   been held), not an arm64 store-reorder. So the arbiter is **neither** — a scheduling/protocol claim.
-- **Status:** blocked — #10
+- **Status:** implemented — TestSP2AParkedAgentTouchesNoGuestMemoryDuringTheStop
+
+  > Landed 2026-09-16. N=4 agents park in a blocking host call whose return path writes a word; `Stop`
+  > returns with all parked (the arrival half), releasing the calls while the stop is held lands no write
+  > (leaveBlocked's poll — the re-entry gate, whose own comment cites SP-2 — parks the re-entering agent
+  > until Resume), and every write lands after Resume. **Mechanism-covered, test-uncovered before this**
+  > (#742's fourth position): the poll was written against SP-2 and cites it, but no runtime test witnessed
+  > it at this shape. **Control watched dying**: with leaveBlocked's poll removed, a released-during-stop
+  > agent's write landed *during the held stop* (word = writeVal in the sample window, strictly after `Stop`
+  > returned and before `Resume`) — the defect signature, not a release race, which is what the control
+  > carries here since the pass was near-certain. Both models via CI; arbiter neither (value-observed, no
+  > external arbiter).
 
 ### SP-3 — the timer channel is disjoint from guest sync state
 
