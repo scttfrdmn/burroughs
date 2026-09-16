@@ -35,26 +35,25 @@ func TestRunRefusesAnAsyncComponentByName(t *testing.T) {
 	}
 }
 
-// TestRunAsyncComponentReachesHostImportSeam marks the increment-4 milestone at the CLI. With gate:async ON,
-// `run p3async-hello.wasm` no longer refuses at bind as unimplemented (the former no-op-kill this test used
-// to assert): every async built-in the guest binds is built, so it instantiates and runs, and the run
-// reaches `wasi:cli/stdout@0.3.0::write-via-stream` — a host import the CLI's stub host does not provide.
-// The exit is NOT the async-gate exitUnsupported/exitGated it used to be; it is exitError, the invocation's
-// own failure to supply a host import, with stderr naming write-via-stream — the remaining host-side seam
-// before the guest prints "Hello, world!\n".
-func TestRunAsyncComponentReachesHostImportSeam(t *testing.T) {
+// TestRunAsyncComponentPrintsHelloWorld is the increment-4 exit condition at the CLI. With gate:async ON,
+// `run p3async-hello.wasm` instantiates, runs, and writes the committed reading to stdout — exit 0, byte-for
+// -byte the wasmtime output (#759). The async guest reaches stdout through the real write-via-stream host
+// consumer (the host-first inline stream copy), not a stub. This is the former no-op-kill test's own
+// forecast landed: gate on, the guest runs.
+func TestRunAsyncComponentPrintsHelloWorld(t *testing.T) {
 	t.Setenv("BURROUGHS_COMPONENTS", "") // gate:components on (default)
 	t.Setenv("BURROUGHS_ASYNC", "1")     // gate:async ON
+	want, err := os.ReadFile("../../internal/component/testdata/p3async-hello.stdout")
+	if err != nil {
+		t.Fatalf("committed reading missing (it is committed, #759): %v", err)
+	}
 	var out, errBuf bytes.Buffer
 	code := dispatch(&out, &errBuf, []string{"run", p3async})
-	if code == exitOK {
-		t.Fatalf("`run p3async-hello.wasm` (gate on) succeeded, but the stub host provides no write-via-stream")
+	if code != exitOK {
+		t.Fatalf("`run p3async-hello.wasm` (gate on) exited %d, want 0\nstderr: %q", code, errBuf.String())
 	}
-	if code == exitUnsupported || code == exitGated {
-		t.Fatalf("`run p3async-hello.wasm` (gate on) exited %d (an async-gate code), but the builtin surface is complete — the seam is a host import\nstderr: %q", code, errBuf.String())
-	}
-	if got := errBuf.String(); !strings.Contains(got, "write-via-stream") {
-		t.Errorf("stderr = %q, want it to name write-via-stream — the remaining host-side seam", got)
+	if out.String() != string(want) {
+		t.Errorf("stdout = %q, want %q (the committed wasmtime reading)", out.String(), string(want))
 	}
 }
 

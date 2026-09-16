@@ -154,7 +154,7 @@ func TestBindingRefusesImplementedFilesystemErrorCodeOnRealGuest(t *testing.T) {
 		t.Fatal(err)
 	}
 	wh := map[string]interp.CanonFunc{"wasi:filesystem/types::filesystem-error-code": dummyCanon}
-	if _, err := c.walkComponent(stubHost, wh, nil); !errors.Is(err, ErrUnsupportedForm) {
+	if _, err := c.walkComponent(stubHost, wh, nil, nil); !errors.Is(err, ErrUnsupportedForm) {
 		t.Fatalf("binding error = %v, want ErrUnsupportedForm", err)
 	} else if got := err.Error(); !contains(got, "filesystem-error-code") || !contains(got, "option") {
 		t.Errorf("binding error %q must name the import and the kind", got)

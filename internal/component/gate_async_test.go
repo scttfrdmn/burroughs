@@ -3,6 +3,7 @@
 package component
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -70,40 +71,41 @@ func TestAsyncGuestRefusedAtBindByName(t *testing.T) {
 	}
 }
 
-// TestGateAsyncOnGuestInstantiatesBuiltinSurfaceExhausted marks the increment-4 milestone that the earlier
-// no-op-kill test (this one, formerly TestGateAsyncOnRefusesUnimplementedByName) anticipated in its own
-// words: "increment 4 lifts it and the guest runs." With gate:async ON, p3async-hello now INSTANTIATES —
-// every async built-in it binds is built (stream.new/write/drops/cancels, the subtask ops, context, the
-// waitable-set loop incl. poll). What it hits next is no longer a gate refusal at bind but a host import at
-// RUN: `wasi:cli/stdout@0.3.0::write-via-stream`, which the stub host does not provide — the remaining seam
-// (the host-side consumer of the readable stream end, where the host-first inline copy first runs from a
-// real guest). The gate-on no-op-kill invariant — a component with a genuinely unbuilt async op refuses by
-// name, not silently — is preserved on SYNTHETIC subjects that still have one:
+// TestGateAsyncGuestRunsToTheCommittedReading is the increment-4 EXIT CONDITION, and the moment the earlier
+// no-op-kill test (formerly TestGateAsyncOnRefusesUnimplementedByName) anticipated in its own words:
+// "increment 4 lifts it and the guest runs." With gate:async ON, p3async-hello instantiates, runs, and
+// writes "Hello, world!\n" — checked byte-for-byte against the committed wasmtime reading (#759, on main
+// since before any op was built). This turns the tier's chain of individually-verified ops (stream.new,
+// write, drops, cancels, the subtask ops, context, the waitable-set loop) into ONE end-to-end claim against
+// an independent engine's reading. The real path is host-first: write-via-stream pends the read on the
+// readable end the guest hands it, and the guest's stream.write drives the copy inline — the host-first
+// inline copy built synthetically in #763, now run by a real guest, with its bytes sunk to stdout.
+//
+// The gate-on no-op-kill invariant — a component with a genuinely unbuilt async op refuses by name, not
+// silently — is preserved on SYNTHETIC subjects that still have one:
 // TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt (future.write 0x17, an async lift) and
-// TestSynthesizedAsyncLiftRefusedAtBindByName. p3async-hello is no
-// longer such a subject, so it can no longer witness that invariant.
-func TestGateAsyncOnGuestInstantiatesBuiltinSurfaceExhausted(t *testing.T) {
+// TestSynthesizedAsyncLiftRefusedAtBindByName. p3async-hello is no longer such a subject.
+func TestGateAsyncGuestRunsToTheCommittedReading(t *testing.T) {
 	b, err := os.ReadFile(asyncGuestWasm)
 	if err != nil {
 		t.Fatalf("async guest fixture missing (it is committed): %v", err)
 	}
+	want, err := os.ReadFile("testdata/p3async-hello.stdout")
+	if err != nil {
+		t.Fatalf("committed reading missing (it is committed, #759): %v", err)
+	}
 	t.Setenv("BURROUGHS_ASYNC", "1")
-	h := NewHost(io.Discard, io.Discard, nil)
+	var out bytes.Buffer
+	h := NewHost(&out, io.Discard, nil)
 	in, err := InstantiateWithHost(b, h)
 	if err != nil {
-		t.Fatalf("gate:async on: the async guest no longer instantiates — its builtin surface should be complete: %v", err)
+		t.Fatalf("gate:async on: the async guest did not instantiate: %v", err)
 	}
-	// At run it reaches the write-via-stream host import, unprovided by the stub host — the remaining seam,
-	// NOT a gate refusal. This is the signal that the async builtin surface is exhausted.
-	runErr := in.Call("wasi:cli/run@0.3.0")
-	if runErr == nil {
-		t.Fatal("run succeeded, but the stub host provides no write-via-stream — a host-import seam should stop it")
+	if runErr := in.Call("wasi:cli/run@0.3.0"); runErr != nil {
+		t.Fatalf("gate:async on: the async guest did not run to completion: %v", runErr)
 	}
-	if errors.Is(runErr, ErrAsyncNotImplemented) || errors.Is(runErr, ErrAsyncGated) {
-		t.Fatalf("run refused by an async gate (%v), but the builtin surface is complete — the seam should be the host import", runErr)
-	}
-	if got := runErr.Error(); !strings.Contains(got, "write-via-stream") {
-		t.Errorf("run error %q must name write-via-stream — the remaining host-side seam", got)
+	if out.String() != string(want) {
+		t.Errorf("stdout = %q, want %q (the committed wasmtime reading) — the end-to-end claim failed", out.String(), string(want))
 	}
 }
 

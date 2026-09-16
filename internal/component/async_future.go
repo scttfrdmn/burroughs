@@ -52,6 +52,10 @@ type readableFutureEnd struct {
 	readPtr   uint32              // where a pending future.read wants the value written
 	hasRead   bool                // a future.read is pending on this end
 	caller    *interp.CanonCaller // the reading agent's caller, for the completion's memory write
+	// completeErr holds a deferred completion failure — when a host consumer resolves this future off the
+	// stream-copy path (write-via-stream's onHostComplete, which cannot return an error), a guest-memory
+	// write failure lands here and is surfaced when the guest next touches the end (futureDrop).
+	completeErr error
 }
 
 // pendingEventLocked delivers the future read's (FUTURE_READ, index, result) event once. readableFutureEnd
@@ -134,8 +138,12 @@ func futureDrop(h *asyncHandles) interp.CanonFunc {
 		i := uint32(args[0].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		if _, ok := handleAt[*readableFutureEnd](h, i); !ok {
+		fe, ok := handleAt[*readableFutureEnd](h, i)
+		if !ok {
 			return nil, fmt.Errorf("component: future.drop-readable: handle %d is not a readable future end", i)
+		}
+		if fe.completeErr != nil { // a deferred host-completion failure surfaces here rather than being lost
+			return nil, fmt.Errorf("component: future.drop-readable: end %d had a failed completion: %w", i, fe.completeErr)
 		}
 		h.entries[i] = nil
 		return nil, nil

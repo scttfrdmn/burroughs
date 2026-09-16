@@ -74,6 +74,67 @@ type Host struct {
 // async impls; a synthesized-guest test populates it to drive the async-lower adapter.
 func (h *Host) asyncWasi() map[string]asyncLowerImpl { return h.asyncImpls }
 
+// streamConsumer is a host import that CONSUMES a guest-provided stream — it needs the per-instance async
+// handle table (to reach the readable end the guest handed it) as well as the host's own resources (stdout),
+// so it is a factory the walk calls with the instance's table, kept SEPARATE from wasi()/asyncWasi() by type
+// for the same reason those are separate (a wrong-source binding is a compile error). It stays INTERNAL: it
+// takes an *asyncHandles, an unexported type, so it cannot appear on the exported API (gate:async #739).
+type streamConsumer func(async *asyncHandles) interp.CanonFunc
+
+// streamConsumers maps a version-stripped import identity to a stream-consuming host import. Only
+// write-via-stream is served (the p3async-hello sink); an unlisted consumer reaches the refusing stub.
+func (h *Host) streamConsumers() map[string]streamConsumer {
+	return map[string]streamConsumer{
+		"wasi:cli/stdout::write-via-stream": h.writeViaStream,
+	}
+}
+
+// writeViaStream implements `wasi:cli/stdout::write-via-stream: func(data: stream<u8>) -> future<result<_,
+// error-code>>` — the real host consumer of the readable stream end the guest hands it (the exit-condition
+// path, gate:async increment 4). It reads `data` into the host's stdout (a host sink, NOT a guest ptr — the
+// #763 divergence) and returns a host-minted future that resolves when the consume completes. The future
+// reuses the readable-future-end kind already on main (async_lower.go mints one for a KindFuture result);
+// result<_, error-code>::ok lifts to discriminant 0, which the future's u32 value carries.
+func (h *Host) writeViaStream(async *asyncHandles) interp.CanonFunc {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: write-via-stream: got %d args, want (data)", len(args))
+		}
+		ri := uint32(args[0].Bits)
+		async.mu.Lock()
+		defer async.mu.Unlock()
+		re, ok := handleAt[*readableStreamEnd](async, ri)
+		if !ok {
+			return nil, fmt.Errorf("%w: write-via-stream on handle %d that is not a readable stream end", ErrLinkRefused, ri)
+		}
+		// Mint the future the guest awaits; it resolves when the consume completes. value 0 == result::ok.
+		fe := &readableFutureEnd{value: 0}
+		fe.index = async.addLocked(fe)
+		// Register the host read: sink to stdout, resolve the future on completion. readN takes all the
+		// guest offers in a write.
+		re.hostSink = func(b []byte) error { _, werr := h.Stdout.Write(b); return werr }
+		re.onHostComplete = func(copyResult) {
+			if cerr := fe.completeLocked(copyCompleted); cerr != nil {
+				fe.completeErr = cerr // deferred: onHostComplete cannot return; futureDrop surfaces it
+			}
+		}
+		re.readN = 1 << 30
+		re.hasRead = true
+		re.caller = c
+		re.state = copyStateCopying
+		// If the guest already wrote (guest-first), drive the copy now; otherwise its stream.write drives it.
+		if re.conn != nil && re.conn.hasWrite && !re.conn.resolved {
+			progress, derr := driveStreamCopyLocked(re, re.conn)
+			if derr != nil {
+				return nil, derr
+			}
+			re.conn.completeWriteLocked(progress, copyCompleted)
+			re.armLocked(progress, copyCompleted)
+		}
+		return []interp.Value{interp.I32(int32(fe.index))}, nil
+	}
+}
+
 // NewHost builds a preview-2 host over the given streams. Handles are minted from 1 (0 is left unused so
 // a zero value is never a live handle).
 func NewHost(stdout, stderr io.Writer, stdin io.Reader) *Host {

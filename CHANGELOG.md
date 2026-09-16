@@ -21,6 +21,24 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `write-via-stream` host consumer; `p3async-hello` runs to the committed reading (ADR 0086, #739).**
+  With `BURROUGHS_ASYNC=1`, the real host consumer `wasi:cli/stdout::write-via-stream` (`func(data: stream<u8>)
+  -> future<result<_, error-code>>`) reads the readable stream end the guest hands it and writes the bytes to
+  stdout, returning a host-minted future that resolves on completion. **`p3async-hello` now instantiates,
+  runs, and writes `Hello, world!\n`** — checked byte-for-byte against the committed wasmtime reading (#759),
+  turning the tier's chain of individually-verified ops into one end-to-end claim against an independent
+  engine. This is the increment's exit condition (the gate stays off; the flip is a separate stamp event).
+  The consumer reuses the existing future machinery (`readableFutureEnd`, minted host→guest as `async_lower.go`
+  does for a `KindFuture` result — no second minting path) and binds through a new **internal** typed seam
+  (a stream-consumer map threaded like `asyncWasiHost`, taking the unexported `*asyncHandles`, so it cannot
+  reach the exported API). Two grounding findings, both on #739: `write-via-stream` is a **sync** lower
+  returning a future (not the async-consumer shape); and the real read sinks to **host** memory, where #763's
+  `hostReadLocked` wrote to a guest ptr (a stand-in, same class as `completeWriteLocked`). The order is
+  host-first, as #763 assumed. A wiring detail surfaced by running: `stream.write` carries no `(memory)`
+  option in this component, so the copy reads the guest src through the host consumer's memory-bound caller
+  (both buffers are in the one guest memory 0). The mixed-kind witness's `pendingEventLocked` arming path is
+  verified through the real run (host-first inline completion), by running — the deferred #762 condition,
+  discharged. Off by default.
 - **`gate:async` increment 4 — `waitable-set.poll` execution, the last builtin; the guest now instantiates (ADR 0086, #739).**
   With `BURROUGHS_ASYNC=1`, `waitable-set.poll` (0x21) executes: it is `wait` minus the park, reading the set's
   readiness through the **same `pendingEventLocked` path** `wait` uses — not a second readiness notion — and
