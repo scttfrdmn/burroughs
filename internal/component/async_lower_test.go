@@ -262,9 +262,16 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 			t.Errorf("gate on, stream drop %#x: gateAsync refused (%v), want permit — the drops are built", op, err)
 		}
 	}
-	scancel := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x11}}} // stream.cancel-read (unbuilt)
-	if err := gateAsync(scancel); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, stream.cancel-read: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	// stream.cancel-read (0x11, increment 4): permitted — the first running production of CANCELLED.
+	scancelr := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x11}}}
+	if err := gateAsync(scancelr); err != nil {
+		t.Errorf("gate on, stream.cancel-read: gateAsync refused (%v), want permit — cancel-read is built", err)
+	}
+	// stream.cancel-write (0x12) remains refused (its symmetric mechanism is a later slice); the refusal
+	// fires by name, not as an unreached branch of cancel-read's shared cancel_copy logic.
+	scancelw := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x12}}}
+	if err := gateAsync(scancelw); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, stream.cancel-write: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
 	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,

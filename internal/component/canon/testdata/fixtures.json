@@ -3082,6 +3082,17 @@
       "ri_state_after_consume": "DONE"
     }
   },
+  "stream_cancel_read": {
+    "read_ret": [
+      4294967295
+    ],
+    "cancel_ret": [
+      2
+    ],
+    "result": 2,
+    "progress": 0,
+    "ri_state_after": "IDLE"
+  },
   "context_ops": {
     "slots": 2,
     "get0_unset": 0,

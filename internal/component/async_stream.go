@@ -302,6 +302,41 @@ func streamDropReadable(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
+// streamCancelRead implements `canon stream.cancel-read` (0x11, definitions.py:2571 → cancel_copy). It
+// cancels a pending read: the end must be mid-copy (COPYING) or it traps; if the copy already completed (an
+// event is armed), the cancel delivers that event (the copy won); otherwise it resolves the read to
+// CANCELLED with whatever progress was made (0 for an undriven pending read). Either way the event is
+// consumed INLINE and its packed payload returned — not BLOCKED. A CANCELLED read leaves the end IDLE (open,
+// reusable); only DROPPED is DONE. This is the FIRST running production of CANCELLED: it has been pinned in
+// the codec since the future oracle (#752) but only ever injected synthetically (future.cancel-read is
+// refused); the test asserts this running path delivers the SAME encoding the fixture asserted.
+func streamCancelRead(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: stream.cancel-read: got %d args, want (i)", len(args))
+		}
+		i := uint32(args[0].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		e, ok := handleAt[*readableStreamEnd](h, i)
+		if !ok {
+			return nil, fmt.Errorf("component: stream.cancel-read: handle %d is not a readable stream end", i)
+		}
+		if e.state != copyStateCopying {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-read: end %d has no copy in flight (state %s)", i, e.state.name())}
+		}
+		if !e.resolved {
+			e.armLocked(e.progress, copyCancelled) // progress is 0 for an undriven pending read
+			e.hasRead = false                      // the pending read is cancelled, not outstanding
+		}
+		ev, ok := e.pendingEventLocked() // consume inline -> IDLE (CANCELLED) or DONE (a prior DROPPED)
+		if !ok {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-read: end %d had no deliverable event after cancel", i)}
+		}
+		return []interp.Value{interp.I32(int32(ev.p2))}, nil
+	}
+}
+
 // streamDropWritable implements `canon stream.drop-writable` (0x14, definitions.py:2608). Same guard as the
 // readable drop (a stream end drops from IDLE or DONE, traps mid-copy) — NOT the writable FUTURE end's rule,
 // which traps unless DONE (def:1125); a writable stream end may be dropped while IDLE. A pending write is the

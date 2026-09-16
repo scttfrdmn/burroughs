@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `stream.cancel-read` execution, the first running production of CANCELLED (ADR 0086, #739).**
+  With `BURROUGHS_ASYNC=1`, `stream.cancel-read` (0x11) executes: it cancels a pending read (the end must be
+  mid-copy or it traps), delivering `CANCELLED` with progress 0 **inline** (not `BLOCKED`), and the end
+  returns to **IDLE** — a cancelled read is open, only `DROPPED` is `DONE`. This is the first time `CANCELLED`
+  is produced by a **running path**: it has been pinned in the codec since the future oracle (#752) but only
+  ever injected synthetically (the future test hand-calls `completeLocked(copyCancelled)` because
+  `future.cancel-read` is refused by name). The test asserts, explicitly, that this running production equals
+  the codec's `copyCancelled` constant **and** the encoding #752 pinned (the `future_reads` CANCELLED payload)
+  — not merely that it passes its own row. Matched to the committed `stream_cancel_read` pin. `gateAsync`
+  permits 0x11; `stream.cancel-write` (0x12) stays refused (its symmetric mechanism is the next slice, and its
+  refusal fires by name, not as an unreached branch). `p3async-hello` now advances to 0x12. Off by default.
+- **`gate:async` increment 4 oracle — the `stream.cancel-read` differential (ADR 0086, #739).** Pinned by
+  running: a pending read cancelled through the cancel op delivers `[CANCELLED | progress<<4]` = 2 (progress
+  0) inline, end → IDLE. Oracle for the execution landed in the same change.
 - **`gate:async` increment 4 — `stream.drop-readable`/`drop-writable` execution, the end-state audit (ADR 0086, #739).**
   With `BURROUGHS_ASYNC=1`, the stream drops (0x13, 0x14) execute. Drops are where end-state correctness is
   audited: a stream end drops from **IDLE** or **DONE** and **traps mid-copy (COPYING)** — an end with an

@@ -765,6 +765,49 @@ def emit_stream_hostfirst(case):
     }
 
 
+def emit_stream_cancel_read():
+    from definitions import (  # noqa: E402
+        U8Type, StreamType, FuncType,
+        canon_stream_new, canon_stream_read, canon_stream_cancel_read,
+    )
+    heap = TracingHeap(128)
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    st = StreamType(U8Type())
+    cap = {}
+
+    def outer_core(_flat):
+        packed = canon_stream_new(st)[0]
+        ri = packed & 0xffffffff
+        dst = heap.realloc([0, 0, 1, 4])[0]
+        cap["read_ret"] = [int(x) for x in canon_stream_read(st, mk_opts(True), ri, dst, 4)]  # pends -> COPYING
+        cap["cancel_ret"] = [int(x) for x in canon_stream_cancel_read(st, True, ri)]           # cancel -> CANCELLED inline
+        cap["ri_state_after"] = inst.handles.get(ri).state.name
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+    payload = cap["cancel_ret"][0]
+    return {
+        "read_ret": cap["read_ret"],       # [BLOCKED] — the read parked (no writer)
+        "cancel_ret": cap["cancel_ret"],   # [CANCELLED | progress<<4] delivered INLINE, not BLOCKED
+        "result": payload & 0xf,           # CopyResult.CANCELLED = 2 — the first RUNNING production of it
+        "progress": payload >> 4,          # 0 — nothing was copied before the cancel
+        "ri_state_after": cap["ri_state_after"],  # IDLE — CANCELLED leaves the end open (only DROPPED is DONE)
+    }
+
+
 def emit_stream_drops():
     from definitions import (  # noqa: E402
         U8Type, StreamType, FuncType,
@@ -859,6 +902,7 @@ def main():
         "stream_writes": [emit_stream_write(c) for c in STREAM_WRITE_CASES],
         "stream_hostfirst": [emit_stream_hostfirst(c) for c in STREAM_HOSTFIRST_CASES],  # gate:async inc 4: host-first inline completion
         "stream_drops": emit_stream_drops(),  # gate:async inc 4: drop-readable/drop-writable end-state audit
+        "stream_cancel_read": emit_stream_cancel_read(),  # gate:async inc 4: first RUNNING production of CANCELLED
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),
