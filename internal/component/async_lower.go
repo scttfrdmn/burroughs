@@ -68,6 +68,23 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			// calls onResolve leaves the retptr untouched.
 			h.mu.Lock()
 			defer h.mu.Unlock()
+			if st.cancellationRequested {
+				// A cancel resolution (the model's on_resolve(None), def:2214–2220): no result is lowered,
+				// and the terminal state is chosen by whether the subtask had started — STARTING ->
+				// CANCELLED_BEFORE_STARTED, STARTED -> CANCELLED_BEFORE_RETURNED. This is the cancel-resolution
+				// path the re-check found missing: before increment 4 onResolve only ever produced RETURNED,
+				// so a cancelled subtask would have resolved with the wrong terminal state (#739).
+				if st.state == subtaskStarting {
+					st.state = subtaskCancelledBeforeStarted
+				} else {
+					st.state = subtaskCancelledBeforeReturned
+				}
+				st.resolved = true
+				if st.set != nil {
+					st.set.signalLocked()
+				}
+				return
+			}
 			if hasResult {
 				if v.Type.Kind == canon.KindFuture {
 					// A future<T> result: mint a readable end in the async handle table and write its handle
@@ -108,7 +125,11 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 		if err != nil {
 			return nil, err
 		}
-		_ = onCancel // cancellation is a later increment; the blocking arm holds the resolver, not the cancel.
+		// Store the impl's request_cancellation so subtask.cancel (0x06) can invoke it. Carried inert since
+		// 2a-i-B-1; wired in increment 4. Guarded by the table mutex like the rest of the subtask's fields.
+		h.mu.Lock()
+		st.onCancel = onCancel
+		h.mu.Unlock()
 
 		h.mu.Lock()
 		rerr := resolveErr

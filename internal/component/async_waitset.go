@@ -206,6 +206,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 		return futureRead(w.async), true
 	case 0x1a: // future.drop-readable
 		return futureDrop(w.async), true
+	case 0x06: // subtask.cancel (gate:async increment 4) — the subtask substrate's cancel path
+		return subtaskCancel(w.async), true
 	case 0x0e: // stream.new (gate:async increment 4) — mints a connected readable+writable end pair
 		return streamNew(w.async), true
 	case 0x10: // stream.write (gate:async increment 3, write side)
