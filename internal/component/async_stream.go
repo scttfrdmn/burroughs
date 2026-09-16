@@ -177,10 +177,16 @@ type readableStreamEnd struct {
 	delivered bool // the STREAM_READ event has been taken by a waitable-set.wait
 	result    copyResult
 	progress  uint32              // elements copied into the read buffer (min(read_n, write_n))
-	dstPtr    uint32              // where a pending read wants elements written
+	dstPtr    uint32              // where a pending read wants elements written (guest reader)
 	readN     uint32              // how many elements the read requested
 	hasRead   bool                // a read is pending on this end
-	caller    *interp.CanonCaller // the reader's caller, for the completion's memory write
+	caller    *interp.CanonCaller // the reader's caller, for the completion's memory write (guest reader)
+	// A HOST consumer (write-via-stream) reads into a host sink rather than guest memory — the #763
+	// divergence: hostReadLocked's guest-ptr destination was a stand-in for a guest-side reader, and the
+	// real consumer's sink is host-side. When hostSink != nil the copy hands the bytes here; onHostComplete
+	// fires when the read resolves, so the consumer can finish (write to stdout, resolve its future).
+	hostSink       func([]byte) error
+	onHostComplete func(result copyResult)
 }
 
 // pendingEventLocked delivers the read's (STREAM_READ, index, result|progress<<4) event once and, on
@@ -216,6 +222,9 @@ func (e *readableStreamEnd) armLocked(progress uint32, r copyResult) {
 	if e.set != nil {
 		e.set.signalLocked()
 	}
+	if e.onHostComplete != nil { // a host consumer: let it finish (write to stdout, resolve its future)
+		e.onHostComplete(r)
+	}
 }
 
 // driveStreamCopyLocked copies min(read_n, write_n) elements from the writable end's source buffer into the
@@ -228,11 +237,23 @@ func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, 
 		n = r.readN
 	}
 	if n > 0 {
-		src, err := w.caller.Read(uint64(w.srcPtr), uint64(n))
+		// Both buffers live in the one guest memory 0. The writer's own caller (stream.write) carries no
+		// (memory) option in this component, so read the src through a caller that is memory-bound: for a
+		// host consumer that is the reader's caller (write-via-stream's, bound to the same guest memory);
+		// for a guest reader it is the writer's caller.
+		reader := w.caller
+		if r.hostSink != nil {
+			reader = r.caller
+		}
+		src, err := reader.Read(uint64(w.srcPtr), uint64(n))
 		if err != nil {
 			return 0, fmt.Errorf("component: stream copy: reading %d elements from writer at %#x: %w", n, w.srcPtr, err)
 		}
-		if err := r.caller.Write(uint64(r.dstPtr), src); err != nil {
+		if r.hostSink != nil { // a host consumer: hand the bytes to its sink (stdout), not guest memory
+			if err := r.hostSink(src); err != nil {
+				return 0, fmt.Errorf("component: stream copy: host sink: %w", err)
+			}
+		} else if err := r.caller.Write(uint64(r.dstPtr), src); err != nil {
 			return 0, fmt.Errorf("component: stream copy: writing %d elements to reader at %#x: %w", n, r.dstPtr, err)
 		}
 	}

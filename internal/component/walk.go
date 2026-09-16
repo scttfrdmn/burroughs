@@ -111,6 +111,9 @@ type walker struct {
 	// asyncWasiHost is the async-lower impl source (gate:async 2a-i-A), SEPARATE from wasiHost by type so
 	// a wrong-source binding is a compile error. An async lower binds through it, not wasiHost.
 	asyncWasiHost map[string]asyncLowerImpl
+	// streamConsumers maps a version-stripped import identity to a host import that consumes a guest stream
+	// (write-via-stream). Threaded like asyncWasiHost; resolverFor binds it with this instance's async table.
+	streamConsumers map[string]streamConsumer
 	// async is this component instance's async handle table (gate:async 2a-i-B): subtasks and waitable-sets
 	// in one index space. The blocking arm of an async lower registers a subtask here; the waitable-set
 	// built-ins allocate and consume from it. Per-instance (component-model handles are per-ComponentInstance).
@@ -327,6 +330,15 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			// An async lower with no async impl falls through: the guest's async lowers are refused at
 			// bind by gateAsync (they accompany async built-ins, 2b) before reaching here; this path is
 			// the synthesized-guest test's when its impl is absent.
+		}
+		// A stream-consuming host import (write-via-stream) binds through the SEPARATE stream-consumer source,
+		// which needs this instance's async handle table (to reach the readable end the guest hands it). The
+		// factory is called with w.async to produce the marshaling impl, bound to the lower's memory/realloc.
+		if f, ok := w.streamConsumers[stripVersion(d.lowerName)]; ok {
+			return interp.CanonLowerExtern(ft, f(w.async), interp.CanonOptions{
+				Memory:  d.lowerMem,
+				Realloc: d.lowerRealloc,
+			}), true
 		}
 		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
 		// stub — it refuses by name, typed from the importing module's own declaration.

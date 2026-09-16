@@ -76,8 +76,8 @@ func stubHost(name string) (compDef, bool) {
 // walkComponent runs the whole walk (core spaces then component spaces) for a component with a given
 // import host, and returns a walker holding the resolved spaces. A nested component recurses through
 // this same function.
-func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl) (*walker, error) {
-	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, async: newAsyncHandles()}
+func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl, streamConsumers map[string]streamConsumer) (*walker, error) {
+	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, async: newAsyncHandles()}
 	for _, d := range c.Defs {
 		if err := w.stepAll(d); err != nil {
 			w.close()
@@ -197,7 +197,7 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		}
 		return compDef{}, false
 	}
-	nw, err := w.nested[in.ComponentIdx].walkComponent(argHost, w.wasiHost, w.asyncWasiHost)
+	nw, err := w.nested[in.ComponentIdx].walkComponent(argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers)
 	if err != nil {
 		return compDef{}, err
 	}
@@ -490,7 +490,7 @@ func Instantiate(bytes []byte) (*Instantiated, error) {
 	if gerr := gateAsync(c); gerr != nil {
 		return nil, gerr
 	}
-	w, err := c.walkComponent(stubHost, nil, nil)
+	w, err := c.walkComponent(stubHost, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +510,7 @@ func InstantiateWithHost(bytes []byte, h *Host) (*Instantiated, error) {
 	if gerr := gateAsync(c); gerr != nil {
 		return nil, gerr
 	}
-	w, err := c.walkComponent(stubHost, h.wasi(), h.asyncWasi())
+	w, err := c.walkComponent(stubHost, h.wasi(), h.asyncWasi(), h.streamConsumers())
 	if err != nil {
 		return nil, err
 	}
