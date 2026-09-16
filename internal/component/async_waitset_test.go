@@ -374,3 +374,87 @@ func TestCloseTerminatesAgentParkedInWaitableSetWait(t *testing.T) {
 		t.Errorf("run returned %v with no error under Close — a parked agent must terminate, not complete", o.res)
 	}
 }
+
+// TestWaitableSetPollReadsSameReadinessAsWait covers poll (0x21) across the same four waitable kinds the wait
+// witness uses, plus the empty-set NONE case pinned by the oracle. poll is wait minus the park: it must read
+// pending events through the SAME pendingEventLocked path (no second readiness notion), so a set of four
+// resolved kinds drained by four polls delivers the four distinct event codes exactly as four waits would,
+// and a fifth poll (nothing left ready) returns NONE without blocking. An empty set polls to NONE too.
+func TestWaitableSetPollReadsSameReadinessAsWait(t *testing.T) {
+	var doc struct {
+		WaitableSetPoll struct {
+			EmptyCode int `json:"empty_code"`
+			EmptyP1   int `json:"empty_p1"`
+			EmptyP2   int `json:"empty_p2"`
+		} `json:"waitable_set_poll"`
+	}
+	loadFixtures(t, &doc)
+	fx := doc.WaitableSetPoll
+
+	cc, err := interp.NewCanonCallerForTest(1)
+	if err != nil {
+		t.Fatalf("harness caller: %v", err)
+	}
+
+	poll := func(t *testing.T, h *asyncHandles, si int32, ptr uint32) event {
+		t.Helper()
+		codeVals, perr := waitableSetPoll(h)(cc, []interp.Value{interp.I32(si), interp.I32(int32(ptr))})
+		if perr != nil {
+			t.Fatalf("waitable-set.poll: %v", perr)
+		}
+		buf, rerr := cc.Read(uint64(ptr), 8)
+		if rerr != nil {
+			t.Fatalf("reading poll event: %v", rerr)
+		}
+		return event{code: eventCode(codeVals[0].Int32()), p1: binary.LittleEndian.Uint32(buf[0:4]), p2: binary.LittleEndian.Uint32(buf[4:8])}
+	}
+
+	// Empty set -> NONE (oracle), no park.
+	h := newAsyncHandles()
+	si0, err := waitableSetNew(h)(cc, nil)
+	if err != nil {
+		t.Fatalf("waitable-set.new: %v", err)
+	}
+	if got := poll(t, h, si0[0].Int32(), 8); int(got.code) != fx.EmptyCode || int(got.p1) != fx.EmptyP1 || int(got.p2) != fx.EmptyP2 {
+		t.Errorf("empty poll = (code %d, p1 %d, p2 %d), want (%d, %d, %d) — NONE, no park", got.code, got.p1, got.p2, fx.EmptyCode, fx.EmptyP1, fx.EmptyP2)
+	}
+
+	// Four resolved kinds joined to one set — poll drains them, each its own code, same as wait would.
+	h = newAsyncHandles()
+	st := &subtask{state: subtaskReturned, resolved: true}
+	st.index = h.addLocked(st)
+	fe := &readableFutureEnd{resolved: true, result: copyCompleted}
+	fe.index = h.addLocked(fe)
+	se := &writableStreamEnd{resolved: true, result: copyCompleted, progress: 2}
+	se.index = h.addLocked(se)
+	re := &readableStreamEnd{resolved: true, result: copyCompleted, progress: 3, state: copyStateCopying}
+	re.index = h.addLocked(re)
+	siVals, err := waitableSetNew(h)(cc, nil)
+	if err != nil {
+		t.Fatalf("waitable-set.new: %v", err)
+	}
+	si := siVals[0].Int32()
+	for _, wi := range []int{st.index, fe.index, se.index, re.index} {
+		if _, jerr := waitableJoin(h)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(si)}); jerr != nil {
+			t.Fatalf("waitable.join(%d): %v", wi, jerr)
+		}
+	}
+	got := map[eventCode]event{}
+	for i := range 4 {
+		e := poll(t, h, si, uint32(16+i*8))
+		got[e.code] = e
+	}
+	if len(got) != 4 {
+		t.Fatalf("four kinds drained by poll delivered %d distinct codes, want 4 — poll must read the same readiness as wait: %v", len(got), got)
+	}
+	if e, ok := got[eventSubtask]; !ok || e.p2 != subtaskReturnedState {
+		t.Errorf("poll SUBTASK = %+v, want p2 %d", e, subtaskReturnedState)
+	}
+	if e, ok := got[eventStreamRead]; !ok || e.p2 != uint32(copyCompleted)|(3<<4) {
+		t.Errorf("poll STREAM_READ = %+v, want p2 %d", e, uint32(copyCompleted)|(3<<4))
+	}
+	// A fifth poll, nothing left ready -> NONE, no park.
+	if e := poll(t, h, si, 56); e.code != eventNone {
+		t.Errorf("drained poll = code %d, want NONE (0) — poll must not park", e.code)
+	}
+}

@@ -35,24 +35,26 @@ func TestRunRefusesAnAsyncComponentByName(t *testing.T) {
 	}
 }
 
-// TestRunRefusesAnAsyncComponentGateOnUnimplemented is the gate-on no-op kill at the CLI (#739 slice 1):
-// with gate:components on and gate:async ON, `run p3async-hello.wasm` does not silently instantiate and
-// then trap obscurely at run — it exits exitUnsupported (5, "the engine reached something it does not
-// implement in this phase"), stdout empty, stderr naming gate:async. Distinct from the gate-off exitGated:
-// the gate is open, the mechanism is being built incrementally.
-func TestRunRefusesAnAsyncComponentGateOnUnimplemented(t *testing.T) {
+// TestRunAsyncComponentReachesHostImportSeam marks the increment-4 milestone at the CLI. With gate:async ON,
+// `run p3async-hello.wasm` no longer refuses at bind as unimplemented (the former no-op-kill this test used
+// to assert): every async built-in the guest binds is built, so it instantiates and runs, and the run
+// reaches `wasi:cli/stdout@0.3.0::write-via-stream` — a host import the CLI's stub host does not provide.
+// The exit is NOT the async-gate exitUnsupported/exitGated it used to be; it is exitError, the invocation's
+// own failure to supply a host import, with stderr naming write-via-stream — the remaining host-side seam
+// before the guest prints "Hello, world!\n".
+func TestRunAsyncComponentReachesHostImportSeam(t *testing.T) {
 	t.Setenv("BURROUGHS_COMPONENTS", "") // gate:components on (default)
 	t.Setenv("BURROUGHS_ASYNC", "1")     // gate:async ON
 	var out, errBuf bytes.Buffer
 	code := dispatch(&out, &errBuf, []string{"run", p3async})
-	if code != exitUnsupported {
-		t.Fatalf("`run p3async-hello.wasm` (gate on) exited %d, want %d (exitUnsupported)\nstderr: %q", code, exitUnsupported, errBuf.String())
+	if code == exitOK {
+		t.Fatalf("`run p3async-hello.wasm` (gate on) succeeded, but the stub host provides no write-via-stream")
 	}
-	if out.Len() != 0 {
-		t.Errorf("stdout = %q, want empty — the async tier's execution is not built", out.String())
+	if code == exitUnsupported || code == exitGated {
+		t.Fatalf("`run p3async-hello.wasm` (gate on) exited %d (an async-gate code), but the builtin surface is complete — the seam is a host import\nstderr: %q", code, errBuf.String())
 	}
-	if got := errBuf.String(); !strings.Contains(got, "gate:async") || !strings.Contains(got, "not yet implemented") {
-		t.Errorf("stderr = %q, want it to name gate:async and that execution is not yet implemented", got)
+	if got := errBuf.String(); !strings.Contains(got, "write-via-stream") {
+		t.Errorf("stderr = %q, want it to name write-via-stream — the remaining host-side seam", got)
 	}
 }
 

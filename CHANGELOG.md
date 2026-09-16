@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `waitable-set.poll` execution, the last builtin; the guest now instantiates (ADR 0086, #739).**
+  With `BURROUGHS_ASYNC=1`, `waitable-set.poll` (0x21) executes: it is `wait` minus the park, reading the set's
+  readiness through the **same `pendingEventLocked` path** `wait` uses — not a second readiness notion — and
+  returning a NONE event `(0, 0, 0)` when nothing is ready rather than blocking. A ready poll and a wait
+  deliver byte-for-byte the same event. The mixed-kind witness now covers poll across all four waitable kinds
+  (subtask, future read, stream write, stream read) plus the drain-to-NONE, alongside wait. Matched to the
+  committed `waitable_set_poll` pin (empty → NONE). With 0x21 built, **`p3async-hello`'s async builtin surface
+  is exhausted: the guest instantiates gate-on** for the first time. At run it reaches
+  `wasi:cli/stdout@0.3.0::write-via-stream` — a *host import*, not a builtin — refused by the stub host as
+  unprovided: the remaining seam is the host-side `write-via-stream` implementation (the consumer of the
+  readable stream end), where the host-first inline copy first runs from a real guest. `gateAsync` permits
+  0x21. Off by default.
+- **`gate:async` increment 4 oracle — the `waitable-set.poll` differential (ADR 0086, #739).** Pinned by
+  running: an empty set polls to `(NONE=0, 0, 0)` without parking. Oracle for the execution landed in the same change.
 - **`gate:async` increment 4 — `subtask.drop` execution, traps unless resolve-delivered (ADR 0086, #739).**
   With `BURROUGHS_ASYNC=1`, `subtask.drop` (0x0d) removes a subtask from the table, but **traps unless the
   subtask is resolve-delivered** — the scheduler-side mirror of the stream drop-mid-copy trap: dropping an

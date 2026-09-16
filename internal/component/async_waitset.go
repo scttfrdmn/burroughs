@@ -168,6 +168,39 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
+// waitableSetPoll implements `canon waitable-set.poll` (0x21, definitions.py:2376 → WaitableSet.poll
+// def:775). It is `wait` minus the park: it reads the set's readiness through the SAME pendingEventLocked
+// path wait uses (async_waitset.go's waitableSetWait, the identical `set.pendingEventLocked()` call), and
+// returns a NONE event (code 0, payload 0,0) when nothing is ready rather than blocking — never a second
+// readiness notion. The event-store path (two u32 at ptr, return the code) is identical to wait's, so a
+// ready poll and a wait deliver byte-for-byte the same event.
+func waitableSetPoll(h *asyncHandles) interp.CanonFunc {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("component: waitable-set.poll: got %d args, want (si, ptr)", len(args))
+		}
+		si, ptr := uint32(args[0].Bits), uint32(args[1].Bits)
+		h.mu.Lock()
+		set, ok := handleAt[*waitableSet](h, si)
+		if !ok {
+			h.mu.Unlock()
+			return nil, fmt.Errorf("component: waitable-set.poll: handle %d is not a waitable set", si)
+		}
+		ev, ready := set.pendingEventLocked() // the SAME readiness path wait uses
+		h.mu.Unlock()
+		if !ready {
+			ev = event{} // (NONE=0, 0, 0) — nothing ready, and poll does not park
+		}
+		var buf [8]byte
+		binary.LittleEndian.PutUint32(buf[0:4], ev.p1)
+		binary.LittleEndian.PutUint32(buf[4:8], ev.p2)
+		if werr := c.Write(uint64(ptr), buf[:]); werr != nil {
+			return nil, fmt.Errorf("component: waitable-set.poll: storing event at ptr: %w", werr)
+		}
+		return []interp.Value{interp.I32(int32(ev.code))}, nil
+	}
+}
+
 // waitableSetDrop implements `canon waitable-set.drop` (definitions.py:2386): remove the set from the
 // table. The model traps if the set still has members; the blocking-arm round trip drops after its wait
 // has delivered, so members remain but the guest is done with them — slice-1 removes the entry without the
@@ -198,6 +231,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 		return waitableSetNew(w.async), true
 	case 0x20: // waitable-set.wait
 		return waitableSetWait(w.async), true
+	case 0x21: // waitable-set.poll (gate:async increment 4) — wait minus the park, same readiness path
+		return waitableSetPoll(w.async), true
 	case 0x22: // waitable-set.drop
 		return waitableSetDrop(w.async), true
 	case 0x23: // waitable.join
