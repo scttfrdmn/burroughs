@@ -220,7 +220,7 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 		t.Errorf("gate on, async-lower-only: gateAsync refused (%v), want permit — the lower arms execute", err)
 	}
 
-	builtin := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x21}}} // waitable-set.poll (still refused)
+	builtin := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x17}}} // future.write (genuinely unbuilt)
 	if err := gateAsync(builtin); !errors.Is(err, ErrAsyncNotImplemented) {
 		t.Errorf("gate on, async built-in: err = %v, want ErrAsyncNotImplemented (refuse by name — 2a-i-B-2)", err)
 	}
@@ -282,10 +282,15 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	if err := gateAsync(subdrop); err != nil {
 		t.Errorf("gate on, subtask.drop: gateAsync refused (%v), want permit — subtask.drop is built", err)
 	}
-	// waitable-set.poll (0x21) remains refused — the last op in the tail.
+	// waitable-set.poll (0x21, increment 4): permitted — wait minus the park, the last op in the tail.
 	wpoll := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x21}}}
-	if err := gateAsync(wpoll); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, waitable-set.poll: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	if err := gateAsync(wpoll); err != nil {
+		t.Errorf("gate on, waitable-set.poll: gateAsync refused (%v), want permit — poll is built", err)
+	}
+	// future.write (0x17) remains refused — a genuinely unbound op (the #734 guest binds no future writes).
+	fwrite2 := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x17}}}
+	if err := gateAsync(fwrite2); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, future.write: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
 	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,

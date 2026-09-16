@@ -70,30 +70,40 @@ func TestAsyncGuestRefusedAtBindByName(t *testing.T) {
 	}
 }
 
-// TestGateAsyncOnRefusesUnimplementedByName is the gate-on no-op kill (#739 slice 1): with gate:async ON,
-// the async guest is NOT silently instantiated (which then trapped obscurely at run on a missing async
-// runtime import) — it refuses at bind, by name, with ErrAsyncNotImplemented naming gate:async and that
-// the tier's execution is not yet built. Distinct from the gate-off ErrAsyncGated: the gate is open, the
-// mechanism is not there yet. As increments land this narrows; increment 4 lifts it and the guest runs.
-func TestGateAsyncOnRefusesUnimplementedByName(t *testing.T) {
+// TestGateAsyncOnGuestInstantiatesBuiltinSurfaceExhausted marks the increment-4 milestone that the earlier
+// no-op-kill test (this one, formerly TestGateAsyncOnRefusesUnimplementedByName) anticipated in its own
+// words: "increment 4 lifts it and the guest runs." With gate:async ON, p3async-hello now INSTANTIATES —
+// every async built-in it binds is built (stream.new/write/drops/cancels, the subtask ops, context, the
+// waitable-set loop incl. poll). What it hits next is no longer a gate refusal at bind but a host import at
+// RUN: `wasi:cli/stdout@0.3.0::write-via-stream`, which the stub host does not provide — the remaining seam
+// (the host-side consumer of the readable stream end, where the host-first inline copy first runs from a
+// real guest). The gate-on no-op-kill invariant — a component with a genuinely unbuilt async op refuses by
+// name, not silently — is preserved on SYNTHETIC subjects that still have one:
+// TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt (future.write 0x17, an async lift) and
+// TestSynthesizedAsyncLiftRefusedAtBindByName. p3async-hello is no
+// longer such a subject, so it can no longer witness that invariant.
+func TestGateAsyncOnGuestInstantiatesBuiltinSurfaceExhausted(t *testing.T) {
 	b, err := os.ReadFile(asyncGuestWasm)
 	if err != nil {
 		t.Fatalf("async guest fixture missing (it is committed): %v", err)
 	}
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	h := NewHost(io.Discard, io.Discard, nil)
-	_, err = InstantiateWithHost(b, h)
-	if err == nil {
-		t.Fatal("gate:async on: the async guest instantiated silently — a nil no-op; an unbuilt sub-path must refuse by name")
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("gate:async on: the async guest no longer instantiates — its builtin surface should be complete: %v", err)
 	}
-	if !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Fatalf("gate:async on: refusal is not ErrAsyncNotImplemented: %v", err)
+	// At run it reaches the write-via-stream host import, unprovided by the stub host — the remaining seam,
+	// NOT a gate refusal. This is the signal that the async builtin surface is exhausted.
+	runErr := in.Call("wasi:cli/run@0.3.0")
+	if runErr == nil {
+		t.Fatal("run succeeded, but the stub host provides no write-via-stream — a host-import seam should stop it")
 	}
-	if errors.Is(err, ErrAsyncGated) {
-		t.Fatalf("gate:async on: refused as ErrAsyncGated (gate off), but the gate is on: %v", err)
+	if errors.Is(runErr, ErrAsyncNotImplemented) || errors.Is(runErr, ErrAsyncGated) {
+		t.Fatalf("run refused by an async gate (%v), but the builtin surface is complete — the seam should be the host import", runErr)
 	}
-	if got := err.Error(); !strings.Contains(got, "gate:async") || !strings.Contains(got, "not yet implemented") {
-		t.Errorf("refusal %q must name gate:async and that execution is not yet implemented", got)
+	if got := runErr.Error(); !strings.Contains(got, "write-via-stream") {
+		t.Errorf("run error %q must name write-via-stream — the remaining host-side seam", got)
 	}
 }
 

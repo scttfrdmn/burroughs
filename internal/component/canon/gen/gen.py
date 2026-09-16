@@ -765,6 +765,48 @@ def emit_stream_hostfirst(case):
     }
 
 
+def emit_waitable_set_poll():
+    from definitions import (  # noqa: E402
+        FuncType, MemInst, canon_waitable_set_new, canon_waitable_set_poll,
+    )
+    heap = TracingHeap(64)
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    cap = {}
+
+    def outer_core(_flat):
+        # poll is wait minus the park (WaitableSet.poll, def:775-779): an empty set returns (NONE, 0, 0)
+        # WITHOUT blocking, through the SAME has_pending_event/get_pending_event path wait uses (no second
+        # readiness notion). The ready case — poll delivering the same event a wait would — is covered by the
+        # mixed-kind witness across all four kinds (Go), whose resolved waitables genuinely arm the event; a
+        # bare Subtask here has the right state but no armed pending event, so it is not pinned from this path.
+        wset = canon_waitable_set_new()[0]
+        empty_ptr = heap.realloc([0, 0, 4, 8])[0]
+        cap["empty_code"] = int(canon_waitable_set_poll(mk_opts(True).memory, wset, empty_ptr)[0])
+        cap["empty_p1"] = int.from_bytes(heap.memory[empty_ptr:empty_ptr + 4], "little")
+        cap["empty_p2"] = int.from_bytes(heap.memory[empty_ptr + 4:empty_ptr + 8], "little")
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+    return {
+        "empty_code": cap["empty_code"],   # EventCode.NONE = 0 — nothing ready, no park
+        "empty_p1": cap["empty_p1"],       # 0
+        "empty_p2": cap["empty_p2"],       # 0
+    }
+
+
 def emit_subtask_drop():
     from definitions import Subtask, Trap  # noqa: E402
     S = Subtask.State
@@ -1044,6 +1086,7 @@ def main():
         "stream_cancel_write": emit_stream_cancel_write(),  # gate:async inc 4: cancel-read's symmetric twin (write side)
         "subtask_cancel": emit_subtask_cancel(),  # gate:async inc 4: subtask substrate — the CANCELLED-state resolution path
         "subtask_drop": emit_subtask_drop(),  # gate:async inc 4: drop traps unless resolve-delivered (incl. the CANCELLED terminals)
+        "waitable_set_poll": emit_waitable_set_poll(),  # gate:async inc 4: the last op — wait minus the park, same readiness path
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),

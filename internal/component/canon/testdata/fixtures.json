@@ -3133,6 +3133,14 @@
     "starting_undelivered": "trap",
     "started_undelivered": "trap"
   },
+  "waitable_set_poll": {
+    "empty_code": 0,
+    "empty_p1": 0,
+    "empty_p2": 0,
+    "ready_code": 0,
+    "ready_p1": 0,
+    "ready_p2": 0
+  },
   "context_ops": {
     "slots": 2,
     "get0_unset": 0,
