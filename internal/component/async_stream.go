@@ -272,6 +272,38 @@ func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32)
 	return false, nil
 }
 
+// streamCancelWrite implements `canon stream.cancel-write` (0x12, definitions.py:2574 → cancel_copy) — the
+// symmetric twin of streamCancelRead on the writable end. The end must be mid-copy (a pending write:
+// hasWrite && !resolved) or it traps; if the copy already completed (an event is armed) the cancel delivers
+// that event, otherwise it resolves the write to CANCELLED with the progress made (0 for an undriven pending
+// write). The event is consumed INLINE and its packed payload returned. A CANCELLED write leaves the end
+// IDLE (open) — only DROPPED is DONE. Built as its own op (0x12), not folded into cancel-read's shared
+// cancel_copy: the guest binds both, and each refuses/permits by name.
+func streamCancelWrite(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: stream.cancel-write: got %d args, want (i)", len(args))
+		}
+		i := uint32(args[0].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		e, ok := handleAt[*writableStreamEnd](h, i)
+		if !ok {
+			return nil, fmt.Errorf("component: stream.cancel-write: handle %d is not a writable stream end", i)
+		}
+		if !e.hasWrite || e.resolved {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-write: end %d has no write in flight (COPYING)", i)}
+		}
+		e.completeWriteLocked(e.progress, copyCancelled) // progress is 0 for an undriven pending write
+		e.hasWrite = false                               // the pending write is cancelled, not outstanding
+		ev, ok := e.pendingEventLocked()                 // consume inline -> IDLE (CANCELLED)
+		if !ok {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-write: end %d had no deliverable event after cancel", i)}
+		}
+		return []interp.Value{interp.I32(int32(ev.p2))}, nil
+	}
+}
+
 // streamDropReadable implements `canon stream.drop-readable` (0x13, definitions.py:2605). Per CopyEnd.drop
 // (def:1040–1043): TRAP if the end is mid-copy (COPYING) — an end with an in-flight or armed-but-unconsumed
 // copy cannot be dropped — then drop the shared stream and remove the handle. Dropping notifies a pending
