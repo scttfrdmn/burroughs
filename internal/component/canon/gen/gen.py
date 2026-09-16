@@ -765,6 +765,67 @@ def emit_stream_hostfirst(case):
     }
 
 
+def emit_subtask_cancel():
+    from definitions import (  # noqa: E402
+        FuncType, MemInst, canon_subtask_cancel,
+    )
+
+    def drive(call_on_start, inline_resolve):
+        heap = TracingHeap(64)
+        inst = ComponentInstance(Store())
+        cap = {}
+
+        def mk_opts(async_):
+            o = CanonicalOptions()
+            o.memory = MemInst(heap.memory, "i32")
+            o.string_encoding = "utf8"
+            o.realloc = heap.realloc
+            o.post_return = None
+            o.sync_task_return = False
+            o.async_ = async_
+            o.callback = None
+            return o
+
+        ft = FuncType([], [], async_=True)
+        oa = mk_opts(True)
+
+        def callee(on_start, on_resolve):
+            if call_on_start:
+                on_start()  # STARTING -> STARTED
+
+            def on_cancel():
+                if inline_resolve:
+                    on_resolve(None)  # the callee observes cancellation and resolves as CANCELLED
+
+            return on_cancel
+
+        def outer_core(_flat):
+            core_lower = inst.store.lower(callee, ft, oa, inst)
+            packed = [int(x) for x in core_lower([])]
+            subtaski = packed[0] >> 4
+            cap["state_at_lower"] = packed[0] & 0xf
+            cap["cancel_ret"] = [int(x) for x in canon_subtask_cancel(True, subtaski)]
+            return []
+
+        inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                          lambda: [], lambda r: None)
+        return cap
+
+    started = drive(True, True)    # STARTED, callee resolves on cancel -> CANCELLED_BEFORE_RETURNED
+    starting = drive(False, True)  # STARTING, callee resolves on cancel -> CANCELLED_BEFORE_STARTED
+    async_ = drive(True, False)    # callee does NOT resolve -> yield -> BLOCKED
+    return {
+        # subtask.cancel returns the terminal state (Subtask.State), chosen by whether the subtask had STARTED,
+        # or BLOCKED if the callee did not resolve during the cancel (the model yields; Burroughs has no yield,
+        # so an unresolved cancel returns BLOCKED and the guest awaits the SUBTASK event — a substrate mapping).
+        "started_cancel_ret": started["cancel_ret"],     # [4] CANCELLED_BEFORE_RETURNED
+        "started_state_at_lower": started["state_at_lower"],   # 1 (STARTED)
+        "starting_cancel_ret": starting["cancel_ret"],   # [3] CANCELLED_BEFORE_STARTED
+        "starting_state_at_lower": starting["state_at_lower"],  # 0 (STARTING)
+        "async_cancel_ret": async_["cancel_ret"],        # [BLOCKED] — callee did not resolve inline
+    }
+
+
 def emit_stream_cancel_read():
     from definitions import (  # noqa: E402
         U8Type, StreamType, FuncType,
@@ -949,6 +1010,7 @@ def main():
         "stream_drops": emit_stream_drops(),  # gate:async inc 4: drop-readable/drop-writable end-state audit
         "stream_cancel_read": emit_stream_cancel_read(),  # gate:async inc 4: first RUNNING production of CANCELLED
         "stream_cancel_write": emit_stream_cancel_write(),  # gate:async inc 4: cancel-read's symmetric twin (write side)
+        "subtask_cancel": emit_subtask_cancel(),  # gate:async inc 4: subtask substrate — the CANCELLED-state resolution path
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),

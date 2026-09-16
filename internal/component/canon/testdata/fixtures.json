@@ -3104,6 +3104,19 @@
     "progress": 0,
     "wi_state_after": "IDLE"
   },
+  "subtask_cancel": {
+    "started_cancel_ret": [
+      4
+    ],
+    "started_state_at_lower": 1,
+    "starting_cancel_ret": [
+      3
+    ],
+    "starting_state_at_lower": 0,
+    "async_cancel_ret": [
+      4294967295
+    ]
+  },
   "context_ops": {
     "slots": 2,
     "get0_unset": 0,

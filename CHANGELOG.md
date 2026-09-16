@@ -21,6 +21,25 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `subtask.cancel` execution, the subtask substrate's cancel-resolution path (ADR 0086, #739).**
+  With `BURROUGHS_ASYNC=1`, `subtask.cancel` (0x06) executes: it requests cancellation of a not-yet-resolved
+  subtask and invokes the impl's cancel handler (the `onCancel` captured at lower, **carried inert since
+  2a-i-B-1** and wired here). If the callee resolves during the cancel, the subtask reaches a CANCELLED state
+  — `CANCELLED_BEFORE_STARTED` (3) if it had not started, `CANCELLED_BEFORE_RETURNED` (4) if it had — and the
+  state is returned; otherwise BLOCKED. Re-checking the dormant path was a **finding either way, and it named
+  a defect**: `onResolve` produced only RETURNED (2), with no cancel-resolution branch and no CANCELLED states
+  in the enum — so wiring `onCancel` naively would have resolved a cancelled subtask as RETURNED, a wrong
+  terminal state that compiled the whole time. This slice builds the missing path (the `result is None` branch
+  choosing the state by started-status), not merely wakes `onCancel`. The model's `thread.yield_` (a
+  cooperative scheduler turn so the single-threaded callee can observe the request) maps to Burroughs' **"BLOCKED
+  if not resolved inline"** — a substrate judgment (like per-caller context, ADR 0050): a goroutine callee needs
+  no cooperative turn, and the guest awaits the SUBTASK event as for any unresolved subtask. Matched to the
+  committed `subtask_cancel` pin. `gateAsync` permits 0x06; `subtask.drop` (0x0d) stays refused. `p3async-hello`
+  now advances to 0x0d. Off by default.
+- **`gate:async` increment 4 oracle — the `subtask.cancel` differential (ADR 0086, #739).** Pinned by running:
+  a STARTED subtask cancelled with an inline-resolving callee returns 4 (CANCELLED_BEFORE_RETURNED), a STARTING
+  one returns 3 (CANCELLED_BEFORE_STARTED), and a non-resolving callee returns BLOCKED. Oracle for the
+  execution landed in the same change.
 - **`gate:async` increment 4 — `stream.cancel-write` execution, cancel-read's symmetric twin (ADR 0086, #739).**
   With `BURROUGHS_ASYNC=1`, `stream.cancel-write` (0x12) executes: a guest-first write parks (BLOCKED,
   COPYING), and cancelling it delivers `CANCELLED` with progress 0 **inline** (not BLOCKED), the end returning

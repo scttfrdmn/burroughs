@@ -272,10 +272,15 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	if err := gateAsync(scancelw); err != nil {
 		t.Errorf("gate on, stream.cancel-write: gateAsync refused (%v), want permit — cancel-write is built", err)
 	}
-	// subtask.cancel (0x06) remains refused — the subtask substrate is a later slice (the dormant onCancel).
+	// subtask.cancel (0x06, increment 4): permitted — the subtask substrate's cancel path is built.
 	subcancel := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x06}}}
-	if err := gateAsync(subcancel); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, subtask.cancel: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	if err := gateAsync(subcancel); err != nil {
+		t.Errorf("gate on, subtask.cancel: gateAsync refused (%v), want permit — subtask.cancel is built", err)
+	}
+	// subtask.drop (0x0d) remains refused — the next slice.
+	subdrop := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x0d}}}
+	if err := gateAsync(subdrop); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, subtask.drop: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
 	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,
@@ -327,5 +332,85 @@ func TestSynthAsyncLowerBindsAndReachesTheWrapper(t *testing.T) {
 	}
 	if gotX != 7 {
 		t.Errorf("impl got x=%d, want 7 — the wrapper did not pass the lifted param", gotX)
+	}
+}
+
+// TestSubtaskCancelProducesCancelledStates pins subtask.cancel (0x06) against the committed oracle, driving
+// the whole path at unit level: a deferring async-lowered impl parks a subtask, then subtask.cancel invokes
+// the impl's onCancel, which resolves it. The terminal state is chosen by whether the subtask had started —
+// CANCELLED_BEFORE_STARTED (3) if not, CANCELLED_BEFORE_RETURNED (4) if so — the cancel-resolution path the
+// re-check found missing (before this increment onResolve produced only RETURNED). A callee that does not
+// resolve during the cancel returns BLOCKED (the model yields; Burroughs has no yield). This test exercises
+// async_lower.go's new cancel branch AND subtaskCancel together, not one in isolation.
+func TestSubtaskCancelProducesCancelledStates(t *testing.T) {
+	var doc struct {
+		SubtaskCancel struct {
+			StartedCancelRet     []int `json:"started_cancel_ret"`
+			StartedStateAtLower  int   `json:"started_state_at_lower"`
+			StartingCancelRet    []int `json:"starting_cancel_ret"`
+			StartingStateAtLower int   `json:"starting_state_at_lower"`
+			AsyncCancelRet       []int `json:"async_cancel_ret"`
+		} `json:"subtask_cancel"`
+	}
+	loadFixtures(t, &doc)
+	fx := doc.SubtaskCancel
+
+	// lower a deferring impl; return the parked subtask's index, its state at lower, and the table/caller.
+	lower := func(t *testing.T, callOnStart, inlineResolve bool) (*asyncHandles, *interp.CanonCaller, uint32, int) {
+		t.Helper()
+		h := newAsyncHandles()
+		cc, err := interp.NewCanonCallerForTest(1)
+		if err != nil {
+			t.Fatalf("caller: %v", err)
+		}
+		impl := func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+			if callOnStart {
+				onStart() // STARTING -> STARTED
+			}
+			return func() {
+				if inlineResolve {
+					onResolve(canon.Value{}) // the callee resolves on cancel; value ignored on the cancel path
+				}
+			}, nil
+		}
+		lowerRet, lerr := asyncLowerFunc(impl, false, h)(cc, nil)
+		if lerr != nil {
+			t.Fatalf("async lower: %v", lerr)
+		}
+		packed := uint32(lowerRet[0].Int32())
+		return h, cc, packed >> 4, int(packed & 0xf)
+	}
+
+	cancel := func(t *testing.T, h *asyncHandles, cc *interp.CanonCaller, subtaski uint32) uint32 {
+		t.Helper()
+		ret, err := subtaskCancel(h)(cc, []interp.Value{interp.I32(int32(subtaski))})
+		if err != nil {
+			t.Fatalf("subtask.cancel: %v", err)
+		}
+		return uint32(ret[0].Int32())
+	}
+
+	// STARTED -> CANCELLED_BEFORE_RETURNED (4)
+	h, cc, sti, sal := lower(t, true, true)
+	if sal != fx.StartedStateAtLower {
+		t.Errorf("state at lower = %d, want %d (STARTED)", sal, fx.StartedStateAtLower)
+	}
+	if got := cancel(t, h, cc, sti); int(got) != fx.StartedCancelRet[0] {
+		t.Errorf("started cancel = %d, want %d (CANCELLED_BEFORE_RETURNED)", got, fx.StartedCancelRet[0])
+	}
+
+	// STARTING -> CANCELLED_BEFORE_STARTED (3)
+	h, cc, sti, sal = lower(t, false, true)
+	if sal != fx.StartingStateAtLower {
+		t.Errorf("state at lower = %d, want %d (STARTING)", sal, fx.StartingStateAtLower)
+	}
+	if got := cancel(t, h, cc, sti); int(got) != fx.StartingCancelRet[0] {
+		t.Errorf("starting cancel = %d, want %d (CANCELLED_BEFORE_STARTED)", got, fx.StartingCancelRet[0])
+	}
+
+	// callee does not resolve during the cancel -> BLOCKED (the yield maps to BLOCKED, not a spin)
+	h, cc, sti, _ = lower(t, true, false)
+	if got := cancel(t, h, cc, sti); got != uint32(fx.AsyncCancelRet[0]) {
+		t.Errorf("async cancel = %#x, want %#x (BLOCKED)", got, uint32(fx.AsyncCancelRet[0]))
 	}
 }
