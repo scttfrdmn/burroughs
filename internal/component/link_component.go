@@ -382,12 +382,12 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 // (0x1a); the stream write-side slice (increment 3) — stream.write (0x10); stream.new (0x0e), the stream
 // drops — drop-readable (0x13), drop-writable (0x14) — and the stream cancels — cancel-read (0x11),
 // cancel-write (0x12) — (increment 4); and context.get/set (increment 4, 0x0a/0x0b). Every other async
-// built-in — waitable-set.poll (0x21), future.write/new/cancel-read, stream.read (0x0f), and subtask.drop
-// (0x0d) — stays refused by name until a guest binds it; subtask.cancel (0x06) is built (increment 4).
-// stream.read stays refused: the guest writes, the host reads (an internal path).
+// built-in — waitable-set.poll (0x21), future.write/new/cancel-read, and stream.read (0x0f) — stays refused
+// by name until a guest binds it; the subtask ops subtask.cancel (0x06) and subtask.drop (0x0d) are built
+// (increment 4). stream.read stays refused: the guest writes, the host reads (an internal path).
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
-	case 0x1f, 0x20, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x06, 0x0a, 0x0b:
+	case 0x1f, 0x20, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x06, 0x0d, 0x0a, 0x0b:
 		return true
 	}
 	return false

@@ -765,6 +765,38 @@ def emit_stream_hostfirst(case):
     }
 
 
+def emit_subtask_drop():
+    from definitions import Subtask, Trap  # noqa: E402
+    S = Subtask.State
+
+    # Subtask.drop traps unless the subtask is resolve-delivered (def:854–856). Driven by calling the model's
+    # drop() directly across (state, delivered) — resolve_delivered() == (lenders is None), which
+    # deliver_resolve sets. The two CANCELLED terminal states (new since subtask.cancel landed) are included
+    # as inputs to confirm they behave exactly as RETURNED: drop OK once delivered, trap while undelivered.
+    # (delivered=True with an unresolved state is impossible — the model's own invariant — so it is omitted.)
+    def drop_result(state, delivered):
+        s = Subtask()
+        s.state = state
+        s.lenders = None if delivered else []
+        try:
+            s.drop()
+            return "ok"
+        except Trap:
+            return "trap"
+
+    resolved_states = {
+        "returned": S.RETURNED,
+        "cancelled_before_started": S.CANCELLED_BEFORE_STARTED,
+        "cancelled_before_returned": S.CANCELLED_BEFORE_RETURNED,
+    }
+    matrix = {name: {"delivered": drop_result(st, True), "undelivered": drop_result(st, False)}
+              for name, st in resolved_states.items()}
+    # Unresolved subtasks can never be delivered, so they only have an undelivered (trap) row.
+    matrix["starting_undelivered"] = drop_result(S.STARTING, False)
+    matrix["started_undelivered"] = drop_result(S.STARTED, False)
+    return matrix
+
+
 def emit_subtask_cancel():
     from definitions import (  # noqa: E402
         FuncType, MemInst, canon_subtask_cancel,
@@ -1011,6 +1043,7 @@ def main():
         "stream_cancel_read": emit_stream_cancel_read(),  # gate:async inc 4: first RUNNING production of CANCELLED
         "stream_cancel_write": emit_stream_cancel_write(),  # gate:async inc 4: cancel-read's symmetric twin (write side)
         "subtask_cancel": emit_subtask_cancel(),  # gate:async inc 4: subtask substrate — the CANCELLED-state resolution path
+        "subtask_drop": emit_subtask_drop(),  # gate:async inc 4: drop traps unless resolve-delivered (incl. the CANCELLED terminals)
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),

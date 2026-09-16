@@ -3117,6 +3117,22 @@
       4294967295
     ]
   },
+  "subtask_drop": {
+    "returned": {
+      "delivered": "ok",
+      "undelivered": "trap"
+    },
+    "cancelled_before_started": {
+      "delivered": "ok",
+      "undelivered": "trap"
+    },
+    "cancelled_before_returned": {
+      "delivered": "ok",
+      "undelivered": "trap"
+    },
+    "starting_undelivered": "trap",
+    "started_undelivered": "trap"
+  },
   "context_ops": {
     "slots": 2,
     "get0_unset": 0,

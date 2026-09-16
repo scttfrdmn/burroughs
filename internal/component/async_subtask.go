@@ -146,3 +146,30 @@ func subtaskCancel(h *asyncHandles) interp.CanonFunc {
 		return []interp.Value{interp.I32(int32(st.state))}, nil
 	}
 }
+
+// subtaskDrop implements `canon subtask.drop` (0x0d, definitions.py:2441 -> Subtask.drop def:854). It traps
+// unless the subtask is resolve-delivered (Burroughs: `delivered`, set when a wait consumed the SUBTASK
+// event or subtask.cancel returned the state inline), then removes it from the table. The trap is the
+// scheduler-side mirror of the stream drop-mid-copy trap: dropping an undelivered resolution would leave the
+// guest's completion silently unaccounted rather than erroring. The two CANCELLED terminal states behave
+// exactly as RETURNED here — once delivered, drop is legal; while undelivered, it traps — so cancellation
+// added new inputs to this path but no new rule.
+func subtaskDrop(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: subtask.drop: got %d args, want (i)", len(args))
+		}
+		i := uint32(args[0].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		st, ok := handleAt[*subtask](h, i)
+		if !ok {
+			return nil, fmt.Errorf("component: subtask.drop: handle %d is not a subtask", i)
+		}
+		if !st.delivered {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("subtask.drop: subtask %d is not resolve-delivered; dropping it would silently discard its resolution", i)}
+		}
+		h.entries[i] = nil
+		return nil, nil
+	}
+}
