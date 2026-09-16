@@ -362,3 +362,90 @@ func TestStreamDropsAuditEndStates(t *testing.T) {
 		t.Errorf("reader end state after consuming DROPPED = %s, want %s (a dropped read is terminal)", got, fx.Notify.RiStateAfterConsume)
 	}
 }
+
+type streamCancelReadFixture struct {
+	ReadRet      []int  `json:"read_ret"`
+	CancelRet    []int  `json:"cancel_ret"`
+	Result       int    `json:"result"`
+	Progress     int    `json:"progress"`
+	RiStateAfter string `json:"ri_state_after"`
+}
+
+// TestStreamCancelReadProducesCancelled pins stream.cancel-read (0x11) against the committed oracle, and is
+// the FIRST assertion that CANCELLED is produced by a RUNNING path. CANCELLED has been pinned in the codec
+// since the future oracle (#752), but only ever injected synthetically — the future test hand-calls
+// completeLocked(copyCancelled) because future.cancel-read is refused by name. Here a pending read is
+// cancelled through the actual cancel op: it delivers result=CANCELLED, progress 0, INLINE (not BLOCKED),
+// and the end returns to IDLE (a cancelled read is open, not DONE — only DROPPED is DONE). The explicit
+// cross-check is Scott's: the value this running path delivers must equal the encoding #752 asserted (the
+// future_reads CANCELLED payload) and the codec's own copyCancelled constant — not merely pass its own row.
+func TestStreamCancelReadProducesCancelled(t *testing.T) {
+	var doc struct {
+		StreamCancelRead streamCancelReadFixture `json:"stream_cancel_read"`
+		FutureReads      []struct {
+			Name    string `json:"name"`
+			Payload *int   `json:"payload"`
+		} `json:"future_reads"`
+	}
+	loadFixtures(t, &doc)
+	fx := doc.StreamCancelRead
+	if len(fx.CancelRet) == 0 {
+		t.Fatal("no stream_cancel_read in fixtures.json")
+	}
+
+	h := newAsyncHandles()
+	cc, err := interp.NewCanonCallerForTest(1)
+	if err != nil {
+		t.Fatalf("harness caller: %v", err)
+	}
+	newRet, err := streamNew(h)(cc, nil)
+	if err != nil {
+		t.Fatalf("stream.new: %v", err)
+	}
+	ri := uint32(uint64(newRet[0].Int64()) & 0xffffffff)
+	re, _ := handleAt[*readableStreamEnd](h, ri)
+
+	h.mu.Lock()
+	completed, rerr := re.hostReadLocked(cc, 32, 4) // host reads first -> parks (COPYING)
+	h.mu.Unlock()
+	if rerr != nil || completed {
+		t.Fatalf("host read: err=%v completed=%v, want parked", rerr, completed)
+	}
+
+	cancelRet, cerr := streamCancelRead(h)(cc, []interp.Value{interp.I32(int32(ri))})
+	if cerr != nil {
+		t.Fatalf("stream.cancel-read: %v", cerr)
+	}
+	got := uint32(cancelRet[0].Int32())
+	if got == asyncBlocked {
+		t.Fatal("stream.cancel-read returned BLOCKED, want the CANCELLED payload inline")
+	}
+	if int(got) != fx.CancelRet[0] {
+		t.Errorf("cancel-read payload = %d, want %d (fixture)", got, fx.CancelRet[0])
+	}
+	if int(got&0xf) != fx.Result || int(got>>4) != fx.Progress {
+		t.Errorf("cancel-read = result %d progress %d, want result %d progress %d (CANCELLED, nothing copied)", got&0xf, got>>4, fx.Result, fx.Progress)
+	}
+	if got := re.endStateName(); got != fx.RiStateAfter {
+		t.Errorf("end state after cancel = %s, want %s (CANCELLED leaves the end IDLE, not DONE)", got, fx.RiStateAfter)
+	}
+
+	// Scott's explicit cross-check: this RUNNING production of CANCELLED equals the codec constant AND the
+	// encoding #752 pinned synthetically (the future_reads CANCELLED payload) — the running path delivers
+	// what the fixture asserted, not a value only this test happens to agree with.
+	if got&0xf != uint32(copyCancelled) {
+		t.Errorf("running CANCELLED = %d, want copyCancelled constant %d", got&0xf, copyCancelled)
+	}
+	var futurePin *int
+	for _, r := range doc.FutureReads {
+		if r.Name == "future-read-u32-cancelled" {
+			futurePin = r.Payload
+		}
+	}
+	if futurePin == nil {
+		t.Fatal("future_reads CANCELLED row (#752 pin) not found — the cross-check has no reference")
+	}
+	if int(got&0xf) != *futurePin {
+		t.Errorf("running CANCELLED encoding = %d, but #752 pinned %d synthetically — the running path diverged from the fixture", got&0xf, *futurePin)
+	}
+}
