@@ -21,6 +21,17 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `stream.cancel-write` execution, cancel-read's symmetric twin (ADR 0086, #739).**
+  With `BURROUGHS_ASYNC=1`, `stream.cancel-write` (0x12) executes: a guest-first write parks (BLOCKED,
+  COPYING), and cancelling it delivers `CANCELLED` with progress 0 **inline** (not BLOCKED), the end returning
+  to **IDLE** (only DROPPED is DONE) — the same CANCELLED encoding as cancel-read, on a STREAM_WRITE-coded
+  event. Built as its own op (0x12), **not folded into cancel-read's shared `cancel_copy`**: the guest binds
+  both, and each permits/refuses by name, so the surface does not grow through the back door. Matched to the
+  committed `stream_cancel_write` pin. `gateAsync` permits 0x12; `subtask.cancel` (0x06) stays refused (the
+  subtask substrate is the next slice). `p3async-hello` now advances to 0x06. Off by default.
+- **`gate:async` increment 4 oracle — the `stream.cancel-write` differential (ADR 0086, #739).** Pinned by
+  running: a parked write cancelled through the cancel op delivers `[CANCELLED | progress<<4]` = 2 (progress
+  0) inline, end → IDLE. Oracle for the execution landed in the same change.
 - **`gate:async` increment 4 — `stream.cancel-read` execution, the first running production of CANCELLED (ADR 0086, #739).**
   With `BURROUGHS_ASYNC=1`, `stream.cancel-read` (0x11) executes: it cancels a pending read (the end must be
   mid-copy or it traps), delivering `CANCELLED` with progress 0 **inline** (not `BLOCKED`), and the end

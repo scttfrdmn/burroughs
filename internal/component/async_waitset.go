@@ -212,6 +212,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 		return streamWrite(w.async), true
 	case 0x11: // stream.cancel-read (gate:async increment 4) — first running production of CANCELLED
 		return streamCancelRead(w.async), true
+	case 0x12: // stream.cancel-write (gate:async increment 4) — cancel-read's symmetric twin
+		return streamCancelWrite(w.async), true
 	case 0x13: // stream.drop-readable (gate:async increment 4)
 		return streamDropReadable(w.async), true
 	case 0x14: // stream.drop-writable (gate:async increment 4)

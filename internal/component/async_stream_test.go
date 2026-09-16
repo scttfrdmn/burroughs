@@ -449,3 +449,66 @@ func TestStreamCancelReadProducesCancelled(t *testing.T) {
 		t.Errorf("running CANCELLED encoding = %d, but #752 pinned %d synthetically — the running path diverged from the fixture", got&0xf, *futurePin)
 	}
 }
+
+type streamCancelWriteFixture struct {
+	WriteRet     []int  `json:"write_ret"`
+	CancelRet    []int  `json:"cancel_ret"`
+	Result       int    `json:"result"`
+	Progress     int    `json:"progress"`
+	WiStateAfter string `json:"wi_state_after"`
+}
+
+// TestStreamCancelWriteProducesCancelled pins stream.cancel-write (0x12) — cancel-read's symmetric twin on
+// the writable end — against the committed oracle. A guest-first write parks (BLOCKED, COPYING); cancelling
+// it delivers CANCELLED with progress 0 INLINE (not BLOCKED), and the end returns to IDLE (only DROPPED is
+// DONE). Same CANCELLED encoding as cancel-read, on a STREAM_WRITE-coded event.
+func TestStreamCancelWriteProducesCancelled(t *testing.T) {
+	var doc struct {
+		StreamCancelWrite streamCancelWriteFixture `json:"stream_cancel_write"`
+	}
+	loadFixtures(t, &doc)
+	fx := doc.StreamCancelWrite
+	if len(fx.CancelRet) == 0 {
+		t.Fatal("no stream_cancel_write in fixtures.json")
+	}
+
+	h := newAsyncHandles()
+	cc, err := interp.NewCanonCallerForTest(1)
+	if err != nil {
+		t.Fatalf("harness caller: %v", err)
+	}
+	newRet, err := streamNew(h)(cc, nil)
+	if err != nil {
+		t.Fatalf("stream.new: %v", err)
+	}
+	wi := uint32(uint64(newRet[0].Int64()) >> 32)
+
+	// A guest-first write parks (no reader yet) -> COPYING.
+	const srcPtr = 32
+	writeRet, werr := streamWrite(h)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(srcPtr), interp.I32(4)})
+	if werr != nil {
+		t.Fatalf("stream.write: %v", werr)
+	}
+	if uint32(writeRet[0].Int32()) != uint32(fx.WriteRet[0]) {
+		t.Errorf("write = %#x, want %#x (BLOCKED)", uint32(writeRet[0].Int32()), uint32(fx.WriteRet[0]))
+	}
+
+	cancelRet, cerr := streamCancelWrite(h)(cc, []interp.Value{interp.I32(int32(wi))})
+	if cerr != nil {
+		t.Fatalf("stream.cancel-write: %v", cerr)
+	}
+	got := uint32(cancelRet[0].Int32())
+	if got == asyncBlocked {
+		t.Fatal("stream.cancel-write returned BLOCKED, want the CANCELLED payload inline")
+	}
+	if int(got) != fx.CancelRet[0] || int(got&0xf) != fx.Result || int(got>>4) != fx.Progress {
+		t.Errorf("cancel-write = %d (result %d progress %d), want %d (result %d progress %d)", got, got&0xf, got>>4, fx.CancelRet[0], fx.Result, fx.Progress)
+	}
+	if got&0xf != uint32(copyCancelled) {
+		t.Errorf("cancel-write result = %d, want copyCancelled constant %d", got&0xf, copyCancelled)
+	}
+	we, _ := handleAt[*writableStreamEnd](h, wi)
+	if s := we.endStateName(); s != fx.WiStateAfter {
+		t.Errorf("end state after cancel = %s, want %s (CANCELLED leaves the end IDLE)", s, fx.WiStateAfter)
+	}
+}

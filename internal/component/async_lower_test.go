@@ -267,11 +267,15 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	if err := gateAsync(scancelr); err != nil {
 		t.Errorf("gate on, stream.cancel-read: gateAsync refused (%v), want permit — cancel-read is built", err)
 	}
-	// stream.cancel-write (0x12) remains refused (its symmetric mechanism is a later slice); the refusal
-	// fires by name, not as an unreached branch of cancel-read's shared cancel_copy logic.
+	// stream.cancel-write (0x12, increment 4): permitted — cancel-read's symmetric twin, now built.
 	scancelw := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x12}}}
-	if err := gateAsync(scancelw); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, stream.cancel-write: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	if err := gateAsync(scancelw); err != nil {
+		t.Errorf("gate on, stream.cancel-write: gateAsync refused (%v), want permit — cancel-write is built", err)
+	}
+	// subtask.cancel (0x06) remains refused — the subtask substrate is a later slice (the dormant onCancel).
+	subcancel := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x06}}}
+	if err := gateAsync(subcancel); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, subtask.cancel: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
 	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,
