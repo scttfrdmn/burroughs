@@ -527,7 +527,19 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
   loop so the stop has something to stop.
 - **Floor:** every run must confirm all N parked before the request.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #10
+- **Status:** implemented — TestSP4StopCompletesWithoutWakingParkedAgents
+
+  > Landed 2026-09-16. N=4 agents park in a blocking host call, one agent runs a hot loop; `Stop` returns
+  > within the deadline (the spinner reaches a back-edge safepoint, the four count as at one) and the wake
+  > counter reads 0. **Mismatch finding**: the single-agent `TestStopCompletesWhileAgentParkedInWaitableSetWait`
+  > was briefly labelled SP-4's partial producer, but it parks in a guest-called *built-in* (`waitable-set.wait`)
+  > — SP-5's shape (whose full case is deferred to #771), not SP-4's host-call shape — and covers none of
+  > SP-4's distinctive content. Folding it in would have certified SP-4 with a test for a different clause;
+  > SP-4 got its own witness instead. **The wake counter is a measured zero**: it increments only on the
+  > blocking select's `ctx.Done` arm (a forced wake), never on the intended `release`, and reads 0 through
+  > normal completion — witnessed live by the **control** (adding `t.cancelCtx()` for blocked threads to
+  > `Stop`'s loop), which drove it to 4 while the stop was held, the defect signature. Both forbidden halves
+  > checked (no wake, and Stop returns). Arbiter neither; both models via CI; race-free under -race.
 
 ### SP-5 — stop composes with agents suspended in guest-called built-ins
 
