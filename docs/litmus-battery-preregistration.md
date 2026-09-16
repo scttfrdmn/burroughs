@@ -501,7 +501,7 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
   hot loop so the stop has something to stop.
 - **Floor:** every run must confirm all N suspended before the request.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #739
+- **Status:** blocked — #771
 
 ### SP-6 — a resumed agent sees writes made while the world was stopped
 
@@ -982,7 +982,7 @@ semantics.
   built-in, so its progress is not an artifact of the substrate.
 - **Floor:** every run must confirm A suspended before sampling.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #739
+- **Status:** blocked — #771
 
 **Why the self-deadlock half has no litmus case:** the clause's last sentence is a *non-guarantee* — the
 runtime does not detect the all-agents-suspended-on-unsatisfiable-waitable-sets case; `Close` and the fault

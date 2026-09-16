@@ -3,17 +3,22 @@
 #
 # Phase-3 (gate:async) borrow-lifetime fixture harness — DORMANT oracle tooling, not wired to a build
 # target and not run in CI. The whole borrow-lifetime discipline relocated to Phase 3 (dated disposition
-# on #694): its three assertions are unreachable in the sync tier — the model's subtask `resolve`
+# on #694): two of its three assertions have no producer yet. The model's subtask `resolve`
 # force-accounts num_lends and num_borrows to 0 before a sync parent resumes (probe: 0→1→0,
 # num_borrows==0 at every sync return), and the lender is suspended for the callee's duration
-# (`may_leave`). They need a caller running while a borrow is outstanding, which is async.
+# (`may_leave`).
 #
-# This is the harness Phase 3's fixtures will be generated from: it drives definitions.py's OWN call
+# The expiry is a GUEST THAT LENDS A BORROW ACROSS A CALL BOUNDARY IT OUTLIVES — not a tier. This was
+# read onto the sync→async boundary at first, but gate:async slice 1 (#739) landed the async ABI end to
+# end and its guest (p3async-hello) still lends nothing across a subtask, so the blocker was never
+# "sync vs async" — it is that no guest has yet handed a borrow across a call it outlives. own-dropped
+# -while-lent and borrow-outliving-call discharge when such a guest arrives; scenario_lend_released
+# (the proven 0→1→0 driver) has its fixture and holds.
+#
+# This is the harness those two scenarios will be generated from: it drives definitions.py's OWN call
 # machinery (the test_handles pattern; the mk_opts/mk_host_func/lift_and_run helpers live in the
-# reference test harness, inlined here). It commits as generator code with **no fixtures** and no
-# Burroughs canon-package lend model — a lend model with nothing that lends is a scaffold without a
-# consumer. scenario_lend_released below is the proven driver (the 0→1→0 trace); Phase 3 adds the
-# borrow-outliving and own-dropped-while-lent scenarios and commits their fixtures behind gate:async.
+# reference test harness, inlined here). It commits as generator code with only scenario_lend_released's
+# fixture — a lend model with nothing that lends is a scaffold without a consumer.
 
 import json
 import os
