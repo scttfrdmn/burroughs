@@ -277,10 +277,15 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	if err := gateAsync(subcancel); err != nil {
 		t.Errorf("gate on, subtask.cancel: gateAsync refused (%v), want permit — subtask.cancel is built", err)
 	}
-	// subtask.drop (0x0d) remains refused — the next slice.
+	// subtask.drop (0x0d, increment 4): permitted — traps unless resolve-delivered.
 	subdrop := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x0d}}}
-	if err := gateAsync(subdrop); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, subtask.drop: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	if err := gateAsync(subdrop); err != nil {
+		t.Errorf("gate on, subtask.drop: gateAsync refused (%v), want permit — subtask.drop is built", err)
+	}
+	// waitable-set.poll (0x21) remains refused — the last op in the tail.
+	wpoll := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x21}}}
+	if err := gateAsync(wpoll); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, waitable-set.poll: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
 	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,

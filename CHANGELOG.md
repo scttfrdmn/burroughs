@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` increment 4 — `subtask.drop` execution, traps unless resolve-delivered (ADR 0086, #739).**
+  With `BURROUGHS_ASYNC=1`, `subtask.drop` (0x0d) removes a subtask from the table, but **traps unless the
+  subtask is resolve-delivered** — the scheduler-side mirror of the stream drop-mid-copy trap: dropping an
+  undelivered resolution would leave the guest's completion silently unaccounted rather than erroring. The
+  two CANCELLED terminal states (new since `subtask.cancel` landed) are pinned as inputs and behave exactly as
+  RETURNED — drop OK once delivered, trap while undelivered — so cancellation added new inputs to the drop
+  path but no new rule. Matched to the committed `subtask_drop` trap matrix. `gateAsync` permits 0x0d;
+  `waitable-set.poll` (0x21) stays refused — the last op in increment 4's countable tail. `p3async-hello` now
+  advances to 0x21. Off by default.
+- **`gate:async` increment 4 oracle — the `subtask.drop` trap matrix (ADR 0086, #739).** Pinned by running:
+  `Subtask.drop` traps iff not resolve-delivered, across RETURNED and both CANCELLED terminals (delivered → ok,
+  undelivered → trap) and the unresolved states (always trap). Oracle for the execution landed in the same change.
 - **`gate:async` increment 4 — `subtask.cancel` execution, the subtask substrate's cancel-resolution path (ADR 0086, #739).**
   With `BURROUGHS_ASYNC=1`, `subtask.cancel` (0x06) executes: it requests cancellation of a not-yet-resolved
   subtask and invokes the impl's cancel handler (the `onCancel` captured at lower, **carried inert since
