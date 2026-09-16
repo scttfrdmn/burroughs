@@ -56,6 +56,40 @@ the test, and the named test must resolve to a real declaration or the control f
 blocker has been discharged while its status still reads `blocked` is the way this document is most
 likely to rot, which is why the sequencing below says out loud which two issues will make that happen.
 
+## Building a case: the per-case discipline
+
+An entry becomes `implemented` only through these steps, in order. They are recorded here rather than
+left to habit because a litmus witness runs concurrent code by construction, and the failure modes below
+are the ones that make a case *look* landed while certifying nothing.
+
+1. **Pre-register before code.** The expected outcome on each model, the control that must be watched
+   dying, the repetition count, and the **arbiter named honestly** — hardware/proposal text, `-race`,
+   protocol, or *the contract's own text with no external arbiter* (over half this battery is the last
+   kind; say so per case rather than in the aggregate).
+2. **Build the case on both models** — an amd64 (x86-TSO) and an AArch64 (weak) runner — or it is not
+   landed; a one-model result is reported as a one-model result.
+3. **Watch the control die, and read the red for the defect's signature**, not merely for being red. A
+   control that hangs instead of failing names nothing.
+4. **Interrogate a first-run pass.** A weak-memory violation is probabilistic; a clean run can mean the
+   window never opened. Say what opened it — and where the pass is near-certain (a *mechanism-covered*
+   case, whose implementation was written against the clause), the control carries the whole weight, so
+   its red must prove the window opens.
+5. **Run the case under `-race` before pushing.** This is not optional and not `make check`'s job: a
+   litmus witness runs concurrent code, and **the instrument's own correctness is part of the evidence.**
+   A witness whose own read races the value it observes can report either value and be green by luck —
+   worse than a red, because the case lands claiming to certify a clause it cannot observe reliably. `make
+   check`'s `test` does not run `-race`; CI's race job does, so a race here is caught late unless run
+   locally per case. **On macOS the *full-package* `-race` run can fail for reasons unrelated to any race**
+   (`fatal error: too many address space collisions for -race mode`, from the mmap-heavy grow tests), so
+   the **per-case** `-race` run is the signal on that box; CI's Linux runners are the full-package
+   authority.
+6. **Land, then check the pre-registration as a set** for that case — every registered expectation
+   hit/miss recorded.
+
+If a case's shape is unrunnable as written, report the trace; do **not** rewrite the registration to fit
+what runs (`b-mm-1`'s documented hole is the precedent). A mismatch between the instrument's shape and the
+clause's text is a finding, not a formatting problem.
+
 ## Coverage, fixed in advance
 
 **Aligned accesses only. Unaligned is named as uncovered.** Every case below observes naturally aligned
