@@ -394,7 +394,13 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
 - **Floor:** every run must observe all N counters advancing before the request; a run that does not is an
   instrument fault.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #554
+- **Status:** blocked — #10
+
+  > Re-pointed from #554 (2026-09-16). #554 (T-1's spawn) is closed and T-1 is implemented
+  > (`TestNAgentsAreAllParkedInAWaitAtOneInstant`); the mechanism SP-1 needs — Spawn supplying N agents in
+  > one world, Stop with a deadline, back-edge safepoint polling (ADR 0059/0067) — is on `main`. So SP-1's
+  > blocker is now the same as SP-2/SP-4/H-1/H-3: writing the case (#10), not a missing mechanism. Caught by
+  > `make blockercheck`'s first batch run (F1) — a stale `blocked — #554` over a closed blocker.
 
 ### SP-2 — a parked thread is at a safepoint
 
