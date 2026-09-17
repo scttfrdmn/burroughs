@@ -10,9 +10,9 @@ Date: 2026-09-17 · Status: **proposed** · [#782](https://github.com/scttfrdmn/
 
 **Is not:** a `GOOS=wasip3` claim on stock Go (that is §10 open-Q6, unsupported on go1.27.1); a port of wasmpreempt's JS host runtime (that liveness half does not transfer — see *Where it lives*); or a project that certifies its own threaded memory model against an independent engine (there is none — see *Two tiers*).
 
-## Sources (this charter grounds in committed records, not the external memo)
+## Sources (this charter grounds in committed records)
 
-The formal endgame register (its `D-*` decision items, its `R-*` risk items, and the `GEOEXPERIMENT` shape) is **not committed** — it lives in chat-CC's memo, outside the repo (frozen-markdown-footprint rule). This charter grounds in committed sources instead: **[#742](https://github.com/scttfrdmn/burroughs/issues/742)** (D-1; the two Phase-4 charter items; the battery's measured state), **[#688](https://github.com/scttfrdmn/burroughs/issues/688)** (no stock Go→p3 path; `GOOS=wasip3` is §10 open-Q6), the recon **[#781](https://github.com/scttfrdmn/burroughs/issues/781)** (upstream status, the fork delta, the wasmpreempt survey), and the contract §§2–6.
+The formal endgame register (the chair's plan document of 2026-09-09 with its dated corrections) is **filed on [#781](https://github.com/scttfrdmn/burroughs/issues/781)** (2026-09-17), closing the governance gap this recon named as F-0 — the charter cites a committed record, not a chat artifact. This charter also grounds in **[#742](https://github.com/scttfrdmn/burroughs/issues/742)** (D-1; the two Phase-4 charter items; the battery's measured state), **[#688](https://github.com/scttfrdmn/burroughs/issues/688)** (no stock Go→p3 path; `GOOS=wasip3` is §10 open-Q6), and the contract §§2–6. Where a ruling supersedes the register's plan text, the register's §7 records it.
 
 ## Context
 
@@ -48,13 +48,17 @@ Following ADR 0084/0086: the claim distinguishes what an independent engine veri
 - The battery has answered what Phase 4 needed — measured, not as expected (see *Two tiers*).
 - **Gap (named, not blocking):** both gates are off; the async tier is sync-lift only, with the async-lift half tracked-but-unbuilt ([#771](https://github.com/scttfrdmn/burroughs/issues/771)); whether the fork's guest sync-lifts (reachable, likely) or async-lifts (#771) is the first slice's opening design question.
 
+## Exit conditions (observable, from the register §3)
+
+Phase 4's exit is stated as observable conditions, not a milestone: goroutines running on **≥2 host agents**; a blocking call suspending **only its own goroutine** while siblings progress (§5 H-1/H-4); the guest's GC completing a **stop-the-world through host safepoints** (`Stop`/`Resume`, §3); and the **§4 litmus battery passing on two memory models** (a TSO and a weakly-ordered platform, B-MM-5) — with its evidence read at the strength *Two tiers* records, not as discrimination it does not provide.
+
 ## Where it lives
 
-A `GEOEXPERIMENT`-gated real-threads experiment over a p3-async base, in the fork's own Go tree — not a stock `GOOS=wasip3` claim. **wasmpreempt is the precedent for the host-agnostic half only** (the back-edge poll codegen, the shared-memory safepoint word, the atomics lowerings, passive segments, the STW broadcast mechanism — all validated on two engines/ISAs). Its scheduler-liveness half is **JS-coupled and does not transfer**: the m0 heartbeat's `Atomics.waitAsync` async-park exists so a single JS event-loop thread never blocks, and has no non-JS analog. **A Burroughs host dissolves that problem** — Burroughs is goroutine-per-agent with real blocking excursions (H-1/H-4), which is the non-JS equivalent wasmpreempt lacks; the fork rebuilds the liveness half on Burroughs's imports rather than porting JS. The reversal trigger for this whole shape is **D-1 flipping to yes** (a `thread.spawn` in the shipped ABI, giving an independent engine), which is on no upstream horizon (#781 A3).
+A `GEOEXPERIMENT`-gated real-threads experiment over a p3-async base, in the fork's own Go tree — a **private tree, separate from the Burroughs repo** (register §3) — not a stock `GOOS=wasip3` claim. **wasmpreempt is the precedent for the host-agnostic half only** (the back-edge poll codegen, the shared-memory safepoint word, the atomics lowerings, passive segments, the STW broadcast mechanism — all validated on two engines/ISAs). Its scheduler-liveness half is **JS-coupled and does not transfer**: the m0 heartbeat's `Atomics.waitAsync` async-park exists so a single JS event-loop thread never blocks, and has no non-JS analog. **A Burroughs host dissolves that problem** — Burroughs is goroutine-per-agent with real blocking excursions (H-1/H-4), which is the non-JS equivalent wasmpreempt lacks; the fork rebuilds the liveness half on Burroughs's imports rather than porting JS. The reversal trigger for this whole shape is **D-1 flipping to yes** (a `thread.spawn` in the shipped ABI, giving an independent engine), which is on no upstream horizon (#781 A3).
 
 ## Consequences
 
-- **Two gates behind it, sync-lift async proven, this is the fork.** The threaded p3 fork is the phase the endgame plan named Phase 4; it is a product line, not scaffolding.
+- **Two gates behind it, sync-lift async proven, this is the fork.** The threaded p3 fork is the phase the endgame plan named Phase 4. Per the chair's reserved-item answer (register §6): **the single-threaded async tier is a product independent of the fork** — it has an independent oracle and yields "runs programs compiled by a third-party toolchain against WASI 0.3"; **Phases 2–3 are the product, and the fork is the thesis on top.**
 - **The first slice has no threaded-tier content** — it exercises the compile-half against the tier that *has* an external oracle (Wasmtime), before any exposure the battery is the sole oracle for.
 - **No `gate:threads`/`gate:async` flip rides this ADR** — the flips are Scott's stamp-tier events with pre-registered forecasts; `gate:threads`'s flip is unscheduled (#670). This charter opens the tier; it does not flip a gate.
 - **No engine code lands on this ADR alone.** Its stamp, and `GEOEXPERIMENT`'s creation, are Scott's.
