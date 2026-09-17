@@ -977,7 +977,23 @@ the test's own comment; it is recorded in three places because no instrument's d
   host call, so its progress cannot be an artifact of the boundary.
 - **Floor:** every run must confirm A parked before sampling.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #10
+- **Status:** implemented — TestH1ABlockingHostCallDoesNotStarveSiblings
+
+  > Landed 2026-09-16 as a STRUCTURAL guarantee, witnessed by running (Scott's ruling: run the attempt, do
+  > not argue the gap). **Mismatch corrected first**: the single-agent `TestWaitableSetWaitParksOnlyThe`
+  > `CallingAgentSiblingRuns` labels itself "H-1/H-4" but parks in `waitable-set.wait` — a guest-called
+  > *built-in*, H-4's shape — so it does not witness H-1's *host-call* shape; H-1 got its own witness.
+  > **The forbidden cannot be produced.** The reading was that goroutine-per-agent makes B share no lock with
+  > A's parked goroutine (`poll()` is a lock-free `stopReq` read); the run confirms it. The positive arm: A
+  > parks in a blocking host call, B (a bounded guest loop, no host call in it) completes. The evidence arm —
+  > a **control watched failing to die** — constructs the strongest starvation attempt available:
+  > `GOMAXPROCS=1` with A busy-HOLDING its OS thread in the host call, never yielding. B **still completes**,
+  > at a ~2x slowdown but never zero progress (Go async preemption schedules B). A merely slow B violates
+  > nothing (this registration says so), so the slowdown is logged, not asserted. **What it would take to
+  > falsify it:** a different engine — a cooperative/single-worker scheduler where a blocking call blocks the
+  > loop — which is the *only* instrument that could produce the forbidden, and the regression this test would
+  > catch. A guarantee that holds by construction, with the construction witnessed rather than asserted, is
+  > the stronger evidence for the threaded tier. Run under -race; arbiter neither.
 
 ### H-2 — no surprise reentrancy
 
