@@ -852,6 +852,13 @@ def emit_async_lift_loop():
     # order pin would over-constrain the engine. Pinned: both armed events delivered (multiset), the task's
     # context surviving re-entry (set in cycle 1, read in cycle 2), the SAME set used across cycles, the cycle
     # count, and the resolved result. random is seeded only to make the model run reproducible.
+    #
+    # DELIBERATE OMISSION (do not "tighten"): the event ORDER is not pinned, and adding an order assertion
+    # here would be adding a defect, not tightening the test. `random.shuffle` over a set's members (def:763)
+    # means order is a property of the model's RNG, not of either implementation, so an order pin would encode
+    # that RNG as a requirement and fail a goroutine-scheduled engine that delivers the same events in a
+    # different order. The non-vacuity guard (TestAsyncLiftLoopPinExercisesReentryState) is what keeps
+    # "multiset" from becoming "anything". (Same shape as the blocking oracle's deliberate-omission note.)
     import random as _random  # noqa: E402
     from definitions import (  # noqa: E402
         FuncType, MemInst, Waitable, EventCode, current_thread,
