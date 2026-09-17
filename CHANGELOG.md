@@ -21,6 +21,16 @@ weakly-ordered platform.
 
 ### Added
 
+- **The stackless async-lift callback-result decode, differential-pinned against every dispatch code (#785).**
+  Increment 2 of the second-async-guest slice: `unpackCallbackResult` (`internal/component/async_lift.go`)
+  decodes the packed i32 the callback returns — `code = packed & 0xf`, waitable-set index `= packed >> 4`,
+  and a code above MAX (EXIT/YIELD/WAIT) **traps**. Pinned byte-exact against the model
+  (`definitions.py unpack_callback_result`, fixtures.json `callback_result`) across **every** code — not just
+  the happy-path EXIT — because the code is exactly what tells "done" from "waiting on set si" from "yield";
+  a success-only pin is green against a dispatch that cannot tell them apart, the mis-route shape this tier
+  has caught three times. The out-of-range codes are pinned to trap (the guard a decode that masks instead of
+  range-checks would skip). Both broken decodes — masking the code away, skipping the range check — were
+  watched failing the pin. No gate flip; the lift's execution loop is the next increment.
 - **The second async guest — async-lift + cancellation, built and its reading committed (#785, discharges #771's async-lift half).**
   `internal/component/testdata/p3async-cancel.wasm`, a Rust `wasm32-wasip3` component, **byte-verified**: it
   **async-lifts** its export — `(func $run (canon lift (core func $hook0) async (callback $hook1)))`, the

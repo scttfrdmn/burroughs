@@ -807,6 +807,42 @@ def emit_waitable_set_poll():
     }
 
 
+def emit_callback_result():
+    from definitions import CallbackCode, unpack_callback_result, Trap  # noqa: E402
+    # The stackless async-lift callback ABI (canon_lift def:2126-2151): after the initial callee call and on
+    # every re-entry, the callback returns a PACKED i32 the scheduler dispatches on — code = packed & 0xf,
+    # waitable_set_index = packed >> 4 (unpack_callback_result def:2171-2177), and code > MAX traps. EVERY code
+    # is pinned, not just the happy-path EXIT, because the code is exactly what distinguishes "done" from
+    # "waiting on set si" from "yield": a success-only pin is green against a scheduler that cannot tell them
+    # apart, which is the mis-route shape this tier has caught three times. The trap on an out-of-range code is
+    # pinned too — it is the guard a dispatch that masks instead of range-checks would skip.
+    def unpack(packed):
+        try:
+            code, si = unpack_callback_result(packed)
+            return {"packed": packed, "code": int(code), "si": si}
+        except Trap:
+            return {"packed": packed, "traps": True}
+
+    return {
+        "codes": {
+            "EXIT": int(CallbackCode.EXIT),    # 0 — task resolved (the guest's run happy path)
+            "YIELD": int(CallbackCode.YIELD),  # 1 — cooperative yield, no set
+            "WAIT": int(CallbackCode.WAIT),    # 2 — waiting on waitable set `si`
+            "MAX": int(CallbackCode.MAX),      # 2 — codes above this trap
+        },
+        "unpacks": [
+            unpack(0),               # EXIT, si 0 — done
+            unpack(1),               # YIELD, si 0
+            unpack(2),               # WAIT, si 0
+            unpack(2 | (1 << 4)),    # WAIT, si 1 — code and set index must not swap (packed 0x12)
+            unpack(1 | (2 << 4)),    # YIELD, si 2 (packed 0x21)
+            unpack(0 | (5 << 4)),    # EXIT, si 5 — decode is uniform; si is present though EXIT ignores it
+            unpack(3),               # code 3 > MAX -> trap
+            unpack(0xf),             # code 15 > MAX -> trap
+        ],
+    }
+
+
 def emit_subtask_drop():
     from definitions import Subtask, Trap  # noqa: E402
     S = Subtask.State
@@ -1087,6 +1123,7 @@ def main():
         "subtask_cancel": emit_subtask_cancel(),  # gate:async inc 4: subtask substrate — the CANCELLED-state resolution path
         "subtask_drop": emit_subtask_drop(),  # gate:async inc 4: drop traps unless resolve-delivered (incl. the CANCELLED terminals)
         "waitable_set_poll": emit_waitable_set_poll(),  # gate:async inc 4: the last op — wait minus the park, same readiness path
+        "callback_result": emit_callback_result(),  # 2nd async guest: the stackless async-lift callback ABI — every dispatch code + the out-of-range trap
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),
