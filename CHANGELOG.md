@@ -21,6 +21,23 @@ weakly-ordered platform.
 
 ### Added
 
+- **§4 litmus B-MM-1 — the async-wake crossing is an acquire edge over the whole address space; the #742 hole closes as structural (`track:litmus`, #10).**
+  `TestBMM1AsyncWakeIsAnAcquireEdgeOverTheAddressSpace` (on the real slice-1 async machinery, new fixture
+  `async-wake-bmm1-synth.wasm`): a guest parks in `waitable-set.wait`; the host writes four words spread
+  low/mid/high across the page while the agent is parked, then resolves the subtask (the async wake); the
+  resumed agent reads the four with guest typed loads and returns `0xF` iff all were seen. Passes under
+  `-race`, both arches. This is the reopening condition the #742 recon named (Q4 ruled: B-MM-1's crossings
+  are all host→guest, so a host publisher is the only publisher the clause admits; "async wake" is one).
+  **Structural, and stronger than SP-6's:** the acquire edge is *identical to the wake delivery* — the parked
+  guest resumes by receiving on the set's `wake` channel, and a Go channel close happens-before its receive,
+  so waking IS the acquire. **No redundant-edge control applies here, and that is the finding (run, not
+  reasoned):** the wake channel and asyncHandles' mutex both carry the ordering and both are load-bearing —
+  removing the channel (with the guest forced to genuinely park) times out the resume, removing the mutex
+  races the handle-table struct. Engine comments that named only the mutex are corrected to name both
+  (`async_waitset.go`, `async_lower.go`), as SP-6 corrected `safepoint.go`. Closes the async-wake crossing
+  only; the **host-call-return** crossing remains the documented `-race`-defeated hole (#742), and the
+  battery's one *discriminating* memory-model witness is still B-MM-2. Registration updated with the dated
+  closure, the hole kept visible.
 - **`gate:async` increment 4 — `write-via-stream` host consumer; `p3async-hello` runs to the committed reading (ADR 0086, #739).**
   With `BURROUGHS_ASYNC=1`, the real host consumer `wasi:cli/stdout::write-via-stream` (`func(data: stream<u8>)
   -> future<result<_, error-code>>`) reads the readable stream end the guest hands it and writes the bytes to

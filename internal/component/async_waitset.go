@@ -21,7 +21,15 @@ import (
 // wait, so a sibling agent keeps running (H-1/H-4) and a concurrent Stop reaches its safepoint on the
 // blocked mark without waking the waiter (SP-5). The wait's inner loop selects on the set's wake channel
 // AND the caller's context, so Close tears the agent down (H-3). Resolution fires on the impl's own
-// goroutine and is synchronized with the parked read through asyncHandles' mutex.
+// goroutine and is synchronized with the parked read by TWO edges, not one (the §4 B-MM-1 acquire edge at
+// the async-wake crossing — corrected here after the litmus witness, as SP-6 corrected safepoint.go): the
+// wake channel's close→receive (signalLocked closes it after the write; the parked select receives it) is
+// the carrier when the guest genuinely parked, and asyncHandles' mutex is the carrier when the guest
+// pre-finds an already-armed event on its first pendingEventLocked check. Both are load-bearing — the
+// channel delivers the resume, the mutex guards the readiness state — so neither is a "redundant" edge a
+// reader may delete: removing the channel means a parked guest never wakes, removing the mutex races the
+// handle table. B-MM-1's async-wake acquire edge is thus IDENTICAL to the wake delivery, not merely carried
+// alongside it (litmus TestBMM1AsyncWakeIsAnAcquireEdgeOverTheAddressSpace).
 
 // eventCode mirrors definitions.py EventCode (def:696–703). Slice-1 delivers NONE and SUBTASK.
 type eventCode uint32

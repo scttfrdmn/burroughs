@@ -132,6 +132,56 @@ return their i32 so the tests observe them via the core instance's Invoke. Autho
   (func (export "sibling") (result u32) (canon lift (core func $sibf))))
 ```
 
+`async-wake-bmm1-synth.wasm` is a hand-authored **synthesized** component for the §4 **B-MM-1** litmus
+witness (`track:litmus`, #10 — `TestBMM1AsyncWakeIsAnAcquireEdgeOverTheAddressSpace`): the same blocking-arm
+round trip as `async-waitset-synth`, but `run`, after `waitable-set.wait` returns (the async wake), reads
+**four words spread low/mid/high across the page** (0x100, 0x4000, 0x8000, 0xF000) — written host-side while
+the agent is parked — and returns a match mask against their sentinels (0x11111111 / 0x22222222 / 0x33333333
+/ 0x44444444), `0xF` iff all four were seen across the wake. It witnesses that the async-wake crossing is an
+acquire edge over the *whole* address space (sampled), not one word. Authored from this WAT via `wasm-tools
+parse` (wasm-tools 1.258.0; validates `--features all`):
+
+```wat
+(component
+  (core module $memmod (memory (export "m") 1))
+  (core instance $memi (instantiate $memmod))
+  (alias core export $memi "m" (core memory $cm))
+  (import "test:async/ops" (instance $ops
+    (export "op" (func async (param "x" u32) (result u32)))))
+  (alias export $ops "op" (func $impf))
+  (core func $lowered (canon lower (func $impf) async (memory $cm)))
+  (core func $wsnew (canon waitable-set.new))
+  (core func $wsjoin (canon waitable.join))
+  (core func $wswait (canon waitable-set.wait (memory $cm)))
+  (core module $runmod
+    (import "" "mem" (memory 1))
+    (import "" "lower" (func $lower (param i32 i32) (result i32)))
+    (import "" "wsnew" (func $wsnew (result i32)))
+    (import "" "wsjoin" (func $wsjoin (param i32 i32)))
+    (import "" "wswait" (func $wswait (param i32 i32) (result i32)))
+    (func (export "run") (result i32)
+      (local $packed i32) (local $subtaski i32) (local $si i32) (local $mask i32)
+      (local.set $packed (call $lower (i32.const 7) (i32.const 0)))
+      (if (i32.ne (local.get $packed) (i32.const 2))
+        (then
+          (local.set $subtaski (i32.shr_u (local.get $packed) (i32.const 4)))
+          (local.set $si (call $wsnew))
+          (call $wsjoin (local.get $subtaski) (local.get $si))
+          (drop (call $wswait (local.get $si) (i32.const 8)))))
+      (if (i32.eq (i32.load (i32.const 0x100))  (i32.const 0x11111111)) (then (local.set $mask (i32.or (local.get $mask) (i32.const 1)))))
+      (if (i32.eq (i32.load (i32.const 0x4000)) (i32.const 0x22222222)) (then (local.set $mask (i32.or (local.get $mask) (i32.const 2)))))
+      (if (i32.eq (i32.load (i32.const 0x8000)) (i32.const 0x33333333)) (then (local.set $mask (i32.or (local.get $mask) (i32.const 4)))))
+      (if (i32.eq (i32.load (i32.const 0xF000)) (i32.const 0x44444444)) (then (local.set $mask (i32.or (local.get $mask) (i32.const 8)))))
+      (local.get $mask)))
+  (core instance $runi (instantiate $runmod
+    (with "" (instance
+      (export "mem" (memory $cm)) (export "lower" (func $lowered))
+      (export "wsnew" (func $wsnew)) (export "wsjoin" (func $wsjoin))
+      (export "wswait" (func $wswait))))))
+  (alias core export $runi "run" (core func $runf))
+  (func (export "run") (result u32) (canon lift (core func $runf))))
+```
+
 `async-lower-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` 2a-i-A
 binding-branch witness: an instance import whose `op` is an async func, a `canon lower` of it carrying the
 `async` canonopt over a bound memory, and a core module that calls the lowered core func — the smallest
