@@ -1034,7 +1034,18 @@ the test's own comment; it is recorded in three places because no instrument's d
 - **Witness:** all N confirmed parked host-side before shutdown is requested.
 - **Floor:** every run must confirm all N parked.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #10
+- **Status:** implemented — TestH3ShutdownInterruptsParkedAgents
+
+  > Landed 2026-09-16. N=4 agents park in a blocking host call (blocked on ctx.Done — only Close ends them);
+  > `Close` returns within the deadline and each call returns a cancellation error (ErrTerminated), none
+  > returning success. **Shape verified, not the tag** (#742's tagging finding): grown from the right-shape
+  > witness `TestCloseTerminatesTheAgentInABlockingExcursion` (T-5.4, N=1, a blocking excursion), NOT the
+  > async `TestCloseTerminatesAgentParkedInWaitableSetWait`, which parks in a guest-called built-in (H-4/SP-5
+  > shape). **Control watched dying**: making `cancelCtx` a no-op left the parked calls uninterrupted, so a
+  > bounded `Close` timed out at the deadline — the forbidden "a call failing to return." Close is run with a
+  > bounded wait so the control fails as a *named timeout*, not an infinite hang (which would name nothing).
+  > Both forbidden halves checked: no hang (Close returns) and no success (each returns ErrTerminated). Arbiter
+  > neither; run under -race.
 
 The MAY half — a guest-visible cancel primitive — is contract-deferred to §10.4 and gets its cases in the PR
 that closes it, for T-5's reason: an allowed-outcome set authored now would be this battery inventing the
