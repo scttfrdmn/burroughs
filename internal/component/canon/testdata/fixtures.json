@@ -3186,6 +3186,28 @@
       }
     ]
   },
+  "async_lift_loop": {
+    "cycles": 2,
+    "events_multiset": [
+      [
+        1,
+        11,
+        22
+      ],
+      [
+        1,
+        33,
+        44
+      ]
+    ],
+    "ctx_readback": 20817,
+    "ctx_written": 20817,
+    "same_set_each_cycle": true,
+    "resolved": [
+      2748
+    ],
+    "result_expected": 2748
+  },
   "context_ops": {
     "slots": 2,
     "get0_unset": 0,

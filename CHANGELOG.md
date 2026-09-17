@@ -21,6 +21,17 @@ weakly-ordered platform.
 
 ### Added
 
+- **The stackless async-lift callback loop's re-entry state, differential-pinned multi-cycle (#785).**
+  fixtures.json `async_lift_loop`: driving the model's real `canon_lift` callback loop (def:2096-2153)
+  through **WAIT → event → WAIT → event → EXIT** — two cycles, not a single park-and-finish — and recording
+  the re-entry state a loop can get subtly wrong while still reaching the right final answer: **context set in
+  cycle 1 is read back in cycle 2** (survives re-entry), the **same waitable set** is used every cycle,
+  **both armed events** are delivered, and the task resolves to the value it returned. The pinned invariants
+  are **schedule-independent** — event order over a two-member set is non-deterministic in both the model
+  (`random.shuffle`) and a goroutine-scheduled engine, so the pin is a multiset, not an ordering; pinning an
+  order would over-constrain the engine. `TestAsyncLiftLoopPinExercisesReentryState` guards the pin's
+  non-vacuity (≥2 cycles, context survives, set survives, both events, resolution). The engine's execution
+  loop is the next increment; this is its differential oracle. No gate flip.
 - **The stackless async-lift callback-result decode, differential-pinned against every dispatch code (#785).**
   Increment 2 of the second-async-guest slice: `unpackCallbackResult` (`internal/component/async_lift.go`)
   decodes the packed i32 the callback returns — `code = packed & 0xf`, waitable-set index `= packed >> 4`,
