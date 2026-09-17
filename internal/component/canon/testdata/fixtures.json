@@ -3136,10 +3136,55 @@
   "waitable_set_poll": {
     "empty_code": 0,
     "empty_p1": 0,
-    "empty_p2": 0,
-    "ready_code": 0,
-    "ready_p1": 0,
-    "ready_p2": 0
+    "empty_p2": 0
+  },
+  "callback_result": {
+    "codes": {
+      "EXIT": 0,
+      "YIELD": 1,
+      "WAIT": 2,
+      "MAX": 2
+    },
+    "unpacks": [
+      {
+        "packed": 0,
+        "code": 0,
+        "si": 0
+      },
+      {
+        "packed": 1,
+        "code": 1,
+        "si": 0
+      },
+      {
+        "packed": 2,
+        "code": 2,
+        "si": 0
+      },
+      {
+        "packed": 18,
+        "code": 2,
+        "si": 1
+      },
+      {
+        "packed": 33,
+        "code": 1,
+        "si": 2
+      },
+      {
+        "packed": 80,
+        "code": 0,
+        "si": 5
+      },
+      {
+        "packed": 3,
+        "traps": true
+      },
+      {
+        "packed": 15,
+        "traps": true
+      }
+    ]
   },
   "context_ops": {
     "slots": 2,
