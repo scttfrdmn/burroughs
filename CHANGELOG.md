@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **The second async guest — async-lift + cancellation, built and its reading committed (#785, discharges #771's async-lift half).**
+  `internal/component/testdata/p3async-cancel.wasm`, a Rust `wasm32-wasip3` component, **byte-verified**: it
+  **async-lifts** its export — `(func $run (canon lift (core func $hook0) async (callback $hook1)))`, the
+  **stackless (callback)** variant — and on its normal path starts a `future<u32>` write with no reader and
+  **cancels it** (`(canon future.cancel-write)`). Committed reading `p3async-cancel.reading`:
+  `wasmtime run --invoke 'run()'` → **1** (the `Cancelled` branch fired — a running producer for CANCELLED),
+  exit 0, **wasmtime 48.0.2**. This settles the stackless-vs-stackful async-lift ABI choice ADR 0086 deferred
+  to the guest that lifts one: **stackless, guest-driven** (grounds are the bytes, not the linker flags; chair
+  ruling #782). The `wasmtime` pin is bumped 48.0.1→48.0.2 (a patch within the minor; each reading names its
+  binary; p3async-hello's 48.0.1 reading is not re-run). The mechanism (the engine's stackless async-lift) is
+  the slice's later increments; this is the guest + reading. Related: §7 S-1's expiry is imprecise — a
+  stackless lift consumes nothing stackful (#784, `type:contract`).
 - **§4 litmus B-MM-1 — the async-wake crossing is an acquire edge over the whole address space; the #742 hole closes as structural (`track:litmus`, #10).**
   `TestBMM1AsyncWakeIsAnAcquireEdgeOverTheAddressSpace` (on the real slice-1 async machinery, new fixture
   `async-wake-bmm1-synth.wasm`): a guest parks in `waitable-set.wait`; the host writes four words spread
