@@ -80,3 +80,53 @@ func TestUnpackCallbackResultMatchesTheOracle(t *testing.T) {
 		t.Error("the pin covers no WAIT with a non-zero set index — it cannot catch a code/set-index swap")
 	}
 }
+
+// TestAsyncLiftLoopPinExercisesReentryState guards the loop-behavior differential pin (fixtures.json
+// async_lift_loop), produced by driving the model's real canon_lift callback loop (def:2096-2153) through a
+// MULTI-CYCLE case: WAIT -> event -> WAIT -> event -> EXIT. The pin's job is to catch a Go loop that loses
+// state between re-entries yet recovers to the right final answer, so this guards that the pin actually
+// exercises re-entry state (Scott's caution): >= 2 cycles, context set in cycle 1 read back in cycle 2, the
+// waitable set surviving every re-entry, both armed events delivered, and the resolution. The invariants are
+// SCHEDULE-INDEPENDENT — event order over a two-member set is non-deterministic in both the model
+// (random.shuffle) and a goroutine-scheduled engine, so the pin is a multiset, not an ordering. The engine's
+// execution loop (next increment) asserts its behavior against this pin; this test keeps the pin honest.
+func TestAsyncLiftLoopPinExercisesReentryState(t *testing.T) {
+	var doc struct {
+		AsyncLiftLoop struct {
+			Cycles           int     `json:"cycles"`
+			EventsMultiset   [][]int `json:"events_multiset"`
+			CtxReadback      int     `json:"ctx_readback"`
+			CtxWritten       int     `json:"ctx_written"`
+			SameSetEachCycle bool    `json:"same_set_each_cycle"`
+			Resolved         []int   `json:"resolved"`
+			ResultExpected   int     `json:"result_expected"`
+		} `json:"async_lift_loop"`
+	}
+	loadFixtures(t, &doc)
+	lp := doc.AsyncLiftLoop
+
+	// Multi-cycle, not a single park-and-finish — the whole point of a re-entry-state pin.
+	if lp.Cycles < 2 {
+		t.Errorf("async_lift_loop pins %d callback cycles; a re-entry-state pin needs >= 2 (WAIT, event, "+
+			"WAIT again, EXIT), or it cannot catch a loop that loses state between re-entries", lp.Cycles)
+	}
+	// Context survived re-entry: written in cycle 1, read in cycle 2.
+	if lp.CtxReadback != lp.CtxWritten || lp.CtxWritten == 0 {
+		t.Errorf("context did not survive re-entry: wrote %#x, read %#x back a cycle later", lp.CtxWritten, lp.CtxReadback)
+	}
+	// The waitable set survived every re-entry (same handle each cycle).
+	if !lp.SameSetEachCycle {
+		t.Error("the waitable set did not survive across the WAIT->event->WAIT cycle")
+	}
+	// Both armed events delivered, and distinct (a loop that dropped or duplicated one fails here).
+	if len(lp.EventsMultiset) != 2 {
+		t.Fatalf("delivered %d events across the cycles, want 2 (both armed)", len(lp.EventsMultiset))
+	}
+	if lp.EventsMultiset[0][1] == lp.EventsMultiset[1][1] && lp.EventsMultiset[0][2] == lp.EventsMultiset[1][2] {
+		t.Errorf("the two delivered events are identical %v — one was dropped or duplicated", lp.EventsMultiset)
+	}
+	// The task resolved to the value it returned via task.return.
+	if len(lp.Resolved) != 1 || lp.Resolved[0] != lp.ResultExpected {
+		t.Errorf("resolved %v, want [%d] — the loop did not carry the returned value to resolution", lp.Resolved, lp.ResultExpected)
+	}
+}

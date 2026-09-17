@@ -843,6 +843,88 @@ def emit_callback_result():
     }
 
 
+def emit_async_lift_loop():
+    # Re-entry-state pin for the stackless async-lift callback loop (canon_lift def:2096-2153). Drives the REAL
+    # model loop through TWO WAIT cycles (WAIT -> event -> WAIT -> event -> EXIT), not a single
+    # park-and-finish, so it catches a loop that loses state between re-entries and recovers to the right final
+    # answer (Scott's caution). The pinned invariants are SCHEDULE-INDEPENDENT: event ORDER over a two-member
+    # set is non-deterministic in both the model's random.shuffle and the engine's goroutine scheduler, so an
+    # order pin would over-constrain the engine. Pinned: both armed events delivered (multiset), the task's
+    # context surviving re-entry (set in cycle 1, read in cycle 2), the SAME set used across cycles, the cycle
+    # count, and the resolved result. random is seeded only to make the model run reproducible.
+    import random as _random  # noqa: E402
+    from definitions import (  # noqa: E402
+        FuncType, MemInst, Waitable, EventCode, current_thread,
+        canon_waitable_set_new, canon_context_set, canon_context_get, canon_task_return,
+    )
+    _random.seed(0)
+    heap = TracingHeap(64)
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_, callback=None):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = callback
+        return o
+
+    WAIT, EXIT, RESULT = 2, 0, 0xABC
+    u32t = build_type({"kind": "u32"})
+    cap = {"events": [], "si_each": [], "ctx_readback": None, "cycles": 0, "si": None, "resolved": None}
+    hold = {}
+
+    def callee_core(_flat_args):
+        cap["si_each"].append(cap["si"])
+        return [WAIT | (cap["si"] << 4)]  # initial park -> first WAIT
+
+    def callback_core(args):  # args = [event_code, p1, p2]
+        cap["events"].append([int(args[0]), int(args[1]), int(args[2])])
+        n = cap["cycles"]
+        cap["cycles"] += 1
+        cap["si_each"].append(cap["si"])
+        if n == 0:
+            canon_context_set("i32", 0, 0x5151)   # set context in cycle 1
+            return [WAIT | (cap["si"] << 4)]       # park again -> second WAIT
+        cap["ctx_readback"] = int(canon_context_get("i32", 0)[0])  # read in cycle 2 what cycle 1 set
+        canon_task_return([u32t], hold["opts"], [RESULT])
+        return [EXIT]
+
+    def outer_core(_flat):
+        si = canon_waitable_set_new()[0]
+        cap["si"] = si
+        wset = inst.handles.get(si)
+        for (p1, p2) in [(11, 22), (33, 44)]:       # arm two events on the set
+            w = Waitable()
+            w.set_pending_event((lambda a=p1, b=p2: (EventCode.SUBTASK, a, b)))
+            w.join(wset)
+        eopts = mk_opts(True, callback=callback_core)
+        hold["opts"] = eopts
+        export = inst.store.lift(callee_core, FuncType([], [u32t], async_=True), eopts, inst)
+        done = {}
+        inst.store.invoke(export, lambda: [], lambda r: done.setdefault("r", r))
+        current_thread().wait_until(lambda: "r" in done)  # park; the pump drives the export's WAIT cycles
+        cap["resolved"] = done["r"]
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+
+    events_sorted = sorted(cap["events"], key=lambda e: (e[1], e[2]))
+    return {
+        "cycles": cap["cycles"],                         # 2 — two WAIT re-entries before EXIT
+        "events_multiset": events_sorted,                # both armed events, order-independent
+        "ctx_readback": cap["ctx_readback"],             # 0x5151 — context set in cycle 1 survived to cycle 2
+        "ctx_written": 0x5151,
+        "same_set_each_cycle": len(set(cap["si_each"])) == 1,  # the set survived every re-entry
+        "resolved": [int(v.v) if hasattr(v, "v") else int(v) for v in (cap["resolved"] or [])],
+        "result_expected": RESULT,
+    }
+
+
 def emit_subtask_drop():
     from definitions import Subtask, Trap  # noqa: E402
     S = Subtask.State
@@ -1124,6 +1206,7 @@ def main():
         "subtask_drop": emit_subtask_drop(),  # gate:async inc 4: drop traps unless resolve-delivered (incl. the CANCELLED terminals)
         "waitable_set_poll": emit_waitable_set_poll(),  # gate:async inc 4: the last op — wait minus the park, same readiness path
         "callback_result": emit_callback_result(),  # 2nd async guest: the stackless async-lift callback ABI — every dispatch code + the out-of-range trap
+        "async_lift_loop": emit_async_lift_loop(),  # 2nd async guest: the callback loop's re-entry state — multi-cycle WAIT/event/WAIT/EXIT, context + set survive re-entry
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),
