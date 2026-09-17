@@ -630,6 +630,21 @@ stop racing the resumed guest's read when the `Resume` acquire edge is missing �
 > guest→host transition MUST constitute the corresponding release edge.
 
 - **Shape:** outcome
+- **Clause status (2026-09-16) — a split, NOT a close. Read per crossing.** B-MM-1 names four host→guest
+  crossings, and the amendment on #743 adds `Resume`-after-`Stop`. Their states differ, and "B-MM-1 is closed"
+  overreads all of them:
+  - **async wake** — witnessed, **structural-by-identity** (the case `b-mm-1-async-wake-is-an-acquire-edge`
+    below): the acquire edge *is* the wake delivery, so there is no version of this engine that wakes without
+    ordering.
+  - **Resume-after-Stop** (the amendment's further crossing) — witnessed at §3 **SP-6** (#779),
+    **structural-by-redundancy**: the named channel edge is deletable because `stopReq` carries it too.
+  - **host-call return** — an **open hole, no instrument** (the `-race` defeat, #742): its A→B channel is a
+    harness flag, nothing on an engine edge to break.
+  - **trap resume** and **stack-switch resume** — **unwitnessed** (stack switching is v2, §7; a trap unwinds
+    rather than resuming into a memory-publishing crossing).
+  So structural-by-identity and structural-by-redundancy are two strengths of the same category, and the
+  charter carries both — one crossing is closed the strongest way available, one the redundant way, one is an
+  open hole, and two are unbuilt.
 - **Blocked by:** nothing, as of #602. Re-pointed from #554 and then discharged: the witness below passes its
   message through host `publish`/`poll` calls, so spawn was neither necessary (ADR 0062's vehicle supplies the
   two agents) nor sufficient (there was nothing to call), and `HostExtern` is now the thing to call. The
@@ -712,8 +727,65 @@ This is exactly `b-mm-2`'s stillbirth (#603): the value-observation window at SC
 - **Reopening condition (this hole's expiry, like S-1's note):** if a future case gives the engine an
   **A→B channel that carries a value across a host-call return** — plausibly the **async tier's subtask
   completion path**, which *is* an engine-carried A→B edge — B-MM-1 becomes witnessable and the hole
-  closes. Registered now so the hole does not read as permanent.
-- **Status:** blocked — #742 (documented hole, ruled 2026-09-12; unwitnessed by any available instrument — see above)
+  closes. Registered now so the hole does not read as permanent. **Met at the async-wake crossing, 2026-09-16
+  — see the case below; this host-call-return crossing stays a hole.**
+- **Status:** blocked — #742 (documented hole, ruled 2026-09-12; the host-call-return crossing is unwitnessed
+  by any available instrument — see above. The sibling async-wake crossing is discharged by the case below.)
+
+#### Case `b-mm-1-async-wake-is-an-acquire-edge`
+
+**The reopening condition met (2026-09-16), closing the async-wake crossing as STRUCTURAL — not as a
+discriminated weak-memory witness.** The Q4 ruling (#742, 2026-09-16) settled it: B-MM-1's four crossings are
+all host→guest, so the publisher is engine code by definition; "async wake" is named among them, and the
+async subtask-completion path is one. The earlier reopening framing that spoke of "both ends guest agents"
+imported SP-6's subject into B-MM-1's and was unsatisfiable by construction — corrected on #742, dated,
+original visible. This case closes the async-wake crossing ONLY; the host-call-return crossing stays the hole
+above (no engine-carried A→B channel — the `-race` defeat stands), and the battery's one *discriminating*
+memory-model witness remains B-MM-2. B-MM-1 is certified by construction with a witness, not by discrimination.
+
+- **Discharges:** B-MM-1
+- **Allowed:** `run` returns `0xF` (all four spread words seen across the async wake) with no `-race` report —
+  the host writes ordered before the resumed guest's loads by the wake edge.
+- **Forbidden:** any spread-word bit clear (the resumed agent read a stale, pre-write value across the wake),
+  or a `-race` report on the host-write/guest-read pair. The failing bit names which spread word was stale.
+- **Witness:** `TestBMM1AsyncWakeIsAnAcquireEdgeOverTheAddressSpace` (internal/component, the real slice-1
+  async machinery, fixture `async-wake-bmm1-synth.wasm`). A guest async-lowers a blocking call and parks in
+  `waitable-set.wait`; the host writes four words spread low/mid/high across the page (0x100/0x4000/0x8000/
+  0xF000, disjoint sentinels) while the agent is parked, then resolves the subtask (the async wake). The agent
+  resumes, reads the four with guest typed loads, and returns a match mask — `0xF` iff all four were seen.
+- **Scope is SAMPLED, not whole — say which.** The clause is the *entire* shared address space; the witness
+  **samples** it at four named points — `0x100` (low), `0x4000` and `0x8000` (mid), `0xF000` (high) across the
+  64KiB page — and does not cover every address (no finite test can). The test's name says "over the address
+  space"; the accurate claim is *this named four-point sample of it*, and that is the claim of record, not the
+  name. A stale word at any sampled point clears its mask bit and fails the case; an unsampled address between
+  them is not observed.
+- **Structural-by-IDENTITY — a stronger sub-kind than SP-6's structural-by-redundancy.** SP-6's acquire edge
+  was carried *redundantly* (a deletable channel, `stopReq` behind it), so its named-edge-removal control
+  passes by falling back to the other carrier. This crossing's acquire edge is **identical to the wake
+  delivery**: the parked guest resumes by receiving on the set's `wake` channel, and a Go channel close
+  happens-before its receive, so waking IS the acquire over everything the waker wrote before the close.
+  **There is no version of this engine that wakes without ordering** — the two are the same operation. Both
+  are structural, and the charter should carry the distinction: SP-6 by redundancy, this by identity. The
+  falsifying instrument is a wake path that delivers WITHOUT a happens-before edge — a plain flag polled
+  without synchronization, i.e. a different engine.
+- **The named-edge-removal control does NOT apply here — and that is the finding (RUN, not reasoned).** Two
+  edges carry the ordering (the `wake` channel close→receive; asyncHandles' mutex, which the engine comments
+  named). Neither can be removed to leave the other cleanly witnessing the guest-memory edge, because both are
+  load-bearing for the wake itself: (a) **wake channel removed + the guest forced to genuinely park → the
+  invoke TIMES OUT** (the parked guest is never notified) — the channel is the resume, its removal breaks the
+  mechanism (the SP-6 compound-control stop-condition; the broken injection is not landed); (b) **the mutex
+  removed from `onResolve` → `-race` FIRES on the subtask/handle-table struct** (`st.state`/`st.resolved`,
+  `pendingEventLocked`'s reads) — a Go-struct race, a confound, not the guest-memory edge. Both *confirmed by
+  running*. So the pass is examined by the identity above (the wake IS the acquire), not by a control that
+  dies; the engine comments naming only the mutex are corrected to name both edges (`async_waitset.go`,
+  `async_lower.go`), as SP-6 corrected `safepoint.go` — the #742 tagging-finding class, applied to a comment.
+- **Floor:** every run must take the blocking arm (the impl defers; the lowered call returns a subtask, not
+  `RETURNED`), so the async-lower → `waitable-set.wait` → resume round trip is real and the wake is exercised,
+  not shortcut by an inline resolution; and all four spread words are read, so the mask is defined over four
+  observations rather than a subset.
+- **Arbiter:** **`-race` (Go's memory model), both arches** — as B-MM-1's recast is, and for the same limit
+  (`-race` certifies Burroughs' Go implementation of the edge, not the guest-visible weak-memory model).
+- **Status:** implemented — TestBMM1AsyncWakeIsAnAcquireEdgeOverTheAddressSpace
 
 ### B-MM-2 — a wake synchronizes every write, not the futex word
 

@@ -65,7 +65,9 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			// For the blocking arm this can fire on the impl's OWN goroutine while a guest agent is parked
 			// in waitable-set.wait, so it runs under the table mutex; the retptr write precedes `resolved`
 			// so a waiter that observes the resolution sees the lowered result. A blocked callee that never
-			// calls onResolve leaves the retptr untouched.
+			// calls onResolve leaves the retptr untouched. The mutex is one of the TWO edges carrying §4
+			// B-MM-1's acquire guarantee to a parked waiter; the other is signalLocked's wake-channel
+			// close→receive (see async_waitset.go's header, corrected after the litmus witness).
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			if st.cancellationRequested {
