@@ -985,10 +985,18 @@ func (in *Instance) Resume() {
 // shape: the host stops the world precisely in order to look at or change something, so a thread that
 // resumed without the edge could carry on against a stale view of whatever the host wrote.
 //
-// **The edge is the channel pair, and it is an edge over everything rather than over one word.** A
-// receive from a closed channel synchronizes with the close, so this thread observes every write
-// `Resume`'s caller made before calling it; the close of `w.stopped` synchronizes the other direction, so
-// the host whose `Stop` returned observes the guest's writes before it.
+// **The edge is carried redundantly, over everything rather than over one word, and the redundancy is
+// load-bearing — not the channel pair alone.** A receive from a closed channel synchronizes with the
+// close, so this thread observes every write `Resume`'s caller made before calling it; the close of
+// `w.stopped` synchronizes the other direction, so the host whose `Stop` returned observes the guest's
+// writes before it. **But the channel is not the only edge.** `Resume` clears `stopReq` with an atomic
+// store, and this thread's next back-edge `poll` reads `stopReq == false` with an atomic load; that
+// store→load synchronizes-with independently, ordering the same stop-time writes before this thread's
+// resumed reads even if the channel edge were removed. §3 SP-6's witness established this by running (a
+// control that removed the channel receive left the acquire edge intact under `-race`), so SP-6 is a
+// *structural* guarantee: the acquire edge is inherent to how an agent resumes at all, carried by the
+// atomic `stopReq` as well as the channel — a reader must not delete either as "redundant"; they are two
+// witnesses of one inherent edge.
 //
 // **The guest→host half is now the mutex chain rather than this thread's own send**, and it is the same
 // edge reached by one more hop. A parking caller's writes precede its release of `w.mu`; every later

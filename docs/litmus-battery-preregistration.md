@@ -602,7 +602,24 @@ stop racing the resumed guest's read when the `Resume` acquire edge is missing �
 - **Floor:** every round confirms the write landed before `Resume` and the resumed read reached the word,
   so the detector's silence is about a formed pair; fresh words per round.
 - **Arbiter:** **`-race` (Go's memory model), both arches — NOT the hardware** (see the limit under Witness).
-- **Status:** blocked — #10
+- **Status:** implemented — TestSP6AResumedAgentSeesWritesMadeDuringTheStop
+
+  > Landed 2026-09-16 as a **STRUCTURAL** guarantee — a stronger outcome than the drafted `-race` case, and
+  > established by running. The positive passes under `-race`: N spread words written host-side during the
+  > stop are ordered before the resumed guest loads, no located report. But the registered control — *a
+  > Resume that omits the acquire edge → a `-race` report* — **does not die**: removing the named edge
+  > (`parkAtSafepoint`'s `<-release` / `Resume`'s `close(release)`) leaves the guarantee intact under
+  > `-race`, because the edge is carried **redundantly** by the atomic `stopReq` store→load a resuming agent
+  > must execute to un-park at all. So the acquire edge is **inherent to how resume works**, not a deletable
+  > line. This corrected the drafting above, which named the channel as the sole edge ("the edge is the
+  > channel pair"); `safepoint.go`'s comment is corrected in the same change to name both edges and that
+  > `stopReq`'s ordering is load-bearing (the #742 tagging-finding class, applied to a comment).
+  >
+  > **Vs H-1**: both structural, but SP-6 has the stronger witness. H-1 holds by the execution model
+  > (goroutine-per-agent), witnessed by an adversary failing to starve. SP-6 holds by the resume path's own
+  > synchronization, witnessed **twice** — the positive under `-race`, and the named edge's removal leaving
+  > it intact. The only falsifying instrument is a resume that learns of stop-lift without synchronization —
+  > a different engine — same class as B-MM-1's hole. `-race` arbiter, both arches, run per case.
 
 ## §4. The boundary memory model
 
