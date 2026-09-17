@@ -630,6 +630,21 @@ stop racing the resumed guest's read when the `Resume` acquire edge is missing �
 > guest→host transition MUST constitute the corresponding release edge.
 
 - **Shape:** outcome
+- **Clause status (2026-09-16) — a split, NOT a close. Read per crossing.** B-MM-1 names four host→guest
+  crossings, and the amendment on #743 adds `Resume`-after-`Stop`. Their states differ, and "B-MM-1 is closed"
+  overreads all of them:
+  - **async wake** — witnessed, **structural-by-identity** (the case `b-mm-1-async-wake-is-an-acquire-edge`
+    below): the acquire edge *is* the wake delivery, so there is no version of this engine that wakes without
+    ordering.
+  - **Resume-after-Stop** (the amendment's further crossing) — witnessed at §3 **SP-6** (#779),
+    **structural-by-redundancy**: the named channel edge is deletable because `stopReq` carries it too.
+  - **host-call return** — an **open hole, no instrument** (the `-race` defeat, #742): its A→B channel is a
+    harness flag, nothing on an engine edge to break.
+  - **trap resume** and **stack-switch resume** — **unwitnessed** (stack switching is v2, §7; a trap unwinds
+    rather than resuming into a memory-publishing crossing).
+  So structural-by-identity and structural-by-redundancy are two strengths of the same category, and the
+  charter carries both — one crossing is closed the strongest way available, one the redundant way, one is an
+  open hole, and two are unbuilt.
 - **Blocked by:** nothing, as of #602. Re-pointed from #554 and then discharged: the witness below passes its
   message through host `publish`/`poll` calls, so spawn was neither necessary (ADR 0062's vehicle supplies the
   two agents) nor sufficient (there was nothing to call), and `HostExtern` is now the thing to call. The
@@ -738,13 +753,21 @@ memory-model witness remains B-MM-2. B-MM-1 is certified by construction with a 
   `waitable-set.wait`; the host writes four words spread low/mid/high across the page (0x100/0x4000/0x8000/
   0xF000, disjoint sentinels) while the agent is parked, then resolves the subtask (the async wake). The agent
   resumes, reads the four with guest typed loads, and returns a match mask — `0xF` iff all four were seen.
-  **Spread words, not one** (the clause is the *entire* shared address space; sampled coverage, stated as
-  such — no finite test proves every address). **Structural, STRONGER than SP-6's:** SP-6's edge was carried
-  *redundantly* (a deletable channel, `stopReq` behind it); this crossing's acquire edge is **identical to the
-  wake delivery** — the parked guest resumes by receiving on the set's `wake` channel, and a Go channel close
-  happens-before its receive, so waking IS the acquire over everything the waker wrote before the close. You
-  cannot deliver the wake without the edge. The falsifying instrument is a wake path that delivers WITHOUT a
-  happens-before edge — a plain flag polled without synchronization, i.e. a different engine.
+- **Scope is SAMPLED, not whole — say which.** The clause is the *entire* shared address space; the witness
+  **samples** it at four named points — `0x100` (low), `0x4000` and `0x8000` (mid), `0xF000` (high) across the
+  64KiB page — and does not cover every address (no finite test can). The test's name says "over the address
+  space"; the accurate claim is *this named four-point sample of it*, and that is the claim of record, not the
+  name. A stale word at any sampled point clears its mask bit and fails the case; an unsampled address between
+  them is not observed.
+- **Structural-by-IDENTITY — a stronger sub-kind than SP-6's structural-by-redundancy.** SP-6's acquire edge
+  was carried *redundantly* (a deletable channel, `stopReq` behind it), so its named-edge-removal control
+  passes by falling back to the other carrier. This crossing's acquire edge is **identical to the wake
+  delivery**: the parked guest resumes by receiving on the set's `wake` channel, and a Go channel close
+  happens-before its receive, so waking IS the acquire over everything the waker wrote before the close.
+  **There is no version of this engine that wakes without ordering** — the two are the same operation. Both
+  are structural, and the charter should carry the distinction: SP-6 by redundancy, this by identity. The
+  falsifying instrument is a wake path that delivers WITHOUT a happens-before edge — a plain flag polled
+  without synchronization, i.e. a different engine.
 - **The named-edge-removal control does NOT apply here — and that is the finding (RUN, not reasoned).** Two
   edges carry the ordering (the `wake` channel close→receive; asyncHandles' mutex, which the engine comments
   named). Neither can be removed to leave the other cleanly witnessing the guest-memory edge, because both are
