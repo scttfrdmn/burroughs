@@ -41,6 +41,25 @@ it Loads and the lower refuses by name at instantiate (the unresolved outer alia
 against a *recorded reading*, not a live wasmtime run. Regenerate only by re-running the pinned wasmtime on
 the committed `p3async-hello.wasm` and updating this note's version.
 
+`p3async-cancel.wasm` is the **second async guest** — the Phase-3 async-lift + cancellation producer
+(`track:litmus`/#771 discharge slice). Unlike `p3async-hello` (which sync-lifts an async-typed `wasi:cli/run`
+export), this guest **async-lifts** its export, verified from the bytes:
+`(func $run (canon lift (core func $hook0) async (callback $hook1)))` — the **stackless (callback)** variant,
+which is what the Rust p3 toolchain emits (the stackless-vs-stackful choice ADR 0086 deferred, settled
+guest-driven; see the slice issue). On its normal path `run` starts a `future<u32>` write with no reader and
+**cancels it**, emitting `(canon future.cancel-write)` (the bytes also carry `future.new`, `future.cancel-read`,
+`task.return`, `task.cancel`, `subtask.cancel`, `subtask.drop`, `stream.cancel-read` — the async-lift +
+cancellation surface). The `mk` export exists only to introduce the `future<u32>` type so `run` can create
+and cancel one. `p3async-cancel.reading` is its committed wasmtime reading: `wasmtime run --invoke 'run()'`
+returns **1** (the `Cancelled` branch fired — a running producer for CANCELLED), exit 0, on **wasmtime
+48.0.2** (the pin bumped 48.0.1→48.0.2 on the chair's ruling; a patch within the minor, each reading names
+its binary). Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)`, `rustup target add wasm32-wasip3`
+(precompiled std; no `-Zbuild-std`), `wit-bindgen 0.61.1` (`async: true`, per-function async on `run`/`mk`),
+`wasm-tools 1.258.0`. **Build-host note:** on a fresh box the nightly's `rust-lld` fails to link with
+`dyld: Library not loaded: @rpath/libLLVM.dylib`; the fix is `rustup component add llvm-tools --toolchain
+nightly`, which places `libLLVM.dylib` at the `@rpath` location `rust-lld` expects — the next person building
+a p3 guest here will hit this.
+
 `future-read-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` increment-3
 `future.read` binding witness: an instance import whose `get-future` is an async func returning `future<u32>`
 (declared **inline** in the instance type — an outer-aliased future type would hit the placeholder-VRef

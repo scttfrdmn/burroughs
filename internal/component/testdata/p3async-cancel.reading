@@ -1,0 +1,8 @@
+# Committed wasmtime reading for p3async-cancel.wasm — the async-lift + cancellation guest.
+# Invocation:  wasmtime run --invoke 'run()' p3async-cancel.wasm
+# Output:      1
+# Exit:        0
+# Meaning:     run() returns 1 == the FutureWriteCancel::Cancelled branch fired — the async task
+#              started a future write with no reader and cancelled it, producing CANCELLED at runtime.
+# Engine:      wasmtime 48.0.2 (e9f1ea232 2026-09-10), async-on-by-default, no flag.
+# Box:         darwin/arm64 (Apple Silicon).
