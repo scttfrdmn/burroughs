@@ -3186,6 +3186,17 @@
       }
     ]
   },
+  "future_cancel_write": {
+    "write_ret": [
+      4294967295
+    ],
+    "cancel_ret": [
+      2
+    ],
+    "result": 2,
+    "progress": 0,
+    "wi_state_after": "IDLE"
+  },
   "async_lift_loop": {
     "cycles": 2,
     "events_multiset": [

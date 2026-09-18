@@ -1113,6 +1113,56 @@ def emit_stream_cancel_write():
     }
 
 
+def emit_future_cancel_write():
+    # The FUTURE write arm's running CANCELLED (2nd async guest, #785 — the cancellation witness). This is the
+    # future analog of emit_stream_cancel_write, through the SAME cancel_copy substrate (definitions.py
+    # canon_future_cancel_write def:2580 -> cancel_copy). ARM PRECISION (Scott, #752/#785): this pins the
+    # future *write* arm's running CANCELLED; the future *read* arm's CANCELLED stays synthetic (no running
+    # producer yet), so "future CANCELLED is produced" is true only on the write side. future.write is a
+    # single value (no count).
+    from definitions import (  # noqa: E402
+        U8Type, FutureType, FuncType,
+        canon_future_new, canon_future_write, canon_future_cancel_write,
+    )
+    heap = TracingHeap(128)
+    inst = ComponentInstance(Store())
+
+    def mk_opts(async_):
+        o = CanonicalOptions()
+        o.memory = MemInst(heap.memory, "i32")
+        o.string_encoding = "utf8"
+        o.realloc = heap.realloc
+        o.post_return = None
+        o.sync_task_return = False
+        o.async_ = async_
+        o.callback = None
+        return o
+
+    ft = FutureType(U8Type())
+    cap = {}
+
+    def outer_core(_flat):
+        packed = canon_future_new(ft)[0]
+        wi = packed >> 32
+        src = heap.realloc([0, 0, 1, 1])[0]
+        heap.memory[src] = 7
+        cap["write_ret"] = [int(x) for x in canon_future_write(ft, mk_opts(True), wi, src)]  # pends -> COPYING
+        cap["cancel_ret"] = [int(x) for x in canon_future_cancel_write(ft, True, wi)]         # cancel -> CANCELLED inline
+        cap["wi_state_after"] = inst.handles.get(wi).state.name
+        return []
+
+    inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
+                      lambda: [], lambda r: None)
+    payload = cap["cancel_ret"][0]
+    return {
+        "write_ret": cap["write_ret"],     # [BLOCKED] — the write parked (no reader)
+        "cancel_ret": cap["cancel_ret"],   # [CANCELLED | progress<<4] delivered INLINE
+        "result": payload & 0xf,           # CopyResult.CANCELLED = 2 — the FUTURE WRITE arm's running production
+        "progress": payload >> 4,          # 0 — nothing was copied before the cancel
+        "wi_state_after": cap["wi_state_after"],  # IDLE — CANCELLED leaves the end open (only DROPPED is DONE)
+    }
+
+
 def emit_stream_drops():
     from definitions import (  # noqa: E402
         U8Type, StreamType, FuncType,
@@ -1213,6 +1263,7 @@ def main():
         "subtask_drop": emit_subtask_drop(),  # gate:async inc 4: drop traps unless resolve-delivered (incl. the CANCELLED terminals)
         "waitable_set_poll": emit_waitable_set_poll(),  # gate:async inc 4: the last op — wait minus the park, same readiness path
         "callback_result": emit_callback_result(),  # 2nd async guest: the stackless async-lift callback ABI — every dispatch code + the out-of-range trap
+        "future_cancel_write": emit_future_cancel_write(),  # 2nd async guest: the FUTURE write arm's running CANCELLED (read arm stays synthetic)
         "async_lift_loop": emit_async_lift_loop(),  # 2nd async guest: the callback loop's re-entry state — multi-cycle WAIT/event/WAIT/EXIT, context + set survive re-entry
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)

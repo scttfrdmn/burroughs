@@ -228,3 +228,37 @@ func TestAsyncLiftContextLivesOnTheTask(t *testing.T) {
 	// context tests (TestContextStorageIsPerCallerStack); it is not re-exercised here, where the harness
 	// caller has no stack.
 }
+
+// TestFutureCancelWritePinIsTheWriteArmRunningCancelled guards the future-cancellation differential pin
+// (fixtures.json future_cancel_write), the oracle for the future write-side built-ins the WAT cancellation
+// guest will drive (2nd async guest, #785). Produced by driving the model's real canon_future_cancel_write
+// through the SAME cancel_copy substrate as the stream arm. ARM PRECISION (#752/#785): this is the future
+// *write* arm's running CANCELLED — the write parks (no reader) then cancels inline to CANCELLED, the end
+// left IDLE (open). The future *read* arm's CANCELLED stays synthetic (no running producer), so this pin
+// does not make "future CANCELLED" true on the read side. Differential-first: the pin lands before the Go
+// built-ins it oracles.
+func TestFutureCancelWritePinIsTheWriteArmRunningCancelled(t *testing.T) {
+	var doc struct {
+		FutureCancelWrite struct {
+			WriteRet     []int64 `json:"write_ret"`
+			CancelRet    []int64 `json:"cancel_ret"`
+			Result       int     `json:"result"`
+			Progress     int     `json:"progress"`
+			WiStateAfter string  `json:"wi_state_after"`
+		} `json:"future_cancel_write"`
+	}
+	loadFixtures(t, &doc)
+	f := doc.FutureCancelWrite
+	if len(f.WriteRet) != 1 || uint32(f.WriteRet[0]) != 0xFFFFFFFF {
+		t.Errorf("write_ret = %v, want [BLOCKED] (0xFFFFFFFF) — the write parks with no reader", f.WriteRet)
+	}
+	if f.Result != 2 {
+		t.Errorf("result = %d, want 2 (CopyResult.CANCELLED) — the future WRITE arm's running production", f.Result)
+	}
+	if f.Progress != 0 {
+		t.Errorf("progress = %d, want 0 — nothing copied before the cancel", f.Progress)
+	}
+	if f.WiStateAfter != "IDLE" {
+		t.Errorf("wi_state_after = %q, want IDLE — CANCELLED leaves the end open (only DROPPED is DONE)", f.WiStateAfter)
+	}
+}

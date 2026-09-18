@@ -21,6 +21,14 @@ weakly-ordered platform.
 
 ### Added
 
+- **The future write-arm CANCELLED, differential-pinned (#785 — the cancellation oracle).** `fixtures.json
+  future_cancel_write`, from driving the model's `canon_future_cancel_write` through the **same `cancel_copy`
+  substrate** as the stream arm (`cancel_copy` now carries a third direction without a second mechanism): a
+  future write parks (no reader) then cancels inline to **CANCELLED** (result 2, progress 0), the end left
+  **IDLE** (open). **Arm-precise**: this pins the future *write* arm's running CANCELLED; the future *read*
+  arm's CANCELLED stays synthetic (no running producer), so it does not make "future CANCELLED" true on the
+  read side. The oracle for the future write-side built-ins the WAT cancellation guest drives; differential
+  -first, it lands before the Go. Guarded by `TestFutureCancelWritePinIsTheWriteArmRunningCancelled`.
 - **The stackless async-lift execution — step 1, the loop skeleton with a durable task (#785).** With
   `BURROUGHS_ASYNC=1`, a `(canon lift ... async (callback ...))` export now **executes**: `compFunc.invoke`
   runs the callback loop over a **durable lift task** (`liftTask`) — the callee runs on it with the lifted
