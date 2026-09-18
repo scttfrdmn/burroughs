@@ -10,14 +10,84 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 contract versions on its own schedule and governs semantic promises. Every
 release below states the contract version it implements.
 
-Minor versions map to milestones, so the number is a conformance statement:
-`v0.1.0` is the MVP core suite green, one minor per proposal gate flipped
-after that, and `v1.0.0` is reserved for the v1 threads-and-safepoints
-milestone landing with the §4 litmus battery passing on both a TSO and a
-weakly-ordered platform.
+Minor versions were mapped to milestones, so the number would be a conformance
+statement — but ADR 0004's **2026-08-28 amendment decoupled the digit from that
+mapping** ("the meaning now travels in the changelog entry") after the SIMD gate
+flipped ahead of GC. A minor therefore carries no milestone claim on its own; what
+a release claims is written in its own block below. `v1.0.0` remains reserved, on
+the requirement **restated by ADR 0004's 2026-09-18 amendment**
+([#795](https://github.com/scttfrdmn/burroughs/issues/795)) — the older wording
+here (*"the §4 litmus battery passing on both a TSO and a weakly-ordered
+platform"*) was satisfiable as written while misleading as read, and the amendment
+says what it now requires and what it gives up.
 
 ## [Unreleased]
 *Implements contract v0.1.*
+
+Nothing yet. Phase 4's first slice (the real-threads fork) lands in the fork's own
+private tree, not here — ADR 0087 §3. A Burroughs-side change arrives only if the fork
+surfaces a missing Burroughs mechanism.
+
+## [0.6.0] - 2026-09-18
+*Implements contract v0.1.*
+
+**The product line, cut before the thesis starts.** This is an interim number over the
+component-model and async capability accumulated since `v0.5.0`, and — like `v0.5.0` — it
+**closes no milestone**: ADR 0004's 2026-08-28 amendment decoupled the digit from that
+mapping, so the claim is what is written here. The line it draws is deliberate: **phases
+2–3 are the product, the fork is the thesis.** Phase 4's first slice lands in the fork's
+own tree, so a cut taken now captures a coherent thing rather than getting tangled with
+fork-driven changes.
+
+- **The capability line:** *Burroughs runs programs compiled by a third-party toolchain
+  against WASI 0.3* — components and the async Canonical ABI, both gates on by default,
+  two guests, byte-identical to an independent engine's committed reading.
+- **The board over 256 files: 60957 pass, 0 fail, 0 unsupported, 4187 gated, 0
+  unimplemented**, at suite pin `de54fd27ecf3e68dfd16b6199c548df77b6a2cc1`, **identical
+  under `-tags burroughs_endtable`**, measured at this release's own HEAD. The zero in
+  `unimplemented` is ADR 0004 guard 4's hard condition on cutting a minor, measured not
+  asserted: `go test ./internal/spec/ -run TestPhase1Files -v` prints it. **The board is
+  unchanged from `v0.5.0`, and that is expected rather than a stall** — this release's
+  work is in the component/async tier, which the core spec suite does not cover. The
+  `unsupported` delta is **0, structurally**: no core-suite surface moved.
+- **Default-on gates, now four:** `gate:simd` and `gate:relaxed-simd` (unchanged, ADRs
+  0025/0028), plus **`gate:components`** (flipped 2026-09-11, ADR 0084 amendment, #720)
+  and **`gate:async`** (flipped 2026-09-18, ADR 0086 amendment, #792). **`gate:threads`
+  is present and off by default**, and its flip remains its own stamp-tier event —
+  unscheduled by Scott's #670 ruling, and not part of this release.
+- **What this release is:** the component model and the WASI 0.3 async ABI, landed and on
+  by default. A component loader and Canonical ABI lift/lower for the WIT value types;
+  resources and handles; the async ABI — async `canon lower` with its subtask substrate,
+  the waitable-set event loop, `stream<u8>`/`future<T>` copy protocol with cancellation,
+  `context.get/set`, `task.return`, and the **stackless (callback) async lift**; a
+  preview-2 host with stdio bound through one sink (ADR 0083's implement-once/bind-twice);
+  and `ComponentConfig.Run` as the public entry. Two guests run end to end: the Rust
+  `wasm32-wasip3` `p3async-hello` writing `Hello, world!\n` byte-identically to a
+  committed wasmtime 48.0.1 reading, and a hand-authored cancellation guest producing a
+  running CANCELLED.
+- **What this release is not — stated at the evidence levels the audit found, not at the
+  level a green suite would suggest:**
+  - It is **not v1.0.0**, which stays reserved on the requirement **restated** by ADR
+    0004's 2026-09-18 amendment (#795). The old wording was satisfiable as written while
+    misleading as read; the amendment names what it now requires and what it gives up.
+  - The async tier's executed surface is **not uniformly toolchain-verified**. Of 13
+    guest-executed ops, **4** are exercised by a third-party toolchain guest
+    (`stream.new`, `stream.write` host-first, `context.get/set`); the other **9** plus the
+    lift loop are exercised by **hand-authored fixtures we wrote**, against
+    `definitions.py @ 2bed77e`. **7** more ops are test-only (reached by no guest's
+    bytes), and `future.write`'s DROPPED outcome has no producer at all.
+  - The **stackful** async lift is model-only and refused by name; **no guest parks a
+    lift**, so the callback loop's WAIT/YIELD dispatch is unbuilt (measured, not
+    inferred); `waitable-set.drop` refuses by name at the call, its incomplete
+    implementation deleted rather than documented (#792/#793).
+  - The **§4 litmus battery's reach is measured**: 11 of 15 registered cases implemented,
+    with **one discriminating memory-model witness** (B-MM-2, the guest→guest wake), the
+    host→guest boundary **certified by construction with a witness**, and B-MM-1's
+    host-call-return crossing an **open hole with no available instrument**.
+  - The **fork is not in this release.** Phase 4's charter is accepted (ADR 0087) and its
+    base decided (own it — #782), but no fork code exists. The contract is still v0.1,
+    carrying **ten amendment markers across six stamp events** (#109, #230, #694, #737, #743, #784),
+    each naming what forced it.
 
 ### Added
 
@@ -14755,5 +14825,6 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/scttfrdmn/burroughs/compare/v0.5.0...v0.6.0
 [0.0.1]: https://github.com/scttfrdmn/burroughs/releases/tag/v0.0.1
