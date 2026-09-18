@@ -118,3 +118,22 @@ pre-registered assertions, all reachable on the async path (#734 C10).
 - **The pin ages:** the async text is younger than the value-type text; a slice needing newer text re-pins
   with a dated amendment.
 - **`gate:async`'s creation and this ADR's stamp are Scott's.** No engine code lands on this ADR alone.
+
+## Amendment — `gate:async` flips on by default (2026-09-18)
+
+**Stamped by Scott on [#792](https://github.com/scttfrdmn/burroughs/issues/792) ("Confirm the stamp. Flip it."), against the forecast pre-registered there.** This amends the *"Gated off by default"* consequence above: `gate:async` is **on by default** as of this date. The gate remains present as the rollback — `BURROUGHS_ASYNC=0` refuses an async component by name through the same path, only the default differs (the form `gate:components` set on 2026-09-11, ADR 0084's amendment). Behaviour 4 satisfied: the flip is its own stamp-tier event, its forecast pre-registered before the numbers existed, and **no mechanism rode it**.
+
+**What the flip claims, at its evidence levels.** The forecast's split is carried here because it is the claim's substance, not its packaging:
+
+- **Toolchain-verified (4 ops).** `p3async-hello` — a third-party Rust `wasm32-wasip3` guest — executes `stream.new`, `stream.write` (host-first inline arm), `context.get`, `context.set`, and writes `Hello, world!\n` byte-identically to the committed wasmtime 48.0.1 reading. This is the only evidence independent of us.
+- **Fixture-verified (9 ops + the arms).** `task.return`, `future.new/write/cancel-write`, `future.read`, `future.drop-readable`, `waitable-set.new/wait`, `waitable.join`, the stackless async-lift callback loop, both async-lower arms, and the guest-first blocked `stream.write` arm are executed by **hand-authored WAT guests we wrote to exercise our own engine** — checked against `definitions.py @ 2bed77e` and, for the lift/cancel guests, committed wasmtime 48.0.2 readings. The model is the independent check here; the guest is not.
+- **Test-only (7 ops).** `subtask.cancel`, `subtask.drop`, `stream.cancel-read`, `stream.cancel-write`, `stream.drop-readable`, `stream.drop-writable`, `waitable-set.poll` — impls run under control, **no guest's bytes reach them**.
+- **Fixture-only.** `future.write`'s DROPPED `CopyResult` — pinned, produced by nothing.
+
+**What the flip does not claim.** The **stackful** async lift is model-only and refused by name (this amends the deferred-choice consequence above: the choice is now *settled for the stackless arm only*, guest-driven from the bytes the Rust p3 toolchain emits — `(canon lift … async (callback …))`). **No guest parks a lift**, so the callback loop's WAIT/YIELD dispatch is unbuilt (measured, not inferred). The future **read** arm's CANCELLED is synthetic; only the **write** arm has a running producer. The multi-agent component-task tier is deferred (SP-5/H-4, #771).
+
+**The one path the audit removed rather than documented.** The close audit found `waitable-set.drop` (0x22) permitted but certified by nothing *and* knowingly incomplete (the model traps when a set is dropped with live members or waiters; the impl had neither trap). It was **deleted and bound to a call-time refusal** before the flip (#793) — a tightening, not an exposure inside the claim. The sibling sweep found nothing else in that position.
+
+**Rollback:** the revert of the flip commit. Witnessed before it was needed by `TestGateAsyncOffByEnvStillRefusesByName`, which asserts both halves — the flipped default instantiates, and `BURROUGHS_ASYNC=0` still refuses by name with `ErrAsyncGated` (wrapped `ErrGated`, CLI exit 6).
+
+**Standing-check inputs** (a bump to any re-opens the claim as a named change): the spec pin `2bed77e`; the committed wasmtime readings, each naming its binary and box — `p3async-hello.stdout` (48.0.1), `p3async-cancel.reading`, `async-lift-exit-synth.reading`, `async-future-cancel-synth.reading` (48.0.2, all darwin/arm64); and the guest fixtures. The last two were README prose until this flip and are now committed files, so a wasmtime bump surfaces as a changed artifact rather than stale prose.

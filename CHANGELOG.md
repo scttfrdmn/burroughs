@@ -21,6 +21,24 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:async` is ON by default — the flip (ADR 0086 amendment, forecast and stamp on #792).** A WASI-0.3
+  component's async Canonical ABI now executes without opting in: a **sync-lifted** `wasi:cli/run@0.3.0`
+  export with async-lowered imports runs end to end and writes its `stream<u8>` stdout byte-identically to
+  the committed wasmtime reading; a **stackless (callback) async-lifted** export executes its callback loop
+  to EXIT and resolves through `task.return`; and **cancellation has a running producer** on the future write
+  arm. **The claim is bounded at its evidence levels, which the flip does not blur:** a third-party toolchain
+  guest (`p3async-hello`, Rust `wasm32-wasip3`) exercises **4** ops — `stream.new`, `stream.write` host-first,
+  `context.get/set`; **9** more plus the lift loop are exercised by **hand-authored WAT fixtures** against
+  `definitions.py @ 2bed77e`; **7** are test-only (no guest's bytes reach them); `future.write`'s DROPPED has
+  no producer at all. **Not claimed:** the stackful lift (model-only, refused by name), any guest parking a
+  lift (the WAIT/YIELD dispatch is unbuilt — measured), the future *read* arm's CANCELLED, and the
+  multi-agent component-task tier (#771). **Rollback:** `BURROUGHS_ASYNC=0` still refuses by name with
+  `ErrAsyncGated` (CLI exit 6) — witnessed before it was needed by `TestGateAsyncOffByEnvStillRefusesByName`,
+  which asserts both the flipped default and the opt-out. Five tests that expressed gate-off as the empty
+  string are repointed to `"0"` (after the flip, `""` means *on*); their correction is evidenced by the
+  unrepointed tests failing against the flipped binary. No mechanism rides the flip; the two WAT guests'
+  wasmtime readings are now committed `.reading` files so a bump surfaces as a changed artifact.
+
 - **`waitable-set.drop` (0x22) refuses by name at the call; its incomplete implementation is deleted (#792).**
   The `gate:async` flip's close audit (runtime-closure instrumentation, both guests plus the whole repo)
   found 0x22 **built and permitted but certified by nothing** — no guest executes it, no test executes it,

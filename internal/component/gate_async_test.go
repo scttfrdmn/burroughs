@@ -57,7 +57,7 @@ func TestAsyncGuestRefusedAtBindByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("async guest fixture missing (it is committed): %v", err)
 	}
-	t.Setenv("BURROUGHS_ASYNC", "") // the default build: gate:async is off
+	t.Setenv("BURROUGHS_ASYNC", "0") // gate:async OFF by explicit opt-out (on is the default since the flip)
 	h := NewHost(io.Discard, io.Discard, nil)
 	_, err = InstantiateWithHost(b, h)
 	if err == nil {
@@ -141,7 +141,7 @@ func TestSynthesizedAsyncLiftRefusedAtBindByName(t *testing.T) {
 	if _, lerr := Load(b); lerr != nil {
 		t.Fatalf("Load refused the synthesized async-lift component — it must decode so the refusal fires at bind: %v", lerr)
 	}
-	t.Setenv("BURROUGHS_ASYNC", "") // gate:async off
+	t.Setenv("BURROUGHS_ASYNC", "0") // gate:async off by explicit opt-out (on is the default since the flip)
 	_, err = Instantiate(b)
 	if err == nil {
 		t.Fatal("gate:async off: the synthesized async lift instantiated — the lift arm was not refused")
@@ -168,7 +168,7 @@ func TestSynthesizedAsyncLiftRefusedAtBindByName(t *testing.T) {
 // bytes path is TestSynthesizedAsyncLiftRefusedAtBindByName): a component whose canon section holds an
 // async lift is refused, by name, naming gate:async and the lift arm.
 func TestAsyncLiftRefusedAtBindByName(t *testing.T) {
-	t.Setenv("BURROUGHS_ASYNC", "") // gate:async off
+	t.Setenv("BURROUGHS_ASYNC", "0") // gate:async off by explicit opt-out (on is the default since the flip)
 	c := &Component{Canons: []Canon{{Kind: CanonLift, Opts: CanonOpts{Async: true}}}}
 	err := gateAsync(c)
 	if err == nil {
@@ -194,7 +194,7 @@ func TestAsyncLiftRefusedAtBindByName(t *testing.T) {
 // TestAsyncStreamValueTypeRefusedAtBind witnesses the defense-in-depth arm: a stream value type (async
 // surface) in a component's types refuses at bind under gate:async even absent a canon marker.
 func TestAsyncStreamValueTypeRefusedAtBind(t *testing.T) {
-	t.Setenv("BURROUGHS_ASYNC", "") // gate:async off
+	t.Setenv("BURROUGHS_ASYNC", "0") // gate:async off by explicit opt-out (on is the default since the flip)
 	c := &Component{Types: []TypeDef{{Kind: TDVal, Val: ValType{Kind: VStream}}}}
 	err := gateAsync(c)
 	if err == nil || !errors.Is(err, ErrAsyncGated) {
@@ -202,5 +202,47 @@ func TestAsyncStreamValueTypeRefusedAtBind(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, "stream") {
 		t.Errorf("refusal %q must name the stream value type", got)
+	}
+}
+
+// TestGateAsyncOffByEnvStillRefusesByName is the FLIP's rollback witness, pre-registered on #792 before the
+// flip landed (#714's lesson: a gated entry's forecast registers the refusal, not only the enabled exit).
+// Both halves are asserted, because the flip is a claim about a default and a rollback is a claim about an
+// opt-out:
+//
+//   - **The default runs.** With no explicit opt-out, the async guest instantiates — that IS the flip.
+//   - **`BURROUGHS_ASYNC=0` still refuses, by name**, with ErrAsyncGated (wrapped to ErrGated at the public
+//     boundary → CLI exit 6, grave #301's classification). The rollback is the revert of the flip commit;
+//     this is what makes it *witnessed* rather than asserted — the same refuse-by-name path as before the
+//     flip, only the default differs (the form gate:components set on 2026-09-11).
+//
+// A flip that made `=0` a silent no-op — the gate present in name but not in effect — fails the second half.
+func TestGateAsyncOffByEnvStillRefusesByName(t *testing.T) {
+	b, err := os.ReadFile(asyncGuestWasm)
+	if err != nil {
+		t.Fatalf("async guest fixture missing (it is committed): %v", err)
+	}
+
+	// Half 1 — the default is ON as of the flip: no opt-out, the guest instantiates.
+	t.Setenv("BURROUGHS_ASYNC", "") // absent/empty is not "0", so the gate is on — the flipped default
+	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err != nil {
+		t.Fatalf("the flipped default did not instantiate the async guest (the flip's own claim): %v", err)
+	}
+	in.Close()
+
+	// Half 2 — the rollback: an explicit opt-out still refuses, by name.
+	t.Setenv("BURROUGHS_ASYNC", "0")
+	_, err = InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err == nil {
+		t.Fatal("BURROUGHS_ASYNC=0 did not refuse — the gate is present in name but not in effect, and the " +
+			"rollback would be unwitnessed")
+	}
+	if !errors.Is(err, ErrAsyncGated) {
+		t.Fatalf("the opt-out's refusal is not ErrAsyncGated (the sentinel the public boundary wraps as "+
+			"ErrGated for exit 6): %v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "gate:async") {
+		t.Errorf("refusal %q must name gate:async — refuse by name, never a silent decline", got)
 	}
 }

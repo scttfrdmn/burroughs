@@ -376,9 +376,12 @@ type Instantiated struct {
 // decode and refuses it by name at bind while the gate is off.
 const asyncGateEnv = "BURROUGHS_ASYNC"
 
-// asyncEnabled reports whether `gate:async` is on. Off is the default: an async component decodes but is
-// refused at bind, by name.
-func asyncEnabled() bool { return os.Getenv(asyncGateEnv) == "1" }
+// asyncEnabled reports whether `gate:async` is on. **On is the default as of the 2026-09-18 flip** (ADR
+// 0086's amendment, forecast and stamp on #792; behaviour 4's stamp-tier event). The gate remains present as
+// the rollback: an explicit `BURROUGHS_ASYNC=0` refuses an async component by name through the same path —
+// only the default differs. The form matches `componentsEnabled` (the 2026-09-11 gate:components flip), so
+// both gates read their opt-out the same way rather than each inventing one.
+func asyncEnabled() bool { return os.Getenv(asyncGateEnv) != "0" }
 
 // ErrAsyncGated is returned at bind when a component uses the async component-model ABI and `gate:async`
 // is off. The root `ComponentConfig.Run` wraps it as `burroughs.ErrGated` so the CLI classifies it exit 6
@@ -407,8 +410,8 @@ func gateAsync(c *Component) error {
 		return nil // no async surface — sync components (gate:components) are unaffected
 	}
 	if !asyncEnabled() {
-		return fmt.Errorf("%w: this component uses the async component-model ABI (%s); set %s=1 to opt in "+
-			"(the async tier's mechanism is not yet implemented)", ErrAsyncGated, what, asyncGateEnv)
+		return fmt.Errorf("%w: this component uses the async component-model ABI (%s); unset %s to run it "+
+			"(the gate is on by default as of the 2026-09-18 flip)", ErrAsyncGated, what, asyncGateEnv)
 	}
 	// Gate ON: the async tier lands incrementally, so this refusal NARROWS to the sub-paths still unbuilt
 	// (#739). 2a-i-A executes the async **lower**'s sync-resolving arm, so an async-lower-only component is
