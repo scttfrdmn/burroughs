@@ -210,25 +210,13 @@ func waitableSetPoll(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// waitableSetDrop implements `canon waitable-set.drop` (definitions.py:2386): remove the set from the
-// table. The model traps if the set still has members; the blocking-arm round trip drops after its wait
-// has delivered, so members remain but the guest is done with them — slice-1 removes the entry without the
-// membership trap (subtask lifetime is the instance's, freed at Close).
-func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-		if len(args) < 1 {
-			return nil, fmt.Errorf("component: waitable-set.drop: got %d args, want (si)", len(args))
-		}
-		si := uint32(args[0].Bits)
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if _, ok := handleAt[*waitableSet](h, si); !ok {
-			return nil, fmt.Errorf("component: waitable-set.drop: handle %d is not a waitable set", si)
-		}
-		h.entries[si] = nil
-		return nil, nil
-	}
-}
+// `canon waitable-set.drop` (0x22) has NO implementation here, deliberately (#792, Scott's ruling). The one
+// that existed removed the table entry WITHOUT the model's two traps (WaitableSet.drop, def:794-796:
+// trap_if(len(elems) > 0); trap_if(num_waiting > 0)) — dropping a set with live members or waiters was
+// silent where the spec requires a trap. The close audit found it certified by nothing (no guest executed
+// it, no test executed it, no fixture pinned it), so it was deleted rather than left as dead code a future
+// reader might re-bind believing it complete. The op is bound to a call-time refusal (asyncBuiltinFunc),
+// and it is rebuilt WITH its traps, its pin, and its firing witness when a guest drops a waitable set.
 
 // asyncBuiltinFunc maps a waitable-set canon built-in opcode to its Go impl over this instance's async
 // handle table. Only the four the blocking-arm round trip needs are bound (gate:async 2a-i-B-2); any other
@@ -242,8 +230,24 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 		return waitableSetWait(w.async), true
 	case 0x21: // waitable-set.poll (gate:async increment 4) — wait minus the park, same readiness path
 		return waitableSetPoll(w.async), true
-	case 0x22: // waitable-set.drop
-		return waitableSetDrop(w.async), true
+	case 0x22:
+		// waitable-set.drop is REFUSED AT THE CALL, not at bind (#792, Scott's ruling: option (b)).
+		// The close audit found it built and permitted but certified by NOTHING — no guest executes it, no
+		// test executes it, no fixture pins it — AND knowingly incomplete: the model traps when a set is
+		// dropped with live members or waiters (WaitableSet.drop: trap_if(len(elems) > 0);
+		// trap_if(num_waiting > 0)), where this engine's impl had neither trap. A silently-diverging path
+		// inside a default-on claim is the shape this tier refuses everywhere else.
+		//
+		// The refusal is at the CALL because the distinction this audit is about — bound is not run — cuts
+		// both ways: `p3async-hello` BINDS 0x22 (its wit-bindgen surface imports it) and never calls it, so
+		// a bind-time refusal would turn the tier's end-to-end exit condition red for an op the guest never
+		// executes (measured: removing 0x22 from isBuiltAsyncBuiltin refuses p3async-hello at instantiate).
+		// It stays bound, so such a guest still instantiates and runs; executing it refuses by name.
+		//
+		// Expiry: a guest that DROPS a waitable set. Then 0x22 gets the model's two traps, its oracle pin,
+		// and its firing witness like every other built-in — built for a consumer, not ahead of one.
+		return refuseAtCall(op, "waitable-set.drop", "no guest drops a waitable set, and the model's "+
+			"membership/waiter traps are unbuilt — it is refused until a guest drops one (#792)"), true
 	case 0x23: // waitable.join
 		return waitableJoin(w.async), true
 	case 0x16: // future.read (gate:async increment 3)
@@ -301,4 +305,15 @@ func handleAt[T any](h *asyncHandles, i uint32) (T, bool) {
 	}
 	v, ok := h.entries[i].(T)
 	return v, ok
+}
+
+// refuseAtCall binds an async built-in to a closure that refuses BY NAME when the guest executes it, rather
+// than refusing the component at bind. It is for an op a guest may legitimately *import without calling* —
+// a wit-bindgen surface brings in ops its path never executes — where a bind-time refusal would reject a
+// working guest for an op it never runs. The refusal is ErrAsyncNotImplemented (the gate is open; the
+// mechanism is not there), and it names the op and why, so a guest that does reach it fails legibly.
+func refuseAtCall(op byte, name, why string) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+		return nil, fmt.Errorf("%w: %s (%#x): %s", ErrAsyncNotImplemented, name, op, why)
+	}
 }

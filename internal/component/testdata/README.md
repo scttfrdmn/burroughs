@@ -131,6 +131,37 @@ built-ins to instantiate one importer is the drag declined one level up. The `as
   (func (export "run") (type $rt) (canon lift (core func $calleef) async (callback $cbf))))
 ```
 
+`async-waitset-drop-synth.wasm` is the **firing witness** for the `waitable-set.drop` (0x22) refusal (#792,
+Scott's ruling): a guest that creates a waitable set and **drops it** — the call no guest on `main` makes
+(`p3async-hello` and `p3async-cancel` both *bind* 0x22 and never call it, which is why the refusal is at the
+call and not at bind). It exists because a refusal needs a witness that makes it fire (#732): this component
+**instantiates** (bind succeeds, so a guest that merely imports 0x22 still runs) and **refuses by name at the
+call** with `ErrAsyncNotImplemented`. The close audit found 0x22 built and permitted but certified by nothing
+— no guest execution, no test execution, no fixture pin — and knowingly incomplete (the model traps when a
+set is dropped with live members or waiters; the deleted impl had neither trap). Authored via `wasm-tools
+parse` (1.258.0; validates `--features all`):
+
+```wat
+(component
+  (core module $memmod (memory (export "m") 1))
+  (core instance $memi (instantiate $memmod))
+  (alias core export $memi "m" (core memory $cm))
+  (core func $wsnew (canon waitable-set.new))
+  (core func $wsdrop (canon waitable-set.drop))
+  (core module $runmod
+    (import "" "wsnew" (func $wsnew (result i32)))
+    (import "" "wsdrop" (func $wsdrop (param i32)))
+    (func (export "run") (result i32)
+      (local $si i32)
+      (local.set $si (call $wsnew))
+      (call $wsdrop (local.get $si))
+      (local.get $si)))
+  (core instance $runi (instantiate $runmod (with "" (instance
+    (export "wsnew" (func $wsnew)) (export "wsdrop" (func $wsdrop))))))
+  (alias core export $runi "run" (core func $runf))
+  (func (export "run") (result u32) (canon lift (core func $runf))))
+```
+
 `future-read-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` increment-3
 `future.read` binding witness: an instance import whose `get-future` is an async func returning `future<u32>`
 (declared **inline** in the instance type — an outer-aliased future type would hit the placeholder-VRef
