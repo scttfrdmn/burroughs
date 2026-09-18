@@ -24,6 +24,14 @@ type compFunc struct {
 	core     coreDef
 	stubName string    // non-empty: a refusing host func naming the unfilled import
 	sig      *FuncType // the component signature of a canon lift (its export type), for the Call refusal
+
+	// Async (callback) lift fields (2nd async guest, #785): when async is set, invoke() runs the callback
+	// loop rather than a single sync call. `core` is the callee (the first call, with the lifted params);
+	// `h` holds the durable lift task. Step 1 is the loop skeleton (first-call -> EXIT -> resolve); the
+	// callback core func for the re-entry/park is threaded in step 2.
+	async  bool
+	h      *asyncHandles
+	result []interp.Value // the async lift's last resolution (what task.return lowered), for the caller/oracle
 }
 
 func (f *compFunc) invoke() error {
@@ -33,8 +41,64 @@ func (f *compFunc) invoke() error {
 	if f.core.inst == nil {
 		return fmt.Errorf("%w: component func has no invocable core func (lift target unresolved)", ErrUnsupportedForm)
 	}
+	if f.async {
+		return f.invokeAsyncLift()
+	}
 	_, err := f.core.inst.Invoke(f.core.name)
 	return err
+}
+
+// invokeAsyncLift runs the stackless (callback) async-lift loop (canon_lift def:2126-2151). Step 1 is the
+// loop skeleton: create the durable lift task, invoke the callee ONCE with the lifted params, decode the
+// packed return, and on EXIT confirm the task was resolved by task.return. The WAIT/YIELD re-entry and park
+// are step 2. The first-call path is explicit here — a shared helper would blur the callee (params) and the
+// callback (event), which #788's multi-cycle pin exists to catch.
+func (f *compFunc) invokeAsyncLift() error {
+	// At-most-one lift task per agent, asserted: an unbound host call into an async-lifted export is a shape
+	// the engine permits, so a nested entry onto an agent already hosting a lift traps by name rather than
+	// resolving the wrong task (witnessed on synth bytes, #732).
+	task := &liftTask{}
+	f.h.mu.Lock()
+	if f.h.lift != nil {
+		f.h.mu.Unlock()
+		return &interp.Trap{Reason: "async canon lift entered while another lift task is already in flight on this agent"}
+	}
+	f.h.lift = task
+	f.h.mu.Unlock()
+	// Teardown keys on the task, not the loop: clear the current-task pointer however invoke exits
+	// (normal EXIT, a trap, or — step 3 — cancellation resolving without a normal EXIT).
+	defer func() {
+		f.h.mu.Lock()
+		f.h.lift = nil
+		f.h.mu.Unlock()
+	}()
+
+	// First call: the callee, carrying the lifted params (none for run()). Its packed return drives dispatch.
+	res, err := f.core.inst.Invoke(f.core.name)
+	if err != nil {
+		return err
+	}
+	if len(res) != 1 {
+		return fmt.Errorf("%w: async lift callee returned %d core values, want 1 (packed)", ErrUnsupportedForm, len(res))
+	}
+	code, _, err := unpackCallbackResult(uint32(res[0].Bits))
+	if err != nil {
+		return err
+	}
+	switch code {
+	case callbackExit:
+		f.h.mu.Lock()
+		resolved := f.h.lift.resolved
+		f.h.mu.Unlock()
+		if !resolved {
+			return &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
+		}
+		f.result = task.result // the resolution, for the caller/oracle to read
+		return nil
+	default:
+		// WAIT / YIELD: the callback re-entry and the park — step 2, not the EXIT-only skeleton.
+		return fmt.Errorf("%w: async-lift dispatch code %d (park/yield) is step 2, not yet built", ErrAsyncNotImplemented, uint32(code))
+	}
 }
 
 // compInstance is a component instance: its exports by name. A stub instance (a host-filled import the
@@ -112,7 +176,15 @@ func (w *walker) funcStep(d Def) error {
 		if int(cn.FuncIdx) >= len(w.coreSpace[SpaceCoreFunc]) {
 			return fmt.Errorf("component: canon lift names core func %d of %d", cn.FuncIdx, len(w.coreSpace[SpaceCoreFunc]))
 		}
-		w.compFuncs = append(w.compFuncs, compDef{fn: &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn)}})
+		lf := &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn)}
+		if cn.Opts.Async && cn.Kind == CanonLift && cn.Opts.Callback != nil {
+			// Stackless (callback) async lift: invoke() runs the loop over the durable lift task. Step 1 is
+			// the loop skeleton; the callback core func for re-entry is threaded in step 2. A no-callback
+			// (stackful) async lift is not bound here — it refuses as unbuilt (unbuiltAsyncSurface).
+			lf.async = true
+			lf.h = w.async
+		}
+		w.compFuncs = append(w.compFuncs, compDef{fn: lf})
 	case SectionImport:
 		cd, ok := w.host(w.c.Imports[d.Item].Name)
 		if !ok {
@@ -361,8 +433,12 @@ func gateAsync(c *Component) error {
 // stream/future is caught by the value-type check, not the lower itself.
 func unbuiltAsyncSurface(c *Component) (string, bool) {
 	for _, cn := range c.Canons {
-		if cn.Kind == CanonLift && cn.Opts.Async {
-			return "an async canon lift", true
+		// The STACKLESS (callback) async lift is built (2nd async guest, #785): invoke() runs the callback
+		// loop, so a lift WITH a callback is permitted (a guest whose loop parks reaches the step-2 not-yet at
+		// invoke, not at bind). The STACKFUL arm — an async lift with NO callback — stays deferred (ADR 0086's
+		// guest-driven choice: no guest lifts stackfully), so it still refuses as unbuilt here.
+		if cn.Kind == CanonLift && cn.Opts.Async && cn.Opts.Callback == nil {
+			return "an async canon lift without a callback (the stackful arm)", true
 		}
 		if cn.Kind == CanonAsyncBuiltin && !isBuiltAsyncBuiltin(cn.AsyncOp) {
 			return fmt.Sprintf("an async canon built-in (%#x)", cn.AsyncOp), true
@@ -387,7 +463,7 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 // (increment 4). stream.read stays refused: the guest writes, the host reads (an internal path).
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
-	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x06, 0x0d, 0x0a, 0x0b:
+	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x06, 0x0d, 0x0a, 0x0b, 0x09:
 		return true
 	}
 	return false

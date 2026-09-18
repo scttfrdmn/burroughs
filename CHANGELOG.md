@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **The stackless async-lift execution — step 1, the loop skeleton with a durable task (#785).** With
+  `BURROUGHS_ASYNC=1`, a `(canon lift ... async (callback ...))` export now **executes**: `compFunc.invoke`
+  runs the callback loop over a **durable lift task** (`liftTask`) — the callee runs on it with the lifted
+  params, `task.return` (0x09, previously decoded-not-bound) resolves it, and EXIT confirms resolution
+  (`async-lift-exit-synth.wasm` → `run()` resolves to 42, matching the committed wasmtime 48.0.2 reading; a
+  lift that returns EXIT without `task.return` traps). Three design rules, each forced by an artifact on
+  `main`: **(1)** the task holds its own context (`context.get/set` under a lift use the task's storage, not
+  the caller's stack) — a dated disposition correcting the ADR 0050 / #739 placement for the async-lift case
+  only (the sync path is unchanged), because per-call stack storage would fail #788's context-survival
+  invariant; **(2)** teardown keys on the task resolving, not the loop exiting, so cancellation (step 3)
+  resolves without a normal EXIT; **(3)** at most one lift task per agent, asserted — a nested entry traps by
+  name. The **stackful** (no-callback) async lift stays deferred and still refuses by name (ADR 0086's
+  guest-driven choice). The WAIT/YIELD park and re-entry are step 2.
 - **The stackless async-lift callback loop's re-entry state, differential-pinned multi-cycle (#785).**
   fixtures.json `async_lift_loop`: driving the model's real `canon_lift` callback loop (def:2096-2153)
   through **WAIT → event → WAIT → event → EXIT** — two cycles, not a single park-and-finish — and recording

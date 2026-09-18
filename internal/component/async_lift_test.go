@@ -4,6 +4,8 @@ package component
 
 import (
 	"errors"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -129,4 +131,100 @@ func TestAsyncLiftLoopPinExercisesReentryState(t *testing.T) {
 	if len(lp.Resolved) != 1 || lp.Resolved[0] != lp.ResultExpected {
 		t.Errorf("resolved %v, want [%d] — the loop did not carry the returned value to resolution", lp.Resolved, lp.ResultExpected)
 	}
+}
+
+// TestAsyncLiftExitOnlyResolvesViaTaskReturn is step 1 of the async-lift execution: the loop skeleton run
+// end-to-end on the minimal EXIT-only guest (async-lift-exit-synth.wasm — callee calls task.return(42) then
+// returns EXIT, no park). The durable lift task is created, the callee runs on it, task.return resolves it,
+// and EXIT confirms resolution. The resolved value (42) matches the committed wasmtime reading (run()->42);
+// a lift that returned EXIT without task.return traps. gate:async on (the mechanism is off by default).
+func TestAsyncLiftExitOnlyResolvesViaTaskReturn(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-lift-exit-synth.wasm")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+	cd, ok := in.export.exports["run"]
+	if !ok || cd.fn == nil {
+		t.Fatal("component exports no run function")
+	}
+	if !cd.fn.async {
+		t.Fatal("run was not bound as an async (callback) lift")
+	}
+	if err := cd.fn.invoke(); err != nil {
+		t.Fatalf("invoke run (the async-lift loop skeleton): %v", err)
+	}
+	if len(cd.fn.result) != 1 || cd.fn.result[0].Bits != 42 {
+		t.Errorf("run resolved to %v, want [42] via task.return (matching the wasmtime reading run()->42)", cd.fn.result)
+	}
+	// The current-task pointer is cleared after invoke (teardown keys on the task), so a second lift is admissible.
+	if in.w.async.lift != nil {
+		t.Error("the current lift task was not cleared after resolution")
+	}
+}
+
+// TestAsyncLiftAtMostOneTaskPerAgentTraps witnesses the at-most-one-lift-task assertion firing through the
+// real invoke path (invokeAsyncLift on the real fixture's compFunc): with a lift task already in flight on
+// the agent, entering an async lift traps by name rather than resolving the wrong task. The nested state is
+// induced here by pre-setting the current-task pointer; the ORGANIC byte-driven witness — a host call into
+// an async-lifted export while another lift's loop is genuinely PARKED on the agent — lands with step 2,
+// which is where that re-entrant window first exists (the EXIT-only step-1 path never parks, so there is no
+// organic overlap to synthesize yet). #785, #732.
+func TestAsyncLiftAtMostOneTaskPerAgentTraps(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-lift-exit-synth.wasm")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+	cd := in.export.exports["run"]
+	// A lift task already in flight on this agent (stands in for a re-entrant caller).
+	in.w.async.lift = &liftTask{}
+	err = cd.fn.invoke()
+	if err == nil {
+		t.Fatal("entering an async lift with one already in flight did not trap — the at-most-one assertion is silent")
+	}
+	var trap *interp.Trap
+	if !errors.As(err, &trap) {
+		t.Fatalf("want a Trap naming the in-flight lift, got %v", err)
+	}
+}
+
+// TestAsyncLiftContextLivesOnTheTask is the dated-disposition correction (#785 / ADR 0050 / #739): with an
+// async lift in flight (h.lift != nil), context.get/set use the durable TASK's storage, not the caller's
+// stack — so context survives across the loop's re-entries. With no lift (the sync path), it stays on the
+// stack, unchanged.
+func TestAsyncLiftContextLivesOnTheTask(t *testing.T) {
+	cc, err := interp.NewCanonCallerForTest(1)
+	if err != nil {
+		t.Fatalf("harness caller: %v", err)
+	}
+	h := newAsyncHandles()
+	h.lift = &liftTask{}
+	// Under a lift: set slot 0 to 0x5151, read it back from the TASK.
+	if _, serr := contextSet(h, 0)(cc, []interp.Value{interp.I32(0x5151)}); serr != nil {
+		t.Fatalf("context.set under lift: %v", serr)
+	}
+	if h.lift.storage[0] != 0x5151 {
+		t.Errorf("context.set under a lift wrote %#x to the task, want 0x5151 (it went to the stack instead)", h.lift.storage[0])
+	}
+	got, err := contextGet(h, 0)(cc, nil)
+	if err != nil {
+		t.Fatalf("context.get under lift: %v", err)
+	}
+	if len(got) != 1 || got[0].Bits != 0x5151 {
+		t.Errorf("context.get under a lift read %v, want [0x5151] from the task", got)
+	}
+	// The sync path (h.lift == nil, storage on the caller's stack) is unchanged and covered by the existing
+	// context tests (TestContextStorageIsPerCallerStack); it is not re-exercised here, where the harness
+	// caller has no stack.
 }

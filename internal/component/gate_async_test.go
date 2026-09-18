@@ -180,12 +180,14 @@ func TestAsyncLiftRefusedAtBindByName(t *testing.T) {
 	if got := err.Error(); !strings.Contains(got, "gate:async") || !strings.Contains(got, "lift") {
 		t.Errorf("refusal %q must name gate:async and the async lift", got)
 	}
-	// And with the gate on, gateAsync refuses the same lift by ErrAsyncNotImplemented (gate open, execution
-	// unbuilt), not by ErrAsyncGated — the no-op kill.
+	// With the gate on, this no-callback (STACKFUL) async lift is still refused by ErrAsyncNotImplemented:
+	// the stackless (callback) arm is built (2nd async guest, #785), but the stackful arm stays deferred
+	// (ADR 0086's guest-driven choice). The built path — a WITH-callback lift binding and running — is
+	// covered by TestAsyncLiftExitOnlyResolvesViaTaskReturn.
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	onErr := gateAsync(c)
 	if onErr == nil || !errors.Is(onErr, ErrAsyncNotImplemented) {
-		t.Fatalf("gate:async on: async lift not refused by ErrAsyncNotImplemented: %v", onErr)
+		t.Fatalf("gate:async on: no-callback (stackful) async lift not refused by ErrAsyncNotImplemented: %v", onErr)
 	}
 }
 
