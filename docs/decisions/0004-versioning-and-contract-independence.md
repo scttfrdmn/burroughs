@@ -31,6 +31,8 @@ Minor versions map to milestones, so the number says what is *green*:
 | `v0.2.0` | one proposal gate flipped (`+GC`), and one minor per gate after |
 | `v1.0.0` | **reserved**: the v1 threads-and-safepoints milestone lands *with the §4 litmus battery passing on both TSO and a weakly-ordered platform* |
 
+*The `v1.0.0` row is **amended below** (2026-09-18, #795): the requirement as written is satisfiable without doing what it reads as demanding, and is restated there. Read the amendment with the row.*
+
 Living in `v0.x` is a privilege, not an embarrassment: no compatibility
 promise, no `/v2` import-path dance, total freedom to break — exactly right
 for an engine whose contract is still v0.1. `v1.0.0` is therefore gated on
@@ -131,3 +133,38 @@ guard 4 is a release gate, and its statement lived where no sweep and no first r
 open-questions list is carried **as it was recorded** rather than brought up to date, because
 correcting it is a measurement of §10's current state and not this repair's business — a reader who
 needs today's list should count it, not read it here.*
+
+## Amendment — `v1.0.0`'s requirement, restated to what is checkable (2026-09-18)
+
+**Approved by Scott on [#795](https://github.com/scttfrdmn/burroughs/issues/795) ("I concur and approve the recommended path") — Option 1 with Option 3's enumeration folded in as the recorded reason.** The row above is superseded by this restatement; it is left visible because what was wrong with it is the point.
+
+### Why the original requirement could not stand
+
+*"The §4 litmus battery passing on both TSO and a weakly-ordered platform"* is **satisfiable as written while misleading as read** — a worse failure than a requirement plainly unmet, because nothing flags it. CI runs both memory models by design (`ubuntu-24.04` x86-64/TSO and `ubuntu-24.04-arm` AArch64/weakly-ordered, contract §9/G-1) and the battery passes on both, so the sentence can be reported met, truthfully. But measured across the 15 registered cases: **10 carry arbiter `neither`** — platform-independent scheduling/protocol claims that pass identically on one platform, so the second runner adds nothing to them; **5 carry `-race`** — Go's memory model, not the guest-visible hardware model; and **0** discriminate a hardware weak-memory outcome by value. A reader takes the sentence to mean *two memory models certify the boundary*; the battery does not deliver that.
+
+### The restated requirement
+
+**`v1.0.0` is reserved for the v1 threads-and-safepoints milestone landing with:**
+
+1. **every registered §4 litmus case either landed or explicitly deferred with a live expiry** naming what would unlock it;
+2. **the battery run on both a TSO and a weakly-ordered platform** — a portability and race-freedom requirement, which is what that run actually establishes;
+3. **the tier's memory-model reach stated at its measured strength** wherever the version's coverage is claimed; and
+4. **the contract stable** (§1 non-goal 4), unchanged from the original second conjunct.
+
+### What is being given up, and what would restore it
+
+Named here so the restatement cannot read as moving the goalposts — the thing conceded is in the same amendment that concedes it:
+
+**Given up:** the reading that `v1.0.0` certifies the guest-visible memory model at the host→guest boundary on two platforms. The threaded tier's evidence is **one discriminating witness** (B-MM-2, the guest→guest wake — a control that dies), the host→guest boundary **certified by construction with a witness** (B-MM-1's async-wake crossing structural-by-identity, #780; Resume-after-Stop structural-by-redundancy at SP-6, #779), and **B-MM-1's host-call-return crossing an open hole with no available instrument** (#742).
+
+**What would restore it** — any one of these, and each is outside this project's unilateral reach:
+
+- **A second independent engine** implementing the threaded ABI. Blocked by **D-1**: no `thread.spawn` in the shipped Canonical ABI, so no engine to differ from.
+- **Hardware or a runner that discriminates reliably.** Measured on arm64: the forbidden outcome appears at ~1e-5 and flaky — **zero in 2 of 5 trials** — below any floor a case could carry (#742 Q3).
+- **A different instrument.** The #742 recon's conclusion was that no cleverer case closes it: every boundary crossing's acquire edge is **inherent to the mechanism performing the crossing**, so there is no deletable line whose removal opens a value window while leaving the crossing functional.
+
+If any of the three arrives, this amendment is the record of what it would upgrade.
+
+### Why the contract's amendments are not evidence of instability
+
+The second conjunct asks for a stable contract. The contract carries **nine amendment markers across three stamp events** (#694 2026-09-10; #737 and #743 both 2026-09-12), plus #784's §7 correction (2026-09-18). **Each names what forced it**, and each was forced by work that found something rather than by churn — which is evidence the contract is being *tested*, not that it is unsettled. Stability is judged on whether new work still forces amendments, not on the count of those already taken.

@@ -290,6 +290,15 @@ commits to that reading.*
   export, so no continuation is captured or grown. This remains true **until a
   guest async-lifts an export**, at which point S-1's applicability is reopened —
   the expiry condition, stated so the note does not read as a settled fact later.*
+  *Amended by Scott's stamp on #784, dated 2026-09-18. The expiry above fires on the
+  wrong event and is corrected here, the original left visible: it was drafted on the
+  inference that an async lift implies a continuation, and the mechanism falsified it.
+  **S-1 remains unconsumed until a guest async-lifts an export stackfully.** A
+  stackless (callback) async lift captures no continuation and does not reach this
+  expiry; the second async guest (#785) async-lifts **stackless** — byte-verified as
+  `(canon lift … async (callback …))`, the variant the Rust p3 toolchain emits — and
+  leaves S-1 unconsumed. Provenance: found by building that guest, not by re-reading
+  the note.*
 - **S-2.** Switch cost SHOULD be O(register save/restore) with no host-call
   round trip on the switch path (the WasmFX libcall→native transition
   measured ~6× on microbenchmarks; Burroughs starts native).
