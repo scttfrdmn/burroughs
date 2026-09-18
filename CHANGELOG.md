@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **The future write-side built-ins and the running CANCELLED producer (#785).** `future.new` (0x15),
+  `future.write` (0x17), and `future.cancel-write` (0x19) now execute (`BURROUGHS_ASYNC=1`), mirroring the
+  stream write-side family through the shared copy/cancel protocol (`writableFutureEnd` ~ `writableStreamEnd`).
+  A WAT cancellation guest (`async-future-cancel-synth.wasm`) runs end-to-end: `future.new` → `future.write`
+  (parks, BLOCKED) → `future.cancel-write` (→ CANCELLED) → `task.return` → EXIT, resolving `run()` to **2**,
+  matching the committed wasmtime 48.0.2 reading. **Cancellation moves from category 2 to category 1** on the
+  future write arm — the three-way assertion (#765) now agrees at both ends: the running production, the codec
+  constant, and the synthetic `future_cancel_write` pin all read CANCELLED. **`future.write`'s DROPPED stays
+  fixture-only** (checked explicitly, not by implication): the cancellation guest cancels, it does not drop,
+  so DROPPED's running producer awaits a guest that drops a future read end with a write in flight.
+  **`p3async-cancel` stays refused by name at instantiate** (witnessed) — its wit-bindgen surface drags
+  future built-ins (`future.cancel-read`, `future.drop-writable`, `task.cancel`) its `run()` never calls, so
+  it stays the standing end-to-end candidate blocked on those, the boundary a named refusal not a gap.
 - **The future write-arm CANCELLED, differential-pinned (#785 — the cancellation oracle).** `fixtures.json
   future_cancel_write`, from driving the model's `canon_future_cancel_write` through the **same `cancel_copy`
   substrate** as the stream arm (`cancel_copy` now carries a third direction without a second mechanism): a
