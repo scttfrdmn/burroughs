@@ -731,6 +731,16 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Contract §7 S-1's expiry is corrected: it fires on a *stackful* async lift, not on any async lift
+  (stamped on [#784](https://github.com/scttfrdmn/burroughs/issues/784), dated 2026-09-18).** The note added
+  with the `gate:async` tier said S-1 stays unconsumed *"until a guest async-lifts an export"* — drafted on
+  the inference that an async lift implies a continuation. **The mechanism falsified it:** a **stackless
+  (callback)** async lift captures no continuation, so the second async guest (#785) async-lifts — verified
+  from its bytes as `(canon lift … async (callback …))`, the variant the Rust p3 toolchain emits — and leaves
+  S-1 entirely unconsumed. The trigger as written would have fired on the wrong event. Corrected as an
+  appended dated amendment with the original left visible; found by building the guest, not by re-reading the
+  note. Load-bearing for Phase 4, whose reasoning rests on when S-1's subject actually arrives.
+
 - **`Config.Instantiate` refuses a module with unsupplied imports at load, rather than instantiating
   it with nil slots and deferring the failure to first use.** [#686](https://github.com/scttfrdmn/burroughs/issues/686),
   [ADR 0082](docs/decisions/0082-instantiate-refuses-unresolved-imports-at-link-and-surfaces-the-failure-as-a-typed-link-error-not-a-trap.md).
