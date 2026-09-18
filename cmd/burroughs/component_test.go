@@ -21,7 +21,7 @@ const (
 // async-lowered — a component the gate:components path alone would otherwise accept.
 func TestRunRefusesAnAsyncComponentByName(t *testing.T) {
 	t.Setenv("BURROUGHS_COMPONENTS", "") // gate:components on (default)
-	t.Setenv("BURROUGHS_ASYNC", "")      // gate:async off (default)
+	t.Setenv("BURROUGHS_ASYNC", "0")     // gate:async OFF by explicit opt-out (on is the default since the flip)
 	var out, errBuf bytes.Buffer
 	code := dispatch(&out, &errBuf, []string{"run", p3async})
 	if code != exitGated {

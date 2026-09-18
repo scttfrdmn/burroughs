@@ -1,0 +1,11 @@
+# Committed wasmtime reading for async-future-cancel-synth.wasm — the running CANCELLED producer.
+# Invocation:  wasmtime run --invoke 'run()' async-future-cancel-synth.wasm
+# Output:      2
+# Exit:        0
+# Meaning:     future.new mints the end pair; future.write parks the write (no reader, BLOCKED);
+#              future.cancel-write resolves it to CANCELLED; task.return carries CopyResult.CANCELLED = 2;
+#              the lift returns EXIT. 2 is the running production of CANCELLED on the future WRITE arm.
+# Engine:      wasmtime 48.0.2 (e9f1ea232 2026-09-10), async-on-by-default, no flag.
+# Box:         darwin/arm64 (Apple Silicon).
+# Committed as a FILE (not README prose) so a wasmtime bump surfaces as a changed artifact — the standing
+# check's whole point (#792 item 3, Scott's ruling).

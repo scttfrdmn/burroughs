@@ -63,7 +63,7 @@ a p3 guest here will hit this.
 `async-lift-exit-synth.wasm` is the step-1 oracle for the async (callback) lift's **execution loop** (2nd
 async guest, #785): the minimal EXIT-only lift — a callee that calls `task.return(42)` then returns EXIT
 (packed code 0), lifted `(canon lift ... async (callback $cb))`, with **no park** and no waitable-set surface.
-Its committed reading is `wasmtime run --invoke 'run()'` → **42** (wasmtime 48.0.2). **Built as WAT, not Rust,
+Its committed reading is **`async-lift-exit-synth.reading`** — `wasmtime run --invoke 'run()'` → **42** (wasmtime 48.0.2), committed as a file rather than stated here so a wasmtime bump surfaces as a changed artifact (#792 item 3). **Built as WAT, not Rust,
 on purpose:** the Rust EXIT path is confirmed working (`run()→42`) but a Rust guest drags wit-bindgen's whole
 async-runtime import surface (waitable-set new/wait/poll/drop) whether the test needs it or not — noise a
 later reader would mistake for scope — so the minimal oracle isolates the loop skeleton rather than the
@@ -89,8 +89,7 @@ toolchain's defaults. Authored via `wasm-tools parse` (1.258.0; validates `--fea
 `async-future-cancel-synth.wasm` is the **running CANCELLED producer** for the 2nd async guest (#785, step 2
 of the async-lift execution): a WAT guest that `future.new`s an end pair, `future.write`s the writable end
 (parks, BLOCKED — no reader), `future.cancel-write`s it (→ CANCELLED), `task.return`s the CANCELLED result,
-and returns EXIT — lifted `(canon lift ... async (callback ...))`. Its committed reading is `wasmtime run
---invoke 'run()'` → **2** (CopyResult.CANCELLED, wasmtime 48.0.2). **Built as WAT, not the Rust
+and returns EXIT — lifted `(canon lift ... async (callback ...))`. Its committed reading is **`async-future-cancel-synth.reading`** — `wasmtime run --invoke 'run()'` → **2** (CopyResult.CANCELLED, wasmtime 48.0.2), committed as a file rather than stated here so a wasmtime bump surfaces as a changed artifact (#792 item 3). **Built as WAT, not the Rust
 `p3async-cancel`**, for the same reason as the EXIT-only oracle: `run()`'s cancel path executes only
 `future.new` + `future.write` + `future.cancel-write`, but the Rust guest's wit-bindgen surface *imports* the
 whole future family (cancel-read, drop-writable, task.cancel) it never calls — building four unexercised

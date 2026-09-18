@@ -1,0 +1,10 @@
+# Committed wasmtime reading for async-lift-exit-synth.wasm — the async-lift loop-skeleton oracle.
+# Invocation:  wasmtime run --invoke 'run()' async-lift-exit-synth.wasm
+# Output:      42
+# Exit:        0
+# Meaning:     the stackless (callback) async lift runs its callee, which resolves the task via task.return(42)
+#              and returns EXIT (packed code 0); the loop resolves and yields 42. No park.
+# Engine:      wasmtime 48.0.2 (e9f1ea232 2026-09-10), async-on-by-default, no flag.
+# Box:         darwin/arm64 (Apple Silicon).
+# Committed as a FILE (not README prose) so a wasmtime bump surfaces as a changed artifact — the standing
+# check's whole point (#792 item 3, Scott's ruling).
