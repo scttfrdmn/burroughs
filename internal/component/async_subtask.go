@@ -56,7 +56,8 @@ type subtask struct {
 // the arming write and the parked read are synchronized here rather than per-object.
 type asyncHandles struct {
 	mu      sync.Mutex
-	entries []any // entries[0] is the reserved nil sentinel; each is *subtask or *waitableSet
+	entries []any     // entries[0] is the reserved nil sentinel; each is *subtask or *waitableSet
+	lift    *liftTask // the current async (callback) lift task, at most one per agent (asserted in the loop)
 }
 
 // pendingEventLocked delivers a resolved subtask's (SUBTASK, subtaski, state) event once, mirroring the

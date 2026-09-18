@@ -18,3 +18,4 @@ old.txt
 
 # Upstream component-model Canonical ABI model, vendored at the pin for the offline fixture generator (ADR 0084); never committed.
 internal/component/canon/gen/vendor/
+__pycache__/

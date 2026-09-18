@@ -225,9 +225,12 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 		t.Errorf("gate on, async built-in: err = %v, want ErrAsyncNotImplemented (refuse by name — 2a-i-B-2)", err)
 	}
 
+	// A no-callback (STACKFUL) async lift stays unbuilt (ADR 0086's stackless-vs-stackful choice: no guest
+	// lifts stackfully), so it still refuses by name. The stackless (callback) arm is built — covered by
+	// TestAsyncLiftExitOnlyResolvesViaTaskReturn, where a WITH-callback lift binds and runs.
 	lift := &Component{Canons: []Canon{{Kind: CanonLift, Opts: CanonOpts{Async: true}}}}
 	if err := gateAsync(lift); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, async lift: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+		t.Errorf("gate on, no-callback (stackful) async lift: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
 	// Increment 3: future.read (0x16) is permitted; future.write (0x17) still refuses by name.

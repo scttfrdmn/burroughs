@@ -60,6 +60,32 @@ its binary). Provenance: `rustc 1.100.0-nightly (0fc141305 2026-09-11)`, `rustup
 nightly`, which places `libLLVM.dylib` at the `@rpath` location `rust-lld` expects — the next person building
 a p3 guest here will hit this.
 
+`async-lift-exit-synth.wasm` is the step-1 oracle for the async (callback) lift's **execution loop** (2nd
+async guest, #785): the minimal EXIT-only lift — a callee that calls `task.return(42)` then returns EXIT
+(packed code 0), lifted `(canon lift ... async (callback $cb))`, with **no park** and no waitable-set surface.
+Its committed reading is `wasmtime run --invoke 'run()'` → **42** (wasmtime 48.0.2). **Built as WAT, not Rust,
+on purpose:** the Rust EXIT path is confirmed working (`run()→42`) but a Rust guest drags wit-bindgen's whole
+async-runtime import surface (waitable-set new/wait/poll/drop) whether the test needs it or not — noise a
+later reader would mistake for scope — so the minimal oracle isolates the loop skeleton rather than the
+toolchain's defaults. Authored via `wasm-tools parse` (1.258.0; validates `--features all`):
+
+```wat
+(component
+  (core module $memmod (memory (export "m") 1))
+  (core instance $memi (instantiate $memmod))
+  (alias core export $memi "m" (core memory $cm))
+  (type $rt (func async (result u32)))
+  (core func $taskret (canon task.return (result u32)))
+  (core module $runmod
+    (import "" "taskret" (func $taskret (param i32)))
+    (func (export "callee") (result i32) (call $taskret (i32.const 42)) (i32.const 0))
+    (func (export "cb") (param i32 i32 i32) (result i32) (i32.const 0)))
+  (core instance $runi (instantiate $runmod (with "" (instance (export "taskret" (func $taskret))))))
+  (alias core export $runi "callee" (core func $calleef))
+  (alias core export $runi "cb" (core func $cbf))
+  (func (export "run") (type $rt) (canon lift (core func $calleef) async (callback $cbf))))
+```
+
 `future-read-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` increment-3
 `future.read` binding witness: an instance import whose `get-future` is an async func returning `future<u32>`
 (declared **inline** in the instance type — an outer-aliased future type would hit the placeholder-VRef

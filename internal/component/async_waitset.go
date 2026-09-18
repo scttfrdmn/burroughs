@@ -266,9 +266,11 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 	case 0x14: // stream.drop-writable (gate:async increment 4)
 		return streamDropWritable(w.async), true
 	case 0x0a: // context.get (gate:async increment 4) — reads the agent's own context slot
-		return contextGet(slot), true
+		return contextGet(w.async, slot), true
 	case 0x0b: // context.set
-		return contextSet(slot), true
+		return contextSet(w.async, slot), true
+	case 0x09: // task.return (2nd async guest) — resolve the current async-lift task
+		return taskReturn(w.async), true
 	}
 	return nil, false
 }
