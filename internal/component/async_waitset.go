@@ -40,6 +40,7 @@ const (
 	eventStreamRead  eventCode = 2 // definitions.py EventCode.STREAM_READ (def:699)
 	eventStreamWrite eventCode = 3 // definitions.py EventCode.STREAM_WRITE (def:700)
 	eventFutureRead  eventCode = 4 // definitions.py EventCode.FUTURE_READ (def:701)
+	eventFutureWrite eventCode = 5 // definitions.py EventCode.FUTURE_WRITE (def:702)
 )
 
 // event is a waitable-set.wait result (definitions.py EventTuple / unpack_event, def:2367–2372): a code
@@ -249,6 +250,12 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 		return futureRead(w.async), true
 	case 0x1a: // future.drop-readable
 		return futureDrop(w.async), true
+	case 0x15: // future.new (2nd async guest) — mints a readable+writable future end pair
+		return futureNew(w.async), true
+	case 0x17: // future.write (2nd async guest) — single-value write; parks with no reader
+		return futureWrite(w.async), true
+	case 0x19: // future.cancel-write (2nd async guest) — the future write arm's running CANCELLED
+		return futureCancelWrite(w.async), true
 	case 0x06: // subtask.cancel (gate:async increment 4) — the subtask substrate's cancel path
 		return subtaskCancel(w.async), true
 	case 0x0d: // subtask.drop (gate:async increment 4)

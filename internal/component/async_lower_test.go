@@ -220,7 +220,7 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 		t.Errorf("gate on, async-lower-only: gateAsync refused (%v), want permit — the lower arms execute", err)
 	}
 
-	builtin := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x17}}} // future.write (genuinely unbuilt)
+	builtin := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x18}}} // future.cancel-read (genuinely unbuilt)
 	if err := gateAsync(builtin); !errors.Is(err, ErrAsyncNotImplemented) {
 		t.Errorf("gate on, async built-in: err = %v, want ErrAsyncNotImplemented (refuse by name — 2a-i-B-2)", err)
 	}
@@ -233,14 +233,19 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 		t.Errorf("gate on, no-callback (stackful) async lift: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
-	// Increment 3: future.read (0x16) is permitted; future.write (0x17) still refuses by name.
+	// future.read (0x16) is permitted; future.write (0x17) is now built too (2nd async guest, #785 — the
+	// cancellation path executes it), so it is permitted; future.cancel-read (0x18) stays unbuilt and refuses.
 	fread := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x16}}}
 	if err := gateAsync(fread); err != nil {
 		t.Errorf("gate on, future.read: gateAsync refused (%v), want permit — future.read is built", err)
 	}
-	fwrite := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x17}}} // future.write (unbuilt)
-	if err := gateAsync(fwrite); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, future.write: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	fwrite := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x17}}} // future.write (now built, #785)
+	if err := gateAsync(fwrite); err != nil {
+		t.Errorf("gate on, future.write: gateAsync refused (%v), want permit — future.write is built (#785)", err)
+	}
+	fcancelread := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x18}}} // future.cancel-read (unbuilt)
+	if err := gateAsync(fcancelread); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, future.cancel-read: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
 	// Stream write side (increment 3): stream.write (0x10) is permitted; stream.read (0x0f) still refuses.
@@ -290,10 +295,11 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 	if err := gateAsync(wpoll); err != nil {
 		t.Errorf("gate on, waitable-set.poll: gateAsync refused (%v), want permit — poll is built", err)
 	}
-	// future.write (0x17) remains refused — a genuinely unbound op (the #734 guest binds no future writes).
-	fwrite2 := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x17}}}
-	if err := gateAsync(fwrite2); !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("gate on, future.write: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
+	// future.cancel-read (0x18) remains refused — a genuinely unbuilt op (the cancellation guest cancels the
+	// write arm, never the read arm; #785). future.write (0x17) is now built, so it is no longer the example.
+	fcancelread2 := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x18}}}
+	if err := gateAsync(fcancelread2); !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Errorf("gate on, future.cancel-read: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
 	// Future AND stream value types are now permitted (both are handle types with a built op — future.read,

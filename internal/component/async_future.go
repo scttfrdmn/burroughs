@@ -21,7 +21,10 @@ import (
 
 // copyResult mirrors definitions.py CopyResult (def:919–922): how a copy ended, the value the guest
 // branches on. A future READ is only ever COMPLETED or CANCELLED — DROPPED is a future.write outcome (a
-// read can never be dropped), pinned when write lands.
+// read can never be dropped). DROPPED is pinned in the oracle (fixture-only, category 3); future.write is
+// now built (#785) and CANCELLED has a running producer (the cancellation guest), but **DROPPED still has
+// no running producer** — its expiry is a guest that drops a future read end while a write is in flight
+// (checked explicitly, not changed by implication: TestFutureWriteDroppedStaysFixtureOnly).
 type copyResult uint32
 
 const (
@@ -147,5 +150,118 @@ func futureDrop(h *asyncHandles) interp.CanonFunc {
 		}
 		h.entries[i] = nil
 		return nil, nil
+	}
+}
+
+// writableFutureEnd is the writable half of a future<T> (2nd async guest, #785, the cancellation witness) —
+// the future analog of writableStreamEnd, through the SAME copy/cancel protocol. A future is single-value:
+// a pending future.write with no reader parks (BLOCKED); a future.cancel-write resolves it to CANCELLED
+// inline, leaving the end IDLE (open) — only DROPPED goes DONE. All fields guarded by asyncHandles' mutex.
+type writableFutureEnd struct {
+	index     int
+	set       *waitableSet // the set it is joined to, if any
+	resolved  bool         // this write has an event to deliver
+	delivered bool         // the FUTURE_WRITE event has been taken by a waitable-set.wait
+	done      bool         // DONE (dropped); a COMPLETED/CANCELLED write leaves it IDLE (open)
+	result    copyResult
+	progress  uint32 // 0 or 1 (a future is one value); packed into the event as progress<<4
+	hasWrite  bool   // a future.write is pending on this end
+}
+
+// pendingEventLocked delivers the write's (FUTURE_WRITE, index, result|progress<<4) event once. The caller
+// holds asyncHandles.mu.
+func (e *writableFutureEnd) pendingEventLocked() (event, bool) {
+	if e.resolved && !e.delivered {
+		e.delivered = true
+		return event{code: eventFutureWrite, p1: uint32(e.index), p2: uint32(e.result) | (e.progress << 4)}, true
+	}
+	return event{}, false
+}
+
+func (e *writableFutureEnd) joinTo(s *waitableSet) { e.set = s }
+
+// completeWriteLocked ends a pending future.write with result r (CANCELLED for a cancel; DROPPED if the read
+// end drops), arms the event, and wakes the set. Mirrors writableStreamEnd.completeWriteLocked. DROPPED goes
+// DONE; CANCELLED/COMPLETED stay IDLE. Caller holds mu.
+func (e *writableFutureEnd) completeWriteLocked(progress uint32, r copyResult) {
+	e.progress = progress
+	e.result = r
+	e.resolved = true
+	if r == copyDropped {
+		e.done = true
+	}
+	if e.set != nil {
+		e.set.signalLocked()
+	}
+}
+
+// futureNew implements `canon future.new` (0x15, definitions.py:2459): mint a connected readable+writable
+// future end pair, return `ri | (wi<<32)` — the same packed shape as stream.new. The cancellation path uses
+// the writable end (write then cancel); the readable end is the pair the model always mints.
+func futureNew(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		re := &readableFutureEnd{}
+		we := &writableFutureEnd{}
+		re.index = h.addLocked(re)
+		we.index = h.addLocked(we)
+		packed := uint64(uint32(re.index)) | uint64(uint32(we.index))<<32
+		return []interp.Value{interp.I64(int64(packed))}, nil
+	}
+}
+
+// futureWrite implements `canon future.write` (0x17, definitions.py:2527) on the async path: a single-value
+// write. With no reader on the paired end (the cancellation guest's shape), the write parks and returns
+// BLOCKED; the guest then cancels it. (A future.write whose read end is already pending — the inline-copy
+// arm — is not exercised by this guest and is not built here; the guest-driven rule keeps it out until a
+// guest reads+writes a future.)
+func futureWrite(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("component: future.write: got %d args, want (i, ptr)", len(args))
+		}
+		i := uint32(args[0].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		e, ok := handleAt[*writableFutureEnd](h, i)
+		if !ok {
+			return nil, fmt.Errorf("component: future.write: handle %d is not a writable future end", i)
+		}
+		if e.done || e.hasWrite || e.resolved {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: end %d is not writable (done, write pending, or resolved)", i)}
+		}
+		e.hasWrite = true
+		bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
+		return []interp.Value{interp.I32(int32(bits))}, nil
+	}
+}
+
+// futureCancelWrite implements `canon future.cancel-write` (0x19, definitions.py:2580 -> cancel_copy): cancel
+// a write in flight, resolving it to CANCELLED inline and returning the packed `result|progress<<4`. The
+// future analog of stream.cancel-write, through the same cancel_copy substrate. Pinned by fixtures.json
+// future_cancel_write (the future WRITE arm's running CANCELLED; progress 0; the end left IDLE).
+func futureCancelWrite(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: future.cancel-write: got %d args, want (i)", len(args))
+		}
+		i := uint32(args[0].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		e, ok := handleAt[*writableFutureEnd](h, i)
+		if !ok {
+			return nil, fmt.Errorf("component: future.cancel-write: handle %d is not a writable future end", i)
+		}
+		if !e.hasWrite || e.resolved {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-write: end %d has no write in flight (COPYING)", i)}
+		}
+		e.completeWriteLocked(e.progress, copyCancelled) // progress 0 for an undriven pending write
+		e.hasWrite = false
+		ev, ok := e.pendingEventLocked() // consume inline -> IDLE (CANCELLED)
+		if !ok {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-write: end %d had no deliverable event after cancel", i)}
+		}
+		return []interp.Value{interp.I32(int32(ev.p2))}, nil
 	}
 }

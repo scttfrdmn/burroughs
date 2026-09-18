@@ -86,6 +86,51 @@ toolchain's defaults. Authored via `wasm-tools parse` (1.258.0; validates `--fea
   (func (export "run") (type $rt) (canon lift (core func $calleef) async (callback $cbf))))
 ```
 
+`async-future-cancel-synth.wasm` is the **running CANCELLED producer** for the 2nd async guest (#785, step 2
+of the async-lift execution): a WAT guest that `future.new`s an end pair, `future.write`s the writable end
+(parks, BLOCKED — no reader), `future.cancel-write`s it (→ CANCELLED), `task.return`s the CANCELLED result,
+and returns EXIT — lifted `(canon lift ... async (callback ...))`. Its committed reading is `wasmtime run
+--invoke 'run()'` → **2** (CopyResult.CANCELLED, wasmtime 48.0.2). **Built as WAT, not the Rust
+`p3async-cancel`**, for the same reason as the EXIT-only oracle: `run()`'s cancel path executes only
+`future.new` + `future.write` + `future.cancel-write`, but the Rust guest's wit-bindgen surface *imports* the
+whole future family (cancel-read, drop-writable, task.cancel) it never calls — building four unexercised
+built-ins to instantiate one importer is the drag declined one level up. The `async` canonopt is on
+`future.write` (a sync future.write needs a wasmtime feature flag); `future.cancel-write` is sync (matching
+`p3async-cancel`'s own emission). Authored via `wasm-tools parse` (1.258.0; validates `--features all`):
+
+```wat
+(component
+  (core module $memmod (memory (export "m") 1))
+  (core instance $memi (instantiate $memmod))
+  (alias core export $memi "m" (core memory $cm))
+  (type $rt (func async (result u32)))
+  (type $fut (future u8))
+  (core func $taskret (canon task.return (result u32)))
+  (core func $fnew (canon future.new $fut))
+  (core func $fwrite (canon future.write $fut (memory $cm) async))
+  (core func $fcancel (canon future.cancel-write $fut))
+  (core module $runmod
+    (import "" "taskret" (func $taskret (param i32)))
+    (import "" "fnew" (func $fnew (result i64)))
+    (import "" "fwrite" (func $fwrite (param i32 i32) (result i32)))
+    (import "" "fcancel" (func $fcancel (param i32) (result i32)))
+    (func (export "callee") (result i32)
+      (local $packed i64) (local $wi i32) (local $cr i32)
+      (local.set $packed (call $fnew))
+      (local.set $wi (i32.wrap_i64 (i64.shr_u (local.get $packed) (i64.const 32))))
+      (drop (call $fwrite (local.get $wi) (i32.const 0)))
+      (local.set $cr (call $fcancel (local.get $wi)))
+      (call $taskret (i32.and (local.get $cr) (i32.const 0xf)))
+      (i32.const 0))
+    (func (export "cb") (param i32 i32 i32) (result i32) (i32.const 0)))
+  (core instance $runi (instantiate $runmod (with "" (instance
+    (export "taskret" (func $taskret)) (export "fnew" (func $fnew))
+    (export "fwrite" (func $fwrite)) (export "fcancel" (func $fcancel))))))
+  (alias core export $runi "callee" (core func $calleef))
+  (alias core export $runi "cb" (core func $cbf))
+  (func (export "run") (type $rt) (canon lift (core func $calleef) async (callback $cbf))))
+```
+
 `future-read-synth.wasm` is a hand-authored **synthesized** component for the `gate:async` increment-3
 `future.read` binding witness: an instance import whose `get-future` is an async func returning `future<u32>`
 (declared **inline** in the instance type — an outer-aliased future type would hit the placeholder-VRef

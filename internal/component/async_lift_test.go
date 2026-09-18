@@ -262,3 +262,95 @@ func TestFutureCancelWritePinIsTheWriteArmRunningCancelled(t *testing.T) {
 		t.Errorf("wi_state_after = %q, want IDLE — CANCELLED leaves the end open (only DROPPED is DONE)", f.WiStateAfter)
 	}
 }
+
+// TestAsyncFutureCancelWriteRunningProducer is the running CANCELLED producer (2nd async guest, #785, step 2
+// of the execution): the WAT cancellation guest (async-future-cancel-synth.wasm) runs on Burroughs —
+// future.new mints the end pair, future.write parks the write (no reader, BLOCKED), future.cancel-write
+// resolves it to CANCELLED, task.return carries CANCELLED, EXIT. The lift loop is still first-call → EXIT
+// (the future.write park is at the future-end level, not a lift WAIT). The THREE-WAY assertion (#765): the
+// running production, the codec constant, and the synthetic pin all agree on CANCELLED, now with a real
+// producer at both ends. Matches the committed wasmtime reading (run()→2).
+func TestAsyncFutureCancelWriteRunningProducer(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-future-cancel-synth.wasm")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+	cd := in.export.exports["run"]
+	if err := cd.fn.invoke(); err != nil {
+		t.Fatalf("invoke run (the cancellation guest): %v", err)
+	}
+	// (1) the running production: run resolved to CANCELLED.
+	if len(cd.fn.result) != 1 || cd.fn.result[0].Bits != uint64(copyCancelled) {
+		t.Fatalf("run resolved to %v, want [%d] (CANCELLED) — the running future-write cancel producer", cd.fn.result, copyCancelled)
+	}
+	// (2) the codec constant, and (3) the synthetic pin — the three-way (#765) agreement.
+	if copyCancelled != 2 {
+		t.Errorf("codec CopyResult.CANCELLED = %d, want 2", copyCancelled)
+	}
+	var doc struct {
+		FutureCancelWrite struct {
+			Result int `json:"result"`
+		} `json:"future_cancel_write"`
+	}
+	loadFixtures(t, &doc)
+	if doc.FutureCancelWrite.Result != int(copyCancelled) {
+		t.Errorf("synthetic pin result %d != codec constant %d — the three-way disagrees", doc.FutureCancelWrite.Result, copyCancelled)
+	}
+}
+
+// TestFutureWriteDroppedStaysFixtureOnly is the explicit DROPPED check (#785, Scott's caution): future.write
+// is now built, so DROPPED becomes REACHABLE — but whether THIS guest produces it is separate from whether
+// the built-in exists. The cancellation guest produces CANCELLED, not DROPPED (nothing drops the paired read
+// end while the write pends), so future.write's DROPPED stays category-3 (fixture-only), audited here rather
+// than changed by implication. Its running-producer expiry updates to a guest that drops a future read end
+// with a write in flight.
+func TestFutureWriteDroppedStaysFixtureOnly(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-future-cancel-synth.wasm")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+	cd := in.export.exports["run"]
+	if err := cd.fn.invoke(); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	// The guest produced CANCELLED, explicitly NOT DROPPED — so DROPPED has no running producer here.
+	if len(cd.fn.result) == 1 && cd.fn.result[0].Bits == uint64(copyDropped) {
+		t.Fatalf("the cancellation guest produced DROPPED — unexpected; it should cancel, not drop")
+	}
+	if cd.fn.result[0].Bits != uint64(copyCancelled) {
+		t.Fatalf("guest produced %v, want CANCELLED — DROPPED's running producer awaits a guest that drops", cd.fn.result)
+	}
+}
+
+// TestP3AsyncCancelStillRefusedByName witnesses the boundary honestly (#785, #732): p3async-cancel — the Rust
+// guest whose wit-bindgen surface DRAGS future built-ins its run() never calls — still refuses at instantiate
+// by name, because the unexercised ones (future.cancel-read 0x18, future.drop-writable 0x1b, task.cancel
+// 0x05) stay unbuilt. The refusal fires on its own bytes: the boundary is a named refusal, not a gap. It
+// stays the standing end-to-end candidate (blocker = those unbuilt built-ins); when a later guest drives
+// them, the Rust end-to-end lands.
+func TestP3AsyncCancelStillRefusedByName(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/p3async-cancel.wasm")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	_, err = InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err == nil {
+		t.Fatal("p3async-cancel instantiated — its unexercised future built-ins should still refuse by name")
+	}
+	if !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Fatalf("refusal is not ErrAsyncNotImplemented (a named gate-on-unbuilt refusal): %v", err)
+	}
+}
