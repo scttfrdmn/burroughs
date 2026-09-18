@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -352,5 +353,46 @@ func TestP3AsyncCancelStillRefusedByName(t *testing.T) {
 	}
 	if !errors.Is(err, ErrAsyncNotImplemented) {
 		t.Fatalf("refusal is not ErrAsyncNotImplemented (a named gate-on-unbuilt refusal): %v", err)
+	}
+}
+
+// TestWaitableSetDropRefusesAtCallNotAtBind witnesses the 0x22 tightening FIRING on real bytes (#792, #732):
+// a synthesized guest that creates a waitable set and DROPS it. Two halves, both load-bearing:
+//
+//   - It INSTANTIATES. The refusal is at the call, not at bind, because bound-is-not-run cuts both ways:
+//     `p3async-hello` binds 0x22 (its wit-bindgen surface imports it) and never calls it, so a bind-time
+//     refusal would turn the tier's end-to-end exit condition red for an op that guest never executes
+//     (measured before choosing the placement).
+//   - Executing it REFUSES BY NAME with ErrAsyncNotImplemented, naming waitable-set.drop — so a guest that
+//     does reach the uncertified path fails legibly instead of silently diverging from the model (which
+//     traps on dropping a set with live members or waiters, where the deleted impl had neither trap).
+//
+// Expiry: a guest that drops a waitable set. Then 0x22 is rebuilt with the model's two traps, its oracle
+// pin, and its firing witness — built for a consumer, not ahead of one.
+func TestWaitableSetDropRefusesAtCallNotAtBind(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/async-waitset-drop-synth.wasm")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err != nil {
+		t.Fatalf("a guest that BINDS waitable-set.drop must still instantiate (the refusal is at the call, "+
+			"not at bind — p3async-hello binds it and never calls it): %v", err)
+	}
+	defer in.Close()
+	cd, ok := in.export.exports["run"]
+	if !ok || cd.fn == nil {
+		t.Fatal("no run export")
+	}
+	err = cd.fn.invoke()
+	if err == nil {
+		t.Fatal("calling waitable-set.drop did not refuse — the uncertified path ran silently")
+	}
+	if !errors.Is(err, ErrAsyncNotImplemented) {
+		t.Fatalf("refusal is not ErrAsyncNotImplemented (gate open, mechanism absent): %v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "waitable-set.drop") {
+		t.Errorf("refusal %q must name waitable-set.drop (refused BY NAME)", got)
 	}
 }

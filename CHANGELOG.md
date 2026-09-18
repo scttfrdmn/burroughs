@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **`waitable-set.drop` (0x22) refuses by name at the call; its incomplete implementation is deleted (#792).**
+  The `gate:async` flip's close audit (runtime-closure instrumentation, both guests plus the whole repo)
+  found 0x22 **built and permitted but certified by nothing** — no guest executes it, no test executes it,
+  no fixture pins it — and **knowingly incomplete**: the model traps when a waitable set is dropped with live
+  members or waiters (`WaitableSet.drop`), where this engine's impl had **neither trap**. A silently-diverging
+  path inside a would-be default-on claim is the shape this tier refuses everywhere else, so the impl is
+  **deleted** (not left as dead code a reader might re-bind believing it complete) and the op is bound to a
+  **call-time refusal**. The refusal is at the *call*, not at bind, because bound-is-not-run cuts both ways:
+  `p3async-hello` **binds** 0x22 and never calls it, so a bind-time refusal would turn the tier's end-to-end
+  exit condition red for an op that guest never executes (measured before choosing the placement). Witnessed
+  firing on new bytes (`async-waitset-drop-synth.wasm`): the guest instantiates, and calling 0x22 refuses by
+  name. **Expiry:** a guest that drops a waitable set — then 0x22 is rebuilt with the model's two traps, its
+  oracle pin, and its firing witness, built for a consumer rather than ahead of one.
 - **The future write-side built-ins and the running CANCELLED producer (#785).** `future.new` (0x15),
   `future.write` (0x17), and `future.cancel-write` (0x19) now execute (`BURROUGHS_ASYNC=1`), mirroring the
   stream write-side family through the shared copy/cancel protocol (`writableFutureEnd` ~ `writableStreamEnd`).
