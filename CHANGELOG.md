@@ -731,6 +731,21 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`v1.0.0`'s requirement is restated to what is checkable, with what it gives up named in the same
+  amendment (ADR 0004 amendment, approved on [#795](https://github.com/scttfrdmn/burroughs/issues/795),
+  2026-09-18).** The original — *"the §4 litmus battery passing on both TSO and a weakly-ordered platform"* —
+  was **satisfiable as written while misleading as read**: CI runs both memory models and the battery passes
+  on both, so the sentence could be reported met truthfully, while **10 of 15 cases carry arbiter `neither`**
+  (platform-independent — the second runner adds nothing to them), **5 carry `-race`** (Go's memory model, not
+  the guest-visible one), and **0** discriminate a hardware weak-memory outcome. `v1.0.0` now requires: every
+  registered §4 case landed or deferred with a live expiry; the battery run on both platforms (a portability
+  and race-freedom requirement, which is what that run establishes); the tier's memory-model reach stated at
+  its measured strength wherever coverage is claimed; and a stable contract. **What is given up is named with
+  what would restore it** — a second independent engine (blocked by D-1), hardware that discriminates
+  reliably (measured ~1e-5 and flaky, zero in 2 of 5 trials), or a different instrument (#742: every boundary
+  crossing's acquire edge is inherent to the mechanism performing it) — so the restatement cannot read as
+  moving the goalposts.
+
 - **Contract §7 S-1's expiry is corrected: it fires on a *stackful* async lift, not on any async lift
   (stamped on [#784](https://github.com/scttfrdmn/burroughs/issues/784), dated 2026-09-18).** The note added
   with the `gate:async` tier said S-1 stays unconsumed *"until a guest async-lifts an export"* — drafted on
