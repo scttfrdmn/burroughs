@@ -51,6 +51,16 @@ own condition rather than as a prediction.
     ([#514](https://github.com/scttfrdmn/burroughs/issues/514)), since a guest wanting a
     per-thread slot at register-like cost can now declare a mutable global.
 
+### Fixed
+
+- **`futex.go` cited §3 SP-4 for a guarantee whose population SP-4 does not name.** SP-4 is
+  scoped to threads *"parked in host calls"*; a thread parked in `memory.atomic.wait` is not
+  one. **SP-2** is the authority for that site and carries both halves, because it names
+  `memory.atomic.wait` explicitly. Comment-only; the mechanism was already correct. Found by
+  reading §§3/5 before building the fork's futex-backed lock layer rather than after — and the
+  same read established that H-4/SP-5's enumeration of blocking excursions is the scope of that
+  append rather than an exhaustive list, so no clause is missing for a core `memory.atomic.wait`.
+
 ## [0.6.0] - 2026-09-18
 *Implements contract v0.1.*
 
