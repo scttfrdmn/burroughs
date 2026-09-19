@@ -1,9 +1,9 @@
 # 0088 — The component path takes a caller-supplied capability set: the engine's first such surface
 
-Date: 2026-09-18 · Status: **proposed** · [#798](https://github.com/scttfrdmn/burroughs/issues/798) (A1 ruled) · [#800](https://github.com/scttfrdmn/burroughs/issues/800) (the slice) · Amends ADR 0085's `ComponentConfig` surface
+Date: 2026-09-18 · Status: **accepted** · [#798](https://github.com/scttfrdmn/burroughs/issues/798) (A1 ruled) · [#800](https://github.com/scttfrdmn/burroughs/issues/800) (the slice) · Amends ADR 0085's `ComponentConfig` surface
 Ratio-Class: ordered https://github.com/scttfrdmn/burroughs/issues/798
 
-**Held for Scott's stamp.** A1 — *that* the component path takes a caller-supplied feature set — is ruled on #798. **The shape is not**, and a shape is public API surface, one of the three subjects an actor may not settle alone. `Status: proposed` cites no approval for the shape; the mechanism in #800 holds for that stamp.
+**Stamped 2026-09-18 (Scott, on #798 — "approved", on the *shape*).** The two approvals are distinct and both are cited because they are: A1 — *that* the component path takes a caller-supplied feature set — was ruled first; **the shape** below — an extensible named-capability set with guest-driven contents, unrecognized values refused by name — was stamped separately, because a shape is public API surface, one of the three subjects an actor may not settle alone. `Status: accepted` cites the second. #800's mechanism proceeds on it.
 
 ## Context
 
