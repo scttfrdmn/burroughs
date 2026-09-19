@@ -148,10 +148,10 @@ type global struct {
 // numeric one and failed its arity check. `constExpr` derives the shape from `g.Type` via
 // `countByArray`, so the three fields are assigned from the one result and a fourth shape arriving in
 // `binary.ValType` is a change to `countByArray`, not to this function.
-// threadGlobals builds one spawned thread's global storage — the mechanism for a new contract §2 clause, a new T-6, [ADR 0089].
+// threadGlobals builds one spawned thread's global storage — contract §2 T-6's mechanism, [ADR 0089].
 //
 // The slice is the instance's, with every **defined** entry replaced by a fresh `*global` and every
-// **imported** entry left as the instance's own pointer. That is a new T-6's exclusion made structural rather
+// **imported** entry left as the instance's own pointer. That is T-6's exclusion made structural rather
 // than checked: an import names a cell the exporting instance owns, so a per-agent copy would answer a
 // different question than the module asked, and because the distinction is settled *here* it costs
 // nothing at `global.get`.
@@ -245,10 +245,10 @@ func (g *global) loadRef() ref {
 // `assert_invalid` string, and `global.wast:249` onward assert exactly that — so enforcing it
 // here would put #9's answer somewhere #9 cannot be tested from, and would make this package
 // judge a module. The `mutable` field is recorded and unread until the validator wants it.
-// **The thread is a parameter, because a global's storage is per-thread** — a new contract §2 clause, a new T-6,
+// **The thread is a parameter, because a global's storage is per-thread** — contract §2 T-6,
 // [ADR 0089]. `t.globals` is indexed identically to `in.globals` (imports first, then definitions) and
 // for the host thread it *is* `in.globals`, aliased at construction, so this resolves in exactly one
-// indexing whichever thread asks. The import/definition distinction a new T-6 draws is settled once at
+// indexing whichever thread asks. The import/definition distinction T-6 draws is settled once at
 // spawn, not here: an imported slot in a spawned thread's slice is the instance's own pointer.
 //
 // The bounds and nil checks read `t.globals` while the *messages* quote the module's index space, which
@@ -263,7 +263,7 @@ func (in *Instance) globalFor(t *thread, what string, idx uint64) (*global, erro
 	//
 	// **Nil-tolerant, matching `poll`'s treatment of the same receiver** (`if t == nil || …`): a stack
 	// with no thread is a test-only state this package already admits, and the fallback it lands on is
-	// the instance's own globals — the behaviour that predates a new T-6, which is the right default for a caller that
+	// the instance's own globals — the pre-T-6 behaviour, which is the right default for a caller that
 	// could not say which thread is asking. Established by a nil dereference here, not by taste:
 	// `TestGlobalGetOfARefUsesTheRefStack` builds a bare `&stack{}` and reaches this line.
 	gs := in.globals

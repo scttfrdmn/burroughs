@@ -222,7 +222,7 @@ func InstantiateLinked(m *binary.Module, imp Imports) (*Instance, *Trap, error) 
 	// `host` is a value field on a struct this function already allocates.
 	in.host.id = ThreadID(in.nextTID.Add(1))
 	// And the host thread's global storage **aliases** the instance's, here rather than after the
-	// globals loop — a new contract §2 clause, a new T-6, [ADR 0089][0089]. The position is forced, not chosen: a global's
+	// globals loop — contract §2 T-6, [ADR 0089][0089]. The position is forced, not chosen: a global's
 	// initializer is a const-expr that `in.run` executes through the general interpreter, so
 	// `global.get` inside one reaches `globalFor` and therefore reads *this* slice. An alias set after
 	// the loop would make every initializer that reads an earlier global resolve against a nil slice.

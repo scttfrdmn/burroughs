@@ -10,7 +10,7 @@ import (
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// A new contract §2 clause — a new T-6 ([ADR 0089]): a module-defined non-shared global is per-agent. These cases are the
+// Contract §2 T-6 ([ADR 0089]): a module-defined non-shared global is per-agent. These cases are the
 // forecast pre-registered on #807, checked as a set.
 //
 // The occasion was Phase 4 slice 2: Go's wasm backend keeps its whole register bank in mutable globals
@@ -92,7 +92,7 @@ func spawnHarness(t *testing.T, childName string) (*Instance, func(string) int32
 	}
 }
 
-// TestASpawnedAgentsWriteToADefinedGlobalIsNotObservableByItsSpawner is a new T-6's own case, and the
+// TestASpawnedAgentsWriteToADefinedGlobalIsNotObservableByItsSpawner is T-6's own case, and the
 // forecast's item 1. Watched die: with `threadGlobals` returning `in.globals` (the pre-0089 sharing)
 // it reports `parent read 222, want 111`. Before ADR 0089 this read **222** — the child's write, through the instance's
 // shared `globals` slice, which is exactly how a second Go M erased the first's SP. It must read 111.
@@ -124,7 +124,7 @@ func TestASpawnedAgentsDefinedGlobalIsFreshlyInitializedNotInherited(t *testing.
 	}
 }
 
-// TestAnImportedGlobalStaysSharedAcrossAgents is the forecast's item 2 — a new T-6's exclusion, witnessed
+// TestAnImportedGlobalStaysSharedAcrossAgents is the forecast's item 2 — T-6's exclusion, witnessed
 // rather than stated.
 //
 // **Its first injection was a no-op, and that near-miss is why the injection is recorded here rather
@@ -185,7 +185,7 @@ func TestAnImportedGlobalStaysSharedAcrossAgents(t *testing.T) {
 			t.Fatalf("parent: %v", r.err)
 		}
 		if got := r.v[0].Int32(); got != 222 {
-			t.Errorf("parent read %d from an IMPORTED global, want 222 — a new T-6 excludes imports, so the "+
+			t.Errorf("parent read %d from an IMPORTED global, want 222 — T-6 excludes imports, so the "+
 				"child's write must reach the spawner; a per-agent copy of an import would answer a "+
 				"different question than the module asked", got)
 		}
@@ -229,8 +229,8 @@ func TestTheHostThreadsGlobalsAreTheInstancesOwn(t *testing.T) {
 	}
 }
 
-// TestASharedGlobalIsRefusedByName is the forecast's item 4, and it is what makes a new T-6's scope
-// CHECKABLE rather than asserted. A new T-6 is written over the *non-shared* category so it stays correct
+// TestASharedGlobalIsRefusedByName is the forecast's item 4, and it is what makes T-6's scope
+// CHECKABLE rather than asserted. T-6 is written over the *non-shared* category so it stays correct
 // when the shared-everything-threads encoding is accepted; the claim that the category is TOTAL today
 // rests on the decoder refusing that encoding, and a scope claim resting on an unwitnessed refusal is
 // the #732 shape one level up.
@@ -248,7 +248,7 @@ func TestASharedGlobalIsRefusedByName(t *testing.T) {
 		}
 		_, err := (&bin.Decoder{Features: bin.Features{Threads: true}}).DecodeModule(img)
 		if err == nil {
-			t.Fatalf("mutability byte %#02x: a SHARED global decoded. A new T-6's \"today that category is "+
+			t.Fatalf("mutability byte %#02x: a SHARED global decoded. T-6's \"today that category is "+
 				"total\" would be false, and a shared global reaching per-agent storage would be "+
 				"copied when the format says it is shared", mut)
 		}

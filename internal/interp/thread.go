@@ -102,7 +102,7 @@ type thread struct {
 	// id is T-1's tid, assigned once at creation and never written again.
 	id ThreadID
 
-	// globals is the thread's own global storage — a new contract §2 clause — **a new T-6**, [ADR 0089]. Indexed exactly
+	// globals is the thread's own global storage — contract §2 **T-6**, [ADR 0089]. Indexed exactly
 	// like `Instance.globals` (imports first, then definitions), and `globalFor` resolves against
 	// *this* slice rather than the instance's, which is what makes a guest's per-thread register state
 	// per-thread.
@@ -111,13 +111,13 @@ type thread struct {
 	// instead of the `slot uint64` this struct held for it. 0050's placement decision stands
 	// unchanged; what changed is which state hangs off it. The deleted field's own retirement
 	// condition named *"T-4's guest-visible slot accessor"*, and ADR 0089 dissolves that accessor
-	// rather than deferring it: under a new T-6 a guest wanting a per-thread slot at register-like cost
+	// rather than deferring it: under T-6 a guest wanting a per-thread slot at register-like cost
 	// declares a mutable global, which now *is* one, so the host-function accessor has no consumer and
 	// no path to one ([#514](https://github.com/scttfrdmn/burroughs/issues/514)). Deleted rather than
 	// re-pinned, because *a directive must not outlive its subject* was that comment's own rule about
 	// itself.
 	//
-	// **Imported entries are aliased, not copied**, and a new T-6 excludes them for a reason the
+	// **Imported entries are aliased, not copied**, and T-6 excludes them for a reason the
 	// representation makes structural: an import names a cell the *exporting* instance owns, so a
 	// per-agent copy of it would answer a different question than the module asked. The alias is
 	// established once at spawn, so the import/definition distinction costs nothing per access.
@@ -142,7 +142,7 @@ type thread struct {
 	//
 	// **The limit this leaves, stated rather than discovered later.** When a thread runs code from an
 	// instance that is *not* this one, `globalFor` falls back to that instance's own globals — so a
-	// foreign instance's defined globals are shared across agents, and a new T-6's guarantee holds for the
+	// foreign instance's defined globals are shared across agents, and T-6's guarantee holds for the
 	// instance a thread was spawned in. That is guest-driven rather than principled: the only spawning
 	// guests today are single-instance, because there is no guest-reachable spawn (D-1) and the engine's
 	// own harness spawns inside one instance. **Trigger for revisiting it:** a guest that spawns *and*
@@ -638,7 +638,7 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 	// whose `Stop` would then wait for it. ADR 0056's walk used to sit here on the same reasoning
 	// about a mark it could not undo; the walk is deleted (decision [0068]) and the placement rule it
 	// was the reason for is now this.
-	// **A new T-6's storage is built here — before `newThread`, which is where every refusal belongs** (ADR
+	// **T-6's storage is built here — before `newThread`, which is where every refusal belongs** (ADR
 	// 0089). A thread whose globals could not be built must not become a member of the world: the
 	// paragraph above is the rule, and this is a new way to fail it. `threadGlobals` evaluates each
 	// defined global's initializer, which can fail exactly as it can at instantiation.

@@ -57,6 +57,14 @@ wasmtime is for.
 - **T-4.** The engine MUST provide a per-thread slot readable at
   register-like cost (the `g` register analog), stable across host calls and
   stack switches.
+  *(Amended 2026-09-19, #806.) T-4 is correct about cost and undersized about
+  extent. It reserved a per-thread slot as "the `g` register analog," naming
+  one register because the wasip1 port's scar tissue was about `g`; a guest
+  whose backend keeps its register bank in mutable globals needs the whole
+  set, not one slot. T-6 owns the extent; T-4 keeps register-cost and
+  stability. Occasioned by Phase 4 slice 2: Go's wasm backend maps SP, CTXT,
+  g, RET0–3 and PAUSE to wasm globals, and a second agent sharing them shares
+  its stack pointer.*
 - **T-5.** A thread **exits** when its entry function returns or traps, and
   exit is the only termination directed at an individual thread: there is no
   cancel and no kill aimed at one thread. Exit, join, and detach semantics
@@ -106,6 +114,20 @@ wasmtime is for.
   guest code runs. What the amendment does not do is invent guest grammar:
   no join instruction, so §9's gate accounting and the `gate:threads` board
   are untouched by it.*
+- **T-6.** A guest's non-shared global storage is per-agent. Each agent
+  created under T-1 has its own storage for every global the module *defines*;
+  an imported global names a cell the exporting instance owns, and its storage
+  is not duplicated. The engine initializes a spawned agent's defined globals
+  from the module's initializers, as at instantiation. The agent the host
+  observes through the public boundary is the instance's initial agent, whose
+  storage is the instance's.
+  *T-6 stamped by Scott on #806 (ADR 0089), 2026-09-19, with the T-4 append
+  above. Occasioned by building the fork rather than by re-reading §2: a Go
+  guest could not run two Ms at all, because Go's wasm backend keeps its
+  entire register bank in mutable globals and every agent shared the
+  instance's. Four facts were witnessed before this clause was drafted
+  (#805), including the spawned agent's write reaching its spawner and the
+  emitted spawn trampoline's own `global.set 2` / `global.set 0`.*
 
 ## §3. Safepoints and preemption
 
