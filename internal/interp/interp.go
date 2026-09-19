@@ -704,7 +704,15 @@ func (in *Instance) Global(name string) (Value, error) {
 	// deferred (ErrNotValidated) — are both reachable from here, and this is precisely the caller
 	// that would half-remember them. `what` names the holder of the index the way the other
 	// callers do: "the export" sends a reader to their export section rather than to a body.
-	g, err := in.globalFor(fmt.Sprintf("the export %q", name), uint64(idx))
+	//
+	// **`&in.host` is the thread whose view this answers, and naming it is the point** (contract §2
+	// a new T-6, ADR 0089): a global's storage is per-thread, so "the value of this exported global" is
+	// incomplete as a question and the public boundary has to answer for *some* thread. The host
+	// thread is the answer with a meaning an embedder can state — the one whose slice *is* the
+	// instance's, holding what instantiation initialized and what host invocations wrote. A spawned
+	// agent's copy is not reachable from here **by construction rather than by omission**: there is no
+	// tid parameter on this method, and adding one would be public API.
+	g, err := in.globalFor(&in.host, fmt.Sprintf("the export %q", name), uint64(idx))
 	if err != nil {
 		return Value{}, err
 	}
