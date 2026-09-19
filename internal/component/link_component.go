@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	bin "github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
@@ -582,7 +583,13 @@ func Instantiate(bytes []byte) (*Instantiated, error) {
 // import instances the aliases project through); the host's impls are consulted at the core boundary
 // where the canon-lowered funcs are filled.
 func InstantiateWithHost(bytes []byte, h *Host) (*Instantiated, error) {
-	c, err := Load(bytes)
+	return InstantiateWithHostFeatures(bytes, h, bin.DefaultFeatures())
+}
+
+// InstantiateWithHostFeatures is InstantiateWithHost with the caller's feature set for the
+// component's core modules (ADR 0088).
+func InstantiateWithHostFeatures(bytes []byte, h *Host, feats bin.Features) (*Instantiated, error) {
+	c, err := LoadWithFeatures(bytes, feats)
 	if err != nil {
 		return nil, err
 	}

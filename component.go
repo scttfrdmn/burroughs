@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	bin "github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/component"
 )
 
@@ -23,6 +24,46 @@ const componentsGateEnv = "BURROUGHS_COMPONENTS"
 // 2026-09-11 flip); only an explicit "0" refuses. A component is recognized (IsComponent) and, unless
 // explicitly gated off, run.
 func componentsEnabled() bool { return os.Getenv(componentsGateEnv) != "0" }
+
+// Feature names a WebAssembly proposal capability an embedder enables for a component's core
+// modules ([ComponentConfig.Features]). It is the engine's first caller-supplied capability surface
+// (ADR 0088, ruled on #798): a **named set** rather than one field per capability, because a field
+// per capability would grow the public surface every time a feature question arrives — the drift
+// that decision exists to prevent. The container is extensible; its contents are guest-driven, so
+// exactly the capabilities a real consumer needs are defined and **an unrecognized value is refused
+// by name** rather than ignored.
+type Feature string
+
+// FeatureThreads enables the threads proposal's surface — the 0xFE atomics region and shared
+// memories — for a component's core modules.
+//
+// An embedder supplies it to say what their artifact requires, which is not the same as flipping a
+// gate: `gate:threads`' default is unchanged, and a component that supplies nothing is refused
+// exactly as before. The consumer that forced this capability is a Go component: Go's compiler emits
+// atomics unconditionally — a hello-world that starts no goroutines carries over a thousand of them —
+// so no Go component can decode under the default set.
+//
+// Whether `gate:threads` off *should* admit atomics when nothing can spawn is a separate, open
+// question (#799), deliberately not answered by supplying this capability.
+const FeatureThreads Feature = "threads"
+
+// resolveFeatures maps the caller's named capabilities onto the decoder's feature set, starting from
+// the default. An unrecognized name is **refused by name**: the set must not silently accept a
+// capability this engine does not implement, which is the guard that lets the container be
+// extensible without becoming a place where typos pass.
+func resolveFeatures(fs []Feature) (bin.Features, error) {
+	feats := bin.DefaultFeatures()
+	for _, f := range fs {
+		switch f {
+		case FeatureThreads:
+			feats.Threads = true
+		default:
+			return bin.Features{}, fmt.Errorf("%w: unknown component feature %q; this build recognizes %q",
+				ErrUnsupported, string(f), string(FeatureThreads))
+		}
+	}
+	return feats, nil
+}
 
 // ComponentConfig runs a WebAssembly **component** whose world is `wasi:cli/run` — the p3 track's
 // public entry (ADR 0084 / 0085, #694), the component analogue of [WASIP1Config].
@@ -40,6 +81,12 @@ type ComponentConfig struct {
 	Stdin  io.Reader // the component's stdin; nil means an empty stream
 	Stdout io.Writer // the component's stdout; nil discards
 	Stderr io.Writer // the component's stderr; nil discards
+
+	// Features are the proposal capabilities this component's core modules require (ADR 0088).
+	// Empty — the zero value — is the engine's default set, so an existing embedder is unaffected
+	// and a component needing a gated capability is still refused by name. An unrecognized value is
+	// refused by name rather than ignored.
+	Features []Feature
 }
 
 // Run instantiates the component against a preview-2 host over the configured streams, calls its
@@ -69,7 +116,11 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	}
 	h := component.NewHost(stdout, stderr, c.Stdin)
 	h.Args = c.Args
-	in, err := component.InstantiateWithHost(wasm, h)
+	feats, ferr := resolveFeatures(c.Features)
+	if ferr != nil {
+		return 0, ferr
+	}
+	in, err := component.InstantiateWithHostFeatures(wasm, h, feats)
 	if err != nil {
 		// `gate:async` (ADR 0086) refuses an async component at bind, by name; it is a distinct gate from
 		// `gate:components`, off by default. Wrap its sentinel as ErrGated so the boundary classifies it
