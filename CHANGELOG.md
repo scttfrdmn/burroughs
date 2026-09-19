@@ -801,6 +801,23 @@ fork-driven changes.
 
 ### Changed
 
+- **ADR 0088 (`accepted`): the component path takes a caller-supplied capability set — the engine's
+  first such surface (A1 ruled on [#798](https://github.com/scttfrdmn/burroughs/issues/798); slice
+  [#800](https://github.com/scttfrdmn/burroughs/issues/800)).** Surfaced by a real consumer: Phase 4's fork
+  emits a Go program as a p3 component that Wasmtime runs and Burroughs refuses, because **Go's compiler
+  emits atomics unconditionally** — 1148 ops in a hello-world that starts no goroutines — while
+  `internal/component/loader.go:Load` hardcodes `bin.DefaultFeatures()` (no threads surface) with no knob and
+  no env override. The measurement attached to the decision **struck one option as vacuous** (all four
+  feature-resolution sites already resolve to the identical default) and **falsified a premise** (no public
+  path exposes a feature set — `Config` carries only `Strict`), so this is not the component path catching up
+  but **the engine's first caller-supplied capability surface**. Shape proposed: an extensible named-capability
+  set with **guest-driven contents** (exactly one capability, the threads proposal's surface; unrecognized
+  values refused by name) — chosen over exporting the internal features struct, a bool per capability
+  (accretion, the precedent this ADR exists to set deliberately), and functional options (a second config
+  style). `gate:threads`' default is untouched; the refusal becomes conditional on what the caller supplied
+  rather than disappearing, registered alongside the enabled path. **Stamped on the shape** (Scott, #798) as a
+  second approval distinct from A1's — a shape is public API surface; the mechanism follows in #800.
+
 - **`v1.0.0`'s requirement is restated to what is checkable, with what it gives up named in the same
   amendment (ADR 0004 amendment, approved on [#795](https://github.com/scttfrdmn/burroughs/issues/795),
   2026-09-18).** The original — *"the §4 litmus battery passing on both TSO and a weakly-ordered platform"* —
