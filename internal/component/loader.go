@@ -203,7 +203,17 @@ const (
 // section, decodes the embedded core modules through the existing core decoder, and extracts the
 // import and export names and kinds. An undefined section id, an unexpected version, or a section whose
 // structured body does not consume exactly its declared size is refused, named.
-func Load(b []byte) (*Component, error) {
+// Load decodes a component, decoding its core modules with bin.DefaultFeatures(). It is
+// LoadWithFeatures at the default set — kept so every existing caller is unchanged by ADR 0088's
+// capability surface.
+func Load(b []byte) (*Component, error) { return LoadWithFeatures(b, bin.DefaultFeatures()) }
+
+// LoadWithFeatures decodes a component, decoding its core modules with the caller's feature set
+// (ADR 0088). The set is what an embedder says their artifact requires: a Go component, for
+// instance, carries atomics whether or not the program has threads, so it cannot decode under the
+// default. A capability the caller did NOT supply is still refused by name at decode — the refusal
+// becomes conditional on the set rather than disappearing.
+func LoadWithFeatures(b []byte, feats bin.Features) (*Component, error) {
 	if len(b) < 8 || string(b[0:4]) != "\x00asm" {
 		return nil, fmt.Errorf("%w: bad magic", ErrNotComponent)
 	}
@@ -239,7 +249,7 @@ func Load(b []byte) (*Component, error) {
 
 		switch kind {
 		case SectionCoreModule:
-			m, derr := (&bin.Decoder{Features: bin.DefaultFeatures()}).DecodeModule(body)
+			m, derr := (&bin.Decoder{Features: feats}).DecodeModule(body)
 			if derr != nil {
 				return nil, fmt.Errorf("component: core module %d: %w", len(c.CoreModules), derr)
 			}

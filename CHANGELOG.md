@@ -91,6 +91,24 @@ fork-driven changes.
 
 ### Added
 
+- **The component path takes a caller-supplied capability set (ADR 0088, ruled A1 on
+  [#798](https://github.com/scttfrdmn/burroughs/issues/798), slice
+  [#800](https://github.com/scttfrdmn/burroughs/issues/800)).** `ComponentConfig.Features []Feature` — the
+  engine's **first caller-supplied capability surface** — replaces the hardcoded `bin.DefaultFeatures()` that
+  `internal/component/loader.go:Load` used for a component's core modules. One capability is defined,
+  `FeatureThreads` (the 0xFE atomics region and shared memories), because one real consumer needs it: a Go
+  component carries atomics whether or not the program has threads, so **no Go component could decode under
+  the default set**. **The refusal did not disappear, it became conditional:** with nothing supplied the
+  behaviour is exactly as before — refused by name — and an **unrecognized capability is refused by name**
+  rather than ignored (a structural guard on the surface's precedent, since with one capability defined
+  nothing but a constructed value can be unrecognized). `Load`/`InstantiateWithHost` are unchanged for every
+  existing caller; `LoadWithFeatures`/`InstantiateWithHostFeatures` are the feature-taking variants.
+  `gate:threads`' default is untouched, and what the gate *should* mean for an atomics-only guest stays open
+  (#799). Witnessed on a 180-byte synthesized fixture, both halves; the 1.8MB Go component that forced the
+  decision is **not** committed (four times this tree's component testdata) — its two-engine result (**42 on
+  Wasmtime 48.0.2 and 42 on Burroughs**, against a reading committed before the fork's emission existed) is
+  recorded on #800, verified but not CI-enforced.
+
 - **`gate:async` is ON by default — the flip (ADR 0086 amendment, forecast and stamp on #792).** A WASI-0.3
   component's async Canonical ABI now executes without opting in: a **sync-lifted** `wasi:cli/run@0.3.0`
   export with async-lowered imports runs end to end and writes its `stream<u8>` stdout byte-identically to

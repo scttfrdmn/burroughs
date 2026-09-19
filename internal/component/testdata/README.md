@@ -130,6 +130,31 @@ built-ins to instantiate one importer is the drag declined one level up. The `as
   (func (export "run") (type $rt) (canon lift (core func $calleef) async (callback $cbf))))
 ```
 
+`atomics-component-synth.wasm` is the witness for **ADR 0088**'s caller-supplied capability set: a
+180-byte component whose core module uses the **0xFE atomics region** (`i32.atomic.rmw.add`), so it
+**cannot decode under `DefaultFeatures()`** — which is the whole point. It is refused by name with no
+capability supplied, and loads (its lifted `hello` returning 42) with the threads capability supplied.
+
+**Why this fixture and not the Go component that forced the decision:** that artifact is **1.8MB** — four
+times this directory's entire contents — because it carries the Go runtime. Committing it would pay a
+large repository cost for a claim this 180-byte fixture makes exactly. The Go component's own two-engine
+result is recorded on #800: it returns **42 on Wasmtime 48.0.2 and 42 on Burroughs**, matching a reading
+committed before the fork's emission code existed. **Stated limitation:** that end-to-end result is
+therefore *verified and recorded* but **not re-run in Burroughs' CI**; this fixture is what CI enforces.
+Authored via `wasm-tools parse` (1.258.0; validates `--features all`):
+
+```wat
+(component
+  (core module $m
+    (memory (export "memory") 1)
+    (func (export "bump") (result i32)
+      (i32.atomic.rmw.add (i32.const 0) (i32.const 1)))
+    (func (export "hello") (result i32) (i32.const 42)))
+  (core instance $i (instantiate $m))
+  (alias core export $i "hello" (core func $h))
+  (func (export "hello") (result u32) (canon lift (core func $h))))
+```
+
 `async-waitset-drop-synth.wasm` is the **firing witness** for the `waitable-set.drop` (0x22) refusal (#792,
 Scott's ruling): a guest that creates a waitable set and **drops it** — the call no guest on `main` makes
 (`p3async-hello` and `p3async-cancel` both *bind* 0x22 and never call it, which is why the refusal is at the
