@@ -65,8 +65,24 @@ type waiter struct {
 //
 // # SP-2's ordering, which is why a `*thread` is a parameter
 //
-// Contract §3 SP-2 makes a thread blocked here *"count as at a safepoint"*, and SP-4 requires a stop
-// to complete *"without waking"* it. `enterBlocked`/`leaveBlocked` are that protocol — see `world`.
+// Contract §3 **SP-2 is the authority for this site, and it carries both halves**: a thread blocked here
+// *"count[s] as at a safepoint"* — SP-2 names `memory.atomic.wait` explicitly, alongside a host call —
+// and a stop therefore completes without waking it, because nothing needs to wake a thread already at a
+// safepoint. `enterBlocked`/`leaveBlocked` are that protocol — see `world`.
+//
+// **This used to cite SP-4 for the no-wake half, and SP-4's letter does not reach a futex wait.** SP-4
+// says *"stopping the world with N threads parked in **host calls** completes without waking them"*; a
+// thread parked here is not in a host call, so SP-4 is the host-call **analogue** of this guarantee
+// rather than its authority. The citation resolved and the sentence it supported was about a population
+// the clause does not name. Corrected on the #806 read-before-build, not by a sweep: nothing in the tree
+// checks which population a resolving clause reference is being used for.
+//
+// **The clauses that do NOT apply here, stated because a reader arriving from the async tier will look
+// for them.** H-4 and SP-5 (#737) name *guest-called canonical built-ins* — `waitable-set.wait`,
+// `stream`/`future` reads and writes, `subtask.cancel` — a category SP-2 could not reach, which is why
+// they had to be added. `memory.atomic.wait` is a core instruction covered by SP-2 since the original
+// text, so SP-5's two-item enumeration of blocking excursions is the scope of *that append*, not an
+// exhaustive list. Reading it as exhaustive manufactures a hole where the contract has none.
 // The mark is taken **before** the compare, so a `Stop` racing this either observes it in the `blocked`
 // term of its own predicate, or does not and is released by `enterBlocked`'s own park. What must not
 // happen is the third thing: a `Stop` that sees neither the mark nor the park, which is
