@@ -102,41 +102,54 @@ type thread struct {
 	// id is T-1's tid, assigned once at creation and never written again.
 	id ThreadID
 
-	// slot is T-4: the per-thread slot, the `g` register analog. Read as `st.t.slot` — two
-	// dereferences from a pointer the hot path already holds in a register.
+	// globals is the thread's own global storage — contract §2 **T-6**, [ADR 0089]. Indexed exactly
+	// like `Instance.globals` (imports first, then definitions), and `globalFor` resolves against
+	// *this* slice rather than the instance's, which is what makes a guest's per-thread register state
+	// per-thread.
 	//
-	// **Nothing reads it yet, and 0050 declines to benchmark the read for that reason.** The first
-	// reader is #515's safepoint check. Comparing `st.t.slot` against `st.slot` today would compare
-	// two fields neither of which is read, which is an analytic zero: it could not have come out any
-	// other way. What 0050 pre-registers instead is the cost of *carrying* the pointer, which is
-	// falsifiable on layout and allocation alone — and which passed, at a worst row of +0.94%.
+	// **This is the field ADR 0050 built the per-thread context object to carry**, and it arrives
+	// instead of the `slot uint64` this struct held for it. 0050's placement decision stands
+	// unchanged; what changed is which state hangs off it. The deleted field's own retirement
+	// condition named *"T-4's guest-visible slot accessor"*, and ADR 0089 dissolves that accessor
+	// rather than deferring it: under T-6 a guest wanting a per-thread slot at register-like cost
+	// declares a mutable global, which now *is* one, so the host-function accessor has no consumer and
+	// no path to one ([#514](https://github.com/scttfrdmn/burroughs/issues/514)). Deleted rather than
+	// re-pinned, because *a directive must not outlive its subject* was that comment's own rule about
+	// itself.
 	//
-	// No `slotOf`/`setSlot` accessors: they would be two functions nothing calls, which `deadcode`
-	// refuses and which would in any case guess at the shape #515's reader wants. The guest-visible
-	// surface for T-4 — the host function a module calls to read its own slot — is public API and
-	// does not ride a representation PR.
+	// **Imported entries are aliased, not copied**, and T-6 excludes them for a reason the
+	// representation makes structural: an import names a cell the *exporting* instance owns, so a
+	// per-agent copy of it would answer a different question than the module asked. The alias is
+	// established once at spawn, so the import/definition distinction costs nothing per access.
 	//
-	// **The suppression is weaker than the one it copies, and says so.** `stack.refs` carried this
-	// exact directive under 0002 and was at least *allocated*; this field is neither read nor
-	// written, so the pin is purely about where the slot lives. It is still the right pin: 0050
-	// exists to decide that, and landing the object without the slot would hand the placement to
-	// #515's PR — *"moving all of them later, in the PR that can least afford a representation
-	// change"*, which is option C's own argument against option B. Deleted, not kept, when the
-	// reader arrives: a directive must not outlive its subject.
+	// **The host thread's slice IS the instance's**, aliased at construction (see `link.go`). Not a
+	// main-thread special case in T-2's sense — T-2 is about blocking — and it is what keeps
+	// instantiation, the public `Global` accessor and every single-threaded behaviour identical rather
+	// than intended-identical: there is one backing array, so a const-expr evaluated during
+	// instantiation and a later `global.get` on the host thread cannot disagree.
+	globals []*global
+
+	// globalsOf is the instance `globals` is indexed in, and it exists because a global index is
+	// **module-local** while a thread can run code from more than one module.
 	//
-	// **That retirement condition has now been falsified by the work it named, and the directive
-	// stays.** This field's forecast was that *"the first reader is #515's safepoint check"*. #515's
-	// check landed ([ADR 0059]) and reads `stopReq` below, not `slot` — a stop request is engine
-	// state and T-4's slot is guest-visible state, and nothing about polling one requires reading the
-	// other. So the suppression's subject is unchanged and deleting it here would be a directive
-	// removed on a coincidence of issue numbers. What *is* corrected is the sentence: `slot`'s first
-	// reader is the host function a module calls to read its own slot, which is public API and still
-	// unwritten. A retirement condition that names a *slice* rather than a *reader* is the kind of
-	// citation that reads as satisfied the moment that slice lands, which is why the condition below
-	// now names the reader.
+	// **This was a bug before it was a field, and the failure is worth keeping.** `globalFor` first
+	// resolved against `t.globals` unconditionally, and a thread calling an *imported function* — whose
+	// body belongs to the exporting instance and whose global indices are read in that module's index
+	// space — indexed the caller's slice instead. The component tier caught it immediately:
+	// `instruction names global 0 of 0`, from a caller with no globals invoking a callee with one
+	// (`TestImportedFuncRunsOnExporterState`). Per-thread global storage is per **(thread, instance)**,
+	// not per thread, and a single slice on a thread cannot say which instance it belongs to.
 	//
-	//nolint:unused // pinned by 0050 before its first consumer; retired by T-4's guest-visible slot accessor
-	slot uint64
+	// **The limit this leaves, stated rather than discovered later.** When a thread runs code from an
+	// instance that is *not* this one, `globalFor` falls back to that instance's own globals — so a
+	// foreign instance's defined globals are shared across agents, and T-6's guarantee holds for the
+	// instance a thread was spawned in. That is guest-driven rather than principled: the only spawning
+	// guests today are single-instance, because there is no guest-reachable spawn (D-1) and the engine's
+	// own harness spawns inside one instance. **Trigger for revisiting it:** a guest that spawns *and*
+	// calls into another instance's mutable globals — at which point the storage wants keying by
+	// instance, and the cost of that keying is the thing to measure rather than assume.
+	globalsOf *Instance
+	//
 
 	// stopReq is contract §3 SP-1's epoch/stop flag: set by `Stop` on another goroutine, read by
 	// `poll` at every back-edge and call site. [ADR 0059]'s mechanism.
@@ -625,10 +638,19 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 	// whose `Stop` would then wait for it. ADR 0056's walk used to sit here on the same reasoning
 	// about a mark it could not undo; the walk is deleted (decision [0068]) and the placement rule it
 	// was the reason for is now this.
+	// **T-6's storage is built here — before `newThread`, which is where every refusal belongs** (ADR
+	// 0089). A thread whose globals could not be built must not become a member of the world: the
+	// paragraph above is the rule, and this is a new way to fail it. `threadGlobals` evaluates each
+	// defined global's initializer, which can fail exactly as it can at instantiation.
+	globals, err := in.threadGlobals()
+	if err != nil {
+		return nil, err
+	}
 	t, err := in.newThread()
 	if err != nil {
 		return nil, err
 	}
+	t.globals, t.globalsOf = globals, in
 	// **Registration has already happened, and that ordering is the whole soundness argument for the
 	// window this `go` opens.** Between `admit` returning and the goroutine's first guest instruction,
 	// a `Stop` can begin: it sets `stopReq` on this thread because it is already a member, and

@@ -50,7 +50,7 @@ func TestGlobalInitializerSeesEarlierGlobals(t *testing.T) {
 	if err := in.Deferred(); err != nil {
 		t.Fatalf("deferred: %v", err)
 	}
-	g, err := in.globalFor("test", 2)
+	g, err := in.globalFor(&in.host, "test", 2)
 	if err != nil {
 		t.Fatalf("globalFor(2): %v", err)
 	}
@@ -93,7 +93,7 @@ func TestGlobalIndexSpacePutsImportsFirst(t *testing.T) {
 		t.Fatalf("global index space is %d wide, want 2 (one import, one definition)", len(in.globals))
 	}
 	// Slot 0 is the import, now filled by the supplier at the head of the space.
-	g0, err := in.globalFor("test", 0)
+	g0, err := in.globalFor(&in.host, "test", 0)
 	if err != nil {
 		t.Fatalf("globalFor(0) (imported): %v", err)
 	}
@@ -101,7 +101,7 @@ func TestGlobalIndexSpacePutsImportsFirst(t *testing.T) {
 		t.Errorf("global 0 (imported) = %d, want 42 — the import did not resolve at slot 0", g0.num.Load())
 	}
 	// Slot 1 is the definition, at the offset the import consumed.
-	g1, err := in.globalFor("test", 1)
+	g1, err := in.globalFor(&in.host, "test", 1)
 	if err != nil {
 		t.Fatalf("globalFor(1): %v", err)
 	}
@@ -203,7 +203,7 @@ func TestGlobalSetOfARefWritesTheRefSlot(t *testing.T) {
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
-	g, err := in.globalFor("test", 0)
+	g, err := in.globalFor(&in.host, "test", 0)
 	if err != nil {
 		t.Fatalf("globalFor: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestGlobalOutOfRangeIsTheLayeringDebt(t *testing.T) {
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
-	_, err := in.globalFor("instruction", 4)
+	_, err := in.globalFor(&in.host, "instruction", 4)
 	if !errors.Is(err, ErrNotValidated) {
 		t.Errorf("got %v, want ErrNotValidated", err)
 	}
@@ -351,7 +351,7 @@ func TestImmutableGlobalIsNotRefusedHere(t *testing.T) {
 	if trap != nil {
 		t.Fatalf("trap: %v", trap)
 	}
-	g, err := in.globalFor("test", 0)
+	g, err := in.globalFor(&in.host, "test", 0)
 	if err != nil {
 		t.Fatalf("globalFor: %v", err)
 	}

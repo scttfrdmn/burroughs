@@ -356,13 +356,110 @@ a futex median of 250 ns on the same machine. Two readings the registration did 
   address, a fresh address holds zero, and zero is what the wait expects — so the not-equal arm is unreachable
   by construction rather than unobserved. `TestAWaitWhoseCellChangedDoesNotQueue` is where that arm is covered.
 
+### T-6 — a guest's non-shared global storage is per-agent
+
+> A guest's non-shared global storage is per-agent. Each agent created under T-1 has its own storage for
+> every global the module *defines*; an imported global names a cell the exporting instance owns, and its
+> storage is not duplicated. The engine initializes a spawned agent's defined globals from the module's
+> initializers, as at instantiation. The agent the host observes through the public boundary is the
+> instance's initial agent, whose storage is the instance's.
+
+- **Shape:** outcome
+- **Blocked by:** nothing — landed with [ADR 0089](decisions/0089-non-shared-globals-are-per-agent-because-a-guests-per-thread-state-is-its-whole-global-set-and-t-4-sized-it-at-one.md) (#807), on the #806 stamp.
+
+**The first §2 clause the fork's own work put a case behind**, and the occasion is worth recording because
+it is not a reading of §2: Go's wasm backend keeps its entire register bank in mutable globals (`SP`→0,
+`CTXT`→1, `g`→2, `RET0..3`→3–6, `PAUSE`→7), so a shared global space meant a second M's first two
+instructions erased the first M's stack pointer. Four facts were witnessed before the clause was drafted;
+they are on [#805](https://github.com/scttfrdmn/burroughs/issues/805).
+
+**Storage is per (agent, INSTANCE), which the clause's "the module *defines*" carries and a reader can
+miss.** A global index is module-local, so an agent running an *imported function* executes a body whose
+indices are read in the exporting module's index space. The engine keys an agent's storage to the
+instance it is indexed in; a foreign instance's defined globals therefore stay shared across agents,
+which is recorded at `thread.globalsOf` with its trigger (a guest that spawns *and* calls into another
+instance's mutable globals).
+
+#### Case `t6-a-spawned-agents-global-write-is-not-observable-by-its-spawner`
+
+- **Discharges:** T-6
+- **Allowed:** the spawner reads **111** — its own write — from a defined `(global $g (mut i32))` after a
+  spawned agent has demonstrably written 222 to that global's index.
+- **Forbidden:** the spawner reads **222**. That is the pre-T-6 reading, and it is the exact mechanism
+  that corrupts a second M's `SP`. Any other value is an instrument fault.
+- **Witness:** the child's execution is observed through a **rendezvous in the shared memory**, not
+  through the global — the parent spins on an atomic cell the child stores to, and only then reads the
+  global. A case that synchronised *through the global under test* could not distinguish per-agent
+  storage from a write that never happened.
+- **Floor:** every run must close the rendezvous or report the deadline; the deadline expiring is a
+  **forbidden outcome, not a discard**, because it means no agent ran the child.
+- **Arbiter:** neither — per-agent storage is a property of the engine's own allocation, not of the
+  hardware's memory model. Run on both anyway, on the same grounds as T-1's case: "expected to agree" is
+  a prediction this suite can check.
+- **Status:** implemented — TestASpawnedAgentsWriteToADefinedGlobalIsNotObservableByItsSpawner
+
+#### Case `t6-a-spawned-agents-global-is-freshly-initialized-not-inherited`
+
+- **Discharges:** T-6 (*"initializes … from the module's initializers, as at instantiation"*)
+- **Allowed:** the child reads **7** — the declared initializer — from its own storage, after the spawner
+  has written 99 to that global.
+- **Forbidden:** the child reads **99** (copy-on-spawn). **Both readings satisfy "per-agent"**, and no
+  argument about the mechanism's shape separates them, which is why this is its own case rather than an
+  assertion inside the one above.
+- **Witness:** the child stores what it read into a second memory cell before closing the rendezvous, so
+  the value under test crosses to the observer through memory rather than through a return.
+- **Floor:** as above — the rendezvous must close or the deadline is the verdict.
+- **Arbiter:** neither, for the case above's reason.
+- **Status:** implemented — TestASpawnedAgentsDefinedGlobalIsFreshlyInitializedNotInherited
+
+#### Case `t6-an-imported-global-stays-shared-across-agents`
+
+- **Discharges:** T-6 (*"an imported global names a cell the exporting instance owns"*)
+- **Allowed:** the spawner reads **222** — the child's write — from an **imported** mutable global.
+- **Forbidden:** the spawner reads **111**. A per-agent copy of an import would answer a different
+  question than the module asked.
+- **Witness:** the rendezvous shape above. **This is the one arm whose correct answer is also the pre-T-6
+  answer**, which is why it needs its own case: a mechanism that copied every slot would pass every other
+  case in this entry.
+- **Floor:** as above.
+- **Arbiter:** neither.
+- **Status:** implemented — TestAnImportedGlobalStaysSharedAcrossAgents
+
+**Its first injection was a NO-OP, and that is recorded rather than counted as a falsification.** Setting
+`off := 0` in `threadGlobals` — "treat imports as definitions" — left the case **passing**, and not
+because the case is strong: the module imports its global and defines none, so the loop never runs and
+`off` cannot matter. **An injection that cannot reach the code under test reads exactly like a control
+that survived.** The injection that does reach it copies the imported slots explicitly, and under that
+one the case fails with `parent read 111 ... want 222`.
+
+**The scope claim has its own witness, because a clause's scope can be as unfalsifiable as its body.**
+T-6 says *non-shared*, so it stays correct when the shared-everything-threads encoding is accepted; the
+claim that the category is **total today** rests on the decoder refusing that encoding.
+`TestASharedGlobalIsRefusedByName` witnesses the refusal firing on hand-built bytes for mutability bytes
+`0x02` and `0x03` (bit 1 = shared), with `0x00`/`0x01` asserted to decode so the refusals are not
+vacuous. Not a litmus case — a decode verdict is not an interleaving.
+
+**The mechanism's measured cost, recorded against the clause rather than only in the ADR.** #807's
+forecast of no significant regression was **falsified**: `globalbench` geomean **+1.55% on x86-64**
+(`janus.local:measured`, 0 concurrent tasks at submit) and **+1.79% on arm64**. The premise died inside
+the slice — the per-(agent, instance) repair restored the branch the design had avoided — and `GetV128`
+flips sign between architectures, reported and not explained. [#809](https://github.com/scttfrdmn/burroughs/issues/809)
+carries the per-frame resolution behind a trigger.
+
 ### T-4 — the per-thread slot
+
 
 > The engine MUST provide a per-thread slot readable at register-like cost (the `g` register analog),
 > stable across host calls and stack switches.
 
 - **Shape:** structural
-- **Blocked by:** nothing — the mechanism landed with ADR 0050 (#514).
+- **Blocked by:** nothing *for this battery*, and the line this replaces over-claimed. It read
+  *"the mechanism landed with ADR 0050 (#514)"*, which a reader takes as T-4 satisfied; what landed was
+  the **field's placement**, and `thread.slot` was `//nolint:unused` — neither read nor written — with the
+  guest-visible accessor unwritten. **Corrected 2026-09-19 (#807):** ADR 0089 **dissolves** that accessor
+  rather than deferring it, because under **T-6** a guest wanting a per-thread slot at register-like cost
+  declares a mutable global, which now *is* one. The field is deleted; T-4 keeps register-cost and
+  stability, and **T-6 owns the extent** of per-agent global state (T-4's dated append says so in §2).
 - **Why no litmus case:** "register-like cost" is a cost claim, and a cost claim's oracle is a benchmark
   rather than an outcome tuple — no interleaving can witness it. The stability half (*"stable across host
   calls and stack switches"*) **is** outcome-shaped, but §7's stack switching does not exist, so the case

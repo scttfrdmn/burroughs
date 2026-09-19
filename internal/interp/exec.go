@@ -878,14 +878,14 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 		// global's declared type, not of the opcode.
 
 		case 0x23: // global.get
-			g, err := in.globalFor("instruction", ins.Imm0)
+			g, err := in.globalFor(st.t, "instruction", ins.Imm0)
 			if err != nil {
 				return err
 			}
 			g.get(st)
 
 		case 0x24: // global.set
-			g, err := in.globalFor("instruction", ins.Imm0)
+			g, err := in.globalFor(st.t, "instruction", ins.Imm0)
 			if err != nil {
 				return err
 			}

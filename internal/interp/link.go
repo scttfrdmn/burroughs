@@ -221,6 +221,19 @@ func InstantiateLinked(m *binary.Module, imp Imports) (*Instance, *Trap, error) 
 	// stack with no thread as a *live* state rather than as a test-only one. No allocation happens:
 	// `host` is a value field on a struct this function already allocates.
 	in.host.id = ThreadID(in.nextTID.Add(1))
+	// And the host thread's global storage **aliases** the instance's, here rather than after the
+	// globals loop — contract §2 T-6, [ADR 0089][0089]. The position is forced, not chosen: a global's
+	// initializer is a const-expr that `in.run` executes through the general interpreter, so
+	// `global.get` inside one reaches `globalFor` and therefore reads *this* slice. An alias set after
+	// the loop would make every initializer that reads an earlier global resolve against a nil slice.
+	//
+	// Aliasing rather than copying is also what keeps the loop below correct: it fills
+	// `in.globals[globOff+i]` as it goes so global N is visible while N+1's initializer runs, and both
+	// slice headers share one backing array, so the host thread sees each slot the instant it is
+	// filled. Linking fills the import slots through the same array for the same reason.
+	//
+	// [0089]: ../../docs/decisions/0089-non-shared-globals-are-per-agent-because-a-guests-per-thread-state-is-its-whole-global-set-and-t-4-sized-it-at-one.md
+	in.host.globals, in.host.globalsOf = in.globals, in
 	// And it joins the instance's stop-the-world set here, at the same point and for the same reason:
 	// SP-1's `Stop` walks `world.live`, so a thread registered later than its first instruction is a
 	// thread a stop can silently fail to reach — the arrival count would be right about a population

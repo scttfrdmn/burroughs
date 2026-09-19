@@ -24,9 +24,32 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
-Nothing yet. Phase 4's first slice (the real-threads fork) lands in the fork's own
-private tree, not here — ADR 0087 §3. A Burroughs-side change arrives only if the fork
-surfaces a missing Burroughs mechanism.
+**The fork surfaced a missing Burroughs mechanism, which is the one case ADR 0087 §3
+admits** — so this block is no longer empty, and the sentence it replaces said so as its
+own condition rather than as a prediction.
+
+### Changed
+
+- **A module-defined non-shared global is now per-agent**, so a spawned thread reads and
+  writes its own instance of it, initialized from that global's own initializer expression
+  ([#807](https://github.com/scttfrdmn/burroughs/issues/807), ADR 0089). **Imported globals
+  stay shared** — an import names a cell the exporting instance owns. Previously every agent
+  shared `Instance.globals`, which made a Go guest unable to run two Ms at all: Go's wasm
+  backend keeps its whole register bank in mutable globals (`SP`→0, `g`→2, …), so a second M's
+  first two instructions erased the first M's stack pointer
+  ([#805](https://github.com/scttfrdmn/burroughs/issues/805)).
+  - Storage is per **(thread, instance)**, not per thread: a thread running an *imported
+    function* executes a body whose global indices are read in the exporting module's index
+    space. Getting that wrong was caught by the component tier as
+    `instruction names global 0 of 0`.
+  - **Costed, not assumed, and the forecast was falsified:** `globalbench` geomean
+    **+1.55% on x86-64** (`janus.local:measured`, 0 concurrent tasks) and **+1.79% on arm64**,
+    where #807 pre-registered no significant regression. `GetV128` flips sign between
+    architectures and that is reported rather than explained. The cheaper per-frame resolution
+    is filed with its trigger at [#809](https://github.com/scttfrdmn/burroughs/issues/809).
+  - `thread.slot` is **deleted**: ADR 0089 dissolves the T-4 accessor it was pinned for
+    ([#514](https://github.com/scttfrdmn/burroughs/issues/514)), since a guest wanting a
+    per-thread slot at register-like cost can now declare a mutable global.
 
 ## [0.6.0] - 2026-09-18
 *Implements contract v0.1.*

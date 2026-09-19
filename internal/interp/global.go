@@ -148,6 +148,49 @@ type global struct {
 // numeric one and failed its arity check. `constExpr` derives the shape from `g.Type` via
 // `countByArray`, so the three fields are assigned from the one result and a fourth shape arriving in
 // `binary.ValType` is a change to `countByArray`, not to this function.
+// threadGlobals builds one spawned thread's global storage — contract §2 T-6's mechanism, [ADR 0089].
+//
+// The slice is the instance's, with every **defined** entry replaced by a fresh `*global` and every
+// **imported** entry left as the instance's own pointer. That is T-6's exclusion made structural rather
+// than checked: an import names a cell the exporting instance owns, so a per-agent copy would answer a
+// different question than the module asked, and because the distinction is settled *here* it costs
+// nothing at `global.get`.
+//
+// **Initializers are re-evaluated rather than the current values copied**, which is what makes the
+// semantics *fresh initialization* and not inheritance: a global declared `(global i32 (i32.const 7))`
+// reads 7 in a spawned thread however many times the spawner has written it. Fresh-init is what a
+// separate instance would give, which is where both upstream threading models converge, and it is the
+// half of this decision an observer can falsify.
+//
+// **Evaluating through the host thread is correct for every module the validator admits**, and the
+// reason is worth stating because it looks like a hole: a const-expr may read an *earlier global*, and
+// `constExpr` runs on `&in.host`, so a fresh copy's initializer reads the **host thread's** globals
+// rather than this thread's. A const-expr may only read an **immutable** global (`instr.go`'s
+// `global.get` of an immutable), and an immutable global holds the same value in every thread, so the
+// two readings coincide. For a module that is not validated they can differ — and this engine does not
+// judge modules (`globalFor` declines the mutability check for that reason), so the behaviour there is
+// unspecified rather than defended.
+//
+// Nil slots propagate as nil: a defined global whose initializer deferred at instantiation fails here
+// too, and `spawn` refuses before the thread becomes a member of the world. An imported slot nothing
+// supplied stays nil and `globalFor` reports it with the message it already has.
+//
+// [ADR 0089]: ../../docs/decisions/0089-non-shared-globals-are-per-agent-because-a-guests-per-thread-state-is-its-whole-global-set-and-t-4-sized-it-at-one.md
+func (in *Instance) threadGlobals() ([]*global, error) {
+	gs := make([]*global, len(in.globals))
+	copy(gs, in.globals)
+	off := in.mod.ImportedGlobals()
+	for i := range in.mod.Globals {
+		g, err := in.newGlobal(in.mod.Globals[i])
+		if err != nil {
+			return nil, fmt.Errorf("%w: a spawned thread's copy of global %d could not be initialized: %w",
+				ErrThreadEntry, off+i, err)
+		}
+		gs[off+i] = g
+	}
+	return gs, nil
+}
+
 func (in *Instance) newGlobal(g binary.Global) (*global, error) {
 	v, err := in.constExpr(g.Init, g.Type, "a global initializer")
 	if err != nil {
@@ -202,12 +245,36 @@ func (g *global) loadRef() ref {
 // `assert_invalid` string, and `global.wast:249` onward assert exactly that — so enforcing it
 // here would put #9's answer somewhere #9 cannot be tested from, and would make this package
 // judge a module. The `mutable` field is recorded and unread until the validator wants it.
-func (in *Instance) globalFor(what string, idx uint64) (*global, error) {
-	if idx >= uint64(len(in.globals)) {
-		return nil, fmt.Errorf("%w: %s names global %d of %d",
-			ErrNotValidated, what, idx, len(in.globals))
+// **The thread is a parameter, because a global's storage is per-thread** — contract §2 T-6,
+// [ADR 0089]. `t.globals` is indexed identically to `in.globals` (imports first, then definitions) and
+// for the host thread it *is* `in.globals`, aliased at construction, so this resolves in exactly one
+// indexing whichever thread asks. The import/definition distinction T-6 draws is settled once at
+// spawn, not here: an imported slot in a spawned thread's slice is the instance's own pointer.
+//
+// The bounds and nil checks read `t.globals` while the *messages* quote the module's index space, which
+// is the same space: a thread's slice is built at the instance's length and never resized.
+//
+// [ADR 0089]: ../../docs/decisions/0089-non-shared-globals-are-per-agent-because-a-guests-per-thread-state-is-its-whole-global-set-and-t-4-sized-it-at-one.md
+func (in *Instance) globalFor(t *thread, what string, idx uint64) (*global, error) {
+	// Per-thread storage applies only to the instance the thread's slice is indexed in — see
+	// `thread.globalsOf` for the cross-instance call this guards and for the limit it leaves. One
+	// pointer compare, and it is what keeps an imported function's body reading its *own* module's
+	// index space.
+	//
+	// **Nil-tolerant, matching `poll`'s treatment of the same receiver** (`if t == nil || …`): a stack
+	// with no thread is a test-only state this package already admits, and the fallback it lands on is
+	// the instance's own globals — the pre-T-6 behaviour, which is the right default for a caller that
+	// could not say which thread is asking. Established by a nil dereference here, not by taste:
+	// `TestGlobalGetOfARefUsesTheRefStack` builds a bare `&stack{}` and reaches this line.
+	gs := in.globals
+	if t != nil && t.globalsOf == in {
+		gs = t.globals
 	}
-	if in.globals[idx] == nil {
+	if idx >= uint64(len(gs)) {
+		return nil, fmt.Errorf("%w: %s names global %d of %d",
+			ErrNotValidated, what, idx, len(gs))
+	}
+	if gs[idx] == nil {
 		// A reserved slot with nothing in it, reported by *which* nothing — memoryFor's
 		// split, and it transfers unchanged because the index space's shape is the same
 		// fact for every extern kind. Below the import offset is an imported global nothing
@@ -221,7 +288,7 @@ func (in *Instance) globalFor(what string, idx uint64) (*global, error) {
 		return nil, fmt.Errorf("%w: global %d was declared but not initialized: %w",
 			ErrNotValidated, idx, in.deferred)
 	}
-	return in.globals[idx], nil
+	return gs[idx], nil
 }
 
 // globalShape is which of a global's three storage layouts its declared type selects.
