@@ -53,6 +53,18 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **Two `internal/wasi` comments stated a single-thread premise as general when it is a property of
+  the guest population they were measured on.** `GuestFeatures`' *"a measured Go wasip1 guest uses no
+  wasm atomics or shared memory … the checkable form of 'gate:threads is not load-bearing for this
+  workload'"* is true of a **stock** Go guest and false of Phase 4's fork, which emits a shared memory
+  and atomics under `GOEXPERIMENT=burroughsspawn`. And `host.fds`' *"no lock guards it … a guest that
+  used wasm threads would change that"* names a guest that now exists. Comment-only, dated, with the
+  fork named as what narrows each: the decode set is **not** widened (that would enable the 0xFE region
+  for every WASIP1 run on a default-off gate), and the unlocked table is left as-is with the note that
+  what keeps it sound is `GuestFeatures`' `Threads`-off decode rather than the stated premise — so if
+  that set ever gains `Threads`, the table needs a lock in the same change. Found by building the fork,
+  not by re-reading the code.
+
 - **`futex.go` cited §3 SP-4 for a guarantee whose population SP-4 does not name.** SP-4 is
   scoped to threads *"parked in host calls"*; a thread parked in `memory.atomic.wait` is not
   one. **SP-2** is the authority for that site and carries both halves, because it names
