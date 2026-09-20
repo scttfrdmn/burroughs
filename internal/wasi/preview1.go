@@ -66,6 +66,20 @@ type host struct {
 	// — the reason gate:threads is not load-bearing here), so host calls are sequential. A guest that
 	// used wasm threads would change that, and would be behind gate:threads, which this workload is
 	// not.
+	//
+	// **The guest that comment anticipated now exists, and this is a dated note rather than a repair
+	// (2026-09-20).** Phase 4's fork emits a `wasip1` guest with a shared memory and real Ms under
+	// `GOEXPERIMENT=burroughsspawn`; two of its agents doing I/O would reach this map concurrently, and
+	// an unlocked `map` under concurrent access is a data race — not a stale read.
+	//
+	// **What keeps it sound today is not the comment's premise but `GuestFeatures`' decode set.** That
+	// set has `Threads` off, so a shared-memory guest cannot decode through `Run` at all; the
+	// single-thread property is *enforced* by the front door rather than assumed about the workload. The
+	// two facts are linked, and a future change to either one alone would break this map — so if
+	// `GuestFeatures` ever gains `Threads`, this table needs a lock in the same change.
+	//
+	// The fork's own harness therefore does **not** reuse this table: it supplies its own preview-1
+	// handlers, so nothing here changes and no threaded guest reaches this map.
 	fds        map[uint32]*fdEntry
 	nextFD     uint32   // the next fd path_open hands out
 	preopenFDs []uint32 // preopen dir fds in discovery order (3, 4, …)

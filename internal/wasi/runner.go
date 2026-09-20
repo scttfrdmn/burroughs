@@ -42,6 +42,18 @@ type Preopen struct {
 // baseline — and **no wasm atomics or shared memory** (ADR 0080's finding 2). A guest that decodes
 // under this set needs no threads feature, which is the checkable form of "`gate:threads` is not
 // load-bearing for this workload."
+//
+// **Narrowed 2026-09-20: that is true of a STOCK Go guest and false of the Phase 4 fork's.** Under
+// `GOEXPERIMENT=burroughsspawn` the fork emits a guest with a **shared memory and atomics** — it has a
+// spawn door and real Ms — so it does **not** decode under this set, and `gate:threads` **is**
+// load-bearing for it. The sentence above is kept because it remains true of the population it was
+// measured on; what it lacked was the qualifier. Same shape as ADR 0088's occasion one path over: a
+// hardcoded `DefaultFeatures()` refusing the fork's atomics, found by building the fork rather than by
+// re-reading the code.
+//
+// Not a defect in ADR 0080 and not a reason to widen this set: a stock guest needs no threads feature,
+// and widening would enable the 0xFE region for every WASIP1 run on a default-off gate. The fork's
+// harness supplies its own feature set instead (ADR 0088's shape, one layer down).
 func GuestFeatures() bin.Features { return bin.DefaultFeatures() }
 
 // Run decodes, validates, and instantiates the guest with the preview-1 host module, then invokes
