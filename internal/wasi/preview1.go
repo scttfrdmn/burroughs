@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
@@ -80,9 +81,66 @@ type host struct {
 	//
 	// The fork's own harness therefore does **not** reuse this table: it supplies its own preview-1
 	// handlers, so nothing here changes and no threaded guest reaches this map.
+	//
+	// **2026-09-22 (#813): THAT CONDITION FIRED, and the note above is what makes this a repair rather
+	// than a discovery.** [Config.Features] now lets a caller supply `Threads`, so the front door no
+	// longer enforces the single-thread property and the lock the note demanded *"in the same change"*
+	// is `mu` below. The fork's harness still does not reuse this table; what changed is that the
+	// public path can now admit a guest that would.
+	//
+	// **The prior question was asked before the lock, and it goes the other way from §2 T-6.** T-6 made
+	// a guest's non-shared globals **per-agent** because Go's register bank is per-*thread* state. A
+	// WASI fd table is **process** state: a Go program opens a file on one goroutine and reads it on
+	// another, so per-agent tables would break `os.Open` followed by a read on a second M. Shared and
+	// locked is therefore the correct answer here, and the contrast is recorded because
+	// *synchronising shared state does not ask whether it should be shared* — the question has to be
+	// asked, and this time it answers "shared" (cf. #663, where the honest answer was to delete the
+	// second copy rather than synchronise it).
+	mu         sync.Mutex
 	fds        map[uint32]*fdEntry
 	nextFD     uint32   // the next fd path_open hands out
 	preopenFDs []uint32 // preopen dir fds in discovery order (3, 4, …)
+}
+
+// THE TABLE IS MUTABLE AND ITS ENTRIES ARE NOT, which is what makes a map-level lock sufficient rather
+// than a lock per entry. Every `fdEntry` field (`reader`, `writer`, `preopen`, `file`) is set at
+// construction and never written again, and `preopenDir` is likewise immutable — so once `fd` has
+// handed back a pointer, reading through it needs no lock, and `*os.File`'s own concurrency contract
+// covers the descriptor beneath it.
+//
+// **That invariant is a precondition on the next slice, not just a note here.** ADR 0083 deferred
+// `fd_seek` and directory enumeration; a `fd_readdir` that cached a dirent cursor *in the entry* would
+// make entries mutable and silently invalidate this reasoning while every one of these accessors kept
+// compiling. Whoever adds a mutable field to `fdEntry` owes the entry a lock or this comment a
+// correction.
+
+// fd returns the entry for a guest fd, or nil for `EBADF`. Held for the map read only.
+func (h *host) fd(n uint32) *fdEntry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.fds[n]
+}
+
+// addFD allocates the next fd for an opened file and returns it.
+func (h *host) addFD(e *fdEntry) uint32 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.nextFD
+	h.nextFD++
+	h.fds[n] = e
+	return n
+}
+
+// dropFD removes an fd, reporting whether it was present. One call rather than a read followed by a
+// delete, because the two-step form is a race even under a lock held only for each step.
+func (h *host) dropFD(n uint32) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.fds[n]; !ok {
+		return false
+	}
+	delete(h.fds, n)
+	return true
 }
 
 // entry is one import: the wasm type the linker matches against, and the Go function behind it. The
@@ -275,7 +333,7 @@ func (h *host) fdWrite(c *interp.Caller, args []interp.Value) ([]interp.Value, e
 
 // writerFor maps a wasm fd to its sink; only stdout (1) and stderr (2) are writable in this slice.
 func (h *host) writerFor(fd uint32) io.Writer {
-	if e := h.fds[fd]; e != nil {
+	if e := h.fd(fd); e != nil {
 		return e.writer
 	}
 	return nil
@@ -324,7 +382,7 @@ func (h *host) fdRead(c *interp.Caller, args []interp.Value) ([]interp.Value, er
 
 // readerFor maps a wasm fd to its source; only stdin (0) is readable in this slice.
 func (h *host) readerFor(fd uint32) io.Reader {
-	e := h.fds[fd]
+	e := h.fd(fd)
 	if e == nil {
 		return nil
 	}
@@ -441,7 +499,7 @@ func (h *host) schedYield(_ *interp.Caller, _ []interp.Value) ([]interp.Value, e
 // fdFdstatGet reports stdio (0,1,2) as character devices with generous rights, which is what the Go
 // runtime probes at startup to classify its standard streams. A non-stdio fd is `EBADF`.
 func (h *host) fdFdstatGet(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
-	e := h.fds[u32(args, 0)]
+	e := h.fd(u32(args, 0))
 	if e == nil {
 		return ret(errBadf), nil
 	}
@@ -465,7 +523,7 @@ func (h *host) fdFdstatGet(c *interp.Caller, args []interp.Value) ([]interp.Valu
 // fdPrestatGet reports no preopens by returning `EBADF` for every fd, which terminates the Go
 // runtime's preopen-discovery loop at its first probe. Filesystem is out of scope for this slice.
 func (h *host) fdPrestatGet(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
-	e := h.fds[u32(args, 0)]
+	e := h.fd(u32(args, 0))
 	if e == nil || e.preopen == nil {
 		// Not a preopen — `EBADF` ends the runtime's discovery loop past the last granted directory.
 		return ret(errBadf), nil
@@ -572,13 +630,13 @@ func writeEvent(c *interp.Caller, ptr uint32, userdata uint64, errno uint16, evT
 
 func (h *host) fdClose(_ *interp.Caller, args []interp.Value) ([]interp.Value, error) {
 	fd := u32(args, 0)
-	e := h.fds[fd]
+	e := h.fd(fd)
 	if e == nil {
 		return ret(errBadf), nil
 	}
 	if e.file != nil {
 		_ = e.file.Close()
-		delete(h.fds, fd)
+		h.dropFD(fd)
 	}
 	// stdio and preopens: closing the guest's view succeeds without touching the host stream or dir.
 	return ret(errSuccess), nil
@@ -590,7 +648,7 @@ func (h *host) fdFdstatSetFlags(_ *interp.Caller, _ []interp.Value) ([]interp.Va
 
 func (h *host) fdPrestatDirName(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
 	fd, pathPtr, pathLen := u32(args, 0), u32(args, 1), u32(args, 2)
-	e := h.fds[fd]
+	e := h.fd(fd)
 	if e == nil || e.preopen == nil {
 		return ret(errBadf), nil
 	}

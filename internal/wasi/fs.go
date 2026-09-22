@@ -63,6 +63,13 @@ type preopenDir struct {
 }
 
 // initFDs builds the fd table: stdio at 0/1/2, then a preopen dir per granted directory at 3.. Each
+//
+// **It writes the table directly rather than through the accessors, and that is the one place that is
+// correct.** It runs inside [Run] before `_start` is invoked, so no guest code and therefore no second
+// agent exists yet; taking `h.mu` here would be a lock with no second party. Stated because it is the
+// sole exemption from "the table is reached through `fd`/`addFD`/`dropFD`" — an unexplained exemption
+// is how a rule stops being auditable, and `TestFDTableIsReachedThroughAccessors` names this function
+// explicitly rather than allowing any construction-looking site.
 // preopen's host path is resolved (made absolute, symlinks followed) up front, so the escape check
 // later is resolved-against-resolved. A host path that is not a directory is a configuration error and
 // fails the run — the embedder named something the guest cannot be given.
@@ -103,7 +110,7 @@ func (h *host) initFDs(preopens []Preopen) error {
 
 // preopenAt returns the preopen directory a dir fd names, or nil if the fd is not a preopen.
 func (h *host) preopenAt(fd uint32) *preopenDir {
-	if e := h.fds[fd]; e != nil {
+	if e := h.fd(fd); e != nil {
 		return e.preopen
 	}
 	return nil
@@ -212,12 +219,10 @@ func (h *host) pathOpen(c *interp.Caller, args []interp.Value) ([]interp.Value, 
 	if err != nil {
 		return ret(errnoForPathError(err)), nil
 	}
-	fd := h.nextFD
-	h.nextFD++
-	h.fds[fd] = &fdEntry{file: f}
+	fd := h.addFD(&fdEntry{file: f})
 	if e := mWriteU32(c, u32(args, 8), fd); e != errSuccess {
 		_ = f.Close()
-		delete(h.fds, fd)
+		h.dropFD(fd)
 		return ret(e), nil
 	}
 	return ret(errSuccess), nil
@@ -246,7 +251,7 @@ func (h *host) pathFilestatGet(c *interp.Caller, args []interp.Value) ([]interp.
 
 // fdFilestatGet stats an open fd. Signature: fd, statptr → errno.
 func (h *host) fdFilestatGet(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
-	e := h.fds[u32(args, 0)]
+	e := h.fd(u32(args, 0))
 	if e == nil {
 		return ret(errBadf), nil
 	}

@@ -52,3 +52,78 @@ So this is **not the component path catching up.** It is **the engine's first ca
 - **One capability, not a set of them.** Every other proposal stays unexposed and is refused by name if named. A second capability arrives with a second consumer.
 - **This is the precedent.** The next feature question arrives at this surface, in this shape. That is the point of settling it in an ADR rather than in the patch that needed it.
 - **The stamp is Scott's**, and the mechanism holds for it. No code lands on this ADR alone.
+
+## Append, 2026-09-22 — the trigger fired: the WASIP1 path is this precedent's second consumer (#813)
+
+**This ADR's own deferral named the site.** The Consequences above read: *"The same gap exists on the core and
+WASIP1 paths and is deliberately left there. `burroughs.go:Instantiate` and `wasi.go:IsWASIP1Command` hardcode
+the same default… Recorded with its trigger: a core-path consumer that needs it."* The consumer arrived, and the
+trigger pointed at `wasi.go:IsWASIP1Command` by name — which is a deferral's trigger doing the job the law
+family asks of one (*a deferral's trigger is a hypothesis about its consumer*), rather than the two instances
+where a trigger of mine named the wrong event and sat until something unrelated walked into it.
+
+**Ruled as execution, not decision (Scott, 2026-09-22):** *"ADR 0088 set the precedent — a caller-supplied
+capability set, extensible named capabilities, unrecognized refused by name — and this is that precedent's
+second application rather than a new decision… Scott ruled A1 on the principle; applying it to a second path is
+execution."* So this is an append rather than a new ADR — and it deliberately does not name the number one
+would have had, because the citation sweep is right to resolve every `ADR NNNN` it finds and a number
+chosen *not* to exist is a reference with no target. The `Status:` above needs no second stamp: the shape it
+cites is the shape being reused, unchanged.
+
+### The consumer, and why the fix widens rather than repairs
+
+Phase 4's fork emits Go `wasip1` guests, and **every one of them carries atomic instructions** — 1025 in a
+hello-world that starts no goroutines. `GuestFeatures()` is plain `DefaultFeatures()`, so the whole public
+wasip1 path refuses them.
+
+**Attributed by measurement, because a toolchain claim is a hypothesis until run:**
+
+| toolchain | atomic ops, wasip1 hello-world | `IsWASIP1Command` |
+|---|---|---|
+| released **go1.27.1** | **0** | **true** |
+| the fork's base (go1.28-devel) | **1025** | false — refused |
+
+The atomics are `c11c94ec47` *"make wasm atomic Or8/And8/And/Or genuinely atomic (D19c zombie fix)"*, author
+`scttfrdmn`, 2026-07-24 — **this project's own earlier campaign, not upstream Go.** Two things follow, and the
+second is why this append states the attribution at all: Burroughs' public wasip1 surface is **not** broken for
+today's Go and this is not an ecosystem compatibility finding; and the capability is required by *our* guests,
+so the change **widens a surface rather than repairing a defect**, which is what keeps it inside 0088's ruling
+instead of being a grave.
+
+### What the trigger did NOT anticipate, and it is the substantive half
+
+The deferral assumed the gap's consequence was *"a guest using atomics is equally unloadable"* — a permission
+problem. On the wasip1 path it is also an **identity** problem, because detection decodes:
+
+> `IsWASIP1Command` returned `(false, …)` for a module that imports `wasi_snapshot_preview1` and exports
+> `_start`. The CLI then printed **"this module is not one"** — a false statement about the module. It *is* a
+> wasip1 command; this build is not permitted to decode it.
+
+That is the **face-4 family** — *a call returning false reads as "nothing to do" when it means "cannot be
+reached"* — and it is the first instance of that family found in Burroughs' own public surface rather than in
+Go's runtime. **Detection answers *what is this*; capability answers *may I run it*.** Conflating them makes the
+engine deny a module's identity on the strength of a gate, and the `(bool, error)` signature that was designed
+to let a caller distinguish them is exactly what the CLI then discarded by testing `derr == nil && isCmd`.
+
+So the consequence recorded here, beyond the field: **a capability-aware detection form, and a call site that
+says which of the two things it means.** Preserving `IsWASIP1Command`'s existing contract is deliberate — its
+doc already says an undecodable module is `(false, err)` and that the caller chooses — so the repair is a
+capability-aware sibling plus a call site that stops flattening the two channels, not a signature change.
+
+### And the CLI supplied capabilities on NEITHER path
+
+Measured while implementing: `cmd/burroughs/run.go` constructs `ComponentConfig` **without** `Features`, so the
+capability this ADR added in 2026-09-18 has never been reachable from `burroughs run` either. Slice 1's
+two-engine claim runs through an internal test for that reason (recorded on #802's close). One CLI flag serves
+both paths; wiring only the wasip1 half would leave an asymmetry with no reason a reader could recover.
+
+### What is unchanged
+
+- **`gate:threads`' default is untouched**, on both paths. Supplying a capability is still an embedder stating
+  what their artifact requires.
+- **Unrecognized names are still refused by name**, and the refusal is still witnessed *firing* with the
+  capability withheld — not inferred from the permit path working.
+- **[#799](https://github.com/scttfrdmn/burroughs/issues/799) (B2) is still open and unscheduled.** Whether
+  `gate:threads` off *should* admit atomics when nothing can spawn is not answered by supplying the capability
+  on a second path; if anything the second consumer strengthens the case for asking, and it stays a question.
+- **One capability still, not a set.** `FeatureThreads` is the only name either path recognizes.
