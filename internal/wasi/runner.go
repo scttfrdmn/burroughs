@@ -27,6 +27,16 @@ type Config struct {
 	Stdout   io.Writer // defaults to os.Stdout
 	Stderr   io.Writer // defaults to os.Stderr
 	Preopens []Preopen // granted directories; empty means no filesystem access (decision 0083)
+
+	// Features is the decoder feature set for this run; nil means [GuestFeatures]. ADR 0088's
+	// caller-supplied capability set, one layer down — the public layer resolves *names* to this
+	// resolved set, so this field is never a place where a typo passes.
+	//
+	// **A pointer, because a zero `bin.Features` is all-gates-off and that is NOT this path's
+	// default.** `GuestFeatures()` is `DefaultFeatures()`, which has SIMD and relaxed SIMD on, so a
+	// value field could not distinguish "the caller asked for nothing" from "the caller asked for
+	// everything off" — and the second reading would silently narrow every existing run.
+	Features *bin.Features
 }
 
 // Preopen grants the guest a directory: Host is the directory on the host, Guest the name the guest
@@ -54,6 +64,13 @@ type Preopen struct {
 // Not a defect in ADR 0080 and not a reason to widen this set: a stock guest needs no threads feature,
 // and widening would enable the 0xFE region for every WASIP1 run on a default-off gate. The fork's
 // harness supplies its own feature set instead (ADR 0088's shape, one layer down).
+//
+// **And since 2026-09-22 (#813) a CALLER can supply one here too** — [Config.Features], ADR 0088's
+// append. That does not widen this function: it stays the default for a caller who asks for nothing,
+// which is the sentence above still doing its job. What changed is that *"the fork's harness supplies
+// its own feature set instead"* is no longer the only route; the public path is now a route as well,
+// and the consequence is recorded where it bites rather than here — see [host.mu], because this set
+// having `Threads` off is what used to make the fd table's lock unnecessary.
 func GuestFeatures() bin.Features { return bin.DefaultFeatures() }
 
 // Run decodes, validates, and instantiates the guest with the preview-1 host module, then invokes
@@ -77,7 +94,11 @@ func Run(cfg Config) (int, error) {
 		cfg.Args = []string{"program"}
 	}
 
-	m, err := (&bin.Decoder{Features: GuestFeatures()}).DecodeModule(cfg.Wasm)
+	feats := GuestFeatures()
+	if cfg.Features != nil {
+		feats = *cfg.Features
+	}
+	m, err := (&bin.Decoder{Features: feats}).DecodeModule(cfg.Wasm)
 	if err != nil {
 		return 0, fmt.Errorf("wasi: decode: %w", err)
 	}

@@ -43,6 +43,44 @@ func (f *preopenFlag) Set(v string) error {
 
 func (f preopenFlag) preopens() []burroughs.Preopen { return []burroughs.Preopen(f) }
 
+// featureFlag collects `--features` into the public capability set (ADR 0088, #813). Comma-separated
+// and repeatable, matching `--dir`'s repeatable shape rather than inventing a second convention.
+//
+// **It does not validate the names.** A name this build does not recognize is refused **by the engine**,
+// by name, on the path that resolves it — so the CLI cannot drift from the library about what exists,
+// and there is one place where the recognized set is written down. A CLI-side check would be a second
+// copy of that list, which is the shape the engine already paid for once (#663's deleted second copy).
+type featureFlag []burroughs.Feature
+
+func (f *featureFlag) String() string {
+	parts := make([]string, len(*f))
+	for i, c := range *f {
+		parts[i] = string(c)
+	}
+	return strings.Join(parts, ",")
+}
+
+// Set is ALL-OR-NOTHING: every name in the value is checked before any is kept, so a rejected
+// `--features` leaves no residue behind. The first version appended as it went, which meant
+// `--features=a,,b` returned an error *and* had already collected `a` — harmless while a flag error
+// aborts the process, and exactly the kind of half-applied state that stops being harmless the first
+// time something recovers from it. Found by a test of mine that counted what was left over.
+func (f *featureFlag) Set(v string) error {
+	parts := strings.Split(v, ",")
+	names := make([]burroughs.Feature, 0, len(parts))
+	for _, name := range parts {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("empty capability name in --features %q", v)
+		}
+		names = append(names, burroughs.Feature(name))
+	}
+	*f = append(*f, names...)
+	return nil
+}
+
+func (f featureFlag) features() []burroughs.Feature { return []burroughs.Feature(f) }
+
 // The run subcommand: load a module, call an exported function, print the result.
 //
 // **A consumer of the public package, never of `internal/`** — which is decision 0029's decision 3
@@ -86,9 +124,12 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	var dirs preopenFlag
 	fs.Var(&dirs, "dir", "grant a wasip1 command a directory as HOST[:GUEST] (repeatable); "+
 		"no directory is visible unless named (decision 0083)")
+	var feats featureFlag
+	fs.Var(&feats, "features", "proposal capabilities the guest requires, comma-separated "+
+		"(repeatable); currently: threads. An unrecognized name is refused (ADR 0088)")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:GUEST]]... <file.wasm> "+
-			"[-- <arg>...] | [<func> [<value>...]]")
+		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:GUEST]]... "+
+			"[--features NAME[,NAME]]... <file.wasm> [-- <arg>...] | [<func> [<value>...]]")
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
 			"directory, capability-based: nothing is visible unless named.")
@@ -123,23 +164,51 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	}
 
 	// A wasip1 command runs (decision 0081); detection reads the module's sections before any plain
-	// instantiate, so it never depends on #686's nil-resolver behavior. A decode error is not handled
-	// here — it falls through to Instantiate below, which classifies a malformed module onto the
-	// public sentinels — so detection routes to WASI only on a clean `(true, nil)`.
-	if isCmd, derr := burroughs.IsWASIP1Command(wasm); derr == nil && isCmd {
+	// instantiate, so it never depends on #686's nil-resolver behavior. It still routes to WASI only on
+	// a clean `(true, nil)`, and a decode error still falls through to Instantiate below so a malformed
+	// module is classified there — **except when the invocation only makes sense for a command**, which
+	// is #813's narrow addition and is stated here because the sentence this replaces said the error was
+	// never handled at all.
+	//
+	// Detection runs under the caller's capabilities (#813), because deciding *what this module is*
+	// with a gate makes the engine deny a module's identity: before this, a guest needing `threads`
+	// came back `false` and the CLI said "this module is not one" about a module that plainly was one.
+	wasiCfg := burroughs.WASIP1Config{
+		Args:     append([]string{filepath.Base(file)}, guestArgs...),
+		Env:      os.Environ(),
+		Stdin:    os.Stdin,
+		Stdout:   stdout,
+		Stderr:   stderr,
+		Preopens: dirs.preopens(),
+		Features: feats.features(),
+	}
+	isCmd, derr := wasiCfg.IsCommand(wasm)
+	// **A decode failure is reported, not folded into "not a command."** `derr != nil` and `!isCmd` are
+	// different answers — the first says this build could not read the module, the second that it read
+	// it and found no `_start`. Falling through silently is what made a gated guest look like a
+	// non-command; the fall-through itself is kept, because a malformed module must still reach the
+	// path that classifies it onto the public sentinels.
+	if derr != nil && (len(guestArgs) > 0 || len(dirs) > 0 || len(feats) > 0) {
+		// Only the HINT is printed here; `runCmd`'s `diagnose` prints the error itself, so repeating it
+		// would report one failure twice — which the first version did, found by running it.
+		//
+		// And the hint is conditioned on the error being a GATE, because "it may need a capability" is
+		// actively misleading when the real problem is a capability name this build does not know: that
+		// error is `ErrUnsupported`, the user already passed `--features`, and telling them to pass it
+		// is advice that cannot work.
+		if errors.Is(derr, burroughs.ErrGated) {
+			fmt.Fprintf(stderr, "%s%s looks like a wasip1 command whose proposal this build gates off; "+
+				"if the guest requires it, name the capability: --features=threads\n", prefix, file)
+		}
+		return derr
+	}
+	if isCmd {
 		if len(invokeArgs) > 0 {
 			// A command's arguments go after `--`; a bare token before it is not a function to invoke.
 			fmt.Fprintf(stderr, "%sa wasip1 command takes its arguments after --, e.g. run %s -- ARG\n", prefix, file)
 			return errUsage
 		}
-		code, rerr := burroughs.WASIP1Config{
-			Args:     append([]string{filepath.Base(file)}, guestArgs...),
-			Env:      os.Environ(),
-			Stdin:    os.Stdin,
-			Stdout:   stdout,
-			Stderr:   stderr,
-			Preopens: dirs.preopens(),
-		}.Run(wasm)
+		code, rerr := wasiCfg.Run(wasm)
 		if rerr != nil {
 			return rerr
 		}
@@ -159,11 +228,19 @@ func run(stdout, stderr io.Writer, argv []string) error {
 			return errUsage
 		}
 		// argv is the file's basename followed by anything after `--`, as a wasip1 command's is.
+		//
+		// **`--features` reaches this path too, and before #813 it reached NEITHER.** ADR 0088 added
+		// `ComponentConfig.Features` on 2026-09-18 and the CLI never passed it, so the capability has
+		// been unreachable from `burroughs run` since the day it was added — which is why Phase 4's
+		// two-engine claim runs through an internal test (#802's close records that as a limitation).
+		// One flag serves both paths: wiring only the wasip1 half would leave an asymmetry a reader
+		// could not recover a reason for.
 		code, rerr := burroughs.ComponentConfig{
-			Args:   append([]string{filepath.Base(file)}, guestArgs...),
-			Stdin:  os.Stdin,
-			Stdout: stdout,
-			Stderr: stderr,
+			Args:     append([]string{filepath.Base(file)}, guestArgs...),
+			Stdin:    os.Stdin,
+			Stdout:   stdout,
+			Stderr:   stderr,
+			Features: feats.features(),
 		}.Run(wasm)
 		if rerr != nil {
 			return rerr

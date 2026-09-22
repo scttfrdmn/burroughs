@@ -58,7 +58,9 @@ func resolveFeatures(fs []Feature) (bin.Features, error) {
 		case FeatureThreads:
 			feats.Threads = true
 		default:
-			return bin.Features{}, fmt.Errorf("%w: unknown component feature %q; this build recognizes %q",
+			// "feature", not "component feature": this resolver serves the wasip1 path too as of #813,
+			// and a message naming one caller's path is wrong for the other. Found by running it there.
+			return bin.Features{}, fmt.Errorf("%w: unknown feature %q; this build recognizes %q",
 				ErrUnsupported, string(f), string(FeatureThreads))
 		}
 	}

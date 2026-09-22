@@ -28,6 +28,39 @@ says what it now requires and what it gives up.
 admits** — so this block is no longer empty, and the sentence it replaces said so as its
 own condition rather than as a prediction.
 
+### Added
+
+- **The WASI preview-1 path takes a caller-supplied capability set**, as the component path has since
+  ADR 0088 — `WASIP1Config.Features []Feature`, the same named set, the same refusal of an unrecognized
+  name, and no change to any gate's default
+  ([#813](https://github.com/scttfrdmn/burroughs/issues/813), ADR 0088's 2026-09-22 append). **ADR 0088
+  deferred this path by name and recorded its trigger** — *"`burroughs.go:Instantiate` and
+  `wasi.go:IsWASIP1Command` hardcode the same default… Recorded with its trigger: a core-path consumer
+  that needs it"* — and the trigger fired: Phase 4's fork emits Go `wasip1` guests carrying **1025
+  atomic instructions in a hello-world that starts no goroutines**, so none of them decoded.
+  - **`WASIP1Config.IsCommand` is new, and it is the substantive half.** `IsWASIP1Command` decodes to
+    detect, so a gated guest came back `false` — and `burroughs run` printed *"this module is not
+    one"* about a module that imports `wasi_snapshot_preview1` and exports `_start`. **Detection
+    answers what a module is; capabilities answer whether it may run**, and deciding the first with
+    the second let a gate deny a module's identity. First instance of the face-4 family found in this
+    engine's own public surface.
+  - **`IsWASIP1Command`'s error is now classifiable** — `ErrGated` for a gated proposal, else
+    `ErrMalformed`, the two arms `Config.Instantiate` has had since grave #301. It previously returned
+    the decoder's raw error, matching no public sentinel, so a caller could not tell "this build gates
+    a proposal you use" from "your module is broken". The bool channel is unchanged.
+  - **`burroughs run --features NAME[,NAME]`**, wired to **both** the wasip1 and component paths.
+    ADR 0088's capability had been unreachable from the CLI since the day it was added — the component
+    branch constructed `ComponentConfig` without `Features` — which is why Phase 4's two-engine claim
+    runs through an internal test.
+  - The preview-1 host's **fd table is now locked**, in this same change rather than a later one,
+    because the source comment added on 2026-09-20 set exactly that condition: *"if `GuestFeatures`
+    ever gains `Threads`, this table needs a lock in the same change."* Supplying the threads
+    capability is what removes the front-door guarantee that made the unlocked map sound. The prior
+    question was asked first and answers the **opposite** way from contract §2 T-6: a WASI fd table is
+    *process* state — a program opens a file on one goroutine and reads it on another — where Go's
+    register bank was *per-thread* state, so shared-and-locked is right here and per-agent was right
+    there.
+
 ### Changed
 
 - **A module-defined non-shared global is now per-agent**, so a spawned thread reads and
