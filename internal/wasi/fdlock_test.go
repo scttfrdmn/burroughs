@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -91,7 +92,14 @@ func TestFDTableIsReachedThroughAccessors(t *testing.T) {
 	// The accessors themselves, plus initFDs, which builds the table before `_start` runs and so has no
 	// second party to lock against (its own comment states that, and this is the list that comment
 	// promises exists).
-	allowed := map[string]bool{"fd": true, "addFD": true, "dropFD": true, "initFDs": true}
+	// Keyed by the FIELD, because the rule is "state guarded by mu is reached under mu" and the struct
+	// grows: `refusals` arrived with #816 under the same lock, and a control scanning only the fd table
+	// would have said nothing about it. Derived from what the lock protects, not from today's call sites.
+	allowed := map[string]map[string]bool{
+		"fds":      {"fd": true, "addFD": true, "dropFD": true, "initFDs": true},
+		"nextFD":   {"addFD": true, "initFDs": true},
+		"refusals": {"refuseNosys": true, "refusalsForTest": true},
+	}
 
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -123,18 +131,18 @@ func TestFDTableIsReachedThroughAccessors(t *testing.T) {
 				if !ok {
 					return true
 				}
-				switch sel.Sel.Name {
-				case "fds", "nextFD":
-				default:
+				perField, guarded := allowed[sel.Sel.Name]
+				if !guarded {
 					return true
 				}
-				if allowed[name] {
+				if perField[name] {
 					return true
 				}
 				violations++
-				t.Errorf("%s: %s touches h.%s directly; the fd table is reached through fd/addFD/dropFD "+
-					"so the lock cannot be bypassed (add an accessor, or justify an exemption in the "+
-					"struct's comment and here)", fset.Position(sel.Pos()), name, sel.Sel.Name)
+				t.Errorf("%s: %s touches h.%s directly; that field is guarded by h.mu and is reached only "+
+					"through its accessors, so the lock cannot be bypassed (add an accessor, or justify "+
+					"an exemption in the struct's comment and here)",
+					fset.Position(sel.Pos()), name, sel.Sel.Name)
 				return true
 			})
 		}
@@ -147,14 +155,11 @@ func TestFDTableIsReachedThroughAccessors(t *testing.T) {
 			"here means nothing", scanned)
 	}
 	if violations == 0 {
-		t.Logf("scanned %d files, no direct access outside %v", scanned, keys(allowed))
+		fields := make([]string, 0, len(allowed))
+		for f := range allowed {
+			fields = append(fields, f)
+		}
+		sort.Strings(fields)
+		t.Logf("scanned %d files; mu-guarded fields %v reached only through their accessors", scanned, fields)
 	}
-}
-
-func keys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }
