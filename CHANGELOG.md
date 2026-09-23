@@ -30,6 +30,38 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **`fd_pread` and `fd_readdir` on the preview-1 host**, and the other seven functions a Go test binary
+  imports are supplied and **refused by name** ([#816](https://github.com/scttfrdmn/burroughs/issues/816),
+  ADR 0083's 2026-09-23 append). ADR 0083 deferred *"the write slice, `fd_seek`, and directory
+  enumeration"* until a guest needed them; Phase 4 slice 6's Go **test binaries** need two of them.
+  - **Supplying is not implementing, and the obligation was measured per FAILURE rather than per call.**
+    ADR 0080 requires the import set supplied whole because *link* refuses a gap. Measured on released
+    go1.27.1 binaries: `sync` imports 8 of the nine and calls **0**; `context` 7 and **0**; `archive/zip`
+    9 and **3**; `runtime` 9 and **0** over the four named tests bounded runs allow. Of `archive/zip`'s
+    three, refusing `fd_pread` fails `TestFSModTime` and refusing `fd_readdir` fails `FuzzReader` — so two
+    are implemented.
+  - **`path_create_directory` is called and its refusal is absorbed**: no test fails. It is in ADR 0083's
+    write category by name, so an import list *or* a call list would have justified implementing it, and
+    the syscall trace refuted both. **An import is a possibility; a syscall is a consumer.**
+  - **ADR 0083's read-only decision is untouched.** Both implemented functions are reads — an offset read
+    of an already-granted descriptor, and a listing of an already-granted directory. The deferral's wording
+    predicted a write slice; the consumer needed no writes. The append records **one arrival, not the
+    category's arrival.**
+  - **`fd_readdir` is stateless on purpose**: a dirent cursor in an `fdEntry` would make entries mutable
+    and invalidate the fd table's map-level lock, whose sufficiency rests on entries being immutable
+    ([#813](https://github.com/scttfrdmn/burroughs/issues/813)). It re-reads by path and slices by the
+    guest's cookie instead — O(n) per call, paid deliberately.
+  - Refusals are **counted**, so "never called" and "called and quietly refused" are distinguishable and
+    "refused by name" is a falsifiable claim. `ENOSYS` rather than `ENOTCAPABLE`, keeping "not implemented"
+    distinct from "the capability model refuses you".
+
+- **`internal/wasi` hosts are built by a constructor**, so a required field cannot be silently omitted
+  ([#815](https://github.com/scttfrdmn/burroughs/issues/815)). A hand-built host that omitted `start` made
+  the monotonic clock compute `time.Since(time.Time{})` — ~2025 years in nanoseconds, **overflowing
+  int64** — and a released-Go `sync.test` then failed `TestMutexFairness` **5/5 deterministically** while
+  passing on wasmtime. Four hypotheses aimed at the engine's timer path were refuted before the instrument
+  was suspected.
+
 - **The WASI preview-1 path takes a caller-supplied capability set**, as the component path has since
   ADR 0088 — `WASIP1Config.Features []Feature`, the same named set, the same refusal of an unrecognized
   name, and no change to any gate's default

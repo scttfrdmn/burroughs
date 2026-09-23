@@ -111,3 +111,77 @@ So read-only is enforced two ways, neither of them the `fs_rights_base` set: a *
 the host — holds; the mechanism is the open mode and the write call, not the requested rights, because
 the requested rights are not a reliable signal of intent from this runtime. Measured, not assumed
 (`typenames.witx` names the bits; the guest named the value).
+
+## Append, 2026-09-23 — ONE ARRIVAL FROM THE DEFERRED SET, NOT THE CATEGORY'S ARRIVAL (#816)
+
+This ADR deferred *"the write slice, `fd_seek`, and directory enumeration"* to *"a later write slice …
+when a guest needs them (guest-driven)"*. **A guest needs two of them. This append records that, and
+deliberately does not record more than that.**
+
+**Read this as one arrival, not as the write slice happening.** The category above is still open: of what
+its wording names, the write surface has **no consumer** and stays refused. A reader who takes this append
+as "the deferred surface is now implemented" would be wrong, which is why the scope is stated before the
+table rather than after it. (Scott's disposal instruction, on ruling the scope.)
+
+### The consumer, and what it obliged
+
+Phase 4 slice 6 runs Go **test binaries** — programs nobody wrote for this engine. They import nine
+preview-1 functions this host did not supply. ADR 0080's rule is that the set must be **supplied whole
+because link refuses a gap**; it says nothing about bodies. So supplying and implementing are different
+sets, and the obligation was measured **per FAILURE**, not per call, on released-**go1.27.1** binaries with
+no fork code in them:
+
+| package | of the nine: imported | called | scope of the measurement |
+|---|---|---|---|
+| `sync` | 8 | **0** | full package |
+| `context` | 7 | **0** | full package |
+| `archive/zip` | 9 | **3** | full package |
+| `runtime` | 9 | **0** | **the four named tests of Phase 4 amendment 2**, not the package — 1032 tests is not a bounded run on an interpreter |
+
+**The table mixes scopes and says so**: three rows are whole packages, `runtime`'s is a named subset. A
+`runtime` row at full scope is not available in bounded time, so its zero is a floor, not a census.
+
+`archive/zip`'s three calls, and what refusing each one did:
+
+| function | measured | disposition |
+|---|---|---|
+| `fd_pread` | called ×38; refusing it **fails** `TestFSModTime` (`read testdata/subdir.zip: Not implemented on wasip1`) | **implemented** |
+| `fd_readdir` | called ×1; refusing it **fails** `FuzzReader` (`readdirent testdata: Not implemented on wasip1`) | **implemented** |
+| `path_create_directory` | called ×1; **refusal absorbed — no test failed** | refused, and the refusal counted |
+| `fd_seek`, `fd_filestat_set_size`, `path_readlink`, `path_remove_directory`, `path_symlink`, `path_unlink_file` | imported, never called | refused by name, refusal counted |
+
+### AN IMPORT IS A POSSIBILITY, A SYSCALL IS A CONSUMER
+
+`path_create_directory` is the trap this distinction catches, and it would have caught me: it is in the
+import set, it is in this ADR's write category **by name**, and a guest **calls it** — so an import list,
+or even a call list, would have justified implementing it. The syscall trace refuted that: `testing`
+absorbs the refusal and no test fails. **Scott's phrasing, kept because it is the sharpest form of this
+project's deferral law so far** (*a deferral's trigger is a hypothesis about its consumer*), here applied
+one level up — to which deferral **owns** a function, and to whether a function named in a category has a
+consumer at all.
+
+### THE READ-ONLY DECISION SURVIVES THIS APPEND INTACT
+
+**Both implemented functions are reads.** `fd_pread` reads a descriptor the capability model already
+granted, at an offset; `fd_readdir` lists a directory already granted. Neither accepts a write request,
+neither widens `path_open`'s accepted rights, and requirement 1's refusal is untouched. The deferral's own
+wording predicted a write slice; the consumer that arrived needs no writes.
+
+Also unchanged, and stated because the names are adjacent: **`fd_write` was already implemented** (stdio),
+and **`fd_pwrite` is imported by none of the four packages**, so it has no consumer here and is not part of
+this arrival.
+
+### What the implementation owes, and one thing it deliberately refused to do
+
+- **`fd_readdir` is stateless.** A resumable enumeration wants a cursor in the `fdEntry`; that would make
+  entries mutable and silently invalidate the fd table's map-level lock, whose sufficiency rests on *"the
+  table is mutable and its entries are not"* (#813). That note named this slice as its precondition, so
+  `fd_readdir` re-reads the directory by path per call and slices by the cookie — O(n) per call, paid
+  deliberately, entries still immutable.
+- **Refusals are counted, not merely returned.** A function refused by name is a claim that no guest needs
+  it, and that claim is falsifiable only if the host can say whether it was reached. Without the counter,
+  "never called" and "called and quietly refused" are the same observation from outside.
+- **`ENOSYS`, not `ENOTCAPABLE`.** This ADR set that distinction and it is load-bearing: `ENOTCAPABLE` says
+  *the capability model refuses you* — a write request, an escape past a preopen — and a guest may
+  reasonably degrade on it. `ENOSYS` says *this engine does not implement this*, which keeps a deferral
+  visible instead of dressing it as policy.

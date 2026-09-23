@@ -73,6 +73,73 @@ type Preopen struct {
 // having `Threads` off is what used to make the fd table's lock unnecessary.
 func GuestFeatures() bin.Features { return bin.DefaultFeatures() }
 
+// newHost builds the per-run host from a config, setting EVERY field whose absence is not a valid state.
+//
+// **It exists because a hand-built `host` can omit one and the symptom surfaces in another subsystem**
+// ([#815](https://github.com/scttfrdmn/burroughs/issues/815)). A recon harness omitted `start`; the zero
+// `time.Time` makes the monotonic clock `time.Since(time.Time{}).Nanoseconds()` — about 2025 years in
+// nanoseconds, which **overflows int64** — and a released-Go `sync.test` then failed one of that package's
+// own fairness tests 5/5 deterministically with `can't acquire Mutex in 10 seconds`, while the same test
+// passed on wasmtime. That test is named in #815; naming it here would read as a citation to a control in
+// this repository, which it is not.
+// Four hypotheses aimed at the engine's timer path were refuted before the instrument was suspected.
+//
+// So the required set is stated once, here, and tests construct hosts through this rather than beside it.
+// It does not call `initFDs`: preopen resolution can fail, and a constructor that returns no error cannot
+// report that — so the two steps stay separate and the caller handles the one that can fail.
+func newHost(cfg Config) *host {
+	return &host{
+		args:   cfg.Args,
+		env:    cfg.Env,
+		stdin:  cfg.Stdin,
+		stdout: cfg.Stdout,
+		stderr: cfg.Stderr,
+		start:  time.Now(),
+	}
+}
+
+// runModule instantiates a decoded module against a prepared host and invokes `_start`. Split out of
+// [Run] so a test can supply its own host and read its counters afterwards — the refusal witnesses need
+// to see `refusalsForTest`, which `Run` has no way to expose — without duplicating this body, which is
+// the shape that lets a test path drift from the real one.
+func runModule(m *bin.Module, h *host) (int, error) {
+	in, trap, err := interp.InstantiateLinked(m, h.imports())
+	if err != nil {
+		return 0, fmt.Errorf("wasi: link: %w", err)
+	}
+	if trap != nil {
+		return 0, fmt.Errorf("wasi: instantiate: %w", trap)
+	}
+	defer in.Close()
+
+	if _, err := in.Invoke("_start"); err != nil {
+		var ee exitError
+		if errors.As(err, &ee) {
+			return ee.code, nil
+		}
+		return 0, fmt.Errorf("wasi: _start: %w", err)
+	}
+	// A `_start` that returns without calling `proc_exit` is a normal exit 0 — WASI's convention.
+	return 0, nil
+}
+
+// decodeGuest decodes and validates under the run's feature set. Shared by [Run] and the test seam so
+// both reach the interpreter through the same front door.
+func decodeGuest(cfg Config) (*bin.Module, error) {
+	feats := GuestFeatures()
+	if cfg.Features != nil {
+		feats = *cfg.Features
+	}
+	m, err := (&bin.Decoder{Features: feats}).DecodeModule(cfg.Wasm)
+	if err != nil {
+		return nil, fmt.Errorf("wasi: decode: %w", err)
+	}
+	if _, verr := validate.Module(m); verr != nil {
+		return nil, fmt.Errorf("wasi: validate: %w", verr)
+	}
+	return m, nil
+}
+
 // Run decodes, validates, and instantiates the guest with the preview-1 host module, then invokes
 // `_start`.
 //
@@ -94,45 +161,14 @@ func Run(cfg Config) (int, error) {
 		cfg.Args = []string{"program"}
 	}
 
-	feats := GuestFeatures()
-	if cfg.Features != nil {
-		feats = *cfg.Features
-	}
-	m, err := (&bin.Decoder{Features: feats}).DecodeModule(cfg.Wasm)
+	m, err := decodeGuest(cfg)
 	if err != nil {
-		return 0, fmt.Errorf("wasi: decode: %w", err)
-	}
-	if _, verr := validate.Module(m); verr != nil {
-		return 0, fmt.Errorf("wasi: validate: %w", verr)
+		return 0, err
 	}
 
-	h := &host{
-		args:   cfg.Args,
-		env:    cfg.Env,
-		stdin:  cfg.Stdin,
-		stdout: cfg.Stdout,
-		stderr: cfg.Stderr,
-		start:  time.Now(),
-	}
+	h := newHost(cfg)
 	if ferr := h.initFDs(cfg.Preopens); ferr != nil {
 		return 0, ferr
 	}
-	in, trap, err := interp.InstantiateLinked(m, h.imports())
-	if err != nil {
-		return 0, fmt.Errorf("wasi: link: %w", err)
-	}
-	if trap != nil {
-		return 0, fmt.Errorf("wasi: instantiate: %w", trap)
-	}
-	defer in.Close()
-
-	if _, err := in.Invoke("_start"); err != nil {
-		var ee exitError
-		if errors.As(err, &ee) {
-			return ee.code, nil
-		}
-		return 0, fmt.Errorf("wasi: _start: %w", err)
-	}
-	// A `_start` that returns without calling `proc_exit` is a normal exit 0 — WASI's convention.
-	return 0, nil
+	return runModule(m, h)
 }

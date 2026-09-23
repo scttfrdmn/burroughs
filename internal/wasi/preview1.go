@@ -96,23 +96,32 @@ type host struct {
 	// *synchronising shared state does not ask whether it should be shared* — the question has to be
 	// asked, and this time it answers "shared" (cf. #663, where the honest answer was to delete the
 	// second copy rather than synchronise it).
-	mu         sync.Mutex
-	fds        map[uint32]*fdEntry
+	mu  sync.Mutex
+	fds map[uint32]*fdEntry
+
+	// refusals counts, per function name, how many times a deferred preview-1 function was reached and
+	// refused. Guarded by mu with the table because it is written from the same host calls.
+	refusals   map[string]int
 	nextFD     uint32   // the next fd path_open hands out
 	preopenFDs []uint32 // preopen dir fds in discovery order (3, 4, …)
 }
 
 // THE TABLE IS MUTABLE AND ITS ENTRIES ARE NOT, which is what makes a map-level lock sufficient rather
-// than a lock per entry. Every `fdEntry` field (`reader`, `writer`, `preopen`, `file`) is set at
-// construction and never written again, and `preopenDir` is likewise immutable — so once `fd` has
+// than a lock per entry. Every `fdEntry` field (`reader`, `writer`, `preopen`, `file`, `hostPath`) is set
+// at construction and never written again, and `preopenDir` is likewise immutable — so once `fd` has
 // handed back a pointer, reading through it needs no lock, and `*os.File`'s own concurrency contract
 // covers the descriptor beneath it.
 //
-// **That invariant is a precondition on the next slice, not just a note here.** ADR 0083 deferred
-// `fd_seek` and directory enumeration; a `fd_readdir` that cached a dirent cursor *in the entry* would
-// make entries mutable and silently invalidate this reasoning while every one of these accessors kept
-// compiling. Whoever adds a mutable field to `fdEntry` owes the entry a lock or this comment a
-// correction.
+// **That invariant was a precondition on the next slice, and that slice has now landed keeping it**
+// (#816). This note said: *"a `fd_readdir` that cached a dirent cursor in the entry would make entries
+// mutable and silently invalidate this reasoning while every one of these accessors kept compiling."*
+// `fd_readdir` is implemented and there is no cursor — it re-reads the directory by path per call and
+// slices by the guest's cookie, which costs O(n) per call and keeps entries immutable. `hostPath` is the
+// field that made that possible and it is immutable too, which is why the enumeration above grew by one
+// name without the reasoning changing.
+//
+// The obligation stands for whoever comes next: **a mutable field in `fdEntry` owes the entry a lock or
+// this comment a correction.**
 
 // fd returns the entry for a guest fd, or nil for `EBADF`. Held for the map read only.
 func (h *host) fd(n uint32) *fdEntry {
@@ -196,6 +205,38 @@ func (h *host) imports() interp.Imports {
 
 		// Still stubbed: no guest here exercises it (decision 0083 defers writes, fd_seek, dir enum).
 		"fd_fdstat_set_flags": {ft([]bin.ValType{i32, i32}, i32), h.fdFdstatSetFlags},
+
+		// --- ADR 0083's deferral, whose consumer arrived: a Go TEST binary (#816) ---
+		//
+		// **All nine must be SUPPLIED because link refuses a gap (ADR 0080); only two are IMPLEMENTED,
+		// because only two were measured as obliged.** The obligation was measured per FAILURE, not per
+		// call: a released-go1.27.1 `archive/zip` test binary calls three of these, and refusing one of
+		// the three changed nothing the guest observed.
+		//
+		// | function | measured on the registered packages | disposition |
+		// |---|---|---|
+		// | fd_pread | called x38; refusing it fails a mod-time test | implemented |
+		// | fd_readdir | called x1; refusing it fails a fuzz target | implemented |
+		// | path_create_directory | called x1; refusal ABSORBED, no test failed | refused, absorbed |
+		// | the other six | imported, never called | refused by name |
+		//
+		// **Both implemented functions are READS, so ADR 0083's read-only decision survives this slice
+		// intact** — which its own wording ("a later write slice") did not predict. The consumer arrived
+		// narrower AND differently shaped than the deferral described, which is property 7 at the level of
+		// a category rather than a trigger.
+		"fd_pread":   {ft([]bin.ValType{i32, i32, i32, i64, i32}, i32), h.fdPread},
+		"fd_readdir": {ft([]bin.ValType{i32, i32, i32, i64, i32}, i32), h.fdReaddir},
+
+		// Refused, each with the trigger that would oblige it. `path_create_directory` is listed first
+		// because it is the only one a measured guest actually CALLS: its refusal is absorbed, which is
+		// ADR 0080's `random_get` disposition (refuse-and-absorbed) rather than an unreached stub.
+		"path_create_directory": {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("path_create_directory")},
+		"fd_seek":               {ft([]bin.ValType{i32, i64, i32, i32}, i32), h.refuseNosys("fd_seek")},
+		"fd_filestat_set_size":  {ft([]bin.ValType{i32, i64}, i32), h.refuseNosys("fd_filestat_set_size")},
+		"path_readlink":         {ft([]bin.ValType{i32, i32, i32, i32, i32, i32}, i32), h.refuseNosys("path_readlink")},
+		"path_remove_directory": {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("path_remove_directory")},
+		"path_symlink":          {ft([]bin.ValType{i32, i32, i32, i32, i32}, i32), h.refuseNosys("path_symlink")},
+		"path_unlink_file":      {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("path_unlink_file")},
 	}
 	return func(mod, name string) (interp.Extern, bool) {
 		if mod != module {
@@ -657,4 +698,40 @@ func (h *host) fdPrestatDirName(c *interp.Caller, args []interp.Value) ([]interp
 		name = name[:pathLen]
 	}
 	return ret(mWrite(c, pathPtr, name)), nil
+}
+
+// refuseNosys builds a handler that refuses by name and records that it fired.
+//
+// **The refusal is a COUNTED event, not just an errno.** A function refused by name is a claim that no
+// guest needs it, and the only way that claim is falsifiable is if the host can say whether it was ever
+// reached — `refusalsForTest` is how a test witnesses a refusal *firing* rather than inferring it from
+// the permit path working (#714's lesson). Without the counter, "never called" and "called and quietly
+// refused" are the same observation from outside.
+//
+// `ENOSYS` rather than `ENOTCAPABLE`: the distinction is load-bearing and ADR 0083 set it. `ENOTCAPABLE`
+// says *the capability model refuses you* — a write request, an escape past a preopen — and a guest may
+// reasonably degrade. `ENOSYS` says *this engine does not implement this*, which is the honest answer for
+// a deferred function and the one that keeps a deferral visible instead of dressing it as a policy.
+func (h *host) refuseNosys(name string) interp.HostFunc {
+	return func(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) {
+		h.mu.Lock()
+		if h.refusals == nil {
+			h.refusals = map[string]int{}
+		}
+		h.refusals[name]++
+		h.mu.Unlock()
+		return ret(errNosys), nil
+	}
+}
+
+// refusalsForTest returns a copy of the refusal counts. A copy, because the caller reads it while guest
+// agents may still be running — handing out the live map would be the fd table's defect one field over.
+func (h *host) refusalsForTest() map[string]int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[string]int, len(h.refusals))
+	for k, v := range h.refusals {
+		out[k] = v
+	}
+	return out
 }
