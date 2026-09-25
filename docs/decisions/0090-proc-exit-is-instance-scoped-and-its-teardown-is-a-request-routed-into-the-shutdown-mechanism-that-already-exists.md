@@ -1,9 +1,11 @@
 # 0090 — `proc_exit` is instance-scoped, and its teardown is a *request* routed into the shutdown mechanism that already exists
 
-Date: 2026-09-25 · Status: **proposed** · [#819](https://github.com/scttfrdmn/burroughs/issues/819) (the finding) · Occasioned by Phase 4's stdlib sweep ([ADR 0087](0087-the-threaded-p3-fork-charter-a-geoexperiment-over-an-async-base-whose-threaded-tier-has-no-independent-engine.md))
+Date: 2026-09-25 · Status: **accepted** · [#819](https://github.com/scttfrdmn/burroughs/issues/819) (the finding) · Occasioned by Phase 4's stdlib sweep ([ADR 0087](0087-the-threaded-p3-fork-charter-a-geoexperiment-over-an-async-base-whose-threaded-tier-has-no-independent-engine.md))
 Ratio-Class: carried
 
-**`Status` is held open, which is behaviour 3.** The *direction* is ruled — Scott, on the #819 report: *"I'm ruling the direction now, conditional on context not producing a counterexample: `proc_exit` is instance-scoped"* — and the *mechanism* is what this document recommends for ratification. There is no stamp to cite for the mechanism yet, so `Status` does not claim one. Recorded by the actor the ruling was given to, so no independent provenance; commits resting on it stay `Ratio-Class: carried`.
+**`Status: accepted` cites chat-Claude, and the first draft of this line cited Scott. That was a fabricated citation and its repair is this ADR's first amendment.** The direction ruling — *"I'm ruling the direction now, conditional on context not producing a counterexample: `proc_exit` is instance-scoped"* — is **chat-Claude's**, relayed through Scott on the #819 report. Scott conveyed it; he did not issue it, and he has said explicitly that technical calls of this kind are not his to make. The ratification of this document, with the three amendments recorded below, is chat-Claude's on the same channel.
+
+**Scott's standing here is the after-the-fact veto**, and that is the whole of it. Naming him as the source of a technical ruling would have credited a stamp he never gave — which this project treats as worse than a wrong option, because it is a forged provenance about the project's own governance (behaviour 3). Relayed and recorded by the actor the relay reached, so no independent provenance; commits resting on it stay `Ratio-Class: carried`.
 
 ## Context
 
@@ -89,13 +91,31 @@ err=burroughs: thread terminated by shutdown: thread 1 ended at a safepoint
     after `Close`, so "_start" did not complete (contract §2 T-5.4)
 ```
 
-### Why the code must travel out of band
+### Why the cause must travel out of band, and why it surfaces at `Invoke` rather than in the runner
 
-That error message is why the routing is only half the repair. If `proc_exit` merely triggered the teardown, `Invoke` would return **the shutdown error**, `runModule`'s `errors.As(err, &ee)` would not find an `exitError`, and exit code 7 would still be lost — just faster. So the code is recorded on the instance and the runner prefers the recorded code over the shutdown error.
+That error message is why the routing is only half the repair. If `proc_exit` merely triggered the teardown, `Invoke` would return **the shutdown error**, `errors.As(err, &ee)` would not find an `exitError`, and exit code 7 would still be lost — just faster.
+
+**The first draft put the fix in `runModule`, and that is amendment 2's subject.** Preferring the recorded code inside the WASI runner repairs the runner and leaves **every other embedder** holding this error out of `Invoke`:
+
+> `thread 1 ended at a safepoint after "Close"`
+
+When the guest exited or trapped, **that sentence is false: nobody called `Close`.** A true message for the WASI runner bought by a false one for everyone else is not a repair, it is a narrower blast radius.
+
+**So the rule is at the engine.** When termination was requested *by the guest*, `Invoke` returns the recorded **first cause** — `errors.As` finding the `exitError`, or the trap — and the out-of-band channel lives in `interp`. The runner then needs no special case at all, and `runModule`'s existing `errors.As(err, &ee)` keeps working unchanged.
+
+This changes **the value of an error, not an API surface**, so it stays inside this ADR rather than reaching behaviour 2's escalation set.
 
 ### Why the request must not wait
 
 `quiescentLocked`'s first condition is `hostCalls == 0`. Calling `Close` from *inside* `proc_exit` — itself an in-flight host call — would wait on a quiescence predicate that counts the waiter, stalling `closeQuiesceInterval` (10s) before returning `unquiesced()`. Derived from the predicate, not guessed, and it is the reason termination is requested rather than performed here.
+
+### Where the hook goes, and the distinction it must make (amendment 3)
+
+**One hook covers both classes.** A spawned agent whose top-level frame unwinds **with a trap** requests instance termination, and `proc_exit` reaches that path already — its `exitError` *becomes* a trap, which is the defect's own mechanism read forwards.
+
+**The hook MUST NOT fire when a spawned agent's entry function returns normally.** That is §2 T-5's ordinary per-thread exit — *"A thread **exits** when its entry function returns or traps"* — and the instance must carry on. T-5 gives those two the same clause but not the same consequence, and the hook is precisely where that difference is implemented.
+
+**A hook placed at "agent ended" rather than "agent trapped" passes arms 1–3 of the witness and silently breaks this.** That is why the witness has a fourth arm rather than three: the three hanging-or-exiting arms cannot see the over-firing case at all, because in each of them the instance is *supposed* to end.
 
 ### Races
 
@@ -119,7 +139,22 @@ The probe's arm 1 hangs identically, so a trap in a spawned agent joins [#819](h
 
 ## Registered witness, before the repair is built
 
-- **Engine-level, Go-free (the negative arm, and it terminates on its bound):** the WAT guests above, all three arms, arms 1–2 currently hanging on `main` — watched hanging *first*, which is what makes it a watched death rather than a re-pointed control. After the repair, `Invoke` returns the right result within a stated bound: code 7 for the exit arm, the trap as the cause for the trap arm. Committed as the oracle's reading rather than gated on a `wat2wasm` lookup, per the wabt precedent.
-  - **`invoker_exits` is the arm that must not move**, and it is registered as such: it passes *today*, so it is the control that catches a repair which fixes the sibling case by breaking the case that already worked. A repair witnessed only on arms 1–2 cannot see that.
+- **Engine-level, Go-free (the negative arm, and it terminates on its bound):** the WAT guests above, **four arms**, with arms 1–2 currently hanging on `main` — watched hanging *first*, which is what makes them watched deaths rather than re-pointed controls. After the repair, `Invoke` returns the right result within a stated bound: code 7 for the exit arm, the trap as the cause for the trap arm. Committed as the oracle's reading rather than gated on a `wat2wasm` lookup, per the wabt precedent, so there is no skip to license.
+- **Two of the four are arms that MUST NOT MOVE, and both pass today** — which is what makes them able to catch a repair that fixes the broken cases by breaking the working ones. A repair witnessed only on arms 1–2 can see neither.
+
+  | arm | today | what it catches |
+  |---|---|---|
+  | 1 `proc_exit` | HUNG 15s, `exitTID=2` | the defect |
+  | 2 `trap` | HUNG 15s, `procExit=0` | the same class, folded into #819 |
+  | 3 `invoker_exits` | RETURNED ~200ms, code 7, `exitTID=1`, **10/10** | a repair that breaks the exit path that already worked |
+  | 4 `sibling_returns` | RETURNED, `err=<nil>`, **5/5** | **a hook at "agent ended" instead of "agent trapped"** — T-5's ordinary per-thread exit, where the instance must carry on |
+
+  Arm 4's *today* column is measured, not assumed: registering an arm as must-not-move on an unverified claim would be the same defect the hook itself is guarded against.
 - **Fork-level:** amendment 5's pooled row set, **18 of 18** finishing, with exact verdict counts.
 - **Gate:** clauses 1, 2 and 3's witnesses re-run. Teardown semantics touch all three.
+- **The committed witness asserts that its own output lines were seen.** During this investigation a
+  count of the probe's runs was taken with `go test` but without `-v`, which swallows the probe's
+  stdout: the pipeline printed a tally for a pattern that had matched nothing. That is the same family
+  as the earlier `grep` block-buffering defect — **an instrument reporting on output it never
+  received** — so the witness asserts a positive line count per arm rather than trusting that absence
+  of a failure line means absence of a failure.
