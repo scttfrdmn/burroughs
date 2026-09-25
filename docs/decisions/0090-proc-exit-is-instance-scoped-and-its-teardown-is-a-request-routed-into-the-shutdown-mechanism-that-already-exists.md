@@ -158,3 +158,68 @@ The probe's arm 1 hangs identically, so a trap in a spawned agent joins [#819](h
   as the earlier `grep` block-buffering defect — **an instrument reporting on output it never
   received** — so the witness asserts a positive line count per arm rather than trusting that absence
   of a failure line means absence of a failure.
+
+---
+
+# Amendment 4, 2026-09-25 — amendment 3's trap clause is withdrawn, because it reversed stamped ADR 0071
+
+**Ruled by chat-Claude** (relayed via Scott), on the conflict being found by building the mechanism rather
+than by re-reading either document. Appended rather than edited into the body above, so that what was
+ratified and what replaced it are both readable.
+
+## What was withdrawn
+
+Amendment 3 said a spawned agent whose top frame unwinds **with a trap** requests instance termination, on
+the wasi-threads reading that a trap in any thread ends the instance. **That clause is withdrawn.** It was
+never implemented past a local branch and no code carrying it ever landed.
+
+**It would have reversed [ADR 0071](0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md),** whose witness says so in plain words — a host
+entry after a spawned thread's trap *"must run"*. 0071 decided what a fault does: record it, report it on
+both of §2 T-5.3's channels, and **leave the instance usable**. Building amendment 3 turned exactly one
+test in the tree red, and it was that witness.
+
+**The premise is what was wrong, not the conclusion.** T-5.3 governs *reporting*, not survival, so the
+contract clause permits either answer — which is why checking the clause alone would not have caught this,
+and why the conflict is with a stamped ADR rather than with §2. The chair applied wasi-threads semantics
+without asking whether a stamped decision had already answered the question; it had.
+
+## What replaces it
+
+**`proc_exit` ends the instance because it is a declaration. A bare trap does not, because it is a fault.**
+
+- `proc_exit` is the guest saying the process is over.
+- a bare trap is a fault, and 0071's considered answer to a fault stands unchanged.
+
+Both reach `world.retire` as a trap, because a host function's returned error *is* a trap — so the engine
+cannot separate them by shape, and a **declaration** is what separates them. `internal/wasi`'s `exitError`
+implements `interp.InstanceEnder`; the hook's predicate is an `errors.As` over the chain for that
+interface. **Fault recording is unchanged for every trap**: only the teardown request is gated.
+
+**The interface is deliberately not the public embedder surface.** Nothing outside the module can
+implement it. If an embedder defining host functions through the public API ever needs to declare this,
+that is new public surface and Scott's stamp — recorded as out of scope, not as a gap.
+
+## The divergence from wasi-threads is deliberate and known
+
+wasi-threads says a trap in any thread ends the instance. **Burroughs does not, and this records that as a
+choice rather than an oversight.** What retires it is a **consumer that needs a bare spawned trap to end
+the instance** — a candidate being a fork guest reaching `unreachable` in a spawned agent without going
+through `proc_exit`, for instance if the runtime's abort path fires. For the Go fork as it stands, fatal
+paths reach `proc_exit` via `runtime.exit`, so Go guests are covered either way.
+
+**That consumer would bring a reversal of 0071, which is Scott's tier.** It does not arrive as another
+amendment to this document.
+
+## The witness changed with it
+
+**Arm 2 changed meaning and now pins 0071 in the threaded setting** — where 0071's own witness does not
+reach, because nothing there is parked in a futex. A spawned agent traps while the invoker sits in an
+infinite wait; `Fault()` reports the trap while `Invoke` is **still in flight**; the embedder then calls
+`Close`, and `Invoke` returns the `Close` sentence, which is **true this time because `Close` was called**.
+`errors.As` finds no `exitError`. Arm 2 joins arms 3 and 4 as must-not-move.
+
+**Injection D is the watched death for the new condition**: fire the hook on any trap and ignore the
+declaration. Arm 2 and T-5.3's witness both die. Injections A–C were re-run against the new predicate, and
+the four form a matrix in which no arm is redundant — **arm 4 is the only row where B and D differ**. One
+honest note: **arm 3 never fails under any of the four injections**; it is a regression guard, not a
+discriminator.

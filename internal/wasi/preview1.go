@@ -51,6 +51,30 @@ type exitError struct{ code int }
 
 func (e exitError) Error() string { return fmt.Sprintf("wasi: proc_exit(%d)", e.code) }
 
+// EndsInstance declares that this error ends the **whole instance**, not only the agent that returned
+// it — [interp.InstanceEnder], [ADR 0090]'s amendment 4.
+//
+// **It is here rather than inferred in the engine because `proc_exit` is a declaration and a trap is
+// not.** A guest calling `proc_exit` says the process is over; a guest that hits `unreachable` has
+// faulted, and stamped [ADR 0071] already answers that case — record it, report it on both of T-5.3's
+// channels, and leave the instance usable. Both reach `world.retire` as a trap, because a host
+// function's returned error *is* a trap, so the engine cannot tell them apart by shape. This method is
+// the difference.
+//
+// Without it, a spawned agent's `proc_exit` ends only that agent and an invoking agent parked in
+// `memory.atomic.wait` waits forever — which is [#819], the defect [ADR 0090] repairs.
+//
+// [ADR 0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+// [ADR 0090]: ../../docs/decisions/0090-proc-exit-is-instance-scoped-and-its-teardown-is-a-request-routed-into-the-shutdown-mechanism-that-already-exists.md
+// [#819]: https://github.com/scttfrdmn/burroughs/issues/819
+func (e exitError) EndsInstance() {}
+
+// exitError satisfies the declaration interface. Asserted at compile time because the whole mechanism
+// is one method's presence: if it were dropped, every arm of [ADR 0090]'s witness that needs a teardown
+// would fail at run time with nothing naming the cause, and a guest's `proc_exit` would silently go
+// back to ending one agent.
+var _ interp.InstanceEnder = exitError{}
+
 // host holds the per-run configuration a preview-1 call reads: argv, environment, the stdout/stderr
 // sinks, and a start instant for the monotonic clock.
 type host struct {

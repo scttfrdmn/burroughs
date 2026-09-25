@@ -785,6 +785,21 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) (results 
 		if _, ok := r.(threadTerminated); !ok {
 			panic(r)
 		}
+		// **[ADR 0090][0090]: when the GUEST requested the teardown, this returns the recorded first cause
+		// instead of the sentence below** — which would otherwise say *"ended at a safepoint after
+		// `Close`"* about an instance nobody called `Close` on. That is false in its load-bearing word,
+		// and it is the error **every embedder** sees, not just the WASI runner: putting the repair in
+		// `runModule` would have bought one true message with a false one for everyone else.
+		//
+		// Returning `world.fault` here is also what lets the runner keep its existing
+		// `errors.As(err, &ee)` and gain no special case at all — the cause carries the `exitError` or
+		// the trap through `world.fault`'s two `%w` verbs.
+		//
+		// [0090]: ../../docs/decisions/0090-proc-exit-is-instance-scoped-and-its-teardown-is-a-request-routed-into-the-shutdown-mechanism-that-already-exists.md
+		if cause := in.world.guestExitCause(); cause != nil {
+			results, err = nil, cause
+			return
+		}
 		results, err = nil, fmt.Errorf("%w: %s ended at a safepoint after `Close`, so %q did not "+
 			"complete (contract §2 T-5.4)", ErrTerminated, &in.host, name)
 	}()

@@ -588,12 +588,39 @@ fi
 # synthetic additions — `+++` first, so the paragraph join below cannot weld a new file's opening
 # line to the previous hunk's tail. Found while falsifying the check: the first `--worktree` run
 # could not see this script.
+#
+# **A BINARY untracked file is skipped, and the count is printed rather than swallowed.** `sed` will
+# happily prefix raw bytes, and the `awk` below then dies — measured as
+# `Assertion failed: (advance > 0), function substitute, file process.c, line 462` and an exit of 134
+# when [ADR 0090]'s committed `.wasm` witnesses first reached this loop. **A crashed sweep checks
+# nothing**, so this is strictly worse than a miss: `make cite` went from a verdict to an abort, and an
+# abort is the one outcome that cannot report which of its seven checks would have passed.
+#
+# Tracked `.wasm` files already existed (`examples/add/add.wasm`, `internal/component/testdata/*.wasm`)
+# and never triggered it, because this synthetic-additions path reads only the **untracked** ones — so
+# the trigger is *adding* a binary, not *having* one, which is why the defect waited this long.
+#
+# **Skipped, not exempted, and the difference is the printed count.** A binary can in principle carry
+# citation text in a custom section, so this is a real gap rather than an empty one — it is named on
+# stderr so a reader can price it, per *an exemption teaches an instrument to look away*. The honest
+# scope: a citation that exists only inside a binary is invisible to this check.
 if [ "$prmode" -eq 0 ] && [ -z "$head" ]; then
+	skippedbin=0
 	for f in $(git ls-files --others --exclude-standard); do
+		# `grep -qI .` is 0 for text and non-zero for binary on both GNU and BSD grep. The `-s` guard
+		# keeps an empty file — also non-zero — out of the binary count, since it is neither.
+		if [ -s "$f" ] && ! grep -qI . "$f" 2>/dev/null; then
+			skippedbin=$((skippedbin + 1))
+			continue
+		fi
 		diffout="$diffout
 +++ b/$f
 $(sed 's/^/+/' "$f")"
 	done
+	if [ "$skippedbin" -gt 0 ]; then
+		echo "citecheck: $skippedbin untracked binary file(s) not scanned for citations — a citation" \
+			"that exists only inside a binary is invisible here. Named rather than dropped." >&2
+	fi
 fi
 nlines="$(printf '%s\n' "$diffout" | grep '^+' | grep -v '^+++' | grep -c '' || true)"
 

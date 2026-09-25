@@ -116,6 +116,23 @@ type world struct {
 	fault         error
 	faultReported bool
 
+	// guestExit marks that this instance's termination was requested by the **guest** — a spawned
+	// agent's top frame unwound with a trap — rather than by `Instance.Close`. [ADR 0090][0090].
+	//
+	// **It exists so that an in-flight `Invoke` can tell a true sentence from a false one.** Both
+	// teardowns end a parked agent the same way, through `thread.cancelCtx` and the `<-Done()` arm of
+	// `memory.wait`, so the *unwind* carries no evidence of which one happened. Without this flag the
+	// conversion in `invokeIndex` reports *"ended at a safepoint after `Close`"* for a guest that called
+	// `proc_exit`, which is false in the load-bearing word: nobody called `Close`.
+	//
+	// **Set once, never cleared, and never set while `closed`.** It is a terminal mark like `closed`
+	// rather than one of SP-1's, and *"first cause wins"* is `world.fault`'s rule applied to the
+	// request as well as to the value — an embedder who calls `Close` after a guest exit is not the
+	// cause of the teardown it is finishing.
+	//
+	// [0090]: ../../docs/decisions/0090-proc-exit-is-instance-scoped-and-its-teardown-is-a-request-routed-into-the-shutdown-mechanism-that-already-exists.md
+	guestExit bool
+
 	// closed is `Instance.Close`'s terminal mark — contract §5 H-3, [ADR 0069][0069].
 	//
 	// **Terminal, and therefore not a second `resume`.** `Stop`/`Resume` are a *pause* and this is a
@@ -453,6 +470,39 @@ func (w *world) retire(t *thread, err error) {
 		// what makes T-5.3's two channels two views of one value.
 		w.fault = fmt.Errorf("%w: %s: %w", ErrThreadFault, t, err)
 	}
+	// **The fault recording above is UNCHANGED for every trap, and the teardown below is gated
+	// separately** — [ADR 0090][0090] amendment 4. Keeping them apart is the whole of ruling B: T-5.3's
+	// retention applies to every trap, so `world.fault` is written here exactly as [ADR 0071][0071] left
+	// it, and only the *teardown request* asks whether the guest declared that the instance ends.
+	//
+	// Firing this on any trap instead would reverse 0071, whose witness requires a host entry after a
+	// spawned thread's trap to still run. `TestASpawnedThreadsTrapReachesBothChannelsAndTheJoin` is the
+	// gate for that and injection D is its watched death.
+	//
+	// **`errors.As` over the chain, not a type switch on `err`.** The declaration is made by the error a
+	// *host function* returned, and by the time it reaches here it has been wrapped by the trap machinery
+	// — so the test has to look through the chain or it would never match.
+	guestEnded := false
+	if err != nil {
+		var ender InstanceEnder
+		guestEnded = errors.As(err, &ender)
+	}
+	// **[ADR 0090][0090]'s hook, and it is this predicate rather than a new one.** A spawned agent whose
+	// top frame unwound with a trap ends the *instance*, so the teardown is requested here — and the
+	// three conditions above are exactly the three the hook needs, which is why it is a read of them
+	// and not a second test:
+	//
+	//   - `err != nil` excludes a **normal return**, which is §2 T-5's ordinary per-thread exit. The
+	//     instance must carry on, and a hook at *"agent ended"* rather than *"agent trapped"* is the
+	//     one mistake the four-arm witness has an arm for.
+	//   - `w.fault == nil` is **first cause wins**: a second trap during the teardown it caused is not
+	//     an error and does not displace the cause.
+	//   - `!errors.Is(err, ErrTerminated)` stops the teardown re-requesting itself, since every sibling
+	//     this ends retires with exactly that error.
+	//
+	// `proc_exit` arrives here without naming itself: [internal/wasi]'s handler returns an `exitError`,
+	// a host function's returned error *is* a trap, and so the exit and the trap are one class with one
+	// hook — which is what folded the trap case into #819 rather than filing it twice.
 	idle := w.releaseIfQuiescent()
 	stopped := w.releaseIfAtSafepoint()
 	w.mu.Unlock()
@@ -463,6 +513,111 @@ func (w *world) retire(t *thread, err error) {
 	if stopped != nil {
 		close(stopped)
 	}
+	if guestEnded {
+		// **Outside the lock, and it must be**: `requestGuestTeardown` takes `w.mu` itself, and it runs
+		// `context.CancelFunc`s, which `Close` also does outside its own critical section for the reason
+		// stated there — a host function's `select` waking while the lock is held would find
+		// `endHostCall` unable to take it.
+		w.requestGuestTeardown()
+	}
+}
+
+// InstanceEnder is implemented by an error a host function returns to **declare** that it ends the whole
+// instance rather than only the calling agent — [ADR 0090][0090], amendment 4.
+//
+// # Why a declaration rather than an inference from "it was a trap"
+//
+// ADR 0090's amendment 3 had the teardown fire on *any* trap that ended a spawned agent, on the
+// wasi-threads reading that a trap in any thread ends the instance. **That reverses stamped
+// [ADR 0071][0071]**, whose witness asserts in plain words that a host entry after a spawned thread's
+// trap *"must run"* — 0071 decided that a fault is recorded, reported on both T-5.3 channels, and the
+// instance stays usable. The clause was withdrawn before any code landed.
+//
+// So the two cases are separated by what they *are*, not by how they arrive:
+//
+//   - `proc_exit` is the guest **declaring** that the process ends. It ends the instance.
+//   - a bare trap is a **fault**. [ADR 0071] already gives it a considered answer, which stands.
+//
+// Both arrive at `retire` as a trap, because a host function's returned error *is* a trap — which is
+// exactly why inference cannot tell them apart and a declaration can.
+//
+// **It is deliberately not the public embedder surface.** `internal/wasi`'s `exitError` implements it,
+// and nothing outside this module can. If an embedder defining host functions through the public API
+// ever needs to declare this, that is new public surface and Scott's stamp; recorded as out of scope
+// rather than as a gap.
+//
+// [0071]: ../../docs/decisions/0071-t-5-is-live-only-membership-a-bounded-status-record-a-fault-in-two-channels-and-a-sentinel-panic-for-the-terminal-unwind.md
+// [0090]: ../../docs/decisions/0090-proc-exit-is-instance-scoped-and-its-teardown-is-a-request-routed-into-the-shutdown-mechanism-that-already-exists.md
+type InstanceEnder interface {
+	error
+	// EndsInstance is a marker. It carries no value because the *cause* already travels through
+	// `world.fault` — a second channel for the same payload is the race `world.fault` documents.
+	EndsInstance()
+}
+
+// requestGuestTeardown ends every agent of this instance because the **guest** asked — [ADR 0090][0090].
+// It is `Instance.Close`'s marking half **without the wait**, and the missing wait is the whole design:
+//
+// **It cannot wait, and that is derived from `quiescentLocked` rather than chosen.** That predicate's
+// first condition is `hostCalls == 0`, and this is reached from a `proc_exit` whose host call is still in
+// flight — so waiting here would wait on a predicate that counts the waiter, stall
+// `closeQuiesceInterval`, and then report `unquiesced()` about a teardown that was working. The wait
+// stays where it already is: the embedder's own `Close`, which for the WASI runner is `runModule`'s
+// `defer in.Close()`.
+//
+// **It reuses §2 T-5.4's mechanism without claiming T-5.4's obligation.** T-5.4's subject is *engine
+// shutdown* — the host calling `Close` — so a clause that obliges the engine there does not oblige it
+// here, and [ADR 0090] says so explicitly rather than citing T-5.4 for a population it does not name.
+// What is borrowed is the *how*: mark, then cancel, and let `memory.wait`'s `<-Done()` arm trap a parked
+// agent out of an infinite wait rather than return it one of that instruction's defined results.
+//
+// [0090]: ../../docs/decisions/0090-proc-exit-is-instance-scoped-and-its-teardown-is-a-request-routed-into-the-shutdown-mechanism-that-already-exists.md
+func (w *world) requestGuestTeardown() {
+	w.mu.Lock()
+	// A `Close` already in progress owns the teardown, and a second guest exit is not an error — both
+	// are `world.guestExit`'s *"first cause wins"*, and re-marking would be harmless but would let a
+	// later exit's code displace the one `Invoke` is going to report.
+	if w.closed || w.guestExit {
+		w.mu.Unlock()
+		return
+	}
+	w.guestExit = true
+	// Copied under the lock for `Close`'s reason: `admit` appends to this slice, so a concurrent
+	// `Spawn` would be a data race on the header if it were walked outside.
+	live := make([]*thread, len(w.live))
+	copy(live, w.live)
+	// **`exitReq` before `stopReq`**, which is `Close`'s order and load-bearing for `Close`'s reason: a
+	// poll diverts on `stopReq` and decides on `exitReq`, so setting the deciding flag first is what
+	// makes the two reads in `parkAtSafepoint` unable to see a half-set request.
+	for _, t := range live {
+		t.exitReq.Store(true)
+		t.stopReq.Store(true)
+	}
+	w.mu.Unlock()
+
+	for _, t := range live {
+		t.cancelCtx()
+	}
+}
+
+// guestExitCause answers the cause when this instance's teardown was requested by the guest, and nil
+// when it was not — [ADR 0090][0090]. `invokeIndex`'s terminal conversion reads it to choose between a
+// true sentence and a false one.
+//
+// **It returns `world.fault` rather than a second record**, so the value an in-flight `Invoke` returns
+// is the same value `Instance.Fault` answers with and the same one a pre-empted later `Invoke` would
+// report. T-5.3's two channels become three views of one value instead of two views and a copy, and
+// `errors.As` reaches the carried trap through `world.fault`'s two `%w` verbs — which is what lets
+// [internal/wasi]'s `errors.As(err, &ee)` find its `exitError` with no special case in the runner.
+//
+// [0090]: ../../docs/decisions/0090-proc-exit-is-instance-scoped-and-its-teardown-is-a-request-routed-into-the-shutdown-mechanism-that-already-exists.md
+func (w *world) guestExitCause() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.guestExit {
+		return nil
+	}
+	return w.fault
 }
 
 // takeFaultReport answers the retained fault the *first* time it is asked and nil thereafter — T-5.3's
