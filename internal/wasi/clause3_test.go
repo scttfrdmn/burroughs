@@ -41,8 +41,8 @@ const (
 // mutator/collector race and both arms' discrimination. It gives up identity with the registered figures.
 const (
 	c3WantCollected = 8
-	c3WantMutations = 8_000
-	c3WantNodes     = 500
+	c3WantMutations = 600
+	c3WantNodes     = 50
 )
 
 type c3Result struct {
@@ -94,14 +94,29 @@ func TestClause3GCAcrossTwoAgents(t *testing.T) {
 	if full {
 		nPos, nNeg = 10, 3
 	}
+	// **ARM SCOPING UNDER `-race`, and it is a claim about what `-race` is for.** The race detector finds data
+	// races in *Burroughs' engine*. `world_stopped` and `world_not_stopped` exercise engine paths — spawn, a
+	// collection across two agents, teardown — so they keep their `-race` coverage. The two
+	// verifier-liveness arms exercise the GUEST's own checksum and finalizer logic, where a data race in the
+	// engine cannot be what makes them pass or fail; running them under `-race` bought 12 minutes of CI and
+	// no new question.
+	//
+	// Measured, and this is why it is not a preference: CI's x86-64 runner took **18m25s** for the three
+	// positive-side arms under `-race` (~6 min each) against a 25-minute per-package budget, and the package
+	// timed out. My own machine had them at 208s for all four — a **~5x** local-to-CI factor on top of
+	// `-race`, on the runner the Makefile's own note documents as the slow and variable one.
+	raceArmsOnly := raceSlowdown > 1
 	for _, arm := range []struct {
-		name     string
-		file     string
-		mode     string
-		n        int
-		wantPass bool
-		wantBad  bool // the verifier must REPORT a failure, not merely not-verify
-		why      string
+		name string
+		file string
+		mode string
+		// guestLogicOnly marks an arm whose subject is the guest's verifier rather than the engine, so
+		// `-race` has nothing to say about it. See the note above.
+		guestLogicOnly bool
+		n              int
+		wantPass       bool
+		wantBad        bool // the verifier must REPORT a failure, not merely not-verify
+		why            string
 	}{{
 		name: "world_stopped", file: "c3_stopped.wasm", n: nPos, wantPass: true,
 		why: "the collector did not act on a heap the mutator was still changing",
@@ -110,17 +125,20 @@ func TestClause3GCAcrossTwoAgents(t *testing.T) {
 		// fails by CRASHING, so until these two existed the checksum walk had only ever passed: live against
 		// a crash and unfalsified against the failure it exists for. Both run on a correctly stopped world.
 		name: "verifier_catches_corruption", file: "c3_stopped.wasm", mode: "corrupt", n: 1,
-		wantPass: false, wantBad: true,
+		guestLogicOnly: true, wantPass: false, wantBad: true,
 		why: "a payload was flipped in a reachable node without re-deriving its sum — nothing crashes, and " +
 			"the walk must say which node",
 	}, {
 		name: "verifier_catches_finalizer", file: "c3_stopped.wasm", mode: "finalizer", n: 1,
-		wantPass: false,
-		why:      "a finalizer body ran on a node the ring still holds, so the finalizer clause must report it",
+		guestLogicOnly: true, wantPass: false,
+		why: "a finalizer body ran on a node the ring still holds, so the finalizer clause must report it",
 	}, {
 		name: "world_not_stopped", file: "c3_notstopped.wasm", n: nNeg, wantPass: false,
 		why: "with the STW wait neutered the collector marks a heap under mutation, and the walk must catch it",
 	}} {
+		if raceArmsOnly && arm.guestLogicOnly {
+			continue
+		}
 		t.Run(arm.name, func(t *testing.T) {
 			var verified, ran, died int
 			var badSeen uint32

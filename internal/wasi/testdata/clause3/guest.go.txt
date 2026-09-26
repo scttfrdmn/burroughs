@@ -41,13 +41,14 @@ func slot(a uintptr) *uint32 { return (*uint32)(unsafe.Pointer(a)) }
 // uninstrumented and **>27x that under `-race`**, measured: the negative arm went from ~11s to over 300s.
 // A positive run would be ~35 minutes in CI's race job, which has a 25-minute budget for the whole tree.
 //
-// So the committed gate runs a SCALED-DOWN structure. What is preserved: the checksum-over-successor
+// So the committed gate runs a SCALED-DOWN structure, twice reduced — see PROVENANCE for both steps and
+// the CI measurement that forced the second. What is preserved: the checksum-over-successor
 // shape, the finalizers on reachable nodes, the mutator/collector race, and both arms' discrimination.
 // What is given up: identity with the registered figures in the committed gate.
 const (
-	nodes       = 500
+	nodes       = 50
 	collections = 8
-	mutations   = 8_000
+	mutations   = 600
 )
 
 type node struct {

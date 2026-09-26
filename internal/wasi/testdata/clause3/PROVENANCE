@@ -119,3 +119,43 @@ SO CLAUSE 3'S CLAIM IS NOW TWO CLAIMS, and they should not be conflated:
   2. the witness separates a stopped world from a not-stopped one, the latter by crashing.
 It still does NOT show that a not-stopped world produces a SURVIVING corrupted heap that the walk then
 catches — that conjunction has not been observed, and claim 1 plus claim 2 do not add up to it.
+
+===============================================================================================
+SCALED AGAIN AFTER CI, AND THE SECOND SCALING WAS THE WRONG LEVER. Hashes above superseded.
+===============================================================================================
+
+CI's x86-64 runner timed out the whole `internal/wasi` package at its 25-minute budget, with
+`TestClause3GCAcrossTwoAgents (18m25s)` still running -- roughly 6 minutes per positive-side arm, against
+208s for all four arms on the machine the earlier numbers were taken on. `internal/spec` under `-race` on the
+same runner took 760s, which is itself above the 430-593s range the Makefile's own note documents.
+
+TWO RESPONSES, and only one of them was right:
+
+  1. ARM SCOPING, which worked. Under `-race` only the two arms whose subject is the ENGINE run --
+     `world_stopped` and `world_not_stopped`. The two verifier-liveness arms exercise the GUEST's checksum
+     and finalizer logic, where an engine data race cannot be what makes them pass or fail. That removed two
+     of three positive-side arms.
+
+  2. SCALING THE STRUCTURE, which did NOT work, and the measurement says so plainly:
+
+       150 nodes / 2,000 mutations  ->  clause 3 under -race: 144.4s
+        50 nodes /   600 mutations  ->  clause 3 under -race: 140.9s
+
+     A 3x reduction in the ring and the mutation count bought 3.5 seconds. THE COST IS FIXED OVERHEAD --
+     Go runtime init plus the 8 forced collections under `-race` in an interpreter -- and not the structure
+     at all. `world_stopped` is ~108s either way.
+
+  So the structure was reduced twice for a reason that was never the cause, and the figure that actually
+  drives the cost is `collections = 8`, which is the registered claim and is NOT reduced.
+
+COMMITTED binaries (50 nodes / 600 mutations / 8 collections):
+  c3_stopped.wasm      sha256 recorded by the committing slice; bytes in git
+  c3_notstopped.wasm   same two stopTheWorldWithSema edits, same source
+
+  measured: 36.4s uninstrumented for all four arms; 218.5s for the whole package under -race with the
+  two engine arms only.
+
+WHAT IS NOT CLAIMED: that these numbers predict CI's. The earlier "~5x local-to-CI factor" was computed by
+comparing a four-arm local run against a three-arm CI run -- different populations, so the ratio was never a
+measurement. CI is the authority for CI timings, and the fit is being established there rather than argued
+from here.
