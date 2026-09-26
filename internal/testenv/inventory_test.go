@@ -58,16 +58,6 @@ import (
 // property the withdrawn door lacked. Its cost is stated too: the convention this file's
 // header rests on — every skip routed through testenv — now has one member outside it.
 var licensed = map[string]string{
-	// The unaimed-program sweep's harness runs fork-built Go test binaries of 6-18 MB each, produced by a
-	// toolchain that lives outside this repository (slice 1's precedent: the guest artifacts are not
-	// committed anywhere). So the guest is named by environment and the test skips without one.
-	//
-	// **The HARNESS is committed, which is the part that was lost.** An earlier version of it produced batch
-	// 2's baseline rows and was then deleted as scratch, leaving a registration whose numbers could not be
-	// re-derived — the fork's standing property 18, hours after it was written. This license buys the
-	// harness's survival, not a skipped question: the question is asked whenever a guest is supplied, and the
-	// rows it produces name the guest they came from.
-	"internal/wasi/sweep_test.go:TestSweepRow": "fork-built guests live outside this repo (6-18 MB each); the harness is committed so its rows stay re-derivable",
 	"internal/testenv/testenv.go:RequireSuite": "local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
 	// The 0007 authority is a separate corpus from the suite with a separate fetch
 	// (`make spec-ref`), so it needs its own door rather than a widened RequireSuite:
