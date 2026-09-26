@@ -1,0 +1,5 @@
+package main
+
+//go:wasmexport hello
+func hello() uint32 { return 42 }
+func main() {}

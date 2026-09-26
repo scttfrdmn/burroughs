@@ -41,8 +41,8 @@ const (
 // mutator/collector race and both arms' discrimination. It gives up identity with the registered figures.
 const (
 	c3WantCollected = 8
-	c3WantMutations = 8_000
-	c3WantNodes     = 500
+	c3WantMutations = 600
+	c3WantNodes     = 50
 )
 
 type c3Result struct {
@@ -94,23 +94,56 @@ func TestClause3GCAcrossTwoAgents(t *testing.T) {
 	if full {
 		nPos, nNeg = 10, 3
 	}
+	// **ARM SCOPING UNDER `-race`, and it is a claim about what `-race` is for.** The race detector finds data
+	// races in *Burroughs' engine*. `world_stopped` and `world_not_stopped` exercise engine paths — spawn, a
+	// collection across two agents, teardown — so they keep their `-race` coverage. The two
+	// verifier-liveness arms exercise the GUEST's own checksum and finalizer logic, where a data race in the
+	// engine cannot be what makes them pass or fail; running them under `-race` bought 12 minutes of CI and
+	// no new question.
+	//
+	// Measured, and this is why it is not a preference: CI's x86-64 runner took **18m25s** for the three
+	// positive-side arms under `-race` (~6 min each) against a 25-minute per-package budget, and the package
+	// timed out. My own machine had them at 208s for all four — a **~5x** local-to-CI factor on top of
+	// `-race`, on the runner the Makefile's own note documents as the slow and variable one.
+	raceArmsOnly := raceSlowdown > 1
 	for _, arm := range []struct {
-		name     string
-		file     string
-		n        int
-		wantPass bool
-		why      string
+		name string
+		file string
+		mode string
+		// guestLogicOnly marks an arm whose subject is the guest's verifier rather than the engine, so
+		// `-race` has nothing to say about it. See the note above.
+		guestLogicOnly bool
+		n              int
+		wantPass       bool
+		wantBad        bool // the verifier must REPORT a failure, not merely not-verify
+		why            string
 	}{{
 		name: "world_stopped", file: "c3_stopped.wasm", n: nPos, wantPass: true,
 		why: "the collector did not act on a heap the mutator was still changing",
 	}, {
+		// **VERIFIER LIVENESS, and it is why the positive arm's green means anything.** The not-stopped arm
+		// fails by CRASHING, so until these two existed the checksum walk had only ever passed: live against
+		// a crash and unfalsified against the failure it exists for. Both run on a correctly stopped world.
+		name: "verifier_catches_corruption", file: "c3_stopped.wasm", mode: "corrupt", n: 1,
+		guestLogicOnly: true, wantPass: false, wantBad: true,
+		why: "a payload was flipped in a reachable node without re-deriving its sum — nothing crashes, and " +
+			"the walk must say which node",
+	}, {
+		name: "verifier_catches_finalizer", file: "c3_stopped.wasm", mode: "finalizer", n: 1,
+		guestLogicOnly: true, wantPass: false,
+		why: "a finalizer body ran on a node the ring still holds, so the finalizer clause must report it",
+	}, {
 		name: "world_not_stopped", file: "c3_notstopped.wasm", n: nNeg, wantPass: false,
 		why: "with the STW wait neutered the collector marks a heap under mutation, and the walk must catch it",
 	}} {
+		if raceArmsOnly && arm.guestLogicOnly {
+			continue
+		}
 		t.Run(arm.name, func(t *testing.T) {
 			var verified, ran, died int
+			var badSeen uint32
 			for i := range arm.n {
-				r, err := runClause3Arm(t, arm.file)
+				r, err := runClause3Arm(t, arm.file, arm.mode)
 				// **A run that DIED is a third outcome, and it is counted rather than fataled.** The
 				// registration named two — verified, or verification failed — and the neutered world
 				// produces a third: the Go runtime throws inside its own mark workers before the guest
@@ -142,6 +175,9 @@ func TestClause3GCAcrossTwoAgents(t *testing.T) {
 				if r.verdict == 1 {
 					verified++
 				}
+				if r.badNode != 0 {
+					badSeen = r.badNode
+				}
 				// **Asserted on EVERY run of BOTH arms**: the guest must have reached its own subject. A
 				// negative arm that "fails" because no collection ran, or because the mutator never
 				// started, would pass this test while witnessing nothing.
@@ -163,6 +199,11 @@ func TestClause3GCAcrossTwoAgents(t *testing.T) {
 					"finalizer firing\"). Recorded as a deviation rather than counted as the reading.",
 					arm.name, died, arm.n)
 			}
+			if arm.wantBad && badSeen == 0 {
+				t.Errorf("the verifier did not name a bad node in any run; %s — a run that merely fails to "+
+					"verify could have failed for any reason, and this arm exists to watch the CHECKSUM "+
+					"clause fire", arm.why)
+			}
 			switch {
 			case arm.wantPass && verified != arm.n:
 				t.Errorf("verified %d of %d runs, want all — %s", verified, arm.n, arm.why)
@@ -176,7 +217,7 @@ func TestClause3GCAcrossTwoAgents(t *testing.T) {
 }
 
 // runClause3Arm runs one guest once and reads its verdict block out of the zero page.
-func runClause3Arm(t *testing.T, file string) (c3Result, error) {
+func runClause3Arm(t *testing.T, file, mode string) (c3Result, error) {
 	t.Helper()
 	var zero c3Result
 	img, rerr := os.ReadFile(filepath.Join("testdata", "clause3", file))
@@ -188,7 +229,9 @@ func runClause3Arm(t *testing.T, file string) (c3Result, error) {
 
 	var out strings.Builder
 	cfg := Config{
-		Wasm: img, Args: []string{"clause3"}, Stdin: strings.NewReader(""),
+		// The mode reaches the guest through argv, so one binary serves three arms and they differ by
+		// nothing else.
+		Wasm: img, Args: append([]string{"clause3"}, argvMode(mode)...), Stdin: strings.NewReader(""),
 		Stdout: &out, Stderr: &out, Features: &feats,
 	}
 	m, derr := decodeGuest(cfg)
@@ -312,4 +355,13 @@ func tail(s string, n int) string {
 		return s
 	}
 	return "..." + s[len(s)-n:]
+}
+
+// argvMode returns the guest's mode argument, or nothing for the default arm — so the normal arm's argv is
+// byte-identical to what it was before the liveness arms existed.
+func argvMode(mode string) []string {
+	if mode == "" {
+		return nil
+	}
+	return []string{mode}
 }

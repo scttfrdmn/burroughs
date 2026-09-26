@@ -1,0 +1,35 @@
+Phase 4 clause 1's witness component — provenance, per the wabt precedent. Not reproducible from this
+repository alone: it is built by the Phase 4 fork and then composed with wasm-tools.
+
+Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch wasmpreempt/phase4
+Fork SHA:     de8e915c0c8ed94f4238203c3c9900450ac140f7
+Built on:     darwin/arm64, 2026-09-26
+Guest source: guest.go.txt (a reactor exporting one scalar function)
+World:        hello.wit (copied from the fork's phase4/hello.wit)
+
+  fork_hello_component.wasm
+    GOEXPERIMENT=componentabi GOOS=wasip1 GOARCH=wasm $(fork)/bin/go build \
+        -buildmode=c-shared -o reactor.wasm .
+    wasm-tools component embed hello.wit reactor.wasm -o embedded.wasm
+    wasm-tools component new embedded.wasm -o fork_hello_component.wasm
+    wasm-tools: 1.258.0
+    sha256: f63159e9c14ecafc820663030004aa42792893a25106a99478f08261e1f2e907
+    bytes:   1852557
+
+TWO ENGINES, COMMITTED DIFFERENTLY, and the asymmetry is deliberate:
+
+  Engine B (Burroughs) — clause1_test.go, runs in CI against the bytes above. Measured: [{i32 42}].
+
+  Engine A (Wasmtime)  — CANNOT run in this repository's CI: wasmtime is not a dependency here. What is
+    committed is its READING, hello.reading, copied verbatim from the fork. That file was committed in the
+    fork BEFORE the fork could emit the module at all, which is what makes it a prediction rather than a
+    transcript of whatever happened. Re-running Engine A is an out-of-CI recipe, recorded in the fork's
+    phase4/README.md. Last run 2026-09-25 on wasmtime 49.0.1: output 42, exit 0, matching the reading.
+
+    The reading also records the load-bearing flag: `-W shared-memory=y` is REQUIRED and `-W threads=y`
+    is NOT sufficient, verified by running both.
+
+WHY THIS DIRECTORY EXISTS AT ALL: clause 1's Burroughs arm was an ad hoc test written into this package,
+run, and deleted. When ADR 0090's merge gate asked for clauses 1-3 to be re-run, clause 1 was re-runnable
+only because its component happened to still be in /tmp. Same standing as clauses 2 and 3 — fork standing
+property 18, a witness that is not committed is not a witness.

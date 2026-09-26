@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
+.PHONY: all build test race witnesses vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -256,8 +256,62 @@ test-endtable:
 # A failsafe, not a budget, in the sense the `fuzz-smoke` job's own timeout comment means it: loose
 # enough that runner variance cannot reach it, tight enough that a genuine hang is still caught.
 # **Not a conformance bar and not a performance target** — no verdict in this tree reads it.
+#
+# **AMENDED 2026-09-26: the figures above are stale, and the note was an instrument claim that had gone
+# false.** `internal/spec` under `-race` on CI's x86-64 leg measured **760.206s** — above the entire
+# 430.9–593.0s range recorded above, so the "2.5x the largest completed observation" multiplier is now
+# **2.0x** for that one package. The drift was not discovered by watching; it was discovered when the
+# 25-minute timeout fired for an unrelated reason and the log happened to carry the number.
+#
+# That is what `scripts/budget.sh` now exists for: every timed job prints elapsed against its budget and
+# warns past 75%, so the room is reported while there is still room. A timeout alone can only say
+# "past 100%", which is the point at which "the work grew" and "the runner drifted" are no longer
+# separable — and here they had both happened.
+#
+# **The Phase 4 clause witnesses are NOT in this target**, and that is deliberate rather than a gap. They
+# cost minutes under `-race` (fixed overhead: a Go guest's runtime init plus 8 forced collections in an
+# interpreter, measured insensitive to the guest's structure), and squeezing them into a budget already at
+# 2.0x only postpones the break. They have their own job — `make witnesses` — with its own budget, on both
+# arches, and they run **under `-race` there**. So the question is relocated, not skipped.
 race:
-	$(GO) test -race -timeout 25m -shuffle=on ./...
+	@./scripts/budget.sh 1500 race -- $(GO) test -race -timeout 25m -shuffle=on \
+		-skip 'TestClause2|TestClause3' ./...
+
+# witnesses — Phase 4's clauses 1–3, which are expensive and have their own budget.
+#
+# **Two invocations, because the two configurations ask different questions.** Without `-race`, every arm
+# runs, including the two verifier-liveness arms that break clause 3's heap deliberately. With `-race`, only
+# the arms whose subject is the ENGINE run (clause 3's `world_stopped` / `world_not_stopped`, clause 2 at
+# 1/1) — a data race in the engine cannot be what makes a guest's own checksum walk pass or fail, so
+# running the guest-logic arms under `-race` buys time and no new question.
+#
+# **`-count=1` is load-bearing, not habit, and it lives in THIS TARGET so no caller can leave it out.** The first version omitted it and `budget.sh` reported
+# `witnesses-norace used 0s of 1800s (0%)` — a CACHED pass, in the one job whose whole purpose is to be the
+# authority for these witnesses. An unrun command looks exactly like a passing one, and the budget gauge is
+# what made the zero visible.
+#
+# ## THE BUDGET IS PROVISIONAL AT 1800s, and how it gets pinned is fixed in advance
+#
+# One CI run is **one sample per arch**, and this Makefile already documents a 1.38x spread on the slow
+# runner — so a pin taken from a single observation is a pin taken from that observation's luck.
+#
+#   1. pin at **2x the SLOWER arch's** observed time;
+#   2. **recheck after three runs**;
+#   3. if a later run shows a larger spread, **the pin moves up with it**, recorded with a date the way the
+#      `race` note above now is;
+#   4. until step 1 has numbers from both arches, 1800s stays marked provisional **here, in the file** —
+#      not in a report, because a provisional value nobody can see in the source reads as a decision.
+#
+# **And the FLOOR is the other half.** `budget.sh --floor` FAILS a run that finishes implausibly fast, set to
+# half the lowest elapsed time observed on either arch and stated in seconds rather than as a percentage of
+# the budget. Earned immediately: this gauge's first real run reported `0s of 1800s (0%)` because the target
+# had omitted `-count=1`, and an upper-end warning is structurally unable to see that. The floor value, like
+# the pin, waits for CI's numbers.
+witnesses:
+	@./scripts/budget.sh 1800 witnesses-norace -- $(GO) test -count=1 -timeout 20m \
+		-run 'TestClause1|TestClause2|TestClause3' ./internal/wasi/ ./internal/component/
+	@./scripts/budget.sh 1800 witnesses-race -- $(GO) test -count=1 -race -timeout 20m \
+		-run 'TestClause1|TestClause2|TestClause3' ./internal/wasi/ ./internal/component/
 
 vet:
 	$(GO) vet ./...

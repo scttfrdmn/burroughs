@@ -1,0 +1,8 @@
+package local:fork;
+
+// Slice 1's world, guest-driven: the single export a first Go program needs, and nothing else.
+// A returned u32 is the observable output, so this slice needs no stdout — which keeps p3's
+// async stdio (stream<u8> + future) out of a slice whose subject is emission, not async.
+world hello {
+  export hello: func() -> u32;
+}

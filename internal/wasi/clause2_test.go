@@ -84,7 +84,10 @@ func TestClause2BlockedGoroutinesPIsHandedOff(t *testing.T) {
 	// still asserts sibling A advanced and sibling B's direction exactly.
 	nPos, nNeg := 10, 3
 	if raceSlowdown > 1 {
-		nPos, nNeg = 3, 1
+		// 1/1 rather than 3/1: CI's x86-64 runner is ~5x slower than the machine these numbers were first
+		// taken on, measured when the package timed out at 25 minutes. One run per arm still asserts every
+		// figure and still exercises the engine paths `-race` is here to watch.
+		nPos, nNeg = 1, 1
 	}
 	readings := []c2Reading{{
 		name: "mechanism_present", file: "c2_present.wasm", n: nPos, wantAdv: true,

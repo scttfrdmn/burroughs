@@ -1,0 +1,12 @@
+# Committed wasmtime reading for the slice-1 component (phase4/hello.wit world).
+# Invocation:  wasmtime run -W shared-memory=y --invoke 'hello()' comp.wasm
+#              (the flag became REQUIRED at slice 2's linker change, 2026-09-19: the module now declares
+#              a SHARED memory, which wasmtime's CLI refuses by default --
+#              "shared memory support is disabled for this engine". FINDING: `-W threads=y` does NOT
+#              enable it; `-W shared-memory=y` is the load-bearing flag. Verified by running both.)
+# Output:      42
+# Exit:        0
+# Engine:      wasmtime 48.0.2 (e9f1ea232 2026-09-10), darwin/arm64.
+# NOTE: recorded from a HAND-WRITTEN core module satisfying the contract (see pin-module-contract.md),
+# not yet from a fork-emitted one — the fork cannot emit it until requirement 1 is met. The reading is
+# committed first, per differential-first, so the emission is checked against a reading that predates it.
