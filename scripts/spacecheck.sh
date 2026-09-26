@@ -32,6 +32,15 @@
 #   3. an aligned timing table, `ubuntu-24.04-arm` against its numbers;
 #   4. another aligned timing table, rewritten as prose instead of exempted.
 #
+# **A correction about this section's own history**, because it was reported wrongly once. It was NOT written
+# earlier and lost in a branch reset: a `str.replace` whose anchor read `# Named rather than implied` where the
+# file says `# nothing. Named rather than implied` matched nothing, returned the text unchanged, and was
+# written back — **with no assertion**. So the section never existed until now, nothing was lost, and the
+# "partial recovery" reported at the time did not happen. Verified over 1001 commits (`rev-list --all
+# --reflog` plus `fsck`'s dangling list): exactly one contains it, the one that added it.
+#
+# That is the defect `scripts/inject.sh` exists for, committed minutes before that script did.
+#
 # **THE PREDICATE DOES NOT MOVE; THE FORMAT DOES.** Commit messages carry no aligned tables. Tables belong in
 # PR bodies and docs, where Markdown pipe tables do not trip this at all, because a pipe is not a word
 # character. A commit message should be prose in any case, so the constraint costs nothing that was not
