@@ -118,6 +118,29 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **A guest that called `proc_exit` on a spawned agent left `Invoke` never returning**
+  ([#819](https://github.com/scttfrdmn/burroughs/issues/819),
+  [ADR 0090](docs/decisions/0090-proc-exit-is-instance-scoped-and-its-teardown-is-a-request-routed-into-the-shutdown-mechanism-that-already-exists.md)).
+  `proc_exit` is **instance-scoped**: it now ends every agent, and `Invoke` returns the recorded first
+  cause, so `errors.As` finds the `exitError` and the exit code reaches the embedder.
+  - **The repair is routing, not a new mechanism.** `Close` already trapped an agent out of an infinite
+    `memory.atomic.wait32` and `Invoke` already returned afterwards; nothing reached that path when the
+    guest itself exited, because `runModule`'s `defer in.Close()` waits on an `Invoke` that never
+    returned. The teardown is now *requested* without waiting — it cannot wait, because
+    `quiescentLocked` counts the in-flight `proc_exit` host call itself.
+  - **The cause surfaces at `Invoke`, not in the WASI runner.** Repairing only the runner would leave
+    every other embedder told a thread *"ended at a safepoint after `Close`"* about an instance nobody
+    called `Close` on. The runner gains no special case.
+  - **A bare trap is unchanged, and that is deliberate.** ADR 0090's amendment 3 would have ended the
+    instance on any spawned trap, which reverses stamped ADR 0071 — a fault is recorded, reported on
+    both §2 T-5.3 channels, and the instance stays usable. `proc_exit` is a *declaration*
+    (`interp.InstanceEnder`) and a trap is a fault. **This diverges from wasi-threads knowingly**;
+    amendment 4 records what retires it.
+- **`scripts/citecheck.sh` aborted instead of reporting when an untracked binary file was added** — it
+  fed raw bytes through `sed` into `awk`, which died with an assertion and exit 134, so `make cite`
+  produced no verdict at all. Binary files are now skipped **with the count printed**, because a
+  citation inside a binary is a real gap rather than an empty one.
+
 - **Two `internal/wasi` comments stated a single-thread premise as general when it is a property of
   the guest population they were measured on.** `GuestFeatures`' *"a measured Go wasip1 guest uses no
   wasm atomics or shared memory … the checkable form of 'gate:threads is not load-bearing for this

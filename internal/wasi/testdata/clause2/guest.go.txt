@@ -1,0 +1,66 @@
+// Clause 2's witness guest, reconstructed from phase4/clause2-recon.md's registered readings.
+//
+// A goroutine blocks in fd_read while two CALL-FREE spinners try to make progress. With
+// GOMAXPROCS=2 there are two Ps: the blocked goroutine holds one and sibling A takes the other,
+// so sibling B can only run if the blocked goroutine's P is HANDED OFF. Sibling A advances in
+// both arms (that is observation 1, which never depended on the handoff); sibling B is the
+// discriminator.
+//
+// The spinners are call-free and the build pins the resched pass OFF, so a spinner cannot yield
+// its M — without that pin slice 5's loop preemption would let one agent serve both siblings and
+// the comparison would stop isolating the handoff.
+//
+// Counters live in the zero page [0,4096), which the linker documents as never accessed in correct
+// execution, so the HOST can read them while the guest runs. 0x0F00.. is clear of the trap marker
+// (0x10), the fd_write sink's byte count (0x14) and the gc phase mark (0x18).
+package main
+
+import (
+	"syscall"
+	"unsafe"
+)
+
+const (
+	addrA     = 0x0F00 // sibling A's counter
+	addrB     = 0x0F04 // sibling B's counter — THE DISCRIMINATOR
+	addrPhase = 0x0F08 // 1 = about to block in fd_read, 2 = returned from it
+)
+
+func slot(a uintptr) *uint32 { return (*uint32)(unsafe.Pointer(a)) }
+
+// Bounded for TWO reasons, and the second was found by running it.
+//
+//  1. the NEGATIVE arm must terminate with a verdict instead of hanging (standing property 4);
+//  2. **the POSITIVE arm deadlocks if this is too large.** With the resched pass pinned off a spinner
+//     never yields its M, so once the blocked goroutine's P is handed off, BOTH Ps are held by spinners
+//     and `main` can never get one back to return from `exitsyscall`. Measured: ~2.9M iterations/sec
+//     under the interpreter, so 400M per spinner was ~140s of unpreemptible work and the arm hung.
+//     8M finishes in ~3s while still advancing ~1.1M inside the 400ms hold, which is what the
+//     discriminator reads.
+// **The constraint is not a duration, it is an ORDERING: sibling A must NOT finish during the hold.** If
+// A completes its spin while the host holds fd_read, it frees its own P, sibling B runs on that P, and the
+// negative arm shows B advancing for a reason that has nothing to do with the handoff. Measured at 2M:
+// deltaA=2000000 exactly (A consumed its whole bound inside the 400ms hold) and deltaB~350000 in the
+// ABSENT arm, which destroyed the discrimination.
+//
+// 8M holds the ordering in both configurations. Uninstrumented A runs ~2.9M/s, so a 400ms hold consumes
+// ~1.2M of 8M and A is still running at the end. Under `-race` the interpreter is ~9x slower, so A consumes
+// less still — and `main` then waits ~25s for A to finish and free a P, which the race-scaled bound
+// accommodates. A SMALLER bound is not safer here: it is what breaks the negative arm.
+const spinBound = 8_000_000
+
+func spin(p *uint32) {
+	for i := 0; i < spinBound; i++ {
+		*p = *p + 1
+	}
+}
+
+func main() {
+	go spin(slot(addrA))
+	go spin(slot(addrB))
+
+	*slot(addrPhase) = 1
+	var b [1]byte
+	_, _ = syscall.Read(0, b[:]) // the host holds this and samples the counters across the hold
+	*slot(addrPhase) = 2
+}

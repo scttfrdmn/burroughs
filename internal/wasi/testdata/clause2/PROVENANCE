@@ -1,0 +1,50 @@
+Phase 4 clause 2's witness guests — provenance, per the wabt precedent (commit the oracle's reading; do not
+shell a toolchain at test time). Neither binary is reproducible from this repository alone.
+
+Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch wasmpreempt/phase4
+Fork SHA:     de8e915c0c8ed94f4238203c3c9900450ac140f7
+Built on:     darwin/arm64, 2026-09-26
+Guest source: guest.go.txt in this directory (byte-identical for BOTH arms)
+
+  c2_present.wasm  — the mechanism is present
+    GOEXPERIMENT=burroughsspawn GOOS=wasip1 GOARCH=wasm $(fork)/bin/go build \
+        -gcflags=all=-d=ssa/insert_resched_checks/off -o c2_present.wasm .
+    sha256: c56c97a6df0b9c5280315b4fc03d47da79e9cf6b2cf5172de4932fbbafaecf67
+    bytes:   1922664
+
+  c2_absent.wasm   — the SAME source, built against a fork whose
+                     src/syscall/blocking_wasip1_spawn.go has enterBlockingSyscall and
+                     exitBlockingSyscall stubbed to empty bodies. Same build command.
+    sha256: d9a3667b38f68831643dbb2e1435b4422cbdd5e3b488caa0d40594d89d8fe671
+    bytes:   1922396
+
+WHY THE NEGATIVE ARM IS A SEPARATE BINARY, not a build flag: the mechanism is a build-tagged file pair keyed
+on goexperiment.burroughsspawn, so dropping the experiment would also remove the spawn door and the arms
+would differ in two variables. The stub keeps the door and removes only the notification.
+
+THE DIFFERENCE IS CHECKABLE IN THE ARTIFACT (standing property 13), not merely in the build command:
+
+  $ wasm-tools print c2_<arm>.wasm | awk '/\(func \$syscall\.Read /{f=1} f{print} f&&/^  \)$/{exit}' \
+      | grep -c 'entersyscallblock\|exitsyscall'
+  c2_present.wasm -> 2
+  c2_absent.wasm  -> 0
+
+REGISTERED READINGS (phase4/clause2-recon.md, "The discriminating pair") and what this pair produces:
+  mechanism present -> sibling B advanced, 10 of 10     REPRODUCED: 10 of 10, deltaB ~1.0M per 400ms hold
+  mechanism absent  -> sibling B delta 0, every run     REPRODUCED: 0 of 3, deltaB = 0 every run
+  Sibling A advanced in both arms on every run (observation 1), asserted per run so a zero for B cannot be
+  vacuous.
+
+SPIN BOUND: 8,000,000, and the constraint is an ORDERING rather than a duration: sibling A must NOT finish
+its spin during the 400ms hold. If it does, it frees its own P, sibling B runs on that P, and the negative
+arm shows B advancing for a reason unrelated to the handoff.
+
+  Measured at 2,000,000 (a first attempt to make CI cheaper):
+    ABSENT arm -> deltaA=2000000 exactly, deltaB~350000, 3 of 3.  Discrimination DESTROYED.
+  Measured at 8,000,000:
+    ABSENT arm -> deltaA~1.14M of 8M (A still running), deltaB=0, 3 of 3.  Correct.
+
+A smaller bound is not the safer choice here; it is what breaks the negative arm. CI's `-race` cost is
+handled by scaling the BOUND (see racebound_race_test.go), not by shrinking the guest: under -race the
+interpreter is ~9x slower, so A consumes even less of its bound inside the hold, and `main` then waits ~25s
+for A to finish and free a P.
