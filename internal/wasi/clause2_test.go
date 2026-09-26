@@ -77,11 +77,20 @@ type c2Reading struct {
 // agent serve both siblings and the comparison would stop isolating the handoff. Both arms pin
 // `-d=ssa/insert_resched_checks/off`, so the arms differ only by the mechanism.
 func TestClause2BlockedGoroutinesPIsHandedOff(t *testing.T) {
+	// **Fewer REPETITIONS under `-race`, and the figures are untouched.** The registered rate is 10/10 and
+	// 0/3, and it is established un-raced. Under `-race` this pair costs 376s at full n, which alongside
+	// `internal/spec`'s ~590s crowds the race job's 25-minute budget for the whole tree. The race
+	// detector's job here is to find data races in the engine, not to re-establish a rate — and every run
+	// still asserts sibling A advanced and sibling B's direction exactly.
+	nPos, nNeg := 10, 3
+	if raceSlowdown > 1 {
+		nPos, nNeg = 3, 1
+	}
 	readings := []c2Reading{{
-		name: "mechanism_present", file: "c2_present.wasm", n: 10, wantAdv: true,
+		name: "mechanism_present", file: "c2_present.wasm", n: nPos, wantAdv: true,
 		why: "the blocked goroutine's P is handed off, so sibling B gets one and advances",
 	}, {
-		name: "mechanism_absent", file: "c2_absent.wasm", n: 3, wantAdv: false,
+		name: "mechanism_absent", file: "c2_absent.wasm", n: nNeg, wantAdv: false,
 		why: "no handoff, so there is no P for sibling B and its counter never moves",
 	}}
 

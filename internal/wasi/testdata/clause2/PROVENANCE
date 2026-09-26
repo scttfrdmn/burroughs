@@ -35,7 +35,16 @@ REGISTERED READINGS (phase4/clause2-recon.md, "The discriminating pair") and wha
   Sibling A advanced in both arms on every run (observation 1), asserted per run so a zero for B cannot be
   vacuous.
 
-SPIN BOUND: 2,000,000, and it is a CI constraint rather than a tuning preference. 8,000,000 was the first
-value; under -race the interpreter is ~9x slower (measured: this pair 14.8s -> 131.8s), so main waited
-~75s for a spinner to free the handed-off P and CI's race job timed out. 2M still outlasts the 400ms hold
-uninstrumented and costs ~132s under -race for the full 10+3.
+SPIN BOUND: 8,000,000, and the constraint is an ORDERING rather than a duration: sibling A must NOT finish
+its spin during the 400ms hold. If it does, it frees its own P, sibling B runs on that P, and the negative
+arm shows B advancing for a reason unrelated to the handoff.
+
+  Measured at 2,000,000 (a first attempt to make CI cheaper):
+    ABSENT arm -> deltaA=2000000 exactly, deltaB~350000, 3 of 3.  Discrimination DESTROYED.
+  Measured at 8,000,000:
+    ABSENT arm -> deltaA~1.14M of 8M (A still running), deltaB=0, 3 of 3.  Correct.
+
+A smaller bound is not the safer choice here; it is what breaks the negative arm. CI's `-race` cost is
+handled by scaling the BOUND (see racebound_race_test.go), not by shrinking the guest: under -race the
+interpreter is ~9x slower, so A consumes even less of its bound inside the hold, and `main` then waits ~25s
+for A to finish and free a P.
