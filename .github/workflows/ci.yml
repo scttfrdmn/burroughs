@@ -783,3 +783,37 @@ jobs:
           name: fuzz-crashers
           path: internal/*/testdata/fuzz/**
           if-no-files-found: ignore
+
+  # Phase 4's clause witnesses, in their OWN job with their OWN budget.
+  #
+  # **Why they are not in `race`.** They cost minutes under `-race` — fixed overhead, measured: a Go guest's
+  # runtime init plus 8 forced collections in an interpreter, and a 3x reduction in the guest's structure
+  # moved clause 3 from 144.4s to 140.9s, i.e. not at all. The `race` job's 25-minute budget was already at
+  # 2.0x of `internal/spec`'s own 760s on the x86-64 leg, so trimming these until they fit would only
+  # postpone the break. `make race` now skips them by name and this job runs them, **including under
+  # `-race`** — the question is relocated, not skipped.
+  #
+  # **Both arches**, because the one failure this structure exists to prevent was arch-specific: arm64
+  # cleared the race step and x86-64 timed out on the same commit.
+  #
+  # The budget is provisional until this job has reported on both arches; `scripts/budget.sh` prints elapsed
+  # against it and warns past 75%, so it is pinned from the runner's numbers rather than from a laptop's.
+  witnesses:
+    name: witnesses (clauses 1-3)
+    # Its subject is the TREE, and editing a PR body cannot change the tree — so it does not re-run on an
+    # `edited` action. `TestBodyEditRetriggersOnlyTheBodyScans` caught this job's first version for exactly
+    # the reason #411 chose that control's shape: a job added later without the condition.
+    if: github.event.action != 'edited'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: witnesses
+        run: make witnesses
