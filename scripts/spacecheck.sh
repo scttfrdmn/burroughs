@@ -18,6 +18,26 @@
 # Each of the three losses was caught by reading the file back, which is luck dressed as diligence. So this is
 # tooling rather than a resolution to be careful, per the rule that a third instance earns a mechanism.
 #
+# ## Its FALSE POSITIVE class, and the MEASURED rate that falsified the prediction
+#
+# **Two-space column alignment.** The predicate cannot distinguish alignment-at-two-spaces from a deletion,
+# and it does not try: three or more spaces is alignment, exactly two is suspect, and a deliberate two is
+# declared with the marker.
+#
+# It was predicted that this would be **rare**. On the author whose habits produced the three original losses
+# it is not — this check fired on **four** of their own commit messages within hours of existing:
+#
+#   1. an aligned two-column list, `finalizer` against `runs a finalizer body ...`;
+#   2. a message quoting the defect as a specimen, which is what the named exemption is for;
+#   3. an aligned timing table, `ubuntu-24.04-arm` against its numbers;
+#   4. another aligned timing table, rewritten as prose instead of exempted.
+#
+# **THE PREDICATE DOES NOT MOVE; THE FORMAT DOES.** Commit messages carry no aligned tables. Tables belong in
+# PR bodies and docs, where Markdown pipe tables do not trip this at all, because a pipe is not a word
+# character. A commit message should be prose in any case, so the constraint costs nothing that was not
+# already worth paying — and fixing the format at the source is what keeps a documented false positive from
+# turning into a habitually-applied exemption, which is how a tripwire stops meaning anything.
+#
 # ## What it does NOT claim
 #
 # A double space is a **symptom**, not the disease. It catches the case where a backticked word sat between
