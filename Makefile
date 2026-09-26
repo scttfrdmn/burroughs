@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race witnesses vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
+.PHONY: all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -595,9 +595,27 @@ ratio:
 #
 #   make cite                       # base `main` against the working tree
 #   make cite CITE="<base> <head>"  # an explicit range, e.g. a PR's merge base to its tip
+SPACE_BASE ?= origin/main
 CITE ?= --worktree main
 cite:
 	@./scripts/citecheck.sh $(CITE)
+
+# spacecheck — a double space between two word characters is refused, because it is the signature of a
+# backtick executed away by an unquoted shell string. Three losses in one session earned a mechanism rather
+# than a resolution to be careful; the script carries their transcripts and its own false-positive class.
+#
+# **Two invocations, two populations**, which is citecheck's and closecheck's shape for the same reason: the
+# added lines of docs and PROVENANCE files, and the commit MESSAGES in the range. Neither hides the other.
+#
+# `make hooks` installs the commit-msg hook that runs the message half locally, before a bad message is ever
+# written down. The hook is the mechanism; `git commit -F` from a quoted heredoc is the habit.
+space:
+	@./scripts/spacecheck.sh --worktree $(SPACE_BASE)
+	@./scripts/spacecheck.sh --range-msgs $(SPACE_BASE) HEAD
+
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "hooks: core.hooksPath -> .githooks (commit-msg installed)"
 
 # closecheck — no PR body or commit message may close an issue by keyword (grave #314).
 #

@@ -490,6 +490,29 @@ jobs:
             echo "citecheck: push event, no PR body to scan (the diff half above ran)."
           fi
 
+      # A double space between two word characters is refused, because it is the signature of a
+      # backtick executed away by an unquoted shell string: the shell runs the backticked word,
+      # the command fails, and the span is replaced with NOTHING. Three losses in one session,
+      # each caught only by reading the file back afterwards — which is luck dressed as
+      # diligence, so the third one earned a mechanism.
+      #
+      # A step in *this* job for the neighbouring steps' reason: the same checkout, the same
+      # range, and a question about the same population — what the diff's prose actually says.
+      # Two invocations, two populations (added doc/PROVENANCE lines, and commit messages),
+      # neither hidden in the other.
+      #
+      # The local half is `make space` plus the commit-msg hook from `make hooks`; this is the
+      # arm that cannot be skipped with --no-verify. scripts/spacecheck.sh carries the
+      # transcripts of the three losses and its own measured false-positive class.
+      - name: prose has no executed-away words
+        run: |
+          git rev-parse --verify "$BASE" >/dev/null
+          ./scripts/spacecheck.sh "$BASE" "$HEAD"
+          ./scripts/spacecheck.sh --range-msgs "$BASE" "$HEAD"
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD^' }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'HEAD' }}
+
       # No prose may close an issue as a side effect (grave #314). A step in *this* job rather
       # than a job of its own: it needs the same checkout, the same token, and the same two
       # permissions, and it asks the neighbouring question — that one checks whether the tracker
