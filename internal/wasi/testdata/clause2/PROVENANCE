@@ -1,0 +1,38 @@
+Phase 4 clause 2's witness guests — provenance, per the wabt precedent (commit the oracle's reading, do
+not shell a toolchain at test time). Neither binary is reproducible from this repository alone: both come
+from the Phase 4 fork, which is a separate tree.
+
+Fork tree:   github.com/scttfrdmn/wp-phase4 (local), branch wasmpreempt/phase4
+Fork SHA:    cc0e44323ff4859af92bb7cf75d780e85b2f95ba
+Go version:  fork bin/go, built from that tree with src/make.bash
+Built on:    darwin/arm64, 2026-09-25
+Guest source: guest.go.txt in this directory (byte-identical for BOTH arms)
+
+  c2_present.wasm  — the mechanism is present
+    GOEXPERIMENT=burroughsspawn GOOS=wasip1 GOARCH=wasm $(fork)/bin/go build \
+        -gcflags=all=-d=ssa/insert_resched_checks/off -o c2_present.wasm .
+    sha256: d5fe1882ad0df8c0d6be30d5b3c0519940a907b72c5d98bb18b16d9c13857ad3
+    bytes:   1922664
+
+  c2_absent.wasm   — the SAME source, built against a fork whose
+                     src/syscall/blocking_wasip1_spawn.go has enterBlockingSyscall and
+                     exitBlockingSyscall stubbed to empty bodies. Same build command as above.
+    sha256: 6a75d3098266ed3ea3c1814636625df5910894cd1fb863a412fb90e289da9e24
+    bytes:   1922396
+
+WHY THE NEGATIVE ARM IS A SEPARATE BINARY, not a build flag: the mechanism is a build-tagged file pair
+keyed on goexperiment.burroughsspawn, so dropping the experiment would also remove the spawn door and the
+arms would differ in two variables. The stub keeps the door and removes only the notification.
+
+THE DIFFERENCE IS CHECKABLE IN THE ARTIFACT (standing property 13), not merely in the build command:
+
+  $ wasm-tools print c2_<arm>.wasm | awk '/\(func \$syscall\.Read /{f=1} f{print} f&&/^  \)$/{exit}' \
+      | grep -c 'entersyscallblock\|exitsyscall'
+  c2_present.wasm -> 2
+  c2_absent.wasm  -> 0
+
+REGISTERED READINGS this pair must reproduce (phase4/clause2-recon.md, "The discriminating pair"):
+  mechanism present -> sibling B advanced, 10 of 10
+  mechanism absent  -> sibling B delta 0, every run, n=3
+A reconstruction that only passes the positive arm is a new green asserting nothing; the negative arm is
+what makes it the same witness.

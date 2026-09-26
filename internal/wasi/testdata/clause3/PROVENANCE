@@ -1,0 +1,55 @@
+Phase 4 clause 3's witness guests — provenance, per the wabt precedent. Neither binary is reproducible
+from this repository alone: both come from the Phase 4 fork.
+
+Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch wasmpreempt/phase4
+Fork SHA:     cc0e44323ff4859af92bb7cf75d780e85b2f95ba
+Built on:     darwin/arm64, 2026-09-25
+Guest source: guest.go.txt in this directory (byte-identical for BOTH arms)
+
+  c3_stopped.wasm    — the world IS stopped (unmodified fork)
+    GOEXPERIMENT=burroughsspawn GOOS=wasip1 GOARCH=wasm $(fork)/bin/go build -o c3_stopped.wasm .
+    sha256: 18e846f073a2a9d3c96d67627396282442969e63caf7a02889ca0b60eb24e1f5
+    bytes:   2016232
+
+  c3_notstopped.wasm — the SAME source, built against a fork with TWO edits in
+                       src/runtime/proc.go's stopTheWorldWithSema. Same build command.
+    sha256: 7866753818601b47ac858a06a904a0e630be5dd23247a69df11623ed5448f665
+    bytes:   2015164
+
+    edit 1 — the wait itself:
+        wait := sched.stopwait > 0      ->  wait := false
+    edit 2 — the double-check that follows it:
+        if sched.stopwait != 0 {        ->  if false {
+            bad = "stopTheWorld: not stopped (stopwait != 0)"
+
+    **TWO edits were needed, and the second is the point.** Neutering the wait alone leaves that
+    double-check, which THROWS. A throw is a crash, and this witness exists for the SILENT failure — so
+    with only edit 1 the negative arm would prove that Go's own assertion works rather than that the heap
+    corrupts under a world that is not stopped.
+
+REGISTERED READINGS (harness-protocol.md, "CLAUSE 3's WITNESS" and "The positive arm"):
+  world stopped      -> code:0 VERIFIED, 10 of 10; 8 collections / 120,000 mutations / 0 finalizers
+  world NOT stopped  -> "verification FAILS — checksum mismatch, wrong count, or a finalizer firing"
+
+REPRODUCED, with one DEVIATION recorded rather than smoothed over:
+  world stopped      -> 10 of 10 VERIFIED, collected=8, finalized=0, mutations=120000, nodes=4000, bad=0
+                        — matches the registered figures exactly.
+  world NOT stopped  -> 0 of 3 verified, which is the discrimination the gate needs. But the failure mode
+                        is NOT the registered one: the guest DIES before reaching its walk, with a Go
+                        runtime traceback through runtime.gcBgMarkStartWorkers (mgc.go:1711) and
+                        proc_exit(2), at collected=1 / mutations=120000. So the collector did run and did
+                        race the mutator; what it produced here is a crash rather than a surviving
+                        corrupted heap.
+
+  Why the deviation is stated and not hidden: the registered reading is about the SILENT case, and a crash
+  is a louder one. The reconstruction therefore demonstrates that the witness discriminates a stopped
+  world from a not-stopped one, and does NOT demonstrate that it would catch a corruption that left the
+  program running. Reporting the second as though it were the first would be the exact substitution this
+  witness exists to prevent.
+
+FULL-n REPRODUCTION, 2026-09-25 (the committed test defaults to n=1/1; see its doc comment):
+  BURROUGHS_WITNESS_FULL=1 go test ./internal/wasi/ -run TestClause3 -timeout 2100s
+  world_stopped      10 of 10 verdict=1 collected=8 finalized=0 mutations=120000 nodes=4000 bad=0
+  world_not_stopped   3 of 3  died before verifying, collected=1, mutations=120000, 0 verified
+  One run costs ~77s under the interpreter, so the registered n is ~17 minutes. The default run asserts the
+  same FIGURES every time and only weakens the RATE; it is not a skip, because both arms always execute.

@@ -1,0 +1,129 @@
+// Clause 3's witness guest, reconstructed from harness-protocol.md's registration.
+//
+// Two things a broken collection cannot fake:
+//
+//  1. A CHECKSUMMED live structure. A ring of nodes, each carrying `id` and a `sum` derived from its own
+//     fields and its successor's `id`. One goroutine rewrites links and payloads continuously; another
+//     forces collections. Afterwards every node is walked and verified: the count, each `sum`, and that
+//     no link is nil before the tail. A collector that marks while links are being rewritten can miss a
+//     node reachable only through a pointer in flight, free it, and hand its memory to a later
+//     allocation — the walk then reads a wrong `sum`, a garbage successor, or the wrong count. None of
+//     those requires a crash, which is the point: the failure this is for is SILENT.
+//
+//  2. FINALIZERS on nodes the structure still holds. A finalizer running on a reachable object is
+//     unambiguous evidence the collector freed something live. The count must be exactly 0.
+//
+// Observation is binary stores into the zero page, never `print`: the instrumentation Heisenbug is live
+// on this tier and `print` takes locks.
+package main
+
+import (
+	"runtime"
+	"unsafe"
+)
+
+const (
+	addrVerdict   = 0x0F20 // 0 = not reached, 1 = VERIFIED, 2 = verification FAILED
+	addrCollected = 0x0F24 // collections completed
+	addrFinalized = 0x0F28 // finalizers that ran on a REACHABLE node — must be 0
+	addrMutations = 0x0F2C // link/payload rewrites performed
+	addrBadNode   = 0x0F30 // id of the first node that failed verification, or 0
+	addrCount     = 0x0F34 // nodes seen by the verifying walk
+)
+
+func slot(a uintptr) *uint32 { return (*uint32)(unsafe.Pointer(a)) }
+
+const (
+	nodes      = 4000
+	collections = 8
+	mutations  = 120_000
+)
+
+type node struct {
+	id   uint32
+	pay  uint32
+	sum  uint32
+	next *node
+}
+
+// checksum is over the node's OWN fields and its successor's id, so a freed-and-reused successor is
+// detectable from the predecessor alone.
+func checksum(n *node) uint32 {
+	var succ uint32
+	if n.next != nil {
+		succ = n.next.id
+	}
+	return n.id*2654435761 ^ n.pay*40503 ^ succ*2246822519
+}
+
+var head *node
+var finalized uint32
+
+func main() {
+	// Build a ring and put a finalizer on every node while the ring still holds it.
+	var prev *node
+	for i := range nodes {
+		n := &node{id: uint32(i) + 1}
+		if prev != nil {
+			prev.next = n
+		} else {
+			head = n
+		}
+		runtime.SetFinalizer(n, func(*node) {
+			finalized++
+			*slot(addrFinalized) = finalized
+		})
+		prev = n
+	}
+	prev.next = head // close the ring: every node stays reachable from `head`
+	for n, i := head, 0; i < nodes; n, i = n.next, i+1 {
+		n.sum = checksum(n)
+	}
+
+	done := make(chan struct{})
+
+	// The mutator: rewrites payloads and re-derives checksums continuously.
+	go func() {
+		n := head
+		for i := range mutations {
+			n.pay = uint32(i)*2654435761 + 1
+			n.sum = checksum(n)
+			n = n.next
+			if i%1000 == 0 {
+				*slot(addrMutations) = uint32(i)
+			}
+		}
+		*slot(addrMutations) = mutations
+		close(done)
+	}()
+
+	// The collector: forces collections while the mutator runs.
+	for i := range collections {
+		runtime.GC()
+		*slot(addrCollected) = uint32(i) + 1
+	}
+	<-done
+
+	// Verify. Bounded, so the NEGATIVE arm terminates with a verdict rather than hanging.
+	seen := uint32(0)
+	bad := uint32(0)
+	for n, i := head, 0; i < nodes; i++ {
+		if n == nil {
+			bad = seen + 1
+			break
+		}
+		if n.sum != checksum(n) {
+			bad = n.id
+			break
+		}
+		seen++
+		n = n.next
+	}
+	*slot(addrCount) = seen
+	*slot(addrBadNode) = bad
+	if bad == 0 && seen == nodes && finalized == 0 {
+		*slot(addrVerdict) = 1
+	} else {
+		*slot(addrVerdict) = 2
+	}
+}
