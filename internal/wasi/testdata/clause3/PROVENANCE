@@ -53,3 +53,36 @@ FULL-n REPRODUCTION, 2026-09-25 (the committed test defaults to n=1/1; see its d
   world_not_stopped   3 of 3  died before verifying, collected=1, mutations=120000, 0 verified
   One run costs ~77s under the interpreter, so the registered n is ~17 minutes. The default run asserts the
   same FIGURES every time and only weakens the RATE; it is not a skip, because both arms always execute.
+
+===============================================================================================
+REBUILT 2026-09-26 AT SCALED PARAMETERS, and the binaries above are SUPERSEDED.
+===============================================================================================
+
+The figures recorded above (4000 nodes / 120,000 mutations) are the REGISTERED ones and were reproduced
+exactly — 10 of 10 VERIFIED — but those binaries are NOT the ones committed here, and their hashes above no
+longer resolve to a file in this directory. They are kept as the record of the full-parameter reproduction.
+
+WHY: one run at the registered parameters costs ~77s uninstrumented, and CI runs the suite under `-race`,
+where this package is ~9x slower (measured). A positive run would be ~12 minutes and CI's race job has a
+25-minute budget for the whole tree; it timed out three arms at once.
+
+COMMITTED binaries, same guest source, scaled structure (500 nodes / 8,000 mutations / 8 collections):
+  c3_stopped.wasm
+    sha256: d52da0f702f6d6b7832353307a0aada208bbe970d6258b829df7fb77f08edf25
+    bytes:   2016352
+  c3_notstopped.wasm  (same two stopTheWorldWithSema edits as recorded above)
+    sha256: 5fc984cd691baa44af6e26d3a7c09e3ef83130a3dfb85f9a5cfd8417d2925f1f
+    bytes:   2015262
+
+  measured: 23.2s uninstrumented, 208.6s under -race, both arms passing.
+
+WHAT IS PRESERVED: the checksum-over-successor shape, the finalizers on reachable nodes, the
+mutator/collector race, and both arms' discrimination (verified vs. not).
+WHAT IS GIVEN UP: identity with the registered FIGURES in the committed gate. The gate asserts its own
+scaled figures exactly (collected=8, mutations=8000, nodes=500, finalized=0, bad=0).
+
+A THIRD SLOT WAS ADDED, and it was earned under -race: 0x0F38 counts collections ENTERED, set before
+runtime.GC() rather than after. The vacuity check first read `collected`, which counts COMPLETIONS — so a
+guest that died INSIDE the first collection scored 0 and was reported as having exercised nothing, when
+dying inside a collection is the not-stopped world biting hardest. Un-raced the negative arm dies after one
+collection completes; under -race it dies inside the first.

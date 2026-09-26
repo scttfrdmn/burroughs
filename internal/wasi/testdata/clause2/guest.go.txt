@@ -37,7 +37,10 @@ func slot(a uintptr) *uint32 { return (*uint32)(unsafe.Pointer(a)) }
 //     under the interpreter, so 400M per spinner was ~140s of unpreemptible work and the arm hung.
 //     8M finishes in ~3s while still advancing ~1.1M inside the 400ms hold, which is what the
 //     discriminator reads.
-const spinBound = 8_000_000
+// 2M, not 8M: under `-race` the interpreter is >27x slower (measured on clause 3), so 8M made `main` wait
+// ~75s for a spinner to free a P and CI's race job timed out. 2M still outlasts the 400ms hold
+// uninstrumented (~0.7s of work) and costs ~19s under `-race`.
+const spinBound = 2_000_000
 
 func spin(p *uint32) {
 	for i := 0; i < spinBound; i++ {

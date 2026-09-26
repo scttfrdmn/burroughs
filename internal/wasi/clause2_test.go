@@ -225,7 +225,7 @@ func runClause2Arm(t *testing.T, file string) (deltaA, deltaB uint32, err error)
 	go func() { _, _ = in.Invoke("_start"); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(60 * time.Second):
+	case <-time.After(60 * time.Second * raceSlowdown):
 		// The guest's spin bound is finite, so a hang here is an engine fault rather than the guest
 		// running long — and the negative arm must terminate with a verdict (standing property 4).
 		return 0, 0, errArmHung

@@ -26,18 +26,27 @@ const (
 	c3AddrMutations = 0x0F2C // rewrites performed
 	c3AddrBadNode   = 0x0F30 // id of the first node that failed verification, or 0
 	c3AddrCount     = 0x0F34 // nodes seen by the verifying walk
+	c3AddrEntered   = 0x0F38 // collections ENTERED — the predicate a died run must satisfy
 )
 
 // The registered figures, from harness-protocol.md's clause 3 positive arm: 8 collections, 120,000
 // mutations, 0 finalizers, 4000 nodes verified.
+// **These are the COMMITTED GATE's figures, not the registration's.** The registration's are 4000 nodes /
+// 120,000 mutations, and the guest reproduced them exactly (10 of 10 VERIFIED, recorded in
+// `testdata/clause3/PROVENANCE`). One run at those numbers costs ~77s uninstrumented and **>27x that under
+// `-race`** — measured, when CI's race job timed out three arms at once. A positive run would be ~35
+// minutes against that job's 25-minute budget for the whole tree, so no bound scaling could save it.
+//
+// The scaled structure keeps the checksum-over-successor shape, the finalizers on reachable nodes, the
+// mutator/collector race and both arms' discrimination. It gives up identity with the registered figures.
 const (
 	c3WantCollected = 8
-	c3WantMutations = 120_000
-	c3WantNodes     = 4000
+	c3WantMutations = 8_000
+	c3WantNodes     = 500
 )
 
 type c3Result struct {
-	verdict, collected, finalized, mutations, badNode, count uint32
+	verdict, collected, finalized, mutations, badNode, count, entered uint32
 }
 
 // TestClause3GCAcrossTwoAgents is Phase 4 **clause 3**'s witness, reconstructed and committed.
@@ -112,12 +121,16 @@ func TestClause3GCAcrossTwoAgents(t *testing.T) {
 					if errors.Is(err, errNoVerdict) && !arm.wantPass {
 						died++
 						ran++
-						t.Logf("CLAUSE3 %s run=%d DIED-BEFORE-VERIFYING collected=%d mutations=%d: %v",
-							arm.name, i+1, r.collected, r.mutations, err)
-						// Even a died run must show the collector ran, or the arm is vacuous.
-						if r.collected == 0 {
-							t.Errorf("run %d: died with 0 collections, so nothing about a not-stopped "+
-								"world was exercised", i+1)
+						t.Logf("CLAUSE3 %s run=%d DIED-BEFORE-VERIFYING entered=%d collected=%d mutations=%d: %v",
+							arm.name, i+1, r.entered, r.collected, r.mutations, err)
+						// **ENTERED, not completed.** The first version of this check read `collected`,
+						// which counts completions — so a guest that died INSIDE the first collection
+						// scored 0 and was reported as having exercised nothing, when dying inside a
+						// collection is the not-stopped world biting hardest. Caught under `-race`, where
+						// the negative arm dies in the first GC rather than the second.
+						if r.entered == 0 {
+							t.Errorf("run %d: died without entering a collection, so nothing about a "+
+								"not-stopped world was exercised", i+1)
 						}
 						continue
 					}
@@ -243,7 +256,7 @@ func runClause3Arm(t *testing.T, file string) (c3Result, error) {
 	go func() { _, ierr = in.Invoke("_start"); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(300 * time.Second):
+	case <-time.After(300 * time.Second * raceSlowdown):
 		return zero, errArmHung
 	}
 
@@ -270,6 +283,7 @@ func runClause3Arm(t *testing.T, file string) (c3Result, error) {
 		mutations: ld(c3AddrMutations),
 		badNode:   ld(c3AddrBadNode),
 		count:     ld(c3AddrCount),
+		entered:   ld(c3AddrEntered),
 	}
 	if r.verdict == 0 {
 		// Report the mechanism alongside the verdict channel: "no verdict" is a *state*, and the reason it

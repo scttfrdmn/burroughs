@@ -29,14 +29,24 @@ const (
 	addrMutations = 0x0F2C // link/payload rewrites performed
 	addrBadNode   = 0x0F30 // id of the first node that failed verification, or 0
 	addrCount     = 0x0F34 // nodes seen by the verifying walk
+	addrEntered   = 0x0F38 // collections ENTERED — set before runtime.GC(), not after
 )
 
 func slot(a uintptr) *uint32 { return (*uint32)(unsafe.Pointer(a)) }
 
+// **These are NOT the registered figures, and that is recorded rather than hidden.** The registration's
+// numbers are 4000 nodes / 8 collections / 120,000 mutations, and this guest reproduced them exactly
+// (10 of 10 VERIFIED) — see testdata/clause3/PROVENANCE. But one run at those numbers costs ~77s
+// uninstrumented and **>27x that under `-race`**, measured: the negative arm went from ~11s to over 300s.
+// A positive run would be ~35 minutes in CI's race job, which has a 25-minute budget for the whole tree.
+//
+// So the committed gate runs a SCALED-DOWN structure. What is preserved: the checksum-over-successor
+// shape, the finalizers on reachable nodes, the mutator/collector race, and both arms' discrimination.
+// What is given up: identity with the registered figures in the committed gate.
 const (
-	nodes      = 4000
+	nodes       = 500
 	collections = 8
-	mutations  = 120_000
+	mutations   = 8_000
 )
 
 type node struct {
@@ -99,6 +109,12 @@ func main() {
 
 	// The collector: forces collections while the mutator runs.
 	for i := range collections {
+		// **Entered before, completed after, and the pair is the point.** A guest that dies INSIDE a
+		// collection has exercised a not-stopped world exactly as much as one that survives it — more, in
+		// fact — but `collected` counts only completions, so a death in the first GC leaves it at 0 and
+		// looks indistinguishable from a guest whose collector never ran. Measured under `-race`, where the
+		// negative arm dies inside the first collection.
+		*slot(addrEntered) = uint32(i) + 1
 		runtime.GC()
 		*slot(addrCollected) = uint32(i) + 1
 	}
