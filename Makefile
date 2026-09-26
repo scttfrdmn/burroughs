@@ -285,7 +285,21 @@ race:
 # 1/1) — a data race in the engine cannot be what makes a guest's own checksum walk pass or fail, so
 # running the guest-logic arms under `-race` buys time and no new question.
 #
-# **`-count=1` is load-bearing, not habit, and it lives in THIS TARGET so no caller can leave it out.** The first version omitted it and `budget.sh` reported
+# **THE PRIMARY CHECK IS `go test -json`, not the clock.** `witnessrun.sh` asserts that each named witness
+# emitted a `run` and a `pass` event, that none was skipped, that no witness *subtest* was skipped, and that no
+# package result was `(cached)`. Each name is checked on its own, so a witness that is renamed or no longer
+# matched fails by name instead of vanishing into a green.
+#
+# That replaced a wall-clock floor as the primary. The floor was earned honestly — a missing `-count=1` had
+# served a cached pass at `0s` — but it is a **proxy**: it measures hardware speed as much as execution, so a
+# fast machine trips it with nothing wrong and a slow one could clear a cached run. The condition is directly
+# observable, so it is observed. *Measure the condition, not its proxy*, applied to an instrument built an hour
+# earlier.
+#
+# **The floor survives as a secondary backstop that binds only in CI**, where the runners it was calibrated
+# against actually run; locally it prints its reading and does not fail.
+#
+# **`-count=1` is load-bearing, not habit, and it lives in the SCRIPT so no caller can leave it out.** The first version omitted it and `budget.sh` reported
 # `witnesses-norace used 0s of 1800s (0%)` — a CACHED pass, in the one job whose whole purpose is to be the
 # authority for these witnesses. An unrun command looks exactly like a passing one, and the budget gauge is
 # what made the zero visible.
@@ -327,10 +341,8 @@ race:
 # Stated because the failure message says "check that the tests actually executed", and the first thing to
 # check when it fires locally is whether the floor is simply CI-shaped rather than whether the run was real.
 witnesses:
-	@./scripts/budget.sh 270 witnesses-norace --floor 48 -- $(GO) test -count=1 -timeout 20m \
-		-run 'TestClause1|TestClause2|TestClause3' ./internal/wasi/ ./internal/component/
-	@./scripts/budget.sh 538 witnesses-race --floor 96 -- $(GO) test -count=1 -race -timeout 20m \
-		-run 'TestClause1|TestClause2|TestClause3' ./internal/wasi/ ./internal/component/
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 270 48
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 538 96 --race
 
 vet:
 	$(GO) vet ./...
