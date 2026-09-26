@@ -86,3 +86,36 @@ runtime.GC() rather than after. The vacuity check first read `collected`, which 
 guest that died INSIDE the first collection scored 0 and was reported as having exercised nothing, when
 dying inside a collection is the not-stopped world biting hardest. Un-raced the negative arm dies after one
 collection completes; under -race it dies inside the first.
+
+===============================================================================================
+REBUILT 2026-09-26 WITH VERIFIER-LIVENESS MODES. Hashes above are superseded again.
+===============================================================================================
+
+  c3_stopped.wasm
+    sha256: 8a31ea910e6d290a2f8da3de4475a727b6601240f9081243c754bcc255082328
+    bytes:   2140217
+  c3_notstopped.wasm  (same two stopTheWorldWithSema edits; rebuilt from the same source)
+    sha256: 4717c1c58e873ff18df04083f02bd43aaebfb4b84a83d450fe2c768d9af6497e
+    bytes:   2139118
+
+WHY: the verifier had NEVER been watched catch corruption. The not-stopped arm fails by CRASHING, so the
+checksum walk itself had only ever passed — live against a crash, unfalsified against the failure it exists
+for, a heap corrupted while the program keeps running. Two modes now break the heap deliberately on a
+CORRECTLY STOPPED world, selected by argv so one binary serves all three positive-side arms:
+
+  mode "corrupt"    flips a payload in a reachable node WITHOUT re-deriving its sum.
+                    Measured: verdict=2, bad=11, nodes=10 — the checksum clause fires and NAMES the node.
+  mode "finalizer"  runs the finalizer's BODY on a node the ring still holds.
+                    Measured: verdict=2, finalized=1 — the finalizer clause fires.
+  no mode           the normal arm, argv byte-identical to before these existed.
+                    Measured: verdict=1, collected=8, finalized=0, mutations=8000, nodes=500, bad=0.
+
+HONEST SCOPE OF THE "finalizer" MODE: a real collector will not run a finalizer on a reachable object, and
+this does not make one. What is under test is the VERIFIER'S finalizer clause — that a non-zero count is
+reported — not the collector's behaviour. A pass means the report works.
+
+SO CLAUSE 3'S CLAIM IS NOW TWO CLAIMS, and they should not be conflated:
+  1. the verifier is LIVE against both of its clauses (checksum and finalizer), watched firing; and
+  2. the witness separates a stopped world from a not-stopped one, the latter by crashing.
+It still does NOT show that a not-stopped world produces a SURVIVING corrupted heap that the walk then
+catches — that conjunction has not been observed, and claim 1 plus claim 2 do not add up to it.

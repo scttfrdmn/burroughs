@@ -18,6 +18,7 @@
 package main
 
 import (
+	"os"
 	"runtime"
 	"unsafe"
 )
@@ -70,6 +71,13 @@ var head *node
 var finalized uint32
 
 func main() {
+	// Mode comes from argv so ONE binary serves the normal arm and both verifier-liveness arms — the arms
+	// then differ by nothing but the argument, which is what keeps them comparable.
+	mode := ""
+	if len(os.Args) > 1 {
+		mode = os.Args[1]
+	}
+
 	// Build a ring and put a finalizer on every node while the ring still holds it.
 	var prev *node
 	for i := range nodes {
@@ -119,6 +127,30 @@ func main() {
 		*slot(addrCollected) = uint32(i) + 1
 	}
 	<-done
+
+	// **VERIFIER-LIVENESS MODES, selected by argv.** The negative arm (a not-stopped world) fails by
+	// crashing, so the checksum walk itself had only ever PASSED — live against a crash and unfalsified
+	// against the failure it exists for, a heap corrupted while the program keeps running. These two modes
+	// break the heap deliberately, on a correctly stopped world, so the verifier is watched catching what
+	// it is for. Neither needs a broken toolchain.
+	switch mode {
+	case "corrupt":
+		// Flip a payload in a reachable node WITHOUT re-deriving its `sum`. This is the shape a collector
+		// that freed a live node and handed its memory on would leave behind: the field and its checksum
+		// disagree, and nothing crashes.
+		n := head
+		for i := 0; i < 10; i++ {
+			n = n.next
+		}
+		n.pay ^= 0xdeadbeef
+	case "finalizer":
+		// Run the finalizer's BODY on a node the ring still holds. A real GC will not do this on a
+		// reachable object, and that is the point — what is under test here is the verifier's finalizer
+		// clause, not the collector's behaviour. Stated rather than implied: this simulates the REPORT, and
+		// a passing run means the report works, not that a finalizer ever fired wrongly.
+		finalized++
+		*slot(addrFinalized) = finalized
+	}
 
 	// Verify. Bounded, so the NEGATIVE arm terminates with a verdict rather than hanging.
 	seen := uint32(0)
