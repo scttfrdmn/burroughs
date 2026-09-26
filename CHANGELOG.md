@@ -116,6 +116,18 @@ own condition rather than as a prediction.
     ([#514](https://github.com/scttfrdmn/burroughs/issues/514)), since a guest wanting a
     per-thread slot at register-like cost can now declare a mutable global.
 
+- **A recon for the write slice, and a recommendation held at `proposed`**
+  ([#831](https://github.com/scttfrdmn/burroughs/issues/831),
+  [ADR 0091](docs/decisions/0091-a-confined-writable-scratch-directory-granted-by-its-own-flag-with-confinement-delegated-to-os-root-rather-than-hand-rolled.md)).
+  **No behaviour changes**; ADR 0083's read-only filesystem is untouched and this entry records a
+  measurement, not a capability. `os` could not run one test under the sweep — 227 verdicts, all
+  failing in `t.TempDir()` — so the demand set was measured on wasmtime 49.0.1, where the same guest
+  bytes complete the cycle: **8 functions would change from refusing to implementing, 16 refusals
+  remain, and none is absent**, so ADR 0080's supplied-whole property is untouched. Confinement is
+  enforceable without granting more than the named directory — `os.Root` refused all 10 escape shapes
+  probed, including creates *through* a symlink pointing out of the grant, while permitting all 8
+  in-grant operations.
+
 ### Fixed
 
 - **`--dir` accepted two guest-path forms that can never map, and said nothing**
