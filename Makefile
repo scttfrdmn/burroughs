@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race witnesses vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
+.PHONY: all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -323,11 +323,55 @@ race:
 #   witnesses-norace  2 x 135s = 270s      floor 48s  (half of the lowest observed, 96s)
 #   witnesses-race    2 x 269s = 538s      floor 96s  (half of the lowest observed, 192s)
 #
+# (Those first pins stood for one run. See the move below — they are kept here because the record of what was
+# pinned from which sample is what makes the move checkable rather than a silent re-tuning.)
+#
 # **RECHECK AFTER THREE RUNS.** This is one sample per arch, and this Makefile documents a 1.38x spread on
 # the slow runner elsewhere — so these pins are a first pin, not a settled one. If a later run widens the
 # spread, **the pin moves up with it and is recorded here with its date**, the way the `race` note above now
 # carries the 760s that falsified it. A pin that silently absorbs a slower run is a pin that has stopped
 # measuring anything.
+#
+# ### MOVED 2026-09-26, on the SECOND run, and the recheck condition earned its keep immediately
+#
+#   | arch             | norace run 1 | run 2     | race run 1 | run 2     |
+#   |------------------|--------------|-----------|------------|-----------|
+#   | ubuntu-24.04     |  96s         | **169s**  | 192s       | **321s**  |
+#   | ubuntu-24.04-arm | 135s         | 138s      | 269s       | 273s      |
+#
+# **x86-64 nearly doubled while arm64 held still**: a **1.76x** run-to-run spread on one arch, wider than the
+# 1.38x documented above for a different job. Two consequences, and the second is the one that matters:
+#
+#   - the pins move to 2x the slowest OBSERVATION, not 2x the slower arch's first one: **338s** and **642s**;
+#   - **which arch is "the slow runner" is not a stable fact.** Run 1 said arm64 (135s vs 96s); run 2 says
+#     x86-64 (169s vs 138s). A pin derived from "the slower arch" is therefore derived from a property that
+#     changes between runs, and the durable rule is *2x the slowest observation on record*, which is what
+#     these numbers now are.
+#
+# The floors are UNCHANGED at 48s and 96s: they come from the LOWEST observation (96s norace, 192s race), and
+# run 2 was slower, not faster. A floor that moved up with a slow run would be a floor chasing the ceiling.
+#
+# ### THE SAMPLE RECORD, because "the slowest observation ON RECORD" needs a record
+#
+# The pin rule points at the slowest observation, so the observations have to live somewhere a later reader
+# can check — otherwise "on record" means "in whoever last touched this file's memory", which is not a record.
+# Dated entries, the way the `race` note above carries its 760s, with the **run ID** so each number is
+# traceable to the run that produced it.
+#
+# **Appended at RECHECK POINTS only, not every run.** A log of every run would be a status file by another
+# name, and this project does not keep those; what the rule needs is the samples that moved or confirmed a
+# pin.
+#
+#   | date       | run ID      | arch             | norace | race |
+#   |------------|-------------|------------------|--------|------|
+#   | 2026-09-26 | 36216184624 | ubuntu-24.04     |   96s  | 192s |
+#   | 2026-09-26 | 36216184624 | ubuntu-24.04-arm |  135s  | 269s |
+#   | 2026-09-26 | 36219470572 | ubuntu-24.04     |  169s  | 321s |
+#   | 2026-09-26 | 36219470572 | ubuntu-24.04-arm |  138s  | 273s |
+#
+# Slowest on record: **169s** norace, **321s** race — both from run 36219470572 on x86-64, which is what the
+# current pins of 338s and 642s are twice. Lowest on record: 96s and 192s, which is what the floors are half
+# of. **Third sample still owed** before these pins are treated as settled.
 #
 # **The FLOOR is the other half, and it FAILS rather than warns.** Earned immediately: this gauge's first real
 # run reported `0s of 1800s (0%)` because the target had omitted `-count=1`, and an upper-end warning is
@@ -341,8 +385,8 @@ race:
 # Stated because the failure message says "check that the tests actually executed", and the first thing to
 # check when it fires locally is whether the floor is simply CI-shaped rather than whether the run was real.
 witnesses:
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 270 48
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 538 96 --race
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 338 48
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 96 --race
 
 vet:
 	$(GO) vet ./...
@@ -595,9 +639,27 @@ ratio:
 #
 #   make cite                       # base `main` against the working tree
 #   make cite CITE="<base> <head>"  # an explicit range, e.g. a PR's merge base to its tip
+SPACE_BASE ?= origin/main
 CITE ?= --worktree main
 cite:
 	@./scripts/citecheck.sh $(CITE)
+
+# spacecheck — a double space between two word characters is refused, because it is the signature of a
+# backtick executed away by an unquoted shell string. Three losses in one session earned a mechanism rather
+# than a resolution to be careful; the script carries their transcripts and its own false-positive class.
+#
+# **Two invocations, two populations**, which is citecheck's and closecheck's shape for the same reason: the
+# added lines of docs and PROVENANCE files, and the commit MESSAGES in the range. Neither hides the other.
+#
+# `make hooks` installs the commit-msg hook that runs the message half locally, before a bad message is ever
+# written down. The hook is the mechanism; `git commit -F` from a quoted heredoc is the habit.
+space:
+	@./scripts/spacecheck.sh --worktree $(SPACE_BASE)
+	@./scripts/spacecheck.sh --range-msgs $(SPACE_BASE) HEAD
+
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "hooks: core.hooksPath -> .githooks (commit-msg installed)"
 
 # closecheck — no PR body or commit message may close an issue by keyword (grave #314).
 #

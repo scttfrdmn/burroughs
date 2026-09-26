@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Reject a commit message with a double space between two word characters — the signature of a backtick
+# executed away by an unquoted shell string. See scripts/spacecheck.sh for the three losses that earned it.
+#
+# Installed by `make hooks`, which sets core.hooksPath. A hook is the MECHANISM; writing messages with
+# `git commit -F` from a <<'EOF' heredoc is the habit, and the habit is only the first line of defence.
+exec ./scripts/spacecheck.sh --msg "$1"
