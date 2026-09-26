@@ -21,34 +21,29 @@ import (
 // all**. The forms used were `HOST`, `HOST:/` and `HOST:.`, and the one that failed is the relative one. So
 // the separator was never the cause, and the arms below are the ones the failures were actually in.
 //
-// That is why this lives in the tree: the grammar is something this package can ask directly, and a scrollback
-// is not a place an answer survives. *A model-mechanics claim is a hypothesis until run* — twice here, once
-// for the separator and once for the cwd.
+// *A model-mechanics claim is a hypothesis until run* — three times over here: once for the separator, once
+// for the cwd, and once for which engine was at fault.
 //
 // # The forms, and what each is measured to do
 //
-//	HOST          maps the directory under its own (absolute host) name. READABLE there.
-//	HOST:/GUEST   the documented form: maps HOST at the absolute guest path. READABLE there.
-//	HOST:.        ACCEPTED AND DEAD. A relative guest path; the grant succeeds and the guest's open returns
-//	              EBADF, "Bad file number" — a preopen name it can never resolve against.
-//	HOST::GUEST   wasmtime 14+'s form, NOT this one. `strings.Cut` splits at the first colon, so the guest
-//	              path becomes ":/d". Also accepted, also dead, also EBADF.
+//	HOST          maps the directory under its RESOLVED own name. Readable there.
+//	HOST:/GUEST   the documented form: maps HOST at the absolute guest path. Readable there.
+//	HOST:.        REFUSED at parse time (#828). Measured dead first: the grant succeeded and every open
+//	              through it returned EBADF.
+//	HOST::GUEST   REFUSED, with an error naming wasmtime's grammar. Also measured dead first, the same way.
 //
-// # The errno is the discriminator, not the failure
+// # The ENOENT arm was a Burroughs defect, and it took a second engine to say so
 //
-// A relative READ under an absolute grant (`--dir HOST:/` then open `in.txt`) fails with **ENOENT**, not
-// EBADF, and the file is demonstrably readable at `/in.txt` under that same grant. Two different errnos mean
-// two different mechanisms: EBADF is "no preopen matches this name", ENOENT is "the preopen matched and the
-// file is not at the resolved path". So the guest's working directory is not the grant, and a relative read
-// is a guest-side question rather than a mapping one. This arm exists because assuming the cwd was `/` would
-// have predicted a PASS, and it does not pass.
-//
-// # What it asserts versus what it proposes
-//
-// The two dead forms are asserted as they behave, not as they arguably should. Narrowing what `--dir` accepts
-// is CLI surface, so the refusal is a proposal rather than a change made here — and these arms are what make
-// it checkable. **If the parser is later narrowed, these arms fail, which is the point**: the test is named
-// for the mapping rule, so a repair rewrites an expectation rather than orphaning a test named after a defect.
+// A relative READ under an absolute grant fails with **ENOENT**, not EBADF, and the file is readable at
+// `/in.txt` under that same grant. I concluded from one engine that this was guest-side. **It is not**, and
+// standing property 20 is why the comparison was ordered: wasmtime 49.0.1, given the same guest bytes and
+// `--dir D::/`, **reads `in.txt` successfully**. The cause is `burroughs run` forwarding `os.Environ()`, so the
+// host's `PWD` becomes the guest's cwd — Go's `wasip1` runtime takes `cwd` from `PWD` and only falls back to
+// `preopens[0].name` when it is unset, which is what wasmtime's empty environment produces. Filed as #830,
+// where the larger half is that the whole host environment crosses into a sandbox whose model says nothing is
+// visible unless named. **The arm below therefore asserts the MECHANISM, not the symptom**: the outcome is
+// determined by the forwarded `PWD`, both values run. If #830 stops the forwarding, both values will read
+// alike and this arm fails — correctly, because the finding will have changed.
 func TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon(t *testing.T) {
 	guest := buildGuestFile(t, "cat")
 	dir := t.TempDir()
@@ -57,8 +52,8 @@ func TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The guest's own bytes are the verdict, not the CLI's exit code: a grant of a path nothing can open
-	// leaves the flag parser perfectly happy, which is the whole defect being measured.
+	// The guest's own bytes are the verdict, not the CLI's exit code: before #828 a grant of a path nothing
+	// could open left the flag parser perfectly happy, which is the defect these arms were written to measure.
 	readable := func(t *testing.T, dirArg, guestPath string) (bool, int, string) {
 		t.Helper()
 		var out, errBuf bytes.Buffer
@@ -66,78 +61,87 @@ func TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon(t *testing.T) {
 		return strings.Contains(out.String(), body), code, errBuf.String()
 	}
 
+	t.Run("bare_host_maps_under_its_resolved_own_name", func(t *testing.T) {
+		ok, code, stderr := readable(t, dir, filepath.Join(dir, "in.txt"))
+		if !ok {
+			t.Errorf("a bare HOST did not make the file readable at the HOST path (exit %d): %s\n"+
+				"\tHOST alone means HOST:abs(HOST). This is the form that DID work during the sweep, which is "+
+				"why #822's archive/zip finding is not a --dir artifact: its run read testdata at "+
+				"n=154 err=<nil>.", code, stderr)
+		}
+	})
+
+	t.Run("absolute_guest_path_is_the_documented_form", func(t *testing.T) {
+		ok, code, stderr := readable(t, dir+":/d", "/d/in.txt")
+		if !ok {
+			t.Errorf("HOST:/GUEST did not make the file readable at the guest path (exit %d): %s\n"+
+				"\tADR 0083's grant. If this breaks, TestRunGrantsAndDeniesFilesystemAccess breaks with it.",
+				code, stderr)
+		}
+	})
+
+	// #828's refusals. Each was measured DEAD before it was refused, so the refusal replaces a specific
+	// observed failure rather than a guess about one — and the error must name the shape, because an operator
+	// who sees only "invalid --dir" has to rediscover which half of their argument was wrong.
 	for _, tc := range []struct {
-		name         string
-		dirArg       string // ":" + this is appended to the host dir, or "" for a bare host grant
-		read         string // "" means the host's own absolute path
-		wantReadable bool
-		wantErrno    string // required when wantReadable is false, because "it failed" is not a finding
-		why          string
+		name, dirArg string
+		wantInError  []string
 	}{
 		{
-			name: "bare_host_maps_under_its_own_name", wantReadable: true,
-			why: "HOST alone means HOST:HOST. This is the form that DID work during the sweep, which is why " +
-				"#822's archive/zip finding is not a --dir artifact: its run read testdata at n=154 err=<nil>.",
+			name: "relative_guest_path_is_refused", dirArg: ".",
+			wantInError: []string{"not absolute", "EBADF"},
 		},
 		{
-			name: "absolute_guest_path_is_the_documented_form", dirArg: "/d", read: "/d/in.txt",
-			wantReadable: true,
-			why: "ADR 0083's grant, and the form the flag help names. If this breaks, " +
-				"TestRunGrantsAndDeniesFilesystemAccess breaks with it.",
+			name: "relative_guest_path_without_a_dot_is_refused_too", dirArg: "sub",
+			wantInError: []string{"not absolute"},
 		},
 		{
-			name: "relative_guest_path_is_accepted_and_maps_nowhere", dirArg: ".", read: "in.txt",
-			wantErrno: "Bad file number",
-			why: "THE FORM THAT FAILED TWICE. EBADF: no preopen name matches, so the grant is dead on " +
-				"arrival while the flag parser reports nothing.",
-		},
-		{
-			name: "relative_guest_path_dead_for_a_dotted_read_too", dirArg: ".", read: "./in.txt",
-			wantErrno: "Bad file number",
-			why:       "Writing the read as ./in.txt does not rescue it; the grant is what is unreachable.",
-		},
-		{
-			name: "wasmtime_two_colon_form_is_accepted_and_maps_nowhere", dirArg: ":/d", read: "/d/in.txt",
-			wantErrno: "Bad file number",
-			why: "A different tool's grammar. The guest path becomes \":/d\", granted successfully — the " +
-				"trap I wrongly blamed for the two failures above.",
-		},
-		{
-			name: "relative_read_under_an_absolute_grant_is_a_cwd_question", dirArg: "/", read: "in.txt",
-			wantErrno: "No such file or directory",
-			why: "ENOENT, not EBADF, and the same file IS readable at /in.txt under this grant — so the " +
-				"preopen matched and the guest's cwd is not the grant. A DIFFERENT mechanism from the two above.",
+			name: "wasmtime_two_colon_form_is_refused_and_says_so", dirArg: ":/d",
+			wantInError: []string{"starts with a colon", "wasmtime"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			arg := dir
-			if tc.dirArg != "" {
-				arg = dir + ":" + tc.dirArg
-			}
-			read := tc.read
-			if read == "" {
-				read = filepath.Join(dir, "in.txt")
-			}
-			ok, code, stderr := readable(t, arg, read)
-			t.Logf("DIRFLAG dir=%q read=%q readable=%v exit=%d stderr=%q", arg, read, ok, code, stderr)
-
-			if tc.wantReadable {
-				if !ok {
-					t.Errorf("--dir %q did not make %q readable (exit %d): stderr %q\n\t%s",
-						arg, read, code, stderr, tc.why)
-				}
-				return
-			}
+			ok, code, stderr := readable(t, dir+":"+tc.dirArg, "/d/in.txt")
+			t.Logf("DIRFLAG refused-form %q: readable=%v exit=%d stderr=%q", tc.dirArg, ok, code, stderr)
 			if ok {
-				t.Fatalf("--dir %q DID make %q readable: this form is recorded as dead, so either the "+
-					"mapping was widened or this expectation was wrong.\n\t%s", arg, read, tc.why)
+				t.Fatalf("--dir HOST:%s made the file readable: this form is refused, so either the parser "+
+					"was widened or this expectation is wrong", tc.dirArg)
 			}
-			if !strings.Contains(stderr, tc.wantErrno) {
-				// The errno, not the failure, is what separates the three dead forms from each other.
-				t.Errorf("--dir %q failed with stderr %q, want it to name %q\n\t%s\n"+
-					"\tA dead form failing for a NEW reason is a different defect from the one recorded here.",
-					arg, stderr, tc.wantErrno, tc.why)
+			if code == 0 {
+				t.Errorf("--dir HOST:%s exited 0; a refused flag must fail the run", tc.dirArg)
+			}
+			for _, want := range tc.wantInError {
+				if !strings.Contains(stderr, want) {
+					// The message is the whole value of the refusal: the run failed before #828 too, just
+					// without saying why.
+					t.Errorf("--dir HOST:%s: stderr %q does not mention %q — the refusal must name the shape, "+
+						"or it is no more useful than the EBADF it replaced", tc.dirArg, stderr, want)
+				}
 			}
 		})
 	}
+
+	t.Run("a_relative_read_is_decided_by_the_forwarded_PWD", func(t *testing.T) {
+		// Two values of ONE variable, which is what makes this a mechanism claim rather than a symptom.
+		// wasmtime forwards no environment and reads the same file successfully (49.0.1, measured); its
+		// behaviour is what `PWD=/` reproduces here.
+		type arm struct {
+			pwd          string
+			wantReadable bool
+		}
+		for _, a := range []arm{
+			{"/", true},
+			{dir, false}, // a host path the guest was never granted — what os.Environ() actually forwards
+		} {
+			t.Setenv("PWD", a.pwd)
+			ok, code, stderr := readable(t, dir+":/", "in.txt")
+			t.Logf("DIRFLAG relative-read PWD=%q readable=%v exit=%d stderr=%q", a.pwd, ok, code, stderr)
+			if ok != a.wantReadable {
+				t.Errorf("with PWD=%q the relative read was readable=%v, want %v (exit %d, stderr %q)\n"+
+					"\tThe guest's cwd comes from the forwarded PWD (Go's syscall/fs_wasip1.go init), and "+
+					"cmd/burroughs/run.go passes os.Environ(). If #830 stopped the forwarding, both arms read "+
+					"alike and this arm is what says so.", a.pwd, ok, a.wantReadable, code, stderr)
+			}
+		}
+	})
 }

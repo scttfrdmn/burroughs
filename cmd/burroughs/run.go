@@ -16,9 +16,9 @@ import (
 	"github.com/scttfrdmn/burroughs"
 )
 
-// preopenFlag collects repeated `--dir HOST[:GUEST]` grants into preopens for a wasip1 command. HOST
-// alone maps the host directory under its own name; HOST:GUEST maps it under GUEST. Capability-based:
-// only what is named here is visible to the guest (decision 0083).
+// preopenFlag collects repeated `--dir HOST[:/GUEST]` grants into preopens for a wasip1 command. HOST alone
+// maps the host directory under its own **resolved** name; `HOST:/GUEST` maps it under GUEST, which must be
+// absolute. Capability-based: only what is named here is visible to the guest (decision 0083).
 type preopenFlag []burroughs.Preopen
 
 func (f *preopenFlag) String() string {
@@ -29,13 +29,54 @@ func (f *preopenFlag) String() string {
 	return strings.Join(parts, ",")
 }
 
+// Set parses one `--dir` grant, and **refuses a guest path that can never be resolved against** (#828).
+//
+// # Why a refusal and not a warning
+//
+// A guest path that is not absolute is granted successfully and maps nowhere: the preopen exists, nothing can
+// open through it, and the guest reports `EBADF` — *"Bad file number"* — which sends the operator looking for a
+// missing file. That cost two measurements during the unaimed-program sweep before anyone suspected the flag.
+// Refusing at parse time turns a silent dead input into a loud one, which is this project's refuse-by-name
+// doctrine; `HOST` and `HOST:/abs` are untouched, so nothing that works today changes.
+//
+// The two refused shapes, each measured dead by
+// `TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon` before being refused here:
+//
+//	HOST:.  HOST:foo   a relative guest path.
+//	HOST::GUEST        wasmtime 14+'s separator. `Cut` splits at the FIRST colon, so the guest path is
+//	                   ":GUEST" — which is why this case names the `::` form in its error: the operator's
+//	                   likely mistake is using another engine's grammar, and the message should say so
+//	                   rather than making them derive it from a colon in a path they did not type.
+//
+// wasmtime rejects its own relative-grant form too (`--dir D::.` → `EBADF` on read, measured on 49.0.1), so
+// refusing here is not narrowing something another engine honours.
 func (f *preopenFlag) Set(v string) error {
 	host, guest, found := strings.Cut(v, ":")
 	if host == "" {
 		return fmt.Errorf("empty host directory in --dir %q", v)
 	}
 	if !found || guest == "" {
-		guest = host
+		// **"Under its own name" means its RESOLVED name.** A bare `--dir .` or `--dir sub/dir` used to grant
+		// a relative guest path — dead by the measurement below — and refusing it would break a form the
+		// ruling says is unchanged. Resolving it instead keeps the bare form working and makes it obey the
+		// absolute rule, which is the only reading under which both hold. `initFDs` already resolves the HOST
+		// side this way, so the two sides now agree rather than differing by a call.
+		abs, err := filepath.Abs(host)
+		if err != nil {
+			return fmt.Errorf("--dir %q: resolving the host directory: %w", v, err)
+		}
+		guest = abs
+	}
+	// Checked before the colon case so that `--dir /h::/g` is reported as the `::` mistake it almost certainly
+	// is, rather than as the generic "not absolute" it also is.
+	if strings.HasPrefix(guest, ":") {
+		return fmt.Errorf("--dir %q: the guest path %q starts with a colon, so nothing can open through it. "+
+			"Burroughs' separator is ONE colon (--dir HOST:/guest/path); two is wasmtime's grammar", v, guest)
+	}
+	if !strings.HasPrefix(guest, "/") {
+		return fmt.Errorf("--dir %q: the guest path %q is not absolute, so the guest can never resolve "+
+			"against it — the grant would succeed and every open through it would fail with EBADF. "+
+			"Use --dir HOST:/guest/path, or a bare --dir HOST to map it under its own name", v, guest)
 	}
 	*f = append(*f, burroughs.Preopen{Host: host, Guest: guest})
 	return nil
@@ -122,9 +163,9 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	strict := fs.Bool("strict", false,
 		"refuse a module the validator could not fully check, instead of running it")
 	var dirs preopenFlag
-	fs.Var(&dirs, "dir", "grant a wasip1 command a directory as HOST[:GUEST], ONE colon (repeatable); "+
-		"no directory is visible unless named (decision 0083). wasmtime's HOST::GUEST is a different "+
-		"tool's grammar and maps nowhere here")
+	fs.Var(&dirs, "dir", "grant a wasip1 command a directory as HOST[:/GUEST], ONE colon (repeatable); "+
+		"no directory is visible unless named (decision 0083). GUEST must be absolute; a relative one, and "+
+		"wasmtime's HOST::GUEST, are refused (#828)")
 	var feats featureFlag
 	fs.Var(&feats, "features", "proposal capabilities the guest requires, comma-separated "+
 		"(repeatable); currently: threads. An unrecognized name is refused (ADR 0088)")
@@ -134,10 +175,10 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
 			"directory, capability-based: nothing is visible unless named.")
-		fmt.Fprintln(stderr, "\n--dir's separator is ONE colon: --dir /host/path:/guest/path. A bare --dir "+
-			"/host/path maps it under its own name.\nwasmtime uses TWO (--dir host::guest); given that form "+
-			"this flag grants a guest path starting with a colon, which nothing can open, so the guest "+
-			"reports a file error for a flag mistake.")
+		fmt.Fprintln(stderr, "\n--dir's separator is ONE colon: --dir /host/path:/guest/path, and the guest "+
+			"path must be absolute.\nA bare --dir /host/path maps it under its own resolved name. A relative "+
+			"guest path and wasmtime's TWO-colon form (--dir host::guest) are both refused by name (#828): "+
+			"each would grant a mapping nothing can open, and report a file error for a flag mistake.")
 		fmt.Fprintln(stderr, "Any other module: with a function named it is invoked; with none its exports are listed.")
 		fmt.Fprintln(stderr, "\nValues are typed: i32:42  i64:-1  f32:nan  f64:inf  v128:0x0:0x0  extern:3  null:func")
 		fs.PrintDefaults()

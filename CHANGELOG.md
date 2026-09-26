@@ -118,16 +118,24 @@ own condition rather than as a prediction.
 
 ### Fixed
 
-- **`--dir`'s help named neither its separator nor the two forms it accepts and cannot map**
-  ([#827](https://github.com/scttfrdmn/burroughs/issues/827)). Burroughs takes ONE colon,
-  `--dir HOST[:GUEST]`, and wasmtime 14+ takes two; given `HOST::GUEST` the flag grants a guest
-  path beginning with a colon, which nothing can open, and the guest reports a file error for a
-  flag mistake. A **relative** guest path (`--dir HOST:.`) is dead the same way. Both are now
-  named in the flag's help and its usage block, and asserted by
-  `TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon` **with the errno that separates them**:
-  a dead grant is `EBADF`, while a relative *read* under a live grant is `ENOENT` and is a
-  guest-cwd question rather than a mapping one. The parser is unchanged — narrowing what `--dir`
-  accepts is CLI surface, so the arms record the behaviour and the refusal is a proposal.
+- **`--dir` accepted two guest-path forms that can never map, and said nothing**
+  ([#828](https://github.com/scttfrdmn/burroughs/issues/828),
+  [#827](https://github.com/scttfrdmn/burroughs/issues/827)). Burroughs' separator is ONE colon and
+  its guest path must be **absolute**. A relative guest path (`--dir HOST:.`) and wasmtime 14+'s
+  two-colon form (`--dir HOST::GUEST`, which makes the guest path `:GUEST`) were each granted
+  successfully and mapped nowhere, so every open through them returned `EBADF` — *"Bad file
+  number"* — and the operator went looking for a missing file. Both are now **refused at flag-parse
+  time with an error naming the shape**, the `::` case naming wasmtime so the likely mistake is
+  visible; `HOST` and `HOST:/abs` are unchanged, and a bare `HOST` now maps under its *resolved*
+  name so the bare form obeys the same rule. Each form was measured dead before it was refused, by
+  `TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon`, which now asserts the refusals and
+  their messages.
+  - **A relative *read* under a live grant is a different defect and is NOT fixed here**
+    ([#830](https://github.com/scttfrdmn/burroughs/issues/830)): it fails with `ENOENT` rather than
+    `EBADF`, and wasmtime 49.0.1 reads the same file from the same guest bytes. The cause is
+    `burroughs run` forwarding `os.Environ()`, so the host's `PWD` becomes the guest's working
+    directory. Filed with the larger half of it — that the whole host environment crosses into a
+    sandbox whose model is *nothing is visible unless named*.
 
 - **A guest that called `proc_exit` on a spawned agent left `Invoke` never returning**
   ([#819](https://github.com/scttfrdmn/burroughs/issues/819),
