@@ -122,8 +122,9 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	strict := fs.Bool("strict", false,
 		"refuse a module the validator could not fully check, instead of running it")
 	var dirs preopenFlag
-	fs.Var(&dirs, "dir", "grant a wasip1 command a directory as HOST[:GUEST] (repeatable); "+
-		"no directory is visible unless named (decision 0083)")
+	fs.Var(&dirs, "dir", "grant a wasip1 command a directory as HOST[:GUEST], ONE colon (repeatable); "+
+		"no directory is visible unless named (decision 0083). wasmtime's HOST::GUEST is a different "+
+		"tool's grammar and maps nowhere here")
 	var feats featureFlag
 	fs.Var(&feats, "features", "proposal capabilities the guest requires, comma-separated "+
 		"(repeatable); currently: threads. An unrecognized name is refused (ADR 0088)")
@@ -133,6 +134,10 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
 			"directory, capability-based: nothing is visible unless named.")
+		fmt.Fprintln(stderr, "\n--dir's separator is ONE colon: --dir /host/path:/guest/path. A bare --dir "+
+			"/host/path maps it under its own name.\nwasmtime uses TWO (--dir host::guest); given that form "+
+			"this flag grants a guest path starting with a colon, which nothing can open, so the guest "+
+			"reports a file error for a flag mistake.")
 		fmt.Fprintln(stderr, "Any other module: with a function named it is invoked; with none its exports are listed.")
 		fmt.Fprintln(stderr, "\nValues are typed: i32:42  i64:-1  f32:nan  f64:inf  v128:0x0:0x0  extern:3  null:func")
 		fs.PrintDefaults()

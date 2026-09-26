@@ -118,6 +118,17 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **`--dir`'s help named neither its separator nor the two forms it accepts and cannot map**
+  ([#827](https://github.com/scttfrdmn/burroughs/issues/827)). Burroughs takes ONE colon,
+  `--dir HOST[:GUEST]`, and wasmtime 14+ takes two; given `HOST::GUEST` the flag grants a guest
+  path beginning with a colon, which nothing can open, and the guest reports a file error for a
+  flag mistake. A **relative** guest path (`--dir HOST:.`) is dead the same way. Both are now
+  named in the flag's help and its usage block, and asserted by
+  `TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon` **with the errno that separates them**:
+  a dead grant is `EBADF`, while a relative *read* under a live grant is `ENOENT` and is a
+  guest-cwd question rather than a mapping one. The parser is unchanged — narrowing what `--dir`
+  accepts is CLI surface, so the arms record the behaviour and the refusal is a proposal.
+
 - **A guest that called `proc_exit` on a spawned agent left `Invoke` never returning**
   ([#819](https://github.com/scttfrdmn/burroughs/issues/819),
   [ADR 0090](docs/decisions/0090-proc-exit-is-instance-scoped-and-its-teardown-is-a-request-routed-into-the-shutdown-mechanism-that-already-exists.md)).
