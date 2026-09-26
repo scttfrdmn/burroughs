@@ -323,11 +323,33 @@ race:
 #   witnesses-norace  2 x 135s = 270s      floor 48s  (half of the lowest observed, 96s)
 #   witnesses-race    2 x 269s = 538s      floor 96s  (half of the lowest observed, 192s)
 #
+# (Those first pins stood for one run. See the move below — they are kept here because the record of what was
+# pinned from which sample is what makes the move checkable rather than a silent re-tuning.)
+#
 # **RECHECK AFTER THREE RUNS.** This is one sample per arch, and this Makefile documents a 1.38x spread on
 # the slow runner elsewhere — so these pins are a first pin, not a settled one. If a later run widens the
 # spread, **the pin moves up with it and is recorded here with its date**, the way the `race` note above now
 # carries the 760s that falsified it. A pin that silently absorbs a slower run is a pin that has stopped
 # measuring anything.
+#
+# ### MOVED 2026-09-26, on the SECOND run, and the recheck condition earned its keep immediately
+#
+#   | arch             | norace run 1 | run 2     | race run 1 | run 2     |
+#   |------------------|--------------|-----------|------------|-----------|
+#   | ubuntu-24.04     |  96s         | **169s**  | 192s       | **321s**  |
+#   | ubuntu-24.04-arm | 135s         | 138s      | 269s       | 273s      |
+#
+# **x86-64 nearly doubled while arm64 held still**: a **1.76x** run-to-run spread on one arch, wider than the
+# 1.38x documented above for a different job. Two consequences, and the second is the one that matters:
+#
+#   - the pins move to 2x the slowest OBSERVATION, not 2x the slower arch's first one: **338s** and **642s**;
+#   - **which arch is "the slow runner" is not a stable fact.** Run 1 said arm64 (135s vs 96s); run 2 says
+#     x86-64 (169s vs 138s). A pin derived from "the slower arch" is therefore derived from a property that
+#     changes between runs, and the durable rule is *2x the slowest observation on record*, which is what
+#     these numbers now are.
+#
+# The floors are UNCHANGED at 48s and 96s: they come from the LOWEST observation (96s norace, 192s race), and
+# run 2 was slower, not faster. A floor that moved up with a slow run would be a floor chasing the ceiling.
 #
 # **The FLOOR is the other half, and it FAILS rather than warns.** Earned immediately: this gauge's first real
 # run reported `0s of 1800s (0%)` because the target had omitted `-count=1`, and an upper-end warning is
@@ -341,8 +363,8 @@ race:
 # Stated because the failure message says "check that the tests actually executed", and the first thing to
 # check when it fires locally is whether the floor is simply CI-shaped rather than whether the run was real.
 witnesses:
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 270 48
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 538 96 --race
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 338 48
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 96 --race
 
 vet:
 	$(GO) vet ./...
