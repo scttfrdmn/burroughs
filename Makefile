@@ -285,33 +285,64 @@ race:
 # 1/1) — a data race in the engine cannot be what makes a guest's own checksum walk pass or fail, so
 # running the guest-logic arms under `-race` buys time and no new question.
 #
-# **`-count=1` is load-bearing, not habit, and it lives in THIS TARGET so no caller can leave it out.** The first version omitted it and `budget.sh` reported
+# **THE PRIMARY CHECK IS `go test -json`, not the clock.** `witnessrun.sh` asserts that each named witness
+# emitted a `run` and a `pass` event, that none was skipped, that no witness *subtest* was skipped, and that no
+# package result was `(cached)`. Each name is checked on its own, so a witness that is renamed or no longer
+# matched fails by name instead of vanishing into a green.
+#
+# That replaced a wall-clock floor as the primary. The floor was earned honestly — a missing `-count=1` had
+# served a cached pass at `0s` — but it is a **proxy**: it measures hardware speed as much as execution, so a
+# fast machine trips it with nothing wrong and a slow one could clear a cached run. The condition is directly
+# observable, so it is observed. *Measure the condition, not its proxy*, applied to an instrument built an hour
+# earlier.
+#
+# **The floor survives as a secondary backstop that binds only in CI**, where the runners it was calibrated
+# against actually run; locally it prints its reading and does not fail.
+#
+# **`-count=1` is load-bearing, not habit, and it lives in the SCRIPT so no caller can leave it out.** The first version omitted it and `budget.sh` reported
 # `witnesses-norace used 0s of 1800s (0%)` — a CACHED pass, in the one job whose whole purpose is to be the
 # authority for these witnesses. An unrun command looks exactly like a passing one, and the budget gauge is
 # what made the zero visible.
 #
-# ## THE BUDGET IS PROVISIONAL AT 1800s, and how it gets pinned is fixed in advance
+# ## THE BUDGET IS PINNED, 2026-09-26, from CI's own numbers on both arches
 #
-# One CI run is **one sample per arch**, and this Makefile already documents a 1.38x spread on the slow
-# runner — so a pin taken from a single observation is a pin taken from that observation's luck.
+# First measured run of this job (`544b576`), both arches green:
 #
-#   1. pin at **2x the SLOWER arch's** observed time;
-#   2. **recheck after three runs**;
-#   3. if a later run shows a larger spread, **the pin moves up with it**, recorded with a date the way the
-#      `race` note above now is;
-#   4. until step 1 has numbers from both arches, 1800s stays marked provisional **here, in the file** —
-#      not in a report, because a provisional value nobody can see in the source reads as a decision.
+#   | arch             | witnesses-norace | witnesses-race |
+#   |------------------|------------------|----------------|
+#   | ubuntu-24.04     |  96s             | 192s           |
+#   | ubuntu-24.04-arm | 135s             | 269s           |
 #
-# **And the FLOOR is the other half.** `budget.sh --floor` FAILS a run that finishes implausibly fast, set to
-# half the lowest elapsed time observed on either arch and stated in seconds rather than as a percentage of
-# the budget. Earned immediately: this gauge's first real run reported `0s of 1800s (0%)` because the target
-# had omitted `-count=1`, and an upper-end warning is structurally unable to see that. The floor value, like
-# the pin, waits for CI's numbers.
+# **arm64 is the SLOWER arch for this job, which inverts the expectation the `race` failure set up.** There
+# x86-64 timed out while arm64 cleared; here arm64 is ~1.4x slower on both halves. Different populations —
+# that job is dominated by `internal/spec` — so neither observation predicts the other, and this is why the
+# pin comes from *this* job's measurements rather than from the neighbouring job's reputation.
+#
+# Pins at **2x the slower arch**, per the rule fixed before the numbers existed:
+#
+#   witnesses-norace  2 x 135s = 270s      floor 48s  (half of the lowest observed, 96s)
+#   witnesses-race    2 x 269s = 538s      floor 96s  (half of the lowest observed, 192s)
+#
+# **RECHECK AFTER THREE RUNS.** This is one sample per arch, and this Makefile documents a 1.38x spread on
+# the slow runner elsewhere — so these pins are a first pin, not a settled one. If a later run widens the
+# spread, **the pin moves up with it and is recorded here with its date**, the way the `race` note above now
+# carries the 760s that falsified it. A pin that silently absorbs a slower run is a pin that has stopped
+# measuring anything.
+#
+# **The FLOOR is the other half, and it FAILS rather than warns.** Earned immediately: this gauge's first real
+# run reported `0s of 1800s (0%)` because the target had omitted `-count=1`, and an upper-end warning is
+# structurally unable to see a job that did nothing. Floors are stated in SECONDS, never as a percentage of
+# the budget — a percentage would drift every time the budget moved, and the budget moves for reasons (runner
+# drift, added work) unrelated to how fast the work *cannot* be.
+#
+# **The floors are calibrated to CI, and a fast developer machine sits closer to them than CI does.** Measured
+# on the machine this was pinned from: 78s and 170s, against CI's 96s/135s and 192s/269s — so local runs are
+# already faster than either runner, and a machine ~1.6x faster again would trip a floor with nothing wrong.
+# Stated because the failure message says "check that the tests actually executed", and the first thing to
+# check when it fires locally is whether the floor is simply CI-shaped rather than whether the run was real.
 witnesses:
-	@./scripts/budget.sh 1800 witnesses-norace -- $(GO) test -count=1 -timeout 20m \
-		-run 'TestClause1|TestClause2|TestClause3' ./internal/wasi/ ./internal/component/
-	@./scripts/budget.sh 1800 witnesses-race -- $(GO) test -count=1 -race -timeout 20m \
-		-run 'TestClause1|TestClause2|TestClause3' ./internal/wasi/ ./internal/component/
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 270 48
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 538 96 --race
 
 vet:
 	$(GO) vet ./...
