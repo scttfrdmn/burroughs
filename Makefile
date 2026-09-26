@@ -351,6 +351,28 @@ race:
 # The floors are UNCHANGED at 48s and 96s: they come from the LOWEST observation (96s norace, 192s race), and
 # run 2 was slower, not faster. A floor that moved up with a slow run would be a floor chasing the ceiling.
 #
+# ### THE SAMPLE RECORD, because "the slowest observation ON RECORD" needs a record
+#
+# The pin rule points at the slowest observation, so the observations have to live somewhere a later reader
+# can check — otherwise "on record" means "in whoever last touched this file's memory", which is not a record.
+# Dated entries, the way the `race` note above carries its 760s, with the **run ID** so each number is
+# traceable to the run that produced it.
+#
+# **Appended at RECHECK POINTS only, not every run.** A log of every run would be a status file by another
+# name, and this project does not keep those; what the rule needs is the samples that moved or confirmed a
+# pin.
+#
+#   | date       | run ID      | arch             | norace | race |
+#   |------------|-------------|------------------|--------|------|
+#   | 2026-09-26 | 36216184624 | ubuntu-24.04     |   96s  | 192s |
+#   | 2026-09-26 | 36216184624 | ubuntu-24.04-arm |  135s  | 269s |
+#   | 2026-09-26 | 36219470572 | ubuntu-24.04     |  169s  | 321s |
+#   | 2026-09-26 | 36219470572 | ubuntu-24.04-arm |  138s  | 273s |
+#
+# Slowest on record: **169s** norace, **321s** race — both from run 36219470572 on x86-64, which is what the
+# current pins of 338s and 642s are twice. Lowest on record: 96s and 192s, which is what the floors are half
+# of. **Third sample still owed** before these pins are treated as settled.
+#
 # **The FLOOR is the other half, and it FAILS rather than warns.** Earned immediately: this gauge's first real
 # run reported `0s of 1800s (0%)` because the target had omitted `-count=1`, and an upper-end warning is
 # structurally unable to see a job that did nothing. Floors are stated in SECONDS, never as a percentage of
