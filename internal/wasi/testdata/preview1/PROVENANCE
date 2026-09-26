@@ -1,0 +1,38 @@
+The preview-1 interface definition, and the script that derives wasm signatures from it.
+
+THIS IS THE WITNESS'S DOMAIN, and it is derived from the specification rather than written by hand — the
+lesson recorded when #264 closed: *derive the domain from the space, never from the registry.* A hand-kept
+list of "the functions we supply" can only ever agree with itself.
+
+  wasi_snapshot_preview1.witx
+    source: https://github.com/WebAssembly/WASI
+    branch: snapshot-01   (`main` no longer carries witx; the layout moved to specifications/)
+    commit: 7256722d5d194be36842ba65d9983dff3718d87d
+    path:   phases/snapshot/witx/wasi_snapshot_preview1.witx
+    bytes:  19235
+    sha256: f6e83cb553b40a34f6622343fbfbf5d24969383fad6a420fd45a29af762161e2
+
+  derive-signatures.py
+    Maps each `(@interface func (export "name"))` to a wasm signature under the canonical ABI: params by
+    type, the FIRST $errno result becomes the wasm return, and ADDITIONAL results become trailing i32
+    out-pointers.
+
+    Run: python3 derive-signatures.py wasi_snapshot_preview1.witx out.json
+
+VALIDATED AGAINST KNOWN-GOOD, which is the only reason it is trusted for the names the host did NOT already
+have. All 27 signatures the host already declared in a parseable form must agree, and they do — **27 agree,
+0 disagree**. Two earlier versions of the script FAILED that check and were caught by it rather than by
+reading the output:
+
+  1. it skipped `(param $path string)` — a builtin witx type carries no `$`, so every string param
+     vanished and `path_link` derived 3 params where the truth is 7;
+  2. it skipped `(param $buf (@witx pointer u8))` — a nested type form — so `random_get`, `fd_readdir`,
+     `poll_oneoff`, `args_get` and `environ_get` each lost a param.
+
+Neither failure was visible in the output on its own. Both were visible the moment the derived set was
+compared with signatures already known to work.
+
+ONE DOCUMENTED ADDITION BEYOND THIS SPEC: `sock_accept` is **not** in snapshot-01's witx, and Go's wasip1
+port imports it (`src/syscall/net_wasip1.go`, `//go:wasmimport wasi_snapshot_preview1 sock_accept`). It is a
+post-snapshot addition, so the witness's domain is *this witx plus that name*, with the addition named rather
+than folded in — a guest may import it, so the host must supply it.

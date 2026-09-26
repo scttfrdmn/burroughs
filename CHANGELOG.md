@@ -116,7 +116,38 @@ own condition rather than as a prediction.
     ([#514](https://github.com/scttfrdmn/burroughs/issues/514)), since a guest wanting a
     per-thread slot at register-like cost can now declare a mutable global.
 
+- **A recon for the write slice, and a recommendation held at `proposed`**
+  ([#831](https://github.com/scttfrdmn/burroughs/issues/831),
+  [ADR 0091](docs/decisions/0091-a-confined-writable-scratch-directory-granted-by-its-own-flag-with-confinement-delegated-to-os-root-rather-than-hand-rolled.md)).
+  **No behaviour changes**; ADR 0083's read-only filesystem is untouched and this entry records a
+  measurement, not a capability. `os` could not run one test under the sweep — 227 verdicts, all
+  failing in `t.TempDir()` — so the demand set was measured on wasmtime 49.0.1, where the same guest
+  bytes complete the cycle: **8 functions would change from refusing to implementing, 16 refusals
+  remain, and none is absent**, so ADR 0080's supplied-whole property is untouched. Confinement is
+  enforceable without granting more than the named directory — `os.Root` refused all 10 escape shapes
+  probed, including creates *through* a symlink pointing out of the grant, while permitting all 8
+  in-grant operations.
+
 ### Fixed
+
+- **`--dir` accepted two guest-path forms that can never map, and said nothing**
+  ([#828](https://github.com/scttfrdmn/burroughs/issues/828),
+  [#827](https://github.com/scttfrdmn/burroughs/issues/827)). Burroughs' separator is ONE colon and
+  its guest path must be **absolute**. A relative guest path (`--dir HOST:.`) and wasmtime 14+'s
+  two-colon form (`--dir HOST::GUEST`, which makes the guest path `:GUEST`) were each granted
+  successfully and mapped nowhere, so every open through them returned `EBADF` — *"Bad file
+  number"* — and the operator went looking for a missing file. Both are now **refused at flag-parse
+  time with an error naming the shape**, the `::` case naming wasmtime so the likely mistake is
+  visible; `HOST` and `HOST:/abs` are unchanged, and a bare `HOST` now maps under its *resolved*
+  name so the bare form obeys the same rule. Each form was measured dead before it was refused, by
+  `TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon`, which now asserts the refusals and
+  their messages.
+  - **A relative *read* under a live grant is a different defect and is NOT fixed here**
+    ([#830](https://github.com/scttfrdmn/burroughs/issues/830)): it fails with `ENOENT` rather than
+    `EBADF`, and wasmtime 49.0.1 reads the same file from the same guest bytes. The cause is
+    `burroughs run` forwarding `os.Environ()`, so the host's `PWD` becomes the guest's working
+    directory. Filed with the larger half of it — that the whole host environment crosses into a
+    sandbox whose model is *nothing is visible unless named*.
 
 - **A guest that called `proc_exit` on a spawned agent left `Invoke` never returning**
   ([#819](https://github.com/scttfrdmn/burroughs/issues/819),

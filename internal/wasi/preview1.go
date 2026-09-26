@@ -200,8 +200,12 @@ func ft(params []bin.ValType, results ...bin.ValType) bin.FuncType {
 // and only for the names in the table. Every name the measured Go guest declares is present —
 // `link` refuses an unsatisfied import outright (ADR 0080's central finding), so the off-path ones
 // are supplied as stubs rather than omitted.
-func (h *host) imports() interp.Imports {
-	table := map[string]entry{
+// imports0 is the supplied table itself. Split out of [host.imports] so that
+// [host.suppliedNamesForTest] can enumerate it: the resolver `imports` returns can answer whether a
+// name resolves but cannot list what it has, and a witness that cannot enumerate can only check one
+// direction of a bijection.
+func (h *host) imports0() map[string]entry {
+	return map[string]entry{
 		// Startup path, implemented for real.
 		"args_get":          {ft([]bin.ValType{i32, i32}, i32), h.argsGet},
 		"args_sizes_get":    {ft([]bin.ValType{i32, i32}, i32), h.argsSizesGet},
@@ -261,7 +265,54 @@ func (h *host) imports() interp.Imports {
 		"path_remove_directory": {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("path_remove_directory")},
 		"path_symlink":          {ft([]bin.ValType{i32, i32, i32, i32, i32}, i32), h.refuseNosys("path_symlink")},
 		"path_unlink_file":      {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("path_unlink_file")},
+
+		// ---- The remainder of the preview-1 surface, supplied so that LINK cannot refuse a guest.
+		//
+		// ADR 0080 records why the set is supplied whole: *link refuses a gap*, so a function that is
+		// not implemented must still be PRESENT and refuse at call time. What #827 found is that the
+		// converse had never been decided: a missing import rejects the WHOLE PROGRAM at instantiation,
+		// including every read-only test it contains, which is harsher than ADR 0083 intended and was
+		// nobody's decision. Batch 2's `os` and `encoding/json` could not run a single test for want of
+		// seven names, most of which those tests never call.
+		//
+		// Nothing refused here becomes allowed, so this stays inside ADR 0083.
+		//
+		// The domain is DERIVED, not listed: `testdata/preview1/wasi_snapshot_preview1.witx` plus the one
+		// documented post-snapshot addition, checked in both directions by a witness.
+		//
+		// ADR 0083's read-only decision: each of these WRITES.
+		"fd_pwrite":               {ft([]bin.ValType{i32, i32, i32, i64, i32}, i32), h.refuseNosys("fd_pwrite")},
+		"fd_sync":                 {ft([]bin.ValType{i32}, i32), h.refuseNosys("fd_sync")},
+		"fd_datasync":             {ft([]bin.ValType{i32}, i32), h.refuseNosys("fd_datasync")},
+		"fd_allocate":             {ft([]bin.ValType{i32, i64, i64}, i32), h.refuseNosys("fd_allocate")},
+		"fd_filestat_set_times":   {ft([]bin.ValType{i32, i64, i64, i32}, i32), h.refuseNosys("fd_filestat_set_times")},
+		"path_filestat_set_times": {ft([]bin.ValType{i32, i32, i32, i32, i64, i64, i32}, i32), h.refuseNosys("path_filestat_set_times")},
+		"path_link":               {ft([]bin.ValType{i32, i32, i32, i32, i32, i32, i32}, i32), h.refuseNosys("path_link")},
+		"path_rename":             {ft([]bin.ValType{i32, i32, i32, i32, i32, i32}, i32), h.refuseNosys("path_rename")},
+		//
+		// fd-table mutation and rights, which the per-run table does not offer.
+		"fd_renumber":          {ft([]bin.ValType{i32, i32}, i32), h.refuseNosys("fd_renumber")},
+		"fd_fdstat_set_rights": {ft([]bin.ValType{i32, i64, i64}, i32), h.refuseNosys("fd_fdstat_set_rights")},
+		"fd_advise":            {ft([]bin.ValType{i32, i64, i64, i32}, i32), h.refuseNosys("fd_advise")},
+		"fd_tell":              {ft([]bin.ValType{i32, i32}, i32), h.refuseNosys("fd_tell")},
+		//
+		// No socket is ever preopened, so there is no descriptor these could act on.
+		"sock_accept":   {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("sock_accept")},
+		"sock_recv":     {ft([]bin.ValType{i32, i32, i32, i32, i32, i32}, i32), h.refuseNosys("sock_recv")},
+		"sock_send":     {ft([]bin.ValType{i32, i32, i32, i32, i32}, i32), h.refuseNosys("sock_send")},
+		"sock_shutdown": {ft([]bin.ValType{i32, i32}, i32), h.refuseNosys("sock_shutdown")},
+		//
+		// No signal delivery exists on this host.
+		"proc_raise": {ft([]bin.ValType{i32}, i32), h.refuseNosys("proc_raise")},
+		//
+		// Implemented, because it is read-only and a guest may reasonably ask.
+		"clock_res_get": {ft([]bin.ValType{i32, i32}, i32), h.clockResGet},
 	}
+}
+
+// imports resolves a preview-1 import against the table [host.imports0] holds.
+func (h *host) imports() interp.Imports {
+	table := h.imports0()
 	return func(mod, name string) (interp.Extern, bool) {
 		if mod != module {
 			return interp.Extern{}, false
@@ -756,6 +807,36 @@ func (h *host) refusalsForTest() map[string]int {
 	out := make(map[string]int, len(h.refusals))
 	for k, v := range h.refusals {
 		out[k] = v
+	}
+	return out
+}
+
+// clockResGet answers a clock's resolution — preview 1's `clock_res_get`. Signature: id, resolution_ptr
+// → errno.
+//
+// **Implemented rather than refused, because it is READ-ONLY and cheap.** Every other name added for #827
+// refuses: they write, mutate the fd table, or need a socket. This one asks what precision the clock has,
+// which the host can answer truthfully, and a guest that gets ENOSYS here may take a worse path than one
+// told the real number.
+//
+// 1 ns is the truth for a monotonic clock read through Go's `time.Now`, which is what `clockTimeGet` uses.
+func (h *host) clockResGet(c *interp.Caller, args []interp.Value) ([]interp.Value, error) {
+	if id := u32(args, 0); id > 3 { // realtime, monotonic, process_cputime, thread_cputime
+		return ret(errInval), nil
+	}
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], 1)
+	return ret(mWrite(c, u32(args, 1), b[:])), nil
+}
+
+// suppliedNamesForTest returns the preview-1 names this host supplies. Test-only, like
+// [host.refusalsForTest], and it exists so a witness can compare the supplied set against the
+// SPECIFICATION in both directions — `imports()` answers "does this name resolve" and cannot enumerate,
+// so a one-directional check is all it could support.
+func (h *host) suppliedNamesForTest() map[string]bool {
+	out := map[string]bool{}
+	for name := range h.imports0() {
+		out[name] = true
 	}
 	return out
 }
