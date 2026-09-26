@@ -285,14 +285,28 @@ race:
 # 1/1) — a data race in the engine cannot be what makes a guest's own checksum walk pass or fail, so
 # running the guest-logic arms under `-race` buys time and no new question.
 #
-# **`-count=1` is load-bearing, not habit.** The first version omitted it and `budget.sh` reported
+# **`-count=1` is load-bearing, not habit, and it lives in THIS TARGET so no caller can leave it out.** The first version omitted it and `budget.sh` reported
 # `witnesses-norace used 0s of 1800s (0%)` — a CACHED pass, in the one job whose whole purpose is to be the
 # authority for these witnesses. An unrun command looks exactly like a passing one, and the budget gauge is
 # what made the zero visible.
 #
-# The budget is **provisional at 1800s** until CI has measured this job on both arches; it is then pinned
-# from those numbers with stated headroom, per the rule that a budget comes from the runner's own timings
-# and not from a laptop's. `budget.sh` is what makes that measurement visible rather than inferred.
+# ## THE BUDGET IS PROVISIONAL AT 1800s, and how it gets pinned is fixed in advance
+#
+# One CI run is **one sample per arch**, and this Makefile already documents a 1.38x spread on the slow
+# runner — so a pin taken from a single observation is a pin taken from that observation's luck.
+#
+#   1. pin at **2x the SLOWER arch's** observed time;
+#   2. **recheck after three runs**;
+#   3. if a later run shows a larger spread, **the pin moves up with it**, recorded with a date the way the
+#      `race` note above now is;
+#   4. until step 1 has numbers from both arches, 1800s stays marked provisional **here, in the file** —
+#      not in a report, because a provisional value nobody can see in the source reads as a decision.
+#
+# **And the FLOOR is the other half.** `budget.sh --floor` FAILS a run that finishes implausibly fast, set to
+# half the lowest elapsed time observed on either arch and stated in seconds rather than as a percentage of
+# the budget. Earned immediately: this gauge's first real run reported `0s of 1800s (0%)` because the target
+# had omitted `-count=1`, and an upper-end warning is structurally unable to see that. The floor value, like
+# the pin, waits for CI's numbers.
 witnesses:
 	@./scripts/budget.sh 1800 witnesses-norace -- $(GO) test -count=1 -timeout 20m \
 		-run 'TestClause1|TestClause2|TestClause3' ./internal/wasi/ ./internal/component/
