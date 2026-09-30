@@ -120,6 +120,15 @@ own condition rather than as a prediction.
     register bank was *per-thread* state, so shared-and-locked is right here and per-agent was right
     there.
 
+- **The sweep harness can grant a writable directory, and a row names the grants it was taken under**
+  ([#831](https://github.com/scttfrdmn/burroughs/issues/831)). `SWEEP_SCRATCH` joins `SWEEP_DIR` —
+  separate variables for the same reason the flags are separate, so a package that needs to write says
+  so and one that does not cannot acquire the capability by accident. The structured row gains a
+  `grants=` field **derived from the config rather than from the environment**, because `os` scores 227
+  setup failures without a writable directory and runs with one: two measurements that would otherwise
+  share one label. `SWEEP_DIR`'s grant is placed first, since a `wasip1` guest takes its working
+  directory from `preopens[0]` when `PWD` is unset — which #830 made the normal case.
+
 ### Changed
 
 - **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed
