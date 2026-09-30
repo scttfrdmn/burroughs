@@ -28,7 +28,13 @@ import (
 // so the third option is the one this engine should end at, and it is deferred here rather than
 // declined: it wants the pairing to live beside the body, which is a retention question in
 // `binary` (a parallel array keyed by instruction index) that `br_table`'s label vector also
-// needs and that neither has yet. Filed as **#136**, whose definition of done is a *benchmark*
+// needs and that neither has yet. **#136 is CLOSED as measured-and-declined**, and this sentence read
+// "Filed as #136" — which reads as open work and is not. The table was built behind
+// `-tags burroughs_endtable` (ADR 0048), measured, and the *flip* declined on Scott's #508 ruling: the
+// pre-registered >=5% on `Coupled/*/arith` was not met and memory went +13.2%. So the third option is
+// **decided against by default**, not pending. A workload where it is worth 31-69x — `select`-dense hot
+// loops, where `matchEnd` is 95.91% of runtime — is recorded on #835, which is evidence about a
+// population the decline did not measure rather than a reversal of it. Its definition of done was a *benchmark*
 // rather than a vector — both readings are correct, so the suite cannot see the difference and only
 // a measurement can: `internal/interp/scanbench`. This header claimed a failing test — **grave #501**.
 //

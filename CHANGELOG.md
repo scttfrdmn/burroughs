@@ -143,6 +143,27 @@ own condition rather than as a prediction.
   - `WriteAt`/`ReadAt` rather than `Write`+`Seek`, because `fd_seek` is among the 21 still refused — a
     seek-based round trip would fail every iteration and report zero mismatches out of zero operations.
 
+- **`scripts/ciwatch.sh` resolves a CI run by head SHA and refuses a verdict whose required jobs did not
+  run.** A green was read off the wrong run: one push produces **two**, and the newer finished in 13 s with
+  six of seven jobs **skipped** while reporting `conclusion: success`, because a skipped job contributes
+  success. The cause is deliberate and documented in `ci.yml` — the `pull_request:` trigger includes
+  `edited` so the two body-scanning checks see the body they will merge with (#411), and every job whose
+  subject is the *tree* carries `if: github.event.action != 'edited'`. **So editing a PR body, which is the
+  normal flow when pasting a measured figure, fires a second run that correctly skips almost everything.**
+  The required job keys are derived from `ci.yml`'s own `jobs:` block, the same way
+  `TestCIGatesCoverWhatCIInvokes` derives its make targets, so the list cannot drift.
+- **`scripts/prmerge.sh` refuses to merge-and-delete while the local branch holds commits the PR does
+  not.** `--delete-branch` deletes the local branch too; a slice committed on top of an already-pushed
+  branch was squashed away with it and recovered only from the reflog, after a `No stash entries found`
+  line in unrelated output was noticed. It asserts a clean tree, then that the local tip equals the PR's
+  remote head, naming the local-only commits if not — every check read-only and before the irreversible
+  step.
+- **`internal/interp/control.go` said "Filed as #136" for a closed issue.** #136 is closed as
+  *measured-and-declined*: the pairing table is built behind `-tags burroughs_endtable` (ADR 0048) and the
+  **flip** was declined on the #508 ruling. The comment read as open work. Corrected, with the workload
+  where that arm is worth 31–69× recorded on
+  [#835](https://github.com/scttfrdmn/burroughs/issues/835) rather than asserted here.
+
 ### Changed
 
 - **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed
