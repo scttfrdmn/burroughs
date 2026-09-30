@@ -34,7 +34,10 @@ import (
 //  2. per-test OUTCOME SETS are readable, because the guest's whole output is dumped;
 //  3. the row is structured, so tallies read named fields through `parsePoRow` rather than a regex;
 //  4. the dump fires on BOTH terminal paths — the arm whose outcome set mattered most in the `archive/zip`
-//     comparison was the one that hung, and a FINISHED-only dump had missed it.
+//     comparison was the one that hung, and a FINISHED-only dump had missed it;
+//  5. the GRANT is named in the row, because a package's outcome set depends on it. `os` scores 227 setup
+//     failures with no writable directory and runs with one, so a row that did not say which it had would be
+//     two different measurements wearing one label.
 //
 // # It does NOT skip without a guest, and that is a correction
 //
@@ -53,7 +56,7 @@ func TestSweepRow(t *testing.T) {
 	// breaks every row this harness will ever emit, and none of that needs a guest to catch.
 	t.Run("the_emitted_row_parses_back_into_named_fields", func(t *testing.T) {
 		for _, tag := range []string{"FINISHED", "PROGRESS", "HUNG"} {
-			line := sweepRow(tag, "/some/path/b2_json.test", 31*time.Second, 379, 6, 2, 1, 0, 2)
+			line := sweepRow(tag, "/some/path/b2_json.test", "ro1+rw1", 31*time.Second, 379, 6, 2, 1, 0, 2)
 			r, err := parsePoRow(strings.TrimSpace(line))
 			if err != nil {
 				t.Fatalf("the emitter's own %s row does not parse: %v\nrow: %q", tag, err, line)
@@ -78,6 +81,11 @@ func TestSweepRow(t *testing.T) {
 			if g := r.Fields["guest"]; g != "b2_json.test" {
 				t.Errorf("%s row: guest = %q, want the basename", tag, g)
 			}
+			// The grant is asserted with the rest, because a row whose grant field went missing would read
+			// as a row taken under no grant at all rather than as a row missing a field.
+			if g := r.Fields["grants"]; g != "ro1+rw1" {
+				t.Errorf("%s row: grants = %q, want %q", tag, g, "ro1+rw1")
+			}
 		}
 	})
 
@@ -101,8 +109,32 @@ func TestSweepRow(t *testing.T) {
 		Wasm: img, Args: append([]string{"sweep"}, strings.Fields(os.Getenv("SWEEP_ARGS"))...),
 		Stdin: strings.NewReader(""), Stdout: &out, Stderr: &out, Features: &feats,
 	}
+	// `SWEEP_DIR` is a READ-ONLY grant and `SWEEP_SCRATCH` a writable one (ADR 0091). They are separate
+	// variables for the same reason the flags are separate: a package that needs to write says so, and one
+	// that does not cannot acquire the capability by accident. Both may be set — `os` needs a writable `/tmp`
+	// **and** its own source tree read-only.
+	//
+	// Batch 2's `os` row was 227 verdicts of `TempDir: mkdir: Not implemented on wasip1`, all in test setup,
+	// which is why this variable exists at all.
 	if d := os.Getenv("SWEEP_DIR"); d != "" {
-		cfg.Preopens = []Preopen{{Host: d, Guest: d}}
+		at := os.Getenv("SWEEP_DIR_GUEST")
+		if at == "" {
+			at = d
+		}
+		// **First in the slice, deliberately.** Go's `wasip1` runtime takes its working directory from
+		// `preopens[0]` when `PWD` is unset (#830 made that the normal case), so the read-only grant is the
+		// one a package's relative reads resolve against — `os`'s own tests open `read_test.go` by name.
+		cfg.Preopens = append(cfg.Preopens, Preopen{Host: d, Guest: at})
+	}
+	if d := os.Getenv("SWEEP_SCRATCH"); d != "" {
+		at := os.Getenv("SWEEP_SCRATCH_GUEST")
+		if at == "" {
+			// Defaulted to `/tmp` because that is where Go's `os.TempDir` on `wasip1` looks, so
+			// `t.TempDir()` works with no environment variable and the row does not depend on #830's
+			// `--env`. Overridable, because a guest that wants it elsewhere should not have to patch this.
+			at = "/tmp"
+		}
+		cfg.Preopens = append(cfg.Preopens, Preopen{Host: d, Guest: at, Writable: true})
 	}
 	m, derr := decodeGuest(cfg)
 	if derr != nil {
@@ -178,8 +210,9 @@ func TestSweepRow(t *testing.T) {
 		return strings.Count(s, "--- PASS") + strings.Count(s, "--- FAIL") + strings.Count(s, "--- SKIP")
 	}
 	var start time.Time
+	grants := sweepGrants(cfg.Preopens)
 	emit := func(tag string) {
-		fmt.Print(sweepRow(tag, guest, time.Since(start).Round(time.Second), out.Len(), verdicts(),
+		fmt.Print(sweepRow(tag, guest, grants, time.Since(start).Round(time.Second), out.Len(), verdicts(),
 			int(spawns.Load()), int(procExits.Load()), int(peCode.Load()), peTID.Load()))
 		os.Stdout.Sync()
 	}
@@ -246,9 +279,37 @@ func (s *syncOut) Len() int                    { s.mu.Lock(); defer s.mu.Unlock(
 //
 // No value may carry a space, which is the one constraint `parsePoRow` places on an emitter — hence the
 // basename rather than the path.
-func sweepRow(tag, guest string, elapsed time.Duration, bytes, verdicts, spawns, procExits, code int, tid int64) string {
-	return fmt.Sprintf("PE-%s guest=%s t=%s bytes=%d verdicts=%d spawns=%d procExit=%d code=%d exitTID=%d\n",
-		tag, sweepBase(guest), elapsed, bytes, verdicts, spawns, procExits, code, tid)
+func sweepRow(tag, guest, grants string, elapsed time.Duration, bytes, verdicts, spawns, procExits, code int, tid int64) string {
+	return fmt.Sprintf("PE-%s guest=%s grants=%s t=%s bytes=%d verdicts=%d spawns=%d procExit=%d code=%d exitTID=%d\n",
+		tag, sweepBase(guest), grants, elapsed, bytes, verdicts, spawns, procExits, code, tid)
+}
+
+// sweepGrants names the grants a row was taken under, space-free for `parsePoRow`.
+//
+// **A row without this field was two measurements wearing one label.** `os` scores 227 setup failures with no
+// writable directory and runs with one, so "os: 227 FAIL" and "os: n PASS" can both be true of the same guest
+// on the same engine. The field is derived from the config rather than from the environment variables, so a
+// row cannot claim a grant the run did not actually get.
+func sweepGrants(preopens []Preopen) string {
+	if len(preopens) == 0 {
+		return "none"
+	}
+	var ro, rw int
+	for _, p := range preopens {
+		if p.Writable {
+			rw++
+		} else {
+			ro++
+		}
+	}
+	switch {
+	case rw == 0:
+		return fmt.Sprintf("ro%d", ro)
+	case ro == 0:
+		return fmt.Sprintf("rw%d", rw)
+	default:
+		return fmt.Sprintf("ro%d+rw%d", ro, rw)
+	}
 }
 
 // sweepBase keeps a row's `guest` field space-free.
@@ -257,4 +318,33 @@ func sweepBase(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+// TestSweepGrantsNamesWhatTheRunActuallyGot pins the mapping, because the field's whole job is to stop two
+// different measurements sharing one label — and a mislabelled grant would do that silently.
+func TestSweepGrantsNamesWhatTheRunActuallyGot(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		preopens []Preopen
+		want     string
+	}{
+		{"no grant at all", nil, "none"},
+		{"one read-only", []Preopen{{Host: "/a", Guest: "/a"}}, "ro1"},
+		{"two read-only", []Preopen{{Host: "/a", Guest: "/a"}, {Host: "/b", Guest: "/b"}}, "ro2"},
+		{"one writable", []Preopen{{Host: "/a", Guest: "/tmp", Writable: true}}, "rw1"},
+		{
+			"os's shape: source read-only plus a writable tmp",
+			[]Preopen{{Host: "/src", Guest: "/"}, {Host: "/scratch", Guest: "/tmp", Writable: true}},
+			"ro1+rw1",
+		},
+	} {
+		if got := sweepGrants(tc.preopens); got != tc.want {
+			t.Errorf("%s: sweepGrants = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// A writable grant must never be reported as read-only, which is the direction that would understate
+	// what a row was taken under. Asserted as a property over the table rather than trusted from the cases.
+	if got := sweepGrants([]Preopen{{Writable: true}}); strings.HasPrefix(got, "ro") {
+		t.Errorf("a writable grant reported as %q, which begins with the read-only marker", got)
+	}
 }
