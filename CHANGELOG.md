@@ -164,6 +164,16 @@ own condition rather than as a prediction.
   where that arm is worth 31–69× recorded on
   [#835](https://github.com/scttfrdmn/burroughs/issues/835) rather than asserted here.
 
+- **The pairing arena's memory term is measured on real Go modules, which is the class #136's decline never
+  covered** ([#835](https://github.com/scttfrdmn/burroughs/issues/835)). `TestPairingArenaCostOnRealGoModules`
+  computes it exactly — the arena is `4 × Σ len(Body)`, so no build tag and no heap sampling are involved —
+  and reports **117.8% of wasm size, ~3.1 MB per guest**, against the **36.7 B per module / +13.2%** the
+  existing corpus instrument reports. The two classes differ by ~85 000× in bytes per module while agreeing on
+  the ratio, which is why a percentage is the wrong unit for a memory ceiling. Only **6.5%** of retained
+  instructions are openers, so the dense whole-body arena spends ~61 B per opener it exists to serve — the
+  density question ADR 0048 settled on a corpus of tiny modules. **No flip is proposed here**; the criterion is
+  pre-registered on the issue and the flip is its own PR holding for a stamp.
+
 ### Changed
 
 - **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed
