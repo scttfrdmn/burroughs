@@ -841,3 +841,14 @@ func attachDirRoot(entry *fdEntry, dir *preopenDir, guestPath string) {
 		entry.dirRoot = nested
 	}
 }
+
+// fdCountForTest reports the number of entries in the fd table.
+//
+// **Its consumer is a leak assertion, not a curiosity.** A descriptor opened and never closed, or closed
+// twice, does not appear as a failed call — the call that leaked it succeeded. The only channel that sees it is
+// the table's size before and after, which is why this exists rather than a test counting its own opens.
+func (h *host) fdCountForTest() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.fds)
+}

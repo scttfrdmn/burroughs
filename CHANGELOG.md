@@ -129,6 +129,20 @@ own condition rather than as a prediction.
   share one label. `SWEEP_DIR`'s grant is placed first, since a `wasip1` guest takes its working
   directory from `preopens[0]` when `PWD` is unset — which #830 made the normal case.
 
+- **An aimed fd-table stress witness, in two arms** ([#834](https://github.com/scttfrdmn/burroughs/issues/834)).
+  The standard library cannot supply one on this target — `os`'s hardest fd tests are pipe tests and
+  `wasip1` has no pipes — so the sweep's fd-table coverage was one concurrent-writer test across two
+  batches. `TestScratchWritePathIsSafeUnderConcurrentHostCalls` drives ADR 0091's machinery from many host
+  goroutines (a shared `os.Root`, the nested roots, the table) and asserts the table **returns to its
+  starting size**; `TestFdStressGuestVerifiesEveryPayload` runs a committed guest whose goroutines each
+  **read back what they wrote**, which is the only channel that sees a write landing in the wrong file.
+  - **The guest needed a `runtime.Gosched()` between its write and its read, and that is load-bearing.**
+    Without it, an injection pointing every `path_open` at one shared file produced **zero mismatches out
+    of 128 operations**: at `GOMAXPROCS=1` there is no preemption point between two host calls, so the pair
+    is effectively atomic and no worker can interleave. With the yield the same injection produces **127**.
+  - `WriteAt`/`ReadAt` rather than `Write`+`Seek`, because `fd_seek` is among the 21 still refused — a
+    seek-based round trip would fail every iteration and report zero mismatches out of zero operations.
+
 ### Changed
 
 - **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed

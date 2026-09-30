@@ -96,7 +96,11 @@ func TestFDTableIsReachedThroughAccessors(t *testing.T) {
 	// grows: `refusals` arrived with #816 under the same lock, and a control scanning only the fd table
 	// would have said nothing about it. Derived from what the lock protects, not from today's call sites.
 	allowed := map[string]map[string]bool{
-		"fds":      {"fd": true, "addFD": true, "dropFD": true, "initFDs": true},
+		// `fdCountForTest` joins the accessor set for the same reason `refusalsForTest` is in the one
+		// below: it IS an accessor — the table's *size* — and a size cannot be obtained through `fd`,
+		// which answers one entry. It takes `h.mu` like the rest, so the lock is not bypassed; what it
+		// cannot do is route through another accessor, which is the only thing this control can see.
+		"fds":      {"fd": true, "addFD": true, "dropFD": true, "initFDs": true, "fdCountForTest": true},
 		"nextFD":   {"addFD": true, "initFDs": true},
 		"refusals": {"refuseNosys": true, "refusalsForTest": true},
 	}
