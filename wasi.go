@@ -57,6 +57,22 @@ type WASIP1Config struct {
 type Preopen struct {
 	Host  string
 	Guest string
+
+	// Writable makes this a **scratch** grant (ADR 0091): the guest may create, write, unlink and
+	// remove beneath it. Writes are confined by an `os.Root` opened for the grant, so a `..`, a
+	// symlink pointing out, or an absolute path cannot escape it any more than a read can.
+	//
+	// **The zero value is read-only, and that is the reason this is a field rather than a second
+	// constructor.** A `Preopen{Host: h, Guest: g}` written before this field existed grants exactly
+	// what it granted before, so adding the capability to the API cannot widen an existing embedder's
+	// grant. Nothing in the engine is writable unless a caller sets this.
+	//
+	// Four preview-1 functions become reachable under such a grant — `path_create_directory`,
+	// `path_unlink_file`, `path_remove_directory`, `fd_pwrite` — plus `path_open`'s create/truncate
+	// modes. The set is the one the *consumers* ask for rather than a symmetric completion of the
+	// write surface; 21 functions still refuse with `ENOSYS`, and a read-only grant still answers
+	// `ENOTCAPABLE` for a write exactly as it did (ADR 0091 amendment 1).
+	Writable bool
 }
 
 // Run decodes, validates, and runs the guest's `_start`, returning the guest's exit code. A
@@ -70,7 +86,7 @@ func (c WASIP1Config) Run(wasm []byte) (exitCode int, err error) {
 	}
 	preopens := make([]wasi.Preopen, len(c.Preopens))
 	for i, p := range c.Preopens {
-		preopens[i] = wasi.Preopen{Host: p.Host, Guest: p.Guest}
+		preopens[i] = wasi.Preopen{Host: p.Host, Guest: p.Guest, Writable: p.Writable}
 	}
 	return wasi.Run(wasi.Config{
 		Wasm:     wasm,

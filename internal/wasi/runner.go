@@ -45,6 +45,18 @@ type Config struct {
 type Preopen struct {
 	Host  string
 	Guest string
+
+	// Writable makes this grant a **scratch** directory (ADR 0091): the guest may create, write,
+	// unlink and remove beneath it. **The zero value is read-only**, which is the whole point of
+	// putting the bit here rather than on the host — a `Preopen{Host: h, Guest: g}` written before
+	// this field existed, or by a caller who has not heard of it, grants exactly what it granted
+	// before.
+	//
+	// Writes are confined by an `*os.Root` opened per writable grant, not by path arithmetic: ADR
+	// 0083's `resolveUnder` checks containment on the *resolved* path through `EvalSymlinks`, which
+	// requires the target to **exist**, so it cannot resolve a path being created. `os.Root` does the
+	// confinement with `openat`, which is why this field needs no companion "confinement mode".
+	Writable bool
 }
 
 // GuestFeatures is the decoder feature set for a Go `wasip1` guest: the default proposals (which have
@@ -170,5 +182,9 @@ func Run(cfg Config) (int, error) {
 	if ferr := h.initFDs(cfg.Preopens); ferr != nil {
 		return 0, ferr
 	}
+	// A scratch grant holds a directory handle for the run's lifetime (ADR 0091), so the run closes
+	// what it opened. Deferred rather than placed after `runModule`, because a guest trap returns
+	// through here too and an fd leaked on the failing path is the one nobody notices.
+	defer h.closeRoots()
 	return runModule(m, h)
 }

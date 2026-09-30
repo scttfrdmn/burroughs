@@ -84,6 +84,30 @@ func (f *preopenFlag) Set(v string) error {
 
 func (f preopenFlag) preopens() []burroughs.Preopen { return []burroughs.Preopen(f) }
 
+// scratchFlag is `--scratch HOST[:/GUEST]`: a **writable** grant (ADR 0091).
+//
+// **It delegates parsing to `preopenFlag` rather than restating it**, so #828's refusals — a relative
+// guest path, and wasmtime's two-colon form — apply here without being written twice. A second copy of
+// that validation would be a copy whose *refusals* could silently diverge, which is worse than a copy of
+// a permit: the permit's divergence shows up as a broken run, the refusal's as a grant nobody meant.
+//
+// The writability is set after parsing, so the only difference between the two flags is one bit and the
+// name a reader sees.
+type scratchFlag struct{ inner preopenFlag }
+
+func (f *scratchFlag) String() string { return f.inner.String() }
+
+func (f *scratchFlag) Set(v string) error { return f.inner.Set(v) }
+
+func (f scratchFlag) preopens() []burroughs.Preopen {
+	out := make([]burroughs.Preopen, 0, len(f.inner))
+	for _, p := range f.inner {
+		p.Writable = true
+		out = append(out, p)
+	}
+	return out
+}
+
 // featureFlag collects `--features` into the public capability set (ADR 0088, #813). Comma-separated
 // and repeatable, matching `--dir`'s repeatable shape rather than inventing a second convention.
 //
@@ -221,13 +245,17 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	var feats featureFlag
 	fs.Var(&feats, "features", "proposal capabilities the guest requires, comma-separated "+
 		"(repeatable); currently: threads. An unrecognized name is refused (ADR 0088)")
+	var scratch scratchFlag
+	fs.Var(&scratch, "scratch", "grant a wasip1 command a WRITABLE directory as HOST[:/GUEST] "+
+		"(repeatable). The only flag that lets a guest change the host's filesystem; writes are confined "+
+		"beneath it, and --dir stays read-only (ADR 0091)")
 	var envs envFlag
 	fs.Var(&envs, "env", "pass NAME[=VALUE] into the guest's environment (repeatable). NOTHING is "+
 		"passed unless named (#830); a bare NAME is refused when unset in this environment")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:/GUEST]]... "+
-			"[--env NAME[=VALUE]]... [--features NAME[,NAME]]... <file.wasm> "+
-			"[-- <arg>...] | [<func> [<value>...]]")
+			"[--scratch HOST[:/GUEST]]... [--env NAME[=VALUE]]... [--features NAME[,NAME]]... "+
+			"<file.wasm> [-- <arg>...] | [<func> [<value>...]]")
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
 			"directory, capability-based: nothing is visible unless named.")
@@ -240,6 +268,10 @@ func run(stdout, stderr io.Writer, argv []string) error {
 			"model; a guest that read an inherited\nvariable now needs --env NAME for it. Note PWD: a Go "+
 			"wasip1 guest takes its working directory from\nit, so --env PWD=/x changes where a relative "+
 			"path resolves.")
+		fmt.Fprintln(stderr, "\n--dir is READ-ONLY. --scratch is the only flag that lets a guest change the "+
+			"host's filesystem: it grants\na writable directory and writes are confined beneath it. Bind "+
+			"mounts, /proc and device files are NOT\nexcluded — the operator chooses the directory, and the "+
+			"confinement does not prohibit what is inside\nit (ADR 0091).")
 		fmt.Fprintln(stderr, "Any other module: with a function named it is invoked; with none its exports are listed.")
 		fmt.Fprintln(stderr, "\nValues are typed: i32:42  i64:-1  f32:nan  f64:inf  v128:0x0:0x0  extern:3  null:func")
 		fs.PrintDefaults()
@@ -286,7 +318,7 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		Stdin:    os.Stdin,
 		Stdout:   stdout,
 		Stderr:   stderr,
-		Preopens: dirs.preopens(),
+		Preopens: append(dirs.preopens(), scratch.preopens()...),
 		Features: feats.features(),
 	}
 	isCmd, derr := wasiCfg.IsCommand(wasm)

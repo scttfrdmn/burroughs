@@ -1,9 +1,9 @@
 # 0091 — A confined writable scratch directory, granted by its own flag, with confinement delegated to `os.Root` rather than hand-rolled
 
-Date: 2026-09-26 · Status: **proposed — recommendation only, no implementation** · [#831](https://github.com/scttfrdmn/burroughs/issues/831) (the recon) · Extends [ADR 0083](0083-a-read-only-wasi-preview1-filesystem-a-per-run-fd-table-capability-preopens-and-path-open-scoped-to-reading.md)
+Date: 2026-09-26 · Status: **accepted** (ratified on the #832 review with five conditions; **amendment 1 below revises the scope from eight functions to four** and is part of the ratification) · [#831](https://github.com/scttfrdmn/burroughs/issues/831) (the recon) · Extends [ADR 0083](0083-a-read-only-wasi-preview1-filesystem-a-per-run-fd-table-capability-preopens-and-path-open-scoped-to-reading.md)
 Ratio-Class: ordered https://github.com/scttfrdmn/burroughs/issues/831
 
-**`Status` is held open deliberately.** The #829 review ordered *"a recon plus an ADR 0091 recommendation"* and said *"Recommendation only. No implementation until it's ratified."* A `Status: accepted` here would cite an approval that does not exist, which this project treats as worse than a wrong option. The ruling that would accept it is chat-Claude's, on the finding in §4 below that confinement **can** be enforced without granting more than the named directory — which is the condition the review set for keeping this a technical ADR rather than escalating it to Scott.
+**`Status` was held open until an approval existed to cite, and now one does.** The #829 review ordered *"a recon plus an ADR 0091 recommendation"* and said *"Recommendation only. No implementation until it's ratified."* Ratification came from chat-Claude on the #832 review, with five conditions, on the finding in §4 below that confinement **can** be enforced without granting more than the named directory — the condition the review set for keeping this a technical ADR rather than escalating it to Scott. **Read the body with amendment 1**: it withdraws five of the eight functions §Decision names and adds one the body lists as staying refused, because the body's demand set came from a synthetic guest rather than from the consumers.
 
 Recorded by the actor the order reached, so no independent provenance; commits resting on it stay `Ratio-Class: carried` unless they carry their own citation.
 
@@ -127,3 +127,209 @@ Three further witnesses the slice owes:
 - **The engine's most conservative default is preserved.** A run with no `--scratch` has exactly today's filesystem behaviour, byte for byte, including its errnos. That is the property that makes this a technical ADR: it grants nothing that was not asked for by name.
 - **ADR 0083's deferral list is discharged in full** by this slice plus #816, so the sentence *"the write slice, `fd_seek`, and directory enumeration"* stops being a live deferral. It should be amended there rather than left reading as outstanding.
 - **A `--scratch` grant is a real capability and should read like one.** It is the first Burroughs flag that lets a guest change the host's filesystem, and the help text carries that plainly rather than by implication.
+
+---
+
+# Amendment 1 — 2026-09-30: the scope is the measured set, and the recon measured the wrong guest
+
+Status: **accepted** · ratified by chat-Claude on the #832 review, with Scott's non-objection on #830 recorded separately · [#831](https://github.com/scttfrdmn/burroughs/issues/831)
+
+**The ratification stands; this amendment revises what it ratified.** The body above recommends **eight**
+functions moving from refusing to implemented. That list is wrong, and the reason it is wrong is a
+principle this project already holds.
+
+## Why the list changed
+
+The eight came from a **synthetic recon guest** — a program I wrote to perform "what a Go test's
+`t.TempDir()` plus a write–read–cleanup cycle performs". It performed what I thought that was. Five of
+its steps (`Seek`, `Sync`, `Truncate`, `Rename`, `Chtimes`) were there because I put them there, and
+none is reached by any consumer the ADR names.
+
+Measuring from the **consumers** instead — §Decision's own acceptance criteria — gives three different
+sets, and the ADR's eight matches none of them:
+
+| consumer | wasmtime verdict | needs changing |
+|---|---|---|
+| `t.TempDir()` + write + read | passes | `path_create_directory`, `path_unlink_file`, `path_remove_directory` |
+| `os.TestWriteAtConcurrent` | **passes** | `path_unlink_file`, **`fd_pwrite`** |
+| the whole `os` package | **0 PASS / 17 FAIL** | ~12, and see below |
+| my synthetic recon guest | passes | the eight above |
+
+**This is *derive the domain from the space, never from the registry* applied to a capability instead of
+a witness** (Scott's framing, #832 review). A synthetic guest is a registry: it contains what its author
+enumerated. The consumer is the space. The same error in a witness would have been caught by the
+surface control that derives its domain from the witx; there was no such control for a *capability*,
+which is why the recon's own doc comment could correctly report five refusals as a floor and still hand
+back a list nobody asked for.
+
+## The measured scope
+
+**Four functions change from refusing to implemented:**
+
+| function | asked for by |
+|---|---|
+| `path_create_directory` | `t.TempDir()` |
+| `path_unlink_file` | both acceptance consumers |
+| `path_remove_directory` | `t.TempDir()`'s registered cleanup |
+| `fd_pwrite` | `os.TestWriteAtConcurrent` |
+
+**And `path_open`'s write-mode policy change is listed here explicitly**, because a reader counting what
+moved should see it. It is not a new function — §3 of the body describes it — but it is the change that
+makes every write above reachable, so omitting it from the count would understate the slice by its most
+load-bearing edit.
+
+**Five of the body's eight are withdrawn**: `fd_seek`, `fd_sync`, `fd_filestat_set_size`, `path_rename`,
+`path_filestat_set_times`. Each stays refused with `ENOSYS`, on ADR 0083's own on-demand rule. The
+remaining-refusal count goes from the body's 16 to **21**.
+
+## `fd_pwrite` moves off the stays-refused list, scoped to its ORIGIN rather than to a path
+
+The body lists `fd_pwrite` among the 16 that stay refused, on the ground that the recon's guest never
+reached it. The measured consumer does: `os.TestWriteAtConcurrent` is the fd-table-under-load test that
+batch 2 could not run at all, which is the artifact this slice exists for.
+
+**It needs no path confinement, and that is the interesting part.** `fd_pwrite` acts on an fd the guest
+already holds, so there is no path to resolve and no root to confine against — `os.Root` is irrelevant to
+it. The only question is **where that fd came from**:
+
+- an fd opened for writing under a `--scratch` preopen — permitted;
+- **any other fd, including one from a read-only `--dir` preopen — refused with `ENOTCAPABLE`.**
+
+`ENOTCAPABLE` and not `ENOSYS`, because after this slice the function *is* implemented and the refusal is
+the capability model speaking, which is the distinction ADR 0083 set and §3 of the body preserves. **That
+refusal gets its own witness arm.** Without one, the permit path working is the only evidence, and a
+`fd_pwrite` that ignored its fd's origin would pass that.
+
+This is the first capability in the engine carried by an **fd's provenance** rather than by a path, so
+the fd table gains the bit that records it.
+
+## Condition 2 is settled: `path_filestat_set_times` stays refused entirely
+
+The review's condition 2 permitted its **no-follow** form while refusing the symlink-following one,
+citing `Root.Chtimes`'s documented Unix race. Three facts close it:
+
+1. **`os.Root` has no `Lchtimes`.** It has `Lchown` and `Lstat`, so the omission is deliberate upstream
+   rather than an oversight to route around. The form the condition permits is not implementable through
+   the mechanism this ADR chose.
+2. **No acceptance consumer asks for it.** It appears in the synthetic guest's set and in the
+   whole-`os` set, and the latter is dropped below.
+3. A `Root.Lstat`-then-`Chtimes` sequence would be a check followed by a use, i.e. the same race with an
+   extra step — and worse, one this document would have described as mitigated.
+
+**What retires this:** a consumer that needs it, plus the `Root.OpenFile(..., O_NOFOLLOW)` +
+`syscall.Futimes(fd)` route, which is a genuine race-free no-follow implementation using only the
+standard library. It is recorded here and not taken because `syscall.Futimes` is **platform-conditional**
+and `internal/wasi` has no build-tagged paths today; adding the first one is its own decision, not a
+detail of this slice.
+
+## Condition 1 is discharged by scope, and leaves a tripwire
+
+The review's condition 1 requires a cross-grant `path_rename`/`path_link` to be refused by name, with its
+own witness arm. **With the measured scope, neither function is implemented** — `path_rename` is
+withdrawn above and `path_link` was never in the set — so no multi-preopen operation exists and the arm
+would have nothing to exercise. Building it anyway would be a witness whose subject is absent, which this
+corpus already prices: *a control that tests a helper nothing calls*.
+
+Their refusal is covered by condition 3's default-unchanged errno witness, which enumerates the whole
+refusal surface.
+
+**What retires this:** implementing `path_rename` or `path_link` requires the cross-grant refusal **and
+its witness arm in the same PR**. A single `*os.Root` cannot span two grants, so the behaviour would
+otherwise be whatever the implementation happened to do — which is the thing condition 1 exists to
+prevent, and the reason it is recorded as owed rather than as satisfied.
+
+## Condition 5 is restated as a two-part acceptance
+
+**Part A.** A guest calling `t.TempDir()` then writing and reading a file succeeds under
+`--scratch HOST:/tmp`. No environment variable is needed: Go's `os.TempDir` on `wasip1` falls back to
+`/tmp`, so this does not wait on [#830](https://github.com/scttfrdmn/burroughs/issues/830). Measured on
+wasmtime as the reference reading.
+
+**Part B.** `os.TestWriteAtConcurrent` goes from **FAIL to PASS** in batch 3's frozen-names row. It is
+the fd-table-under-load test, it passes on wasmtime with nothing but a writable `/tmp`, and it is the
+single row expected to move.
+
+**The whole-`os` row is dropped.** With its source mapped read-only and a writable scratch, `os` scores
+**0 PASS / 17 FAIL on wasmtime**, and the causes are environmental rather than engine-level: `/dev/null`,
+the GOROOT layout, and its own source tree at paths no sandbox grants. **A row that fails on both engines
+adjudicates nothing** — *identical boards are the finding*, and here the finding would be about the host
+filesystem rather than about Burroughs. Batch 3 measures the frozen names.
+
+## Conditions 3 and 4 stand unchanged
+
+The default-unchanged errno witness (condition 3) and the committed confinement tests (condition 4) are
+unaffected by the narrowing. Condition 3's domain **grows**: the refusal surface it enumerates is now 21
+names rather than 16, and it derives that domain from the witx rather than from a list, so the growth
+costs it nothing.
+
+## Two witnesses survived their injections, and what that says about escape-only confinement tests
+
+Recorded because both gaps are the kind a reader of the test would not see.
+
+**1. An escape-only confinement test measures *confined to a root*, not *confined to THE root*.** §4's probe
+and its committed form both refused all ten escape shapes and permitted all eight in-grant operations.
+Injecting `os.OpenRoot(filepath.Dir(root))` — confining the grant to the **parent** of the granted directory
+— left every one of those eighteen arms green. The escapes still escape the parent, so they are still
+refused; the in-grant operations still succeed, in the wrong directory. **Only the host filesystem can tell
+the two apart**, so the witness now writes a file through the grant and asserts it appears inside the granted
+directory and *not* one level above it.
+
+**2. Nothing connected the flag name to the capability.** Injecting `Writable: true` into `preopenFlag`'s
+accessor — every `--dir` silently becoming a write grant — left the whole tree green.
+`TestRunGrantsAndDeniesFilesystemAccess` exercises reads only, and the library-level two-grant witness builds
+`Preopen` values directly rather than through the flags. The engine was witnessed and **the CLI's mapping onto
+it was not**, which is the gap a reader checking "is `--dir` read-only?" would have believed was covered.
+`TestDirIsReadOnlyAndOnlyScratchGrantsWrites` closes it by running one guest under each flag.
+
+The general shape, for the next capability: **a refusal-only witness cannot distinguish a capability aimed
+at the wrong target from one aimed correctly**, because both refuse the same things. Assert where the
+permitted operation *lands*, not only what the refused one returns.
+
+## Amendment 2 — 2026-09-30: a directory fd is a confinement boundary, and the implementation opened one before anything tested it
+
+Status: **accepted** · ordered on the #833 review
+
+Making `t.TempDir()`'s cleanup work required `path_*` to resolve against **any** directory fd rather than only
+a preopen's, because Go's `RemoveAll` descends by opening each directory and operating through the resulting
+fd. **That widened the confinement surface for both kinds of grant, and every arm in §4's probe starts from
+the preopen**, so none of them reached it. The shape that matters starts one level down: open a subdirectory
+inside the grant, then climb or follow a symlink relative to *that* fd.
+
+### The threat model, which decides what layer the arms sit at
+
+**No stock Go guest can express this attack.** Go's `wasip1` runtime cleans a path textually before it reaches
+`path_open` (`appendCleanPath`), and its `os.Root` refuses escaping and absolute symlinks *in the guest* before
+any host call happens. A module hand-written in wasm can send whatever path bytes it likes with whatever dirfd
+it holds, and that is what is being defended against. So the arms drive the resolution primitives directly —
+`resolveUnder` for reads, the nested `os.Root` for writes — against a subdirectory fd built through the same
+`attachDirRoot` the engine uses. **What they do not cover is the wasm-level marshalling**, whose happy path is
+`TestAScratchGrantIsRequiredForEveryWrite` and part A's cleanup.
+
+### What holds, measured for both grant kinds
+
+Six read escapes and six write escapes, refused in both: climbing out of the grant, climbing past the base,
+an absolute path, a symlink inside the subdirectory pointing out, an absolute symlink, a symlink aimed straight
+at a file outside, plus the write forms (create, mkdir, create-through-symlink, write-through-symlink, remove
+outside, rename out). A legitimate read and a legitimate write are permitted through the same fd, and the
+write is asserted to **land beneath the subdirectory** — the landing check §4 learned it needed.
+
+`--scratch` reaches this by a **nested** `os.Root` derived from the grant's own root, so a child fd cannot
+reach where its parent could not. `--dir` reaches it through `resolveUnder` against the subdirectory's resolved
+host path, with containment on the resolved result — and a read-only grant's subdirectory fd is asserted to
+have **no write capability at all**, because "`--dir` is read-only" has to hold at every level and not only at
+the preopen.
+
+**One observation recorded rather than required:** resolution through a subdirectory fd is
+*subdirectory-scoped*, so a sibling inside the grant but outside the subdirectory is refused. That is
+**stricter** than the grant, and safe in the direction that matters — anything contained by a directory inside
+the grant is contained by the grant. A guest wanting the sibling addresses it through the preopen. The test
+logs which reading holds rather than asserting one, so a future change to grant-scoped resolution reports
+itself instead of failing.
+
+### Watched die four ways
+
+1. the subdirectory fd resolving against `/` — four read escapes permitted, including `/etc/passwd`;
+2. the nested root taken from the grant's **parent** — a write escape permitted and the landing check red;
+3. containment checked **without** resolving symlinks (`Clean` instead of `EvalSymlinks`) — the three symlink
+   shapes permitted, which is the arm a textual `..` filter would have left uncovered;
+4. a read-only grant's subdirectory fd handed a write root — the `--dir` capability arm red.

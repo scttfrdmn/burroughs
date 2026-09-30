@@ -258,13 +258,13 @@ func (h *host) imports0() map[string]entry {
 		// Refused, each with the trigger that would oblige it. `path_create_directory` is listed first
 		// because it is the only one a measured guest actually CALLS: its refusal is absorbed, which is
 		// ADR 0080's `random_get` disposition (refuse-and-absorbed) rather than an unreached stub.
-		"path_create_directory": {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("path_create_directory")},
+		"path_create_directory": {ft([]bin.ValType{i32, i32, i32}, i32), h.pathCreateDirectory},
 		"fd_seek":               {ft([]bin.ValType{i32, i64, i32, i32}, i32), h.refuseNosys("fd_seek")},
 		"fd_filestat_set_size":  {ft([]bin.ValType{i32, i64}, i32), h.refuseNosys("fd_filestat_set_size")},
 		"path_readlink":         {ft([]bin.ValType{i32, i32, i32, i32, i32, i32}, i32), h.refuseNosys("path_readlink")},
-		"path_remove_directory": {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("path_remove_directory")},
+		"path_remove_directory": {ft([]bin.ValType{i32, i32, i32}, i32), h.pathRemoveDirectory},
 		"path_symlink":          {ft([]bin.ValType{i32, i32, i32, i32, i32}, i32), h.refuseNosys("path_symlink")},
-		"path_unlink_file":      {ft([]bin.ValType{i32, i32, i32}, i32), h.refuseNosys("path_unlink_file")},
+		"path_unlink_file":      {ft([]bin.ValType{i32, i32, i32}, i32), h.pathUnlinkFile},
 
 		// ---- The remainder of the preview-1 surface, supplied so that LINK cannot refuse a guest.
 		//
@@ -281,7 +281,7 @@ func (h *host) imports0() map[string]entry {
 		// documented post-snapshot addition, checked in both directions by a witness.
 		//
 		// ADR 0083's read-only decision: each of these WRITES.
-		"fd_pwrite":               {ft([]bin.ValType{i32, i32, i32, i64, i32}, i32), h.refuseNosys("fd_pwrite")},
+		"fd_pwrite":               {ft([]bin.ValType{i32, i32, i32, i64, i32}, i32), h.fdPwrite},
 		"fd_sync":                 {ft([]bin.ValType{i32}, i32), h.refuseNosys("fd_sync")},
 		"fd_datasync":             {ft([]bin.ValType{i32}, i32), h.refuseNosys("fd_datasync")},
 		"fd_allocate":             {ft([]bin.ValType{i32, i64, i64}, i32), h.refuseNosys("fd_allocate")},
@@ -449,8 +449,23 @@ func (h *host) fdWrite(c *interp.Caller, args []interp.Value) ([]interp.Value, e
 
 // writerFor maps a wasm fd to its sink; only stdout (1) and stderr (2) are writable in this slice.
 func (h *host) writerFor(fd uint32) io.Writer {
-	if e := h.fd(fd); e != nil {
+	e := h.fd(fd)
+	if e == nil {
+		return nil
+	}
+	if e.writer != nil {
 		return e.writer
+	}
+	// **A writable FILE fd, ADR 0091.** This function answered stdio only, which made `fd_write`
+	// "implemented" for one population and absent for the other — so a guest that created a file under
+	// a scratch grant got `EBADF` from a function the surface reports as present. Found by running
+	// acceptance part A: `t.TempDir()` succeeded and the very next `WriteFile` failed.
+	//
+	// `e.writable` is the gate, not `e.file != nil`. A file opened for reading has an `*os.File` too,
+	// and returning it here would make every read-only fd writable at the OS's discretion rather than
+	// at the grant's — the capability decided by a nil check instead of by a policy.
+	if e.file != nil && e.writable {
+		return e.file
 	}
 	return nil
 }
@@ -751,6 +766,11 @@ func (h *host) fdClose(_ *interp.Caller, args []interp.Value) ([]interp.Value, e
 		return ret(errBadf), nil
 	}
 	if e.file != nil {
+		// The nested confinement root goes with the fd that owns it (ADR 0091): an `os.Root` holds a
+		// directory handle, so leaving it open would leak one per directory the guest opens and closes.
+		if e.dirRoot != nil {
+			_ = e.dirRoot.Close()
+		}
 		_ = e.file.Close()
 		h.dropFD(fd)
 	}
