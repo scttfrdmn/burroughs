@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
+.PHONY: ci all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -57,6 +57,53 @@ all: check
 
 # The gate list, named once so the recipe below cannot drift from it.
 CHECK_GATES = pipefail-check fmt-check build vet lint test test-endtable deadcode
+
+# **`ci` is what "report green" means, and `check` is not.** Ordered on the #829 review, after
+# `make strict` reddened CI on a tree `make check` had just passed green: *"`make strict` caught a
+# skip that `make check` passed, so the local gate isn't a mirror of CI. Put `strict` into `check`.
+# If it's too slow for that, add a `make ci` target that is the exact CI set, and make 'report
+# green' mean `make ci`."*
+#
+# **The fallback is taken, and the trigger is NOT the one the ruling named.** Speed does not block
+# it: measured on the dev box, `check` is 2:04 and `strict` is 1:25, so the union is under four
+# minutes. What blocks it is a **precondition**. `strict` runs the whole tree under
+# `BURROUGHS_NO_SKIP=1`, which *revokes* the corpus licenses, so a clone without the vendored suite
+# fails rather than skips — measured, with the corpus moved aside: **102 test failures**. Folding
+# `strict` into `check` would therefore destroy the property `check`'s own comment asserts three
+# lines up, that it proves the code sound on *any* clone. The ruling gave the escape hatch for a
+# different reason than the one that applies; it is taken on the reason that does.
+#
+# **And `strict` was never the whole gap, which is why this is a target and not one added gate.**
+# CI also invokes `race`, `opcode-drift`, `keyword-drift`, `witnesses`, and — through their scripts
+# rather than through `make` — `cite`, `close` and `space`. None was in `CHECK_GATES`. Adding only
+# the gate that bit would have left the mirror still not a mirror, and the next gap would arrive the
+# same way: green locally, red in CI, with the gate's own comment claiming to be a mirror.
+#
+# `CI_ONLY_GATES` is the difference, named once and consumed twice: `ci` runs it, and `check`
+# **prints it on success** so a green `check` cannot be read as a green CI.
+#
+# **This list is derived, and the first draft of it was not.** Written from reading `ci.yml`, it
+# named `conformance`, `memarg-drift`, `opcodes-text-drift`, `vuln` and `tidy` — none of which
+# `ci.yml` invokes — and *omitted* `cite`, `close` and `space`, which it does. So the list was
+# rebuilt from the workflow by the two derivations `TestCIGatesCoverWhatCIInvokes` now asserts:
+#
+#	make <target> in a `run:` body   ->  must be in CI_GATES (or ci's corpus prerequisite)
+#	scripts/<x>.sh in a `run:` body  ->  the Makefile target whose recipe invokes that
+#	                                     script must be in CI_GATES
+#
+# The second derivation is the technique `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` already
+# uses — *its Makefile target comes from the recipe that invokes the script, so the target is never
+# typed twice* — and it is what caught the three omissions. Comments and **string literals** are
+# stripped before matching, because `echo "run: make fmt"` inside a `run:` body is prose and
+# matching it would have put `make fmt` in the gate set, i.e. a formatter that rewrites the tree.
+# *Aboutness is not proximity.*
+#
+# **Scope, stated because it bounds the claim:** the derivations cover `make` and `scripts/`. CI's
+# raw `go test`, `golangci-lint` and `govulncheck` steps are not derived, and their local mirrors
+# (`test`, `test-endtable`, `lint`, `vuln`) sit in the lists by hand. `vuln` is therefore in
+# `CI_ONLY_GATES` on judgement rather than derivation, and is marked as such.
+CI_ONLY_GATES = race strict opcode-drift keyword-drift witnesses cite close space vuln
+CI_GATES = $(CHECK_GATES) $(CI_ONLY_GATES)
 
 # **An unreached gate is not a passed gate, and the abort must say which is which.**
 #
@@ -101,7 +148,42 @@ check:
 			echo "$$failed is the last gate; every other gate ran."; \
 		fi; \
 		exit 1; \
-	fi
+	fi; \
+	echo; \
+	echo "make check is green, and it is NOT the reporting gate. It did not run:"; \
+	echo "  $(CI_ONLY_GATES)"; \
+	echo "Report green from \`make ci\`, which runs those too. This line exists because a green"; \
+	echo "check was reported as a green tree and CI was red at strict (#829 review)."
+
+# `ci` is the exact CI set: `check`'s gates plus everything CI runs that `check` does not. Same
+# unreached-gate reporting as `check`, for the same reason — *an unreached gate is not a passed
+# gate* — and the corpora come first, because `strict` and `conformance` fail without them and a
+# reader should be told to vendor rather than handed 102 test failures.
+ci:
+	@$(MAKE) --no-print-directory spec-tests spec-ref threads-ref
+	@failed=""; \
+	for g in $(CI_GATES); do \
+		[ -n "$$failed" ] && continue; \
+		$(MAKE) --no-print-directory "$$g" || failed="$$g"; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		rest=""; past=""; \
+		for g in $(CI_GATES); do \
+			if [ "$$g" = "$$failed" ]; then past=1; continue; fi; \
+			[ -n "$$past" ] && rest="$$rest $$g"; \
+		done; \
+		echo; \
+		echo "make ci FAILED at gate: $$failed"; \
+		if [ -n "$$rest" ]; then \
+			echo "gates NOT reached — these did not pass, they did not run:$$rest"; \
+			echo "a green from them is unavailable, not implied. Fix $$failed and re-run."; \
+		else \
+			echo "$$failed is the last gate; every other gate ran."; \
+		fi; \
+		exit 1; \
+	fi; \
+	echo; \
+	echo "make ci is green over $(words $(CI_GATES)) gates."
 
 # The falsification above, kept. `SHELL := /bin/bash -o pipefail` is a claim about how every
 # recipe in this file runs, and it is a claim that has already been silently false once — the

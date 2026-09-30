@@ -1,6 +1,7 @@
 package testenv_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -608,4 +610,270 @@ func TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob(t *testing.T) {
 		t.Logf("%d pinned corpora fetched by all %d unit-test jobs (%s); %d fuzz-only jobs exempt",
 			len(pinned), len(unit), strings.Join(names, " "), len(fuzzOnly))
 	}
+}
+
+// reMakeInvocation and reScriptInvocation read a workflow `run:` body for the two things that name a
+// Makefile target: an invocation of one, and an invocation of a script some target's recipe runs.
+var (
+	reMakeCall         = regexp.MustCompile(`(?:^|[;&|(])\s*(?:@)?(?:make|\$\(MAKE\))\s`)
+	reScriptInvocation = regexp.MustCompile(`scripts/([a-z0-9_.-]+\.(?:sh|py))`)
+	reMakeTargetLine   = regexp.MustCompile(`^([a-z][a-z0-9_-]*):`)
+	reMakeVarLine      = regexp.MustCompile(`^([A-Z_]+) = (.*)$`)
+	reTargetWord       = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+)
+
+// makeTargets returns every target named by a `make` invocation in one line of shell.
+//
+// **It consumes the whole argument list, and the first version consumed one word.** That version read
+// `make spec-tests spec-ref threads-ref` as one target and read
+// `$(MAKE) --no-print-directory spec-tests ...` as *none*, because the word after `$(MAKE)` was a
+// flag. Both are real forms in this tree — the second is `ci`'s own first recipe line — and the
+// under-match was silent: the control reported three gates missing that were in front of it. So flags
+// are skipped rather than terminating the scan, and the scan runs to the next shell separator.
+func makeTargets(line string) []string {
+	var out []string
+	rest := line
+	for {
+		loc := reMakeCall.FindStringIndex(rest)
+		if loc == nil {
+			return out
+		}
+		rest = rest[loc[1]:]
+		// Arguments up to the next separator. A VAR=value assignment is not a target either.
+		for _, w := range strings.FieldsFunc(rest, func(r rune) bool {
+			return r == ' ' || r == '\t'
+		}) {
+			if w == ";" || w == "&&" || w == "||" || w == "|" || strings.HasPrefix(w, ">") {
+				break
+			}
+			if strings.HasPrefix(w, "-") || strings.Contains(w, "=") {
+				continue // a flag or an override, not a target
+			}
+			if !reTargetWord.MatchString(w) {
+				break
+			}
+			out = append(out, w)
+		}
+		if i := strings.IndexAny(rest, ";&|"); i >= 0 {
+			rest = rest[i+1:]
+		} else {
+			return out
+		}
+	}
+}
+
+// TestCIGatesCoverWhatCIInvokes asserts that `make ci` runs everything `ci.yml` reaches through the
+// Makefile — so "report green from `make ci`" is a claim a reader can check rather than a habit.
+//
+// # Why this exists
+//
+// `make strict` reddened CI on a tree `make check` had just passed, and `check`'s own comment called
+// itself the local mirror of CI. The #829 review's repair was a `ci` target that is the exact CI set.
+// **A target whose gate list is hand-copied from a workflow is the same defect one layer up**: the
+// copy is right on the day it is written and silently wrong the first time CI gains a step. This is
+// the control that makes it not a copy.
+//
+// The first draft of `CI_ONLY_GATES` is the evidence that the control was needed rather than
+// ceremonial. Written by reading `ci.yml`, it named five targets CI does not invoke
+// (`conformance`, `memarg-drift`, `opcodes-text-drift`, `vuln`, `tidy`) and **omitted three it
+// does** (`cite`, `close`, `space`). The omissions are the dangerous half, and no amount of care in
+// reading would have made them visible.
+//
+// # Both vocabularies are derived
+//
+//	make <target> in a `run:` body   ->  must be in CI_GATES, or be one of `ci`'s corpus prerequisites
+//	scripts/<x>.sh in a `run:` body  ->  the Makefile target whose recipe invokes that script must be
+//	                                     in CI_GATES
+//
+// The second is the technique [TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob] already uses — *its
+// Makefile target comes from the recipe that invokes the script, so the target is never typed twice*
+// — and it is what would have caught `cite`, `close` and `space`.
+//
+// # Comments AND string literals are stripped, because one of them bit
+//
+// `ci.yml` contains `echo "::error::gofumpt would reformat the tree; run: make fmt"` inside a `run:`
+// body. Matching that would require `fmt` in the gate set, i.e. a formatter that rewrites the tree
+// as part of the reporting gate. **A `make x` inside a quoted string is prose about a command, not
+// the command** — *aboutness is not proximity* — so literals are blanked before matching.
+//
+// # What it does NOT cover, stated so the claim is bounded
+//
+// CI's raw `go test`, `golangci-lint` and `govulncheck` steps name no Makefile target and are not
+// derived here; their local mirrors (`test`, `test-endtable`, `lint`, `vuln`) sit in the Makefile's
+// lists by hand. So this control proves `ci` covers CI's *Makefile-reachable* surface, which is the
+// half that drifts silently, and not that `ci` covers CI entirely.
+//
+// # Watched die four ways, and the third injection landed on the wrong arm
+//
+//  1. `close` and `space` removed from `CI_ONLY_GATES` — the script-derived arm, 2 reported.
+//  2. `make memarg-drift` added to `ci.yml` — the make-derived arm, 1 reported.
+//  3. `ci.yml`'s `spacecheck.sh` swapped for `blockercheck.sh` — intended as the decision-0005 arm,
+//     and it is **not**: `blockercheck.sh` has a Makefile target, so it took the owner-not-in-gates
+//     path instead. The run went red, which is exactly why it needed checking — *"the injection
+//     failed the test" is not evidence the arm you aimed at fired.* Read which branch reported.
+//  4. `ci.yml` given `./scripts/inject.sh`, one of the three scripts no recipe invokes — the 0005
+//     arm for real, reporting *"no Makefile recipe invokes it"*.
+func TestCIGatesCoverWhatCIInvokes(t *testing.T) {
+	root := "../.."
+	mk := readFile(t, filepath.Join(root, "Makefile"))
+
+	// The gate lists, read from the Makefile rather than restated here: a second copy of CI_GATES
+	// inside its own control is the copy this control exists to forbid.
+	vars := map[string][]string{}
+	for _, ln := range strings.Split(mk, "\n") {
+		if m := reMakeVarLine.FindStringSubmatch(ln); m != nil {
+			vars[m[1]] = strings.Fields(m[2])
+		}
+	}
+	gates := map[string]bool{}
+	for _, name := range []string{"CHECK_GATES", "CI_ONLY_GATES"} {
+		if len(vars[name]) == 0 {
+			t.Fatalf("the Makefile has no %s assignment this control can read; it was renamed or "+
+				"reformatted, and a gate list this cannot see is a gate list it cannot check", name)
+		}
+		for _, g := range vars[name] {
+			gates[g] = true
+		}
+	}
+	// `ci`'s corpus prerequisites are covered by the recipe's first line rather than by CI_GATES,
+	// because they must run before the gates that need them. Derived from that line, not listed.
+	ciRecipe := ""
+	for i, ln := range strings.Split(mk, "\n") {
+		if strings.HasPrefix(ln, "ci:") {
+			rest := strings.Split(mk, "\n")[i+1:]
+			if len(rest) > 0 {
+				ciRecipe = rest[0]
+			}
+			break
+		}
+	}
+	if ciRecipe == "" {
+		t.Fatal("no `ci:` target found in the Makefile, or it has an empty recipe")
+	}
+	for _, g := range makeTargets(ciRecipe) {
+		gates[g] = true
+	}
+
+	// Every Makefile target and the scripts its recipe invokes, so a script can be mapped back to
+	// the target that runs it.
+	scriptTarget := map[string][]string{}
+	cur := ""
+	for _, ln := range strings.Split(mk, "\n") {
+		if m := reMakeTargetLine.FindStringSubmatch(ln); m != nil {
+			cur = m[1]
+			continue
+		}
+		if !strings.HasPrefix(ln, "\t") {
+			if ln != "" && !strings.HasPrefix(ln, " ") {
+				cur = ""
+			}
+			continue
+		}
+		if cur == "" {
+			continue
+		}
+		for _, m := range reScriptInvocation.FindAllStringSubmatch(ln, -1) {
+			scriptTarget[m[1]] = append(scriptTarget[m[1]], cur)
+		}
+	}
+	if len(scriptTarget) < 3 {
+		t.Fatalf("mapped only %d scripts to Makefile targets; the recipe walk is broken, and this "+
+			"control's script arm would pass by having nothing to check", len(scriptTarget))
+	}
+
+	wf := filepath.Join(root, ".github/workflows/ci.yml")
+	bodies := runBodies(t, readFile(t, wf))
+	if len(bodies) < 10 {
+		t.Fatalf("found %d `run:` bodies in ci.yml (want >=10); the extractor is reading the "+
+			"workflow wrong and every assertion below would be vacuous", len(bodies))
+	}
+
+	madeTargets, scripts := map[string]bool{}, map[string]bool{}
+	for _, b := range bodies {
+		code := stripQuotedAndComments(b)
+		for _, tgt := range makeTargets(code) {
+			madeTargets[tgt] = true
+		}
+		for _, m := range reScriptInvocation.FindAllStringSubmatch(code, -1) {
+			scripts[m[1]] = true
+		}
+	}
+	if len(madeTargets) < 5 || len(scripts) < 2 {
+		t.Fatalf("derived %d make targets and %d scripts from ci.yml (want >=5 and >=2): the "+
+			"stripping or the matching has gone wrong, and an empty domain passes by asking nothing",
+			len(madeTargets), len(scripts))
+	}
+
+	var missing []string
+	for tgt := range madeTargets {
+		if !gates[tgt] {
+			missing = append(missing, fmt.Sprintf("%s (ci.yml runs `make %s`)", tgt, tgt))
+		}
+	}
+	for s := range scripts {
+		owners := scriptTarget[s]
+		if len(owners) == 0 {
+			// A script CI runs with no Makefile target is decision 0005's own rule, checked
+			// elsewhere; named here rather than silently skipped.
+			t.Errorf("ci.yml runs scripts/%s and no Makefile recipe invokes it, so `make ci` cannot "+
+				"reach it. Per decision 0005 tooling goes through the Makefile; give it a target.", s)
+			continue
+		}
+		covered := false
+		for _, o := range owners {
+			if gates[o] {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			missing = append(missing, fmt.Sprintf("%s (ci.yml runs scripts/%s)",
+				strings.Join(owners, " or "), s))
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("`make ci` does not run %d thing(s) ci.yml reaches through the Makefile:\n\t%s\n"+
+			"\tAdd each to CI_ONLY_GATES. This is the drift the `ci` target exists to end: a green "+
+			"`make ci` is reported as a green tree, so a gate CI has and `ci` lacks is a red run "+
+			"nobody saw coming (#829 review).", len(missing), strings.Join(missing, "\n\t"))
+	}
+	t.Logf("CI GATES: %d gate(s) cover %d make target(s) and %d script(s) derived from ci.yml",
+		len(gates), len(madeTargets), len(scripts))
+}
+
+// runBodies returns the text of every `run:` block in a workflow. Shared shape with the job walk
+// above: the workflow's own indentation is the delimiter, so a `run:` body ends at the next key at
+// or below its own indent.
+func runBodies(t *testing.T, wf string) []string {
+	t.Helper()
+	var out []string
+	inRun, indent := false, 0
+	for _, ln := range strings.Split(wf, "\n") {
+		m := reWorkflowKey.FindStringSubmatch(ln)
+		switch {
+		case m != nil && m[3] == "run":
+			inRun, indent = true, len(m[1])
+			out = append(out, ln[strings.Index(ln, "run:")+4:])
+		case m != nil && inRun && len(m[1]) <= indent:
+			inRun = false
+		case inRun:
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+var reWorkflowKey = regexp.MustCompile(`^(\s*)(- )?(name|run|uses|with|if|env|shell|timeout-minutes|working-directory|id|continue-on-error):`)
+
+// stripQuotedAndComments blanks string literals and trailing comments so a command's *mention* is not
+// read as its invocation. `echo "run: make fmt"` is the specimen: a diagnostic telling a human what to
+// type, which as an invocation would put a tree-rewriting formatter in the reporting gate.
+func stripQuotedAndComments(code string) string {
+	code = regexp.MustCompile(`"[^"]*"`).ReplaceAllString(code, `""`)
+	code = regexp.MustCompile(`'[^']*'`).ReplaceAllString(code, `''`)
+	if i := strings.Index(code, "#"); i >= 0 {
+		code = code[:i]
+	}
+	return code
 }

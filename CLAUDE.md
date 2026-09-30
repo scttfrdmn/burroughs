@@ -283,9 +283,20 @@ prose can still name a law that does not exist.
 
 - Module `github.com/scttfrdmn/burroughs` (the vanity `burroughs.run` path is a later decision —
   [0001](docs/decisions/0001-project-genesis.md) records this). Go ≥ 1.26. **No cgo. Pure Go.**
-- **`make check` is the gate** — fmt-check, build, vet, lint, test, deadcode — and must be green
-  before any report. It is the local mirror of CI **on a precondition: where the Makefile observes a
-  superset of what CI observes.** Inside that region a surprise in CI is a bug in the Makefile;
+- **`make ci` is the gate, and `make check` is not** — `check` is the fast inner loop (fmt-check,
+  build, vet, lint, test, test-endtable, deadcode); **`ci` is what must be green before any report**,
+  and it is `check`'s gates plus the nine CI runs that `check` does not. The split was ordered on the
+  #829 review after `make strict` reddened CI on a tree `check` had just passed green. **`strict` could
+  not simply be folded into `check`**: it runs the tree under `BURROUGHS_NO_SKIP=1`, which revokes the
+  corpus licenses, so a clone without the vendored suite fails rather than skips — measured, with the
+  corpus moved aside, at **102 failures**. Speed was never the obstacle the ruling anticipated
+  (`check` 2:04, `strict` 1:25); the precondition was. `check` now prints on success the gates it did
+  **not** run, so its green cannot be read as a green tree, and
+  `TestCIGatesCoverWhatCIInvokes` derives CI's Makefile-reachable set from `ci.yml` — both `make
+  <target>` invocations and the targets owning the scripts CI runs — so `ci`'s list cannot drift from
+  CI's. That control exists because the first draft of the list, written by reading the workflow, named
+  five targets CI does not invoke and **omitted three it does**. It is the local mirror of CI **on a
+  precondition: where the Makefile observes a superset of what CI observes.** Inside that region a surprise in CI is a bug in the Makefile;
   outside it the surprise *is* the gap, and the gap is what to name rather than a Makefile bug to hunt
   ([the precondition, with its
   instances](docs/laws/operations.md#the-maxims-precondition-the-mirror-holds-where-the-makefile-observes-a-superset-of-ci)).
