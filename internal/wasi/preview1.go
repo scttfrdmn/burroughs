@@ -120,7 +120,14 @@ type host struct {
 	// *synchronising shared state does not ask whether it should be shared* — the question has to be
 	// asked, and this time it answers "shared" (cf. #663, where the honest answer was to delete the
 	// second copy rather than synchronise it).
-	mu  sync.Mutex
+	mu sync.Mutex
+
+	// Reached only through `fd`, `addFD`, `dropFD`, `initFDs` and `fdCountForTest`, which
+	// [TestFDTableIsReachedThroughAccessors] enforces. **`fdCountForTest` is an accessor rather than an
+	// exemption**: the table's *size* cannot be obtained through `fd`, which answers one entry, and it
+	// takes `mu` like the others. Its consumer is a leak assertion — a descriptor opened and never
+	// closed, or closed twice, does not appear as a failed call, so the size before and after a run is
+	// the only channel that sees it (ADR 0091's fd-table stress witness).
 	fds map[uint32]*fdEntry
 
 	// refusals counts, per function name, how many times a deferred preview-1 function was reached and
