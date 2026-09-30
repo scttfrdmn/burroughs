@@ -95,6 +95,36 @@ own condition rather than as a prediction.
 
 ### Changed
 
+- **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed
+  `os.Environ()` — every variable the process held, credentials included — into a sandbox whose
+  documented model (ADR 0083) is that nothing is visible unless named
+  ([#830](https://github.com/scttfrdmn/burroughs/issues/830)). **Nothing crosses now unless
+  `--env NAME` or `--env NAME=VALUE` names it**, matching wasmtime's default. A bare `--env NAME`
+  whose variable is unset in the host is **refused by name** rather than granting an empty value,
+  because a request that quietly receives something else is the shape #828 was just repaired for;
+  `--env NAME=` grants an explicit empty value and is accepted.
+  - **What this breaks:** a script whose guest reads an inherited variable now needs an `--env` for
+    it. The library is unaffected — `Config.Env` always defaulted to none — so this is the CLI alone.
+  - **Note `PWD` in particular.** A Go `wasip1` guest takes its working directory from it, so the
+    leak moved where a relative guest path resolved; that was how the defect surfaced, two removes
+    from its cause. `--env PWD=/x` still moves it, by explicit grant.
+  - Witnessed by `TestEnvIsEmptyUnlessNamed` over a new `testdata/envprint` guest that **reports its
+    own environment**, because no guest could before and every observation had to be indirect. Its
+    `ENVCOUNT` line makes "nothing crossed" an assertable observation rather than an absence of
+    output, which a guest that never started also produces.
+
+- **`make ci` is the reporting gate; `make check` is the inner loop.** Ordered on the #829 review
+  after `make strict` reddened CI on a tree `make check` had passed green. `ci` runs `check`'s gates
+  plus `race`, `strict`, `opcode-drift`, `keyword-drift`, `witnesses`, `cite`, `close`, `space` and
+  `vuln`, with the corpora fetched first. `check` now prints the gates it did **not** run, so its
+  green cannot be read as a green tree. `strict` was not folded into `check` because it fails rather
+  than skips on a clone without the vendored suite (measured: 102 failures), which would have
+  destroyed `check`'s own property of proving the code sound on any clone.
+  - `TestCIGatesCoverWhatCIInvokes` derives CI's Makefile-reachable set from `ci.yml` — `make`
+    invocations **and** the targets owning the scripts CI runs — so the list cannot drift. It earned
+    itself immediately: the first draft, written by reading the workflow, named five targets CI does
+    not invoke and omitted three it does.
+
 - **A module-defined non-shared global is now per-agent**, so a spawned thread reads and
   writes its own instance of it, initialized from that global's own initializer expression
   ([#807](https://github.com/scttfrdmn/burroughs/issues/807), ADR 0089). **Imported globals

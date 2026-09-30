@@ -32,18 +32,28 @@ import (
 //	              through it returned EBADF.
 //	HOST::GUEST   REFUSED, with an error naming wasmtime's grammar. Also measured dead first, the same way.
 //
-// # The ENOENT arm was a Burroughs defect, and it took a second engine to say so
+// # The ENOENT arm was a Burroughs defect, it took a second engine to say so, and it is now FIXED
 //
-// A relative READ under an absolute grant fails with **ENOENT**, not EBADF, and the file is readable at
-// `/in.txt` under that same grant. I concluded from one engine that this was guest-side. **It is not**, and
-// standing property 20 is why the comparison was ordered: wasmtime 49.0.1, given the same guest bytes and
-// `--dir D::/`, **reads `in.txt` successfully**. The cause is `burroughs run` forwarding `os.Environ()`, so the
-// host's `PWD` becomes the guest's cwd — Go's `wasip1` runtime takes `cwd` from `PWD` and only falls back to
-// `preopens[0].name` when it is unset, which is what wasmtime's empty environment produces. Filed as #830,
-// where the larger half is that the whole host environment crosses into a sandbox whose model says nothing is
-// visible unless named. **The arm below therefore asserts the MECHANISM, not the symptom**: the outcome is
-// determined by the forwarded `PWD`, both values run. If #830 stops the forwarding, both values will read
-// alike and this arm fails — correctly, because the finding will have changed.
+// A relative read under an absolute grant used to fail with **ENOENT**, not EBADF, while the same file was
+// readable at `/in.txt` under that same grant. I concluded from one engine that this was guest-side. **It was
+// not**, and standing property 20 is why the comparison was ordered: wasmtime 49.0.1, given the same guest
+// bytes and `--dir D::/`, read `in.txt` successfully. The cause was `burroughs run` forwarding `os.Environ()`,
+// so the host's `PWD` became the guest's cwd — Go's `wasip1` runtime takes `cwd` from `PWD` and falls back to
+// `preopens[0].name` only when it is unset, which is what wasmtime's empty environment produces.
+//
+// **The arm below was registered to flip when #830 landed, and it flipped.** Its previous form asserted that
+// the outcome was *determined by the forwarded `PWD`*, with a note saying that if the forwarding stopped both
+// values would read alike and the arm would fail — correctly, because the finding would have changed. #830
+// landed, both values read alike, and the arm went red on exactly the sentence that predicted it. What
+// replaces it asserts **both halves of the repair**, which is strictly more than the old arm did:
+//
+//	no --env at all           the relative read SUCCEEDS, and the host's PWD is irrelevant — two host
+//	                          values, same outcome. This is the leak being closed.
+//	--env PWD=<elsewhere>     the relative read FAILS. The mechanism is still reachable, by explicit
+//	                          grant only. This is the capability working.
+//
+// A single arm asserting only the first half would pass against a CLI that had lost the ability to set `PWD`
+// at all, which is why the second is there.
 func TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon(t *testing.T) {
 	guest := buildGuestFile(t, "cat")
 	dir := t.TempDir()
@@ -54,10 +64,12 @@ func TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon(t *testing.T) {
 
 	// The guest's own bytes are the verdict, not the CLI's exit code: before #828 a grant of a path nothing
 	// could open left the flag parser perfectly happy, which is the defect these arms were written to measure.
-	readable := func(t *testing.T, dirArg, guestPath string) (bool, int, string) {
+	readable := func(t *testing.T, dirArg, guestPath string, extra ...string) (bool, int, string) {
 		t.Helper()
 		var out, errBuf bytes.Buffer
-		code := dispatch(&out, &errBuf, []string{"run", "--dir", dirArg, guest, "--", guestPath})
+		argv := append([]string{"run", "--dir", dirArg}, extra...)
+		argv = append(argv, guest, "--", guestPath)
+		code := dispatch(&out, &errBuf, argv)
 		return strings.Contains(out.String(), body), code, errBuf.String()
 	}
 
@@ -121,27 +133,34 @@ func TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon(t *testing.T) {
 		})
 	}
 
-	t.Run("a_relative_read_is_decided_by_the_forwarded_PWD", func(t *testing.T) {
-		// Two values of ONE variable, which is what makes this a mechanism claim rather than a symptom.
-		// wasmtime forwards no environment and reads the same file successfully (49.0.1, measured); its
-		// behaviour is what `PWD=/` reproduces here.
-		type arm struct {
-			pwd          string
-			wantReadable bool
-		}
-		for _, a := range []arm{
-			{"/", true},
-			{dir, false}, // a host path the guest was never granted — what os.Environ() actually forwards
-		} {
-			t.Setenv("PWD", a.pwd)
+	t.Run("a_relative_read_no_longer_depends_on_the_hosts_PWD", func(t *testing.T) {
+		// #830's half: with nothing forwarded, the guest's cwd falls back to the preopen name, so the
+		// host's own PWD cannot move where a guest path resolves. Two host values, one outcome.
+		for _, hostPWD := range []string{"/", dir, "/somewhere/else"} {
+			t.Setenv("PWD", hostPWD)
 			ok, code, stderr := readable(t, dir+":/", "in.txt")
-			t.Logf("DIRFLAG relative-read PWD=%q readable=%v exit=%d stderr=%q", a.pwd, ok, code, stderr)
-			if ok != a.wantReadable {
-				t.Errorf("with PWD=%q the relative read was readable=%v, want %v (exit %d, stderr %q)\n"+
-					"\tThe guest's cwd comes from the forwarded PWD (Go's syscall/fs_wasip1.go init), and "+
-					"cmd/burroughs/run.go passes os.Environ(). If #830 stopped the forwarding, both arms read "+
-					"alike and this arm is what says so.", a.pwd, ok, a.wantReadable, code, stderr)
+			if !ok {
+				t.Errorf("with the host's PWD=%q the relative read failed (exit %d, stderr %q)\n"+
+					"\tNothing is forwarded to the guest unless --env names it (#830), so the host's "+
+					"PWD must not reach the guest's cwd at all. If this fails, the forwarding is back.",
+					hostPWD, code, stderr)
 			}
+		}
+	})
+
+	t.Run("and_PWD_still_moves_it_when_explicitly_granted", func(t *testing.T) {
+		// The other half. Without this, the arm above would also pass against a CLI that had lost the
+		// ability to set PWD at all — a capability silently removed reads exactly like a leak fixed.
+		t.Setenv("PWD", "/")
+		ok, code, stderr := readable(t, dir+":/", "in.txt", "--env", "PWD=/somewhere/else")
+		if ok {
+			t.Errorf("with --env PWD=/somewhere/else the relative read still succeeded (exit %d): the "+
+				"grant is not reaching the guest's cwd, so --env is not carrying PWD", code)
+		}
+		if !strings.Contains(stderr, "No such file or directory") {
+			t.Errorf("stderr %q does not name ENOENT: the granted PWD should resolve the read to a "+
+				"path inside the grant that does not exist, which is a different failure from EBADF",
+				stderr)
 		}
 	})
 }

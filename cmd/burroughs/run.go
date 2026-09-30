@@ -122,6 +122,58 @@ func (f *featureFlag) Set(v string) error {
 
 func (f featureFlag) features() []burroughs.Feature { return []burroughs.Feature(f) }
 
+// envFlag collects repeated `--env NAME[=VALUE]` grants into the guest's environment (#830).
+//
+// # Why the default is now nothing
+//
+// `burroughs run` passed `os.Environ()` — **the whole host environment, every variable the process
+// held, into a sandboxed guest** whose documented model (ADR 0083) is that nothing is visible unless
+// named. It was found by a path bug rather than by a review: Go's `wasip1` runtime takes its working
+// directory from `PWD`, so the leaked `PWD` made a relative read resolve outside its grant, and
+// wasmtime — which forwards nothing by default — read the same file from the same guest bytes.
+//
+// **This is a narrowing, and it is a behaviour change.** A guest that read an inherited variable now
+// reads nothing there until it is named. The library was always correct (`Config.Env` defaults to
+// none), so only the CLI changes.
+//
+// # `NAME` versus `NAME=VALUE`
+//
+//	--env NAME         pass the host's value for NAME through, and REFUSE if the host has none
+//	--env NAME=VALUE   pass VALUE literally, host environment irrelevant
+//
+// The refusal in the first form is the point rather than a nicety. A `--env NAME` whose variable is
+// unset would otherwise grant an empty string or nothing at all, which is the silent-dead-input shape
+// `--dir` was just repaired for (#828): the operator asked for something, got something else, and
+// nothing said so. `--env NAME=` grants an explicit empty value and is accepted, because that spelling
+// says what it means.
+type envFlag []string
+
+func (f *envFlag) String() string { return strings.Join(*f, ",") }
+
+func (f *envFlag) Set(v string) error {
+	name, value, found := strings.Cut(v, "=")
+	if name == "" {
+		return fmt.Errorf("--env %q names no variable", v)
+	}
+	if strings.ContainsAny(name, " \t") {
+		return fmt.Errorf("--env %q: the variable name %q contains whitespace", v, name)
+	}
+	if found {
+		*f = append(*f, name+"="+value)
+		return nil
+	}
+	hostValue, ok := os.LookupEnv(name)
+	if !ok {
+		return fmt.Errorf("--env %s: %s is not set in this environment, so there is nothing to pass "+
+			"through. Use --env %s=VALUE to set it explicitly, or --env %s= for an empty value",
+			name, name, name, name)
+	}
+	*f = append(*f, name+"="+hostValue)
+	return nil
+}
+
+func (f envFlag) env() []string { return []string(f) }
+
 // The run subcommand: load a module, call an exported function, print the result.
 //
 // **A consumer of the public package, never of `internal/`** — which is decision 0029's decision 3
@@ -169,9 +221,13 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	var feats featureFlag
 	fs.Var(&feats, "features", "proposal capabilities the guest requires, comma-separated "+
 		"(repeatable); currently: threads. An unrecognized name is refused (ADR 0088)")
+	var envs envFlag
+	fs.Var(&envs, "env", "pass NAME[=VALUE] into the guest's environment (repeatable). NOTHING is "+
+		"passed unless named (#830); a bare NAME is refused when unset in this environment")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:GUEST]]... "+
-			"[--features NAME[,NAME]]... <file.wasm> [-- <arg>...] | [<func> [<value>...]]")
+		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:/GUEST]]... "+
+			"[--env NAME[=VALUE]]... [--features NAME[,NAME]]... <file.wasm> "+
+			"[-- <arg>...] | [<func> [<value>...]]")
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
 			"directory, capability-based: nothing is visible unless named.")
@@ -179,6 +235,11 @@ func run(stdout, stderr io.Writer, argv []string) error {
 			"path must be absolute.\nA bare --dir /host/path maps it under its own resolved name. A relative "+
 			"guest path and wasmtime's TWO-colon form (--dir host::guest) are both refused by name (#828): "+
 			"each would grant a mapping nothing can open, and report a file error for a flag mistake.")
+		fmt.Fprintln(stderr, "\nThe guest's environment is EMPTY unless named with --env (#830). Until this "+
+			"release the host's whole\nenvironment was passed through, which contradicted --dir's own "+
+			"model; a guest that read an inherited\nvariable now needs --env NAME for it. Note PWD: a Go "+
+			"wasip1 guest takes its working directory from\nit, so --env PWD=/x changes where a relative "+
+			"path resolves.")
 		fmt.Fprintln(stderr, "Any other module: with a function named it is invoked; with none its exports are listed.")
 		fmt.Fprintln(stderr, "\nValues are typed: i32:42  i64:-1  f32:nan  f64:inf  v128:0x0:0x0  extern:3  null:func")
 		fs.PrintDefaults()
@@ -221,7 +282,7 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	// came back `false` and the CLI said "this module is not one" about a module that plainly was one.
 	wasiCfg := burroughs.WASIP1Config{
 		Args:     append([]string{filepath.Base(file)}, guestArgs...),
-		Env:      os.Environ(),
+		Env:      envs.env(),
 		Stdin:    os.Stdin,
 		Stdout:   stdout,
 		Stderr:   stderr,
