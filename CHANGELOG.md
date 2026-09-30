@@ -30,6 +30,33 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **`--scratch HOST[:/GUEST]`: a confined writable directory, off by default**
+  ([#831](https://github.com/scttfrdmn/burroughs/issues/831),
+  [ADR 0091](docs/decisions/0091-a-confined-writable-scratch-directory-granted-by-its-own-flag-with-confinement-delegated-to-os-root-rather-than-hand-rolled.md)).
+  The first flag that lets a guest change the host's filesystem. `--dir` stays read-only, nothing is
+  writable without `--scratch`, and **a run without it has the same errnos it had before**. Writes are
+  confined by an `os.Root` per grant — `openat`, not path arithmetic — so a `..`, an outward symlink, or
+  an absolute path cannot escape a write any more than a read. `Preopen.Writable` is the public API's
+  form of it, with a read-only zero value.
+  - **Four functions move from refusing to implemented**: `path_create_directory`, `path_unlink_file`,
+    `path_remove_directory`, `fd_pwrite` — plus `path_open`'s create/truncate modes, which is the change
+    that makes every write reachable. **21 names still refuse with `ENOSYS`.** The set is the one the
+    *consumers* ask for, measured from `t.TempDir()` and `os.TestWriteAtConcurrent` rather than from a
+    synthetic guest; ADR 0091 amendment 1 records why the list shrank from eight.
+  - **`fd_pwrite` is the engine's first capability decided by an fd's provenance** rather than by a path.
+    It refuses `ENOTCAPABLE` on any fd that did not come from a writable grant.
+  - **A directory fd opened under a grant is itself a confinement boundary.** `path_*` resolves against any
+    directory fd, not only a preopen's, because Go's `RemoveAll` descends that way — so a subdirectory fd
+    carries a **nested** `os.Root` under `--scratch`, and under `--dir` resolves through the read path with
+    containment on the resolved result and **no write capability at all**. Six read and six write escape
+    shapes are refused through such an fd for both grant kinds, including symlinks planted inside the
+    subdirectory, and a permitted write is asserted to land beneath it (ADR 0091 amendment 2).
+  - **Fixed alongside, each found by running rather than reading:** `fd_write` answered stdio only, so a
+    guest that created a file got `EBADF` from a function the surface reports as present; `path_*` calls
+    resolved only preopen fds, so Go's `RemoveAll` — which descends by opening each directory — failed at
+    `t.TempDir()`'s cleanup; and `ENOTEMPTY` was unmapped, so a non-empty `rmdir` blamed the host for an
+    I/O problem instead of naming the guest's own request.
+
 - **`fd_pread` and `fd_readdir` on the preview-1 host**, and the other seven functions a Go test binary
   imports are supplied and **refused by name** ([#816](https://github.com/scttfrdmn/burroughs/issues/816),
   ADR 0083's 2026-09-23 append). ADR 0083 deferred *"the write slice, `fd_seek`, and directory
@@ -146,14 +173,16 @@ own condition rather than as a prediction.
     ([#514](https://github.com/scttfrdmn/burroughs/issues/514)), since a guest wanting a
     per-thread slot at register-like cost can now declare a mutable global.
 
-- **A recon for the write slice, and a recommendation held at `proposed`**
-  ([#831](https://github.com/scttfrdmn/burroughs/issues/831),
-  [ADR 0091](docs/decisions/0091-a-confined-writable-scratch-directory-granted-by-its-own-flag-with-confinement-delegated-to-os-root-rather-than-hand-rolled.md)).
-  **No behaviour changes**; ADR 0083's read-only filesystem is untouched and this entry records a
-  measurement, not a capability. `os` could not run one test under the sweep — 227 verdicts, all
+- **The recon behind that capability, and why its scope is four functions rather than eight**
+  ([#831](https://github.com/scttfrdmn/burroughs/issues/831)). This entry recorded a measurement with
+  **no behaviour changes** while ADR 0091 was held at `proposed`; the ADR has since been ratified and
+  implemented in the same unreleased block, so it now reads as the reasoning behind the `--scratch`
+  entry above rather than as a standalone deferral. `os` could not run one test under the sweep — 227 verdicts, all
   failing in `t.TempDir()` — so the demand set was measured on wasmtime 49.0.1, where the same guest
   bytes complete the cycle: **8 functions would change from refusing to implementing, 16 refusals
-  remain, and none is absent**, so ADR 0080's supplied-whole property is untouched. Confinement is
+  remain, and none is absent**, so ADR 0080's supplied-whole property is untouched. **That count came
+  from a synthetic guest and is superseded**: measuring from the consumers instead gives four, and ADR
+  0091 amendment 1 records the difference. Confinement is
   enforceable without granting more than the named directory — `os.Root` refused all 10 escape shapes
   probed, including creates *through* a symlink pointing out of the grant, while permitting all 8
   in-grant operations.

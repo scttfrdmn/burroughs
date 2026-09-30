@@ -131,9 +131,17 @@ func TestDeferredRefusalsFire(t *testing.T) {
 	// Channel 2: the host counted each refusal, so "never called" and "called and quietly refused" are
 	// distinguishable — which is what makes "refused by name" a falsifiable claim rather than a label.
 	got := h.refusalsForTest()
+	// **Three names left this list when ADR 0091 implemented them**, and the guest's own channel above is
+	// unchanged: `MKDIR`, `REMOVE` and `RMDIR` still fail, because this run has no writable grant. What
+	// changed is *why* — `errNotcapable` from the capability model rather than `errNosys` from a deferral —
+	// so `refusalsForTest` no longer counts them and asserting it would fail for the right reason.
+	//
+	// That distinction is the point of having two channels. A test reading only the guest's side would see
+	// no difference at all between a refused function and an unpermitted one, which is exactly the
+	// conflation ADR 0083 drew the two errnos to prevent. `TestWithoutAScratchGrantEveryRefusalIsUnchanged`
+	// is where those three are now asserted, by errno.
 	for _, name := range []string{
-		"fd_seek", "path_create_directory", "path_unlink_file", "path_symlink",
-		"path_readlink", "fd_filestat_set_size", "path_remove_directory",
+		"fd_seek", "path_symlink", "path_readlink", "fd_filestat_set_size",
 	} {
 		if got[name] == 0 {
 			t.Errorf("refusal %q never fired; the guest calls it, so either the call did not reach the "+

@@ -164,3 +164,63 @@ func TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon(t *testing.T) {
 		}
 	})
 }
+
+// TestDirIsReadOnlyAndOnlyScratchGrantsWrites is the CLI-level half of ADR 0091's default-unchanged claim.
+//
+// **It exists because an injection survived.** Making `preopenFlag.preopens()` set `Writable: true` — i.e.
+// every `--dir` silently becoming a write grant — left every test in the tree green.
+// `TestRunGrantsAndDeniesFilesystemAccess` only exercises reads, and the library-level two-grant witness
+// builds `Preopen` values directly rather than going through the flags, so **nothing connected the flag
+// name to the capability**. The engine was witnessed; the CLI's mapping onto it was not.
+//
+// The two arms run the same guest, so the flag is the only variable.
+func TestDirIsReadOnlyAndOnlyScratchGrantsWrites(t *testing.T) {
+	guest := buildGuestFile(t, "scratchwrite")
+
+	run := func(t *testing.T, flag string) (steps map[string]string, leftover int) {
+		t.Helper()
+		dir := t.TempDir()
+		var out, errBuf bytes.Buffer
+		dispatch(&out, &errBuf, []string{"run", flag, dir + ":/s", guest, "--", "/s"})
+		steps = map[string]string{}
+		for _, ln := range strings.Split(out.String(), "\n") {
+			if !strings.HasPrefix(ln, "STEP ") {
+				continue
+			}
+			if parts := strings.SplitN(strings.TrimPrefix(ln, "STEP "), " ", 2); len(parts) == 2 {
+				steps[parts[0]] = parts[1]
+			}
+		}
+		if !strings.Contains(out.String(), "SCRATCH-END") {
+			t.Fatalf("%s: the guest did not reach its end marker:\n%s\nstderr: %s", flag, out.String(), errBuf.String())
+		}
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return steps, len(ents)
+	}
+
+	roSteps, roLeft := run(t, "--dir")
+	rwSteps, rwLeft := run(t, "--scratch")
+
+	for _, name := range []string{"mkdir", "writefile", "open-rdwr", "unlink", "rmdir"} {
+		if roSteps[name] == "ok" {
+			t.Errorf("--dir permitted %q: --dir is READ-ONLY, and only --scratch grants writes (ADR 0091)", name)
+		}
+		if rwSteps[name] != "ok" {
+			t.Errorf("--scratch refused %q (%q): without this arm the refusals above would also be "+
+				"satisfied by a CLI that granted nothing at all", name, rwSteps[name])
+		}
+	}
+	// The host's own account, because "the guest was told no" and "nothing was written" are two facts.
+	if roLeft != 0 {
+		t.Errorf("--dir left %d entr(ies) in the host directory; every write reported refused and "+
+			"something landed anyway", roLeft)
+	}
+	if rwLeft != 0 {
+		t.Errorf("--scratch left %d entr(ies) behind; the guest removed what it created, so a leftover "+
+			"means an unlink or rmdir silently did nothing", rwLeft)
+	}
+	t.Logf("CLI GRANTS: --dir=%v --scratch=%v", roSteps, rwSteps)
+}
