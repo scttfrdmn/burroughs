@@ -240,6 +240,20 @@ own condition rather than as a prediction.
   because without it a green from three commits ago reads exactly like a green from this one. One
   consequence changes the working order: the gate must run on the **committed** tree, so it is
   commit, then `make ci`, then push, then merge.
+- **The verdict writer itself refuses to run during a dry run**, so no caller can forge a green —
+  not a hand-typed `make -n ci`, not a debugging session, not a future test. The flag detection is
+  **measured rather than guessed, because the obvious form is half-broken**: `make -n ci` gives
+  `MAKEFLAGS=[n]`, but nested under `-n` it is `[ --no-print-directory -n]` — first word empty, `-n`
+  as a later dashed word — and `--no-print-directory` contains an `n` that must never match. A
+  first-word-only check passes the direct arm and misses the nested one, which is witnessed as an
+  injection rather than argued.
+- **The hook over-refused a file outside the repo.** `cd /tmp/x && … > Makefile` was refused as
+  overwriting the tracked root `Makefile`, because a bare name was resolved against the repo root and
+  nothing looked at the `cd`. **An over-refusing check is not the safe direction** — it blocks work it
+  was never aimed at, and a blocked actor proceeds by working around the check, which is the failure
+  mode the mechanism exists to prevent. The last `cd` now wins, as the shell does, and a `cd` *into*
+  the repo must still resolve bare names to tracked files — the complement arm that keeps "follow the
+  cd" from decaying into "ignore relative paths".
 - **A dry run was forging a green verdict.** GNU make executes any recipe line containing
   `$(MAKE)` **even under `-n`**, passing `-n` down so a dry run can see into sub-makes. `ci`'s recipe
   is one continued line containing `$(MAKE)`, so the first `make -n ci` ordering check ran

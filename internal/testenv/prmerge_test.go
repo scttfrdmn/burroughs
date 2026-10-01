@@ -115,6 +115,69 @@ func TestCIVerdictRecordsTheTreeItActuallyRanOn(t *testing.T) {
 			t.Errorf("exit=%q, want 2: %v", got["exit"], got)
 		}
 	})
+
+	// A DRY RUN must never produce a verdict, whoever starts it. `make -n ci` wrote a real one: make runs
+	// any recipe line containing `$(MAKE)` even under `-n`, so the writer executed and recorded `exit=0`
+	// with the current SHA — the exact file prmerge.sh accepts. Pointing one test's dry run at a temp path
+	// stopped that caller; this stops every caller, in the writer.
+	t.Run("a_dry_run_writes_nothing_and_says_why", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "v")
+		c := exec.Command("bash", script, "0", out)
+		c.Dir = repo
+		// `n` alone is the form a direct `make -n ci` produces, measured rather than assumed.
+		c.Env = append(os.Environ(), "MAKEFLAGS=n")
+		combined, runErr := c.CombinedOutput()
+		if runErr != nil {
+			t.Fatalf("the writer should exit 0 and decline, not fail: %v\n%s", runErr, combined)
+		}
+		if _, statErr := os.Stat(out); statErr == nil {
+			body, _ := os.ReadFile(out)
+			t.Errorf("a verdict was written during a dry run, which is a FORGED GREEN — prmerge.sh "+
+				"accepts exactly this file:\n%s", body)
+		}
+		for _, want := range []string{"REFUSING", "dry run", "MAKEFLAGS"} {
+			if !strings.Contains(string(combined), want) {
+				t.Errorf("the refusal does not mention %q, so a reader cannot tell why no verdict "+
+					"exists — and a missing verdict with no explanation looks like a broken writer:\n%s",
+					want, combined)
+			}
+		}
+	})
+
+	t.Run("a_long_option_containing_n_is_not_a_dry_run", func(t *testing.T) {
+		// `--no-print-directory` contains an `n` and is present in MAKEFLAGS on every nested make in this
+		// Makefile. If it matched, the writer would decline during every real `make ci` and the verdict
+		// would never be written — a refusal that looks like the mechanism working while disabling it.
+		// Measured form, from a nested make with no -n: MAKEFLAGS=[ --no-print-directory].
+		out := filepath.Join(t.TempDir(), "v")
+		c := exec.Command("bash", script, "0", out)
+		c.Dir = repo
+		c.Env = append(os.Environ(), "MAKEFLAGS= --no-print-directory")
+		if combined, runErr := c.CombinedOutput(); runErr != nil {
+			t.Fatalf("civerdict.sh: %v\n%s", runErr, combined)
+		}
+		if _, statErr := os.Stat(out); statErr != nil {
+			t.Errorf("no verdict was written when MAKEFLAGS held only a long option: %v\n"+
+				"`--no-print-directory` must not be read as the dry-run flag", statErr)
+		}
+	})
+
+	t.Run("a_nested_dry_run_is_still_a_dry_run", func(t *testing.T) {
+		// The other measured form, which the obvious implementation gets wrong: under a nested `-n` the
+		// first MAKEFLAGS word is EMPTY and `-n` arrives as a later dashed word. A first-word-only check
+		// passes the arm above and misses this one.
+		out := filepath.Join(t.TempDir(), "v")
+		c := exec.Command("bash", script, "0", out)
+		c.Dir = repo
+		c.Env = append(os.Environ(), "MAKEFLAGS= --no-print-directory -n")
+		if combined, runErr := c.CombinedOutput(); runErr != nil {
+			t.Fatalf("civerdict.sh: %v\n%s", runErr, combined)
+		}
+		if _, statErr := os.Stat(out); statErr == nil {
+			body, _ := os.ReadFile(out)
+			t.Errorf("a verdict was written under a NESTED dry run:\n%s", body)
+		}
+	})
 }
 
 // TestPrmergeRefusesWithoutAGreenLocalVerdictForThisCommit witnesses the gate-verdict check in

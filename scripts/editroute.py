@@ -164,18 +164,57 @@ def tracked_set(root: str) -> set[str]:
     return _tracked
 
 
-def is_tracked(path: str, root: str, cwd: str) -> bool:
+def cd_base(tokens: list[str], cwd: str) -> tuple[str, bool]:
+    """The directory a relative path in this command resolves against, and whether a `cd` set it.
+
+    **This exists because the hook produced a false positive on its author.** A command beginning
+    `cd /tmp/mfprobe && printf ... > Makefile` was refused as overwriting the tracked root `Makefile`:
+    the bare name was resolved against the repo root, and nothing had looked at the `cd`. The file
+    being written was a new one in /tmp.
+
+    An over-refusing check is not the safe direction. It blocks work it was never aimed at, and the
+    way a blocked actor proceeds is by working around the check — which is the failure mode this
+    whole mechanism exists to prevent.
+
+    The last `cd` wins, because that is what the shell does. `~` is expanded; a `cd` with no argument
+    means home; `cd -` is left alone rather than guessed at, since tracking OLDPWD is beyond what this
+    needs and a wrong guess here is another false positive.
+    """
+    base, moved = cwd, False
+    for cmdv in simple_commands(tokens):
+        head = 0
+        while head < len(cmdv) and cmdv[head] in SHELL_KEYWORDS:
+            head += 1
+        if head >= len(cmdv) or basename(cmdv[head]) != "cd":
+            continue
+        args = [a for a in cmdv[head + 1 :] if not a.startswith("-")]
+        if not args:
+            base, moved = os.path.expanduser("~"), True
+            continue
+        target = os.path.expanduser(args[0])
+        base = target if os.path.isabs(target) else os.path.normpath(os.path.join(base, target))
+        moved = True
+    return base, moved
+
+
+def is_tracked(path: str, root: str, cwd: str, moved: bool = False) -> bool:
     """True when `path` names a file git tracks in this repo.
 
-    Resolution is tried from the command's cwd and from the repo root, because a Bash command may
-    `cd` first and its paths are relative to wherever it ends up. `realpath` is not used: a symlink
-    is a different question and resolving one would silently widen the subject.
+    `cwd` is the directory the command actually ends up in, so a `cd` has already been applied by
+    `cd_base`. The repo root is tried as a fallback **only when no `cd` moved us** — with an explicit
+    `cd`, the shell's answer is unambiguous and a second guess can only manufacture a false match,
+    which is precisely the false positive this signature was changed to fix.
+
+    `realpath` is not used: a symlink is a different question and resolving one would silently widen
+    the subject.
     """
     if not path or path.startswith("-"):
         return False
     cands = []
     if os.path.isabs(path):
         cands.append(os.path.normpath(path))
+    elif moved:
+        cands.append(os.path.normpath(os.path.join(cwd, path)))
     else:
         for base in (cwd, root):
             if base:
@@ -266,6 +305,11 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
 
     reasons: list[str] = []
 
+    # Where a relative path in this command actually resolves. Computed once, before any path is judged,
+    # because every judgement below depends on it — and because the version that skipped this step refused a
+    # `cd /tmp/mfprobe && printf … > Makefile` as overwriting the tracked root `Makefile`.
+    base, moved = cd_base(tokens, cwd)
+
     # subst1.py's own invocation is the one explicit exemption: it IS a permitted route, and it
     # writes its target by design. But the exemption is conditional on the route still being the route.
     #
@@ -298,14 +342,14 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     for i, t in enumerate(tokens):
         if t in REDIRECTS and i + 1 < len(tokens):
             target = tokens[i + 1]
-            if is_tracked(target, root, cwd):
+            if is_tracked(target, root, base, moved):
                 reasons.append(
                     f"a shell redirection ({t}) would overwrite the tracked file {target!r}"
                 )
     for cmdv in simple_commands(tokens):
         if cmdv and basename(cmdv[0]) in ("tee",):
             for arg in cmdv[1:]:
-                if is_tracked(arg, root, cwd):
+                if is_tracked(arg, root, base, moved):
                     reasons.append(f"tee would overwrite the tracked file {arg!r}")
 
         # --- route 2: in-place stream editors -------------------------------------------------
@@ -313,7 +357,7 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
             inplace = any(a == "-i" or a.startswith("-i") for a in cmdv[1:])
             if inplace:
                 for arg in cmdv[1:]:
-                    if is_tracked(arg, root, cwd):
+                    if is_tracked(arg, root, base, moved):
                         reasons.append(
                             f"{basename(cmdv[0])} -i would edit the tracked file {arg!r} in place"
                         )
@@ -362,7 +406,7 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
         if not inline_present or not WRITE_OPEN.search(prog):
             continue
         lits = [m.group(1) for m in LITERAL.finditer(prog)]
-        hit = [l for l in lits if is_tracked(l, root, cwd)]
+        hit = [l for l in lits if is_tracked(l, root, base, moved)]
         if hit:
             reasons.append(
                 "an inline interpreter opens the tracked file "
@@ -370,7 +414,7 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
                 + " for writing"
             )
         elif not any(
-            is_tracked(l, root, cwd) or os.path.sep in l or "." in l for l in lits
+            is_tracked(l, root, base, moved) or os.path.sep in l or "." in l for l in lits
         ):
             # A write whose target is computed rather than written down cannot be shown to be
             # outside the subject. Exemption is by explicit path, so an unresolvable target is

@@ -249,6 +249,25 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
+			// The hook's own false positive, found when it refused its author. The bare name `Makefile`
+			// was resolved against the repo ROOT — where a tracked Makefile lives — while the command had
+			// already `cd`'d to /tmp. An over-refusing check is not the safe direction: it blocks work it
+			// was never aimed at, and a blocked actor proceeds by working around the check, which is the
+			// failure mode the whole mechanism exists to prevent.
+			name: "a_cd_outside_the_repo_makes_a_bare_name_someone_elses_file",
+			cmd:  "mkdir -p /tmp/mfprobe && cd /tmp/mfprobe && printf 'x:\\n' > Makefile",
+			deny: false,
+		},
+		{
+			// The complement that keeps the `cd` handling from becoming an escape hatch: a `cd` INTO the
+			// repo must still resolve bare names to tracked files. Without this arm, "follow the cd" could
+			// decay into "ignore relative paths" and still pass the arm above.
+			name: "a_cd_into_the_repo_still_resolves_bare_names",
+			cmd:  "cd ~/src/burroughs && echo broken > CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
 			// The known gap, pinned as a deliberate arm rather than left to be discovered: a command
 			// that cannot be tokenised is allowed, with a warning. Failing closed selectively would
 			// mean grepping the raw text, which is the defect property 21 names.
