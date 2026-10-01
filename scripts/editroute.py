@@ -57,8 +57,22 @@ the hook's stdin and never a file in the tree. The class of defect property 21 n
 cannot arise here, which is worth stating rather than assuming: it is the first check in this tree
 whose subject is not a file.
 
-The known gap, stated rather than filed
----------------------------------------
+Two known gaps, stated rather than filed
+----------------------------------------
+
+**A truncating pipe loses the landing display as surely as /dev/null does.** `subst1.py … | head -4`
+keeps the first few lines and drops the rest, and that is a form actually used in this session. Only
+the /dev/null forms are refused, because that is the shape the ruling named and because "how many
+lines are enough" has no principled answer a check could hold. Named here so the next reader can
+price it rather than assume the route is sealed.
+
+**Today the display goes to stderr, so `> /dev/null` alone does not in fact lose it.** It is refused
+anyway: which stream the display uses is an implementation detail no caller should have to track, and
+a caller who wants the command quiet is the caller who adds `2>&1` next. The refusal is about the
+intent, and saying so is better than letting a reader infer a precision the check does not have.
+
+The known gap in parsing
+------------------------
 A command `shlex` cannot tokenise at all (unbalanced quotes) is **allowed**, with a warning on
 stderr. Failing closed there would block commands whose only problem is that this hook cannot read
 them, and failing closed *selectively* would mean grepping the raw text for a tracked path — the
@@ -253,9 +267,32 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     reasons: list[str] = []
 
     # subst1.py's own invocation is the one explicit exemption: it IS a permitted route, and it
-    # writes its target by design.
+    # writes its target by design. But the exemption is conditional on the route still being the route.
+    #
+    # --- route 5: subst1.py with its output discarded --------------------------------------------
+    #
+    # The scripted route's one defence against a WRONG aim is the landing display it prints: the hunk it
+    # wrote, with context, so the site is visible at the moment of the edit. Discard that and the exemption
+    # buys a silent write — strictly worse than the inline interpreter it replaces, because it carries the
+    # authority of a permitted route.
+    #
+    # This is not hypothetical. The third misplaced anchor in one slice went in through
+    # `subst1.py … > /dev/null 2>&1 && make ci`, which silenced the display in the same command that relied
+    # on it, minutes after the display was built for exactly that purpose. A structural control caught it.
+    # The three discard forms, read from what the tokeniser actually produces rather than guessed:
+    # `> /dev/null` and `>/dev/null` give ('>', '/dev/null'); `2>/dev/null` gives ('2', '>', '/dev/null');
+    # `&> /dev/null` gives ('&>', '/dev/null'). All three are a redirection token followed immediately by
+    # /dev/null, so one test covers them, and `> /dev/null 2>&1` is caught by its first half.
     if any(basename(t) == "subst1.py" for t in tokens):
-        return []
+        if any(
+            t in REDIRECTS and i + 1 < len(tokens) and tokens[i + 1] == "/dev/null"
+            for i, t in enumerate(tokens)
+        ):
+            reasons.append(
+                "subst1.py's output is redirected to /dev/null — the landing display is the scripted "
+                "route's only defence against an anchor that is unique, present and in the wrong place"
+            )
+        return reasons
 
     # --- route 1: redirection into a tracked path, including `tee` -----------------------------
     for i, t in enumerate(tokens):

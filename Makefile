@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: ci all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
+.PHONY: ci ci-gates all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -159,7 +159,28 @@ check:
 # unreached-gate reporting as `check`, for the same reason — *an unreached gate is not a passed
 # gate* — and the corpora come first, because `strict` and `conformance` fail without them and a
 # reader should be told to vendor rather than handed 102 test failures.
+# `ci` writes its own verdict to .ci-verdict (untracked), and the TARGET writes it so no caller has to
+# remember to. A caller cannot be trusted with it: a gate chained as `make ci > log; echo rc=$$?` hands the
+# status to whatever ran last, `pipefail` does not reach a `;`, and a background task's notification carries
+# the WRAPPER's exit code. All three happened, and the last one put a commit on a branch over a red gate.
+#
+# The file records the exit code, the HEAD SHA it ran on, whether the tree was dirty, and a timestamp. The SHA
+# is what makes it a verdict about something rather than a mood: `prmerge.sh` refuses to merge unless that SHA
+# is the local tip. One consequence worth stating because it changes the working order — the gate must run on
+# the COMMITTED tree, so: commit, then `make ci`, then push, then merge. Running it before committing leaves a
+# verdict naming the parent commit, which prmerge will correctly refuse.
 ci:
+	@rc=0; $(MAKE) --no-print-directory ci-gates || rc=$$?; \
+	{ \
+		echo "exit=$$rc"; \
+		echo "sha=$$(git rev-parse HEAD 2>/dev/null || echo unknown)"; \
+		echo "dirty=$$(test -n \"$$(git status --porcelain 2>/dev/null)\" && echo yes || echo no)"; \
+		echo "when=$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+	} > .ci-verdict; \
+	echo "make ci: verdict written to .ci-verdict (exit=$$rc)"; \
+	exit $$rc
+
+ci-gates:
 	@$(MAKE) --no-print-directory spec-tests spec-ref threads-ref
 	@failed=""; \
 	for g in $(CI_GATES); do \

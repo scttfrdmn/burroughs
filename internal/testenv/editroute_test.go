@@ -57,10 +57,10 @@ func TestSubst1ShowsWhereTheEditLanded(t *testing.T) {
 		return p
 	}
 	target := write("t.txt", "line1\nline2\nANCHOR\nline4\nline5\n")
-	old := write("o.txt", "ANCHOR\n")
-	new := write("n.txt", "NEW-A\nNEW-B\n")
+	oldText := write("o.txt", "ANCHOR\n")
+	newText := write("n.txt", "NEW-A\nNEW-B\n")
 
-	cmd := exec.Command("python3", filepath.Join(root, "scripts", "subst1.py"), target, old, new)
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "subst1.py"), target, oldText, newText)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -134,6 +134,34 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			name: "subst1_is_a_permitted_route",
 			cmd:  "python3 scripts/subst1.py scripts/ciwatch.sh /tmp/old /tmp/new",
 			deny: false,
+		},
+		{
+			// The exemption is conditional on the route still BEING the route. The scripted path's one
+			// defence against a wrong aim is the landing display; discard it and the exemption buys a
+			// silent write that carries the authority of a permitted route — strictly worse than the
+			// inline interpreter it replaces. This exact command put the third misplaced anchor of one
+			// slice into CHANGELOG.md, minutes after the display was built to prevent it.
+			name:   "subst1_with_its_output_discarded_is_refused",
+			cmd:    "python3 scripts/subst1.py CHANGELOG.md /tmp/old /tmp/new > /dev/null 2>&1 && make ci",
+			deny:   true,
+			want:   "landing display",
+			routes: []string{"subst1.py"},
+		},
+		{
+			// The allow arm that makes the discard test load-bearing: same route, same target, output
+			// left visible. Without it, "refuse subst1.py near /dev/null" could decay into refusing the
+			// route altogether and still pass the deny arm.
+			name: "subst1_with_its_output_visible_is_still_permitted",
+			cmd:  "python3 scripts/subst1.py CHANGELOG.md /tmp/old /tmp/new && make ci",
+			deny: false,
+		},
+		{
+			// stderr alone, since that is where the display actually goes.
+			name:   "subst1_with_stderr_discarded_is_refused",
+			cmd:    "python3 scripts/subst1.py CHANGELOG.md /tmp/old /tmp/new 2>/dev/null",
+			deny:   true,
+			want:   "landing display",
+			routes: []string{"subst1.py"},
 		},
 		{
 			// Reading a tracked file inline is most of what inline python is for.

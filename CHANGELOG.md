@@ -220,6 +220,31 @@ own condition rather than as a prediction.
 
 ### Changed
 
+- **`scripts/subst1.py` prints where the edit landed** — the written hunk with four lines of context
+  either side, marking the written lines, with the file's own line numbers. The helper already refused
+  0 matches, >1 matches, and a no-op replacement, all of which are *missed* anchors; none of them can
+  see an anchor that is unique, present, and in the **wrong place**, which happened **three times** in
+  one slice. It is a complement and not a safeguard, and the slice proved both halves of that: the
+  real check on a wrong aim is a structural oracle over the destination — `TestChangelogGroupsAre-
+  Canonical` caught the second and third — and the display cannot help a caller who discards it,
+  which is how the third got in. That edit was run as `subst1.py … > /dev/null 2>&1 && make ci`,
+  silencing the landing display in the same command that relied on it.
+- **`make ci` writes its own verdict, and `prmerge.sh` refuses to merge without a green one for the
+  exact commit.** `make ci` writes `.ci-verdict` (untracked) with the exit code, the HEAD SHA it ran
+  on, whether the tree was dirty, and a timestamp — the **target** writes it, so no caller has to
+  remember to. A shell's return code could not carry it: chaining with `;` hands the status to
+  whatever ran last, `pipefail` does not reach across a `;`, and a background task's notification
+  carries the **wrapper's** exit code. The third put a commit on a branch over a red gate with
+  `ci rc=2` sitting unread in the output file. `prmerge.sh` now refuses unless the file exists, its
+  SHA is the local tip, the tree was clean, and the exit is 0 — **the SHA is the load-bearing field**,
+  because without it a green from three commits ago reads exactly like a green from this one. One
+  consequence changes the working order: the gate must run on the **committed** tree, so it is
+  commit, then `make ci`, then push, then merge.
+- **The hook refuses `subst1.py` with its output discarded.** The scripted route's only defence
+  against a wrong aim is the landing display, so redirecting it to `/dev/null` turns a permitted
+  route into a silent write carrying the authority of a permitted one — strictly worse than the
+  inline interpreter it replaces. Not hypothetical: `subst1.py … > /dev/null 2>&1 && make ci` is how
+  the third misplaced anchor got in, minutes after the display was built to prevent it.
 - **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed
   `os.Environ()` — every variable the process held, credentials included — into a sandbox whose
   documented model (ADR 0083) is that nothing is visible unless named
@@ -308,15 +333,6 @@ own condition rather than as a prediction.
   the per-run JSON instead of impersonating it; a `conclusion` key is deliberately absent, because
   the honest reason a reader cannot have one is that no run holds it.
 
-### Changed
-
-- **`scripts/subst1.py` prints where the edit landed** — the written hunk with four lines of context
-  either side, marking the written lines. The helper already refused 0 matches, >1 matches, and a
-  no-op replacement, all of which are *missed* anchors; none of them can see an anchor that is
-  unique, present, and in the **wrong place**, which happened twice in one slice. This makes the aim
-  visible at the moment of the edit rather than leaving it for something downstream, and it is a
-  complement rather than a safeguard: the real check on a wrong aim is a structural oracle over the
-  destination, which is what caught the second of the two.
 - **`--dir` accepted two guest-path forms that can never map, and said nothing**
   ([#828](https://github.com/scttfrdmn/burroughs/issues/828),
   [#827](https://github.com/scttfrdmn/burroughs/issues/827)). Burroughs' separator is ONE colon and
