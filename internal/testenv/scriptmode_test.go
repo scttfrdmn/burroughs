@@ -128,19 +128,38 @@ func TestEveryTrackedScriptIsExecutableInTheIndex(t *testing.T) {
 // `TestEveryTrackedScriptIsExecutableInTheIndex` — and the SHA had moved, which is the only reason it was
 // caught.
 //
-// # Why `make -n`
+// # Why `make -n`, and why it must be pointed somewhere else
 //
 // The ordering was asserted only by reading the Makefile, and a reordering would have been invisible.
 // `make -n` prints the recipe without running the gates, so the order is checkable in milliseconds rather
 // than in a full `make ci`. It is the recipe's *text* in execution order, which is exactly the subject —
 // this is not a claim that the gates pass.
+//
+// **But `-n` does not mean nothing runs.** GNU make executes any recipe line containing `$(MAKE)` even under
+// `-n`, passing `-n` down, so that a dry run can see into sub-makes. `ci`'s recipe is one continued line
+// containing `$(MAKE)` — so the first version of this test ran `civerdict.sh` for real, and because the
+// recursive dry run "succeeded" it wrote `exit=0` with the current SHA and `dirty=no`.
+//
+// That is a **forged green**: `prmerge.sh` accepts exactly that file, so merely running `go test
+// ./internal/testenv/` was enough to manufacture a verdict the merge helper trusts. Reproduced deliberately
+// before fixing — delete the file, run only this test, and the verdict reappears.
+//
+// So the dry run is pointed at a temp path through `CI_VERDICT`, and the arm below asserts the real file is
+// **untouched** by this test's own run. A control that fabricates the evidence its consumer reads is worse
+// than the gap it was closing.
 func TestCIRemovesItsVerdictBeforeRunningTheGates(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("make", "-n", "ci")
+	// The real verdict's state before this test touches anything, so the no-side-effect property is a
+	// measurement rather than a hope. Absence is a state too, and the common one.
+	realPath := filepath.Join(root, ".ci-verdict")
+	realBefore, realBeforeErr := os.ReadFile(realPath)
+
+	tmpVerdict := filepath.Join(t.TempDir(), "dryrun-verdict")
+	cmd := exec.Command("make", "-n", "ci", "CI_VERDICT="+tmpVerdict)
 	cmd.Dir = root
 	// MAKEFLAGS is cleared so an ambient value from a parent `make` (this test can run under `make ci`
 	// itself) cannot change what -n prints.
@@ -151,12 +170,27 @@ func TestCIRemovesItsVerdictBeforeRunningTheGates(t *testing.T) {
 	}
 	text := string(printed)
 
-	idxRemove := strings.Index(text, "rm -f .ci-verdict")
+	realAfter, realAfterErr := os.ReadFile(realPath)
+	switch {
+	case realBeforeErr != nil && realAfterErr == nil:
+		t.Errorf("this test CREATED %s:\n%s\n\nA dry run must not write the verdict prmerge.sh reads — "+
+			"that is a forged green, and `-n` does not stop a recipe line containing $(MAKE).",
+			realPath, realAfter)
+	case realBeforeErr == nil && realAfterErr != nil:
+		t.Errorf("this test DELETED %s, which was %q", realPath, realBefore)
+	case realBeforeErr == nil && realAfterErr == nil && !bytes.Equal(realBefore, realAfter):
+		t.Errorf("this test REWROTE %s\n  before: %q\n  after:  %q", realPath, realBefore, realAfter)
+	}
+
+	// The assertions below are about the path the recipe was told to use, so they follow the variable
+	// rather than the literal — a literal `.ci-verdict` here would stop matching the moment it is
+	// parameterised, and pass by finding nothing to complain about.
+	idxRemove := strings.Index(text, "rm -f "+tmpVerdict)
 	idxWrite := strings.Index(text, "civerdict.sh")
 	idxGates := strings.Index(text, "ci-gates")
 
 	if idxRemove < 0 {
-		t.Fatalf("`make ci` does not remove .ci-verdict at all. Without it, a run that dies before "+
+		t.Fatalf("`make ci` does not remove the verdict at all. Without it, a run that dies before "+
 			"writing leaves the PREVIOUS verdict on disk, and prmerge.sh can only catch that when the SHA "+
 			"has moved:\n%s", text)
 	}

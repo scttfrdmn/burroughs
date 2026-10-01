@@ -180,10 +180,19 @@ check:
 # failed and the previous run's verdict stayed on disk — a file reading `exit=2 sha=<older commit>` which
 # `prmerge.sh` happened to refuse only because the SHA had moved. Had the SHA matched, a dead writer would
 # have been indistinguishable from a live green. Absence is a state prmerge already refuses by name.
+# **`CI_VERDICT` is a variable so a DRY RUN cannot write the real verdict**, which it otherwise does.
+# GNU make executes any recipe line containing `$(MAKE)` even under `-n`, passing `-n` down — and this whole
+# recipe is one continued line containing `$(MAKE)`, so `make -n ci` ran `civerdict.sh` for real. The
+# recursive dry run "succeeded", so it wrote `exit=0` with the current SHA and `dirty=no`: a **forged green**
+# that `prmerge.sh` accepts, produced by merely running the test that asserts this ordering.
+# `TestCIRemovesItsVerdictBeforeRunningTheGates` now passes `CI_VERDICT=<tmp>` and asserts the real file is
+# untouched by its own run.
+CI_VERDICT ?= .ci-verdict
+
 ci:
-	@rm -f .ci-verdict
+	@rm -f $(CI_VERDICT)
 	@rc=0; $(MAKE) --no-print-directory ci-gates || rc=$$?; \
-	scripts/civerdict.sh $$rc; \
+	scripts/civerdict.sh $$rc $(CI_VERDICT); \
 	exit $$rc
 
 ci-gates:

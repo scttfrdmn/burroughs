@@ -240,6 +240,15 @@ own condition rather than as a prediction.
   because without it a green from three commits ago reads exactly like a green from this one. One
   consequence changes the working order: the gate must run on the **committed** tree, so it is
   commit, then `make ci`, then push, then merge.
+- **A dry run was forging a green verdict.** GNU make executes any recipe line containing
+  `$(MAKE)` **even under `-n`**, passing `-n` down so a dry run can see into sub-makes. `ci`'s recipe
+  is one continued line containing `$(MAKE)`, so the first `make -n ci` ordering check ran
+  `civerdict.sh` for real — and because the recursive dry run "succeeded" it wrote `exit=0` with the
+  current SHA and `dirty=no`, which is precisely the file `prmerge.sh` accepts. **Merely running
+  `go test ./internal/testenv/` manufactured a verdict the merge helper trusts.** Reproduced
+  deliberately before fixing. The verdict path is now a `CI_VERDICT` variable, the check points its
+  dry run at a temp file, and it asserts the real `.ci-verdict` is untouched by its own run — created,
+  deleted, or rewritten all fail, and absence is treated as a state rather than as nothing.
 - **Two checks protecting the verdict mechanism itself.** `TestCIRemovesItsVerdictBeforeRunning-
   TheGates` drives `make -n ci` — the recipe's text in execution order, no gate run — and asserts the
   `rm -f .ci-verdict` precedes both the gate run and the write, because **absence is a state
