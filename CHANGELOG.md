@@ -298,6 +298,15 @@ own condition rather than as a prediction.
   and the predicate excludes `skipped` alone. Witnessed by a fourth arm that must fail as
   *unfinished* and never as *"no run ran them"* — both are non-zero, so the exit code cannot tell
   this arm's pass from its failure.
+- **The verdict file said `"conclusion": "failure"` beside a GREEN.** It was a copy of the chosen
+  tree run's JSON, and once the two classes can come from different runs **no single run's
+  conclusion is the verdict** — the first green under the repaired selection had a tree run whose six
+  tree jobs all passed and whose `citations` job had failed against a body that no longer existed.
+  The standing rule for reading a CI result is *read the verdict file's status field*, so the file
+  would have returned the opposite of the truth to the one reader it exists for. It now states what
+  the script decided (`ciwatch_verdict`), names the run that answered for each class, and points at
+  the per-run JSON instead of impersonating it; a `conclusion` key is deliberately absent, because
+  the honest reason a reader cannot have one is that no run holds it.
 - **`--dir` accepted two guest-path forms that can never map, and said nothing**
   ([#828](https://github.com/scttfrdmn/burroughs/issues/828),
   [#827](https://github.com/scttfrdmn/burroughs/issues/827)). Burroughs' separator is ONE colon and

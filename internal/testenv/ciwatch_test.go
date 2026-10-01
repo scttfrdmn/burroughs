@@ -3,6 +3,7 @@
 package testenv_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -106,6 +107,30 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		if !strings.Contains(out, "tree-subject verdict from run 1") ||
 			!strings.Contains(out, "body-subject from run 2") {
 			t.Errorf("the log does not name which run answered for which class:\n%s", out)
+		}
+
+		// The verdict FILE must agree with the verdict. This arm exists because the file used to be a copy
+		// of the chosen tree run's JSON, and run 1 here concludes `failure` — its citations job failed
+		// against a body that no longer exists. So the file said `"conclusion": "failure"` beside a GREEN,
+		// and the standing rule for reading a CI result is *read the verdict file's status field*, which
+		// would have returned the opposite of the truth to the one reader the file exists for.
+		raw, err := os.ReadFile(filepath.Join(dir, "out.verdict"))
+		if err != nil {
+			t.Fatalf("no verdict file was written: %v", err)
+		}
+		var v map[string]any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			t.Fatalf("the verdict file is not JSON, so it cannot be read by the tool that needs it: %v\n%s",
+				err, raw)
+		}
+		if v["ciwatch_verdict"] != "green" {
+			t.Errorf("verdict file says %v, want green: %s", v["ciwatch_verdict"], raw)
+		}
+		// And it must not carry a run's conclusion under a name a reader would reach for, because the
+		// whole point is that no single run holds one.
+		if _, present := v["conclusion"]; present {
+			t.Errorf("the verdict file carries a `conclusion` key — a reader will take it for the verdict, "+
+				"and since the two-class split no single run's conclusion is one:\n%s", raw)
 		}
 	})
 
