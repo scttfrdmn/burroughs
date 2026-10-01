@@ -13,6 +13,110 @@ import (
 	"testing"
 )
 
+// TestCIVerdictRecordsTheTreeItActuallyRanOn witnesses the PRODUCER of `.ci-verdict`.
+//
+// # Why this exists separately from the consumer's witness
+//
+// The consumer's witness below went green against hand-written fixture files while the real producer was
+// broken. The verdict was first written inline in the Makefile, where a double-quoted recipe line passes
+// *literal* backslash-quote characters into `test -n` — a non-empty string — so `dirty` was **always** `yes`.
+// `prmerge.sh` would have refused every merge, and a check that always refuses gets deleted rather than
+// debugged. The defect was found by reading a real `.ci-verdict` that said `dirty=yes` on a clean tree.
+//
+// **A control that tests the helper is not testing the path.** Fixtures prove the consumer reads fields; only
+// running the producer proves the fields are true. That is also why the writing moved out of the Makefile: a
+// recipe cannot be driven from a witness with a controlled tree state, and a script can.
+func TestCIVerdictRecordsTheTreeItActuallyRanOn(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "scripts", "civerdict.sh")
+	if _, err := os.Stat(script); err != nil {
+		t.Fatalf("civerdict.sh is missing, so this witness has no subject: %v", err)
+	}
+
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", args...)
+		c.Dir = repo
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	git("config", "user.email", "witness@example.invalid")
+	git("config", "user.name", "witness")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+
+	headOut, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headOut))
+
+	write := func(rc string) map[string]string {
+		t.Helper()
+		out := filepath.Join(t.TempDir(), "v")
+		c := exec.Command("bash", script, rc, out)
+		c.Dir = repo
+		if combined, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("civerdict.sh %s: %v\n%s", rc, err, combined)
+		}
+		raw, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields := map[string]string{}
+		for _, ln := range strings.Split(string(raw), "\n") {
+			if k, v, ok := strings.Cut(ln, "="); ok {
+				fields[k] = v
+			}
+		}
+		return fields
+	}
+
+	t.Run("a_clean_tree_records_dirty_no", func(t *testing.T) {
+		got := write("0")
+		// This is the arm the Makefile version failed, and it failed by always reporting the SAFE-SOUNDING
+		// value — `yes` — which is why nothing downstream looked wrong until a merge was attempted.
+		if got["dirty"] != "no" {
+			t.Errorf("dirty=%q on a clean tree, want no: prmerge refuses a dirty verdict, so an always-yes\n"+
+				"writer refuses every merge: %v", got["dirty"], got)
+		}
+		if got["exit"] != "0" {
+			t.Errorf("exit=%q, want 0: %v", got["exit"], got)
+		}
+		if got["sha"] != head {
+			t.Errorf("sha=%q, want the repo's HEAD %q — the SHA is what makes the file a verdict about\n"+
+				"something rather than a mood", got["sha"], head)
+		}
+		if got["when"] == "" {
+			t.Errorf("no timestamp recorded: %v", got)
+		}
+	})
+
+	t.Run("a_dirty_tree_records_dirty_yes", func(t *testing.T) {
+		// The complement, without which the arm above is satisfied by a writer hard-coding `no` — which is
+		// the same defect as hard-coding `yes`, pointed the other way and far more dangerous.
+		if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := write("0")
+		if got["dirty"] != "yes" {
+			t.Errorf("dirty=%q with an untracked file present, want yes: a gate that passed with "+
+				"uncommitted work says nothing about the commit without it: %v", got["dirty"], got)
+		}
+	})
+
+	t.Run("a_nonzero_code_is_recorded_as_given", func(t *testing.T) {
+		if got := write("2"); got["exit"] != "2" {
+			t.Errorf("exit=%q, want 2: %v", got["exit"], got)
+		}
+	})
+}
+
 // TestPrmergeRefusesWithoutAGreenLocalVerdictForThisCommit witnesses the gate-verdict check in
 // `scripts/prmerge.sh`.
 //
@@ -74,7 +178,7 @@ func TestPrmergeRefusesWithoutAGreenLocalVerdictForThisCommit(t *testing.T) {
 	// reached, and nothing can merge because the stub cannot.
 	stub := t.TempDir()
 	ghStub := `#!/usr/bin/env bash
-# A stub `+"`gh`"+`: answers the one query prmerge makes before the verdict block, and REFUSES to merge.
+# A stub ` + "`gh`" + `: answers the one query prmerge makes before the verdict block, and REFUSES to merge.
 # If a check under test ever stops firing, the stub is what turns that into a loud failure instead of a
 # real merge — a witness for an irreversible step must not be able to perform it.
 if [ "$2" = "pr" ] || [ "$1" = "pr" ]; then

@@ -169,15 +169,15 @@ check:
 # is the local tip. One consequence worth stating because it changes the working order — the gate must run on
 # the COMMITTED tree, so: commit, then `make ci`, then push, then merge. Running it before committing leaves a
 # verdict naming the parent commit, which prmerge will correctly refuse.
+# The writing is in `scripts/civerdict.sh` and NOT inline here, because inline it was wrong in a way worse
+# than having no check at all: a double-quoted recipe line passes literal backslash-quotes into `test -n`,
+# which is a non-empty string, so `dirty` was always `yes` and `prmerge.sh` would have refused every merge.
+# A recipe carries two escaping layers; a script carries one. The script is also drivable from a witness with
+# a controlled tree state, which a recipe is not — and the consumer's witness had already gone green against
+# hand-written fixtures while this producer was broken.
 ci:
 	@rc=0; $(MAKE) --no-print-directory ci-gates || rc=$$?; \
-	{ \
-		echo "exit=$$rc"; \
-		echo "sha=$$(git rev-parse HEAD 2>/dev/null || echo unknown)"; \
-		echo "dirty=$$(test -n \"$$(git status --porcelain 2>/dev/null)\" && echo yes || echo no)"; \
-		echo "when=$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
-	} > .ci-verdict; \
-	echo "make ci: verdict written to .ci-verdict (exit=$$rc)"; \
+	scripts/civerdict.sh $$rc; \
 	exit $$rc
 
 ci-gates:
