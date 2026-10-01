@@ -97,7 +97,39 @@ def main(argv: list[str]) -> int:
     with open(target, "w", encoding="utf-8") as fh:
         fh.write(out)
     print(f"subst1: replaced 1 occurrence in {target}", file=sys.stderr)
+    show_landing(out, body.index(old), new, file=sys.stderr)
     return 0
+
+
+def show_landing(out: str, offset: int, new: str, *, context: int = 4, file=sys.stderr) -> None:
+    """Print the replaced hunk with surrounding lines, so the AIM is visible without a second read.
+
+    Why this is here
+    ----------------
+    Everything above protects against a *missed* anchor: zero matches, several matches, a rewrite that
+    changes nothing. None of it can see an anchor that is unique, present, and **in the wrong place**. Two
+    edits in one slice landed exactly that way — one put a `### Added` inside a release's prose, the other
+    put a `### Fixed` before the `### Added` it belongs after — and both printed ``replaced 1 occurrence``
+    truthfully on the way.
+
+    This does not prevent either. It makes them *visible at the moment they happen* rather than leaving
+    them for something downstream to find. **The real check on a wrong aim is a structural oracle over the
+    destination** — the second of those two was caught by a changelog control that knows Keep a Changelog's
+    group order, which is a thing no general-purpose edit helper can know. So: this is the cheap complement,
+    not the safeguard.
+    """
+    lines = out.split("\n")
+    start = out.count("\n", 0, offset) + 1
+    end = start + new.count("\n")
+    lo = max(1, start - context)
+    hi = min(len(lines), end + context)
+    width = len(str(hi))
+    print(f"subst1: it landed at line{'s' if end > start else ''} {start}"
+          f"{f'-{end}' if end > start else ''} — context below, `>` marks what was written:",
+          file=file)
+    for n in range(lo, hi + 1):
+        mark = ">" if start <= n <= end else " "
+        print(f"  {mark} {n:>{width}} | {lines[n - 1]}", file=file)
 
 
 if __name__ == "__main__":

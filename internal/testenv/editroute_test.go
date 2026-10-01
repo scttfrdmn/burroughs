@@ -34,6 +34,58 @@ import (
 //
 // The `allow` arms carry as much weight as the `deny` arms, for the reason a refusal-only witness
 // cannot check its aim: a hook that denied everything would pass every deny arm and be unusable.
+// TestSubst1ShowsWhereTheEditLanded covers the other half of the edit route: the permitted scripted path
+// prints the hunk it wrote, with context, so the AIM is visible at the moment of the edit.
+//
+// This is deliberately NOT a safeguard, and the test says so because the script does. `subst1.py` already
+// refuses 0 matches, >1 matches, and a no-op replacement — all of which are *missed* anchors. None of them
+// can see an anchor that is unique, present, and in the wrong place, which happened twice in one slice. The
+// real check on a wrong aim is a structural oracle over the destination: the second of those two was caught
+// by `TestChangelogGroupsAreCanonical`, which knows Keep a Changelog's group order — a thing no
+// general-purpose edit helper can know. So this asserts visibility, not protection.
+func TestSubst1ShowsWhereTheEditLanded(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	target := write("t.txt", "line1\nline2\nANCHOR\nline4\nline5\n")
+	old := write("o.txt", "ANCHOR\n")
+	new := write("n.txt", "NEW-A\nNEW-B\n")
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "subst1.py"), target, old, new)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("subst1 failed: %v\n%s", err, stderr.String())
+	}
+	got := stderr.String()
+
+	// The line numbers must be REAL, not a count of the replacement: the anchor is on line 3 and the
+	// replacement is two lines, so it occupies 3-4 of the file as written.
+	if !strings.Contains(got, "landed at lines 3-4") {
+		t.Errorf("the output does not name the lines the edit occupies:\n%s", got)
+	}
+	// Both written lines marked, and context on BOTH sides — a hunk shown with only what follows it cannot
+	// tell you that you landed after the wrong heading.
+	for _, want := range []string{"> 3 | NEW-A", "> 4 | NEW-B", "  1 | line1", "  5 | line4"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q from the landing display:\n%s", want, got)
+		}
+	}
+	// And the marker must DISCRIMINATE: an unmarked context line proves the `>` is not on everything.
+	if strings.Contains(got, "> 1 | line1") {
+		t.Errorf("a context line is marked as written, so the marker says nothing:\n%s", got)
+	}
+}
+
 func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 	// Absolute, because the hook is handed a `cwd` and a `CLAUDE_PROJECT_DIR` and must resolve a
 	// command's relative paths against them — `../..` would be resolved against the wrong base.
@@ -62,7 +114,12 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 		deny bool
 		// want is a phrase the refusal must contain, so an arm cannot pass on the wrong reason.
 		want string
+		// routes names what the refusal must offer instead. Per-arm rather than global, because the two
+		// subjects need different guidance and **a refusal that names the wrong route is worse than one
+		// that names none**: it sends the reader to a tool that cannot help. Defaults to the edit routes.
+		routes []string
 	}
+	editRoutes := []string{"editor tool", "subst1.py"}
 	arms := []arm{
 		{
 			// The campaign's own defect, verbatim in shape.
@@ -140,6 +197,30 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
+			// Behaviour 5: a duration is not a signal. This slipped more than once in the session that
+			// built the hook, including inside the slice itself.
+			name:   "a_bare_sleep_is_the_wait_and_is_refused",
+			cmd:    "sleep 240; tail -3 /tmp/ci.log",
+			deny:   true,
+			want:   "a duration is not a signal",
+			routes: []string{"detach.sh", "ciwatch.sh", "run_in_background"},
+		},
+		{
+			// The route the ruling names as allowed must SURVIVE the refusal, and this arm is what makes
+			// the loop-depth discriminator load-bearing rather than incidental: the word `sleep` is present
+			// in both arms, so anything matching the word refuses the correct pattern too.
+			name: "a_sleep_polling_a_live_process_is_a_wait_on_a_signal",
+			cmd:  "while kill -0 53907 2>/dev/null; do sleep 20; done; tail -8 /tmp/w.log",
+			deny: false,
+		},
+		{
+			// `sleep` inside a committed script is untouched, because the hook never sees past the command
+			// line. Stated as an arm so the boundary is asserted rather than merely true today.
+			name: "a_script_that_sleeps_internally_is_not_the_subject",
+			cmd:  "bash scripts/detach.sh /tmp/x.stamp 60 -- echo hi",
+			deny: false,
+		},
+		{
 			// The known gap, pinned as a deliberate arm rather than left to be discovered: a command
 			// that cannot be tokenised is allowed, with a warning. Failing closed selectively would
 			// mean grepping the raw text, which is the defect property 21 names.
@@ -194,7 +275,11 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			if a.deny {
 				// A refusal that does not say what to do instead teaches working around the check
 				// rather than through it.
-				for _, route := range []string{"editor tool", "subst1.py"} {
+				want := a.routes
+				if want == nil {
+					want = editRoutes
+				}
+				for _, route := range want {
 					if !strings.Contains(stderr.String(), route) {
 						t.Errorf("the refusal does not name the %q route: %s", route, stderr.String())
 					}

@@ -200,6 +200,20 @@ def lift_heredocs(cmd: str) -> tuple[str, list[str]]:
 SEPARATORS = {";", "|", "||", "&&", "&", "\n", "(", ")", "{", "}"}
 REDIRECTS = {">", ">>", "1>", "2>", "&>", ">|"}
 
+# Words that may precede a simple command's actual command word. `shlex` gives these as plain
+# tokens, so finding the command word means stepping over them.
+SHELL_KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "for", "!", "time", "nohup"}
+
+WAIT_ROUTES = (
+    "    - scripts/detach.sh, which records its pid and process group before starting and bounds\n"
+    "      the run four ways; then wait on that process, e.g.\n"
+    "        while kill -0 \"$pid\" 2>/dev/null; do sleep 20; done\n"
+    "      whose `sleep` is the poll interval of a wait on a real signal, not the wait itself; or\n"
+    "    - scripts/ciwatch.sh, which resolves the run by SHA and asserts the required jobs RAN; or\n"
+    "    - run_in_background, and read the harness notification — but read the VERDICT from the\n"
+    "      run or the output file, because a notification's exit code is the wrapper's.\n"
+)
+
 
 def tokenize(text: str) -> list[str] | None:
     lex = shlex.shlex(text, posix=True, punctuation_chars=True)
@@ -267,6 +281,34 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
                             f"{basename(cmdv[0])} -i would edit the tracked file {arg!r} in place"
                         )
 
+    # --- route 4: `sleep` used as a wait --------------------------------------------------------
+    #
+    # Behaviour 5: wait on the verdict, never on a timer. This slipped more than once in one session,
+    # including inside the slice that built this hook — which is the same shape as everything else here, a
+    # rule recitable and broken at the moment acting was cheaper than remembering.
+    #
+    # The discriminator is LOOP DEPTH, not the word. `while kill -0 "$pid"; do sleep 20; done` is waiting on
+    # the process — a named allowed route — and its `sleep` is the poll interval of a wait on a real signal.
+    # A bare `sleep 240` at top level is the timer itself. So depth is tracked across the token stream and
+    # only a depth-0 `sleep` is refused, which also means a `sleep` inside a committed script is untouched:
+    # the hook never sees past the command line.
+    depth = 0
+    for cmdv in simple_commands(tokens):
+        head = 0
+        while head < len(cmdv) and cmdv[head] in SHELL_KEYWORDS:
+            head += 1
+        word = basename(cmdv[head]) if head < len(cmdv) else ""
+        if word == "sleep" and depth == 0:
+            reasons.append(
+                "`sleep` is being used as the wait, at the top level of the command — a duration is not a "
+                "signal, and the signal being waited for already exists"
+            )
+        for w in cmdv:
+            if w in ("while", "until", "for"):
+                depth += 1
+            elif w == "done":
+                depth = max(0, depth - 1)
+
     # --- route 3: an inline interpreter that opens a file for writing ---------------------------
     programs: list[str] = list(bodies)
     for cmdv in simple_commands(tokens):
@@ -320,19 +362,31 @@ def main() -> int:
     if not reasons:
         return 0
 
-    print(
-        "editroute: REFUSED — a tracked file must not be edited from a Bash command.\n\n"
-        + "".join(f"  * {r}\n" for r in reasons)
-        + "\n  This is enforced because the rule was broken in all 8 writes to one script in one\n"
-        "  campaign, and the eighth lost an edit whose mechanism could not afterwards be\n"
-        "  determined: a write whose success is never read back leaves no evidence of its own\n"
-        "  failure, and `bash -n` cannot see an absence.\n\n"
-        "  Use one of the two loud routes:\n"
-        + ALLOWED_ROUTES
-        + "\n  Creating a NEW file this way is fine and is not what was refused — the defect is a\n"
-        "  silent no-op on a missed anchor, which requires the file to already exist.\n",
-        file=sys.stderr,
-    )
+    # The two subjects get their own guidance, because a refusal that names the wrong route is worse
+    # than one that names none: it sends the reader to a tool that cannot help.
+    sleeping = [r for r in reasons if r.startswith("`sleep`")]
+    editing = [r for r in reasons if not r.startswith("`sleep`")]
+
+    msg = "editroute: REFUSED.\n\n" + "".join(f"  * {r}\n" for r in reasons) + "\n"
+    if editing:
+        msg += (
+            "  A tracked file must not be edited from a Bash command. This is enforced because the\n"
+            "  rule was broken in all 8 writes to one script in one campaign, and the eighth lost an\n"
+            "  edit whose mechanism could not afterwards be determined: a write whose success is never\n"
+            "  read back leaves no evidence of its own failure, and `bash -n` cannot see an absence.\n\n"
+            "  Use one of the two loud routes:\n"
+            + ALLOWED_ROUTES
+            + "\n  Creating a NEW file this way is fine and is not what was refused — the defect is a\n"
+            "  silent no-op on a missed anchor, which requires the file to already exist.\n\n"
+        )
+    if sleeping:
+        msg += (
+            "  Wait on the verdict, never on a timer. Use one of:\n"
+            + WAIT_ROUTES
+            + "\n  A `sleep` inside a loop that tests a real condition is NOT refused — only a `sleep`\n"
+            "  standing on its own as the wait is.\n"
+        )
+    print(msg, file=sys.stderr)
     return 2
 
 

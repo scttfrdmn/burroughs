@@ -307,6 +307,16 @@ own condition rather than as a prediction.
   the script decided (`ciwatch_verdict`), names the run that answered for each class, and points at
   the per-run JSON instead of impersonating it; a `conclusion` key is deliberately absent, because
   the honest reason a reader cannot have one is that no run holds it.
+
+### Changed
+
+- **`scripts/subst1.py` prints where the edit landed** — the written hunk with four lines of context
+  either side, marking the written lines. The helper already refused 0 matches, >1 matches, and a
+  no-op replacement, all of which are *missed* anchors; none of them can see an anchor that is
+  unique, present, and in the **wrong place**, which happened twice in one slice. This makes the aim
+  visible at the moment of the edit rather than leaving it for something downstream, and it is a
+  complement rather than a safeguard: the real check on a wrong aim is a structural oracle over the
+  destination, which is what caught the second of the two.
 - **`--dir` accepted two guest-path forms that can never map, and said nothing**
   ([#828](https://github.com/scttfrdmn/burroughs/issues/828),
   [#827](https://github.com/scttfrdmn/burroughs/issues/827)). Burroughs' separator is ONE colon and
