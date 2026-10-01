@@ -174,13 +174,18 @@ own condition rather than as a prediction.
   density question ADR 0048 settled on a corpus of tiny modules. **No flip is proposed here**; the criterion is
   pre-registered on the issue and the flip is its own PR holding for a stamp.
 
-- **BREAKING (engine default): branch targets are resolved by a per-body table built on first entry, not by
+- **Changed (engine default): branch targets are resolved by a per-body table built on first entry, not by
   a scan on every block entry** ([#835](https://github.com/scttfrdmn/burroughs/issues/835),
   [ADR 0048](docs/decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)'s
   2026-09-30 section). **Stamped by Scott.** The previous mechanism made every `block`/`loop`/`if` entry
   O(body length), so cost grew with iteration count times body size: `runtime`'s `TestSelectStress` and
   `TestChan` **did not finish in 300 s** and now take 19.85 s and 12.62 s; `TestSelfSelect` goes 127.59 s →
   1.58 s.
+  - **What moves and what does not**, stated because the label was first written as *BREAKING* and that was
+    wrong: **speed and a small amount of memory move.** No API changes, no semantics change, and **no results
+    change** — the spec board is identical on the default build and under every lane tag
+    (`60957/0/0/4187`). A guest computes the same answers; it computes them faster. Nothing here justifies a
+    major version.
   - **Not a reversal of [#136](https://github.com/scttfrdmn/burroughs/issues/136)**, which declined a
     *different* mechanism against a **≥5%** bar on `Coupled/*/arith`. That decline stands on its own
     population; this is a complexity class, which no percentage bar was built to measure.
