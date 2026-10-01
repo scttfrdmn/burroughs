@@ -32,8 +32,8 @@ func TestCIVerdictRecordsTheTreeItActuallyRanOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := filepath.Join(root, "scripts", "civerdict.sh")
-	if _, err := os.Stat(script); err != nil {
-		t.Fatalf("civerdict.sh is missing, so this witness has no subject: %v", err)
+	if _, statErr := os.Stat(script); statErr != nil {
+		t.Fatalf("civerdict.sh is missing, so this witness has no subject: %v", statErr)
 	}
 
 	repo := t.TempDir()
@@ -41,8 +41,8 @@ func TestCIVerdictRecordsTheTreeItActuallyRanOn(t *testing.T) {
 		t.Helper()
 		c := exec.Command("git", args...)
 		c.Dir = repo
-		if out, err := c.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
+		if out, gitErr := c.CombinedOutput(); gitErr != nil {
+			t.Fatalf("git %v: %v\n%s", args, gitErr, out)
 		}
 	}
 	git("init", "-q", "-b", "main")
@@ -146,8 +146,8 @@ func TestPrmergeRefusesWithoutAGreenLocalVerdictForThisCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := filepath.Join(root, "scripts", "prmerge.sh")
-	if _, err := os.Stat(script); err != nil {
-		t.Fatalf("prmerge.sh is missing, so this witness has no subject: %v", err)
+	if _, statErr := os.Stat(script); statErr != nil {
+		t.Fatalf("prmerge.sh is missing, so this witness has no subject: %v", statErr)
 	}
 
 	// A dedicated repo, because the subject is the verdict block and the tree's state must not decide the
@@ -163,8 +163,8 @@ func TestPrmergeRefusesWithoutAGreenLocalVerdictForThisCommit(t *testing.T) {
 	} {
 		c := exec.Command("git", args...)
 		c.Dir = repo
-		if out, err := c.CombinedOutput(); err != nil {
-			t.Fatalf("git %v in the temp repo: %v\n%s", args, err, out)
+		if out, gitErr := c.CombinedOutput(); gitErr != nil {
+			t.Fatalf("git %v in the temp repo: %v\n%s", args, gitErr, out)
 		}
 	}
 	tip, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()

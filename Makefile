@@ -175,7 +175,13 @@ check:
 # A recipe carries two escaping layers; a script carries one. The script is also drivable from a witness with
 # a controlled tree state, which a recipe is not — and the consumer's witness had already gone green against
 # hand-written fixtures while this producer was broken.
+# The file is REMOVED first, so a run that dies before writing it leaves **absence rather than staleness**.
+# That distinction was earned: when `civerdict.sh` was first called without its executable bit, the write
+# failed and the previous run's verdict stayed on disk — a file reading `exit=2 sha=<older commit>` which
+# `prmerge.sh` happened to refuse only because the SHA had moved. Had the SHA matched, a dead writer would
+# have been indistinguishable from a live green. Absence is a state prmerge already refuses by name.
 ci:
+	@rm -f .ci-verdict
 	@rc=0; $(MAKE) --no-print-directory ci-gates || rc=$$?; \
 	scripts/civerdict.sh $$rc; \
 	exit $$rc
