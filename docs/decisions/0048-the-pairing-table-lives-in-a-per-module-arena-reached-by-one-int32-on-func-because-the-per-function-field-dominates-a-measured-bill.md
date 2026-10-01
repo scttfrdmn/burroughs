@@ -294,3 +294,102 @@ flip PR and not this one.
   because *an issue's list is a registry, not an inventory* and this is a lead, not a finding.
 - **One ADR earns one implementation**, and this one earns the `binary` pairing table in its arena. It does
   not earn the flip, the pair search, or a re-placement of 0016's own side tables.
+
+---
+
+# 2026-09-30 — the flip happens, and on a different question from the one #136 declined
+
+Status: **accepted** · **Stamped by Scott**, given in chat on the #835 flip package · supersedes this ADR's
+*"it does not earn the flip"* as to the **default only**, not as to its placement decision
+
+**The default pairing mechanism becomes a per-body table built on first entry.** The grounds, the criteria,
+both amendments to them, and the stamp are recorded together, because the flip's whole claim is that it was
+decided by evidence registered before the evidence arrived.
+
+## Why this is not #136 reopened
+
+[#136](https://github.com/scttfrdmn/burroughs/issues/136) measured the table against a registered **≥5%
+improvement on `Coupled/*/arith`**, did not meet it, found memory **+13.2%** on the spec-suite corpus, and was
+closed **measured-and-declined** on Scott's #508 ruling. **That decline stands, on its own population and its
+own criterion** — the geomeans measured here are −4.19% for the arena and −7.12% for the lane that flips, and
+neither meets ≥5% either.
+
+**What is new is a complexity class rather than a constant factor** (chair's ruling on the #837 review):
+`matchEnd` makes every block/loop/if entry O(body length), so in a loop the cost grows with iteration count
+times body size — and *no 5% bar was designed to measure that, because the benchmark never exercised it.*
+
+Measured on `runtime`'s own tests through a stock `wasip1` guest:
+
+| test | scan lane | the table | wasmtime 49.0.1 |
+|---|---|---|---|
+| `TestSelectStress` | **did not finish in 300 s** | 19.85 s | 0.18 s |
+| `TestChan` | **did not finish in 300 s** | 12.62 s | 0.20 s |
+| `TestSelfSelect` | 127.59 s | 1.58 s | 0.14 s |
+| `TestNonblockSelectRace` | 49.68 s | 1.55 s | 0.14 s |
+
+A CPU profile **95.91% flat in `matchEnd`**, with one goroutine running and one runnable — so not a deadlock —
+is what located it ([#835](https://github.com/scttfrdmn/burroughs/issues/835)).
+
+## The four criteria, and the lane that passes them
+
+| criterion | lazy per-body (new default) | dense arena | per-site memo |
+|---|---|---|---|
+| **1** family finishes, `TestSelectStress` ≤ 60 s | **19.85 s** ✓ | 19.98 s ✓ | **73.50 s** ✗ |
+| **2′** geomean no slower than +2%, no row slower than +5% | **−7.12%** ✓ | −4.19% ✓ | **+5.12%**, worst +34.63% ✗ |
+| **3′** retained ≤ 10% of peak RSS | **0.50%** (2 481 160 B) ✓ | 4.84% ✓ | not reached |
+| **4** spec board identical | ✓ | ✓ | ✓ |
+
+**The lazy lane passes all four prospectively.** The dense arena passes too and is the **disclosed fallback**.
+The per-site memo is out on two: its map lookup per block entry costs more than the scan it replaces.
+
+## Both amendments, each with its timing — the ordering is the evidence
+
+1. **Criterion 3's denominator** (chair's ruling, #838 review). It read *"≤ 25% of the module's wasm size"*. The
+   wasm file is not what an operator pays for a running guest; peak resident memory is. Amended to **≤ 10% of
+   the run's peak RSS, denominator measured on the default arm** so it excludes the thing being measured.
+   **Made after the dense arena's absolute bytes were published** — so that lane's 3′ pass is **post hoc**, and
+   the lazy lane's is prospective.
+2. **Criterion 2's transcription** (same channel). The authority said *"doesn't regress beyond noise"* —
+   one-sided, slower is the failure. The registration made it a two-sided ±2% band **with the sign reversed**,
+   so read literally it failed on an improvement. Restored to **no slower than +2% geomean, no row slower than
+   +5%**. **Made after the dense arena's −4.19% was known** — so that lane's 2′ pass is **post hoc** too.
+
+Both corrections restore an authority's words rather than invent a bar, **and** both were written with numbers
+in hand. Those facts are recorded together rather than one excusing the other, and the preference order — a
+prospective pass beats a post-hoc one — was registered before either prototype existed.
+
+## Safe publication, which the threaded tier requires
+
+Several agents run the same function at once, so a table written into shared memory while another reads it is a
+race whichever agent wins. A table is **built privately and installed with `sync.Map.LoadOrStore`**: two agents
+computing the same body get identical answers, because the pairing is a pure function of the body, which is why
+one atomic publication suffices and a lock does not.
+
+`TestLazyTableIsPublishedSafely` enters one cold body from 16 agents under `-race`; all must see the same
+pairing **and** it must match `matchEnd`'s. It **dies with 4 race reports** when the install is a plain map
+store. It states its own gap: the real subject is two *guest* agents, which no committable guest can produce.
+
+`TestEmbeddedLaneTypesDoNotShadowInstanceFields` guards the other hazard the lanes introduce. They are embedded
+in `Instance` so its declaration is identical in every lane, and Go resolves a promoted name to the shallowest
+match **silently**: a lane field called `tables` once meant the engine's wasm table space, caught only because
+the types happened to be incompatible. It dies on a compiling injection that reinstates that collision.
+
+## What the flip does NOT do
+
+- **It does not remove the scan lane.** `-tags burroughs_scanlane` is the rollback *and* the comparison lane
+  future A/B work needs. Removing a lane is a separate change with its own reasons.
+- **It does not move this ADR's placement decision**, which the arena still embodies under `burroughs_endtable`.
+- **It does not reopen #136**, which is closed on its own ground.
+- **It does not cut a release.** Default engine behaviour changes, so the next release is a minor bump; **the
+  version number is Scott's when he decides to cut one** (ADR 0004).
+
+## Rollback
+
+Revert the flip commit, or build `-tags burroughs_scanlane`, which restores the previous behaviour **without a
+revert**. No data migration, no on-disk format, no public API change.
+
+## Measuring after the flip
+
+Every lane's tag is **18 characters**, and the default now needs an inert one — `burroughs_lazylane` — so a
+comparison of the default against the scan is **tag-to-tag**. An untagged-versus-tagged A/B shifts 2474 of 5824
+`nm -size` lines, the artifact #136 paid to find and minted as law.

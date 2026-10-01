@@ -174,6 +174,25 @@ own condition rather than as a prediction.
   density question ADR 0048 settled on a corpus of tiny modules. **No flip is proposed here**; the criterion is
   pre-registered on the issue and the flip is its own PR holding for a stamp.
 
+- **BREAKING (engine default): branch targets are resolved by a per-body table built on first entry, not by
+  a scan on every block entry** ([#835](https://github.com/scttfrdmn/burroughs/issues/835),
+  [ADR 0048](docs/decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)'s
+  2026-09-30 section). **Stamped by Scott.** The previous mechanism made every `block`/`loop`/`if` entry
+  O(body length), so cost grew with iteration count times body size: `runtime`'s `TestSelectStress` and
+  `TestChan` **did not finish in 300 s** and now take 19.85 s and 12.62 s; `TestSelfSelect` goes 127.59 s →
+  1.58 s.
+  - **Not a reversal of [#136](https://github.com/scttfrdmn/burroughs/issues/136)**, which declined a
+    *different* mechanism against a **≥5%** bar on `Coupled/*/arith`. That decline stands on its own
+    population; this is a complexity class, which no percentage bar was built to measure.
+  - **Four criteria, set before the deciding measurements**: the select family finishes with
+    `TestSelectStress` ≤ 60 s (**19.85 s**); `Coupled/*/arith` no slower than +2% geomean (**−7.12%**, i.e.
+    *faster*); retained bytes ≤ 10% of peak RSS (**0.50%**); spec board identical (**60957/0/0/4187**). Two
+    criteria were corrected during the work and both corrections are disclosed with their timing in the ADR.
+  - **Rollback without a revert:** build `-tags burroughs_scanlane`. The scan lane stays in the tree as the
+    rollback and as the comparison lane for future A/B work.
+  - **No release is cut here.** This changes default engine behaviour, so the next release is a minor bump;
+    the version number is Scott's when he decides to cut one (ADR 0004).
+
 ### Changed
 
 - **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed
