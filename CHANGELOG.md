@@ -193,6 +193,13 @@ own condition rather than as a prediction.
     `TestSelectStress` ≤ 60 s (**19.85 s**); `Coupled/*/arith` no slower than +2% geomean (**−7.12%**, i.e.
     *faster*); retained bytes ≤ 10% of peak RSS (**0.50%**); spec board identical (**60957/0/0/4187**). Two
     criteria were corrected during the work and both corrections are disclosed with their timing in the ADR.
+  - **The store is one `atomic.Pointer` per function**, indexed by its position in `mod.Funcs`, so publishing
+    a table is a single compare-and-swap. Two earlier shapes were rejected during the work and ADR 0048
+    records both: a `sync.Map` whose `any` needed a type assertion that could have dropped the engine back to
+    the scan, and a copy-on-write map that was **O(n²) in the number of functions entered** — measured at
+    1 644 391 entry copies for 1 814 misses, exactly m(m−1)/2, which projects to **54 103 401** for this
+    guest's 10 402 functions. Having just removed one cost quadratic in a hidden variable, a second was not
+    shippable.
   - **Rollback without a revert:** build `-tags burroughs_scanlane`. The scan lane stays in the tree as the
     rollback and as the comparison lane for future A/B work.
   - **No release is cut here.** This changes default engine behaviour, so the next release is a minor bump;

@@ -48,8 +48,14 @@ func TestLazyTableIsPublishedSafely(t *testing.T) {
 			binary.Instr{Op: opEnd},
 		)
 	}
-	fn := &binary.Func{Body: body}
-	in := &Instance{}
+	// **The function must live in a MODULE now, and that is the mechanism change showing up in its witness.**
+	// The earlier store was keyed by the body's data pointer and needed no module; the slot store indexes
+	// `mod.Funcs` by the function's position, so a bare `&binary.Func{...}` has no slot and the witness would
+	// exercise nothing. Handing the instance a real module is what keeps this arm on the real path — and
+	// building it the other way is how the nil-module guard in `funcSlot` was found.
+	mod := &binary.Module{Funcs: []binary.Func{{Body: body}}}
+	fn := &mod.Funcs[0]
+	in := &Instance{mod: mod}
 
 	// **Every goroutine asks for the SAME cold body at once**, which is the arrangement the ruling names.
 	// Agents are started together rather than in sequence so the first-entry window is contended rather

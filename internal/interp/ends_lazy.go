@@ -6,6 +6,7 @@
 package interp
 
 import (
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -48,24 +49,22 @@ import (
 // cost is one map's worth of duplication per instance of the same module, which is a cost this prototype
 // reports rather than hides.
 type lazyEnds struct {
-	// ends is an IMMUTABLE map behind an atomic pointer, replaced wholesale on a cold miss.
+	// slots is one atomic pointer per DEFINED FUNCTION, indexed by that function's position in
+	// `mod.Funcs`. Publishing a table is a single compare-and-swap on one slot: no map, no copy, no `any`.
 	//
-	// **It was a `sync.Map`, and the type assertion that required is why it is not.** `sync.Map` stores `any`,
-	// so every read needed `v.([]int32)` — and a failed assertion there would have dropped the engine back to
-	// the scan, which is the exact slow path this mechanism removes. That is a **performance cliff with every
-	// test still green**, which is how #835 went unnoticed for as long as it did. The chair's ruling was to
-	// make it fail loudly; this makes it **unrepresentable**, which is stronger: there is no assertion to fail.
+	// **It was a copy-on-write map, and that was quadratic in a hidden variable** — the very shape #835
+	// itself was. Every cold miss copied the whole map, so total work grew with the square of the number of
+	// distinct functions entered. Measured on lever 2's filter: **1 814 misses, 1 644 391 entries copied**,
+	// which is exactly m(m−1)/2 to the entry. This guest has **10 402** functions, so a long-running program
+	// that eventually touched most of its code would copy **54 103 401** entries — a startup cost growing
+	// quadratically that no short-test benchmark would ever show. Having just removed one cost that was
+	// quadratic in a hidden variable, shipping another was not an option (chair's ruling, #840 review).
 	//
-	// A panic was the other candidate and is rejected for a reachability reason, not a stylistic one:
-	// `Instance.Invoke`'s recover re-panics everything that is not `threadTerminated`, so a panic here reaches
-	// the embedder as a process crash — and decision 0077's precedent for *the engine's own broken invariant*
-	// is a typed sentinel the embedder can handle, not a crash.
-	//
-	// Reads are a lock-free atomic load and a map index. Writes copy, add, and compare-and-swap, which is
-	// O(n) per cold miss and O(n²) over a run — 991 misses on the measured guest, so ~490k entry copies once,
-	// against 4.6M lookups that pay nothing. The copy is also what makes publication safe without a lock: a
-	// reader holds a map no writer can touch.
-	ends   atomic.Pointer[map[uintptr][]int32]
+	// Allocated once under `once`, which also supplies the happens-before every later reader needs: a
+	// reader that has returned from `once.Do` is guaranteed to see the fully allocated slice.
+	once  sync.Once
+	slots []atomic.Pointer[[]int32]
+
 	calls  atomic.Int64
 	builds atomic.Int64
 }
@@ -82,51 +81,86 @@ func (in *Instance) frameEnds(fn *binary.Func) endTable {
 		return nil
 	}
 	in.calls.Add(1)
-	// **A body with no structural opener gets no table, and that is the whole of the count fix.**
-	//
-	// The first version built one for every body `frameEnds` saw, and a run showed **101 044** tables for a
-	// module with **10 402** functions. Two explanations were available and *both were wrong*: nothing
-	// materializes a `Func` per indirect call (`DefinedFunc` returns `&m.Funcs[i]`, a stable pointer), and
-	// nothing passes re-sliced body tails. Reading the source found a third cause —
-	// [Instance.runConst] synthesizes `&binary.Func{Body: expr}` **once per const expression**, and this
-	// guest has **100 000 active data segments** plus 8 globals and 1 element segment. 100 009 + ~1 034
-	// entered function bodies is the 101 044.
-	//
-	// Those bodies are `i32.const N; end` — which is why the smallest table measured 2 slots. A const
-	// expression cannot contain a block, so its table is all `-1` and can never answer anything. Skipping
-	// blockless bodies removes every one of them, and removes blockless *functions* too, which is the
-	// majority of them in a hand-written corpus.
+	// A body with no structural opener gets no table: its table would be all `-1` and could never answer
+	// anything. That removes every const-expression body — 100 009 of them on this guest — and every
+	// blockless function, which is the majority of them in a hand-written corpus.
 	if !hasOpener(fn.Body) {
 		return nil
 	}
-	k := bodyKey(fn.Body)
-	if tbl, ok := in.loadEnds()[k]; ok {
-		return tbl
+	slot := in.funcSlot(fn)
+	if slot == nil {
+		// Not one of this module's defined functions, so it has no slot. The only producer of such a `Func`
+		// is `runConst`, whose bodies are const expressions — and those were already excluded above, so this
+		// is a belt-and-braces return rather than a live path. Returning nil means `endOf` scans, which is
+		// slower and correct.
+		return nil
 	}
-	// **Built privately.** Nothing below is reachable by another agent until the LoadOrStore.
+	if tbl := slot.Load(); tbl != nil {
+		return *tbl
+	}
+	// **Built privately, then published with ONE compare-and-swap on this function's own slot.** A loser
+	// takes the winner's table: the two are identical, because the pairing is a pure function of the body,
+	// which is why a single CAS suffices and no lock or retry loop is needed.
 	in.builds.Add(1)
 	built := buildEnds(fn.Body)
-	// **Published by replacing the whole map**, so a reader either sees the old one or the new one and never a
-	// half-written entry. The CAS loop handles the race with another agent installing a different body's table
-	// at the same time: a loser re-copies from the winner's map rather than discarding the winner's work, which
-	// is why this is a loop and not a single swap.
-	for {
-		old := in.ends.Load()
-		cur := in.loadEnds()
-		next := make(map[uintptr][]int32, len(cur)+1)
-		for key, v := range cur {
-			next[key] = v
-		}
-		if existing, ok := next[k]; ok {
-			// Another agent installed this very body between the miss and here. Its table is identical to
-			// ours — the pairing is a pure function of the body — so take theirs and drop the copy.
-			return existing
-		}
-		next[k] = built
-		if in.ends.CompareAndSwap(old, &next) {
-			return built
-		}
+	if slot.CompareAndSwap(nil, &built) {
+		return built
 	}
+	if tbl := slot.Load(); tbl != nil {
+		return *tbl
+	}
+	return built
+}
+
+// funcSlot answers this function's table slot, or nil if it is not one of the module's defined functions.
+//
+// # The index comes from the pointer, and it is VERIFIED rather than assumed
+//
+// `DefinedFunc` returns `&mod.Funcs[i]`, a stable pointer into a slice the decoder has finished with, so a
+// function's index is recoverable from its address in O(1). The alternative was a field on `binary.Func`
+// holding the slot — rejected because it puts *runtime* state in the *decoder's* type, and keeping the decoder
+// free of runtime state is the reason this lives on the instance.
+//
+// Every step is checked: the offset must be within the slice, must be a whole multiple of the element size,
+// and `&Funcs[i]` must be the pointer handed in. **A failed check is not an invariant violation** — it means
+// the `Func` was synthesized elsewhere, which `runConst` legitimately does — so it answers nil rather than
+// panicking, and the caller scans.
+//
+// # The slots are per-instance, and sharing them would also be correct
+//
+// A table depends only on a function's *body*, so two instances of one module could share one set of slots and
+// each would compute the same answers. They are not shared, because lane B's own doc records that indexing
+// another module's arena is wrong *silently*, and a per-instance slice cannot make that mistake at all. The
+// cost is one slice of pointers per instance, which is `8 × len(Funcs)` bytes and does not grow with use.
+func (in *Instance) funcSlot(fn *binary.Func) *atomic.Pointer[[]int32] {
+	// **The nil-module guard is not defensive padding; a witness found it.** An `Instance` with no module is
+	// constructible — `&Instance{}` is what the publication witness built before this mechanism needed a
+	// module — and the previous body-pointer key never touched `mod`. Dereferencing it here segfaulted. An
+	// instance with no functions has no slot to hand back, which is the same answer as a `Func` from
+	// elsewhere.
+	if in.mod == nil {
+		return nil
+	}
+	fns := in.mod.Funcs
+	if len(fns) == 0 {
+		return nil
+	}
+	base := uintptr(unsafe.Pointer(&fns[0]))
+	p := uintptr(unsafe.Pointer(fn))
+	if p < base {
+		return nil
+	}
+	size := unsafe.Sizeof(fns[0])
+	off := p - base
+	if off%size != 0 {
+		return nil
+	}
+	i := off / size
+	if i >= uintptr(len(fns)) || &fns[i] != fn {
+		return nil
+	}
+	in.once.Do(func() { in.slots = make([]atomic.Pointer[[]int32], len(fns)) })
+	return &in.slots[i]
 }
 
 // buildEnds pairs every structural header in one body with its END, in a single pass.
@@ -182,9 +216,11 @@ func endOf(body []binary.Instr, ends endTable, pc int) (int, error) {
 // `sync.Map.Range` is safe against concurrent writers, and a table installed while this is counting is simply
 // counted or not — a race the answer tolerates, since it is a size report rather than a verdict.
 func (in *Instance) RetainedEndsBytes() (tables, slots int) {
-	for _, tbl := range in.loadEnds() {
-		tables++
-		slots += len(tbl)
+	for i := range in.slots {
+		if tbl := in.slots[i].Load(); tbl != nil {
+			tables++
+			slots += len(*tbl)
+		}
 	}
 	// Summed with the other lane's store for the reason `ends_retained_off.go` records: one accessor,
 	// lane-independent, so a flip package's figures come from one driver.
@@ -195,11 +231,6 @@ func (in *Instance) RetainedEndsBytes() (tables, slots int) {
 // RetainedEndsCalls reports frameEnds calls and builds, to tell "one key per function" from "one key per call".
 func (in *Instance) RetainedEndsCalls() (calls, builds int64) {
 	return in.calls.Load(), in.builds.Load()
-}
-
-// bodyKey is a retained body's stable identity: its backing array's data pointer.
-func bodyKey(body []binary.Instr) uintptr {
-	return uintptr(unsafe.Pointer(unsafe.SliceData(body)))
 }
 
 // hasOpener reports whether a body contains any structural header, i.e. whether a pairing table could ever
@@ -219,17 +250,4 @@ func hasOpener(body []binary.Instr) bool {
 		}
 	}
 	return false
-}
-
-// loadEnds reads the current immutable table map, treating the unset pointer as empty.
-//
-// **It takes the atomic rather than a `*map`**, which `gocritic` is right about: a pointer-to-map parameter is
-// a smell on its own, and the pointer only exists because `atomic.Pointer` needs one. Taking the atomic means
-// the nil case lives in exactly one place instead of at each of the three readers, and a reader cannot forget
-// it — a forgotten check there is a nil map index, which is a panic rather than a wrong answer.
-func (l *lazyEnds) loadEnds() map[uintptr][]int32 {
-	if m := l.ends.Load(); m != nil {
-		return *m
-	}
-	return nil
 }

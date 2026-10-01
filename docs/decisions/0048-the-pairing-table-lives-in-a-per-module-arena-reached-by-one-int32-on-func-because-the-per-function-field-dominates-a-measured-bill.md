@@ -388,6 +388,55 @@ the types happened to be incompatible. It dies on a compiling injection that rei
 Revert the flip commit, or build `-tags burroughs_scanlane`, which restores the previous behaviour **without a
 revert**. No data migration, no on-disk format, no public API change.
 
+## The store went through three shapes, and the first two were each quadratic in a hidden variable
+
+Disclosed rather than re-stamped: the lane and the criteria are what Scott stamped, and the mechanism *inside*
+the lane changed twice afterwards without changing either.
+
+| shape | publish cost | why it was replaced |
+|---|---|---|
+| `sync.Map` keyed by body pointer | O(1) | stored `any`, so every read needed a type assertion — a failed one would drop the engine back to the **scan**, a performance cliff with every test still green |
+| immutable map behind `atomic.Pointer` | **O(n) per miss, O(n²) per run** | removed the assertion; **reintroduced the very shape #835 was** |
+| **`atomic.Pointer` per function, indexed by `mod.Funcs` position** | **O(1)** | no map, no copy, no `any` |
+
+**The quadratic term was measured before it was removed**, not argued about. On lever 2's 88-test filter:
+
+```
+funcs = 10402
+misses = 1814
+entries_copied = 1644391
+m(m-1)/2 = 1644391      <- exact to the entry
+```
+
+The formula is confirmed, so the projection is arithmetic rather than estimate: a long-running program that
+eventually entered all **10 402** functions would copy **54 103 401** entries — a startup cost growing
+quadratically that **no short-test benchmark would show.** Having just removed one cost that was quadratic in a
+hidden variable, shipping another was not an option (chair's ruling).
+
+**The index comes from the pointer and is verified.** `DefinedFunc` returns `&mod.Funcs[i]`, so a function's
+index is recoverable from its address in O(1); the offset is checked for range, for being a whole multiple of
+the element size, and for `&Funcs[i] == fn`. A failed check means the `Func` was synthesized elsewhere — which
+`runConst` legitimately does — so it answers nil and the caller scans. **A field on `binary.Func` was the
+alternative and is rejected**: it would put *runtime* state in the *decoder's* type.
+
+**Slots are per-instance, and sharing them would also be correct** — a table depends only on a body, so two
+instances of one module would compute the same answers. They are not shared because lane B's own doc records
+that indexing another module's arena is wrong *silently*, and a per-instance slice cannot make that mistake.
+The price is one pointer per function, `8 × len(Funcs)`, which does not grow with use.
+
+### The criteria on the final shape
+
+| criterion | result |
+|---|---|
+| **1** | `TestSelectStress` **20.07 s**; `TestChan` 12.70 s; `TestSelfSelect` 1.68 s; `TestNonblockSelectRace` 1.58 s |
+| **2′** | geomean **−6.12%**, every row faster, worst −4.84% |
+| **3′** | **2 572 228 B = 0.521%** of peak RSS — 2 489 012 B of tables **plus the 83 216 B slots array**, which is the fixed cost traded for the quadratic one and is counted rather than omitted |
+| **4** | board identical, `60957/0/0/4187` |
+
+The publication witness passes under `-race` on the slot form and **dies with a race report** when the install
+is a plain store with the `sync.Once` removed. **It needed a module to do so** — the old key was a body
+pointer and needed none — and building it the other way is how `funcSlot`'s nil-module guard was found.
+
 ## Measuring after the flip
 
 Every lane's tag is **18 characters**, and the default now needs an inert one — `burroughs_lazylane` — so a
