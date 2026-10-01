@@ -174,6 +174,37 @@ own condition rather than as a prediction.
   density question ADR 0048 settled on a corpus of tiny modules. **No flip is proposed here**; the criterion is
   pre-registered on the issue and the flip is its own PR holding for a stamp.
 
+- **Changed (engine default): branch targets are resolved by a per-body table built on first entry, not by
+  a scan on every block entry** ([#835](https://github.com/scttfrdmn/burroughs/issues/835),
+  [ADR 0048](docs/decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)'s
+  2026-09-30 section). **Stamped by Scott.** The previous mechanism made every `block`/`loop`/`if` entry
+  O(body length), so cost grew with iteration count times body size: `runtime`'s `TestSelectStress` and
+  `TestChan` **did not finish in 300 s** and now take 19.85 s and 12.62 s; `TestSelfSelect` goes 127.59 s →
+  1.58 s.
+  - **What moves and what does not**, stated because the label was first written as *BREAKING* and that was
+    wrong: **speed and a small amount of memory move.** No API changes, no semantics change, and **no results
+    change** — the spec board is identical on the default build and under every lane tag
+    (`60957/0/0/4187`). A guest computes the same answers; it computes them faster. Nothing here justifies a
+    major version.
+  - **Not a reversal of [#136](https://github.com/scttfrdmn/burroughs/issues/136)**, which declined a
+    *different* mechanism against a **≥5%** bar on `Coupled/*/arith`. That decline stands on its own
+    population; this is a complexity class, which no percentage bar was built to measure.
+  - **Four criteria, set before the deciding measurements**: the select family finishes with
+    `TestSelectStress` ≤ 60 s (**19.85 s**); `Coupled/*/arith` no slower than +2% geomean (**−7.12%**, i.e.
+    *faster*); retained bytes ≤ 10% of peak RSS (**0.50%**); spec board identical (**60957/0/0/4187**). Two
+    criteria were corrected during the work and both corrections are disclosed with their timing in the ADR.
+  - **The store is one `atomic.Pointer` per function**, indexed by its position in `mod.Funcs`, so publishing
+    a table is a single compare-and-swap. Two earlier shapes were rejected during the work and ADR 0048
+    records both: a `sync.Map` whose `any` needed a type assertion that could have dropped the engine back to
+    the scan, and a copy-on-write map that was **O(n²) in the number of functions entered** — measured at
+    1 644 391 entry copies for 1 814 misses, exactly m(m−1)/2, which projects to **54 103 401** for this
+    guest's 10 402 functions. Having just removed one cost quadratic in a hidden variable, a second was not
+    shippable.
+  - **Rollback without a revert:** build `-tags burroughs_scanlane`. The scan lane stays in the tree as the
+    rollback and as the comparison lane for future A/B work.
+  - **No release is cut here.** This changes default engine behaviour, so the next release is a minor bump;
+    the version number is Scott's when he decides to cut one (ADR 0004).
+
 ### Changed
 
 - **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed

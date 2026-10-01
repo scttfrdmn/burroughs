@@ -1,7 +1,7 @@
 // Copyright 2026 Scott Friedman.
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build burroughs_lazytabl
+//go:build !burroughs_scanlane && !burroughs_endtable && !burroughs_sitememo
 
 package interp
 
@@ -49,7 +49,22 @@ import (
 // cost is one map's worth of duplication per instance of the same module, which is a cost this prototype
 // reports rather than hides.
 type lazyEnds struct {
-	ends   sync.Map // body data pointer -> []int32
+	// slots is one atomic pointer per DEFINED FUNCTION, indexed by that function's position in
+	// `mod.Funcs`. Publishing a table is a single compare-and-swap on one slot: no map, no copy, no `any`.
+	//
+	// **It was a copy-on-write map, and that was quadratic in a hidden variable** — the very shape #835
+	// itself was. Every cold miss copied the whole map, so total work grew with the square of the number of
+	// distinct functions entered. Measured on lever 2's filter: **1 814 misses, 1 644 391 entries copied**,
+	// which is exactly m(m−1)/2 to the entry. This guest has **10 402** functions, so a long-running program
+	// that eventually touched most of its code would copy **54 103 401** entries — a startup cost growing
+	// quadratically that no short-test benchmark would ever show. Having just removed one cost that was
+	// quadratic in a hidden variable, shipping another was not an option (chair's ruling, #840 review).
+	//
+	// Allocated once under `once`, which also supplies the happens-before every later reader needs: a
+	// reader that has returned from `once.Do` is guaranteed to see the fully allocated slice.
+	once  sync.Once
+	slots []atomic.Pointer[[]int32]
+
 	calls  atomic.Int64
 	builds atomic.Int64
 }
@@ -65,36 +80,87 @@ func (in *Instance) frameEnds(fn *binary.Func) endTable {
 	if fn == nil || len(fn.Body) == 0 {
 		return nil
 	}
-	in.lazyEnds.calls.Add(1)
-	// **A body with no structural opener gets no table, and that is the whole of the count fix.**
-	//
-	// The first version built one for every body `frameEnds` saw, and a run showed **101 044** tables for a
-	// module with **10 402** functions. Two explanations were available and *both were wrong*: nothing
-	// materializes a `Func` per indirect call (`DefinedFunc` returns `&m.Funcs[i]`, a stable pointer), and
-	// nothing passes re-sliced body tails. Reading the source found a third cause —
-	// [Instance.runConst] synthesizes `&binary.Func{Body: expr}` **once per const expression**, and this
-	// guest has **100 000 active data segments** plus 8 globals and 1 element segment. 100 009 + ~1 034
-	// entered function bodies is the 101 044.
-	//
-	// Those bodies are `i32.const N; end` — which is why the smallest table measured 2 slots. A const
-	// expression cannot contain a block, so its table is all `-1` and can never answer anything. Skipping
-	// blockless bodies removes every one of them, and removes blockless *functions* too, which is the
-	// majority of them in a hand-written corpus.
+	in.calls.Add(1)
+	// A body with no structural opener gets no table: its table would be all `-1` and could never answer
+	// anything. That removes every const-expression body — 100 009 of them on this guest — and every
+	// blockless function, which is the majority of them in a hand-written corpus.
 	if !hasOpener(fn.Body) {
 		return nil
 	}
-	k := bodyKey(fn.Body)
-	if v, ok := in.lazyEnds.ends.Load(k); ok {
-		return v.([]int32)
+	slot := in.funcSlot(fn)
+	if slot == nil {
+		// Not one of this module's defined functions, so it has no slot. The only producer of such a `Func`
+		// is `runConst`, whose bodies are const expressions — and those were already excluded above, so this
+		// is a belt-and-braces return rather than a live path. Returning nil means `endOf` scans, which is
+		// slower and correct.
+		return nil
 	}
-	// **Built privately.** Nothing below is reachable by another agent until the LoadOrStore.
-	in.lazyEnds.builds.Add(1)
+	if tbl := slot.Load(); tbl != nil {
+		return *tbl
+	}
+	// **Built privately, then published with ONE compare-and-swap on this function's own slot.** A loser
+	// takes the winner's table: the two are identical, because the pairing is a pure function of the body,
+	// which is why a single CAS suffices and no lock or retry loop is needed.
+	in.builds.Add(1)
 	built := buildEnds(fn.Body)
-	// **Published atomically.** A loser takes the winner's table and drops its own; the two are identical
-	// because the pairing is a pure function of the body, so the discard costs one allocation on a cold
-	// body and never a wrong answer.
-	actual, _ := in.lazyEnds.ends.LoadOrStore(k, built)
-	return actual.([]int32)
+	if slot.CompareAndSwap(nil, &built) {
+		return built
+	}
+	if tbl := slot.Load(); tbl != nil {
+		return *tbl
+	}
+	return built
+}
+
+// funcSlot answers this function's table slot, or nil if it is not one of the module's defined functions.
+//
+// # The index comes from the pointer, and it is VERIFIED rather than assumed
+//
+// `DefinedFunc` returns `&mod.Funcs[i]`, a stable pointer into a slice the decoder has finished with, so a
+// function's index is recoverable from its address in O(1). The alternative was a field on `binary.Func`
+// holding the slot — rejected because it puts *runtime* state in the *decoder's* type, and keeping the decoder
+// free of runtime state is the reason this lives on the instance.
+//
+// Every step is checked: the offset must be within the slice, must be a whole multiple of the element size,
+// and `&Funcs[i]` must be the pointer handed in. **A failed check is not an invariant violation** — it means
+// the `Func` was synthesized elsewhere, which `runConst` legitimately does — so it answers nil rather than
+// panicking, and the caller scans.
+//
+// # The slots are per-instance, and sharing them would also be correct
+//
+// A table depends only on a function's *body*, so two instances of one module could share one set of slots and
+// each would compute the same answers. They are not shared, because lane B's own doc records that indexing
+// another module's arena is wrong *silently*, and a per-instance slice cannot make that mistake at all. The
+// cost is one slice of pointers per instance, which is `8 × len(Funcs)` bytes and does not grow with use.
+func (in *Instance) funcSlot(fn *binary.Func) *atomic.Pointer[[]int32] {
+	// **The nil-module guard is not defensive padding; a witness found it.** An `Instance` with no module is
+	// constructible — `&Instance{}` is what the publication witness built before this mechanism needed a
+	// module — and the previous body-pointer key never touched `mod`. Dereferencing it here segfaulted. An
+	// instance with no functions has no slot to hand back, which is the same answer as a `Func` from
+	// elsewhere.
+	if in.mod == nil {
+		return nil
+	}
+	fns := in.mod.Funcs
+	if len(fns) == 0 {
+		return nil
+	}
+	base := uintptr(unsafe.Pointer(&fns[0]))
+	p := uintptr(unsafe.Pointer(fn))
+	if p < base {
+		return nil
+	}
+	size := unsafe.Sizeof(fns[0])
+	off := p - base
+	if off%size != 0 {
+		return nil
+	}
+	i := off / size
+	if i >= uintptr(len(fns)) || &fns[i] != fn {
+		return nil
+	}
+	in.once.Do(func() { in.slots = make([]atomic.Pointer[[]int32], len(fns)) })
+	return &in.slots[i]
 }
 
 // buildEnds pairs every structural header in one body with its END, in a single pass.
@@ -150,11 +216,12 @@ func endOf(body []binary.Instr, ends endTable, pc int) (int, error) {
 // `sync.Map.Range` is safe against concurrent writers, and a table installed while this is counting is simply
 // counted or not — a race the answer tolerates, since it is a size report rather than a verdict.
 func (in *Instance) RetainedEndsBytes() (tables, slots int) {
-	in.lazyEnds.ends.Range(func(_, v any) bool {
-		tables++
-		slots += len(v.([]int32))
-		return true
-	})
+	for i := range in.slots {
+		if tbl := in.slots[i].Load(); tbl != nil {
+			tables++
+			slots += len(*tbl)
+		}
+	}
 	// Summed with the other lane's store for the reason `ends_retained_off.go` records: one accessor,
 	// lane-independent, so a flip package's figures come from one driver.
 	mt, ms := in.memo.retained()
@@ -163,12 +230,7 @@ func (in *Instance) RetainedEndsBytes() (tables, slots int) {
 
 // RetainedEndsCalls reports frameEnds calls and builds, to tell "one key per function" from "one key per call".
 func (in *Instance) RetainedEndsCalls() (calls, builds int64) {
-	return in.lazyEnds.calls.Load(), in.lazyEnds.builds.Load()
-}
-
-// bodyKey is a retained body's stable identity: its backing array's data pointer.
-func bodyKey(body []binary.Instr) uintptr {
-	return uintptr(unsafe.Pointer(unsafe.SliceData(body)))
+	return in.calls.Load(), in.builds.Load()
 }
 
 // hasOpener reports whether a body contains any structural header, i.e. whether a pairing table could ever

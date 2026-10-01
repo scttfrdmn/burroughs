@@ -28,6 +28,22 @@ set -eu
 label=${1:?usage: witnessrun.sh <label> <budget> <floor> [--race]}
 budget=${2:?usage: witnessrun.sh <label> <budget> <floor> [--race]}
 floor=${3:?usage: witnessrun.sh <label> <budget> <floor> [--race]}
+# **A floor prefixed `~` is PROVISIONAL: advisory in CI as well as locally.**
+#
+# A wall-clock floor is calibrated against an engine, and twice now a change to the engine's default has made
+# the job faster than its own floor — the #825 pins, then the #835 flip, which cut the witnesses job by ~2.4x
+# and reddened CI on a floor everyone already knew was stale. So the rule, set on the #840 review:
+#
+#   **A change to the engine default resets every time floor to provisional** until it has been re-pinned from
+#   an observation taken on the new default, by this file's own rule (half the lowest observed), and re-armed.
+#
+# Provisional is not "off": the number is still printed and still compared, and the note says the floor is
+# unpinned and why. What it does not do is fail a run over a figure nobody has re-measured yet — which would be
+# a gate asserting a property of an engine that no longer exists.
+provisional=0
+case $floor in
+~*) provisional=1; floor=${floor#\~} ;;
+esac
 raceflag=""
 if [ "${4:-}" = "--race" ]; then
 	raceflag="-race"
@@ -110,13 +126,19 @@ fi
 pct=$((elapsed * 100 / budget))
 printf 'witnessrun: %s used %ss of %ss (%s%%), floor %ss%s\n' \
 	"$label" "$elapsed" "$budget" "$pct" "$floor" \
-	"$([ -n "${CI:-}" ] && echo ' [CI: floor binds]' || echo ' [local: floor advisory]')" >&2
+	"$(if [ "$provisional" -eq 1 ]; then echo ' [PROVISIONAL: advisory everywhere, awaiting a re-pin]';
+	    elif [ -n "${CI:-}" ]; then echo ' [CI: floor binds]'; else echo ' [local: floor advisory]'; fi)" >&2
 if [ "$pct" -ge 75 ]; then
 	printf '::warning title=%s budget::%s used %s%% of its %ss budget. Re-measure before adding to it.\n' \
 		"$label" "$label" "$pct" "$budget" >&2
 fi
 if [ "$elapsed" -lt "$floor" ]; then
-	if [ -n "${CI:-}" ]; then
+	if [ "$provisional" -eq 1 ]; then
+		note "note: below the ${floor}s floor, which is PROVISIONAL — the engine default changed and this"
+		note "      floor has not been re-pinned from an observation on it. The number above is what the"
+		note "      re-pin should be derived from (half the lowest observed). The primary checks are what"
+		note "      decide whether the tests ran."
+	elif [ -n "${CI:-}" ]; then
 		note "FAIL below the ${floor}s floor, on a runner this floor was calibrated for."
 		fail=1
 	else

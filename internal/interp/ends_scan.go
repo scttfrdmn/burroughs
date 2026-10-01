@@ -1,13 +1,28 @@
 // Copyright 2026 Scott Friedman.
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build !burroughs_endtable && !burroughs_lazytabl && !burroughs_sitememo
+//go:build burroughs_scanlane
 
 package interp
 
 import "github.com/scttfrdmn/burroughs/internal/binary"
 
-// This file is **lane A** of #136's probe: target resolution as this engine ships it, one
+// This file **was** the default lane and is now behind `-tags burroughs_scanlane`. It is #136's lane A:
+// target resolution by one matching-`end` scan per dynamic block entry.
+//
+// **It stays in the tree for two reasons, both of which outlive the flip.** It is the **rollback** — a build
+// with this tag has exactly the behaviour the engine shipped before — and it is the **comparison lane** every
+// future A/B of this mechanism needs. Removing a lane is a separate change with its own reasons, never a side
+// effect of a flip.
+//
+// **Its tag is 18 characters, as every lane's is**, and that is not decoration. `runtime.modinfo.str` records
+// `-tags`, so an untagged-versus-tagged A/B shifts 2474 of 5824 `nm -size` lines and the tag swap alone ran
+// −3.05% to +0.65% at p<0.01. #136 minted the law — give both lanes a tag of equal length — so now that the
+// *default* is untagged, a comparison against this lane needs an inert 18-character tag for the default side:
+// `burroughs_lazylane`, which selects nothing and exists only to make the comparison tag-to-tag.
+//
+// The original note on this file's mechanism, which the flip does not change:
+// one
 // matching-`end` scan per dynamic block entry. Its pair is `ends_table.go`, built with
 // `-tags burroughs_endtable`, which resolves once per body and indexes.
 //
