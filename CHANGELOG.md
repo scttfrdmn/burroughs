@@ -240,6 +240,16 @@ own condition rather than as a prediction.
   because without it a green from three commits ago reads exactly like a green from this one. One
   consequence changes the working order: the gate must run on the **committed** tree, so it is
   commit, then `make ci`, then push, then merge.
+- **Two checks protecting the verdict mechanism itself.** `TestCIRemovesItsVerdictBeforeRunning-
+  TheGates` drives `make -n ci` — the recipe's text in execution order, no gate run — and asserts the
+  `rm -f .ci-verdict` precedes both the gate run and the write, because **absence is a state
+  `prmerge.sh` refuses by name while staleness is one it catches only by luck**. That ordering had
+  been asserted only by reading the Makefile. `TestEveryTrackedScriptIsExecutableInTheIndex` asserts
+  mode `100755` in **git's index** — not the filesystem, since a local `chmod` fixes one checkout
+  while the index is what every clone and CI get. Its domain is derived as *every tracked file whose
+  first line is a shebang*, which catches the extensionless `scripts/labrun` and `scripts/labprov`
+  that a `scripts/*.sh` list would miss; it found **four** files at `100644`, including
+  `scripts/editroute.py`, the hook's own implementation.
 - **The hook refuses `subst1.py` with its output discarded.** The scripted route's only defence
   against a wrong aim is the landing display, so redirecting it to `/dev/null` turns a permitted
   route into a silent write carrying the authority of a permitted one — strictly worse than the
