@@ -129,6 +129,26 @@ if [ -z "${runs// /}" ]; then
 fi
 echo "ciwatch: runs for this SHA: $runs" >&2
 
+# --- wait for EVERY run for this SHA to FINISH, before deciding anything about it --------------------------
+#
+# This ordering is the repair for a defect #841 shipped: selection ran first, and `run_covers` read a job
+# with no conclusion yet as a job that had not run -- the same reading that is correct for `skipped` and
+# wrong for `in_progress`. So on a freshly pushed SHA, whose jobs are all pending, the tree class looked
+# uncovered and the verdict was "no run ran its tree-subject jobs" on a run that was busy running them.
+#
+# `assert_class` below already distinguished the three states; this half did not, which is the lesson: the
+# distinction was applied where it was being thought about and not where it was equally load-bearing.
+#
+# Waiting first dissolves the three states rather than handling them. A completed run has no pending jobs,
+# so "did this run execute these jobs" becomes a question with an answer, and coverage never has to guess
+# about a job's future. Every run for the SHA is waited on because every one of them is in the population a
+# class may be selected from -- not a cost, since a run nobody waits on is a run whose verdict is a snapshot.
+for id in $runs; do
+	if [ -z "${CIWATCH_FIXTURE:-}" ]; then
+		gh run watch "$id" --repo "$repo" > /dev/null 2>&1
+	fi
+done
+
 # --- TWO classes, TWO runs, because one rule cannot serve both ---------------------------------------------
 #
 # Tree-subject jobs take their verdict from the newest run in which they actually RAN. A run where they are
@@ -150,7 +170,9 @@ run_covers() {
 import json, sys
 v = json.load(open(sys.argv[1]))
 want = sys.argv[2].split()
-ran = [j["name"] for j in v.get("jobs", []) if j.get("conclusion") not in (None, "", "skipped")]
+# Only `skipped` means the job did not run. A null or empty conclusion means it has not FINISHED, which is a
+# claim about time and not about whether the run executed it -- and after the wait above, belt and braces.
+ran = [j["name"] for j in v.get("jobs", []) if j.get("conclusion") != "skipped"]
 for key in want:
     if not any(n == key or n.startswith(key + " ") for n in ran):
         raise SystemExit(1)
@@ -188,16 +210,12 @@ else
 	echo "         a second run that skipped the tree jobs and read the CURRENT body (#839's sequence)" >&2
 fi
 
-# --- wait on each, then assert each class against its own run ----------------------------------------------
+# --- assert each class against its own run ------------------------------------------------------------------
 #
-# Waiting on both is what makes this a verdict rather than a snapshot: the tree run may still be building while
-# the body run has long finished, and the reverse after an edit.
-for id in $treerun $bodyrun; do
-	if [ -z "${CIWATCH_FIXTURE:-}" ]; then
-		gh run watch "$id" --repo "$repo" > /dev/null 2>&1
-		fetch_run "$id" > "$prefix.$id.json" 2>&1
-	fi
-done
+# No wait and no re-fetch here, and the absence is deliberate rather than an omission: every run for the SHA
+# was waited on BEFORE the selection loop, so the JSON that loop wrote was already taken from a finished run.
+# A second fetch would re-ask a question whose answer cannot have changed, and the version of this script that
+# fetched here did so because it was the first point at which the run was known to be over.
 cp "$prefix.$treerun.json" "$prefix.verdict"
 
 assert_class() {

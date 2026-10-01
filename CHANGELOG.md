@@ -287,6 +287,17 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **`ciwatch.sh` read an in-progress job as a job that never ran**, so a freshly pushed SHA — whose
+  jobs are all pending — got the verdict *"no run ran its tree-subject jobs"* about a run that was
+  busy running them. Found by #842's own CI, one slice after the code shipped. Three states, not
+  two: `skipped` is a claim about **whether** a job ran, a null conclusion is a claim about **when**
+  it finishes, and only the first excludes a run from answering for a class. `assert_class` already
+  drew the distinction; selection did not, which is the lesson — it was drawn where it was being
+  thought about and not where it was equally load-bearing. Repaired twice over: every run for the
+  SHA is now waited on **before** selection, so coverage is only ever asked about a finished run,
+  and the predicate excludes `skipped` alone. Witnessed by a fourth arm that must fail as
+  *unfinished* and never as *"no run ran them"* — both are non-zero, so the exit code cannot tell
+  this arm's pass from its failure.
 - **`--dir` accepted two guest-path forms that can never map, and said nothing**
   ([#828](https://github.com/scttfrdmn/burroughs/issues/828),
   [#827](https://github.com/scttfrdmn/burroughs/issues/827)). Burroughs' separator is ONE colon and
