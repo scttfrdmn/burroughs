@@ -414,6 +414,35 @@ race:
 # carries the 760s that falsified it. A pin that silently absorbs a slower run is a pin that has stopped
 # measuring anything.
 #
+# ### MOVED 2026-10-01: the FLOOR comes DOWN, because the flip made the engine faster than the floor assumed
+#
+# The #835 flip (ADR 0048's 2026-09-30 section) changed the default pairing mechanism, and the witnesses job
+# got **~2.4x faster**. Both arches then came in *below* the 48s floor and the job failed — not because a
+# witness declined to run, which is what the floor exists to catch, but because the floor was calibrated
+# against an interpreter that no longer exists:
+#
+#   | arch             | before the flip (lowest) | after    |
+#   |------------------|--------------------------|----------|
+#   | ubuntu-24.04     | 96s                      | **40s**  |
+#   | ubuntu-24.04-arm | 96s                      | **45s**  |
+#
+# Re-derived by this file's own rule — **half of the lowest observed** — so 40s gives a floor of **20s**. It is
+# a *first* pin on the new default, one sample per arch, and it carries the same recheck obligation every pin
+# here does.
+#
+# **The TIMEOUT stays at 338s, deliberately.** The rule that set it is 2x the slower arch, which would now give
+# ~90s — and lowering a timeout on one sample per arch buys no measurement while taking on a real flake risk.
+# The budget line already prints utilisation (13% and 11% on this run), which is the signal a reader needs, and
+# a timeout is a bound on the catastrophic case rather than an estimate of the normal one.
+#
+# **What this episode says about the floor itself.** A time floor is a *proxy* for "the witnesses executed", and
+# the #825 work replaced it as the primary check: `witnesses` runs with `go test -json` and asserts the witness
+# functions **ran**. That direct check is what caught nothing here, correctly — the witnesses did run. So the
+# floor survives as a secondary guard, and this move is the second time it has needed re-deriving from a
+# changed engine. A proxy that must be re-pinned every time its subject gets faster is worth keeping only
+# while it is cheap; it is, and it stays, with this note so the next person sees the pattern rather than a bare
+# number.
+#
 # ### MOVED 2026-09-26, on the SECOND run, and the recheck condition earned its keep immediately
 #
 #   | arch             | norace run 1 | run 2     | race run 1 | run 2     |
@@ -467,7 +496,7 @@ race:
 # Stated because the failure message says "check that the tests actually executed", and the first thing to
 # check when it fires locally is whether the floor is simply CI-shaped rather than whether the run was real.
 witnesses:
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 338 48
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 338 20
 	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 96 --race
 
 vet:

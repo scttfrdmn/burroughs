@@ -65,7 +65,7 @@ func (in *Instance) frameEnds(fn *binary.Func) endTable {
 	if fn == nil || len(fn.Body) == 0 {
 		return nil
 	}
-	in.lazyEnds.calls.Add(1)
+	in.calls.Add(1)
 	// **A body with no structural opener gets no table, and that is the whole of the count fix.**
 	//
 	// The first version built one for every body `frameEnds` saw, and a run showed **101 044** tables for a
@@ -84,17 +84,29 @@ func (in *Instance) frameEnds(fn *binary.Func) endTable {
 		return nil
 	}
 	k := bodyKey(fn.Body)
-	if v, ok := in.lazyEnds.ends.Load(k); ok {
-		return v.([]int32)
+	if v, ok := in.ends.Load(k); ok {
+		// **Comma-ok, and the failure branch is unreachable rather than defensive.** This map is written in
+		// exactly one place — the `LoadOrStore` below — and only ever with a `[]int32`. The assertion is
+		// written in its checked form because `errcheck`'s type-assertion check refuses the bare one, and a
+		// bare assertion that *could* panic inside the interpreter's hot entry path is worth refusing even
+		// when today's writer makes it impossible. Falling through to the scan is the conservative answer: it
+		// is slower and correct, which is the right direction for an impossible case.
+		if tbl, isTable := v.([]int32); isTable {
+			return tbl
+		}
+		return nil
 	}
 	// **Built privately.** Nothing below is reachable by another agent until the LoadOrStore.
-	in.lazyEnds.builds.Add(1)
+	in.builds.Add(1)
 	built := buildEnds(fn.Body)
 	// **Published atomically.** A loser takes the winner's table and drops its own; the two are identical
 	// because the pairing is a pure function of the body, so the discard costs one allocation on a cold
 	// body and never a wrong answer.
-	actual, _ := in.lazyEnds.ends.LoadOrStore(k, built)
-	return actual.([]int32)
+	actual, _ := in.ends.LoadOrStore(k, built)
+	if tbl, isTable := actual.([]int32); isTable {
+		return tbl
+	}
+	return built
 }
 
 // buildEnds pairs every structural header in one body with its END, in a single pass.
@@ -150,9 +162,11 @@ func endOf(body []binary.Instr, ends endTable, pc int) (int, error) {
 // `sync.Map.Range` is safe against concurrent writers, and a table installed while this is counting is simply
 // counted or not — a race the answer tolerates, since it is a size report rather than a verdict.
 func (in *Instance) RetainedEndsBytes() (tables, slots int) {
-	in.lazyEnds.ends.Range(func(_, v any) bool {
+	in.ends.Range(func(_, v any) bool {
 		tables++
-		slots += len(v.([]int32))
+		if tbl, isTable := v.([]int32); isTable {
+			slots += len(tbl)
+		}
 		return true
 	})
 	// Summed with the other lane's store for the reason `ends_retained_off.go` records: one accessor,
@@ -163,7 +177,7 @@ func (in *Instance) RetainedEndsBytes() (tables, slots int) {
 
 // RetainedEndsCalls reports frameEnds calls and builds, to tell "one key per function" from "one key per call".
 func (in *Instance) RetainedEndsCalls() (calls, builds int64) {
-	return in.lazyEnds.calls.Load(), in.lazyEnds.builds.Load()
+	return in.calls.Load(), in.builds.Load()
 }
 
 // bodyKey is a retained body's stable identity: its backing array's data pointer.
