@@ -1,0 +1,31 @@
+{
+  "$comment": [
+    "Project-level hooks for this repo. PROJECT-level and not user-level on purpose: the rule being",
+    "enforced is about THIS tree's tracked files, so a user-level hook would carry it into every",
+    "other repo the agent works in, where `git ls-files` names a different set and the refusal would",
+    "be about something nobody decided. Scope the enforcement to the scope of the rule.",
+    "",
+    "editroute.py refuses to edit a TRACKED file from a Bash command — inline interpreters that open",
+    "a file for writing, `sed -i`, and redirection or `tee` onto a tracked path. It exists because",
+    "`scripts/subst1.py` and the editor tool were already the rule and the rule was broken in all 8",
+    "writes to one script in one campaign. Its witness is TestEditRouteHookRefusesBashEditsOfTracked-",
+    "Files in internal/testenv, which `make ci` runs; the hook's own behaviour is asserted there",
+    "rather than here, because nothing runs this file as a test.",
+    "",
+    "settings.json is TRACKED (only settings.local.json is ignored), so this applies to anyone",
+    "working in the tree rather than to one machine."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/editroute.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

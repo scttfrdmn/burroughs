@@ -30,6 +30,19 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **A `PreToolUse` hook refuses to edit a tracked file from a Bash command**
+  (`scripts/editroute.py`, wired in the tracked `.claude/settings.json`). The two loud routes — the
+  editor tool, which fails when its anchor is missing, and `scripts/subst1.py`, which refuses 0 or
+  >1 matches — were already the rule; it was then broken in **all 8** writes to one script in one
+  campaign, and the eighth lost an edit whose mechanism could not afterwards be determined, because
+  a write whose success is never read back leaves no evidence of its own failure. Three routes are
+  closed: an inline interpreter opening a file for writing, `sed -i`, and redirection or `tee` onto a
+  tracked path. **Creating a new file is untouched** — the defect is a silent no-op on a *missed*
+  anchor, which requires the file to already exist. Exemptions are the `git ls-files` predicate
+  itself rather than a list, so `/tmp` and build outputs need no clause: they are untracked.
+  Witnessed by `TestEditRouteHookRefusesBashEditsOfTrackedFiles` over 13 arms — five die under a
+  blanket-allow injection, and one, the quoted `>`, only under a grep-based implementation, which is
+  what makes the parse load-bearing rather than decorative.
 - **`--scratch HOST[:/GUEST]`: a confined writable directory, off by default**
   ([#831](https://github.com/scttfrdmn/burroughs/issues/831),
   [ADR 0091](docs/decisions/0091-a-confined-writable-scratch-directory-granted-by-its-own-flag-with-confinement-delegated-to-os-root-rather-than-hand-rolled.md)).
