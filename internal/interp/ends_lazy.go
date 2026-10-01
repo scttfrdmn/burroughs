@@ -6,7 +6,6 @@
 package interp
 
 import (
-	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -49,7 +48,24 @@ import (
 // cost is one map's worth of duplication per instance of the same module, which is a cost this prototype
 // reports rather than hides.
 type lazyEnds struct {
-	ends   sync.Map // body data pointer -> []int32
+	// ends is an IMMUTABLE map behind an atomic pointer, replaced wholesale on a cold miss.
+	//
+	// **It was a `sync.Map`, and the type assertion that required is why it is not.** `sync.Map` stores `any`,
+	// so every read needed `v.([]int32)` — and a failed assertion there would have dropped the engine back to
+	// the scan, which is the exact slow path this mechanism removes. That is a **performance cliff with every
+	// test still green**, which is how #835 went unnoticed for as long as it did. The chair's ruling was to
+	// make it fail loudly; this makes it **unrepresentable**, which is stronger: there is no assertion to fail.
+	//
+	// A panic was the other candidate and is rejected for a reachability reason, not a stylistic one:
+	// `Instance.Invoke`'s recover re-panics everything that is not `threadTerminated`, so a panic here reaches
+	// the embedder as a process crash — and decision 0077's precedent for *the engine's own broken invariant*
+	// is a typed sentinel the embedder can handle, not a crash.
+	//
+	// Reads are a lock-free atomic load and a map index. Writes copy, add, and compare-and-swap, which is
+	// O(n) per cold miss and O(n²) over a run — 991 misses on the measured guest, so ~490k entry copies once,
+	// against 4.6M lookups that pay nothing. The copy is also what makes publication safe without a lock: a
+	// reader holds a map no writer can touch.
+	ends   atomic.Pointer[map[uintptr][]int32]
 	calls  atomic.Int64
 	builds atomic.Int64
 }
@@ -84,29 +100,33 @@ func (in *Instance) frameEnds(fn *binary.Func) endTable {
 		return nil
 	}
 	k := bodyKey(fn.Body)
-	if v, ok := in.ends.Load(k); ok {
-		// **Comma-ok, and the failure branch is unreachable rather than defensive.** This map is written in
-		// exactly one place — the `LoadOrStore` below — and only ever with a `[]int32`. The assertion is
-		// written in its checked form because `errcheck`'s type-assertion check refuses the bare one, and a
-		// bare assertion that *could* panic inside the interpreter's hot entry path is worth refusing even
-		// when today's writer makes it impossible. Falling through to the scan is the conservative answer: it
-		// is slower and correct, which is the right direction for an impossible case.
-		if tbl, isTable := v.([]int32); isTable {
-			return tbl
-		}
-		return nil
+	if tbl, ok := in.loadEnds()[k]; ok {
+		return tbl
 	}
 	// **Built privately.** Nothing below is reachable by another agent until the LoadOrStore.
 	in.builds.Add(1)
 	built := buildEnds(fn.Body)
-	// **Published atomically.** A loser takes the winner's table and drops its own; the two are identical
-	// because the pairing is a pure function of the body, so the discard costs one allocation on a cold
-	// body and never a wrong answer.
-	actual, _ := in.ends.LoadOrStore(k, built)
-	if tbl, isTable := actual.([]int32); isTable {
-		return tbl
+	// **Published by replacing the whole map**, so a reader either sees the old one or the new one and never a
+	// half-written entry. The CAS loop handles the race with another agent installing a different body's table
+	// at the same time: a loser re-copies from the winner's map rather than discarding the winner's work, which
+	// is why this is a loop and not a single swap.
+	for {
+		old := in.ends.Load()
+		cur := in.loadEnds()
+		next := make(map[uintptr][]int32, len(cur)+1)
+		for key, v := range cur {
+			next[key] = v
+		}
+		if existing, ok := next[k]; ok {
+			// Another agent installed this very body between the miss and here. Its table is identical to
+			// ours — the pairing is a pure function of the body — so take theirs and drop the copy.
+			return existing
+		}
+		next[k] = built
+		if in.ends.CompareAndSwap(old, &next) {
+			return built
+		}
 	}
-	return built
 }
 
 // buildEnds pairs every structural header in one body with its END, in a single pass.
@@ -162,13 +182,10 @@ func endOf(body []binary.Instr, ends endTable, pc int) (int, error) {
 // `sync.Map.Range` is safe against concurrent writers, and a table installed while this is counting is simply
 // counted or not — a race the answer tolerates, since it is a size report rather than a verdict.
 func (in *Instance) RetainedEndsBytes() (tables, slots int) {
-	in.ends.Range(func(_, v any) bool {
+	for _, tbl := range in.loadEnds() {
 		tables++
-		if tbl, isTable := v.([]int32); isTable {
-			slots += len(tbl)
-		}
-		return true
-	})
+		slots += len(tbl)
+	}
 	// Summed with the other lane's store for the reason `ends_retained_off.go` records: one accessor,
 	// lane-independent, so a flip package's figures come from one driver.
 	mt, ms := in.memo.retained()
@@ -202,4 +219,17 @@ func hasOpener(body []binary.Instr) bool {
 		}
 	}
 	return false
+}
+
+// loadEnds reads the current immutable table map, treating the unset pointer as empty.
+//
+// **It takes the atomic rather than a `*map`**, which `gocritic` is right about: a pointer-to-map parameter is
+// a smell on its own, and the pointer only exists because `atomic.Pointer` needs one. Taking the atomic means
+// the nil case lives in exactly one place instead of at each of the three readers, and a reader cannot forget
+// it — a forgotten check there is a nil map index, which is a panic rather than a wrong answer.
+func (l *lazyEnds) loadEnds() map[uintptr][]int32 {
+	if m := l.ends.Load(); m != nil {
+		return *m
+	}
+	return nil
 }

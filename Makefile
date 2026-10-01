@@ -414,7 +414,25 @@ race:
 # carries the 760s that falsified it. A pin that silently absorbs a slower run is a pin that has stopped
 # measuring anything.
 #
-# ### MOVED 2026-10-01: the FLOOR comes DOWN, because the flip made the engine faster than the floor assumed
+# ### RULE, set 2026-10-01: an engine-default change resets every time floor to PROVISIONAL
+#
+# Twice an engine change has made this job faster than its own floor. A floor is calibrated against an engine,
+# so when the default engine changes the floor is **measuring something that no longer exists** — and failing a
+# run on it is a gate asserting a stale property. A floor written `~96` in the invocation below is provisional:
+# printed and compared, advisory **everywhere**, with a note saying it is unpinned. It is re-armed by dropping
+# the `~` once it has been re-pinned from an observation on the new default.
+#
+# **The marker is single-quoted in the recipe, and that is not style.** Unquoted, `~96` is a *directory-stack
+# reference* in zsh — it fails with `not enough directory stack entries` before the script ever runs. Bash
+# leaves it alone, and this file's recipes are bash, so it would have worked here and broken for anyone who
+# invoked the script from an interactive zsh. Quoting removes the question.
+#
+# `witnesses-race` is provisional right now. Local numbers on the new default are 22s norace and 29s race; CI's
+# norace came in at 40s and 45s, so the race arm is **predicted at 53–59s** against its 96s floor. **That
+# prediction is recorded before the run** so the re-pin is a forecast tested rather than a number fitted after
+# the fact, and the pin will come from CI's own observation.
+#
+# ### MOVED 2026-10-01: the norace FLOOR comes DOWN, because the flip made the engine faster than it assumed
 #
 # The #835 flip (ADR 0048's 2026-09-30 section) changed the default pairing mechanism, and the witnesses job
 # got **~2.4x faster**. Both arches then came in *below* the 48s floor and the job failed — not because a
@@ -497,7 +515,7 @@ race:
 # check when it fires locally is whether the floor is simply CI-shaped rather than whether the run was real.
 witnesses:
 	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 338 20
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 96 --race
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 '~96' --race
 
 vet:
 	$(GO) vet ./...
