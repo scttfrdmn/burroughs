@@ -1,7 +1,7 @@
 // Copyright 2026 Scott Friedman.
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build !burroughs_endtable
+//go:build !burroughs_endtable && !burroughs_lazytabl && !burroughs_sitememo
 
 package interp
 
@@ -24,8 +24,12 @@ import "github.com/scttfrdmn/burroughs/internal/binary"
 //
 // A method with an unused receiver, for the same one-`runFrame` reason: lane B reads the table off
 // the instance's module (0048's arena), so the signature has to admit a receiver in both lanes.
-func (*Instance) frameEnds(*binary.Func) []int32 { return nil }
+// endTable is what a lane hands `endOf`. A per-lane alias, so `exec.go` is byte-identical in
+// every lane and the A/B compares mechanisms rather than call sites.
+type endTable = []int32
+
+func (*Instance) frameEnds(*binary.Func) endTable { return nil }
 
 // endOf pairs the structural header at `pc` with its END. In this lane it is `matchEnd` verbatim:
 // the table argument is ignored because no table was built.
-func endOf(body []binary.Instr, _ []int32, pc int) (int, error) { return matchEnd(body, pc) }
+func endOf(body []binary.Instr, _ endTable, pc int) (int, error) { return matchEnd(body, pc) }

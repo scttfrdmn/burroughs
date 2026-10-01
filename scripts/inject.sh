@@ -21,6 +21,8 @@
 #
 # ## What this refuses
 #
+#   - an injection whose tree does not COMPILE — reported as INVALID INJECTION, exit 3, because a build
+#     error and a control dying are the same exit status from outside and that has been misread twice;
 #   - an edit that produces no diff — the injection did not apply;
 #   - a restore that leaves a diff — the tree is dirty and the next measurement inherits it;
 #   - with `--expect-fail`, a control that SURVIVED its injection — because *a control isn't born until it's
@@ -107,6 +109,38 @@ hunk=$(git diff -- "$file")
 
 echo "inject: applied to $file:" >&2
 printf '%s\n' "$hunk" | sed 's/^/    /' >&2
+
+# ---------------------------------------------------------------------------------------------------------
+# **The injected tree must COMPILE before the control is allowed to judge it.**
+#
+# Twice now an injection has been reported as a watched death when the subject never ran. The second time was
+# the clearer specimen: removing a `sync.Map` left an unused `"sync"` import, so `go test` exited non-zero on
+# `"sync" imported and not used` — a red run, zero race reports, and a control that had not been exercised at
+# all. A build failure and a control dying are the same exit status from outside, and only this step can tell
+# them apart.
+#
+# `go build` over the whole module rather than `go vet` or a package: an injection may break a *consumer* of
+# the file it edited, and a per-package check would miss that. Tags are passed through `INJECT_BUILD_TAGS`
+# because a lane behind a build tag is exactly the thing injections are aimed at, and building the untagged
+# tree would compile a different file set than the command is about to run.
+#
+# The failure is reported as **INVALID INJECTION** and exits **3**, distinct from both the control's own
+# failure and `inject`'s other refusals, so no caller can read a compile error as a verdict.
+buildlog=$(mktemp)
+# shellcheck disable=SC2086 # INJECT_BUILD_TAGS is a deliberate word-split: it may name several tags.
+if ! go build ${INJECT_BUILD_TAGS:+-tags "$INJECT_BUILD_TAGS"} ./... >"$buildlog" 2>&1; then
+	echo "inject: INVALID INJECTION — the injected tree does not COMPILE, so the command below would have" >&2
+	echo "        failed for a reason that is not the control. A build error and a control dying are the same" >&2
+	echo "        exit status from outside, and that has already been misread twice." >&2
+	echo "        the compiler's own words:" >&2
+	sed 's/^/          /' "$buildlog" >&2
+	rm -f "$buildlog"
+	git checkout -- "$file" || fail "could not restore $file after an invalid injection"
+	echo "inject: $file restored" >&2
+	exit 3
+fi
+rm -f "$buildlog"
+echo "inject: the injected tree compiles${INJECT_BUILD_TAGS:+ (-tags $INJECT_BUILD_TAGS)}" >&2
 
 set +e
 "$@"

@@ -43,6 +43,15 @@ import (
 // Enforced by the return type rather than by this comment: Instantiate returns `*Trap`, so a
 // verdict cannot travel through it even by mistake.
 type Instance struct {
+	// lazyEnds is lane C's per-instance pairing-table store (#136's lazy prototype) and is a zero-width
+	// struct in every other lane. Embedded for the reason `binary.Module` embeds `moduleEnds`: a field that
+	// existed only under a build tag would make this declaration differ between lanes, and the A/B rests on
+	// the two builds sharing every other line.
+	lazyEnds
+
+	// memo is lane D's per-instance site memo (#136's sparse prototype), zero-width elsewhere.
+	memo siteMemo
+
 	mod *binary.Module
 
 	// mems is the memory index space, in index order — **imports first, then definitions**,
