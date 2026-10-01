@@ -253,6 +253,12 @@ own condition rather than as a prediction.
   as a later dashed word — and `--no-print-directory` contains an `n` that must never match. A
   first-word-only check passes the direct arm and misses the nested one, which is witnessed as an
   injection rather than argued.
+- **A witness hard-coded one developer's path and inverted on CI.** Two hook arms began
+  `cd ~/src/burroughs`, so on a runner where that directory does not exist the hook correctly resolved
+  the bare path against a non-repo directory and **allowed** the write — both arms reporting the
+  opposite of the truth. Found by CI while the local gate was green, which is the mirror's precondition
+  failing in the direction where CI observes what `make` cannot. The arms now substitute the real tree
+  root, verified by running them through a different absolute path rather than only here.
 - **The hook over-refused a file outside the repo.** `cd /tmp/x && … > Makefile` was refused as
   overwriting the tracked root `Makefile`, because a bare name was resolved against the repo root and
   nothing looked at the `cd`. **An over-refusing check is not the safe direction** — it blocks work it

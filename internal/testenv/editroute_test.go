@@ -124,7 +124,7 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 		{
 			// The campaign's own defect, verbatim in shape.
 			name: "inline_python_writing_a_tracked_file",
-			cmd: "cd ~/src/burroughs && python3 - <<'PY'\n" +
+			cmd: "cd {ROOT} && python3 - <<'PY'\n" +
 				"p='scripts/ciwatch.sh'\ns=open(p).read()\n" +
 				"s=s.replace('a','b')\nopen(p,'w').write(s)\nPY",
 			deny: true,
@@ -263,7 +263,7 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			// repo must still resolve bare names to tracked files. Without this arm, "follow the cd" could
 			// decay into "ignore relative paths" and still pass the arm above.
 			name: "a_cd_into_the_repo_still_resolves_bare_names",
-			cmd:  "cd ~/src/burroughs && echo broken > CHANGELOG.md",
+			cmd:  "cd {ROOT} && echo broken > CHANGELOG.md",
 			deny: true,
 			want: "CHANGELOG.md",
 		},
@@ -283,11 +283,17 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			if tool == "" {
 				tool = "Bash"
 			}
+			// `{ROOT}` is substituted rather than written out, because the two arms that need a `cd` into
+			// the repo first said `cd ~/src/burroughs` — one developer's path. CI caught it: on a runner
+			// that directory does not exist, so the hook correctly resolved the bare path against a
+			// non-repo directory and ALLOWED the write, and both arms inverted. A witness that hard-codes
+			// where the tree lives is asserting something about a machine, not about the hook.
+			cmdText := strings.ReplaceAll(a.cmd, "{ROOT}", root)
 			payload, err := json.Marshal(map[string]any{
 				"hook_event_name": "PreToolUse",
 				"tool_name":       tool,
 				"cwd":             root,
-				"tool_input":      map[string]any{"command": a.cmd},
+				"tool_input":      map[string]any{"command": cmdText},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -312,7 +318,7 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			denied := code == 2
 			if denied != a.deny {
 				t.Fatalf("exit %d (denied=%v), want denied=%v\n\tcommand: %s\n\tstderr: %s",
-					code, denied, a.deny, a.cmd, stderr.String())
+					code, denied, a.deny, cmdText, stderr.String())
 			}
 			if a.deny && a.want != "" && !strings.Contains(stderr.String(), a.want) {
 				t.Errorf("the refusal does not mention %q, so this arm may be passing on the wrong\n"+
