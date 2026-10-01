@@ -7,11 +7,13 @@ package interp
 
 import (
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// This file is **lane C** of #136's question, prototyped on the #839 ruling: a dense pairing table per body,
+// This file is **lane C** of #136's question, prototyped on the chair's ruling on the #838 review: a dense pairing table per body,
 // built the **first time that body is entered** and never for a body that is not.
 //
 // # Why a third lane, when lane B exists and passes
@@ -47,7 +49,9 @@ import (
 // cost is one map's worth of duplication per instance of the same module, which is a cost this prototype
 // reports rather than hides.
 type lazyEnds struct {
-	tables sync.Map // *binary.Func -> []int32
+	ends   sync.Map // body data pointer -> []int32
+	calls  atomic.Int64
+	builds atomic.Int64
 }
 
 // frameEnds returns this body's pairing table, building it on first entry.
@@ -61,15 +65,35 @@ func (in *Instance) frameEnds(fn *binary.Func) endTable {
 	if fn == nil || len(fn.Body) == 0 {
 		return nil
 	}
-	if v, ok := in.lazyEnds.tables.Load(fn); ok {
+	in.lazyEnds.calls.Add(1)
+	// **A body with no structural opener gets no table, and that is the whole of the count fix.**
+	//
+	// The first version built one for every body `frameEnds` saw, and a run showed **101 044** tables for a
+	// module with **10 402** functions. Two explanations were available and *both were wrong*: nothing
+	// materializes a `Func` per indirect call (`DefinedFunc` returns `&m.Funcs[i]`, a stable pointer), and
+	// nothing passes re-sliced body tails. Reading the source found a third cause —
+	// [Instance.runConst] synthesizes `&binary.Func{Body: expr}` **once per const expression**, and this
+	// guest has **100 000 active data segments** plus 8 globals and 1 element segment. 100 009 + ~1 034
+	// entered function bodies is the 101 044.
+	//
+	// Those bodies are `i32.const N; end` — which is why the smallest table measured 2 slots. A const
+	// expression cannot contain a block, so its table is all `-1` and can never answer anything. Skipping
+	// blockless bodies removes every one of them, and removes blockless *functions* too, which is the
+	// majority of them in a hand-written corpus.
+	if !hasOpener(fn.Body) {
+		return nil
+	}
+	k := bodyKey(fn.Body)
+	if v, ok := in.lazyEnds.ends.Load(k); ok {
 		return v.([]int32)
 	}
 	// **Built privately.** Nothing below is reachable by another agent until the LoadOrStore.
+	in.lazyEnds.builds.Add(1)
 	built := buildEnds(fn.Body)
 	// **Published atomically.** A loser takes the winner's table and drops its own; the two are identical
 	// because the pairing is a pure function of the body, so the discard costs one allocation on a cold
 	// body and never a wrong answer.
-	actual, _ := in.lazyEnds.tables.LoadOrStore(fn, built)
+	actual, _ := in.lazyEnds.ends.LoadOrStore(k, built)
 	return actual.([]int32)
 }
 
@@ -113,4 +137,55 @@ func endOf(body []binary.Instr, ends endTable, pc int) (int, error) {
 		}
 	}
 	return matchEnd(body, pc)
+}
+
+// RetainedEndsBytes reports what this instance's lazy tables actually hold.
+//
+// **Measured rather than estimated, because the estimate would be the thing in question.** Criterion 3′ asks
+// for retained bytes against peak RSS, and lane C's whole claim is that it retains less than lane B by only
+// paying for bodies that run. A figure derived from "30% of bodies were entered on one guest" would be
+// arithmetic over a different run; this counts the slices this instance is holding.
+//
+// Exported so a driver outside the package can read it after a run. It is not on a hot path and takes no lock:
+// `sync.Map.Range` is safe against concurrent writers, and a table installed while this is counting is simply
+// counted or not — a race the answer tolerates, since it is a size report rather than a verdict.
+func (in *Instance) RetainedEndsBytes() (tables, slots int) {
+	in.lazyEnds.ends.Range(func(_, v any) bool {
+		tables++
+		slots += len(v.([]int32))
+		return true
+	})
+	// Summed with the other lane's store for the reason `ends_retained_off.go` records: one accessor,
+	// lane-independent, so a flip package's figures come from one driver.
+	mt, ms := in.memo.retained()
+	return tables + mt, slots + ms
+}
+
+// RetainedEndsCalls reports frameEnds calls and builds, to tell "one key per function" from "one key per call".
+func (in *Instance) RetainedEndsCalls() (calls, builds int64) {
+	return in.lazyEnds.calls.Load(), in.lazyEnds.builds.Load()
+}
+
+// bodyKey is a retained body's stable identity: its backing array's data pointer.
+func bodyKey(body []binary.Instr) uintptr {
+	return uintptr(unsafe.Pointer(unsafe.SliceData(body)))
+}
+
+// hasOpener reports whether a body contains any structural header, i.e. whether a pairing table could ever
+// answer a question about it.
+//
+// **One pass over a body that is about to be interpreted anyway**, and only on the cold path: a body with a
+// table takes the `Load` and never reaches here again. A const expression — two instructions — costs two
+// comparisons once.
+func hasOpener(body []binary.Instr) bool {
+	for i := range body {
+		if body[i].Prefix != 0x00 {
+			continue
+		}
+		switch body[i].Op {
+		case opBlock, opLoop, opIf, opTryTable:
+			return true
+		}
+	}
+	return false
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// This file is **lane D** of #136's question, prototyped on the #839 ruling: a pairing memo keyed by the
+// This file is **lane D** of #136's question, prototyped on the chair's ruling on the #838 review: a pairing memo keyed by the
 // structural site, filled the first time **that site** is entered.
 //
 // # What it is for, and the risk it is carrying
@@ -81,4 +81,14 @@ func endOf(body []binary.Instr, m endTable, pc int) (int, error) {
 // on the lookup path, which is the one path this lane cannot afford to make slower than it already is.
 func bodyID(body []binary.Instr) uintptr {
 	return uintptr(unsafe.Pointer(unsafe.SliceData(body)))
+}
+
+// retained reports what the memo holds, for [Instance.RetainedEndsBytes]. One entry per *entered site*, which
+// is the figure lane D's whole case rests on — and the one criterion 1 never let it reach.
+func (m siteMemo) retained() (tables, slots int) {
+	m.sites.Range(func(_, _ any) bool {
+		slots++
+		return true
+	})
+	return 1, slots
 }
