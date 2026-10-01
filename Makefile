@@ -189,10 +189,17 @@ check:
 # untouched by its own run.
 CI_VERDICT ?= .ci-verdict
 
+# **The SHA is captured BEFORE the gates, not when the verdict is written.** Observed, not theorised: a gate
+# started on one commit, ran for minutes, and by the time it wrote, another commit had moved the tip — so
+# `git rev-parse HEAD` inside the writer named a tree the gate had never seen. That run happened to be red, but
+# a run that PASSES on A and finishes after a commit to B writes `exit=0 sha=B`: a green for a tree never
+# tested, which `prmerge.sh` accepts. Passing the start SHA makes a moved tip a mismatch, which prmerge already
+# refuses by name.
 ci:
 	@rm -f $(CI_VERDICT)
-	@rc=0; $(MAKE) --no-print-directory ci-gates || rc=$$?; \
-	scripts/civerdict.sh $$rc $(CI_VERDICT); \
+	@start=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
+	rc=0; $(MAKE) --no-print-directory ci-gates || rc=$$?; \
+	scripts/civerdict.sh $$rc $(CI_VERDICT) $$start; \
 	exit $$rc
 
 ci-gates:

@@ -240,6 +240,12 @@ own condition rather than as a prediction.
   because without it a green from three commits ago reads exactly like a green from this one. One
   consequence changes the working order: the gate must run on the **committed** tree, so it is
   commit, then `make ci`, then push, then merge.
+- **A verdict could name a tree the gate never saw.** The SHA was read when the verdict was
+  *written*, so a gate started on commit A and finishing after a commit to B recorded `sha=B` with
+  A's result — **observed**, on a run that happened to be red; a passing one would have written
+  `exit=0 sha=B`, a green for a tree never tested, which `prmerge.sh` accepts. The SHA is now
+  captured **before** the gates and passed in, so a moved tip becomes a mismatch that prmerge already
+  refuses by name, and the writer says on stderr that the tip moved rather than absorbing it silently.
 - **The verdict writer itself refuses to run during a dry run**, so no caller can forge a green —
   not a hand-typed `make -n ci`, not a debugging session, not a future test. The flag detection is
   **measured rather than guessed, because the obvious form is half-broken**: `make -n ci` gives

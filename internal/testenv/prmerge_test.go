@@ -162,6 +162,38 @@ func TestCIVerdictRecordsTheTreeItActuallyRanOn(t *testing.T) {
 		}
 	})
 
+	t.Run("the_gated_sha_is_recorded_not_the_current_tip", func(t *testing.T) {
+		// Observed, not theorised. A gate started on one commit, ran for minutes, and by the time the writer
+		// ran another commit had moved the tip — so `git rev-parse HEAD` named a tree the gate had never
+		// seen. That run was red. A run that PASSES on A and finishes after a commit to B would have written
+		// `exit=0 sha=B`: a green for a tree never tested, which prmerge.sh accepts.
+		//
+		// So the caller passes the SHA captured before the gates, and it must win over the current HEAD.
+		// A fake SHA is used because it cannot possibly equal the repo's tip, which is the whole point.
+		const gated = "1111111111111111111111111111111111111111"
+		out := filepath.Join(t.TempDir(), "v")
+		c := exec.Command("bash", script, "0", out, gated)
+		c.Dir = repo
+		combined, runErr := c.CombinedOutput()
+		if runErr != nil {
+			t.Fatalf("civerdict.sh: %v\n%s", runErr, combined)
+		}
+		raw, readErr := os.ReadFile(out)
+		if readErr != nil {
+			t.Fatalf("no verdict written: %v", readErr)
+		}
+		if !strings.Contains(string(raw), "sha="+gated) {
+			t.Errorf("the verdict records %q instead of the GATED sha %s — a long gate that outlives a\n"+
+				"commit would then label its result with a tree it never saw:\n%s",
+				strings.TrimSpace(string(raw)), gated, raw)
+		}
+		// And the move must be SAID, not silently absorbed: a verdict prmerge will refuse needs a reason a
+		// reader can find, or the refusal looks like a broken writer.
+		if !strings.Contains(string(combined), "MOVED") {
+			t.Errorf("the writer did not report that the tip moved during the run:\n%s", combined)
+		}
+	})
+
 	t.Run("a_nested_dry_run_is_still_a_dry_run", func(t *testing.T) {
 		// The other measured form, which the obvious implementation gets wrong: under a nested `-n` the
 		// first MAKEFLAGS word is EMPTY and `-n` arrives as a later dashed word. A first-word-only check

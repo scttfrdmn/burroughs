@@ -75,7 +75,28 @@ if [ "$dry" = "yes" ]; then
 	exit 0
 fi
 
-sha=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+# --- the SHA must be the tree that was GATED, not the tree that exists now --------------------------------
+#
+# Observed: a gate started on one commit, ran for minutes, and by the time it reached this line another commit
+# had moved the tip — so `git rev-parse HEAD` named a tree the gate had never seen. That run was red, so the
+# mislabelling cost nothing; a run that PASSES on A and finishes after a commit to B writes `exit=0 sha=B`,
+# which is a green for a tree never tested and is exactly what `prmerge.sh` accepts.
+#
+# So the caller passes the SHA it captured BEFORE the gates. The fallback to the current HEAD is kept for a
+# direct invocation, and a mismatch is reported rather than silently preferred either way: a moved tip means
+# the verdict is about neither tree cleanly, and saying so is cheaper than picking.
+sha=${3:-}
+if [ -z "$sha" ]; then
+	sha=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+else
+	now=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+	if [ "$now" != "$sha" ]; then
+		echo "civerdict: the tip MOVED during the run — gated ${sha:0:12}, now ${now:0:12}." >&2
+		echo "           Recording the gated SHA, so prmerge.sh will refuse this verdict against the" >&2
+		echo "           current tip. A verdict naming a tree the gate never saw is the forged-green" >&2
+		echo "           shape arriving by a different route." >&2
+	fi
+fi
 
 # `dirty` asks whether the tree the gate ran on is the tree the SHA names. Untracked files count: a gate that
 # passed with an uncommitted test file present says nothing about the commit without it.
