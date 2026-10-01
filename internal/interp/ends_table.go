@@ -32,7 +32,10 @@ import "github.com/scttfrdmn/burroughs/internal/binary"
 //
 // No build, no cache, no allocation: `binary.Module.FuncEnds` is bounds arithmetic over a slice the
 // module retains.
-func (in *Instance) frameEnds(fn *binary.Func) []int32 {
+// endTable is what a lane hands `endOf`; see `ends_scan.go` for why it is an alias.
+type endTable = []int32
+
+func (in *Instance) frameEnds(fn *binary.Func) endTable {
 	return in.mod.FuncEnds(fn)
 }
 
@@ -46,7 +49,7 @@ func (in *Instance) frameEnds(fn *binary.Func) []int32 {
 // fuzz mutation of an already-decoded form can, leaves `-1` in its slot; the error a caller must get
 // for that is the one `matchEnd` already writes, so it is delegated rather than restated and the two
 // lanes cannot diverge in what they report.
-func endOf(body []binary.Instr, ends []int32, pc int) (int, error) {
+func endOf(body []binary.Instr, ends endTable, pc int) (int, error) {
 	if pc < len(ends) {
 		if e := ends[pc]; e >= 0 {
 			return int(e), nil
