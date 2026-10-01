@@ -427,10 +427,19 @@ race:
 # leaves it alone, and this file's recipes are bash, so it would have worked here and broken for anyone who
 # invoked the script from an interactive zsh. Quoting removes the question.
 #
-# `witnesses-race` is provisional right now. Local numbers on the new default are 22s norace and 29s race; CI's
-# norace came in at 40s and 45s, so the race arm is **predicted at 53–59s** against its 96s floor. **That
-# prediction is recorded before the run** so the re-pin is a forecast tested rather than a number fitted after
-# the fact, and the pin will come from CI's own observation.
+# `witnesses-race` was provisional and is now **RE-ARMED at 29s**, pinned from CI's own observation.
+#
+# **The forecast and the outcome, both recorded, because the ordering is what makes the pin trustworthy.**
+# Before the run: *"local numbers are 22s norace and 29s race; CI's norace came in at 40s and 45s, so the race
+# arm is predicted at 53–59s."* Observed on CI: **60s (amd64) and 59s (arm64)**. The shape was right and the
+# low end was wrong — arm64 landed exactly on the top of the range and amd64 one second above it. Reported as
+# what it is rather than rounded into a hit.
+#
+# Pinned by this file's rule, half the lowest observed: 59 / 2 = 29.5, taken **down** to **29**, because a floor
+# that errs low fails no honest run while a floor that errs high fails every fast one.
+#
+# The `norace` arm's second observation is 48s (amd64) and 47s (arm64), against the 40s that set its 20s pin.
+# The pin does not move: the rule reads from the **lowest** observed, and 40s is still it.
 #
 # ### MOVED 2026-10-01: the norace FLOOR comes DOWN, because the flip made the engine faster than it assumed
 #
@@ -515,7 +524,7 @@ race:
 # check when it fires locally is whether the floor is simply CI-shaped rather than whether the run was real.
 witnesses:
 	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 338 20
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 '~96' --race
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 29 --race
 
 vet:
 	$(GO) vet ./...
