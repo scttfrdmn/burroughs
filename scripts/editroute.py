@@ -431,14 +431,51 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return 0
-    if payload.get("tool_name") != "Bash":
+    tool = payload.get("tool_name")
+    inp = payload.get("tool_input") or {}
+    root = repo_root()
+    cwd = payload.get("cwd") or os.getcwd()
+
+    # --- the editor tool's own escape from the one-match check -----------------------------------
+    #
+    # `subst1.py` refuses >1 match, and the reason is stated in its own docstring: picking the first
+    # silently is how an injection lands in the wrong one of several identical call sites. The editor
+    # tool's `replace_all: true` opts out of exactly that refusal — and in the slice that built this
+    # hook it hit a **sixth** call site nobody intended, leaving the hook crashing with a NameError.
+    #
+    # So the route around the loud check gets closed, which is this hook's whole premise. A wide edit
+    # across a tracked file is not forbidden work; it is work that must be done where its scope is
+    # visible, which means one anchored edit at a time or a longer unique anchor.
+    #
+    # Scoped to TRACKED files for the same reason every other route is: an untracked or new file has
+    # no reviewers and no history to disturb.
+    if tool in ("Edit", "MultiEdit") and inp.get("replace_all") is True:
+        target = inp.get("file_path") or ""
+        if is_tracked(target, root, cwd):
+            print(
+                "editroute: REFUSED — `replace_all: true` on the tracked file "
+                f"{target!r}.\n\n"
+                "  It replaces every occurrence without telling you how many there were, which is the\n"
+                "  one thing `scripts/subst1.py` refuses outright (>1 match is an ambiguous edit). In\n"
+                "  the slice that added this hook, a `replace_all` hit a sixth call site nobody\n"
+                "  intended and left the hook itself crashing.\n\n"
+                "  Do instead one of:\n"
+                "    - extend the anchor until it is unique, and edit once; or\n"
+                "    - make the edits one at a time, so each one's site is visible; or\n"
+                "    - python3 scripts/subst1.py <target> <old-file> <new-file>, which refuses 0 and\n"
+                "      >1 matches and prints the hunk it wrote with context.\n\n"
+                "  Untracked and new files are not refused — a wide edit there disturbs no history.\n",
+                file=sys.stderr,
+            )
+            return 2
         return 0
-    cmd = (payload.get("tool_input") or {}).get("command") or ""
+
+    if tool != "Bash":
+        return 0
+    cmd = inp.get("command") or ""
     if not cmd:
         return 0
 
-    root = repo_root()
-    cwd = payload.get("cwd") or os.getcwd()
     reasons = findings(cmd, root, cwd)
     if not reasons:
         return 0

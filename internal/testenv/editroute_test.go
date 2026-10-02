@@ -118,6 +118,9 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 		// subjects need different guidance and **a refusal that names the wrong route is worse than one
 		// that names none**: it sends the reader to a tool that cannot help. Defaults to the edit routes.
 		routes []string
+		// editInput carries a non-Bash payload verbatim. The `Edit` subject has no command to put in
+		// `cmd`, and faking one would test a shape the harness never sends.
+		editInput map[string]any
 	}
 	editRoutes := []string{"editor tool", "subst1.py"}
 	arms := []arm{
@@ -219,10 +222,37 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
-			name: "a_non_bash_tool_is_never_the_subject",
+			name: "a_plain_edit_is_never_the_subject",
 			tool: "Edit",
 			cmd:  "",
 			deny: false,
+		},
+		{
+			// `replace_all` opts out of the >1-match refusal `subst1.py` enforces. In the slice that built
+			// this hook it hit a sixth call site nobody intended and left the hook itself crashing.
+			name:      "replace_all_on_a_tracked_file_is_refused",
+			tool:      "Edit",
+			editInput: map[string]any{"file_path": "{ROOT}/scripts/ciwatch.sh", "replace_all": true},
+			deny:      true,
+			want:      "replace_all",
+			routes:    []string{"subst1.py", "unique"},
+		},
+		{
+			// The allow arm that makes the flag the subject rather than the tool: same tracked file, same
+			// editor, one anchored replacement. Without it, "refuse Edit on tracked files" passes the deny
+			// arm and makes the hook unusable.
+			name:      "an_anchored_edit_on_a_tracked_file_is_permitted",
+			tool:      "Edit",
+			editInput: map[string]any{"file_path": "{ROOT}/scripts/ciwatch.sh", "replace_all": false},
+			deny:      false,
+		},
+		{
+			// And scoped to TRACKED files, like every other route here: a wide edit to an untracked or new
+			// file disturbs no history and has no reviewers.
+			name:      "replace_all_on_an_untracked_file_is_permitted",
+			tool:      "Edit",
+			editInput: map[string]any{"file_path": "/tmp/scratch-notes.md", "replace_all": true},
+			deny:      false,
 		},
 		{
 			// Behaviour 5: a duration is not a signal. This slipped more than once in the session that
@@ -289,11 +319,21 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			// non-repo directory and ALLOWED the write, and both arms inverted. A witness that hard-codes
 			// where the tree lives is asserting something about a machine, not about the hook.
 			cmdText := strings.ReplaceAll(a.cmd, "{ROOT}", root)
+			input := map[string]any{"command": cmdText}
+			if a.editInput != nil {
+				input = map[string]any{}
+				for k, v := range a.editInput {
+					if s, ok := v.(string); ok {
+						v = strings.ReplaceAll(s, "{ROOT}", root)
+					}
+					input[k] = v
+				}
+			}
 			payload, err := json.Marshal(map[string]any{
 				"hook_event_name": "PreToolUse",
 				"tool_name":       tool,
 				"cwd":             root,
-				"tool_input":      map[string]any{"command": cmdText},
+				"tool_input":      input,
 			})
 			if err != nil {
 				t.Fatal(err)

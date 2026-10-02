@@ -111,6 +111,20 @@ $nbody body-subject ($(printf '%s ' $bodykeys))" >&2
 # drives the real selection code rather than a reimplementation of it.
 fetch_runs() {
 	if [ -n "${CIWATCH_FIXTURE:-}" ]; then
+		# A fixture may declare that the run list is empty for its first N calls, so the bounded wait below
+		# can be witnessed rather than asserted. Without this the retry path has no arm: a static fixture
+		# either has runs from the start or never gets them, and neither exercises "appeared on attempt 3".
+		if [ -f "$CIWATCH_FIXTURE/runs.delay" ]; then
+			want=$(tr -dc '0-9' <"$CIWATCH_FIXTURE/runs.delay")
+			seen=0
+			[ -f "$prefix.delaycount" ] && seen=$(tr -dc '0-9' <"$prefix.delaycount")
+			seen=$((seen + 1))
+			echo "$seen" >"$prefix.delaycount"
+			if [ "$seen" -le "${want:-0}" ]; then
+				echo ""
+				return
+			fi
+		fi
 		python3 -c 'import json,sys; print(" ".join(str(r["databaseId"]) for r in json.load(open(sys.argv[1]))))' \
 			"$CIWATCH_FIXTURE/runs.json"
 		return
@@ -127,11 +141,42 @@ fetch_run() {
 	gh run view "$1" --repo "$repo" --json status,conclusion,headSha,jobs
 }
 
+# --- wait a BOUNDED time for a run to appear, because "not yet" is not "not coming" -------------------------
+#
+# This exited 3 the instant no run existed, and the moment it is launched is the moment right after a push —
+# exactly when GitHub may not have created the run. It bit once: a watcher launched straight after `git push`
+# reported `no run exists ... yet` and ended, having watched nothing.
+#
+# Exit 3 was never *dishonest* — it claimed no verdict, which is the right direction for a failure and the
+# whole reason this script exists rather than `gh pr checks --watch`, which reports the previous commit's
+# green. It was simply useless at the one moment it is used.
+#
+# So the two states are now told apart, and the distinction is the point:
+#
+#   NO RUN YET      — inside the bound. Keep polling, and say how long has been waited so the operator can see
+#                     the difference between progress and a stall.
+#   NO RUN IS COMING — the bound is spent. Exit 3, naming the bound, so the message says what was concluded
+#                     and on what evidence rather than reporting a momentary absence as a verdict.
+#
+# The bound is a duration because what is being waited for is a remote system's scheduling latency, which has
+# no signal to wait on — the one case where a timer is the right instrument rather than a substitute for one.
+run_wait=${CIWATCH_RUN_WAIT:-180}
+run_poll=${CIWATCH_RUN_POLL:-10}
+waited=0
 runs=$(fetch_runs)
-if [ -z "${runs// /}" ]; then
-	echo "ciwatch: no run exists for $sha yet" >&2
-	exit 3
-fi
+while [ -z "${runs// /}" ]; do
+	if [ "$waited" -ge "$run_wait" ]; then
+		echo "ciwatch: FAIL no run appeared for $sha after ${waited}s (bound ${run_wait}s)." >&2
+		echo "         This is 'no run is coming', not 'not yet': the bound is spent. Check the push" >&2
+		echo "         landed (git ls-remote) and that the workflow's triggers cover this ref." >&2
+		exit 3
+	fi
+	echo "ciwatch: no run yet for $sha — waited ${waited}s of ${run_wait}s, polling again in ${run_poll}s" >&2
+	sleep "$run_poll"
+	waited=$((waited + run_poll))
+	runs=$(fetch_runs)
+done
+[ "$waited" -gt 0 ] && echo "ciwatch: a run appeared after ${waited}s" >&2
 echo "ciwatch: runs for this SHA: $runs" >&2
 
 # --- wait for EVERY run for this SHA to FINISH, before deciding anything about it --------------------------
