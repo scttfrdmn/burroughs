@@ -1,0 +1,6 @@
+MODE      abandon
+EVENTS    enter(1) -> suspend(1)
+OUTCOME   abandon: host future dropped after guest arrival
+ARRIVALS  1
+RECEIPT   none (expected: the task was abandoned, not cancelled)
+TICKDROP  false

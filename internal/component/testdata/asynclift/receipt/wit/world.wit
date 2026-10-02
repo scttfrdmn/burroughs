@@ -1,0 +1,18 @@
+package test:receipt@0.1.0;
+
+// The cancellation witness's guest. Identical to `suspending`'s world apart from `note`, because both
+// arms of the witness are cut from THIS guest and the guest must not be a variable between them.
+world job {
+  // Suspends the task. Without a suspension point there is nothing for the host to cancel.
+  import tick: async func(id: u32) -> u32;
+
+  // The receipt channel: a SYNC import the guest calls from a Drop guard local to the async body, so
+  // the host records that the cancellation reached the guest. Sync because it is called from `drop`,
+  // which cannot await.
+  //
+  // Whether a cancelled task may call an import at all is an open question, pre-registered on #857
+  // with both outcomes fixed in advance.
+  import note: func(code: u32);
+
+  export run: async func(id: u32) -> u32;
+}

@@ -106,7 +106,7 @@ print(hits[0])
 ' "$1"
 }
 
-for g in single suspending; do
+for g in single suspending receipt; do
 	echo "== guest: $g ==" >&2
 	# `wit_bindgen::generate!` reads `path: "wit"`, a DIRECTORY relative to the crate root, so each guest
 	# keeps `wit/world.wit` rather than a flat `world.wit`. The first staging of these artefacts flattened
@@ -132,6 +132,26 @@ echo "== readings ==" >&2
 "$bin" sequential "$here/suspending/component.wasm" > "$here/sequential.reading" 2>&1 || true
 cat "$here/concurrent.reading" "$here/sequential.reading" >&2
 
+# The abandonment arms (#857, ABANDONMENT.md). Both are cut from the receipt guest by
+# `scripts/stripcall.py`, which refuses on anything but exactly one matched call, requires the edited
+# module to VALIDATE, requires the bytes to change, and requires the committed diff to be +0/-1.
+#
+# **Both arms go through the round-trip**, because `wasm-tools print`/`parse` is not byte-identical
+# (measured: a2600925… -> bb766fec… on a no-op round-trip). Comparing a committed guest against an
+# edited one would differ by the edit AND by normalization; comparing round-tripped against
+# round-tripped-and-edited leaves the deleted call as the only variable.
+echo "== abandonment arms ==" >&2
+arms=$(mktemp -d)
+python3 "$here/../../../../scripts/stripcall.py" "$here/receipt/component.wasm" --out-dir "$arms"
+cp "$arms/stripped.wat.diff" "$here/receipt.wat.diff"
+"$bin" abandon "$arms/roundtrip.wasm" > "$here/abandonment.reading" 2>&1 || true
+"$bin" abandon "$arms/stripped.wasm" > "$here/abandonment-stripped.reading" 2>&1 || true
+cat "$here/abandonment.reading" >&2
+rm -rf "$arms"
+
 echo >&2
 echo "build.sh: the SEQUENTIAL reading is expected to report an expired rendezvous." >&2
 echo "          That is the negative arm's verdict, not a failure of this script." >&2
+echo "build.sh: the two ABANDONMENT readings are expected to be IDENTICAL. Dropping a host call" >&2
+echo "          future does not cancel a started task, so the deleted task.cancel cannot matter." >&2
+echo "          That identity is the finding -- see ABANDONMENT.md -- not a failure either." >&2

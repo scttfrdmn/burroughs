@@ -15,6 +15,31 @@ struct Rv {
     arrived: Mutex<u32>,
     notify: tokio::sync::Notify,
     log: Mutex<Vec<String>>,
+    /// Fired by `tick` once the guest has arrived and is about to go pending. **This is the
+    /// cancellation arm's drop signal**: the host drops the call future when the guest has
+    /// demonstrably suspended, never after a duration (#857 amendment 3).
+    arrived_sig: tokio::sync::Notify,
+    /// Set by the `note` host import — the guest's receipt that the cancellation reached it.
+    ///
+    /// **A latch, not a `Notify`.** `notify_waiters` stores no permit, so a receipt arriving while
+    /// nobody is awaiting is lost — and the receipt arrives during the engine's cancellation work,
+    /// which runs when the canceller is *not* waiting. The first version used a `Notify` here and
+    /// could not have observed a receipt even if one had been sent.
+    receipt: Mutex<Option<u32>>,
+    /// Set when the pending `tick`'s future is dropped. Captures what becomes of a host call left
+    /// in flight when its task is cancelled, which Burroughs will have to match.
+    tick_dropped: Mutex<bool>,
+}
+
+/// Records that the pending host `tick` was dropped. A guard rather than a flag set by hand, because
+/// the thing being measured is *the host future being dropped*, and only a `Drop` impl observes that.
+struct TickDropped(Arc<Rv>);
+
+impl Drop for TickDropped {
+    fn drop(&mut self) {
+        *self.0.tick_dropped.lock().unwrap() = true;
+        self.0.say("tick-dropped".into());
+    }
 }
 
 impl Rv {
@@ -54,6 +79,29 @@ async fn rendezvous(rv: Arc<Rv>, id: u32) -> Result<u32> {
     }
 }
 
+/// The cancellation arm's `tick`: it **never completes**.
+///
+/// Held pending with no bound, deliberately (#857 amendment 3). The rendezvous `tick` releases on a second
+/// arrival and expires at `BOUND`; reused here that makes the arm a race — if `tick` returned before the
+/// drop took effect the guest would resume, disarm its receipt guard and call `task.return`, and the arm
+/// would record a **normal completion** while claiming to be the positive cancellation arm. A reading that
+/// is right about the fact and wrong about the reason.
+///
+/// With no completion path, cancellation is the only way the call can end, so the verdict cannot turn on
+/// which `select!` branch won by a hair.
+async fn pending_tick(rv: Arc<Rv>, id: u32) -> Result<u32> {
+    rv.say(format!("enter({id})"));
+    {
+        let mut g = rv.arrived.lock().unwrap();
+        *g += 1;
+    }
+    let _dropped = TickDropped(rv.clone());
+    rv.say(format!("suspend({id})"));
+    rv.arrived_sig.notify_waiters();
+    std::future::pending::<()>().await;
+    unreachable!("the cancellation arm's tick never completes; the only exit is cancellation")
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "concurrent".into());
@@ -70,13 +118,44 @@ async fn main() -> Result<()> {
         arrived: Mutex::new(0),
         notify: tokio::sync::Notify::new(),
         log: Mutex::new(Vec::new()),
+        arrived_sig: tokio::sync::Notify::new(),
+        receipt: Mutex::new(None),
+        tick_dropped: Mutex::new(false),
     });
 
+    // Named `abandon`, not `cancel`, because that is what it measures. Dropping the host call future
+    // does NOT cancel a started task in wasmtime 49 — it abandons it. The mode was called `cancel`
+    // while the premise was believed, and the name is corrected rather than the reading relabelled.
+    let abandoning = mode == "abandon";
     let mut linker: Linker<HostState> = Linker::new(&engine);
-    linker.root().func_wrap_concurrent("tick", |acc, (id,): (u32,)| {
+    linker.root().func_wrap_concurrent("tick", move |acc, (id,): (u32,)| {
         let rv = acc.with(|mut s| s.get().rv.clone());
-        Box::pin(async move { rendezvous(rv, id).await.map(|v| (v,)) })
+        Box::pin(async move {
+            if abandoning {
+                pending_tick(rv, id).await.map(|v| (v,))
+            } else {
+                rendezvous(rv, id).await.map(|v| (v,))
+            }
+        })
     })?;
+
+    // The receipt channel. SYNC, because the guest calls it from a `Drop` impl, which cannot await.
+    // Registered as a host import rather than stdout so the harness is the witness rather than the
+    // subject: a stdout line would be the guest's claim about itself.
+    //
+    // **Amendment 2's question — may a cancelled task call an import? — is NOT reached by this mode**,
+    // because nothing here cancels. The receipt is wired up anyway and its absence is part of the
+    // reading: it is what shows the guest's cancellation path never ran.
+    if abandoning {
+        let rv_note = rv.clone();
+        linker
+            .root()
+            .func_wrap("note", move |_store, (code,): (u32,)| {
+                rv_note.say(format!("receipt({code})"));
+                *rv_note.receipt.lock().unwrap() = Some(code);
+                Ok(())
+            })?;
+    }
 
     let mut store = Store::new(&engine, HostState { rv: rv.clone() });
     let instance = linker.instantiate_async(&mut store, &component).await?;
@@ -86,9 +165,39 @@ async fn main() -> Result<()> {
     // rendezvous expired the host error escaped through the task machinery and `main` returned before
     // printing EVENTS — losing the diagnostic log at exactly the moment the registration's failure table
     // needs it. A witness must report its evidence on the failing path above all.
+    let rv_cancel = rv.clone();
     let outer = store
         .run_concurrent(async |acc| -> Result<String> {
-            if mode == "sequential" {
+            if mode == "abandon" {
+                // Start the call, then drop it once the guest has DEMONSTRABLY suspended. `select!`
+                // drops the losing branch, so the arrival signal winning *is* the drop — and the
+                // signal is the guest reaching `tick`, never a duration.
+                //
+                // This was built to be a CANCELLATION arm and is not one. Dropping the host future
+                // does not cancel a started task in wasmtime 49; `TaskId::host_future_dropped`
+                // cancels eagerly only when the parameters have NOT been lowered, and otherwise
+                // merely marks the future dropped and defers deletion until the task's threads
+                // finish. `Event::Cancelled` has exactly one producer, `subtask_cancel` — a GUEST
+                // built-in, reachable only through `libcalls.rs`. So the mode measures abandonment,
+                // and it is named for that.
+                let outcome = {
+                    let fut = run.call_concurrent(acc, (1,));
+                    tokio::select! {
+                        r = fut => {
+                            // With a pending-forever `tick` a normal return is impossible, so this
+                            // is reported as the finding rather than as a pass.
+                            format!("call RESOLVED unexpectedly: {r:?}")
+                        }
+                        () = rv_cancel.arrived_sig.notified() => "host future dropped after guest arrival".into(),
+                    }
+                };
+                // **Return immediately after the drop, and inspect the receipt outside.** Measured:
+                // waiting for the receipt *here* observes nothing even in principle, because the
+                // engine's own task machinery is driven by `run_concurrent` — the very future this
+                // closure is suspended inside. Nothing can process the drop while the caller holds
+                // the floor.
+                Ok(format!("abandon: {outcome}"))
+            } else if mode == "sequential" {
                 // The second call is not issued until the first resolves, so the rendezvous cannot close.
                 let a = run.call_concurrent(acc, (1,)).await;
                 let b = run.call_concurrent(acc, (2,)).await;
@@ -112,5 +221,24 @@ async fn main() -> Result<()> {
         Err(e) => println!("OUTCOME   host/task error: {e}"),
     }
     println!("ARRIVALS  {}", *rv.arrived.lock().unwrap());
+    if abandoning {
+        // `abandoning`, not a second `mode ==` literal: the first version of this block tested
+        // `mode == "cancel"` and silently stopped printing RECEIPT and TICKDROP when the mode was
+        // renamed — two facts dropped from the reading with nothing failing. One predicate, one site.
+        //
+        // Read AFTER `run_concurrent` has returned, which is the only point the engine has had a
+        // chance to process the dropped call future.
+        match *rv.receipt.lock().unwrap() {
+            Some(code) => println!("RECEIPT   observed, code={code}"),
+            // Expected under abandonment, and part of the reading rather than a disappointment: the
+            // guest's cancellation path never ran because the guest was never cancelled.
+            None => println!("RECEIPT   none (expected: the task was abandoned, not cancelled)"),
+        }
+        // The reference fact amendment 3 added: what becomes of a host call left in flight when its
+        // task is cancelled. A host function held pending forever is a resource, and whether the
+        // engine tears it down or leaks it is a difference an embedder hits eventually — so it is
+        // captured here rather than discovered in slice 3.
+        println!("TICKDROP  {}", *rv.tick_dropped.lock().unwrap());
+    }
     Ok(())
 }

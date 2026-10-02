@@ -1,6 +1,6 @@
 # 0085 — The public component API surface: a new component value type, resource handles first-class, and WIT-typed constructors
 
-Date: 2026-09-09 · Status: **accepted** · [#697](https://github.com/scttfrdmn/burroughs/issues/697) · Resolves ADR 0084's deferred embedder surface · **Amendment 1 (2026-10-02, stamped by Scott) adds `context.Context` to `Component.Call` and makes cancellation a distinct outcome** — a question this body does not reach
+Date: 2026-09-09 · Status: **accepted** · [#697](https://github.com/scttfrdmn/burroughs/issues/697) · Resolves ADR 0084's deferred embedder surface · **Amendment 1 (2026-10-02, stamped by Scott) adds `context.Context` to `Component.Call` and makes cancellation a distinct outcome** — a question this body does not reach · **A correction is appended to amendment 1: its wasmtime premise is false, and the decision stands on corrected grounds**
 Ratio-Class: carried
 
 ## Context
@@ -138,3 +138,50 @@ this amendment can be recorded now without any surface appearing:
 
 Recorded by the actor the ruling reached, so **no independent provenance**; commits resting on this amendment
 stay `Ratio-Class: carried`.
+
+### Correction to amendment 1 (2026-10-02) — the wasmtime premise above is wrong; the decision stands on corrected grounds
+
+**Amendment 1's text is left exactly as written** and this is appended, because the record of what was believed
+when a decision was taken is the part worth keeping. The decision is unchanged. One of the reasons given for
+it was false.
+
+**What amendment 1 claims and what is actually true.** It states *"On wasmtime the host cancels by dropping
+the call's future; there is no public `cancel()` (`concurrent.rs:2404`)"*, and offers that as the shape
+`Component.Call(ctx, …)` matches. The second half is right — there is no public `cancel()`. The first half is
+not: **wasmtime gives a host no way to cancel a task that has already started.** Dropping the call future
+*abandons* it. Three independent confirmations, found when #857's witness was built rather than by reading:
+
+1. `TaskId::host_future_dropped` cancels eagerly **only** in its `!already_lowered_parameters()` branch — a
+   task that has not started. For a started task it sets `host_future_state = Dropped` and defers deletion
+   until all threads finish.
+2. `Event::Cancelled` is produced in exactly one place, inside `subtask_cancel` — the `0x06` built-in, invoked
+   by a **guest** cancelling a subtask it started.
+3. `subtask_cancel` is reachable only from `libcalls.rs`, the guest libcall path; no public host API reaches
+   it. And `HostFutureState::Dropped` is read only by `ready_to_delete()`, never to trigger cancellation.
+
+Measured, on the receipt guest with its host call held pending: the task is **not** cancelled, the guest's
+cancellation path never runs, and **the pending host call is not dropped** (`TICKDROP false`).
+
+**How the error was made, stated so the method is corrected and not just the fact.** The cited comment at
+`concurrent.rs:2404` says *"Dropping a host `call_async` future which needs to cancel the task"*. It is about
+**`call_async`**, the non-concurrent API, and about the pre-lowering case. It was generalised to
+`call_concurrent` and to started tasks **without checking** — a comment read as a specification, which is the
+shape `docs/laws/errors-and-testimony.md` names, applied to someone else's comment instead of our own.
+
+**Why the decision is unaffected.** Cancellation is defined in the component model: it is the semantics of a
+caller cancelling its subtask (`subtask.cancel`), which delivers the cancelled event and requires the callee
+to finish through `task.cancel` or `task.return`. Burroughs' context cancellation applies **those** semantics,
+with the host acting as the caller. So the decision is not "copy wasmtime's host API" — there is nothing there
+to copy — but "implement the spec's cancellation semantics, driven by `ctx`". That is a stronger basis than
+the one originally given.
+
+**What changes is the oracle, not the decision.** The reference for this behaviour is **wasmtime running a
+component that cancels its own subtask**, not wasmtime's host interface. That composition is #857's slice 2b.
+
+**Abandonment is reference behaviour but not a requirement.** Burroughs is not obliged to reproduce it: Go's
+`context` offers no way to walk away from a call *without* cancelling, so the state wasmtime enters has no
+expressible analogue at this surface. It is recorded because it is real, and because it is the reason the
+original premise failed.
+
+(Correction ruled by chat-Claude on the #857 reading; reported to Scott, whose decision stands. Recorded by
+the actor, so no independent provenance.)

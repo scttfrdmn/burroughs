@@ -1,0 +1,10 @@
+--- roundtrip.wat
++++ stripped.wat
+@@ -7882,7 +7882,6 @@
+       call $_RNvCskdKJRKLKjqM_7___rustc14___rust_dealloc
+     )
+     (func $_ZN90_$LT$wit_bindgen..rt..async_support..TaskCancelOnDrop$u20$as$u20$core..ops..drop..Drop$GT$4drop17h98669c00c95c6703E (;59;) (type 1) (param i32)
+-      call $_ZN90_$LT$wit_bindgen..rt..async_support..TaskCancelOnDrop$u20$as$u20$core..ops..drop..Drop$GT$4drop6cancel17h11288b8e1d1d4b6aE
+     )
+     (func $_ZN92_$LT$wit_bindgen..rt..async_support..waitable..CabiTask$u20$as$u20$core..ops..drop..Drop$GT$4drop17hf6a774f36f4a797fE (;60;) (type 1) (param i32)
+       (local i32)
