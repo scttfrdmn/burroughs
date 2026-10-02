@@ -456,15 +456,25 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 	return "", false
 }
 
-// isBuiltAsyncBuiltin reports whether an async canon built-in opcode is one this engine executes: the
-// waitable-set loop (gate:async 2a-i-B-2) — waitable-set.new (0x1f), .wait (0x20), .drop (0x22),
-// waitable.join (0x23); the future.read slice (increment 3) — future.read (0x16), future.drop-readable
-// (0x1a); the stream write-side slice (increment 3) — stream.write (0x10); stream.new (0x0e), the stream
-// drops — drop-readable (0x13), drop-writable (0x14) — and the stream cancels — cancel-read (0x11),
-// cancel-write (0x12) — (increment 4); and context.get/set (increment 4, 0x0a/0x0b). Every other async
-// built-in — waitable-set.poll (0x21), future.write/new/cancel-read, and stream.read (0x0f) — stays refused
-// by name until a guest binds it; the subtask ops subtask.cancel (0x06) and subtask.drop (0x0d) are built
-// (increment 4). stream.read stays refused: the guest writes, the host reads (an internal path).
+// isBuiltAsyncBuiltin reports whether an async canon built-in opcode is one this engine executes.
+//
+// **The authoritative list is not this comment.** It is `testdata/canon-builtins.tsv` — every canon
+// production in Binary.md at CANON_PIN — paired with the `canonStatus` classification beside the witness in
+// canonbuiltins_test.go, which asserts those two and this switch agree **in both directions**: an opcode
+// added here with nothing reclassified fails, and so does a status claiming one this switch does not permit
+// (ADR 0092).
+//
+// It is written that way because of grave #850: the prose list that used to stand here had drifted from the
+// switch below and was twice read as the engine's actual coverage. It said waitable-set.poll (0x21) "stays
+// refused by name" while 0x21 sat in the case list, and it named none of 0x09/0x15/0x17/0x19 among the built.
+// A comment duplicating a property the code already carries is correct exactly once; what a reader needs is
+// which instrument to ask, so that is what this says.
+//
+// The shape, which does not drift: the waitable-set loop, the stream and future operations the earlier
+// increments built, the subtask ops, task.return, and the context slots. What stays refused is the rest of
+// the 🔀 family — including stream.read, where the guest writes and the host reads over an internal path,
+// and task.cancel (0x05), which the committed suspending guest DOES import and is therefore slice 2's engine
+// work rather than a deferral waiting for a consumer.
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
 	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x06, 0x0d, 0x0a, 0x0b, 0x09, 0x15, 0x17, 0x19:

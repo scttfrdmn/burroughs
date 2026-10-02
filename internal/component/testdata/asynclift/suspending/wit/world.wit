@@ -1,0 +1,6 @@
+package test:conc@0.1.0;
+
+world job {
+  import tick: async func(id: u32) -> u32;
+  export run: async func(id: u32) -> u32;
+}

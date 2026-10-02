@@ -1,0 +1,9 @@
+package test:probe@0.1.0;
+
+interface ops {
+  compute: async func(x: u32) -> u32;
+}
+
+world probe {
+  export ops;
+}

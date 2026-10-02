@@ -923,6 +923,21 @@ canon-fixtures:
 	cd internal/component/canon/gen && uv run --no-project python3 gen.py > ../testdata/fixtures.json
 	@echo "regenerated internal/component/canon/testdata/fixtures.json from definitions.py @ $(CANON_PIN)"
 
+# Regenerate the canon built-in table from `Binary.md` at the SAME pin (#771, ADR 0092). Spec facts only —
+# opcode, name, proposal marker — because Burroughs' status per built-in is authored in Go beside the witness
+# that compares the two; generating the status from the engine would make that comparison vacuous.
+#
+# Shares CANON_PIN with `canon-fixtures` deliberately: the two read different files from one revision, and a
+# pin that could differ between them is a pin that will. The witness asserts the table's recorded pin equals
+# this variable, so bumping CANON_PIN without re-running this target fails the suite rather than going unread.
+#
+# `definitions.py` is NOT the authority for this table and the difference is measured: at this pin it defines
+# 44 `canon_*` functions against Binary.md's 47 productions, missing exactly the three 🧵② shared-everything
+# -threads forms. The binary grammar is what a decoder must be total over, so the grammar is what is read.
+canon-builtins:
+	./scripts/gen-canon-builtins.py "$(CANON_PIN)" > internal/component/testdata/canon-builtins.tsv
+	@echo "regenerated internal/component/testdata/canon-builtins.tsv from Binary.md @ $(CANON_PIN)"
+
 # Regenerate the opcode table from the vendored reference (decision 0007). The output
 # is committed, so this is run when the pin moves, not on every build.
 opcodes: spec-ref threads-ref
