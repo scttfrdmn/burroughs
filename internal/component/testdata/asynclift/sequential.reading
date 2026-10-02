@@ -1,0 +1,4 @@
+MODE      sequential
+EVENTS    enter(1) -> suspend(1) -> expire(1)
+OUTCOME   host/task error: rendezvous expired after 5s with only 1 arrival(s)
+ARRIVALS  1

@@ -1,0 +1,4 @@
+MODE      concurrent
+EVENTS    enter(1) -> suspend(1) -> enter(2) -> release(by 2) -> resume(1)
+OUTCOME   concurrent: first=Ok((1,)) second=Ok((2,))
+ARRIVALS  2

@@ -1,0 +1,8 @@
+[package]
+name = "concwitness"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wasmtime = { version = "49", features = ["component-model-async"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

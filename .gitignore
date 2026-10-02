@@ -30,6 +30,12 @@ __pycache__/
 # holder before ending it. Untracked — it is a fact about one machine's current run.
 .ci-lock
 
+# Cargo build directories under the async-lift guests. The COMPONENTS are committed and the build script is
+# run deliberately, out of CI (ADR 0086's "commit the oracle's reading" shape) — so `target/` is a by-product
+# of regenerating them, not an input. Scoped to this testdata path rather than a bare `target/`: this is a Go
+# module with no Rust of its own, and a tree-wide rule would quietly ignore a future directory that matters.
+internal/component/testdata/asynclift/*/target/
+
 # The edit-route hook's refusal log: when, which rule, a hash of the command. Untracked because it is a fact
 # about one machine's recent sessions, and because the point is to measure the hook's FALSE-POSITIVE rate
 # rather than to publish a project-wide statistic. `scripts/refusals.sh` reports it.
