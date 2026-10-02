@@ -30,6 +30,17 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The edit-route hook logs each refusal, so its false-positive rate is measured rather than recalled**
+  (`.editroute-log`, untracked; `scripts/refusals.sh` reports by rule). The hook had refused **ten** times and
+  **three were false positives** — all three on its author, and it was narrowed three times as a result. That
+  rate is what decides whether the mechanism survives, because **an over-refusing check is the kind that gets
+  deleted**, and it was being counted from memory. One line per refusal: timestamp, rule slug, and a **hash**
+  of the command — the hash because a command can carry a path or a secret and the log is for counting, not
+  forensics. **The report cannot say which refusals were wrong**, and says so: that is a judgement about what
+  the author meant, and classifying the entries is a deliberate step at a tooling decision.
+  `TestEveryRefusalReasonHasARule` keeps the rule table **total** over the hook's own deny arms, so a reason
+  added later cannot log as `unclassified` and quietly hole the figure.
+
 - **A `pre-commit` hook refuses commits on the default branch** (`.githooks/pre-commit`, installed by
   `make hooks`). After one PR merged, the next slice's two commits went onto `main` directly — not from
   disagreeing with the rule but because the `git checkout -b` step never happened, and noticing was luck. The
