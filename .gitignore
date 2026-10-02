@@ -29,3 +29,8 @@ __pycache__/
 # The gate lock: one `make ci` at a time. Holder pid, process group and start SHA, so a reader can identify a
 # holder before ending it. Untracked — it is a fact about one machine's current run.
 .ci-lock
+
+# The edit-route hook's refusal log: when, which rule, a hash of the command. Untracked because it is a fact
+# about one machine's recent sessions, and because the point is to measure the hook's FALSE-POSITIVE rate
+# rather than to publish a project-wide statistic. `scripts/refusals.sh` reports it.
+.editroute-log

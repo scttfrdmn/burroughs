@@ -86,12 +86,14 @@ the agent is told.** So the message names the two permitted routes, because a re
 say what to do instead is how an agent learns to work around a check rather than through it.
 """
 
+import hashlib
 import json
 import os
 import re
 import shlex
 import subprocess
 import sys
+import time
 
 # Interpreters whose program text can arrive inline, on `-c`/`-e` or through a heredoc.
 INTERPRETERS = {"python", "python3", "perl", "ruby", "node", "php", "uv"}
@@ -116,6 +118,73 @@ WRITE_OPEN = re.compile(
 LITERAL = re.compile(r"""['"]([^'"\n`$]{1,256})['"]""")
 
 HEREDOC = re.compile(r"""<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
+
+# --- the refusal log ----------------------------------------------------------------------------------------
+#
+# **Why a log and not a tally.** This hook has refused ten times and **three of those were false positives**,
+# all three on its own author — a bare name after a `cd` outside the repo, a *backgrounded* `sleep` (a process,
+# not a wait), and a `/dev/null` belonging to a later command. It has been narrowed three times as a result.
+# That ratio matters more than any single catch, because **an over-refusing check is the kind that gets
+# deleted** — and until now the ratio was counted from memory, which is the one thing this project does not
+# accept for a figure that decides something.
+#
+# So each refusal appends **one line**: when, which rule, and a hash of the command. The hash and not the
+# command, because a command can carry a path or a secret and this file is for counting, not for forensics.
+#
+# Untracked and gitignored: it is a fact about one machine's recent sessions. Classifying the entries
+# true/false is a separate, deliberate step at the next tooling decision — a log nobody reads is a tally with
+# extra steps.
+REFUSAL_LOG = ".editroute-log"
+
+# Rule slugs, matched by a distinctive phrase from each reason. **Ordered**, and the first match wins.
+#
+# A reason is prose, so this is a classifier over text the hook itself emits — not over a file, which is why
+# property 21's parse-don't-grep does not reach it. What *does* reach it is the risk that a new reason lands
+# with no rule and logs as `unclassified`, which is why
+# `TestEveryRefusalReasonHasARule` asserts the classifier is TOTAL over the hook's own deny arms.
+RULES: tuple[tuple[str, str], ...] = (
+    ("replace-all", "`replace_all: true`"),
+    ("subst1-discarded", "landing display"),
+    ("subst1-chained", "runs whatever its exit status was"),
+    ("sleep-as-wait", "a duration is not a signal"),
+    ("inline-write", "an inline interpreter opens"),
+    ("in-place-edit", "in place"),
+    ("tee-write", "tee would overwrite"),
+    ("redirect-write", "a shell redirection"),
+
+)
+
+
+def rule_for(text: str) -> str:
+    for slug, phrase in RULES:
+        if phrase in text:
+            return slug
+    return "unclassified"
+
+
+def log_refusal(texts: list[str], subject: str, root: str) -> None:
+    """Append exactly one line per refusal: `when<TAB>rules<TAB>hash`.
+
+    Failures are swallowed on purpose. A hook that cannot write its log must still refuse — making the
+    refusal depend on the log would turn a disk-full into a permissive hook, which is the inverse of what
+    this file is for.
+    """
+    try:
+        rules = ",".join(sorted({rule_for(t) for t in texts})) or "unclassified"
+        digest = hashlib.sha256(subject.encode("utf-8", "replace")).hexdigest()[:12]
+        when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # `EDITROUTE_LOG` overrides the path, matching what `scripts/refusals.sh` already reads. It exists
+        # for the witness: redirecting `CLAUDE_PROJECT_DIR` instead would move the repo root, and the root is
+        # what `git ls-files` is asked about — so the tracked-file routes would stop refusing and the arms
+        # would measure an empty repo. That is what the first version of the witness did.
+        path = os.environ.get("EDITROUTE_LOG") or (
+            os.path.join(root, REFUSAL_LOG) if root else REFUSAL_LOG
+        )
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"{when}\t{rules}\t{digest}\n")
+    except OSError:
+        pass
+
 
 ALLOWED_ROUTES = (
     "    - the editor tool (str_replace), which FAILS LOUDLY when its anchor is not found; or\n"
@@ -590,6 +659,7 @@ def main() -> int:
     if tool in ("Edit", "MultiEdit") and wide:
         target = inp.get("file_path") or ""
         if is_tracked(target, root, cwd):
+            log_refusal(["`replace_all: true`"], tool + " " + target, root)
             print(
                 "editroute: REFUSED — `replace_all: true` on the tracked file "
                 f"{target!r}.\n\n"
@@ -617,6 +687,7 @@ def main() -> int:
     reasons = findings(cmd, root, cwd)
     if not reasons:
         return 0
+    log_refusal(reasons, cmd, root)
 
     # The two subjects get their own guidance, because a refusal that names the wrong route is worse
     # than one that names none: it sends the reader to a tool that cannot help.

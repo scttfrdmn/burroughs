@@ -51,6 +51,15 @@ public entry and the contract text are Scott's.
    `gate:components` sync lift, but `ft.async_ = True` skips the sync-driver pump loop and lets the task stay
    pending, driven by the outer scheduler); (b) the **async `canon lower`** producing a subtask; (c) the
    **waitable-set / stream / future** built-ins the `run` task uses to await and to write `stream<u8>` stdout.
+   **DEFERRAL DISCHARGED 2026-10-02 — the condition below has been met and the work has started**
+   ([#771](https://github.com/scttfrdmn/burroughs/issues/771), approved by Scott on that issue's decision
+   document; a phase-and-scope call, since #771 is `phase:v3` work pulled forward). The guest this clause waited
+   for exists and was **built, not inferred**: `wit-bindgen 0.62.0` → a core module → `wasm-tools 1.258.0
+   component new` yields a component whose lift is `canon lift … async (callback …)`, i.e. the **stackless
+   callback** model. The choice is therefore made by the consumer, which is what this clause required. Appended
+   rather than rewritten: the sentence below is what was decided in September and is left standing, because a
+   deferral's discharge is a later event and not a correction of it. **Phase 4 stays open and no version moves.**
+
    **The async-lift ABI choice (stackless callback vs stackful) is deferred to the first guest that actually
    lifts an async export** — it is not forced by this guest and would be mechanism built ahead of a consumer.
 2. **The suspension substrate → goroutine-per-task, reusing §5 `CanonCaller.Blocking`.** The `run` task
