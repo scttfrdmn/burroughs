@@ -61,7 +61,11 @@ own condition rather than as a prediction.
   failed; `&&` is permitted because it is what the chaining meant. **The separator in the specimen was a
   newline**, which `shlex` eats as whitespace — so `… | head -3` and `git add -A` had been tokenising as
   one command, which silently widened every per-command judgement in the hook. Newlines are now
-  normalised to separators after heredoc lifting, and the newline arm fails without it.
+  normalised to separators after heredoc lifting, and the newline arm fails without it — **quote-aware,
+  and joining line continuations first**, because a blanket replacement turned `sed -i '' s/a/b/ \` +
+  newline + `CHANGELOG.md` into two commands with `-i` and its target separated, letting through exactly
+  the in-place edit the hook exists to refuse. One pass rather than two regexes: inside single quotes a
+  backslash is literal, so a blanket continuation join would corrupt the content it was meant to preserve.
 
 - **A `PreToolUse` hook refuses to edit a tracked file from a Bash command**
   (`scripts/editroute.py`, wired in the tracked `.claude/settings.json`). The two loud routes — the

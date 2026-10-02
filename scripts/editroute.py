@@ -268,6 +268,62 @@ WAIT_ROUTES = (
 )
 
 
+def separate_commands(text: str) -> str:
+    """Normalise newlines so each top-level command is one `shlex` command, quote-aware.
+
+    Three jobs, in one pass because they interact:
+
+    * a **line continuation** (`\\` then newline) outside quotes joins — it is one command, and splitting it
+      would put `sed -i` and its target in different commands;
+    * any other newline **outside quotes** becomes `;` — `shlex` eats newlines as whitespace, so without this
+      `… | head -3` and `git add -A` tokenise as a single command and every per-command check is widened;
+    * newlines **inside quotes** are left exactly as they are — they are content, and the inline-interpreter
+      check reads that content.
+
+    A single pass rather than two regexes because inside single quotes a backslash is literal: a blanket
+    `\\\\\\n -> ' '` would corrupt the quoted text it was supposed to leave alone.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if quote is not None:
+            # In double quotes a backslash still escapes; in single quotes nothing does.
+            if quote == '"' and c == "\\" and i + 1 < n:
+                out.append(c)
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            out.append(c)
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n and text[i + 1] == "\n":
+            out.append(" ")  # continuation: one command, not two
+            i += 2
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(c)
+            out.append(text[i + 1])
+            i += 2
+            continue
+        if c == "\n":
+            out.append(" ; ")
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def tokenize(text: str) -> list[str] | None:
     lex = shlex.shlex(text, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
@@ -300,9 +356,19 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     # in the specimen that motivated the subst1-chaining check, where a refused edit was followed by a commit
     # on the next LINE rather than after a `;`.
     #
-    # Heredoc bodies are already lifted out above, so every newline still here is a top-level separator and
-    # turning it into one is exact rather than approximate.
-    text = text.replace("\n", " ; ")
+    # **But not every remaining newline separates commands**, and a blanket replace broke two cases:
+    #
+    #  * **Line continuation.** `sed -i '' s/a/b/ \<newline> CHANGELOG.md` is ONE command. Replacing the
+    #    newline gives `… \ ; CHANGELOG.md`, where the backslash escapes a space and the `;` then splits
+    #    `-i` from its target into two commands — letting through exactly the in-place edit this hook exists
+    #    to refuse.
+    #  * **Newlines inside quotes.** A multi-line `-c` program or quoted commit message would get `; `
+    #    injected into its *content*, which is the text the inline-interpreter check reads.
+    #
+    # So the scan is quote-aware and does both jobs in one pass. The continuation join cannot be a separate
+    # blanket `\\\n -> ' '` either: inside single quotes a backslash is literal, so joining there would
+    # corrupt the content it was meant to preserve.
+    text = separate_commands(text)
     tokens = tokenize(text)
     if tokens is None:
         print(

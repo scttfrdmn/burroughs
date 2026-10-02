@@ -320,6 +320,26 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
+			// A LINE CONTINUATION is one command, and the newline-to-`;` normalisation nearly broke exactly
+			// the check it was added beside. Blanket-replacing the newline gives `sed -i '' s/a/b/ \ ; CHANGELOG.md`
+			// — the backslash escapes a space and the `;` splits `-i` from its target, so the in-place edit
+			// this hook exists to refuse walks through. This arm is the discriminator for the join step.
+			name: "an_in_place_edit_split_across_a_continuation_is_still_refused",
+			cmd:  "sed -i '' 's/a/b/' \\\n  CHANGELOG.md",
+			deny: true,
+			want: "in place",
+		},
+		{
+			// Newlines inside quotes are CONTENT, not separators. This is a regression guard rather than a
+			// discriminator, and is labelled as one: because `shlex` keeps a quoted string as a single token,
+			// a naive replacement injects `;` into the message text without changing the tokenisation, so
+			// this arm passes either way. It is here because the *content* is what the inline-interpreter
+			// check reads, and a future change to that check would be caught by it rather than by a user.
+			name: "a_multi_line_quoted_message_stays_one_command",
+			cmd:  "git commit -q -m \"line one\nsleep 300 was the bug\nline three\"",
+			deny: false,
+		},
+		{
 			// Behaviour 5: a duration is not a signal. This slipped more than once in the session that
 			// built the hook, including inside the slice itself.
 			name:   "a_bare_sleep_is_the_wait_and_is_refused",
