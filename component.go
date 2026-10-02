@@ -76,8 +76,18 @@ func resolveFeatures(fs []Feature) (bin.Features, error) {
 // name because the *host* chooses it; a component's is the guest's own declaration.
 //
 // This slice runs a `wasi:cli/run` world with the standard streams. Value-carrying component exports an
-// embedder calls with typed arguments are the `ComponentValue` surface (ADR 0085), which lands with its
-// first embedder consumer — a component export called with values, which this stdio-run entry is not.
+// embedder calls with typed arguments are a **separate surface that ADR 0085 decides and that has not
+// landed**: a tagged union over the WIT value types, distinct from the core-wasm [Value], reached through
+// `LoadComponent(wasm) (*Component, error)` — and, by that ADR's amendment 1,
+// `Component.Call(ctx, name, args...)` with cancellation as a distinct outcome. It lands with its first
+// embedder consumer, a component export called with values, which this stdio-run entry is not.
+//
+// This sentence named a `ComponentValue` type until grave #850's sibling, #856: **ADR 0085 contains no such
+// identifier.** The citation resolved — the ADR exists and the link is well-formed — while the claim about
+// what it says did not, which is the half no citation sweep can check. The value type's exported name is
+// genuinely still open (the ADR commits to the *shape* and shows a `Variant("closed", nil)` constructor), so
+// this comment names the shape and the entry points that are decided, rather than inventing the one that
+// is not.
 type ComponentConfig struct {
 	Args   []string  // the component's argv, lowered by wasi:cli/environment.get-arguments
 	Stdin  io.Reader // the component's stdin; nil means an empty stream
