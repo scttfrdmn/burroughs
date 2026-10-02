@@ -61,23 +61,70 @@ echo "== provenance ==" >&2
 "$HOST_CARGO" --version >&2
 "$WASM_TOOLS" --version >&2
 
+## Locating the build's output: ask cargo, never `find`
+#
+# **This paid for itself immediately.** The previous form searched a target directory for a `*.wasm` `-newer`
+# than `src/lib.rs` and took the first hit, with a hard-coded fallback into an ambient `CARGO_TARGET_DIR` on an
+# external drive. Run from a clean checkout — the only condition under which a reproducibility claim means
+# anything — every part of that failed at once:
+#
+#   * a clean checkout stamps `src/lib.rs` with the checkout time, so a warm target directory's artefact is
+#     always OLDER than the source and `-newer` matches nothing;
+#   * the shared target directory meant the build was a 0.62s cache hit from a DIFFERENT worktree, so the
+#     search was being pointed at another tree's artefacts — which answers the question with a past version of
+#     the tree whether or not anyone appointed it an oracle;
+#   * the script then exited 1 **before** `wasm-tools component new` ran, leaving the committed
+#     `component.wasm` untouched — so the hash comparison downstream compared the files to THEMSELVES and
+#     reported a clean match. A failing build produced a passing reproducibility check.
+#
+# So: a per-guest target directory (no cross-tree sharing), the artefact path read from cargo's own JSON
+# (no mtime heuristic, no first-match pick), and **the output deleted before the build** — a comparison whose
+# subject can survive a failed build is not a comparison.
+emit_artifact() {
+	# Reads `cargo build --message-format=json` on stdin and prints the single compiler-artifact filename
+	# matching the given extension. Refuses on anything but exactly one, because "take the first" is how the
+	# previous form silently answered from the wrong tree.
+	python3 -c '
+import json, sys
+want = sys.argv[1]
+hits = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        m = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if m.get("reason") != "compiler-artifact":
+        continue
+    hits += [f for f in (m.get("filenames") or []) if f.endswith(want)]
+if len(hits) != 1:
+    print(f"expected exactly 1 {want} artifact, cargo reported {len(hits)}: {hits}", file=sys.stderr)
+    raise SystemExit(1)
+print(hits[0])
+' "$1"
+}
+
 for g in single suspending; do
 	echo "== guest: $g ==" >&2
 	# `wit_bindgen::generate!` reads `path: "wit"`, a DIRECTORY relative to the crate root, so each guest
 	# keeps `wit/world.wit` rather than a flat `world.wit`. The first staging of these artefacts flattened
 	# it, and the macro's failure blamed an unresolved `exports` module three errors down from the cause.
-	( cd "$here/$g" && RUSTC="$RUSTUP_RUSTC" "$RUSTUP_CARGO" build --target wasm32-unknown-unknown --release )
-	core=$(find "$here/$g/target" /Volumes/External\ HD/cargo-target/wasm32-unknown-unknown/release \
-		-name '*.wasm' -newer "$here/$g/src/lib.rs" 2>/dev/null | head -1)
-	[ -n "$core" ] || { echo "build.sh: no core module found for $g" >&2; exit 1; }
+	rm -f "$here/$g/component.wasm"
+	core=$( cd "$here/$g" &&
+		RUSTC="$RUSTUP_RUSTC" CARGO_TARGET_DIR="$here/$g/target" \
+			"$RUSTUP_CARGO" build --target wasm32-unknown-unknown --release --message-format=json |
+			emit_artifact .wasm )
+	[ -n "$core" ] || { echo "build.sh: cargo reported no core module for $g" >&2; exit 1; }
 	"$WASM_TOOLS" component new "$core" -o "$here/$g/component.wasm"
-	echo "   wrote $g/component.wasm" >&2
+	echo "   wrote $g/component.wasm from $core" >&2
 done
 
 echo "== harness ==" >&2
-( cd "$here/harness" && RUSTC="$HOST_RUSTC" "$HOST_CARGO" build --release )
-bin=$(find "$here/harness/target/release" /Volumes/External\ HD/cargo-target/release \
-	-name concwitness -type f 2>/dev/null | head -1)
+bin=$( cd "$here/harness" &&
+	RUSTC="$HOST_RUSTC" CARGO_TARGET_DIR="$here/harness/target" \
+		"$HOST_CARGO" build --release --message-format=json | emit_artifact concwitness )
 [ -n "$bin" ] || { echo "build.sh: concwitness was not built" >&2; exit 1; }
 
 echo "== readings ==" >&2
