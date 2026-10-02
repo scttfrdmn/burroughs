@@ -25,3 +25,7 @@ __pycache__/
 # background task's notification carries the wrapper's code. `prmerge.sh` refuses to merge unless this file's
 # SHA is the local tip and its exit is 0. Untracked: it is a fact about one machine's last run.
 .ci-verdict
+
+# The gate lock: one `make ci` at a time. Holder pid, process group and start SHA, so a reader can identify a
+# holder before ending it. Untracked — it is a fact about one machine's current run.
+.ci-lock

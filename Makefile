@@ -189,6 +189,13 @@ check:
 # untouched by its own run.
 CI_VERDICT ?= .ci-verdict
 
+# **One gate at a time, enforced.** Two `make ci` runs overlapped three times in one campaign; the start-SHA
+# capture and prmerge's SHA check make an overlap HARMLESS but nothing made it impossible, and removing the
+# verdict at gate start cannot stop a run that finishes afterwards — the write happens after the removal, so
+# the file comes back. The lock is taken before anything else on the line, released by a trap, and the verdict
+# writer checks it still holds it. Overridable so the witness can point at a temp path.
+CI_LOCK ?= .ci-lock
+
 # **The SHA is captured BEFORE the gates, not when the verdict is written.** Observed, not theorised: a gate
 # started on one commit, ran for minutes, and by the time it wrote, another commit had moved the tip — so
 # `git rev-parse HEAD` inside the writer named a tree the gate had never seen. That run happened to be red, but
@@ -196,10 +203,13 @@ CI_VERDICT ?= .ci-verdict
 # tested, which `prmerge.sh` accepts. Passing the start SHA makes a moved tip a mismatch, which prmerge already
 # refuses by name.
 ci:
-	@rm -f $(CI_VERDICT)
-	@start=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
-	rc=0; $(MAKE) --no-print-directory ci-gates || rc=$$?; \
-	scripts/civerdict.sh $$rc $(CI_VERDICT) $$start; \
+	@rc=0; me=$$$$; \
+	scripts/cilock.sh acquire $(CI_LOCK) $$me || exit 1; \
+	trap 'scripts/cilock.sh release $(CI_LOCK) '"$$me" EXIT; \
+	rm -f $(CI_VERDICT); \
+	start=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
+	$(MAKE) --no-print-directory ci-gates || rc=$$?; \
+	scripts/civerdict.sh $$rc $(CI_VERDICT) $$start $(CI_LOCK) $$me; \
 	exit $$rc
 
 ci-gates:

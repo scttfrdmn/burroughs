@@ -473,13 +473,28 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     # A bare `sleep 240` at top level is the timer itself. So depth is tracked across the token stream and
     # only a depth-0 `sleep` is refused, which also means a `sleep` inside a committed script is untouched:
     # the hook never sees past the command line.
+    # **A BACKGROUNDED `sleep` is not a wait**, and refusing it was a false positive on this hook's own
+    # author: `sleep 400 &` was a live process to hold a gate lock in a witness, and the shell does not block
+    # on it at all. An over-refusing check is not the safe direction — it blocks work it was never aimed at,
+    # and a blocked actor proceeds by working around the check.
+    #
+    # The discriminator is the separator that FOLLOWS the command, which is exactly the structure the
+    # subst1-chaining check reads, one token further on.
+    backgrounded = set()
+    seen_cmds = 0
+    for i, t in enumerate(tokens):
+        if t in SEPARATORS:
+            if t == "&":
+                backgrounded.add(seen_cmds)
+            seen_cmds += 1
+
     depth = 0
-    for cmdv in simple_commands(tokens):
+    for n, cmdv in enumerate(simple_commands(tokens)):
         head = 0
         while head < len(cmdv) and cmdv[head] in SHELL_KEYWORDS:
             head += 1
         word = basename(cmdv[head]) if head < len(cmdv) else ""
-        if word == "sleep" and depth == 0:
+        if word == "sleep" and depth == 0 and n not in backgrounded:
             reasons.append(
                 "`sleep` is being used as the wait, at the top level of the command — a duration is not a "
                 "signal, and the signal being waited for already exists"

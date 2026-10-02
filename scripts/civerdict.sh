@@ -54,20 +54,11 @@ out=${2:-.ci-verdict}
 # Single-letter options are bundled into the FIRST word with no leading dash; long options follow as separate
 # dashed words. So two tests are needed, and one trap avoided: `--no-print-directory` contains an `n` and must
 # never match, which is why the word scan compares whole words rather than searching for a letter.
-dry=no
-flags=${MAKEFLAGS:-}
-first=${flags%% *}
-case "$first" in
-	"" | -*) : ;; # no single-letter bundle present
-	*n*) dry=yes ;;
-esac
-for w in $flags; do
-	case "$w" in
-		-n | --dry-run | --just-print | --recon) dry=yes ;;
-	esac
-done
-
-if [ "$dry" = "yes" ]; then
+# The detection lives in scripts/isdryrun.sh — one authority, because the gate lock on the same recipe line
+# needs the identical test and a second copy of something this subtle would drift. The measured MAKEFLAGS
+# shapes and the two traps are documented there.
+if "$(dirname "$0")/isdryrun.sh"; then
+	flags=${MAKEFLAGS:-}
 	echo "civerdict: REFUSING to write $out — this is a make DRY RUN (MAKEFLAGS=[$flags])." >&2
 	echo "           A dry run changes nothing, so it must not produce a verdict: prmerge.sh accepts" >&2
 	echo "           a green verdict for the current SHA, and -n does not stop a recipe line that" >&2
@@ -85,6 +76,26 @@ fi
 # So the caller passes the SHA it captured BEFORE the gates. The fallback to the current HEAD is kept for a
 # direct invocation, and a mismatch is reported rather than silently preferred either way: a moved tip means
 # the verdict is about neither tree cleanly, and saying so is cheaper than picking.
+# --- this run must still HOLD the gate lock -----------------------------------------------------------------
+#
+# A run whose lock was reclaimed is a run another gate has taken over from. Writing a verdict then is the
+# stale-green shape once more: this run's exit code against a tree somebody else is gating. The SHA field
+# catches the *common* case, where the tip moved; it cannot catch two gates on the SAME commit, and that is
+# exactly what a reclaimed lock means.
+#
+# Optional arguments, so a direct `civerdict.sh <rc> <out>` keeps working — the witness uses that form, and a
+# writer that *required* a lock could not be driven without inventing one.
+lockfile=${4:-}
+lockpid=${5:-}
+if [ -n "$lockfile" ] && [ -n "$lockpid" ]; then
+	if ! "$(dirname "$0")/cilock.sh" holds "$lockfile" "$lockpid"; then
+		echo "civerdict: REFUSING to write $out — this run no longer holds the gate lock." >&2
+		echo "           Another gate reclaimed it, so a verdict written now would carry THIS run's" >&2
+		echo "           exit code about a tree the OTHER run is gating. No file written." >&2
+		exit 0
+	fi
+fi
+
 sha=${3:-}
 if [ -z "$sha" ]; then
 	sha=$(git rev-parse HEAD 2>/dev/null || echo unknown)
