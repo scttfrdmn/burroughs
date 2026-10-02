@@ -30,6 +30,23 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **A gate lock: one `make ci` at a time, enforced rather than remembered** (`scripts/cilock.sh`,
+  `CI_LOCK ?= .ci-lock`, untracked). Two gates overlapped **three times** in one campaign. The start-SHA
+  capture and `prmerge.sh`'s SHA check made the resulting stale green *harmless*, but nothing made the
+  overlap impossible — and **removing the verdict at gate start cannot stop a run that finishes
+  afterwards**, because the write happens after the removal and the file comes back. The lock records the
+  holder's **pid, process group and start SHA**, so a reader can identify a holder before ending it; a live
+  holder **refuses**, naming it and pointing at `detach.sh --stop`; a **dead** holder is reclaimed
+  **loudly**, since a lock that wedges the tree is a lock someone deletes by hand. And the verdict writer
+  **checks it still holds the lock** before writing — the SHA field catches a moved tip but cannot catch
+  two gates on the *same* commit, which is exactly what a reclaimed lock means. Five arms; the three the
+  ruling named each watched failing.
+- **`scripts/isdryrun.sh`: the make-dry-run test, as one authority with two consumers.** Both the verdict
+  writer and the lock sit on the `$(MAKE)` line that `-n` executes, and the test is subtle enough that a
+  second copy would drift — a first-word-only check passes a direct `make -n` and misses a nested one, and
+  `--no-print-directory` contains an `n` that must never match. The verdict writer's seven arms stayed
+  green across the refactor, which is the evidence it is equivalent.
+
 - **`scripts/detach.sh --stop <stamp>` ends a detached run by its recorded process GROUP.** The stamp
   already recorded `child_pgid` and nothing read it. A pid is not the handle — a watcher spawns `gh`, a
   gate spawns `make`, `go` and a linter — and ending the task left `golangci-lint` running, reddening

@@ -357,6 +357,15 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
+			// A BACKGROUNDED sleep is not a wait — the shell does not block on it. This was a false positive
+			// on the hook's own author: `sleep 400 &` was a live process held to occupy a gate lock in a
+			// witness. An over-refusing check blocks work it was never aimed at, and a blocked actor
+			// proceeds by working around the check.
+			name: "a_backgrounded_sleep_is_a_process_not_a_wait",
+			cmd:  "sleep 400 & HPID=$!; bash scripts/cilock.sh acquire /tmp/l $HPID",
+			deny: false,
+		},
+		{
 			// `sleep` inside a committed script is untouched, because the hook never sees past the command
 			// line. Stated as an arm so the boundary is asserted rather than merely true today.
 			name: "a_script_that_sleeps_internally_is_not_the_subject",

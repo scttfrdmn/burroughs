@@ -158,8 +158,15 @@ func TestCIRemovesItsVerdictBeforeRunningTheGates(t *testing.T) {
 	realPath := filepath.Join(root, ".ci-verdict")
 	realBefore, realBeforeErr := os.ReadFile(realPath)
 
+	// The lock's real path is guarded the same way as the verdict's, and for the same reason: `make -n ci`
+	// runs every command on the `$(MAKE)` line, so a dry run could both create a lock and — worse — be
+	// REFUSED while a real gate was running, reporting a conflict about a run that is not happening.
+	realLock := filepath.Join(root, ".ci-lock")
+	_, lockBeforeErr := os.Stat(realLock)
+
 	tmpVerdict := filepath.Join(t.TempDir(), "dryrun-verdict")
-	cmd := exec.Command("make", "-n", "ci", "CI_VERDICT="+tmpVerdict)
+	tmpLock := filepath.Join(t.TempDir(), "dryrun-lock")
+	cmd := exec.Command("make", "-n", "ci", "CI_VERDICT="+tmpVerdict, "CI_LOCK="+tmpLock)
 	cmd.Dir = root
 	// MAKEFLAGS is cleared so an ambient value from a parent `make` (this test can run under `make ci`
 	// itself) cannot change what -n prints.
@@ -185,9 +192,17 @@ func TestCIRemovesItsVerdictBeforeRunningTheGates(t *testing.T) {
 	// The assertions below are about the path the recipe was told to use, so they follow the variable
 	// rather than the literal — a literal `.ci-verdict` here would stop matching the moment it is
 	// parameterised, and pass by finding nothing to complain about.
+	if _, lockAfterErr := os.Stat(tmpLock); lockAfterErr == nil {
+		t.Errorf("the dry run created the lock at %s — `make -n ci` must not take the gate lock", tmpLock)
+	}
+	if _, lockAfterErr := os.Stat(realLock); lockBeforeErr != nil && lockAfterErr == nil {
+		t.Errorf("the dry run created the REAL lock %s, which would refuse the next genuine gate", realLock)
+	}
+
 	idxRemove := strings.Index(text, "rm -f "+tmpVerdict)
 	idxWrite := strings.Index(text, "civerdict.sh")
 	idxGates := strings.Index(text, "ci-gates")
+	idxLock := strings.Index(text, "cilock.sh acquire")
 
 	if idxRemove < 0 {
 		t.Fatalf("`make ci` does not remove the verdict at all. Without it, a run that dies before "+
@@ -207,6 +222,16 @@ func TestCIRemovesItsVerdictBeforeRunningTheGates(t *testing.T) {
 	if idxRemove > idxWrite {
 		t.Errorf("the removal of .ci-verdict comes AFTER civerdict.sh writes it, which deletes the verdict "+
 			"the run just produced:\n%s", text)
+	}
+	// The lock is taken BEFORE anything else, which is the whole point of a lock: a gate that removes the
+	// verdict or starts a gate before acquiring has already done something a second gate can observe.
+	if idxLock < 0 {
+		t.Fatalf("`make ci` never acquires the gate lock, so two gates can run at once — which collided two "+
+			"linters and let a stale run's verdict land on a newer run's reset:\n%s", text)
+	}
+	if idxLock > idxRemove || idxLock > idxGates {
+		t.Errorf("the gate lock is acquired AFTER work has begun (lock at %d, rm at %d, gates at %d), so a "+
+			"second gate can observe a half-started first one:\n%s", idxLock, idxRemove, idxGates, text)
 	}
 	t.Logf("CI ORDER: rm at %d, ci-gates at %d, civerdict.sh at %d", idxRemove, idxGates, idxWrite)
 }
