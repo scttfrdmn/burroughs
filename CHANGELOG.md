@@ -30,6 +30,28 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **A `pre-commit` hook refuses commits on the default branch** (`.githooks/pre-commit`, installed by
+  `make hooks`). After one PR merged, the next slice's two commits went onto `main` directly — not from
+  disagreeing with the rule but because the `git checkout -b` step never happened, and noticing was luck. The
+  refusal names both the fix and the **recovery**, because the realistic reader has already committed there.
+  A detached HEAD is explicitly not the subject — rebase and bisect run there — and `--no-verify` is left as a
+  deliberate escape hatch, since a hook that cannot be bypassed is one that gets deleted the first time it is
+  wrong.
+- **`prmerge.sh` deletes the local branch after a successful merge and verifies it is gone.** Measured on four
+  consecutive merges: `gh pr merge --delete-branch` removes the **remote** branch and leaves the **local** one
+  every time. That surviving merged ref is not inert — a `git push -u origin <that-branch>` copied forward from
+  the previous slice **resurrected a branch `prmerge` had just deleted**, at a commit already squashed into
+  main. `-D` rather than `-d`, because a squash merge means the tip is not an ancestor of `main` and `-d` would
+  refuse every time. **The safety is a SHA re-check at the point of deletion, not the merge having
+  succeeded** — a successful merge says the PR's head is in `main` and says nothing about whether the local
+  branch is still at that head. Step 2's equality check lives three steps earlier with nothing tying it to the
+  force-delete, so if step 2 were ever loosened a bare `-D` would start destroying local-only commits silently.
+  A branch that moved during the merge is left alone, with its local-only commits **named**.
+- **The hook no longer refuses a later command's `/dev/null`.** Its discard check scanned the whole token
+  stream, so `subst1.py … && make fmt > /dev/null` was refused for a redirect belonging to `make fmt`. Scoped
+  now to the tokens of subst1's own simple command. Third false positive out of ten refusals, all three on the
+  author — and an over-refusing check is the kind that gets deleted, so the rate is the thing to watch.
+
 - **The text→binary bridge is checked in the accept direction, over the whole suite**
   ([#67](https://github.com/scttfrdmn/burroughs/issues/67),
   [#8](https://github.com/scttfrdmn/burroughs/issues/8)). `TestEncodedModulesMatchTheReference` compares

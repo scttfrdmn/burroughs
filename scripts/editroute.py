@@ -403,9 +403,21 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     # `&> /dev/null` gives ('&>', '/dev/null'). All three are a redirection token followed immediately by
     # /dev/null, so one test covers them, and `> /dev/null 2>&1` is caught by its first half.
     if any(basename(t) == "subst1.py" for t in tokens):
+        # **Scoped to subst1.py's OWN simple command, not the whole token stream.** The first version scanned
+        # every token, so `subst1.py … && make fmt > /dev/null` was refused for a redirect belonging to
+        # `make fmt` — a false positive on this hook's author, and the third of them. An over-refusing check is
+        # the kind that gets deleted, so the subject is the redirect *attached to the invocation*: the tokens
+        # from `subst1.py` up to the next separator.
+        start = next(i for i, t in enumerate(tokens) if basename(t) == "subst1.py")
+        end = len(tokens)
+        for i in range(start + 1, len(tokens)):
+            if tokens[i] in SEPARATORS:
+                end = i
+                break
+        own = tokens[start:end]
         if any(
-            t in REDIRECTS and i + 1 < len(tokens) and tokens[i + 1] == "/dev/null"
-            for i, t in enumerate(tokens)
+            t in REDIRECTS and i + 1 < len(own) and own[i + 1] == "/dev/null"
+            for i, t in enumerate(own)
         ):
             reasons.append(
                 "subst1.py's output is redirected to /dev/null — the landing display is the scripted "
