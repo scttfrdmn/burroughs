@@ -29,21 +29,44 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 : "${RUSTUP_CARGO:=$HOME/.cargo/bin/cargo}"   # has the wasm targets
+: "${RUSTUP_RUSTC:=$HOME/.cargo/bin/rustc}"   # must be pinned WITH it — see below
 : "${HOST_CARGO:=/opt/homebrew/bin/cargo}"    # new enough for the wasmtime crate
+: "${HOST_RUSTC:=/opt/homebrew/bin/rustc}"    # pinned for the same reason, in the other direction
 : "${WASM_TOOLS:=wasm-tools}"
 
-for t in "$RUSTUP_CARGO" "$HOST_CARGO"; do
+# ## Pinning the cargo is not enough: `rustc` must be pinned too
+#
+# **Measured, by running this script from a clean checkout and watching it fail.** Cargo invokes a BARE
+# `rustc`, resolved through `PATH` — so on a machine where Homebrew's bin directory precedes `~/.cargo/bin`
+# (which is this one), the rustup cargo above drives the HOMEBREW rustc. That install has no wasm targets, and
+# the error names the wrong cause:
+#
+#     error[E0463]: can't find crate for `core`
+#     = note: the `wasm32-unknown-unknown` target may not be installed
+#
+# The target IS installed; `rustup target list --installed` says so. The toolchain that cannot see it is the
+# one PATH chose. Two toolchains with disjoint capabilities is the condition this slice is stuck with, so
+# **which rustc runs cannot be left to PATH order** — ambient state is exactly what made the first clean-tree
+# rebuild fail while the dirty development tree kept working.
+# The harness is pinned too, and the failure it avoids is the mirror image: with `~/.cargo/bin` ahead of
+# Homebrew's, the host cargo would drive the 1.91.1 rustc, which is too old for the wasmtime 49 crate. Neither
+# side of this build may inherit its compiler from PATH.
+for t in "$RUSTUP_CARGO" "$RUSTUP_RUSTC" "$HOST_CARGO" "$HOST_RUSTC"; do
 	[ -x "$t" ] || { echo "build.sh: $t is not executable — see the toolchain note above" >&2; exit 2; }
 done
 
 echo "== provenance ==" >&2
 "$RUSTUP_CARGO" --version >&2
+"$RUSTUP_RUSTC" --version >&2
 "$HOST_CARGO" --version >&2
 "$WASM_TOOLS" --version >&2
 
 for g in single suspending; do
 	echo "== guest: $g ==" >&2
-	( cd "$here/$g" && "$RUSTUP_CARGO" build --target wasm32-unknown-unknown --release )
+	# `wit_bindgen::generate!` reads `path: "wit"`, a DIRECTORY relative to the crate root, so each guest
+	# keeps `wit/world.wit` rather than a flat `world.wit`. The first staging of these artefacts flattened
+	# it, and the macro's failure blamed an unresolved `exports` module three errors down from the cause.
+	( cd "$here/$g" && RUSTC="$RUSTUP_RUSTC" "$RUSTUP_CARGO" build --target wasm32-unknown-unknown --release )
 	core=$(find "$here/$g/target" /Volumes/External\ HD/cargo-target/wasm32-unknown-unknown/release \
 		-name '*.wasm' -newer "$here/$g/src/lib.rs" 2>/dev/null | head -1)
 	[ -n "$core" ] || { echo "build.sh: no core module found for $g" >&2; exit 1; }
@@ -52,7 +75,7 @@ for g in single suspending; do
 done
 
 echo "== harness ==" >&2
-( cd "$here/harness" && "$HOST_CARGO" build --release )
+( cd "$here/harness" && RUSTC="$HOST_RUSTC" "$HOST_CARGO" build --release )
 bin=$(find "$here/harness/target/release" /Volumes/External\ HD/cargo-target/release \
 	-name concwitness -type f 2>/dev/null | head -1)
 [ -n "$bin" ] || { echo "build.sh: concwitness was not built" >&2; exit 1; }
