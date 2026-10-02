@@ -30,6 +30,21 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **wasmtime 49 gives a host no way to cancel a task that has already started, and the reference reading for
+  that is committed under its true name** (`internal/component/testdata/asynclift/ABANDONMENT.md`,
+  [#857](https://github.com/scttfrdmn/burroughs/issues/857)). Dropping the host call future **abandons** the
+  task: the guest's cancellation path never runs, the pending host call is **not** dropped, and the call site
+  returns while the task stays suspended. Three confirmations in wasmtime's source —
+  `TaskId::host_future_dropped` cancels eagerly only for a task whose parameters are *not* yet lowered;
+  `Event::Cancelled` has exactly one producer, `subtask_cancel`; and that built-in is reachable only from the
+  guest libcall path. **Cancellation exists in the component model only as a caller cancelling its subtask**,
+  so the oracle for it is a component that cancels its own call, not wasmtime's host interface.
+  **This falsified the premise given for [ADR 0085 amendment 1](docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md)**
+  — a correction is appended there, with how the error was made: a doc comment about `call_async` and the
+  pre-lowering case was generalised to `call_concurrent` and to started tasks without checking. **The decision
+  is unchanged and now rests on the spec's own semantics**, which is a stronger basis than the one originally
+  offered. Burroughs is **not** required to reproduce abandonment: Go's `context` cannot walk away from a call
+  without cancelling it.
 - **An embedder will cancel a component call through `context.Context`, and cancellation is its own outcome**
   ([ADR 0085 amendment 1](docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md),
   stamped by Scott on the [#771](https://github.com/scttfrdmn/burroughs/issues/771) slice-2 question).
