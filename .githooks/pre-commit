@@ -1,0 +1,56 @@
+#!/usr/bin/env sh
+# Refuse a commit on the default branch. Work happens in PRs (behaviour 2), and a commit on `main` has no
+# review, no CI before the fact, and no branch for `prmerge.sh` to check.
+#
+# ## The specimen
+#
+# After one PR merged, the next slice's two commits went onto `main` directly — not out of disagreement with the
+# rule but because the step that creates a branch simply never happened. They were recovered by branching at the
+# commits and resetting `main`, so nothing was lost; what made it recoverable was noticing, and noticing was
+# luck: `git push -u origin <stale-branch>` is what surfaced it, three commands later.
+#
+# ## Why a hook and not a reminder
+#
+# The rule was already written down. The habit is `git checkout -b` and the habit is what failed, which is the
+# case this project closes with a mechanism rather than a note — see standing property 22 in the fork's harness
+# protocol. The cost of the hook is one line in a message; the cost of the defect is a rewritten history or an
+# unreviewed commit on the branch everything else forks from.
+#
+# Installed by `make hooks`, which sets core.hooksPath to this directory.
+#
+# ## The escape hatch, named
+#
+# `git commit --no-verify` bypasses this, as it bypasses every hook. That is deliberate and is not a hole to
+# plug: a hook that cannot be bypassed is a hook that will be deleted the first time it is wrong. Using it is a
+# decision, and a decision is what this refusal exists to force.
+set -u
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
+
+# A detached HEAD is not the default branch and is not this hook's subject — a rebase or a bisect runs there and
+# refusing would break both. Checked explicitly rather than falling through, because an empty branch name
+# compared against "main" would also pass and would do so by accident.
+if [ -z "$branch" ]; then
+	exit 0
+fi
+
+default=$(git config --get burroughs.defaultBranch 2>/dev/null || echo "main")
+
+if [ "$branch" = "$default" ]; then
+	echo "pre-commit: REFUSED — this is a commit on '$default'." >&2
+	echo "            Work happens in PRs: a commit here has no review, no CI before the fact, and no" >&2
+	echo "            branch for prmerge.sh to verify against the PR's head." >&2
+	echo >&2
+	echo "            Branch first, keeping the work you have already staged:" >&2
+	echo "              git checkout -b <topic>" >&2
+	echo >&2
+	echo "            If you have ALREADY committed here, the commits are not lost:" >&2
+	echo "              git branch <topic>            # keep them" >&2
+	echo "              git reset --hard origin/$default   # restore the branch" >&2
+	echo "              git checkout <topic>" >&2
+	echo >&2
+	echo "            This happened once, and the two commits were recovered exactly that way." >&2
+	exit 1
+fi
+
+exit 0

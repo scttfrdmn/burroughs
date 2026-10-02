@@ -119,4 +119,59 @@ echo "prmerge: the local gate is green on this exact commit" >&2
 
 # --- 4. the irreversible step ------------------------------------------------------------------------------
 echo "prmerge: merging #$pr with $mode --delete-branch" >&2
-gh pr merge "$pr" --repo "$repo" "$mode" --delete-branch
+gh pr merge "$pr" --repo "$repo" "$mode" --delete-branch || exit $?
+
+# --- 5. the LOCAL branch, which --delete-branch does not reliably remove ------------------------------------
+#
+# **Measured, twice.** `gh pr merge --delete-branch` deleted the remote branch on four consecutive merges and
+# left the local one every time. A surviving merged local ref is not inert: `git push -u origin <that-branch>`
+# — a command copied forward from the previous slice without re-reading it — **resurrected a branch this script
+# had just deleted**, at a commit already squashed into main.
+#
+# So the local ref goes too, and its absence is **verified** rather than assumed.
+#
+# ## Why `-D` is safe, stated at the point of the force-delete
+#
+# `-d` would refuse every time: a squash merge leaves the branch tip off `main`'s ancestry, so git cannot see
+# that the content landed. `-D` skips that question — which means **this code must answer it itself.**
+#
+# **The safety is the SHA re-check immediately below, not the fact that `gh pr merge` succeeded.** A successful
+# merge says the PR's head is in `main`; it says nothing about whether the local branch is still at that head.
+# Step 2 above established the equality, but that check lives three steps away and nothing tied the two
+# together — so if step 2 is ever loosened, a bare `-D` here would start destroying local-only commits silently.
+# The re-check makes the force-delete's precondition local to the force-delete.
+#
+# The branch is not deleted while checked out — git refuses, and rightly — so this moves to the default branch
+# first. That is where a caller ends up anyway after a merge.
+if git rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
+	# Re-read the tip NOW. Between step 2 and here a merge ran, and anything that commits during a merge —
+	# a hook, a concurrent session, a script — moves this ref.
+	local_now=$(git rev-parse "refs/heads/$branch")
+	if [ "$local_now" != "$remote_head" ]; then
+		echo "prmerge: NOT deleting local $branch — it is at ${local_now:0:12}, and the PR head this run" >&2
+		echo "         verified was ${remote_head:0:12}. The branch moved after the pre-merge check, so a" >&2
+		echo "         force-delete here could destroy work that is not in the squash." >&2
+		extra=$(git log --oneline "$remote_head..$local_now" 2>/dev/null)
+		if [ -n "$extra" ]; then
+			echo "         Commit(s) on the local branch and NOT in the merged head:" >&2
+			printf '%s\n' "$extra" | sed 's/^/           /' >&2
+		fi
+		echo "         The merge itself succeeded. Deal with these, then: git branch -D $branch" >&2
+		exit 0
+	fi
+	default=$(git config --get burroughs.defaultBranch 2>/dev/null || echo "main")
+	if [ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")" = "$branch" ]; then
+		git checkout --quiet "$default" 2>/dev/null ||
+			echo "prmerge: could not switch to $default; leaving local $branch in place" >&2
+	fi
+	if [ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")" != "$branch" ]; then
+		git branch -D "$branch" > /dev/null 2>&1
+	fi
+	if git rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
+		echo "prmerge: WARNING local branch $branch survived deletion." >&2
+		echo "         A merged local ref is what a copied-forward \`git push -u origin $branch\` revives," >&2
+		echo "         recreating a branch this merge deleted. Remove it: git branch -D $branch" >&2
+	else
+		echo "prmerge: local branch $branch deleted (verified absent)" >&2
+	fi
+fi

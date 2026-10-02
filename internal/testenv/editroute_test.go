@@ -159,6 +159,15 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
+			// A LATER command's redirect is not subst1's. The first version of the discard check scanned the
+			// whole token stream, so this was refused for a `/dev/null` belonging to `make fmt` — a false
+			// positive on the hook's author, and the third of them. An over-refusing check is the kind that
+			// gets deleted, which is why the arm is here rather than the behaviour being left to drift.
+			name: "a_later_commands_dev_null_is_not_subst1s",
+			cmd:  "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n && make fmt > /dev/null 2>&1",
+			deny: false,
+		},
+		{
 			// stderr alone, since that is where the display actually goes.
 			name:   "subst1_with_stderr_discarded_is_refused",
 			cmd:    "python3 scripts/subst1.py CHANGELOG.md /tmp/old /tmp/new 2>/dev/null",
