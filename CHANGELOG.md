@@ -30,6 +30,26 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The text→binary bridge is checked in the accept direction, over the whole suite**
+  ([#67](https://github.com/scttfrdmn/burroughs/issues/67),
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8)). `TestEncodedModulesMatchTheReference` compares
+  **2,021** must-succeed suite modules against a committed `wat2wasm` 1.0.42 reference — **0 mismatched** —
+  and `make watref` is the only thing that ever calls the tool, which is the wabt precedent: commit the
+  oracle's reading, never depend on the oracle at test time. The 138 modules wabt cannot encode are **listed
+  by name with the reason** in the manifest and counted in the denominator, never skipped; over 100 are GC
+  type syntax its text parser lacks.
+- **The comparison is on decoded modules with encoding latitude canonicalised, which raw-byte equality and
+  plain decoded equality both get wrong.** Byte equality would flag LEB padding and section ordering. Plain
+  decoded equality still flagged three modules — `block.wast:3`, `if.wast:3`, `loop.wast:3` — where wat2wasm
+  spelled a blocktype with the **empty** and **i32** shorthands and our encoder used **type indices**: the same
+  block type, a different spelling, and the decoded form retains the distinction. Blocktypes are now resolved to
+  the signature they denote, and `Func.EndsOff` is excluded as a derived arena offset rather than module content.
+- **The control is falsified in both halves, committed** (`TestWatRefControlDetectsWrongModules`): the probe's
+  six mutation classes, **100% of mutated modules detected in every class**, against a registered bar of ≥99%.
+  The two **behaviour-preserving** classes are the load-bearing ones — a local's type (**19/19**) and export
+  order (**7/7**) — where the board detected **0 of 19** and **0 of 7**, which is what shows this control
+  compares structure rather than behaviour.
+
 - **A gate lock: one `make ci` at a time, enforced rather than remembered** (`scripts/cilock.sh`,
   `CI_LOCK ?= .ci-lock`, untracked). Two gates overlapped **three times** in one campaign. The start-SHA
   capture and `prmerge.sh`'s SHA check made the resulting stale green *harmless*, but nothing made the
