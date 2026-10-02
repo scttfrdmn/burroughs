@@ -50,7 +50,18 @@ own condition rather than as a prediction.
   calls. `replace_all` opts out of the one-match refusal `subst1.py` enforces — and in the slice that
   built the hook it hit a **sixth** call site nobody intended, leaving the hook crashing. Scoped to
   tracked files; an anchored edit on the same file and a wide edit on an untracked one are both
-  permitted, which is what makes the **flag** the subject rather than the tool.
+  permitted, which is what makes the **flag** the subject rather than the tool. **`MultiEdit` carries
+  the flag per entry inside `edits`**, so a check reading only the top level refused `Edit` and let the
+  wider tool through unchecked; the arm puts the flag on the *second* entry, so a scan stopping at the
+  first does not pass.
+- **The hook refuses a command chained after `subst1.py` past anything but `&&`.** A refused edit — 7
+  matches of `### Added`, correctly declined — was followed by a commit that ran anyway, so a change
+  landed without its CHANGELOG entry. The loud route was loud; the **sequencing** swallowed it. `;`, a
+  newline and `&` carry on regardless of the exit status, and `||` runs the next command *because* it
+  failed; `&&` is permitted because it is what the chaining meant. **The separator in the specimen was a
+  newline**, which `shlex` eats as whitespace — so `… | head -3` and `git add -A` had been tokenising as
+  one command, which silently widened every per-command judgement in the hook. Newlines are now
+  normalised to separators after heredoc lifting, and the newline arm fails without it.
 
 - **A `PreToolUse` hook refuses to edit a tracked file from a Bash command**
   (`scripts/editroute.py`, wired in the tracked `.claude/settings.json`). The two loud routes — the

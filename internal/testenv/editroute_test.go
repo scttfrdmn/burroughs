@@ -255,6 +255,71 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny:      false,
 		},
 		{
+			// `MultiEdit` carries the flag PER ENTRY inside `edits`, not at the top level — so a check
+			// reading only `tool_input["replace_all"]` refused `Edit` and let the WIDER tool through
+			// unchecked. The flag is on the SECOND entry deliberately: a scan that stops at the first
+			// passes this arm.
+			name: "multiedit_with_replace_all_in_a_later_entry_is_refused",
+			tool: "MultiEdit",
+			editInput: map[string]any{
+				"file_path": "{ROOT}/scripts/ciwatch.sh",
+				"edits": []any{
+					map[string]any{"old_string": "a", "new_string": "b"},
+					map[string]any{"old_string": "c", "new_string": "d", "replace_all": true},
+				},
+			},
+			deny:   true,
+			want:   "replace_all",
+			routes: []string{"subst1.py", "unique"},
+		},
+		{
+			// The complement: a MultiEdit of anchored replacements is ordinary work and must pass.
+			name: "multiedit_without_replace_all_is_permitted",
+			tool: "MultiEdit",
+			editInput: map[string]any{
+				"file_path": "{ROOT}/scripts/ciwatch.sh",
+				"edits": []any{
+					map[string]any{"old_string": "a", "new_string": "b"},
+					map[string]any{"old_string": "c", "new_string": "d"},
+				},
+			},
+			deny: false,
+		},
+		{
+			// The swallowed refusal, in the separator the specimen actually used: a NEWLINE. `subst1.py`
+			// refused 7 matches of `### Added` and the commit on the next line ran anyway, so the change
+			// landed without its CHANGELOG entry. `shlex` eats newlines, so this arm also holds the
+			// newline-to-`;` normalisation in place.
+			name: "a_command_after_subst1_on_the_next_line_is_refused",
+			cmd: "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n\n" +
+				"git add -A && git commit -q -m x",
+			deny:   true,
+			want:   "runs whatever its exit status was",
+			routes: []string{"&&"},
+		},
+		{
+			name:   "a_command_after_subst1_past_a_semicolon_is_refused",
+			cmd:    "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n ; git commit -q -m x",
+			deny:   true,
+			want:   "runs whatever its exit status was",
+			routes: []string{"&&"},
+		},
+		{
+			// `|| true` is the shape that most looks like care and most reliably discards the refusal.
+			name:   "a_command_after_subst1_past_or_is_refused",
+			cmd:    "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n || true",
+			deny:   true,
+			want:   "runs whatever its exit status was",
+			routes: []string{"&&"},
+		},
+		{
+			// The allow arm, and the one that makes this about the SEPARATOR rather than about chaining:
+			// `&&` is what the chaining meant — the next step happens only if the edit did.
+			name: "a_command_after_subst1_past_and_is_permitted",
+			cmd:  "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n && git commit -q -m x",
+			deny: false,
+		},
+		{
 			// Behaviour 5: a duration is not a signal. This slipped more than once in the session that
 			// built the hook, including inside the slice itself.
 			name:   "a_bare_sleep_is_the_wait_and_is_refused",

@@ -294,6 +294,15 @@ def basename(word: str) -> str:
 def findings(cmd: str, root: str, cwd: str) -> list[str]:
     """Every reason this command must not run, as sentences. Empty means allow."""
     text, bodies = lift_heredocs(cmd)
+    # **A newline is a command separator and `shlex` eats it.** Measured: with `whitespace_split`, a newline
+    # is whitespace, so `… | head -3\ngit add -A` tokenises as one command ending `head -3 git add -A`. Two
+    # commands became one, which silently widened every per-command judgement below — and it is the separator
+    # in the specimen that motivated the subst1-chaining check, where a refused edit was followed by a commit
+    # on the next LINE rather than after a `;`.
+    #
+    # Heredoc bodies are already lifted out above, so every newline still here is a top-level separator and
+    # turning it into one is exact rather than approximate.
+    text = text.replace("\n", " ; ")
     tokens = tokenize(text)
     if tokens is None:
         print(
@@ -336,6 +345,31 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
                 "subst1.py's output is redirected to /dev/null — the landing display is the scripted "
                 "route's only defence against an anchor that is unique, present and in the wrong place"
             )
+
+        # --- route 6: a refusal nobody reads ----------------------------------------------------
+        #
+        # `subst1.py` refused an ambiguous edit — 7 matches of `### Added` — and the commit chained after
+        # it ran anyway, so the change landed without its CHANGELOG entry. The loud route was loud; the
+        # SEQUENCING swallowed it.
+        #
+        # So the separator that follows the invocation is the subject. `;` and a newline carry on
+        # regardless of the exit status, and `||` runs the next command *because* it failed — all three
+        # turn a refusal into a no-op. **`&&` is permitted**, because it is what the chaining meant: the
+        # next step happens only if the edit happened.
+        #
+        # This closes the route rather than asking the next actor to remember an ordering, which is the
+        # difference between a mechanism and a note — and the note would have been mine to forget.
+        idx = next(i for i, t in enumerate(tokens) if basename(t) == "subst1.py")
+        for t in tokens[idx + 1 :]:
+            if t in ("&&",):
+                break
+            if t in (";", "||", "&"):
+                reasons.append(
+                    f"a command follows subst1.py past `{t}`, which runs whatever its exit status was — "
+                    "so a refused edit is followed by the next step anyway. Use `&&`, so the next step "
+                    "happens only if the edit did"
+                )
+                break
         return reasons
 
     # --- route 1: redirection into a tracked path, including `tee` -----------------------------
@@ -449,7 +483,18 @@ def main() -> int:
     #
     # Scoped to TRACKED files for the same reason every other route is: an untracked or new file has
     # no reviewers and no history to disturb.
-    if tool in ("Edit", "MultiEdit") and inp.get("replace_all") is True:
+    # **`MultiEdit` carries `replace_all` PER ENTRY, inside `edits`, not at the top level.** Checking
+    # only `inp["replace_all"]` therefore refused `Edit` and let `MultiEdit` through unchecked — the
+    # wider tool, unguarded, which is the worse half to miss. Both shapes are read here, and the
+    # per-entry scan is what the `MultiEdit` arm exists to hold.
+    wide = inp.get("replace_all") is True
+    if not wide:
+        edits = inp.get("edits")
+        if isinstance(edits, list):
+            wide = any(
+                isinstance(e, dict) and e.get("replace_all") is True for e in edits
+            )
+    if tool in ("Edit", "MultiEdit") and wide:
         target = inp.get("file_path") or ""
         if is_tracked(target, root, cwd):
             print(
