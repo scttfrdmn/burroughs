@@ -48,7 +48,10 @@ own condition rather than as a prediction.
   six mutation classes, **100% of mutated modules detected in every class**, against a registered bar of ≥99%.
   The two **behaviour-preserving** classes are the load-bearing ones — a local's type (**19/19**) and export
   order (**7/7**) — where the board detected **0 of 19** and **0 of 7**, which is what shows this control
-  compares structure rather than behaviour.
+  compares structure rather than behaviour. The **138** modules wabt cannot encode are tracked as a named gap
+  in [#846](https://github.com/scttfrdmn/burroughs/issues/846) rather than only documented — over 100 are GC
+  text syntax, and `gate:gc` is off, so the bridge for them is unchecked for modules the engine does not yet
+  claim to run.
 
 - **A gate lock: one `make ci` at a time, enforced rather than remembered** (`scripts/cilock.sh`,
   `CI_LOCK ?= .ci-lock`, untracked). Two gates overlapped **three times** in one campaign. The start-SHA

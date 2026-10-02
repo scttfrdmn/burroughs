@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,10 +47,41 @@ func watRefName(file string, line int) string {
 // expected-failure vector. `KindModuleBinary` is excluded because it never goes through the encoder, so it has
 // no bridge to check. Both exclusions are the probe's, carried forward unchanged so the witness's population is
 // the probe's population.
+// **Exhaustive on purpose, and the linter asking for it is right.** With a default arm, a Kind added upstream
+// would fall silently into "not must-succeed" and the control's population would shrink without anyone deciding
+// it should — *derive the domain, do not list today's cases*. Listing every Kind makes the next addition a
+// question somebody has to answer.
+//
+// **What enforces it is the `exhaustive` linter in the LINT GATE, not the compiler.** Go has no exhaustiveness
+// check of its own, so `go build` and `go vet` will both accept an unlisted Kind here. A reader who expects the
+// compiler to catch it would be wrong, and would be wrong in the direction of trusting a check that is not
+// running.
 func mustSucceedKind(k Kind) bool {
 	switch k {
+	// The three that carry text the encoder must bridge.
 	case KindModuleText, KindModuleQuote, KindModuleDefinition:
 		return true
+
+	// A module, but not through the encoder: the binary form has no text to bridge, and an instance
+	// instantiates a definition that was already checked under its own Kind.
+	case KindModuleBinary, KindModuleInstance:
+		return false
+
+	// Modules the suite expects to FAIL. A mutation flipping one of these is half 1's question — does it
+	// reject what it should — not half 2's. `KindAssertTrapModule` belongs here too: it is expected to trap
+	// at instantiation, so it is an expected-failure vector and neither half reads cleanly from it.
+	case KindAssertMalformed, KindAssertMalformedText,
+		KindAssertInvalid, KindAssertInvalidBinary, KindAssertInvalidQuote,
+		KindAssertUnlinkable, KindAssertTrapModule:
+		return false
+
+	// Not modules at all — assertions and actions over a module already instantiated.
+	case KindAssertReturn, KindNamedAssertReturn,
+		KindAssertTrapAction, KindNamedAssertTrap,
+		KindInvoke, KindNamedInvoke,
+		KindAssertException, KindAssertExhaustion,
+		KindRegister, KindUnsupported:
+		return false
 	}
 	return false
 }
