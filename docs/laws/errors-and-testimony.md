@@ -131,6 +131,35 @@ reach is a law out of context.
   inward — the discipline's own output — and the remedy is the same, correct the document and
   say that it was the document that moved. (Sharpening: chat-Claude, PR #302.)
 
+  **The preventive form, which is cheaper than the remedy: where prose would restate something
+  code or an instrument computes, point at the instrument instead of repeating its value.** A
+  comment duplicating a property the artifact already carries is correct exactly once, and from
+  then on it is a second account competing with the first. The sentence a reader actually needs
+  is not the value but *which instrument to ask*.
+
+  Two specimens one slice apart, which is why this is a rule rather than an observation. Grave
+  #850: `isBuiltAsyncBuiltin`'s doc comment enumerated the async built-ins the engine executes,
+  drifted from the `case` list three lines below it, and was read as the engine's coverage
+  **twice** — it claimed `waitable-set.poll` "stays refused by name" while that opcode sat in
+  the list. Grave #852: `scripts/refusals.sh`'s header quoted a false-positive rate as though the
+  log beneath it were the source, when the figure was recalled and the log postdated it. One was
+  prose against code, the other prose against an instrument's output; the repair in both cases
+  was to name the instrument — the committed table plus its equality witness, and the reset log
+  with its cut-off date — rather than to write a fresher number.
+
+  **A citation is not exempt from this, because a resolving link does not certify its sentence.**
+  Grave #856: `component.go` pointed an embedder at *"the `ComponentValue` surface (ADR 0085)"*
+  and ADR 0085 contains no such identifier. The link resolved, `make cite` was satisfied, and the
+  claim about what the cited record *says* was still false — the half no citation sweep in this
+  tree can check. The repair there carries the rule's sharp edge: the value type's exported name
+  was genuinely still open, so the comment names the **shape** ADR 0085 decides and declines to
+  invent an identifier. Writing a plausible name would have re-created the defect with a
+  different string and left the next reader unable to tell an invented identifier from a decided
+  one. (Ruling: chat-Claude, on the #851 review, after declining a general sweep for this shape:
+  anything matching "a number near an instrument" cannot distinguish a statement about something
+  from the thing itself, so it would be noisy, and an over-refusing check gets ignored. The rule
+  is applied when such a comment is touched, not enforced by a scanner.)
+
 ### When two fields disagree about a value, the suite has handed you a bidirectional control.
 
 - **When two fields disagree about a value, the suite has handed you a
