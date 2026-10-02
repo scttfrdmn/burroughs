@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: ci ci-gates all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
+.PHONY: ci ci-gates watref all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -970,6 +970,12 @@ opcode-drift:
 # run together when the pin moves. That coupling is intended — an arm arriving upstream
 # inside a whole-region gate range is exactly the event #91 filed, and a census the
 # regeneration does not touch would be the staleness defect of #87 in a golden file.
+# The wat2wasm reference corpus for #67's half 2. Regenerated deliberately and rarely: the point of committing
+# the oracle's output is that no test path calls the oracle, so this target exists to be run when the suite pin
+# moves and at no other time. Needs wabt on PATH; the control does not.
+watref:
+	$(GO) test ./internal/spec/ -run TestEncodedModulesMatchTheReference -update-watref -count=1 -v
+
 gate-census:
 	$(GO) test ./internal/binary/ -run TestGateCensusIsClassifiedArmByArm -update-census -count=1
 	@echo "regenerated internal/binary/testdata/gate-census.txt"
