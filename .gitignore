@@ -19,3 +19,9 @@ old.txt
 # Upstream component-model Canonical ABI model, vendored at the pin for the offline fixture generator (ADR 0084); never committed.
 internal/component/canon/gen/vendor/
 __pycache__/
+
+# `make ci` writes its own verdict here — exit code, the HEAD SHA it ran on, dirtiness, timestamp — because a
+# shell's return code cannot be trusted to carry it: `;` hands the status to whatever ran last, and a
+# background task's notification carries the wrapper's code. `prmerge.sh` refuses to merge unless this file's
+# SHA is the local tip and its exit is 0. Untracked: it is a fact about one machine's last run.
+.ci-verdict

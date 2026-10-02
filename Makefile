@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: ci all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
+.PHONY: ci ci-gates all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -159,7 +159,50 @@ check:
 # unreached-gate reporting as `check`, for the same reason — *an unreached gate is not a passed
 # gate* — and the corpora come first, because `strict` and `conformance` fail without them and a
 # reader should be told to vendor rather than handed 102 test failures.
+# `ci` writes its own verdict to .ci-verdict (untracked), and the TARGET writes it so no caller has to
+# remember to. A caller cannot be trusted with it: a gate chained as `make ci > log; echo rc=$$?` hands the
+# status to whatever ran last, `pipefail` does not reach a `;`, and a background task's notification carries
+# the WRAPPER's exit code. All three happened, and the last one put a commit on a branch over a red gate.
+#
+# The file records the exit code, the HEAD SHA it ran on, whether the tree was dirty, and a timestamp. The SHA
+# is what makes it a verdict about something rather than a mood: `prmerge.sh` refuses to merge unless that SHA
+# is the local tip. One consequence worth stating because it changes the working order — the gate must run on
+# the COMMITTED tree, so: commit, then `make ci`, then push, then merge. Running it before committing leaves a
+# verdict naming the parent commit, which prmerge will correctly refuse.
+# The writing is in `scripts/civerdict.sh` and NOT inline here, because inline it was wrong in a way worse
+# than having no check at all: a double-quoted recipe line passes literal backslash-quotes into `test -n`,
+# which is a non-empty string, so `dirty` was always `yes` and `prmerge.sh` would have refused every merge.
+# A recipe carries two escaping layers; a script carries one. The script is also drivable from a witness with
+# a controlled tree state, which a recipe is not — and the consumer's witness had already gone green against
+# hand-written fixtures while this producer was broken.
+# The file is REMOVED first, so a run that dies before writing it leaves **absence rather than staleness**.
+# That distinction was earned: when `civerdict.sh` was first called without its executable bit, the write
+# failed and the previous run's verdict stayed on disk — a file reading `exit=2 sha=<older commit>` which
+# `prmerge.sh` happened to refuse only because the SHA had moved. Had the SHA matched, a dead writer would
+# have been indistinguishable from a live green. Absence is a state prmerge already refuses by name.
+# **`CI_VERDICT` is a variable so a DRY RUN cannot write the real verdict**, which it otherwise does.
+# GNU make executes any recipe line containing `$(MAKE)` even under `-n`, passing `-n` down — and this whole
+# recipe is one continued line containing `$(MAKE)`, so `make -n ci` ran `civerdict.sh` for real. The
+# recursive dry run "succeeded", so it wrote `exit=0` with the current SHA and `dirty=no`: a **forged green**
+# that `prmerge.sh` accepts, produced by merely running the test that asserts this ordering.
+# `TestCIRemovesItsVerdictBeforeRunningTheGates` now passes `CI_VERDICT=<tmp>` and asserts the real file is
+# untouched by its own run.
+CI_VERDICT ?= .ci-verdict
+
+# **The SHA is captured BEFORE the gates, not when the verdict is written.** Observed, not theorised: a gate
+# started on one commit, ran for minutes, and by the time it wrote, another commit had moved the tip — so
+# `git rev-parse HEAD` inside the writer named a tree the gate had never seen. That run happened to be red, but
+# a run that PASSES on A and finishes after a commit to B writes `exit=0 sha=B`: a green for a tree never
+# tested, which `prmerge.sh` accepts. Passing the start SHA makes a moved tip a mismatch, which prmerge already
+# refuses by name.
 ci:
+	@rm -f $(CI_VERDICT)
+	@start=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
+	rc=0; $(MAKE) --no-print-directory ci-gates || rc=$$?; \
+	scripts/civerdict.sh $$rc $(CI_VERDICT) $$start; \
+	exit $$rc
+
+ci-gates:
 	@$(MAKE) --no-print-directory spec-tests spec-ref threads-ref
 	@failed=""; \
 	for g in $(CI_GATES); do \

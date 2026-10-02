@@ -735,24 +735,58 @@ func TestCIGatesCoverWhatCIInvokes(t *testing.T) {
 			gates[g] = true
 		}
 	}
-	// `ci`'s corpus prerequisites are covered by the recipe's first line rather than by CI_GATES,
-	// because they must run before the gates that need them. Derived from that line, not listed.
-	ciRecipe := ""
-	for i, ln := range strings.Split(mk, "\n") {
-		if strings.HasPrefix(ln, "ci:") {
-			rest := strings.Split(mk, "\n")[i+1:]
-			if len(rest) > 0 {
-				ciRecipe = rest[0]
+	// `ci`'s corpus prerequisites are covered by its recipe rather than by CI_GATES, because they must run
+	// before the gates that need them. Derived, not listed.
+	//
+	// **Followed transitively through `$(MAKE)`, which is a re-pointing rather than the original design.**
+	// This read only `ci`'s FIRST recipe line, which was true while that line was the corpus prerequisites.
+	// When `ci` grew a verdict file — gates moved into a `ci-gates` sub-target so their status could be
+	// captured — the first line became `rm -f .ci-verdict` and this control reported three uncovered things
+	// that `ci` still ran, one level down. The control was right to fire: its premise about where `ci`'s work
+	// is expressed had been falsified. It was wrong about the cause, which is what a re-pointing fixes.
+	//
+	// A control names a risk, not a code shape: the risk is that `make ci` does not reach something CI does,
+	// and that risk does not care how many targets `ci` delegates through.
+	allLines := strings.Split(mk, "\n")
+	recipeOf := func(target string) []string {
+		var out []string
+		for i, ln := range allLines {
+			if !strings.HasPrefix(ln, target+":") {
+				continue
 			}
-			break
+			for _, r := range allLines[i+1:] {
+				if strings.HasPrefix(r, "\t") {
+					out = append(out, r)
+					continue
+				}
+				if strings.TrimSpace(r) == "" {
+					continue // a blank line inside a recipe does not end it
+				}
+				break
+			}
+			return out
+		}
+		return nil
+	}
+	seen := map[string]bool{}
+	var follow func(target string, depth int)
+	follow = func(target string, depth int) {
+		if depth > 4 || seen[target] {
+			return
+		}
+		seen[target] = true
+		lines := recipeOf(target)
+		for _, ln := range lines {
+			for _, g := range makeTargets(ln) {
+				gates[g] = true
+				follow(g, depth+1)
+			}
 		}
 	}
-	if ciRecipe == "" {
+	if len(recipeOf("ci")) == 0 {
 		t.Fatal("no `ci:` target found in the Makefile, or it has an empty recipe")
 	}
-	for _, g := range makeTargets(ciRecipe) {
-		gates[g] = true
-	}
+	follow("ci", 0)
 
 	// Every Makefile target and the scripts its recipe invokes, so a script can be mapped back to
 	// the target that runs it.

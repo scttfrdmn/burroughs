@@ -30,6 +30,19 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **A `PreToolUse` hook refuses to edit a tracked file from a Bash command**
+  (`scripts/editroute.py`, wired in the tracked `.claude/settings.json`). The two loud routes — the
+  editor tool, which fails when its anchor is missing, and `scripts/subst1.py`, which refuses 0 or
+  >1 matches — were already the rule; it was then broken in **all 8** writes to one script in one
+  campaign, and the eighth lost an edit whose mechanism could not afterwards be determined, because
+  a write whose success is never read back leaves no evidence of its own failure. Three routes are
+  closed: an inline interpreter opening a file for writing, `sed -i`, and redirection or `tee` onto a
+  tracked path. **Creating a new file is untouched** — the defect is a silent no-op on a *missed*
+  anchor, which requires the file to already exist. Exemptions are the `git ls-files` predicate
+  itself rather than a list, so `/tmp` and build outputs need no clause: they are untracked.
+  Witnessed by `TestEditRouteHookRefusesBashEditsOfTrackedFiles` over 13 arms — five die under a
+  blanket-allow injection, and one, the quoted `>`, only under a grep-based implementation, which is
+  what makes the parse load-bearing rather than decorative.
 - **`--scratch HOST[:/GUEST]`: a confined writable directory, off by default**
   ([#831](https://github.com/scttfrdmn/burroughs/issues/831),
   [ADR 0091](docs/decisions/0091-a-confined-writable-scratch-directory-granted-by-its-own-flag-with-confinement-delegated-to-os-root-rather-than-hand-rolled.md)).
@@ -207,6 +220,76 @@ own condition rather than as a prediction.
 
 ### Changed
 
+- **`scripts/subst1.py` prints where the edit landed** — the written hunk with four lines of context
+  either side, marking the written lines, with the file's own line numbers. The helper already refused
+  0 matches, >1 matches, and a no-op replacement, all of which are *missed* anchors; none of them can
+  see an anchor that is unique, present, and in the **wrong place**, which happened **three times** in
+  one slice. It is a complement and not a safeguard, and the slice proved both halves of that: the
+  real check on a wrong aim is a structural oracle over the destination — `TestChangelogGroupsAre-
+  Canonical` caught the second and third — and the display cannot help a caller who discards it,
+  which is how the third got in. That edit was run as `subst1.py … > /dev/null 2>&1 && make ci`,
+  silencing the landing display in the same command that relied on it.
+- **`make ci` writes its own verdict, and `prmerge.sh` refuses to merge without a green one for the
+  exact commit.** `make ci` writes `.ci-verdict` (untracked) with the exit code, the HEAD SHA it ran
+  on, whether the tree was dirty, and a timestamp — the **target** writes it, so no caller has to
+  remember to. A shell's return code could not carry it: chaining with `;` hands the status to
+  whatever ran last, `pipefail` does not reach across a `;`, and a background task's notification
+  carries the **wrapper's** exit code. The third put a commit on a branch over a red gate with
+  `ci rc=2` sitting unread in the output file. `prmerge.sh` now refuses unless the file exists, its
+  SHA is the local tip, the tree was clean, and the exit is 0 — **the SHA is the load-bearing field**,
+  because without it a green from three commits ago reads exactly like a green from this one. One
+  consequence changes the working order: the gate must run on the **committed** tree, so it is
+  commit, then `make ci`, then push, then merge.
+- **A verdict could name a tree the gate never saw.** The SHA was read when the verdict was
+  *written*, so a gate started on commit A and finishing after a commit to B recorded `sha=B` with
+  A's result — **observed**, on a run that happened to be red; a passing one would have written
+  `exit=0 sha=B`, a green for a tree never tested, which `prmerge.sh` accepts. The SHA is now
+  captured **before** the gates and passed in, so a moved tip becomes a mismatch that prmerge already
+  refuses by name, and the writer says on stderr that the tip moved rather than absorbing it silently.
+- **The verdict writer itself refuses to run during a dry run**, so no caller can forge a green —
+  not a hand-typed `make -n ci`, not a debugging session, not a future test. The flag detection is
+  **measured rather than guessed, because the obvious form is half-broken**: `make -n ci` gives
+  `MAKEFLAGS=[n]`, but nested under `-n` it is `[ --no-print-directory -n]` — first word empty, `-n`
+  as a later dashed word — and `--no-print-directory` contains an `n` that must never match. A
+  first-word-only check passes the direct arm and misses the nested one, which is witnessed as an
+  injection rather than argued.
+- **A witness hard-coded one developer's path and inverted on CI.** Two hook arms began
+  `cd ~/src/burroughs`, so on a runner where that directory does not exist the hook correctly resolved
+  the bare path against a non-repo directory and **allowed** the write — both arms reporting the
+  opposite of the truth. Found by CI while the local gate was green, which is the mirror's precondition
+  failing in the direction where CI observes what `make` cannot. The arms now substitute the real tree
+  root, verified by running them through a different absolute path rather than only here.
+- **The hook over-refused a file outside the repo.** `cd /tmp/x && … > Makefile` was refused as
+  overwriting the tracked root `Makefile`, because a bare name was resolved against the repo root and
+  nothing looked at the `cd`. **An over-refusing check is not the safe direction** — it blocks work it
+  was never aimed at, and a blocked actor proceeds by working around the check, which is the failure
+  mode the mechanism exists to prevent. The last `cd` now wins, as the shell does, and a `cd` *into*
+  the repo must still resolve bare names to tracked files — the complement arm that keeps "follow the
+  cd" from decaying into "ignore relative paths".
+- **A dry run was forging a green verdict.** GNU make executes any recipe line containing
+  `$(MAKE)` **even under `-n`**, passing `-n` down so a dry run can see into sub-makes. `ci`'s recipe
+  is one continued line containing `$(MAKE)`, so the first `make -n ci` ordering check ran
+  `civerdict.sh` for real — and because the recursive dry run "succeeded" it wrote `exit=0` with the
+  current SHA and `dirty=no`, which is precisely the file `prmerge.sh` accepts. **Merely running
+  `go test ./internal/testenv/` manufactured a verdict the merge helper trusts.** Reproduced
+  deliberately before fixing. The verdict path is now a `CI_VERDICT` variable, the check points its
+  dry run at a temp file, and it asserts the real `.ci-verdict` is untouched by its own run — created,
+  deleted, or rewritten all fail, and absence is treated as a state rather than as nothing.
+- **Two checks protecting the verdict mechanism itself.** `TestCIRemovesItsVerdictBeforeRunning-
+  TheGates` drives `make -n ci` — the recipe's text in execution order, no gate run — and asserts the
+  `rm -f .ci-verdict` precedes both the gate run and the write, because **absence is a state
+  `prmerge.sh` refuses by name while staleness is one it catches only by luck**. That ordering had
+  been asserted only by reading the Makefile. `TestEveryTrackedScriptIsExecutableInTheIndex` asserts
+  mode `100755` in **git's index** — not the filesystem, since a local `chmod` fixes one checkout
+  while the index is what every clone and CI get. Its domain is derived as *every tracked file whose
+  first line is a shebang*, which catches the extensionless `scripts/labrun` and `scripts/labprov`
+  that a `scripts/*.sh` list would miss; it found **four** files at `100644`, including
+  `scripts/editroute.py`, the hook's own implementation.
+- **The hook refuses `subst1.py` with its output discarded.** The scripted route's only defence
+  against a wrong aim is the landing display, so redirecting it to `/dev/null` turns a permitted
+  route into a silent write carrying the authority of a permitted one — strictly worse than the
+  inline interpreter it replaces. Not hypothetical: `subst1.py … > /dev/null 2>&1 && make ci` is how
+  the third misplaced anchor got in, minutes after the display was built to prevent it.
 - **BREAKING (CLI): `burroughs run` no longer passes the host environment to the guest.** It passed
   `os.Environ()` — every variable the process held, credentials included — into a sandbox whose
   documented model (ADR 0083) is that nothing is visible unless named
@@ -273,6 +356,27 @@ own condition rather than as a prediction.
   in-grant operations.
 
 ### Fixed
+
+- **`ciwatch.sh` read an in-progress job as a job that never ran**, so a freshly pushed SHA — whose
+  jobs are all pending — got the verdict *"no run ran its tree-subject jobs"* about a run that was
+  busy running them. Found by #842's own CI, one slice after the code shipped. Three states, not
+  two: `skipped` is a claim about **whether** a job ran, a null conclusion is a claim about **when**
+  it finishes, and only the first excludes a run from answering for a class. `assert_class` already
+  drew the distinction; selection did not, which is the lesson — it was drawn where it was being
+  thought about and not where it was equally load-bearing. Repaired twice over: every run for the
+  SHA is now waited on **before** selection, so coverage is only ever asked about a finished run,
+  and the predicate excludes `skipped` alone. Witnessed by a fourth arm that must fail as
+  *unfinished* and never as *"no run ran them"* — both are non-zero, so the exit code cannot tell
+  this arm's pass from its failure.
+- **The verdict file said `"conclusion": "failure"` beside a GREEN.** It was a copy of the chosen
+  tree run's JSON, and once the two classes can come from different runs **no single run's
+  conclusion is the verdict** — the first green under the repaired selection had a tree run whose six
+  tree jobs all passed and whose `citations` job had failed against a body that no longer existed.
+  The standing rule for reading a CI result is *read the verdict file's status field*, so the file
+  would have returned the opposite of the truth to the one reader it exists for. It now states what
+  the script decided (`ciwatch_verdict`), names the run that answered for each class, and points at
+  the per-run JSON instead of impersonating it; a `conclusion` key is deliberately absent, because
+  the honest reason a reader cannot have one is that no run holds it.
 
 - **`--dir` accepted two guest-path forms that can never map, and said nothing**
   ([#828](https://github.com/scttfrdmn/burroughs/issues/828),

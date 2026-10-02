@@ -28,9 +28,14 @@
 #
 #   scripts/ciwatch.sh <sha> [stamp-prefix]
 #
-# Exits 0 only when a run for that SHA is complete, concluded success, and has every derived key represented by
-# a job that actually ran. Writes the chosen run's JSON to <stamp-prefix>.verdict for reading afterwards, and
-# prints the rejected runs with their reasons.
+# Exits 0 only when every derived key is represented by a job that actually RAN and concluded success, in the
+# run that can answer for that key's class. It does NOT require any run to have concluded success, because
+# since the two-class split no single run's conclusion is the verdict: the tree run may conclude failure on a
+# body job that read a superseded body, and a run may conclude success over skipped jobs.
+#
+# Writes its own verdict to <stamp-prefix>.verdict -- `ciwatch_verdict`, the run chosen for each class, and a
+# pointer to each run's JSON. Not a copy of a run, which is what it used to be and which made the file say
+# `failure` beside a GREEN.
 set -uo pipefail
 
 repo=${CIWATCH_REPO:-scttfrdmn/burroughs}
@@ -129,6 +134,26 @@ if [ -z "${runs// /}" ]; then
 fi
 echo "ciwatch: runs for this SHA: $runs" >&2
 
+# --- wait for EVERY run for this SHA to FINISH, before deciding anything about it --------------------------
+#
+# This ordering is the repair for a defect #841 shipped: selection ran first, and `run_covers` read a job
+# with no conclusion yet as a job that had not run -- the same reading that is correct for `skipped` and
+# wrong for `in_progress`. So on a freshly pushed SHA, whose jobs are all pending, the tree class looked
+# uncovered and the verdict was "no run ran its tree-subject jobs" on a run that was busy running them.
+#
+# `assert_class` below already distinguished the three states; this half did not, which is the lesson: the
+# distinction was applied where it was being thought about and not where it was equally load-bearing.
+#
+# Waiting first dissolves the three states rather than handling them. A completed run has no pending jobs,
+# so "did this run execute these jobs" becomes a question with an answer, and coverage never has to guess
+# about a job's future. Every run for the SHA is waited on because every one of them is in the population a
+# class may be selected from -- not a cost, since a run nobody waits on is a run whose verdict is a snapshot.
+for id in $runs; do
+	if [ -z "${CIWATCH_FIXTURE:-}" ]; then
+		gh run watch "$id" --repo "$repo" > /dev/null 2>&1
+	fi
+done
+
 # --- TWO classes, TWO runs, because one rule cannot serve both ---------------------------------------------
 #
 # Tree-subject jobs take their verdict from the newest run in which they actually RAN. A run where they are
@@ -150,7 +175,9 @@ run_covers() {
 import json, sys
 v = json.load(open(sys.argv[1]))
 want = sys.argv[2].split()
-ran = [j["name"] for j in v.get("jobs", []) if j.get("conclusion") not in (None, "", "skipped")]
+# Only `skipped` means the job did not run. A null or empty conclusion means it has not FINISHED, which is a
+# claim about time and not about whether the run executed it -- and after the wait above, belt and braces.
+ran = [j["name"] for j in v.get("jobs", []) if j.get("conclusion") != "skipped"]
 for key in want:
     if not any(n == key or n.startswith(key + " ") for n in ran):
         raise SystemExit(1)
@@ -188,17 +215,12 @@ else
 	echo "         a second run that skipped the tree jobs and read the CURRENT body (#839's sequence)" >&2
 fi
 
-# --- wait on each, then assert each class against its own run ----------------------------------------------
+# --- assert each class against its own run ------------------------------------------------------------------
 #
-# Waiting on both is what makes this a verdict rather than a snapshot: the tree run may still be building while
-# the body run has long finished, and the reverse after an edit.
-for id in $treerun $bodyrun; do
-	if [ -z "${CIWATCH_FIXTURE:-}" ]; then
-		gh run watch "$id" --repo "$repo" > /dev/null 2>&1
-		fetch_run "$id" > "$prefix.$id.json" 2>&1
-	fi
-done
-cp "$prefix.$treerun.json" "$prefix.verdict"
+# No wait and no re-fetch here, and the absence is deliberate rather than an omission: every run for the SHA
+# was waited on BEFORE the selection loop, so the JSON that loop wrote was already taken from a finished run.
+# A second fetch would re-ask a question whose answer cannot have changed, and the version of this script that
+# fetched here did so because it was the first point at which the run was known to be over.
 
 assert_class() {
 	python3 - "$1" "$2" "$3" <<'PYCLS'
@@ -231,8 +253,33 @@ PYCLS
 }
 
 fail=0
-assert_class "$prefix.$treerun.json" "tree-subject (run $treerun)" "$treekeys" || fail=1
-assert_class "$prefix.$bodyrun.json" "body-subject (run $bodyrun)" "$bodykeys" || fail=1
+treeok=true
+bodyok=true
+assert_class "$prefix.$treerun.json" "tree-subject (run $treerun)" "$treekeys" || { fail=1; treeok=false; }
+assert_class "$prefix.$bodyrun.json" "body-subject (run $bodyrun)" "$bodykeys" || { fail=1; bodyok=false; }
+
+# --- the verdict file carries THIS SCRIPT's verdict, not a run's conclusion ---------------------------------
+#
+# It used to be `cp` of the chosen tree run's JSON, and that was a trap this script built for its own reader.
+# Once the two classes can come from different runs, **a run's own `conclusion` is no longer the verdict**: the
+# first green under the repaired selection had a tree run whose six tree jobs all passed and whose `citations`
+# job had failed against a body that no longer existed, so the file said `"conclusion": "failure"` beside a
+# `GREEN` on stderr. The standing rule for reading a CI result is *read the verdict file's status field* --
+# which would have returned the opposite of the truth, to the one reader the file exists for.
+#
+# So the file states what the script decided, names which run answered for each class, and keeps a pointer to
+# the per-run JSON rather than impersonating it. `conclusion` is deliberately absent: the honest reason a
+# reader cannot have that key is that no single run holds it.
+cat > "$prefix.verdict" <<VERDICT
+{
+  "ciwatch_verdict": "$([ "$fail" -eq 0 ] && echo green || echo fail)",
+  "sha": "$sha",
+  "tree_subject": { "run": "$treerun", "ok": $treeok, "keys": "$(printf '%s ' $treekeys)", "json": "$prefix.$treerun.json" },
+  "body_subject": { "run": "$bodyrun", "ok": $bodyok, "keys": "$(printf '%s ' $bodykeys)", "json": "$prefix.$bodyrun.json" },
+  "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+}
+VERDICT
+
 if [ "$fail" -ne 0 ]; then
 	echo "ciwatch: FAIL not green" >&2
 	exit 1

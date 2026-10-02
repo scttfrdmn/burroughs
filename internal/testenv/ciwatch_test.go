@@ -3,6 +3,7 @@
 package testenv_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -107,6 +108,30 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 			!strings.Contains(out, "body-subject from run 2") {
 			t.Errorf("the log does not name which run answered for which class:\n%s", out)
 		}
+
+		// The verdict FILE must agree with the verdict. This arm exists because the file used to be a copy
+		// of the chosen tree run's JSON, and run 1 here concludes `failure` — its citations job failed
+		// against a body that no longer exists. So the file said `"conclusion": "failure"` beside a GREEN,
+		// and the standing rule for reading a CI result is *read the verdict file's status field*, which
+		// would have returned the opposite of the truth to the one reader the file exists for.
+		raw, err := os.ReadFile(filepath.Join(dir, "out.verdict"))
+		if err != nil {
+			t.Fatalf("no verdict file was written: %v", err)
+		}
+		var v map[string]any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			t.Fatalf("the verdict file is not JSON, so it cannot be read by the tool that needs it: %v\n%s",
+				err, raw)
+		}
+		if v["ciwatch_verdict"] != "green" {
+			t.Errorf("verdict file says %v, want green: %s", v["ciwatch_verdict"], raw)
+		}
+		// And it must not carry a run's conclusion under a name a reader would reach for, because the
+		// whole point is that no single run holds one.
+		if _, present := v["conclusion"]; present {
+			t.Errorf("the verdict file carries a `conclusion` key — a reader will take it for the verdict, "+
+				"and since the two-class split no single run's conclusion is one:\n%s", raw)
+		}
 	})
 
 	t.Run("a_failing_body_job_in_the_newest_run_is_still_a_failure", func(t *testing.T) {
@@ -139,6 +164,42 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		}
 		if !strings.Contains(out, "no run for") {
 			t.Errorf("the failure does not say that no run could answer for the tree class:\n%s", out)
+		}
+	})
+
+	t.Run("an_in_progress_job_has_run_it_has_not_finished", func(t *testing.T) {
+		// The defect #841 shipped and #842's own CI found. `run_covers` read a job with no conclusion as a job
+		// that had NOT RUN — the reading that is right for `skipped` and wrong for `in_progress` — and
+		// selection happened before the wait. So a freshly pushed SHA, whose jobs are all pending, reported
+		// "no run for <sha> ran its tree-subject jobs" about a run that was busy running them.
+		//
+		// Three states, not two: `skipped` is a claim about whether, a null conclusion is a claim about WHEN,
+		// and only the first excludes a run from answering for a class. `assert_class` already drew this
+		// distinction; this arm is why drawing it in one of two places was not enough.
+		//
+		// Under a fixture there is no waiting, so this exercises the coverage predicate directly — which is
+		// the half that has to be right even after the wait, because a fetch can race a job's own transition.
+		dir := t.TempDir()
+		pending := strings.ReplaceAll(pushRun, `"conclusion":"success"`, `"conclusion":null`)
+		pending = strings.ReplaceAll(pending, `"status":"completed"`, `"status":"in_progress"`)
+		pending = strings.ReplaceAll(pending, `{"name":"citations","conclusion":"failure"}`,
+			`{"name":"citations","conclusion":"success"}`)
+		write(dir, "runs.json", `[{"databaseId": 1}]`)
+		write(dir, "1.json", pending)
+
+		code, out := run(t, dir)
+		if code == 0 {
+			t.Fatalf("exit 0 — an unfinished run is not green either:\n%s", out)
+		}
+		// The distinction the whole arm is about: it must fail as UNFINISHED, never as "no run ran them".
+		// Both are non-zero, so an exit code alone cannot tell this arm's pass from its failure.
+		if strings.Contains(out, "no run for") {
+			t.Errorf("an in-progress run was reported as a run that never executed the tree jobs — the\n"+
+				"three-state distinction is gone and the exit code cannot see it:\n%s", out)
+		}
+		if !strings.Contains(out, "unfinished") {
+			t.Errorf("the failure does not name the jobs as unfinished, so it is not reporting the state it\n"+
+				"found:\n%s", out)
 		}
 	})
 }
