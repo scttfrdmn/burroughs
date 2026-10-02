@@ -368,7 +368,7 @@ func TestEngineBuiltSetEqualsTheClassification(t *testing.T) {
 	for _, r := range rows {
 		known[r.ops[0]] = true
 	}
-	for op := 0; op < 256; op++ {
+	for op := range 256 {
 		if isBuiltAsyncBuiltin(byte(op)) && !known[byte(op)] {
 			t.Errorf("isBuiltAsyncBuiltin permits %#x, which is NOT a canon production at the pin", op)
 		}
@@ -511,6 +511,11 @@ func TestTheDemandedAbsentSetIsSliceTwosWorkList(t *testing.T) {
 				t.Errorf("%s is classified demanded-BUILT but the engine does not execute it", r.name)
 			}
 			built = append(built, fmt.Sprintf("%#x %s", r.ops[0], r.name))
+		case statusLifting, statusResource, statusAsyncBuiltUndemanded, statusAsyncRefusedByName,
+			statusErrorContext, statusThreads, statusThreadsPhase2:
+			// Not part of the demand set, so not part of slice 2's list. Named rather than left to a
+			// `default` so that a status added later lands here as a linter failure and gets a decision:
+			// whether a new status is demanded is exactly the question this arm exists to answer.
 		}
 	}
 	sort.Strings(absent)
