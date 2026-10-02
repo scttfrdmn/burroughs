@@ -30,6 +30,20 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **An embedder will cancel a component call through `context.Context`, and cancellation is its own outcome**
+  ([ADR 0085 amendment 1](docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md),
+  stamped by Scott on the [#771](https://github.com/scttfrdmn/burroughs/issues/771) slice-2 question).
+  `Component.Call(ctx, name, args...)` takes Go's cancellation token first; cancelling it cancels the
+  in-flight task; the call returns a **distinct cancelled outcome checkable with `errors.Is`**, whose exact
+  form is set from wasmtime's committed cancellation reading rather than chosen now. **No surface ships in
+  this entry** — the decision is recorded ahead of the mechanism precisely because `Component.Call` has not
+  shipped, which is what makes it free to change. The question arose because parity with wasmtime 49 needs a
+  host cancellation action and **Burroughs has none at any level**: measured, no exported entry takes a
+  `context.Context`, and the only lifecycle method that bounds anything is the internal
+  `interp.Instance.Stop(time.Duration)`, which cannot carry a cancellation. The handle-based alternative
+  (`Start` returning a `*Task` with `Cancel`/`Wait`) is **declined for want of a consumer** and stays addable
+  on top. The resulting asymmetry — the component call takes a context, the released `Instance.Call` does not
+  and is not changing — is stated and accepted rather than resolved.
 - **The async-lift ABI is settled as stackless callback, chosen by the first guest that lifts async**
   ([ADR 0092](docs/decisions/0092-the-async-lift-abi-is-stackless-callback-because-the-first-guest-that-lifts-async-chose-it-and-the-demand-set-is-read-from-that-guest.md),
   [#771](https://github.com/scttfrdmn/burroughs/issues/771)), discharging
@@ -489,6 +503,15 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **A doc comment cited a `ComponentValue` surface that its own cited ADR does not define**
+  ([grave #856](https://github.com/scttfrdmn/burroughs/issues/856)). `component.go` pointed an embedder at
+  *"the `ComponentValue` surface (ADR 0085)"*; **ADR 0085 contains no such identifier.** The citation resolved
+  — the ADR exists, the link is well-formed, `make cite` was satisfied — while the **claim about what the
+  cited record says** did not, which is the half no citation sweep in this tree can check. It was read as fact
+  while answering #771's cancellation question, producing the belief that the value surface was stamped under
+  that name and merely awaiting a consumer. The comment now names what ADR 0085 **decides** — a tagged union
+  over the WIT value types, reached through `LoadComponent`/`*Component`, plus amendment 1's `Call(ctx, …)` —
+  and **does not invent the value type's exported name**, which the ADR genuinely leaves open.
 - **The refusal log's dominant writer was its own test suite, so the rate it exists to measure could not be
   read from it** ([grave #852](https://github.com/scttfrdmn/burroughs/issues/852)).
   `internal/testenv/editroute_test.go` drove `scripts/editroute.py` without redirecting `EDITROUTE_LOG`, so
