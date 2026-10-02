@@ -9,6 +9,16 @@
 # deleted.** It was being counted from memory, which this project does not accept for a figure that decides
 # something.
 #
+# **Those two figures are recalled, not read from this log, and the log could not have produced them** — it
+# did not exist until the slice that counted them. Said here because the paragraph above otherwise reads as a
+# citation to the log, and grave #852 is what that reading costs: for its first day the log's dominant writer
+# was the hook's OWN TEST SUITE. `editroute_test.go` drove the hook without redirecting `EDITROUTE_LOG`, so
+# every refusing arm appended on every `go test` run; the log reached **137 entries of which 2 were real**,
+# and this script printed a confident table over them. The guard is now `TestMain` in
+# `internal/testenv/refusallogguard_test.go`, which fails the package if its tests modify this file at all.
+# The log was reset to the two real entries; the polluted copy is machine-local evidence and is not in the
+# tree. **Any count below that predates 2026-10-02 is not a reading of real usage.**
+#
 # ## What this does NOT do
 #
 # It does not say which refusals were *wrong*. Nothing can: whether a refusal was a false positive is a

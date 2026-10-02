@@ -22,6 +22,13 @@ import (
 // survives — **an over-refusing check is the kind that gets deleted** — and it was being counted from memory,
 // which this project does not accept for a figure that decides something.
 //
+// **Those figures are recalled and the log could not have produced them**, because it did not exist until the
+// slice that counted them — and for that slice's first day the log's dominant writer was the hook's own test
+// suite (grave #852: `editroute_test.go` drove the hook without redirecting `EDITROUTE_LOG`, reaching 137
+// entries of which 2 were real). `TestMain` in `refusallogguard_test.go` now fails the package if any test
+// here modifies the production log, which is the guard this test's own `EDITROUTE_LOG` override was not: the
+// override protected the artifact from the test *about* it, not from the test that generates the refusals.
+//
 // # What these arms assert, and what they cannot
 //
 // They assert the log's *mechanics*: one line per refusal, nothing on an allowed command, a rule slug and a
