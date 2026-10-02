@@ -444,7 +444,18 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			cmd := exec.Command("python3", hook)
 			cmd.Dir = root
 			cmd.Stdin = bytes.NewReader(payload)
-			cmd.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+root)
+			// `EDITROUTE_LOG` is redirected because **a test that drives a mechanism is a writer to every
+			// artifact that mechanism touches** (grave #852). Without it every refusing arm here appended to
+			// the production `.editroute-log` once per `go test` run, and the log that exists to measure the
+			// hook's false-positive RATE reached 137 entries of which **2 were real** — its own test suite
+			// out-writing real usage 135:2, with nothing in `scripts/refusals.sh`'s output to show it.
+			//
+			// Redirecting it in `refusallog_test.go` — the test *about* the log — was not enough. The
+			// redirection belongs wherever the hook is invoked, which is here.
+			cmd.Env = append(os.Environ(),
+				"CLAUDE_PROJECT_DIR="+root,
+				"EDITROUTE_LOG="+filepath.Join(t.TempDir(), "refusals"),
+			)
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			runErr := cmd.Run()

@@ -57,6 +57,9 @@ own condition rather than as a prediction.
   of the command — the hash because a command can carry a path or a secret and the log is for counting, not
   forensics. **The report cannot say which refusals were wrong**, and says so: that is a judgement about what
   the author meant, and classifying the entries is a deliberate step at a tooling decision.
+  **Corrected one slice later ([grave #852](https://github.com/scttfrdmn/burroughs/issues/852)): the ten and
+  the three above are *recalled*, and the log could not have produced them — it did not exist until this
+  slice. For its first day its dominant writer was the hook's own test suite.** See **Fixed**.
   `TestEveryRefusalReasonHasARule` keeps the rule table **total** over the hook's own deny arms, so a reason
   added later cannot log as `unclassified` and quietly hole the figure.
 
@@ -486,6 +489,20 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **The refusal log's dominant writer was its own test suite, so the rate it exists to measure could not be
+  read from it** ([grave #852](https://github.com/scttfrdmn/burroughs/issues/852)).
+  `internal/testenv/editroute_test.go` drove `scripts/editroute.py` without redirecting `EDITROUTE_LOG`, so
+  each of its refusing arms appended to the production `.editroute-log` on **every** `go test` run. Measured:
+  **137 entries, of which 2 were real** — 16 bursts of 4–12 entries, one per test run, out-writing real usage
+  **135:2** — while `scripts/refusals.sh` printed a confident table over them. **An instrument that cannot
+  produce its own figure, while its documentation implies it can, is worse than no instrument.** Redirecting
+  the log in `refusallog_test.go` (the test *about* the log) was not enough: **a test that drives a mechanism
+  is a writer to every artifact that mechanism touches**, so the redirection belongs wherever the hook is
+  invoked. The guard is `TestMain` in `internal/testenv/refusallogguard_test.go`, which fingerprints the log
+  before and after the package's tests and fails if it moved — **named after the rule, not the code shape**,
+  because the next writer may reach it through a script, a helper, or a route nobody has thought of, none of
+  which an audit of `exec.Command` call sites would see. Watched die: with the fix reverted the guard fails
+  and reports both fingerprints, the log having grown 137 → 152. The log is reset to its two real entries.
 - **A doc comment that contradicted its own switch, twice read as the engine's coverage**
   ([grave #850](https://github.com/scttfrdmn/burroughs/issues/850)). `isBuiltAsyncBuiltin`'s comment
   enumerated the async built-ins the engine executes and had drifted from the `case` list directly below it:
