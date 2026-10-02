@@ -30,6 +30,43 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **`scripts/detach.sh --stop <stamp>` ends a detached run by its recorded process GROUP.** The stamp
+  already recorded `child_pgid` and nothing read it. A pid is not the handle — a watcher spawns `gh`, a
+  gate spawns `make`, `go` and a linter — and ending the task left `golangci-lint` running, reddening
+  the next gate on `parallel golangci-lint is running`, a failure that was not about the tree.
+  Survivors are **verified absent** rather than assumed, and the outcome is appended to the stamp, so a
+  stop that left something running is readable afterwards. Witnessed with a payload that spawns a child,
+  and **the witness had to kill the launcher first to discriminate at all** — `detach.sh`'s own loop
+  cleans up the group on `child-gone`, so with the launcher alive a pid-kill injection still passed.
+  Killing it is also the production condition: the harness ended the wrapper and the group ran on.
+- **`ciwatch.sh` waits a bounded time for a run to appear, telling "not yet" from "not coming".** It
+  exited 3 the instant no run existed, and the moment it is launched is the moment right after a push —
+  exactly when the run may not exist. Exit 3 was never dishonest; it was useless at the one moment it is
+  used. `CIWATCH_RUN_WAIT` (default 180 s) and `CIWATCH_RUN_POLL` (10 s) bound the wait; the polling is
+  **visible**, so an operator can tell a poll from a stall, and a spent bound exits 3 **naming the
+  bound**. A duration is the right instrument here: what is being waited for is a remote system's
+  scheduling latency, which offers no signal to wait on.
+- **The hook refuses `replace_all: true` on tracked files**, which required teaching it to see `Edit`
+  calls. `replace_all` opts out of the one-match refusal `subst1.py` enforces — and in the slice that
+  built the hook it hit a **sixth** call site nobody intended, leaving the hook crashing. Scoped to
+  tracked files; an anchored edit on the same file and a wide edit on an untracked one are both
+  permitted, which is what makes the **flag** the subject rather than the tool. **`MultiEdit` carries
+  the flag per entry inside `edits`**, so a check reading only the top level refused `Edit` and let the
+  wider tool through unchecked; the arm puts the flag on the *second* entry, so a scan stopping at the
+  first does not pass.
+- **The hook refuses a command chained after `subst1.py` past anything but `&&`.** A refused edit — 7
+  matches of `### Added`, correctly declined — was followed by a commit that ran anyway, so a change
+  landed without its CHANGELOG entry. The loud route was loud; the **sequencing** swallowed it. `;`, a
+  newline and `&` carry on regardless of the exit status, and `||` runs the next command *because* it
+  failed; `&&` is permitted because it is what the chaining meant. **The separator in the specimen was a
+  newline**, which `shlex` eats as whitespace — so `… | head -3` and `git add -A` had been tokenising as
+  one command, which silently widened every per-command judgement in the hook. Newlines are now
+  normalised to separators after heredoc lifting, and the newline arm fails without it — **quote-aware,
+  and joining line continuations first**, because a blanket replacement turned `sed -i '' s/a/b/ \` +
+  newline + `CHANGELOG.md` into two commands with `-i` and its target separated, letting through exactly
+  the in-place edit the hook exists to refuse. One pass rather than two regexes: inside single quotes a
+  backslash is literal, so a blanket continuation join would corrupt the content it was meant to preserve.
+
 - **A `PreToolUse` hook refuses to edit a tracked file from a Bash command**
   (`scripts/editroute.py`, wired in the tracked `.claude/settings.json`). The two loud routes — the
   editor tool, which fails when its anchor is missing, and `scripts/subst1.py`, which refuses 0 or

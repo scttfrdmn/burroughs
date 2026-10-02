@@ -268,6 +268,62 @@ WAIT_ROUTES = (
 )
 
 
+def separate_commands(text: str) -> str:
+    """Normalise newlines so each top-level command is one `shlex` command, quote-aware.
+
+    Three jobs, in one pass because they interact:
+
+    * a **line continuation** (`\\` then newline) outside quotes joins — it is one command, and splitting it
+      would put `sed -i` and its target in different commands;
+    * any other newline **outside quotes** becomes `;` — `shlex` eats newlines as whitespace, so without this
+      `… | head -3` and `git add -A` tokenise as a single command and every per-command check is widened;
+    * newlines **inside quotes** are left exactly as they are — they are content, and the inline-interpreter
+      check reads that content.
+
+    A single pass rather than two regexes because inside single quotes a backslash is literal: a blanket
+    `\\\\\\n -> ' '` would corrupt the quoted text it was supposed to leave alone.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if quote is not None:
+            # In double quotes a backslash still escapes; in single quotes nothing does.
+            if quote == '"' and c == "\\" and i + 1 < n:
+                out.append(c)
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            out.append(c)
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n and text[i + 1] == "\n":
+            out.append(" ")  # continuation: one command, not two
+            i += 2
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(c)
+            out.append(text[i + 1])
+            i += 2
+            continue
+        if c == "\n":
+            out.append(" ; ")
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def tokenize(text: str) -> list[str] | None:
     lex = shlex.shlex(text, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
@@ -294,6 +350,25 @@ def basename(word: str) -> str:
 def findings(cmd: str, root: str, cwd: str) -> list[str]:
     """Every reason this command must not run, as sentences. Empty means allow."""
     text, bodies = lift_heredocs(cmd)
+    # **A newline is a command separator and `shlex` eats it.** Measured: with `whitespace_split`, a newline
+    # is whitespace, so `… | head -3\ngit add -A` tokenises as one command ending `head -3 git add -A`. Two
+    # commands became one, which silently widened every per-command judgement below — and it is the separator
+    # in the specimen that motivated the subst1-chaining check, where a refused edit was followed by a commit
+    # on the next LINE rather than after a `;`.
+    #
+    # **But not every remaining newline separates commands**, and a blanket replace broke two cases:
+    #
+    #  * **Line continuation.** `sed -i '' s/a/b/ \<newline> CHANGELOG.md` is ONE command. Replacing the
+    #    newline gives `… \ ; CHANGELOG.md`, where the backslash escapes a space and the `;` then splits
+    #    `-i` from its target into two commands — letting through exactly the in-place edit this hook exists
+    #    to refuse.
+    #  * **Newlines inside quotes.** A multi-line `-c` program or quoted commit message would get `; `
+    #    injected into its *content*, which is the text the inline-interpreter check reads.
+    #
+    # So the scan is quote-aware and does both jobs in one pass. The continuation join cannot be a separate
+    # blanket `\\\n -> ' '` either: inside single quotes a backslash is literal, so joining there would
+    # corrupt the content it was meant to preserve.
+    text = separate_commands(text)
     tokens = tokenize(text)
     if tokens is None:
         print(
@@ -336,6 +411,31 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
                 "subst1.py's output is redirected to /dev/null — the landing display is the scripted "
                 "route's only defence against an anchor that is unique, present and in the wrong place"
             )
+
+        # --- route 6: a refusal nobody reads ----------------------------------------------------
+        #
+        # `subst1.py` refused an ambiguous edit — 7 matches of `### Added` — and the commit chained after
+        # it ran anyway, so the change landed without its CHANGELOG entry. The loud route was loud; the
+        # SEQUENCING swallowed it.
+        #
+        # So the separator that follows the invocation is the subject. `;` and a newline carry on
+        # regardless of the exit status, and `||` runs the next command *because* it failed — all three
+        # turn a refusal into a no-op. **`&&` is permitted**, because it is what the chaining meant: the
+        # next step happens only if the edit happened.
+        #
+        # This closes the route rather than asking the next actor to remember an ordering, which is the
+        # difference between a mechanism and a note — and the note would have been mine to forget.
+        idx = next(i for i, t in enumerate(tokens) if basename(t) == "subst1.py")
+        for t in tokens[idx + 1 :]:
+            if t in ("&&",):
+                break
+            if t in (";", "||", "&"):
+                reasons.append(
+                    f"a command follows subst1.py past `{t}`, which runs whatever its exit status was — "
+                    "so a refused edit is followed by the next step anyway. Use `&&`, so the next step "
+                    "happens only if the edit did"
+                )
+                break
         return reasons
 
     # --- route 1: redirection into a tracked path, including `tee` -----------------------------
@@ -431,14 +531,62 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return 0
-    if payload.get("tool_name") != "Bash":
+    tool = payload.get("tool_name")
+    inp = payload.get("tool_input") or {}
+    root = repo_root()
+    cwd = payload.get("cwd") or os.getcwd()
+
+    # --- the editor tool's own escape from the one-match check -----------------------------------
+    #
+    # `subst1.py` refuses >1 match, and the reason is stated in its own docstring: picking the first
+    # silently is how an injection lands in the wrong one of several identical call sites. The editor
+    # tool's `replace_all: true` opts out of exactly that refusal — and in the slice that built this
+    # hook it hit a **sixth** call site nobody intended, leaving the hook crashing with a NameError.
+    #
+    # So the route around the loud check gets closed, which is this hook's whole premise. A wide edit
+    # across a tracked file is not forbidden work; it is work that must be done where its scope is
+    # visible, which means one anchored edit at a time or a longer unique anchor.
+    #
+    # Scoped to TRACKED files for the same reason every other route is: an untracked or new file has
+    # no reviewers and no history to disturb.
+    # **`MultiEdit` carries `replace_all` PER ENTRY, inside `edits`, not at the top level.** Checking
+    # only `inp["replace_all"]` therefore refused `Edit` and let `MultiEdit` through unchecked — the
+    # wider tool, unguarded, which is the worse half to miss. Both shapes are read here, and the
+    # per-entry scan is what the `MultiEdit` arm exists to hold.
+    wide = inp.get("replace_all") is True
+    if not wide:
+        edits = inp.get("edits")
+        if isinstance(edits, list):
+            wide = any(
+                isinstance(e, dict) and e.get("replace_all") is True for e in edits
+            )
+    if tool in ("Edit", "MultiEdit") and wide:
+        target = inp.get("file_path") or ""
+        if is_tracked(target, root, cwd):
+            print(
+                "editroute: REFUSED — `replace_all: true` on the tracked file "
+                f"{target!r}.\n\n"
+                "  It replaces every occurrence without telling you how many there were, which is the\n"
+                "  one thing `scripts/subst1.py` refuses outright (>1 match is an ambiguous edit). In\n"
+                "  the slice that added this hook, a `replace_all` hit a sixth call site nobody\n"
+                "  intended and left the hook itself crashing.\n\n"
+                "  Do instead one of:\n"
+                "    - extend the anchor until it is unique, and edit once; or\n"
+                "    - make the edits one at a time, so each one's site is visible; or\n"
+                "    - python3 scripts/subst1.py <target> <old-file> <new-file>, which refuses 0 and\n"
+                "      >1 matches and prints the hunk it wrote with context.\n\n"
+                "  Untracked and new files are not refused — a wide edit there disturbs no history.\n",
+                file=sys.stderr,
+            )
+            return 2
         return 0
-    cmd = (payload.get("tool_input") or {}).get("command") or ""
+
+    if tool != "Bash":
+        return 0
+    cmd = inp.get("command") or ""
     if not cmd:
         return 0
 
-    root = repo_root()
-    cwd = payload.get("cwd") or os.getcwd()
     reasons = findings(cmd, root, cwd)
     if not reasons:
         return 0

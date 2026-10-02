@@ -118,6 +118,9 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 		// subjects need different guidance and **a refusal that names the wrong route is worse than one
 		// that names none**: it sends the reader to a tool that cannot help. Defaults to the edit routes.
 		routes []string
+		// editInput carries a non-Bash payload verbatim. The `Edit` subject has no command to put in
+		// `cmd`, and faking one would test a shape the harness never sends.
+		editInput map[string]any
 	}
 	editRoutes := []string{"editor tool", "subst1.py"}
 	arms := []arm{
@@ -219,9 +222,121 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
-			name: "a_non_bash_tool_is_never_the_subject",
+			name: "a_plain_edit_is_never_the_subject",
 			tool: "Edit",
 			cmd:  "",
+			deny: false,
+		},
+		{
+			// `replace_all` opts out of the >1-match refusal `subst1.py` enforces. In the slice that built
+			// this hook it hit a sixth call site nobody intended and left the hook itself crashing.
+			name:      "replace_all_on_a_tracked_file_is_refused",
+			tool:      "Edit",
+			editInput: map[string]any{"file_path": "{ROOT}/scripts/ciwatch.sh", "replace_all": true},
+			deny:      true,
+			want:      "replace_all",
+			routes:    []string{"subst1.py", "unique"},
+		},
+		{
+			// The allow arm that makes the flag the subject rather than the tool: same tracked file, same
+			// editor, one anchored replacement. Without it, "refuse Edit on tracked files" passes the deny
+			// arm and makes the hook unusable.
+			name:      "an_anchored_edit_on_a_tracked_file_is_permitted",
+			tool:      "Edit",
+			editInput: map[string]any{"file_path": "{ROOT}/scripts/ciwatch.sh", "replace_all": false},
+			deny:      false,
+		},
+		{
+			// And scoped to TRACKED files, like every other route here: a wide edit to an untracked or new
+			// file disturbs no history and has no reviewers.
+			name:      "replace_all_on_an_untracked_file_is_permitted",
+			tool:      "Edit",
+			editInput: map[string]any{"file_path": "/tmp/scratch-notes.md", "replace_all": true},
+			deny:      false,
+		},
+		{
+			// `MultiEdit` carries the flag PER ENTRY inside `edits`, not at the top level — so a check
+			// reading only `tool_input["replace_all"]` refused `Edit` and let the WIDER tool through
+			// unchecked. The flag is on the SECOND entry deliberately: a scan that stops at the first
+			// passes this arm.
+			name: "multiedit_with_replace_all_in_a_later_entry_is_refused",
+			tool: "MultiEdit",
+			editInput: map[string]any{
+				"file_path": "{ROOT}/scripts/ciwatch.sh",
+				"edits": []any{
+					map[string]any{"old_string": "a", "new_string": "b"},
+					map[string]any{"old_string": "c", "new_string": "d", "replace_all": true},
+				},
+			},
+			deny:   true,
+			want:   "replace_all",
+			routes: []string{"subst1.py", "unique"},
+		},
+		{
+			// The complement: a MultiEdit of anchored replacements is ordinary work and must pass.
+			name: "multiedit_without_replace_all_is_permitted",
+			tool: "MultiEdit",
+			editInput: map[string]any{
+				"file_path": "{ROOT}/scripts/ciwatch.sh",
+				"edits": []any{
+					map[string]any{"old_string": "a", "new_string": "b"},
+					map[string]any{"old_string": "c", "new_string": "d"},
+				},
+			},
+			deny: false,
+		},
+		{
+			// The swallowed refusal, in the separator the specimen actually used: a NEWLINE. `subst1.py`
+			// refused 7 matches of `### Added` and the commit on the next line ran anyway, so the change
+			// landed without its CHANGELOG entry. `shlex` eats newlines, so this arm also holds the
+			// newline-to-`;` normalisation in place.
+			name: "a_command_after_subst1_on_the_next_line_is_refused",
+			cmd: "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n\n" +
+				"git add -A && git commit -q -m x",
+			deny:   true,
+			want:   "runs whatever its exit status was",
+			routes: []string{"&&"},
+		},
+		{
+			name:   "a_command_after_subst1_past_a_semicolon_is_refused",
+			cmd:    "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n ; git commit -q -m x",
+			deny:   true,
+			want:   "runs whatever its exit status was",
+			routes: []string{"&&"},
+		},
+		{
+			// `|| true` is the shape that most looks like care and most reliably discards the refusal.
+			name:   "a_command_after_subst1_past_or_is_refused",
+			cmd:    "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n || true",
+			deny:   true,
+			want:   "runs whatever its exit status was",
+			routes: []string{"&&"},
+		},
+		{
+			// The allow arm, and the one that makes this about the SEPARATOR rather than about chaining:
+			// `&&` is what the chaining meant — the next step happens only if the edit did.
+			name: "a_command_after_subst1_past_and_is_permitted",
+			cmd:  "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n && git commit -q -m x",
+			deny: false,
+		},
+		{
+			// A LINE CONTINUATION is one command, and the newline-to-`;` normalisation nearly broke exactly
+			// the check it was added beside. Blanket-replacing the newline gives `sed -i '' s/a/b/ \ ; CHANGELOG.md`
+			// — the backslash escapes a space and the `;` splits `-i` from its target, so the in-place edit
+			// this hook exists to refuse walks through. This arm is the discriminator for the join step.
+			name: "an_in_place_edit_split_across_a_continuation_is_still_refused",
+			cmd:  "sed -i '' 's/a/b/' \\\n  CHANGELOG.md",
+			deny: true,
+			want: "in place",
+		},
+		{
+			// Newlines inside quotes are CONTENT, not separators. This is a regression guard rather than a
+			// discriminator, and is labelled as one: because `shlex` keeps a quoted string as a single token,
+			// a naive replacement injects `;` into the message text without changing the tokenisation, so
+			// this arm passes either way. It is here because the *content* is what the inline-interpreter
+			// check reads, and a future change to that check would be caught by it rather than by a user.
+			name: "a_multi_line_quoted_message_stays_one_command",
+			cmd:  "git commit -q -m \"line one\nsleep 300 was the bug\nline three\"",
 			deny: false,
 		},
 		{
@@ -289,11 +404,21 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			// non-repo directory and ALLOWED the write, and both arms inverted. A witness that hard-codes
 			// where the tree lives is asserting something about a machine, not about the hook.
 			cmdText := strings.ReplaceAll(a.cmd, "{ROOT}", root)
+			input := map[string]any{"command": cmdText}
+			if a.editInput != nil {
+				input = map[string]any{}
+				for k, v := range a.editInput {
+					if s, ok := v.(string); ok {
+						v = strings.ReplaceAll(s, "{ROOT}", root)
+					}
+					input[k] = v
+				}
+			}
 			payload, err := json.Marshal(map[string]any{
 				"hook_event_name": "PreToolUse",
 				"tool_name":       tool,
 				"cwd":             root,
-				"tool_input":      map[string]any{"command": cmdText},
+				"tool_input":      input,
 			})
 			if err != nil {
 				t.Fatal(err)

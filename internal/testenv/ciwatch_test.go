@@ -73,12 +73,13 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		}
 	}
 
-	run := func(t *testing.T, dir string) (int, string) {
+	run := func(t *testing.T, dir string, extraEnv ...string) (int, string) {
 		t.Helper()
 		cmd := exec.Command("bash", "ciwatch.sh", sha, filepath.Join(dir, "out"))
 		cmd.Dir = filepath.Join(root, "scripts")
 		cmd.Env = append(os.Environ(), "CIWATCH_FIXTURE="+dir,
 			"CIWATCH_WORKFLOW=../.github/workflows/ci.yml")
+		cmd.Env = append(cmd.Env, extraEnv...)
 		out, err := cmd.CombinedOutput()
 		code := 0
 		if err != nil {
@@ -164,6 +165,56 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		}
 		if !strings.Contains(out, "no run for") {
 			t.Errorf("the failure does not say that no run could answer for the tree class:\n%s", out)
+		}
+	})
+
+	t.Run("a_run_that_appears_late_is_waited_for", func(t *testing.T) {
+		// The gap this closes: the watcher exited 3 the instant no run existed, and the moment it is
+		// launched is the moment right after a push — exactly when GitHub may not have created the run yet.
+		// It bit once, reporting `no run exists ... yet` having watched nothing.
+		//
+		// `runs.delay` makes the fixture return an empty list for its first N calls, so the retry is
+		// *witnessed* rather than asserted. A static fixture either has runs from the start or never gets
+		// them, and neither exercises "appeared on attempt 3".
+		dir := t.TempDir()
+		write(dir, "runs.json", runsJSON)
+		write(dir, "1.json", pushRun)
+		write(dir, "2.json", editRun)
+		write(dir, "runs.delay", "2")
+
+		code, out := run(t, dir, "CIWATCH_RUN_WAIT=30", "CIWATCH_RUN_POLL=1")
+		if code != 0 {
+			t.Fatalf("exit %d, want 0 — the run appeared on the third call and the verdict is green:\n%s",
+				code, out)
+		}
+		// The wait must be VISIBLE. An operator watching a watcher needs to tell polling from a stall,
+		// and a silent retry loop is indistinguishable from a hang.
+		if !strings.Contains(out, "no run yet") {
+			t.Errorf("the watcher never said it was waiting, so a poll cannot be told from a stall:\n%s", out)
+		}
+		if !strings.Contains(out, "a run appeared after") {
+			t.Errorf("the watcher did not report that the run eventually appeared:\n%s", out)
+		}
+	})
+
+	t.Run("a_spent_bound_is_no_run_is_coming_not_no_run_yet", func(t *testing.T) {
+		// The other half of the distinction, and the reason the bound exists at all: once it is spent the
+		// watcher must conclude, and its message must say what it concluded and on what evidence. Reporting
+		// a momentary absence in the same words as an exhausted bound is what made the old behaviour
+		// useless — it was never dishonest, it just could not be acted on.
+		dir := t.TempDir()
+		write(dir, "runs.json", `[]`)
+
+		code, out := run(t, dir, "CIWATCH_RUN_WAIT=0", "CIWATCH_RUN_POLL=1")
+		if code == 0 {
+			t.Fatalf("exit 0 with no run at all — silence is not a pass:\n%s", out)
+		}
+		if !strings.Contains(out, "no run appeared") || !strings.Contains(out, "bound") {
+			t.Errorf("the failure does not distinguish a spent bound from a momentary absence:\n%s", out)
+		}
+		// And it must NOT claim the tree is bad: there is no verdict here, only an absent one.
+		if strings.Contains(out, "GREEN") {
+			t.Errorf("a spent bound reported a green:\n%s", out)
 		}
 	})
 

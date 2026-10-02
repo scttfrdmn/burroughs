@@ -35,8 +35,63 @@ set -uo pipefail
 
 usage() {
 	echo "usage: detach.sh <stampfile> <timeout-seconds> -- <command...>" >&2
+	echo "       detach.sh --stop <stampfile>" >&2
 	exit 2
 }
+
+# --- `--stop`: end a detached run by its recorded process GROUP ---------------------------------------------
+#
+# The stamp already records `child_pgid`, and the reason to read it rather than improvise is measured. Stopping
+# a backgrounded `make ci` through the harness task left `golangci-lint` running, and the next gate run died on
+# `parallel golangci-lint is running` — a red that was not about the tree. The harness ends the *task*; the
+# process group is what holds the work.
+#
+# So: launch anything stoppable through this script, including gates, and stop it through here. A pid is not
+# the handle — a watcher spawns `gh`, a gate spawns `make`, `go`, and a linter — and killing a pid leaves the
+# children reparented and running.
+#
+# The termination is the same TERM → grace → KILL ladder the launcher loop uses below, deliberately, because
+# two spellings of "end this group" is one of them being wrong eventually. Survivors are **verified absent**
+# rather than assumed, and the outcome is appended to the stamp: a stop that left something running must be
+# readable afterwards, or the next unexplained contention has no record to point at.
+if [ "${1:-}" = "--stop" ]; then
+	stamp=${2:-}
+	[ -n "$stamp" ] || usage
+	[ -f "$stamp" ] || { echo "detach.sh: no such stamp file: $stamp" >&2; exit 2; }
+	pgid=$(sed -n 's/.*child_pgid=\([0-9]*\).*/\1/p' "$stamp" | tail -1)
+	if [ -z "$pgid" ]; then
+		echo "detach.sh: $stamp records no child_pgid — it was not written by this script, or the" >&2
+		echo "           launch died before recording one. Nothing to stop by group." >&2
+		exit 2
+	fi
+	if ! kill -0 -- "-$pgid" 2>/dev/null; then
+		echo "detach: stop pgid=$pgid already-gone $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$stamp"
+		echo "detach.sh: process group $pgid is already gone" >&2
+		exit 0
+	fi
+	killed=none
+	if kill -TERM -- "-$pgid" 2>/dev/null; then
+		killed=term
+		for _ in 1 2 3; do
+			sleep 1
+			kill -0 -- "-$pgid" 2>/dev/null || break
+		done
+		if kill -0 -- "-$pgid" 2>/dev/null; then
+			kill -KILL -- "-$pgid" 2>/dev/null && killed=term+kill
+			sleep 1
+		fi
+	fi
+	if kill -0 -- "-$pgid" 2>/dev/null; then
+		echo "detach: stop pgid=$pgid killed=$killed SURVIVED $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$stamp"
+		echo "detach.sh: FAIL process group $pgid is STILL ALIVE after TERM and KILL." >&2
+		echo "           Do not start another run that shares its resources — that is how a leftover" >&2
+		echo "           linter reddens the next gate on something unrelated to the tree." >&2
+		exit 1
+	fi
+	echo "detach: stop pgid=$pgid killed=$killed gone $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$stamp"
+	echo "detach.sh: process group $pgid ended ($killed), no survivors" >&2
+	exit 0
+fi
 
 [ $# -ge 4 ] || usage
 stamp=$1
