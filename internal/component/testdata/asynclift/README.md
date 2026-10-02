@@ -27,8 +27,8 @@ targets. See `build.sh` for that and for three blocked paths worth not re-paying
 
 | path | what it is |
 |---|---|
-| `single/` | async-**lift** only: `compute: async func(x: u32) -> u32`. 46,089 B |
-| `suspending/` | async-lift **and** async-**lower**: `run` awaits an imported `tick`, so a task suspends. 52,202 B |
+| `single/` | async-**lift** only: `compute: async func(x: u32) -> u32`. 46,171 B |
+| `suspending/` | async-lift **and** async-**lower**: `run` awaits an imported `tick`, so a task suspends. 52,334 B |
 | `harness/` | the wasmtime embedding that answers the concurrency question. Its own lockfile, outside the Go build |
 | `concurrent.reading` | the positive arm's reading |
 | `sequential.reading` | the negative arm's reading |
@@ -40,7 +40,41 @@ different bytes. The provenance block above would then name a version the rebuil
 **One edit was made to the copied locks, and it is recorded because it is exactly the kind of thing that breaks
 a rebuild:** the guests were developed as crates named `conc` and `p62` and renamed on the way in, so each
 lock's root `[[package]]` name was rewritten to match its manifest. Whether that rewrite is sound is not an
-argument to have — the reproducibility check below is what settles it.
+argument to have — the reproducibility check below is what settled it. (It did not survive: cargo re-sorts the
+package list after a root rename, so the committed locks are the build's own output, not the hand edit.)
+
+## Reproducibility, measured
+
+**The committed bytes rebuild byte-for-byte from the committed sources.** Run from a clean `git worktree` at a
+**different absolute path** from the one that produced them, so path-dependence would have shown as a mismatch:
+
+```
+single/component.wasm       0efba8e99ec4ead3890a4736f5e6e9e020f388f0b2d06b5265aef94aca7a4991   MATCH
+suspending/component.wasm   a26009255f8519a0b1adc115de8bc6bae53f2174607517befe688061b6324b95   MATCH
+concurrent.reading / sequential.reading                                                        byte-identical
+```
+
+### It did not pass first time, and the three failures are the reason to keep this section
+
+Recorded because each one is invisible from inside the tree that produced the artefacts, which is the whole
+argument for running the check at all rather than assuming provenance from a version block.
+
+1. **`build.sh` pinned `cargo` but not `rustc`.** Cargo invokes a bare `rustc` through `PATH`; with Homebrew's
+   bin directory ahead of `~/.cargo/bin`, the rustup cargo drove a rustc with no wasm targets. The error
+   blamed a missing target that `rustup target list --installed` shows present.
+2. **The WIT file was staged flattened.** `wit_bindgen::generate!` reads `path: "wit"`, a directory. The macro
+   then reported an unresolved `exports` module, three errors downstream of the cause.
+3. **A failing build produced a *passing* check.** `build.sh` exited before `wasm-tools component new` ran, so
+   the committed `component.wasm` was never touched and the comparison was each file **against itself**. This
+   is why the script now deletes its output before building and reads the artefact path from cargo's own JSON
+   rather than guessing with `find -newer`.
+
+Then the check failed **legitimately**, and the diagnosis mattered: the entire byte difference was Rust symbol
+names (`p62` → `asynclift_single`, `conc` → `asynclift_suspending`). Not nondeterminism, not embedded paths —
+the crates had been renamed during staging, so the original bytes were built from crates the committed
+manifests no longer describe and **no rebuild from these sources could ever have reproduced them.** The bytes
+were replaced with ones the sources do describe, after confirming the rebuilt pair still lifts stacklessly,
+still imports the same eleven intrinsics, and still yields both readings unchanged.
 
 ## What the guests settle
 
