@@ -24,6 +24,23 @@ TICKDROP  false
 cancelled, so this pair discriminates nothing about `task.cancel`. Reported rather than smoothed over, per the
 witness registration's own rule.
 
+## A property of the witness design worth keeping: the pending host call is what makes a null result readable
+
+The host's `tick` in this mode **never completes** — held pending with no bound. That was registered to remove
+a race (a bounded `tick` could return before the drop took effect, letting the guest resume and call
+`task.return`, so the arm would record a normal completion while claiming to be a cancellation arm). It earned
+its keep in an unexpected way.
+
+**With a bounded `tick` this run would have shown a normal completion**, and the reading would then have had to
+distinguish *"cancelled, then resumed anyway"* from *"never cancelled"* — two very different facts with the
+same surface. Held pending, the only possible exits were cancellation or nothing, so *nothing* is a verdict
+rather than an ambiguity.
+
+Generally: **when a witness may produce a null result, remove every path by which the subject could end for an
+uninteresting reason.** Then the null is informative. The same move as the rendezvous one level in — the
+rendezvous made a second arrival the proof of concurrency; this makes cancellation the only way the call can
+end.
+
 ## What the reading establishes
 
 Three facts, all of which Burroughs' behaviour will be compared against:
