@@ -66,14 +66,19 @@ func (f *compFunc) invokeWith(params []interp.Value) error {
 // `invokeAsyncLift()` delegating to this was dead the moment it was written, and the `unused` linter said
 // so. One entry point, and the params-free case is a nil argument rather than a second name for it.
 func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) error {
-	// At-most-one lift task per agent, asserted: an unbound host call into an async-lifted export is a shape
-	// the engine permits, so a nested entry onto an agent already hosting a lift traps by name rather than
-	// resolving the wrong task (witnessed on synth bytes, #732).
+	// At-most-one lift task per component INSTANCE, asserted: an unbound host call into an async-lifted
+	// export is a shape the engine permits, so an entry while the instance already hosts a lift traps by
+	// name rather than resolving the wrong task (witnessed on synth bytes, #732).
+	//
+	// **The scope is the instance, not the agent**, and this comment said "agent" until #857's recon
+	// measured it (see testdata/asynclift/PARITY-BLOCKERS.md): `asyncHandles` is per-instance, so a second
+	// agent's lift traps here too. That is the blocker the concurrent parity arm hits, and #869 is where
+	// the assertion becomes per-agent — which is what this comment always claimed.
 	task := &liftTask{}
 	f.h.mu.Lock()
 	if f.h.lift != nil {
 		f.h.mu.Unlock()
-		return &interp.Trap{Reason: "async canon lift entered while another lift task is already in flight on this agent"}
+		return &interp.Trap{Reason: "async canon lift entered while another lift task is already in flight in this component instance"}
 	}
 	f.h.lift = task
 	f.h.mu.Unlock()
