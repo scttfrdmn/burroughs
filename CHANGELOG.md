@@ -30,6 +30,28 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **Burroughs runs a committed async-lifted guest and matches wasmtime's reading**
+  ([#864](https://github.com/scttfrdmn/burroughs/issues/864)). `Instantiated.CallValues` carries
+  `canon.Value` arguments and results through a component export — `compute(5) → 6` and
+  `compute(41) → 42`, read from the **committed** `compute.reading` rather than from literals in the test,
+  plus the gate-off refusal. **Two pairs, because one cannot discriminate**: a constant reads the same value
+  twice and a passthrough reads `5 → 5`, so no separate instrumentation is added for *"the argument reached
+  the guest"* — that would be a second witness of one fact. Export names take the component model's
+  `interface#function` path form, since a world exporting an interface exports an **instance**; a bare name
+  is deliberately **not** resolved by searching instances, because a search picks silently when two
+  interfaces share a function name.
+- **`task.cancel` (`0x05`) is implemented, and it had to land before the parity work** — not after.
+  `wit-bindgen` emits a `TaskCancelOnDrop` guard for **every** async export, so both committed guests import
+  `[task-cancel]` and **neither could instantiate** while the opcode was refused by name. What landed is the
+  Canonical ABI's own rule rather than a stub: `task.cancel` on a task that has **not** been cancelled
+  **traps** (wasmtime spells it `TaskCancelNotCancelled`), and since nothing in this engine can cancel a
+  task, every reachable call lands there. The **cancelled** branch refuses by name, pointing at
+  [#862](https://github.com/scttfrdmn/burroughs/issues/862), because nothing sets that flag yet. Witnessed by
+  a hand-authored `testdata/task-cancel-synth.wat` that calls it immediately — the committed guests call it
+  only from drop glue that never runs — with **its `.wat` source committed beside its `.wasm`**, which the
+  other hand-authored fixtures do not do. The slice-1 classification moved with it (`demand set: 10 built,
+  0 absent`), and **the equality witness is what noticed**: adding the opcode turned it red with *"executes
+  these, but no status claims them built"*.
 - **A parks assertion that had never been watched die, now falsified in both directions**
   ([#863](https://github.com/scttfrdmn/burroughs/issues/863)).
   `TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns` asserts that an agent stays parked in

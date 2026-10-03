@@ -86,7 +86,16 @@ var canonStatus = map[string]canonBuiltinStatus{
 	"backpressure.dec": statusAsyncRefusedByName,
 
 	"task.return": statusAsyncDemandedBuilt,
-	"task.cancel": statusAsyncDemandedAbsent, // the only demanded-and-absent one: slice 2's engine work
+	// Built in #864, and it had to be: `wit-bindgen` emits a `TaskCancelOnDrop` guard for every async
+	// export, so BOTH committed guests import `[task-cancel]` and neither could instantiate while 0x05 was
+	// refused — which blocked the value-carrying call and the parity readings alike. The implementation is
+	// the Canonical ABI's own rule (trap unless the task was cancelled), not a stub; the cancelled branch
+	// refuses by name pointing at #862, since nothing can set that flag yet.
+	//
+	// **This status moved because the engine moved, and the witness is what noticed.** Adding 0x05 to
+	// `isBuiltAsyncBuiltin` turned `TestEngineBuiltSetEqualsTheClassification` red with
+	// "executes these, but no status claims them built" — the direction nobody checks by hand.
+	"task.cancel": statusAsyncDemandedBuilt,
 	"context.get": statusAsyncDemandedBuilt,
 	"context.set": statusAsyncDemandedBuilt,
 

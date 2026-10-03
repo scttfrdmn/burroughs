@@ -1,6 +1,6 @@
 # 0092 — The async-lift ABI is stackless callback, because the first guest that lifts async chose it, and the demand set is read from that guest
 
-Date: 2026-10-02 · Status: **accepted** ([#771](https://github.com/scttfrdmn/burroughs/issues/771), approved by Scott: *"Agree - proceed"*) · Discharges [ADR 0086](0086-the-async-canonical-abi-behind-gate-async-opens-phase-3.md)'s async-lift deferral
+Date: 2026-10-02 · Status: **accepted** ([#771](https://github.com/scttfrdmn/burroughs/issues/771), approved by Scott: *"Agree - proceed"*) · **Addendum below: `task.cancel` is built, so the demand table's last row is a dated measurement** · Discharges [ADR 0086](0086-the-async-canonical-abi-behind-gate-async-opens-phase-3.md)'s async-lift deferral
 Ratio-Class: carried
 
 **What is approved and what is decided in-slice are different, and the `Status` says which.** Scott approved *starting* #771. The two decisions below — the ABI arm, and the classification of the built-in set — were taken in the slice under the #647 narrowing (*"Escalate only for: contract (§) text, public API surface, reversing a stamped ADR"*), and none of the three applies: no contract clause changes, no embedder-visible surface changes, and ADR 0086 is **discharged on its own terms** rather than reversed — it deferred the choice to a consumer, and a consumer has made it.
@@ -122,3 +122,37 @@ Two facts in this ADR came from running the witness rather than from reading any
 - **The classification is now falsifiable.** An engine change that moves the built set without reclassifying fails; a pin bump that adds a built-in fails until it is classified; a regenerated guest whose demand set changes fails until the statuses follow.
 - **A reproducibility claim about the committed guests exists and is recorded with its hashes** in the testdata README, including the three ways the check failed before it passed. The relevant one for a future reader: a build that exits before writing anything leaves the committed artefact in place, so the comparison runs each file against itself and reports a clean match.
 - **This ADR does not open slice 2.** It is the record of what slice 1 measured. One ADR earns one implementation, and the implementation this one earns is `task.cancel`.
+
+## Addendum (2026-10-03) — `task.cancel` is built, and the demand table above is a dated measurement
+
+**The demand list's last row now reads wrong, and it is corrected here rather than edited in place**, because
+that table is a *measurement of the engine on 2026-10-02* and the body is the record of what slice 1 found.
+Editing it would leave no trace that the engine moved, which is the whole reason the row was interesting.
+
+`task.cancel` (`0x05`) is **built** (#864). Its status in the classification moved from
+`async-demanded-absent` to `async-demanded-built`, and **the demand set is now 10 built, 0 absent** — the
+slice-2 work list this ADR named is empty.
+
+**It had to land earlier than this ADR implied.** The body says *"slice 2's engine work for this guest is
+`task.cancel`"*, which read as a task to schedule. In fact `wit-bindgen` emits a `TaskCancelOnDrop` guard for
+**every** async export, so **both** committed guests import `[task-cancel]` — including `single`, whose
+`compute` has nothing to do with cancellation. With `0x05` refused by name, **neither guest could
+instantiate**, which blocked the value-carrying export call and the parity readings alike. The opcode was a
+prerequisite for running the guests at all, not a feature to add afterwards.
+
+**What was built is the Canonical ABI's rule, not a stub.** `task.cancel` on a task that has not been
+cancelled **traps** — wasmtime spells the same rule `TaskCancelNotCancelled`. Burroughs cannot cancel
+anything, so every reachable call lands on that branch, and implementing it is implementing the spec. The
+*cancelled* branch refuses by name (`ErrTaskCancelUnbuilt`, pointing at
+[#862](https://github.com/scttfrdmn/burroughs/issues/862)), because nothing sets that flag yet and semantics
+written against no measurement is the shape this campaign keeps correcting.
+
+**The committed guests cannot witness it** — they call `task.cancel` only from drop glue that never runs
+absent a cancellation — so `testdata/task-cancel-synth.wat` calls it immediately and traps. Its `.wat` source
+is committed beside its `.wasm`, which the other hand-authored fixtures here do not do: regenerating one of
+those means re-authoring it from a prose description.
+
+**The classification moved because the engine moved, and the witness is what noticed.** Adding `0x05` to
+`isBuiltAsyncBuiltin` turned `TestEngineBuiltSetEqualsTheClassification` red with *"executes these, but no
+status claims them built"* — the direction nobody checks by hand, and the reason this ADR's table is
+falsifiable rather than decorative.
