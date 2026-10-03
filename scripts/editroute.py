@@ -151,7 +151,15 @@ RULES: tuple[tuple[str, str], ...] = (
     ("in-place-edit", "in place"),
     ("tee-write", "tee would overwrite"),
     ("redirect-write", "a shell redirection"),
-
+    ("git-discard", "would DISCARD uncommitted changes"),
+    # The fail-closed case needs its own slug: it is a DIFFERENT finding from a measured discard — one is
+    # "this destroys work", the other "I could not tell". Grouping them would hide how often the guard is
+    # refusing blind, which is the figure that would justify changing how it asks.
+    ("git-discard-unknown", "could not be checked"),
+    # The override is logged like a refusal and therefore needs a slug like one. Without it the entry read
+    # `unclassified`, which `scripts/refusals.sh` calls "a DEFECT in the rule table, not a category" — and
+    # a deliberate discard is precisely the entry a later reader most wants to be able to group.
+    ("discard-override", "override used"),
 )
 
 
@@ -416,6 +424,185 @@ def basename(word: str) -> str:
     return os.path.basename(word)
 
 
+def basename_in_cmd(cmd: str, name: str) -> bool:
+    """Whether `name` appears as a command word. Used only to decide whether to LOG an override, so a
+    coarse match is right: over-logging an override costs a line, under-logging hides one."""
+    toks = tokenize(separate_commands(lift_heredocs(cmd)[0]))
+    if toks is None:
+        return name in cmd
+    return any(c and basename(c[0]) == name for c in simple_commands(toks))
+
+
+def discard_override() -> str | None:
+    """The deliberate-discard escape, or None.
+
+    A guard with no override is a guard people route around by other means, and the route they pick is
+    not logged. This one is: `main` records the override in the refusal log alongside refusals, so a
+    deliberate discard leaves a trace rather than being invisible.
+    """
+    v = os.environ.get("EDITROUTE_ALLOW_DISCARD", "")
+    return v if v not in ("", "0") else None
+
+
+# Each entry is (spelling, matcher). The matcher gets the argv AFTER `git` and returns the paths the
+# command would discard, or None if this spelling does not apply.
+#
+# **The coverage is a LIMIT, not a guarantee**, and it is stated here because the PR body states it too:
+# this matches COMMAND TEXT. It sees a direct invocation on the command line and does not see a script
+# that runs git internally, a shell function, or an alias — `editroute.py` never gets past the command it
+# is handed. So "the hook refuses discards" is false as a general claim; what is true is "the hook refuses
+# these spellings, typed directly".
+def git_discard_subject(cmdv: list[str], cwd: str) -> dict | None:
+    a = [x for x in cmdv[1:] if x]
+
+    # **Global options come BEFORE the subcommand, and skipping them is not optional.** `git -C <dir>
+    # checkout -- x` and `git -c k=v reset --hard` put the option first, so reading `a[0]` as the
+    # subcommand found `-C` and matched nothing — the guard was bypassed by the most ordinary scripted
+    # spelling there is. `-C` also moves the directory the dirtiness must be measured in.
+    cdir: str | None = None
+    while a:
+        if a[0] == "-C" and len(a) >= 2:
+            cdir = a[1] if os.path.isabs(a[1]) else os.path.join(cwd, a[1])
+            a = a[2:]
+        elif a[0] == "-c" and len(a) >= 2:
+            a = a[2:]
+        elif a[0].startswith(("--git-dir=", "--work-tree=", "--namespace=")):
+            a = a[1:]
+        elif a[0] in ("--no-pager", "--literal-pathspecs", "--paginate", "-P"):
+            a = a[1:]
+        else:
+            break
+    if not a:
+        return None
+    sub = a[0]
+    rest = a[1:]
+    # Paths are judged relative to the SHELL's cwd (or `-C`'s directory), never the hook's own. The first
+    # version called `os.path.exists(p)` directly, so a command issued from a subdirectory could have
+    # `git checkout foo.go` misread as a BRANCH switch and let through — the dirtiness check joined
+    # against cwd correctly, but the is-this-a-path decision happened before it and did not.
+    pbase = cdir or cwd
+
+    def here(p: str) -> str:
+        return p if os.path.isabs(p) else os.path.join(pbase, p)
+
+    def paths_after_ddash(args: list[str]) -> list[str]:
+        return args[args.index("--") + 1 :] if "--" in args else []
+
+    # `git checkout -- <path>` / `git checkout <rev> -- <path>` / `git checkout .`
+    if sub == "checkout":
+        if "--" in rest:
+            return {"spelling": "checkout --", "paths": paths_after_ddash(rest), "cdir": cdir}
+        # `git checkout .` and `git checkout <path>` discard too; a branch name does not. Only an
+        # existing path is treated as a path, so switching branches is untouched.
+        cand = [x for x in rest if not x.startswith("-")]
+        hits = [p for p in cand if os.path.exists(here(p))]
+        if hits:
+            return {"spelling": "checkout", "paths": hits, "cdir": cdir}
+        return None
+
+    # `git restore` restores the WORKING TREE by default, which is the discard.
+    #
+    # **`--staged` alone only unstages** — the working tree keeps the content, so nothing is discarded and
+    # it is allowed. `--staged --worktree` together do discard, so the exemption is for `--staged` with no
+    # `--worktree`, not for the flag's presence.
+    if sub == "restore":
+        if any(x in ("--staged", "-S") for x in rest) and not any(
+            x in ("--worktree", "-W") for x in rest
+        ):
+            return None
+        hits = paths_after_ddash(rest) or [x for x in rest if not x.startswith("-")]
+        return {"spelling": "restore", "paths": hits or ["."], "cdir": cdir}
+
+    # `git reset --hard` throws away the working tree wholesale.
+    if sub == "reset" and any(x == "--hard" for x in rest):
+        return {"spelling": "reset --hard", "paths": ["."], "cdir": cdir}
+
+    # `git clean -f` DELETES UNTRACKED files — untracked new work is lost the same way, which is why a
+    # tracked-file-only guard would have missed it.
+    if sub == "clean" and any(x.startswith("-") and "f" in x.lstrip("-") for x in rest):
+        hits = [x for x in rest if not x.startswith("-")]
+        return {"spelling": "clean -f", "paths": hits or ["."], "cdir": cdir}
+
+    # `git stash drop` / `git stash clear` — the stash spellings that DISCARD. Plain `git stash` saves.
+    if sub == "stash" and rest and rest[0] in ("drop", "clear"):
+        return {"spelling": f"stash {rest[0]}", "paths": ["<the stash>"], "cdir": cdir}
+
+    return None
+
+
+# The marker for "the dirty state could not be determined". **A guard on an irreversible step fails
+# CLOSED**: the first version returned an empty list when `git status` or `git stash list` failed, which
+# let the discard through — *absence read as permission*, inside the guard built to stop a data loss.
+UNKNOWN_DIRTY = "<could not determine>"
+
+
+def dirty_paths(root: str, cwd: str, paths: list[str]) -> list[str]:
+    """Which of `paths` have uncommitted changes (modified, staged, or untracked).
+
+    `<the stash>` is reported dirty whenever the stash is non-empty: dropping an entry discards it
+    whatever the working tree looks like.
+
+    Returns `[UNKNOWN_DIRTY]` when git could not be asked — a non-zero exit as well as an OSError, since
+    a git that ran and failed tells us no more than one that could not run.
+    """
+    if paths == ["<the stash>"]:
+        try:
+            p = subprocess.run(
+                ["git", "-C", root, "stash", "list"], capture_output=True, text=True, check=False
+            )
+        except OSError:
+            return [UNKNOWN_DIRTY]
+        if p.returncode != 0:
+            return [UNKNOWN_DIRTY]
+        return ["<the stash>"] if p.stdout.strip() else []
+    # **`git status --porcelain` reports paths relative to the REPOSITORY ROOT**, whatever directory `-C`
+    # names — measured: `git -C sub status --porcelain` prints `sub/f.go`, not `f.go`. So a relative path
+    # computed against `-C`'s subdirectory can never match a status line, the dirty file goes unfound, and
+    # the discard is allowed. The comparison base has to be the top level.
+    #
+    # `rev-parse --show-toplevel` also resolves symlinks (`/tmp` -> `/private/tmp` here), so both sides go
+    # through `realpath` — otherwise the relpath is computed across two spellings of one directory and
+    # misses for a second, unrelated reason.
+    #
+    # A `rev-parse` that fails is the "couldn't check" case, not a clean tree.
+    try:
+        tp = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return [UNKNOWN_DIRTY]
+    if tp.returncode != 0 or not tp.stdout.strip():
+        return [UNKNOWN_DIRTY]
+    top = os.path.realpath(tp.stdout.strip())
+    try:
+        proc = subprocess.run(
+            ["git", "-C", top, "status", "--porcelain"], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return [UNKNOWN_DIRTY]
+    if proc.returncode != 0:
+        return [UNKNOWN_DIRTY]
+    changed = {ln[3:].strip().strip('"') for ln in proc.stdout.splitlines() if len(ln) > 3}
+    if not changed:
+        return []
+    hits: list[str] = []
+    for p in paths:
+        # A path given relative to the shell's cwd is compared against ROOT-relative status output, with
+        # both sides realpath'd — see the note above for why the base is `top` and not `root`.
+        abs_p = p if os.path.isabs(p) else os.path.join(cwd, p)
+        rel = os.path.relpath(os.path.realpath(abs_p), top)
+        rel = "" if rel == "." else rel
+        # A path outside the repository cannot be matched against its status, and saying so is better than
+        # a silent miss: the `..` prefix is how that shows up after the relpath.
+        if rel.startswith(".."):
+            continue
+        for c in changed:
+            if rel == "" or c == rel or c.startswith(rel.rstrip("/") + "/"):
+                hits.append(c)
+    return sorted(set(hits))
+
+
 def findings(cmd: str, root: str, cwd: str) -> list[str]:
     """Every reason this command must not run, as sentences. Empty means allow."""
     text, bodies = lift_heredocs(cmd)
@@ -542,6 +729,53 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
                         reasons.append(
                             f"{basename(cmdv[0])} -i would edit the tracked file {arg!r} in place"
                         )
+
+        # --- route 3: a git command that DISCARDS uncommitted work ----------------------------
+        #
+        # The specimen is this hook's own author losing work. One compound command was
+        #
+        #     git add -A && git commit -m "wip: baseline" && python3 <<'PY' … PY
+        #
+        # whose heredoc wrote a tracked file, so **this hook refused the whole command and nothing in it
+        # ran** — including the `git commit` at its front. The baseline therefore never existed, and a
+        # later `git checkout -- scripts/ciwatch.sh`, issued to "restore from the injection", reverted
+        # real work: a poll loop, a default, and a fixture mechanism, all uncommitted.
+        #
+        # **A hook refusal kills the entire compound command**, so anything earlier in it did not run.
+        # Treating a refusal as "the risky part was blocked" rather than "nothing happened" is what made
+        # the restore look safe. The project already had the rule — *an injection battery needs a
+        # committed baseline* — cited earlier in the same session and then applied without checking the
+        # baseline existed, which is why this is a mechanism and not another sentence.
+        #
+        # **`git stash` is NOT here, deliberately.** Stashing *saves* the changes, so it is recoverable —
+        # and it is the move the refusal message below recommends. Refusing it would block the remedy.
+        # What discards is `stash drop` and `stash clear`.
+        if cmdv and basename(cmdv[0]) == "git" and discard_override() is None:
+            what = git_discard_subject(cmdv, base)
+            if what is not None:
+                # `-C <dir>` moves the repository the dirtiness must be measured in; without it the check
+                # would read the session's root and clear a discard aimed somewhere else entirely.
+                dirty = dirty_paths(what.get("cdir") or root, what.get("cdir") or base, what["paths"])
+                if dirty == [UNKNOWN_DIRTY]:
+                    reasons.append(
+                        f"`git {what['spelling']}` could not be checked: git would not report whether "
+                        f"this discards uncommitted work. Refused rather than allowed — a guard on an "
+                        f"irreversible step fails closed. Set EDITROUTE_ALLOW_DISCARD=1 to proceed anyway"
+                    )
+                elif dirty:
+                    listed = ", ".join(repr(p) for p in dirty[:4])
+                    # The stash case gets its own remedy: "commit or stash them first" is nonsense advice
+                    # for dropping a stash entry, and wrong advice is the failure this hook's dispatch
+                    # already guards against one level up.
+                    remedy = (
+                        "inspect it with `git stash show -p` first"
+                        if what["paths"] == ["<the stash>"]
+                        else "commit or `git stash` them first"
+                    )
+                    reasons.append(
+                        f"`git {what['spelling']}` would DISCARD uncommitted changes in {listed} "
+                        f"— {remedy}, or set EDITROUTE_ALLOW_DISCARD=1 to discard deliberately"
+                    )
 
     # --- route 4: `sleep` used as a wait --------------------------------------------------------
     #
@@ -684,6 +918,13 @@ def main() -> int:
     if not cmd:
         return 0
 
+    # **A used override is logged.** The discard guard has an escape, and an escape nobody can see is
+    # indistinguishable from the guard not firing — so a deliberate discard leaves the same kind of trace a
+    # refusal does. Logged whether or not the command is then refused for some other reason, because the
+    # fact worth recording is that the escape was taken.
+    if discard_override() is not None and basename_in_cmd(cmd, "git"):
+        log_refusal(["EDITROUTE_ALLOW_DISCARD override used for a git discard"], cmd, root)
+
     reasons = findings(cmd, root, cwd)
     if not reasons:
         return 0
@@ -692,7 +933,16 @@ def main() -> int:
     # The two subjects get their own guidance, because a refusal that names the wrong route is worse
     # than one that names none: it sends the reader to a tool that cannot help.
     sleeping = [r for r in reasons if r.startswith("`sleep`")]
-    editing = [r for r in reasons if not r.startswith("`sleep`")]
+    # The discard route gets its OWN guidance. The first version let it fall into `editing`, so a refused
+    # `git checkout --` was answered with "use str_replace or subst1.py" — advice for a problem the actor
+    # does not have, which is the failure this very dispatch exists to prevent: *a refusal that names the
+    # wrong route is worse than one that names none.*
+    discarding = [
+        r
+        for r in reasons
+        if "would DISCARD uncommitted changes" in r or "could not be checked" in r
+    ]
+    editing = [r for r in reasons if r not in sleeping and r not in discarding]
 
     msg = "editroute: REFUSED.\n\n" + "".join(f"  * {r}\n" for r in reasons) + "\n"
     if editing:
@@ -705,6 +955,22 @@ def main() -> int:
             + ALLOWED_ROUTES
             + "\n  Creating a NEW file this way is fine and is not what was refused — the defect is a\n"
             "  silent no-op on a missed anchor, which requires the file to already exist.\n\n"
+        )
+    if discarding:
+        msg += (
+            "  This discards uncommitted work, and it is refused because it already cost some. One\n"
+            "  compound command was `git add -A && git commit … && python3 <<'PY' …`, whose heredoc\n"
+            "  wrote a tracked file — so this hook refused the WHOLE command and nothing in it ran,\n"
+            "  including the commit at its front. The baseline never existed, and a later\n"
+            "  `git checkout --` meant to undo an injection reverted real work instead.\n\n"
+            "  **A hook refusal kills the entire compound command**: anything earlier in it did not run.\n\n"
+            "  Do instead one of:\n"
+            "    - `git stash` (which SAVES, and is why plain `git stash` is not refused here); or\n"
+            "    - commit first, even as a throwaway, so the discard has something to return to; or\n"
+            "    - `EDITROUTE_ALLOW_DISCARD=1 <command>` to discard deliberately. The override is\n"
+            "      LOGGED, so a deliberate discard leaves a trace rather than being invisible.\n\n"
+            "  Coverage is a LIMIT, not a guarantee: this matches command text, so it sees a direct\n"
+            "  invocation and not a script that runs git internally, a shell function, or an alias.\n\n"
         )
     if sleeping:
         msg += (
