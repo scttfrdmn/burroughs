@@ -30,6 +30,30 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **A host can supply a bare world-level component import**
+  ([#870](https://github.com/scttfrdmn/burroughs/issues/870)), which unblocks the first of the parity
+  witness's three blockers. The defect was the **kind** of thing the import resolver returned, not a
+  missing resolver: `stubHost` answers every import with a stub *instance*, so a function import like the
+  suspending guest's `(import "tick" (func …))` produced a def whose function half was nil — and the
+  impl lookup is guarded on that half, so it **never ran at all**, for provided and unprovided imports
+  alike. A function import now gets a function-shaped stub carrying the import's **own name**, so the
+  existing lookup does the work keyed `tick`, with no second dispatch path. The key is the bare name on
+  two spec facts checked at `CANON_PIN`: import `externname`s are strongly-unique, and a `plainname`'s
+  charset is alphanumerics and `-` only, so a bare name cannot collide with an `instance::export` key.
+  A second gap came with it — the lowering had **no signature** for a name without `::`, which bound the
+  lower with no result and returned **0 with no error**; it now resolves a bare name through the import's
+  own type index. Three witness arms, with the provided arm asserting its value against the **committed**
+  `inline.reading` — wasmtime on the same arm, since every other committed reading uses the rendezvous
+  `tick`, which defers. Both halves were neutered in turn, and the table in `PARITY-BLOCKERS.md` records
+  that only the value comparison catches the signature half.
+- **An unimplemented canon lower refuses by its component-level name**, not by the core coordinates it was
+  lowered at. `wit-component` inserts a `shim` module and an `actual` core instance whose exports are the
+  lowered imports **by index**, so a missing `tick` refused as `import actual::0` — which named neither the
+  import nor anything a host could have supplied. The refusal now names the identity the host would have
+  keyed on and keeps the core coordinates as a trailing diagnostic, which improves every unimplemented
+  lower's message rather than only a bare one. **Found by an arm contradicting a claim already written into
+  the slice's own record**: that the kind fix above had fixed the message too, inferred from the stub
+  carrying the right name and never run. It had not — an unimplemented lower never reaches that refusal.
 - **The edit-route hook refuses a git command that would discard uncommitted work**, because one already
   destroyed some. A compound command `git add -A && git commit … && python3 <<'PY' …` had its heredoc write
   a tracked file, so **the hook refused the whole command and nothing in it ran** — including the commit at

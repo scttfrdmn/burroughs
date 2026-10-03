@@ -79,6 +79,107 @@ enforced**, so a reader would believe two agents could each hold a lift. Both no
 the scope actually enforced — and #869 is where it becomes per-agent, which is what the comment always
 claimed.
 
+## Addendum (2026-10-03) — blocker 1 is resolved, and removing it brought blocker 2 into view
+
+**Appended, not edited.** The text above is the measurement as it stood, and the value of a "before"
+record is that it still reads as one.
+
+### Blocker 1 is gone (#870)
+
+The defect was the **kind** of thing the resolver returned, not the absence of a resolver: `stubHost`
+answered every import with a stub *instance*, so a bare world-level function import produced a `compDef`
+whose `.fn` was nil — and `walk.go`'s impl lookup is guarded on `fn != nil`, so **it never ran, for
+provided and unprovided imports alike**.
+
+Fixed where the sort is known: a function import now gets a function-shaped stub whose `stubName` is the
+import's **own name**, so the existing lookup does all the work, keyed `tick`, with no second dispatch
+path. A second gap came with it — `lowerSignature` returned nil for any name without `::`, so the lowering
+had no signature to marshal against; it now resolves a bare name through the `ExternFunc` import's own
+`TypeIndex`.
+
+### The refusal naming: a claim written here before it was measured, and falsified by its own arm
+
+**This section said the repair above also made an unprovided bare import refuse as `tick` rather than
+`actual::0`. That was wrong when written.** It was inferred from the kind fix — the stub now carries
+`stubName: "tick"` — and never run. The refusal arm then asserted `tick` and got:
+
+```
+host function trapped: component: link refused: import actual::0 is not provided (stub host)
+```
+
+The inference missed a layer. `compFunc.stubName` is refused at `link_component.go`, but an
+**unimplemented canon lower** never reaches it: the lower is appended with `lowerName: "tick"`, no impl
+is found in `asyncWasiHost`, and the CORE-level resolver falls through to `refuse(mod, name)` — whose
+`mod`/`name` are the core module's import strings. So the message was built from coordinates one layer
+below the name anyone could have supplied.
+
+Repaired at that site: `refuse` now takes the lower's component-level identity and names it as the
+subject, keeping the core coordinates as a trailing diagnostic (`import tick is not provided (stub host;
+lowered at core actual::0)`). This improves every unimplemented lower's refusal, not only a bare one — a
+missing WASI method now names the interface and method rather than wit-component's indirection.
+
+**The lesson is the ordering, not the layer.** A claim about a message is one `go test` away from being
+measured, and this one was published in the same breath as the fix it was inferred from. The arm existed,
+which is the only reason the correction is here rather than in a later session's grave.
+
+### Both probe outputs, which is how the chain was confirmed rather than inferred
+
+Inline-resolving `tick` — the guest runs to completion:
+
+```
+PROBE run -> [u32 7] err=<nil>   (tick entered 1)
+```
+
+Deferring `tick` — the guest parks, and the run stops exactly where the record above predicted:
+
+```
+DEFERRED run -> [] err=component: gate:async is on but the async tier's execution is not yet
+                 implemented: async-lift dispatch code 2 (park/yield) is step 2, not yet built
+```
+
+So **removing blocker 1 exposes blocker 2 at the next step, naming the dispatch code.** That is the
+registered chain measured rather than reasoned, and it makes #871's subject reachable instead of
+hypothetical.
+
+### A correction this addendum carries
+
+`actual` is **never resolved through `host`.** The original record left that as an open hypothesis — "the
+real `actual` cannot be built, so something downstream falls back" — and reading the component settled it
+the other way: `actual` is an inline-export **core instance the component builds itself**, whose export
+`"0"` *is* the canon lower of `tick`, indexed because wit-component's fixup module patches a shim table by
+index. The hypothesis was wrong, and it was registered as a hypothesis precisely so it could be.
+
+### The inline result has a reference now
+
+`run -> 7` above is Burroughs' own output, and when first obtained it had **nothing to check against**:
+every committed reading here uses the rendezvous `tick`, which defers. So `inline.reading` was captured
+from wasmtime on the same arm — `tick` resolving at once with `id + 100` — and the parity witness asserts
+against **that committed value**, not a literal:
+
+```
+OUTCOME   inline: run(1)=Ok((101,)) run(2)=Ok((102,))
+```
+
+Two calls, because one cannot tell a passthrough or a constant from a real `id + 100`. **Burroughs' own
+number is not evidence until the reference agrees** — the same discipline as the `compute` readings.
+
+### The witness watched die, and the two halves fail differently
+
+Each half of the repair was neutered in turn, because an arm that has only been watched pass is a
+forecast. The result is worth recording, since the halves are not interchangeable:
+
+| neutered | provided arm | refusal arm | deferring arm |
+|---|---|---|---|
+| the kind fix (`funcStep`) | FAIL — `link refused: actual::0` | FAIL | FAIL |
+| `lowerSignature`'s bare branch | **FAIL — `run(1) = 0`, no error** | pass | pass |
+
+**The second row is the dangerous one.** With no signature the lower binds with `hasResult` false, so the
+host's resolution is discarded and `run` returns **0 with no error at all** — a silently wrong value, not
+a refusal. The host impl is still entered and still receives the right argument, so every check short of
+the returned value passes. That is precisely the defect class a reading with no reference cannot catch:
+asserting "the import was entered" would have passed, and so would asserting "no error". Only comparing
+the value against wasmtime's committed reading fails.
+
 ## Why this is a record and not a tripwire test
 
 A test asserting these blockers *persist* would fail the moment #870 lands, which is the next slice. The
