@@ -30,6 +30,24 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **A parks assertion that had never been watched die, now falsified in both directions**
+  ([#863](https://github.com/scttfrdmn/burroughs/issues/863)).
+  `TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns` asserts that an agent stays parked in
+  `waitable-set.wait`, and all six tests on that fixture went through a single **deferring** host helper —
+  so no run had ever exercised an impl that does **not** park. Measured, because *"catches the bad case
+  every time"* and *"never fires when nothing is wrong"* are separate claims: the injected
+  inline-resolving impl gives **0 misses in 200 runs plus 50 under `-race`**, and the unmodified test gives
+  **0 failures** over the same. **The injection's own first version missed 199 of 200**, which was the
+  injection's defect — `startInvoke` is buffered, so a miss meant the agent's goroutine had never run;
+  the original gets that synchronisation from receiving the resolver, and an inline impl hands out none.
+  The history is in the test's doc comment so the `entered` wait is not simplified away.
+- **A host can serve a guest's plain (non-async) import** (`Host.syncImpls`, merged into `wasi()`),
+  the counterpart of the existing `asyncImpls` — needed because
+  [#862](https://github.com/scttfrdmn/burroughs/issues/862)'s receipt guest calls `note` from `Drop` glue,
+  which cannot await. **A name WASI already serves is refused, not shadowed**: silently overriding
+  `wasi:cli/exit::exit` would be a capability change disguised as a map write, undetectable by the guest.
+  The refusal is watched firing, and reachability is asserted separately from WASI's set remaining intact,
+  since a merge that replaced the map would pass the first check alone.
 - **wasmtime 49 gives a host no way to cancel a task that has already started, and the reference reading for
   that is committed under its true name** (`internal/component/testdata/asynclift/ABANDONMENT.md`,
   [#857](https://github.com/scttfrdmn/burroughs/issues/857)). Dropping the host call future **abandons** the
