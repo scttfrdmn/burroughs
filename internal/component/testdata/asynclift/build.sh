@@ -133,6 +133,20 @@ echo "== readings ==" >&2
 "$bin" sequential "$here/suspending/component.wasm" > "$here/sequential.reading" 2>&1 || true
 cat "$here/concurrent.reading" "$here/sequential.reading" >&2
 
+# The INLINE arm (#870): `tick` resolves at once with `id + 100`. Every other reading here uses the
+# rendezvous `tick`, which DEFERS — so when Burroughs first ran this guest with an inline host impl, its
+# output had nothing to check against. A number with no reference is not evidence.
+#
+# Two calls, because one cannot tell a passthrough or a constant from a real `id + 100` — the same reason
+# `compute.reading` commits two pairs.
+"$bin" inline "$here/suspending/component.wasm" > "$here/inline.reading" 2>&1 || true
+cat "$here/inline.reading" >&2
+grep -q 'run(1)=Ok((101,)) run(2)=Ok((102,))' "$here/inline.reading" || {
+	echo "build.sh: the inline reading did not capture both results — a reading that records neither" >&2
+	echo "          value is indistinguishable from one that was never taken." >&2
+	exit 1
+}
+
 # The single guest's VALUE reading (#864), captured through the wasmtime CLI rather than the harness: the
 # question is what a value-carrying async-lifted export returns, and the CLI answers it without a bespoke
 # embedding. Three arms, and the third is what makes the first two mean anything.

@@ -59,14 +59,38 @@ func TestP3HelloCoreModulesInstantiate(t *testing.T) {
 
 // TestStubHostRefusesByName is the "imports reach a stub host that refuses by name" boundary (PR B): a
 // canon-lowered import the engine does not fill refuses, naming the import, when called.
+//
+// **Both branches, because #870 gave `refuse` a second one.** A lower with a component-level identity
+// names that identity as the subject; one without — a resource built-in stub — has only the core
+// coordinates and keeps them. This asserts the helper; the PATH is asserted by
+// `TestHostCanSupplyABareWorldLevelImport`'s refusal arm, which is where the defect was actually found.
 func TestStubHostRefusesByName(t *testing.T) {
-	_, err := refuse("wasi_snapshot_preview1", "fd_write")(nil, nil)
-	if !errors.Is(err, ErrLinkRefused) {
-		t.Fatalf("stub error = %v, want ErrLinkRefused", err)
-	}
-	if got := err.Error(); !contains(got, "fd_write") {
-		t.Errorf("stub error %q does not name the import", got)
-	}
+	t.Run("no_component_identity_keeps_the_core_coordinates", func(t *testing.T) {
+		_, err := refuse("wasi_snapshot_preview1", "fd_write", "")(nil, nil)
+		if !errors.Is(err, ErrLinkRefused) {
+			t.Fatalf("stub error = %v, want ErrLinkRefused", err)
+		}
+		if got := err.Error(); !contains(got, "fd_write") {
+			t.Errorf("stub error %q does not name the import", got)
+		}
+	})
+
+	t.Run("a_component_identity_becomes_the_subject", func(t *testing.T) {
+		// `actual::0` is wit-component's index indirection. It must not be what the refusal is ABOUT.
+		_, err := refuse("actual", "0", "tick")(nil, nil)
+		if !errors.Is(err, ErrLinkRefused) {
+			t.Fatalf("stub error = %v, want ErrLinkRefused", err)
+		}
+		got := err.Error()
+		if !contains(got, "import tick is not provided") {
+			t.Errorf("stub error %q does not name the component-level import as its subject", got)
+		}
+		// The core coordinates are kept as a diagnostic — a reader debugging the link needs them, and
+		// dropping them would trade one unreadable message for another.
+		if !contains(got, "actual::0") {
+			t.Errorf("stub error %q dropped the core coordinates the link is debugged through", got)
+		}
+	})
 }
 
 func contains(s, sub string) bool {
