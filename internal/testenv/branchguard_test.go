@@ -205,11 +205,21 @@ func TestPrmergeDeletesTheLocalBranch(t *testing.T) {
 		t.Fatal(wErr)
 	}
 
+	// A green CI verdict too, since #867 made CI's own result a precondition of the merge. Without it this
+	// arm stops at the new step 4 and never reaches the branch deletion it exists to witness — the claim is
+	// unchanged, the fixture just has to satisfy a precondition the script did not have before.
+	ciw := filepath.Join(filepath.Dir(verdict), "ci")
+	if wErr := os.WriteFile(ciw+".verdict",
+		[]byte(`{"ciwatch_verdict": "green", "sha": "`+topicHead+`", "body_stale": false}`), 0o600); wErr != nil {
+		t.Fatal(wErr)
+	}
+
 	cmd := exec.Command("bash", script, "1")
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(),
 		"PATH="+stub+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"PRMERGE_VERDICT="+verdict)
+		"PRMERGE_VERDICT="+verdict,
+		"PRMERGE_CIWATCH="+ciw)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -260,11 +270,19 @@ func TestPrmergeDeletesTheLocalBranch(t *testing.T) {
 			t.Fatal(wErr)
 		}
 
+		// The #867 precondition, as above: this arm must reach the post-merge SHA re-check.
+		ciw2 := filepath.Join(filepath.Dir(v2), "ci")
+		if wErr := os.WriteFile(ciw2+".verdict",
+			[]byte(`{"ciwatch_verdict": "green", "sha": "`+t2+`", "body_stale": false}`), 0o600); wErr != nil {
+			t.Fatal(wErr)
+		}
+
 		c := exec.Command("bash", script, "1")
 		c.Dir = repo
 		c.Env = append(os.Environ(),
 			"PATH="+stub2+string(os.PathListSeparator)+os.Getenv("PATH"),
-			"PRMERGE_VERDICT="+v2)
+			"PRMERGE_VERDICT="+v2,
+			"PRMERGE_CIWATCH="+ciw2)
 		var o bytes.Buffer
 		c.Stdout = &o
 		c.Stderr = &o

@@ -117,11 +117,93 @@ if [ "$v_dirty" = "yes" ]; then
 fi
 echo "prmerge: the local gate is green on this exact commit" >&2
 
-# --- 4. the irreversible step ------------------------------------------------------------------------------
+# --- 4. CI's own verdict, which this script did not read at all --------------------------------------------
+#
+# Step 3 above proves `make ci` passed **here**. It says nothing about the nine CI runs, which is the whole
+# reason `ciwatch.sh` exists — and until #867 this script never consulted it. So *"merge on a
+# ciwatch-verified green"* was **operator discipline, not an enforced precondition**: on #866 a
+# `ciwatch_verdict: fail` was in hand and nothing in the tool would have stopped the merge, and nothing would
+# stop a caller who never ran `ciwatch.sh` at all.
+#
+# Five refusals, and **green is the only verdict accepted**:
+#
+#   fail            — CI said no.
+#   wrong SHA       — a green from another commit reads exactly like a green from this one, which is the same
+#                     reasoning as step 3's SHA check.
+#   no verdict      — absence must not read as permission. A missing file means "no information", and this
+#                     script must turn that into a refusal rather than proceeding.
+#   unfinished      — the bound expired with the run still going. **Separate from `fail`, and its message
+#                     says "still running" rather than "failing"**, which is the entire point of giving the
+#                     expiry its own outcome: a reader re-runs the watch, they do not go hunting a breakage.
+#   stale body      — the body class was resolved from a run older than the last body edit, so the green is
+#                     about a body that no longer exists.
+#
+# `PRMERGE_CIWATCH` points at the verdict prefix; by default it is the one `scripts/detach.sh` writes.
+ciw=${PRMERGE_CIWATCH:-/tmp/ci$pr}.verdict
+if [ ! -f "$ciw" ]; then
+	echo "prmerge: FAIL no CI verdict at $ciw." >&2
+	echo "         The local gate's green is about this tree, not about CI's nine runs. Run" >&2
+	echo "         scripts/ciwatch.sh $remote_head $(dirname "$ciw")/ci$pr first." >&2
+	echo "         Absence is not permission: no verdict means no information, not a pass." >&2
+	exit 1
+fi
+cv=$(sed -n 's/.*"ciwatch_verdict": *"\([a-z]*\)".*/\1/p' "$ciw" | head -1)
+csha=$(sed -n 's/.*"sha": *"\([0-9a-f]*\)".*/\1/p' "$ciw" | head -1)
+echo "prmerge: $ciw ciwatch_verdict=${cv:-?} sha=${csha:0:12}" >&2
+
+if [ "$csha" != "$remote_head" ]; then
+	echo "prmerge: FAIL the CI verdict names ${csha:0:12} but the PR's head is ${remote_head:0:12}." >&2
+	echo "         A green from another commit reads exactly like a green from this one." >&2
+	exit 1
+fi
+case "$cv" in
+green) : ;;
+unfinished)
+	echo "prmerge: FAIL CI is STILL RUNNING for this commit — the watch's bound expired before the run" >&2
+	echo "         finished. This is NOT a failing tree: no required job's conclusion has been read." >&2
+	echo "         Re-run scripts/ciwatch.sh once the run completes; do not go looking for a breakage." >&2
+	exit 1
+	;;
+*)
+	echo "prmerge: FAIL CI's verdict for this commit is '${cv:-missing}', not green." >&2
+	echo "         A red CI run is not merged, and only 'green' is accepted here — an unrecognised" >&2
+	echo "         verdict is refused rather than assumed benign." >&2
+	exit 1
+	;;
+esac
+# The body class must have been read from a run that saw the CURRENT body. A green whose body check predates
+# the last body edit is a green about a body that no longer exists (#867's first half).
+#
+# **`null` is a refusal, not a pass.** The first version refused only on `true`, so a verdict whose body was
+# never checked went straight through — *absence is not permission*, in the slice built to remove exactly
+# that defect. `ciwatch.sh` reports `null` when it was given no PR number and therefore could not measure
+# body currency; this script always knows the PR, so it can insist on a check that was actually made.
+#
+# Only `false` merges: the body was measured and found current.
+bs=$(sed -n 's/.*"body_stale": *\([a-z]*\).*/\1/p' "$ciw" | head -1)
+case "$bs" in
+false) : ;;
+true)
+	echo "prmerge: FAIL the CI verdict is green, but its body check was resolved from a run older than" >&2
+	echo "         the last body edit — so it is a green about a body that no longer exists." >&2
+	echo "         Re-run: CIWATCH_PR=$pr scripts/ciwatch.sh $remote_head $(dirname "$ciw")/ci$pr" >&2
+	exit 1
+	;;
+*)
+	echo "prmerge: FAIL the CI verdict's body currency was NEVER CHECKED (body_stale=${bs:-missing})." >&2
+	echo "         That is not a pass. ciwatch.sh reports null when it is given no PR number, so it" >&2
+	echo "         could not measure whether the body moved after the run that read it." >&2
+	echo "         Re-run: CIWATCH_PR=$pr scripts/ciwatch.sh $remote_head $(dirname "$ciw")/ci$pr" >&2
+	exit 1
+	;;
+esac
+echo "prmerge: CI is green on this exact commit, body check measured and current" >&2
+
+# --- 5. the irreversible step ------------------------------------------------------------------------------
 echo "prmerge: merging #$pr with $mode --delete-branch" >&2
 gh pr merge "$pr" --repo "$repo" "$mode" --delete-branch || exit $?
 
-# --- 5. the LOCAL branch, which --delete-branch does not reliably remove ------------------------------------
+# --- 6. the LOCAL branch, which --delete-branch does not reliably remove ------------------------------------
 #
 # **Measured, twice.** `gh pr merge --delete-branch` deleted the remote branch on four consecutive merges and
 # left the local one every time. A surviving merged local ref is not inert: `git push -u origin <that-branch>`

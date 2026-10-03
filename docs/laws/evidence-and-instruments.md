@@ -472,6 +472,30 @@ reach is a law out of context.
   control, which had never been watched die: all six tests on that fixture went through one deferring
   host helper, so no run had ever exercised an impl that does not park. (Ruling: chat-Claude, #863.)
 
+### A refusal arm asserts that it reached its block, not merely that something refused.
+
+- **A non-zero exit cannot tell "refused for my reason" from "refused earlier".** So a refusal arm checks
+  that the step *before* its subject **passed** — not only that its own message appeared. Matching the
+  message is necessary and not sufficient: it guards against today's earlier refusals, and has to be
+  re-tightened every time one of them grows a new one.
+
+  **Adding a precondition is what makes this bite, and it bites every existing arm at once.** A new gate
+  makes every test that drives past it refuse for the new reason *while still looking like it tested the old
+  thing* — so the arms do not fail, they pass vacuously, and nothing distinguishes that from working.
+
+  Two specimens from one slice (#867, which added CI's verdict as a precondition of merging):
+
+  * **The slice's own fixture** wrote its verdict files inside the temp repo, so `prmerge.sh`'s first step
+    refused a **dirty tree** and all seven arms recorded a refusal without ever reaching the block under
+    test. What exposed it was the **uniformity** — seven arms failing identically is a shape; one is a bug.
+  * **An existing witness lost its subject.** `TestPrmergeDeletesTheLocalBranch` could no longer reach the
+    branch deletion it exists to prove, because the new step refused first. Its claim was unchanged; its
+    fixture simply had to satisfy a precondition the script had not had.
+
+  The repair is to assert the predecessor's success line, which also covers arms added later. Watched die by
+  re-injecting the fixture defect: all six refusal arms then fail with *"refused BEFORE the block"*, naming
+  the cause rather than reporting a pass. (Ruling: chat-Claude, #867.)
+
 ### Coverage is a claim: an instrument's domain is an assertion it cannot check about itself.
 
 - **Coverage is a claim: an instrument's domain is an assertion it cannot check
