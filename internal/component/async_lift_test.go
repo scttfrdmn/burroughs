@@ -188,7 +188,9 @@ func TestAsyncLiftAtMostOneTaskPerAgentTraps(t *testing.T) {
 	}
 	defer in.Close()
 	cd := in.export.exports["run"]
-	// A lift task already in flight on this agent (stands in for a re-entrant caller).
+	// A lift task already in flight in this component INSTANCE (stands in for a re-entrant caller). Said
+	// "on this agent" until #857's recon measured the scope: `asyncHandles` is per-instance, so this also
+	// traps a *different* agent's lift — which is the blocker the concurrent parity arm hits (#869).
 	in.w.async.lift = &liftTask{}
 	err = cd.fn.invoke()
 	if err == nil {

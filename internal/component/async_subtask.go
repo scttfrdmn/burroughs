@@ -56,8 +56,16 @@ type subtask struct {
 // the arming write and the parked read are synchronized here rather than per-object.
 type asyncHandles struct {
 	mu      sync.Mutex
-	entries []any     // entries[0] is the reserved nil sentinel; each is *subtask or *waitableSet
-	lift    *liftTask // the current async (callback) lift task, at most one per agent (asserted in the loop)
+	entries []any // entries[0] is the reserved nil sentinel; each is *subtask or *waitableSet
+	// lift is the current async (callback) lift task — **at most one per component INSTANCE**, asserted in
+	// the loop. This said "per agent" until #857's recon measured otherwise: `asyncHandles` is built at a
+	// single call site (`walkComponent`), so one slot serves the whole instance and a second entry traps
+	// whichever agent makes it. The prose claimed something NARROWER than the code enforced, which would
+	// have told a reader two agents could each hold a lift.
+	//
+	// Per-agent is what #869 makes true, and it is the scope the Canonical ABI wants: several async-lifted
+	// tasks may run concurrently in one instance, each built-in acting on the task calling it.
+	lift *liftTask
 }
 
 // pendingEventLocked delivers a resolved subtask's (SUBTASK, subtaski, state) event once, mirroring the

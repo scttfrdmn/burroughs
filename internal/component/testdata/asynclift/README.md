@@ -146,6 +146,17 @@ function is defined in the 'concurrent' mode here a guest may still lower it syn
 `[async-lower]` import shows the guest **asks** for async lowering, not that the host honoured it. Both harness
 faults are excluded by the committed readings — `suspend(1)` appears, and the sequential arm expired.
 
+## The parity witness does not run yet
+
+[PARITY-BLOCKERS.md](PARITY-BLOCKERS.md) records why, measured: the guest's bare world-level `tick` import
+has no host path, a guest that suspends cannot complete (the callback park is unbuilt), and one lift task
+per component instance. **Three blockers, not one**, and the first is earlier than the concurrency question
+the `concurrent.reading` above was captured to answer.
+
+So the readings in this directory are **wasmtime's** — the oracle's side of a comparison whose other side
+does not exist yet. That is the normal state for a committed reading here, and it is said plainly because a
+directory full of readings invites the assumption that something was compared against them.
+
 ## Coverage, stated so these readings are not read as more than they are
 
 - **Externally checkable, and checked here:** the ABI surface — async lift/lower results, and the built-ins as
