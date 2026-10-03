@@ -67,6 +67,13 @@ type Host struct {
 	// returning both would let a wrong-source call site compile. Empty in production (no real async impls
 	// until 2b); populated by a synthesized-guest test that exercises the async-lower adapter.
 	asyncImpls map[string]asyncLowerImpl
+	// syncImpls is the extra-sync-impl source, merged into wasi() (#863). Kept as its own field rather
+	// than by widening wasi()'s literal, so the WASI capability set stays one readable block and an extra
+	// cannot be mistaken for one of it. A name WASI already serves is refused at merge, never shadowed.
+	//
+	// Needed because a guest in the async tier may import a plain function: #862's receipt guest calls
+	// `note` from `Drop` glue, which cannot await, so an async impl is the wrong shape for it.
+	syncImpls map[string]interp.CanonFunc
 }
 
 // asyncWasi is the async-lower impl source — SEPARATE from wasi() by type, so binding an async lower to a
@@ -203,6 +210,22 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 		"wasi:filesystem/types::[resource-drop]descriptor",
 	} {
 		m[name] = h.noop
+	}
+	// Extra SYNC impls, the counterpart of `asyncImpls` (#863). A guest in the async tier can import a
+	// plain function the host must answer — #862's receipt guest calls `note` from `Drop` glue, which
+	// cannot await, so it has to be sync. `asyncImpls` already had a field for its half; this is the other.
+	//
+	// **A name already served by WASI is REFUSED, not shadowed.** Silently overriding
+	// `wasi:cli/exit::exit` with a test's function would be a capability change disguised as a map write,
+	// and the guest would have no way to tell. The panic is the right severity for an in-package
+	// misconfiguration: `syncImpls` is unexported and set only by a test, so a collision is a programming
+	// error at the call site rather than anything a guest or an embedder can provoke.
+	for name, fn := range h.syncImpls {
+		if _, taken := m[name]; taken {
+			panic("component: syncImpls would shadow the WASI impl for " + name +
+				" — pick another name; the host does not let an extra impl displace a real capability")
+		}
+		m[name] = fn
 	}
 	return m
 }

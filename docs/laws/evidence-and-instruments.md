@@ -428,6 +428,50 @@ reach is a law out of context.
     contributes one opener and millions. The dynamic half needs a counter in `runFrame` and is not
     built.
 
+### An absence claim states its search, or it is "I didn't find X".
+
+- **Any "X does not exist" or "there is no Y" states what was searched to establish it:** which types,
+  call sites and test files, and with what query. A reader can then see how wide the search was. **If the
+  search cannot be stated, the claim is "I didn't find X", not "X does not exist".** The difference is the
+  whole point — *"I didn't find X"* invites a harder look; *"X does not exist"* closes the question, and a
+  closed question is acted on.
+
+  **Three specimens in one session, all closing a question that was open, all escalated to a principal.**
+  (1) *"On wasmtime the host cancels by dropping the call's future"* — the cited comment says `call_async`
+  and describes the pre-lowering case; generalised to `call_concurrent` and to started tasks. It became
+  the stated justification for a decision Scott approved, and
+  [ADR 0085](../decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md)
+  carries the correction. (2) *"There is no host-import mechanism"* — `walkComponent` takes a sync map
+  **and** an async-lowered map, and five test files inject them; the first parameter was read and the
+  other three were not, from a signature printed in the actor's own output moments earlier. (3) *"Every
+  existing test site resolves inline"* — three of five files were read and the generalisation covered all
+  five; the two unread are precisely the deferring ones.
+
+  **One shape in all three: read one thing, generalise, don't check the neighbours.** The guard is a
+  reporting requirement rather than an instruction to be careful, because a stated search is checkable by
+  a reader and "more care" is not — and in practice it caught the third error one turn *after* it was
+  reported and the fourth *before*, the difference being whether the search was stated first or last.
+  (Ruling: chat-Claude, on the #857 reading.)
+
+  **An absence claim is a coverage claim about a search**, which is why it sits here: everything the next
+  law says about an instrument's domain applies to the domain of a grep.
+
+### Two witnesses of one mechanism are the executable form of duplicated prose.
+
+- **Where a mechanism already has a witness, strengthen it rather than adding a second one.** Two tests
+  driving one mechanism drift apart, and the one nobody is reading becomes the one that is wrong — the
+  same failure as a comment duplicating what the code already carries
+  ([errors-and-testimony.md](errors-and-testimony.md)), with an executable instead of a sentence. The
+  question to ask of a proposed new witness is not "does this assert something true" but "is there
+  already a witness of this mechanism whose assertions should grow".
+
+  Specimen: #863 was registered to add a parks-assertion witness for the async-lowered import path, and
+  `TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns` already asserted the three facts separately
+  and more strongly than the proposed replacement — a non-blocking check made meaningful by a sibling
+  having run to completion, rather than a bounded wait. The slice reduced to **falsifying** the existing
+  control, which had never been watched die: all six tests on that fixture went through one deferring
+  host helper, so no run had ever exercised an impl that does not park. (Ruling: chat-Claude, #863.)
+
 ### Coverage is a claim: an instrument's domain is an assertion it cannot check about itself.
 
 - **Coverage is a claim: an instrument's domain is an assertion it cannot check
