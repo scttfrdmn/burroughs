@@ -3,6 +3,7 @@
 package component
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -18,6 +19,16 @@ type liftTask struct {
 	resolved bool           // set by task.return or by cancellation — the teardown key
 	result   []interp.Value // the flat result task.return received; read at resolution
 	storage  [2]uint32      // the task's context (context.get/set), NOT the per-call stack's — see below
+
+	// cancelled records that this task has been cancelled, which is the precondition `task.cancel`
+	// (0x05) checks. **Nothing sets it today**: Burroughs has no way to cancel a task, and the engine it
+	// is measured against has none either for a task that has already started — dropping a host call
+	// future ABANDONS it (see testdata/asynclift/ABANDONMENT.md). Cancellation reaches a task only
+	// through a caller's `subtask.cancel`, which is #862's composed artifact.
+	//
+	// So the field exists for `task.cancel` to check and for #862 to set, and the cancelled branch is
+	// REFUSED by name rather than implemented against semantics nobody has measured yet.
+	cancelled bool
 }
 
 // taskReturn implements `canon task.return` (0x09, definitions.py canon_task_return def:2329): it resolves
@@ -25,6 +36,50 @@ type liftTask struct {
 // async handle table, which holds the current lift task (set by the callback loop before it invokes the
 // callee). It traps if there is no current lift task — task.return outside an async lift is a guest error,
 // not a silent no-op.
+// ErrTaskCancelUnbuilt is the cancelled branch of `task.cancel` (0x05): the task HAS been cancelled, and
+// what a task does on resolving a cancellation is #862's subject rather than this slice's.
+//
+// It is a named refusal rather than an implementation because nothing can reach it yet — no path in this
+// engine sets `liftTask.cancelled` — so an implementation here would be semantics written against no
+// measurement, which is the shape this campaign keeps correcting. When #862's composed artifact can
+// actually cancel a task, the reading it produces is what the branch gets built from.
+var ErrTaskCancelUnbuilt = errors.New(
+	"component: task.cancel on a cancelled task is not implemented (gate:async 2b, #862)")
+
+// taskCancel implements `canon task.cancel` (0x05, definitions.py canon_task_cancel def:2342).
+//
+// # Why the trap is the whole implementation, and is not a stub
+//
+// The Canonical ABI says what `task.cancel` does on a task that has NOT been cancelled: it traps.
+// wasmtime spells the same rule `TaskCancelNotCancelled` — *"`task.cancel` called by task which has not
+// been cancelled"*. Burroughs cannot cancel anything, so **every reachable call lands on that branch**,
+// and implementing it is implementing the spec rather than deferring it.
+//
+// # Why it had to land before the parity witness
+//
+// `wit-bindgen` emits a `TaskCancelOnDrop` guard for EVERY async export, so both committed guests import
+// `[task-cancel]` — including the `single` guest, whose `compute` has nothing to do with cancellation.
+// With 0x05 unbuilt, `isBuiltAsyncBuiltin` refused it and **neither guest could instantiate**, which
+// blocked #864's value-carrying call and #857's parity readings. The guests never *call* it absent a
+// cancellation; they only need it bound.
+func taskCancel(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+		h.mu.Lock()
+		task := h.lift
+		h.mu.Unlock()
+		if task == nil {
+			// Same discipline as task.return's: outside an async lift this is a guest error, not a no-op.
+			return nil, &interp.Trap{Reason: "task.cancel called with no async lift task in flight"}
+		}
+		if task.cancelled {
+			return nil, ErrTaskCancelUnbuilt
+		}
+		return nil, &interp.Trap{
+			Reason: "task.cancel called by a task that has not been cancelled",
+		}
+	}
+}
+
 func taskReturn(h *asyncHandles) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		h.mu.Lock()

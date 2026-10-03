@@ -282,6 +282,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 		return contextSet(w.async, slot), true
 	case 0x09: // task.return (2nd async guest) — resolve the current async-lift task
 		return taskReturn(w.async), true
+	case 0x05: // task.cancel (#864) — traps unless the task was cancelled, which nothing can do yet
+		return taskCancel(w.async), true
 	}
 	return nil, false
 }

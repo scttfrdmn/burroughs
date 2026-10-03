@@ -187,6 +187,21 @@ func Future(value uint32) Value { return Value{Type: Type{Kind: KindFuture}, u: 
 // FutureValue returns the value a KindFuture carries (the wrapper reads it to mint the readable end).
 func (v Value) FutureValue() uint32 { return uint32(v.u) }
 
+// U32 returns the value a KindU32 carries, and whether it is one.
+//
+// The payload field is unexported, so a value crossing out of this package needs an accessor per kind it
+// is read at — #864's value-carrying export call reads `u32`. **Kind-checked rather than a bare read**:
+// `FutureValue` above is unchecked because the async-lower wrapper is its only caller and has just minted
+// the value, whereas this one is called on a value an outside caller supplied. A bare reader would return
+// a plausible number for a `u64` or an `s32`, and the caller's own kind check would be the only thing
+// standing between a mistyped argument and the guest.
+func (v Value) U32() (uint32, bool) {
+	if v.Type.Kind != KindU32 {
+		return 0, false
+	}
+	return uint32(v.u), true
+}
+
 // Stream builds a stream<T> result the host returns to a guest to write to. Carries no payload; the
 // async-lower wrapper mints a writable-stream-end handle (component layer), never codec-lowered.
 func Stream() Value { return Value{Type: Type{Kind: KindStream}} }

@@ -35,7 +35,12 @@ type compFunc struct {
 	result []interp.Value // the async lift's last resolution (what task.return lowered), for the caller/oracle
 }
 
-func (f *compFunc) invoke() error {
+func (f *compFunc) invoke() error { return f.invokeWith(nil) }
+
+// invokeWith is invoke carrying flat core params (#864's value-carrying export call). `invoke()` is this
+// with none, which is what run() needs — kept as the name every existing caller uses, so adding params
+// did not touch any of them.
+func (f *compFunc) invokeWith(params []interp.Value) error {
 	if f.stubName != "" {
 		return fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
 	}
@@ -43,9 +48,9 @@ func (f *compFunc) invoke() error {
 		return fmt.Errorf("%w: component func has no invocable core func (lift target unresolved)", ErrUnsupportedForm)
 	}
 	if f.async {
-		return f.invokeAsyncLift()
+		return f.invokeAsyncLiftWith(params)
 	}
-	_, err := f.core.inst.Invoke(f.core.name)
+	_, err := f.core.inst.Invoke(f.core.name, params...)
 	return err
 }
 
@@ -54,7 +59,13 @@ func (f *compFunc) invoke() error {
 // packed return, and on EXIT confirm the task was resolved by task.return. The WAIT/YIELD re-entry and park
 // are step 2. The first-call path is explicit here — a shared helper would blur the callee (params) and the
 // callback (event), which #788's multi-cycle pin exists to catch.
-func (f *compFunc) invokeAsyncLift() error {
+// invokeAsyncLiftWith carries the lifted params (#864). The comment on the first call below already
+// anticipated them — "carrying the lifted params (none for run())" — and this supplies them.
+//
+// There is no no-params wrapper beside it: `invokeWith(nil)` reaches here with an empty slice, so a
+// `invokeAsyncLift()` delegating to this was dead the moment it was written, and the `unused` linter said
+// so. One entry point, and the params-free case is a nil argument rather than a second name for it.
+func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) error {
 	// At-most-one lift task per agent, asserted: an unbound host call into an async-lifted export is a shape
 	// the engine permits, so a nested entry onto an agent already hosting a lift traps by name rather than
 	// resolving the wrong task (witnessed on synth bytes, #732).
@@ -75,7 +86,7 @@ func (f *compFunc) invokeAsyncLift() error {
 	}()
 
 	// First call: the callee, carrying the lifted params (none for run()). Its packed return drives dispatch.
-	res, err := f.core.inst.Invoke(f.core.name)
+	res, err := f.core.inst.Invoke(f.core.name, params...)
 	if err != nil {
 		return err
 	}
@@ -477,7 +488,7 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 // work rather than a deferral waiting for a consumer.
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
-	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x06, 0x0d, 0x0a, 0x0b, 0x09, 0x15, 0x17, 0x19:
+	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x05, 0x06, 0x0d, 0x0a, 0x0b, 0x09, 0x15, 0x17, 0x19:
 		return true
 	}
 	return false
