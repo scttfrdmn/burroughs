@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestCIWatchTakesEachJobClassFromItsOwnRun reproduces #839's sequence and asserts the watcher reads each job
@@ -228,11 +229,20 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		// and only the first excludes a run from answering for a class. `assert_class` already drew this
 		// distinction; this arm is why drawing it in one of two places was not enough.
 		//
-		// Under a fixture there is no waiting, so this exercises the coverage predicate directly — which is
-		// the half that has to be right even after the wait, because a fetch can race a job's own transition.
+		// This arm exercises the coverage predicate directly — the half that has to be right **even after
+		// the wait**, because a fetch can race a job's own transition.
+		//
+		// **The run says `completed` while a job's conclusion is still null, and that is the point** (#867).
+		// It used to say `in_progress`, which worked only because a fixture skipped the wait entirely. Now
+		// that the wait polls for `status == completed`, an `in_progress` fixture is caught by the wait and
+		// never reaches `assert_class` — so the state this arm is about would have been tested by the wrong
+		// mechanism, and the coverage predicate would have gone unexercised while the arm still looked green.
+		//
+		// A completed run carrying a null-conclusion job is exactly the race the paragraph above names, and
+		// it is the only shape that reaches the predicate now. The arm's CLAIM is unchanged; its fixture
+		// stopped being a valid way to reach it.
 		dir := t.TempDir()
 		pending := strings.ReplaceAll(pushRun, `"conclusion":"success"`, `"conclusion":null`)
-		pending = strings.ReplaceAll(pending, `"status":"completed"`, `"status":"in_progress"`)
 		pending = strings.ReplaceAll(pending, `{"name":"citations","conclusion":"failure"}`,
 			`{"name":"citations","conclusion":"success"}`)
 		write(dir, "runs.json", `[{"databaseId": 1}]`)
@@ -251,6 +261,93 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		if !strings.Contains(out, "unfinished") {
 			t.Errorf("the failure does not name the jobs as unfinished, so it is not reporting the state it\n"+
 				"found:\n%s", out)
+		}
+	})
+
+	// --- #867: the wait POLLS, and "unfinished" is never a verdict -----------------------------------------
+	//
+	// `ciwatch.sh` used to wait with `gh run watch`, which can exit 0 **without the run having completed**.
+	// When it returned early the script walked into evaluation, found jobs with no conclusion, and reported
+	// a FAILURE. Measured on #868: `FAIL tree-subject: unfinished: build, build` while both were in
+	// progress; re-running it unchanged gave GREEN and all nine jobs finished `success`.
+	//
+	// A false fail on the one path every merge goes through, whose only guard was an operator noticing.
+
+	t.Run("an_unfinished_run_is_waited_for_not_failed", func(t *testing.T) {
+		// The fixture reports run 1 as in_progress for its first two reads, then completed — the `runs.delay`
+		// idiom one function over. Without a mechanism like this the fixture's run is complete from the first
+		// read and the poll has no arm at all, which is how the defect lived in the one step nothing could
+		// exercise.
+		dir := t.TempDir()
+		write(dir, "runs.json", `[{"databaseId": 1}]`)
+		write(dir, "1.json", strings.ReplaceAll(pushRun,
+			`{"name":"citations","conclusion":"failure"}`, `{"name":"citations","conclusion":"success"}`))
+		inprog := strings.ReplaceAll(pushRun, `"status":"completed"`, `"status":"in_progress"`)
+		inprog = strings.ReplaceAll(inprog, `"conclusion":"success"`, `"conclusion":null`)
+		write(dir, "1.unfinished.json", inprog)
+		write(dir, "1.unfinished", "2")
+
+		code, out := run(t, dir)
+		if code != 0 {
+			t.Fatalf("exit %d — an unfinished run that then completes must be WAITED for, not failed:\n%s",
+				code, out)
+		}
+		if !strings.Contains(out, "GREEN") {
+			t.Errorf("the completed run was not read as green after the wait:\n%s", out)
+		}
+		// The wait must be visible, or a reader cannot tell a poll from a lucky first read.
+		if !strings.Contains(out, "polling again") {
+			t.Errorf("no evidence the run was polled; the wait may have been skipped:\n%s", out)
+		}
+	})
+
+	t.Run("a_spent_job_bound_is_unfinished_not_fail", func(t *testing.T) {
+		// The bound's expiry is its OWN outcome. A reader acts differently on "still running" than on "the
+		// tree is broken", so collapsing them into `fail` would re-create the defect with a bound on it.
+		dir := t.TempDir()
+		write(dir, "runs.json", `[{"databaseId": 1}]`)
+		write(dir, "1.json", pushRun)
+		inprog := strings.ReplaceAll(pushRun, `"status":"completed"`, `"status":"in_progress"`)
+		write(dir, "1.unfinished.json", inprog)
+		write(dir, "1.unfinished", "999") // never completes within any bound
+
+		code, out := run(t, dir, "CIWATCH_JOB_WAIT=1", "CIWATCH_JOB_POLL=1")
+		if code != 4 {
+			t.Fatalf("exit %d, want 4 — a spent job bound is its own outcome, not fail (1) and not green:\n%s",
+				code, out)
+		}
+		if !strings.Contains(out, "UNFINISHED") || !strings.Contains(out, "NOT a failure of the tree") {
+			t.Errorf("the message does not distinguish a spent bound from a tree failure:\n%s", out)
+		}
+		v, err := os.ReadFile(filepath.Join(dir, "out.verdict"))
+		if err != nil {
+			t.Fatalf("no verdict file: a spent bound must still record what it concluded: %v", err)
+		}
+		if !strings.Contains(string(v), `"ciwatch_verdict": "unfinished"`) {
+			t.Errorf("the verdict file does not say unfinished, so a reader cannot tell it from fail:\n%s", v)
+		}
+	})
+
+	t.Run("the_fixture_bound_defaults_to_fixture_scale", func(t *testing.T) {
+		// The mechanism that replaces "every fixture test must remember to set a bound". The first version
+		// of the poll defaulted to 2400s/15s unconditionally and hung `internal/testenv` until `go test`
+		// timed out at 600s. A reminder would have worked until the next test forgot.
+		dir := t.TempDir()
+		write(dir, "runs.json", `[{"databaseId": 1}]`)
+		write(dir, "1.json", pushRun)
+		write(dir, "1.unfinished.json", strings.ReplaceAll(pushRun, `"status":"completed"`, `"status":"in_progress"`))
+		write(dir, "1.unfinished", "999")
+
+		start := time.Now()
+		code, out := run(t, dir) // deliberately NO bound set
+		elapsed := time.Since(start)
+		if code != 4 {
+			t.Fatalf("exit %d, want 4 — with no bound set a fixture must still reach unfinished:\n%s", code, out)
+		}
+		// The production default is 2400s. Anything near it means the fixture scale did not apply.
+		if elapsed > 30*time.Second {
+			t.Errorf("took %s with no bound set; the fixture-scale default did not apply, so a test that "+
+				"forgets to set one hangs the package", elapsed)
 		}
 	})
 }

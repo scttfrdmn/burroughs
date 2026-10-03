@@ -135,6 +135,22 @@ fetch_runs() {
 
 fetch_run() {
 	if [ -n "${CIWATCH_FIXTURE:-}" ]; then
+		# A fixture may declare a run UNFINISHED for its first N reads, so the completion poll below can be
+		# witnessed rather than asserted — the same shape as `runs.delay` above, one function over. Without
+		# it a fixture's run is complete from the first read and the poll has no arm: exactly the gap that
+		# let `gh run watch`'s early return ship a false fail (#867), since the fixture used to skip the
+		# wait entirely.
+		if [ -f "$CIWATCH_FIXTURE/$1.unfinished" ] && [ -f "$CIWATCH_FIXTURE/$1.unfinished.json" ]; then
+			uwant=$(tr -dc '0-9' <"$CIWATCH_FIXTURE/$1.unfinished")
+			useen=0
+			[ -f "$prefix.$1.unfinishedcount" ] && useen=$(tr -dc '0-9' <"$prefix.$1.unfinishedcount")
+			useen=$((useen + 1))
+			echo "$useen" >"$prefix.$1.unfinishedcount"
+			if [ "$useen" -le "${uwant:-0}" ]; then
+				cat "$CIWATCH_FIXTURE/$1.unfinished.json"
+				return
+			fi
+		fi
 		cat "$CIWATCH_FIXTURE/$1.json"
 		return
 	fi
@@ -193,10 +209,64 @@ echo "ciwatch: runs for this SHA: $runs" >&2
 # so "did this run execute these jobs" becomes a question with an answer, and coverage never has to guess
 # about a job's future. Every run for the SHA is waited on because every one of them is in the population a
 # class may be selected from -- not a cost, since a run nobody waits on is a run whose verdict is a snapshot.
+# **The wait POLLS for `status == completed`; it does not trust `gh run watch`'s exit.**
+#
+# The ordering above is right and the primitive under it was not. `gh run watch` can exit 0 **without the run
+# having completed** — a 502 mid-watch is enough — and when it returned early this script walked straight into
+# evaluation, found jobs with no conclusion, and reported them as a FAILURE. Measured on #868: it wrote
+#
+#   ciwatch: FAIL tree-subject (run 37087257601): unfinished: build (ubuntu-24.04), build (ubuntu-24.04-arm)
+#
+# while both of those jobs were **in progress**; re-running it unchanged gave GREEN, and all nine jobs
+# finished `success`. A false fail on the one path every merge goes through, whose only guard was an operator
+# noticing and re-running by hand.
+#
+# So "unfinished" is a reason to **keep waiting**, never a verdict — the same distinction `assert_class` makes
+# between `skipped` and a null conclusion, applied to the wait that is supposed to make it unnecessary. And
+# the bound's expiry is **its own outcome**: `unfinished` rather than `fail`, because a reader acts differently
+# on "still running" than on "the tree is broken".
+#
+# The fixture drives this loop too. It used to skip the wait entirely, so no witness could reach it — which is
+# how a defect lived in the one step nothing could exercise.
+#
+# **The default bound is fixture-scale under a fixture**, because the first version defaulted to 2400s/15s
+# unconditionally and hung `internal/testenv` until `go test` timed out at 600s. Requiring every fixture test
+# to set a bound is a reminder; this is a mechanism. A fixture reads local files, so a run that will complete
+# already has.
+if [ -n "${CIWATCH_FIXTURE:-}" ]; then
+	job_wait=${CIWATCH_JOB_WAIT:-3}
+	job_poll=${CIWATCH_JOB_POLL:-1}
+else
+	job_wait=${CIWATCH_JOB_WAIT:-2400}
+	job_poll=${CIWATCH_JOB_POLL:-15}
+fi
 for id in $runs; do
-	if [ -z "${CIWATCH_FIXTURE:-}" ]; then
-		gh run watch "$id" --repo "$repo" > /dev/null 2>&1
-	fi
+	jwaited=0
+	while :; do
+		st=$(fetch_run "$id" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
+		[ "$st" = "completed" ] && break
+		if [ "$jwaited" -ge "$job_wait" ]; then
+			echo "ciwatch: UNFINISHED run $id is still '$st' after ${jwaited}s (bound ${job_wait}s)." >&2
+			echo "         This is NOT a failure of the tree: no required job has been read yet. Re-run" >&2
+			echo "         ciwatch once the run completes, or raise CIWATCH_JOB_WAIT." >&2
+			cat > "$prefix.verdict" <<UNFINISHED
+{
+  "ciwatch_verdict": "unfinished",
+  "sha": "$sha",
+  "run": "$id",
+  "status": "$st",
+  "waited_s": $jwaited,
+  "bound_s": $job_wait,
+  "note": "The bound expired with the run unfinished. This is neither green nor fail: no required job's conclusion was read. A reader must not treat it as a tree failure."
+}
+UNFINISHED
+			exit 4
+		fi
+		echo "ciwatch: run $id is '$st' — waited ${jwaited}s of ${job_wait}s, polling again in ${job_poll}s" >&2
+		sleep "$job_poll"
+		jwaited=$((jwaited + job_poll))
+	done
+	[ "$jwaited" -gt 0 ] && echo "ciwatch: run $id completed after ${jwaited}s" >&2
 done
 
 # --- TWO classes, TWO runs, because one rule cannot serve both ---------------------------------------------
@@ -297,6 +367,40 @@ if missing or unfinished or bad:
 PYCLS
 }
 
+# --- was the body edited after the run that answered for it? (#867) ---------------------------------------
+#
+# The body is the one MUTABLE input. A body-class green from a run that read a superseded body is a green
+# about a body that no longer exists — measured on #866, where the `citations` job had correctly failed
+# against a body containing a banned construct, the body was fixed, and the verdict still reported the old
+# run's failure.
+#
+# **An unchecked body is reported as unchecked, never as current.** This script is given a SHA, not a PR, so
+# without `CIWATCH_PR` it cannot ask when the body last moved — and claiming "not stale" on that basis would
+# be the same class of defect one level out: an absent measurement reported as a favourable one.
+body_stale=null
+body_stale_note="unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured"
+if [ -n "${CIWATCH_PR:-}" ]; then
+	if [ -n "${CIWATCH_FIXTURE:-}" ]; then
+		body_updated=$(cat "$CIWATCH_FIXTURE/body_updated_at" 2>/dev/null || echo "")
+		run_created=$(cat "$CIWATCH_FIXTURE/$bodyrun.created_at" 2>/dev/null || echo "")
+	else
+		body_updated=$(gh pr view "$CIWATCH_PR" --repo "$repo" --json body,updatedAt --jq .updatedAt 2>/dev/null)
+		run_created=$(gh run view "$bodyrun" --repo "$repo" --json createdAt --jq .createdAt 2>/dev/null)
+	fi
+	if [ -z "$body_updated" ] || [ -z "$run_created" ]; then
+		body_stale_note="unchecked: could not read the body's updatedAt or the run's createdAt"
+	elif [ "$body_updated" \> "$run_created" ]; then
+		# Lexicographic comparison is correct for ISO-8601 UTC timestamps, which both of these are.
+		body_stale=true
+		body_stale_note="the body was edited at $body_updated, AFTER the body-class run was created at $run_created"
+		echo "ciwatch: body edited at $body_updated, after run $bodyrun was created at $run_created" >&2
+		echo "         The body class's green is about a body that no longer exists." >&2
+	else
+		body_stale=false
+		body_stale_note="the body-class run ($run_created) is not older than the body's last edit ($body_updated)"
+	fi
+fi
+
 fail=0
 treeok=true
 bodyok=true
@@ -321,6 +425,8 @@ cat > "$prefix.verdict" <<VERDICT
   "sha": "$sha",
   "tree_subject": { "run": "$treerun", "ok": $treeok, "keys": "$(printf '%s ' $treekeys)", "json": "$prefix.$treerun.json" },
   "body_subject": { "run": "$bodyrun", "ok": $bodyok, "keys": "$(printf '%s ' $bodykeys)", "json": "$prefix.$bodyrun.json" },
+  "body_stale": $body_stale,
+  "body_stale_note": "$body_stale_note",
   "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
 }
 VERDICT
