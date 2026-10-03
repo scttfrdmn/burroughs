@@ -30,6 +30,24 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The edit-route hook refuses a git command that would discard uncommitted work**, because one already
+  destroyed some. A compound command `git add -A && git commit … && python3 <<'PY' …` had its heredoc write
+  a tracked file, so **the hook refused the whole command and nothing in it ran** — including the commit at
+  its front. The baseline never existed, and a later `git checkout --` meant to undo an injection reverted
+  real work. **A hook refusal kills the entire compound command**, and treating it as "the risky part was
+  blocked" rather than "nothing happened" is what made the restore look safe.
+  Refused: `checkout -- <path>`, `checkout <path>`, `restore`, `reset --hard`, `clean -f` (which deletes
+  **untracked** files, so a tracked-only guard would have missed it), and `stash drop`/`clear`.
+  **`git stash` stays allowed** — it *saves*, and it is the remedy the refusal recommends, so refusing it
+  would have forbidden the hook's own advice. `restore --staged` without `--worktree` only unstages, so it
+  is allowed too. `EDITROUTE_ALLOW_DISCARD=1` overrides, and **the override is logged** under its own slug,
+  since an escape nobody can see is indistinguishable from the guard not firing.
+  **It fails closed:** when git cannot report the dirty state the command is refused, not allowed — with a
+  separate slug, because "this destroys work" and "I could not tell" are different findings.
+  **Coverage is a limit, not a guarantee:** it matches command text, so it sees a direct invocation and not
+  a script that runs git internally, a shell function, or an alias.
+  Fifteen witness arms, each run in production shape and each refusing arm asserting **the path the refusal
+  names** — root-relative, so a fixture that resolved the wrong repository fails instead of passing.
 - **Burroughs runs a committed async-lifted guest and matches wasmtime's reading**
   ([#864](https://github.com/scttfrdmn/burroughs/issues/864)). `Instantiated.CallValues` carries
   `canon.Value` arguments and results through a component export — `compute(5) → 6` and
