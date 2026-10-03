@@ -353,7 +353,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				Realloc: d.lowerRealloc,
 			}), true
 		}
-		return interp.HostExtern(ft, refuse(mod, name)), true
+		return interp.HostExtern(ft, refuse(mod, name, d.lowerName)), true
 	}
 }
 
@@ -423,8 +423,28 @@ func dropNoop(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) { retu
 
 // refuse is the stub host function: called, it refuses by name — the "imports reach a stub host that
 // refuses" boundary (PR B). The real host is PR C.
-func refuse(mod, name string) interp.HostFunc {
+//
+// # Which name, and why the core one is not it (#870)
+//
+// `mod`/`name` are the CORE module's import strings, and for a canon-lowered func those are an
+// implementation detail of whatever produced the component: wit-component inserts a `shim` module and an
+// `actual` core instance whose exports are the lowered imports **by index**, so the bare world-level
+// import `tick` reached this refusal as `actual::0`. That told a reader nothing — not which import was
+// missing, and not that the missing thing was nameable at the component level at all.
+//
+// So the COMPONENT-level identity is named when there is one (`lowerName`, the key the host would have
+// had to supply), and the core coordinates follow in parentheses for anyone reading the link itself. A
+// lower with no component identity — a resource built-in stub — keeps the core form, which is all it has.
+//
+// **Measured, not assumed.** `TestHostCanSupplyABareWorldLevelImport`'s refusal arm asserted `tick` and
+// got `actual::0`, which falsified a claim already written into #870's record; the record is appended to
+// rather than corrected in place, because what it measured was true when measured.
+func refuse(mod, name, lowerName string) interp.HostFunc {
 	return func(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) {
+		if lowerName != "" {
+			return nil, fmt.Errorf("%w: import %s is not provided (stub host; lowered at core %s::%s)",
+				ErrLinkRefused, lowerName, mod, name)
+		}
 		return nil, fmt.Errorf("%w: import %s::%s is not provided (stub host)", ErrLinkRefused, mod, name)
 	}
 }
@@ -445,6 +465,28 @@ func (w *walker) close() {
 func (w *walker) lowerSignature(lowerName string) *FuncType {
 	mod, export, found := strings.Cut(lowerName, "::")
 	if !found {
+		// **A BARE name is a world-level function import** (#870), not a malformed key. Returning nil here
+		// meant the lowering had no signature to marshal against — and the signature is needed on both
+		// sides of the call, so the type has to come through for a bare import exactly as it does for an
+		// interface export.
+		//
+		// The import's own `TypeIndex` carries it. Mapped through `typeSpaceToTypes` for the same reason
+		// the instance branch below does: `TypeIndex` is a type index-SPACE ordinal while `c.Types` is the
+		// compacted section.
+		for i := range w.c.Imports {
+			imp := &w.c.Imports[i]
+			if imp.Name != lowerName || imp.Kind != ExternFunc {
+				continue
+			}
+			ct := w.c.typeSpaceToTypes(imp.TypeIndex)
+			if ct < 0 || ct >= len(w.c.Types) {
+				return nil
+			}
+			if td := w.c.Types[ct]; td.Kind == TDFunc {
+				return td.Func
+			}
+			return nil
+		}
 		return nil
 	}
 	for i := range w.c.Imports {

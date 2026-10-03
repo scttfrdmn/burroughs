@@ -75,15 +75,15 @@ const suiteDir = "../../testdata/spec"
 // `data1.wast` was the one excluded file whose exclusion this list called "the
 // interpreter's", and the label was a prediction that came due: every form in it is
 // `assert_trap` wrapping a bare module, nothing else, so the file held no scorable command
-// until that shape became a Kind. The list below is now three, and the shrink is the reason
+// until that shape became a Kind. The list below lost a file, and that shrink is the reason
 // this paragraph exists — *an itemized exclusion outlives the exclusion unless someone
 // re-prints it*, and this one had a file in it that the same PR admitted.
 //
-// 254 of 257 vendored files hold a scorable command, and the three that do not were
-// *printed*, not predicted — two are the validator's and one is a real gap:
+// 256 of 257 vendored files hold a scorable command; the **one** that does not was *printed*, not
+// predicted. Two files this list named as excluded are now scored (`memory_size3.wast` 2/2,
+// `unreached-invalid.wast` 118/118 + 3 gated), so it rotted a second time, as the paragraph above
+// warns. Re-printed from the board; #875 replaces it with the complement the board already computes.
 //
-//	memory_size3.wast        2 assert_invalid     the validator's
-//	unreached-invalid.wast 121 assert_invalid     the validator's
 //	inline-module.wast       3 bare fields        **not** a later stratum's — see below
 //
 // `inline-module.wast` is the honest miss. Its commands are `(func)`, `(func)`, `(memory

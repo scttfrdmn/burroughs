@@ -203,9 +203,29 @@ func (w *walker) funcStep(d Def) error {
 		}
 		w.compFuncs = append(w.compFuncs, compDef{fn: lf})
 	case SectionImport:
-		cd, ok := w.host(w.c.Imports[d.Item].Name)
+		imp := w.c.Imports[d.Item]
+		cd, ok := w.host(imp.Name)
 		if !ok {
-			return fmt.Errorf("%w: import %q", ErrLinkRefused, w.c.Imports[d.Item].Name)
+			return fmt.Errorf("%w: import %q", ErrLinkRefused, imp.Name)
+		}
+		// **A FUNCTION import needs a function-shaped def** (#870). `stubHost` answers every import with a
+		// stub *instance*, so for a bare world-level function import — `(import "tick" (func …))`, which
+		// `wasi:cli/run` worlds do not have but an async guest does — `cd.fn` was nil. The impl lookup in
+		// `walk.go` is guarded on `fn != nil`, so it **never ran at all**: not for a provided import, and
+		// not for an unprovided one either.
+		//
+		// The defect was the KIND, not the provided case, so it is fixed here where the sort is known
+		// rather than by adding a second dispatch path. With a function-shaped stub the existing lookup
+		// runs, keyed on the import's own name — and the refusal for an unprovided import now says `tick`
+		// instead of `actual::0`, which is wit-component's index-shaped indirection and told a reader
+		// nothing.
+		//
+		// Keyed on the bare name, with both premises checked against the spec at CANON_PIN: import
+		// `externname`s are strongly-unique in a component (Binary.md), and a `plainname`'s charset is
+		// alphanumerics and `-` only (Explainer.md), so no bare name can collide with an
+		// `instance::export` key.
+		if cd.fn == nil && cd.inst != nil && cd.inst.stub {
+			cd = compDef{fn: &compFunc{stubName: imp.Name}}
 		}
 		w.compFuncs = append(w.compFuncs, cd)
 	case SectionAlias:

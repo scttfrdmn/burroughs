@@ -79,6 +79,28 @@ async fn rendezvous(rv: Arc<Rv>, id: u32) -> Result<u32> {
     }
 }
 
+/// The INLINE arm's `tick`: it resolves at once, with a value derived from its argument (#870).
+///
+/// # Why this arm exists, and why the value is derived
+///
+/// Removing the bare-import blocker let Burroughs run the suspending guest with a `tick` that resolves
+/// immediately — but **none of the committed readings covers that shape**: they all use the rendezvous
+/// `tick`, which defers. So Burroughs' output had nothing to check against, and a number with no
+/// reference is not evidence.
+///
+/// `id + 100` rather than a constant, for the same reason the `compute` reading commits two pairs: a
+/// constant could not tell that the argument reached the host import at all. Two calls then discriminate
+/// a passthrough and a constant from the real thing.
+async fn inline_tick(rv: Arc<Rv>, id: u32) -> Result<u32> {
+    rv.say(format!("enter({id})"));
+    {
+        let mut g = rv.arrived.lock().unwrap();
+        *g += 1;
+    }
+    rv.say(format!("inline-resolve({id})"));
+    Ok(id + 100)
+}
+
 /// The cancellation arm's `tick`: it **never completes**.
 ///
 /// Held pending with no bound, deliberately (#857 amendment 3). The rendezvous `tick` releases on a second
@@ -127,11 +149,14 @@ async fn main() -> Result<()> {
     // does NOT cancel a started task in wasmtime 49 — it abandons it. The mode was called `cancel`
     // while the premise was believed, and the name is corrected rather than the reading relabelled.
     let abandoning = mode == "abandon";
+    let inlining = mode == "inline";
     let mut linker: Linker<HostState> = Linker::new(&engine);
     linker.root().func_wrap_concurrent("tick", move |acc, (id,): (u32,)| {
         let rv = acc.with(|mut s| s.get().rv.clone());
         Box::pin(async move {
-            if abandoning {
+            if inlining {
+                inline_tick(rv, id).await.map(|v| (v,))
+            } else if abandoning {
                 pending_tick(rv, id).await.map(|v| (v,))
             } else {
                 rendezvous(rv, id).await.map(|v| (v,))
@@ -168,7 +193,13 @@ async fn main() -> Result<()> {
     let rv_cancel = rv.clone();
     let outer = store
         .run_concurrent(async |acc| -> Result<String> {
-            if mode == "abandon" {
+            if mode == "inline" {
+                // TWO calls, sequentially, so the reading can tell a passthrough and a constant from a
+                // real `id + 100`. One value cannot.
+                let a = run.call_concurrent(acc, (1,)).await;
+                let b = run.call_concurrent(acc, (2,)).await;
+                Ok(format!("inline: run(1)={a:?} run(2)={b:?}"))
+            } else if mode == "abandon" {
                 // Start the call, then drop it once the guest has DEMONSTRABLY suspended. `select!`
                 // drops the losing branch, so the arrival signal winning *is* the drop — and the
                 // signal is the guest reaching `tick`, never a duration.

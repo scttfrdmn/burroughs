@@ -1,0 +1,4 @@
+MODE      inline
+EVENTS    enter(1) -> inline-resolve(1) -> enter(2) -> inline-resolve(2)
+OUTCOME   inline: run(1)=Ok((101,)) run(2)=Ok((102,))
+ARRIVALS  2
