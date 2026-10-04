@@ -97,9 +97,15 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, e
 	// instance, so two concurrent callers present the SAME `Thread()`
 	// (`TestConcurrentHostCallsShareOneThreadID`); per-agent keying would have collapsed them. The scope
 	// that was wrong was never "instance vs agent" — it was "in flight vs entered".
-	task := &liftTask{cb: f.cb}
+	// Created in `liftInitial`, the model's INITIAL (def:390). It becomes `liftStarted` at the first
+	// entry below — the analog of `Task.start()` (def:483-486), which is what `canon_lift` calls before
+	// lowering the params. Keeping the two apart is what lets a cancel arriving in that window be
+	// refused by name as the before-started case (status 3, no reference reading, #884) instead of
+	// silently taking the started path and claiming a status Burroughs has never measured.
+	task := &liftTask{cb: f.cb, state: liftInitial, cancelWake: make(chan struct{})}
 	f.h.mu.Lock()
 	f.h.liftsInFlight++
+	f.h.cancellable[task] = struct{}{}
 	f.h.mu.Unlock()
 	// Teardown: decrement however invoke exits (normal EXIT, a trap, a park's bound expiring, or — step
 	// 3 — cancellation resolving without a normal EXIT).
@@ -111,8 +117,15 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, e
 	defer func() {
 		f.h.mu.Lock()
 		f.h.liftsInFlight--
+		delete(f.h.cancellable, task)
 		f.h.mu.Unlock()
 	}()
+
+	// `Task.start()` (def:483-486): INITIAL → STARTED, immediately before the callee is entered. Set
+	// under the lock for the same reason the EXIT arm reads under it — a cancel request races this.
+	f.h.mu.Lock()
+	task.state = liftStarted
+	f.h.mu.Unlock()
 
 	// First call: the callee, carrying the lifted params (none for run()). Its packed return drives dispatch.
 	res, err := f.enterAndInvoke(task, f.core, params)
@@ -132,6 +145,51 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, e
 		if uerr != nil {
 			return nil, uerr
 		}
+
+		// **Cancellation is delivered IN PLACE OF WAITING** (definitions.py def:2129, ADR 0094), which is
+		// the placement and not merely the timing: the model's check sits at the top of the loop body,
+		// *before* exclusivity is released, so a task with a pending cancel never parks and never yields —
+		// it goes straight back into the guest carrying TASK_CANCELLED. Putting this inside the WAIT arm
+		// instead would park first and deliver second, which is a different semantics wearing the same
+		// event code.
+		//
+		// Guarded on `code != callbackExit` because the model's loop condition is `while code != EXIT`:
+		// a guest that has already resolved and is returning EXIT is past cancelling, and delivering here
+		// would re-enter a resolved task.
+		//
+		// # This is ONE of the model's checks; the other two are not both here
+		//
+		// The model has three `deliver_pending_cancel` sites on this path, and reading only `canon_lift`
+		// finds two of them:
+		//
+		//   - def:2129, the top of the loop body — this check;
+		//   - def:2137, inside the YIELD arm, after `wait_until(exclusive_thread is None)`;
+		//   - **def:789, inside `WaitableSet.wait_from_callback`** — the WAIT arm's check, which is in the
+		//     WAIT rather than beside it, and which `canon_lift` alone does not show.
+		//
+		// The third is in `awaitEvent`, where the model puts it; see that function for why believing it
+		// absent is a hang and not a latency difference, and for the reading error that produced the
+		// belief.
+		//
+		// The YIELD one is genuinely NOT reproduced. Burroughs' analog of its `wait_until` is `enterTask`'s
+		// semaphore acquire inside `enterAndInvoke`, and this loop does not re-check after it. That
+		// consequence really is bounded and really is latency: such a cancel is delivered on the next
+		// iteration's check above, one callback entry later. Recorded so a reader comparing the loops
+		// finds a decision rather than reconstructing one.
+		if code != callbackExit {
+			f.h.mu.Lock()
+			delivered := task.deliverPendingCancelLocked()
+			f.h.mu.Unlock()
+			if delivered {
+				task.waitSet = 0
+				res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventTaskCancelled}))
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
+
 		switch code {
 		case callbackExit:
 			// **Read the LOCAL task, never the shared slot.** This was `f.h.lift.resolved`, which is
@@ -139,8 +197,22 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, e
 			// current* resolved, and the answer can be another task's. A wrong answer here is silent —
 			// the caller gets the wrong result or a spurious trap — which is worse than the visible
 			// at-most-one assertion the same slice had to split in two.
-			if !task.resolved {
+			//
+			// Read under the lock, because a cancellation request can land on this task from another
+			// goroutine at any point (ADR 0094). The state is no longer a boolean only this loop and
+			// `task.return` write.
+			f.h.mu.Lock()
+			state, cancelledResolution := task.state, task.cancelledResolution
+			f.h.mu.Unlock()
+			if state != liftResolved {
 				return nil, &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
+			}
+			// **A cancelled task resolves too, and its resolution is not a result.** The model expresses
+			// this as `on_resolve(None)` from `Task.cancel` (def:497); here it is the explicit
+			// discriminant, because an empty result slice is what a guest returning nothing legitimately
+			// resolves with (grave #885's artefact). #862's ruling 1 maps it to one sentinel.
+			if cancelledResolution {
+				return nil, ErrCancelled
 			}
 			// The resolution travels back to THIS caller. It was `f.result = task.result`, a field on the
 			// SHARED compFunc, which raced between concurrent callers — reported by `-race` on this
@@ -162,7 +234,7 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, e
 			// goroutine — the guest's agent was released when it returned WAIT, which is the whole
 			// difference from waitableSetWait's blocking excursion.
 			task.waitSet = si
-			ev, aerr := f.h.awaitEvent(si, liftParkBound)
+			ev, aerr := f.h.awaitEvent(task, si, liftParkBound)
 			if aerr != nil {
 				return nil, aerr
 			}

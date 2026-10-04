@@ -401,3 +401,34 @@ byte-verified by the canon `definitions.py` fixtures; this records that a real f
 err arm and aborts, which Burroughs matches behaviorally (its own error text). Box: darwin, closed pipe;
 `/dev/full` on Linux gives the same via ENOSPC (deterministic). Regenerate:
 `printf 'hello\n' | wasmtime run p3echo.wasm | true` (capturing stderr and the exit).
+
+`lift-cancel-yield-synth.wasm` is the witness for the lift loop's **top-of-loop** cancellation check
+(#887, [ADR 0094](../../../docs/decisions/0094-host-cancellation-reaches-a-lift-task-through-an-internal-trigger-this-slice-because-the-model-hands-the-embedder-a-per-call-oncancel-and-invoke-blocks.md)),
+and it exists because that check **had no witness and the suite was green without it** — found by
+neutering, not by reading. The end-to-end cancellation witness drives a `wit-bindgen` guest, which awaits
+an import and therefore returns **WAIT**, so the park's own check (`definitions.py` def:789, inside
+`awaitEvent`) is always what delivers the cancellation there. Two call sites, one witness: grave #885's
+shape one level up.
+
+What only this fixture reaches is a guest that **yields repeatedly and never parks**. The YIELD arm
+re-enters the callback immediately, so `awaitEvent` is never entered and the top-of-loop check (def:2129)
+is the only path a host cancellation has. That is the honest case rather than a contrived one: a guest
+doing CPU work with cooperative yields is exactly the guest a host most wants to cancel. `wit-bindgen`
+cannot produce it — nothing in its surface emits a cooperative yield, the same reason
+`async-lift-yield-synth.wasm` is hand-authored.
+
+Two traps are part of the assertion rather than defensive decoration. The callback accepts **only** event
+codes 0 (NONE) and 6 (TASK_CANCELLED) and traps otherwise, so "the engine delivered the right code" is
+checked inside the guest instead of inferred from the call completing. And it **bounds the spin** at
+200000 re-entries in a core global, because an engine that never delivers the cancellation would make the
+test *hang* rather than fail — *a wait that cannot be satisfied must end in a verdict*, the principle
+`liftParkBound` exists for, applied to a spin. It has no committed `.reading`: wasmtime gives a host no
+way to cancel a started task ([ABANDONMENT.md](asynclift/ABANDONMENT.md)), which is the whole reason
+#862 measured the reference through composition, so there is no reference side to record here.
+
+Authored with `wasm-tools parse` (1.258.0), modelled on `async-lift-yield-synth.wat`; the `.wat` is
+committed beside the `.wasm`. Regenerate:
+
+```sh
+wasm-tools parse lift-cancel-yield-synth.wat -o lift-cancel-yield-synth.wasm
+```

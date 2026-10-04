@@ -665,7 +665,13 @@ func TestLiftParkExpiryIsNamedNotAHang(t *testing.T) {
 	h.mu.Unlock()
 
 	start := time.Now()
-	_, err := h.awaitEvent(si, 200*time.Millisecond)
+	// The task is `liftStarted` and uncancelled, so the park's cancel arm (ADR 0094) is inert here and the
+	// bound is still the only thing that can end this wait — which is what keeps this test's subject the
+	// bound rather than cancellation. A task in `liftPendingCancel` would return TASK_CANCELLED at once
+	// and the expiry would never be reached, so the state is set explicitly rather than left to a zero
+	// value that happens to work.
+	task := &liftTask{state: liftStarted, cancelWake: make(chan struct{})}
+	_, err := h.awaitEvent(task, si, 200*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if err == nil {

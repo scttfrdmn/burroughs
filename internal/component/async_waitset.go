@@ -31,7 +31,8 @@ import (
 // handle table. B-MM-1's async-wake acquire edge is thus IDENTICAL to the wake delivery, not merely carried
 // alongside it (litmus TestBMM1AsyncWakeIsAnAcquireEdgeOverTheAddressSpace).
 
-// eventCode mirrors definitions.py EventCode (def:696–703). Slice-1 delivers NONE and SUBTASK.
+// eventCode mirrors definitions.py EventCode (def:696–703). Slice-1 delivered NONE and SUBTASK; the
+// enum is now complete, TASK_CANCELLED having been the last gap (ADR 0094).
 type eventCode uint32
 
 const (
@@ -41,6 +42,12 @@ const (
 	eventStreamWrite eventCode = 3 // definitions.py EventCode.STREAM_WRITE (def:700)
 	eventFutureRead  eventCode = 4 // definitions.py EventCode.FUTURE_READ (def:701)
 	eventFutureWrite eventCode = 5 // definitions.py EventCode.FUTURE_WRITE (def:702)
+
+	// eventTaskCancelled is delivered to the LIFT's callback, not by a waitable set — the lift loop
+	// synthesises it from the task's own state (def:2129/2137) rather than receiving it from a member.
+	// It lives in this enum anyway because the enum is the ABI's, and a code the guest can see must be
+	// named where a reader looks the codes up.
+	eventTaskCancelled eventCode = 6 // definitions.py EventCode.TASK_CANCELLED (def:703)
 )
 
 // event is a waitable-set.wait result (definitions.py EventTuple / unpack_event, def:2367–2372): a code
