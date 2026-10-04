@@ -180,6 +180,14 @@ func waitsetSynthHost() (*Host, chan func(canon.Value), *int32) {
 	return h, resolvers, &entered
 }
 
+// parksGrace is how long a parks assertion waits before concluding that a parked agent has not returned.
+//
+// It is a **bound on a true negative**, not a sampling window: the agent's subtask resolves only when the
+// test calls its resolver, so an agent that has not been resolved cannot complete and the wait can only
+// expire. Generous because the cost is wall time in one test and the benefit is an assertion that does
+// not depend on the machine — the non-blocking form it replaced passed on arm64 and missed on CI's amd64.
+const parksGrace = 250 * time.Millisecond
+
 // coreInstanceWithExport returns the core instance among the component's instantiated modules that has the
 // named export (the runmod, which carries `run`/`sibling`), for driving Invoke/Stop directly.
 func coreInstanceWithExport(in *Instantiated, name string) *interp.Instance {
@@ -334,11 +342,32 @@ func TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns(t *testing.T) {
 	if oB.err != nil || len(oB.res) != 1 || oB.res[0].Int32() != 42 {
 		t.Fatalf("sibling = %v (err %v), want [42] — a parked agent starved its sibling", oB.res, oB.err)
 	}
-	// A must still be parked (nothing has resolved its subtask).
+	// A must still be parked — and this is a BOUNDED NEGATIVE, not a peek, which is the repair.
+	//
+	// # What it replaced, and why a bound is sound here when `default:` was not
+	//
+	// The check was `select { case <-chA: fail; default: }`. Its own injection control's doc comment
+	// named the hazard — *"the original's `default:` arm passes whenever A has not yet delivered to its
+	// channel, so a miss is possible in principle"* — and measured **0 misses over 200 runs + 50 under
+	// `-race`**. That was `darwin/arm64`. **CI on `ubuntu-24.04` produced a miss** on a tree whose only
+	// change was a decoder repair, so the zero was platform-scoped and the hazard is reachable.
+	// `TestWaitsetParksCheckDetectsAnInlineResolvingImpl` carries the reproduction attempts and their
+	// one surprise: amd64 under QEMU does not reproduce it either, so the architecture is not the cause.
+	//
+	// A bound fixes it **because of what A is waiting for**, not because the window got wider. A's
+	// subtask resolves only when this test calls `resolve`, and it has not — so A **cannot** complete,
+	// and an expiring wait is a true negative rather than a sample. `default:` was unsound for the
+	// opposite reason: it asserted A had not finished at an instant when A *could already have*, and was
+	// merely unlikely to have on one architecture.
+	//
+	// The cost is `parksGrace` of wall time in exchange for an assertion whose correctness does not
+	// depend on the machine. An attempt to assert it from engine state instead — counting resolved
+	// subtasks — failed, and informatively: with an inline impl the round trip **completes**, so
+	// `subtask.drop` removes the entry and the count reads zero for the wrong reason.
 	select {
 	case o := <-chA:
 		t.Fatalf("the parked agent returned (%v) before its subtask resolved", o.res)
-	default:
+	case <-time.After(parksGrace):
 	}
 	// Resolve A's subtask; A wakes and completes.
 	resolve(canon.U32(107))

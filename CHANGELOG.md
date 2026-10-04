@@ -753,6 +753,30 @@ own condition rather than as a prediction.
   **The two witnesses have different subjects**, which the falsification showed: reverting `task.return`
   alone leaves the decoder arm passing, and neutering the shared decoder fails both — so one guards the
   decoder and the other guards `task.return`'s use of it.
+- **Two parks assertions were samples of a race rather than assertions about it**, and CI took the losing
+  branch. `TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns` checked that a parked agent had not
+  returned with a non-blocking `select`/`default:`, and its injection control
+  `TestWaitsetParksCheckDetectsAnInlineResolvingImpl` mirrored that shape to detect a miss. Both passed
+  **250 runs on `darwin/arm64` with zero misses**, measured when they were built (#863) — and
+  `ubuntu-24.04` then reported a MISS on a tree whose only change was the decoder repair above. *A
+  determinism premise is platform-scoped*: the zeros were true and were never a claim about the control,
+  only about the control on one machine.
+  **Both are now bounded negatives, sound by what the agent is waiting for rather than by how wide the
+  window is.** The parked agent's subtask resolves only when the test calls its resolver, so an
+  unresolved agent **cannot** complete and an expiring wait is a true negative; the injected
+  inline-resolving agent has nothing left to wait for, so waiting generously for it cannot pass falsely.
+  `default:` was unsound for the opposite reason — it asserted the agent had not finished at an instant
+  when it *could already have*, and was merely unlikely to have on one architecture.
+  **The reproduction was sought on the other memory model and not found**, which is why the repair is
+  structural rather than a wider timeout: 180 runs on amd64 under QEMU via `scripts/xcheck-amd64.sh`
+  produced zero misses, so the architecture is not the cause and what remains is CI's machine under CI's
+  load. `janus.local` was unresolvable, so the native x86-64 row is `NOT RUN` — a mechanism failure, not
+  a verdict. Both repairs were watched die structurally instead: give the original an inline-resolving
+  impl and it fails on the delivery; give the injection control a deferring one and it fails on the
+  timeout.
+  An attempt to assert the park from engine state instead — counting resolved subtasks — **failed
+  informatively** and is recorded: with an inline impl the round trip completes, so `subtask.drop` removes
+  the entry and the count reads zero for the wrong reason.
 - **A doc comment cited a `ComponentValue` surface that its own cited ADR does not define**
   ([grave #856](https://github.com/scttfrdmn/burroughs/issues/856)). `component.go` pointed an embedder at
   *"the `ComponentValue` surface (ADR 0085)"*; **ADR 0085 contains no such identifier.** The citation resolved
