@@ -30,6 +30,23 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **`wac` is the pinned composition tool, with a witness that reads the composed artefact rather than the
+  exit status.** `wac-cli 0.12.0`, installed with `cargo install wac-cli --locked`, recorded in
+  `internal/component/testdata/compose/README.md` and printed from the tool by `compose.sh`. It replaces
+  `wasm-tools compose`, which still exists at the pinned 1.258.0 and prints *"has been deprecated. Please
+  use `wac` instead"* on every invocation — a committed, reproducible artefact should not be built by a
+  tool telling you to stop using it.
+  **The witness exists because `wac plug` exits 0 even when it cannot satisfy a dependency.** Two sockets
+  compose against the committed `receipt/` guest: one whose single import that guest supplies, one with an
+  extra import nothing supplies. Both produce output and both exit 0; the discriminator is the composed
+  world. The assertion is directional rather than a count — the *plugged* import is gone while the
+  *child's own* host imports (`tick`, `note`) remain, because composition correctly leaves those for the
+  host and a zero-import expectation would fail on a correct composition.
+  **The two tools disagree, and taking the deprecated one's answer for a general rule cost a plan.**
+  `compose` refuses a bare world-level function import where `wac` satisfies it; measured with `compose`
+  alone, that briefly became "bare imports do not compose" and a plan to add a second `receipt` guest with
+  an interface-shaped export. `wac` composes the existing guest as it is, so no second guest exists and
+  every reading and hash taken against `receipt/` keeps its subject.
 - **Several async-lifted tasks can be in flight in one component instance**
   ([#869](https://github.com/scttfrdmn/burroughs/issues/869)), which clears blocker 3 and is the
   concurrency `gate:async` exists to unlock. Burroughs now reproduces wasmtime's committed
