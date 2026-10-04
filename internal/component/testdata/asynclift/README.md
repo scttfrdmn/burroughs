@@ -13,11 +13,31 @@ the slice's first day.
 
 ```
 wit-bindgen-cli  0.62.0
+wit-bindgen-rt   0.44.0                             the RUNTIME 0.62.0 depends on — not 0.62
 wasm-tools       1.258.0
-wasmtime         49.0.1 (46c23a87d 2026-09-24)
+wac-cli          0.12.0                             composition; see ../compose/README.md
+wasmtime (CLI)   49.0.2 (3c8a3e79a 2026-10-02)      produces compute.reading
+wasmtime (crate) 49.0.2                             LINKED by harness/; produces every other reading
 rustc (guest)    1.91.1 (ed61e7d7e 2025-11-07)      rustup — has the wasm targets
 rustc (host)     1.98.1 (48a229cea 2026-09-01)      Homebrew — new enough for the wasmtime crate
 ```
+
+**The wasmtime CLI and the wasmtime crate are two artefacts and are recorded separately.** They happen to
+agree at 49.0.2 today; nothing makes them. `compute.reading` is taken through the **CLI** (`wasmtime run
+--invoke`), every other reading through the **crate** the harness links, whose version is pinned by
+`harness/Cargo.lock`. A reading that disagreed with another would need to be read against the right one,
+and one line in a provenance block naming "wasmtime" could not say which.
+
+**Measured mid-slice, which is why it is spelled out:** the CLI moved 49.0.1 → 49.0.2 while #862 was being
+built, and the only thing that changed in `compute.reading` was its own provenance header — every value
+identical. So the bump invalidated nothing; it did invalidate the single-line version block that had been
+standing in for both.
+
+**`wit-bindgen-rt` is recorded separately because the version a reader would guess is wrong**, and the
+difference is load-bearing. The guests depend on `wit-bindgen 0.62.0`, whose *runtime* crate is **0.44.0**
+— so a question about what the generated code does at run time is answered by `wit-bindgen-rt-0.44.0`'s
+source, not by anything numbered 0.62. Four facts about cancellation were read out of it (see
+[CANCELLATION.md](CANCELLATION.md)), and looking them up under the wrong version would have found nothing.
 
 **Both rustc versions are recorded because neither alone suffices.** The guests need rustup's wasm targets but
 its rustc is too old for the wasmtime 49 crate; the harness needs the newer rustc but that install has no wasm
@@ -30,6 +50,8 @@ targets. See `build.sh` for that and for three blocked paths worth not re-paying
 | `single/` | async-**lift** only: `compute: async func(x: u32) -> u32`. 46,171 B |
 | `suspending/` | async-lift **and** async-**lower**: `run` awaits an imported `tick`, so a task suspends. 52,334 B |
 | `receipt/` | the `suspending` guest **plus a receipt guard**: a `Drop` local to the async body that calls a `note` host import, disarmed on success. 52,443 B. Built for #857's cancellation witness; see [ABANDONMENT.md](ABANDONMENT.md) for what it actually measured, and why that is not cancellation |
+| `cancel-rust-parent/` | #862's **real** canceller: drops an in-flight async import, which is what a Rust guest does. Sees no status — see [CANCELLATION.md](CANCELLATION.md) |
+| `cancel-wat-parent/` | #862's **synthetic** canceller: calls `subtask.cancel` by hand and reports the numeric status it returns. Its `.wat` is committed beside its `.wasm` |
 | `harness/` | the wasmtime embedding that answers the concurrency question. Its own lockfile, outside the Go build |
 | `concurrent.reading` | the positive arm's reading |
 | `sequential.reading` | the negative arm's reading |
@@ -56,7 +78,16 @@ receipt/component.wasm      4c0f63f97637e1b00c82ad3eeb37f7665fb79dffdf952c7ede3a
 concurrent.reading / sequential.reading                                                        byte-identical
 abandonment.reading / abandonment-stripped.reading                                             byte-identical
 receipt.wat.diff                                                                               byte-identical
+cancel-rust-parent/component.wasm  0b2ce9ac3a56fe221d4fcae7bdb5047c8de02c57657683b5a9ba7598a08d550f  MATCH
+cancel-rust-parent/composed.wasm   b2d5d0f3bf597de39b649212710d070496e8b3bd3bde24023633bab7e58c4dc9  MATCH
+cancel-wat-parent/parent.wasm      189ea0de6396c597a9e0c6b9401b692a83da0f0188164d163a128c4cb3e37238  MATCH
+cancel-wat-parent/composed.wasm    d2d02c27cc322b95e92ba64a388f623589fe9b525b7550d14326a6d9d35beeb2  MATCH
+cancel-wat.reading / cancel-rust.reading                                                       byte-identical
 ```
+
+**The #862 rows include the COMPOSED artefacts, so `wac`'s output is checked here too** — the composition
+step is part of the build and therefore part of what has to reproduce. Run from `/tmp/repro-862`, a
+different absolute path, with `git status` reporting nothing changed.
 
 **All three guests are rows in this check, not two rows and an exception.** The run above is a clean
 `git worktree` at `/tmp/repro-allthree` — a different absolute path from the tree that produced the bytes —

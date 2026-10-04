@@ -1,0 +1,7 @@
+MODE      cancel-rust
+EVENTS    enter(1) -> suspend(1) -> tick-dropped -> receipt(1)
+OUTCOME   go() returned
+ARRIVALS  1
+RECEIPT   observed, code=1
+TICKDROP  true
+STATUS    none reported (this parent has no report channel)

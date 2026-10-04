@@ -29,6 +29,12 @@ struct Rv {
     /// Set when the pending `tick`'s future is dropped. Captures what becomes of a host call left
     /// in flight when its task is cancelled, which Burroughs will have to match.
     tick_dropped: Mutex<bool>,
+    /// `(kind, value)` pairs from the WAT canceller's `report` import (#862).
+    ///
+    /// **A vector, not two fields.** The parent reports the lower's returned *state* (kind 1) and then
+    /// the status `subtask.cancel` returned (kind 2), and the ORDER is part of the reading: a status
+    /// recorded without the state before it cannot say which cancellation case it is a status of.
+    reports: Mutex<Vec<(u32, u32)>>,
 }
 
 /// Records that the pending host `tick` was dropped. A guard rather than a flag set by hand, because
@@ -143,6 +149,7 @@ async fn main() -> Result<()> {
         arrived_sig: tokio::sync::Notify::new(),
         receipt: Mutex::new(None),
         tick_dropped: Mutex::new(false),
+        reports: Mutex::new(Vec::new()),
     });
 
     // Named `abandon`, not `cancel`, because that is what it measures. Dropping the host call future
@@ -150,13 +157,18 @@ async fn main() -> Result<()> {
     // while the premise was believed, and the name is corrected rather than the reading relabelled.
     let abandoning = mode == "abandon";
     let inlining = mode == "inline";
+    // The composed cancellation modes (#862). `tick` must be PENDING FOREVER in both, so the child
+    // parks and is cancelled after it has STARTED — which is the case the witness exists for, and the
+    // one the WAT parent's reported state is there to confirm rather than assume.
+    let cancelling = mode == "cancel-wat" || mode == "cancel-rust";
+    let pending_tick_mode = abandoning || cancelling;
     let mut linker: Linker<HostState> = Linker::new(&engine);
     linker.root().func_wrap_concurrent("tick", move |acc, (id,): (u32,)| {
         let rv = acc.with(|mut s| s.get().rv.clone());
         Box::pin(async move {
             if inlining {
                 inline_tick(rv, id).await.map(|v| (v,))
-            } else if abandoning {
+            } else if pending_tick_mode {
                 pending_tick(rv, id).await.map(|v| (v,))
             } else {
                 rendezvous(rv, id).await.map(|v| (v,))
@@ -171,7 +183,7 @@ async fn main() -> Result<()> {
     // **Amendment 2's question — may a cancelled task call an import? — is NOT reached by this mode**,
     // because nothing here cancels. The receipt is wired up anyway and its absence is part of the
     // reading: it is what shows the guest's cancellation path never ran.
-    if abandoning {
+    if abandoning || cancelling {
         let rv_note = rv.clone();
         linker
             .root()
@@ -182,8 +194,76 @@ async fn main() -> Result<()> {
             })?;
     }
 
+    // The WAT canceller's reporting channel (#862). Only that parent has it, so it is registered only
+    // for its mode — registering an import the component does not declare is itself an error.
+    if mode == "cancel-wat" {
+        let rv_rep = rv.clone();
+        linker
+            .root()
+            .func_wrap("report", move |_store, (kind, value): (u32, u32)| {
+                let label = match kind {
+                    1 => "lower-state",
+                    2 => "cancel-status",
+                    _ => "unknown-kind",
+                };
+                rv_rep.say(format!("{label}({value})"));
+                rv_rep.reports.lock().unwrap().push((kind, value));
+                Ok(())
+            })?;
+    }
+
     let mut store = Store::new(&engine, HostState { rv: rv.clone() });
     let instance = linker.instantiate_async(&mut store, &component).await?;
+    // **The composed cancellation artefacts export `go`, not `run`**, and the parent is what calls the
+    // child. So the lookup is mode-dependent and this path returns early: entangling it with the `run`
+    // lookup below would make every other mode depend on an export the composed component does not have.
+    if cancelling {
+        let go = instance.get_typed_func::<(), ()>(&mut store, "go")?;
+        let outcome = store
+            .run_concurrent(async |acc| go.call_concurrent(acc, ()).await)
+            .await;
+        let log = rv.log.lock().unwrap().clone();
+        println!("MODE      {mode}");
+        println!("EVENTS    {}", log.join(" -> "));
+        match outcome {
+            Ok(Ok(())) => println!("OUTCOME   go() returned"),
+            Ok(Err(e)) => println!("OUTCOME   guest-call error: {e}"),
+            Err(e) => println!("OUTCOME   host/task error: {e}"),
+        }
+        println!("ARRIVALS  {}", *rv.arrived.lock().unwrap());
+        // The child's receipt: did the cancellation REACH the guest? Printed in both cancellation modes
+        // because it is one of the facts the two parents must agree on.
+        match *rv.receipt.lock().unwrap() {
+            Some(code) => println!("RECEIPT   observed, code={code}"),
+            None => println!("RECEIPT   none"),
+        }
+        // What became of the child's pending host `tick`. On the host-driven ABANDONMENT path this was
+        // false — the call was not dropped. Whether real cancellation differs is part of what this
+        // measures, so it is printed rather than assumed.
+        println!("TICKDROP  {}", *rv.tick_dropped.lock().unwrap());
+        // The status, from the WAT parent only. Printed as the raw numeric value with its meaning, so
+        // the 3-versus-4 distinction the ABI makes and wit-bindgen collapses is visible in the reading.
+        let reports = rv.reports.lock().unwrap().clone();
+        if reports.is_empty() {
+            println!("STATUS    none reported (this parent has no report channel)");
+        } else {
+            for (kind, value) in reports {
+                let meaning = match (kind, value) {
+                    (1, 0) => "STARTING",
+                    (1, 1) => "STARTED",
+                    (1, 2) => "RETURNED",
+                    (2, 3) => "CANCELLED_BEFORE_STARTED",
+                    (2, 4) => "CANCELLED_BEFORE_RETURNED",
+                    (2, 2) => "RETURNED (the cancel raced a completion)",
+                    _ => "unmapped",
+                };
+                let label = if kind == 1 { "LOWERSTATE" } else { "STATUS" };
+                println!("{label}  {value} ({meaning})");
+            }
+        }
+        return Ok(());
+    }
+
     let run = instance.get_typed_func::<(u32,), (u32,)>(&mut store, "run")?;
 
     // **The outer result is CAPTURED, not propagated.** The first version used `?` here, so when the

@@ -1,0 +1,15 @@
+[package]
+name = "cancel-rust-parent"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.62"
+# `futures` is a DIRECT dependency rather than reached through wit-bindgen's re-export: the runtime does
+# re-export it (`wit-bindgen-rt-0.44.0/src/async_support.rs:53`), but `wit-bindgen 0.62.0`'s own
+# `async`-gated re-export list does not include it, so the path a guest would guess does not resolve.
+# Depending on it directly is what a real guest would do, and the lockfile records which version.
+futures = { version = "0.3", default-features = false, features = ["async-await"] }

@@ -1,0 +1,8 @@
+MODE      cancel-wat
+EVENTS    enter(1) -> suspend(1) -> lower-state(1) -> tick-dropped -> receipt(1) -> cancel-status(4)
+OUTCOME   go() returned
+ARRIVALS  1
+RECEIPT   observed, code=1
+TICKDROP  true
+LOWERSTATE  1 (STARTED)
+STATUS  4 (CANCELLED_BEFORE_RETURNED)

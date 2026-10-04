@@ -1,0 +1,19 @@
+package test:canceller@0.1.0;
+
+// The Rust canceller's world. Mirrors `cancel-wat-parent/parent.wat`'s shape deliberately — one async
+// import satisfied by the child, one sync export the harness calls — so the two parents differ in HOW
+// they cancel and not in what they are composed with.
+//
+// No `report` import, and that absence is the finding this parent exists to make concrete: a Rust guest
+// cannot observe the status `subtask.cancel` returns, so it has nothing to report.
+world parent {
+  // The child's export, satisfied by `wac plug`. Must be `async` to match — a sync import of the same
+  // name and value types does not compose.
+  import run: async func(id: u32) -> u32;
+
+  // ASYNC, unlike the WAT parent's sync export, and the difference is forced: an async import's waker
+  // machinery needs a task context, which only an async export sets up. A sync `go` panicked inside
+  // `poll_complete_with_code` at drop time.
+  export go: async func();
+}
+
