@@ -30,6 +30,26 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **Composed cancellation is measured: a caller cancelling its own subtask**
+  ([#862](https://github.com/scttfrdmn/burroughs/issues/862)), with **two parents cancelling one child**
+  and their agreement on every shared fact licensing the status only one of them can report. Readings and
+  the coverage split in `internal/component/testdata/asynclift/CANCELLATION.md`.
+  **A cancelled task MAY call an import** — pre-registered on #857 with both outcomes fixed in advance,
+  and settled: the child's receipt arrives in both parents. On the host-driven *abandonment* path no
+  receipt arrived, because nothing was cancelled; same guest, same guard, opposite outcome.
+  **The child's pending host call IS dropped** on real cancellation, where abandonment measured the
+  opposite — and the **order** is part of the finding: the host call is torn down *before* the guest's
+  cancellation path runs, so an implementation with the order reversed would produce the same two facts.
+  **`subtask.cancel` returns 4, `CANCELLED_BEFORE_RETURNED`**, with the lower's returned state recorded
+  immediately before it so the reading says which case it is a status of. Status 3 is **not reachable**
+  with this child — the async lower returns STARTED synchronously — and is recorded as unmeasured rather
+  than assumed.
+  **Two parents are necessary because issuing a cancellation and observing its result are different
+  capabilities**, and `wit-bindgen` has only the first: the generated import awaits immediately so a guest
+  never holds the operation, `Drop` discards `cancel()`'s value, the numeric status is private, and
+  statuses 3 and 4 collapse to one Rust value. **For the sentinel review: the ABI distinguishes
+  "cancelled before started" from "cancelled before returned" and `wit-bindgen` does not**, so whether
+  `Component.Call` exposes that difference is a public-interface question, not an internal one.
 - **`wac` is the pinned composition tool, with a witness that reads the composed artefact rather than the
   exit status.** `wac-cli 0.12.0`, installed with `cargo install wac-cli --locked`, recorded in
   `internal/component/testdata/compose/README.md` and printed from the tool by `compose.sh`. It replaces

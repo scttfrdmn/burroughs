@@ -122,6 +122,27 @@ for g in single suspending receipt; do
 	echo "   wrote $g/component.wasm from $core" >&2
 done
 
+# The cancellation parents (#862, CANCELLATION.md). TWO parents cancelling ONE child, because issuing a
+# cancellation and observing its status are different capabilities and `wit-bindgen` has only the first:
+#   * the RUST parent is what a real guest does — drop an in-flight async import — and sees no status;
+#   * the WAT parent calls `subtask.cancel` by hand and reports the numeric status it returns.
+# Their agreement on every shared fact is what licenses the WAT parent's number (coverage split in
+# CANCELLATION.md). The child is the committed `receipt/` guest, UNCHANGED.
+echo "== cancel-rust-parent ==" >&2
+rm -f "$here/cancel-rust-parent/component.wasm"
+core=$( cd "$here/cancel-rust-parent" &&
+	RUSTC="$RUSTUP_RUSTC" CARGO_TARGET_DIR="$here/cancel-rust-parent/target" \
+		"$RUSTUP_CARGO" build --target wasm32-unknown-unknown --release --message-format=json |
+		emit_artifact .wasm )
+[ -n "$core" ] || { echo "build.sh: cargo reported no core module for cancel-rust-parent" >&2; exit 1; }
+"$WASM_TOOLS" component new "$core" -o "$here/cancel-rust-parent/component.wasm"
+echo "   wrote cancel-rust-parent/component.wasm from $core" >&2
+
+echo "== cancel-wat-parent ==" >&2
+"$WASM_TOOLS" parse "$here/cancel-wat-parent/parent.wat" -o "$here/cancel-wat-parent/parent.wasm"
+"$WASM_TOOLS" validate --features all "$here/cancel-wat-parent/parent.wasm"
+echo "   assembled cancel-wat-parent/parent.wasm" >&2
+
 echo "== harness ==" >&2
 bin=$( cd "$here/harness" &&
 	RUSTC="$HOST_RUSTC" CARGO_TARGET_DIR="$here/harness/target" \
@@ -185,6 +206,47 @@ grep -q 'REFUSED: `task.return` requires' "$here/compute.reading" || {
 # (measured: a2600925… -> bb766fec… on a no-op round-trip). Comparing a committed guest against an
 # edited one would differ by the edit AND by normalization; comparing round-tripped against
 # round-tripped-and-edited leaves the deleted call as the only variable.
+# The composed cancellation readings (#862). Each parent is plugged into the SAME child with `wac`, the
+# pinned composition tool — see ../compose/README.md for why `wasm-tools compose` is not used.
+echo "== composed cancellation ==" >&2
+: "${WAC:=wac}"
+command -v "$WAC" >/dev/null || { echo "build.sh: $WAC not found — 'cargo install wac-cli --locked'" >&2; exit 2; }
+"$WAC" --version >&2
+for p in cancel-wat-parent cancel-rust-parent; do
+	sock="$here/$p/parent.wasm"
+	[ -f "$sock" ] || sock="$here/$p/component.wasm"
+	"$WAC" plug "$sock" --plug "$here/receipt/component.wasm" -o "$here/$p/composed.wasm"
+	echo "   composed $p/composed.wasm" >&2
+done
+"$bin" cancel-wat "$here/cancel-wat-parent/composed.wasm" > "$here/cancel-wat.reading" 2>&1 || true
+"$bin" cancel-rust "$here/cancel-rust-parent/composed.wasm" > "$here/cancel-rust.reading" 2>&1 || true
+cat "$here/cancel-wat.reading" "$here/cancel-rust.reading" >&2
+
+# **The two readings must AGREE on every shared fact**, which is what licenses the WAT parent's status as
+# what a real canceller would have seen. Asserted here rather than left to the eye: a disagreement is the
+# finding, and a silent one would let the status be trusted when it should not be.
+for fact in 'ARRIVALS  1' 'RECEIPT   observed, code=1' 'TICKDROP  true'; do
+	grep -q "^$fact" "$here/cancel-wat.reading" && grep -q "^$fact" "$here/cancel-rust.reading" || {
+		echo "build.sh: the two cancellation readings DISAGREE on '$fact'." >&2
+		echo "          Report that as the finding — do not derive anything from the status." >&2
+		exit 1
+	}
+done
+# And the order: the pending host call is torn down BEFORE the guest's cancellation path runs.
+for r in cancel-wat cancel-rust; do
+	grep -q "tick-dropped -> receipt(1)" "$here/$r.reading" || {
+		echo "build.sh: $r.reading no longer shows tick-dropped before receipt — the ORDER is part of" >&2
+		echo "          the finding, not an incidental detail." >&2
+		exit 1
+	}
+done
+grep -q "^STATUS  4 (CANCELLED_BEFORE_RETURNED)" "$here/cancel-wat.reading" || {
+	echo "build.sh: the WAT canceller no longer reports status 4; re-derive CANCELLATION.md rather than" >&2
+	echo "          editing its assertions." >&2
+	exit 1
+}
+echo "   both readings agree on every shared fact" >&2
+
 echo "== abandonment arms ==" >&2
 arms=$(mktemp -d)
 python3 "$here/../../../../scripts/stripcall.py" "$here/receipt/component.wasm" --out-dir "$arms"
