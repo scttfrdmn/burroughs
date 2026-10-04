@@ -36,23 +36,28 @@ func waitsetSynthHostInline() (*Host, *int32) {
 // # Why that control needed falsifying
 //
 // Every one of the six tests driving `async-waitset-synth.wasm` goes through `waitsetSynthHost`, the
-// DEFERRING helper. So the parks assertion — a non-blocking check that agent A has not returned — had
-// never been run against an impl that does not park, and *a control isn't born until it's watched die*.
+// DEFERRING helper. So the parks assertion had never been run against an impl that does not park, and
+// *a control isn't born until it's watched die*.
 //
 // # The assertion here is inverted
 //
-// A red run of THIS test means the parks assertion would have MISSED an inline-resolving impl. The
-// original's `default:` arm passes whenever A has not yet delivered to its channel, so a miss is possible
-// in principle and had to be measured rather than argued.
+// A red run of THIS test means the parks assertion would have MISSED an inline-resolving impl.
 //
-// # Measured rates (#863), both directions
+// # Measured rates (#863), both directions — and what overtook them
 //
 //	injected, this test     200 runs + 50 under -race   0 misses, 0 races
 //	original, unmodified    200 runs + 50 under -race   0 failures, 0 races
 //
-// So the parks assertion has neither false passes nor false failures. The two are **separate claims**:
-// "catches the bad case every time" and "never fires when nothing is wrong" need their own measurements,
-// and a control sound in one direction and flaky in the other still gets deleted.
+// The conclusion drawn from those rows was *"the parks assertion has neither false passes nor false
+// failures"*, on the separate-claims reasoning that "catches the bad case every time" and "never fires
+// when nothing is wrong" need their own measurements. **The reasoning stands and the conclusion was
+// falsified**: both rows were taken on `darwin/arm64`, and `ubuntu-24.04` later produced the miss (see
+// the final check below). So the rows are kept as what was measured and the sentence they supported is
+// struck — *a determinism premise is platform-scoped*, and 250 arm64 runs are not a claim about a
+// control, only about a control on one machine.
+//
+// Both assertions are now **bounded negatives rather than samples**, so neither row's successor is a
+// rate: the question "how often does it miss" no longer has a subject.
 //
 // # The `entered` wait, and why it must not be simplified away
 //
@@ -105,19 +110,50 @@ func TestWaitsetParksCheckDetectsAnInlineResolvingImpl(t *testing.T) {
 		t.Fatalf("sibling failed (%v); the fixture, not the control, is the subject here", oB.err)
 	}
 
-	// The original's parks check, read as a detector. With an inline impl A has already returned, so
-	// `default:` being taken is the control missing its failure case.
-	select {
-	case o := <-chA:
-		if o.err != nil {
-			t.Fatalf("A returned an error (%v); expected a completed inline round trip", o.err)
-		}
-		if atomic.LoadInt32(entered) != 1 {
-			t.Errorf("op impl entered %d times, want 1", atomic.LoadInt32(entered))
-		}
-	default:
-		t.Fatal("MISS: the parks assertion would have passed against an inline-resolving impl — " +
-			"A had not delivered to its channel when the non-blocking check ran, so `default:` was " +
-			"taken and the absence of a park went undetected")
+	// The original's parks check, read as a detector — and it is now the **strengthened** check, which is
+	// why this arm is deterministic.
+	//
+	// # What moved, and why the old form could not stay
+	//
+	// Grave #891. This used to mirror the original's non-blocking `select` on A's channel and report a
+	// MISS when `default:` was taken. That made the control's own verdict depend on whether A had
+	// delivered yet — the same race it existed to expose. **CI on `ubuntu-24.04` took that branch** and
+	// reported a MISS on a tree whose only change was a decoder repair.
+	//
+	// # The reproduction was sought and not found, which is why the repair is structural
+	//
+	//	darwin/arm64, native           180 runs, -cpu=1/2    0 misses
+	//	amd64 under QEMU (xcheck)      180 runs, -cpu=1/2/4  0 misses
+	//	x86-64 native (janus.local)    NOT RUN — hostname unresolvable
+	//
+	// So the miss is **not** explained by the architecture, which was the first hypothesis: the other
+	// memory model, exercised by the instrument that exists for exactly this question, does not produce
+	// it either. What is left is CI's machine under CI's load, which is not an instrument available here.
+	// The native x86-64 row is a mechanism failure and not a verdict — CI's own x86-64 runner answers it
+	// one push later.
+	//
+	// A repair whose failure cannot be reproduced cannot be watched die *as a timing repair*, so the
+	// subject moved instead: both checks became assertions scheduling cannot perturb, and the
+	// falsifications below are structural (remove the deferral / add one) rather than temporal.
+	//
+	// The detection claim, as the complement of the strengthened assertion: with an inline-resolving impl
+	// **A completes without anything resolving its subtask**, so the original's bounded wait would see a
+	// delivery and fail. That is the miss the original form could not reliably catch.
+	//
+	// Asserted by waiting for A **generously**, which is sound in this direction for the mirror of the
+	// original's reason: A has nothing left to wait for, so it will deliver. The failure mode is a loud
+	// timeout rather than a silent pass.
+	oA := recvWithin(t, chA, 5*time.Second, "the inline-resolving agent")
+	if oA.err != nil {
+		t.Fatalf("A returned an error (%v); expected a completed inline round trip", oA.err)
 	}
+	if atomic.LoadInt32(entered) != 1 {
+		t.Errorf("op impl entered %d times, want 1", atomic.LoadInt32(entered))
+	}
+	// **"A delivered without a resolve" is guaranteed by construction, not asserted here.**
+	// `waitsetSynthHostInline` returns no resolver channel at all — it calls `onResolve` in place and has
+	// nothing to hand out — so there is no state in which this control could be accidentally measuring a
+	// deferring impl. I tried to assert it and found there was nothing to assert against, which is the
+	// better arrangement: the distinction the detection rests on is in the helper's type rather than in a
+	// check that could be forgotten.
 }

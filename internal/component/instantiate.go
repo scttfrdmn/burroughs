@@ -438,15 +438,12 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		// backpressure.inc/.dec — no operands.
 	case 0x06: // subtask.cancel: async?
 		return c, readAsyncQ()
-	case 0x09: // task.return: resultlist (0x00 valtype) + opts
-		disc, err := r.byte()
-		if err != nil {
-			return Canon{}, err
-		}
-		if disc != 0x00 {
-			return Canon{}, fmt.Errorf("canon task.return resultlist discriminant %#x is not 0x00", disc)
-		}
-		if _, err := r.valType(); err != nil {
+	case 0x09: // task.return: resultlist + opts
+		// Through `resultList`, the one decoder (grave #885). This case read the discriminant itself and
+		// accepted only `0x00`, so an async-lifted export returning **nothing** — whose `task.return`
+		// encodes the empty form `0x01 0x00` — was unloadable. `funcType` had decoded both arms correctly
+		// 200 lines away the whole time: two decoders for one encoding, only one of them total.
+		if _, err := r.resultList(); err != nil {
 			return Canon{}, err
 		}
 		return c, readOpts()

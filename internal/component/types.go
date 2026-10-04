@@ -184,13 +184,26 @@ func (r *reader) typeDef() (TypeDef, error) {
 	}
 }
 
-// funcType reads a `functype` body (after the 0x40): a param vec of labelled value types, then a
-// result — 0x00 valtype (one result) or 0x01 0x00 (none).
-func (r *reader) funcType() (*FuncType, error) {
-	params, err := r.namedValVec()
-	if err != nil {
-		return nil, err
-	}
+// resultList reads a `resultlist`: `0x00 valtype` for one result, or `0x01 0x00` for none. It returns nil
+// for the empty form.
+//
+// # One decoder, because two was the defect (grave #885)
+//
+// This encoding appears in **two** places — a `functype`'s result and `canon task.return`'s operand — and
+// until this slice each read it separately. `funcType` handled both arms; `canon task.return` handled only
+// `0x00`, so **an async-lifted export returning nothing could not be loaded at all**: a guest declaring
+// `export go: async func()` was refused at instantiate with *"resultlist discriminant 0x1 is not 0x00"*.
+//
+// The duplication is the defect and the missing case was its symptom, so the repair is this function and
+// not a second copy of the switch. The search is stated on the grave: exactly two sites decode a result
+// list, and there is no third — `grep -rn "resultlist\|result list"` over the package plus a pass over
+// every `valType()` call site, to catch a site that decodes the shape without using the word.
+//
+// **The error messages name `resultlist` and not the caller**, deliberately: one decoder cannot honestly
+// say which construct it is inside, and a message that guessed would be worse than one that does not. The
+// caller's own context is what wraps it — `canon 0:` and `nested component 1:` were already in the
+// refusal a reader saw.
+func (r *reader) resultList() (*ValType, error) {
 	disc, err := r.byte()
 	if err != nil {
 		return nil, err
@@ -201,17 +214,31 @@ func (r *reader) funcType() (*FuncType, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &FuncType{Params: params, Result: &vt}, nil
+		return &vt, nil
 	case 0x01:
 		if b, err := r.byte(); err != nil {
 			return nil, err
 		} else if b != 0x00 {
-			return nil, fmt.Errorf("functype resultlist 0x01 not followed by 0x00 (got %#x)", b)
+			return nil, fmt.Errorf("resultlist 0x01 not followed by 0x00 (got %#x)", b)
 		}
-		return &FuncType{Params: params}, nil
+		return nil, nil
 	default:
-		return nil, fmt.Errorf("functype resultlist discriminant %#x is not 0x00/0x01", disc)
+		return nil, fmt.Errorf("resultlist discriminant %#x is not 0x00/0x01", disc)
 	}
+}
+
+// funcType reads a `functype` body (after the 0x40): a param vec of labelled value types, then a
+// result list — see resultList, which `canon task.return` reads through too.
+func (r *reader) funcType() (*FuncType, error) {
+	params, err := r.namedValVec()
+	if err != nil {
+		return nil, err
+	}
+	res, err := r.resultList()
+	if err != nil {
+		return nil, err
+	}
+	return &FuncType{Params: params, Result: res}, nil
 }
 
 // instanceType reads an `instancetype` body (after the 0x42): a vec of instancedecls. The nested type
