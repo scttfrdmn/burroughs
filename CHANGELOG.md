@@ -30,6 +30,48 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **Burroughs cancels a started async-lift task from the host**
+  ([#887](https://github.com/scttfrdmn/burroughs/issues/887),
+  [ADR 0094](docs/decisions/0094-host-cancellation-reaches-a-lift-task-through-an-internal-trigger-this-slice-because-the-model-hands-the-embedder-a-per-call-oncancel-and-invoke-blocks.md)),
+  matching #862's committed readings on all four facts — the pending host call is **dropped**, and
+  **before** the receipt; the receipt **arrives**, so a cancelled task may still call an import;
+  `task.cancel` is reached; and the caller gets **`ErrCancelled`**, ruling 1's mapping for status 4.
+  **No parent component is involved.** #862 measured the reference through composition only because
+  wasmtime gives a host no way to cancel a started task — that is the reference's limitation, not a
+  requirement on Burroughs, where the host *is* the caller. So the `receipt/` guest is driven directly,
+  unmodified, which is what keeps the guest from being a variable between the two sides.
+  **`task.cancel` is reached by construction rather than by elimination.** #862 needed a stripped child as
+  a negative arm because a composed parent cannot see its child's built-ins; here `ErrCancelled` is
+  returned *only* from the resolution discriminant that *only* `task.cancel` sets.
+  **`liftState` replaces two booleans** and mirrors `Task.State` one-for-one, because PENDING_CANCEL and
+  CANCEL_DELIVERED are distinct and `task.cancel`'s precondition is the second specifically — a request
+  the guest has not been handed is as wrong as no request at all. `eventCode`'s last gap closes with
+  `TASK_CANCELLED` (6).
+  **The host entry point is internal, and the slice says so rather than implying a capability it
+  withholds.** The model hands the embedder a per-call `OnCancel` (`Store.invoke` returns it); Burroughs'
+  `Invoke` **blocks**, so a trigger it returned would arrive when there was nothing left to cancel. Go's
+  inward form is a `context.Context`, which is public API surface and therefore Scott's — so the mechanism
+  is built behind an unexported trigger and the surface is [#880](https://github.com/scttfrdmn/burroughs/issues/880)'s.
+  **Refusing a cancel against a non-started task is this project's decision, not the model's**: the model
+  *asserts* STARTED, specifying nothing, so Burroughs refuses with the state named — not a trap, because a
+  host that raced a resolution did nothing wrong, and not a silent no-op, because then "I cancelled it"
+  and "it finished first" become one observation. It is deliberately **not idempotent**.
+  **The before-started path is refused by name**, since it would produce status 3, which has no reference
+  reading until [#884](https://github.com/scttfrdmn/burroughs/issues/884). Reachable, so refusable; the
+  refusal is asserted rather than left to prose.
+  **ADR 0094's first draft misread the model and the amendment is in the ADR.** It claimed the WAIT arm
+  had no cancellation check — inferred from `canon_lift` alone, which does not show
+  `WaitableSet.wait_from_callback`'s (def:789). The consequence was not the latency difference the draft
+  priced but a **hang**: the task a host cancels is characteristically parked on something nothing will
+  resolve, so there is no next iteration. Measured as that hang on the first run.
+  **One check had no witness, and that was found by falsifying rather than reading.** Neutering the
+  top-of-loop check left the whole component suite green, because a `wit-bindgen` guest awaits an import
+  and so always returns WAIT — grave #885's two-call-sites-one-witness shape one level up. Repaired with a
+  hand-authored guest that **yields repeatedly and never parks**
+  (`internal/component/testdata/lift-cancel-yield-synth.wat`), so each neuter now fails exactly one
+  witness. A race in the new witness itself turned up the same way: it signalled from inside the import,
+  before the guest parked, so *which* check delivered the cancellation was nondeterministic — now it waits
+  on the park's own waiter count, grave #891's lesson applied immediately.
 - **Composed cancellation is measured: a caller cancelling its own subtask**
   ([#862](https://github.com/scttfrdmn/burroughs/issues/862)), with **two parents cancelling one child**
   and their agreement on every shared fact licensing the status only one of them can report. Readings and

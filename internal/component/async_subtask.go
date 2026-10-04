@@ -89,6 +89,53 @@ type asyncHandles struct {
 	// in this instance, which is what makes the single `lift` slot provably the entered task's. See
 	// enterTask for why entries wait rather than refuse.
 	entrySem chan struct{}
+
+	// cancellable holds every lift task this instance currently hosts, which is what a cancellation
+	// request is aimed at (ADR 0094). It is a SET and not the `lift` slot, because those answer
+	// different questions: `lift` is the *entered* task, and it is **nil while a task is parked** —
+	// which is precisely when a host cancellation is interesting. Cancelling only the entered task
+	// would be able to cancel a task that is running and unable to cancel one that is waiting, the exact
+	// inverse of what the capability is for.
+	//
+	// Keyed by pointer because a lift task has no index: it is not in the handle table. Added where
+	// `liftsInFlight` is incremented and removed in the same deferred teardown, so the set and the count
+	// have one lifetime and a leak in either is visible as a disagreement between them.
+	cancellable map[*liftTask]struct{}
+}
+
+// requestCancelAll requests cancellation of every lift task this instance currently hosts, and is the
+// internal trigger ADR 0094 builds the mechanism behind.
+//
+// # Why this is unexported, and what it is standing in for
+//
+// The model's host entry point is a per-call `OnCancel` handed back by the lift — `Store.invoke` returns
+// it (def:510-518). **Burroughs cannot copy that shape**: `Invoke` blocks until the task resolves, so a
+// trigger it returned would arrive when there is nothing left to cancel. Go's inward form of the same
+// capability is a `context.Context` passed in, which is #880's subject and **public API surface**, so it
+// is Scott's and not this slice's. The mechanism is therefore built behind a trigger no embedder can
+// reach, and the slice says so rather than implying a capability it withholds.
+//
+// # Why "all" rather than one
+//
+// A lift task has no embedder-facing identity. Naming one would require inventing the handle whose shape
+// is exactly the deferred question, so the trigger takes the only subject available without prejudging
+// it: the instance. When the surface arrives, a per-call trigger is a narrowing of this, not a rewrite.
+//
+// Returns the first refusal, so a request against an instance with nothing running is observable rather
+// than silently successful — see ErrCancelNotRunning for why that is a refusal and not a no-op.
+func (h *asyncHandles) requestCancelAll() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.cancellable) == 0 {
+		return fmt.Errorf("%w: this instance hosts no lift task", ErrCancelNotRunning)
+	}
+	var first error
+	for t := range h.cancellable {
+		if err := t.requestCancelLocked(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // enterTask makes t the current lift task and returns the previous one, which the caller MUST restore.
@@ -187,7 +234,11 @@ func (st *subtask) joinTo(s *waitableSet) { st.set = s }
 func (st *subtask) currentSet() *waitableSet { return st.set }
 
 func newAsyncHandles() *asyncHandles {
-	return &asyncHandles{entries: []any{nil}, entrySem: make(chan struct{}, 1)}
+	return &asyncHandles{
+		entries:     []any{nil},
+		entrySem:    make(chan struct{}, 1),
+		cancellable: make(map[*liftTask]struct{}),
+	}
 }
 
 // addLocked registers v and returns its index (>= 1). The caller holds mu.

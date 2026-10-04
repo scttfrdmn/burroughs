@@ -16,20 +16,60 @@ import (
 // resolution, and its context storage persist across all of them. Teardown keys on RESOLUTION (task.return
 // or cancellation), never on the loop exiting normally — a cancelled task resolves without a normal EXIT
 // (#785 step 1, Scott's caution; the cancellation guest is the case a loop-exit teardown would break).
-type liftTask struct {
-	resolved bool           // set by task.return or by cancellation — the teardown key
-	result   []interp.Value // the flat result task.return received; read at resolution
-	storage  [2]uint32      // the task's context (context.get/set), NOT the per-call stack's — see below
+// liftState mirrors definitions.py `Task.State` (def:389-394) one-for-one, and it is an enum rather than
+// the two booleans it replaces (`resolved`, `cancelled`) because the model's five states include two that
+// a boolean pair can represent twice over. PENDING_CANCEL and CANCEL_DELIVERED are *distinct* — the first
+// is a request nobody has told the guest about, the second is a request the guest has been handed and may
+// now act on — and `task.cancel`'s precondition is the second specifically (def:494).
+//
+// INITIAL is kept separate from STARTED even though Burroughs enters the callee immediately, with no
+// backpressure wait to sit in. The window is small and it is not empty, and the model's two
+// `request_cancellation` arms (def:463-470) diverge on exactly this distinction: INITIAL is the
+// before-started path, the route to status 3, which this slice REFUSES BY NAME because it has no
+// reference reading (#884). A state that cannot be observed cannot be refused by name.
+type liftState uint8
 
-	// cancelled records that this task has been cancelled, which is the precondition `task.cancel`
-	// (0x05) checks. **Nothing sets it today**: Burroughs has no way to cancel a task, and the engine it
-	// is measured against has none either for a task that has already started — dropping a host call
-	// future ABANDONS it (see testdata/asynclift/ABANDONMENT.md). Cancellation reaches a task only
-	// through a caller's `subtask.cancel`, which is #862's composed artifact.
-	//
-	// So the field exists for `task.cancel` to check and for #862 to set, and the cancelled branch is
-	// REFUSED by name rather than implemented against semantics nobody has measured yet.
-	cancelled bool
+const (
+	liftInitial         liftState = iota // Task.State.INITIAL — created, callee not yet entered
+	liftStarted                          // Task.State.STARTED — running
+	liftPendingCancel                    // Task.State.PENDING_CANCEL — requested, not yet delivered to the guest
+	liftCancelDelivered                  // Task.State.CANCEL_DELIVERED — guest has had TASK_CANCELLED
+	liftResolved                         // Task.State.RESOLVED — by task.return or by task.cancel
+)
+
+func (s liftState) String() string {
+	switch s {
+	case liftInitial:
+		return "initial"
+	case liftStarted:
+		return "started"
+	case liftPendingCancel:
+		return "pending-cancel"
+	case liftCancelDelivered:
+		return "cancel-delivered"
+	case liftResolved:
+		return "resolved"
+	}
+	return fmt.Sprintf("liftState(%d)", uint8(s))
+}
+
+type liftTask struct {
+	state   liftState      // mirrors Task.State; resolution (however reached) is the teardown key
+	result  []interp.Value // the flat result task.return received; read at resolution
+	storage [2]uint32      // the task's context (context.get/set), NOT the per-call stack's — see below
+
+	// cancelledResolution distinguishes the two ways a task reaches `liftResolved`, which the model
+	// expresses as the *payload* of `on_resolve`: `return_` passes a result (def:490), `cancel` passes
+	// `None` (def:497). Burroughs cannot read that distinction off `result`, because a guest whose export
+	// returns nothing resolves with an empty result legitimately — `export go: async func()` is exactly
+	// grave #885's artefact. So the discriminant is explicit rather than inferred from an ambiguous nil.
+	cancelledResolution bool
+
+	// cancelled WAS a field here, with a comment saying "**Nothing sets it today**: Burroughs has no way
+	// to cancel a task". That was true when #864 wrote it and is false now — ADR 0094 is what changed it,
+	// and the sentence is repaired rather than left standing, because a comment telling the next reader
+	// the tree is in a state it is not is the foreclosing-words shape. The state it recorded is now
+	// `liftCancelDelivered`.
 
 	// # The re-entry state (#871), which exists because the guest's frame does not
 	//
@@ -50,6 +90,21 @@ type liftTask struct {
 	// the park's bound expires: the index is what tells a reader WHICH set never produced an event, and
 	// by that point the packed return it came from is several entries behind.
 	waitSet uint32
+
+	// cancelWake wakes a park that is waiting on this task's cancellation (ADR 0094). It is CLOSED, not
+	// sent on, so every parked selector sees it and a request that arrives before any park is not lost —
+	// the park re-checks the state on entry and finds the cancel already pending.
+	//
+	// It is separate from the waitable set's `wake` because the two have different subjects and different
+	// lifetimes: `signalLocked` closes and REPLACES the set's channel on every event, so a cancellation
+	// routed through it would be indistinguishable from an event and would have to be re-armed. A
+	// cancellation happens at most once per task, so a one-shot close is the whole mechanism.
+	//
+	// Set to nil once closed. A closed channel fires forever, so a park that re-selected on it would spin
+	// instead of waiting; nil blocks, which is the correct behaviour for "there is no second
+	// cancellation". Reaching that select at all requires the cancel to have been delivered already,
+	// since the pass before it checks `deliverPendingCancelLocked` first.
+	cancelWake chan struct{}
 }
 
 // taskReturn implements `canon task.return` (0x09, definitions.py canon_task_return def:2329): it resolves
@@ -57,24 +112,134 @@ type liftTask struct {
 // async handle table, which holds the current lift task (set by the callback loop before it invokes the
 // callee). It traps if there is no current lift task — task.return outside an async lift is a guest error,
 // not a silent no-op.
-// ErrTaskCancelUnbuilt is the cancelled branch of `task.cancel` (0x05): the task HAS been cancelled, and
-// what a task does on resolving a cancellation is #862's subject rather than this slice's.
+
+// ErrCancelled is what a cancelled lift's caller gets, and it is ONE sentinel for both cancelled statuses
+// by #862's ruling 1 (chat-Claude, relayed by Scott, inside what ADR 0085 amendment 1 already approved —
+// so not new public surface). The mapping, committed in testdata/asynclift/CANCELLATION.md: status 3
+// CANCELLED_BEFORE_STARTED and status 4 CANCELLED_BEFORE_RETURNED both return this value; status 2
+// RETURNED returns its result normally, because the work completed. Statuses with no Go equivalent: none,
+// recorded as a claim so a later ABI status is visibly outside the mapping rather than silently absorbed.
 //
-// It is a named refusal rather than an implementation because nothing can reach it yet — no path in this
-// engine sets `liftTask.cancelled` — so an implementation here would be semantics written against no
-// measurement, which is the shape this campaign keeps correcting. When #862's composed artifact can
-// actually cancel a task, the reading it produces is what the branch gets built from.
+// The 3-versus-4 distinction is **deferred, not discarded** (#858): it matters to an embedder deciding
+// whether a retry is safe, Burroughs can see it where a Rust guest cannot, and no consumer has asked.
+// It stays addable without a break as an error TYPE wrapping this value, so `errors.Is` keeps answering.
+var ErrCancelled = errors.New("component: the async task was cancelled")
+
+// ErrTaskCancelUnbuilt covered `task.cancel`'s cancelled branch while nothing could reach it. **ADR 0094
+// built that branch**, so the delivered path no longer returns this — a task in `liftCancelDelivered`
+// resolves. It survives for the branch still unbuilt: the model's `request_cancellation` INITIAL arm
+// (def:463-466), the before-started route to status 4's sibling status 3, which has no reference reading
+// until #884 produces one.
+//
+// Its message named "#862" as what would build it, and #862 is closed; the refusal that remains is a
+// different one, so the message says which. Rewritten rather than left pointing at a discharged issue.
 var ErrTaskCancelUnbuilt = errors.New(
-	"component: task.cancel on a cancelled task is not implemented (gate:async 2b, #862)")
+	"component: cancelling a task that has not started yet is not implemented — " +
+		"it would produce subtask.cancel status 3, which has no reference reading (gate:async, #884)")
+
+// ErrCancelNotRunning refuses a host cancellation request aimed at a task that is not STARTED.
+//
+// **The model specifies nothing here, so this is Burroughs' decision** (ADR 0094), and it is a refusal
+// rather than either of the two tempting alternatives. `request_cancellation`'s else arm *asserts*
+// `state == STARTED` (def:469), so a redundant or late request is undefined for an embedder, not allowed.
+//
+//   - **Not a trap**, because a trap blames the guest. A host that requests cancellation while the task
+//     resolves underneath it has raced a legitimate race, and nothing the guest did is wrong.
+//   - **Not silently ignored**, because then "I cancelled it" and "it finished first" become the same
+//     observation and the host cannot tell which happened.
+//
+// So it is refused with the state in the message, and it is **not idempotent**: a second request is
+// refused the same way, which matches the model's assertion rather than inventing a laxer contract.
+var ErrCancelNotRunning = errors.New("component: no running async task to cancel")
+
+// requestCancelLocked is definitions.py `Task.request_cancellation` (def:463-470). Caller holds h.mu.
+//
+// The model's two arms diverge on INITIAL versus STARTED, and only the second is built here. The INITIAL
+// arm resolves the task immediately — via resuming its thread so `enter_implicit_thread`'s backpressure
+// path delivers the cancel and calls `cancel()` (def:432-434) — and produces subtask.cancel status 3,
+// which has no reference reading. Refused by name (ErrTaskCancelUnbuilt) rather than written against an
+// unmeasured semantics.
+func (t *liftTask) requestCancelLocked() error {
+	switch t.state {
+	case liftStarted:
+		t.state = liftPendingCancel
+		// Wake a park, if there is one. **This is what makes the capability reachable in its main case**:
+		// the task a host wants to cancel is typically parked on a set nothing will ever resolve, so a
+		// state change nobody is woken by would be a cancellation that takes effect only if something
+		// else happens first. Closed rather than sent on, so an unparked task loses nothing — see the
+		// field's comment.
+		if t.cancelWake != nil {
+			close(t.cancelWake)
+			t.cancelWake = nil
+		}
+		return nil
+	case liftInitial:
+		return ErrTaskCancelUnbuilt
+	default:
+		return fmt.Errorf("%w: task is %s", ErrCancelNotRunning, t.state)
+	}
+}
+
+// deliverPendingCancelLocked is definitions.py `Task.deliver_pending_cancel` (def:475-480): it converts a
+// PENDING_CANCEL into CANCEL_DELIVERED and reports whether it did. Caller holds h.mu.
+//
+// The report is the whole value: the lift loop delivers TASK_CANCELLED **in place of waiting** when this
+// returns true, so a false is what lets the loop park. One-shot by construction — the state moves, so a
+// second call on the same request returns false.
+func (t *liftTask) deliverPendingCancelLocked() bool {
+	if t.state != liftPendingCancel {
+		return false
+	}
+	t.state = liftCancelDelivered
+	return true
+}
+
+// cancelLocked is definitions.py `Task.cancel` (def:494-498): it resolves a task whose cancellation has
+// been DELIVERED, with no result. Caller holds h.mu.
+//
+// The precondition is CANCEL_DELIVERED specifically, not "cancelled somehow" — a guest that calls
+// `task.cancel` on a request it has not been handed yet is as wrong as one that calls it with no
+// cancellation at all, and the model traps on both (`trap_if(state != CANCEL_DELIVERED)`). That is why
+// liftState keeps the two cancel states apart.
+//
+// # The trap has two messages for the model's one condition, and the test caught me collapsing them
+//
+// `trap_if(state != CANCEL_DELIVERED)` is one predicate, but it covers two situations a reader needs to
+// tell apart: a task **never cancelled** (the common case, and the Canonical ABI's own named rule, which
+// wasmtime spells `TaskCancelNotCancelled` — *"task.cancel called by task which has not been
+// cancelled"*), and a task with a cancel **requested but not yet delivered** (reachable only in the
+// window this slice opened). A first draft used the second wording for both and
+// `TestTaskCancelTrapsOnAnUncancelledTask` failed, because it asserts the ABI's rule by name. It was
+// right to: a shared message would have reported the rare case's cause for the common case.
+func (t *liftTask) cancelLocked() error {
+	switch t.state {
+	case liftCancelDelivered:
+		// fall through to the resolution below
+	case liftPendingCancel:
+		return &interp.Trap{Reason: "task.cancel called by a task whose cancellation has not been " +
+			"delivered yet (requested, not handed to the guest)"}
+	default:
+		return &interp.Trap{Reason: fmt.Sprintf(
+			"task.cancel called by a task that has not been cancelled (task is %s)", t.state)}
+	}
+	t.result = nil
+	t.cancelledResolution = true
+	t.state = liftResolved
+	return nil
+}
 
 // taskCancel implements `canon task.cancel` (0x05, definitions.py canon_task_cancel def:2342).
 //
-// # Why the trap is the whole implementation, and is not a stub
+// # What changed, and why the previous comment could not stay
 //
-// The Canonical ABI says what `task.cancel` does on a task that has NOT been cancelled: it traps.
-// wasmtime spells the same rule `TaskCancelNotCancelled` — *"`task.cancel` called by task which has not
-// been cancelled"*. Burroughs cannot cancel anything, so **every reachable call lands on that branch**,
-// and implementing it is implementing the spec rather than deferring it.
+// This used to be a trap and a named refusal, and its comment said so as a *general* claim: *"Burroughs
+// cannot cancel anything, so **every reachable call lands on that branch**, and implementing it is
+// implementing the spec rather than deferring it."* The first clause was true and ADR 0094 falsified it;
+// the trap is now one of two outcomes rather than the whole implementation. Repaired rather than
+// annotated — a comment that names a constraint the code no longer embodies misdirects the next reader.
+//
+// The trap arm is unchanged and still the spec's, which is why only its reach narrowed: wasmtime spells
+// the same rule `TaskCancelNotCancelled` — *"`task.cancel` called by task which has not been cancelled"*.
 //
 // # Why it had to land before the parity witness
 //
@@ -86,18 +251,12 @@ var ErrTaskCancelUnbuilt = errors.New(
 func taskCancel(h *asyncHandles) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
 		h.mu.Lock()
-		task := h.lift
-		h.mu.Unlock()
-		if task == nil {
+		defer h.mu.Unlock()
+		if h.lift == nil {
 			// Same discipline as task.return's: outside an async lift this is a guest error, not a no-op.
 			return nil, &interp.Trap{Reason: "task.cancel called with no async lift task in flight"}
 		}
-		if task.cancelled {
-			return nil, ErrTaskCancelUnbuilt
-		}
-		return nil, &interp.Trap{
-			Reason: "task.cancel called by a task that has not been cancelled",
-		}
+		return nil, h.lift.cancelLocked()
 	}
 }
 
@@ -108,8 +267,16 @@ func taskReturn(h *asyncHandles) interp.CanonFunc {
 		if h.lift == nil {
 			return nil, &interp.Trap{Reason: "task.return called with no async lift task in flight"}
 		}
+		// definitions.py `Task.return_` traps on an already-resolved task (def:487). Burroughs had no such
+		// check, because with no cancellation a task reached RESOLVED exactly once — through here. A
+		// cancelled task is resolved by `task.cancel`, so a `task.return` after it is now reachable and is
+		// a guest error: the guest was told its task was cancelled and returned a value anyway.
+		if h.lift.state == liftResolved {
+			return nil, &interp.Trap{Reason: "task.return called on a task that is already resolved"}
+		}
 		h.lift.result = append([]interp.Value(nil), args...)
-		h.lift.resolved = true
+		h.lift.cancelledResolution = false
+		h.lift.state = liftResolved
 		return nil, nil
 	}
 }
@@ -192,7 +359,26 @@ var ErrLiftParkExpired = errors.New("component: async-lift park expired with no 
 // The readiness test is the SAME `set.pendingEventLocked()` the other park and `waitable-set.poll` use, so
 // an event delivered through a callback re-entry is byte-for-byte the one a parked `wait` would have got.
 // A second readiness notion is the defect this shares its predicate to avoid.
-func (h *asyncHandles) awaitEvent(si uint32, bound time.Duration) (event, error) {
+//
+// # The park is CANCEL-AWARE, and this is where the model puts that (def:781-792)
+//
+// `wait_from_callback`'s readiness is *"has_pending_event() **or** task.has_pending_cancel()"*, and on
+// waking it prefers the cancel: `if deliver_pending_cancel(): return (TASK_CANCELLED, 0, 0)`. So the WAIT
+// path's cancellation check lives **inside the wait**, not in the lift loop.
+//
+// **ADR 0094's first draft got this wrong**, and the error is worth stating because it is a reading
+// method and not a slip: I read `canon_lift`, found one `deliver_pending_cancel` at its top and a second
+// in its YIELD arm, and concluded from their absence in the WAIT arm that the WAIT path had no check —
+// *"a cancel arriving while the guest is parked on a waitable set is not delivered by this loop at all"*.
+// That inference required `wait_from_callback` to be cancel-blind, which I never checked. **The model
+// distributes the mechanism across the two functions**, and the consequence of believing otherwise is not
+// a latency difference but a hang: a task parked on a set nothing will ever resolve is exactly the task a
+// host cancels, so a cancel-blind park makes cancellation unreachable in its main case. Measured as that
+// hang on #887's first run. *Don't derive a follow-up from your own reasoning* — read the site.
+//
+// The task is a parameter for this reason alone: the readiness predicate is about the TASK's state as
+// much as the set's, and the previous signature could not express that.
+func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration) (event, error) {
 	deadline := time.NewTimer(bound)
 	defer deadline.Stop()
 
@@ -223,6 +409,14 @@ func (h *asyncHandles) awaitEvent(si uint32, bound time.Duration) (event, error)
 			return event{}, &interp.Trap{Reason: fmt.Sprintf(
 				"async-lift WAIT named handle %d, which is not a waitable set", si)}
 		}
+		// **Cancel first, event second** — the model's own order (def:789-792): on waking it calls
+		// `deliver_pending_cancel()` and returns TASK_CANCELLED if it fires, consulting the set only
+		// otherwise. The order is observable whenever both are ready at once, and preferring the event
+		// would strand a delivered cancellation behind a queue of events.
+		if task.deliverPendingCancelLocked() {
+			h.mu.Unlock()
+			return event{code: eventTaskCancelled}, nil
+		}
 		if e, ready := set.pendingEventLocked(); ready {
 			h.mu.Unlock()
 			return e, nil
@@ -230,9 +424,11 @@ func (h *asyncHandles) awaitEvent(si uint32, bound time.Duration) (event, error)
 		// The wake channel is re-read under the lock each pass: signalLocked CLOSES and REPLACES it, so a
 		// channel captured once would be the stale, already-closed one and this would spin.
 		wake := set.wake
+		cancelWake := task.cancelWake
 		h.mu.Unlock()
 		select {
 		case <-wake: // a member resolved (or another waiter's cycle) — re-check
+		case <-cancelWake: // a host cancellation was requested — re-check, which will deliver it
 		case <-deadline.C:
 			return event{}, fmt.Errorf("%w: waitable set %d produced nothing in %s — the host impl or "+
 				"guest that would resolve it never did", ErrLiftParkExpired, si, bound)
