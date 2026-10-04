@@ -119,39 +119,43 @@ func TestTaskCancelResolvesADeliveredCancellation(t *testing.T) {
 	})
 }
 
-// TestCancellingABeforeStartedTaskIsRefusedByName is the scope boundary ADR 0094 draws, and it is the one
-// branch of the cancellation mechanism that is deliberately NOT built.
+// TestCancellingABeforeStartedTaskIsRecordedNotRefused **replaces**
+// `TestCancellingABeforeStartedTaskIsRefusedByName`, which **no longer exists**: it asserted that the
+// before-started arm refused with `ErrTaskCancelUnbuilt`, and ADR 0094 amendment 2 reverses that. The old
+// name is written here so a reader looking for it finds the reversal rather than a deletion.
 //
-// `request_cancellation`'s INITIAL arm (definitions.py def:463-466) is the before-started path, and it
-// produces `subtask.cancel` status 3 `CANCELLED_BEFORE_STARTED`. **Status 3 has no reference reading** —
-// #862 measured 4 and recorded 3 as unmeasured rather than assumed, and #884 registers the child that
-// would produce one. Burroughs can reach the state; what it cannot do is claim the behaviour.
+// # Why the reversal, and why it is not a loosening
 //
-// So the arm refuses by name. Asserted rather than left to prose because *a negative claim buys a branch
-// an exemption* only if something checks the exemption.
-func TestCancellingABeforeStartedTaskIsRefusedByName(t *testing.T) {
+// ADR 0094 refused the arm because it was believed to produce `subtask.cancel` status 3, which has no
+// reference reading (#884). **That reason is true of the model and false of Burroughs**: the model calls
+// `on_start` *inside* the lift (`canon_lift`'s `thread_func`, def:2097-2102), so a lift task still INITIAL
+// means the parent's subtask is still STARTING, means status 3. Burroughs' cross-component adapter calls
+// `onStart()` itself, synchronously, before the child's lift task exists — it has to, because `on_start`
+// reads the caller's flat args — so the parent's subtask is already STARTED and the terminal state is 4
+// either way. **Honouring the request claims no unmeasured status.**
+//
+// And the refusal's cost had changed underneath it. ADR 0094 reasoned the parent would learn of it
+// through BLOCKED; grave #892 removed BLOCKED from the sync path, so the refusal became a **30s hang** —
+// measured as a flaky one, which is worse than a consistent failure. *A gap whose consequence has changed
+// needs re-deciding, not re-citing.*
+func TestCancellingABeforeStartedTaskIsRecordedNotRefused(t *testing.T) {
 	h := newAsyncHandles()
-	task := &liftTask{state: liftInitial}
+	task := &liftTask{state: liftInitial, cancelWake: make(chan struct{})}
 	h.mu.Lock()
 	h.cancellable[task] = struct{}{}
 	h.mu.Unlock()
 
-	err := h.requestCancelAll()
-	if err == nil {
-		t.Fatal("cancelling a task that has not started returned no error; it would produce status 3, " +
-			"which has no reference reading, so it must refuse rather than claim a behaviour")
+	if err := h.requestCancelAll(); err != nil {
+		t.Fatalf("cancelling a not-yet-started task: %v, want it recorded", err)
 	}
-	if !errors.Is(err, ErrTaskCancelUnbuilt) {
-		t.Errorf("refused, but not with ErrTaskCancelUnbuilt: %v", err)
+	if task.state != liftPendingCancel {
+		t.Errorf("state = %s, want pending-cancel — the request must be RECORDED, because a request that "+
+			"is neither honoured nor reported is a cancellation the caller believes happened", task.state)
 	}
-	// The refusal points at the issue that would produce the reading, so a reader meeting it knows what
-	// is missing. It used to name #862, which is closed — a refusal citing a discharged issue sends the
-	// reader somewhere that answers nothing.
-	if !strings.Contains(err.Error(), "#884") {
-		t.Errorf("the refusal does not name what would unblock it: %v", err)
-	}
-	if task.state != liftInitial {
-		t.Errorf("state = %s, want initial — a refused request must not move the task", task.state)
+	// The task's own start must not erase it. An unconditional INITIAL→STARTED write at the top of
+	// `runLiftTask` would, and that is the same 30s hang one step later.
+	if task.deliverPendingCancelLocked() != true {
+		t.Error("the recorded cancel is not deliverable, so the task would start and never learn of it")
 	}
 }
 

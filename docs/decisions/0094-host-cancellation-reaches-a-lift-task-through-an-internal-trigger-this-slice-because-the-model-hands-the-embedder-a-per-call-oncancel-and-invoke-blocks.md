@@ -23,6 +23,38 @@ The original text of the status line and the options section is left below and s
 
 **Amendment 1 does not change what this slice built.** The internal trigger is still the right mechanism and is still what the decided surface will drive; what changes is that it is implementing a decision rather than standing in for a missing one.
 
+## Amendment 2 (2026-10-04) — the before-started arm is honoured, because this ADR's reason for refusing it is false of Burroughs
+
+**This ADR refused `request_cancellation`'s INITIAL arm** with `ErrTaskCancelUnbuilt`, under "Scope, and what this slice must not claim":
+
+> **Nothing about status 3.** The before-started path … has **no reference reading** … so the honest disposition is to **refuse that path by name** until #884 lands.
+
+**The scope statement is right and the mechanism attached to it was wrong.** Nothing about status 3 should be claimed, and honouring the INITIAL arm does not claim anything about it — which this ADR did not check.
+
+### Why the reason does not hold here
+
+| | when is the lower's subtask STARTED? | so a lift task in INITIAL implies |
+|---|---|---|
+| **the model** | `canon_lift`'s `thread_func` calls `task.start()` → the lower's `on_start`, **inside** the lift (def:2097-2102) | subtask STARTING → `on_resolve(None)` picks **status 3** |
+| **Burroughs** | the cross-component adapter calls `onStart()` **itself, synchronously, before the child's lift task exists** — it must, because `on_start` reads the caller's flat args and those belong to the caller's frame ([ADR 0095](0095-a-cross-component-async-call-is-a-siblings-lift-adapted-to-the-lower-side-the-substrate-already-wants-run-on-one-goroutine-per-call.md)) | subtask already STARTED → **status 4**, whatever the lift task's state |
+
+So status 3 is unreachable from this path, and the refusal was protecting against a consequence Burroughs' own ordering had already removed. **The divergence is one ADR 0095 introduced deliberately and for a stated reason**, which is why this is a correction to the inference and not to either ADR's mechanism.
+
+For the *host* trigger the question does not arise at all: there is no subtask, and `subtask.cancel` statuses are a guest-parent construct.
+
+### And the refusal's cost had changed underneath it
+
+This ADR reasoned that a dropped refusal was acceptable because the parent would learn of it through BLOCKED. **Grave #892 removed BLOCKED from the sync path** — the model waits there — so the refusal stopped being a reported outcome and became a **30s hang**. Measured as a *flaky* one: 150 runs of the composed witness could not all complete, where 200 now run in under three seconds.
+
+*A gap whose consequence has changed needs re-deciding, not re-citing.* ADR 0095 cited this gap as "recorded"; the recording was accurate when written and stopped describing the behaviour one slice later.
+
+### What changed, concretely
+
+- `requestCancelLocked` honours INITIAL and STARTED alike, both setting PENDING_CANCEL — **which is what the model's own code does** (def:463-470); only the delivery carrier differs.
+- `runLiftTask`'s INITIAL→STARTED transition is **guarded**, because an unconditional write would erase a cancellation recorded before it ran — the same hang one step later.
+- `ErrTaskCancelUnbuilt` is **deleted**. This arm was its last producer, and a sentinel nothing returns is the defect ADR 0094 was itself cleaning up. Never public surface: `internal/component`.
+- **#884 keeps its subject and loses this consumer.** Status 3 still has no reference reading and the mapping's first row is still asserted rather than observed. What it no longer blocks is the before-started cancel path.
+
 Recorded by the actor the work reached, so no independent provenance; commits resting on it stay `Ratio-Class: carried`.
 
 ## Context — the field with nothing to set it

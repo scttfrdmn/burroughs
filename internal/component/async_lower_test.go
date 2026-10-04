@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -359,16 +360,29 @@ func TestSynthAsyncLowerBindsAndReachesTheWrapper(t *testing.T) {
 // the impl's onCancel, which resolves it. The terminal state is chosen by whether the subtask had started —
 // CANCELLED_BEFORE_STARTED (3) if not, CANCELLED_BEFORE_RETURNED (4) if so — the cancel-resolution path the
 // re-check found missing (before this increment onResolve produced only RETURNED). A callee that does not
-// resolve during the cancel returns BLOCKED (the model yields; Burroughs has no yield). This test exercises
-// async_lower.go's new cancel branch AND subtaskCancel together, not one in isolation.
+// resolve during the cancel returns BLOCKED **on the async form** (the model yields). This test exercises
+// async_lower.go's cancel branch AND subtaskCancel together, not one in isolation.
+//
+// # Both forms are driven, which they were not before grave #892
+//
+// `canon_subtask_cancel(async_, i)` takes the flag and branches on it: the sync form **waits** for the
+// resolution and only the async form yields and may return BLOCKED (def:2426-2433). This test used to call
+// `subtaskCancel(h)` with no form at all — because the engine had none — and the fixture it compares
+// against was generated with `canon_subtask_cancel(True, …)` hard-coded. **So the oracle had the same
+// blind spot as the engine**, and every row that existed was either one the two forms agree on or one the
+// sync form cannot produce. No comparison between them could have caught the conflation; that is the
+// second-order half of #892 and the reason the generator was parameterised rather than just the engine
+// fixed.
 func TestSubtaskCancelProducesCancelledStates(t *testing.T) {
 	var doc struct {
 		SubtaskCancel struct {
-			StartedCancelRet     []int `json:"started_cancel_ret"`
-			StartedStateAtLower  int   `json:"started_state_at_lower"`
-			StartingCancelRet    []int `json:"starting_cancel_ret"`
-			StartingStateAtLower int   `json:"starting_state_at_lower"`
-			AsyncCancelRet       []int `json:"async_cancel_ret"`
+			StartedCancelRet      []int `json:"started_cancel_ret"`
+			StartedStateAtLower   int   `json:"started_state_at_lower"`
+			StartingCancelRet     []int `json:"starting_cancel_ret"`
+			StartingStateAtLower  int   `json:"starting_state_at_lower"`
+			AsyncCancelRet        []int `json:"async_cancel_ret"`
+			SyncStartedCancelRet  []int `json:"sync_started_cancel_ret"`
+			SyncStartingCancelRet []int `json:"sync_starting_cancel_ret"`
 		} `json:"subtask_cancel"`
 	}
 	loadFixtures(t, &doc)
@@ -400,9 +414,11 @@ func TestSubtaskCancelProducesCancelledStates(t *testing.T) {
 		return h, cc, packed >> 4, int(packed & 0xf)
 	}
 
-	cancel := func(t *testing.T, h *asyncHandles, cc *interp.CanonCaller, subtaski uint32) uint32 {
+	// `asyncForm` is named at every call site rather than defaulted, so a reader can see which arm each
+	// assertion is about — the distinction this test previously could not express.
+	cancel := func(t *testing.T, h *asyncHandles, cc *interp.CanonCaller, subtaski uint32, asyncForm bool) uint32 {
 		t.Helper()
-		ret, err := subtaskCancel(h)(cc, []interp.Value{interp.I32(int32(subtaski))})
+		ret, err := subtaskCancel(h, asyncForm)(cc, []interp.Value{interp.I32(int32(subtaski))})
 		if err != nil {
 			t.Fatalf("subtask.cancel: %v", err)
 		}
@@ -414,8 +430,8 @@ func TestSubtaskCancelProducesCancelledStates(t *testing.T) {
 	if sal != fx.StartedStateAtLower {
 		t.Errorf("state at lower = %d, want %d (STARTED)", sal, fx.StartedStateAtLower)
 	}
-	if got := cancel(t, h, cc, sti); int(got) != fx.StartedCancelRet[0] {
-		t.Errorf("started cancel = %d, want %d (CANCELLED_BEFORE_RETURNED)", got, fx.StartedCancelRet[0])
+	if got := cancel(t, h, cc, sti, true); int(got) != fx.StartedCancelRet[0] {
+		t.Errorf("started cancel (async form) = %d, want %d (CANCELLED_BEFORE_RETURNED)", got, fx.StartedCancelRet[0])
 	}
 
 	// STARTING -> CANCELLED_BEFORE_STARTED (3)
@@ -423,13 +439,171 @@ func TestSubtaskCancelProducesCancelledStates(t *testing.T) {
 	if sal != fx.StartingStateAtLower {
 		t.Errorf("state at lower = %d, want %d (STARTING)", sal, fx.StartingStateAtLower)
 	}
-	if got := cancel(t, h, cc, sti); int(got) != fx.StartingCancelRet[0] {
-		t.Errorf("starting cancel = %d, want %d (CANCELLED_BEFORE_STARTED)", got, fx.StartingCancelRet[0])
+	if got := cancel(t, h, cc, sti, true); int(got) != fx.StartingCancelRet[0] {
+		t.Errorf("starting cancel (async form) = %d, want %d (CANCELLED_BEFORE_STARTED)", got, fx.StartingCancelRet[0])
 	}
 
-	// callee does not resolve during the cancel -> BLOCKED (the yield maps to BLOCKED, not a spin)
+	// callee does not resolve during the cancel -> BLOCKED. **ASYNC form only**: this is the model's
+	// `thread.yield_()` arm, and it is the row the sync form cannot produce.
 	h, cc, sti, _ = lower(t, true, false)
-	if got := cancel(t, h, cc, sti); got != uint32(fx.AsyncCancelRet[0]) {
+	if got := cancel(t, h, cc, sti, true); got != uint32(fx.AsyncCancelRet[0]) {
 		t.Errorf("async cancel = %#x, want %#x (BLOCKED)", got, uint32(fx.AsyncCancelRet[0]))
+	}
+
+	// ## The SYNC form, which had no coverage and no fixture row before grave #892
+	//
+	// With a callee that resolves during the cancel, the two forms agree — and the fixture now says so
+	// from the model rather than leaving a reader to assume it. These rows are what make the agreement a
+	// checked fact instead of the reason the conflation was invisible.
+	h, cc, sti, sal = lower(t, true, true)
+	// The state at lower is asserted on this arm too, so the sync rows say which case they are of rather
+	// than inheriting that from the arms above — the same reason `cancel-wat-parent` reports it.
+	if sal != fx.StartedStateAtLower {
+		t.Errorf("state at lower (sync arm) = %d, want %d (STARTED)", sal, fx.StartedStateAtLower)
+	}
+	if got := cancel(t, h, cc, sti, false); int(got) != fx.SyncStartedCancelRet[0] {
+		t.Errorf("started cancel (sync form) = %d, want %d", got, fx.SyncStartedCancelRet[0])
+	}
+	h, cc, sti, _ = lower(t, false, true)
+	if got := cancel(t, h, cc, sti, false); int(got) != fx.SyncStartingCancelRet[0] {
+		t.Errorf("starting cancel (sync form) = %d, want %d", got, fx.SyncStartingCancelRet[0])
+	}
+
+	// **The sync form never returns BLOCKED**, which is the whole point of the grave. Asserted as a
+	// negative against the value the async arm legitimately returns, because that value reaching a
+	// synchronous guest is precisely what crashed it.
+	if fx.SyncStartedCancelRet[0] == fx.AsyncCancelRet[0] {
+		t.Fatal("the fixture's sync and async non-resolving rows are equal, so this assertion has no " +
+			"subject — the generator's cancel_async parameter is not reaching canon_subtask_cancel")
+	}
+}
+
+// newTestCanonCaller is the one-page-earlier construction extracted, because grave #892's two witnesses
+// need it too and three inline copies of a fallible constructor is where one of them forgets the error
+// check.
+func newTestCanonCaller(t *testing.T) *interp.CanonCaller {
+	t.Helper()
+	cc, err := interp.NewCanonCallerForTest(1)
+	if err != nil {
+		t.Fatalf("caller: %v", err)
+	}
+	return cc
+}
+
+// TestSyncSubtaskCancelWaitsForALaterResolution is grave #892's discriminating witness: a host impl whose
+// cancel handler resolves the subtask **later, from another goroutine**, which is the case the shipped
+// engine got wrong.
+//
+// # Why this arm and not the inline one
+//
+// An impl that resolves *inside* `onCancel` produces the same answer on both forms — which is why the
+// defect survived: every existing arm was one the forms agree on. The discriminator is a cancel handler
+// that resolves after returning. The model's sync form **waits** for it (`thread.wait_until`); Burroughs
+// returned BLOCKED, and `wit-bindgen`'s synchronous drop glue panics on BLOCKED
+// (`in_progress_update`'s `other => panic!("unknown code {other:#x}")`).
+//
+// So this test fails on the pre-repair engine with the wrong *value* rather than with an error, which is
+// the shape worth having: a status the guest then trusts.
+func TestSyncSubtaskCancelWaitsForALaterResolution(t *testing.T) {
+	h := newAsyncHandles()
+	cc := newTestCanonCaller(t)
+
+	impl := func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+		onStart() // STARTING -> STARTED, so the terminal state is CANCELLED_BEFORE_RETURNED (4)
+		return func() {
+			// Resolve LATER, off this goroutine. A real host dropping a pending call does work before it
+			// can honestly say the call is gone, so this is the ordinary shape rather than an edge.
+			go func() {
+				time.Sleep(10 * time.Millisecond)
+				onResolve(canon.Value{})
+			}()
+		}, nil
+	}
+	lowerRet, err := asyncLowerFunc(impl, false, h)(cc, nil)
+	if err != nil {
+		t.Fatalf("async lower: %v", err)
+	}
+	packed := uint32(lowerRet[0].Int32())
+	sti := packed >> 4
+
+	// The SYNC form must wait and then return the real terminal state.
+	ret, err := subtaskCancel(h, false)(cc, []interp.Value{interp.I32(int32(sti))})
+	if err != nil {
+		t.Fatalf("sync subtask.cancel: %v", err)
+	}
+	got := uint32(ret[0].Int32())
+	if got == uint32(asyncBlocked) {
+		t.Fatalf("sync subtask.cancel returned BLOCKED (%#x). The model waits here "+
+			"(definitions.py def:2428, `thread.wait_until(subtask.resolved)`) and only the ASYNC form "+
+			"may return BLOCKED. A wit-bindgen guest's drop glue is synchronous, cannot await, and "+
+			"panics on this value — grave #892 returning", got)
+	}
+	if got != uint32(subtaskCancelledBeforeReturned) {
+		t.Errorf("sync subtask.cancel = %d, want %d (CANCELLED_BEFORE_RETURNED)", got, subtaskCancelledBeforeReturned)
+	}
+
+	// The ASYNC form on the same shape returns BLOCKED, and that is correct — asserted so the repair
+	// cannot be read as "BLOCKED was wrong" rather than "BLOCKED was the wrong form's answer".
+	h2 := newAsyncHandles()
+	cc2 := newTestCanonCaller(t)
+	lowerRet2, err := asyncLowerFunc(impl, false, h2)(cc2, nil)
+	if err != nil {
+		t.Fatalf("async lower (2): %v", err)
+	}
+	sti2 := uint32(lowerRet2[0].Int32()) >> 4
+	ret2, err := subtaskCancel(h2, true)(cc2, []interp.Value{interp.I32(int32(sti2))})
+	if err != nil {
+		t.Fatalf("async subtask.cancel: %v", err)
+	}
+	if got2 := uint32(ret2[0].Int32()); got2 != uint32(asyncBlocked) {
+		t.Errorf("async subtask.cancel = %#x, want BLOCKED %#x — the async arm is unchanged by this "+
+			"repair and must stay so", got2, uint32(asyncBlocked))
+	}
+}
+
+// TestSyncSubtaskCancelBoundIsNamedNotAHang pins the bound the sync wait needs and the model does not.
+//
+// The model waits unconditionally, because it has no real time and a never-resolving impl is outside what
+// it describes — its driving loop traps on no-progress instead (`trap_if(not candidates)`). Burroughs
+// cannot detect no-progress: the callee is a goroutine, so "nothing can make progress" is not a question
+// this engine can ask. It therefore bounds the wait and **names the expiry**, for `liftParkBound`'s
+// reason: *a wait that cannot be satisfied must end in a verdict.* An unbounded wait here would turn a
+// misbehaving host impl into a hung guest with no diagnostic, which is strictly worse than the BLOCKED it
+// replaced.
+//
+// The bound is shortened for the test, because a witness that waited the real 30s is a witness nobody runs.
+func TestSyncSubtaskCancelBoundIsNamedNotAHang(t *testing.T) {
+	saved := subtaskCancelBound
+	subtaskCancelBound = 150 * time.Millisecond
+	t.Cleanup(func() { subtaskCancelBound = saved })
+
+	h := newAsyncHandles()
+	cc := newTestCanonCaller(t)
+	impl := func(_ *interp.CanonCaller, onStart func() []interp.Value, _ func(canon.Value)) (func(), error) {
+		onStart()
+		return func() {}, nil // asked to cancel, never resolves — the misbehaving host
+	}
+	lowerRet, err := asyncLowerFunc(impl, false, h)(cc, nil)
+	if err != nil {
+		t.Fatalf("async lower: %v", err)
+	}
+	sti := uint32(lowerRet[0].Int32()) >> 4
+
+	start := time.Now()
+	_, err = subtaskCancel(h, false)(cc, []interp.Value{interp.I32(int32(sti))})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a sync subtask.cancel whose impl never resolves RETURNED — it cannot have had a " +
+			"resolution, so this is the unbounded-wait failure the bound exists to prevent, and an " +
+			"engine without the bound would not fail this test, it would never finish it")
+	}
+	if !errors.Is(err, ErrSubtaskCancelExpired) {
+		t.Errorf("the wait ended, but not as ErrSubtaskCancelExpired: %v", err)
+	}
+	// It must not be reported as BLOCKED, which is the async form's legitimate answer — reusing it here
+	// would be the same conflation one level on.
+	if elapsed < subtaskCancelBound {
+		t.Errorf("returned after %s, before the %s bound — it did not actually wait", elapsed, subtaskCancelBound)
 	}
 }

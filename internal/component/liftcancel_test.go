@@ -72,9 +72,14 @@ func (l *cancelLog) indexOf(e string) int {
 //
 // # What this does NOT claim
 //
-// **Nothing about status 3.** The before-started path has no reference reading until #884, and
-// `TestCancellingABeforeStartedTaskIsRefusedByName` pins that it refuses by name instead. Fact 4 here is
+// **Nothing about status 3.** The before-started path has no reference reading until #884. Fact 4 here is
 // status 4's mapping only.
+//
+// This used to cite `TestCancellingABeforeStartedTaskIsRefusedByName`, which **no longer exists**: ADR
+// 0094 amendment 2 honours the before-started arm rather than refusing it, having found that the refusal's
+// reason — "it would produce status 3" — is false for Burroughs, because the cross-component adapter calls
+// `onStart()` before the child's lift task exists. `TestCancellingABeforeStartedTaskIsRecordedNotRefused`
+// is the successor. Status 3 is still unclaimed; what changed is that no branch refuses in its name.
 //
 // # `task.cancel` is reached BY CONSTRUCTION here, which is better than #862's elimination
 //
@@ -293,10 +298,15 @@ func TestHostCancelsAYieldingLiftTask(t *testing.T) {
 	}()
 
 	// **Poll on the real condition, not a timer.** This guest calls no host import, so there is no entry
-	// hook to wait on — but `requestCancelAll`'s own refusals ARE the condition: it answers
-	// `ErrCancelNotRunning` while no task is registered and `ErrTaskCancelUnbuilt` while the task is still
-	// `liftInitial`. Retrying until it succeeds therefore waits for "a started task exists" without
-	// asserting anything about how long that takes.
+	// hook to wait on — but `requestCancelAll`'s own refusal IS the condition: it answers
+	// `ErrCancelNotRunning` while this instance hosts no lift task. Retrying until it succeeds therefore
+	// waits for "a task exists" without asserting anything about how long that takes.
+	//
+	// It used to wait for a *started* task, because a `liftInitial` one was refused too. ADR 0094
+	// amendment 2 records a cancel against an initial task instead of refusing it, so the condition is
+	// now the weaker "registered" — which is still sufficient here: the delivery happens at the lift
+	// loop's first check either way, and this witness's subject is that check, not when the request
+	// landed.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if cErr := in.w.async.requestCancelAll(); cErr == nil {

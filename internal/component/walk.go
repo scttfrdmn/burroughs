@@ -73,6 +73,12 @@ type coreDef struct {
 	// are refused at bind by gateAsync and never reach here.
 	asyncBuiltin   bool
 	asyncBuiltinOp byte
+	// asyncBuiltinForm carries the built-in's `async?` operand (`Canon.AsyncForm`) — `subtask.cancel`'s
+	// today. It is threaded because the two forms are **different functions**: the model's sync form
+	// WAITS for the cancellation to resolve and the async form returns BLOCKED (def:2426-2433). Until
+	// grave #892 the operand was decoded and discarded, so one impl served both and took the async
+	// branch — which a conforming guest's synchronous drop glue cannot handle.
+	asyncBuiltinForm bool
 	// asyncBuiltinSlot is the static slot index a context.get/set built-in names (its u32 operand,
 	// captured at decode into Canon.TypeIdx). Unused by the other async built-ins.
 	asyncBuiltinSlot uint32
@@ -231,6 +237,7 @@ func (w *walker) step(d Def) error {
 					asyncBuiltin:     true,
 					asyncBuiltinOp:   cn.AsyncOp,
 					asyncBuiltinSlot: cn.TypeIdx, // context.get/set's static slot (captured at decode)
+					asyncBuiltinForm: cn.AsyncForm,
 					lowerMem:         w.lowerMemory(cn),
 				})
 				return nil
@@ -352,7 +359,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// A waitable-set canon built-in (gate:async 2a-i-B-2) binds to its Go impl, typed from the guest's
 		// import signature; waitable-set.wait stores its event in the memory it carried (d.lowerMem).
 		if d.asyncBuiltin {
-			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.asyncBuiltinSlot); ok {
+			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.asyncBuiltinSlot, d.asyncBuiltinForm); ok {
 				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
 			}
 			return interp.Extern{}, false

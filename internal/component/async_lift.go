@@ -125,17 +125,21 @@ type liftTask struct {
 // It stays addable without a break as an error TYPE wrapping this value, so `errors.Is` keeps answering.
 var ErrCancelled = errors.New("component: the async task was cancelled")
 
-// ErrTaskCancelUnbuilt covered `task.cancel`'s cancelled branch while nothing could reach it. **ADR 0094
-// built that branch**, so the delivered path no longer returns this — a task in `liftCancelDelivered`
-// resolves. It survives for the branch still unbuilt: the model's `request_cancellation` INITIAL arm
-// (def:463-466), the before-started route to status 4's sibling status 3, which has no reference reading
-// until #884 produces one.
+// `ErrTaskCancelUnbuilt` **was here and is deleted**, across two slices that each removed one of its two
+// producers.
 //
-// Its message named "#862" as what would build it, and #862 is closed; the refusal that remains is a
-// different one, so the message says which. Rewritten rather than left pointing at a discharged issue.
-var ErrTaskCancelUnbuilt = errors.New(
-	"component: cancelling a task that has not started yet is not implemented — " +
-		"it would produce subtask.cancel status 3, which has no reference reading (gate:async, #884)")
+// It began as `task.cancel`'s cancelled-branch refusal, while nothing in the engine could set the
+// precondition. ADR 0094 built that branch, and re-pointed the value at the one refusal left: the model's
+// `request_cancellation` INITIAL arm, declined because it was believed to produce `subtask.cancel` status
+// 3. ADR 0094 amendment 2 (see `requestCancelLocked`) found that reason false for Burroughs and honoured
+// the arm, which left the value with **no producer at all**.
+//
+// Deleted rather than kept, because a sentinel nothing returns is the same defect as a field nothing
+// writes — which is what #864 left behind and what ADR 0094 was cleaning up. Keeping it "in case" would
+// make the next reader hunt for a branch that does not exist. It was never public surface: this is
+// `internal/component`, so no embedder could reference it.
+//
+// `ErrCancelNotRunning` is the refusal that survives, for a request against a task already past running.
 
 // ErrCancelNotRunning refuses a host cancellation request aimed at a task that is not STARTED.
 //
@@ -154,14 +158,34 @@ var ErrCancelNotRunning = errors.New("component: no running async task to cancel
 
 // requestCancelLocked is definitions.py `Task.request_cancellation` (def:463-470). Caller holds h.mu.
 //
-// The model's two arms diverge on INITIAL versus STARTED, and only the second is built here. The INITIAL
-// arm resolves the task immediately — via resuming its thread so `enter_implicit_thread`'s backpressure
-// path delivers the cancel and calls `cancel()` (def:432-434) — and produces subtask.cancel status 3,
-// which has no reference reading. Refused by name (ErrTaskCancelUnbuilt) rather than written against an
-// unmeasured semantics.
+// The model's two arms diverge on INITIAL versus STARTED. **Both are honoured here, and both set
+// PENDING_CANCEL** — which is what the model's own code does too (def:463-470): its INITIAL arm then
+// resumes the thread so the entry path delivers the cancel, while Burroughs' delivery happens at the
+// first check the lift loop or its park reaches. Same state, different carrier.
+//
+// # The INITIAL arm is honoured, not refused — ADR 0094 amendment 2
+//
+// ADR 0094 refused it with `ErrTaskCancelUnbuilt`, on the reason that it *"would produce subtask.cancel
+// status 3, which has no reference reading"*. **That reason is true of the model and false of Burroughs**,
+// and the difference is one ADR 0095 introduced deliberately:
+//
+//   - In the model, `canon_lift`'s `thread_func` calls `task.start()` — and therefore the lower's
+//     `on_start` — INSIDE the lift (def:2097-2102). So a lift task still INITIAL means `on_start` has not
+//     run, means the parent's subtask is still STARTING, means `on_resolve(None)` picks
+//     CANCELLED_BEFORE_STARTED = 3. The reasoning holds there.
+//   - In Burroughs the cross-component adapter calls `onStart()` **itself, synchronously, before the
+//     child's lift task exists**, because `on_start` reads the caller's flat args and those belong to the
+//     caller's frame. So the parent's subtask is already STARTED, and the terminal state is
+//     CANCELLED_BEFORE_RETURNED = 4 whatever the child's lift task state is. Status 3 is unreachable on
+//     this path, so honouring the request claims nothing unmeasured.
+//
+// And refusing had a cost that ADR 0094 mispriced: it said the parent would learn of the refusal through
+// BLOCKED. Grave #892 removed BLOCKED from the sync path, so the refusal became a **30s hang** instead.
+// Measured as a flaky one — 150 runs of the composed witness could not all complete — which is worse than
+// a consistent failure. *A gap whose consequence has changed needs re-deciding, not re-citing.*
 func (t *liftTask) requestCancelLocked() error {
 	switch t.state {
-	case liftStarted:
+	case liftStarted, liftInitial:
 		t.state = liftPendingCancel
 		// Wake a park, if there is one. **This is what makes the capability reachable in its main case**:
 		// the task a host wants to cancel is typically parked on a set nothing will ever resolve, so a
@@ -173,8 +197,6 @@ func (t *liftTask) requestCancelLocked() error {
 			t.cancelWake = nil
 		}
 		return nil
-	case liftInitial:
-		return ErrTaskCancelUnbuilt
 	default:
 		return fmt.Errorf("%w: task is %s", ErrCancelNotRunning, t.state)
 	}

@@ -53,7 +53,16 @@ The adapter owes an `onCancel`, and the model's is `task.request_cancellation` �
 
 **And it does not work yet, for a reason outside this slice.** Measured on #862's composed artefacts: the WAT parent's `subtask.cancel` returns **`0xffffffff` (BLOCKED)** and then traps at `subtask.drop`; the Rust parent traps `unreachable`. Both are [#892](https://github.com/scttfrdmn/burroughs/issues/892) — the model *waits* for resolution on a sync-lowered `subtask.cancel` (def:2427-2428) and Burroughs returns BLOCKED unconditionally. #888's recon predicted this path would meet #892 first, because a guest child's cancellation unwinds through the guest and so is never instantaneous; the prediction is now a measurement.
 
-**A second, smaller finding rides with it**: the parent can request cancellation before the child's task has started, where `requestCancelAll` answers `ErrTaskCancelUnbuilt` (ADR 0094's refused status-3 path) and the adapter drops it, so an early cancellation is **lost**. The model handles this — `request_cancellation`'s INITIAL arm sets PENDING_CANCEL and resumes the thread (def:463-466) — and Burroughs refuses it because status 3 has no reference reading. So the cross-component path *reaches* the before-started case naturally, which is new information about #884's priority rather than a defect to patch here. Recorded on #892 and #884 rather than worked around.
+**A second, smaller finding rides with it** — ~~and it was neither as small nor as recordable as this paragraph claimed~~. As written:
+
+> the parent can request cancellation before the child's task has started, where `requestCancelAll` answers `ErrTaskCancelUnbuilt` (ADR 0094's refused status-3 path) and the adapter drops it, so an early cancellation is **lost**. … new information about #884's priority rather than a defect to patch here. Recorded on #892 and #884 rather than worked around.
+
+**Amended by grave #892's slice, in two steps.** Calling it "recorded rather than worked around" rested on the parent learning of the loss through BLOCKED; #892 removed BLOCKED from the sync path, because the model waits there, and the loss became a **30s hang** — measured as a *flaky* one, which is the worst form. So it was a defect to patch after all:
+
+1. **The registration half**: the adapter now creates and registers the child's task **synchronously, before the impl returns** (`newLiftTask`, split from `runLiftTask`), so registration happens-before anything the caller can do next. Previously the task was created on the goroutine and a prompt parent often found nothing to cancel.
+2. **The before-started half**: [ADR 0094 amendment 2](0094-host-cancellation-reaches-a-lift-task-through-an-internal-trigger-this-slice-because-the-model-hands-the-embedder-a-per-call-oncancel-and-invoke-blocks.md) honours the INITIAL arm instead of refusing it, having found ADR 0094's reason for the refusal false of Burroughs — **and the reason it is false is this ADR's own doing**: the adapter calls `onStart()` before the child's lift task exists, so the parent's subtask is already STARTED and status 3 is unreachable here.
+
+What survives of the paragraph: the cross-component path does reach the before-started case naturally, and #884 keeps its subject (status 3 has no reference reading). What it loses is this consumer.
 
 ### Result lifting is scoped to scalars, by name
 
