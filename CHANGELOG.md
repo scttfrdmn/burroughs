@@ -753,7 +753,8 @@ own condition rather than as a prediction.
   **The two witnesses have different subjects**, which the falsification showed: reverting `task.return`
   alone leaves the decoder arm passing, and neutering the shared decoder fails both — so one guards the
   decoder and the other guards `task.return`'s use of it.
-- **Two parks assertions were samples of a race rather than assertions about it**, and CI took the losing
+- **Two parks assertions were samples of a race rather than assertions about it**
+  ([grave #891](https://github.com/scttfrdmn/burroughs/issues/891)), and CI took the losing
   branch. `TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns` checked that a parked agent had not
   returned with a non-blocking `select`/`default:`, and its injection control
   `TestWaitsetParksCheckDetectsAnInlineResolvingImpl` mirrored that shape to detect a miss. Both passed

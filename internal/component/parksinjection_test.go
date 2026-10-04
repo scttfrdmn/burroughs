@@ -115,10 +115,10 @@ func TestWaitsetParksCheckDetectsAnInlineResolvingImpl(t *testing.T) {
 	//
 	// # What moved, and why the old form could not stay
 	//
-	// This used to mirror the original's non-blocking `select` on A's channel and report a MISS when
-	// `default:` was taken. That made the control's own verdict depend on whether A had delivered yet —
-	// the same race it existed to expose. **CI on `ubuntu-24.04` took that branch** and reported a MISS
-	// on a tree whose only change was a decoder repair.
+	// Grave #891. This used to mirror the original's non-blocking `select` on A's channel and report a
+	// MISS when `default:` was taken. That made the control's own verdict depend on whether A had
+	// delivered yet — the same race it existed to expose. **CI on `ubuntu-24.04` took that branch** and
+	// reported a MISS on a tree whose only change was a decoder repair.
 	//
 	// # The reproduction was sought and not found, which is why the repair is structural
 	//

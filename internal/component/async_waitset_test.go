@@ -180,7 +180,8 @@ func waitsetSynthHost() (*Host, chan func(canon.Value), *int32) {
 	return h, resolvers, &entered
 }
 
-// parksGrace is how long a parks assertion waits before concluding that a parked agent has not returned.
+// parksGrace is how long a parks assertion waits before concluding that a parked agent has not returned
+// (grave #891).
 //
 // It is a **bound on a true negative**, not a sampling window: the agent's subtask resolves only when the
 // test calls its resolver, so an agent that has not been resolved cannot complete and the wait can only
@@ -342,7 +343,7 @@ func TestWaitableSetWaitParksOnlyTheCallingAgentSiblingRuns(t *testing.T) {
 	if oB.err != nil || len(oB.res) != 1 || oB.res[0].Int32() != 42 {
 		t.Fatalf("sibling = %v (err %v), want [42] — a parked agent starved its sibling", oB.res, oB.err)
 	}
-	// A must still be parked — and this is a BOUNDED NEGATIVE, not a peek, which is the repair.
+	// A must still be parked — and this is a BOUNDED NEGATIVE, not a peek, which is grave #891's repair.
 	//
 	// # What it replaced, and why a bound is sound here when `default:` was not
 	//
