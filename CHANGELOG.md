@@ -738,6 +738,21 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **An async-lifted export that returns nothing can be loaded**
+  ([grave #885](https://github.com/scttfrdmn/burroughs/issues/885)). A result list is encoded two ways —
+  `0x00 valtype` for one result, `0x01 0x00` for none — and `canon task.return` accepted only the first,
+  so a guest declaring `export go: async func()` was refused at instantiate with *"resultlist discriminant
+  0x1 is not 0x00"*. **`funcType` had decoded both arms correctly 200 lines away the whole time.**
+  **Two decoders for one encoding, only one of them total: the duplication is the defect and the missing
+  case was its symptom.** So the repair is **one** `resultList` method that both call, not a second
+  mirrored copy that would leave the next site free to repeat it. The search is stated on the grave —
+  exactly two sites decode a result list, and there is no third.
+  Witnessed on an artefact **already in the tree and refused**: #862's `cancel-rust-parent/composed.wasm`,
+  which exports `go: async func()`. No guest had an async export returning nothing until that slice built
+  one, which is why the defect survived. Plus a decoder arm covering both encodings and both refusals.
+  **The two witnesses have different subjects**, which the falsification showed: reverting `task.return`
+  alone leaves the decoder arm passing, and neutering the shared decoder fails both — so one guards the
+  decoder and the other guards `task.return`'s use of it.
 - **A doc comment cited a `ComponentValue` surface that its own cited ADR does not define**
   ([grave #856](https://github.com/scttfrdmn/burroughs/issues/856)). `component.go` pointed an embedder at
   *"the `ComponentValue` surface (ADR 0085)"*; **ADR 0085 contains no such identifier.** The citation resolved
