@@ -52,6 +52,7 @@ targets. See `build.sh` for that and for three blocked paths worth not re-paying
 | `receipt/` | the `suspending` guest **plus a receipt guard**: a `Drop` local to the async body that calls a `note` host import, disarmed on success. 52,443 B. Built for #857's cancellation witness; see [ABANDONMENT.md](ABANDONMENT.md) for what it actually measured, and why that is not cancellation |
 | `cancel-rust-parent/` | #862's **real** canceller: drops an in-flight async import, which is what a Rust guest does. Sees no status — see [CANCELLATION.md](CANCELLATION.md) |
 | `cancel-wat-parent/` | #862's **synthetic** canceller: calls `subtask.cancel` by hand and reports the numeric status it returns. Its `.wat` is committed beside its `.wasm` |
+| `call-wat-parent/` | #888's **completer**: calls the child, parks on its subtask, and reports the value it returned. The only composed artefact here that does **not** cancel — see below. Its `.wat` is committed beside its `.wasm` |
 | `harness/` | the wasmtime embedding that answers the concurrency question. Its own lockfile, outside the Go build |
 | `concurrent.reading` | the positive arm's reading |
 | `sequential.reading` | the negative arm's reading |
@@ -187,6 +188,25 @@ the `concurrent.reading` above was captured to answer.
 So the readings in this directory are **wasmtime's** — the oracle's side of a comparison whose other side
 does not exist yet. That is the normal state for a committed reading here, and it is said plainly because a
 directory full of readings invites the assumption that something was compared against them.
+
+## Why `call-wat-parent/` exists, and why it has no `.reading`
+
+**Every other composed artefact here cancels**, because #862 built them to measure cancellation. That left
+the cross-component *call* with no end-to-end arm at all: the composed paths either cancelled the child or,
+in `resultlist_test.go`, asserted load-and-instantiate without calling. So #888's capability could not be
+witnessed by anything in the tree, and a cancelling witness would have failed on
+[#892](https://github.com/scttfrdmn/burroughs/issues/892) — `subtask.cancel` returns BLOCKED where the model
+waits — for a reason that is not about the call.
+
+This parent is the completing path: start the child, park on its subtask, read the result the lower lowered
+to the retptr, report it. The value crosses **two** boundaries (host `tick` → child `task.return` → parent
+retptr → the parent's own lift result), which is why the witness asserts a value rather than a success.
+
+**It carries no committed `.reading`**, and that is a property of the subject rather than an omission. The
+other parents have readings because wasmtime can run them; this one's subject is a capability Burroughs is
+adding, and the reference side of it is the composed cancellation already recorded in
+[CANCELLATION.md](CANCELLATION.md). There is no wasmtime number here that would mean anything a reading
+could hold — *a figure with no subject is worse than no figure.*
 
 ## Coverage, stated so these readings are not read as more than they are
 

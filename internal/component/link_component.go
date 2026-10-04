@@ -55,9 +55,12 @@ func (f *compFunc) invoke() error {
 // invokeWith is invoke carrying flat core params (#864's value-carrying export call). `invoke()` is this
 // with none, which is what run() needs — kept as the name every existing caller uses, so adding params
 // did not touch any of them.
-// It returns the async lift's resolution (what `task.return` lowered), or nil for a sync lift, which
-// moves no values through this path. **Returned rather than stored on the func** — see the comment where
-// the `result` field used to be.
+// It returns the lift's results: what `task.return` lowered for an async lift, or the core func's own
+// returns for a sync one. **Returned rather than stored on the func** — see the comment where the
+// `result` field used to be.
+//
+// This said "or nil for a sync lift, which moves no values through this path" until #888 found two
+// callers that needed them; the repair is in the sync branch below, with how it surfaced.
 func (f *compFunc) invokeWith(params []interp.Value) ([]interp.Value, error) {
 	if f.stubName != "" {
 		return nil, fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
@@ -68,8 +71,21 @@ func (f *compFunc) invokeWith(params []interp.Value) ([]interp.Value, error) {
 	if f.async {
 		return f.invokeAsyncLiftWith(params)
 	}
-	_, err := f.core.inst.Invoke(f.core.name, params...)
-	return nil, err
+	// **A sync lift's results travel back too, and they used to be dropped here.** This was
+	// `_, err := ...; return nil, err`, with the doc comment above saying "nil for a sync lift, which
+	// moves no values through this path" — true of the callers that existed, and false as a statement
+	// about the path.
+	//
+	// It surfaced twice in #888, from opposite directions. `CallValues` on a sync export declaring a
+	// result refused with *"the guest returned 0 flat value(s); one is expected"* — the guest had returned
+	// one and this discarded it. And the **sync cross-component arm** (`bindCrossComponent`) hands its
+	// caller whatever this returns, so a sync guest-to-guest call would have silently produced no result:
+	// a wrong value reported as success, which is the outcome the async arm's discriminant work exists to
+	// avoid.
+	//
+	// Returning them is strictly wider: `invoke()` discards the slice, and every other caller was already
+	// reading `nil` as "no values".
+	return f.core.inst.Invoke(f.core.name, params...)
 }
 
 // invokeAsyncLift runs the stackless (callback) async-lift loop (canon_lift def:2126-2151). Step 1 is the

@@ -727,6 +727,55 @@ func valHasUnresolvedAlias(vt ValType, depth int) bool {
 // valKindName is the WIT name of a value kind, for a refuse-by-name message.
 func valKindName(k ValKind) string {
 	switch k {
+	// The scalars and the other shapes were missing until #888, and the gap is the shape grave #885
+	// records one level up: **a function that is total for its first consumer and partial for the next.**
+	// This existed for the unmodeled-kind binding refusal, which only ever names the kinds it refuses, so
+	// `string` and the numerics fell to the default. #888's cross-component result refusal names whatever
+	// kind it could not carry — and its own witness caught the message reading `valkind(12)`, which is
+	// exactly the "a bare unsupported leaves the next author guessing" failure that assertion exists for.
+	//
+	// Completed here rather than given a second namer beside it, on #885's lesson: the duplication is the
+	// defect and the missing case is its symptom.
+	case VBool:
+		return "bool"
+	case VS8:
+		return "s8"
+	case VU8:
+		return "u8"
+	case VS16:
+		return "s16"
+	case VU16:
+		return "u16"
+	case VS32:
+		return "s32"
+	case VU32:
+		return "u32"
+	case VS64:
+		return "s64"
+	case VU64:
+		return "u64"
+	case VF32:
+		return "f32"
+	case VF64:
+		return "f64"
+	case VChar:
+		return "char"
+	case VString:
+		return "string"
+	case VList:
+		return "list"
+	case VVariant:
+		return "variant"
+	case VTuple:
+		return "tuple"
+	case VResult:
+		return "result"
+	case VOwn:
+		return "own"
+	case VBorrow:
+		return "borrow"
+	case VRef:
+		return "a typeidx reference"
 	case VRecord:
 		return "record"
 	case VFlags:

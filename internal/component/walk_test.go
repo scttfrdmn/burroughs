@@ -73,6 +73,27 @@ func TestStubHostRefusesByName(t *testing.T) {
 		if got := err.Error(); !contains(got, "fd_write") {
 			t.Errorf("stub error %q does not name the import", got)
 		}
+		// **It must say the coordinates are a CORE import, and quote them** (#888). The old form rendered
+		// a module-less import as `import ::run`, which a reader takes for a name and then hunts for —
+		// #888's registration did exactly that and diagnosed a naming defect in #870's identity
+		// derivation that did not exist. Asserted so the wording cannot drift back.
+		if got := err.Error(); !contains(got, "core import") {
+			t.Errorf("stub error %q does not say its coordinates are a core import, so an empty module "+
+				"part reads as part of a name", got)
+		}
+	})
+
+	t.Run("an_empty_module_part_is_visible_rather_than_swallowed", func(t *testing.T) {
+		// The case that misled: `mod` empty. Quoting makes the emptiness legible instead of collapsing
+		// into a `::name` that looks like an identity.
+		_, err := refuse("", "run", "")(nil, nil)
+		got := err.Error()
+		if contains(got, "import ::run") {
+			t.Errorf("stub error %q still renders a module-less import as `::run`", got)
+		}
+		if !contains(got, `""::"run"`) {
+			t.Errorf("stub error %q does not show the empty module part quoted", got)
+		}
 	})
 
 	t.Run("a_component_identity_becomes_the_subject", func(t *testing.T) {

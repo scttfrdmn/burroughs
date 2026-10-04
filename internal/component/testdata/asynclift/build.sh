@@ -143,6 +143,13 @@ echo "== cancel-wat-parent ==" >&2
 "$WASM_TOOLS" validate --features all "$here/cancel-wat-parent/parent.wasm"
 echo "   assembled cancel-wat-parent/parent.wasm" >&2
 
+# The COMPLETING parent (#888). Every other composed artefact here cancels, which left the
+# cross-component call itself unwitnessable — see call-wat-parent/parent.wat's header.
+echo "== call-wat-parent ==" >&2
+"$WASM_TOOLS" parse "$here/call-wat-parent/parent.wat" -o "$here/call-wat-parent/parent.wasm"
+"$WASM_TOOLS" validate --features all "$here/call-wat-parent/parent.wasm"
+echo "   assembled call-wat-parent/parent.wasm" >&2
+
 echo "== harness ==" >&2
 bin=$( cd "$here/harness" &&
 	RUSTC="$HOST_RUSTC" CARGO_TARGET_DIR="$here/harness/target" \
@@ -212,7 +219,10 @@ echo "== composed cancellation ==" >&2
 : "${WAC:=wac}"
 command -v "$WAC" >/dev/null || { echo "build.sh: $WAC not found — 'cargo install wac-cli --locked'" >&2; exit 2; }
 "$WAC" --version >&2
-for p in cancel-wat-parent cancel-rust-parent; do
+# `call-wat-parent` rides this loop rather than getting its own: it is plugged into the SAME child by the
+# SAME tool, and the whole point of #862's two-parent arrangement is that the child is not a variable.
+# A second composition step would be a second place for the child to drift.
+for p in cancel-wat-parent cancel-rust-parent call-wat-parent; do
 	sock="$here/$p/parent.wasm"
 	[ -f "$sock" ] || sock="$here/$p/component.wasm"
 	"$WAC" plug "$sock" --plug "$here/receipt/component.wasm" -o "$here/$p/composed.wasm"
