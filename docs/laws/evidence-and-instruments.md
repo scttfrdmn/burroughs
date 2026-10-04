@@ -496,6 +496,40 @@ reach is a law out of context.
   re-injecting the fixture defect: all six refusal arms then fail with *"refused BEFORE the block"*, naming
   the cause rather than reporting a pass. (Ruling: chat-Claude, #867.)
 
+### A witness whose expected outcome is a failure cannot be falsified by a change that also fails — its falsification target is the positive arm.
+
+- **A refusal arm and its falsification are different arms, and assuming otherwise wastes the
+  falsification.** If a witness passes when its subject *fails*, then a defect that also produces a
+  failure leaves it passing — same verdict, different cause. So the arm that proves a mechanism works has
+  to be a **positive** one: something the engine can only do when the mechanism is present.
+
+  **Specimen (#871, the stackless async-lift park).** The registered falsification was *"neuter the
+  callback re-entry so the callback is never called after WAIT; the sequential arm must then fail by name,
+  not hang."* Run: **the sequential arm passed with the re-entry neutered.** It asserts an *expiry* —
+  wasmtime's committed `sequential.reading` records a rendezvous that never closes — and an engine that
+  never re-enters the callback also expires.
+
+  It is **structurally** blind, not fixably so: on that arm no event ever arrives, so a correct engine
+  never re-enters the callback either. There is no observation in it that separates the two engines. The
+  arm that does separate them is the positive one — a deferring import that is *resolved*, requiring the
+  lift to resume with the right value — which under the same neuter fails with *"a park did not wake"*.
+
+  **So name both targets when registering a witness pair**, and when they coincide, say so rather than
+  landing on it quietly: #869's concurrent arm is positive *and* asserts per-caller values, so acceptance
+  and falsification are one arm there — which is worth stating, because the remedy for this rule is "find
+  the positive arm" and silently having one looks like having skipped the question.
+
+- **A crossing whose symptom is timing-dependent needs the race detector, not a value assertion.** The
+  corollary found in the next slice. #869's concurrent arm asserts that each caller receives its own
+  result — exactly the crossed-result property — and it **passed while the engine had a data race on it**:
+  the resolution was stored on a field of the `compFunc` shared by every concurrent caller. Whether that
+  yields a wrong value depends on the interleaving, and on an unloaded machine it interleaved favourably
+  every time. `go test -race` named it immediately, write against read.
+
+  A value assertion samples **one** interleaving. So for shared-mutable-state defects the positive arm is
+  necessary and still not sufficient, and the instrument whose domain is the subject is the race detector.
+  (Ruling: chat-Claude, #871; corollary measured in #869.)
+
 ### Coverage is a claim: an instrument's domain is an assertion it cannot check about itself.
 
 - **Coverage is a claim: an instrument's domain is an assertion it cannot check

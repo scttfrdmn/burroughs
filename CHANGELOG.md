@@ -30,6 +30,47 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **Several async-lifted tasks can be in flight in one component instance**
+  ([#869](https://github.com/scttfrdmn/burroughs/issues/869)), which clears blocker 3 and is the
+  concurrency `gate:async` exists to unlock. Burroughs now reproduces wasmtime's committed
+  `concurrent.reading`: two tasks in flight, two rendezvous arrivals, **each caller receiving its own
+  value**. The at-most-one-lift-per-instance trap is gone.
+  **It is not keyed by agent, and that is measured rather than assumed.** The registered design was a map
+  from the calling agent's `Thread()` to its task; measured, every `Instance.Invoke` runs on one engine
+  thread per instance, so two concurrent host callers present the **same** thread ID — keying by agent
+  would have collapsed two tasks into one slot and crossed their results, which is the exact failure the
+  slice exists to prevent. Committed as `TestConcurrentHostCallsShareOneThreadID` so a later change to
+  thread assignment cannot quietly make the rejected design look viable.
+  Instead, entries **serialize** on a capacity-1 semaphore: one guest execution at a time, which makes
+  the single current-task slot provably the entered task's. A first attempt *refused* an occupied slot and
+  the acceptance arm destroyed it — with one engine thread, two concurrent callers necessarily contend, so
+  refusing turned the concurrency into a trap. The wait is bounded, because a plain mutex would turn a
+  self-re-entering lift into a deadlock rather than a named trap.
+  **The in-flight marker became a count**, since "in flight" and "entered" came apart exactly as "exists"
+  and "running" did at the first park.
+  **Exclusivity is held across a blocking host call, and contention waits with no bound.** An interim
+  design released the slot for the duration of a §5 excursion — the engine thread is free there, so a
+  sibling may as well run — and it was **reverted on review**. The model holds `exclusive_thread` across a
+  callback-lifted task's whole entry, and that is not a scheduling choice: it is the guarantee that **no
+  other task's guest code runs while this task's guest frame is live**, which a correct guest may depend
+  on. A Rust guest holding a `RefCell` borrow, or its executor's state, across a blocking import must not
+  have another task's callback interleave; releasing permits exactly that, so a correct guest could panic
+  here and run fine against the reference. The committed guests do not exercise it, which is why no
+  witness caught it — the arm now asserts the **order** (`B-tick` after `A-block-end`) rather than
+  inferring it from both calls completing.
+  The entry bound went with it: the only case it could catch was a lift re-entering itself, which is
+  **unreachable** (`CanonCaller`'s sole guest entry is a depth-budgeted `Realloc` — §5 H-2 "enforced by
+  absence" — and no host impl captures the instance), and it cost a false trap, since ordinary contention
+  expired it and the message blamed self-re-entry. Contention now waits as the model's backpressure does.
+  A holder blocked forever in a host import makes that wait indefinite, which is the limitation `interp`
+  already documents for H-3 rather than a new one;
+  [#880](https://github.com/scttfrdmn/burroughs/issues/880) is where the call's context ends both waits.
+- **Fixed: two concurrent callers of one async-lifted export could receive each other's result.** The
+  resolution was stored on `compFunc.result`, a field shared by every caller of that export, so two lifts
+  wrote and read one slot. It now travels back as a return value — per-call by construction rather than by
+  locking. **Found by `go test -race`, not by the value assertions**: the concurrent acceptance arm checks
+  that each caller gets its own value and passed anyway, because the crossing is timing-dependent and a
+  value assertion samples one interleaving.
 - **An async-lifted export can park and resume: the callback re-entry is built**
   ([#871](https://github.com/scttfrdmn/burroughs/issues/871)), which clears blocker 2 of the parity
   witness's three. The lift loop handled one dispatch code; WAIT and YIELD refused by name, and the

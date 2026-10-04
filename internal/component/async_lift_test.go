@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -160,11 +161,15 @@ func TestAsyncLiftExitOnlyResolvesViaTaskReturn(t *testing.T) {
 	if !cd.fn.async {
 		t.Fatal("run was not bound as an async (callback) lift")
 	}
-	if err := cd.fn.invoke(); err != nil {
+	// `invokeWith(nil)` rather than `invoke()`, because the resolution is now a RETURN value. It used to
+	// be read off `cd.fn.result`, a field on the shared compFunc that raced between concurrent callers
+	// (#869); `invoke()` is the discarding wrapper, so a test that needs the result asks for it.
+	resolved, err := cd.fn.invokeWith(nil)
+	if err != nil {
 		t.Fatalf("invoke run (the async-lift loop skeleton): %v", err)
 	}
-	if len(cd.fn.result) != 1 || cd.fn.result[0].Bits != 42 {
-		t.Errorf("run resolved to %v, want [42] via task.return (matching the wasmtime reading run()->42)", cd.fn.result)
+	if len(resolved) != 1 || resolved[0].Bits != 42 {
+		t.Errorf("run resolved to %v, want [42] via task.return (matching the wasmtime reading run()->42)", resolved)
 	}
 	// The current-task pointer is cleared after invoke (teardown keys on the task), so a second lift is admissible.
 	if in.w.async.lift != nil {
@@ -172,14 +177,28 @@ func TestAsyncLiftExitOnlyResolvesViaTaskReturn(t *testing.T) {
 	}
 }
 
-// TestAsyncLiftAtMostOneTaskPerAgentTraps witnesses the at-most-one-lift-task assertion firing through the
-// real invoke path (invokeAsyncLift on the real fixture's compFunc): with a lift task already in flight on
-// the agent, entering an async lift traps by name rather than resolving the wrong task. The nested state is
-// induced here by pre-setting the current-task pointer; the ORGANIC byte-driven witness — a host call into
-// an async-lifted export while another lift's loop is genuinely PARKED on the agent — lands with step 2,
-// which is where that re-entrant window first exists (the EXIT-only step-1 path never parks, so there is no
-// organic overlap to synthesize yet). #785, #732.
-func TestAsyncLiftAtMostOneTaskPerAgentTraps(t *testing.T) {
+// TestAnEntryWaitsForTheExecutionSlot is this arm's FOURTH subject, and the churn is the record.
+//
+//	#785/#732: a lift task already in flight on the agent           -> trap
+//	#871:      `liftInFlight = true`, a lift EXISTS in the instance -> trap
+//	#869 (a):  an occupied current-task slot                        -> trap
+//	#869 (b):  an entry that cannot BEGIN within its bound          -> trap
+//	#869 (c):  an entry WAITS for the slot and then succeeds        -> no trap at all
+//
+// The first two went because several lifts per instance is the deliverable, so "one already exists" is no
+// longer an error. (a) went because the acceptance arm destroyed it: with one engine thread two
+// concurrent callers *necessarily* contend, so refusing an occupied slot refused the concurrency.
+//
+// **(b) went on the chair's review of #882, and its subject turned out to be unreachable.** The bound
+// existed to catch a lift re-entering itself, which a plain semaphore deadlocks on. Searched: a host impl
+// cannot call back in — `CanonCaller`'s only guest-entry method is the depth-budgeted `Realloc`, with no
+// `Invoke` and no instance accessor (§5 H-2 "enforced by absence"), and no impl in this engine captures
+// an `*Instantiated`. A bound whose only subject cannot occur is a mechanism with no consumer, and it
+// cost a false trap: ordinary contention expired it and the message blamed self-re-entry.
+//
+// So what is asserted now is the behaviour that remains: contention **waits**, as the model's
+// backpressure does (def:424-430 — no trap, no bound).
+func TestAnEntryWaitsForTheExecutionSlot(t *testing.T) {
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	b, err := os.ReadFile("testdata/async-lift-exit-synth.wasm")
 	if err != nil {
@@ -191,46 +210,67 @@ func TestAsyncLiftAtMostOneTaskPerAgentTraps(t *testing.T) {
 	}
 	defer in.Close()
 	cd := in.export.exports["run"]
-	// A lift already in flight in this component INSTANCE (stands in for a re-entrant caller). Said
-	// "on this agent" until #857's recon measured the scope: `asyncHandles` is per-instance, so this also
-	// traps a *different* agent's lift — which is the blocker the concurrent parity arm hits (#869).
-	//
-	// **`liftInFlight`, not `lift`** (#871). The assertion's subject moved when the two meanings came
-	// apart: `lift` is now the CURRENT task, restored to nil at every park, so setting it here would no
-	// longer reproduce the condition being asserted. This witness failed loudly on the split rather than
-	// passing vacuously, which is the only reason the move is visible at all.
-	in.w.async.liftInFlight = true
+
+	// Occupy the execution slot, then release it from another goroutine after a delay. The entry must
+	// **wait and then succeed** — it must not refuse, and it must not expire, because there is no bound.
+	in.w.async.entrySem <- struct{}{}
+	const held = 300 * time.Millisecond
+	go func() {
+		time.Sleep(held)
+		<-in.w.async.entrySem
+	}()
+
+	start := time.Now()
 	err = cd.fn.invoke()
-	if err == nil {
-		t.Fatal("entering an async lift with one already in flight did not trap — the at-most-one assertion is silent")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("an entry that merely had to WAIT for the slot failed: %v\n\nContention is the normal "+
+			"state of two concurrent callers, so it must not refuse.", err)
 	}
-	var trap *interp.Trap
-	if !errors.As(err, &trap) {
-		t.Fatalf("want a Trap naming the in-flight lift, got %v", err)
+	// It must have actually waited, or the slot is not guarding entry at all and the arm is vacuous.
+	if elapsed < held {
+		t.Errorf("the entry completed in %s, less than the %s the slot was held — it did not wait for "+
+			"the slot, so nothing here is being guarded", elapsed, held)
 	}
 }
 
-// TestAsyncLiftAtMostOneTaskTrapsWhileGenuinelyParked is the ORGANIC witness the test above promised.
+// TestASecondLiftIsPermittedWhileTheFirstIsParked is this arm with its claim REVERSED by #869.
 //
-// # Why it could not be written before #871
+// # What it asserted, and why the reversal is the deliverable
 //
-// That test induces the condition by setting a field, and its own comment said the byte-driven version
-// *"lands with step 2 … the EXIT-only step-1 path never parks, so there is no organic overlap to
-// synthesize yet"*. Step 2 is this slice: a lift can now be genuinely parked, so a second entry during
-// that window is reachable without touching any field.
+// It was `TestAsyncLiftAtMostOneTaskTrapsWhileGenuinelyParked`, and it required a second lift entered
+// during a park to **trap**. That was correct while a component instance could host one lift task, and
+// it was the falsification for splitting `lift` from `liftInFlight` in #871.
 //
-// # And it is the falsification for splitting `lift` from `liftInFlight`
+// **#869's whole purpose is to make that trap wrong.** The Canonical ABI allows several async-lifted
+// tasks in flight in one instance, and #771 exists to unlock exactly that. So the arm is not deleted and
+// not weakened — its claim is inverted, and the inversion *is* the slice's headline property: a second
+// lift entered while the first is parked now **succeeds**.
 //
-// With one field the assertion was `lift != nil`, and `lift` is restored to nil at every park — so a
-// single-field engine **permits** this entry. That is a silent regression of a guarded behaviour, and
-// this arm is what refuses to let it happen.
+// # What still constrains it, so this is not a permissiveness change
 //
-// **Watched die, and the first version of it did not.** Reverting the split to `lift != nil` left this arm
-// passing, because the import's signal fires while the guest is still unwinding toward its WAIT return —
-// so the second call checked a slot that was still set and trapped for the wrong reason. The arm was
-// protected by timing. It now polls for the real parked state (`lift == nil && liftInFlight`) before the
-// second entry, and under the revert it fails: the second lift runs, parks on its own set, and expires.
-func TestAsyncLiftAtMostOneTaskTrapsWhileGenuinelyParked(t *testing.T) {
+// Entries still **serialize**: only one guest execution runs in the instance at a time, and a contending
+// entry **waits** — `TestAnEntryWaitsForTheExecutionSlot` above pins that, and
+// `TestASiblingWaitsForABlockingImportAndDoesNotTrap` pins that the wait spans a blocking host call, which
+// is the guest-invariant guarantee. The pair is the point: *in flight* became permitted in the same change
+// that kept *entered* exclusive, which is why neither arm alone would show the restriction moved rather
+// than vanished.
+//
+// **This sentence has gone stale three times inside two slices**, and `TestEveryCitedTestNameResolves`
+// caught it every time. It cited, in order: an overlapping-entry *refusal* (an intermediate design the
+// acceptance arm destroyed, since concurrent callers necessarily contend); then that control by a name I
+// had invented for it; then an entry *bound* that was reverted on review because its only subject is
+// unreachable. The churn is left visible because a comment naming a control is a citation, and this one
+// kept pointing at mechanisms that no longer existed.
+//
+// # Why it must still reach a genuine park first
+//
+// The polling below is kept verbatim in purpose from the version that trapped. Measured then: without
+// it, the arm ran its second call while the guest was still unwinding toward its WAIT return, so it was
+// testing a window it had not actually entered. A permissiveness claim measured outside the window is
+// worth even less than a refusal claim was.
+func TestASecondLiftIsPermittedWhileTheFirstIsParked(t *testing.T) {
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	b, err := os.ReadFile("testdata/asynclift/suspending/component.wasm")
 	if err != nil {
@@ -240,9 +280,29 @@ func TestAsyncLiftAtMostOneTaskTrapsWhileGenuinelyParked(t *testing.T) {
 	h := NewHost(io.Discard, io.Discard, nil)
 	parked := make(chan struct{})
 	var once sync.Once
+	// `hs` is assigned after instantiate and read from inside the import, which only ever runs during a
+	// call made after that — so there is no ordering hazard, and the alternative (threading the handles
+	// in some other way) would mean the impl could not see the engine's own count at all.
+	var hs *asyncHandles
+	var peakInFlight int32
 	h.asyncImpls = map[string]asyncLowerImpl{
 		"tick": func(_ *interp.CanonCaller, onStart func() []interp.Value, _ func(canon.Value)) (func(), error) {
 			onStart()
+			// **Sample the engine's own in-flight count from inside a live entry.** This is the only
+			// point at which both lifts are demonstrably coexisting, and reading it here rather than
+			// polling from the test means the concurrency is measured where it happens instead of
+			// inferred from two calls overlapping in wall-clock time.
+			if hs != nil {
+				hs.mu.Lock()
+				n := int32(hs.liftsInFlight)
+				hs.mu.Unlock()
+				for {
+					old := atomic.LoadInt32(&peakInFlight)
+					if n <= old || atomic.CompareAndSwapInt32(&peakInFlight, old, n) {
+						break
+					}
+				}
+			}
 			// Signalled from inside the import, so the second entry happens when the guest has
 			// DEMONSTRABLY suspended rather than after a duration — the rendezvous discipline the
 			// committed harness uses, for the same reason.
@@ -255,6 +315,7 @@ func TestAsyncLiftAtMostOneTaskTrapsWhileGenuinelyParked(t *testing.T) {
 		t.Fatalf("instantiate: %v", err)
 	}
 	defer in.Close()
+	hs = in.w.async
 
 	// Shorten the bound: this test WANTS the park to expire, since nothing will ever resolve `tick`, and
 	// the engine's 30s backstop is not a test's timescale.
@@ -281,33 +342,46 @@ func TestAsyncLiftAtMostOneTaskTrapsWhileGenuinelyParked(t *testing.T) {
 	// reason. The arm was protected by timing rather than by the property it claimed to test, which is
 	// only visible by running the falsification.
 	//
-	// The parked state is exactly `lift == nil && liftInFlight`: no task's code is running, and a lift
-	// exists. Polling for it is what puts the second call inside the window.
+	// The parked state is exactly `lift == nil && liftsInFlight == 1`: no task's code is running, and one
+	// lift exists. Polling for it is what puts the second call inside the window.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		in.w.async.mu.Lock()
-		cur, inFlight := in.w.async.lift, in.w.async.liftInFlight
+		cur, n := in.w.async.lift, in.w.async.liftsInFlight
 		in.w.async.mu.Unlock()
-		if cur == nil && inFlight {
+		if cur == nil && n == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the first lift never reached a park (current task %v, in flight %v)", cur, inFlight)
+			t.Fatalf("the first lift never reached a park (current task %v, in flight %d)", cur, n)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 
-	// The window: the first lift is parked, so `h.lift` is nil and only `liftInFlight` says a lift exists.
+	// The window: the first lift is parked, so `h.lift` is nil and the count says one lift exists.
+	//
+	// The second lift must be ADMITTED. It then parks on its own set and expires at the shortened bound,
+	// because nothing resolves `tick` — so `ErrLiftParkExpired` is the *success* reading here: it proves
+	// the lift ran far enough to park, which a refused entry never would.
 	_, second := in.CallValues("run", canon.U32(2))
 	if second == nil {
-		t.Fatal("a second async lift was PERMITTED while the first was parked — the at-most-one assertion " +
-			"does not span parks, which is what `liftInFlight` exists for")
+		t.Fatal("the second lift returned a result, which cannot happen with a `tick` that never " +
+			"resolves — so it did not actually park, and this arm measured the wrong thing")
 	}
 	var trap *interp.Trap
-	if !errors.As(second, &trap) {
-		t.Errorf("the second entry was refused, but not as a Trap naming the in-flight lift: %v", second)
-	} else if !strings.Contains(trap.Reason, "already in flight") {
-		t.Errorf("the trap does not name the in-flight lift: %q", trap.Reason)
+	if errors.As(second, &trap) && strings.Contains(trap.Reason, "overlapping entry") {
+		t.Fatalf("a second lift was REFUSED while the first was merely parked: %q.\n\nSeveral lift tasks "+
+			"per instance is what #869 built; only an overlapping ENTRY may trap, and a parked task has "+
+			"no live entry.", trap.Reason)
+	}
+	if !errors.Is(second, ErrLiftParkExpired) {
+		t.Errorf("the second lift was admitted but did not end at its own park's bound: %v", second)
+	}
+	// Both lifts were in flight at once, which is the property. Checked from the engine's own count
+	// rather than inferred from the two calls having overlapped in wall-clock time.
+	if peak := atomic.LoadInt32(&peakInFlight); peak < 2 {
+		t.Errorf("peak lifts in flight was %d, want 2 — the two lifts never coexisted, so this arm did "+
+			"not witness concurrency even though both calls were admitted", peak)
 	}
 
 	// Drain the first call so the test does not leak a goroutine past its own end; it expires at the
@@ -400,12 +474,13 @@ func TestAsyncFutureCancelWriteRunningProducer(t *testing.T) {
 	}
 	defer in.Close()
 	cd := in.export.exports["run"]
-	if err := cd.fn.invoke(); err != nil {
+	resolved, err := cd.fn.invokeWith(nil) // the resolution is a return value now (#869)
+	if err != nil {
 		t.Fatalf("invoke run (the cancellation guest): %v", err)
 	}
 	// (1) the running production: run resolved to CANCELLED.
-	if len(cd.fn.result) != 1 || cd.fn.result[0].Bits != uint64(copyCancelled) {
-		t.Fatalf("run resolved to %v, want [%d] (CANCELLED) — the running future-write cancel producer", cd.fn.result, copyCancelled)
+	if len(resolved) != 1 || resolved[0].Bits != uint64(copyCancelled) {
+		t.Fatalf("run resolved to %v, want [%d] (CANCELLED) — the running future-write cancel producer", resolved, copyCancelled)
 	}
 	// (2) the codec constant, and (3) the synthetic pin — the three-way (#765) agreement.
 	if copyCancelled != 2 {
@@ -440,15 +515,19 @@ func TestFutureWriteDroppedStaysFixtureOnly(t *testing.T) {
 	}
 	defer in.Close()
 	cd := in.export.exports["run"]
-	if err := cd.fn.invoke(); err != nil {
+	resolved, err := cd.fn.invokeWith(nil) // the resolution is a return value now (#869)
+	if err != nil {
 		t.Fatalf("invoke: %v", err)
 	}
 	// The guest produced CANCELLED, explicitly NOT DROPPED — so DROPPED has no running producer here.
-	if len(cd.fn.result) == 1 && cd.fn.result[0].Bits == uint64(copyDropped) {
+	if len(resolved) == 1 && resolved[0].Bits == uint64(copyDropped) {
 		t.Fatalf("the cancellation guest produced DROPPED — unexpected; it should cancel, not drop")
 	}
-	if cd.fn.result[0].Bits != uint64(copyCancelled) {
-		t.Fatalf("guest produced %v, want CANCELLED — DROPPED's running producer awaits a guest that drops", cd.fn.result)
+	if len(resolved) != 1 {
+		t.Fatalf("run resolved to %d values, want 1", len(resolved))
+	}
+	if resolved[0].Bits != uint64(copyCancelled) {
+		t.Fatalf("guest produced %v, want CANCELLED — DROPPED's running producer awaits a guest that drops", resolved)
 	}
 }
 

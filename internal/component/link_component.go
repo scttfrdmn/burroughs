@@ -31,29 +31,45 @@ type compFunc struct {
 	// `h` holds the current lift task. `cb` is the callback core func for re-entry, threaded in #871 —
 	// which is also when it was first captured at all: before that, `cn.Opts.Callback` was only
 	// nil-checked to set `async`, so nothing held the func the loop had to call.
-	async  bool
-	h      *asyncHandles
-	cb     coreDef        // the `(callback $f)` canonopt's core func — the re-entry target
-	result []interp.Value // the async lift's last resolution (what task.return lowered), for the caller/oracle
+	async bool
+	h     *asyncHandles
+	cb    coreDef // the `(callback $f)` canonopt's core func — the re-entry target
+
+	// There is deliberately NO `result` field here (#869). It held the async lift's last resolution, and
+	// a `compFunc` is **shared by every concurrent caller of its export** — so with several lift tasks
+	// per instance two callers wrote and read one field and could receive each other's result.
+	//
+	// Measured, not reasoned: `go test -race` reported a data race between the write at
+	// `invokeAsyncLiftWith` and the read in `CallValues`, on the slice's own concurrent acceptance arm.
+	// **That arm passed without `-race`** — the crossing is timing-dependent, so asserting per-caller
+	// values was necessary and not sufficient to find it. The result now travels back as a return value,
+	// which is per-call by construction rather than by locking.
 }
 
-func (f *compFunc) invoke() error { return f.invokeWith(nil) }
+// invoke runs the func and discards any resolution — for callers whose export returns nothing (`run()`).
+func (f *compFunc) invoke() error {
+	_, err := f.invokeWith(nil)
+	return err
+}
 
 // invokeWith is invoke carrying flat core params (#864's value-carrying export call). `invoke()` is this
 // with none, which is what run() needs — kept as the name every existing caller uses, so adding params
 // did not touch any of them.
-func (f *compFunc) invokeWith(params []interp.Value) error {
+// It returns the async lift's resolution (what `task.return` lowered), or nil for a sync lift, which
+// moves no values through this path. **Returned rather than stored on the func** — see the comment where
+// the `result` field used to be.
+func (f *compFunc) invokeWith(params []interp.Value) ([]interp.Value, error) {
 	if f.stubName != "" {
-		return fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
+		return nil, fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
 	}
 	if f.core.inst == nil {
-		return fmt.Errorf("%w: component func has no invocable core func (lift target unresolved)", ErrUnsupportedForm)
+		return nil, fmt.Errorf("%w: component func has no invocable core func (lift target unresolved)", ErrUnsupportedForm)
 	}
 	if f.async {
 		return f.invokeAsyncLiftWith(params)
 	}
 	_, err := f.core.inst.Invoke(f.core.name, params...)
-	return err
+	return nil, err
 }
 
 // invokeAsyncLift runs the stackless (callback) async-lift loop (canon_lift def:2126-2151). Step 1 is the
@@ -67,41 +83,41 @@ func (f *compFunc) invokeWith(params []interp.Value) error {
 // There is no no-params wrapper beside it: `invokeWith(nil)` reaches here with an empty slice, so a
 // `invokeAsyncLift()` delegating to this was dead the moment it was written, and the `unused` linter said
 // so. One entry point, and the params-free case is a nil argument rather than a second name for it.
-func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) error {
-	// At-most-one lift task per component INSTANCE, asserted: an unbound host call into an async-lifted
-	// export is a shape the engine permits, so an entry while the instance already hosts a lift traps by
-	// name rather than resolving the wrong task (witnessed on synth bytes, #732).
+func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, error) {
+	// **Several lift tasks per instance are permitted** (#869, the concurrency #771 exists to unlock).
+	// The at-most-one-per-instance trap that stood here is gone, and what replaced it is not a looser
+	// version of the same check but a different one: `enterTask` refuses an **overlapping entry**.
 	//
-	// **The scope is the instance, not the agent**, and this comment said "agent" until #857's recon
-	// measured it (see testdata/asynclift/PARITY-BLOCKERS.md): `asyncHandles` is per-instance, so a second
-	// agent's lift traps here too. That is the blocker the concurrent parity arm hits, and #869 is where
-	// the assertion becomes per-agent — which is what this comment always claimed.
+	// The order those two changes landed in is load-bearing, and it is the chair's: the entry guard
+	// arrives in the same change that lifts the restriction. Lifting it first would have turned a trap
+	// into a silently crossed result, because the current-task slot is shared.
+	//
+	// This comment said the assertion would become "per-agent" in #869 — which it does not, and the
+	// reason is measured rather than argued. `Instance.Invoke` runs every call on one engine thread per
+	// instance, so two concurrent callers present the SAME `Thread()`
+	// (`TestConcurrentHostCallsShareOneThreadID`); per-agent keying would have collapsed them. The scope
+	// that was wrong was never "instance vs agent" — it was "in flight vs entered".
 	task := &liftTask{cb: f.cb}
 	f.h.mu.Lock()
-	if f.h.liftInFlight {
-		f.h.mu.Unlock()
-		return &interp.Trap{Reason: "async canon lift entered while another lift task is already in flight in this component instance"}
-	}
-	f.h.liftInFlight = true
+	f.h.liftsInFlight++
 	f.h.mu.Unlock()
-	// Teardown keys on the task, not the loop: release the in-flight marker however invoke exits
-	// (normal EXIT, a trap, a park's bound expiring, or — step 3 — cancellation resolving without a
-	// normal EXIT).
+	// Teardown: decrement however invoke exits (normal EXIT, a trap, a park's bound expiring, or — step
+	// 3 — cancellation resolving without a normal EXIT).
 	//
-	// **This clears `liftInFlight`, not `lift`.** The current-task slot is restored by each entry's own
+	// **This touches the count, not `lift`.** The current-task slot is restored by each entry's own
 	// leaveTask, so by the time this runs it already holds whatever it held before the loop. Clearing it
-	// here too would overwrite an OUTER task's slot in the nested case — the bug the two fields were
+	// here too would overwrite an OUTER task's slot in the nested case — the bug the fields were
 	// separated to make impossible.
 	defer func() {
 		f.h.mu.Lock()
-		f.h.liftInFlight = false
+		f.h.liftsInFlight--
 		f.h.mu.Unlock()
 	}()
 
 	// First call: the callee, carrying the lifted params (none for run()). Its packed return drives dispatch.
 	res, err := f.enterAndInvoke(task, f.core, params)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// The loop. Each iteration decodes one packed return and either resolves, re-enters immediately
@@ -110,11 +126,11 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) error {
 	// drift, which is what #788's multi-cycle pin exists to catch.
 	for {
 		if len(res) != 1 {
-			return fmt.Errorf("%w: async lift callee returned %d core values, want 1 (packed)", ErrUnsupportedForm, len(res))
+			return nil, fmt.Errorf("%w: async lift callee returned %d core values, want 1 (packed)", ErrUnsupportedForm, len(res))
 		}
 		code, si, uerr := unpackCallbackResult(uint32(res[0].Bits))
 		if uerr != nil {
-			return uerr
+			return nil, uerr
 		}
 		switch code {
 		case callbackExit:
@@ -124,10 +140,12 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) error {
 			// the caller gets the wrong result or a spurious trap — which is worse than the visible
 			// at-most-one assertion the same slice had to split in two.
 			if !task.resolved {
-				return &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
+				return nil, &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
 			}
-			f.result = task.result // the resolution, for the caller/oracle to read
-			return nil
+			// The resolution travels back to THIS caller. It was `f.result = task.result`, a field on the
+			// SHARED compFunc, which raced between concurrent callers — reported by `-race` on this
+			// slice's own acceptance arm, which passed without it (#869).
+			return task.result, nil
 
 		case callbackYield:
 			// A cooperative yield: no set, no event. Re-enter at once with EVENT_NONE. There is nothing
@@ -136,7 +154,7 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) error {
 			task.waitSet = 0
 			res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventNone}))
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 		case callbackWait:
@@ -146,11 +164,11 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) error {
 			task.waitSet = si
 			ev, aerr := f.h.awaitEvent(si, liftParkBound)
 			if aerr != nil {
-				return aerr
+				return nil, aerr
 			}
 			res, err = f.enterAndInvoke(task, task.cb, eventArgs(ev))
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -172,6 +190,9 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 		return nil, fmt.Errorf("%w: async lift has no invocable core func for this entry (callback unresolved)",
 			ErrUnsupportedForm)
 	}
+	// Entering WAITS for the instance's execution slot and cannot fail: contention is the normal state of
+	// two concurrent callers, and the only thing a refusal could catch — a lift re-entering itself — is
+	// unreachable (see enterTask).
 	prev := f.h.enterTask(task)
 	defer f.h.leaveTask(prev)
 	return target.inst.Invoke(target.name, args...)
