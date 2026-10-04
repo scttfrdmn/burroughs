@@ -125,12 +125,32 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 		}()
 
 		return func() {
-			// The parent's `subtask.cancel` reaching the child's lift task: #887's mechanism, through the
-			// CHILD's handle table, which is its own (`link_component.go` gives every nested
-			// instantiation its own `newAsyncHandles`). A refusal is dropped here deliberately — the model
-			// gives `on_cancel` no return value (`OnCancel = Callable[[], None]`, def:384), and the only
-			// refusals `requestCancelAll` produces are "nothing running" and "not started", both of which
-			// mean the race is already lost and the subtask will resolve on its own.
+			// The parent's `subtask.cancel` reaching the child's lift task: ADR 0094's mechanism, through
+			// the CHILD's handle table, which is its own (`link_component.go` gives every nested
+			// instantiation its own `newAsyncHandles`).
+			//
+			// # The refusal has nowhere to go here, and its channel is elsewhere
+			//
+			// The model gives `on_cancel` no return value (`OnCancel = Callable[[], None]`, def:384), so
+			// this signature has no slot for one. **That is not the same as the refusal being invisible**:
+			// `subtaskCancel` re-checks `st.resolved` after invoking this and returns BLOCKED when the
+			// subtask has not resolved, so the parent learns "not cancelled (yet)" whatever the reason
+			// `requestCancelAll` declined. That status is the channel.
+			//
+			// A first draft of this comment said the refusals *"mean the race is already lost and the
+			// subtask will resolve on its own"*. **That is false for one of them and I had already
+			// measured it**: the parent can request cancellation before the child's task exists in
+			// `cancellable` at all, because `onStart` runs synchronously and the task is created on the
+			// goroutine below — so `requestCancelAll` answers "no lift task", or answers
+			// `ErrTaskCancelUnbuilt` once the task exists but is still `liftInitial` (ADR 0094's refused
+			// status-3 path). In that window the request does **not** take effect later. It is a recorded
+			// gap, not a benign race: ADR 0095 names it, and it is the cross-component path reaching the
+			// before-started case that #884 exists to produce a reading for.
+			//
+			//nolint:errcheck // No slot in the model's OnCancel signature; the parent's channel is the
+			// BLOCKED status subtaskCancel returns. The before-started window is a recorded gap (ADR
+			// 0095, #884, #892), deliberately not papered over with a retry whose semantics no reading
+			// covers.
 			_ = callee.h.requestCancelAll()
 		}, nil
 	}

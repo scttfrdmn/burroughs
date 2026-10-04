@@ -84,11 +84,21 @@ cancel-rust-parent/composed.wasm   b2d5d0f3bf597de39b649212710d070496e8b3bd3bde2
 cancel-wat-parent/parent.wasm      189ea0de6396c597a9e0c6b9401b692a83da0f0188164d163a128c4cb3e37238  MATCH
 cancel-wat-parent/composed.wasm    d2d02c27cc322b95e92ba64a388f623589fe9b525b7550d14326a6d9d35beeb2  MATCH
 cancel-wat.reading / cancel-rust.reading                                                       byte-identical
+call-wat-parent/parent.wasm        ded1d755c619aea5fe03e8f659712bcf7369ecac23376ba98fe1a0eb33c570b2  MATCH
+call-wat-parent/composed.wasm      7ef2273c074ece4da16dfa70ef7e2bfeae52a0934245a64d71b73485d576bf7b  MATCH
 ```
 
 **The #862 rows include the COMPOSED artefacts, so `wac`'s output is checked here too** — the composition
 step is part of the build and therefore part of what has to reproduce. Run from `/tmp/repro-862`, a
 different absolute path, with `git status` reporting nothing changed.
+
+**The #888 rows were taken the same way, from `/tmp/repro-888`, with both outputs deleted first** — a
+reproducibility check that does not delete its target can pass on a stale file and say nothing. `git status`
+in that worktree reported nothing changed. **Only the two `wasm-tools parse` / `wac plug` steps were re-run,
+not the whole `build.sh`**, and that is a narrower claim stated as one: both of this artefact's inputs
+(`call-wat-parent/parent.wat` and `receipt/component.wasm`) are committed, so those two steps are the entire
+derivation of its bytes. The Rust rows above still carry the full-build claim; this one does not and does not
+need to.
 
 **All three guests are rows in this check, not two rows and an exception.** The run above is a clean
 `git worktree` at `/tmp/repro-allthree` — a different absolute path from the tree that produced the bytes —
