@@ -55,6 +55,9 @@ func (e *writableStreamEnd) pendingEventLocked() (event, bool) {
 // joinTo records the set this end belongs to, so a completed write can wake its waiters.
 func (e *writableStreamEnd) joinTo(s *waitableSet) { e.set = s }
 
+// currentSet reports the set this end is joined to, so `waitable.join` can remove it before re-joining.
+func (e *writableStreamEnd) currentSet() *waitableSet { return e.set }
+
 // endStateName is the write end's lifecycle state after resolution: DONE for DROPPED, IDLE for a COMPLETED
 // write (the stream stays open for more — NOT DONE like a future). A subsequent write's trap-legality reads
 // this; it is tracked here rather than derived from the future end's rule.
@@ -207,6 +210,9 @@ func (e *readableStreamEnd) pendingEventLocked() (event, bool) {
 
 // joinTo records the set this end belongs to, so a completed copy can wake its waiters.
 func (e *readableStreamEnd) joinTo(s *waitableSet) { e.set = s }
+
+// currentSet reports the set this end is joined to, so `waitable.join` can remove it before re-joining.
+func (e *readableStreamEnd) currentSet() *waitableSet { return e.set }
 
 // endStateName is the read end's lifecycle state — COPYING while a read is registered and its event untaken,
 // IDLE/DONE once consumed. Tracked here (not derived at delivery) because the next op's trap-legality reads it.

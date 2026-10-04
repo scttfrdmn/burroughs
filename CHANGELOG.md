@@ -30,6 +30,35 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **An async-lifted export can park and resume: the callback re-entry is built**
+  ([#871](https://github.com/scttfrdmn/burroughs/issues/871)), which clears blocker 2 of the parity
+  witness's three. The lift loop handled one dispatch code; WAIT and YIELD refused by name, and the
+  callback core func was **never captured at all** — `cn.Opts.Callback` was only nil-checked. Now the task
+  carries what outlives the guest's return (its callback, the set it named), the loop parks in Go on the
+  waitable set's wake channel while **the guest's agent is released**, and each packed return drives the
+  next step through the same decode as the first call. YIELD re-enters at once with `EVENT_NONE`.
+  **This park is not an extension of the other one**: `waitable-set.wait` keeps the guest's frame alive on
+  the Go stack inside a blocking excursion, whereas here the frame is *gone* — which is why the two cannot
+  share a mechanism.
+  The park's **bound expires as a named outcome** (`ErrLiftParkExpired`, naming the set), not a hang.
+  Stated limit: the loop does not observe `Instance.Close` directly, since `interp.Instance` exposes no
+  done channel — a close during a park is caught by the bound and by the next re-entry failing, so it is
+  bounded rather than responsive.
+  **`h.lift` split into two fields.** It was the current task *and* the at-most-one-per-instance
+  assertion; those come apart at the first park, where the slot is nil, so a single-field assertion would
+  stop firing exactly when a second lift could start. Witnessed: with the split reverted, a second lift
+  runs during the park.
+- **`waitable.join` unjoins, and leaves the set it was in** — two of the model's three steps were missing.
+  `si == 0` is `w.join(None)` (not an error) and had been refused as *"handle 0 is not a waitable set"*;
+  a re-join never removed the waitable from its previous set, so its resolution would have woken waiters
+  on a set it had left. The engine's own comment had recorded the first as unexercised, and this slice's
+  park is what exercised it.
+- **`waitable-set.drop` (0x22) is implemented, on the expiry its own deferral named.** #792 deleted an
+  impl that lacked the model's two traps and recorded the condition for rebuilding it: *"a guest that
+  drops a waitable set."* The committed suspending guest drops one — reachable only once the park let it
+  resume. Both traps are present (non-empty set; set with waiters) with the waiter count kept by **both**
+  parks, since the model counts in `wait` and `wait_from_callback` alike. `refuseAtCall` was deleted for
+  want of callers; the bound-is-not-run principle it carried is recorded where it was.
 - **A host can supply a bare world-level component import**
   ([#870](https://github.com/scttfrdmn/burroughs/issues/870)), which unblocks the first of the parity
   witness's three blockers. The defect was the **kind** of thing the import resolver returned, not a

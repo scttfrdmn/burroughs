@@ -57,15 +57,52 @@ type subtask struct {
 type asyncHandles struct {
 	mu      sync.Mutex
 	entries []any // entries[0] is the reserved nil sentinel; each is *subtask or *waitableSet
-	// lift is the current async (callback) lift task — **at most one per component INSTANCE**, asserted in
-	// the loop. This said "per agent" until #857's recon measured otherwise: `asyncHandles` is built at a
-	// single call site (`walkComponent`), so one slot serves the whole instance and a second entry traps
-	// whichever agent makes it. The prose claimed something NARROWER than the code enforced, which would
-	// have told a reader two agents could each hold a lift.
+	// lift is the CURRENT async (callback) lift task — the slot a built-in like `task.return` acts
+	// through. Set on every entry to a callee or a callback and restored to the previous value on exit
+	// (#871), so a built-in always acts on the task whose code is running.
 	//
+	// **It is nil while a task is parked**, which is correct: between a WAIT return and the next
+	// re-entry, none of that task's code is running and there is nothing for a built-in to act on.
+	//
+	// This said "per agent" until #857's recon measured otherwise: `asyncHandles` is built at a single
+	// call site (`walkComponent`), so one slot serves the whole instance. The prose claimed something
+	// NARROWER than the code enforced, which would have told a reader two agents could each hold a lift.
 	// Per-agent is what #869 makes true, and it is the scope the Canonical ABI wants: several async-lifted
 	// tasks may run concurrently in one instance, each built-in acting on the task calling it.
 	lift *liftTask
+
+	// liftInFlight is whether this instance hosts a lift AT ALL — the at-most-one-per-instance assertion's
+	// subject, spanning the whole loop including its parks.
+	//
+	// # Why this is a second field rather than `lift != nil`
+	//
+	// It was `lift != nil` until #871, and that worked only because with no re-entry *"a lift exists"* and
+	// *"a lift is running"* could not come apart. They come apart at the first park: `lift` is restored to
+	// nil there, so an assertion keyed on it would stop firing **exactly when a second lift could start**
+	// — the one moment it is needed. That is a silent regression of a guarded behaviour (witnessed since
+	// #732), not a refactor, so the two meanings are separated rather than one of them quietly weakened.
+	liftInFlight bool
+}
+
+// enterTask makes t the current lift task and returns the previous one, which the caller MUST restore.
+// Paired with leaveTask around every entry to a callee or a callback (#871).
+//
+// A built-in must act on the task whose code is running, and in the stackless model that changes several
+// times within one `invokeAsyncLiftWith`. The pair is two methods rather than one deferred closure because
+// the loop restores at points that are not function exits.
+func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask) {
+	h.mu.Lock()
+	prev = h.lift
+	h.lift = t
+	h.mu.Unlock()
+	return prev
+}
+
+// leaveTask restores the current lift task to prev — the value enterTask returned.
+func (h *asyncHandles) leaveTask(prev *liftTask) {
+	h.mu.Lock()
+	h.lift = prev
+	h.mu.Unlock()
 }
 
 // pendingEventLocked delivers a resolved subtask's (SUBTASK, subtaski, state) event once, mirroring the
@@ -82,12 +119,34 @@ func (st *subtask) pendingEventLocked() (event, bool) {
 // joinTo records the set this subtask belongs to, so onResolve can wake its waiters.
 func (st *subtask) joinTo(s *waitableSet) { st.set = s }
 
+// currentSet reports the set this subtask is joined to, so `waitable.join` can remove it before re-joining.
+func (st *subtask) currentSet() *waitableSet { return st.set }
+
 func newAsyncHandles() *asyncHandles { return &asyncHandles{entries: []any{nil}} }
 
-// addLocked registers h and returns its index (>= 1). The caller holds mu.
-func (t *asyncHandles) addLocked(v any) int {
-	t.entries = append(t.entries, v)
-	return len(t.entries) - 1
+// addLocked registers v and returns its index (>= 1). The caller holds mu.
+//
+// Receiver renamed `t` -> `h` for consistency with every other method on this type (revive
+// receiver-naming). It was the only `t`, and it passed lint until #871 added `enterTask`/`leaveTask`
+// above it — which made `h` the established name and this the outlier.
+func (h *asyncHandles) addLocked(v any) int {
+	h.entries = append(h.entries, v)
+	return len(h.entries) - 1
+}
+
+// removeLocked clears the entry at index i, mirroring the model's `HandleTable.remove` (def:664-668). The
+// caller holds mu.
+//
+// The slot is **nil'd in place and not spliced out**, because every live handle the guest holds is an index
+// into this slice: removing an element would silently renumber every handle above it. The model's own
+// `remove` does the same (`self.array[i] = None`) and keeps a free list; this engine does not reuse slots
+// yet, so the nil is the whole of it — a reused index would hand a guest a stale handle's identity, which
+// is a decision to take when something needs the compaction and not before.
+func (h *asyncHandles) removeLocked(i uint32) {
+	if i == 0 || int(i) >= len(h.entries) {
+		return
+	}
+	h.entries[i] = nil
 }
 
 // packSubtaskWait encodes `canon_lower`'s blocking return `[state | (subtaski<<4)]` (def:2251). The model

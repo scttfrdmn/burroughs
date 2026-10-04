@@ -62,6 +62,10 @@ type waitable interface {
 	pendingEventLocked() (event, bool)
 	// joinTo records the set this waitable belongs to, so its own resolution can wake the set's waiters.
 	joinTo(s *waitableSet)
+	// currentSet reports the set this waitable is joined to, or nil. Needed because `waitable.join` must
+	// REMOVE the waitable from its previous set before adding it to the new one (def:737-743), and only
+	// the waitable knows which set that was. The caller holds asyncHandles.mu.
+	currentSet() *waitableSet
 }
 
 // waitableSet is a set of waitables a guest agent can block on. `wake` is closed-and-replaced each time a
@@ -71,6 +75,14 @@ type waitable interface {
 type waitableSet struct {
 	members []waitable
 	wake    chan struct{}
+	// waiting counts the agents and lift loops currently parked on this set — the model's
+	// `WaitableSet.num_waiting` (def:752), which `WaitableSet.drop` traps on (def:796).
+	//
+	// Both parks increment it, and that is not a detail: the model counts in `wait` (def:769-772) **and**
+	// in `wait_from_callback` (def:782-786), so the stackless park is as much a waiter as the blocking
+	// excursion. Counting only one of them would make `drop`'s trap depend on which park a guest happened
+	// to use.
+	waiting int
 }
 
 // pendingEventLocked returns the first ready member's deliverable event, or (event{}, false) if none is
@@ -92,6 +104,64 @@ func (s *waitableSet) signalLocked() {
 	s.wake = make(chan struct{})
 }
 
+// Every `waitable` implementer, asserted AT COMPILE TIME — which exists because adding `currentSet` to
+// the interface broke three of these five **at runtime, not at build** (#871).
+//
+// `handleWaitable` reaches a waitable by dynamic type assertion, so a type that stops satisfying the
+// interface does not fail to compile: it silently stops being a waitable, and `waitable.join` answers
+// "handle 1 is not a waitable" about a handle that plainly is one. Six tests caught it, which was luck
+// about coverage rather than a property of the code — nothing would have caught it for a kind no test
+// drove. These lines turn the next such change into a build error.
+var (
+	_ waitable = (*subtask)(nil)
+	_ waitable = (*readableFutureEnd)(nil)
+	_ waitable = (*writableFutureEnd)(nil)
+	_ waitable = (*readableStreamEnd)(nil)
+	_ waitable = (*writableStreamEnd)(nil)
+)
+
+// removeLocked drops w from the set's members. The caller holds asyncHandles.mu.
+//
+// Interface values compare by identity here because every implementer is a pointer (*subtask,
+// *readableFutureEnd) — which is also why a waitable cannot be a value type without this silently
+// matching the wrong member.
+func (s *waitableSet) removeLocked(w waitable) {
+	for i, m := range s.members {
+		if m == w {
+			s.members = append(s.members[:i], s.members[i+1:]...)
+			return
+		}
+	}
+}
+
+// joinWaitableLocked moves w into set, or out of any set when set is nil — the whole of the model's
+// `Waitable.join` (def:737-743), which is three steps and not one:
+//
+//	if self.wset:  self.wset.elems.remove(self)    # leave the old set
+//	self.wset = wset                               # record the new one
+//	if wset:       wset.elems.append(self)         # join it
+//
+// # Both of the first two steps were missing (#871)
+//
+// `waitable.join` did only the record-and-append half. **The `si == 0` unjoin trapped** as "handle 0 is
+// not a waitable set", which this engine's own comment had recorded as unexercised — and the stackless
+// park is what exercises it, because a guest that parks and resumes unjoins its subtask afterwards. **And
+// a re-join never left the old set**, so a waitable stayed a member of every set it had ever been in and
+// its resolution would wake waiters on all of them. The second was not needed by any witness; it is
+// repaired because it is the same model line, read in the same sitting, and a comment claiming to
+// implement `join` while implementing a third of it is the testimony defect this corpus keeps paying for.
+//
+// The caller holds asyncHandles.mu.
+func joinWaitableLocked(w waitable, set *waitableSet) {
+	if old := w.currentSet(); old != nil {
+		old.removeLocked(w)
+	}
+	w.joinTo(set)
+	if set != nil {
+		set.members = append(set.members, w)
+	}
+}
+
 // waitableSetNew implements `canon waitable-set.new` (definitions.py:2351): allocate a waitable set in the
 // instance table, return its index.
 func waitableSetNew(h *asyncHandles) interp.CanonFunc {
@@ -103,8 +173,14 @@ func waitableSetNew(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// waitableJoin implements `canon waitable.join` (definitions.py:2396): join waitable `wi` to set `si`. This
-// slice's only waitable is a subtask; si == 0 (unjoin) is not exercised by the blocking-arm round trip.
+// waitableJoin implements `canon waitable.join` (definitions.py:2396): join waitable `wi` to set `si`, or
+// UNJOIN it when si is 0.
+//
+// `si == 0` is `w.join(None)` in the model (def:2402-2403), not an error — and it was refused here as
+// "handle 0 is not a waitable set" until #871, whose park is what first drove a guest through it. The
+// deferral was recorded in this comment ("si == 0 (unjoin) is not exercised by the blocking-arm round
+// trip"), so the trigger was named before it fired; what the note could not say was that the trigger would
+// be another slice's mechanism rather than a new guest.
 func waitableJoin(h *asyncHandles) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
@@ -117,12 +193,16 @@ func waitableJoin(h *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, fmt.Errorf("component: waitable.join: handle %d is not a waitable", wi)
 		}
-		set, ok := handleAt[*waitableSet](h, si)
-		if !ok {
-			return nil, fmt.Errorf("component: waitable.join: handle %d is not a waitable set", si)
+		// si == 0 unjoins; any other index must name a real set. The order matters: a zero index is NOT
+		// looked up, because handle 0 is the table's reserved nil sentinel and would fail the type check.
+		var set *waitableSet
+		if si != 0 {
+			set, ok = handleAt[*waitableSet](h, si)
+			if !ok {
+				return nil, fmt.Errorf("component: waitable.join: handle %d is not a waitable set", si)
+			}
 		}
-		w.joinTo(set)
-		set.members = append(set.members, w)
+		joinWaitableLocked(w, set)
 		return nil, nil
 	}
 }
@@ -144,6 +224,18 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, fmt.Errorf("component: waitable-set.wait: handle %d is not a waitable set", si)
 		}
+
+		// num_waiting (def:769-772): counted for the whole park, so waitable-set.drop traps on a set this
+		// agent is parked on. Decremented however the park ends, including the context-cancelled exit —
+		// a leaked count would make the set permanently undroppable.
+		h.mu.Lock()
+		set.waiting++
+		h.mu.Unlock()
+		defer func() {
+			h.mu.Lock()
+			set.waiting--
+			h.mu.Unlock()
+		}()
 
 		var ev event
 		err := c.Blocking(func() error {
@@ -210,13 +302,57 @@ func waitableSetPoll(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// `canon waitable-set.drop` (0x22) has NO implementation here, deliberately (#792, Scott's ruling). The one
-// that existed removed the table entry WITHOUT the model's two traps (WaitableSet.drop, def:794-796:
-// trap_if(len(elems) > 0); trap_if(num_waiting > 0)) — dropping a set with live members or waiters was
-// silent where the spec requires a trap. The close audit found it certified by nothing (no guest executed
-// it, no test executed it, no fixture pinned it), so it was deleted rather than left as dead code a future
-// reader might re-bind believing it complete. The op is bound to a call-time refusal (asyncBuiltinFunc),
-// and it is rebuilt WITH its traps, its pin, and its firing witness when a guest drops a waitable set.
+// waitableSetDrop implements `canon waitable-set.drop` (0x22, def:2386-2392), **rebuilt on the expiry its
+// own deferral named** (#792, Scott's ruling).
+//
+// # The deferral, and the trigger that fired it
+//
+// An earlier implementation removed the table entry WITHOUT the model's two traps, so dropping a set with
+// live members or waiters was silent where the spec requires a trap. The #792 close audit found it
+// certified by nothing — no guest executed it, no test executed it, no fixture pinned it — and deleted it
+// rather than leave dead code a reader might re-bind believing it complete. The recorded expiry was
+// explicit: *"a guest that DROPS a waitable set. Then 0x22 gets the model's two traps, its oracle pin, and
+// its firing witness like every other built-in."*
+//
+// **The committed suspending guest drops one, and #871's park is what let it get that far.** The trigger
+// was named correctly; what the note could not anticipate is that the consumer would be another slice's
+// mechanism rather than a new guest — which is the general shape of a deferral's trigger being a
+// hypothesis about its consumer.
+//
+// # Both traps, and why neither is the interesting one alone
+//
+//	trap_if(len(self.elems) > 0)   # members still joined
+//	trap_if(self.num_waiting > 0)  # someone is parked on it
+//
+// A members-only check passes a set being dropped out from under a parked waiter, and a waiter-only check
+// passes one dropped while a subtask is still joined and may yet resolve into it. The audit's objection was
+// to an impl with *neither*, so an impl with one would be the same defect at half size.
+func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: waitable-set.drop: got %d args, want (si)", len(args))
+		}
+		si := uint32(args[0].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		set, ok := handleAt[*waitableSet](h, si)
+		if !ok {
+			return nil, fmt.Errorf("component: waitable-set.drop: handle %d is not a waitable set", si)
+		}
+		if n := len(set.members); n > 0 {
+			return nil, &interp.Trap{Reason: fmt.Sprintf(
+				"waitable-set.drop: set %d still has %d joined waitable(s) (WaitableSet.drop traps on a "+
+					"non-empty set; the guest must waitable.join them away first)", si, n)}
+		}
+		if set.waiting > 0 {
+			return nil, &interp.Trap{Reason: fmt.Sprintf(
+				"waitable-set.drop: set %d has %d agent(s) parked on it (WaitableSet.drop traps on a set "+
+					"with waiters)", si, set.waiting)}
+		}
+		h.removeLocked(si)
+		return nil, nil
+	}
+}
 
 // asyncBuiltinFunc maps a waitable-set canon built-in opcode to its Go impl over this instance's async
 // handle table. Only the four the blocking-arm round trip needs are bound (gate:async 2a-i-B-2); any other
@@ -230,24 +366,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 		return waitableSetWait(w.async), true
 	case 0x21: // waitable-set.poll (gate:async increment 4) — wait minus the park, same readiness path
 		return waitableSetPoll(w.async), true
-	case 0x22:
-		// waitable-set.drop is REFUSED AT THE CALL, not at bind (#792, Scott's ruling: option (b)).
-		// The close audit found it built and permitted but certified by NOTHING — no guest executes it, no
-		// test executes it, no fixture pins it — AND knowingly incomplete: the model traps when a set is
-		// dropped with live members or waiters (WaitableSet.drop: trap_if(len(elems) > 0);
-		// trap_if(num_waiting > 0)), where this engine's impl had neither trap. A silently-diverging path
-		// inside a default-on claim is the shape this tier refuses everywhere else.
-		//
-		// The refusal is at the CALL because the distinction this audit is about — bound is not run — cuts
-		// both ways: `p3async-hello` BINDS 0x22 (its wit-bindgen surface imports it) and never calls it, so
-		// a bind-time refusal would turn the tier's end-to-end exit condition red for an op the guest never
-		// executes (measured: removing 0x22 from isBuiltAsyncBuiltin refuses p3async-hello at instantiate).
-		// It stays bound, so such a guest still instantiates and runs; executing it refuses by name.
-		//
-		// Expiry: a guest that DROPS a waitable set. Then 0x22 gets the model's two traps, its oracle pin,
-		// and its firing witness like every other built-in — built for a consumer, not ahead of one.
-		return refuseAtCall(op, "waitable-set.drop", "no guest drops a waitable set, and the model's "+
-			"membership/waiter traps are unbuilt — it is refused until a guest drops one (#792)"), true
+	case 0x22: // waitable-set.drop — implemented on #792's named expiry (see waitableSetDrop)
+		return waitableSetDrop(w.async), true
 	case 0x23: // waitable.join
 		return waitableJoin(w.async), true
 	case 0x16: // future.read (gate:async increment 3)
@@ -309,13 +429,28 @@ func handleAt[T any](h *asyncHandles, i uint32) (T, bool) {
 	return v, ok
 }
 
-// refuseAtCall binds an async built-in to a closure that refuses BY NAME when the guest executes it, rather
-// than refusing the component at bind. It is for an op a guest may legitimately *import without calling* —
-// a wit-bindgen surface brings in ops its path never executes — where a bind-time refusal would reject a
-// working guest for an op it never runs. The refusal is ErrAsyncNotImplemented (the gate is open; the
-// mechanism is not there), and it names the op and why, so a guest that does reach it fails legibly.
-func refuseAtCall(op byte, name, why string) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
-		return nil, fmt.Errorf("%w: %s (%#x): %s", ErrAsyncNotImplemented, name, op, why)
-	}
-}
+// `refuseAtCall` lived here and is DELETED, because implementing `waitable-set.drop` above left it with no
+// callers (#871). It bound an async built-in to a closure that refused by name when the guest *executed*
+// it, rather than refusing the component at bind.
+//
+// # The design principle it carried is not deleted with it
+//
+// **Bound is not run.** A wit-bindgen surface imports ops whose path never executes them, so a bind-time
+// refusal rejects a working guest for an op it never calls — measured on `p3async-hello`, which binds
+// 0x22 and never calls it. That was Scott's #792 ruling (option (b)), and it still governs: the next
+// unbuilt-but-bound op refuses at the call, not at bind. Reconstructing the helper is eight lines; what
+// would be expensive to recover is the reason, which is why the reason stays on the page.
+//
+// Deleted rather than kept for a future caller on #792's own precedent — that audit deleted an
+// uncertified `waitable-set.drop` rather than leave *"dead code a future reader might re-bind believing it
+// complete"* — and because `make ci`'s deadcode gate refuses an unreachable func without a tracking issue,
+// which is the same policy mechanised.
+//
+// # One gap it leaves dormant, recorded where it would bite
+//
+// While `refuseAtCall` was in use, `isBuiltAsyncBuiltin` listed 0x22 as built (it was *bound*) and the
+// 47-row classification claimed the engine *executes* it. Those are different claims, and the comparator
+// could not tell them apart — so the table asserted something false about drop and stayed green. With no
+// bound-but-refusing op left, nothing is misclassified today. **Re-introducing one re-opens it**, so a
+// future actor binding a call-time refusal must also teach the classification that bound is not executed.
+// Noted at `isBuiltAsyncBuiltin` too, which is the site that would need to change.

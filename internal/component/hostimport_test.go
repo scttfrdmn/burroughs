@@ -3,12 +3,12 @@
 package component
 
 import (
-	"errors"
 	"io"
 	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -152,16 +152,31 @@ func TestHostCanSupplyABareWorldLevelImport(t *testing.T) {
 		}
 	})
 
-	t.Run("a_deferring_import_reaches_the_unbuilt_park_by_name", func(t *testing.T) {
-		// Blocker 2, which removing blocker 1 brought into view. Asserted here rather than left to a
-		// report, because "the next blocker is reachable" is a claim about this engine that can regress:
-		// if the park were later swallowed rather than refused by name, this arm is what would notice.
+	t.Run("a_deferring_import_parks_and_completes_when_resolved", func(t *testing.T) {
+		// # This arm was re-pointed, and the old subject is why
+		//
+		// It asserted that a deferring import **reached the unbuilt park and refused by name**
+		// (`ErrAsyncNotImplemented`, "park/yield"), pinning that removing blocker 1 exposed blocker 2.
+		// Its own failure message named its successor: *"if it now can, #871 has landed and this arm is
+		// the thing to update"*. #871 landed, so the subject is gone — and it went loudly, by this arm
+		// failing, rather than by anyone remembering to come back.
+		//
+		// Re-pointed at what it was really protecting: that a deferring import **parks** rather than
+		// silently succeeding or hanging. That claim outlives the refusal, so it is the one kept —
+		// strictly stronger now, because the park must also *end correctly*.
 		h := NewHost(io.Discard, io.Discard, nil)
 		resolvers := make(chan func(canon.Value), 4)
+		var entered int32
 		h.asyncImpls = map[string]asyncLowerImpl{
 			"tick": func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
-				onStart()
-				resolvers <- onResolve // defer, so the guest must park
+				params := onStart()
+				atomic.AddInt32(&entered, 1)
+				arg := uint32(0)
+				if len(params) > 0 {
+					arg = uint32(params[0].Int32())
+				}
+				// Deferred: the guest MUST park, because nothing resolves before this returns.
+				resolvers <- func(canon.Value) { onResolve(canon.U32(arg + 100)) }
 				return func() {}, nil
 			},
 		}
@@ -170,17 +185,42 @@ func TestHostCanSupplyABareWorldLevelImport(t *testing.T) {
 			t.Fatalf("instantiate: %v", iErr)
 		}
 		defer in.Close()
-		_, cErr := in.CallValues("run", canon.U32(1))
-		if cErr == nil {
-			t.Fatal("a deferring host impl completed — the callback park is not built, so this cannot " +
-				"succeed; if it now can, #871 has landed and this arm is the thing to update")
+
+		done := make(chan struct{})
+		var got []canon.Value
+		var cErr error
+		go func() { got, cErr = in.CallValues("run", canon.U32(1)); close(done) }()
+
+		// Resolve only once the import has been entered, so the resolution cannot beat the park. If it
+		// could, this arm would pass without a park ever happening — the vacuity the deferral is for.
+		select {
+		case resolve := <-resolvers:
+			resolve(canon.Value{})
+		case <-time.After(5 * time.Second):
+			t.Fatal("the host impl was never entered, so no park was reached")
 		}
-		if !errors.Is(cErr, ErrAsyncNotImplemented) {
-			t.Errorf("refused, but not as the unbuilt async tier: %v", cErr)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the lift never resumed after its waitable set was signalled — a park did not wake")
 		}
-		if !strings.Contains(cErr.Error(), "park/yield") {
-			t.Errorf("the refusal does not name the unbuilt dispatch, so it is not reporting which step "+
-				"is missing:\n%v", cErr)
+		if cErr != nil {
+			t.Fatalf("a parked lift failed to complete after resolution: %v", cErr)
+		}
+		if atomic.LoadInt32(&entered) != 1 {
+			t.Errorf("the host impl was entered %d time(s), want 1", atomic.LoadInt32(&entered))
+		}
+		// Against wasmtime's committed reading, like the first arm: a park that resumes with the WRONG
+		// value is the failure a completion-only check cannot see.
+		if len(got) != 1 {
+			t.Fatalf("run(1) returned %d values, want 1", len(got))
+		}
+		v, ok := got[0].U32()
+		if !ok {
+			t.Fatalf("run(1) returned kind %v, want u32", got[0].Type.Kind)
+		}
+		if want := wantInline(t, "1"); itoa(v) != want {
+			t.Errorf("a resumed park returned %d, wasmtime's committed reading says %s", v, want)
 		}
 	})
 }
