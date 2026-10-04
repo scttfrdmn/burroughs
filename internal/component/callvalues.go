@@ -62,10 +62,14 @@ func (in *Instantiated) CallValues(name string, args ...canon.Value) ([]canon.Va
 	if err != nil {
 		return nil, err
 	}
-	if err := fn.invokeWith(flat); err != nil {
+	// **The resolution comes back as a return value, not from a field on `fn`** (#869). `fn` is shared by
+	// every concurrent caller of this export, so reading a resolution off it handed two callers one slot —
+	// a data race `-race` reported on the concurrent acceptance arm, which passed without it.
+	resolved, err := fn.invokeWith(flat)
+	if err != nil {
 		return nil, err
 	}
-	return liftFlatResult(name, fn.sig, fn.result)
+	return liftFlatResult(name, fn.sig, resolved)
 }
 
 // resolveValueExport finds the callable function an export name denotes.

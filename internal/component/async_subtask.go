@@ -5,6 +5,7 @@ package component
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
@@ -71,17 +72,24 @@ type asyncHandles struct {
 	// tasks may run concurrently in one instance, each built-in acting on the task calling it.
 	lift *liftTask
 
-	// liftInFlight is whether this instance hosts a lift AT ALL — the at-most-one-per-instance assertion's
-	// subject, spanning the whole loop including its parks.
+	// liftsInFlight counts the lift tasks this instance hosts — **a count, not a flag** (#869).
 	//
-	// # Why this is a second field rather than `lift != nil`
+	// # Why a count, and why it is not the thing that bounds entry
 	//
-	// It was `lift != nil` until #871, and that worked only because with no re-entry *"a lift exists"* and
-	// *"a lift is running"* could not come apart. They come apart at the first park: `lift` is restored to
-	// nil there, so an assertion keyed on it would stop firing **exactly when a second lift could start**
-	// — the one moment it is needed. That is a silent regression of a guarded behaviour (witnessed since
-	// #732), not a refactor, so the two meanings are separated rather than one of them quietly weakened.
-	liftInFlight bool
+	// It was a bool until #869, asserting at most one lift per instance. The Canonical ABI allows several
+	// async-lifted tasks to be in flight in one instance concurrently, which is what #771 exists to
+	// unlock, so the bound moved: **several may be in flight, one may be entered.** The count is kept so
+	// teardown is symmetric and so a leak is visible, not to refuse anything.
+	//
+	// It was a bool and `lift != nil` before that (#871 split them), and the lesson repeats one level up:
+	// each time a new state becomes expressible, a field that meant two things has to give one of them up.
+	// Here "in flight" and "entered" come apart, exactly as "exists" and "running" did at the first park.
+	liftsInFlight int
+
+	// entrySem is a capacity-1 semaphore serializing async-lift ENTRIES — one guest execution at a time
+	// in this instance, which is what makes the single `lift` slot provably the entered task's. See
+	// enterTask for why entries wait rather than refuse.
+	entrySem chan struct{}
 }
 
 // enterTask makes t the current lift task and returns the previous one, which the caller MUST restore.
@@ -90,19 +98,60 @@ type asyncHandles struct {
 // A built-in must act on the task whose code is running, and in the stackless model that changes several
 // times within one `invokeAsyncLiftWith`. The pair is two methods rather than one deferred closure because
 // the loop restores at points that are not function exits.
-func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask) {
+//
+// # Entries SERIALIZE on a semaphore; they are not refused (#869)
+//
+// Measured (`TestConcurrentHostCallsShareOneThreadID`): every `Instance.Invoke` runs on `&in.host`, one
+// engine thread per instance, so **two concurrent host callers present the same `Thread()`**. That ruled
+// out the per-agent map #869 was registered to build — it would have collapsed two tasks into one entry
+// and crossed their results.
+//
+// **A first attempt refused an occupied slot, and running it showed why that is wrong.** With one engine
+// thread, two concurrent callers *necessarily* contend: the first is inside `inst.Invoke` with the guest
+// running, and the second arrives while that entry is live. Refusing there turned the concurrency this
+// slice exists to permit into a trap — the acceptance arm came back with one caller trapped and the other
+// parked alone, arrivals=1, so the rendezvous could never close. Contention is the normal state, not the
+// defect.
+//
+// So an entry **waits** for the slot. The semaphore is held across the whole entry — set the slot, invoke,
+// clear, release — which makes the slot provably the entered task's, and a second caller blocks only for
+// the duration of one guest execution: the loop parks *after* `inst.Invoke` returns, so the holder always
+// releases before it waits for an event.
+//
+// # Why the wait is bounded, and what the bound catches
+//
+// A plain mutex would turn one case into a **deadlock** rather than a trap: a guest re-entering an
+// async-lifted export from inside its own entry would wait for a semaphore it holds itself. Thread
+// identity cannot distinguish that case here — the re-entrant call is on the same engine thread as every
+// other — so the bound is what separates "another caller is executing" from "this caller is waiting for
+// itself". Expiry is a named trap, the same principle as the park's bound.
+func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask, err error) {
+	select {
+	case h.entrySem <- struct{}{}:
+	case <-time.After(liftEntryBound):
+		return nil, &interp.Trap{Reason: fmt.Sprintf(
+			"async canon lift could not begin an entry within %s: another entry has held the component "+
+				"instance's execution slot for longer than any single guest call should take, which is "+
+				"what a lift re-entering itself looks like (one engine thread per instance, so thread "+
+				"identity cannot tell that apart from ordinary contention)", liftEntryBound)}
+	}
 	h.mu.Lock()
 	prev = h.lift
 	h.lift = t
 	h.mu.Unlock()
-	return prev
+	return prev, nil
 }
 
-// leaveTask restores the current lift task to prev — the value enterTask returned.
+// leaveTask restores the current lift task to prev — the value enterTask returned — and releases the
+// entry semaphore, admitting whichever caller is waiting.
+//
+// Called only on the paths where enterTask SUCCEEDED: `enterAndInvoke` returns early without deferring
+// this when the entry was refused, so the release is never unpaired.
 func (h *asyncHandles) leaveTask(prev *liftTask) {
 	h.mu.Lock()
 	h.lift = prev
 	h.mu.Unlock()
+	<-h.entrySem
 }
 
 // pendingEventLocked delivers a resolved subtask's (SUBTASK, subtaski, state) event once, mirroring the
@@ -122,7 +171,9 @@ func (st *subtask) joinTo(s *waitableSet) { st.set = s }
 // currentSet reports the set this subtask is joined to, so `waitable.join` can remove it before re-joining.
 func (st *subtask) currentSet() *waitableSet { return st.set }
 
-func newAsyncHandles() *asyncHandles { return &asyncHandles{entries: []any{nil}} }
+func newAsyncHandles() *asyncHandles {
+	return &asyncHandles{entries: []any{nil}, entrySem: make(chan struct{}, 1)}
+}
 
 // addLocked registers v and returns its index (>= 1). The caller holds mu.
 //
