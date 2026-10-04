@@ -1,11 +1,27 @@
 # 0094 — Host cancellation reaches a lift task through an internal trigger this slice, because the model hands the embedder a per-call `OnCancel` and `Invoke` blocks
 
-Date: 2026-10-04 · Status: **accepted** for the mechanism, **open** for the public surface · [#887](https://github.com/scttfrdmn/burroughs/issues/887) · Sets the `cancelled` field [ADR 0092](0092-the-async-lift-abi-is-stackless-callback-because-the-first-guest-that-lifts-async-chose-it-and-the-demand-set-is-read-from-that-guest.md)'s addendum left unset
+Date: 2026-10-04 · Status: **accepted** · [#887](https://github.com/scttfrdmn/burroughs/issues/887) · Sets the `cancelled` field [ADR 0092](0092-the-async-lift-abi-is-stackless-callback-because-the-first-guest-that-lifts-async-chose-it-and-the-demand-set-is-read-from-that-guest.md)'s addendum left unset · **Amendment 1 below: the public surface was already decided and this ADR wrongly presented it as open**
 Ratio-Class: carried
 
-**The `Status:` line is split on purpose, and the split is the #647 narrowing applied rather than dodged.** Escalation is owed for *"contract (§) text, public API surface, reversing a stamped ADR"*. The cancellation **mechanism** — pending-cancel state, `TASK_CANCELLED` delivery, what `task.cancel` is now allowed to do — is none of those, so it is decided here and self-merges. The **host entry point** is public API surface by construction: whatever requests a cancellation is a thing an embedder calls. So that half is **not decided here**, it is escalated with the options and their costs below, and the mechanism is built behind a trigger no embedder can reach.
+**The mechanism is decided here under the #647 narrowing** — escalation is owed for *"contract (§) text, public API surface, reversing a stamped ADR"*, and the pending-cancel state, the `TASK_CANCELLED` delivery and what `task.cancel` may now do are none of those. The **host entry point** is public API surface, and it was **already decided** by [ADR 0085 amendment 1](0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md#amendment-1-2026-10-02--componentcall-takes-a-contextcontext-and-cancelling-it-cancels-the-task); see amendment 1 below for the correction. What this slice builds is the internal trigger that decision's implementation will sit on.
 
-That is also why this ADR earns one implementation rather than two. The mechanism is the implementation; the surface decision, when it comes, is a rename of a private trigger and not a second design.
+## Amendment 1 (2026-10-04) — the public surface was decided, not open, and this ADR escalated a settled question
+
+**The `Status:` line read *"accepted for the mechanism, open for the public surface"*, and the section below offered Scott three options.** Both were wrong: the surface was settled on 2026-10-02 by **ADR 0085 amendment 1, stamped by Scott** (*"I agree with the recommendation"*), which decides
+
+```go
+func (c *Component) Call(ctx context.Context, name string, args ...Value) ([]Value, error)
+```
+
+and that **cancelling the context cancels the in-flight task**. What this ADR called "option A" *is* that decision. So the surface is **decided and unimplemented**, which is a different state from undecided, and only the implementation is pending — it lands with ADR 0085's surface as amendment 1's own slice-3 (now [#858](https://github.com/scttfrdmn/burroughs/issues/858)).
+
+**Declining the handle form was right, and the record already supported it** without my re-deriving it: amendment 1 item 4 declines a `Start`-returning-`*Task` form **for want of a consumer**, not permanently, and notes it stays addable on top. My "declined loudly, the phase's largest API decision for its smallest reason" reached the same place by argument where a citation was available.
+
+**The lesson is the *what exists* rule applied to decisions rather than to code** (chair's words on the #894 review): *check the ADR record before escalating something as open.* I ran the measured recon on the model and on the engine, and did not run the equivalent pass over this project's own decisions — so I spent a principal's review slot on a question he had already answered, which is the same cost as a wrong option and harder to notice.
+
+The original text of the status line and the options section is left below and struck in place rather than deleted, because what was believed is the part worth keeping.
+
+**Amendment 1 does not change what this slice built.** The internal trigger is still the right mechanism and is still what the decided surface will drive; what changes is that it is implementing a decision rather than standing in for a missing one.
 
 Recorded by the actor the work reached, so no independent provenance; commits resting on it stay `Ratio-Class: carried`.
 
@@ -109,21 +125,29 @@ Two things worth stating because a summary loses both. **Both arms set PENDING_C
 
 **Burroughs' `Invoke` blocks until the task resolves.** A trigger returned by it would arrive when there is nothing left to cancel. So copying the reference's signature produces a value that is correct in type and useless in fact — the shape is downstream of a scheduling model Burroughs does not have, which is exactly the case where *a capability requirement is a mechanism choice* cuts the other way: here the reference's mechanism is the thing that cannot be lifted.
 
-Go's idiomatic inward form of the same capability is `context.Context`: the trigger is passed *in* before the call blocks, instead of handed *out* after it would not have. That is a real answer, and it is [#880](https://github.com/scttfrdmn/burroughs/issues/880)'s subject, not this slice's.
+Go's idiomatic inward form of the same capability is `context.Context`: the trigger is passed *in* before the call blocks, instead of handed *out* after it would not have. **That is also what ADR 0085 amendment 1 decided**, which the section below failed to check — see amendment 1 at the top.
 
-## Options for the host entry point
+## ~~Options for the host entry point~~ — superseded, and kept as what was believed
 
-**A. `context.Context` on the call path (#880's shape).** Go's form of the model's `OnCancel`, inverted because the call blocks. Cost: it changes an exported signature, so it is public API surface and Scott's; and #880 has its own acceptance that this slice must not pre-empt or duplicate.
+**This section was written as a live question put to Scott. It was not one.** ADR 0085 amendment 1 had already decided the surface on 2026-10-02 with his stamp, and the right move was to cite it. Struck rather than deleted, per amendment 1 above; the text stands as the record of the error.
 
-**B. A non-blocking `Invoke` variant returning a handle with `Cancel()`.** The closest structural copy of the model. Cost: it requires an async public API Burroughs does not have and has not designed — a far larger surface than cancellation, decided as a side effect of a cancellation slice. This is the option to decline loudly rather than quietly: it would be the biggest API decision in the phase, taken for the smallest reason.
+> **A. `context.Context` on the call path (#880's shape).** Go's form of the model's `OnCancel`, inverted because the call blocks. Cost: it changes an exported signature, so it is public API surface and Scott's; and #880 has its own acceptance that this slice must not pre-empt or duplicate.
+>
+> **B. A non-blocking `Invoke` variant returning a handle with `Cancel()`.** The closest structural copy of the model. Cost: it requires an async public API Burroughs does not have and has not designed — a far larger surface than cancellation, decided as a side effect of a cancellation slice. This is the option to decline loudly rather than quietly: it would be the biggest API decision in the phase, taken for the smallest reason.
+>
+> **C. An internal trigger this slice; the surface decided in #880.** The mechanism is built and witnessed against #862's readings; the trigger is unexported and test-reachable. Cost: `gate:async`'s cancellation is not embedder-reachable when this lands, and the slice must say so rather than implying a capability it withholds.
 
-**C. An internal trigger this slice; the surface decided in #880.** The mechanism is built and witnessed against #862's readings; the trigger is unexported and test-reachable. Cost: `gate:async`'s cancellation is not embedder-reachable when this lands, and the slice must say so rather than implying a capability it withholds.
+**What each option's fate actually is**, read against the stamped record rather than offered:
+
+- **A is the decision**, already taken: `Component.Call(ctx, …)`, cancelling the context cancels the task. Not an option — the thing to implement.
+- **B was already declined**, by amendment 1 item 4, **for want of a consumer** and with a note that it stays addable on top. My reasoning above reached the same conclusion independently, which is the mild version of the same error: a conclusion argued where a citation existed.
+- **C is what this slice builds**, and it is correctly scoped — not as a stand-in for a missing decision, but as the internal mechanism the decided surface will drive.
 
 ## Choice
 
-**C**, with A named as the expected successor and B declined with its reason recorded.
+**C as the mechanism, implementing A as already decided.**
 
-The mechanism is what #887 is for and what has a reference to be checked against; the surface has a separate issue, a separate acceptance, and a different principal. Building C makes the surface question *smaller* when it arrives — a trigger that works needs a caller, which is a narrower thing to decide than a trigger and a caller at once.
+The surface's implementation lands with ADR 0085's surface, which amendment 1's own ordering section calls its slice 3 and which is now [#858](https://github.com/scttfrdmn/burroughs/issues/858). Building C first still makes that slice smaller — a trigger that works needs a caller — but the reason is sequencing, not an open question.
 
 ### A second decision, which is this ADR's own rather than the model's
 
@@ -146,4 +170,4 @@ The mechanism is what #887 is for and what has a reference to be checked against
 - **Two checks, with a witness each, because one of them had none.** `awaitEvent` carries the park's check (def:789) and the dispatch loop carries the top-of-loop one (def:2129). Neutering the loop check left the **whole component suite green**, including this slice's own end-to-end witness — which drives a `wit-bindgen` guest, and a `wit-bindgen` guest awaits an import and therefore returns WAIT, so the park's check is always what delivers. That is grave #885's shape one level up (two call sites, one witness), found by falsifying rather than reading, and the repair is a hand-authored fixture that **yields repeatedly and never parks** (`testdata/lift-cancel-yield-synth.wat`) so the loop check is the only path a cancellation has. Each neuter now fails exactly one witness.
 - **The YIELD arm's second check (def:2137) is the one genuine divergence.** Burroughs' analog of its `wait_until` is `enterTask`'s semaphore acquire, and the loop does not re-check after it; such a cancel is delivered one callback entry later. That consequence really is latency rather than outcome, which is what the WAIT claim was wrongly asserted to be.
 - **A host async impl's `onCancel` must resolve its subtask, or a conforming guest panics** — and this is a separate, filed gap rather than a property of this slice. The model's `canon_subtask_cancel` **waits** for resolution when the cancel is sync-lowered (`thread.wait_until(subtask.resolved)`, def:2427-2428) and returns BLOCKED only on the async form; Burroughs returns BLOCKED unconditionally. `wit-bindgen`'s drop glue is synchronous, cannot await, and meets BLOCKED in `in_progress_update`'s `other => panic!("unknown code {other:#x}")`. Measured as a bare `unreachable` with no receipt on this slice's first run. It is `subtask.cancel`'s arm — the parent's path — so it is out of scope here and filed with the citation.
-- `gate:async` cancellation is **not embedder-reachable** when this lands. Said in the slice's report rather than implied.
+- `gate:async` cancellation is **not embedder-reachable** when this lands. Said in the slice's report rather than implied — and the reason is that the decided surface (`Component.Call(ctx, …)`, ADR 0085 amendment 1) is **unimplemented**, which is a sequencing fact rather than an open design question. [#858](https://github.com/scttfrdmn/burroughs/issues/858) is where it becomes reachable.

@@ -86,8 +86,13 @@ own condition rather than as a prediction.
   **The host entry point is internal, and the slice says so rather than implying a capability it
   withholds.** The model hands the embedder a per-call `OnCancel` (`Store.invoke` returns it); Burroughs'
   `Invoke` **blocks**, so a trigger it returned would arrive when there was nothing left to cancel. Go's
-  inward form is a `context.Context`, which is public API surface and therefore Scott's — so the mechanism
-  is built behind an unexported trigger and the surface is [#880](https://github.com/scttfrdmn/burroughs/issues/880)'s.
+  inward form is a `context.Context` — **which ADR 0085 amendment 1 already decided**, stamped by Scott on
+  2026-10-02: `Component.Call(ctx, name, args...)`, and cancelling the context cancels the task. So the
+  surface is **decided and unimplemented**, not open, and this trigger is the mechanism its implementation
+  drives; it becomes embedder-reachable with ADR 0085's surface in
+  [#858](https://github.com/scttfrdmn/burroughs/issues/858). ADR 0094's own text presented that as an open
+  question put to Scott and is corrected by its amendment 1 — *the "what exists" rule applies to the
+  decision record, not only to the code.*
   **Refusing a cancel against a non-started task is this project's decision, not the model's**: the model
   *asserts* STARTED, specifying nothing, so Burroughs refuses with the state named — not a trap, because a
   host that raced a resolution did nothing wrong, and not a silent no-op, because then "I cancelled it"

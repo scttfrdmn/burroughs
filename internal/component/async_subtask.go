@@ -106,20 +106,29 @@ type asyncHandles struct {
 // requestCancelAll requests cancellation of every lift task this instance currently hosts, and is the
 // internal trigger ADR 0094 builds the mechanism behind.
 //
-// # Why this is unexported, and what it is standing in for
+// # Why this is unexported, and what it implements
 //
 // The model's host entry point is a per-call `OnCancel` handed back by the lift — `Store.invoke` returns
 // it (def:510-518). **Burroughs cannot copy that shape**: `Invoke` blocks until the task resolves, so a
-// trigger it returned would arrive when there is nothing left to cancel. Go's inward form of the same
-// capability is a `context.Context` passed in, which is #880's subject and **public API surface**, so it
-// is Scott's and not this slice's. The mechanism is therefore built behind a trigger no embedder can
-// reach, and the slice says so rather than implying a capability it withholds.
+// trigger it returned would arrive when there is nothing left to cancel. Go's inward form is a
+// `context.Context` passed in.
+//
+// **That surface is DECIDED, not open**: ADR 0085 amendment 1, stamped by Scott on 2026-10-02, sets
+// `Component.Call(ctx, name, args...)` and makes cancelling the context cancel the in-flight task. This
+// comment said it was *"#880's subject and public API surface, so it is Scott's and not this slice's"* —
+// which escalated a settled question, because I checked the model and the engine and not the project's
+// own decision record. **Decided and unimplemented is a different state from undecided**, and this
+// trigger is the mechanism that decision's implementation drives rather than a stand-in for a missing
+// one. It lands with [ADR 0085]'s surface, amendment 1's own slice 3, now [#858].
 //
 // # Why "all" rather than one
 //
-// A lift task has no embedder-facing identity. Naming one would require inventing the handle whose shape
-// is exactly the deferred question, so the trigger takes the only subject available without prejudging
-// it: the instance. When the surface arrives, a per-call trigger is a narrowing of this, not a rewrite.
+// A lift task has no embedder-facing identity **yet** — `Component.Call(ctx, …)` gives each call its own
+// context, so the per-call subject arrives with the surface. Until then the trigger takes the only
+// subject available: the instance. A per-call trigger is then a narrowing of this, not a rewrite.
+//
+// [ADR 0085]: ../../docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md
+// [#858]: https://github.com/scttfrdmn/burroughs/issues/858
 //
 // Returns the first refusal, so a request against an instance with nothing running is observable rather
 // than silently successful — see ErrCancelNotRunning for why that is a refusal and not a no-op.
