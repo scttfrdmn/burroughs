@@ -74,6 +74,9 @@ func (e *readableFutureEnd) pendingEventLocked() (event, bool) {
 // joinTo records the set this end belongs to, so a completed copy can wake its waiters.
 func (e *readableFutureEnd) joinTo(s *waitableSet) { e.set = s }
 
+// currentSet reports the set this end is joined to, so `waitable.join` can remove it before re-joining.
+func (e *readableFutureEnd) currentSet() *waitableSet { return e.set }
+
 // resolveLocked ends the read with a result and wakes any set the end is joined to. Reached where the kind
 // is known (the copy completion), so the signal path is not on the waitable interface. The caller holds mu.
 func (e *readableFutureEnd) resolveLocked(r copyResult) {
@@ -179,6 +182,9 @@ func (e *writableFutureEnd) pendingEventLocked() (event, bool) {
 }
 
 func (e *writableFutureEnd) joinTo(s *waitableSet) { e.set = s }
+
+// currentSet reports the set this end is joined to, so `waitable.join` can remove it before re-joining.
+func (e *writableFutureEnd) currentSet() *waitableSet { return e.set }
 
 // completeWriteLocked ends a pending future.write with result r (CANCELLED for a cancel; DROPPED if the read
 // end drops), arms the event, and wakes the set. Mirrors writableStreamEnd.completeWriteLocked. DROPPED goes

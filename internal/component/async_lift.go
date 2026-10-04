@@ -5,6 +5,7 @@ package component
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
@@ -29,6 +30,26 @@ type liftTask struct {
 	// So the field exists for `task.cancel` to check and for #862 to set, and the cancelled branch is
 	// REFUSED by name rather than implemented against semantics nobody has measured yet.
 	cancelled bool
+
+	// # The re-entry state (#871), which exists because the guest's frame does not
+	//
+	// When the callee or a callback returns WAIT or YIELD, the guest's core frame is **gone** — that is
+	// what returning a dispatch code instead of blocking means. So everything the next entry needs lives
+	// here, on the task, rather than on the Go stack of the call that parked.
+	//
+	// This is the field set that makes the stackless model different in kind from the engine's other
+	// park: `waitableSetWait` keeps the guest's frame alive on the Go stack inside a `c.Blocking`
+	// excursion, so it needs no durable state at all. The two cannot share a mechanism.
+	//
+	// `cb` lives on the TASK and not only on the compFunc because #869 gives one instance several
+	// concurrent lift tasks, from different exports, each with its own callback. Keyed per task now, it
+	// needs no second move then.
+	cb coreDef // the callback core func (cn.Opts.Callback), threaded through at walk time
+
+	// waitSet is the waitable-set index the guest named in its WAIT return, kept for the diagnostic when
+	// the park's bound expires: the index is what tells a reader WHICH set never produced an event, and
+	// by that point the packed return it came from is several entries behind.
+	waitSet uint32
 }
 
 // taskReturn implements `canon task.return` (0x09, definitions.py canon_task_return def:2329): it resolves
@@ -134,4 +155,80 @@ func unpackCallbackResult(packed uint32) (callbackCode, uint32, error) {
 			"async-lift callback returned code %d, above max %d (EXIT/YIELD/WAIT)", uint32(code), uint32(callbackCodeMax))}
 	}
 	return code, packed >> 4, nil
+}
+
+// liftParkBound bounds one park (#871). **Its expiry is a named outcome, not a hang** — the same
+// principle as `ciwatch.sh`'s `unfinished` verdict: a wait that can end in silence reports "still
+// waiting" as though it were "nothing to report".
+//
+// It is a `var` solely so a witness can shorten it; nothing in the engine reassigns it. The value is a
+// backstop for a guest or host that never resolves, not a scheduling parameter, so it is deliberately far
+// above any legitimate wait — [[an-unasserted-distance-is-the-vacuum]] cuts the other way here, since a
+// bound close to real waits would fire on load rather than on a defect.
+var liftParkBound = 30 * time.Second
+
+// ErrLiftParkExpired is a park that reached its bound with no event. Its own error rather than a generic
+// trap, because the two readings a caller needs to separate are *"the guest is wrong"* and *"nothing ever
+// resolved the thing it waited for"*, and only the second is this.
+var ErrLiftParkExpired = errors.New("component: async-lift park expired with no event")
+
+// awaitEvent parks until a member of waitable set `si` has a pending event, then delivers it (#871).
+//
+// # This is the stackless park, and it is not waitableSetWait
+//
+// The guest's frame is gone: it returned WAIT rather than blocking. So **no agent is blocked here** — the
+// wait is on the Go goroutine that called the async-lifted export, which is the caller waiting for its own
+// call to resolve. `waitableSetWait` is the other park, where the guest's frame stays alive inside a
+// `c.Blocking` excursion and the *agent* is marked blocked. Same observable behaviour, different mechanism,
+// and the reason they cannot share an implementation (#871's recon).
+//
+// The readiness test is the SAME `set.pendingEventLocked()` the other park and `waitable-set.poll` use, so
+// an event delivered through a callback re-entry is byte-for-byte the one a parked `wait` would have got.
+// A second readiness notion is the defect this shares its predicate to avoid.
+func (h *asyncHandles) awaitEvent(si uint32, bound time.Duration) (event, error) {
+	deadline := time.NewTimer(bound)
+	defer deadline.Stop()
+
+	// num_waiting, so waitable-set.drop traps on a set this loop is parked on. The model counts in
+	// `wait_from_callback` (def:782-786) exactly as it does in `wait`, so the stackless park is a waiter
+	// too — counting only the blocking excursion would make drop's trap depend on which park the guest
+	// used. Resolved once, outside the loop, so a re-check pass does not double-count.
+	h.mu.Lock()
+	set0, ok0 := handleAt[*waitableSet](h, si)
+	if !ok0 {
+		h.mu.Unlock()
+		return event{}, &interp.Trap{Reason: fmt.Sprintf(
+			"async-lift WAIT named handle %d, which is not a waitable set", si)}
+	}
+	set0.waiting++
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		set0.waiting--
+		h.mu.Unlock()
+	}()
+
+	for {
+		h.mu.Lock()
+		set, ok := handleAt[*waitableSet](h, si)
+		if !ok {
+			h.mu.Unlock()
+			return event{}, &interp.Trap{Reason: fmt.Sprintf(
+				"async-lift WAIT named handle %d, which is not a waitable set", si)}
+		}
+		if e, ready := set.pendingEventLocked(); ready {
+			h.mu.Unlock()
+			return e, nil
+		}
+		// The wake channel is re-read under the lock each pass: signalLocked CLOSES and REPLACES it, so a
+		// channel captured once would be the stale, already-closed one and this would spin.
+		wake := set.wake
+		h.mu.Unlock()
+		select {
+		case <-wake: // a member resolved (or another waiter's cycle) — re-check
+		case <-deadline.C:
+			return event{}, fmt.Errorf("%w: waitable set %d produced nothing in %s — the host impl or "+
+				"guest that would resolve it never did", ErrLiftParkExpired, si, bound)
+		}
+	}
 }

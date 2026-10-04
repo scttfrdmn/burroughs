@@ -28,10 +28,12 @@ type compFunc struct {
 
 	// Async (callback) lift fields (2nd async guest, #785): when async is set, invoke() runs the callback
 	// loop rather than a single sync call. `core` is the callee (the first call, with the lifted params);
-	// `h` holds the durable lift task. Step 1 is the loop skeleton (first-call -> EXIT -> resolve); the
-	// callback core func for the re-entry/park is threaded in step 2.
+	// `h` holds the current lift task. `cb` is the callback core func for re-entry, threaded in #871 —
+	// which is also when it was first captured at all: before that, `cn.Opts.Callback` was only
+	// nil-checked to set `async`, so nothing held the func the loop had to call.
 	async  bool
 	h      *asyncHandles
+	cb     coreDef        // the `(callback $f)` canonopt's core func — the re-entry target
 	result []interp.Value // the async lift's last resolution (what task.return lowered), for the caller/oracle
 }
 
@@ -74,47 +76,115 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) error {
 	// measured it (see testdata/asynclift/PARITY-BLOCKERS.md): `asyncHandles` is per-instance, so a second
 	// agent's lift traps here too. That is the blocker the concurrent parity arm hits, and #869 is where
 	// the assertion becomes per-agent — which is what this comment always claimed.
-	task := &liftTask{}
+	task := &liftTask{cb: f.cb}
 	f.h.mu.Lock()
-	if f.h.lift != nil {
+	if f.h.liftInFlight {
 		f.h.mu.Unlock()
 		return &interp.Trap{Reason: "async canon lift entered while another lift task is already in flight in this component instance"}
 	}
-	f.h.lift = task
+	f.h.liftInFlight = true
 	f.h.mu.Unlock()
-	// Teardown keys on the task, not the loop: clear the current-task pointer however invoke exits
-	// (normal EXIT, a trap, or — step 3 — cancellation resolving without a normal EXIT).
+	// Teardown keys on the task, not the loop: release the in-flight marker however invoke exits
+	// (normal EXIT, a trap, a park's bound expiring, or — step 3 — cancellation resolving without a
+	// normal EXIT).
+	//
+	// **This clears `liftInFlight`, not `lift`.** The current-task slot is restored by each entry's own
+	// leaveTask, so by the time this runs it already holds whatever it held before the loop. Clearing it
+	// here too would overwrite an OUTER task's slot in the nested case — the bug the two fields were
+	// separated to make impossible.
 	defer func() {
 		f.h.mu.Lock()
-		f.h.lift = nil
+		f.h.liftInFlight = false
 		f.h.mu.Unlock()
 	}()
 
 	// First call: the callee, carrying the lifted params (none for run()). Its packed return drives dispatch.
-	res, err := f.core.inst.Invoke(f.core.name, params...)
+	res, err := f.enterAndInvoke(task, f.core, params)
 	if err != nil {
 		return err
 	}
-	if len(res) != 1 {
-		return fmt.Errorf("%w: async lift callee returned %d core values, want 1 (packed)", ErrUnsupportedForm, len(res))
-	}
-	code, _, err := unpackCallbackResult(uint32(res[0].Bits))
-	if err != nil {
-		return err
-	}
-	switch code {
-	case callbackExit:
-		f.h.mu.Lock()
-		resolved := f.h.lift.resolved
-		f.h.mu.Unlock()
-		if !resolved {
-			return &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
+
+	// The loop. Each iteration decodes one packed return and either resolves, re-enters immediately
+	// (YIELD), or parks and re-enters with an event (WAIT). The callee's return and every callback's
+	// return go through the SAME decode — a second decode for the re-entry path is how the two could
+	// drift, which is what #788's multi-cycle pin exists to catch.
+	for {
+		if len(res) != 1 {
+			return fmt.Errorf("%w: async lift callee returned %d core values, want 1 (packed)", ErrUnsupportedForm, len(res))
 		}
-		f.result = task.result // the resolution, for the caller/oracle to read
-		return nil
-	default:
-		// WAIT / YIELD: the callback re-entry and the park — step 2, not the EXIT-only skeleton.
-		return fmt.Errorf("%w: async-lift dispatch code %d (park/yield) is step 2, not yet built", ErrAsyncNotImplemented, uint32(code))
+		code, si, uerr := unpackCallbackResult(uint32(res[0].Bits))
+		if uerr != nil {
+			return uerr
+		}
+		switch code {
+		case callbackExit:
+			// **Read the LOCAL task, never the shared slot.** This was `f.h.lift.resolved`, which is
+			// correct only while one task exists: with interleaving it asks whether *whatever task is
+			// current* resolved, and the answer can be another task's. A wrong answer here is silent —
+			// the caller gets the wrong result or a spurious trap — which is worse than the visible
+			// at-most-one assertion the same slice had to split in two.
+			if !task.resolved {
+				return &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
+			}
+			f.result = task.result // the resolution, for the caller/oracle to read
+			return nil
+
+		case callbackYield:
+			// A cooperative yield: no set, no event. Re-enter at once with EVENT_NONE. There is nothing
+			// to wait for, so a yield that parked would deadlock on a set the guest never named — and
+			// `si` is not read here for exactly that reason (the model packs no index with YIELD).
+			task.waitSet = 0
+			res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventNone}))
+			if err != nil {
+				return err
+			}
+
+		case callbackWait:
+			// Park until set `si` has an event, then re-enter carrying it. The park is in Go on this
+			// goroutine — the guest's agent was released when it returned WAIT, which is the whole
+			// difference from waitableSetWait's blocking excursion.
+			task.waitSet = si
+			ev, aerr := f.h.awaitEvent(si, liftParkBound)
+			if aerr != nil {
+				return aerr
+			}
+			res, err = f.enterAndInvoke(task, task.cb, eventArgs(ev))
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// enterAndInvoke makes task current, invokes one core func, and restores the previous current task (#871).
+//
+// # Why the set/restore is here and not at the loop's edges
+//
+// A built-in must act on the task whose code is running, and in the stackless model that changes on every
+// entry and every return. Pairing them in one function means **no entry can be added that forgets the
+// restore** — the loop above cannot invoke a core func except through this.
+//
+// The restore is not deferred to the loop's exit, because between a WAIT return and the next re-entry the
+// task's code is NOT running and `h.lift` must be nil: a `task.return` arriving then is a guest error, and
+// leaving the slot populated would make it silently succeed against a parked task.
+func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.Value) ([]interp.Value, error) {
+	if target.inst == nil {
+		return nil, fmt.Errorf("%w: async lift has no invocable core func for this entry (callback unresolved)",
+			ErrUnsupportedForm)
+	}
+	prev := f.h.enterTask(task)
+	defer f.h.leaveTask(prev)
+	return target.inst.Invoke(target.name, args...)
+}
+
+// eventArgs flattens an event into the callback's three i32 parameters — `__callback(ev0, ev1, ev2) -> u32`
+// (definitions.py canon_lift's callback invocation). EVENT_NONE is the all-zero triple, which is what a
+// YIELD re-entry carries.
+func eventArgs(ev event) []interp.Value {
+	return []interp.Value{
+		interp.I32(int32(ev.code)),
+		interp.I32(int32(ev.p1)),
+		interp.I32(int32(ev.p2)),
 	}
 }
 
@@ -195,11 +265,22 @@ func (w *walker) funcStep(d Def) error {
 		}
 		lf := &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn)}
 		if cn.Opts.Async && cn.Kind == CanonLift && cn.Opts.Callback != nil {
-			// Stackless (callback) async lift: invoke() runs the loop over the durable lift task. Step 1 is
-			// the loop skeleton; the callback core func for re-entry is threaded in step 2. A no-callback
-			// (stackful) async lift is not bound here — it refuses as unbuilt (unbuiltAsyncSurface).
+			// Stackless (callback) async lift: invoke() runs the loop over the durable lift task. A
+			// no-callback (stackful) async lift is not bound here — it refuses as unbuilt
+			// (unbuiltAsyncSurface).
+			//
+			// **The callback's core func is resolved here** (#871). Until this slice the canonopt was only
+			// nil-checked, so the loop had nothing to re-enter and every WAIT refused by name. Resolved at
+			// bind rather than at first park, because an out-of-range callback index is a malformed
+			// component and that is a refusal the loop should never have to make mid-park.
+			cbIdx := *cn.Opts.Callback
+			if int(cbIdx) >= len(w.coreSpace[SpaceCoreFunc]) {
+				return fmt.Errorf("component: canon lift names callback core func %d of %d",
+					cbIdx, len(w.coreSpace[SpaceCoreFunc]))
+			}
 			lf.async = true
 			lf.h = w.async
+			lf.cb = w.coreSpace[SpaceCoreFunc][cbIdx]
 		}
 		w.compFuncs = append(w.compFuncs, compDef{fn: lf})
 	case SectionImport:
@@ -511,6 +592,19 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 // the 🔀 family — including stream.read, where the guest writes and the host reads over an internal path,
 // and task.cancel (0x05), which the committed suspending guest DOES import and is therefore slice 2's engine
 // work rather than a deferral waiting for a consumer.
+//
+// # This predicate answers BOUND, not EXECUTES, and the two were conflated (#871)
+//
+// Every op listed here is *bound* to something. Until this slice one of them — `waitable-set.drop` (0x22)
+// — was bound to a **call-time refusal**, so it was listed here while the engine did not execute it. The
+// 47-row classification's `claimsBuilt()` is compared against this predicate and its status means *"this
+// engine executes"*, so the table asserted something false about 0x22 and stayed green, because the
+// comparator cannot see the difference between bound-to-an-impl and bound-to-a-refusal.
+//
+// 0x22 now has a real impl, and nothing else is bound to a refusal (`refuseAtCall` was deleted for want of
+// callers), so no row is currently wrong. **A future actor binding another call-time refusal re-opens
+// it**, and the fix then is not to add a row here but to give the classification a third claim —
+// bound-but-refusing — distinct from built and from refused-at-bind.
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
 	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x05, 0x06, 0x0d, 0x0a, 0x0b, 0x09, 0x15, 0x17, 0x19:

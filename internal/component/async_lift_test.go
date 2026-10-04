@@ -7,8 +7,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
@@ -188,10 +191,15 @@ func TestAsyncLiftAtMostOneTaskPerAgentTraps(t *testing.T) {
 	}
 	defer in.Close()
 	cd := in.export.exports["run"]
-	// A lift task already in flight in this component INSTANCE (stands in for a re-entrant caller). Said
+	// A lift already in flight in this component INSTANCE (stands in for a re-entrant caller). Said
 	// "on this agent" until #857's recon measured the scope: `asyncHandles` is per-instance, so this also
 	// traps a *different* agent's lift — which is the blocker the concurrent parity arm hits (#869).
-	in.w.async.lift = &liftTask{}
+	//
+	// **`liftInFlight`, not `lift`** (#871). The assertion's subject moved when the two meanings came
+	// apart: `lift` is now the CURRENT task, restored to nil at every park, so setting it here would no
+	// longer reproduce the condition being asserted. This witness failed loudly on the split rather than
+	// passing vacuously, which is the only reason the move is visible at all.
+	in.w.async.liftInFlight = true
 	err = cd.fn.invoke()
 	if err == nil {
 		t.Fatal("entering an async lift with one already in flight did not trap — the at-most-one assertion is silent")
@@ -199,6 +207,113 @@ func TestAsyncLiftAtMostOneTaskPerAgentTraps(t *testing.T) {
 	var trap *interp.Trap
 	if !errors.As(err, &trap) {
 		t.Fatalf("want a Trap naming the in-flight lift, got %v", err)
+	}
+}
+
+// TestAsyncLiftAtMostOneTaskTrapsWhileGenuinelyParked is the ORGANIC witness the test above promised.
+//
+// # Why it could not be written before #871
+//
+// That test induces the condition by setting a field, and its own comment said the byte-driven version
+// *"lands with step 2 … the EXIT-only step-1 path never parks, so there is no organic overlap to
+// synthesize yet"*. Step 2 is this slice: a lift can now be genuinely parked, so a second entry during
+// that window is reachable without touching any field.
+//
+// # And it is the falsification for splitting `lift` from `liftInFlight`
+//
+// With one field the assertion was `lift != nil`, and `lift` is restored to nil at every park — so a
+// single-field engine **permits** this entry. That is a silent regression of a guarded behaviour, and
+// this arm is what refuses to let it happen.
+//
+// **Watched die, and the first version of it did not.** Reverting the split to `lift != nil` left this arm
+// passing, because the import's signal fires while the guest is still unwinding toward its WAIT return —
+// so the second call checked a slot that was still set and trapped for the wrong reason. The arm was
+// protected by timing. It now polls for the real parked state (`lift == nil && liftInFlight`) before the
+// second entry, and under the revert it fails: the second lift runs, parks on its own set, and expires.
+func TestAsyncLiftAtMostOneTaskTrapsWhileGenuinelyParked(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/asynclift/suspending/component.wasm")
+	if err != nil {
+		t.Fatalf("the committed suspending guest is missing: %v", err)
+	}
+	// `tick` defers forever, so the first lift reaches its park and stays there for the whole test.
+	h := NewHost(io.Discard, io.Discard, nil)
+	parked := make(chan struct{})
+	var once sync.Once
+	h.asyncImpls = map[string]asyncLowerImpl{
+		"tick": func(_ *interp.CanonCaller, onStart func() []interp.Value, _ func(canon.Value)) (func(), error) {
+			onStart()
+			// Signalled from inside the import, so the second entry happens when the guest has
+			// DEMONSTRABLY suspended rather than after a duration — the rendezvous discipline the
+			// committed harness uses, for the same reason.
+			once.Do(func() { close(parked) })
+			return func() {}, nil
+		},
+	}
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+
+	// Shorten the bound: this test WANTS the park to expire, since nothing will ever resolve `tick`, and
+	// the engine's 30s backstop is not a test's timescale.
+	restore := liftParkBound
+	liftParkBound = 300 * time.Millisecond
+	defer func() { liftParkBound = restore }()
+
+	first := make(chan error, 1)
+	go func() { _, e := in.CallValues("run", canon.U32(1)); first <- e }()
+
+	select {
+	case <-parked:
+	case e := <-first:
+		t.Fatalf("the first lift returned before reaching its park, so there is no overlap to witness: %v", e)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first lift never entered `tick`, so it never parked")
+	}
+
+	// **Wait for the task to be GENUINELY parked, not merely for `tick` to have been entered.**
+	//
+	// Measured: without this the arm passed against the pre-#871 single-field assertion, because the
+	// import's signal fires while the guest is still unwinding toward its WAIT return — so `h.lift` was
+	// still set when the second call made its check, and a `lift != nil` assertion trapped for the wrong
+	// reason. The arm was protected by timing rather than by the property it claimed to test, which is
+	// only visible by running the falsification.
+	//
+	// The parked state is exactly `lift == nil && liftInFlight`: no task's code is running, and a lift
+	// exists. Polling for it is what puts the second call inside the window.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		in.w.async.mu.Lock()
+		cur, inFlight := in.w.async.lift, in.w.async.liftInFlight
+		in.w.async.mu.Unlock()
+		if cur == nil && inFlight {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the first lift never reached a park (current task %v, in flight %v)", cur, inFlight)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// The window: the first lift is parked, so `h.lift` is nil and only `liftInFlight` says a lift exists.
+	_, second := in.CallValues("run", canon.U32(2))
+	if second == nil {
+		t.Fatal("a second async lift was PERMITTED while the first was parked — the at-most-one assertion " +
+			"does not span parks, which is what `liftInFlight` exists for")
+	}
+	var trap *interp.Trap
+	if !errors.As(second, &trap) {
+		t.Errorf("the second entry was refused, but not as a Trap naming the in-flight lift: %v", second)
+	} else if !strings.Contains(trap.Reason, "already in flight") {
+		t.Errorf("the trap does not name the in-flight lift: %q", trap.Reason)
+	}
+
+	// Drain the first call so the test does not leak a goroutine past its own end; it expires at the
+	// shortened bound, which is the named outcome rather than a hang.
+	if e := <-first; !errors.Is(e, ErrLiftParkExpired) {
+		t.Errorf("the parked first lift ended as %v, want ErrLiftParkExpired", e)
 	}
 }
 
@@ -358,20 +473,22 @@ func TestP3AsyncCancelStillRefusedByName(t *testing.T) {
 	}
 }
 
-// TestWaitableSetDropRefusesAtCallNotAtBind witnesses the 0x22 tightening FIRING on real bytes (#792, #732):
-// a synthesized guest that creates a waitable set and DROPS it. Two halves, both load-bearing:
+// TestWaitableSetDropRunsOnRealBytes is the re-pointed 0x22 witness (#792's expiry, reached in #871).
 //
-//   - It INSTANTIATES. The refusal is at the call, not at bind, because bound-is-not-run cuts both ways:
-//     `p3async-hello` binds 0x22 (its wit-bindgen surface imports it) and never calls it, so a bind-time
-//     refusal would turn the tier's end-to-end exit condition red for an op that guest never executes
-//     (measured before choosing the placement).
-//   - Executing it REFUSES BY NAME with ErrAsyncNotImplemented, naming waitable-set.drop — so a guest that
-//     does reach the uncertified path fails legibly instead of silently diverging from the model (which
-//     traps on dropping a set with live members or waiters, where the deleted impl had neither trap).
+// # What it used to assert, and why that is gone
 //
-// Expiry: a guest that drops a waitable set. Then 0x22 is rebuilt with the model's two traps, its oracle
-// pin, and its firing witness — built for a consumer, not ahead of one.
-func TestWaitableSetDropRefusesAtCallNotAtBind(t *testing.T) {
+// It asserted that executing `waitable-set.drop` **refused by name** — the #792 tightening, which deleted
+// an impl that removed the table entry without the model's two traps. Its own doc comment named the
+// expiry: *"a guest that drops a waitable set. Then 0x22 is rebuilt with the model's two traps, its oracle
+// pin, and its firing witness."*
+//
+// That expiry arrived from an unexpected direction: not a new guest, but **this slice's park**. The
+// committed suspending guest drops its set after resuming, which it could never reach while every WAIT
+// refused. So the refusal is gone and the arm is re-pointed at the behaviour that replaced it.
+//
+// The instantiate half is kept verbatim in spirit: a guest that binds 0x22 must instantiate, which was
+// true under the refusal and must stay true under the implementation.
+func TestWaitableSetDropRunsOnRealBytes(t *testing.T) {
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	b, err := os.ReadFile("testdata/async-waitset-drop-synth.wasm")
 	if err != nil {
@@ -379,22 +496,136 @@ func TestWaitableSetDropRefusesAtCallNotAtBind(t *testing.T) {
 	}
 	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
 	if err != nil {
-		t.Fatalf("a guest that BINDS waitable-set.drop must still instantiate (the refusal is at the call, "+
-			"not at bind — p3async-hello binds it and never calls it): %v", err)
+		t.Fatalf("a guest that binds waitable-set.drop must instantiate: %v", err)
 	}
 	defer in.Close()
 	cd, ok := in.export.exports["run"]
 	if !ok || cd.fn == nil {
 		t.Fatal("no run export")
 	}
-	err = cd.fn.invoke()
-	if err == nil {
-		t.Fatal("calling waitable-set.drop did not refuse — the uncertified path ran silently")
+	// The fixture creates a set and drops it — empty, no waiters, so both of the model's traps are
+	// inapplicable and the drop must simply succeed.
+	if err = cd.fn.invoke(); err != nil {
+		t.Fatalf("a guest dropping an empty, unwaited waitable set must succeed: %v", err)
 	}
-	if !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Fatalf("refusal is not ErrAsyncNotImplemented (gate open, mechanism absent): %v", err)
+}
+
+// TestWaitableSetDropTrapsOnMembersAndOnWaiters pins the two traps #792 deleted an impl for lacking
+// (`WaitableSet.drop`, def:794-796).
+//
+// # Three arms, and the third is the vacuity check
+//
+// The traps are asserted over the impl rather than over bytes because **no committed guest can construct
+// either state**: a guest that drops a set it still has members in, or that another agent is parked on, is
+// precisely the malformed case the traps exist for, and synthesizing one would be writing a guest to be
+// wrong. The real-bytes path is covered by the arm above, so this is the helper-vs-path split made on
+// purpose rather than by omission.
+//
+// The success arm is what keeps the other two honest: without it, an impl that trapped unconditionally
+// would pass both trap arms.
+func TestWaitableSetDropTrapsOnMembersAndOnWaiters(t *testing.T) {
+	// newSet installs an empty set at a fresh handle and returns both.
+	newSet := func() (*asyncHandles, uint32, *waitableSet) {
+		h := newAsyncHandles()
+		s := &waitableSet{wake: make(chan struct{})}
+		h.mu.Lock()
+		si := uint32(h.addLocked(s))
+		h.mu.Unlock()
+		return h, si, s
 	}
-	if got := err.Error(); !strings.Contains(got, "waitable-set.drop") {
-		t.Errorf("refusal %q must name waitable-set.drop (refused BY NAME)", got)
+
+	t.Run("an_empty_unwaited_set_drops", func(t *testing.T) {
+		h, si, _ := newSet()
+		if _, err := waitableSetDrop(h)(nil, []interp.Value{interp.I32(int32(si))}); err != nil {
+			t.Fatalf("dropping an empty, unwaited set must succeed: %v", err)
+		}
+		// The handle is gone: a second drop must not find a set. This is what makes it a removal rather
+		// than a no-op that happened to return nil.
+		if _, err := waitableSetDrop(h)(nil, []interp.Value{interp.I32(int32(si))}); err == nil {
+			t.Error("the handle survived its own drop — the entry was never removed")
+		}
+	})
+
+	t.Run("a_set_with_a_joined_member_traps", func(t *testing.T) {
+		h, si, s := newSet()
+		st := &subtask{}
+		h.mu.Lock()
+		joinWaitableLocked(st, s)
+		h.mu.Unlock()
+		_, err := waitableSetDrop(h)(nil, []interp.Value{interp.I32(int32(si))})
+		if err == nil {
+			t.Fatal("dropping a set with a joined waitable did not trap (WaitableSet.drop traps on a " +
+				"non-empty set)")
+		}
+		var trap *interp.Trap
+		if !errors.As(err, &trap) {
+			t.Fatalf("want a Trap, got %v", err)
+		}
+		if !strings.Contains(trap.Reason, "joined waitable") {
+			t.Errorf("the trap does not say the set was non-empty: %q", trap.Reason)
+		}
+	})
+
+	t.Run("a_set_with_a_parked_waiter_traps", func(t *testing.T) {
+		h, si, s := newSet()
+		h.mu.Lock()
+		s.waiting++ // what both parks do for the duration of the park
+		h.mu.Unlock()
+		_, err := waitableSetDrop(h)(nil, []interp.Value{interp.I32(int32(si))})
+		if err == nil {
+			t.Fatal("dropping a set with a parked waiter did not trap (WaitableSet.drop traps on " +
+				"num_waiting > 0)")
+		}
+		var trap *interp.Trap
+		if !errors.As(err, &trap) {
+			t.Fatalf("want a Trap, got %v", err)
+		}
+		if !strings.Contains(trap.Reason, "parked on it") {
+			t.Errorf("the trap does not say the set had waiters: %q", trap.Reason)
+		}
+	})
+}
+
+// TestWaitableJoinLeavesThePreviousSet pins the step of `Waitable.join` this engine never had
+// (def:737-743: `if self.wset: self.wset.elems.remove(self)`).
+//
+// Without it a re-joined waitable stayed a member of every set it had ever been in, so its resolution
+// would deliver an event to waiters on a set it had supposedly left — and `waitable-set.drop` would trap
+// on a stale membership the guest believed it had removed. Not needed by any witness in this slice; pinned
+// because it is the same model line, and an unexercised half of a three-step operation is the kind of gap
+// the #792 audit was about.
+func TestWaitableJoinLeavesThePreviousSet(t *testing.T) {
+	h := newAsyncHandles()
+	a := &waitableSet{wake: make(chan struct{})}
+	bSet := &waitableSet{wake: make(chan struct{})}
+	st := &subtask{}
+
+	h.mu.Lock()
+	joinWaitableLocked(st, a)
+	h.mu.Unlock()
+	if len(a.members) != 1 {
+		t.Fatalf("after joining set A it has %d members, want 1", len(a.members))
+	}
+
+	h.mu.Lock()
+	joinWaitableLocked(st, bSet)
+	h.mu.Unlock()
+	if len(bSet.members) != 1 {
+		t.Errorf("after re-joining to set B it has %d members, want 1", len(bSet.members))
+	}
+	if len(a.members) != 0 {
+		t.Errorf("set A still has %d member(s) after the waitable left it — a resolution would wake A's "+
+			"waiters about a waitable that is no longer in A", len(a.members))
+	}
+
+	// And the unjoin (si == 0 → join(nil)), which is the step the park actually drove.
+	h.mu.Lock()
+	joinWaitableLocked(st, nil)
+	h.mu.Unlock()
+	if len(bSet.members) != 0 {
+		t.Errorf("after unjoining, set B still has %d member(s)", len(bSet.members))
+	}
+	if st.currentSet() != nil {
+		t.Error("after unjoining, the waitable still points at a set")
 	}
 }
