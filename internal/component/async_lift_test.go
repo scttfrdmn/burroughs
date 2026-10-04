@@ -177,26 +177,28 @@ func TestAsyncLiftExitOnlyResolvesViaTaskReturn(t *testing.T) {
 	}
 }
 
-// TestAnEntryThatCannotBeginTrapsAtItsBound is this arm's THIRD subject, and the churn is the record.
+// TestAnEntryWaitsForTheExecutionSlot is this arm's FOURTH subject, and the churn is the record.
 //
-//	#785/#732: a lift task already in flight on the agent          -> trap
+//	#785/#732: a lift task already in flight on the agent           -> trap
 //	#871:      `liftInFlight = true`, a lift EXISTS in the instance -> trap
-//	#869:      an entry that cannot BEGIN within its bound          -> trap
+//	#869 (a):  an occupied current-task slot                        -> trap
+//	#869 (b):  an entry that cannot BEGIN within its bound          -> trap
+//	#869 (c):  an entry WAITS for the slot and then succeeds        -> no trap at all
 //
-// The first two are gone because #869 permits several lifts per instance — that is the slice's purpose,
-// so "one already exists" is no longer an error and asserting it would assert the opposite of the
-// deliverable.
+// The first two went because several lifts per instance is the deliverable, so "one already exists" is no
+// longer an error. (a) went because the acceptance arm destroyed it: with one engine thread two
+// concurrent callers *necessarily* contend, so refusing an occupied slot refused the concurrency.
 //
-// **An intermediate version of this arm asserted that an occupied current-task slot traps, and running
-// the acceptance arm destroyed it.** With one engine thread per instance, two concurrent callers
-// *necessarily* contend — the first is inside `inst.Invoke` with the guest running when the second
-// arrives — so refusing an occupied slot refused the concurrency this slice exists to permit. Entries now
-// **wait**, and setting the slot by hand traps nothing.
+// **(b) went on the chair's review of #882, and its subject turned out to be unreachable.** The bound
+// existed to catch a lift re-entering itself, which a plain semaphore deadlocks on. Searched: a host impl
+// cannot call back in — `CanonCaller`'s only guest-entry method is the depth-budgeted `Realloc`, with no
+// `Invoke` and no instance accessor (§5 H-2 "enforced by absence"), and no impl in this engine captures
+// an `*Instantiated`. A bound whose only subject cannot occur is a mechanism with no consumer, and it
+// cost a false trap: ordinary contention expired it and the message blamed self-re-entry.
 //
-// What is left to guard is the one case waiting cannot resolve: a holder that never releases. Thread
-// identity cannot detect it (every host caller shares one engine thread), so the bound is the detector
-// and its expiry is a named trap rather than a deadlock — the same shape as the park's bound.
-func TestAnEntryThatCannotBeginTrapsAtItsBound(t *testing.T) {
+// So what is asserted now is the behaviour that remains: contention **waits**, as the model's
+// backpressure does (def:424-430 — no trap, no bound).
+func TestAnEntryWaitsForTheExecutionSlot(t *testing.T) {
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	b, err := os.ReadFile("testdata/async-lift-exit-synth.wasm")
 	if err != nil {
@@ -209,36 +211,27 @@ func TestAnEntryThatCannotBeginTrapsAtItsBound(t *testing.T) {
 	defer in.Close()
 	cd := in.export.exports["run"]
 
-	restore := liftEntryBound
-	liftEntryBound = 200 * time.Millisecond
-	defer func() { liftEntryBound = restore }()
-
-	// Occupy the execution slot and never release it — what a lift re-entering itself looks like from
-	// here. Induced rather than driven by bytes because a guest that re-enters its own async-lifted
-	// export is a shape no committed guest has, and writing one would be writing a guest to be wrong.
+	// Occupy the execution slot, then release it from another goroutine after a delay. The entry must
+	// **wait and then succeed** — it must not refuse, and it must not expire, because there is no bound.
 	in.w.async.entrySem <- struct{}{}
+	const held = 300 * time.Millisecond
+	go func() {
+		time.Sleep(held)
+		<-in.w.async.entrySem
+	}()
 
 	start := time.Now()
 	err = cd.fn.invoke()
 	elapsed := time.Since(start)
 
-	if err == nil {
-		t.Fatal("an entry whose execution slot was never released SUCCEEDED — it cannot have run the " +
-			"guest, so the slot is not actually guarding entry")
+	if err != nil {
+		t.Fatalf("an entry that merely had to WAIT for the slot failed: %v\n\nContention is the normal "+
+			"state of two concurrent callers, so it must not refuse.", err)
 	}
-	var trap *interp.Trap
-	if !errors.As(err, &trap) {
-		t.Fatalf("want a Trap naming the unavailable entry slot, got %v", err)
-	}
-	if !strings.Contains(trap.Reason, "could not begin an entry") {
-		t.Errorf("the trap does not say the entry could not begin: %q", trap.Reason)
-	}
-	// It must have WAITED. A bound that fires immediately would pass every assertion above while turning
-	// ordinary contention — the normal state of two concurrent callers — into a trap, which is exactly
-	// the defect the acceptance arm caught in the intermediate design.
-	if elapsed < 150*time.Millisecond {
-		t.Errorf("the entry failed after %s, far short of its 200ms bound — it refused rather than "+
-			"waited, which would refuse legitimate concurrency", elapsed)
+	// It must have actually waited, or the slot is not guarding entry at all and the arm is vacuous.
+	if elapsed < held {
+		t.Errorf("the entry completed in %s, less than the %s the slot was held — it did not wait for "+
+			"the slot, so nothing here is being guarded", elapsed, held)
 	}
 }
 
@@ -255,18 +248,21 @@ func TestAnEntryThatCannotBeginTrapsAtItsBound(t *testing.T) {
 // not weakened — its claim is inverted, and the inversion *is* the slice's headline property: a second
 // lift entered while the first is parked now **succeeds**.
 //
-// # What still traps, so this is not a permissiveness change
+// # What still constrains it, so this is not a permissiveness change
 //
-// Entries still **serialize**, so only one guest execution runs at a time, and an entry that can never
-// begin traps at its bound — `TestAnEntryThatCannotBeginTrapsAtItsBound` above pins that. The pair is the
-// point: *in flight* became permitted in the same change that bounded *entry*, which is why neither arm
-// alone would show the restriction moved rather than vanished.
+// Entries still **serialize**: only one guest execution runs in the instance at a time, and a contending
+// entry **waits** — `TestAnEntryWaitsForTheExecutionSlot` above pins that, and
+// `TestASiblingWaitsForABlockingImportAndDoesNotTrap` pins that the wait spans a blocking host call, which
+// is the guest-invariant guarantee. The pair is the point: *in flight* became permitted in the same change
+// that kept *entered* exclusive, which is why neither arm alone would show the restriction moved rather
+// than vanished.
 //
-// This sentence previously cited an overlapping-entry **refusal**, which an intermediate design had and
-// the acceptance arm destroyed: with one engine thread, concurrent callers necessarily contend, so
-// refusing an occupied slot refused the concurrency. The citation went stale within the slice and
-// `TestEveryCitedTestNameResolves` is what caught it — twice, since the first repair cited that control
-// by a name I had invented for it.
+// **This sentence has gone stale three times inside two slices**, and `TestEveryCitedTestNameResolves`
+// caught it every time. It cited, in order: an overlapping-entry *refusal* (an intermediate design the
+// acceptance arm destroyed, since concurrent callers necessarily contend); then that control by a name I
+// had invented for it; then an entry *bound* that was reverted on review because its only subject is
+// unreachable. The churn is left visible because a comment naming a control is a citation, and this one
+// kept pointing at mechanisms that no longer existed.
 //
 // # Why it must still reach a genuine park first
 //

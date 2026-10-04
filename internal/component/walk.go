@@ -309,12 +309,6 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// import signature; waitable-set.wait stores its event in the memory it carried (d.lowerMem).
 		if d.asyncBuiltin {
 			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.asyncBuiltinSlot); ok {
-				// **Not bracketed here.** Most async built-ins exist to act on the CURRENT task —
-				// `task.return`, `task.cancel`, `context.get`/`set` all read `h.lift` — so releasing the
-				// slot around them makes them see nothing. Measured: bracketing this site at first made
-				// `task.cancel` trap with "no async lift task in flight" on a guest that plainly had one.
-				// The one built-in that blocks, `waitable-set.wait`, is bracketed at its own bind in
-				// `asyncBuiltinFunc`, where the distinction is visible.
 				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
 			}
 			return interp.Extern{}, false
@@ -329,9 +323,8 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				hasResult := sig != nil && sig.Result != nil
 				aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
 				return interp.CanonLowerExtern(aft, asyncLowerFunc(aimpl, hasResult, w.async), interp.CanonOptions{
-					OnExcursion: w.async.suspendEntry,
-					Memory:      d.lowerMem,
-					Realloc:     d.lowerRealloc,
+					Memory:  d.lowerMem,
+					Realloc: d.lowerRealloc,
 				}), true
 			}
 			// An async lower with no async impl falls through: the guest's async lowers are refused at
@@ -343,9 +336,8 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// factory is called with w.async to produce the marshaling impl, bound to the lower's memory/realloc.
 		if f, ok := w.streamConsumers[stripVersion(d.lowerName)]; ok {
 			return interp.CanonLowerExtern(ft, f(w.async), interp.CanonOptions{
-				OnExcursion: w.async.suspendEntry,
-				Memory:      d.lowerMem,
-				Realloc:     d.lowerRealloc,
+				Memory:  d.lowerMem,
+				Realloc: d.lowerRealloc,
 			}), true
 		}
 		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
@@ -356,15 +348,9 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			// the guest arguments through the memory-less trampoline and can lower a host-produced list
 			// through the guest's allocator. A lower with no memory/realloc option (the stdio getters,
 			// exit) binds neither.
-			// `OnExcursion` so a lift entry blocked in this impl releases the instance's execution slot
-			// (#869): a WASI import that blocks releases the engine thread, and a sibling task may
-			// legitimately enter while it does. The hook fires only on a real §5 excursion, so a fast
-			// host call — which does NOT free the thread — keeps the slot, which is the distinction a
-			// first attempt got wrong by bracketing the whole call.
 			return interp.CanonLowerExtern(ft, impl, interp.CanonOptions{
-				OnExcursion: w.async.suspendEntry,
-				Memory:      d.lowerMem,
-				Realloc:     d.lowerRealloc,
+				Memory:  d.lowerMem,
+				Realloc: d.lowerRealloc,
 			}), true
 		}
 		return interp.HostExtern(ft, refuse(mod, name, d.lowerName)), true

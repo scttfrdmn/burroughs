@@ -48,14 +48,23 @@ own condition rather than as a prediction.
   self-re-entering lift into a deadlock rather than a named trap.
   **The in-flight marker became a count**, since "in flight" and "entered" came apart exactly as "exists"
   and "running" did at the first park.
-  **An entry blocked in a host import releases the slot for the duration of the excursion** and restores
-  itself as current afterwards. Without that, a slow sync import (WASI I/O) starved every other task and
-  then failed it with a trap blaming *self-re-entry* — a legitimate program failing for a misleading
-  reason, purely from timing. The release is hooked at `CanonCaller.Blocking`
-  (`interp.CanonOptions.OnExcursion`), which is the one point where the engine thread is demonstrably
-  free: a first attempt bracketed the whole host call instead and was **unsound**, because a fast host
-  call does not free the thread and a second agent admitted during one runs guest code while the first
-  still holds it.
+  **Exclusivity is held across a blocking host call, and contention waits with no bound.** An interim
+  design released the slot for the duration of a §5 excursion — the engine thread is free there, so a
+  sibling may as well run — and it was **reverted on review**. The model holds `exclusive_thread` across a
+  callback-lifted task's whole entry, and that is not a scheduling choice: it is the guarantee that **no
+  other task's guest code runs while this task's guest frame is live**, which a correct guest may depend
+  on. A Rust guest holding a `RefCell` borrow, or its executor's state, across a blocking import must not
+  have another task's callback interleave; releasing permits exactly that, so a correct guest could panic
+  here and run fine against the reference. The committed guests do not exercise it, which is why no
+  witness caught it — the arm now asserts the **order** (`B-tick` after `A-block-end`) rather than
+  inferring it from both calls completing.
+  The entry bound went with it: the only case it could catch was a lift re-entering itself, which is
+  **unreachable** (`CanonCaller`'s sole guest entry is a depth-budgeted `Realloc` — §5 H-2 "enforced by
+  absence" — and no host impl captures the instance), and it cost a false trap, since ordinary contention
+  expired it and the message blamed self-re-entry. Contention now waits as the model's backpressure does.
+  A holder blocked forever in a host import makes that wait indefinite, which is the limitation `interp`
+  already documents for H-3 rather than a new one;
+  [#880](https://github.com/scttfrdmn/burroughs/issues/880) is where the call's context ends both waits.
 - **Fixed: two concurrent callers of one async-lifted export could receive each other's result.** The
   resolution was stored on `compFunc.result`, a field shared by every caller of that export, so two lifts
   wrote and read one slot. It now travels back as a return value — per-call by construction rather than by

@@ -13,7 +13,7 @@ import (
 // per-thread-object store would pass a one-agent test and fail here.
 func TestContextStorageIsPerCallerStack(t *testing.T) {
 	newCaller := func() *CanonCaller {
-		return newCanonCaller(context.Background(), 0, nil, nil, nil, nil, &stack{}, 0, nil)
+		return newCanonCaller(context.Background(), 0, nil, nil, nil, nil, &stack{}, 0)
 	}
 
 	// Two agents = two stacks: writing one's slot 0 does not touch the other's, and each reads its own.

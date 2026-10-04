@@ -167,16 +167,12 @@ func unpackCallbackResult(packed uint32) (callbackCode, uint32, error) {
 // bound close to real waits would fire on load rather than on a defect.
 var liftParkBound = 30 * time.Second
 
-// liftEntryBound bounds how long one async-lift entry waits for the instance's execution slot (#869).
-//
-// It is **not** a park bound: nothing is being waited *for* here except another caller's guest execution,
-// which is bounded by that guest returning a dispatch code. So a wait this long means the slot's holder
-// is not going to release it — in practice a lift re-entering itself, which thread identity cannot detect
-// because every host caller shares one engine thread. The expiry is a named trap rather than a deadlock.
-//
-// Deliberately much shorter than `liftParkBound`: a park legitimately waits on a host impl that may be
-// slow, while an entry waits only on a guest call already in progress.
-var liftEntryBound = 5 * time.Second
+// `liftEntryBound` lived here and is DELETED. It bounded how long an async-lift entry waits for the
+// instance's execution slot, trapping on expiry to turn a self-re-entering lift's deadlock into a named
+// refusal. Removed on the chair's review of #882: **its only subject is unreachable** (see enterTask —
+// `CanonCaller` has no guest entry but a depth-budgeted `Realloc`, and no host impl holds the instance),
+// and it cost a false trap, since ordinary contention expired it and the message blamed self-re-entry.
+// Entry contention now waits, as the model's backpressure does.
 
 // ErrLiftParkExpired is a park that reached its bound with no event. Its own error rather than a generic
 // trap, because the two readings a caller needs to separate are *"the guest is wrong"* and *"nothing ever

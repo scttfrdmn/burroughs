@@ -276,9 +276,6 @@ type hostFunc struct {
 	canon          CanonFunc
 	realloc        *Extern
 	stringEncoding string
-	// onExcursion mirrors CanonOptions.OnExcursion — see there for why the hook is at the excursion and
-	// not around the impl.
-	onExcursion func() (resume func(), suspended bool)
 }
 
 // HostExtern makes an `Extern` that satisfies a function import with an embedder's Go function.
@@ -329,23 +326,6 @@ type CanonOptions struct {
 	Memory         *Extern
 	Realloc        *Extern
 	StringEncoding string
-
-	// OnExcursion, when set, is called at the start of every §5 blocking excursion this lower's impl
-	// takes (`CanonCaller.Blocking`) and its returned `resume` is called when the excursion ends.
-	//
-	// # Why the hook is here and not a wrapper around the impl
-	//
-	// An excursion is the one moment the **engine thread is released**, so it is the one moment a sibling
-	// agent may legitimately run (§5 H-1/H-4). A caller that keeps its own per-instance exclusivity
-	// across the impl has to relinquish it for exactly that window — and only `Blocking` knows when that
-	// window is. The component layer's first attempt bracketed the *whole host call* instead, which is
-	// unsound: a fast host call does not free the thread, so releasing exclusivity there admits a second
-	// agent into guest execution while the first still holds the thread (#869, measured — the guest
-	// trapped `unreachable`).
-	//
-	// Nil for every embedder lower and for every impl that cannot block; the component walk sets it on
-	// the lowers it binds for an instance hosting async lift tasks.
-	OnExcursion func() (resume func(), suspended bool)
 }
 
 // CanonLowerExtern makes the canonical-ABI adapter extern for a canon lower (ADR 0084, §5 H-2 amended).
@@ -371,7 +351,6 @@ func CanonLowerExtern(ft binary.FuncType, fn CanonFunc, opts CanonOptions) Exter
 		mem:            opts.Memory,
 		realloc:        opts.Realloc,
 		stringEncoding: opts.StringEncoding,
-		onExcursion:    opts.OnExcursion,
 	}}
 }
 
@@ -597,7 +576,7 @@ func (in *Instance) callAdapter(h *hostFunc, st *stack, depth int) error {
 			mem, memErr = nil, fmt.Errorf("%w: a canon lower's bound memory is nil", ErrNotValidated)
 		}
 	}
-	cc := newCanonCaller(t.context(), t.threadID(), mem, memErr, h.realloc, t, st, depth, h.onExcursion)
+	cc := newCanonCaller(t.context(), t.threadID(), mem, memErr, h.realloc, t, st, depth)
 
 	results, callErr := h.canon(cc, args)
 	if callErr != nil {
@@ -617,22 +596,19 @@ type CanonCaller struct {
 	t       *thread
 	st      *stack
 	depth   int
-	// onExcursion is the lower's CanonOptions.OnExcursion, consulted by Blocking.
-	onExcursion func() (resume func(), suspended bool)
 }
 
 // newCanonCaller builds the canonical-ABI adapter's caller. `callAdapter` and the test harness
 // (NewCanonCallerForTest) both go through it, so a test drives the *same* caller shape production does —
 // same options bundle, same memory binding — rather than a parallel convenience constructor that could
 // pass tests against a caller no guest produces.
-func newCanonCaller(ctx context.Context, tid ThreadID, mem *memory, memErr error, realloc *Extern, t *thread, st *stack, depth int, onExcursion func() (func(), bool)) *CanonCaller {
+func newCanonCaller(ctx context.Context, tid ThreadID, mem *memory, memErr error, realloc *Extern, t *thread, st *stack, depth int) *CanonCaller {
 	return &CanonCaller{
-		Caller:      &Caller{ctx: ctx, tid: tid, mem: mem, memErr: memErr},
-		realloc:     realloc,
-		t:           t,
-		st:          st,
-		depth:       depth,
-		onExcursion: onExcursion,
+		Caller:  &Caller{ctx: ctx, tid: tid, mem: mem, memErr: memErr},
+		realloc: realloc,
+		t:       t,
+		st:      st,
+		depth:   depth,
 	}
 }
 
@@ -647,7 +623,7 @@ func NewCanonCallerForTest(minPages uint32) (*CanonCaller, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newCanonCaller(context.Background(), 0, mem, nil, nil, nil, nil, 0, nil), nil
+	return newCanonCaller(context.Background(), 0, mem, nil, nil, nil, nil, 0), nil
 }
 
 // Realloc invokes the canon lower's `cabi_realloc(orig_ptr, orig_size, align, new_size) -> i32` on the
@@ -735,30 +711,10 @@ func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32,
 // hazard the Model-2 adapter avoids by never blocking during the lower (#694/#715 registered assertion).
 // The crossing/blocked pair here is balanced (leaveGuest+enterBlocked … enterGuest+leaveBlocked), the
 // same order `callHost` uses, so `callAdapter`'s own accounting is untouched.
-// **The excursion hook fires here, and only here.** `OnExcursion` exists because this is the one point
-// at which the engine thread is demonstrably released — between `enterBlocked` and `leaveBlocked` — so a
-// caller holding its own per-instance exclusivity can relinquish it for exactly that window and take it
-// back after. Placing it around `fn` rather than around the whole host call is the distinction a first
-// attempt in the component layer got wrong: a fast host call never reaches here, and releasing
-// exclusivity for one would admit a second agent into guest execution while this one still holds the
-// thread (#869).
-//
-// The resume runs **before** `enterGuest`/`leaveBlocked`, so exclusivity is reacquired while this agent
-// is still marked blocked — the order that cannot deadlock against an agent waiting to enter, since the
-// waiter needs only the exclusivity and not the thread.
 func (c *CanonCaller) Blocking(fn func() error) error {
 	leaveGuest()
 	c.t.enterBlocked()
-	var resume func()
-	if c.onExcursion != nil {
-		if r, suspended := c.onExcursion(); suspended {
-			resume = r
-		}
-	}
 	err := fn()
-	if resume != nil {
-		resume()
-	}
 	enterGuest()
 	c.t.leaveBlocked()
 	return err

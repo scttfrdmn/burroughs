@@ -190,10 +190,10 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 		return nil, fmt.Errorf("%w: async lift has no invocable core func for this entry (callback unresolved)",
 			ErrUnsupportedForm)
 	}
-	prev, err := f.h.enterTask(task)
-	if err != nil {
-		return nil, err // an overlapping entry (#869) — refused by name rather than crossing two tasks
-	}
+	// Entering WAITS for the instance's execution slot and cannot fail: contention is the normal state of
+	// two concurrent callers, and the only thing a refusal could catch — a lift re-entering itself — is
+	// unreachable (see enterTask).
+	prev := f.h.enterTask(task)
 	defer f.h.leaveTask(prev)
 	return target.inst.Invoke(target.name, args...)
 }
