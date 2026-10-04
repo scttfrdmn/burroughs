@@ -431,6 +431,56 @@ commits to that reading.*
   from the wasip1 port's batteries into permanent CI.
   *The judge needs a judge: positive controls for the classifiers ship in
   the same battery.*
+- **G-5.** A feature **ahead of the spec** lives behind a **speculative**
+  gate, which is a distinct class from G-1's. A standard gate becomes
+  default-on when its proposal's upstream suite is green (G-1). A
+  speculative gate has no such suite to be green against, so it is
+  **never default-on while it is ahead of the spec**: it becomes merely
+  *eligible* for a G-1 flip when the spec catches up and an upstream suite
+  exists to judge it. Each speculative feature carries its own decision
+  doc stating the goal it serves, the draft or rationale it follows at a
+  pinned revision, and **what retires it** — refactored to match the
+  shipped spec, proposed upstream, or deprecated if the spec goes another
+  way. Speculative behaviour is **kept off the conformance board**: it
+  carries its own witnesses, and a check keeps it from counting toward the
+  spec numbers. A guest artifact that depends on a speculative gate is
+  **labelled as such**, so a Burroughs-only artifact cannot be mistaken
+  for a portable one.
+  *The board's number has to keep meaning "conforms to the spec", and a
+  gate with no suite cannot be judged by G-1's criterion — so the honest
+  move is a second class rather than a weaker reading of the first.
+  G-1's acceptance test is not merely unmet for a speculative feature; it
+  is unaskable, and a criterion that cannot be asked is not a bar that has
+  been lowered.*
+  *Two kinds sit in this class and their costs differ, which the decision
+  doc must name. **Implementing an unfinished proposal early** is a bet on
+  a document that will change: the cost is tracking its revisions, and the
+  pinned revision is what makes drift visible. **A Burroughs extension**
+  the spec has not contemplated is a bet on a future the spec has not
+  written: the cost is reconciling with it later, and contributing the
+  idea upstream is what converts that liability into the first kind.
+  Neither cost is paid by the conformance board, which is the point of
+  keeping them off it.*
+  *The boundary, stated because the nearest case sits just outside it:
+  going beyond the spec's **guarantees** while staying inside what the
+  spec **permits** is not speculative. G-5 applies only to behaviour the
+  spec does not yet define or permit at all.*
+  *The boundary case is ADR 0028. Relaxed SIMD is a standard proposal and
+  flipped through an ordinary G-1 — its own suite green, 77 pass / 0 fail
+  / 0 unsupported / 0 gated across the seven `*relaxed*.wast` files,
+  identical on both architectures, satisfying G-1's literal reading. What
+  exceeds the spec there is the **lowering choice**: the proposal permits a
+  set of results per instruction and Burroughs picks one deterministically
+  and uniformly, which is a guarantee stricter than the spec requires.
+  That is the "Burroughs extension" kind in miniature — a property chosen
+  for this project's goals that the spec does not promise — and it needed
+  no speculative gate and stays on the board, because the choice is one
+  the spec itself permits. It also already practises G-5's own-witness
+  rule: the uniformity guarantee is held by
+  `TestRelaxedLoweringChoicesArePinned`, because no spec vector can
+  measure it.*
+  *See ADR 0093 for the deliberation and the retirement conditions this
+  clause requires of each speculative feature.*
 
 ## §10. Open questions
 

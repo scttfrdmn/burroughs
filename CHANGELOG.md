@@ -50,6 +50,37 @@ own condition rather than as a prediction.
   statuses 3 and 4 collapse to one Rust value. **For the sentinel review: the ABI distinguishes
   "cancelled before started" from "cancelled before returned" and `wit-bindgen` does not**, so whether
   `Component.Call` exposes that difference is a public-interface question, not an internal one.
+- **A speculative gate class for features ahead of the spec** — contract §9 **G-5** and
+  [ADR 0093](docs/decisions/0093-a-speculative-gate-class-for-features-ahead-of-the-spec-never-default-on-off-the-board-and-labelled-where-it-leaks.md).
+  A standard gate becomes default-on when its proposal's upstream suite is green; a speculative gate has
+  **no such suite**, so G-1's criterion is not unmet but **unaskable** — and a criterion that cannot be
+  asked is not a bar that has been lowered. So: never default-on while ahead of the spec, merely *eligible*
+  for an ordinary G-1 flip when the spec catches up; a decision doc per feature naming its goal, the draft
+  it follows **at a pinned revision**, and **what retires it** (refactored, proposed upstream, or
+  deprecated); kept **off the conformance board** with a check rather than a convention, so the board's
+  number keeps meaning "conforms to the spec"; and guests depending on it **labelled**, so a Burroughs-only
+  artifact cannot be mistaken for a portable one.
+  The ADR separates the two kinds and their costs: an **unfinished proposal** implemented early is a bet on
+  a moving document, paid by tracking revisions, and exits by refactoring to the shipped shape; a
+  **Burroughs extension** is a bet on a future the spec has not written, paid by reconciling with it later,
+  and exits by being **contributed upstream** — which is the point rather than a courtesy, since an
+  extension nobody has proposed has no retirement path. ADR 0028 is cited as the precedent: relaxed SIMD
+  flipped while this project's own prose said every 3.0 gate was off, and the contradiction was repaired
+  *after* the fact. G-5 exists so the next feature past the spec's edge is classified when it lands.
+  **The boundary, which a first draft of the ADR got wrong:** going beyond the spec's *guarantees* while
+  staying within what it *permits* is **not** speculative. ADR 0028 is the case that sits just outside —
+  relaxed SIMD flipped by an **ordinary G-1** on its own green suite (77 pass / 0 fail / 0 unsupported /
+  0 gated across the seven `*relaxed*.wast` files, both architectures), and what exceeds the spec is its
+  *lowering choice*: the proposal permits a set of results and Burroughs picks one deterministically. That
+  is the extension kind in miniature, it needed **no** speculative gate, and it **stays on the board**. It
+  also already practises the own-witness rule, since no spec vector can measure which permitted member was
+  chosen. The first draft cited it as precedent for shipping *ahead* of the spec, which it is not; the
+  misreading is recorded in the ADR rather than quietly fixed.
+  **Stamped by Scott on 2026-10-04**, on the chair's summary **with that correction included**, so the
+  stamp covers the corrected text. §9 is normative, so this was held as a draft rather than merged on a
+  green build — the green was necessary and never sufficient. **The stamp authorises the class only:** no
+  speculative feature is approved, and shared-everything threads needs its own ADR and registration before
+  anything is built.
 - **`wac` is the pinned composition tool, with a witness that reads the composed artefact rather than the
   exit status.** `wac-cli 0.12.0`, installed with `cargo install wac-cli --locked`, recorded in
   `internal/component/testdata/compose/README.md` and printed from the tool by `compose.sh`. It replaces
