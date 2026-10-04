@@ -362,7 +362,7 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 	switch op {
 	case 0x1f: // waitable-set.new
 		return waitableSetNew(w.async), true
-	case 0x20: // waitable-set.wait
+	case 0x20: // waitable-set.wait — the one async built-in that takes a blocking excursion
 		return waitableSetWait(w.async), true
 	case 0x21: // waitable-set.poll (gate:async increment 4) — wait minus the park, same readiness path
 		return waitableSetPoll(w.async), true

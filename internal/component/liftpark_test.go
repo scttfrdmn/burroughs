@@ -450,16 +450,18 @@ func TestConcurrentLiftsDoNotShareMutableStateOnTheCompFunc(t *testing.T) {
 		// swap, and values that differ per round also catch a stale read from a previous round.
 		a, bArg := uint32(round*10+1), uint32(round*10+2)
 		type outcome struct {
-			id uint32
-			v  uint32
-			ok bool
+			id  uint32
+			v   uint32
+			ok  bool
+			err error
+			n   int
 		}
 		res := make(chan outcome, 2)
 		for _, id := range []uint32{a, bArg} {
 			go func(id uint32) {
 				got, e := in.CallValues("run", canon.U32(id))
 				if e != nil || len(got) != 1 {
-					res <- outcome{id: id}
+					res <- outcome{id: id, err: e, n: len(got)}
 					return
 				}
 				v, k := got[0].U32()
@@ -470,7 +472,9 @@ func TestConcurrentLiftsDoNotShareMutableStateOnTheCompFunc(t *testing.T) {
 			select {
 			case o := <-res:
 				if !o.ok {
-					t.Errorf("round %d: run(%d) did not return a u32", round, o.id)
+					// The error is REPORTED, not swallowed. A first version printed only "did not return
+					// a u32", which named the symptom and hid the cause on an intermittent failure.
+					t.Errorf("round %d: run(%d) returned %d value(s), err=%v", round, o.id, o.n, o.err)
 					continue
 				}
 				if o.v != o.id {
@@ -482,6 +486,166 @@ func TestConcurrentLiftsDoNotShareMutableStateOnTheCompFunc(t *testing.T) {
 			}
 		}
 		in.Close()
+	}
+}
+
+// TestASlowBlockingImportDoesNotStarveASiblingLift is the chair's review witness for #869.
+//
+// # The gap it closes
+//
+// The entry semaphore was held across the whole entry, **including while the entry was blocked inside a
+// host call**. A §5 excursion releases the engine thread, so a sibling may legitimately run (H-1/H-4) —
+// but it could not get the component-level slot. A slow sync import (WASI I/O) therefore made every
+// other caller wait out `liftEntryBound` and then trap with a message blaming **self-re-entry**: a
+// legitimate program failing for a misleading reason, purely from timing.
+//
+// # What it asserts
+//
+// Task A's entry blocks in a host import for **longer than the shortened bound** while task B enters. B
+// must not trap, and both must complete with their own values. Run under `-race` in CI's race gate.
+//
+// # Falsification
+//
+// Hold the slot across the excursion — i.e. drop `OnExcursion` from the bind, which is what the code did
+// before this repair — and B hits the entry-bound trap. Watched die that way.
+//
+// # Why the blocking import is the async-lowered one
+//
+// `tick` is the only import the committed suspending guest has, and it is async-lowered. Its impl takes
+// the excursion by calling `c.Blocking`, which is what a WASI import does and the path the hook fires
+// on. Using the guest's own import rather than a synthetic one keeps the arm on the real bind path,
+// where `OnExcursion` is actually threaded.
+func TestASlowBlockingImportDoesNotStarveASiblingLift(t *testing.T) {
+	t.Setenv(asyncGateEnv, "1")
+	b, err := os.ReadFile("testdata/asynclift/suspending/component.wasm")
+	if err != nil {
+		t.Fatalf("the committed suspending guest is missing: %v", err)
+	}
+
+	// The bound is shortened well below the block's duration, so holding the slot across the excursion
+	// *must* trip it. Without that ordering the arm would pass against the defect by taking less time
+	// than the bound — the vacuity this setup avoids.
+	restoreEntry := liftEntryBound
+	liftEntryBound = 250 * time.Millisecond
+	defer func() { liftEntryBound = restoreEntry }()
+	// The PARK bound is shortened too, and not only for speed. Under the falsification the sibling traps
+	// on the entry bound, so the first task's park then waits for an arrival that will never come — with
+	// the engine's 30s default that races this test's own timeout and the failure reads "only 1 of 2
+	// returned" instead of naming the starvation. Bounding it makes the neutered run fail for its actual
+	// reason.
+	restorePark := liftParkBound
+	liftParkBound = 3 * time.Second
+	defer func() { liftParkBound = restorePark }()
+
+	const blockFor = 1500 * time.Millisecond // 6x the bound
+
+	h := NewHost(io.Discard, io.Discard, nil)
+	var mu sync.Mutex
+	var pend []func(canon.Value)
+	var args []uint32
+	var blocked int32
+	h.asyncImpls = map[string]asyncLowerImpl{
+		"tick": func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+			params := onStart()
+			arg := uint32(0)
+			if len(params) > 0 {
+				arg = uint32(params[0].Int32())
+			}
+			mu.Lock()
+			pend = append(pend, onResolve)
+			args = append(args, arg)
+			first := len(pend) == 1
+			allR, allA := pend, args
+			mu.Unlock()
+
+			if first {
+				// **The first caller blocks inside a real §5 excursion** — the engine thread is released
+				// and `OnExcursion` fires, so the sibling may take the execution slot.
+				atomic.AddInt32(&blocked, 1)
+				_ = c.Blocking(func() error {
+					time.Sleep(blockFor)
+					return nil
+				})
+				return func() {}, nil
+			}
+			// The sibling arrived while the first was blocked — which is the property. Resolve both so
+			// neither park has to wait on the other.
+			for i, r := range allR {
+				r(canon.U32(allA[i]))
+			}
+			return func() {}, nil
+		},
+	}
+
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+
+	type outcome struct {
+		id  uint32
+		v   uint32
+		ok  bool
+		err error
+	}
+	res := make(chan outcome, 2)
+	go func() {
+		got, e := in.CallValues("run", canon.U32(1))
+		o := outcome{id: 1, err: e}
+		if e == nil && len(got) == 1 {
+			o.v, o.ok = got[0].U32()
+		}
+		res <- o
+	}()
+	// B is issued after A is demonstrably inside the blocking excursion, so the arm measures the window
+	// it claims to. Polling the engine's own marker rather than sleeping a guess.
+	deadline := time.Now().Add(10 * time.Second)
+	for atomic.LoadInt32(&blocked) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the first lift never reached its blocking import")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	go func() {
+		got, e := in.CallValues("run", canon.U32(2))
+		o := outcome{id: 2, err: e}
+		if e == nil && len(got) == 1 {
+			o.v, o.ok = got[0].U32()
+		}
+		res <- o
+	}()
+
+	byID := map[uint32]outcome{}
+	for range 2 {
+		select {
+		case o := <-res:
+			byID[o.id] = o
+		case <-time.After(30 * time.Second):
+			t.Fatalf("only %d of 2 lifts returned", len(byID))
+		}
+	}
+
+	for _, id := range []uint32{1, 2} {
+		o := byID[id]
+		if o.err != nil {
+			if errors.Is(o.err, ErrLiftParkExpired) || strings.Contains(o.err.Error(), "could not begin an entry") {
+				t.Errorf("run(%d) failed because a SIBLING held the execution slot across its blocking "+
+					"import: %v\n\nA §5 excursion releases the engine thread, so the slot must be "+
+					"released with it — otherwise a slow WASI import starves every other task and the "+
+					"failure blames self-re-entry.", id, o.err)
+				continue
+			}
+			t.Errorf("run(%d): %v", id, o.err)
+			continue
+		}
+		if !o.ok {
+			t.Errorf("run(%d) did not return a u32", id)
+			continue
+		}
+		if o.v != id {
+			t.Errorf("run(%d) = %d — a caller received another task's resolution", id, o.v)
+		}
 	}
 }
 

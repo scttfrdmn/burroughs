@@ -142,6 +142,64 @@ func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask, err error) {
 	return prev, nil
 }
 
+// suspendEntry releases the execution slot for the duration of a host call and returns the resume that
+// takes it back, restoring this task as current (#869, chair's review of the first design).
+//
+// # The gap this closes
+//
+// The entry semaphore was held across the *whole* entry, including while the entry was blocked inside a
+// host call. A §5 blocking excursion releases the **engine thread** (`CanonCaller.Blocking`:
+// `leaveGuest(); enterBlocked(); fn(); …`), so a sibling may legitimately run — that is H-1/H-4,
+// Burroughs' own contract. Holding the component-level slot across it contradicted that: a slow sync
+// import (WASI I/O) would make every other caller wait out `liftEntryBound` and then **trap with a
+// message blaming self-re-entry**, a legitimate program failing for a misleading reason purely from
+// timing.
+//
+// # Why the slot must be saved and restored, not just released
+//
+// Releasing alone would be a liveness fix with a correctness hole. With one engine thread, entry A inside
+// an excursion lets entry B run; the slot then holds B. When A's excursion returns, **A's guest resumes
+// and its next built-in would read B's task.** That defect exists whether or not the semaphore is held —
+// releasing it only makes it reachable. So resume re-takes the slot *and* restores A as current, which is
+// the same save-and-restore discipline entries already use, one level in.
+//
+// # It brackets the whole host call, which is wider than the excursion and deliberately so
+//
+// The precise condition is "the engine thread is free", which only `Blocking` knows. Hooking it would mean
+// an `interp` API addition; bracketing the enclosing host call is a superset and needs none. The cost is
+// that another task may enter during a **fast** host call too — which is legal, since during any host call
+// the suspended entry is running no guest code of its own.
+//
+// It is a no-op when no lift task is entered (`suspended` false), which matters: releasing a semaphore
+// this instance never took would block the next acquire forever.
+func (h *asyncHandles) suspendEntry() (resume func(), suspended bool) {
+	h.mu.Lock()
+	mine := h.lift
+	if mine == nil {
+		h.mu.Unlock()
+		return func() {}, false
+	}
+	h.lift = nil
+	h.mu.Unlock()
+	<-h.entrySem
+	return func() {
+		h.entrySem <- struct{}{} // waits for whichever entry ran in the gap; bounded by that entry
+		h.mu.Lock()
+		h.lift = mine
+		h.mu.Unlock()
+	}, true
+}
+
+// `bracketHostCall` lived here and is DELETED. It wrapped an impl so that the *whole host call* released
+// the execution slot, and that is **unsound**: a fast host call does not release the engine thread, so a
+// second entry admitted during one would run guest code while the first still held the thread. Measured —
+// the guest trapped `unreachable`, every round.
+//
+// `suspendEntry` is now reached through `interp.CanonOptions.OnExcursion`, which `CanonCaller.Blocking`
+// invokes between `enterBlocked` and `leaveBlocked` — the one window where the thread is demonstrably
+// free. The hook replaced the wrapper rather than joining it, because the wrapper's placement was the
+// defect and keeping both would leave the unsound one available.
+
 // leaveTask restores the current lift task to prev — the value enterTask returned — and releases the
 // entry semaphore, admitting whichever caller is waiting.
 //

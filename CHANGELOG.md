@@ -48,6 +48,14 @@ own condition rather than as a prediction.
   self-re-entering lift into a deadlock rather than a named trap.
   **The in-flight marker became a count**, since "in flight" and "entered" came apart exactly as "exists"
   and "running" did at the first park.
+  **An entry blocked in a host import releases the slot for the duration of the excursion** and restores
+  itself as current afterwards. Without that, a slow sync import (WASI I/O) starved every other task and
+  then failed it with a trap blaming *self-re-entry* — a legitimate program failing for a misleading
+  reason, purely from timing. The release is hooked at `CanonCaller.Blocking`
+  (`interp.CanonOptions.OnExcursion`), which is the one point where the engine thread is demonstrably
+  free: a first attempt bracketed the whole host call instead and was **unsound**, because a fast host
+  call does not free the thread and a second agent admitted during one runs guest code while the first
+  still holds it.
 - **Fixed: two concurrent callers of one async-lifted export could receive each other's result.** The
   resolution was stored on `compFunc.result`, a field shared by every caller of that export, so two lifts
   wrote and read one slot. It now travels back as a return value — per-call by construction rather than by
