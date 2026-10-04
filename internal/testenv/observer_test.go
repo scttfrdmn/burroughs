@@ -109,6 +109,17 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 			by: "ADR 0068 — T-1's spawn, one OS-thread-locked goroutine per `Spawn`, " +
 				"registered in the world before the statement runs",
 		},
+		{"internal/component/cross_component.go", "liftAsAsyncImpl"}: {
+			count: 1,
+			by: "ADR 0095 — #888's cross-component async call, one goroutine per call running the " +
+				"callee component's lift. It introduces NO new boundary crossing: it resolves the " +
+				"parent's subtask through the same `onResolve` under the same `asyncHandles` mutex, " +
+				"woken by the same `signalLocked` wake-channel close, as the host-impl blocking arm " +
+				"that has shipped since 2a-i-B — what is new is who calls `onResolve`, not where the " +
+				"write lands or what orders it. #662's table twin is not reachable: the child's guest " +
+				"code runs only on this goroutine, serialized by the child's own `entrySem`. The " +
+				"goroutine ends when the child's task resolves, traps, or its park's bound expires.",
+		},
 	}
 
 	seen := map[site]int{}

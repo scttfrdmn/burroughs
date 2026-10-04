@@ -30,6 +30,42 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **A cross-component async call: a parent's `canon lower` whose callee is another component's `canon lift`**
+  ([#888](https://github.com/scttfrdmn/burroughs/issues/888),
+  [ADR 0095](docs/decisions/0095-a-cross-component-async-call-is-a-siblings-lift-adapted-to-the-lower-side-the-substrate-already-wants-run-on-one-goroutine-per-call.md)).
+  Guest-to-guest, inside one composed component, with params crossing one way and the result the other.
+  **It was one adapter, not new subtask machinery**, and the recon #888 required before designing is what
+  established that: the model's `canon_lower` ends `subtask.on_cancel = callee(on_start, on_resolve)`,
+  where the callee is a `FuncInst` — and `asyncLowerImpl` is already that type, so the whole subtask
+  protocol is unchanged.
+  **What was missing was not the protocol.** `coreDef` recorded only `lowerName`, a host-impl lookup key
+  derived from `cf.stubName`, so a lower whose callee was a *real* component func fell through to a bare
+  `coreDef{stub: true}` recording **nothing**; every downstream lookup then ran with an empty key and
+  missed. The refusal read `import ::run is not provided (stub host)`, which reads as an unwired import
+  and was not one — the import resolved fine, to the child's lift.
+  **The hole was sort-agnostic**: the fall-through never read `Opts.Async`, so a *sync* guest-to-guest
+  call was equally unreachable. Both arms are fixed, because fixing one would leave the same defect
+  behind a narrower door.
+  **The child's lift runs on one goroutine per call**, authorised by ADR 0095 and the goroutine census
+  that refused the implementation without it. It introduces **no new boundary crossing**: the same
+  `onResolve`, under the same `asyncHandles` mutex, woken by the same `signalLocked` wake-channel close as
+  the host-impl blocking arm shipped since 2a-i-B. What is new is *who* calls `onResolve` — a guest's lift
+  instead of a Go impl — not where the write lands or what orders it. This is the **second** slice to turn
+  on the same engine property, now stated once: *Burroughs' component entry points block, so every place
+  the model returns a continuation is a place that needs a goroutine.*
+  **Result lifting is scoped to scalars and refuses aggregates by name.** A child's `task.return` hands
+  over flat values in the *child's* ABI; anything aggregate is a pointer into the child's memory, so
+  carrying it means copying through the parent's `realloc`. The refusal names the kind, so the boundary is
+  a message a reader meets rather than a silent truncation.
+  **A composed artefact that completes exists for the first time** (`call-wat-parent/`). Every prior one
+  cancelled, which is exactly why the capability had no end-to-end arm — and a cancelling witness would
+  have failed on [#892](https://github.com/scttfrdmn/burroughs/issues/892) for a reason that is not about
+  the call. Cancellation across the boundary composes out of ADR 0094's mechanism and **does not work
+  yet**, blocked on #892, measured on both of #862's parents.
+  **The carried `::run` naming repair is dissolved rather than done.** Its premise was that #870's
+  component-level identity derivation mis-rendered the name; there was no such defect — the identity was
+  *absent*. The message is re-worded so a module-less import stops reading as a name, which keeps the
+  repair's intent and drops its diagnosis.
 - **Burroughs cancels a started async-lift task from the host**
   ([#887](https://github.com/scttfrdmn/burroughs/issues/887),
   [ADR 0094](docs/decisions/0094-host-cancellation-reaches-a-lift-task-through-an-internal-trigger-this-slice-because-the-model-hands-the-embedder-a-per-call-oncancel-and-invoke-blocks.md)),
@@ -780,6 +816,29 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **A sync lift's results reached nobody**, discarded between the core func and the caller
+  ([#888](https://github.com/scttfrdmn/burroughs/issues/888)). `invokeWith`'s sync arm was
+  `_, err := Invoke(...); return nil, err`, and its doc comment said a sync lift *"moves no values through
+  this path"* — true of the callers that existed, false of the path. Two consumers needed them, found from
+  opposite directions: `CallValues` on a sync export declaring a result refused with *"the guest returned
+  0 flat value(s); one is expected"* **when the guest had returned one**, and the new sync
+  cross-component arm would have silently produced no result. The second is the worse of the two — a
+  wrong value reported as success.
+- **The resolver's "a real export, by reference" guard swallowed a new kind of lower**
+  ([#888](https://github.com/scttfrdmn/burroughs/issues/888)). A cross-component lower has an empty
+  `lowerName` and is not a stub, so it matched that guard and was handed back as `d.extern` — **the zero
+  `Extern`** — which `InstantiateLinked` reports as *"a supplier with no defining module"*: accurate and
+  unhelpful, since the supplier was a struct nobody filled. The shape is worth more than the fix: **a
+  predicate written as "none of the known special cases" silently admits the next special case**, and
+  admits it into the *default* arm, where the failure surfaces as far as possible from its cause.
+- **`valKindName` was total only for its first consumer's kinds**
+  ([#888](https://github.com/scttfrdmn/burroughs/issues/888)), so `string` and every numeric rendered as
+  `valkind(N)`. It existed for the unmodeled-kind binding refusal, which only ever names what it refuses;
+  the new cross-component refusal names whatever kind it could not carry, and **its own witness caught the
+  message reading `valkind(12)`** — exactly the "a bare unsupported leaves the next author guessing"
+  failure that assertion was written for. Completed in place rather than given a second namer beside it,
+  on grave #885's lesson, with a totality control whose **domain is derived** from the enum's bounds so a
+  newly added kind extends its population automatically.
 - **An async-lifted export that returns nothing can be loaded**
   ([grave #885](https://github.com/scttfrdmn/burroughs/issues/885)). A result list is encoded two ways —
   `0x00 valtype` for one result, `0x01 0x00` for none — and `canon task.return` accepted only the first,

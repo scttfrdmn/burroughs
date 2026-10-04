@@ -36,6 +36,23 @@ type coreDef struct {
 	// lowerName is the wasi identity ("module::export") of a canon-lowered func — the host resolves it
 	// to a real marshaling impl (PR C) or, absent one, the refusing stub.
 	lowerName string
+	// lowerCallee is the component func a canon lower targets when that func is a REAL definition rather
+	// than an unfilled import — which is the guest-to-guest case: a composed sibling's lift (#888).
+	//
+	// # Why this field had to exist for a cross-component call to be possible at all
+	//
+	// `lowerName` is a *host-impl lookup key*, and it is derived from `cf.stubName` — so it is populated
+	// only when the callee is an import nobody filled. When the callee IS filled, by a sibling's export,
+	// the lower used to fall through to a bare `coreDef{stub: true}` with **no record of its callee**, and
+	// every impl lookup downstream then ran with an empty key and missed. That is why a composed parent's
+	// call refused with `import ::run is not provided (stub host)`: not because the component-level import
+	// was unresolved — it resolved fine, to the child's lift — but because the LOWER could only express a
+	// host callee.
+	//
+	// The hole was **sort-agnostic**: the fall-through did not look at `cn.Opts.Async`, so a sync
+	// guest-to-guest call was equally unreachable. Nothing exercised either, because the composed
+	// artefacts in the tree asserted load and instantiate only.
+	lowerCallee *compFunc
 	// lowerMem is the memory named in the canon lower's `(memory $m)` option, if any — the memory the
 	// marshaling lifts and lowers against, which is not the memory-less trampoline's (ADR 0084). Bound
 	// into the canon-ABI adapter so CanonCaller.Read/Write reach the guest arguments.
@@ -150,6 +167,23 @@ func (w *walker) step(d Def) error {
 			// built-ins keep the stub (their discipline is Phase 3).
 			cn := w.c.Canons[d.Item]
 			if cn.Kind == CanonLower && int(cn.FuncIdx) < len(w.compFuncs) {
+				// **A callee that is a real component func is the guest-to-guest case** (#888): a composed
+				// sibling's lift, reachable right here and discarded until now. The `stubName != ""` arm
+				// below is the host case, and the two are mutually exclusive by construction — a compFunc
+				// either names an unfilled import or has a definition.
+				//
+				// Recorded rather than resolved here, for the same reason the host case records a key
+				// rather than an impl: the binding happens in `resolverFor`, where the module's own import
+				// type is in hand. What changes is only that the lower no longer forgets its callee.
+				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName == "" && cf.core.inst != nil {
+					w.appendCore(SpaceCoreFunc, coreDef{
+						lowerCallee:  cf,
+						lowerMem:     w.lowerMemory(cn),
+						lowerRealloc: w.lowerRealloc(cn),
+						async:        cn.Opts.Async,
+					})
+					return nil
+				}
 				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName != "" {
 					// An unresolved outer type alias (#753) in the lowered signature can never be marshaled —
 					// refuse by name at instantiate, for any lower (sync or async), rather than binding a core
@@ -293,7 +327,17 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if !ok {
 			return interp.Extern{}, false
 		}
-		if d.lowerName == "" && !d.isStub() && !d.resourceDrop && !d.asyncBuiltin {
+		// `lowerCallee` joins this guard's exclusion list because a cross-component lower (#888) has an
+		// empty `lowerName` and is not a stub, so it matched "a real export" and was handed back as
+		// `d.extern` — **the zero Extern**, which `InstantiateLinked` reports as *"a supplier with no
+		// defining module"*. That message is accurate and unhelpful: the supplier was a struct nobody
+		// filled, not a host function with a bad type.
+		//
+		// The guard is a list of "not a real export" markers, so every new kind of lower has to be added
+		// to it. That is the shape worth noting rather than the one-line fix: a predicate written as "none
+		// of the known special cases" silently admits the next special case, and admits it into the
+		// *default* arm, where the failure surfaces as far as possible from the cause.
+		if d.lowerName == "" && d.lowerCallee == nil && !d.isStub() && !d.resourceDrop && !d.asyncBuiltin {
 			return d.extern, true // a real export, by reference (memory/global/func sharing)
 		}
 		ft, ok := funcImportType(m, mod, name)
@@ -310,6 +354,16 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if d.asyncBuiltin {
 			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.asyncBuiltinSlot); ok {
 				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
+			}
+			return interp.Extern{}, false
+		}
+		// **A cross-component call** (#888): the lower's callee is a composed sibling's definition rather
+		// than an unfilled import, so it binds to that func instead of to a host impl. Checked before the
+		// host arms because `lowerName` is empty on this path — a lower that reached them would look up
+		// the empty key, miss, and refuse as `::run`, which reads as an unwired import and is not one.
+		if d.lowerCallee != nil {
+			if ext, ok := w.bindCrossComponent(d, m, mod, name); ok {
+				return ext, true
 			}
 			return interp.Extern{}, false
 		}
@@ -445,7 +499,18 @@ func refuse(mod, name, lowerName string) interp.HostFunc {
 			return nil, fmt.Errorf("%w: import %s is not provided (stub host; lowered at core %s::%s)",
 				ErrLinkRefused, lowerName, mod, name)
 		}
-		return nil, fmt.Errorf("%w: import %s::%s is not provided (stub host)", ErrLinkRefused, mod, name)
+		// **Quoted, and said to be a CORE import** (#888). This read `import %s::%s is not provided`,
+		// which renders a module-less import as `import ::run` — a string a reader takes for a name, and
+		// then hunts for. That is how #888's registration read it: it diagnosed a naming defect in
+		// #870's component-level identity derivation, and **there was none**. The identity was *absent*,
+		// because the canon definition behind the lower recorded no callee at all, and this branch was
+		// correctly reporting the only coordinates it had.
+		//
+		// So the carried repair is **dissolved rather than done**: fixing the real defect (`lowerCallee`)
+		// removes the message from the composed path entirely. What is kept is its intent — this is the
+		// message someone debugging a link reads — re-aimed at the wording that misled.
+		return nil, fmt.Errorf("%w: core import %q::%q is not provided (stub host) — the canon definition "+
+			"behind it records no component-level identity", ErrLinkRefused, mod, name)
 	}
 }
 
