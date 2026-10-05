@@ -408,7 +408,7 @@ func (h *asyncHandles) beginSubtaskCancel(i uint32, asyncForm bool) (
 }
 
 func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: subtask.cancel: got %d args, want (i)", len(args))
 		}
@@ -461,12 +461,33 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			// The wait is **bounded**, for `liftParkBound`'s reason one level out: an impl that never
 			// resolves must end in a verdict rather than a hang. The model has no bound because it has no
 			// real time; this engine does, and a wait with no bound is a hang wearing a spec citation.
-			select {
-			case <-wake:
-			case <-time.After(subtaskCancelBound):
-				return nil, fmt.Errorf("%w: subtask %d did not resolve within %s of its cancellation — "+
-					"the host impl's cancel handler never resolved it", ErrSubtaskCancelExpired, i,
-					subtaskCancelBound)
+			// **Inside `c.Blocking`, which is §5 H-1 and not a wrapper for tidiness.**
+			//
+			// A first version waited in a bare `select`. It was correct about *what* it waited for and
+			// wrong about *who* was waiting: this is a canon function, so the calling agent is in guest
+			// execution, and for up to `subtaskCancelBound` that agent would be running host code
+			// **without being marked blocked**. It therefore reaches no safepoint and is not excused as
+			// blocked, so a stop-the-world that begins during a cancellation stalls for the whole wait —
+			// Phase 4 clause 3's GC drives STW through cooperative safepoints.
+			//
+			// `Blocking` marks the agent blocked for `fn`'s duration, so a concurrent `Stop` sees it at a
+			// safepoint and **only this agent waits** (H-1: siblings run). `waitableSetWait` already did
+			// exactly this; the defect was that this function ignored its caller — its parameter was `_`,
+			// which is the shape that made the omission invisible.
+			//
+			// The return value carries the expiry out of the excursion rather than being handled inside,
+			// because `Blocking`'s own contract is that realloc and lowering must not run inside `fn`.
+			if werr := c.Blocking(func() error {
+				select {
+				case <-wake:
+					return nil
+				case <-time.After(subtaskCancelBound):
+					return fmt.Errorf("%w: subtask %d did not resolve within %s of its cancellation — "+
+						"the host impl's cancel handler never resolved it", ErrSubtaskCancelExpired, i,
+						subtaskCancelBound)
+				}
+			}); werr != nil {
+				return nil, werr
 			}
 		}
 		// **No `defer` in this function, and that is the control's requirement rather than a preference.**
