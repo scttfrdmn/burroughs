@@ -221,13 +221,46 @@ func (h *asyncHandles) requestCancelAll() error {
 // inherits a property the engine has rather than adding one. [#880] is where the call's context ends both.
 //
 // [#880]: https://github.com/scttfrdmn/burroughs/issues/880
-func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask) {
-	h.entrySem <- struct{}{}
+// The entry wait honours the call's context (#880, #858), which is the second of the two places a lift
+// task can wait. A task queued behind a sibling's entry was previously unresponsive to cancellation for
+// as long as the sibling held the slot; now a cancelled context ends the wait.
+//
+// **It returns `ok == false` rather than an error**, because a refused entry is not a failure of this
+// function and the caller already has the context that caused it: `enterAndInvoke` turns it into
+// `ErrCancelled` at the one place that knows the call is being abandoned. Two return values rather than
+// three keeps the `leaveTask` pairing visible — the caller releases only when `ok`.
+func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask, ok bool) {
+	// **The context refuses an entry only while the task has not begun cancelling**, and getting this
+	// wrong made the cancellation undeliverable.
+	//
+	// A first version refused on `ctx.Done()` unconditionally. Measured: the call returned `ErrCancelled`
+	// in under a millisecond and **no receipt arrived** — because the entry the lift loop needs in order
+	// to hand the guest `TASK_CANCELLED` was itself refused. The cancellation was delivered to nobody,
+	// the guest's destructors never ran, and the error was a claim about the engine's bookkeeping rather
+	// than about the guest. The test caught it because it asserts the receipt and not only the error.
+	//
+	// So: the context's job is to **start** a cancellation, not to interrupt one that is already in
+	// flight. Once the state is PENDING_CANCEL or CANCEL_DELIVERED the entry must proceed, or the guest
+	// can never finish what it was told to do.
+	h.mu.Lock()
+	cancelling := t.state == liftPendingCancel || t.state == liftCancelDelivered
+	h.mu.Unlock()
+
+	var ctxDone <-chan struct{}
+	if !cancelling {
+		ctxDone = t.context().Done()
+	}
+	select {
+	case h.entrySem <- struct{}{}:
+	case <-ctxDone:
+		// Never acquired the slot, so there is nothing to release and `leaveTask` must not run.
+		return nil, false
+	}
 	h.mu.Lock()
 	prev = h.lift
 	h.lift = t
 	h.mu.Unlock()
-	return prev
+	return prev, true
 }
 
 // leaveTask restores the current lift task to prev — the value enterTask returned — and releases the

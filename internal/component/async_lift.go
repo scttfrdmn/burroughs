@@ -3,6 +3,7 @@
 package component
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -36,6 +37,15 @@ const (
 	liftCancelDelivered                  // Task.State.CANCEL_DELIVERED — guest has had TASK_CANCELLED
 	liftResolved                         // Task.State.RESOLVED — by task.return or by task.cancel
 )
+
+// context returns the call's context, substituting `context.Background()` for a task built by a struct
+// literal. See the `ctx` field for why this is the only read path.
+func (t *liftTask) context() context.Context {
+	if t.ctx == nil {
+		return context.Background()
+	}
+	return t.ctx
+}
 
 func (s liftState) String() string {
 	switch s {
@@ -90,6 +100,27 @@ type liftTask struct {
 	// the park's bound expires: the index is what tells a reader WHICH set never produced an event, and
 	// by that point the packed return it came from is several entries behind.
 	waitSet uint32
+
+	// ctx is the call's context (#880, #858). It is the embedder's cancellation channel, and it reaches
+	// the two places this task can wait: `awaitEvent`'s park and `enterTask`'s entry semaphore.
+	//
+	// # Why a field on the task rather than a parameter everywhere
+	//
+	// The task is already threaded to both waits — `awaitEvent` takes it, and `enterTask` is called with
+	// it — so carrying the context here reaches them without a signature change at every intermediate
+	// hop. It is per-call by construction, which a field on the shared `compFunc` would not be (#869's
+	// lesson: a `compFunc` is shared by every concurrent caller of its export).
+	//
+	// **Read through `context()`, never directly.** `newLiftTask` substitutes `context.Background()`,
+	// but a struct literal — which several tests legitimately use to put a task in a specific state —
+	// leaves this nil, and a nil `context.Context` panics on `Done()`.
+	//
+	// That is not hypothetical: it cost a 60-second hang. The panic fired *inside* a critical section, so
+	// the table mutex was never released and the next goroutine to want it deadlocked — the test binary
+	// reported a timeout rather than the nil deref, and the stack had to be read to find the real cause.
+	// **An invariant maintained by every constructor is an invariant one literal breaks**; maintained at
+	// the single read site, it cannot be.
+	ctx context.Context
 
 	// cancelWake wakes a park that is waiting on this task's cancellation (ADR 0094). It is CLOSED, not
 	// sent on, so every parked selector sees it and a request that arrives before any park is not lost —
@@ -423,6 +454,13 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 		h.mu.Unlock()
 	}()
 
+	// **One context request per park, enforced by taking the channel out of the select afterwards.** A
+	// `Done()` channel stays closed, so a case that re-selected on it would spin: the ordinary path exits
+	// the loop on the next pass (the delivery), but a *refused* request — the task is already past
+	// running — leaves the loop running with a permanently ready case. A flag rather than nilling
+	// `task.ctx` because the context is the caller's and this function does not own it.
+	requested := false
+
 	for {
 		h.mu.Lock()
 		set, ok := handleAt[*waitableSet](h, si)
@@ -447,10 +485,29 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 		// channel captured once would be the stale, already-closed one and this would spin.
 		wake := set.wake
 		cancelWake := task.cancelWake
+		var ctxDone <-chan struct{}
+		if !requested {
+			ctxDone = task.context().Done()
+		}
 		h.mu.Unlock()
 		select {
 		case <-wake: // a member resolved (or another waiter's cycle) — re-check
 		case <-cancelWake: // a host cancellation was requested — re-check, which will deliver it
+		case <-ctxDone:
+			// **The embedder's context (#880, #858). It REQUESTS a cancellation; it does not abort the
+			// park.** The difference is the whole of it: aborting would return an error from a task the
+			// guest still believes is running, leaving its destructors unrun and its resources held.
+			// Requesting takes ADR 0094's path — PENDING_CANCEL, then TASK_CANCELLED delivered at the
+			// top of this loop — so the guest runs its own cancellation and resolves, and the caller
+			// gets `ErrCancelled` from a task that actually ended.
+			//
+			// The request is made once and then this case goes inert, because `requestCancelLocked`
+			// moves the state out of `liftStarted` and the next pass's `deliverPendingCancelLocked`
+			// returns the event. A still-closed `Done()` channel would otherwise re-fire forever.
+			requested = true
+			h.mu.Lock()
+			_ = task.requestCancelLocked() // a refusal means it is already past running; the loop sees it
+			h.mu.Unlock()
 		case <-deadline.C:
 			return event{}, fmt.Errorf("%w: waitable set %d produced nothing in %s — the host impl or "+
 				"guest that would resolve it never did", ErrLiftParkExpired, si, bound)

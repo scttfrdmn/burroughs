@@ -87,11 +87,17 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 					"would park an agent that is inside guest execution (§5 H-1)", ErrUnsupportedForm)
 			}, opts), true
 		}
-		return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		return interp.CanonLowerExtern(ft, func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 			// A sync callee: `invokeWith` reaches `inst.Invoke` directly, with no loop and no park. This
 			// is guest-calling-guest on one goroutine, which is what a sync call means, so there is
 			// nothing to mark and nothing to wait on.
-			return callee.invokeWith(args)
+			//
+			// The **caller's** context is passed down (#858): a child call inherits its parent's
+			// cancellation, so an embedder cancelling the outer call cancels the whole chain rather than
+			// the outermost frame only. Carried even though a sync callee never waits on it, because the
+			// alternative is a `context.Background()` that silently detaches a subtree — and which arm
+			// waits is the callee's property, not this site's to assume.
+			return callee.invokeWith(c.Context(), args)
 		}, opts), true
 	}
 
@@ -128,7 +134,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 // `liftTask.requestCancelLocked`, with the cancel-aware park and the top-of-loop delivery behind it. So
 // the returned closure requests the child's lift-task cancellation through the child's own handle table.
 func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
-	return func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+	return func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 		// `onStart` lifts the caller's flat params and moves the subtask STARTING→STARTED. It must run
 		// **before** the goroutine, synchronously, because the model's `on_start` reads the caller's flat
 		// args (`CoreValueIter(flat_args)`, def:2193/2210) and those belong to the calling frame — reading
@@ -143,7 +149,11 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 		// race, with one run cancelling in 11ms and the next timing out at 30s with the child's cancel
 		// handler never invoked. Creating it here makes registration happen-before anything the caller
 		// can do next, so there is no window to lose the race in.
-		task := callee.newLiftTask()
+		// The child's task inherits the **caller's** context (#858), so an embedder cancelling the outer
+		// call cancels the child too rather than only the frame it can see. The context is read here, on
+		// the calling goroutine, rather than inside the closure below: `c` belongs to the caller's frame,
+		// and reading it from the goroutine would be a use after that frame may have moved on.
+		task := callee.newLiftTask(c.Context())
 
 		go func() {
 			res, err := callee.runLiftTask(task, params)

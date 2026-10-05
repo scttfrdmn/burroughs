@@ -3,6 +3,7 @@
 package component
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -43,7 +44,23 @@ import (
 // rather than at load, because *the boundary is where the value moves* (ADR 0084). Reusing it rather than
 // adding a second refusal is deliberate: two refusals for one condition drift apart, and the one nobody
 // reads becomes the one that is wrong.
+// CallValues is [Instantiated.CallValuesCtx] with no cancellation, which is what every test that is not
+// *about* cancellation wants.
+//
+// **Two entry points rather than one, deliberately.** The usual rule here is one entry point with the
+// optional thing as a nil argument — `invokeWith(nil)` over a second name. It does not apply: a context
+// is not an argument a reader can ignore, and threading `context.Background()` through seventeen call
+// sites whose subject is the lift loop would put ceremony in front of what each one is actually asserting.
+// Both names have live callers, so neither is the dead wrapper that rule exists to prevent.
 func (in *Instantiated) CallValues(name string, args ...canon.Value) ([]canon.Value, error) {
+	return in.CallValuesCtx(context.Background(), name, args...)
+}
+
+// CallValuesCtx is CallValues carrying the call's context (#880, #858): cancelling it **requests the
+// task's cancellation** rather than abandoning the call, so the guest runs its own cancellation path and
+// the call returns `ErrCancelled` from a task that actually ended. It reaches the two places a lift task
+// waits — the park and the entry semaphore.
+func (in *Instantiated) CallValuesCtx(ctx context.Context, name string, args ...canon.Value) ([]canon.Value, error) {
 	fn, err := in.resolveValueExport(name)
 	if err != nil {
 		return nil, err
@@ -65,7 +82,7 @@ func (in *Instantiated) CallValues(name string, args ...canon.Value) ([]canon.Va
 	// **The resolution comes back as a return value, not from a field on `fn`** (#869). `fn` is shared by
 	// every concurrent caller of this export, so reading a resolution off it handed two callers one slot —
 	// a data race `-race` reported on the concurrent acceptance arm, which passed without it.
-	resolved, err := fn.invokeWith(flat)
+	resolved, err := fn.invokeWith(ctx, flat)
 	if err != nil {
 		return nil, err
 	}
