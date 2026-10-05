@@ -983,7 +983,22 @@ func (w *walker) liftSignature(cn Canon) *FuncType {
 	if td.Kind != TDFunc {
 		return nil
 	}
-	return td.Func
+	// **Resolved, where this returned `td.Func` raw until #903.** A lift's signature comes straight from
+	// the type section, so a parameter written as a typeidx reference stayed a `VRef` — and
+	// `unmodeledValKind`'s default arm counts `VRef` as *modeled*, because a handle is an i32 whatever it
+	// references. So a lift whose parameter was a reference to an unmodeled type (a record, say) passed the
+	// unmodeled check without the check ever looking at what the reference named.
+	//
+	// It was masked rather than harmless: `lowerFlatArgs` refuses anything that is not `VU32` by name, so
+	// the wrong answer could not reach a marshal. Generalising that path is exactly what #903 does, which
+	// is when the mask comes off — so the resolution lands with the bridge rather than after it.
+	//
+	// The lookup is the **section** one: a top-level VRef is a type-index-space ordinal, and indexing
+	// `c.Types` by it directly names a different type that exists (see `typeAt`).
+	if td.Func == nil {
+		return nil
+	}
+	return resolveFunc(td.Func, w.c.sectionTypeAt())
 }
 
 // CallRun invokes the component's `wasi:cli/run` export, whatever version it names

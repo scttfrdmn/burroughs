@@ -554,8 +554,12 @@ func (w *walker) lowerSignature(lowerName string) *FuncType {
 			if ct < 0 || ct >= len(w.c.Types) {
 				return nil
 			}
-			if td := w.c.Types[ct]; td.Kind == TDFunc {
-				return td.Func
+			// Resolved for `liftSignature`'s reason (#903), and through the section lookup for the same
+			// reason: this is a *top-level* import's functype, so its VRefs are index-space ordinals. The
+			// instance branch below needs no resolution — those signatures were already inlined against the
+			// instance's own local space when the instance type was decoded.
+			if td := w.c.Types[ct]; td.Kind == TDFunc && td.Func != nil {
+				return resolveFunc(td.Func, w.c.sectionTypeAt())
 			}
 			return nil
 		}

@@ -69,8 +69,24 @@ func (in *Instantiated) CallValuesCtx(ctx context.Context, name string, args ...
 		return nil, fmt.Errorf("%w: export %q has no resolved component signature, so its values cannot "+
 			"be checked against it", ErrUnsupportedForm, name)
 	}
-	// The same refusal `Call` performs, at the same point, for the same reason.
-	if k, bad := unmodeledInSig(fn.sig); bad {
+	// **The refusal is the bridge's, where it was `unmodeledInSig`'s until #903.**
+	//
+	// Both answer "can the codec carry this signature", and this file already records why two refusals for
+	// one condition are wrong — *"they drift apart, and the one nobody reads becomes the one that is
+	// wrong."* So the export-call path asks the thing that actually builds the codec types, rather than a
+	// predicate that agrees with it by inspection.
+	//
+	// It is also strictly better here, on the one case where the two disagree. `unmodeledValKind`'s default
+	// arm counts a `VRef` **modeled** — true of a handle, which is an i32 whatever it references — and it
+	// does not follow the reference. So an export whose parameter was a reference to a record passed the
+	// old check without anything looking at what the reference named, and was refused further down by the
+	// `VU32` guard, which reported the wrong reason. Lift signatures are resolved now, so the bridge sees
+	// through the reference and names the record.
+	//
+	// `unmodeledInSig` is deliberately NOT retired: it is consulted at **instantiate** for every
+	// implemented lower, so changing its verdict changes which components load. That is its own slice with
+	// its own witness, and `TestTheBridgeAndTheUnmodeledPredicateAgree` pins the two together until then.
+	if k, bad := canonSigUnmodeled(fn.sig); bad {
 		return nil, fmt.Errorf("%w: export %q carries %s, which this engine's Canonical ABI does not model",
 			ErrUnsupportedForm, name, valKindName(k))
 	}

@@ -30,6 +30,17 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The bridge from a decoded component value type to the Canonical ABI codec's type**
+  ([#903](https://github.com/scttfrdmn/burroughs/issues/903)), which is what a value-carrying export call
+  needs and what did not exist: every `canon.Type` in the engine was hand-written by a WASI import that
+  knows its own signature statically, which cannot serve a call driven by whatever signature a component
+  *declared*. 19 of the 28 decoded kinds are carried, 9 refused **by name**, and the domain is derived
+  from the kind enum's own extent so a new kind cannot be silently unclassified. The codec is the oracle
+  for what the bridge builds, not a table: each built type is handed to `canon.StoreVia`, whose
+  size/alignment/flatten arms are what reject a type the codec cannot carry.
+  **No public surface** — `string`, `list` and `record` do not cross the embedder's boundary yet, and
+  what they will look like is [#902](https://github.com/scttfrdmn/burroughs/issues/902), awaiting a stamp.
+
 - **The public component interface: `LoadComponent`, `*Component`, `Component.Call(ctx, …)`,
   `ComponentValue`, and `ErrCancelled`** ([#858](https://github.com/scttfrdmn/burroughs/issues/858),
   [ADR 0096](docs/decisions/0096-the-public-component-interface-lands-as-componentvalue-loadcomponent-and-call-with-a-context-stamped-on-a-six-point-summary.md)),
@@ -924,6 +935,24 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **A lift's signature was never resolved, so an unmodeled type behind a typeidx reference passed the
+  unmodeled check** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). `liftSignature` returned
+  the functype straight from the type section, and `unmodeledValKind` counts a `VRef` *modeled* — true of
+  a handle, which is an i32 whatever it references — without following it. So an export whose parameter
+  referenced a record was accepted by the check and refused further down by the `u32`-only guard, which
+  named the reference where the obstacle was the record. Masked rather than harmless, and the mask is
+  exactly what #903 removes. Both unresolved sites resolve now; the export-call refusal is the bridge's.
+- **Resolving a top-level reference against the type *section* names a different type that exists.** A
+  top-level `VRef` is an ordinal into the component's type-index **space**, of which the section is a
+  compacted subset — an alias grows the space without appending to the section. `resolveVal` took a
+  plain slice, so there was no way to express which space an index belonged to; it now takes a lookup,
+  and each caller supplies the one its indices belong to. No bound was exceeded and no error returned in
+  the wrong case, which is why this is a lookup and not a range check.
+- **`resolveVal` reached four of six compound kinds**, inlining list, option, result and variant but not
+  `record` or `tuple`, so a field or element that was itself a reference stayed one while its siblings
+  inlined — output indistinguishable by shape from a fully resolved type.
+- **`resolveFunc` silently dropped `Async`**, so every resolved signature claimed to be a sync functype.
+  Free while its only caller never read the field back; the lift path reads it.
 - **The sync `subtask.cancel` wait blocked an agent without a blocking excursion**, so a stop-the-world
   beginning during a cancellation stalled for the whole wait. It landed as a bare `select` in a canon
   function whose caller parameter was `_` — and a canon function runs with the calling agent **inside
