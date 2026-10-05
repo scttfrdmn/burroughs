@@ -288,35 +288,82 @@ func (r *reader) instanceType() (*InstanceType, error) {
 	// local type-index references.
 	for i := range inst.Exports {
 		if inst.Exports[i].Func != nil {
-			inst.Exports[i].Func = resolveFunc(inst.Exports[i].Func, local)
+			inst.Exports[i].Func = resolveFunc(inst.Exports[i].Func, sliceTypeAt(local))
 		}
 	}
 	return inst, nil
 }
 
-// resolveFunc inlines a function type's parameter and result value types against a local type space.
-func resolveFunc(ft *FuncType, local []TypeDef) *FuncType {
-	out := &FuncType{Params: make([]NamedVal, len(ft.Params))}
+// resolveFunc inlines a function type's parameter and result value types against a type space.
+//
+// **`Async` is carried through.** It was dropped while the only caller was the instance-export path,
+// where no caller read it back off a resolved signature; the lift path added in #903 does, and a
+// signature that forgot it was an async functype would be a different type than the one decoded.
+func resolveFunc(ft *FuncType, at typeAt) *FuncType {
+	out := &FuncType{Params: make([]NamedVal, len(ft.Params)), Async: ft.Async}
 	for i, p := range ft.Params {
-		out.Params[i] = NamedVal{Name: p.Name, Type: resolveVal(p.Type, local, nil)}
+		out.Params[i] = NamedVal{Name: p.Name, Type: resolveVal(p.Type, at, nil)}
 	}
 	if ft.Result != nil {
-		r := resolveVal(*ft.Result, local, nil)
+		r := resolveVal(*ft.Result, at, nil)
 		out.Result = &r
 	}
 	return out
 }
 
-// resolveVal follows a VRef into the local type space and inlines the referenced value type, recursing
-// into compound elements. own/borrow keep their resource type index (a handle is an i32 regardless).
+// typeAt resolves a type index to its definition, reporting whether the index names a parsed one.
+//
+// **It is a function and not a slice because the two index spaces this engine resolves against are not
+// interchangeable, and indexing the wrong one is silently wrong rather than out of range.** An instance
+// type's VRef is an ordinal into that instance's own local type space, which is a plain slice built in
+// declaration order. A *top-level* VRef is an ordinal into the component's type-index **space**, of which
+// `c.Types` is a compacted subset — aliases and instance-local sub-types also grow the space without
+// appending to the section, so `c.Types[ref]` for any ordinal past the first interleaved alias names a
+// *different type that exists*. That is the failure mode a slice parameter cannot prevent and a lookup
+// can: each caller supplies the lookup for the space its indices belong to.
+type typeAt func(uint32) (TypeDef, bool)
+
+// sliceTypeAt is the lookup for a local type space indexed directly — an instance type's own.
+func sliceTypeAt(local []TypeDef) typeAt {
+	return func(i uint32) (TypeDef, bool) {
+		if int(i) >= len(local) {
+			return TypeDef{}, false
+		}
+		return local[i], true
+	}
+}
+
+// sectionTypeAt is the lookup for a top-level VRef: a type-index-space ordinal, mapped through
+// [Component.typeSpaceToTypes] to the compacted section. An ordinal naming an alias or an import rather
+// than a parsed section type does not resolve, which is the honest answer — the alternative is the
+// wrong-type-that-exists above.
+func (c *Component) sectionTypeAt() typeAt {
+	return func(i uint32) (TypeDef, bool) {
+		ct := c.typeSpaceToTypes(i)
+		if ct < 0 || ct >= len(c.Types) {
+			return TypeDef{}, false
+		}
+		return c.Types[ct], true
+	}
+}
+
+// resolveVal follows a VRef through `at` and inlines the referenced value type, recursing into compound
+// elements. own/borrow keep their resource type index (a handle is an i32 regardless).
 // `seen` tracks the VRef indices already entered on the current chain, so a cyclic reference (a
 // self-referential placeholder, or any fuzzer-crafted VRef cycle) is detected and returned as
 // VUnresolvedAlias — a named, refusable outcome — rather than overflowing the stack (#753). It bounds
 // nothing legal: a finite, acyclic type visits each index at most once. `seen` is nil at the top level.
-func resolveVal(vt ValType, local []TypeDef, seen map[uint32]bool) ValType {
+//
+// **The record and tuple arms were absent until #903**, so a record field or tuple element that was
+// itself a VRef stayed a reference while every other compound inlined. It was unreachable in the one
+// direction that mattered — a record is unmodeled, so a signature carrying one refuses before anything
+// reads its fields — but `tuple` is modeled for size and alignment, and the bridge to the codec's types
+// reads both. A resolver that inlines four of six compound kinds is one whose output cannot be told from
+// a fully resolved type by its own shape.
+func resolveVal(vt ValType, at typeAt, seen map[uint32]bool) ValType {
 	switch vt.Kind {
 	case VRef:
-		if int(vt.Ref) < len(local) && local[vt.Ref].Kind == TDVal {
+		if td, ok := at(vt.Ref); ok && td.Kind == TDVal {
 			if seen[vt.Ref] {
 				return ValType{Kind: VUnresolvedAlias} // a cycle — unresolvable, refuse by name downstream
 			}
@@ -324,22 +371,22 @@ func resolveVal(vt ValType, local []TypeDef, seen map[uint32]bool) ValType {
 				seen = map[uint32]bool{}
 			}
 			seen[vt.Ref] = true
-			return resolveVal(local[vt.Ref].Val, local, seen)
+			return resolveVal(td.Val, at, seen)
 		}
 		return vt // a ref to a resource/func/instance type — left as a reference
 	case VList, VOption:
 		if vt.Elem != nil {
-			e := resolveVal(*vt.Elem, local, seen)
+			e := resolveVal(*vt.Elem, at, seen)
 			vt.Elem = &e
 		}
 		return vt
 	case VResult:
 		if vt.Ok != nil {
-			ok := resolveVal(*vt.Ok, local, seen)
+			ok := resolveVal(*vt.Ok, at, seen)
 			vt.Ok = &ok
 		}
 		if vt.Err != nil {
-			e := resolveVal(*vt.Err, local, seen)
+			e := resolveVal(*vt.Err, at, seen)
 			vt.Err = &e
 		}
 		return vt
@@ -348,11 +395,25 @@ func resolveVal(vt ValType, local []TypeDef, seen map[uint32]bool) ValType {
 		for i, c := range vt.Cases {
 			cs[i] = c
 			if c.Type != nil {
-				t := resolveVal(*c.Type, local, seen)
+				t := resolveVal(*c.Type, at, seen)
 				cs[i].Type = &t
 			}
 		}
 		vt.Cases = cs
+		return vt
+	case VRecord:
+		fs := make([]NamedVal, len(vt.Fields))
+		for i, f := range vt.Fields {
+			fs[i] = NamedVal{Name: f.Name, Type: resolveVal(f.Type, at, seen)}
+		}
+		vt.Fields = fs
+		return vt
+	case VTuple:
+		es := make([]ValType, len(vt.Elems))
+		for i, e := range vt.Elems {
+			es[i] = resolveVal(e, at, seen)
+		}
+		vt.Elems = es
 		return vt
 	default:
 		return vt
