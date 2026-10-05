@@ -57,12 +57,41 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		// lower of an ASYNC lift still runs the callback loop to completion — which is the correct
 		// reading of a sync lower (the model's `canon_lower` with `async_` false asserts the subtask
 		// reached RETURNED before returning, def:2227).
+		// # A sync lower of an ASYNC lift is refused by name, and there is deliberately no excursion here
+		//
+		// The transitive half of the `c.Blocking` audit (§5 H-1, grave #892's slice) flagged this arm: a
+		// lexical scan finds no `select`, but `invokeWith` dispatches on the **callee's** `async` flag, so
+		// a sync lower of an async lift would run the whole callback loop — `awaitEvent`'s park included,
+		// up to `liftParkBound` — on this goroutine with the agent inside guest execution and unmarked.
+		//
+		// **Checking the premise retired the finding rather than confirming it.** A sync `canon lower`
+		// cannot target an async lift in a well-formed component: the lower must match the import's
+		// asyncness, which is recorded as a measured refusal in `testdata/compose/parent-supplied.wat`
+		// (*"The `canon lower` must carry **`async`** to match"*). So the path is unreachable upstream.
+		//
+		// **And wrapping it in `c.Blocking` would have been wrong, not merely unnecessary.** A sync
+		// cross-component call runs *guest* code; `Blocking` means "this agent is in host code", and the
+		// mark tells a concurrent `Stop` the agent is at a safepoint. Marking it while a callee guest
+		// executes would let a stop round report a stopped world over running guest code — the opposite
+		// of the property the audit was protecting. A first attempt did add the wrapper here, on the
+		// strength of the finding and before checking either of these.
+		//
+		// So the arm **refuses an async callee by name** instead. That is cheaper than an excursion and
+		// strictly more honest: it says the component is ill-formed rather than running a loop on a
+		// goroutine that must not park. Refused at call rather than at bind because the resolver has no
+		// error channel — the same shape `refuse` uses.
+		if callee.async {
+			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+				return nil, fmt.Errorf("%w: a sync canon lower cannot target an async lift — the lower "+
+					"must match its import's asyncness, and running the callee's callback loop here "+
+					"would park an agent that is inside guest execution (§5 H-1)", ErrUnsupportedForm)
+			}, opts), true
+		}
 		return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-			res, err := callee.invokeWith(args)
-			if err != nil {
-				return nil, err
-			}
-			return res, nil
+			// A sync callee: `invokeWith` reaches `inst.Invoke` directly, with no loop and no park. This
+			// is guest-calling-guest on one goroutine, which is what a sync call means, so there is
+			// nothing to mark and nothing to wait on.
+			return callee.invokeWith(args)
 		}, opts), true
 	}
 

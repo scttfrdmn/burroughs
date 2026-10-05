@@ -821,6 +821,31 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **The sync `subtask.cancel` wait blocked an agent without a blocking excursion**, so a stop-the-world
+  beginning during a cancellation stalled for the whole wait. It landed as a bare `select` in a canon
+  function whose caller parameter was `_` — and a canon function runs with the calling agent **inside
+  guest execution**, so for up to `subtaskCancelBound` that agent ran host code *without being marked
+  blocked*: it reaches no safepoint and is not excused as one. Phase 4 clause 3 drives GC's STW through
+  cooperative safepoints, so this was a GC that stalls on a cancellation.
+  Now inside **`c.Blocking`** (§5 **H-1**: a blocking host call stops only its own agent, siblings run),
+  which is what `waitableSetWait` already did. **The ignored parameter is what made the omission
+  invisible** — there was nothing to misuse, so nothing looked wrong.
+  Witnessed: a `Stop` issued while a sync cancel waits on a 3s resolution returns in **3µs** against a
+  500ms deadline. Neutering the excursion makes it expire with the engine's own diagnostic — *"thread 1
+  has 0 of 1 callers at a safepoint (0 parked, 0 blocked)"*. The assertion is carried by `Stop`'s
+  contract rather than a stopwatch: returning `nil` *means* it beat its deadline.
+  **The audit for other such waits was done with a parser, in two halves, and its blind spots are named.**
+  Lexically, over every canon closure: `subtaskCancel` was the only unguarded one. Transitively — because
+  a canon closure can reach a park through a *call*, which no lexical scan sees — two candidates, both
+  true negatives: `runLiftTask` is reached inside a `go` statement, so no agent is in guest execution, and
+  `invokeWith`'s sync arm can only reach a non-parking sync callee.
+  **That second one was nearly "fixed" wrongly.** A first attempt wrapped it in `c.Blocking` on the
+  strength of the finding. Checking the premise retired it twice over: a sync `canon lower` cannot target
+  an async lift in a well-formed component (a measured refusal, recorded in
+  `testdata/compose/parent-supplied.wat`), **and** `Blocking` would have been the wrong marking anyway —
+  a sync cross-component call runs *guest* code, and marking the agent blocked would let a stop round
+  report a stopped world over a running guest. The arm now **refuses an async callee by name** instead,
+  which says the component is ill-formed rather than parking an agent that must not park.
 - **`subtask.cancel` returned BLOCKED where the model waits, and crashed conforming guests**
   ([grave #892](https://github.com/scttfrdmn/burroughs/issues/892)). `canon_subtask_cancel(async_, i)`
   branches on its flag: the **sync** form waits for the cancellation to resolve
