@@ -944,6 +944,28 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **`task.return` lifted its result after the callback loop, by which time the guest may have reused the
+  buffer** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). The model lifts **inside**
+  `canon_task_return` (`definitions.py:2336`) and hands `Task.return_` an already-lifted value
+  (def:487-492); Burroughs stored the flat words and lifted them at resolution. For a `u32` the two are
+  identical — the value *is* the word — which is exactly why it survived: no committed guest returned
+  anything else, so no fixture could tell the orders apart. For a `string` the words are a `(ptr, len)`
+  into guest memory, and between `task.return` and the loop's exit the guest **runs again**. The lift is
+  eager now, and `task-return-string-clobber-synth.wasm` is the witness: it resolves with nine bytes, then
+  overwrites them with `'X'`. Moving its clobber ahead of the `task.return` makes the test read
+  `"XXXXXXXXX"`, so the engine is demonstrably reading live memory at `task.return` time.
+- **`task.return`'s declared result type and canonopts were decoded and discarded**
+  ([#903](https://github.com/scttfrdmn/burroughs/issues/903)) — `if _, err := r.resultList()` and
+  `_, err := r.canonOpts()`. Both were on the wire the whole time, and both are what the eager lift needs:
+  the type to lift against, the memory to lift from. Grave [#892](https://github.com/scttfrdmn/burroughs/issues/892)'s
+  shape, in the same function, thirty lines from the comment explaining why discarding is the hazard.
+- **Every export name resolved to the last component func of its sort**
+  ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). `parseExports` called `sortIdx`, which
+  reads the sortidx's index and drops it, so `exportRef` guessed; its comment said this was *"sufficient
+  for the single func/instance export shapes this slice reaches"*, which was true of every fixture in the
+  tree. The first component to export two lifts had both names answered by one function, with the wrong
+  signature attached — a `string`-returning export reported a `u32` result. `sortIdxFull` already existed
+  and already returned the index. **Third field in this slice that was decoded and thrown away.**
 - **The codec's string lift implemented none of the model's four traps, and an out-of-range one
   panicked** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). `load` and `liftFlat` sliced the
   differential heap's backing array directly — `h.mem[begin : begin+n]` — so a byte length past the

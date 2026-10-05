@@ -205,7 +205,8 @@ func TestYieldReentersTheCallbackWithNoEvent(t *testing.T) {
 		t.Fatal("no run export")
 	}
 
-	resolved, err := cd.fn.invokeWith(context.Background(), nil) // the resolution is a return value now (#869)
+	res0, err := cd.fn.invokeWith(context.Background(), nil) // the resolution is a return value now (#869)
+	resolved := res0.flat                                    // .flat since #903
 	if err != nil {
 		// Both falsifications were run, and they fail by DIFFERENT routes — worth naming, because a
 		// reader debugging this arm needs to know which one they are looking at:

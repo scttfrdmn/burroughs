@@ -323,7 +323,7 @@ func TestValKindNameIsTotal(t *testing.T) {
 func TestACrossComponentResultShapeRefusesByName(t *testing.T) {
 	t.Run("scalar_is_carried", func(t *testing.T) {
 		sig := &FuncType{Result: &ValType{Kind: VU32}}
-		v, err := crossComponentValue(sig, []interp.Value{interp.I32(49)})
+		v, err := crossComponentValue(sig, liftResult{flat: []interp.Value{interp.I32(49)}})
 		if err != nil {
 			t.Fatalf("a u32 result: %v, want carried", err)
 		}
@@ -336,14 +336,14 @@ func TestACrossComponentResultShapeRefusesByName(t *testing.T) {
 	t.Run("no_result_is_carried", func(t *testing.T) {
 		// "Returns nothing" is a shape this carries perfectly, and it is grave #885's guest exactly — so
 		// it must not land in the refusal arm with the aggregates.
-		if _, err := crossComponentValue(&FuncType{}, nil); err != nil {
+		if _, err := crossComponentValue(&FuncType{}, liftResult{}); err != nil {
 			t.Errorf("a no-result signature: %v, want carried", err)
 		}
 	})
 
 	t.Run("string_refuses_naming_the_kind", func(t *testing.T) {
 		sig := &FuncType{Result: &ValType{Kind: VString}}
-		_, err := crossComponentValue(sig, []interp.Value{interp.I32(0)})
+		_, err := crossComponentValue(sig, liftResult{flat: []interp.Value{interp.I32(0)}})
 		if !errors.Is(err, ErrCrossComponentResult) {
 			t.Fatalf("a string result: %v, want ErrCrossComponentResult", err)
 		}
@@ -356,7 +356,7 @@ func TestACrossComponentResultShapeRefusesByName(t *testing.T) {
 
 	t.Run("wrong_arity_refuses", func(t *testing.T) {
 		sig := &FuncType{Result: &ValType{Kind: VU32}}
-		if _, err := crossComponentValue(sig, nil); !errors.Is(err, ErrCrossComponentResult) {
+		if _, err := crossComponentValue(sig, liftResult{}); !errors.Is(err, ErrCrossComponentResult) {
 			t.Errorf("a u32 result with no flat values: %v, want ErrCrossComponentResult", err)
 		}
 	})

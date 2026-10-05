@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
@@ -58,6 +59,23 @@ type liftTask struct {
 	state   liftState      // mirrors Task.State; resolution (however reached) is the teardown key
 	result  []interp.Value // the flat result task.return received; read at resolution
 	storage [2]uint32      // the task's context (context.get/set), NOT the per-call stack's — see below
+
+	// lifted is the result `task.return` lifted **eagerly**, when its canonopts gave it a result type to
+	// lift against. nil when the export declares no result, or when the type is one the flat lift cannot
+	// carry (in which case `task.return` has already refused).
+	//
+	// # Why eagerly, and why this field rather than lifting at resolution
+	//
+	// The model lifts inside `canon_task_return` (definitions.py:2336) and hands `Task.return_` an
+	// already-lifted value (def:487-492). Burroughs stored the flat words and lifted them after the
+	// callback loop exited, which for a `u32` is identical — the value *is* the word — and wrong for
+	// anything whose payload lives in guest memory: between `task.return` and the loop's exit the guest
+	// **runs again**, and it is free to reuse the buffer its `(ptr, len)` named. The late lift then reads
+	// whatever the guest put there second.
+	//
+	// So this is not an optimisation and not a tidying. It is the difference between reading the guest's
+	// result and reading the guest's next scratch write.
+	lifted *canon.Value
 
 	// cancelledResolution distinguishes the two ways a task reaches `liftResolved`, which the model
 	// expresses as the *payload* of `on_resolve`: `return_` passes a result (def:490), `cancel` passes
@@ -335,8 +353,25 @@ func taskCancel(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-func taskReturn(h *asyncHandles) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		// **The lift happens here, before the lock and before `Task.return_`'s equivalent** — the order the
+		// model uses (definitions.py:2336 lifts, then def:2337 calls `task.return_`). It reads guest memory,
+		// so it must not hold `h.mu`: a read can fail, and §4 B-MM-3's rule is that a critical section
+		// holds no operation that can block or reach out of the engine.
+		//
+		// `c` was `_` until #903, which is the same smell it is everywhere else in this package: the caller
+		// is the memory, so a canon function that ignores it is a canon function that cannot touch the
+		// guest's heap. Here it could not lift its own argument.
+		var lifted *canon.Value
+		if resultT != nil {
+			v, err := liftTaskReturnValue(c, *resultT, args)
+			if err != nil {
+				return nil, err
+			}
+			lifted = &v
+		}
+
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if h.lift == nil {
@@ -350,9 +385,70 @@ func taskReturn(h *asyncHandles) interp.CanonFunc {
 			return nil, &interp.Trap{Reason: "task.return called on a task that is already resolved"}
 		}
 		h.lift.result = append([]interp.Value(nil), args...)
+		h.lift.lifted = lifted
 		h.lift.cancelledResolution = false
 		h.lift.state = liftResolved
 		return nil, nil
+	}
+}
+
+// liftTaskReturnValue lifts `task.return`'s flat arguments into a component value.
+//
+// # Scope: what a FLAT lift can carry without a per-element load
+//
+// The scalars are their own words, and a `string` is a `(ptr, len)` pair whose bytes are read through the
+// codec's one string lift. Everything compound — a list, a variant, a record — needs a per-element load
+// the way `canon.StoreList` needs a per-element store, and no such lift exists yet (`canon.LoadListU8` is
+// the one reduced case, and it reduces only because a u8 is one byte at a one-byte stride). So those
+// refuse **by name** here rather than being approximated, which is the same discipline the bridge applies
+// one level up.
+//
+// It deliberately does not build a second lift path: every indirect read goes through
+// `canon.LoadStringFromRange`, which is the function the codec's own two arms call and the differential's
+// string fixtures verify.
+func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value) (canon.Value, error) {
+	ct, err := canonTypeOf(vt)
+	if err != nil {
+		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
+			"task.return declares a result this engine's Canonical ABI cannot lift: %v", err)}
+	}
+
+	want := func(n int) error {
+		if len(args) != n {
+			return &interp.Trap{Reason: fmt.Sprintf(
+				"task.return for a %s result got %d flat value(s), want %d", ct.Kind, len(args), n)}
+		}
+		return nil
+	}
+
+	switch ct.Kind {
+	case canon.KindU32:
+		if err := want(1); err != nil {
+			return canon.Value{}, err
+		}
+		return canon.U32(uint32(args[0].Int32())), nil
+
+	case canon.KindString:
+		// Two flat words, `(ptr, byte-length)`. **Read now**, which is the whole point: the guest resumes
+		// after this call and may reuse the buffer.
+		if err := want(2); err != nil {
+			return canon.Value{}, err
+		}
+		ptr := int(uint32(args[0].Int32()))
+		n := int(uint32(args[1].Int32()))
+		v, lerr := canon.LoadStringFromRange(guestHeap{c}, ptr, n)
+		if lerr != nil {
+			// A guest's own (ptr, len) failing the model's traps is a guest fault, not an engine error —
+			// it traps, as `load_string_from_range` does (def:1383-1389).
+			return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf("task.return's string result: %v", lerr)}
+		}
+		return v, nil
+
+	default:
+		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
+			"task.return declares a %s result; this engine lifts scalars and string from a task.return's "+
+				"flat values, and a compound needs a per-element load the codec does not yet expose",
+			ct.Kind)}
 	}
 }
 

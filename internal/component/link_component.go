@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
@@ -65,12 +66,12 @@ func (f *compFunc) invoke() error {
 // `ctx` is the call's cancellation channel (#880, #858). It is carried to the two places a lift task can
 // wait — the park and the entry semaphore — by being stored on the task, so no intermediate signature
 // needs it. A sync lift ignores it: it does not wait.
-func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) ([]interp.Value, error) {
+func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftResult, error) {
 	if f.stubName != "" {
-		return nil, fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
+		return liftResult{}, fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
 	}
 	if f.core.inst == nil {
-		return nil, fmt.Errorf("%w: component func has no invocable core func (lift target unresolved)", ErrUnsupportedForm)
+		return liftResult{}, fmt.Errorf("%w: component func has no invocable core func (lift target unresolved)", ErrUnsupportedForm)
 	}
 	if f.async {
 		return f.invokeAsyncLiftWith(ctx, params)
@@ -89,7 +90,37 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) ([]int
 	//
 	// Returning them is strictly wider: `invoke()` discards the slice, and every other caller was already
 	// reading `nil` as "no values".
-	return f.core.inst.Invoke(f.core.name, params...)
+	//
+	// A sync lift carries **no** eagerly-lifted value: there is no `task.return` on this path, so the
+	// core func's own returns are the whole result and the caller lifts them. That asymmetry is what
+	// `liftResult` exists to make explicit rather than leave to a nil check nobody documents.
+	flat, err := f.core.inst.Invoke(f.core.name, params...)
+	if err != nil {
+		return liftResult{}, err
+	}
+	return liftResult{flat: flat}, nil
+}
+
+// liftResult is what one invocation resolved to.
+//
+// # Why a struct and not two return values
+//
+// The two fields are not alternatives a caller picks between on taste: `lifted` is authoritative when it
+// is set, because it was read at the only moment it was readable — inside `task.return`, before the guest
+// resumed and could reuse its buffer. `flat` is what a sync lift produces, and what an async lift's
+// `u32`-era callers read. A caller that checked `flat` first would silently prefer the stale words for
+// exactly the kinds where staleness is possible.
+//
+// Carried as a return value rather than on the `compFunc`, for #869's reason: a `compFunc` is shared by
+// every concurrent caller of its export, and a resolution stored there handed two callers one slot — a
+// data race `-race` reported on an arm that passed without it.
+type liftResult struct {
+	// flat is the invocation's flat core results: a sync lift's own returns, or the words `task.return`
+	// received.
+	flat []interp.Value
+	// lifted is the value `task.return` lifted eagerly, or nil when there was none to lift (no declared
+	// result, or a sync lift). **When set it wins** — see the type's doc comment.
+	lifted *canon.Value
 }
 
 // invokeAsyncLift runs the stackless (callback) async-lift loop (canon_lift def:2126-2151). Step 1 is the
@@ -103,7 +134,7 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) ([]int
 // There is no no-params wrapper beside it: `invokeWith(nil)` reaches here with an empty slice, so a
 // `invokeAsyncLift()` delegating to this was dead the moment it was written, and the `unused` linter said
 // so. One entry point, and the params-free case is a nil argument rather than a second name for it.
-func (f *compFunc) invokeAsyncLiftWith(ctx context.Context, params []interp.Value) ([]interp.Value, error) {
+func (f *compFunc) invokeAsyncLiftWith(ctx context.Context, params []interp.Value) (liftResult, error) {
 	return f.runLiftTask(f.newLiftTask(ctx), params)
 }
 
@@ -147,7 +178,7 @@ func (f *compFunc) newLiftTask(ctx context.Context) *liftTask {
 	return task
 }
 
-func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.Value, error) {
+func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) (liftResult, error) {
 	// **Several lift tasks per instance are permitted** (#869, the concurrency #771 exists to unlock).
 	// The at-most-one-per-instance trap that stood here is gone, and what replaced it is not a looser
 	// version of the same check but a different one: `enterTask` refuses an **overlapping entry**.
@@ -196,7 +227,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 	// First call: the callee, carrying the lifted params (none for run()). Its packed return drives dispatch.
 	res, err := f.enterAndInvoke(task, f.core, params)
 	if err != nil {
-		return nil, err
+		return liftResult{}, err
 	}
 
 	// One context request per call, the same discipline the park uses. See the check inside the loop.
@@ -208,11 +239,11 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 	// drift, which is what #788's multi-cycle pin exists to catch.
 	for {
 		if len(res) != 1 {
-			return nil, fmt.Errorf("%w: async lift callee returned %d core values, want 1 (packed)", ErrUnsupportedForm, len(res))
+			return liftResult{}, fmt.Errorf("%w: async lift callee returned %d core values, want 1 (packed)", ErrUnsupportedForm, len(res))
 		}
 		code, si, uerr := unpackCallbackResult(uint32(res[0].Bits))
 		if uerr != nil {
-			return nil, uerr
+			return liftResult{}, uerr
 		}
 
 		// **Cancellation is delivered IN PLACE OF WAITING** (definitions.py def:2129, ADR 0094), which is
@@ -279,7 +310,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 				task.waitSet = 0
 				res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventTaskCancelled}))
 				if err != nil {
-					return nil, err
+					return liftResult{}, err
 				}
 				continue
 			}
@@ -300,19 +331,19 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 			state, cancelledResolution := task.state, task.cancelledResolution
 			f.h.mu.Unlock()
 			if state != liftResolved {
-				return nil, &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
+				return liftResult{}, &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
 			}
 			// **A cancelled task resolves too, and its resolution is not a result.** The model expresses
 			// this as `on_resolve(None)` from `Task.cancel` (def:497); here it is the explicit
 			// discriminant, because an empty result slice is what a guest returning nothing legitimately
 			// resolves with (grave #885's artefact). #862's ruling 1 maps it to one sentinel.
 			if cancelledResolution {
-				return nil, ErrCancelled
+				return liftResult{}, ErrCancelled
 			}
 			// The resolution travels back to THIS caller. It was `f.result = task.result`, a field on the
 			// SHARED compFunc, which raced between concurrent callers — reported by `-race` on this
 			// slice's own acceptance arm, which passed without it (#869).
-			return task.result, nil
+			return liftResult{flat: task.result, lifted: task.lifted}, nil
 
 		case callbackYield:
 			// A cooperative yield: no set, no event. Re-enter at once with EVENT_NONE. There is nothing
@@ -321,7 +352,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 			task.waitSet = 0
 			res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventNone}))
 			if err != nil {
-				return nil, err
+				return liftResult{}, err
 			}
 
 		case callbackWait:
@@ -331,11 +362,11 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 			task.waitSet = si
 			ev, aerr := f.h.awaitEvent(task, si, liftParkBound)
 			if aerr != nil {
-				return nil, aerr
+				return liftResult{}, aerr
 			}
 			res, err = f.enterAndInvoke(task, task.cb, eventArgs(ev))
 			if err != nil {
-				return nil, err
+				return liftResult{}, err
 			}
 		}
 	}
@@ -656,20 +687,26 @@ func (w *walker) exportInstance() *compInstance {
 	return &compInstance{exports: exports}
 }
 
-// exportRef resolves a top-level export's sortidx to the def it names. The loader's parseExports
-// discards the index (it reported only the kind), so this resolves by the export's position among
-// same-sort exports — sufficient for the single func/instance export shapes this slice reaches.
+// exportRef resolves a top-level export's sortidx to the def it names, **by its index** (#903).
+//
+// It used to return the **last** definition of the matching sort, for every export name, because
+// `parseExports` discarded the index. Its comment said that was *"sufficient for the single
+// func/instance export shapes this slice reaches"* — true of every fixture in the tree, and the first
+// component to export two lifts got one function answering for both names, with the second's signature
+// attached to the first. A `string`-returning export reported a `u32` result and lifted accordingly.
+//
+// An out-of-range index declines rather than clamping. Returning the last definition for an index past
+// the end is how the old behaviour arose; a decline surfaces as "no callable run export", which is a
+// legible refusal rather than a wrong function.
 func (w *walker) exportRef(e Export, _ int) (compDef, bool) {
-	// This slice resolves an export naming a func or an instance by scanning for the matching sort in
-	// order; p3hello's `run` export is the sole component-func-or-instance export.
 	switch e.Kind {
 	case SortFunc:
-		if len(w.compFuncs) > 0 {
-			return w.compFuncs[len(w.compFuncs)-1], true
+		if int(e.Index) < len(w.compFuncs) {
+			return w.compFuncs[e.Index], true
 		}
 	case SortInstance:
-		if len(w.compInstances) > 0 {
-			return w.compInstances[len(w.compInstances)-1], true
+		if int(e.Index) < len(w.compInstances) {
+			return w.compInstances[e.Index], true
 		}
 	default:
 	}
