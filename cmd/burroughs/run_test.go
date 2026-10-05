@@ -40,6 +40,14 @@ var publicSentinels = map[string]error{
 	"ErrUnsupported": burroughs.ErrUnsupported,
 	"ErrGated":       burroughs.ErrGated,
 	"ErrUnlinkable":  burroughs.ErrUnlinkable,
+	// ErrCancelled is here for the same reason ErrGated is: it landed in the library (#858's public
+	// component interface) and this guard failed with `the public package declares ErrCancelled and
+	// this taxonomy does not classify it: it would exit 1`. Second specimen of the derived domain
+	// earning itself, and the second time nobody had to remember to come here.
+	"ErrCancelled": burroughs.ErrCancelled,
+	// #858's `Close`. Third and fourth specimens of this derived domain earning itself.
+	"ErrComponentClosed": burroughs.ErrComponentClosed,
+	"ErrCloseIncomplete": burroughs.ErrCloseIncomplete,
 }
 
 // declaredSentinels reads the exported `Err*` variables out of the public package's source.
@@ -48,36 +56,72 @@ var publicSentinels = map[string]error{
 // reason: the authority is the declaration, and a domain typed out beside the table it checks cannot
 // notice an addition. The floor below is the vacuity check — a moved declaration or a renamed file
 // yields an empty set, which would make every comparison here an agreement between nothings.
+//
+// # The domain is the PACKAGE, and it was one file until #858
+//
+// This read `../../burroughs.go` alone, which made the derivation's own claim narrower than its subject:
+// a sentinel declared in any other file of the package — `component.go`, `wasi.go` — escaped it entirely
+// and would fall through `exitCode`'s switch to the catch-all **unnoticed**, which is precisely the
+// failure this control exists to prevent.
+//
+// Found by walking into it: #858's `ErrCloseIncomplete` was first declared in `component.go` and this
+// test reported *"this taxonomy binds ErrCloseIncomplete, which the public package no longer declares"* —
+// the right complaint for the wrong reason. The sentinel moved to `burroughs.go` where the others live,
+// **and the domain widened**, because the next one will not necessarily land in the conventional file and
+// a convention no instrument checks is not one.
+//
+// Same shape as `TestMarkdownLinksResolve`, which was `CLAUDE.md`-scoped until #466 for this exact
+// reason: a control whose domain is a file cannot see the package.
 func declaredSentinels(t *testing.T) []string {
 	t.Helper()
 
-	const path = "../../burroughs.go"
-	f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parsing %s: %v", path, err)
+	const dir = "../.."
+	entries, derr := os.ReadDir(dir)
+	if derr != nil {
+		t.Fatalf("reading %s: %v", dir, derr)
 	}
 	var names []string
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
+	files := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
+		files++
+		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil,
+			parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
 				continue
 			}
-			for _, name := range vs.Names {
-				if name.IsExported() && strings.HasPrefix(name.Name, "Err") {
-					names = append(names, name.Name)
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, n := range vs.Names {
+					if n.IsExported() && strings.HasPrefix(n.Name, "Err") {
+						names = append(names, n.Name)
+					}
 				}
 			}
 		}
 	}
 	slices.Sort(names)
+	// Two floors, because the walk and the match fail for unrelated reasons. The file count catches a
+	// read that stopped seeing the package; the name count catches declarations that moved out of the
+	// form this matches.
+	if files < 4 {
+		t.Fatalf("read %d non-test .go file(s) in %s; the package's layout changed and this derivation "+
+			"is looking at almost nothing", files, dir)
+	}
 	if len(names) < 4 {
-		t.Fatalf("found %d exported sentinels in %s (%v); the declarations moved, so this test "+
-			"is measuring nothing", len(names), path, names)
+		t.Fatalf("found %d exported sentinels across %d file(s) in %s (%v); the declarations moved, so "+
+			"this test is measuring nothing", len(names), files, dir, names)
 	}
 	return names
 }
@@ -115,6 +159,14 @@ func TestExitCodesCoverEveryPublicSentinel(t *testing.T) {
 		// Deliberately *not* exitRefused, which is grave #301 stated as a number: a gated module is
 		// well-formed, so a caller told "refused" would go looking for the defect in their module.
 		"ErrGated": exitGated,
+		// Deliberately not exitError either: the module ran correctly and the CALLER stopped it, so
+		// "this invocation's own failure" names the wrong party.
+		"ErrCancelled": exitCancelled,
+		// And deliberately two codes rather than one: calling a closed component is the INVOKER's
+		// mistake, an incomplete close is the GUEST refusing to stop. An operator seeing the second
+		// learns something about the module that the first does not say.
+		"ErrComponentClosed": exitClosed,
+		"ErrCloseIncomplete": exitCloseIncomplete,
 	}
 	for name, sentinel := range publicSentinels {
 		got := exitCode(fmt.Errorf("wrapped: %w", sentinel))
@@ -127,7 +179,10 @@ func TestExitCodesCoverEveryPublicSentinel(t *testing.T) {
 	}
 
 	// The codes are distinct, which is the whole point of having more than one.
-	codes := []int{exitOK, exitError, exitUsage, exitRefused, exitTrap, exitUnsupported, exitGated}
+	codes := []int{
+		exitOK, exitError, exitUsage, exitRefused, exitTrap, exitUnsupported, exitGated,
+		exitCancelled, exitClosed, exitCloseIncomplete,
+	}
 	if slices.Compact(slices.Sorted(slices.Values(codes)))[0] != exitOK ||
 		len(slices.Compact(slices.Sorted(slices.Values(codes)))) != len(codes) {
 		t.Errorf("the exit codes are not distinct: %v", codes)

@@ -3,6 +3,7 @@
 package component
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -48,7 +49,7 @@ type compFunc struct {
 
 // invoke runs the func and discards any resolution — for callers whose export returns nothing (`run()`).
 func (f *compFunc) invoke() error {
-	_, err := f.invokeWith(nil)
+	_, err := f.invokeWith(context.Background(), nil)
 	return err
 }
 
@@ -61,7 +62,10 @@ func (f *compFunc) invoke() error {
 //
 // This said "or nil for a sync lift, which moves no values through this path" until #888 found two
 // callers that needed them; the repair is in the sync branch below, with how it surfaced.
-func (f *compFunc) invokeWith(params []interp.Value) ([]interp.Value, error) {
+// `ctx` is the call's cancellation channel (#880, #858). It is carried to the two places a lift task can
+// wait — the park and the entry semaphore — by being stored on the task, so no intermediate signature
+// needs it. A sync lift ignores it: it does not wait.
+func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) ([]interp.Value, error) {
 	if f.stubName != "" {
 		return nil, fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
 	}
@@ -69,7 +73,7 @@ func (f *compFunc) invokeWith(params []interp.Value) ([]interp.Value, error) {
 		return nil, fmt.Errorf("%w: component func has no invocable core func (lift target unresolved)", ErrUnsupportedForm)
 	}
 	if f.async {
-		return f.invokeAsyncLiftWith(params)
+		return f.invokeAsyncLiftWith(ctx, params)
 	}
 	// **A sync lift's results travel back too, and they used to be dropped here.** This was
 	// `_, err := ...; return nil, err`, with the doc comment above saying "nil for a sync lift, which
@@ -99,8 +103,8 @@ func (f *compFunc) invokeWith(params []interp.Value) ([]interp.Value, error) {
 // There is no no-params wrapper beside it: `invokeWith(nil)` reaches here with an empty slice, so a
 // `invokeAsyncLift()` delegating to this was dead the moment it was written, and the `unused` linter said
 // so. One entry point, and the params-free case is a nil argument rather than a second name for it.
-func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, error) {
-	return f.runLiftTask(f.newLiftTask(), params)
+func (f *compFunc) invokeAsyncLiftWith(ctx context.Context, params []interp.Value) ([]interp.Value, error) {
+	return f.runLiftTask(f.newLiftTask(ctx), params)
 }
 
 // newLiftTask creates a lift task and REGISTERS it, separately from running it (grave #892).
@@ -125,12 +129,17 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, e
 //
 // Calling this before the impl returns makes registration **happen-before** anything the caller can do
 // next, so the race has no window rather than a small one. *A timing fix is one you cannot watch die.*
-func (f *compFunc) newLiftTask() *liftTask {
+func (f *compFunc) newLiftTask(ctx context.Context) *liftTask {
+	if ctx == nil {
+		// Never nil on the task, so every wait can select on `Done()` without a guard. A nil-channel
+		// select case never fires, which is exactly the "no cancellation" behaviour wanted.
+		ctx = context.Background()
+	}
 	// Created in `liftInitial`, the model's INITIAL (def:390); `runLiftTask` moves it to `liftStarted`,
 	// the analog of `Task.start()` (def:483-486). The two are kept apart so a cancel arriving in that
 	// window is refused by name as the before-started case (status 3, no reference reading, #884) rather
 	// than silently taking the started path and claiming a status Burroughs has never measured.
-	task := &liftTask{cb: f.cb, state: liftInitial, cancelWake: make(chan struct{})}
+	task := &liftTask{cb: f.cb, state: liftInitial, cancelWake: make(chan struct{}), ctx: ctx}
 	f.h.mu.Lock()
 	f.h.liftsInFlight++
 	f.h.cancellable[task] = struct{}{}
@@ -190,6 +199,9 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 		return nil, err
 	}
 
+	// One context request per call, the same discipline the park uses. See the check inside the loop.
+	ctxRequested := false
+
 	// The loop. Each iteration decodes one packed return and either resolves, re-enters immediately
 	// (YIELD), or parks and re-enters with an event (WAIT). The callee's return and every callback's
 	// return go through the SAME decode — a second decode for the re-entry path is how the two could
@@ -234,6 +246,32 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 		// iteration's check above, one callback entry later. Recorded so a reader comparing the loops
 		// finds a decision rather than reconstructing one.
 		if code != callbackExit {
+			// **A guest that YIELDS and never parks must still be cancellable** (#880's gap, found on the
+			// #858 review). The context was consulted only at the two *waits* — the park and the entry
+			// semaphore — and a yielding guest reaches neither: the YIELD arm re-enters immediately, so
+			// nothing read `ctx.Done()` and a spinning guest could not be cancelled through a context at
+			// all. `lift-cancel-yield-synth` exists precisely because that guest never parks, and this is
+			// the same gap as the top-of-loop check's own missing witness one slice earlier.
+			//
+			// So the request is made **here**, at the delivery point, before asking whether a
+			// cancellation is pending — which is the only place on this path that every iteration passes
+			// through.
+			//
+			// `Err()` rather than a select on `Done()`: this is a *poll* at a delivery point, not a wait,
+			// and it is read **outside** the table lock so no channel operation enters a critical section
+			// (§4 B-MM-3). Once per call, because a refused request would otherwise be retried every
+			// iteration for the rest of a spinning guest's life.
+			if !ctxRequested && task.context().Err() != nil {
+				ctxRequested = true
+				f.h.mu.Lock()
+				// A refusal means the task is already past running, which the delivery below or the EXIT
+				// arm reports. Same reasoning as the park's.
+				//
+				//nolint:errcheck // ErrCancelNotRunning here means the task already resolved; the next
+				// few lines report that outcome, so the refusal has no consumer.
+				_ = task.requestCancelLocked()
+				f.h.mu.Unlock()
+			}
 			f.h.mu.Lock()
 			delivered := task.deliverPendingCancelLocked()
 			f.h.mu.Unlock()
@@ -319,10 +357,19 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 		return nil, fmt.Errorf("%w: async lift has no invocable core func for this entry (callback unresolved)",
 			ErrUnsupportedForm)
 	}
-	// Entering WAITS for the instance's execution slot and cannot fail: contention is the normal state of
-	// two concurrent callers, and the only thing a refusal could catch — a lift re-entering itself — is
-	// unreachable (see enterTask).
-	prev := f.h.enterTask(task)
+	// Entering WAITS for the instance's execution slot. Contention is the normal state of two concurrent
+	// callers, so the wait is not a refusal — but it is **cancellable** as of #880/#858: a task queued
+	// behind a sibling's entry was unresponsive for as long as that sibling held the slot, which is one
+	// of the two waits a call's context has to reach.
+	//
+	// `ok == false` means the context ended the wait without the slot ever being acquired, so
+	// `leaveTask` must NOT run — which is why the deferral is below the check rather than above it. An
+	// unpaired release here would admit a caller the semaphore never admitted.
+	prev, ok := f.h.enterTask(task)
+	if !ok {
+		return nil, fmt.Errorf("%w: the call's context ended while waiting for this instance's execution "+
+			"slot", ErrCancelled)
+	}
 	defer f.h.leaveTask(prev)
 	return target.inst.Invoke(target.name, args...)
 }
@@ -949,6 +996,25 @@ func (in *Instantiated) CallRun() error {
 		}
 	}
 	return fmt.Errorf("%w: no wasi:cli/run export", ErrNoRun)
+}
+
+// CancelAll requests cancellation of every async-lift task this instance currently hosts, and is what
+// the public `Component.Close` calls **before** tearing anything down (#858, ADR 0096's ruling).
+//
+// # Why cancel before teardown rather than just tearing down
+//
+// Teardown ends a task; cancellation ends it *through the guest*. A torn-down task never runs its own
+// cancellation path, so its destructors do not fire and whatever it held is not released — and its caller
+// gets a terminated-call error that says nothing about why. Cancelling first means the caller gets
+// `ErrCancelled` from a task that **actually ended**, which is the same distinction the context witnesses
+// assert with the guest's receipt rather than with the error alone.
+//
+// Returns no error: the only refusals underneath are "nothing running" and "already past running", both of
+// which mean there was nothing to cancel, which is the normal case for a `Close` on an idle instance.
+func (in *Instantiated) CancelAll() {
+	//nolint:errcheck // ErrCancelNotRunning means there was nothing in flight, which is what a Close on
+	// an idle instance finds; the caller is tearing down either way.
+	_ = in.w.async.requestCancelAll()
 }
 
 // Close tears down the instantiated core instances.

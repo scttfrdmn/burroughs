@@ -221,13 +221,57 @@ func (h *asyncHandles) requestCancelAll() error {
 // inherits a property the engine has rather than adding one. [#880] is where the call's context ends both.
 //
 // [#880]: https://github.com/scttfrdmn/burroughs/issues/880
-func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask) {
-	h.entrySem <- struct{}{}
+// The entry wait honours the call's context (#880, #858), which is the second of the two places a lift
+// task can wait. A task queued behind a sibling's entry was previously unresponsive to cancellation for
+// as long as the sibling held the slot; now a cancelled context ends the wait.
+//
+// **It returns `ok == false` rather than an error**, because a refused entry is not a failure of this
+// function and the caller already has the context that caused it: `enterAndInvoke` turns it into
+// `ErrCancelled` at the one place that knows the call is being abandoned. Two return values rather than
+// three keeps the `leaveTask` pairing visible — the caller releases only when `ok`.
+func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask, ok bool) {
+	// **The context may abort an entry only BEFORE the task has ever entered the guest**, and arriving
+	// at that condition took two measured corrections.
+	//
+	// *First attempt*: refuse on `ctx.Done()` unconditionally. The call returned `ErrCancelled` in under
+	// a millisecond with **no receipt** — the entry the lift loop needs in order to hand the guest
+	// `TASK_CANCELLED` was itself refused, so the cancellation was delivered to nobody.
+	//
+	// *Second attempt*: refuse unless the task was already PENDING_CANCEL or CANCEL_DELIVERED. That
+	// fixed the delivery and left the yielding guest broken in the same way, invisibly: every YIELD
+	// re-entry was refused before any cancellation had been *requested*, so the call ended with
+	// `ErrCancelled` from `enterAndInvoke` and the guest's own path never ran. It surfaced because the
+	// **top-of-loop check's neuter stopped failing its witness** — *a witness that passes under its own
+	// neuter is passing for another reason.*
+	//
+	// The rule that holds: **the cancellation is delivered through an entry**, so an entry may only be
+	// aborted when there is nothing to deliver to. Before the first entry no guest code has run, so
+	// there are no destructors to skip; after it, every entry must proceed and the top-of-loop check is
+	// what ends the task.
+	//
+	// The cost, stated: a task queued behind a sibling's *re-entry* waits for that sibling regardless of
+	// its own context. That is not a gap this flag papers over — it is inherent, because delivering a
+	// cancellation needs the slot too.
+	h.mu.Lock()
+	everEntered := t.everEntered
+	h.mu.Unlock()
+
+	var ctxDone <-chan struct{}
+	if !everEntered {
+		ctxDone = t.context().Done()
+	}
+	select {
+	case h.entrySem <- struct{}{}:
+	case <-ctxDone:
+		// Never acquired the slot, so there is nothing to release and `leaveTask` must not run.
+		return nil, false
+	}
 	h.mu.Lock()
 	prev = h.lift
 	h.lift = t
+	t.markEntered() // from here on, a cancelled context must not abort this task's entries
 	h.mu.Unlock()
-	return prev
+	return prev, true
 }
 
 // leaveTask restores the current lift task to prev — the value enterTask returned — and releases the

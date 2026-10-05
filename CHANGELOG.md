@@ -30,6 +30,99 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The public component interface: `LoadComponent`, `*Component`, `Component.Call(ctx, …)`,
+  `ComponentValue`, and `ErrCancelled`** ([#858](https://github.com/scttfrdmn/burroughs/issues/858),
+  [ADR 0096](docs/decisions/0096-the-public-component-interface-lands-as-componentvalue-loadcomponent-and-call-with-a-context-stamped-on-a-six-point-summary.md)),
+  landing [ADR 0085](docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md)
+  and its amendment 1. **Stamped by Scott on 2026-10-05**, on the chair's six-point summary of the review.
+  **No release is cut.** The stamp's own sixth point is *merge, do not release*: no version is cut until
+  strings, lists and records cross the boundary, so the first embedder to reach for the API finds it
+  useful rather than finds a wall. When it ships it is a **minor** bump, since everything is additive —
+  and both the timing and the number stay Scott's (ADR 0004).
+  **This release carries `u32` only.** Every other kind is refused **by name**, naming the kind, in both
+  directions of the conversion. Each additional kind is a new constructor plus a conversion arm, purely
+  additive, so nothing breaks when they arrive. `ComponentKind` enumerates the WIT kinds beyond what
+  crosses for exactly that reason: a refusal that could not name what it refused would say only
+  "unsupported".
+  **`ComponentValue` is distinct from the core-module `Value`, and that is ADR 0029 decision 2 applied
+  rather than a choice made here** — Scott's own ruling that an internal representation is not hoisted
+  into the public surface, on a specific record: `interp.Value` widened four times in four slices and the
+  fourth *retyped a field*, which for a published type is a break and not a minor version. So
+  `ComponentValue` is converted at the boundary, with **no silent default in either direction**. Its
+  fields are unexported, so a value always carries the kind it claims and a mis-typed read returns
+  `(0, false)` rather than reinterpreting bits; the **zero value names no type** and is refused rather
+  than crossing as `u32(0)`.
+  **Cancelling the context cancels the task**, which returns `ErrCancelled` — one sentinel for ABI
+  statuses 3 and 4 per #862's ruling 1, while status 2 returns its result normally because the work
+  completed. It means the task **ended**, not that the engine stopped waiting: the guest runs its own
+  cancellation path, so what it held is released. The started/not-started distinction stays an **option**,
+  addable as an error type wrapping this value so `errors.Is` keeps answering.
+  **Naming**: `interface#function` for an export inside an interface, a bare name for a top-level
+  function and for an import, and a bare name is **never** resolved by searching — a search picks one
+  silently when two interfaces share a function name.
+  **The tests are in `package burroughs_test`**, which cannot reach unexported identifiers. The claim
+  this adds is not that the mechanism works — the engine's own tests established that against wasmtime's
+  committed readings — but that it is **reachable from outside the module**, and only a test at the public
+  boundary can make it. The compiler is the assertion.
+  **`Component.Close()`** cancels every call in flight, waits a bounded time for the cancellations to
+  finish, then tears down — approved on the review with that behaviour stated, not left to the
+  implementation. In-flight callers get `ErrCancelled` from tasks that **actually ended**: the guest runs
+  its own cancellation path, so its destructors fire. **Cancel before teardown** is the whole ordering —
+  tearing down first ends the same tasks without that, which is how a cancellation and an abandonment
+  become indistinguishable. The bound returns `ErrCloseIncomplete` rather than hanging or tearing down
+  silently, because a guest is not obliged to cooperate. Calls after `Close` return `ErrComponentClosed`.
+  `Close` is **idempotent**, which the ruling did not specify and is not a change to it: an embedder who
+  defers it and also calls it on an error path should not have to track which ran.
+  **Two conveniences the chair deferred**: a capability-carrying `ComponentConfig.LoadComponent` (so
+  `LoadComponent` discards stdout/stderr and supplies no args) and `Component.Exports()` —
+  [#899](https://github.com/scttfrdmn/burroughs/issues/899), filed against the value-kinds work.
+  **Re-entry detection (the stamp's fourth point) is satisfied because the hazard cannot occur**, which
+  is Scott's ruling of 2026-10-05 rather than a scope cut. It needs an embedder-supplied host function
+  and the root package exports no hook, so §5 H-2's "enforced by absence" already guarantees it. It also
+  could not be built soundly today: the model distinguishes re-entry from ordinary contention by **thread
+  identity**, and Burroughs' identity is per *instance* — measured by the committed
+  `TestConcurrentHostCallsShareOneThreadID`. **Detection is required acceptance on
+  [#804](https://github.com/scttfrdmn/burroughs/issues/804)**, the public import-registration surface,
+  with per-caller identity built in the same change; the guard and the hazard arrive together, which is
+  stronger than a detector shipped against a path nothing can take.
+  **Three new CLI exit codes, and the suggested one did not fit.** `ErrCancelled`, `ErrComponentClosed`
+  and `ErrCloseIncomplete` are public sentinels, and `TestExitCodesCoverEveryPublicSentinel` — whose
+  domain is derived from the package's own source — requires each to be classified. The chair's
+  suggestion was the existing code for the invoker's own failure; that control **forbids** any sentinel
+  mapping to `exitError`, and is right to, since a sentinel landing on the catch-all is
+  indistinguishable from one that fell through. So `7`, `8` and `9`, with `8` and `9` separate because
+  they are facts about different parties — the invoker calling a closed component versus a guest that
+  would not finish cancelling, and an operator seeing the second learns something about the module. All
+  three unreachable from the CLI today and documented as such.
+  **And that control's domain was one file.** `declaredSentinels` read `burroughs.go` alone, so a
+  sentinel in any other file of the package escaped it and would fall through to the catch-all
+  **unnoticed** — the very failure it exists to prevent. Found by walking into it: `ErrCloseIncomplete`
+  was first declared in `component.go` and the control reported *"this taxonomy binds
+  ErrCloseIncomplete, which the public package no longer declares"*, the right complaint for the wrong
+  reason. The sentinel moved and **the domain widened to the package**, with its own file-count floor.
+  Same shape as `TestMarkdownLinksResolve`, `CLAUDE.md`-scoped until #466: *a control whose domain is a
+  file cannot see the package.*
+- **A call's context reaches every place a lift task can be ended**
+  ([#880](https://github.com/scttfrdmn/burroughs/issues/880)): the park, the entry wait, and the
+  top-of-loop delivery point. It **requests** a cancellation rather than aborting a wait, so the guest
+  runs its own path and `ErrCancelled` comes from a task that ended — the witnesses assert the guest's
+  **receipt** and not only the error, which is the only way to tell those apart.
+  **A yielding guest needed the third site.** The context was first consulted only at the two *waits*,
+  and a guest that yields reaches neither, so a spinning guest could not be cancelled at all.
+  **And the settled rule took three corrections, each caught by measurement**: a cancellation is
+  delivered **through** an entry, so an entry may only be cut short before the guest has run any code.
+  Refusing unconditionally delivered the cancellation to nobody; refusing unless already-cancelling
+  abandoned a yielding guest silently — found because the top-of-loop check's neuter *stopped failing its
+  witness*, and **a witness that passes under its own neuter is passing for another reason**. The residual
+  cost is stated: a task queued behind a sibling's re-entry waits regardless of its context, because
+  delivering a cancellation needs the slot too.
+  **A claim that cross-component children inherited the caller's cancellation was false and is
+  withdrawn.** Searched: `CanonCaller`'s context comes from `newCanonCaller(t.context(), …)` and a
+  thread's is created in `world.addLocked` as `context.WithCancel(context.Background())`, cancelled by
+  `Close` — the thread's **lifetime** context, not the embedder's per-call one. The plumbing is removed;
+  the child is cancelled by the model's own route, witnessed **by effect** (the child's receipt and status
+  4) rather than by route, because a route-phrased witness would have passed while the route was
+  imaginary.
 - **A cross-component async call: a parent's `canon lower` whose callee is another component's `canon lift`**
   ([#888](https://github.com/scttfrdmn/burroughs/issues/888),
   [ADR 0095](docs/decisions/0095-a-cross-component-async-call-is-a-siblings-lift-adapted-to-the-lower-side-the-substrate-already-wants-run-on-one-goroutine-per-call.md)).

@@ -490,6 +490,36 @@ const (
 	exitTrap        = 4 // the module executed correctly and the program went wrong
 	exitUnsupported = 5 // the engine reached something it does not implement in this phase
 	exitGated       = 6 // the module is fine; this build has that proposal's gate off (#301)
+	// exitCancelled is a component call the *caller* stopped — `burroughs.ErrCancelled`, #858.
+	//
+	// **A seventh code because none of the six fits, and the taxonomy's own reasoning says so.** The
+	// other six classify *why the module did not run*: refused, trapped, unsupported, gated. A
+	// cancellation is none of those — the module ran correctly and the invoker ended it — so every
+	// existing code would be a wrong claim, and `exitError` (the catch-all this taxonomy exists to
+	// avoid) means "this invocation's own failure", which a deliberate cancellation is not.
+	//
+	// **Currently unreachable from this CLI**, and that is stated rather than hidden: `burroughs run`
+	// drives a component through `ComponentConfig.Run`, which takes no context and cannot return the
+	// sentinel. It exists because the taxonomy's domain is the *package's* declared sentinels, derived
+	// by `TestExitCodesCoverEveryPublicSentinel` — not the CLI's reachable set. That control is what
+	// required this entry, exactly as it required `ErrGated`'s.
+	exitCancelled = 7
+	// exitClosed is a call on a closed component, and exitCloseIncomplete a `Close` that reached its
+	// bound with a guest still cancelling — `burroughs.ErrComponentClosed` and
+	// `burroughs.ErrCloseIncomplete`, #858's `Close`.
+	//
+	// **`exitError` was the chair's suggested home for the first and does not fit**, which is reported
+	// rather than worked around: `TestExitCodesCoverEveryPublicSentinel` **forbids** any public sentinel
+	// mapping to the catch-all, and it is right to — a sentinel that lands there is indistinguishable
+	// from one that fell through, which is the failure the taxonomy exists to prevent. So the suggestion
+	// could not be taken without weakening the control that asked the question.
+	//
+	// Two codes rather than one because they are different facts about different parties: calling a
+	// closed component is the **invoker's** mistake, while an incomplete close is the **guest** refusing
+	// to stop — and an operator seeing the second learns something about the module that the first does
+	// not say. Both are unreachable from this CLI today, for `exitCancelled`'s reason.
+	exitClosed          = 8
+	exitCloseIncomplete = 9
 )
 
 // exitCode maps an error from runCmd **or inspectCmd** onto the taxonomy above.
@@ -534,6 +564,14 @@ func exitCode(err error) int {
 		return exitRefused
 	case errors.Is(err, burroughs.ErrUnsupported):
 		return exitUnsupported
+	// Ahead of nothing in particular, and after the module-classification arms on purpose: a
+	// cancellation is about the *caller*, so it only answers once the module's own verdicts have not.
+	case errors.Is(err, burroughs.ErrCancelled):
+		return exitCancelled
+	case errors.Is(err, burroughs.ErrComponentClosed):
+		return exitClosed
+	case errors.Is(err, burroughs.ErrCloseIncomplete):
+		return exitCloseIncomplete
 	}
 	var trap *burroughs.Trap
 	if errors.As(err, &trap) {
