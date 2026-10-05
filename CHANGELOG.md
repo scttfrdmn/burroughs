@@ -30,6 +30,15 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The codec's lifting side: `canon.ReadHeap`, `LoadString`, `LoadStringFromRange`, `LoadListU8` and
+  `canon.Value.Str()`** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). Every prior use of
+  the codec **lowered** — the host answers a guest through `StoreString`/`StoreVia` against guest memory,
+  and the differential lowers into the model heap — so guest-to-host lifting of a compound value was not
+  implementable outside the `canon` package at all. `ReadHeap` is separate from `Heap` rather than three
+  more methods on it, because the capabilities have different holders: a lowering needs a realloc and
+  belongs to whoever owns the allocation, a lifting needs only to read. A host lifting a `task.return`
+  value has no business reallocating in the guest.
+
 - **The bridge from a decoded component value type to the Canonical ABI codec's type**
   ([#903](https://github.com/scttfrdmn/burroughs/issues/903)), which is what a value-carrying export call
   needs and what did not exist: every `canon.Type` in the engine was hand-written by a WASI import that
@@ -935,6 +944,23 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **The codec's string lift implemented none of the model's four traps, and an out-of-range one
+  panicked** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). `load` and `liftFlat` sliced the
+  differential heap's backing array directly — `h.mem[begin : begin+n]` — so a byte length past the
+  model's cap (`definitions.py:1383`), a range past the end of memory (def:1385) and bytes that are not
+  valid UTF-8 (def:1386-1389) all passed. Unreachable while the only heap was the differential's, whose
+  fixtures the model emits and are therefore well-formed by construction; **every one is reachable from a
+  guest's own word**, since the two words a string's flat form carries come from the guest. Two were worse
+  than a wrong answer: an out-of-range slice panicked, and invalid bytes produced a Go string that
+  silently was not UTF-8. The neuter reproducing the old code fails with
+  `slice bounds out of range [:92] with capacity 64`. There is now **one** string lift, and both codec
+  arms go through it.
+- **`streamWrite`'s comment claimed the codec and its code read raw bytes.** It said it lifted *"the
+  list&lt;u8&gt; from the bound memory (canon load over u8)"* while calling `CanonCaller.Read` directly —
+  possible to say with a straight face because for `list<u8>` the two agree byte for byte, a u8 being one
+  byte at a one-byte stride. It goes through the codec now that there is a lifting abstraction to go
+  through; behaviour-preserving for this element type, and the next element type to arrive gets the
+  verified framing rather than a second hand path.
 - **A lift's signature was never resolved, so an unmodeled type behind a typeidx reference passed the
   unmodeled check** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). `liftSignature` returned
   the functype straight from the type section, and `unmodeledValKind` counts a `VRef` *modeled* — true of

@@ -33,6 +33,20 @@ func (g guestHeap) StoreInt(v uint64, ptr, nbytes int) error {
 	return g.c.Write(uint64(uint32(ptr)), buf)
 }
 
+// ReadBytes makes a guestHeap a [canon.ReadHeap] too, so the codec's **lifting** arms reach guest memory
+// the way its lowering arms already did (#903). `CanonCaller.Read` performs the bounds check against the
+// instance's memory, which is the error the codec's string lift delegates its def:1385 trap to.
+//
+// A negative offset cannot reach a guest pointer — the two words a string's flat form carries are
+// unsigned i32s — but it is refused rather than converted, because `int` is the codec's offset type and
+// `uint64(uint32(negative))` would turn a programming error into a plausible address.
+func (g guestHeap) ReadBytes(ptr, n int) ([]byte, error) {
+	if ptr < 0 || n < 0 {
+		return nil, fmt.Errorf("component: guest read of %d byte(s) at %d: a negative offset is not an address", n, ptr)
+	}
+	return g.c.Read(uint64(uint32(ptr)), uint64(uint32(n)))
+}
+
 // The real preview-2 host (PR C.2). The stub host (link_component.go) refuses every wasi import by name;
 // this host provides the ten the guest-driven `wasi:cli/run` world reaches. Each import is a canon
 // lower, so its impl is a `interp.CanonFunc` dispatched through the canonical-ABI adapter
@@ -290,7 +304,16 @@ func (h *Host) streamWrite(c *interp.CanonCaller, args []interp.Value) ([]interp
 	if !ok {
 		return nil, fmt.Errorf("%w: stream write on unknown handle %d", ErrLinkRefused, self)
 	}
-	buf, err := c.Read(ptr, n)
+	// **Through the codec, which this function's doc comment already claimed** (#903). It read raw bytes
+	// with `c.Read` and said it lifted "the list<u8> from the bound memory (canon load over u8)" — a
+	// comment naming one mechanism while the code embodied another, and the reason it could say so with a
+	// straight face is that for `list<u8>` the two agree byte for byte: a u8 element is one byte at a
+	// one-byte stride, so the codec's load loop and a raw read produce the same slice.
+	//
+	// Routed properly now that there is a lifting abstraction to route through. It is behaviour-preserving
+	// for this element type by the argument above, and it means the next element type to arrive here gets
+	// the framing from the verified codec rather than from a second hand path.
+	buf, err := canon.LoadListU8(guestHeap{c}, int(ptr), int(n))
 	if err != nil {
 		return nil, fmt.Errorf("component: stream write: reading contents: %w", err)
 	}
