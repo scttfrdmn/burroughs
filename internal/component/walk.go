@@ -82,6 +82,14 @@ type coreDef struct {
 	// asyncBuiltinSlot is the static slot index a context.get/set built-in names (its u32 operand,
 	// captured at decode into Canon.TypeIdx). Unused by the other async built-ins.
 	asyncBuiltinSlot uint32
+	// asyncBuiltinResult is the value type a `task.return` declares (Canon.Result), resolved against the
+	// component's type-index space. nil for the empty form, and for every other built-in.
+	//
+	// It is what lets `task.return` lift its argument **eagerly**, which the model does inside
+	// `canon_task_return` (definitions.py:2336) rather than leaving the flat words for later. The
+	// difference is invisible for a `u32` — the value *is* the word — and decisive for anything whose
+	// payload lives in guest memory behind a pointer the guest may reuse on resumption.
+	asyncBuiltinResult *ValType
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -233,12 +241,22 @@ func (w *walker) step(d Def) error {
 				// A waitable-set built-in (gate:async 2a-i-B-2) binds to a Go impl; waitable-set.wait
 				// carries the memory it stores its event in (the memidx operand, captured into Opts.Memory
 				// at decode). Other async built-ins are refused at bind by gateAsync and never reach here.
+				// `lowerMem` was already carried for every async built-in, so capturing task.return's
+				// canonopts at decode (#903) is what makes the memory reach it — no new plumbing, only a
+				// field that had been thrown away. The result type is new, and is resolved here for
+				// `liftSignature`'s reason: a top-level VRef is an index-space ordinal.
+				var resultT *ValType
+				if cn.Result != nil {
+					rt := resolveVal(*cn.Result, w.c.sectionTypeAt(), nil)
+					resultT = &rt
+				}
 				w.appendCore(SpaceCoreFunc, coreDef{
-					asyncBuiltin:     true,
-					asyncBuiltinOp:   cn.AsyncOp,
-					asyncBuiltinSlot: cn.TypeIdx, // context.get/set's static slot (captured at decode)
-					asyncBuiltinForm: cn.AsyncForm,
-					lowerMem:         w.lowerMemory(cn),
+					asyncBuiltin:       true,
+					asyncBuiltinOp:     cn.AsyncOp,
+					asyncBuiltinSlot:   cn.TypeIdx, // context.get/set's static slot (captured at decode)
+					asyncBuiltinForm:   cn.AsyncForm,
+					asyncBuiltinResult: resultT,
+					lowerMem:           w.lowerMemory(cn),
 				})
 				return nil
 			}
@@ -359,7 +377,8 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// A waitable-set canon built-in (gate:async 2a-i-B-2) binds to its Go impl, typed from the guest's
 		// import signature; waitable-set.wait stores its event in the memory it carried (d.lowerMem).
 		if d.asyncBuiltin {
-			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.asyncBuiltinSlot, d.asyncBuiltinForm); ok {
+			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.asyncBuiltinSlot, d.asyncBuiltinForm,
+				d.asyncBuiltinResult); ok {
 				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
 			}
 			return interp.Extern{}, false

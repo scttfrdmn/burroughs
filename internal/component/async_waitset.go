@@ -368,7 +368,7 @@ func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
 // `asyncForm` is the built-in's `async?` operand, which only `subtask.cancel` carries today and which is
 // a **function selector** rather than a flag: the model's sync form waits for the cancellation to resolve
 // and the async form returns BLOCKED (grave #892).
-func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool) (interp.CanonFunc, bool) {
+func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT *ValType) (interp.CanonFunc, bool) {
 	switch op {
 	case 0x1f: // waitable-set.new
 		return waitableSetNew(w.async), true
@@ -411,7 +411,9 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool) (interp.
 	case 0x0b: // context.set
 		return contextSet(w.async, slot), true
 	case 0x09: // task.return (2nd async guest) — resolve the current async-lift task
-		return taskReturn(w.async), true
+		// The declared result type reaches it now (#903), so it can lift its argument eagerly — the order
+		// the model uses (definitions.py:2336). nil for an export declaring no result.
+		return taskReturn(w.async, resultT), true
 	case 0x05: // task.cancel (#864) — traps unless the task was cancelled, which nothing can do yet
 		return taskCancel(w.async), true
 	}

@@ -105,6 +105,34 @@ func (in *Instantiated) CallValuesCtx(ctx context.Context, name string, args ...
 	return liftFlatResult(name, fn.sig, resolved)
 }
 
+// liftedOrFlat is the rule `liftResult` exists to state: **an eagerly-lifted value wins.**
+//
+// It was read at the only moment it was readable — inside `task.return`, before the guest resumed — so
+// preferring the flat words would reintroduce exactly the staleness the eager lift removes. The flat
+// words remain the answer where there was nothing to lift eagerly: a sync lift, which has no
+// `task.return` at all.
+func liftFlatResult(name string, sig *FuncType, res liftResult) ([]canon.Value, error) {
+	if res.lifted != nil {
+		// The declared result still has to agree with what arrived — a lifted value of the wrong kind
+		// would be the mis-typing this whole path exists to refuse, just sourced from the guest.
+		if sig == nil || sig.Result == nil {
+			return nil, fmt.Errorf("%w: export %q declares no result but its task.return lifted a %s",
+				ErrUnsupportedForm, name, res.lifted.Type.Kind)
+		}
+		want, werr := canonTypeOf(*sig.Result)
+		if werr != nil {
+			return nil, fmt.Errorf("%w: export %q's declared result cannot be carried: %w",
+				ErrUnsupportedForm, name, werr)
+		}
+		if res.lifted.Type.Kind != want.Kind {
+			return nil, fmt.Errorf("%w: export %q declares a %s result but its task.return lifted a %s",
+				ErrUnsupportedForm, name, want.Kind, res.lifted.Type.Kind)
+		}
+		return []canon.Value{*res.lifted}, nil
+	}
+	return liftFlatCoreResult(name, sig, res.flat)
+}
+
 // resolveValueExport finds the callable function an export name denotes.
 //
 // # Why the path form, and only the path form
@@ -182,11 +210,15 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 	return flat, nil
 }
 
-// liftFlatResult lifts an export's flat core result back to a component value.
+// liftFlatCoreResult lifts an export's flat core result back to a component value.
 //
-// `res` is what `task.return` lowered — the async lift captures it on the task, so the result is already
-// in hand by the time the loop exits.
-func liftFlatResult(name string, sig *FuncType, res []interp.Value) ([]canon.Value, error) {
+// **This is the path for a result that was NOT lifted eagerly** — a sync lift's own returns. It was the
+// only path until #903, and its doc comment said `res` "is what task.return lowered — the async lift
+// captures it on the task, so the result is already in hand by the time the loop exits." That was true
+// of a `u32`, whose value *is* its flat word, and it is the precise sentence that hid the defect: for
+// anything whose payload lives in guest memory, "already in hand" was false. The words were in hand; the
+// bytes they pointed at were the guest's to overwrite.
+func liftFlatCoreResult(name string, sig *FuncType, res []interp.Value) ([]canon.Value, error) {
 	if sig.Result == nil {
 		if len(res) != 0 {
 			return nil, fmt.Errorf("%w: export %q declares no result but the guest returned %d flat value(s)",

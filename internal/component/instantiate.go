@@ -197,6 +197,20 @@ type Canon struct {
 	// draws, and Burroughs took the async branch for both. A conforming guest's synchronous drop glue
 	// then met a BLOCKED it cannot handle and panicked.
 	AsyncForm bool
+	// Result is the value type a `canon task.return` (0x09) declares it returns, or nil for the empty
+	// form. It is NOT the lift's result type — the two must agree, and the model checks exactly that
+	// (`trap_if(result_type != task.ft.result)`, definitions.py:2333).
+	//
+	// **It was decoded and thrown away** until #903: `if _, err := r.resultList(); err != nil`. Harmless
+	// while every result was a `u32`, because a u32's whole value is its flat word and the loop could lift
+	// it later from the flat args alone. It is not harmless for anything else — the model lifts *inside*
+	// `canon_task_return` (def:2336) precisely because the payload of a non-scalar lives in guest memory
+	// behind a pointer the guest may reuse the moment it resumes. Lifting eagerly needs the type, so the
+	// type has to survive the decode.
+	//
+	// Same shape as grave #892, in this same function: a field read off the wire and dropped, where the
+	// dropping is invisible until a case arrives that distinguishes it.
+	Result *ValType
 }
 
 // space is the index space a canon adds to: lift yields a component func; lower, the resource built-ins,
@@ -475,10 +489,22 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		// accepted only `0x00`, so an async-lifted export returning **nothing** — whose `task.return`
 		// encodes the empty form `0x01 0x00` — was unloadable. `funcType` had decoded both arms correctly
 		// 200 lines away the whole time: two decoders for one encoding, only one of them total.
-		if _, err := r.resultList(); err != nil {
+		//
+		// **Both the result type and the opts are now CAPTURED** (#903), where this read each and dropped
+		// it. The eager lift needs the type to lift against and the memory to lift from, and both were
+		// already on the wire — see `Canon.Result` for why dropping them was invisible while every result
+		// was a `u32`.
+		rl, err := r.resultList()
+		if err != nil {
 			return Canon{}, err
 		}
-		return c, readOpts()
+		c.Result = rl
+		opts, err := r.canonOpts()
+		if err != nil {
+			return Canon{}, err
+		}
+		c.Opts = opts
+		return c, nil
 	case 0x0a, 0x0b: // context.get / context.set: core:valtype (one byte) + u32 slot index
 		if _, err := r.byte(); err != nil { // the core:valtype (i32/i64) — i32 in slice-1 scope
 			return Canon{}, err

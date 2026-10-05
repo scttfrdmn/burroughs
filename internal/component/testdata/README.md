@@ -432,3 +432,38 @@ committed beside the `.wasm`. Regenerate:
 ```sh
 wasm-tools parse lift-cancel-yield-synth.wat -o lift-cancel-yield-synth.wasm
 ```
+
+`task-return-string-clobber-synth.wasm` is the witness that `task.return` lifts its result **eagerly**
+(#903). It exists because the late lift was indistinguishable from the eager one for every result type
+any committed guest used: a `u32`'s value **is** its flat word, so storing the words and lifting them
+after the callback loop gives the same answer. For a `string` the words are a `(ptr, len)` into guest
+memory, and between `task.return` and the loop's exit **the guest runs again** and may reuse that buffer.
+
+So this guest does: its result bytes `"burroughs"` sit at 1024 from a data segment, `callee` calls
+`task.return(1024, 9)`, then **overwrites those nine bytes with `'X'`**, then returns EXIT. Both readings
+are nine bytes of valid UTF-8, so a late lift fails with a **wrong value and not a decode error** — the
+stronger shape, since an engine could pass every UTF-8 check and still be returning the guest's scratch.
+
+Two structural notes. It uses **two core modules** because the dependency is genuinely circular:
+`task.return`'s canonopts name the memory it lifts from, that memory is the guest's, and the guest module
+imports `task.return` — one module cannot both supply an import's dependency and receive the import. The
+first draft put memory in the code module and `wasm-tools` refused with
+`unknown core memory: failed to find name $memx`. And it has a **second export, `peek`**, returning the
+byte now at 1024 as a `u32`, without which the fixture could pass vacuously: if the clobber loop never
+ran, `run` would return `"burroughs"` because nothing overwrote it, and the test would be green having
+exercised none of the window. "The result survived" and "the buffer was overwritten" are two independent
+facts, and only their conjunction says the result was read first.
+
+That second export also exposed an unrelated defect it is now the witness for: `exportRef` returned the
+**last** component func of the matching sort for every export name, because `parseExports` discarded the
+sortidx's index. This is the first fixture in the tree to export two lifts.
+
+No committed `.reading`: `wit-bindgen` will not emit a guest that reuses its result buffer immediately
+after returning it, because real ABIs lift eagerly and its glue keeps the allocation alive — so there is
+no reference side to record, the same position `lift-cancel-yield-synth.wasm` is in.
+
+Authored with `wasm-tools parse` (1.258.0); the `.wat` is committed beside the `.wasm`. Regenerate:
+
+```sh
+wasm-tools parse task-return-string-clobber-synth.wat -o task-return-string-clobber-synth.wasm
+```

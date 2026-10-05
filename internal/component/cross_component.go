@@ -107,7 +107,10 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 			// `TASK_CANCELLED`, its drop code issues `subtask.cancel`, and that reaches the child through
 			// ADR 0095's `onCancel`. One route, witnessed by effect, rather than two of which one was
 			// imaginary.
-			return callee.invokeWith(context.Background(), args)
+			// The sync arm hands back flat core values: `bindCrossComponent` refuses an async callee on
+			// this arm by name, so there is never an eagerly-lifted value to carry here.
+			res, cerr := callee.invokeWith(context.Background(), args)
+			return res.flat, cerr
 		}, opts), true
 	}
 
@@ -181,7 +184,7 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 				// `onResolve`'s cancel arm is reached only when `cancellationRequested` is set, so a
 				// child that failed WITHOUT the parent asking is a different case — see the note in
 				// `crossComponentResolve`.
-				crossComponentResolve(onResolve, callee.sig, nil, err)
+				crossComponentResolve(onResolve, callee.sig, liftResult{}, err)
 				return
 			}
 			crossComponentResolve(onResolve, callee.sig, res, nil)
@@ -236,7 +239,10 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 // piece of this slice with no prior code path — the piece where a wrong implementation is **silently**
 // wrong rather than loudly broken, since a mis-lifted result is a value of the right type and the wrong
 // contents.
-func crossComponentResolve(onResolve func(canon.Value), sig *FuncType, res []interp.Value, callErr error) {
+// `res` is the whole resolution, not just its flat words, because a child whose `task.return` lifted
+// eagerly has the authoritative value there — the same precedence rule `liftFlatResult` applies for a
+// host caller. A sibling guest must not be handed the stale words when the host would not be.
+func crossComponentResolve(onResolve func(canon.Value), sig *FuncType, res liftResult, callErr error) {
 	if callErr != nil {
 		// The model's `on_resolve(None)` (def:2214) — no result. Burroughs' `onResolve` reads
 		// `cancellationRequested` to choose the terminal state, so this is the cancel arm when the parent
@@ -279,18 +285,36 @@ var ErrCrossComponentResult = fmt.Errorf("%w: cross-component result shape is no
 // The signature is the child's and not the parent's import declaration on purpose: the flat values came
 // out of the child's `task.return`, so the child's result type is what describes them. They agree when the
 // composition is well-typed, and when they do not, the one that describes the bytes is the right oracle.
-func crossComponentValue(sig *FuncType, res []interp.Value) (canon.Value, error) {
+func crossComponentValue(sig *FuncType, res liftResult) (canon.Value, error) {
+	// An eagerly-lifted value is authoritative here for `liftFlatResult`'s reason, and the kind check is
+	// the same one: a value of the wrong kind is a mis-typing whichever direction it came from.
+	if res.lifted != nil {
+		if sig == nil || sig.Result == nil {
+			return canon.Value{}, fmt.Errorf("%w: the callee declares no result but its task.return lifted a %s",
+				ErrCrossComponentResult, res.lifted.Type.Kind)
+		}
+		want, werr := canonTypeOf(*sig.Result)
+		if werr != nil {
+			return canon.Value{}, fmt.Errorf("%w: the callee's declared result cannot be carried: %w",
+				ErrCrossComponentResult, werr)
+		}
+		if res.lifted.Type.Kind != want.Kind {
+			return canon.Value{}, fmt.Errorf("%w: the callee declares a %s result but its task.return lifted a %s",
+				ErrCrossComponentResult, want.Kind, res.lifted.Type.Kind)
+		}
+		return *res.lifted, nil
+	}
 	if sig == nil || sig.Result == nil {
 		// No result: `hasResult` is false at the bind site, so the lower ignores the value entirely. An
 		// explicit empty is returned rather than an error, because "returns nothing" is a shape this
 		// carries perfectly — grave #885's guest is exactly it.
 		return canon.Value{}, nil
 	}
-	if len(res) != 1 {
+	if len(res.flat) != 1 {
 		return canon.Value{}, fmt.Errorf("%w: child returned %d flat values for a %s result, want 1",
-			ErrCrossComponentResult, len(res), valKindName(sig.Result.Kind))
+			ErrCrossComponentResult, len(res.flat), valKindName(sig.Result.Kind))
 	}
-	bits := res[0].Bits
+	bits := res.flat[0].Bits
 	switch sig.Result.Kind {
 	case VBool:
 		return canon.Bool(uint32(bits) != 0), nil

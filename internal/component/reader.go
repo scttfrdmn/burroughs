@@ -215,18 +215,15 @@ func (r *reader) sort() (Sort, CoreSort, error) {
 	}
 }
 
-// sortIdx reads a `sortidx` and returns the sort, discarding the index — the export enumeration reports
-// the kind, not the target.
-func (r *reader) sortIdx() (Sort, error) {
-	s, _, err := r.sort()
-	if err != nil {
-		return 0, err
-	}
-	if _, err = r.u32(); err != nil {
-		return 0, err
-	}
-	return s, nil
-}
+// `sortIdx` stood here: it read a `sortidx` and returned the sort, **discarding the index**, and said so
+// — *"the export enumeration reports the kind, not the target."* It is deleted rather than left unused
+// (#903), and the reason it is worth a note is what its deletion revealed: `parseExports` was its only
+// caller, so this function existed for no purpose other than to throw away the field that made
+// `exportRef` resolve every export name to the last definition of its sort. `sortIdxFull` — which has
+// always returned the index, for instantiation args that must resolve a space — is now the only reader.
+//
+// A decoder whose stated job is to discard a field is worth a second look at the consumer that wanted it
+// discarded.
 
 // sortIdxFull reads a `sortidx` and returns the sort, its core sub-sort, and the index, for
 // instantiation args that must resolve the target's space.

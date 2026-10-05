@@ -161,6 +161,18 @@ type Import struct {
 type Export struct {
 	Name string
 	Kind Sort
+	// Index is the sortidx's index — which func, instance, or other definition of that sort this export
+	// names.
+	//
+	// **It was read and discarded** until #903: `parseExports` called `sortIdx`, which reads the index and
+	// drops it, and `exportRef` then returned the **last** definition of the matching sort for every
+	// export name. With one exported func that is right by luck; with two it hands every name the same
+	// function, and the second lift's signature silently answers for the first. Found by the first fixture
+	// in the tree to export two lifts — nothing else ever had.
+	//
+	// `sortIdxFull` already existed and already returned the index, for instantiation args that must
+	// resolve a space. So this is the third field in this slice that was on the wire the whole time.
+	Index uint32
 }
 
 // Section records one top-level section's kind and byte size, in file order — the structural spine an
@@ -341,7 +353,9 @@ func (c *Component) parseExports(body []byte) error {
 		if err != nil {
 			return fmt.Errorf("component: export %d name: %w", i, err)
 		}
-		sort, err := r.sortIdx()
+		// `sortIdxFull`, not `sortIdx`: the latter discards the index, which is what made every export
+		// name resolve to the last definition of its sort (#903, see Export.Index).
+		sort, _, idx, err := r.sortIdxFull()
 		if err != nil {
 			return fmt.Errorf("component: export %d (%q) sortidx: %w", i, name, err)
 		}
@@ -359,7 +373,7 @@ func (c *Component) parseExports(body []byte) error {
 		default:
 			return fmt.Errorf("component: export %d (%q): type-ascription flag %#x is not 0x00/0x01", i, name, present)
 		}
-		c.Exports = append(c.Exports, Export{Name: name, Kind: sort})
+		c.Exports = append(c.Exports, Export{Name: name, Kind: sort, Index: idx})
 	}
 	if r.pos != len(body) {
 		return fmt.Errorf("component: export section: consumed %d of %d bytes", r.pos, len(body))
