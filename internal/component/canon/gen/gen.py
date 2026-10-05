@@ -969,7 +969,13 @@ def emit_subtask_cancel():
         FuncType, MemInst, canon_subtask_cancel,
     )
 
-    def drive(call_on_start, inline_resolve):
+    # `cancel_async` is `canon_subtask_cancel`'s FIRST argument, and it was hard-coded True until grave
+    # #892. That mattered because the model branches on it (def:2426-2433): the sync form WAITS for the
+    # cancellation to resolve and only the async form yields and may return BLOCKED. So every row this
+    # generator produced was the async arm, and **the oracle had the same blind spot as the engine** --
+    # which is why no fixture comparison could ever have caught the conflation. Parameterised here so
+    # the sync arm has a reference reading at all.
+    def drive(call_on_start, inline_resolve, cancel_async=True):
         heap = TracingHeap(64)
         inst = ComponentInstance(Store())
         cap = {}
@@ -1003,7 +1009,7 @@ def emit_subtask_cancel():
             packed = [int(x) for x in core_lower([])]
             subtaski = packed[0] >> 4
             cap["state_at_lower"] = packed[0] & 0xf
-            cap["cancel_ret"] = [int(x) for x in canon_subtask_cancel(True, subtaski)]
+            cap["cancel_ret"] = [int(x) for x in canon_subtask_cancel(cancel_async, subtaski)]
             return []
 
         inst.store.invoke(inst.store.lift(outer_core, FuncType([], [], async_=False), mk_opts(False), inst),
@@ -1012,16 +1018,36 @@ def emit_subtask_cancel():
 
     started = drive(True, True)    # STARTED, callee resolves on cancel -> CANCELLED_BEFORE_RETURNED
     starting = drive(False, True)  # STARTING, callee resolves on cancel -> CANCELLED_BEFORE_STARTED
-    async_ = drive(True, False)    # callee does NOT resolve -> yield -> BLOCKED
+    async_ = drive(True, False)    # ASYNC, callee does NOT resolve -> yield -> BLOCKED
+
+    # The SYNC arm, which had no row at all until grave #892. A callee that resolves during the cancel
+    # gives the same answer either way -- which is exactly why the conflation was invisible: every row
+    # that existed was one the two forms agree on, plus one the sync form cannot produce.
+    sync_started = drive(True, True, cancel_async=False)
+    sync_starting = drive(False, True, cancel_async=False)
+
+    # **There is deliberately no sync + non-resolving row, and its absence is a reference fact rather
+    # than a gap.** With `async_=False` and a callee that never resolves, the model reaches
+    # `thread.wait_until(subtask.resolved)` with nothing able to resolve it, so the driving loop's
+    # `trap_if(not candidates)` fires: the model's answer is a TRAP, not a status. It is not recorded as
+    # a fixture row because a trap is not a return value, and asserting "it raised" against a generator
+    # that raises for several reasons would be a row with no subject.
     return {
-        # subtask.cancel returns the terminal state (Subtask.State), chosen by whether the subtask had STARTED,
-        # or BLOCKED if the callee did not resolve during the cancel (the model yields; Burroughs has no yield,
-        # so an unresolved cancel returns BLOCKED and the guest awaits the SUBTASK event — a substrate mapping).
+        # subtask.cancel returns the terminal state (Subtask.State), chosen by whether the subtask had
+        # STARTED. BLOCKED is the ASYNC form's answer when the callee did not resolve during the cancel;
+        # the sync form waits instead (def:2426-2433), which is the distinction grave #892 is about.
+        #
+        # The `async_cancel_ret` name predates that finding and is kept: it was accurate about which arm
+        # it recorded, and renaming a committed fixture key would break the comparison it exists for.
         "started_cancel_ret": started["cancel_ret"],     # [4] CANCELLED_BEFORE_RETURNED
         "started_state_at_lower": started["state_at_lower"],   # 1 (STARTED)
         "starting_cancel_ret": starting["cancel_ret"],   # [3] CANCELLED_BEFORE_STARTED
         "starting_state_at_lower": starting["state_at_lower"],  # 0 (STARTING)
-        "async_cancel_ret": async_["cancel_ret"],        # [BLOCKED] — callee did not resolve inline
+        "async_cancel_ret": async_["cancel_ret"],        # [BLOCKED] — ASYNC form, callee did not resolve
+        # The sync form's rows (grave #892). Expected equal to the two above — recorded anyway, because
+        # "the two forms agree here" is a fact the fixture should assert rather than one a reader assumes.
+        "sync_started_cancel_ret": sync_started["cancel_ret"],
+        "sync_starting_cancel_ret": sync_starting["cancel_ret"],
     }
 
 

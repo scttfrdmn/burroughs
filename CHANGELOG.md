@@ -86,8 +86,13 @@ own condition rather than as a prediction.
   **The host entry point is internal, and the slice says so rather than implying a capability it
   withholds.** The model hands the embedder a per-call `OnCancel` (`Store.invoke` returns it); Burroughs'
   `Invoke` **blocks**, so a trigger it returned would arrive when there was nothing left to cancel. Go's
-  inward form is a `context.Context`, which is public API surface and therefore Scott's — so the mechanism
-  is built behind an unexported trigger and the surface is [#880](https://github.com/scttfrdmn/burroughs/issues/880)'s.
+  inward form is a `context.Context` — **which ADR 0085 amendment 1 already decided**, stamped by Scott on
+  2026-10-02: `Component.Call(ctx, name, args...)`, and cancelling the context cancels the task. So the
+  surface is **decided and unimplemented**, not open, and this trigger is the mechanism its implementation
+  drives; it becomes embedder-reachable with ADR 0085's surface in
+  [#858](https://github.com/scttfrdmn/burroughs/issues/858). ADR 0094's own text presented that as an open
+  question put to Scott and is corrected by its amendment 1 — *the "what exists" rule applies to the
+  decision record, not only to the code.*
   **Refusing a cancel against a non-started task is this project's decision, not the model's**: the model
   *asserts* STARTED, specifying nothing, so Burroughs refuses with the state named — not a trap, because a
   host that raced a resolution did nothing wrong, and not a silent no-op, because then "I cancelled it"
@@ -816,6 +821,41 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **`subtask.cancel` returned BLOCKED where the model waits, and crashed conforming guests**
+  ([grave #892](https://github.com/scttfrdmn/burroughs/issues/892)). `canon_subtask_cancel(async_, i)`
+  branches on its flag: the **sync** form waits for the cancellation to resolve
+  (`thread.wait_until(subtask.resolved)`, def:2426-2428) and only the **async** form yields and may answer
+  BLOCKED. Burroughs answered BLOCKED for both.
+  **The `async?` operand was decoded and thrown away** — the decoder's helper was
+  `func() error { _, err := r.byte(); return err }`. The information was in the bytes, read, and dropped,
+  so one impl served two different functions and took the wrong branch for one of them.
+  `wit-bindgen`'s drop glue is **synchronous** (it runs in `Drop`, which cannot await), so it uses the
+  sync form, never expects BLOCKED, and meets it in `in_progress_update`'s
+  `other => panic!("unknown code {other:#x}")` — `unreachable` in wasm. Measured on both of #862's
+  composed parents: the WAT parent reported status `0xffffffff` then trapped at `subtask.drop`; the Rust
+  parent trapped `unreachable`. Both now complete, and the WAT parent reports **status 4**, matching its
+  committed `cancel-wat.reading` on the real cross-component path.
+  **The oracle had the same blind spot as the engine**, which is why no fixture comparison could have
+  caught this: the generator hard-coded `canon_subtask_cancel(True, …)`, so every committed row was the
+  async arm — either one the two forms agree on, or the one the sync form cannot produce. The generator is
+  now parameterised and the sync rows are recorded from the model. There is deliberately **no**
+  sync-plus-non-resolving row: the model's answer there is a *trap* (its driving loop's
+  `trap_if(not candidates)`), and a trap is not a return value.
+  **The sync wait is bounded and the expiry is named** (`ErrSubtaskCancelExpired`), for `liftParkBound`'s
+  reason: the model waits unconditionally because it has no real time and detects no-progress instead,
+  which this engine cannot do — a callee is a goroutine. *A wait that cannot be satisfied must end in a
+  verdict*, and an unbounded wait here would turn a misbehaving host impl into a hung guest with no
+  diagnostic, which is worse than the BLOCKED it replaced.
+  **Two more halves were needed before the composed witness was deterministic**, and both were found by
+  running it 150 times rather than by reading: the cross-component adapter now **registers the child's
+  task synchronously, before the impl returns** (so a prompt parent cannot find nothing to cancel), and
+  the task's INITIAL→STARTED transition is **guarded** (so it cannot erase a cancellation recorded before
+  it ran). 200 runs now finish in under three seconds where 150 could not finish in 600.
+  **And §4 B-MM-3's control refused two restructurings before the third**, correctly: a `defer Unlock`
+  anywhere in a function keeps the whole-function interval, so the sync wait sat inside a critical section
+  however the rest was arranged. The function was split — a guarded prologue with one balanced
+  `Lock`/`Unlock`, and an epilogue that branches after releasing — rather than exempted, because *an
+  exemption inherits none of the control's lessons.*
 - **A sync lift's results reached nobody**, discarded between the core func and the caller
   ([#888](https://github.com/scttfrdmn/burroughs/issues/888)). `invokeWith`'s sync arm was
   `_, err := Invoke(...); return nil, err`, and its doc comment said a sync lift *"moves no values through

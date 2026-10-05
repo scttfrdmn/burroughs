@@ -184,6 +184,19 @@ type Canon struct {
 	Opts    CanonOpts
 	TypeIdx uint32
 	AsyncOp byte
+	// AsyncForm is the `async?` OPERAND some async built-ins carry — currently `subtask.cancel` (0x06).
+	// It is **not** `Opts.Async`, and the separation is load-bearing twice over: `Opts.Async` is the
+	// canonopt vec's `async` marker on a lift/lower, and `asyncSurface` keys the gate's refusal message
+	// on it — so setting it here would make a `subtask.cancel async` report as *"an async canon lower"*,
+	// naming a construct the component does not contain.
+	//
+	// **The byte was read and thrown away** until grave #892: the decoder's `readAsyncQ` was
+	// `func() error { _, err := r.byte(); return err }`. The two forms are semantically different — the
+	// model's `canon_subtask_cancel(async_, i)` **waits** for resolution on the sync form and returns
+	// BLOCKED only on the async one (def:2426-2433) — so discarding it collapsed a distinction the ABI
+	// draws, and Burroughs took the async branch for both. A conforming guest's synchronous drop glue
+	// then met a BLOCKED it cannot handle and panicked.
+	AsyncForm bool
 }
 
 // space is the index space a canon adds to: lift yields a component func; lower, the resource built-ins,
@@ -429,7 +442,26 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 	// async? is a single byte (0x00 absent / 0x01 async); typeidx and memidx are u32; opts is a canonopt
 	// vec; context.get/set carry a core:valtype byte + u32; task.return a resultlist + opts; the
 	// waitable-set.wait/poll and thread.yield forms carry a fixed 0x00 before their operand.
-	readAsyncQ := func() error { _, err := r.byte(); return err } // 0x00/0x01
+	// `async?` is 0x00 (absent) or 0x01 (async). **Captured, not discarded** — this was
+	// `func() error { _, err := r.byte(); return err }`, which read the byte and dropped it, collapsing
+	// the two forms the model distinguishes (grave #892). A value other than 0x00/0x01 is refused rather
+	// than coerced: the old form accepted anything a byte could hold, so a malformed component decoded
+	// as one of the two valid forms by accident of which branch `!= 0` happened to pick.
+	readAsyncQ := func() error {
+		b, err := r.byte()
+		if err != nil {
+			return err
+		}
+		switch b {
+		case 0x00:
+			c.AsyncForm = false
+		case 0x01:
+			c.AsyncForm = true
+		default:
+			return fmt.Errorf("async built-in %#x: async? is %#x, not 0x00/0x01", op, b)
+		}
+		return nil
+	}
 	readIdx := func() error { _, err := r.u32(); return err }
 	readOpts := func() error { _, err := r.canonOpts(); return err }
 	switch op {

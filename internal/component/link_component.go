@@ -100,6 +100,45 @@ func (f *compFunc) invokeWith(params []interp.Value) ([]interp.Value, error) {
 // `invokeAsyncLift()` delegating to this was dead the moment it was written, and the `unused` linter said
 // so. One entry point, and the params-free case is a nil argument rather than a second name for it.
 func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, error) {
+	return f.runLiftTask(f.newLiftTask(), params)
+}
+
+// newLiftTask creates a lift task and REGISTERS it, separately from running it (grave #892).
+//
+// # Why creation is split from the loop
+//
+// For a host-driven call the split is invisible — `invokeAsyncLiftWith` does both in order. It exists for
+// the **cross-component** adapter, which runs the loop on its own goroutine, and there the split is a
+// correctness requirement rather than tidiness.
+//
+// A composed parent calls its child and then promptly cancels. The parent's `subtask.cancel` reaches the
+// adapter's `onCancel`, which asks the child's table to cancel every task it hosts. If the task is not
+// registered yet, that finds **nothing** and the request is dropped: `requestCancelAll` answers "no lift
+// task", the child runs on uncancelled, and the parent's sync cancel then waits out its whole bound.
+//
+// **Measured, and it was a race rather than a consistent failure** — which is worse. Two runs of the same
+// composed artefact, differing only in an unrelated host delay: one cancelled in 11ms, the other timed
+// out at 30s with the child's cancel handler never invoked at all. ADR 0095 recorded this window as a
+// known gap on the reasoning that the parent would learn of it through BLOCKED; grave #892 removed BLOCKED
+// from the sync path, so the window became a hang instead, and a gap whose consequence changed is a gap
+// that needs re-deciding rather than re-citing.
+//
+// Calling this before the impl returns makes registration **happen-before** anything the caller can do
+// next, so the race has no window rather than a small one. *A timing fix is one you cannot watch die.*
+func (f *compFunc) newLiftTask() *liftTask {
+	// Created in `liftInitial`, the model's INITIAL (def:390); `runLiftTask` moves it to `liftStarted`,
+	// the analog of `Task.start()` (def:483-486). The two are kept apart so a cancel arriving in that
+	// window is refused by name as the before-started case (status 3, no reference reading, #884) rather
+	// than silently taking the started path and claiming a status Burroughs has never measured.
+	task := &liftTask{cb: f.cb, state: liftInitial, cancelWake: make(chan struct{})}
+	f.h.mu.Lock()
+	f.h.liftsInFlight++
+	f.h.cancellable[task] = struct{}{}
+	f.h.mu.Unlock()
+	return task
+}
+
+func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.Value, error) {
 	// **Several lift tasks per instance are permitted** (#869, the concurrency #771 exists to unlock).
 	// The at-most-one-per-instance trap that stood here is gone, and what replaced it is not a looser
 	// version of the same check but a different one: `enterTask` refuses an **overlapping entry**.
@@ -113,16 +152,9 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, e
 	// instance, so two concurrent callers present the SAME `Thread()`
 	// (`TestConcurrentHostCallsShareOneThreadID`); per-agent keying would have collapsed them. The scope
 	// that was wrong was never "instance vs agent" — it was "in flight vs entered".
-	// Created in `liftInitial`, the model's INITIAL (def:390). It becomes `liftStarted` at the first
-	// entry below — the analog of `Task.start()` (def:483-486), which is what `canon_lift` calls before
-	// lowering the params. Keeping the two apart is what lets a cancel arriving in that window be
-	// refused by name as the before-started case (status 3, no reference reading, #884) instead of
-	// silently taking the started path and claiming a status Burroughs has never measured.
-	task := &liftTask{cb: f.cb, state: liftInitial, cancelWake: make(chan struct{})}
-	f.h.mu.Lock()
-	f.h.liftsInFlight++
-	f.h.cancellable[task] = struct{}{}
-	f.h.mu.Unlock()
+	// The task arrives created and registered (see `newLiftTask`), so a cross-component caller can
+	// register it synchronously and run this on a goroutine without a window in between.
+	//
 	// Teardown: decrement however invoke exits (normal EXIT, a trap, a park's bound expiring, or — step
 	// 3 — cancellation resolving without a normal EXIT).
 	//
@@ -139,8 +171,17 @@ func (f *compFunc) invokeAsyncLiftWith(params []interp.Value) ([]interp.Value, e
 
 	// `Task.start()` (def:483-486): INITIAL → STARTED, immediately before the callee is entered. Set
 	// under the lock for the same reason the EXIT arm reads under it — a cancel request races this.
+	//
+	// **Guarded, because an unconditional assignment here would ERASE a cancellation.** A cross-component
+	// caller registers the task synchronously and runs this on a goroutine (`newLiftTask`), so a parent
+	// that cancels promptly can set `liftPendingCancel` before this line runs. Writing `liftStarted` over
+	// it would drop the request silently and the parent's sync `subtask.cancel` would then wait out its
+	// whole bound — the same 30s hang the registration split was fixing, moved one step later. Only the
+	// INITIAL→STARTED transition is this line's business.
 	f.h.mu.Lock()
-	task.state = liftStarted
+	if task.state == liftInitial {
+		task.state = liftStarted
+	}
 	f.h.mu.Unlock()
 
 	// First call: the callee, carrying the lifted params (none for run()). Its packed return drives dispatch.

@@ -23,16 +23,24 @@
 ;; is of. Here it does more — kinds 2 and 3 are **different arms of the engine**, and a reading that showed
 ;; only "the value was 49" could not tell a parked cross-component call from one that resolved inline.
 ;;
-;; **Kind 2 is unreachable through THIS child, and that was measured rather than assumed.** A first draft
-;; of this comment said *"a host whose `tick` resolves immediately produces kind 2; one that defers
-;; produces kind 3"*. Both hosts produce **kind 3**: the child is a `wit-bindgen` guest, and its async
-;; lift always returns WAIT and resolves through `task.return` on a later re-entry, so the parent's lower
-;; never sees RETURNED inline no matter how fast the host is. The inline arm is a property of the
-;; *callee's* ABI, not of the host's latency.
+;; **Both arms are reachable, and this comment was wrong twice before saying so.**
 ;;
-;; The arm is kept because it is the correct code for a callee that does resolve inline, and the fixture
-;; would be wrong without it — but it is **unwitnessed here**, which is said rather than left for someone
-;; to discover from a coverage report.
+;; Draft 1: *"a host whose `tick` resolves immediately produces kind 2; one that defers produces kind 3"*
+;; — falsified locally, where both hosts produced kind 3.
+;;
+;; Draft 2 concluded from that: *"kind 2 is unreachable through THIS child … the child is a `wit-bindgen`
+;; guest, and its async lift always returns WAIT … so the parent's lower never sees RETURNED inline no
+;; matter how fast the host is. The inline arm is a property of the callee's ABI, not of the host's
+;; latency."* — falsified by CI's `ubuntu-24.04-arm`, which reported kind 2 with the right value.
+;;
+;; What is actually true: the child's lift runs on the adapter's own goroutine (ADR 0095). If it
+;; completes — `task.return` included — before the lower re-checks the subtask, the lower legitimately
+;; returns RETURNED with the result already at the retptr. **Which arm is taken is a scheduling fact**,
+;; and neither the host's latency nor the callee's ABI decides it alone.
+;;
+;; Draft 2's error is the more instructive one: it generalised from a local measurement that agreed with
+;; a plausible mechanism, and the mechanism was wrong. The witness asserted it, which is how it was
+;; caught — so the arm is now reported and the value checked in whichever channel carries it.
 ;;
 ;; # Why the returned value is the *child's* arithmetic and not a constant
 ;;

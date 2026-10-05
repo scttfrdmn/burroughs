@@ -3115,6 +3115,12 @@
     "starting_state_at_lower": 0,
     "async_cancel_ret": [
       4294967295
+    ],
+    "sync_started_cancel_ret": [
+      4
+    ],
+    "sync_starting_cancel_ret": [
+      3
     ]
   },
   "subtask_drop": {

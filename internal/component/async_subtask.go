@@ -3,8 +3,10 @@
 package component
 
 import (
+	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
@@ -47,6 +49,21 @@ type subtask struct {
 	set                   *waitableSet // the set it is joined to, if any (nil until waitable.join)
 	cancellationRequested bool         // set by subtask.cancel before it invokes onCancel
 	onCancel              func()       // the impl's request_cancellation, captured at lower (async_lower.go)
+	// resolveWake is closed by `onResolve` when this subtask resolves, so a **sync** `subtask.cancel`
+	// can wait for the resolution the model makes it wait for (grave #892, `definitions.py` def:2428:
+	// `thread.wait_until(subtask.resolved)`).
+	//
+	// # Why the subtask needs its own channel rather than the set's
+	//
+	// The waitable set's `wake` is the obvious candidate and is unavailable here by construction:
+	// `subtask.cancel` **traps** if the subtask is joined to a set (def:2421, and the trap is already
+	// implemented), so on this path there is no set to signal through. A subtask being cancelled is
+	// exactly a subtask with no set.
+	//
+	// Closed rather than sent on, and nil-once-closed, for `liftTask.cancelWake`'s reasons: a close is
+	// seen by every waiter and cannot be missed by one that arrives late, and nilling it stops a
+	// re-select from spinning on an already-closed channel.
+	resolveWake chan struct{}
 }
 
 // asyncHandles is a component instance's async handle table — subtasks and waitable-sets in one index
@@ -106,20 +123,29 @@ type asyncHandles struct {
 // requestCancelAll requests cancellation of every lift task this instance currently hosts, and is the
 // internal trigger ADR 0094 builds the mechanism behind.
 //
-// # Why this is unexported, and what it is standing in for
+// # Why this is unexported, and what it implements
 //
 // The model's host entry point is a per-call `OnCancel` handed back by the lift — `Store.invoke` returns
 // it (def:510-518). **Burroughs cannot copy that shape**: `Invoke` blocks until the task resolves, so a
-// trigger it returned would arrive when there is nothing left to cancel. Go's inward form of the same
-// capability is a `context.Context` passed in, which is #880's subject and **public API surface**, so it
-// is Scott's and not this slice's. The mechanism is therefore built behind a trigger no embedder can
-// reach, and the slice says so rather than implying a capability it withholds.
+// trigger it returned would arrive when there is nothing left to cancel. Go's inward form is a
+// `context.Context` passed in.
+//
+// **That surface is DECIDED, not open**: ADR 0085 amendment 1, stamped by Scott on 2026-10-02, sets
+// `Component.Call(ctx, name, args...)` and makes cancelling the context cancel the in-flight task. This
+// comment said it was *"#880's subject and public API surface, so it is Scott's and not this slice's"* —
+// which escalated a settled question, because I checked the model and the engine and not the project's
+// own decision record. **Decided and unimplemented is a different state from undecided**, and this
+// trigger is the mechanism that decision's implementation drives rather than a stand-in for a missing
+// one. It lands with [ADR 0085]'s surface, amendment 1's own slice 3, now [#858].
 //
 // # Why "all" rather than one
 //
-// A lift task has no embedder-facing identity. Naming one would require inventing the handle whose shape
-// is exactly the deferred question, so the trigger takes the only subject available without prejudging
-// it: the instance. When the surface arrives, a per-call trigger is a narrowing of this, not a rewrite.
+// A lift task has no embedder-facing identity **yet** — `Component.Call(ctx, …)` gives each call its own
+// context, so the per-call subject arrives with the surface. Until then the trigger takes the only
+// subject available: the instance. A per-call trigger is then a narrowing of this, not a rewrite.
+//
+// [ADR 0085]: ../../docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md
+// [#858]: https://github.com/scttfrdmn/burroughs/issues/858
 //
 // Returns the first refusal, so a request against an instance with nothing running is observable rather
 // than silently successful — see ErrCancelNotRunning for why that is a refusal and not a no-op.
@@ -227,6 +253,29 @@ func (st *subtask) pendingEventLocked() (event, bool) {
 	return event{}, false
 }
 
+// resolveLocked moves this subtask to a terminal state and wakes everything that could be waiting on it:
+// a waitable-set waiter through the set's channel, and a **sync `subtask.cancel`** through the subtask's
+// own. Caller holds h.mu.
+//
+// # Why this is one method and not two call sites
+//
+// `onResolve` has two arms — the cancel arm picking CANCELLED_BEFORE_{STARTED,RETURNED}, and the result
+// arm picking RETURNED — and both did the same three things inline. Adding the sync-cancel wake to both
+// would have made two mirrored copies of one operation, which is **grave #885's shape**: the duplication
+// is the defect and a missing case in one copy is its symptom. So the shared part moved here first and
+// the arms keep only what differs between them, which is the state.
+func (st *subtask) resolveLocked(state subtaskState) {
+	st.state = state
+	st.resolved = true
+	if st.set != nil { // wake any agent parked on the set this subtask was joined to
+		st.set.signalLocked()
+	}
+	if st.resolveWake != nil { // wake a sync subtask.cancel waiting for exactly this (grave #892)
+		close(st.resolveWake)
+		st.resolveWake = nil
+	}
+}
+
 // joinTo records the set this subtask belongs to, so onResolve can wake its waiters.
 func (st *subtask) joinTo(s *waitableSet) { st.set = s }
 
@@ -278,59 +327,193 @@ func packSubtaskWait(state subtaskState, subtaski int) int32 {
 // CANCELLED state — CANCELLED_BEFORE_STARTED if it had not started, CANCELLED_BEFORE_RETURNED if it had —
 // and the state is returned; otherwise BLOCKED.
 //
-// The model yields here (thread.yield_) to let the single-threaded callee run and observe the request;
-// Burroughs has no yield — a callee runs on its own goroutine — so an unresolved cancel simply returns
-// BLOCKED and the guest awaits the SUBTASK event, as it does for any unresolved subtask (a substrate
-// mapping like per-caller context, ADR 0050, not a transliteration). onCancel is invoked WITHOUT the table
-// lock held: it may call onResolve, which takes the lock, so holding it here would deadlock — the same
-// discipline the blocking arm uses for the impl and its resolver.
-func subtaskCancel(h *asyncHandles) interp.CanonFunc {
+// # The two forms are different functions, and treating them as one crashed guests (grave #892)
+//
+// This comment used to say: *"The model yields here (thread.yield_) to let the single-threaded callee run
+// and observe the request; Burroughs has no yield — a callee runs on its own goroutine — so an unresolved
+// cancel simply returns BLOCKED and the guest awaits the SUBTASK event, as it does for any unresolved
+// subtask (a substrate mapping like per-caller context, ADR 0050, not a transliteration)."*
+//
+// **It described the model's ASYNC arm and applied it to both forms.** `canon_subtask_cancel(async_, i)`
+// takes the flag, and def:2426-2433 branches on it: the sync form **waits**
+// (`thread.wait_until(subtask.resolved)`) and only the async form yields and may return BLOCKED. The
+// substrate-mapping argument was sound for the arm it described and was never checked against the other,
+// which existed in the bytes the whole time — `async?` was decoded and thrown away.
+//
+// The consequence was not cosmetic. `wit-bindgen`'s drop glue is **synchronous** (it runs in `Drop`,
+// which cannot await), so it uses the sync form, never expects BLOCKED, and meets it in
+// `in_progress_update`'s `other => panic!("unknown code {other:#x}")` — `unreachable` in wasm. A
+// conforming guest crashed.
+//
+// `asyncForm` now selects: wait (bounded, see `subtaskCancelBound`) or return BLOCKED.
+//
+// onCancel is invoked WITHOUT the table lock held: it may call onResolve, which takes the lock, so
+// holding it here would deadlock — the same discipline the blocking arm uses for the impl and its
+// resolver.
+// beginSubtaskCancel is `subtask.cancel`'s guarded prologue: it validates the handle, applies the model's
+// three traps, records the cancellation request, and arms the resolution wake — **all under one balanced
+// `Lock`/`Unlock` pair in a single block.**
+//
+// # Why it is a separate function
+//
+// It was inline, with the table lock taken once at the top and released on **five** different paths. That
+// is the shape that breeds a missed unlock, and it also defeated
+// `TestNoEngineLockIsHeldAcrossAChannelOperation`: with conditional unlocks nested in `if`s and a
+// `switch`, the control cannot pair them, so it reported the sync wait's channel receive as being inside
+// a critical section that was in fact already released. Rather than exempt the function — *"an exemption
+// inherits none of this control's lessons"* — the lock was made balanced and local, which is the shape
+// `awaitEvent` already uses and the one the control can actually verify.
+//
+// The second return is the **inline** answer: non-nil when the subtask had already resolved before the
+// cancel, in which case its state is the result and there is nothing to wait for (`get_pending_event`).
+func (h *asyncHandles) beginSubtaskCancel(i uint32, asyncForm bool) (
+	st *subtask, inlineState *subtaskState, wake chan struct{}, onCancel func(), err error,
+) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	st, ok := handleAt[*subtask](h, i)
+	if !ok {
+		return nil, nil, nil, nil, fmt.Errorf("component: subtask.cancel: handle %d is not a subtask", i)
+	}
+	// The model's three traps, in its order (def:2419-2421).
+	switch {
+	case st.delivered:
+		return nil, nil, nil, nil, &interp.Trap{
+			Reason: fmt.Sprintf("subtask.cancel: subtask %d already resolve-delivered", i),
+		}
+	case st.cancellationRequested:
+		return nil, nil, nil, nil, &interp.Trap{
+			Reason: fmt.Sprintf("subtask.cancel: subtask %d already has a cancellation requested", i),
+		}
+	case st.set != nil:
+		return nil, nil, nil, nil, &interp.Trap{
+			Reason: fmt.Sprintf("subtask.cancel: subtask %d is joined to a waitable set", i),
+		}
+	}
+	if st.resolved {
+		state := st.state
+		st.delivered = true
+		return st, &state, nil, nil, nil
+	}
+	st.cancellationRequested = true
+	// Arm the resolution wake BEFORE the lock is released and before `onCancel` runs. An impl that
+	// resolves on another goroutine the instant it is asked would otherwise close a channel that did not
+	// exist yet, and the wait would then wait for a resolution that had already happened — the
+	// lost-wakeup shape. Only the sync form waits, so only it needs the channel.
+	if !asyncForm {
+		st.resolveWake = make(chan struct{})
+	}
+	return st, nil, st.resolveWake, st.onCancel, nil
+}
+
+func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: subtask.cancel: got %d args, want (i)", len(args))
 		}
 		i := uint32(args[0].Bits)
-		h.mu.Lock()
-		st, ok := handleAt[*subtask](h, i)
-		if !ok {
-			h.mu.Unlock()
-			return nil, fmt.Errorf("component: subtask.cancel: handle %d is not a subtask", i)
+		st, inlineState, wake, onCancel, err := h.beginSubtaskCancel(i, asyncForm)
+		if err != nil {
+			return nil, err
 		}
-		switch {
-		case st.delivered:
-			h.mu.Unlock()
-			return nil, &interp.Trap{Reason: fmt.Sprintf("subtask.cancel: subtask %d already resolve-delivered", i)}
-		case st.cancellationRequested:
-			h.mu.Unlock()
-			return nil, &interp.Trap{Reason: fmt.Sprintf("subtask.cancel: subtask %d already has a cancellation requested", i)}
-		case st.set != nil:
-			h.mu.Unlock()
-			return nil, &interp.Trap{Reason: fmt.Sprintf("subtask.cancel: subtask %d is joined to a waitable set", i)}
+		if inlineState != nil {
+			// Already resolved before the cancel — deliver its state (`get_pending_event`).
+			return []interp.Value{interp.I32(int32(*inlineState))}, nil
 		}
-		if st.resolved {
-			state := st.state // already resolved before the cancel — deliver its state (get_pending_event)
-			st.delivered = true
-			h.mu.Unlock()
-			return []interp.Value{interp.I32(int32(state))}, nil
-		}
-		st.cancellationRequested = true
-		onCancel := st.onCancel
-		h.mu.Unlock()
-
 		if onCancel != nil {
 			onCancel() // may call onResolve (which locks); must run without the table lock held
 		}
 
 		h.mu.Lock()
-		defer h.mu.Unlock()
-		if !st.resolved {
-			bits := uint32(asyncBlocked) // the callee did not resolve inline; the guest awaits the event
+		resolvedNow := st.resolved
+		h.mu.Unlock()
+
+		// **The wait happens with NO lock held, and the shape is not a style choice.**
+		//
+		// A first version read the flag, unlocked, waited and re-locked all inside one
+		// `h.mu.Lock()`-opened block. It was correct — the unlock preceded the receive — and
+		// `TestNoEngineLockIsHeldAcrossAChannelOperation` refused it anyway, reporting a channel receive
+		// inside the critical section opened by that `Lock`. The control reads the structure rather than
+		// tracing a conditional unlock, and **that is the right trade**: §4 B-MM-3 forbids holding an
+		// engine lock across a guest resume, a `close` on a release channel *is* a resume, and a rule that
+		// could be satisfied by an argument about control flow is a rule the next edit falsifies silently.
+		//
+		// Its own message says what to do: *"If the lock is genuinely outside the hazard, narrow the rule
+		// … do not add a name to a list, because an exemption inherits none of this control's lessons."*
+		// So the code was restructured to make the premise visibly hold, rather than exempted. It is also
+		// simpler — one read, one wait, one re-lock, instead of a lock/unlock/lock dance.
+		if !resolvedNow && !asyncForm {
+			// **The SYNC form waits** (grave #892, `definitions.py` def:2426-2428):
+			//
+			//	if not subtask.resolved():
+			//	  if not async_:
+			//	    thread.wait_until(subtask.resolved)
+			//	  else:
+			//	    thread.yield_()
+			//
+			// Burroughs returned BLOCKED here for **both** forms, because the `async?` operand was
+			// decoded and discarded. That is a shipped divergence that **crashes conforming guests**:
+			// `wit-bindgen`'s drop glue is synchronous — it runs in `Drop`, which cannot await — so it
+			// uses this form, never expects BLOCKED, and meets it in `in_progress_update`'s
+			// `other => panic!("unknown code {other:#x}")`, which is `unreachable` in wasm.
+			//
+			// The wait is **bounded**, for `liftParkBound`'s reason one level out: an impl that never
+			// resolves must end in a verdict rather than a hang. The model has no bound because it has no
+			// real time; this engine does, and a wait with no bound is a hang wearing a spec citation.
+			select {
+			case <-wake:
+			case <-time.After(subtaskCancelBound):
+				return nil, fmt.Errorf("%w: subtask %d did not resolve within %s of its cancellation — "+
+					"the host impl's cancel handler never resolved it", ErrSubtaskCancelExpired, i,
+					subtaskCancelBound)
+			}
+		}
+		// **No `defer` in this function, and that is the control's requirement rather than a preference.**
+		// `TestNoEngineLockIsHeldAcrossAChannelOperation` says so in its own words: *"A deferred `Unlock`
+		// anywhere in the function keeps the whole-function interval, unnarrowed"* — because `defer`
+		// cannot be ordered lexically against a channel operation, so a function with one is treated as
+		// locked throughout. With a `defer` here, the sync wait above sat inside that interval no matter
+		// how the rest was arranged, which is why two earlier restructurings did not satisfy it.
+		//
+		// So the epilogue reads and mutates under one balanced `Lock`/`Unlock` in this statement list and
+		// branches after releasing. Taking the decision out from under the lock is also the better shape
+		// on its own terms: nothing between the unlock and the return touches shared state.
+		h.mu.Lock()
+		blocked := !st.resolved
+		state := st.state
+		if !blocked {
+			st.delivered = true
+		}
+		h.mu.Unlock()
+
+		if blocked {
+			// Reachable on the **async** form only: the model's async arm yields once and then returns
+			// BLOCKED if the subtask still has not resolved (def:2430-2433). The guest awaits the event.
+			// On the sync form the wait above either saw the resolution or returned the named expiry.
+			bits := uint32(asyncBlocked)
 			return []interp.Value{interp.I32(int32(bits))}, nil
 		}
-		st.delivered = true
-		return []interp.Value{interp.I32(int32(st.state))}, nil
+		return []interp.Value{interp.I32(int32(state))}, nil
 	}
 }
+
+// subtaskCancelBound bounds the SYNC `subtask.cancel` wait (grave #892).
+//
+// The model waits unconditionally (`thread.wait_until(subtask.resolved)`) because it has no real time and
+// a non-resolving impl is outside what it describes. This engine has both, so the wait is bounded for the
+// same reason `liftParkBound` is: *a wait that cannot be satisfied must end in a verdict.* An unbounded
+// wait here would turn a misbehaving host impl into a hung guest with no diagnostic, which is strictly
+// worse than the BLOCKED this replaces.
+//
+// A `var` rather than a `const` so a witness can shorten it — the expiry has to be watched firing, and a
+// test that waited the real bound to see it would be a test nobody runs.
+var subtaskCancelBound = 30 * time.Second
+
+// ErrSubtaskCancelExpired is the sync `subtask.cancel` wait's bound expiring: the impl's cancel handler
+// was invoked and never resolved the subtask. Named rather than returned as BLOCKED, because BLOCKED is
+// the ASYNC form's answer and reusing it is exactly the conflation grave #892 is about.
+var ErrSubtaskCancelExpired = errors.New("component: subtask.cancel (sync) timed out waiting for the cancellation to resolve")
 
 // subtaskDrop implements `canon subtask.drop` (0x0d, definitions.py:2441 -> Subtask.drop def:854). It traps
 // unless the subtask is resolve-delivered (Burroughs: `delivered`, set when a wait consumed the SUBTASK

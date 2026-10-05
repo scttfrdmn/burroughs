@@ -107,8 +107,17 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 		// retptr is in the same argument list.
 		params := onStart()
 
+		// **Register the child's task BEFORE returning, not on the goroutine** (grave #892). A composed
+		// parent calls its child and then promptly cancels; the parent's `subtask.cancel` reaches the
+		// `onCancel` below, which asks the child's table to cancel what it hosts. If the task were
+		// created on the goroutine, that would often find nothing and drop the request — measured as a
+		// race, with one run cancelling in 11ms and the next timing out at 30s with the child's cancel
+		// handler never invoked. Creating it here makes registration happen-before anything the caller
+		// can do next, so there is no window to lose the race in.
+		task := callee.newLiftTask()
+
 		go func() {
-			res, err := callee.invokeAsyncLiftWith(params)
+			res, err := callee.runLiftTask(task, params)
 			if err != nil {
 				// A child that trapped or was cancelled resolves the parent's subtask as a cancellation
 				// rather than a result. **The parent gets a terminal state either way**: leaving the
@@ -137,20 +146,31 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 			// subtask has not resolved, so the parent learns "not cancelled (yet)" whatever the reason
 			// `requestCancelAll` declined. That status is the channel.
 			//
-			// A first draft of this comment said the refusals *"mean the race is already lost and the
-			// subtask will resolve on its own"*. **That is false for one of them and I had already
-			// measured it**: the parent can request cancellation before the child's task exists in
-			// `cancellable` at all, because `onStart` runs synchronously and the task is created on the
-			// goroutine below — so `requestCancelAll` answers "no lift task", or answers
-			// `ErrTaskCancelUnbuilt` once the task exists but is still `liftInitial` (ADR 0094's refused
-			// status-3 path). In that window the request does **not** take effect later. It is a recorded
-			// gap, not a benign race: ADR 0095 names it, and it is the cross-component path reaching the
-			// before-started case that #884 exists to produce a reading for.
+			// # The window this comment used to describe is CLOSED, in two steps
 			//
-			//nolint:errcheck // No slot in the model's OnCancel signature; the parent's channel is the
-			// BLOCKED status subtaskCancel returns. The before-started window is a recorded gap (ADR
-			// 0095, #884, #892), deliberately not papered over with a retry whose semantics no reading
-			// covers.
+			// Two earlier drafts were wrong in opposite directions. The first said the refusals *"mean
+			// the race is already lost and the subtask will resolve on its own"* — false. The second
+			// called the loss *"a recorded gap, not a benign race"*, which was honest about the race and
+			// wrong about recording being enough: it rested on the parent learning of the loss through
+			// BLOCKED, and grave #892 removed BLOCKED from the sync path. The gap became a **30s hang**,
+			// measured as a flaky one (150 composed runs could not all complete; 200 now finish in under
+			// three seconds).
+			//
+			// Both halves are now fixed rather than noted:
+			//
+			//   1. the task is created and registered **above, synchronously**, so a prompt parent cannot
+			//      find nothing to cancel (`newLiftTask`);
+			//   2. a cancel landing while the task is still `liftInitial` is **recorded** and delivered
+			//      when it starts (ADR 0094 amendment 2), because this adapter's own early `onStart`
+			//      makes status 3 unreachable here — so honouring it claims nothing unmeasured.
+			//
+			// What remains unreported is a request against a task already **past** running, which
+			// `ErrCancelNotRunning` names and which genuinely is the lost race: the subtask has resolved
+			// and the parent will read its real status.
+			//
+			//nolint:errcheck // No slot in the model's OnCancel signature (`OnCancel = Callable[[], None]`,
+			// def:384). The only refusal left is ErrCancelNotRunning — a task already past running, whose
+			// resolved status the parent reads anyway — so there is nothing here a caller could act on.
 			_ = callee.h.requestCancelAll()
 		}, nil
 	}
@@ -195,7 +215,7 @@ func crossComponentResolve(onResolve func(canon.Value), sig *FuncType, res []int
 // That copy is real work with its own witnesses, and it is **not** what #888 registered. The artefacts in
 // the tree return `u32` (`receipt/`'s `run: async func(id: u32) -> u32`), so scalars are what the measured
 // cases need. An aggregate refuses **by name at the resolution**, so the boundary is a message a reader
-// meets rather than a silent truncation — the same discipline `ErrTaskCancelUnbuilt` applies to an
+// meets rather than a silent truncation — the same discipline `ErrCancelNotRunning` applies to an
 // unmeasured branch.
 var ErrCrossComponentResult = fmt.Errorf("%w: cross-component result shape is not carried yet", ErrUnsupportedForm)
 

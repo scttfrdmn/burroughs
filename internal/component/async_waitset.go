@@ -365,7 +365,10 @@ func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
 // handle table. Only the four the blocking-arm round trip needs are bound (gate:async 2a-i-B-2); any other
 // async built-in is refused at bind by gateAsync and never reaches here. waitable-set.wait writes its event
 // through the memory bound into its CanonOptions at the call site, so no memory is threaded here.
-func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool) {
+// `asyncForm` is the built-in's `async?` operand, which only `subtask.cancel` carries today and which is
+// a **function selector** rather than a flag: the model's sync form waits for the cancellation to resolve
+// and the async form returns BLOCKED (grave #892).
+func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool) (interp.CanonFunc, bool) {
 	switch op {
 	case 0x1f: // waitable-set.new
 		return waitableSetNew(w.async), true
@@ -388,7 +391,7 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32) (interp.CanonFunc, bool)
 	case 0x19: // future.cancel-write (2nd async guest) — the future write arm's running CANCELLED
 		return futureCancelWrite(w.async), true
 	case 0x06: // subtask.cancel (gate:async increment 4) — the subtask substrate's cancel path
-		return subtaskCancel(w.async), true
+		return subtaskCancel(w.async, asyncForm), true
 	case 0x0d: // subtask.drop (gate:async increment 4)
 		return subtaskDrop(w.async), true
 	case 0x0e: // stream.new (gate:async increment 4) — mints a connected readable+writable end pair

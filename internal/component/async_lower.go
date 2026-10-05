@@ -77,13 +77,9 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 				// path the re-check found missing: before increment 4 onResolve only ever produced RETURNED,
 				// so a cancelled subtask would have resolved with the wrong terminal state (#739).
 				if st.state == subtaskStarting {
-					st.state = subtaskCancelledBeforeStarted
+					st.resolveLocked(subtaskCancelledBeforeStarted)
 				} else {
-					st.state = subtaskCancelledBeforeReturned
-				}
-				st.resolved = true
-				if st.set != nil {
-					st.set.signalLocked()
+					st.resolveLocked(subtaskCancelledBeforeReturned)
 				}
 				return
 			}
@@ -116,11 +112,7 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 					return
 				}
 			}
-			st.state = subtaskReturned
-			st.resolved = true
-			if st.set != nil { // wake any agent parked on the set this subtask was joined to
-				st.set.signalLocked()
-			}
+			st.resolveLocked(subtaskReturned)
 		}
 
 		onCancel, err := impl(c, onStart, onResolve)
