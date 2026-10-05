@@ -123,11 +123,24 @@ func TestACrossComponentAsyncCallCarriesParamsAndResult(t *testing.T) {
 		name   string
 		defer_ bool
 	}{
-		// Both arms are kept even though they reach the same engine path, and **that sameness is the
-		// finding**: a `wit-bindgen` child's lift always returns WAIT, so the parent's lower sees STARTED
-		// whatever the host's latency. The inline-resolving host does not shorten the chain. Asserted
-		// below as the state, so if a future child does resolve inline this test says so rather than
-		// silently changing which arm it covers.
+		// **BOTH dispatch arms are reachable, and a first draft of this comment claimed otherwise.** It
+		// said *"both arms reach the same engine path, and that sameness is the finding: a `wit-bindgen`
+		// child's lift always returns WAIT, so the parent's lower sees STARTED whatever the host's
+		// latency"* — and asserted that, which is how it was caught. `build (ubuntu-24.04-arm)` reported
+		// `reports=[[1 2] [2 49]]`: the lower returned **RETURNED (2)**, the inline arm, with the right
+		// value.
+		//
+		// The reasoning was wrong because the child's lift runs on the adapter's own goroutine (ADR 0095).
+		// If it completes — `task.return` included — before `asyncLowerFunc` re-checks `st.resolved`, the
+		// lower legitimately returns RETURNED with the result already at the retptr. Which arm is taken is
+		// a **scheduling fact, not a property of the callee's ABI**. Measured: `darwin/arm64` always
+		// parked; CI's `ubuntu-24.04-arm` reached inline.
+		//
+		// So this test no longer asserts which arm. It asserts that the arm taken is one of the two, and
+		// that the value is correct **in whichever arm's channel reports it** — because the thing under
+		// test is that the value crosses, not which path it crossed by. *A witness whose subject depends
+		// on scheduling is a sample, not an assertion* (grave #891), and that lesson arrived here one
+		// slice after I wrote it down.
 		{"tick_resolves_inline", false},
 		{"tick_resolves_later", true},
 	} {
@@ -181,25 +194,48 @@ func TestACrossComponentAsyncCallCarriesParamsAndResult(t *testing.T) {
 					"dropped it", ticks, wantID)
 			}
 
-			// ## WHICH arm the engine took, so the coverage cannot drift silently
+			// ## WHICH arm the engine took is REPORTED, and the value is asserted in that arm's channel
+			//
+			// Both arms are legitimate — see the table's comment for the measurement that falsified the
+			// claim they could not both happen. What must hold is that the arm is one of the two and that
+			// it carries the right value; which one it is belongs in the log, not in an assertion.
 			state, ok := r.valueFor(1)
 			if !ok {
 				t.Fatal("the parent reported no lower state (kind 1); the reading cannot say which arm " +
 					"this is")
 			}
-			if state != uint32(subtaskStarted) {
-				t.Errorf("the lower returned state %d, want %d (STARTED) — a `wit-bindgen` child's lift "+
-					"always returns WAIT, so the parent's lower cannot see RETURNED inline. If this now "+
-					"reads 2, the inline arm became reachable and it has no witness yet",
-					state, subtaskStarted)
-			}
-			// kind 3 is the post-park read; kind 2 would be the inline arm, which is unreachable here.
-			if _, inline := r.valueFor(2); inline {
-				t.Error("the parent took its INLINE arm (kind 2), which this child cannot reach — the " +
-					"fixture or the child changed, and the park arm is now unwitnessed")
-			}
-			if v, ok := r.valueFor(3); !ok || v != tickValue {
-				t.Errorf("post-park read (kind 3) = %d/%v, want %d", v, ok, tickValue)
+			// kind 2 is the inline arm's read, kind 3 the post-park one. Exactly one must be present:
+			// both would mean the parent ran both branches, and neither would mean it read no value at
+			// all — either is a real defect, which is what makes this an assertion rather than a log line.
+			inlineVal, sawInline := r.valueFor(2)
+			parkedVal, sawParked := r.valueFor(3)
+			switch {
+			case sawInline && sawParked:
+				t.Errorf("the parent reported BOTH an inline (kind 2) and a post-park (kind 3) read; its "+
+					"dispatch is exclusive, so one of them is a value it should never have produced. "+
+					"reports=%v", reports)
+			case !sawInline && !sawParked:
+				t.Errorf("the parent reported neither an inline nor a post-park read, so the call "+
+					"returned without the value crossing. reports=%v", reports)
+			case sawInline:
+				if state != uint32(subtaskReturned) {
+					t.Errorf("the parent took its inline arm but reported state %d, want %d (RETURNED) — "+
+						"the two must agree, since the arm is chosen by the state", state, subtaskReturned)
+				}
+				if inlineVal != tickValue {
+					t.Errorf("inline read (kind 2) = %d, want %d", inlineVal, tickValue)
+				}
+				t.Logf("arm: INLINE (lower returned RETURNED) — the child's lift completed before the "+
+					"lower re-checked; value %d", inlineVal)
+			case sawParked:
+				if state != uint32(subtaskStarted) {
+					t.Errorf("the parent parked but reported state %d, want %d (STARTED) — the two must "+
+						"agree, since the arm is chosen by the state", state, subtaskStarted)
+				}
+				if parkedVal != tickValue {
+					t.Errorf("post-park read (kind 3) = %d, want %d", parkedVal, tickValue)
+				}
+				t.Logf("arm: PARKED (lower returned STARTED) — value %d", parkedVal)
 			}
 		})
 	}
