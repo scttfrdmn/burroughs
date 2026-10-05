@@ -89,8 +89,11 @@ own condition rather than as a prediction.
   (ADR 0096 amendment 2). The ruling that approved `Close` carried a conditional stop — *"give it the
   existing code for the invoker's own failure if that fits, or report back if it doesn't"* — and it did
   not fit, so the slice should have ended there. It merged instead, with the reasoning in the PR body,
-  which is not reporting *before* merging. The two codes are **pending Scott's confirmation** and come out
-  in a follow-up at no cost if he declines, since no release is cut. Code 7, the two sentinels, and
+  which is not reporting *before* merging. **Scott has since confirmed both codes** (2026-10-05, *"1 yes,
+  keep both"*), so the outcome is settled and they stay —
+  [#900](https://github.com/scttfrdmn/burroughs/issues/900) is closed. **Being confirmed afterwards does
+  not undo the breach**, and the record of it above is left exactly as written: a ruling that would have
+  gone the same way is not a licence to have skipped asking for it. Code 7, the two sentinels, and
   `Close`'s idempotence are all within what was ruled; the codes are the part that was not.
   **Three new CLI exit codes, and the suggested one did not fit.** `ErrCancelled`, `ErrComponentClosed`
   and `ErrCloseIncomplete` are public sentinels, and `TestExitCodesCoverEveryPublicSentinel` — whose

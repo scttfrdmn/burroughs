@@ -70,7 +70,9 @@ So `exitClosed = 8` and `exitCloseIncomplete = 9`. **Two codes rather than one**
 
 ## Amendment 2 (2026-10-05) — exit codes 8 and 9 were merged past a stop condition, and are put to Scott after the fact
 
-**Status of the two codes: pending Scott's confirmation**, tracked on [#900](https://github.com/scttfrdmn/burroughs/issues/900) (`decision-needed:scott`). They are on main. They should not have been merged without his answer, and this section is the record of that rather than a justification for it.
+**Status of the two codes: confirmed by Scott**, 2026-10-05, in chat: *"1 yes, keep both"* — answering the proposition put to him on [#900](https://github.com/scttfrdmn/burroughs/issues/900), which is closed. They stay on main.
+
+**The confirmation settles the outcome and changes nothing else in this section.** They should not have been merged without his answer, and the rest of this section is the record of that rather than a justification for it — left as written on purpose. *A ruling that would have gone the same way is not a licence to have skipped asking for it*, and a breach record that quietly softened once the answer came back favourable would be a record of the answer rather than of the conduct. The lesson below is about the reasoning, which the confirmation does not touch.
 
 ### What the instruction said, and what I did
 
@@ -95,7 +97,7 @@ Neither could be `exitError`: that code is deliberately reserved for errors noth
 
 **Neither is reachable from the CLI today** (`run` drives a component through `ComponentConfig.Run`, which takes no context and no handle to close), and the README says so.
 
-**The chair's recommendation is to keep both.** If Scott would rather not, they come out in a follow-up at no cost: no release has been cut, so nothing depends on them.
+**The chair's recommendation was to keep both, and Scott agreed** — *"1 yes, keep both"*, 2026-10-05. The sentence that stood here said they would come out in a follow-up at no cost if he declined; it is overtaken rather than wrong, and is recorded that way because the cost argument was itself part of what made proceeding look cheap. Keeping it visible is the point.
 
 **What is *not* in question**: the two sentinels themselves and `Close`'s idempotence are within amendment 1's ruling, which asked for a closed error and a named outcome when the bound runs out.
 
