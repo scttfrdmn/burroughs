@@ -118,13 +118,21 @@ inspects before running does not have to translate (decision 0033):
 | `5` | the engine reached something it does not implement in this phase |
 | `6` | the module is fine; this build has that proposal's gate off |
 | `7` | a component call the **caller** cancelled — the module ran correctly and the invoker stopped it |
+| `8` | a call on a component that has been closed — the invoker's own mistake |
+| `9` | `Close` reached its bound with a guest still cancelling; the instance was torn down anyway |
 
-`7` is **not reachable through this CLI today**, and is listed because the code
-exists rather than because `run` can produce it: `run` drives a component through
-`ComponentConfig.Run`, which takes no context. It is the classification of
-`burroughs.ErrCancelled`, which `Component.Call(ctx, …)` returns to a Go
-embedder, and the taxonomy covers the package's sentinels rather than the CLI's
-reachable subset.
+`7`, `8` and `9` are **not reachable through this CLI today**, and are listed
+because the codes exist rather than because `run` can produce them: `run` drives
+a component through `ComponentConfig.Run`, which takes no context and no handle
+to close. They classify `burroughs.ErrCancelled`, `ErrComponentClosed` and
+`ErrCloseIncomplete`, which a Go embedder meets through `Component.Call(ctx, …)`
+and `Component.Close()`. The taxonomy covers the package's sentinels rather than
+the CLI's reachable subset — which is what `TestExitCodesCoverEveryPublicSentinel`
+derives and enforces, and why these rows exist at all.
+
+`8` and `9` are separate because they are facts about different parties: `8` is
+the invoker calling a component they already closed, `9` is a guest that would
+not finish cancelling. An operator seeing `9` learns something about the module.
 
 `inspect` never returns `4` or `5`: it decodes and dumps, so nothing it does can
 trap or reach an unimplemented instruction. It exits `0` on a module that fails

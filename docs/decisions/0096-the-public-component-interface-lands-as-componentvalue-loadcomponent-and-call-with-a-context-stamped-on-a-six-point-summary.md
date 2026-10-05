@@ -30,6 +30,44 @@ Recorded by the actor the stamp reached, so no independent provenance — but th
 
 **6 is recorded and nothing is cut.** The CHANGELOG entry says the interface is merged and that no release is cut.
 
+## Amendment 1 (2026-10-05) — Scott's ruling on the three items the stamp did not see
+
+**Stamped by Scott** on 2026-10-05 (*"I do not object"*), on the chair's three-item summary of what building the interface turned up. Recorded beside the original stamp because it answers the limit that stamp carried, and the limit's whole point was that the answer be his.
+
+The chair split the five reported items: two were the chair's own and are deferred, three were Scott's because they change the public interface or what was stamped.
+
+### Deferred by the chair, not by this ADR's author
+
+**`ComponentConfig.LoadComponent` and `Component.Exports()`.** Both additive later, neither needed by a first user of a `u32`-only interface, and leaving them out costs nothing. Filed against the release-blocking value-kinds work.
+
+### Scott's three, as ruled
+
+**1. Re-entry (point 4) is satisfied because the hazard cannot occur.** §5 **H-2** already guarantees it by giving host code no way back into the instance, and the public API offers no host functions. Detection becomes **required acceptance** on the issue that makes host functions public, and **per-caller identity is built in the same change** — because that change is what brings the hazard into existence, and because the detector cannot be written without the identity.
+
+This is not a weakening of point 4. It is the point read against what exists: the guard and the hazard arrive together, which is stronger than a detector shipped now against a path nothing can take.
+
+**2. Exit code 7 is approved as public CLI surface**, documented as unreachable from the CLI for now.
+
+**3. `Component.Close()` is approved**, with the behaviour stated in the ruling rather than left to the implementation:
+
+- cancel every call in flight, so those callers get `ErrCancelled` from tasks that **actually ended**;
+- wait a bounded time for the cancellations to finish, then tear down, with a **named outcome** if the bound is reached;
+- calls after `Close` return a **closed** error.
+
+All three are built. `Close` is additionally **idempotent**, which the ruling did not specify and which is not a change to it: an embedder who defers `Close` and also calls it on an error path should not have to track which ran, and a second `Close` returning nil is the only reading under which both are safe.
+
+### What this amendment turned up, reported under the same limit
+
+**Two new public sentinels, not one, and neither could take the exit code the chair suggested.**
+
+`Close` needs `ErrComponentClosed` (a call on a closed component) and `ErrCloseIncomplete` (the bound reached). The chair's instruction was to *"give it the existing code for the invoker's own failure if that fits, or report back if it doesn't."* **It does not fit:** `TestExitCodesCoverEveryPublicSentinel` **forbids** any public sentinel mapping to `exitError`, and it is right to — a sentinel that lands on the catch-all is indistinguishable from one that fell through, which is the failure the taxonomy exists to prevent. Taking the suggestion would have meant weakening the control that asked the question.
+
+So `exitClosed = 8` and `exitCloseIncomplete = 9`. **Two codes rather than one**, because they are facts about different parties: calling a closed component is the **invoker's** mistake, while an incomplete close is the **guest** refusing to stop, and an operator seeing the second learns something about the module that the first does not say. Both unreachable from the CLI today, for code 7's reason, and both documented as such.
+
+**And the sentinel control's domain was one file.** `declaredSentinels` read `burroughs.go` alone, so a sentinel declared in any other file of the package escaped it and would fall through to the catch-all **unnoticed** — the exact failure it exists to prevent. Found by walking into it: `ErrCloseIncomplete` was first declared in `component.go` and the control reported *"this taxonomy binds ErrCloseIncomplete, which the public package no longer declares"*, the right complaint for the wrong reason. The sentinel moved to `burroughs.go` where the others live **and the domain widened to the package**, with its own file-count floor. Same shape as `TestMarkdownLinksResolve`, which was `CLAUDE.md`-scoped until #466: *a control whose domain is a file cannot see the package.*
+
+**One witness could not be written from outside the module.** The ruling's first `Close` witness — an in-flight call parked in a host import that never resolves, with the guest's **receipt** observed — needs a host import, and this release ships no hook for one. So it is witnessed one level down, in `internal/component`, against `Instantiated.CancelAll` — which is *exactly* what `Component.Close` calls before tearing down, so the code path under test is the same one. The public arms assert the error, the closed refusal, the bound's named outcome and the goroutine count. Split by where each claim is observable.
+
 ## 4 — re-entry: the hazard is still unreachable, and this is the report the limit asks for
 
 **Point 4 is not implemented, and the reason is that its path does not exist in the surface this slice ships.** This is reported rather than quietly skipped, per the stamp's own limit.

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -200,4 +201,153 @@ func TestNamingAnExportFollowsTheStampedGrammar(t *testing.T) {
 		t.Error("an unknown export name succeeded, so names are being resolved more loosely than the " +
 			"grammar says")
 	}
+}
+
+// TestCloseReturnsErrClosedToLaterCalls is `Close`'s third stated behaviour, from the embedder's side.
+func TestCloseReturnsErrClosedToLaterCalls(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	wasm, err := os.ReadFile("internal/component/testdata/async-lift-exit-synth.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	c, err := burroughs.LoadComponent(wasm)
+	if err != nil {
+		t.Fatalf("LoadComponent: %v", err)
+	}
+
+	// It works before.
+	if _, err := c.Call(context.Background(), "run"); err != nil {
+		t.Fatalf("Call before Close: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close on an idle component: %v, want a clean close", err)
+	}
+
+	_, callErr := c.Call(context.Background(), "run")
+	if !errors.Is(callErr, burroughs.ErrComponentClosed) {
+		t.Fatalf("Call after Close returned %v; want ErrComponentClosed — a refusal from deeper in the "+
+			"engine about an instance that no longer exists tells the embedder about the wrong thing",
+			callErr)
+	}
+	// The name is in the message, so a multi-export embedder learns which call did not happen.
+	if !strings.Contains(callErr.Error(), "run") {
+		t.Errorf("the refusal does not name the call: %v", callErr)
+	}
+
+	// Idempotent: an embedder who defers Close and also calls it on an error path should not have to
+	// track which ran.
+	if err := c.Close(); err != nil {
+		t.Errorf("the second Close returned %v; want nil", err)
+	}
+}
+
+// TestCloseCancelsAnInFlightCall is `Close`'s first stated behaviour: callers of in-flight calls get
+// [burroughs.ErrCancelled], from tasks that actually ended.
+//
+// The yielding fixture is used because it **imports nothing** — this release ships no host-function hook,
+// so a fixture parked in a host import cannot be driven from out here at all. The guest's *receipt* — the
+// proof that its own cancellation path ran rather than the task being abandoned — is therefore witnessed
+// one level down, in `internal/component`, where a host import can be supplied. Split by where each claim
+// is observable, not by preference.
+func TestCloseCancelsAnInFlightCall(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	wasm, err := os.ReadFile("internal/component/testdata/lift-cancel-yield-synth.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	c, err := burroughs.LoadComponent(wasm)
+	if err != nil {
+		t.Fatalf("LoadComponent: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, cErr := c.Call(context.Background(), "run")
+		done <- cErr
+	}()
+
+	// The guest spins with no host import, so there is no entry hook; a short delay then Close. Sound
+	// because the fixture cannot finish on its own — whenever Close lands, it is the only thing that can
+	// end the call — and its own 200000 spin bound makes an ignored cancellation fail loudly.
+	time.Sleep(20 * time.Millisecond)
+
+	closeErr := c.Close()
+
+	select {
+	case cErr := <-done:
+		if !errors.Is(cErr, burroughs.ErrCancelled) {
+			t.Fatalf("the in-flight call returned %v; want ErrCancelled. Close must CANCEL before it "+
+				"tears down, or the caller gets a terminated-call error from a task whose own "+
+				"cancellation path never ran", cErr)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the in-flight call never returned after Close")
+	}
+	if closeErr != nil {
+		t.Errorf("Close returned %v; the guest cancels promptly, so this should be a clean close",
+			closeErr)
+	}
+}
+
+// TestCloseReturnsTheGoroutineCountToWhereItStarted is the leak check: a component's threads and tasks are
+// released, not merely forgotten.
+//
+// # Why a settling allowance and not an exact match
+//
+// `runtime.NumGoroutine()` counts the whole process, and Go's own runtime goroutines come and go. So the
+// assertion is that the count returns to its baseline **within a bounded settle**, polled on the real
+// condition rather than slept at — which is the honest form: an exact instantaneous match would be a
+// sample of the runtime's own scheduling, and *a witness whose subject depends on scheduling is a sample*
+// (grave #891).
+//
+// A leak fails it anyway, because a leaked engine goroutine never goes away: the poll runs out.
+func TestCloseReturnsTheGoroutineCountToWhereItStarted(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	wasm, err := os.ReadFile("internal/component/testdata/lift-cancel-yield-synth.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+
+	// Baseline taken after a settle of its own, so a goroutine left by an earlier test in this package is
+	// not counted against this one.
+	settle(t, runtime.NumGoroutine(), 2*time.Second)
+	base := runtime.NumGoroutine()
+
+	c, err := burroughs.LoadComponent(wasm)
+	if err != nil {
+		t.Fatalf("LoadComponent: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, cErr := c.Call(context.Background(), "run")
+		done <- cErr
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if n := runtime.NumGoroutine(); n <= base {
+		t.Logf("goroutines did not rise above the baseline (%d vs %d); the fixture may have finished "+
+			"before the measurement, which weakens this arm but does not invalidate it", n, base)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	<-done
+
+	if !settle(t, base, 5*time.Second) {
+		t.Errorf("goroutines did not return to the baseline %d within 5s (now %d) — Close released the "+
+			"instance's state but something it started is still running", base, runtime.NumGoroutine())
+	}
+}
+
+// settle polls until the goroutine count is at or below want, and reports whether it got there. A poll on
+// a real condition rather than a sleep, so a fast machine does not wait and a slow one is not failed.
+func settle(t *testing.T, want int, bound time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(bound)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() <= want {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return runtime.NumGoroutine() <= want
 }

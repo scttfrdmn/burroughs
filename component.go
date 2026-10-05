@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
+	"time"
 
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/component"
@@ -185,7 +187,27 @@ func IsComponent(wasm []byte) (bool, error) {
 // [ADR 0085]: https://github.com/scttfrdmn/burroughs/blob/main/docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md
 type Component struct {
 	in *component.Instantiated
+
+	// mu guards `closed` and the `active` increment, which must be atomic *together*: a Call that read
+	// "not closed" and then incremented after Close had started counting would be a call Close does not
+	// wait for.
+	mu     sync.Mutex
+	closed bool
+
+	// active counts Calls in flight. A plain counter rather than a `sync.WaitGroup`, because `Wait` is
+	// unbounded and Close's wait is bounded — see Close for why that bound exists.
+	active int
 }
+
+// componentCloseBound is how long [Component.Close] waits for in-flight calls to finish cancelling
+// before tearing down anyway.
+//
+// A guest is not obliged to cooperate: it can ignore `TASK_CANCELLED` and keep yielding, or sit in a host
+// import that never returns. So the wait is bounded for `liftParkBound`'s reason one level out — *a wait
+// that cannot be satisfied must end in a verdict* — and reaching the bound is reported as a **named
+// outcome** rather than silently tearing down or hanging. A `var` so a witness can shorten it; a test
+// that waited the real bound to see the bound is a test nobody runs.
+var componentCloseBound = 5 * time.Second
 
 // LoadComponent loads and instantiates a component, returning a handle whose exports can be called.
 //
@@ -254,6 +276,22 @@ func (c *Component) Call(ctx context.Context, name string, args ...ComponentValu
 		return nil, fmt.Errorf("%w: Call needs a non-nil context; use context.Background() for a call "+
 			"that is not cancellable", ErrUnsupported)
 	}
+	// The closed check and the in-flight increment happen under one acquisition (ADR 0096's ruling):
+	// separately, a call that read "not closed" and incremented after Close had taken its count would be
+	// a call Close never waits for — torn down mid-flight with its caller told nothing useful.
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("%w: %q was not called", ErrComponentClosed, name)
+	}
+	c.active++
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.active--
+		c.mu.Unlock()
+	}()
+
 	in := make([]canon.Value, 0, len(args))
 	for i, a := range args {
 		cv, err := a.toCanon()
@@ -286,4 +324,68 @@ func (c *Component) Call(ctx context.Context, name string, args ...ComponentValu
 		out = append(out, pv)
 	}
 	return out, nil
+}
+
+// Close cancels every call still running, waits a bounded time for them to finish cancelling, and
+// releases the component's engine threads and host state.
+//
+// Approved on the #858 review (ADR 0096's ruling), with that behaviour stated rather than left to the
+// implementation:
+//
+//   - **Cancel, then tear down.** In-flight callers get [ErrCancelled] from tasks that *actually ended* —
+//     the guest runs its own cancellation path, so its destructors fire. Tearing down first would end the
+//     same tasks without that, which is how a cancellation and an abandonment become indistinguishable.
+//   - **The wait is bounded**, and reaching the bound returns [ErrCloseIncomplete] rather than hanging or
+//     tearing down silently. A guest can ignore a cancellation; `Close` cannot be made to wait on one
+//     that does.
+//   - **Calls after Close return [ErrComponentClosed]**, not a refusal from deeper in the engine about an
+//     instance that no longer exists.
+//
+// Close is **idempotent**: a second call returns nil without re-tearing down. An embedder who defers it
+// and also calls it on an error path should not have to track which ran.
+func (c *Component) Close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	// Set **before** cancelling, so no new call can join the set Close is about to wait for. The order is
+	// the whole of the guard: cancelling first would leave a window in which a fresh Call starts against
+	// an instance that is already being torn down.
+	c.closed = true
+	c.mu.Unlock()
+
+	c.in.CancelAll()
+
+	// A bounded wait on a real condition, polled rather than signalled.
+	//
+	// **No goroutine**, deliberately: the obvious shape is `go func() { wg.Wait(); close(done) }()` with
+	// a `select` on a timer, and that would be a new goroutine site — which the goroutine census
+	// (`TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`) admits only behind its own decision doc,
+	// and which *leaks* on the bound path, because the waiter stays blocked on calls that never finish.
+	// A poll on a teardown path costs a millisecond of granularity and nothing else.
+	deadline := time.Now().Add(componentCloseBound)
+	incomplete := false
+	for {
+		c.mu.Lock()
+		remaining := c.active
+		c.mu.Unlock()
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			incomplete = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Teardown runs on **both** paths. A bound reached is not a reason to leak the instance — it is a
+	// reason to say so, which the returned error does.
+	c.in.Close()
+	if incomplete {
+		return fmt.Errorf("%w: gave up after %s; the guest did not finish its cancellation",
+			ErrCloseIncomplete, componentCloseBound)
+	}
+	return nil
 }

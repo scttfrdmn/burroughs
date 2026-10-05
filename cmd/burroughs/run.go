@@ -504,6 +504,22 @@ const (
 	// by `TestExitCodesCoverEveryPublicSentinel` — not the CLI's reachable set. That control is what
 	// required this entry, exactly as it required `ErrGated`'s.
 	exitCancelled = 7
+	// exitClosed is a call on a closed component, and exitCloseIncomplete a `Close` that reached its
+	// bound with a guest still cancelling — `burroughs.ErrComponentClosed` and
+	// `burroughs.ErrCloseIncomplete`, #858's `Close`.
+	//
+	// **`exitError` was the chair's suggested home for the first and does not fit**, which is reported
+	// rather than worked around: `TestExitCodesCoverEveryPublicSentinel` **forbids** any public sentinel
+	// mapping to the catch-all, and it is right to — a sentinel that lands there is indistinguishable
+	// from one that fell through, which is the failure the taxonomy exists to prevent. So the suggestion
+	// could not be taken without weakening the control that asked the question.
+	//
+	// Two codes rather than one because they are different facts about different parties: calling a
+	// closed component is the **invoker's** mistake, while an incomplete close is the **guest** refusing
+	// to stop — and an operator seeing the second learns something about the module that the first does
+	// not say. Both are unreachable from this CLI today, for `exitCancelled`'s reason.
+	exitClosed          = 8
+	exitCloseIncomplete = 9
 )
 
 // exitCode maps an error from runCmd **or inspectCmd** onto the taxonomy above.
@@ -552,6 +568,10 @@ func exitCode(err error) int {
 	// cancellation is about the *caller*, so it only answers once the module's own verdicts have not.
 	case errors.Is(err, burroughs.ErrCancelled):
 		return exitCancelled
+	case errors.Is(err, burroughs.ErrComponentClosed):
+		return exitClosed
+	case errors.Is(err, burroughs.ErrCloseIncomplete):
+		return exitCloseIncomplete
 	}
 	var trap *burroughs.Trap
 	if errors.As(err, &trap) {

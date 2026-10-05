@@ -371,3 +371,85 @@ func TestCancellingTheOuterCallReachesTheComposedChild(t *testing.T) {
 		t.Errorf("cancel status = %d, want %d from the committed cancel-wat.reading", status, want.status)
 	}
 }
+
+// TestCancelAllEndsAParkedCallWithTheGuestsOwnCancellation is the receipt half of `Close`'s first
+// behaviour, witnessed here because **a host import cannot be supplied from outside the module** — this
+// release ships no host-function hook, so the public `Close` test uses a fixture that imports nothing and
+// can assert the error but not the receipt.
+//
+// `Instantiated.CancelAll` is exactly what `Component.Close` calls before tearing down, so what is under
+// test is the same code path, driven where a never-resolving `tick` can be provided.
+//
+// # The receipt is the claim, not the error
+//
+// `ErrCancelled` alone would be satisfied by an implementation that abandoned the park — the guest left
+// believing it is running, its destructors unrun, whatever it held still held. The receipt comes from a
+// `Drop` guard local to the guest's async body, so its arrival proves the guest's **own** cancellation
+// path ran. Close cancels *before* teardown for precisely this reason, and this is where that ordering is
+// observable.
+func TestCancelAllEndsAParkedCallWithTheGuestsOwnCancellation(t *testing.T) {
+	t.Setenv(asyncGateEnv, "1")
+	b, err := os.ReadFile("testdata/asynclift/receipt/component.wasm")
+	if err != nil {
+		t.Fatalf("the receipt guest is missing: %v", err)
+	}
+
+	entered := make(chan struct{}, 1)
+	var receipts int32
+	h := NewHost(io.Discard, io.Discard, nil)
+	h.asyncImpls = map[string]asyncLowerImpl{
+		"tick": func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+			onStart()
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			// Never resolves on its own — only the cancellation can end this call — but resolves when
+			// asked to cancel, which is the well-behaved host shape a real `Close` meets.
+			return func() { onResolve(canon.U32(0)) }, nil
+		},
+	}
+	h.syncImpls = map[string]interp.CanonFunc{
+		"note": func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+			atomic.AddInt32(&receipts, 1)
+			return nil, nil
+		},
+	}
+
+	in, err := InstantiateWithHost(b, h)
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	defer in.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, cErr := in.CallValues("run", canon.U32(1))
+		done <- cErr
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the guest never reached `tick` within 5s; there is nothing parked to cancel")
+	}
+	if !waitForPark(t, in, 5*time.Second) {
+		t.Fatal("the guest reached `tick` but never parked within 5s")
+	}
+
+	in.CancelAll()
+
+	select {
+	case cErr := <-done:
+		if !errors.Is(cErr, ErrCancelled) {
+			t.Fatalf("the parked call returned %v; want ErrCancelled", cErr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("CancelAll did not end the parked call within 10s")
+	}
+	if atomic.LoadInt32(&receipts) == 0 {
+		t.Error("no receipt arrived, so the guest's own cancellation path never ran — the park was " +
+			"abandoned rather than the task cancelled, which is the distinction Close's cancel-before-" +
+			"teardown ordering exists to preserve")
+	}
+}

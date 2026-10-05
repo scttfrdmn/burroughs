@@ -998,5 +998,24 @@ func (in *Instantiated) CallRun() error {
 	return fmt.Errorf("%w: no wasi:cli/run export", ErrNoRun)
 }
 
+// CancelAll requests cancellation of every async-lift task this instance currently hosts, and is what
+// the public `Component.Close` calls **before** tearing anything down (#858, ADR 0096's ruling).
+//
+// # Why cancel before teardown rather than just tearing down
+//
+// Teardown ends a task; cancellation ends it *through the guest*. A torn-down task never runs its own
+// cancellation path, so its destructors do not fire and whatever it held is not released — and its caller
+// gets a terminated-call error that says nothing about why. Cancelling first means the caller gets
+// `ErrCancelled` from a task that **actually ended**, which is the same distinction the context witnesses
+// assert with the guest's receipt rather than with the error alone.
+//
+// Returns no error: the only refusals underneath are "nothing running" and "already past running", both of
+// which mean there was nothing to cancel, which is the normal case for a `Close` on an idle instance.
+func (in *Instantiated) CancelAll() {
+	//nolint:errcheck // ErrCancelNotRunning means there was nothing in flight, which is what a Close on
+	// an idle instance finds; the caller is tearing down either way.
+	_ = in.w.async.requestCancelAll()
+}
+
 // Close tears down the instantiated core instances.
 func (in *Instantiated) Close() { in.w.close() }

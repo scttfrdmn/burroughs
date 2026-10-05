@@ -64,16 +64,44 @@ own condition rather than as a prediction.
   this adds is not that the mechanism works — the engine's own tests established that against wasmtime's
   committed readings — but that it is **reachable from outside the module**, and only a test at the public
   boundary can make it. The compiler is the assertion.
-  **Three things the stamp did not see are reported rather than built**: a capability-carrying
-  `ComponentConfig.LoadComponent` (so `LoadComponent` discards stdout/stderr and supplies no args),
-  `Component.Exports()`, and `Component.Close()` — the last being the one worth a decision, since a
-  component owns engine threads and in-flight async tasks and an embedder currently cannot release them.
-  **Re-entry detection (the stamp's fourth point) is not implemented, and the path does not exist**: it
-  needs an embedder-supplied host function, and the root package exports no host-function hook. The
-  hazard stays unreachable by §5 H-2's "enforced by absence". It also could not be built soundly today —
-  the model distinguishes re-entry from ordinary contention by **thread identity**, and Burroughs'
-  identity is per *instance*, measured by the committed `TestConcurrentHostCallsShareOneThreadID`. So the
-  slice that makes host functions public owes per-caller identity and the detector together.
+  **`Component.Close()`** cancels every call in flight, waits a bounded time for the cancellations to
+  finish, then tears down — approved on the review with that behaviour stated, not left to the
+  implementation. In-flight callers get `ErrCancelled` from tasks that **actually ended**: the guest runs
+  its own cancellation path, so its destructors fire. **Cancel before teardown** is the whole ordering —
+  tearing down first ends the same tasks without that, which is how a cancellation and an abandonment
+  become indistinguishable. The bound returns `ErrCloseIncomplete` rather than hanging or tearing down
+  silently, because a guest is not obliged to cooperate. Calls after `Close` return `ErrComponentClosed`.
+  `Close` is **idempotent**, which the ruling did not specify and is not a change to it: an embedder who
+  defers it and also calls it on an error path should not have to track which ran.
+  **Two conveniences the chair deferred**: a capability-carrying `ComponentConfig.LoadComponent` (so
+  `LoadComponent` discards stdout/stderr and supplies no args) and `Component.Exports()` —
+  [#899](https://github.com/scttfrdmn/burroughs/issues/899), filed against the value-kinds work.
+  **Re-entry detection (the stamp's fourth point) is satisfied because the hazard cannot occur**, which
+  is Scott's ruling of 2026-10-05 rather than a scope cut. It needs an embedder-supplied host function
+  and the root package exports no hook, so §5 H-2's "enforced by absence" already guarantees it. It also
+  could not be built soundly today: the model distinguishes re-entry from ordinary contention by **thread
+  identity**, and Burroughs' identity is per *instance* — measured by the committed
+  `TestConcurrentHostCallsShareOneThreadID`. **Detection is required acceptance on
+  [#804](https://github.com/scttfrdmn/burroughs/issues/804)**, the public import-registration surface,
+  with per-caller identity built in the same change; the guard and the hazard arrive together, which is
+  stronger than a detector shipped against a path nothing can take.
+  **Three new CLI exit codes, and the suggested one did not fit.** `ErrCancelled`, `ErrComponentClosed`
+  and `ErrCloseIncomplete` are public sentinels, and `TestExitCodesCoverEveryPublicSentinel` — whose
+  domain is derived from the package's own source — requires each to be classified. The chair's
+  suggestion was the existing code for the invoker's own failure; that control **forbids** any sentinel
+  mapping to `exitError`, and is right to, since a sentinel landing on the catch-all is
+  indistinguishable from one that fell through. So `7`, `8` and `9`, with `8` and `9` separate because
+  they are facts about different parties — the invoker calling a closed component versus a guest that
+  would not finish cancelling, and an operator seeing the second learns something about the module. All
+  three unreachable from the CLI today and documented as such.
+  **And that control's domain was one file.** `declaredSentinels` read `burroughs.go` alone, so a
+  sentinel in any other file of the package escaped it and would fall through to the catch-all
+  **unnoticed** — the very failure it exists to prevent. Found by walking into it: `ErrCloseIncomplete`
+  was first declared in `component.go` and the control reported *"this taxonomy binds
+  ErrCloseIncomplete, which the public package no longer declares"*, the right complaint for the wrong
+  reason. The sentinel moved and **the domain widened to the package**, with its own file-count floor.
+  Same shape as `TestMarkdownLinksResolve`, `CLAUDE.md`-scoped until #466: *a control whose domain is a
+  file cannot see the package.*
 - **A call's context reaches every place a lift task can be ended**
   ([#880](https://github.com/scttfrdmn/burroughs/issues/880)): the park, the entry wait, and the
   top-of-loop delivery point. It **requests** a cancellation rather than aborting a wait, so the guest

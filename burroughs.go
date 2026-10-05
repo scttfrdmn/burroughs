@@ -96,6 +96,26 @@ var (
 	// `errors.Is(err, ErrCancelled)` keeps answering either way.
 	ErrCancelled = errors.New("burroughs: the component call was cancelled")
 
+	// ErrComponentClosed is a [Component.Call] on a component that has been closed. The instance's
+	// threads and host state are gone, so the call cannot be made — and saying so is better than a
+	// refusal from deeper in the engine about an instance that no longer exists.
+	//
+	// **Separate from [ErrCancelled], which is one state over.** A cancelled call *ran* and was stopped;
+	// this one never started. An embedder retrying on a cancellation would be right to retry and wrong to
+	// retry here, so collapsing them would make the two indistinguishable at exactly the decision point
+	// that matters.
+	ErrComponentClosed = errors.New("burroughs: the component is closed")
+
+	// ErrCloseIncomplete is a [Component.Close] that reached its bound with calls still in flight: the
+	// cancellations were requested and did not finish, and the instance was torn down anyway.
+	//
+	// **It is an outcome, not a failure of Close.** Close has done everything it can — a guest is not
+	// obliged to cooperate with a cancellation, and the alternative to the bound is a `Close` that hangs
+	// on a guest that ignores it. Reported as its own value so that "closed cleanly" and "closed over a
+	// guest that would not stop" stay distinguishable, which they must be: the second says something
+	// about the module, and an operator who cannot tell them apart learns nothing from the difference.
+	ErrCloseIncomplete = errors.New("burroughs: Close tore down with calls still cancelling")
+
 	// ErrUnlinkable is a module this API cannot instantiate because an import is unsupplied — the
 	// spec's `assert_unlinkable` category, at the public boundary. `Config.Instantiate` has no linking
 	// surface (decision 0029), so an import-bearing module reaches it unresolved and is **refused at
