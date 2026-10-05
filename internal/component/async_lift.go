@@ -38,15 +38,6 @@ const (
 	liftResolved                         // Task.State.RESOLVED — by task.return or by task.cancel
 )
 
-// context returns the call's context, substituting `context.Background()` for a task built by a struct
-// literal. See the `ctx` field for why this is the only read path.
-func (t *liftTask) context() context.Context {
-	if t.ctx == nil {
-		return context.Background()
-	}
-	return t.ctx
-}
-
 func (s liftState) String() string {
 	switch s {
 	case liftInitial:
@@ -136,6 +127,15 @@ type liftTask struct {
 	// cancellation". Reaching that select at all requires the cancel to have been delivered already,
 	// since the pass before it checks `deliverPendingCancelLocked` first.
 	cancelWake chan struct{}
+}
+
+// context returns the call's context, substituting `context.Background()` for a task built by a struct
+// literal. See the `ctx` field for why this is the only read path.
+func (t *liftTask) context() context.Context {
+	if t.ctx == nil {
+		return context.Background()
+	}
+	return t.ctx
 }
 
 // taskReturn implements `canon task.return` (0x09, definitions.py canon_task_return def:2329): it resolves
@@ -506,7 +506,15 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 			// returns the event. A still-closed `Done()` channel would otherwise re-fire forever.
 			requested = true
 			h.mu.Lock()
-			_ = task.requestCancelLocked() // a refusal means it is already past running; the loop sees it
+			// The only refusal `requestCancelLocked` can give here is `ErrCancelNotRunning` — the task
+			// is already past running, which means it has resolved or is resolving, which means the next
+			// pass of this loop either delivers its event or the EXIT arm reports it. There is nothing a
+			// caller could do with the error that the loop is not already doing, and this function's
+			// return is an `(event, error)` about the *wait*, not about the request.
+			//
+			//nolint:errcheck // ErrCancelNotRunning here means the task already resolved; the loop's next
+			// pass reports that outcome, so the refusal has no consumer.
+			_ = task.requestCancelLocked()
 			h.mu.Unlock()
 		case <-deadline.C:
 			return event{}, fmt.Errorf("%w: waitable set %d produced nothing in %s — the host impl or "+

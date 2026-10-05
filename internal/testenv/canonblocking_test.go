@@ -63,7 +63,7 @@ import (
 func TestEveryCanonFunctionsWaitIsInsideABlockingExcursion(t *testing.T) {
 	fset := token.NewFileSet()
 	var offenders, closures []string
-	scanned := 0
+	scanned, withWaits := 0, 0
 
 	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -90,6 +90,9 @@ func TestEveryCanonFunctionsWaitIsInsideABlockingExcursion(t *testing.T) {
 		}
 		for _, c := range canonClosures(fset, f) {
 			closures = append(closures, fmt.Sprintf("%s:%d", rel, c.line))
+			if len(c.waits) > 0 {
+				withWaits++
+			}
 			for _, w := range c.waits {
 				if w.guarded {
 					continue
@@ -150,7 +153,7 @@ func TestEveryCanonFunctionsWaitIsInsideABlockingExcursion(t *testing.T) {
 			strings.Join(offenders, "\n  "))
 	}
 	t.Logf("%d canon closure(s) across %d file(s); %d with a wait, all inside c.Blocking",
-		len(closures), scanned, countClosuresWithWaits(fset))
+		len(closures), scanned, withWaits)
 }
 
 // canonClosure is one closure whose first parameter is a `*interp.CanonCaller`, with the waits found in it.
@@ -254,37 +257,6 @@ func waitsIn(fset *token.FileSet, lit *ast.FuncLit) []canonWait {
 		return true
 	})
 	return out
-}
-
-// countClosuresWithWaits recounts for the success log, so the figure a green prints comes from the
-// instrument rather than from a comment that can go stale.
-func countClosuresWithWaits(fset *token.FileSet) int {
-	n := 0
-	_ = filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if skipWalkDir(d, "third_party") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
-		f, perr := parser.ParseFile(fset, path, nil, 0)
-		if perr != nil {
-			return nil
-		}
-		for _, c := range canonClosures(fset, f) {
-			if len(c.waits) > 0 {
-				n++
-			}
-		}
-		return nil
-	})
-	return n
 }
 
 // exprString renders the small subset of type/selector expressions this analysis needs.
