@@ -2,7 +2,10 @@
 
 package canon
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
 // ptrSize is the pointer width of an i32-memory component — the only memory kind this slice models.
 const ptrSize = 4
@@ -235,6 +238,127 @@ func (h *heap) WriteBytes(ptr int, data []byte) error {
 func (h *heap) StoreInt(v uint64, ptr, nbytes int) error {
 	h.storeInt(v, ptr, nbytes)
 	return nil
+}
+
+// The model `*heap` is also a [ReadHeap]. **Its bounds check is not decoration** even though the
+// differential's fixtures are in range: the check is what the string lift delegates its def:1385 trap to,
+// so a heap that panicked instead would make the trap untestable against this heap — and the traps are
+// tested here, where a byte slice can be set up out of range, rather than only against a live guest.
+func (h *heap) ReadBytes(ptr, n int) ([]byte, error) {
+	if ptr < 0 || n < 0 || ptr+n > len(h.mem) || ptr+n < 0 {
+		return nil, fmt.Errorf("canon: read of %d byte(s) at %d is outside a %d-byte heap", n, ptr, len(h.mem))
+	}
+	return h.mem[ptr : ptr+n], nil
+}
+
+// ReadHeap is the memory a value **lifting** reads through — the mirror of [Heap], which only writes.
+//
+// # Why this did not exist until #903
+//
+// Every use of this codec so far lowered: the host answers a guest through `StoreString`/`StoreVia`
+// against guest memory, and the differential lowers into the model heap. **Lifting had no abstraction at
+// all** — `load` and `liftFlat` are methods on the unexported `*heap` and slice `h.mem` directly, so
+// guest-to-host lifting of a compound value was not implementable outside this package. `streamWrite`
+// reads a guest's `list<u8>` with a raw `CanonCaller.Read` for exactly that reason, while its own comment
+// claimed it lifted "through canon load over u8".
+//
+// It is a separate interface from [Heap] rather than three more methods on it, because the two
+// capabilities have different holders: a lowering needs a realloc and is performed by whoever owns the
+// allocation, while a lifting needs only to read and is performed by whoever owns the pointer. A host
+// lifting a `task.return` value has no business reallocating in the guest.
+type ReadHeap interface {
+	// ReadBytes returns n bytes at ptr, or an error if that range is not readable. **The error is the
+	// bounds check**: the model traps when `ptr + byte_length > len(memory)` (definitions.py:1385), and an
+	// implementation over a Go slice must not be allowed to panic instead.
+	ReadBytes(ptr, n int) ([]byte, error)
+}
+
+// MaxStringByteLength is the model's cap on a lifted string's byte length (definitions.py:1360), which it
+// traps past (def:1383). It bounds an allocation this process would otherwise make on a guest's word.
+const MaxStringByteLength = (1 << 28) - 1
+
+// LoadStringFromRange lifts a `string` from a (pointer, byte-length) range — the model's
+// `load_string_from_range` for the `utf8` encoding (definitions.py:1363-1389).
+//
+// **It is the one string lift, and it implements all four of the model's traps**, none of which the
+// codec performed before #903:
+//
+//  1. byte length past [MaxStringByteLength] (def:1383);
+//  2. a misaligned pointer (def:1384) — vacuous at utf8's alignment of 1, and present because the arm
+//     that makes it non-vacuous is utf16's, which this engine does not yet carry;
+//  3. the range not within memory (def:1385) — delegated to [ReadHeap.ReadBytes], which is why that
+//     method returns an error;
+//  4. bytes that are not valid UTF-8 (def:1386-1389, `except UnicodeError: trap()`).
+//
+// All four were unreachable while the only heap was the differential's, whose fixtures are well-formed
+// by construction. Against guest memory every one is reachable from a guest's own word, and three are
+// worse than a wrong answer: an out-of-range slice panics, and invalid bytes produce a Go string that
+// silently is not UTF-8.
+//
+// The `utf8` encoding is the only one this engine carries; a component declaring `utf16` or
+// `latin1+utf16` is refused by name at the canonopt, not here.
+func LoadStringFromRange(h ReadHeap, ptr, byteLength int) (Value, error) {
+	if byteLength < 0 || byteLength > MaxStringByteLength {
+		return Value{}, fmt.Errorf("canon: string byte length %d is out of range (max %d)",
+			byteLength, MaxStringByteLength)
+	}
+	if ptr < 0 {
+		return Value{}, fmt.Errorf("canon: string pointer %d is negative", ptr)
+	}
+	// utf8's alignment is 1, so every pointer satisfies it. Written as the model writes it so the
+	// utf16 arm has somewhere to land rather than being remembered.
+	const alignment = 1
+	if ptr != alignTo(ptr, alignment) {
+		return Value{}, fmt.Errorf("canon: string pointer %d is not aligned to %d", ptr, alignment)
+	}
+	data, err := h.ReadBytes(ptr, byteLength)
+	if err != nil {
+		return Value{}, fmt.Errorf("canon: reading a %d-byte string at %d: %w", byteLength, ptr, err)
+	}
+	if !utf8.Valid(data) {
+		return Value{}, fmt.Errorf("canon: the %d bytes at %d are not valid UTF-8", byteLength, ptr)
+	}
+	return Str(string(data)), nil
+}
+
+// LoadListU8 lifts the elements of a `list<u8>` given its (pointer, count) — the one case where the
+// model's per-element load loop reduces to a contiguous read, because a `u8` is one byte at a one-byte
+// stride. It is the lifting counterpart of the framing [StoreList] owns.
+//
+// **Separate from a general list lift, deliberately.** A general one needs a per-element load the way
+// `StoreList` takes a per-element store, and no caller needs that yet; `list<u8>` has a caller today
+// (a guest's stream write) and reduces exactly. A wider list lift arrives with the consumer that needs
+// it, and when it does, this stays as the fast path or goes — it is not a shape to generalise on spec.
+func LoadListU8(h ReadHeap, ptr, count int) ([]byte, error) {
+	if ptr < 0 || count < 0 {
+		return nil, fmt.Errorf("canon: list<u8> at %d with count %d is out of range", ptr, count)
+	}
+	// A u8's size and alignment are both 1, derived rather than written as literals so a change to the
+	// codec's own tables reaches here. `alignTo` is then the identity, which is the honest reason there is
+	// no alignment trap on this path.
+	elem := Type{Kind: KindU8}
+	if s, a := size(elem), alignment(elem); s != 1 || a != 1 {
+		return nil, fmt.Errorf("canon: list<u8> fast path assumes a 1-byte element at 1-byte alignment, "+
+			"but u8 now sizes %d and aligns %d — the contiguous read is no longer the element loop", s, a)
+	}
+	return h.ReadBytes(ptr, count)
+}
+
+// LoadString lifts a `string` from the (pointer, length) PAIR stored at ptr — the model's `load_string`
+// (definitions.py:1351-1354), which reads the two words and defers to [LoadStringFromRange]. Separate
+// from that function because the flat lifting gets its two words from the core value iterator rather
+// than from memory, and only the range is common to both.
+func LoadString(h ReadHeap, ptr int) (Value, error) {
+	hdr, err := h.ReadBytes(ptr, 2*ptrSize)
+	if err != nil {
+		return Value{}, fmt.Errorf("canon: reading a string header at %d: %w", ptr, err)
+	}
+	var begin, n uint64
+	for i := range ptrSize {
+		begin |= uint64(hdr[i]) << (8 * i)
+		n |= uint64(hdr[ptrSize+i]) << (8 * i)
+	}
+	return LoadStringFromRange(h, int(begin), int(n))
 }
 
 // StoreString lowers s as a `string` (CanonicalABI.md `store_string`, utf-8): its bytes are allocated
@@ -557,9 +681,10 @@ func (h *heap) load(ptr int, t Type) (Value, error) {
 	case KindChar:
 		return Char(rune(h.loadInt(ptr, 4)))
 	case KindString:
-		begin := int(h.loadInt(ptr, ptrSize))
-		n := int(h.loadInt(ptr+ptrSize, ptrSize))
-		return Str(string(h.mem[begin : begin+n])), nil
+		// Through the one string lift (#903), where this sliced `h.mem` directly. The differential's
+		// fixtures are well-formed so the traps never fired here, which is exactly why they were missing
+		// when a guest heap arrived.
+		return LoadString(h, ptr)
 	case KindList:
 		begin := int(h.loadInt(ptr, ptrSize))
 		n := int(h.loadInt(ptr+ptrSize, ptrSize))
@@ -684,9 +809,12 @@ func (h *heap) liftFlat(it *coreValueIter, t Type) (Value, error) {
 	case KindChar:
 		return Char(rune(it.next("i32")))
 	case KindString:
+		// Through the one string lift (#903). The flat form supplies the two words from the core value
+		// iterator rather than from memory, which is why it calls the range function and `load` calls the
+		// header one.
 		begin := int(it.next("i32"))
 		n := int(it.next("i32"))
-		return Str(string(h.mem[begin : begin+n])), nil
+		return LoadStringFromRange(h, begin, n)
 	case KindList:
 		begin := int(it.next("i32"))
 		n := int(it.next("i32"))

@@ -202,6 +202,22 @@ func (v Value) U32() (uint32, bool) {
 	return uint32(v.u), true
 }
 
+// Str returns the value a KindString carries, and whether it is one.
+//
+// Kind-checked for [Value.U32]'s reason: the payload field is unexported, so an outside reader needs an
+// accessor per kind, and a bare read would hand back the empty string for every non-string rather than
+// saying it was the wrong kind. The two are distinguishable and must be — `""` is a legitimate string.
+//
+// The package-level `Str(s string) Value` constructor and this method do not collide: Go keeps function
+// and method names in separate namespaces, and naming both after the WIT type is what makes the
+// construct/read pair legible.
+func (v Value) Str() (string, bool) {
+	if v.Type.Kind != KindString {
+		return "", false
+	}
+	return v.s, true
+}
+
 // Stream builds a stream<T> result the host returns to a guest to write to. Carries no payload; the
 // async-lower wrapper mints a writable-stream-end handle (component layer), never codec-lowered.
 func Stream() Value { return Value{Type: Type{Kind: KindStream}} }
