@@ -117,6 +117,14 @@ inspects before running does not have to translate (decision 0033):
 | `4` | the module executed correctly and the program went wrong — a trap |
 | `5` | the engine reached something it does not implement in this phase |
 | `6` | the module is fine; this build has that proposal's gate off |
+| `7` | a component call the **caller** cancelled — the module ran correctly and the invoker stopped it |
+
+`7` is **not reachable through this CLI today**, and is listed because the code
+exists rather than because `run` can produce it: `run` drives a component through
+`ComponentConfig.Run`, which takes no context. It is the classification of
+`burroughs.ErrCancelled`, which `Component.Call(ctx, …)` returns to a Go
+embedder, and the taxonomy covers the package's sentinels rather than the CLI's
+reachable subset.
 
 `inspect` never returns `4` or `5`: it decodes and dumps, so nothing it does can
 trap or reach an unimplemented instruction. It exits `0` on a module that fails

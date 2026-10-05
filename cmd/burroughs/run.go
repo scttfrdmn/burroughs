@@ -490,6 +490,20 @@ const (
 	exitTrap        = 4 // the module executed correctly and the program went wrong
 	exitUnsupported = 5 // the engine reached something it does not implement in this phase
 	exitGated       = 6 // the module is fine; this build has that proposal's gate off (#301)
+	// exitCancelled is a component call the *caller* stopped — `burroughs.ErrCancelled`, #858.
+	//
+	// **A seventh code because none of the six fits, and the taxonomy's own reasoning says so.** The
+	// other six classify *why the module did not run*: refused, trapped, unsupported, gated. A
+	// cancellation is none of those — the module ran correctly and the invoker ended it — so every
+	// existing code would be a wrong claim, and `exitError` (the catch-all this taxonomy exists to
+	// avoid) means "this invocation's own failure", which a deliberate cancellation is not.
+	//
+	// **Currently unreachable from this CLI**, and that is stated rather than hidden: `burroughs run`
+	// drives a component through `ComponentConfig.Run`, which takes no context and cannot return the
+	// sentinel. It exists because the taxonomy's domain is the *package's* declared sentinels, derived
+	// by `TestExitCodesCoverEveryPublicSentinel` — not the CLI's reachable set. That control is what
+	// required this entry, exactly as it required `ErrGated`'s.
+	exitCancelled = 7
 )
 
 // exitCode maps an error from runCmd **or inspectCmd** onto the taxonomy above.
@@ -534,6 +548,10 @@ func exitCode(err error) int {
 		return exitRefused
 	case errors.Is(err, burroughs.ErrUnsupported):
 		return exitUnsupported
+	// Ahead of nothing in particular, and after the module-classification arms on purpose: a
+	// cancellation is about the *caller*, so it only answers once the module's own verdicts have not.
+	case errors.Is(err, burroughs.ErrCancelled):
+		return exitCancelled
 	}
 	var trap *burroughs.Trap
 	if errors.As(err, &trap) {

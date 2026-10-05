@@ -3,6 +3,7 @@
 package burroughs
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/component"
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
 )
 
 // componentsGateEnv is the config gate for the component mechanism (`gate:components`, ADR 0084). It is
@@ -169,4 +171,119 @@ func IsComponent(wasm []byte) (bool, error) {
 	}
 	layer := binary.LittleEndian.Uint16(wasm[6:8])
 	return layer == 1, nil
+}
+
+// Component is a loaded, instantiated WebAssembly component whose exports an embedder can call with
+// values — [ADR 0085]'s surface, landing with the `Call(ctx, …)` signature its amendment 1 approved.
+//
+// It mirrors [Instance] for core modules, and the asymmetry between them is deliberate and stated in that
+// amendment: `Instance.Call(name, args...)` takes **no** context and is not changing, because it is
+// released surface and adding a parameter would break every embedder to serve a path it does not have.
+// So the component call carries a context and the core call does not. That is a real inconsistency in the
+// public surface, accepted knowingly, and it was cheap only because `Component.Call` had not shipped.
+//
+// [ADR 0085]: https://github.com/scttfrdmn/burroughs/blob/main/docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md
+type Component struct {
+	in *component.Instantiated
+}
+
+// LoadComponent loads and instantiates a component, returning a handle whose exports can be called.
+//
+// It mirrors [Instantiate]/[Instance], which is what ADR 0085 commits to in those words. Streams and
+// arguments are the zero configuration — stdout and stderr discarded, stdin empty — because a
+// capability-carrying twin is a further exported name and this release ships only what was stamped;
+// [ComponentConfig.Run] remains the configured path for running `wasi:cli/run`.
+//
+// A component using a proposal whose gate is off is refused as [ErrGated]; one whose form this engine
+// does not model, as [ErrUnsupported]. Both are refused **at load**, which is the earliest point either
+// can be known.
+func LoadComponent(wasm []byte) (*Component, error) {
+	if !componentsEnabled() {
+		return nil, fmt.Errorf("%w: gate:components is off in this build (%s=0); unset it to load a "+
+			"component (the gate is on by default as of the 2026-09-11 flip)",
+			ErrGated, componentsGateEnv)
+	}
+	h := component.NewHost(io.Discard, io.Discard, nil)
+	in, err := component.InstantiateWithHost(wasm, h)
+	if err != nil {
+		// The same classification [ComponentConfig.Run] performs, for the same reason: `gate:async` is a
+		// distinct gate from `gate:components` and a component refused by it is **well-formed**, so it
+		// crosses as ErrGated rather than as a malformedness this boundary would be manufacturing
+		// (grave #301).
+		if errors.Is(err, component.ErrAsyncGated) {
+			return nil, fmt.Errorf("%w: %w", ErrGated, err)
+		}
+		if errors.Is(err, component.ErrUnsupportedForm) {
+			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
+		return nil, err
+	}
+	return &Component{in: in}, nil
+}
+
+// Call invokes an exported function with component values and returns its results.
+//
+// # Naming
+//
+// A **bare** name addresses a top-level exported function: `Call(ctx, "run", …)`. A function inside an
+// exported interface is addressed `interface#function`: `Call(ctx, "wasi:cli/run@0.3.0#run", …)`. Naming
+// an interface without a function refuses and says which form to use.
+//
+// **A bare name is never resolved by searching the interfaces**, and that is a decision rather than an
+// omission: a search picks one silently when two interfaces export the same function name, and an
+// embedder cannot tell which it got. The grammar is the same one the import side uses, where a
+// world-level function import is registered under its own name.
+//
+// # Cancellation
+//
+// Cancelling ctx cancels the running task: the engine delivers the component model's cancelled event, the
+// guest runs its own cancellation path, and the call returns [ErrCancelled] — from a task that **ended**,
+// not from an abandoned wait. A call that completes before the cancellation takes effect returns its
+// result normally.
+//
+// # Value scope
+//
+// This release carries **`u32` only** across the boundary. An argument or result of any other kind is
+// refused **by name** as [ErrUnsupported], naming the kind. The other kinds are added one at a time and
+// each is additive, so nothing here breaks when they arrive.
+func (c *Component) Call(ctx context.Context, name string, args ...ComponentValue) ([]ComponentValue, error) {
+	if ctx == nil {
+		// A nil context is a programming error, and saying so beats substituting Background: an embedder
+		// who passed nil believes they can cancel this call, and silently giving them a call that cannot
+		// be cancelled is the quietly-wrong outcome.
+		return nil, fmt.Errorf("%w: Call needs a non-nil context; use context.Background() for a call "+
+			"that is not cancellable", ErrUnsupported)
+	}
+	in := make([]canon.Value, 0, len(args))
+	for i, a := range args {
+		cv, err := a.toCanon()
+		if err != nil {
+			return nil, fmt.Errorf("argument %d: %w", i, err)
+		}
+		in = append(in, cv)
+	}
+
+	res, err := c.in.CallValuesCtx(ctx, name, in...)
+	if err != nil {
+		// The engine's cancellation sentinel becomes the public one. Wrapped rather than replaced so the
+		// engine's own message — which names the park or the entry wait it ended at — survives for a
+		// reader, while `errors.Is(err, ErrCancelled)` is what an embedder matches on.
+		if errors.Is(err, component.ErrCancelled) {
+			return nil, fmt.Errorf("%w: %w", ErrCancelled, err)
+		}
+		if errors.Is(err, component.ErrUnsupportedForm) {
+			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
+		return nil, err
+	}
+
+	out := make([]ComponentValue, 0, len(res))
+	for i, r := range res {
+		pv, cerr := fromCanon(r)
+		if cerr != nil {
+			return nil, fmt.Errorf("result %d: %w", i, cerr)
+		}
+		out = append(out, pv)
+	}
+	return out, nil
 }

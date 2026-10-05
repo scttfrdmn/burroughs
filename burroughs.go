@@ -71,6 +71,31 @@ var (
 	// permanent furniture rather than a carve-out.
 	ErrGated = errors.New("burroughs: proposal gate is off in this build")
 
+	// ErrCancelled is a [Component.Call] whose context was cancelled: the engine delivered the
+	// component model's cancelled event to the task, the guest ran its own cancellation path, and the
+	// task resolved without a result.
+	//
+	// **It is one sentinel for two ABI statuses**, and that mapping is not this file's to make — it was
+	// set from wasmtime's committed reading (#862's ruling 1, recorded in
+	// `internal/component/testdata/asynclift/CANCELLATION.md`): `subtask.cancel` statuses 3
+	// `CANCELLED_BEFORE_STARTED` and 4 `CANCELLED_BEFORE_RETURNED` both answer here, while status 2
+	// `RETURNED` — the call finished before the cancellation took effect — returns its **result
+	// normally**, because the work completed. Statuses with no Go equivalent: none, which is recorded as
+	// a claim so a status added to the ABI later is visibly outside this mapping rather than silently
+	// absorbed by it.
+	//
+	// **It means the task ended, not that the engine gave up waiting.** The distinction is load-bearing
+	// for an embedder: a cancellation is *requested* of the guest, which runs its destructors and
+	// resolves, so resources the guest held are released. An implementation that abandoned the wait
+	// instead would return this same error with the guest still holding them — which is why the engine's
+	// own witness asserts the guest's receipt and not merely this value.
+	//
+	// **Whether the call had started is deliberately not reported**, and it is an addition rather than a
+	// gap. It decides whether a retry is safe, Burroughs can see it where a Rust guest cannot, and no
+	// consumer has asked; it stays addable without a break as an error *type* wrapping this value, so
+	// `errors.Is(err, ErrCancelled)` keeps answering either way.
+	ErrCancelled = errors.New("burroughs: the component call was cancelled")
+
 	// ErrUnlinkable is a module this API cannot instantiate because an import is unsupplied — the
 	// spec's `assert_unlinkable` category, at the public boundary. `Config.Instantiate` has no linking
 	// surface (decision 0029), so an import-bearing module reaches it unresolved and is **refused at

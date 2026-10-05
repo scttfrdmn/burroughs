@@ -40,6 +40,11 @@ var publicSentinels = map[string]error{
 	"ErrUnsupported": burroughs.ErrUnsupported,
 	"ErrGated":       burroughs.ErrGated,
 	"ErrUnlinkable":  burroughs.ErrUnlinkable,
+	// ErrCancelled is here for the same reason ErrGated is: it landed in the library (#858's public
+	// component interface) and this guard failed with `the public package declares ErrCancelled and
+	// this taxonomy does not classify it: it would exit 1`. Second specimen of the derived domain
+	// earning itself, and the second time nobody had to remember to come here.
+	"ErrCancelled": burroughs.ErrCancelled,
 }
 
 // declaredSentinels reads the exported `Err*` variables out of the public package's source.
@@ -115,6 +120,9 @@ func TestExitCodesCoverEveryPublicSentinel(t *testing.T) {
 		// Deliberately *not* exitRefused, which is grave #301 stated as a number: a gated module is
 		// well-formed, so a caller told "refused" would go looking for the defect in their module.
 		"ErrGated": exitGated,
+		// Deliberately not exitError either: the module ran correctly and the CALLER stopped it, so
+		// "this invocation's own failure" names the wrong party.
+		"ErrCancelled": exitCancelled,
 	}
 	for name, sentinel := range publicSentinels {
 		got := exitCode(fmt.Errorf("wrapped: %w", sentinel))
@@ -127,7 +135,7 @@ func TestExitCodesCoverEveryPublicSentinel(t *testing.T) {
 	}
 
 	// The codes are distinct, which is the whole point of having more than one.
-	codes := []int{exitOK, exitError, exitUsage, exitRefused, exitTrap, exitUnsupported, exitGated}
+	codes := []int{exitOK, exitError, exitUsage, exitRefused, exitTrap, exitUnsupported, exitGated, exitCancelled}
 	if slices.Compact(slices.Sorted(slices.Values(codes)))[0] != exitOK ||
 		len(slices.Compact(slices.Sorted(slices.Values(codes)))) != len(codes) {
 		t.Errorf("the exit codes are not distinct: %v", codes)
