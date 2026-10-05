@@ -230,24 +230,34 @@ func (h *asyncHandles) requestCancelAll() error {
 // `ErrCancelled` at the one place that knows the call is being abandoned. Two return values rather than
 // three keeps the `leaveTask` pairing visible — the caller releases only when `ok`.
 func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask, ok bool) {
-	// **The context refuses an entry only while the task has not begun cancelling**, and getting this
-	// wrong made the cancellation undeliverable.
+	// **The context may abort an entry only BEFORE the task has ever entered the guest**, and arriving
+	// at that condition took two measured corrections.
 	//
-	// A first version refused on `ctx.Done()` unconditionally. Measured: the call returned `ErrCancelled`
-	// in under a millisecond and **no receipt arrived** — because the entry the lift loop needs in order
-	// to hand the guest `TASK_CANCELLED` was itself refused. The cancellation was delivered to nobody,
-	// the guest's destructors never ran, and the error was a claim about the engine's bookkeeping rather
-	// than about the guest. The test caught it because it asserts the receipt and not only the error.
+	// *First attempt*: refuse on `ctx.Done()` unconditionally. The call returned `ErrCancelled` in under
+	// a millisecond with **no receipt** — the entry the lift loop needs in order to hand the guest
+	// `TASK_CANCELLED` was itself refused, so the cancellation was delivered to nobody.
 	//
-	// So: the context's job is to **start** a cancellation, not to interrupt one that is already in
-	// flight. Once the state is PENDING_CANCEL or CANCEL_DELIVERED the entry must proceed, or the guest
-	// can never finish what it was told to do.
+	// *Second attempt*: refuse unless the task was already PENDING_CANCEL or CANCEL_DELIVERED. That
+	// fixed the delivery and left the yielding guest broken in the same way, invisibly: every YIELD
+	// re-entry was refused before any cancellation had been *requested*, so the call ended with
+	// `ErrCancelled` from `enterAndInvoke` and the guest's own path never ran. It surfaced because the
+	// **top-of-loop check's neuter stopped failing its witness** — *a witness that passes under its own
+	// neuter is passing for another reason.*
+	//
+	// The rule that holds: **the cancellation is delivered through an entry**, so an entry may only be
+	// aborted when there is nothing to deliver to. Before the first entry no guest code has run, so
+	// there are no destructors to skip; after it, every entry must proceed and the top-of-loop check is
+	// what ends the task.
+	//
+	// The cost, stated: a task queued behind a sibling's *re-entry* waits for that sibling regardless of
+	// its own context. That is not a gap this flag papers over — it is inherent, because delivering a
+	// cancellation needs the slot too.
 	h.mu.Lock()
-	cancelling := t.state == liftPendingCancel || t.state == liftCancelDelivered
+	everEntered := t.everEntered
 	h.mu.Unlock()
 
 	var ctxDone <-chan struct{}
-	if !cancelling {
+	if !everEntered {
 		ctxDone = t.context().Done()
 	}
 	select {
@@ -259,6 +269,7 @@ func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask, ok bool) {
 	h.mu.Lock()
 	prev = h.lift
 	h.lift = t
+	t.markEntered() // from here on, a cancelled context must not abort this task's entries
 	h.mu.Unlock()
 	return prev, true
 }

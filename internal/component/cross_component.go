@@ -3,6 +3,7 @@
 package component
 
 import (
+	"context"
 	"fmt"
 
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
@@ -92,12 +93,21 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 			// is guest-calling-guest on one goroutine, which is what a sync call means, so there is
 			// nothing to mark and nothing to wait on.
 			//
-			// The **caller's** context is passed down (#858): a child call inherits its parent's
-			// cancellation, so an embedder cancelling the outer call cancels the whole chain rather than
-			// the outermost frame only. Carried even though a sync callee never waits on it, because the
-			// alternative is a `context.Background()` that silently detaches a subtree — and which arm
-			// waits is the callee's property, not this site's to assume.
-			return callee.invokeWith(c.Context(), args)
+			// **No context is propagated to the child, and the claim that one was is withdrawn.**
+			//
+			// This passed `c.Context()` with a comment saying a child inherits its parent's cancellation,
+			// so an embedder cancelling the outer call cancels the chain. **That was false.** Searched:
+			// `CanonCaller`'s context comes from `newCanonCaller(t.context(), …)`, and a thread's context
+			// is created in `world.addLocked` as `context.WithCancel(context.Background())` — it is the
+			// thread's **lifetime** context, cancelled by `Instance.Close` (`thread.cancelCtx`, ADR
+			// 0069). It is not the embedder's per-call context, which lives on the parent's `liftTask`
+			// and has no route to here.
+			//
+			// Cancellation still reaches the child, by **the model's own path**: the parent receives
+			// `TASK_CANCELLED`, its drop code issues `subtask.cancel`, and that reaches the child through
+			// ADR 0095's `onCancel`. One route, witnessed by effect, rather than two of which one was
+			// imaginary.
+			return callee.invokeWith(context.Background(), args)
 		}, opts), true
 	}
 
@@ -149,11 +159,16 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 		// race, with one run cancelling in 11ms and the next timing out at 30s with the child's cancel
 		// handler never invoked. Creating it here makes registration happen-before anything the caller
 		// can do next, so there is no window to lose the race in.
-		// The child's task inherits the **caller's** context (#858), so an embedder cancelling the outer
-		// call cancels the child too rather than only the frame it can see. The context is read here, on
-		// the calling goroutine, rather than inside the closure below: `c` belongs to the caller's frame,
-		// and reading it from the goroutine would be a use after that frame may have moved on.
-		task := callee.newLiftTask(c.Context())
+		// **The child's task carries no context, and the claim that it carried the caller's is
+		// withdrawn** — see the sync arm above for the search. `CanonCaller`'s context is the *thread's*
+		// lifetime context (`world.addLocked`: `context.WithCancel(context.Background())`, cancelled by
+		// `Close`), not the embedder's per-call one, so passing it propagated nothing an embedder had
+		// asked for while reading as though it did.
+		//
+		// Cancellation reaches this child by the model's path: the parent's `subtask.cancel` invokes the
+		// `onCancel` below, which requests this task's cancellation. That is one route and it is
+		// witnessed by effect (`TestCancellingTheOuterCallReachesTheComposedChild`).
+		task := callee.newLiftTask(context.Background())
 
 		go func() {
 			res, err := callee.runLiftTask(task, params)

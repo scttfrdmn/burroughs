@@ -127,7 +127,29 @@ type liftTask struct {
 	// cancellation". Reaching that select at all requires the cancel to have been delivered already,
 	// since the pass before it checks `deliverPendingCancelLocked` first.
 	cancelWake chan struct{}
+
+	// everEntered records whether this task has entered the guest at least once, and it exists for
+	// exactly one decision: **whether a cancelled context may ABORT an entry.**
+	//
+	// Before the first entry, no guest code has run — there are no destructors to skip and nothing to
+	// tell — so abandoning the task is harmless and is the model's own INITIAL arm in spirit. After it,
+	// every entry must proceed, because **the cancellation is delivered THROUGH an entry**: refusing one
+	// abandons a task mid-flight, leaving its destructors unrun and its resources held.
+	//
+	// Measured, not reasoned: with `enterTask` refusing on context for any started task, the yielding
+	// guest's witness passed while the guest never received TASK_CANCELLED at all — every YIELD
+	// re-entry was refused, so the call ended with `ErrCancelled` from `enterAndInvoke` and the guest's
+	// own cancellation path never ran. The neuter of the top-of-loop check then did not fail the test,
+	// which is how it surfaced: *a witness that passes under its own neuter is passing for another
+	// reason.*
+	//
+	// `liftStarted` cannot substitute: `runLiftTask` sets it immediately *before* the first entry, so a
+	// task queued for its first entry is already STARTED.
+	everEntered bool
 }
+
+// markEntered records that this task has entered the guest at least once. Caller holds h.mu.
+func (t *liftTask) markEntered() { t.everEntered = true }
 
 // context returns the call's context, substituting `context.Background()` for a task built by a struct
 // literal. See the `ctx` field for why this is the only read path.

@@ -199,6 +199,9 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 		return nil, err
 	}
 
+	// One context request per call, the same discipline the park uses. See the check inside the loop.
+	ctxRequested := false
+
 	// The loop. Each iteration decodes one packed return and either resolves, re-enters immediately
 	// (YIELD), or parks and re-enters with an event (WAIT). The callee's return and every callback's
 	// return go through the SAME decode — a second decode for the re-entry path is how the two could
@@ -243,6 +246,32 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) ([]interp.
 		// iteration's check above, one callback entry later. Recorded so a reader comparing the loops
 		// finds a decision rather than reconstructing one.
 		if code != callbackExit {
+			// **A guest that YIELDS and never parks must still be cancellable** (#880's gap, found on the
+			// #858 review). The context was consulted only at the two *waits* — the park and the entry
+			// semaphore — and a yielding guest reaches neither: the YIELD arm re-enters immediately, so
+			// nothing read `ctx.Done()` and a spinning guest could not be cancelled through a context at
+			// all. `lift-cancel-yield-synth` exists precisely because that guest never parks, and this is
+			// the same gap as the top-of-loop check's own missing witness one slice earlier.
+			//
+			// So the request is made **here**, at the delivery point, before asking whether a
+			// cancellation is pending — which is the only place on this path that every iteration passes
+			// through.
+			//
+			// `Err()` rather than a select on `Done()`: this is a *poll* at a delivery point, not a wait,
+			// and it is read **outside** the table lock so no channel operation enters a critical section
+			// (§4 B-MM-3). Once per call, because a refused request would otherwise be retried every
+			// iteration for the rest of a spinning guest's life.
+			if !ctxRequested && task.context().Err() != nil {
+				ctxRequested = true
+				f.h.mu.Lock()
+				// A refusal means the task is already past running, which the delivery below or the EXIT
+				// arm reports. Same reasoning as the park's.
+				//
+				//nolint:errcheck // ErrCancelNotRunning here means the task already resolved; the next
+				// few lines report that outcome, so the refusal has no consumer.
+				_ = task.requestCancelLocked()
+				f.h.mu.Unlock()
+			}
 			f.h.mu.Lock()
 			delivered := task.deliverPendingCancelLocked()
 			f.h.mu.Unlock()
