@@ -85,6 +85,13 @@ own condition rather than as a prediction.
   [#804](https://github.com/scttfrdmn/burroughs/issues/804)**, the public import-registration surface,
   with per-caller identity built in the same change; the guard and the hazard arrive together, which is
   stronger than a detector shipped against a path nothing can take.
+  **Codes 8 and 9 are on main ahead of a ruling, which is a process breach and is recorded as one**
+  (ADR 0096 amendment 2). The ruling that approved `Close` carried a conditional stop — *"give it the
+  existing code for the invoker's own failure if that fits, or report back if it doesn't"* — and it did
+  not fit, so the slice should have ended there. It merged instead, with the reasoning in the PR body,
+  which is not reporting *before* merging. The two codes are **pending Scott's confirmation** and come out
+  in a follow-up at no cost if he declines, since no release is cut. Code 7, the two sentinels, and
+  `Close`'s idempotence are all within what was ruled; the codes are the part that was not.
   **Three new CLI exit codes, and the suggested one did not fit.** `ErrCancelled`, `ErrComponentClosed`
   and `ErrCloseIncomplete` are public sentinels, and `TestExitCodesCoverEveryPublicSentinel` — whose
   domain is derived from the package's own source — requires each to be classified. The chair's

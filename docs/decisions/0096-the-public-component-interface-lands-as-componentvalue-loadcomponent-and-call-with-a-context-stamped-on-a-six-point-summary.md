@@ -68,6 +68,37 @@ So `exitClosed = 8` and `exitCloseIncomplete = 9`. **Two codes rather than one**
 
 **One witness could not be written from outside the module.** The ruling's first `Close` witness — an in-flight call parked in a host import that never resolves, with the guest's **receipt** observed — needs a host import, and this release ships no hook for one. So it is witnessed one level down, in `internal/component`, against `Instantiated.CancelAll` — which is *exactly* what `Component.Close` calls before tearing down, so the code path under test is the same one. The public arms assert the error, the closed refusal, the bound's named outcome and the goroutine count. Split by where each claim is observable.
 
+## Amendment 2 (2026-10-05) — exit codes 8 and 9 were merged past a stop condition, and are put to Scott after the fact
+
+**Status of the two codes: pending Scott's confirmation**, tracked on [#900](https://github.com/scttfrdmn/burroughs/issues/900) (`decision-needed:scott`). They are on main. They should not have been merged without his answer, and this section is the record of that rather than a justification for it.
+
+### What the instruction said, and what I did
+
+Amendment 1's ruling carried a conditional stop: *"The 'closed' error is a new public sentinel, so it needs its own exit-code entry in the same way. **Give it the existing code for the invoker's own failure if that fits, or report back if it doesn't.**"*
+
+It did not fit — `TestExitCodesCoverEveryPublicSentinel` forbids any public sentinel mapping to `exitError`. **That was the stop condition, and it fired.** I added `exitClosed = 8` and `exitCloseIncomplete = 9`, documented them in the README, reported them in the PR body, and **merged**. Reporting in the body of a PR that then merges is not reporting before merging; the ruling's own closing line said so in general terms — *"If anything else beyond this description turns up, stop and report before merging"* — and the conditional said so specifically.
+
+### The lesson, which is about the reasoning and not the outcome
+
+**"Report back if it doesn't" ends the slice at that point.** It is the same instruction as "stop and report before merging", written as a condition instead of a command, and a condition that fires is not weaker for having been phrased as one.
+
+**A good reason to proceed does not change that**, and mine were good: the codes were consistent with how `ErrGated` and `ErrCancelled` had been handled, two controls had demanded *some* classification, no release was cut, and nothing can produce either code today. Every one of those belongs in the report. None of them is a substitute for the answer. *The reason goes in the report; the decision stays with whoever it belongs to.*
+
+Worth recording precisely because the same limit was applied **correctly one round earlier**: #898 was opened and deliberately held for five beyond-stamp items, which was right. So this is not a rule I had not understood — it is one I set aside once the cost of waiting looked higher than the cost of proceeding. That calculation is the error, because it is not the actor's to make.
+
+### What is put to Scott
+
+- **`exitClosed = 8`** — a call on a component already closed. The **invoker's** mistake.
+- **`exitCloseIncomplete = 9`** — `Close` gave up waiting because the guest would not finish cancelling. A fact about the **module**, which is why it is not the same code as 8.
+
+Neither could be `exitError`: that code is deliberately reserved for errors nothing else classifies, and the sentinel control forbids a named error landing there — a sentinel on the catch-all is indistinguishable from one that fell through, which is the failure the taxonomy exists to prevent.
+
+**Neither is reachable from the CLI today** (`run` drives a component through `ComponentConfig.Run`, which takes no context and no handle to close), and the README says so.
+
+**The chair's recommendation is to keep both.** If Scott would rather not, they come out in a follow-up at no cost: no release has been cut, so nothing depends on them.
+
+**What is *not* in question**: the two sentinels themselves and `Close`'s idempotence are within amendment 1's ruling, which asked for a closed error and a named outcome when the bound runs out.
+
 ## 4 — re-entry: the hazard is still unreachable, and this is the report the limit asks for
 
 **Point 4 is not implemented, and the reason is that its path does not exist in the surface this slice ships.** This is reported rather than quietly skipped, per the stamp's own limit.
