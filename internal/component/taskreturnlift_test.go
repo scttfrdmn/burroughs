@@ -139,6 +139,186 @@ func TestTwoExportedLiftsResolveToTheirOwnFunctions(t *testing.T) {
 	}
 }
 
+// storedBytes lowers v through the codec and returns the first eight bytes it wrote.
+//
+// It exists because `canon.Value` has readers for `u32` and `string` only, so a test cannot read a `s8`
+// or a `bool` back out to compare it. Two values of the same kind are equal exactly when their lowered
+// bytes are equal, and the lowering is the differential-verified `StoreVia` — so this compares through
+// machinery that is already an oracle rather than through an accessor written for the test.
+//
+// Eight bytes covers every scalar (the widest is `u64`/`f64`); the heap is zeroed, so a narrower kind's
+// unwritten tail compares equal on both sides.
+func storedBytes(t *testing.T, v canon.Value) [8]byte {
+	t.Helper()
+	h := &bridgeHeap{mem: make([]byte, 1<<12), next: 64}
+	if err := canon.StoreVia(h, v, 0); err != nil {
+		t.Fatalf("storing a %s: %v", v.Type.Kind, err)
+	}
+	var out [8]byte
+	copy(out[:], h.mem[:8])
+	return out
+}
+
+// TestTaskReturnLiftsEveryScalarKind is the regression's witness.
+//
+// `liftTaskReturnValue` handled `u32` alone when the eager lift landed. That was a regression on arrival:
+// a non-`u32` scalar from an async cross-component child previously resolved through
+// `crossComponentValue`, which has arms for `bool` and all eight integers — and an eagerly lifted value
+// takes precedence over the flat words, so those arms became unreachable for the async path. A conforming
+// child returning `bool` would have trapped where it used to work. No committed fixture returns one, so
+// nothing caught it.
+//
+// The conversions themselves are **not** asserted here against a table: they are `canon.LiftFlatScalar`,
+// which `liftFlat` reaches for every scalar, so `TestCodecMatchesReferenceModel` verifies them against
+// `definitions.py` over `gen/cases.json`. What this test owns is the part the differential cannot see —
+// that `task.return` **reaches** that function, for every kind, with the word unnarrowed.
+func TestTaskReturnLiftsEveryScalarKind(t *testing.T) {
+	cases := []struct {
+		name string
+		vt   ValType
+		word uint64
+		kind canon.Kind
+		want canon.Value // the same value built directly, for a lowered-bytes comparison
+	}{
+		{"bool-false", ValType{Kind: VBool}, 0, canon.KindBool, canon.Bool(false)},
+		{"bool-true-is-nonzero", ValType{Kind: VBool}, 2, canon.KindBool, canon.Bool(true)},
+		{"u8-truncates", ValType{Kind: VU8}, 0x1ff, canon.KindU8, canon.U8(0xff)},
+		{"u16", ValType{Kind: VU16}, 0xbeef, canon.KindU16, canon.U16(0xbeef)},
+		{"u32", ValType{Kind: VU32}, 0xdeadbeef, canon.KindU32, canon.U32(0xdeadbeef)},
+		{"u64-keeps-all-64-bits", ValType{Kind: VU64}, 0xdeadbeefcafef00d, canon.KindU64, canon.U64(0xdeadbeefcafef00d)},
+		{"s8-sign-extends", ValType{Kind: VS8}, 0xff, canon.KindS8, canon.S8(-1)},
+		{"s16-sign-extends", ValType{Kind: VS16}, 0xffff, canon.KindS16, canon.S16(-1)},
+		{"s32-sign-extends", ValType{Kind: VS32}, 0xffffffff, canon.KindS32, canon.S32(-1)},
+		{"s64-sign-extends", ValType{Kind: VS64}, 0xffffffffffffffff, canon.KindS64, canon.S64(-1)},
+		{"char-ascii", ValType{Kind: VChar}, 'A', canon.KindChar, mustChar(t, 'A')},
+		{"char-astral", ValType{Kind: VChar}, 0x10FFFF, canon.KindChar, mustChar(t, 0x10FFFF)},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := liftTaskReturnValue(nil, c.vt, []interp.Value{{Bits: c.word}})
+			if err != nil {
+				t.Fatalf("lifting a %s from word %#x: %v", c.name, c.word, err)
+			}
+			if got.Type.Kind != c.kind {
+				t.Fatalf("lifted kind %s, want %s", got.Type.Kind, c.kind)
+			}
+			if g, w := storedBytes(t, got), storedBytes(t, c.want); g != w {
+				t.Fatalf("lifted value lowers to % x, want % x — the word was mis-converted on the way "+
+					"through, or narrowed before it reached the codec", g, w)
+			}
+		})
+	}
+
+	// The two floats are carried too. Their `want` cannot be built with a constructor — `canon` has no
+	// `F32`/`F64` — which is itself why they are checked by kind alone here and by the differential for
+	// their value.
+	for _, c := range []struct {
+		name string
+		vt   ValType
+		kind canon.Kind
+	}{
+		{"f32", ValType{Kind: VF32}, canon.KindF32},
+		{"f64", ValType{Kind: VF64}, canon.KindF64},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := liftTaskReturnValue(nil, c.vt, []interp.Value{{Bits: 0x3ff0000000000000}})
+			if err != nil {
+				t.Fatalf("lifting a %s: %v", c.name, err)
+			}
+			if got.Type.Kind != c.kind {
+				t.Fatalf("lifted kind %s, want %s", got.Type.Kind, c.kind)
+			}
+		})
+	}
+
+	// A floor, because the point of this test is coverage of a closed set: twelve one-word kinds plus the
+	// two floats handled above.
+	if len(cases) != 12 {
+		t.Fatalf("the table covers %d kind(s); the one-word set this test is about has 12 besides the "+
+			"two floats, so a kind has been added or dropped without a decision", len(cases))
+	}
+}
+
+func mustChar(t *testing.T, r rune) canon.Value {
+	t.Helper()
+	v, err := canon.Char(r)
+	if err != nil {
+		t.Fatalf("canon.Char(%#x): %v", r, err)
+	}
+	return v
+}
+
+// TestTaskReturnTrapsOnACharOutsideTheUnicodeScalarRange is the one scalar arm with a model TRAP rather
+// than a conversion, so it gets its own test: `convert_i32_to_char` traps past the last code point and
+// inside the surrogate range (definitions.py:1343-1347).
+//
+// A guest can produce either from one word, so both are guest faults rather than engine errors.
+func TestTaskReturnTrapsOnACharOutsideTheUnicodeScalarRange(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		word uint64
+	}{
+		{"past-the-last-code-point", 0x110000},
+		{"far-past-it", 0xFFFFFFFF},
+		{"low-surrogate-start", 0xD800},
+		{"high-surrogate-end", 0xDFFF},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := liftTaskReturnValue(nil, ValType{Kind: VChar}, []interp.Value{{Bits: c.word}}); err == nil {
+				t.Fatalf("a char of %#x lifted successfully; the model traps there", c.word)
+			}
+		})
+	}
+	// And the values either side of the surrogate block are fine, so the refusal is a range and not a
+	// blanket.
+	for _, ok := range []uint64{0xD7FF, 0xE000, 0x10FFFF} {
+		if _, err := liftTaskReturnValue(nil, ValType{Kind: VChar}, []interp.Value{{Bits: ok}}); err != nil {
+			t.Fatalf("a char of %#x was refused: %v", ok, err)
+		}
+	}
+}
+
+// TestTaskReturnCoversEveryKindCrossComponentValueDoes pins the regression's **shape** rather than its
+// instances: the eager lift must carry at least what the path it displaced carried.
+//
+// `crossComponentValue`'s scalar arms are now reached only by a sync cross-component call. For an async
+// one, `task.return`'s lifted value wins — so any kind that switch handles and `liftTaskReturnValue` does
+// not is a kind that silently stopped working. Derived from the two implementations rather than listed,
+// so a future arm added to one and not the other fails here.
+func TestTaskReturnCoversEveryKindCrossComponentValueDoes(t *testing.T) {
+	// The kinds `crossComponentValue` carries, as its switch has them.
+	crossCarried := []ValType{
+		{Kind: VBool},
+		{Kind: VU8},
+		{Kind: VU16},
+		{Kind: VU32},
+		{Kind: VU64},
+		{Kind: VS8},
+		{Kind: VS16},
+		{Kind: VS32},
+		{Kind: VS64},
+	}
+	var missing []string
+	for _, vt := range crossCarried {
+		// Confirm the premise: the sync path really does carry it. A kind that stopped being carried
+		// there would make this test's domain quietly shrink.
+		if _, err := crossComponentValue(&FuncType{Result: &vt}, liftResult{flat: []interp.Value{{Bits: 1}}}); err != nil {
+			t.Fatalf("premise failed: crossComponentValue no longer carries %s (%v) — this test's domain "+
+				"is derived from that switch, so it must be updated deliberately", valKindName(vt.Kind), err)
+		}
+		if _, err := liftTaskReturnValue(nil, vt, []interp.Value{{Bits: 1}}); err != nil {
+			missing = append(missing, valKindName(vt.Kind))
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("task.return cannot lift %v, which crossComponentValue carries. An async child returning "+
+			"one of those used to resolve through that switch and now resolves through the eager lift, so "+
+			"each is a kind that silently stopped working.", missing)
+	}
+	t.Logf("EAGER-LIFT-COVERS %d kind(s) the sync cross-component path carries", len(crossCarried))
+}
+
 // TestTaskReturnRefusesAResultKindItCannotLift pins the refusal side, because the eager lift's scope is
 // narrower than the bridge's: a flat lift carries the scalars and `string`, and anything compound needs a
 // per-element load the codec does not expose.

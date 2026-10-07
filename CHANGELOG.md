@@ -944,6 +944,20 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **The eager lift carried `u32` alone, which was a regression the moment it shipped**
+  ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). A non-`u32` scalar returned by an async
+  *cross-component* child used to resolve through `crossComponentValue`, which has arms for `bool` and all
+  eight integers — and an eagerly lifted value takes precedence over the flat words, so those arms became
+  unreachable for the async path. A conforming child returning `bool` would have **trapped where it
+  worked before**. No committed fixture returns one, so nothing caught it: the same blindness that let the
+  late lift survive, one layer along. The repair is not more arms in two places but **one** scalar flat
+  lift — `canon.LiftFlatScalar`, extracted from the codec's own thirteen arms, which `liftFlat` now
+  reaches for every scalar. So the differential against `definitions.py` over `gen/cases.json` is its
+  oracle, and `task.return` delegates to it instead of restating conversions. Carries `bool`, the eight
+  integers, both floats and `char`, with the model's two traps for `char` (past the last code point, and
+  the surrogate range) and *nonzero is true* for `bool`. The default arm's message claimed the engine
+  "lifts scalars and string" while handling only `u32` — **false for every other scalar** — and now
+  describes what actually remains.
 - **`task.return` lifted its result after the callback loop, by which time the guest may have reused the
   buffer** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). The model lifts **inside**
   `canon_task_return` (`definitions.py:2336`) and hands `Task.return_` an already-lifted value

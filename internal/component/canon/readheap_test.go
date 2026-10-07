@@ -116,6 +116,47 @@ func TestLoadStringReadsTheHeaderTheStoreWrote(t *testing.T) {
 	}
 }
 
+// TestLiftFlatScalarRefusesANonScalar covers the arm the differential cannot reach: every case in
+// `gen/cases.json` is a well-typed value, so no fixture asks this function for a `list` or a `record`.
+//
+// Its conversions are NOT tested here on purpose. `liftFlat` reaches this function for every scalar, so
+// `TestCodecMatchesReferenceModel` verifies them against `definitions.py` over the emitted flat values —
+// a table here would be a second, weaker opinion about the same arithmetic. What is tested is the
+// boundary the model has no case for.
+func TestLiftFlatScalarRefusesANonScalar(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		t    Type
+	}{
+		{"string", Type{Kind: KindString}},
+		{"list", Type{Kind: KindList, Elem: &Type{Kind: KindU8}}},
+		{"variant", VariantType(Case{Name: "a"})},
+		{"tuple", TupleType(Type{Kind: KindU32})},
+		{"own", OwnType(0)},
+		{"future", Type{Kind: KindFuture}},
+		{"stream", Type{Kind: KindStream}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := LiftFlatScalar(c.t, 0)
+			if err == nil {
+				t.Fatalf("LiftFlatScalar carried a %s; it is not a one-word value", c.name)
+			}
+			if !strings.Contains(err.Error(), c.t.Kind.String()) {
+				t.Fatalf("the refusal %q does not name %q", err, c.t.Kind)
+			}
+		})
+	}
+
+	// `char` is the one scalar whose lift can fail, and it fails for the model's reason rather than
+	// because it is not a scalar. Checked here so the two refusal causes are not conflated.
+	if _, err := LiftFlatScalar(Type{Kind: KindChar}, 0xD800); err == nil {
+		t.Fatal("a surrogate lifted as a char; definitions.py:1346 traps")
+	}
+	if _, err := LiftFlatScalar(Type{Kind: KindChar}, 'x'); err != nil {
+		t.Fatalf("an ordinary char was refused: %v", err)
+	}
+}
+
 func TestLoadListU8(t *testing.T) {
 	h := newHeap(256)
 	want := []byte{0, 1, 2, 250, 255}
