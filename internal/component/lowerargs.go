@@ -5,6 +5,7 @@ package component
 import (
 	"fmt"
 
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
@@ -95,7 +96,43 @@ func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error 
 //
 // The four arguments are the canonical ABI's `cabi_realloc(orig_ptr, orig_size, align, new_size)`, with
 // the first two zero because this is a fresh allocation rather than a resize.
+// checkLowerSize refuses a payload too large to be worth asking the guest for, **before** the realloc.
+//
+// # This is stricter than the model, and the reason is worth stating
+//
+// On the **store** side the model only asserts `dst_byte_length <= REALLOC_I32_MAX` (2³²−1,
+// definitions.py:1597) — an `assert`, not a `trap_if`. The 2²⁸−1 cap is the **load** side's trap
+// (def:1383, `MAX_STRING_BYTE_LENGTH`), and it is the one this engine already applies in
+// `canon.LoadStringFromRange`.
+//
+// So refusing at the load cap here declines a string the model would store. That is deliberate: a string
+// past that cap **can never be read back as one** — any `load_string` of it traps — so it is unusable in
+// both directions, and the model's own `assert(REALLOC_I32_MAX > 2 * MAX_STRING_BYTE_LENGTH)` (def:1361)
+// is the statement that the two bounds are meant to sit in that relation. Asking a guest for a
+// quarter-gigabyte allocation it is going to refuse is worse than declining before the call.
+//
+// **Factored so it can be called on its own**, which is what makes it testable without allocating a
+// 256 MiB string: the check is about the length, so the test supplies a length.
+func checkLowerSize(param string, n int) error {
+	if n < 0 {
+		return fmt.Errorf("%w: argument %q has a negative byte length %d", ErrUnsupportedForm, param, n)
+	}
+	if n > canon.MaxStringByteLength {
+		return fmt.Errorf("%w: argument %q is %d bytes, past the %d-byte cap a component string can "+
+			"carry; a longer one could be stored but never read back, because a load of it traps "+
+			"(definitions.py:1383), so it is refused here rather than allocated for",
+			ErrUnsupportedForm, param, n, canon.MaxStringByteLength)
+	}
+	return nil
+}
+
 func (f *compFunc) guestAlloc(p *pendingLower) (int32, error) {
+	// **Before the realloc**, so the guest is never asked for an allocation this engine would refuse to
+	// use. The order is the point: checking after would mean a guest had already grown its memory by a
+	// quarter of a gigabyte to satisfy a request about to be rejected.
+	if err := checkLowerSize(p.param, len(p.bytes)); err != nil {
+		return 0, err
+	}
 	if f.reallocCore.inst == nil {
 		return 0, fmt.Errorf("%w: argument %q is a %d-byte value that must live in guest memory, but this "+
 			"lift declares no (realloc) canonopt — there is nowhere to put it",
@@ -129,6 +166,16 @@ func (f *compFunc) guestAlloc(p *pendingLower) (int32, error) {
 	if ptr < 0 {
 		return 0, fmt.Errorf("%w: argument %q: the guest's realloc returned %d, which is not an address",
 			ErrUnsupportedForm, p.param, ptr)
+	}
+	// **The misalignment trap** (definitions.py:1599, `trap_if(ptr != align_to(ptr, dst_alignment))`).
+	//
+	// **Vacuous for a `string`**, whose alignment is 1 — every pointer satisfies it. Implemented anyway,
+	// and said to be vacuous, because the first kind whose alignment is not 1 is a `list<u32>` at
+	// alignment 4, and a check added at that point would be a check nothing had ever run. The model
+	// states it unconditionally and so does this.
+	if p.align > 0 && int(ptr)%p.align != 0 {
+		return 0, fmt.Errorf("%w: argument %q: the guest's realloc returned %d, which is not aligned to "+
+			"%d", ErrUnsupportedForm, p.param, ptr, p.align)
 	}
 	return ptr, nil
 }
