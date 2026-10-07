@@ -46,6 +46,22 @@ The three locked lines are factored into `writeUnderGrowthLock`, and `interp.Wri
 
 So this engine allocates, writes, and **does not touch the allocation again** — no free, no re-read, no retained pointer. Recorded because the opposite instinct is strong: a host that allocated something usually cleans it up, and doing so here would free memory the guest still owns.
 
+### 5. The lowering refuses a payload past the load cap, which is a deliberate divergence from the model
+
+**Recorded here and not only in a code comment**, because it is a place this engine is *stricter* than the reference, and a divergence that lives only next to the code is one a future reader will take for an oversight and "fix".
+
+The model's **store** side has no `MAX_STRING_BYTE_LENGTH` trap. It asserts `dst_byte_length <= REALLOC_I32_MAX` — 2³²−1 — at `definitions.py:1597`, and an `assert` is not a `trap_if`. The 2²⁸−1 cap is the **load** side's trap, at def:1383, and this engine already applies it in `canon.LoadStringFromRange`.
+
+So `checkLowerSize` refuses, before calling the guest's realloc, a string the model would have stored. The grounds:
+
+- **It could never be read back.** Any `load_string` of a string past that cap traps, so the value is unusable in both directions — the guest cannot receive it as a `string` by any path.
+- **The model's own constants say the bounds are meant to sit in that relation**: `assert(REALLOC_I32_MAX > 2 * MAX_STRING_BYTE_LENGTH)` (def:1361).
+- **The alternative is worse than a refusal.** Without the check the engine asks a guest to grow by up to a quarter of a gigabyte to satisfy a request it will then decline.
+
+**The check runs before the realloc**, which is the whole point of its position rather than its existence, and it is factored to take a **length** so it is testable without allocating 256 MiB.
+
+**What this does not do**: it does not narrow what a *guest* may store, or what the codec will lift. It constrains one direction of one host-side lowering. If a consumer ever needs to hand a guest a string past the cap — which would require the guest to read it as something other than a `string` — this is the decision to revisit, and it is recorded here so that revisiting it is a decision rather than a discovery.
+
 ## Consequences
 
 - **The fixture is `string-arg-realloc-synth.wasm`**, whose realloc **grows** and returns a pointer into the page it just added, and whose `echo` returns the **sum of the bytes it read** — so the assertion is on content at the right address, not on the call completing. Three lifts, because three failure modes are unrelated: the working path, a realloc whose body is `unreachable`, and a `peek` that reports the byte at the allocation so the ownership rule is observable.

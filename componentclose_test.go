@@ -47,7 +47,34 @@ func TestCloseReachesItsBoundWithANamedOutcome(t *testing.T) {
 		_, cErr := c.Call(context.Background(), "run")
 		done <- cErr
 	}()
-	time.Sleep(20 * time.Millisecond)
+
+	// **Wait for the call to be in flight, not for 20ms.**
+	//
+	// This was `time.Sleep(20 * time.Millisecond)`, and it was a timer standing in for a signal — this
+	// tree's own first operational rule, applied to a test instead of to CI. It held on an idle machine
+	// and failed under `make strict`, which runs every package at once: 20ms was not enough for the call
+	// to enter, `Close` found nothing active, and returned cleanly. The test then reported that the bound
+	// had not produced `ErrCloseIncomplete` — **a true statement about a run that never set up the
+	// condition.** A load-sensitive false failure is the mild outcome; the same sleep could have passed
+	// over a broken bound on a fast machine.
+	//
+	// `active` is the signal: `Call` increments it before doing any guest work, and the yielding fixture
+	// never finishes, so once it is non-zero it stays non-zero. The deadline makes a call that never
+	// enters a failure rather than a hang.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		inFlight := c.active
+		c.mu.Unlock()
+		if inFlight > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the call never entered: Close's bound cannot be reached with nothing in flight, so " +
+				"this test would have asserted the bound against an idle component")
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	closeErr := c.Close()
 	if !errors.Is(closeErr, ErrCloseIncomplete) {
