@@ -37,6 +37,20 @@ type compFunc struct {
 	h     *asyncHandles
 	cb    coreDef // the `(callback $f)` canonopt's core func — the re-entry target
 
+	// The lift's own `(memory $m)` and `(realloc $f)` canonopts, for lowering an argument that does not
+	// fit in flat words — a `string` today (#902).
+	//
+	// `reallocCore` is a **coreDef and not an `*interp.Extern`**, because the host calls it as an ordinary
+	// guest call through `inst.Invoke`: that gets the thread, the stack and the safepoint handling for
+	// free and keeps the call visible to a stop-the-world. A synthesized `CanonCaller` would be a second
+	// route into guest code that the safepoint and lock controls have never checked.
+	//
+	// `mem` is the extern because the write goes through `interp.WriteBoundaryMemory`, which takes ADR
+	// 0073's growth lock and resolves the image **inside** it — necessary here and not merely tidy,
+	// because `cabi_realloc` can grow the memory on its way to returning the pointer.
+	mem         *interp.Extern
+	reallocCore coreDef
+
 	// There is deliberately NO `result` field here (#869). It held the async lift's last resolution, and
 	// a `compFunc` is **shared by every concurrent caller of its export** — so with several lift tasks
 	// per instance two callers wrote and read one field and could receive each other's result.
@@ -66,6 +80,24 @@ func (f *compFunc) invoke() error {
 // `ctx` is the call's cancellation channel (#880, #858). It is carried to the two places a lift task can
 // wait — the park and the entry semaphore — by being stored on the task, so no intermediate signature
 // needs it. A sync lift ignores it: it does not wait.
+// invokeWithPending is `invokeWith` carrying arguments whose bytes must be placed in guest memory before
+// the callee runs (#902). `invokeWith` is this with none, which is what every caller but `CallValuesCtx`
+// wants — a second name rather than a nil argument at sixteen call sites whose subject is the lift loop.
+//
+// A pending lowering on a **sync** lift is refused rather than performed: the sync path has no task and
+// no entry slot, so there is nowhere to do the work that satisfies the model's ordering.
+func (f *compFunc) invokeWithPending(ctx context.Context, params []interp.Value, pend []pendingLower) (liftResult, error) {
+	if len(pend) > 0 && !f.async {
+		return liftResult{}, fmt.Errorf("%w: this export is a sync lift and one of its arguments must be "+
+			"placed in guest memory; the model lowers a lift's parameters inside the callee's task, and a "+
+			"sync lift has no task to do it on", ErrUnsupportedForm)
+	}
+	if f.async {
+		return f.runLiftTask(f.newLiftTask(ctx), params, pend)
+	}
+	return f.invokeWith(ctx, params)
+}
+
 func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftResult, error) {
 	if f.stubName != "" {
 		return liftResult{}, fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
@@ -135,7 +167,7 @@ type liftResult struct {
 // `invokeAsyncLift()` delegating to this was dead the moment it was written, and the `unused` linter said
 // so. One entry point, and the params-free case is a nil argument rather than a second name for it.
 func (f *compFunc) invokeAsyncLiftWith(ctx context.Context, params []interp.Value) (liftResult, error) {
-	return f.runLiftTask(f.newLiftTask(ctx), params)
+	return f.runLiftTask(f.newLiftTask(ctx), params, nil)
 }
 
 // newLiftTask creates a lift task and REGISTERS it, separately from running it (grave #892).
@@ -178,7 +210,7 @@ func (f *compFunc) newLiftTask(ctx context.Context) *liftTask {
 	return task
 }
 
-func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) (liftResult, error) {
+func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pendingLower) (liftResult, error) {
 	// **Several lift tasks per instance are permitted** (#869, the concurrency #771 exists to unlock).
 	// The at-most-one-per-instance trap that stood here is gone, and what replaced it is not a looser
 	// version of the same check but a different one: `enterTask` refuses an **overlapping entry**.
@@ -225,7 +257,14 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) (liftResul
 	f.h.mu.Unlock()
 
 	// First call: the callee, carrying the lifted params (none for run()). Its packed return drives dispatch.
-	res, err := f.enterAndInvoke(task, f.core, params)
+	//
+	// **The pending lowerings run on THIS entry, not before it** (#902). The model lowers a lift's
+	// parameters inside the callee's task, after `task.start()` and before the core call
+	// (definitions.py:2097-2107) — so the allocation, the write and the call that uses them are one
+	// exclusive region. Doing the lowering outside the entry would let a sibling call into the instance
+	// between the allocation and the call, and the guest is entitled to reuse anything it likes on an
+	// entry it owns.
+	res, err := f.enterInvokeLowering(task, f.core, params, pend)
 	if err != nil {
 		return liftResult{}, err
 	}
@@ -383,6 +422,38 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value) (liftResul
 // The restore is not deferred to the loop's exit, because between a WAIT return and the next re-entry the
 // task's code is NOT running and `h.lift` must be nil: a `task.return` arriving then is a guest error, and
 // leaving the slot populated would make it silently succeed against a parked task.
+// enterInvokeLowering is [compFunc.enterAndInvoke] with the pending argument lowerings performed on the
+// same entry, between the acquisition and the call (#902).
+//
+// **One function rather than an exported "hold the entry" helper**, because the invariant is that the
+// three steps share one acquisition and a helper that handed the slot out would let a caller forget the
+// middle one. `enterAndInvoke` is this with no lowerings, which is every re-entry in the loop — a
+// callback re-entry has no arguments to place.
+func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []interp.Value,
+	pend []pendingLower,
+) ([]interp.Value, error) {
+	if len(pend) == 0 {
+		return f.enterAndInvoke(task, target, args)
+	}
+	if target.inst == nil {
+		return nil, fmt.Errorf("%w: async lift has no invocable core func for this entry",
+			ErrUnsupportedForm)
+	}
+	prev, ok := f.h.enterTask(task)
+	if !ok {
+		return nil, fmt.Errorf("%w: the call's context ended while waiting for this instance's execution "+
+			"slot", ErrCancelled)
+	}
+	defer f.h.leaveTask(prev)
+
+	// Allocate and write, then call — all three inside the one acquisition above. `lowerPending` does not
+	// take the entry itself, precisely so it cannot be called from somewhere that does not hold it.
+	if lerr := f.lowerPending(pend, args); lerr != nil {
+		return nil, lerr
+	}
+	return target.inst.Invoke(target.name, args...)
+}
+
 func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.Value) ([]interp.Value, error) {
 	if target.inst == nil {
 		return nil, fmt.Errorf("%w: async lift has no invocable core func for this entry (callback unresolved)",
@@ -492,6 +563,13 @@ func (w *walker) funcStep(d Def) error {
 			return fmt.Errorf("component: canon lift names core func %d of %d", cn.FuncIdx, len(w.coreSpace[SpaceCoreFunc]))
 		}
 		lf := &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn)}
+		// The lift's memory and realloc (#902). Captured for every lift, used only by an argument that
+		// needs guest memory; a lift carrying neither canonopt leaves them zero and the lowering refuses
+		// by name rather than dereferencing nothing.
+		lf.mem = w.lowerMemory(cn)
+		if cn.Opts.Realloc != nil && int(*cn.Opts.Realloc) < len(w.coreSpace[SpaceCoreFunc]) {
+			lf.reallocCore = w.coreSpace[SpaceCoreFunc][*cn.Opts.Realloc]
+		}
 		if cn.Opts.Async && cn.Kind == CanonLift && cn.Opts.Callback != nil {
 			// Stackless (callback) async lift: invoke() runs the loop over the durable lift task. A
 			// no-callback (stackful) async lift is not bound here — it refuses as unbuilt

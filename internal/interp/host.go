@@ -218,16 +218,53 @@ func (c *Caller) Write(offset uint64, buf []byte) error {
 	if err != nil {
 		return err
 	}
+	return writeUnderGrowthLock(mem, offset, buf)
+}
+
+// writeUnderGrowthLock is the one locked boundary write, shared by [Caller.Write] and
+// [WriteBoundaryMemory] (#902's string arguments).
+//
+// **Factored rather than copied.** It is ADR 0073's decision 6 in three lines — take `growMu` read-shared
+// across the image load and the copy — and a second transcription of it is how the two would drift. The
+// `RLock` is what excludes the relocating arm of `grow`: a write through an abandoned image is the lost
+// write #586 names, and this is the direction that hazard was found in.
+//
+// **The image is resolved inside the lock, not before it**, because `mem.write` loads the base and the
+// length itself. A caller that read the size first and wrote after would be describing a buffer a
+// concurrent `grow` may already have replaced — which matters especially for a host lowering, where the
+// `cabi_realloc` that produced the pointer **can grow the memory on the way to returning it**.
+func writeUnderGrowthLock(mem *memory, offset uint64, buf []byte) error {
 	enterGuest()
 	defer leaveGuest()
 
-	// The retained-`Caller` exclusion, and this is the direction it was built for: a write through an
-	// abandoned image is the lost write #586 names. See `Read` for the whole argument and for why the lock
-	// is at the boundary rather than inside `write`.
 	mem.growMu.RLock()
 	defer mem.growMu.RUnlock()
 
 	return mem.write(offset, 0, buf)
+}
+
+// WriteBoundaryMemory writes buf at offset in the memory `mem` names, for a host that must place bytes in
+// guest memory **outside** a guest call.
+//
+// # Why this exists, and why it is a function rather than a Caller
+//
+// Lowering a `string` argument for a component export has to allocate in the guest (through its own
+// `cabi_realloc`) and then write the bytes — and both happen **before** the export is entered, so there
+// is no `Caller` and no `CanonCaller` in hand. Every other guest-memory write in the engine has one.
+//
+// It is a free function taking the memory's extern rather than a constructor handing out a `Caller`,
+// because a `Caller` carries a thread identity and a context this path has neither of, and fabricating a
+// zero `ThreadID` to satisfy a field nothing on this path reads would be a value that looks like an
+// answer. `Caller`'s own doc argues the same containment one level in — it holds a `*memory` and not an
+// `*Instance` precisely so the accessors cannot widen into `Invoke`.
+//
+// It runs no guest code, so §5 **H-2** is untouched: the guest is not re-entered, only its bytes are
+// written. The allocation that makes the offset legal is a separate, ordinary guest call.
+func WriteBoundaryMemory(mem *Extern, offset uint64, buf []byte) error {
+	if mem == nil || mem.mem == nil {
+		return fmt.Errorf("%w: a boundary write names no memory", ErrNotValidated)
+	}
+	return writeUnderGrowthLock(mem.mem, offset, buf)
 }
 
 // hostMemory resolves the memory a `Caller`'s accessors reach, keeping `memoryFor`'s three distinct

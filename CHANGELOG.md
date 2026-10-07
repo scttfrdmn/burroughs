@@ -30,6 +30,25 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **A `string` argument crosses into a component call, through the guest's own `cabi_realloc`**
+  ([#902](https://github.com/scttfrdmn/burroughs/issues/902),
+  [ADR 0098](docs/decisions/0098-a-string-argument-is-lowered-inside-the-callees-task-through-an-ordinary-call-to-the-guests-cabi-realloc.md)).
+  A string now crosses the embedder's boundary **both ways**. Three mechanism choices, each following the
+  model or an existing decision rather than being invented: the lowering happens **inside the callee's
+  task**, on the same entry slot as the first callee call (`definitions.py:2097-2107` lowers after
+  `task.start()` and before the core call) — so the allocation, the write and the call that uses them are
+  one exclusive region, and a sibling cannot enter the instance between them; the realloc is called as an
+  **ordinary guest call** through `Invoke`, which gets the thread, stack and safepoint handling and stays
+  visible to a stop-the-world, rather than through a synthesized caller that the safepoint and lock
+  controls have never seen; and the write goes through **one** locked boundary accessor that resolves the
+  image *inside* ADR 0073's growth lock, which is load-bearing because `cabi_realloc` can grow the memory
+  on its way to returning the pointer. **Ownership follows the model**: the callee owns a lowered
+  argument, so the host allocates, writes, and never frees, re-reads or retains it.
+  New: `interp.WriteBoundaryMemory`, for a host with no `Caller` — a free function rather than a `Caller`
+  constructor, since this path has no thread identity and fabricating one would be a value that looks
+  like an answer. `Caller.Write`'s three locked lines are **factored, not copied**, so there is one
+  transcription of ADR 0073's decision 6.
+
 - **The public string surface: `ComponentType`, `ComponentTypeU32`, `ComponentTypeString`,
   `ComponentString` and `ComponentValue.Str`** ([#902](https://github.com/scttfrdmn/burroughs/issues/902),
   [ADR 0097](docs/decisions/0097-the-public-compound-value-surface-componenttype-plus-string-list-and-record-stamped-on-a-four-point-summary-with-three-changes.md)),

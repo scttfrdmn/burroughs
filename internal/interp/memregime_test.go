@@ -90,8 +90,18 @@ var guestMemoryRegimes = map[string]memRegime{
 	// exactly the case it was made for. What the embedder gets instead is §4 B-MM-1's edge on each
 	// access, which is what the message-passing row needs and is strictly stronger than per-access
 	// atomicity for that purpose.
-	"host.go:Caller.Read":  regimePlain,
-	"host.go:Caller.Write": regimePlain,
+	"host.go:Caller.Read": regimePlain,
+
+	// `writeUnderGrowthLock` and NOT `Caller.Write`, since #902 factored the locked write out of it:
+	// `Caller.Write` now resolves the memory and delegates, so it reaches no guest byte itself and
+	// `WriteBoundaryMemory` — the host-side lowering of a `string` argument, which has no `Caller` —
+	// reaches the same three lines. **One site, two entry points**, which is the point of the factoring:
+	// a second transcription of ADR 0073's decision 6 is how the two would drift.
+	//
+	// The regime is unchanged and is `Caller.Write`'s for `Caller.Write`'s reason, argued above the
+	// `Caller.Read` row: plain, with §4 B-MM-1's edge per access. This control caught the move, which is
+	// what it is for — the access did not change regime, but the function holding it changed name.
+	"host.go:writeUnderGrowthLock": regimePlain,
 
 	// Bounds and length only: no guest byte crosses these. `atomicNotify`'s `read` is the clearest
 	// case in the package — it discards both return values but the error, so the call is there to

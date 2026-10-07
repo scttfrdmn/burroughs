@@ -82,23 +82,63 @@ func TestAnEmbedderCallsAnExportAndReadsAString(t *testing.T) {
 	}
 }
 
-// TestAStringArgumentIsRefusedByName pins item 2's stated limit: a string crosses **out** and not yet
-// **in**, and the refusal says which and why.
+// TestAnEmbedderPassesAStringArgument is item 3's deliverable, from outside the module: a `string`
+// crosses **in** as well as out.
 //
-// Passing one in needs the guest's own `cabi_realloc`, a host-initiated guest call the engine does not
-// yet make. A refusal is the right outcome rather than a best effort: a string lowered without a realloc
-// has nowhere to live, and writing it anywhere else in guest memory would corrupt whatever is there.
+// # What replaced what
 //
-// # What this does and does not reach, stated because the neuter showed it
+// A test stood here asserting the argument was **refused** by name, which was item 2's honest limit. ADR
+// 0098 discharged it — the engine now allocates through the guest's own `cabi_realloc`, inside the
+// callee's task, on the entry the callee runs on. The refusal test is replaced rather than kept beside
+// this one, because the two assert opposite things and keeping both would mean one of them was testing a
+// path nothing takes.
 //
-// It pins the **boundary** refusal: `Call` converts its arguments before `CallValuesCtx` checks arity, so
-// the conversion is what fires here. Neutering the conversion to accept the string makes this test fail
-// on the *arity* check instead — `run` declares no parameters — which is the right failure for the wrong
-// reason and is why the assertions below check the message, not just that an error occurred.
+// The guest sums the bytes it was handed, so the assertion is on **content** arriving at the address the
+// guest's own realloc returned — and that realloc **grows** the memory first, which is the case a write
+// against a stale image would get wrong.
+func TestAnEmbedderPassesAStringArgument(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	wasm, err := os.ReadFile("internal/component/testdata/string-arg-realloc-synth.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	c, err := burroughs.LoadComponent(wasm)
+	if err != nil {
+		t.Fatalf("LoadComponent: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	arg, err := burroughs.ComponentString("hello")
+	if err != nil {
+		t.Fatalf("ComponentString: %v", err)
+	}
+	res, err := c.Call(context.Background(), "echo", arg)
+	if err != nil {
+		t.Fatalf("Call(echo, %q): %v", "hello", err)
+	}
+	var want uint32
+	for _, b := range []byte("hello") {
+		want += uint32(b)
+	}
+	got, ok := res[0].U32()
+	if !ok {
+		t.Fatalf("echo returned %v, not a u32", res[0])
+	}
+	if got != want {
+		t.Fatalf("echo summed the argument's bytes to %d, want %d — the guest read from the address its "+
+			"own realloc returned, so a mismatch means the bytes landed elsewhere", got, want)
+	}
+}
+
+// TestAStringArgumentToALiftWithoutAReallocIsRefusedByName is the limit that remains, and it is a
+// property of the **component** rather than of the value: a lift declaring no `(realloc)` canonopt has
+// nowhere to put the bytes.
 //
-// **No committed fixture declares a string parameter**, so the case where an export genuinely wants one
-// cannot be driven end to end yet. That arrives with item 3, and it is the fixture that work owes.
-func TestAStringArgumentIsRefusedByName(t *testing.T) {
+// `run` on the clobbering fixture declares no parameters at all, so this reaches the **arity** refusal
+// rather than the realloc one — which is the honest thing to assert from out here, because a lift with a
+// `string` parameter and no realloc cannot be built (`wasm-tools` refuses it at validation). The
+// realloc-absent arm is witnessed one layer down, where a `compFunc` can be built by hand.
+func TestAStringArgumentToALiftWithoutAReallocIsRefusedByName(t *testing.T) {
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	wasm, err := os.ReadFile("internal/component/testdata/task-return-string-clobber-synth.wasm")
 	if err != nil {
@@ -108,7 +148,7 @@ func TestAStringArgumentIsRefusedByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadComponent: %v", err)
 	}
-	defer func() { _ = c.Close() }() // this test's subject is the argument refusal, not teardown
+	defer func() { _ = c.Close() }()
 
 	arg, err := burroughs.ComponentString("hello")
 	if err != nil {
@@ -116,21 +156,13 @@ func TestAStringArgumentIsRefusedByName(t *testing.T) {
 	}
 	_, err = c.Call(context.Background(), "run", arg)
 	if err == nil {
-		t.Fatal("a string argument was accepted; lowering one needs a realloc the engine does not call")
+		t.Fatal("an argument was accepted by an export declaring no parameters")
 	}
 	if !errors.Is(err, burroughs.ErrUnsupported) {
 		t.Fatalf("the refusal is not ErrUnsupported: %v", err)
 	}
-	// It must name the mechanism, not just decline. An embedder reading "unsupported" cannot tell whether
-	// to wait for a release or restructure their call.
-	for _, want := range []string{"string", "realloc"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal %q does not mention %q", err, want)
-		}
-	}
-	// And it must say the other direction works, since that is the non-obvious half.
-	if !strings.Contains(err.Error(), "RESULT") {
-		t.Errorf("the refusal %q does not say a string result works", err)
+	if !strings.Contains(err.Error(), "parameter") {
+		t.Errorf("the refusal %q does not name the arity mismatch", err)
 	}
 }
 

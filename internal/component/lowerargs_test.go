@@ -1,0 +1,198 @@
+// Copyright 2026 Scott Friedman. SPDX-License-Identifier: Apache-2.0
+
+package component
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
+)
+
+// Witnesses for lowering a `string` argument through the guest's own `cabi_realloc` (#902, ADR 0098).
+
+func loadStringArgFixture(t *testing.T) *Instantiated {
+	t.Helper()
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	b, err := os.ReadFile("testdata/string-arg-realloc-synth.wasm")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	t.Cleanup(in.Close)
+	return in
+}
+
+// TestAStringArgumentIsAllocatedByTheGuestAndWrittenIntoGrownMemory is the working path, and it is also
+// the chair's growth witness.
+//
+// The fixture's `cabi_realloc` **grows the memory and returns a pointer into the page it just added**, so
+// a write that had captured the memory's base or length before calling realloc would be describing an
+// image that no longer exists. The guest sums the bytes it was handed, so the assertion is on the
+// **content at the right address** rather than on the call merely completing.
+func TestAStringArgumentIsAllocatedByTheGuestAndWrittenIntoGrownMemory(t *testing.T) {
+	in := loadStringArgFixture(t)
+
+	const arg = "abc" // 97 + 98 + 99
+	want := uint32(0)
+	for _, b := range []byte(arg) {
+		want += uint32(b)
+	}
+
+	res, err := in.CallValues("echo", canon.Str(arg))
+	if err != nil {
+		t.Fatalf("CallValues(echo, %q): %v", arg, err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("echo returned %d value(s), want 1", len(res))
+	}
+	got, ok := res[0].U32()
+	if !ok {
+		t.Fatalf("echo returned a %s, want a u32", res[0].Type.Kind)
+	}
+	if got != want {
+		t.Fatalf("echo summed the bytes to %d, want %d. The guest read %d byte(s) from the address its "+
+			"own realloc returned — a mismatch means the bytes landed somewhere else, which is what a "+
+			"write against a pre-growth image would do", got, want, len(arg))
+	}
+
+	// **What this test does NOT witness, stated rather than implied.** It shows the write lands at the
+	// address the guest's realloc returned, in a page that existed only after the growth — so a base or
+	// length captured before the realloc would fail here. It does **not** witness ADR 0073's locking
+	// half: excluding a *concurrent* relocating `grow` needs a second agent growing the memory while this
+	// write runs, and no fixture here has one. The `RLock` is the same one `Caller.Write` has always
+	// taken, and #586's litmus work is where that exclusion is measured.
+
+	// The empty string is the case most likely to be special-cased wrongly: it allocates zero bytes and
+	// writes nothing, and must still arrive as an empty string rather than as a refusal.
+	res, err = in.CallValues("echo", canon.Str(""))
+	if err != nil {
+		t.Fatalf("CallValues(echo, \"\"): %v", err)
+	}
+	if got, ok := res[0].U32(); !ok || got != 0 {
+		t.Fatalf("echo(\"\") summed to %d (ok=%v), want 0", got, ok)
+	}
+}
+
+// TestTheHostDoesNotTouchALoweredArgumentAfterTheCall is the ownership witness.
+//
+// The model's rule: a lowered argument belongs to the **callee** once the call is made. `lower_flat_values`
+// has no matching free and there is no "unlower" anywhere in the model, so the host allocates through the
+// guest's realloc and never releases, re-reads or zeroes it.
+//
+// The fixture's realloc returns a predictable address — the start of the page it grew into, 65536 for the
+// first allocation — and `peek` reports the byte there. A host that freed or scrubbed the allocation would
+// show up here and in no other test.
+func TestTheHostDoesNotTouchALoweredArgumentAfterTheCall(t *testing.T) {
+	in := loadStringArgFixture(t)
+
+	if _, err := in.CallValues("echo", canon.Str("abc")); err != nil {
+		t.Fatalf("CallValues(echo): %v", err)
+	}
+	res, err := in.CallValues("peek")
+	if err != nil {
+		t.Fatalf("CallValues(peek): %v", err)
+	}
+	got, ok := res[0].U32()
+	if !ok {
+		t.Fatalf("peek returned a %s, want a u32", res[0].Type.Kind)
+	}
+	if got != 'a' {
+		t.Fatalf("the byte at the first allocation is %#x, want %#x ('a'). The host wrote the argument "+
+			"there and must not have touched it since — the callee owns it once the call is made, and "+
+			"freeing or scrubbing it would be the host reclaiming memory the guest still owns", got, 'a')
+	}
+}
+
+// TestAReallocThatTrapsIsReportedAsTheGuestsRefusal covers a guest that declines the allocation.
+//
+// The `echo-trap` export has the same signature and a realloc whose body is `unreachable`. The host must
+// surface that refusal, and in particular must **not** proceed to write at whatever the failed call left
+// behind — there is no address to write to.
+func TestAReallocThatTrapsIsReportedAsTheGuestsRefusal(t *testing.T) {
+	in := loadStringArgFixture(t)
+
+	_, err := in.CallValues("echo-trap", canon.Str("abc"))
+	if err == nil {
+		t.Fatal("a trapping realloc produced no error; the guest refused the allocation, so there is no " +
+			"address the argument could have been written to")
+	}
+	// The message must say it was the realloc and which argument, because the alternative — a bare trap —
+	// leaves an embedder unable to tell a refused allocation from a fault in the export's own body.
+	for _, want := range []string{"realloc", "\"s\""} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestALiftWithNoReallocRefusesAStringArgumentByName covers the canonopt being absent rather than failing.
+//
+// Asserted on the lowering directly: a lift declaring a `string` parameter and no `(realloc)` is refused
+// by `wasm-tools` at validation, so **no fixture can carry one** — the engine must still not dereference a
+// zero `coreDef`, and this is where that is checked. *A negative claim buys a branch an exemption only if
+// something checks the exemption.*
+func TestALiftWithNoReallocRefusesAStringArgumentByName(t *testing.T) {
+	// A compFunc with neither canonopt, which is what a lift that declared none leaves behind.
+	f := &compFunc{}
+	p := pendingLower{param: "s", bytes: []byte("abc"), align: 1}
+
+	_, err := f.guestAlloc(&p)
+	if err == nil {
+		t.Fatal("a lift with no realloc allocated something; there is nowhere to put the bytes")
+	}
+	if !errors.Is(err, ErrUnsupportedForm) {
+		t.Errorf("the refusal is not ErrUnsupportedForm: %v", err)
+	}
+	for _, want := range []string{"realloc", "\"s\""} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not mention %q", err, want)
+		}
+	}
+
+	// And with a realloc but no memory, which is the other half of the same absence and a different
+	// message: there is somewhere to allocate and nowhere to write.
+	in := loadStringArgFixture(t)
+	cd := in.export.exports["echo"]
+	if cd.fn == nil {
+		t.Fatal("the fixture exports no echo")
+	}
+	noMem := &compFunc{reallocCore: cd.fn.reallocCore}
+	if _, err := noMem.guestAlloc(&p); err == nil {
+		t.Fatal("a lift with no memory allocated something; there is nowhere to write the bytes")
+	} else if !strings.Contains(err.Error(), "memory") {
+		t.Errorf("the no-memory refusal %q does not mention memory", err)
+	}
+}
+
+// TestASyncLiftRefusesAStringArgument pins the one structural refusal the entry discipline forces.
+//
+// The lowering must happen inside the callee's task, on the entry the callee runs on — that is the
+// model's ordering and the reason the allocation cannot be made in `CallValuesCtx`. A **sync** lift has
+// no task and no entry slot, so there is nowhere to do it, and the refusal says so rather than lowering
+// outside the entry and hoping no sibling calls in.
+func TestASyncLiftRefusesAStringArgument(t *testing.T) {
+	f := &compFunc{async: false}
+	// `context.Background()` rather than nil: the refusal happens before the context is read, which is
+	// the property being relied on, but a nil Context is a thing to pass nowhere on principle.
+	_, err := f.invokeWithPending(context.Background(), nil,
+		[]pendingLower{{param: "s", bytes: []byte("x"), align: 1}})
+	if err == nil {
+		t.Fatal("a sync lift accepted a pending argument lowering")
+	}
+	if !errors.Is(err, ErrUnsupportedForm) {
+		t.Errorf("the refusal is not ErrUnsupportedForm: %v", err)
+	}
+	for _, want := range []string{"sync lift", "task"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not mention %q", err, want)
+		}
+	}
+}

@@ -91,14 +91,18 @@ func (in *Instantiated) CallValuesCtx(ctx context.Context, name string, args ...
 			ErrUnsupportedForm, name, valKindName(k))
 	}
 
-	flat, err := lowerFlatArgs(name, fn.sig, args)
+	// `pend` is the arguments whose bytes must land in guest memory. They are **not** lowered here: the
+	// model lowers a lift's parameters inside the callee's task, on the entry the callee runs on, and
+	// nothing holds that entry at this point (lowerargs.go has the argument). Empty for every signature
+	// that carries only scalars, which is every committed guest but one.
+	flat, pend, err := lowerFlatArgs(name, fn.sig, args)
 	if err != nil {
 		return nil, err
 	}
 	// **The resolution comes back as a return value, not from a field on `fn`** (#869). `fn` is shared by
 	// every concurrent caller of this export, so reading a resolution off it handed two callers one slot —
 	// a data race `-race` reported on the concurrent acceptance arm, which passed without it.
-	resolved, err := fn.invokeWith(ctx, flat)
+	resolved, err := fn.invokeWithPending(ctx, flat, pend)
 	if err != nil {
 		return nil, err
 	}
@@ -182,32 +186,59 @@ func (in *Instantiated) resolveValueExport(name string) (*compFunc, error) {
 //
 // Arity is checked against the SIGNATURE, not against the arguments: a call with the wrong count is a
 // caller error that must be named, and lowering whatever arrived would hand the guest a short frame.
-func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Value, error) {
+// A `string` parameter yields **two placeholder slots and a `pendingLower`**, because its bytes cannot be
+// placed here: the model lowers a lift's parameters inside the callee's task, on the entry the callee then
+// runs on (definitions.py:2097-2107), and nothing holds that entry at this point. See `lowerargs.go`.
+func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Value, []pendingLower, error) {
 	if len(args) != len(sig.Params) {
-		return nil, fmt.Errorf("%w: export %q takes %d parameter(s), got %d",
+		return nil, nil, fmt.Errorf("%w: export %q takes %d parameter(s), got %d",
 			ErrUnsupportedForm, name, len(sig.Params), len(args))
 	}
 	flat := make([]interp.Value, 0, len(args))
+	var pend []pendingLower
 	for i, p := range sig.Params {
 		// The declared kind drives the lowering, and the value's own kind must agree with it. Trusting
 		// the value alone would let a caller smuggle a kind past the signature; trusting the signature
 		// alone would lower a mismatched payload as though it were the declared type.
+		if p.Type.Kind == VString {
+			s, ok := args[i].Str()
+			if !ok {
+				return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared string but the value "+
+					"given is %v", ErrUnsupportedForm, name, p.Name, args[i].Type.Kind)
+			}
+			// A string flattens to `(i32 ptr, i32 len)`. The slots are reserved now and filled inside the
+			// entry; their values here are **not** a plausible pointer by accident — a lowering that
+			// forgot to patch them would hand the guest a null pointer and a zero length, which traps in
+			// any guest that reads the string rather than silently passing an empty one.
+			ptrSlot, lenSlot := len(flat), len(flat)+1
+			flat = append(flat, interp.I32(0), interp.I32(0))
+			pend = append(pend, pendingLower{
+				param: p.Name,
+				bytes: []byte(s),
+				align: 1, // utf-8 string data: the model allocates it at alignment 1
+				// The slots are indices into `flat`, not pointers into it, because `flat` is appended to
+				// after this and a slice header captured mid-build can be left behind by a reallocation.
+				ptrSlot: ptrSlot,
+				lenSlot: lenSlot,
+			})
+			continue
+		}
 		if p.Type.Kind != VU32 {
-			return nil, fmt.Errorf("%w: export %q parameter %q is %s; this slice carries u32 only (#864)",
-				ErrUnsupportedForm, name, p.Name, valKindName(p.Type.Kind))
+			return nil, nil, fmt.Errorf("%w: export %q parameter %q is %s; this engine lowers u32 and "+
+				"string arguments", ErrUnsupportedForm, name, p.Name, valKindName(p.Type.Kind))
 		}
 		// `U32` is kind-checked, so the value's agreement with the declared type is the accessor's answer
 		// rather than a separate test that could drift from it.
 		u, ok := args[i].U32()
 		if !ok {
-			return nil, fmt.Errorf("%w: export %q parameter %q is declared u32 but the value given is %v",
+			return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared u32 but the value given is %v",
 				ErrUnsupportedForm, name, p.Name, args[i].Type.Kind)
 		}
 		// A u32 is one flat i32 in the Canonical ABI: the low 32 bits, carried as two's complement. No
 		// memory and no realloc are involved, which is why this slice needs neither.
 		flat = append(flat, interp.I32(int32(u)))
 	}
-	return flat, nil
+	return flat, pend, nil
 }
 
 // liftFlatCoreResult lifts an export's flat core result back to a component value.
