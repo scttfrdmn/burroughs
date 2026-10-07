@@ -30,6 +30,21 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The public string surface: `ComponentType`, `ComponentTypeU32`, `ComponentTypeString`,
+  `ComponentString` and `ComponentValue.Str`** ([#902](https://github.com/scttfrdmn/burroughs/issues/902),
+  [ADR 0097](docs/decisions/0097-the-public-compound-value-surface-componenttype-plus-string-list-and-record-stamped-on-a-four-point-summary-with-three-changes.md)),
+  **stamped by Scott on 2026-10-06**. A `string` **result** now crosses the embedder's boundary: an export
+  declaring one returns it through `Component.Call`, witnessed from outside the module in
+  `burroughs_test` against the clobbering fixture — so the eager lift is observable from an embedder's
+  seat as well as from the engine's. `ComponentString` refuses invalid UTF-8 **at construction**, because
+  the ABI's `string` is UTF-8 while a Go `string` is an arbitrary byte sequence; the in-tree precedent is
+  the codec's `Char`. `Str()` returns the **content** and `String()` is the **debug rendering** — the one
+  confusion the compiler cannot catch, so both the doc comment and a test draw the line.
+  **A string *argument* is refused by name**, saying that lowering one needs the guest's `cabi_realloc`
+  and that a string result works. **Seven of the thirteen stamped names**; the list and record
+  constructors and accessors arrive with the internal directions that carry them, per ADR 0097's
+  each-piece-when-its-direction-works rule. **No release is cut.**
+
 - **The codec's lifting side: `canon.ReadHeap`, `LoadString`, `LoadStringFromRange`, `LoadListU8` and
   `canon.Value.Str()`** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). Every prior use of
   the codec **lowered** — the host answers a guest through `StoreString`/`StoreVia` against guest memory,
