@@ -65,10 +65,14 @@ func TestAStringArgumentIsAllocatedByTheGuestAndWrittenIntoGrownMemory(t *testin
 
 	// **What this test does NOT witness, stated rather than implied.** It shows the write lands at the
 	// address the guest's realloc returned, in a page that existed only after the growth — so a base or
-	// length captured before the realloc would fail here. It does **not** witness ADR 0073's locking
-	// half: excluding a *concurrent* relocating `grow` needs a second agent growing the memory while this
-	// write runs, and no fixture here has one. The `RLock` is the same one `Caller.Write` has always
-	// taken, and #586's litmus work is where that exclusion is measured.
+	// length captured before the realloc would fail here.
+	//
+	// It does **not** witness ADR 0073's locking half, and **no test in the tree does.** Searched on the
+	// #915 review: of every `internal/interp` test that both spawns a goroutine and calls `.Write(`, one
+	// exists and it never grows; and ADR 0073's own relocating-grow test represents the sibling agent as
+	// a host call parked in the guest, ignoring its `Caller`, so it covers the world-count refusal rather
+	// than the `RLock`. The `RLock` is there for the **retained-`Caller`** case, which no world count
+	// sees — and that case is unwitnessed. Filed as #916; the gap predates this slice.
 
 	// The empty string is the case most likely to be special-cased wrongly: it allocates zero bytes and
 	// writes nothing, and must still arrive as an empty string rather than as a refusal.
@@ -169,6 +173,83 @@ func TestALiftWithNoReallocRefusesAStringArgumentByName(t *testing.T) {
 		t.Fatal("a lift with no memory allocated something; there is nowhere to write the bytes")
 	} else if !strings.Contains(err.Error(), "memory") {
 		t.Errorf("the no-memory refusal %q does not mention memory", err)
+	}
+}
+
+// TestALoweredPayloadPastTheStringCapIsRefusedBeforeTheRealloc is the size check, and the point is the
+// **order**: the guest must never be asked for an allocation this engine would refuse to use.
+//
+// # It is stricter than the model, on purpose
+//
+// The model's **store** side only asserts `dst_byte_length <= REALLOC_I32_MAX` (2³²−1,
+// definitions.py:1597). The 2²⁸−1 cap is the **load** side's trap (def:1383). So this refuses a string
+// the model would store — deliberately, because such a string could never be read back as one: any
+// `load_string` of it traps. It is unusable in both directions, and asking a guest to grow by a quarter
+// of a gigabyte to satisfy a request about to be rejected is worse than declining first.
+//
+// **No 256 MiB string is allocated**, because the check is factored to take a length. That is why it is
+// a separate function rather than three lines inside `guestAlloc`.
+func TestALoweredPayloadPastTheStringCapIsRefusedBeforeTheRealloc(t *testing.T) {
+	if err := checkLowerSize("s", canon.MaxStringByteLength); err != nil {
+		t.Fatalf("a payload exactly at the cap was refused: %v", err)
+	}
+	for _, n := range []int{canon.MaxStringByteLength + 1, 1 << 30, -1} {
+		err := checkLowerSize("s", n)
+		if err == nil {
+			t.Fatalf("a payload of %d bytes was accepted; the cap is %d", n, canon.MaxStringByteLength)
+		}
+		if !errors.Is(err, ErrUnsupportedForm) {
+			t.Errorf("%d: the refusal is not ErrUnsupportedForm: %v", n, err)
+		}
+		if !strings.Contains(err.Error(), "\"s\"") {
+			t.Errorf("%d: the refusal %q does not name the argument", n, err)
+		}
+	}
+
+	// And the order: a `compFunc` with NO realloc still refuses on **size** for an over-cap payload,
+	// which is only possible if the size check runs first. If the realloc were consulted first, this
+	// would complain about the missing canonopt instead.
+	// `checkLowerSize` above asserts the cap itself. What is left to check is that `guestAlloc` **calls**
+	// it — and the honest way to do that without allocating 256 MiB is the complement: a payload small
+	// enough to pass the size check, against a `compFunc` with no realloc, must then fail on the realloc.
+	// If the two checks were in the other order this would still name the realloc, so this is a weaker
+	// assertion than the ordering comment above and is labelled as such rather than oversold.
+	f := &compFunc{}
+	small := pendingLower{param: "s", bytes: []byte("abc"), align: 1}
+	if _, err := f.guestAlloc(&small); err == nil {
+		t.Fatal("guestAlloc with no realloc accepted a payload")
+	} else if !strings.Contains(err.Error(), "realloc") {
+		t.Errorf("with a small payload and no realloc the refusal should name the realloc, got %q", err)
+	}
+}
+
+// TestAMisalignedReallocResultIsRefused covers definitions.py:1599's trap, which is **vacuous for a
+// string** — alignment 1, so every pointer satisfies it.
+//
+// Implemented and tested anyway: the first kind whose alignment is not 1 is a `list<u32>` at alignment 4,
+// and a check written at that point would be a check nothing had ever run. Asserted here against a
+// hand-built `pendingLower`, since no fixture's realloc returns a misaligned pointer yet — the list work
+// owes that variant.
+func TestAMisalignedReallocResultIsRefused(t *testing.T) {
+	in := loadStringArgFixture(t)
+	cd := in.export.exports["echo"]
+	if cd.fn == nil {
+		t.Fatal("the fixture exports no echo")
+	}
+	f := &compFunc{mem: cd.fn.mem, reallocCore: cd.fn.reallocCore}
+
+	// The fixture's realloc returns 65536 on its first call — aligned to anything. At alignment 1 it is
+	// accepted, which is the vacuity being asserted.
+	if _, err := f.guestAlloc(&pendingLower{param: "s", bytes: []byte("abc"), align: 1}); err != nil {
+		t.Fatalf("an alignment-1 payload was refused: %v", err)
+	}
+	// A demand the fixture's pointer cannot satisfy shows the check is live rather than dead code. The
+	// second call returns 131072, so an alignment it is not a multiple of is what discriminates.
+	const odd = 65537 // not a divisor of any page boundary
+	if _, err := f.guestAlloc(&pendingLower{param: "s", bytes: []byte("abc"), align: odd}); err == nil {
+		t.Fatalf("a pointer not aligned to %d was accepted", odd)
+	} else if !strings.Contains(err.Error(), "aligned") {
+		t.Errorf("the refusal %q does not name the alignment", err)
 	}
 }
 
