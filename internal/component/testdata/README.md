@@ -467,3 +467,37 @@ Authored with `wasm-tools parse` (1.258.0); the `.wat` is committed beside the `
 ```sh
 wasm-tools parse task-return-string-clobber-synth.wat -o task-return-string-clobber-synth.wasm
 ```
+
+`string-arg-realloc-synth.wasm` is the witness for lowering a `string` **argument** through the guest's
+own `cabi_realloc` (#902, [ADR 0098](../../../docs/decisions/0098-a-string-argument-is-lowered-inside-the-callees-task-through-an-ordinary-call-to-the-guests-cabi-realloc.md)).
+
+Its realloc **grows the memory and returns a pointer into the page it just added**. That is the whole
+reason it is hand-authored: the guest `wit-bindgen` emits allocates into a pre-grown heap, so a write
+against a memory base captured *before* calling realloc would land correctly anyway and the hazard would
+be invisible. ADR 0073 is why the distinction matters — the boundary write resolves the image inside the
+growth lock, and this fixture is the case that tells the two apart.
+
+`echo` returns the **sum of the bytes it read**, not their count, so a test learns the content arrived at
+the right address rather than that something of the right size did. Three lifts, because three failure
+modes are unrelated: `echo` (the working path), `echo-trap` (the same signature against a realloc whose
+body is `unreachable`, since a guest may refuse an allocation), and `peek` (returns the byte at the
+allocation's address, so a test can check the host **left the allocation alone** — the model's rule is
+that a lowered argument belongs to the callee, and a host that freed or scrubbed it would show up here
+and nowhere else).
+
+The allocation address is predictable on purpose: one page grown per call, returning the old page count ×
+65536, so the first allocation is at 65536. A bump allocator with a hidden watermark would make the
+ownership witness unwritable from outside.
+
+Two core modules, for `task-return-string-clobber-synth.wasm`'s reason — the lift's canonopts name the
+memory and the realloc while the code module imports `task.return`, and one module cannot both supply an
+import's dependency and receive the import.
+
+No committed `.reading`: no reference toolchain produces a guest that grows inside its realloc, so there
+is no reference side to record, the same position the other two synth fixtures are in.
+
+Authored with `wasm-tools parse` (1.258.0); the `.wat` is committed beside the `.wasm`. Regenerate:
+
+```sh
+wasm-tools parse string-arg-realloc-synth.wat -o string-arg-realloc-synth.wasm
+```

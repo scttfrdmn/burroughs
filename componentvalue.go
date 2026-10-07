@@ -320,16 +320,15 @@ func (v ComponentValue) toCanon() (canon.Value, error) {
 	case KindComponentU32:
 		return canon.U32(uint32(v.bits)), nil
 	case KindComponentString:
-		// **A string ARGUMENT is refused here, by name, and that is the only direction still missing.**
-		// Lowering one means allocating in the guest's linear memory, which means calling the guest's own
-		// `cabi_realloc` — a host-initiated guest call this engine does not yet make. A string *result*
-		// crosses the other way and works, because the guest allocated it and `task.return` lifts it.
+		// **A string argument crosses now** (ADR 0098). It was refused here until the engine could place
+		// the bytes: lowering one means allocating in the guest's own linear memory through its
+		// `cabi_realloc`, inside the callee's task on the entry the callee runs on.
 		//
-		// Refused rather than attempted: a string lowered without a realloc has nowhere to live, and
-		// writing it anywhere else in guest memory would corrupt whatever is there.
-		return canon.Value{}, fmt.Errorf("%w: a string cannot be passed INTO a component call yet — "+
-			"lowering one needs the guest's cabi_realloc, which this engine does not yet invoke. A string "+
-			"RESULT works: an export declaring one returns it through Call", ErrUnsupported)
+		// The refusal that stood here named the realloc as the obstacle, which was accurate and is now
+		// discharged. What refuses instead, and refuses further in, is a lift that declares no `(realloc)`
+		// or no `(memory)` canonopt — a condition of the *component*, not of this value, and so not
+		// knowable at this point.
+		return canon.Str(v.s), nil
 	case KindComponentNone:
 		return canon.Value{}, fmt.Errorf("%w: a ComponentValue with no kind cannot cross the boundary — "+
 			"the zero value names no WIT type, so it is a value nobody constructed rather than a u32(0)",

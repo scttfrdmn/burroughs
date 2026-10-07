@@ -174,7 +174,10 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 		task := callee.newLiftTask(context.Background())
 
 		go func() {
-			res, err := callee.runLiftTask(task, params)
+			// No pending lowerings: a guest-to-guest call's arguments arrive already flat, lowered by the
+			// caller's own `canon lower` into the caller's memory and read across by the adapter. Nothing
+			// on this path builds a value the host must place in the callee's memory.
+			res, err := callee.runLiftTask(task, params, nil)
 			if err != nil {
 				// A child that trapped or was cancelled resolves the parent's subtask as a cancellation
 				// rather than a result. **The parent gets a terminal state either way**: leaving the
