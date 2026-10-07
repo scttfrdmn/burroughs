@@ -235,9 +235,16 @@ func ComponentU32(v uint32) ComponentValue {
 // total because `u32` has none.
 func ComponentString(s string) (ComponentValue, error) {
 	if !utf8.ValidString(s) {
-		return ComponentValue{}, fmt.Errorf("%w: a component string must be valid UTF-8, and this one is "+
-			"not; the Canonical ABI's string is UTF-8 while a Go string is an arbitrary byte sequence, so "+
-			"the two differ exactly here", ErrUnsupported)
+		// **No sentinel, deliberately.** `ErrUnsupported` means "this engine does not implement that yet"
+		// and the CLI maps it to its own exit code; invalid UTF-8 is the **caller's own bad input**, not a
+		// gap in the engine. An embedder matching `errors.Is(err, ErrUnsupported)` would read this as a
+		// missing feature and wait for a release that is never coming.
+		//
+		// A plain error is classified by the taxonomy as the invocation's own failure, which is what it
+		// is — and it adds no exported name. (Caught by the chair on the #913 review.)
+		return ComponentValue{}, fmt.Errorf("a component string must be valid UTF-8, and this one is not; " +
+			"the Canonical ABI's string is UTF-8 while a Go string is an arbitrary byte sequence, so the " +
+			"two differ exactly here")
 	}
 	return ComponentValue{typ: ComponentTypeString(), s: s}, nil
 }
