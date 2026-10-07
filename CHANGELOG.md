@@ -959,6 +959,24 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **`ComponentString` classified the caller's bad input as an engine gap**
+  ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). Invalid UTF-8 was wrapped in
+  `ErrUnsupported`, which means *"this engine does not implement that yet"* and carries its own CLI exit
+  code — so an embedder matching that sentinel would read their own malformed string as a missing feature
+  and wait for a release that was never coming. It returns a plain error now, which the taxonomy
+  classifies as the invocation's own failure; that is accurate and adds no exported name. The
+  string-**argument** refusal keeps `ErrUnsupported`, because that one genuinely is an engine gap — the
+  two are about different parties and must not share a sentinel.
+- **A sync lift returning a non-scalar described the engine as narrower than it is, and named the wrong
+  obstacle** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). The refusal said *"this slice
+  carries u32 only"*, true of both paths when written and now true only of the sync one. It already
+  refused rather than falling through — which matters, because a sync result flattening wider than one
+  word comes back through a return **pointer** (`MAX_FLAT_RESULTS` is 1, `definitions.py:2109`), so the
+  `u32` path would have read an address as data. The message now names both obstacles: the return pointer,
+  and the lift's `post-return` — called *after* the lift (def:2111-2116, checked at the model) — which
+  this engine neither captures nor calls, so lifting without it would leak the guest's buffer. An earlier
+  draft of the message claimed an async export returning the same kind works; that is true of `string`
+  and **false of `list` and `record`**, and a test now forbids the misdirection.
 - **The eager lift carried `u32` alone, which was a regression the moment it shipped**
   ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). A non-`u32` scalar returned by an async
   *cross-component* child used to resolve through `crossComponentValue`, which has arms for `bool` and all

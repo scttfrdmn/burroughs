@@ -226,8 +226,38 @@ func liftFlatCoreResult(name string, sig *FuncType, res []interp.Value) ([]canon
 		}
 		return nil, nil
 	}
+	// **A SYNC lift carries `u32` only, and the reason is `post-return` rather than the lift.**
+	//
+	// The message here said *"this slice carries u32 only (#864)"*, which was true of both paths when it
+	// was written and is now true of only this one — the async path lifts a `string` eagerly inside
+	// `task.return` (#903). A refusal that describes the engine as narrower than it is sends a reader
+	// looking for a limit in the wrong place.
+	//
+	// A sync `string` result needs **two** things this engine does not have, and the first is the sharper
+	// one:
+	//
+	//  1. **It does not arrive in flat words at all.** The sync path lifts with `MAX_FLAT_RESULTS`, which
+	//     is **1** (definitions.py:2109, and the constant at def:1784), so anything flattening wider than
+	//     one word — a string is two — **spills to a return pointer**: the caller passes a pointer and the
+	//     callee writes the `(ptr, len)` pair there. The async path lifts with `MAX_FLAT_PARAMS` (16,
+	//     def:2336), which is why a string crosses `task.return` flat and crosses here not at all.
+	//  2. **`post-return`.** The guest allocated the buffer and nothing has freed it; the ABI's answer is
+	//     the lift's `post-return`, called **after** the lift (def:2111-2116, confirmed at the model rather
+	//     than assumed). This engine neither captures that canonopt for a lift nor calls it, so lifting
+	//     the bytes without it would leak the guest's allocation on every call.
+	//
+	// So this is a refusal **by name** and not a fallthrough. Reaching the flat-word path below with a
+	// string result would read the **return pointer** as though it were the number — a plausible wrong
+	// value rather than an error, which is the outcome the refusal exists to prevent.
 	if sig.Result.Kind != VU32 {
-		return nil, fmt.Errorf("%w: export %q returns %s; this slice carries u32 only (#864)",
+		// The closing hint names what DOES work without claiming it for the kind in hand. An earlier
+		// draft said "an async export returning %s works", which is true for `string` and **false for
+		// `list` and `record`** — the eager lift refuses those too. A refusal that misdirects is worse
+		// than one that only declines.
+		return nil, fmt.Errorf("%w: export %q is a sync lift returning %s; a sync lift carries u32 only. "+
+			"A result flattening wider than one word returns through a return pointer rather than in flat "+
+			"values, and freeing the guest's buffer needs the lift's post-return — this engine does "+
+			"neither. A string result does cross from an async export, through task.return",
 			ErrUnsupportedForm, name, valKindName(sig.Result.Kind))
 	}
 	// A declared result the guest never produced is a distinct failure from a wrong value, and is named as

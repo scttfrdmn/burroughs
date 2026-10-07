@@ -3,6 +3,7 @@
 package component
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -394,6 +395,61 @@ func TestTaskReturnChecksItsFlatArity(t *testing.T) {
 	// One word is right for a u32 and wrong for a string: the two must not share a check.
 	if _, err := liftTaskReturnValue(nil, ValType{Kind: VString}, []interp.Value{interp.I32(0)}); err == nil {
 		t.Fatal("a string result with one flat value lifted successfully; a string is two words")
+	}
+}
+
+// TestASyncLiftRefusesANonScalarResultRatherThanReadingItsReturnPointer answers the chair's question on
+// the #913 review: what does a **sync** lift declaring a `string` result do today?
+//
+// It refuses by name, and this pins that — because the alternative is not a wrong error but a **plausible
+// wrong value**. A sync result flattening wider than one word returns through a return **pointer**
+// (`MAX_FLAT_RESULTS` is 1, definitions.py:2109), so the single flat word is an address. The `u32` path
+// would read that address as the number and hand it back as data.
+//
+// Asserted on the lift helper directly: no committed guest is a sync lift declaring a string result, and
+// *a negative claim buys a branch an exemption only if something checks the exemption.*
+func TestASyncLiftRefusesANonScalarResultRatherThanReadingItsReturnPointer(t *testing.T) {
+	// One flat word, as a sync lift with a spilled result really does return — an address, here a
+	// plausible-looking one.
+	retPtr := []interp.Value{interp.I32(1024)}
+
+	for _, kind := range []ValKind{VString, VList, VRecord} {
+		vt := kind
+		sig := &FuncType{Result: &ValType{Kind: vt}}
+		_, err := liftFlatResult("echo", sig, liftResult{flat: retPtr})
+		if err == nil {
+			t.Fatalf("a sync lift returning %s was accepted; its flat word is a return pointer, so the "+
+				"value handed back would be the address read as data", valKindName(vt))
+		}
+		if !errors.Is(err, ErrUnsupportedForm) {
+			t.Errorf("%s: refusal is not ErrUnsupportedForm: %v", valKindName(vt), err)
+		}
+		// The message must name the kind and both obstacles, because "u32 only" alone was the stale
+		// sentence this replaced — it described the engine as narrower than it is now that the async path
+		// carries a string.
+		msg := strings.ToLower(err.Error())
+		for _, want := range []string{valKindName(vt), "pointer", "post-return", "task.return"} {
+			if !strings.Contains(msg, strings.ToLower(want)) {
+				t.Errorf("%s: the refusal %q does not mention %q", valKindName(vt), err, want)
+			}
+		}
+		// And it must NOT claim this kind crosses from an async export — true of `string`, false of
+		// `list` and `record`, which the eager lift refuses too. A refusal that misdirects is worse than
+		// one that only declines.
+		if vt != VString && strings.Contains(msg, "returning "+strings.ToLower(valKindName(vt))+" works") {
+			t.Errorf("%s: the refusal claims an async export returning it works, which is false — the "+
+				"eager lift refuses compound kinds as well", valKindName(vt))
+		}
+	}
+
+	// And a sync u32 result still works, so the refusal is about width and not about sync lifts.
+	out, err := liftFlatResult("compute", &FuncType{Result: &ValType{Kind: VU32}},
+		liftResult{flat: []interp.Value{interp.I32(7)}})
+	if err != nil {
+		t.Fatalf("a sync u32 result was refused: %v", err)
+	}
+	if got, ok := out[0].U32(); !ok || got != 7 {
+		t.Fatalf("a sync u32 result lifted to %v (ok=%v), want 7", got, ok)
 	}
 }
 

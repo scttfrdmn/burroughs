@@ -136,13 +136,28 @@ func TestAStringArgumentIsRefusedByName(t *testing.T) {
 
 // TestComponentStringRefusesInvalidUTF8 is ADR 0097's stamped behaviour: the validity check is at
 // construction, not at the boundary.
+//
+// # And the refusal carries NO sentinel, which is the point of the second half
+//
+// `ErrUnsupported` means "this engine does not implement that yet". Invalid UTF-8 is the **caller's own
+// bad input**, so an embedder matching that sentinel would read it as a missing feature and wait for a
+// release that is never coming. An unsentineled error is classified by the CLI taxonomy as the
+// invocation's own failure, which is accurate, and adds no exported name.
+//
+// Contrast with the string-**argument** refusal, which keeps `ErrUnsupported` because that one genuinely
+// is an engine gap. The two refusals are about different parties and must not share a sentinel.
 func TestComponentStringRefusesInvalidUTF8(t *testing.T) {
 	// A lone 0xff is not a legal UTF-8 byte in any position; 0x80 is a continuation with no lead byte.
 	for _, bad := range []string{"\xff", "\x80", "ok-then\xff", "\xc3"} {
-		if _, err := burroughs.ComponentString(bad); err == nil {
+		_, err := burroughs.ComponentString(bad)
+		if err == nil {
 			t.Errorf("ComponentString(%q) succeeded; the Canonical ABI's string is UTF-8", bad)
-		} else if !errors.Is(err, burroughs.ErrUnsupported) {
-			t.Errorf("ComponentString(%q) refused with a non-ErrUnsupported error: %v", bad, err)
+			continue
+		}
+		if errors.Is(err, burroughs.ErrUnsupported) {
+			t.Errorf("ComponentString(%q) refused with ErrUnsupported: %v — that sentinel means the "+
+				"engine has not implemented something, and an embedder would read this as a missing "+
+				"feature rather than as their own bad input", bad, err)
 		}
 	}
 	// And the legitimate cases are not caught by an over-eager check — including the empty string, which
