@@ -284,39 +284,65 @@ func TestTaskReturnTrapsOnACharOutsideTheUnicodeScalarRange(t *testing.T) {
 //
 // `crossComponentValue`'s scalar arms are now reached only by a sync cross-component call. For an async
 // one, `task.return`'s lifted value wins — so any kind that switch handles and `liftTaskReturnValue` does
-// not is a kind that silently stopped working. Derived from the two implementations rather than listed,
-// so a future arm added to one and not the other fails here.
+// not is a kind that silently stopped working.
+//
+// # The domain is derived, and the first draft only said so
+//
+// This test's comment claimed the domain was *"derived from the two implementations rather than listed,
+// so a future arm added to one and not the other fails here"* while the code held a **hand-written list
+// of nine kinds**. A tenth arm added to `crossComponentValue` would have passed unnoticed — exactly the
+// drift the test advertised catching. *A comment names one constraint, the code embodies another*, and
+// the comment is the one a reader trusts.
+//
+// So the domain now comes from the `ValKind` enum's own extent, read off `valKindName` the way
+// `TestBridgeClassifiesEveryValKind` reads it, and membership is **asked of `crossComponentValue`
+// itself** rather than asserted: every kind it accepts is a kind the eager lift owes.
 func TestTaskReturnCoversEveryKindCrossComponentValueDoes(t *testing.T) {
-	// The kinds `crossComponentValue` carries, as its switch has them.
-	crossCarried := []ValType{
-		{Kind: VBool},
-		{Kind: VU8},
-		{Kind: VU16},
-		{Kind: VU32},
-		{Kind: VU64},
-		{Kind: VS8},
-		{Kind: VS16},
-		{Kind: VS32},
-		{Kind: VS64},
-	}
-	var missing []string
-	for _, vt := range crossCarried {
-		// Confirm the premise: the sync path really does carry it. A kind that stopped being carried
-		// there would make this test's domain quietly shrink.
-		if _, err := crossComponentValue(&FuncType{Result: &vt}, liftResult{flat: []interp.Value{{Bits: 1}}}); err != nil {
-			t.Fatalf("premise failed: crossComponentValue no longer carries %s (%v) — this test's domain "+
-				"is derived from that switch, so it must be updated deliberately", valKindName(vt.Kind), err)
+	// The enum's extent: every kind `valKindName` names is declared, and the first number it renders as
+	// `valkind(N)` is one past the end.
+	var n int
+	for k := range 256 {
+		if strings.HasPrefix(valKindName(ValKind(k)), "valkind(") {
+			n = k
+			break
 		}
+	}
+	// A floor on the derivation, not on the result: a domain of two or three means the extent walk
+	// stopped early rather than that the enum shrank.
+	if n < 20 {
+		t.Fatalf("derived a ValKind extent of %d, below the floor; the enum has more kinds than that, so "+
+			"the derivation is wrong rather than the enum small", n)
+	}
+
+	var carried, missing []string
+	for k := range n {
+		vt := ValType{Kind: ValKind(k)}
+		// **Membership is asked, not listed.** A compound kind reaches this with its element/field slices
+		// empty, which `crossComponentValue` refuses through its default arm along with every other
+		// non-scalar — so a degenerate compound cannot smuggle itself into the domain.
+		if _, err := crossComponentValue(&FuncType{Result: &vt}, liftResult{flat: []interp.Value{{Bits: 1}}}); err != nil {
+			continue // not carried by the sync path, so the eager lift owes nothing for it
+		}
+		carried = append(carried, valKindName(vt.Kind))
 		if _, err := liftTaskReturnValue(nil, vt, []interp.Value{{Bits: 1}}); err != nil {
 			missing = append(missing, valKindName(vt.Kind))
 		}
 	}
+
 	if len(missing) > 0 {
 		t.Fatalf("task.return cannot lift %v, which crossComponentValue carries. An async child returning "+
 			"one of those used to resolve through that switch and now resolves through the eager lift, so "+
 			"each is a kind that silently stopped working.", missing)
 	}
-	t.Logf("EAGER-LIFT-COVERS %d kind(s) the sync cross-component path carries", len(crossCarried))
+	// The floor the chair set: nine kinds are carried today (bool and the eight integers). Fewer means the
+	// sync path's switch shrank, which makes this test's domain shrink with it — a green over a domain
+	// that quietly emptied is the failure mode a derived domain is otherwise prone to.
+	if len(carried) < 9 {
+		t.Fatalf("crossComponentValue carries only %d kind(s) (%v); nine are expected, so either an arm "+
+			"was removed or the probe stopped reaching them, and this control's domain has silently shrunk",
+			len(carried), carried)
+	}
+	t.Logf("EAGER-LIFT-COVERS %d of %d ValKind(s): %v", len(carried), n, carried)
 }
 
 // TestTaskReturnRefusesAResultKindItCannotLift pins the refusal side, because the eager lift's scope is
