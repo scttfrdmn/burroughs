@@ -396,12 +396,26 @@ func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
 //
 // # Scope: what a FLAT lift can carry without a per-element load
 //
-// The scalars are their own words, and a `string` is a `(ptr, len)` pair whose bytes are read through the
-// codec's one string lift. Everything compound — a list, a variant, a record — needs a per-element load
-// the way `canon.StoreList` needs a per-element store, and no such lift exists yet (`canon.LoadListU8` is
-// the one reduced case, and it reduces only because a u8 is one byte at a one-byte stride). So those
-// refuse **by name** here rather than being approximated, which is the same discipline the bridge applies
-// one level up.
+// Every one-word kind — `bool`, the eight integers, `f32`/`f64`, `char` — is lifted by the codec's one
+// scalar flat lift, and a `string` is a `(ptr, len)` pair whose bytes are read through the codec's one
+// string lift. Everything compound — a list, a variant, a record — needs a per-element load the way
+// `canon.StoreList` needs a per-element store, and no such lift exists yet (`canon.LoadListU8` is the one
+// reduced case, and it reduces only because a u8 is one byte at a one-byte stride). So those refuse
+// **by name** here rather than being approximated, which is the same discipline the bridge applies one
+// level up.
+//
+// # Why every scalar, and not just the one a fixture drives
+//
+// This function handled `u32` alone when it landed, because `u32` is what every committed guest returns.
+// That was a **regression the moment it shipped**, and guest-driven scope does not excuse it: before the
+// eager lift, a non-`u32` scalar from an async *cross-component* child resolved through
+// `crossComponentValue`, which has arms for bool, the eight integers and the two floats. An eagerly
+// lifted value takes precedence over the flat words, so those arms became unreachable for the async path
+// and a conforming child returning `bool` would have **trapped** where it used to work.
+//
+// No committed fixture returns one, so nothing caught it — the same blindness that let the late lift
+// survive, one layer along. The arms are added because the set is *closed and small*, not because a guest
+// asked: a partial switch over a complete enum is a defect waiting for its first caller.
 //
 // It deliberately does not build a second lift path: every indirect read goes through
 // `canon.LoadStringFromRange`, which is the function the codec's own two arms call and the differential's
@@ -422,11 +436,28 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 	}
 
 	switch ct.Kind {
-	case canon.KindU32:
+	// Every one-word kind — bool, the eight integers, the two floats, char — goes through the codec's
+	// **one** scalar flat lift. Delegated rather than restated: `canon.LiftFlatScalar` is the function
+	// `liftFlat` reaches for every scalar, so the differential against `definitions.py` over
+	// `gen/cases.json` is its oracle, and these arms are verified against the model rather than against a
+	// table. Restating them here is what produced the `u32`-only regression in the first place.
+	case canon.KindBool, canon.KindU8, canon.KindU16, canon.KindU32, canon.KindU64,
+		canon.KindS8, canon.KindS16, canon.KindS32, canon.KindS64,
+		canon.KindF32, canon.KindF64, canon.KindChar:
 		if err := want(1); err != nil {
 			return canon.Value{}, err
 		}
-		return canon.U32(uint32(args[0].Int32())), nil
+		// `Bits` and not `Int32()`: the lift is defined on the unsigned word (definitions.py's iterator
+		// yields one, and `char`'s trap depends on it), and a 64-bit kind needs all 64 bits. Narrowing is
+		// the codec's business, per kind, where `flattenType` says how wide the word is.
+		v, lerr := canon.LiftFlatScalar(ct, args[0].Bits)
+		if lerr != nil {
+			// A `char` outside the Unicode scalar range is the reachable case, and it is a **guest fault**:
+			// the model traps there (def:1343-1347), so this does too.
+			return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
+				"task.return's %s result: %v", ct.Kind, lerr)}
+		}
+		return v, nil
 
 	case canon.KindString:
 		// Two flat words, `(ptr, byte-length)`. **Read now**, which is the whole point: the guest resumes
@@ -445,10 +476,16 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 		return v, nil
 
 	default:
+		// Everything left is compound: list, variant (and so result/option/enum, which despecialize to
+		// one), record, tuple, own/borrow. The message said "this engine lifts scalars and string" while
+		// only `u32` was handled, which made it **false for every other scalar** — a refusal that
+		// misdescribes its own scope sends the next reader looking for a bug that is not there. It is now
+		// accurate about what remains.
 		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
-			"task.return declares a %s result; this engine lifts scalars and string from a task.return's "+
-				"flat values, and a compound needs a per-element load the codec does not yet expose",
-			ct.Kind)}
+			"task.return declares a %s result; a compound value needs a per-element load the codec does "+
+				"not yet expose — the mirror of the per-element store canon.StoreList takes — so this "+
+				"engine lifts bool, the integers, the floats, char and string from a task.return's flat "+
+				"values and refuses the rest by name", ct.Kind)}
 	}
 }
 

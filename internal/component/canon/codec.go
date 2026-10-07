@@ -321,6 +321,71 @@ func LoadStringFromRange(h ReadHeap, ptr, byteLength int) (Value, error) {
 	return Str(string(data)), nil
 }
 
+// LiftFlatScalar lifts a scalar, `bool` or `char` value of type t from the single core word it occupies.
+//
+// # Why this is exported and why there is exactly one of it
+//
+// It is the codec's own flat-lift arms, extracted (#903) so that the component layer's `task.return` can
+// lift its result **eagerly** without reimplementing them. It had reimplemented one of them: `u32` alone,
+// which was a regression the moment it shipped, because a non-`u32` scalar from an async cross-component
+// child used to resolve through a path with arms for `bool` and all eight integers. A partial switch over
+// a closed enum is a defect waiting for its first caller.
+//
+// **So the differential is this function's oracle.** `TestCodecMatchesReferenceModel` drives `liftFlat`
+// over every case in `gen/cases.json` against the flat types and values `definitions.py` emits, and
+// `liftFlat` now reaches every scalar through here. The conversions are therefore verified against the
+// model rather than against a table someone wrote out, which is the whole reason for extracting rather
+// than copying.
+//
+// The conversions, with the model's rules:
+//
+//   - the unsigned integers are `lift_flat_unsigned` (definitions.py:1914-1917): the word modulo the
+//     target width, which a Go truncating conversion is;
+//   - the signed integers are `lift_flat_signed` (def:1919-1925): the same reduction, then the top bit
+//     read as the sign, which a Go conversion through the sized signed type is;
+//   - `bool` is `convert_int_to_bool` (def:1311-1313) — **nonzero is true**, `bool(i)` and not `i == 1`,
+//     so a guest returning 2 for true is returning true;
+//   - `char` is `convert_i32_to_char` (def:1343-1347), which **traps** past the last code point or inside
+//     the surrogate range — delegated to [Char], which applies exactly those two conditions, so the
+//     refusal is the constructor's and cannot drift from it;
+//   - `f32`/`f64` canonicalize a NaN (def:1319-1341), because a guest may hand over any of the many NaN
+//     bit patterns and the ABI admits one.
+//
+// A non-scalar kind is refused by name: it is not a one-word value and has no business here.
+func LiftFlatScalar(t Type, word uint64) (Value, error) {
+	switch t.Kind {
+	case KindBool:
+		return Bool(word != 0), nil
+	case KindU8:
+		return Value{Type: t, u: word & 0xff}, nil
+	case KindU16:
+		return Value{Type: t, u: word & 0xffff}, nil
+	case KindU32:
+		return Value{Type: t, u: word & 0xffffffff}, nil
+	case KindU64:
+		return Value{Type: t, u: word}, nil
+	case KindS8:
+		return Value{Type: t, u: uint64(int64(int8(word)))}, nil
+	case KindS16:
+		return Value{Type: t, u: uint64(int64(int16(word)))}, nil
+	case KindS32:
+		return Value{Type: t, u: uint64(int64(int32(word)))}, nil
+	case KindS64:
+		return Value{Type: t, u: word}, nil
+	case KindF32:
+		return Value{Type: t, u: uint64(canonicalizeNaN32(uint32(word)))}, nil
+	case KindF64:
+		return Value{Type: t, u: canonicalizeNaN64(word)}, nil
+	case KindChar:
+		// The word is read UNSIGNED. The model asserts `i >= 0` because its iterator yields the unsigned
+		// word, so a word with the top bit set is a large code point to be trapped — not a negative rune
+		// that would slip past an `i >= 0x110000` test.
+		return Char(rune(uint32(word)))
+	default:
+		return Value{}, fmt.Errorf("canon: %s is not a scalar and does not lift from a single core word", t.Kind)
+	}
+}
+
 // LoadListU8 lifts the elements of a `list<u8>` given its (pointer, count) — the one case where the
 // model's per-element load loop reduces to a contiguous read, because a `u8` is one byte at a one-byte
 // stride. It is the lifting counterpart of the framing [StoreList] owns.
@@ -784,30 +849,13 @@ func coerce(have, want string, bits uint64) uint64 {
 // drains the unused joined slots.
 func (h *heap) liftFlat(it *coreValueIter, t Type) (Value, error) {
 	switch t.Kind {
-	case KindBool:
-		return Bool(it.next("i32") != 0), nil
-	case KindU8:
-		return Value{Type: t, u: it.next("i32") & 0xff}, nil
-	case KindU16:
-		return Value{Type: t, u: it.next("i32") & 0xffff}, nil
-	case KindU32:
-		return Value{Type: t, u: it.next("i32") & 0xffffffff}, nil
-	case KindU64:
-		return Value{Type: t, u: it.next("i64")}, nil
-	case KindS8:
-		return Value{Type: t, u: uint64(int64(int8(it.next("i32"))))}, nil
-	case KindS16:
-		return Value{Type: t, u: uint64(int64(int16(it.next("i32"))))}, nil
-	case KindS32:
-		return Value{Type: t, u: uint64(int64(int32(it.next("i32"))))}, nil
-	case KindS64:
-		return Value{Type: t, u: it.next("i64")}, nil
-	case KindF32:
-		return Value{Type: t, u: uint64(canonicalizeNaN32(uint32(it.next("f32"))))}, nil
-	case KindF64:
-		return Value{Type: t, u: canonicalizeNaN64(it.next("f64"))}, nil
-	case KindChar:
-		return Char(rune(it.next("i32")))
+	case KindBool, KindU8, KindU16, KindU32, KindU64, KindS8, KindS16, KindS32, KindS64,
+		KindF32, KindF64, KindChar:
+		// **One scalar flat lift** (#903), where these were thirteen arms here and a second set of the
+		// same conversions in the component layer's `task.return`. The core type to pull is the kind's own
+		// flat type rather than a literal per arm — `flattenType` is the authority on which word a scalar
+		// occupies, so an arm cannot disagree with it.
+		return LiftFlatScalar(t, it.next(flattenType(t)[0]))
 	case KindString:
 		// Through the one string lift (#903). The flat form supplies the two words from the core value
 		// iterator rather than from memory, which is why it calls the range function and `load` calls the

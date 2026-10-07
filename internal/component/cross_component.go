@@ -310,6 +310,15 @@ func crossComponentValue(sig *FuncType, res liftResult) (canon.Value, error) {
 		// carries perfectly — grave #885's guest is exactly it.
 		return canon.Value{}, nil
 	}
+	// **These arms are the SYNC path's now** (#903). An async child resolves through `task.return`, which
+	// lifts eagerly and whose value is preferred above, so the switch below is reached only by a sync
+	// cross-component call — which has no `task.return` and therefore nothing lifted.
+	//
+	// That division is why the eager lift had to grow past `u32` in the same breath as it landed: these
+	// arms used to serve the async path too, so an async child returning `bool` worked here and would have
+	// begun trapping. The two sets are deliberately not merged — a sync child's result is its core
+	// function's return value, with no memory and no guest resumption in between, so it genuinely is just
+	// the word.
 	if len(res.flat) != 1 {
 		return canon.Value{}, fmt.Errorf("%w: child returned %d flat values for a %s result, want 1",
 			ErrCrossComponentResult, len(res.flat), valKindName(sig.Result.Kind))
