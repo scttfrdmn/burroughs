@@ -266,9 +266,26 @@ func TestCloseCancelsAnInFlightCall(t *testing.T) {
 		done <- cErr
 	}()
 
-	// The guest spins with no host import, so there is no entry hook; a short delay then Close. Sound
-	// because the fixture cannot finish on its own — whenever Close lands, it is the only thing that can
-	// end the call — and its own 200000 spin bound makes an ignored cancellation fail loudly.
+	// **A sleep that stays, and the sweep's job is to say why** (#918).
+	//
+	// "The call is in flight" means `Component`'s own in-flight counter is non-zero, and **that is not
+	// observable from this package** — these tests are in `burroughs_test` precisely so the claim is
+	// reachability from outside, which is the same containment that puts the counter out of reach. The
+	// guest spins with no host import, so there is no entry hook either.
+	//
+	// **A goroutine-count poll was tried and is worse.** The `Call` goroutine is scheduled and counted
+	// *before* it reaches the counter increment, so the poll returns in microseconds, `Close` wins, and
+	// the call comes back `ErrComponentClosed` — this test failed 3 for 3 that way. Measured, not
+	// reasoned; the replacement was the regression.
+	//
+	// **It can only cause a false FAILURE, never a false pass**, which is the distinction that makes it
+	// tolerable where `TestCloseReachesItsBoundWithANamedOutcome`'s sleep was not. Too long is harmless:
+	// the fixture cannot finish on its own, so `Close` is still the only thing that can end the call and
+	// the answer is still `ErrCancelled`. Too short yields `ErrComponentClosed` and the assertion fails.
+	// There is no interleaving in which a broken `Close` passes here.
+	//
+	// The real witness for the guest's own cancellation path is one level down, in `internal/component`,
+	// where a host import can be supplied — as this test's own doc comment already says.
 	time.Sleep(20 * time.Millisecond)
 
 	closeErr := c.Close()
@@ -322,11 +339,11 @@ func TestCloseReturnsTheGoroutineCountToWhereItStarted(t *testing.T) {
 		_, cErr := c.Call(context.Background(), "run")
 		done <- cErr
 	}()
-	time.Sleep(20 * time.Millisecond)
-	if n := runtime.NumGoroutine(); n <= base {
-		t.Logf("goroutines did not rise above the baseline (%d vs %d); the fixture may have finished "+
-			"before the measurement, which weakens this arm but does not invalidate it", n, base)
-	}
+	// Waits on the rise rather than sleeping and then noting whether it happened (the #918 sweep). The
+	// old form only `t.Logf`'d when the count had not risen, so it was no false-pass risk — but the note
+	// it printed was load-dependent, which makes it a log a reader cannot act on. Now the rise is the
+	// condition, and a call that never starts fails rather than annotating.
+	inFlight(t, base, 5*time.Second)
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -336,6 +353,34 @@ func TestCloseReturnsTheGoroutineCountToWhereItStarted(t *testing.T) {
 		t.Errorf("goroutines did not return to the baseline %d within 5s (now %d) — Close released the "+
 			"instance's state but something it started is still running", base, runtime.NumGoroutine())
 	}
+}
+
+// inFlight waits until the goroutine count rises above `base`, which from **outside** the module is the
+// only observable sign that a `Call` has actually started.
+//
+// # Why a proxy, and why it is still right
+//
+// These tests are in `burroughs_test` on purpose — the claim is reachability from outside — so `Component`'s
+// own in-flight counter is unreachable. A goroutine-count rise is indirect, but it is a **real condition
+// with a deadline** rather than a timer, which is the whole difference: a fast machine does not wait, a
+// slow one is not failed, and a call that never starts **fails the test** instead of letting it assert
+// against an idle component.
+//
+// It replaced `time.Sleep(20 * time.Millisecond)` at two sites (the #918 sweep). At one of them the sleep
+// was a genuine false-pass risk: if `Close` ran before the call entered, the call would return
+// `ErrComponentClosed` and the test's `ErrCancelled` assertion would fail for a reason having nothing to
+// do with the behaviour under test.
+func inFlight(t *testing.T, base int, bound time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(bound)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() > base {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("no goroutine appeared above the baseline %d within %s, so the call never started and this "+
+		"test would have asserted against an idle component", base, bound)
 }
 
 // settle polls until the goroutine count is at or below want, and reports whether it got there. A poll on
