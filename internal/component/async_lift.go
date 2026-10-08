@@ -477,15 +477,26 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 
 	default:
 		// Everything left is compound: list, variant (and so result/option/enum, which despecialize to
-		// one), record, tuple, own/borrow. The message said "this engine lifts scalars and string" while
-		// only `u32` was handled, which made it **false for every other scalar** — a refusal that
-		// misdescribes its own scope sends the next reader looking for a bug that is not there. It is now
-		// accurate about what remains.
+		// one), record, tuple, own/borrow.
+		//
+		// **This message has now been wrong twice, in opposite directions, and both are worth naming.**
+		// It first said "this engine lifts scalars and string" while only `u32` was handled, which made
+		// it false for every other scalar. It was then accurate, and said a compound "needs a
+		// per-element load the codec does not yet expose — the mirror of the per-element store
+		// canon.StoreList takes". That became false when `canon.LoadList` landed with exactly that
+		// injected per-element load: the capability it named as missing exists, and the message was
+		// still sending readers to look for it.
+		//
+		// So it now names what is actually missing, which is the wiring here and not a codec gap. The
+		// general shape is the one `CLAUDE.md` calls foreclosing words — a sentence true when written,
+		// left standing across the work that falsified it — and an error message is the worst place for
+		// it, because a reader meets it already looking for a cause.
 		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
-			"task.return declares a %s result; a compound value needs a per-element load the codec does "+
-				"not yet expose — the mirror of the per-element store canon.StoreList takes — so this "+
-				"engine lifts bool, the integers, the floats, char and string from a task.return's flat "+
-				"values and refuses the rest by name", ct.Kind)}
+			"task.return declares a %s result; this engine lifts bool, the integers, the floats, char "+
+				"and string from a task.return's flat values and refuses the rest by name. The codec "+
+				"does expose the per-element load a list needs (canon.LoadList, the mirror of "+
+				"canon.StoreList's injected element store); what is missing is this arm using it, which "+
+				"is its own slice", ct.Kind)}
 	}
 }
 
