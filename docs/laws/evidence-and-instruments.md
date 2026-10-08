@@ -1324,3 +1324,53 @@ reach is a law out of context.
   measured three-row table — rather than to quietly write a different test than the one that was asked
   for. (ADR
   [0070](../decisions/0070-an-embedder-panic-is-repaired-inside-the-defers-that-already-exist.md).)
+
+### Every wait is paired with an assertion that what it waited for actually happened.
+
+- **The rule, in the chair's words on the #920 review:** *every wait is paired with an assertion that
+  what it waited for actually happened. A wait whose condition can't be observed from the test's package
+  uses a timer plus that assertion, never a proxy: a timer that's too short fails visibly, while a proxy
+  that returns early passes silently.*
+
+  **The asymmetry is the whole content.** A timer that is too short produces the wrong *outcome*, and the
+  assertion catches it. A proxy that returns early produces the right outcome for the wrong reason — the
+  test ran against a state that never existed — and nothing catches it, because the proxy *looks* like a
+  wait on a real condition and that is exactly the property a reviewer stops checking. So where the
+  condition is unobservable the timer is the **safer** instrument, which inverts the usual advice and is
+  why this is written down rather than left to judgement.
+
+  **Third appearance, and the family is one shape seen from three sides.**
+
+  (1) **[Grave #891](https://github.com/scttfrdmn/burroughs/issues/891)** — the negative-assertion form.
+  Two parks assertions checked that a parked agent *had not* returned, with soundness resting on how wide
+  the window was; both passed 250 runs on `darwin/arm64`, and `ubuntu-24.04` then reported a miss. The
+  repair was to make each **sound by construction** — the agent's subtask resolves only when the test
+  calls its resolver, so an unresolved agent *cannot* complete — rather than by widening the window.
+  Cited as the same family and not the same shape: there a window stood in for the condition, here a wait
+  does.
+
+  (2) **`TestCloseReachesItsBoundWithANamedOutcome`** — slept 20ms for a call to be in flight, then
+  asserted a zero `Close` bound yields `ErrCloseIncomplete`. Under `make strict`'s full-package load the
+  call had not entered, `Close` returned cleanly, and the test reported that the bound had not fired: **a
+  true statement about a run that never set up the condition.** The dangerous direction is the other one —
+  the same sleep could have passed over a genuinely broken bound on an idle machine. Repaired to wait on
+  the in-flight counter, which that test *can* see because it is in the internal package.
+
+  (3) **`TestCloseReturnsTheGoroutineCountToWhereItStarted`** — and this one was introduced **by the
+  sweep meant to fix the family**. A goroutine-count poll replaced its sleep; the `Call` goroutine is
+  scheduled and counted *before* it reaches the in-flight increment, so the poll returned in
+  microseconds, `Close` tore down an **idle** component, the count settled because nothing had been
+  running, and the leak check passed having released nothing. It had no assertion on the call's own
+  outcome, so it passed that way on **every run for a slice**. Adding the assertion exposed it 6 times
+  out of 6; the sleep returned, and with the sleep set to zero it fails 8 times out of 8.
+
+  **The helper that proxy lived in was deleted rather than kept for a future caller.** A wait that
+  returns too early is worse than no wait: it reads as a wait on a real condition. *A control that cannot
+  distinguish "the condition holds" from "I did not look" is not a control*, and the same goes for a wait.
+
+  **What this does not say.** It does not ban timers. A sleep that **is** the subject of a test — a
+  deliberately late resolution, a held semaphore, a blocking excursion — and a sleep that is the
+  measurement window for a negative claim are both correct, and the #918 sweep kept 13 of those two kinds
+  for exactly those reasons; that sweep's value was its classification, not a count of deletions. What is
+  banned is a wait standing in for a condition **with nothing downstream that would notice if it had not
+  held.** (Ruling: chat-Claude, on the #920 review.)

@@ -386,6 +386,97 @@ func LiftFlatScalar(t Type, word uint64) (Value, error) {
 	}
 }
 
+// ListByteLength is `count × elem_size` for a list, computed so it cannot overflow and bounded the way
+// the model bounds it.
+//
+// # Why an overflow check where the model needs none
+//
+// `store_list_into_range` computes `len(v) * elem_size(...)` and asserts the product is at most
+// `REALLOC_I32_MAX` (definitions.py:1711-1713). Python integers do not overflow, so the model's `assert`
+// is the whole of its guard. **Go's do**, and the count on the lifting side is a word the **guest**
+// supplies — so the multiplication is attacker-controlled arithmetic and the product must be checked
+// before it is used as a length.
+//
+// The check is the division form rather than "multiply and see if it got smaller": the latter is
+// undefined-adjacent reasoning about wraparound, and on a 64-bit `int` a product can wrap past zero and
+// land on a *plausible small positive*, which is the value a bounds check would then wave through.
+//
+// `ReallocI32Max` is the model's own bound (def:1359), so a list whose bytes cannot be addressed by the
+// ABI's 32-bit pointer space is refused here rather than at a realloc that would be asked for a quantity
+// it cannot express.
+func ListByteLength(count, elemSize int) (int, error) {
+	if count < 0 {
+		return 0, fmt.Errorf("canon: list count %d is negative", count)
+	}
+	if elemSize < 0 {
+		return 0, fmt.Errorf("canon: list element size %d is negative", elemSize)
+	}
+	if elemSize == 0 {
+		// A zero-size element makes the byte length zero for any count, which is a legitimate shape (an
+		// empty tuple's) and must not divide by zero below.
+		return 0, nil
+	}
+	if count > ReallocI32Max/elemSize {
+		return 0, fmt.Errorf("canon: a list of %d elements of %d bytes needs %d×%d bytes, past the %d-byte "+
+			"maximum the Canonical ABI's 32-bit pointer space can address",
+			count, elemSize, count, elemSize, ReallocI32Max)
+	}
+	return count * elemSize, nil
+}
+
+// ReallocI32Max is the model's `REALLOC_I32_MAX` (definitions.py:1359): the largest byte count the ABI's
+// 32-bit pointer space can address.
+const ReallocI32Max = 1<<32 - 1
+
+// LoadList lifts a `list<T>` given its (pointer, count), with the per-element load **injected** — the
+// mirror of [StoreList]'s injected element store.
+//
+// # Why injected rather than switched on the element kind
+//
+// `StoreList` takes its element store for a stated reason: the model heap can lower any element kind
+// through its own `store`, while a guest heap lowers only the composable ones, and the **framing** —
+// stride, the backing allocation, the header offsets — is shared regardless. The lifting side has the
+// same split and the same framing, so it takes the same shape. That is what lets `list<string>` and
+// later `list<record>` reuse one framing instead of each growing a loop of its own.
+//
+// What is shared and verified here: the byte length and its overflow guard, the stride, and the refusal
+// of a count the pointer space cannot address. What the caller supplies is how to read one element at an
+// offset.
+//
+// **The element's stride is `size(elem)`, derived rather than passed**, so a caller cannot disagree with
+// the codec about layout — which is the mistake [LoadListU8]'s own guard exists to catch for its one
+// reduced case.
+func LoadList(h ReadHeap, ptr, count int, elem Type, loadElem func(int) (Value, error)) (Value, error) {
+	es := size(elem)
+	byteLen, err := ListByteLength(count, es)
+	if err != nil {
+		return Value{}, err
+	}
+	if ptr < 0 {
+		return Value{}, fmt.Errorf("canon: list pointer %d is negative", ptr)
+	}
+	if a := alignment(elem); a > 0 && ptr%a != 0 {
+		// definitions.py:1715's trap, on the lifting side: a list's data must sit at its element's
+		// alignment. Non-vacuous as soon as the element is wider than a byte, unlike a string's.
+		return Value{}, fmt.Errorf("canon: list pointer %d is not aligned to %d", ptr, a)
+	}
+	// **Bounds-checked once, over the whole span**, before any element is read — so a count that runs off
+	// the end is refused rather than discovered partway through a loop that has already allocated.
+	if _, rerr := h.ReadBytes(ptr, byteLen); rerr != nil {
+		return Value{}, fmt.Errorf("canon: reading a %d-element list at %d (%d bytes): %w",
+			count, ptr, byteLen, rerr)
+	}
+	vals := make([]Value, count)
+	for i := range count {
+		v, lerr := loadElem(ptr + i*es)
+		if lerr != nil {
+			return Value{}, fmt.Errorf("canon: list element %d at %d: %w", i, ptr+i*es, lerr)
+		}
+		vals[i] = v
+	}
+	return List(elem, vals...)
+}
+
 // LoadListU8 lifts the elements of a `list<u8>` given its (pointer, count) — the one case where the
 // model's per-element load loop reduces to a contiguous read, because a `u8` is one byte at a one-byte
 // stride. It is the lifting counterpart of the framing [StoreList] owns.
