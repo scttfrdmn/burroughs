@@ -347,35 +347,111 @@ func TestTaskReturnCoversEveryKindCrossComponentValueDoes(t *testing.T) {
 }
 
 // TestTaskReturnRefusesAResultKindItCannotLift pins the refusal side, because the eager lift's scope is
-// narrower than the bridge's: a flat lift carries the scalars and `string`, and anything compound needs a
-// per-element load the codec does not expose.
+// narrower than the bridge's: a flat lift carries the scalars, `string` and `list`, and the rest needs a
+// composable load for the kind — `canon.LoadVia`, where that limit now lives for both directions at once.
 //
 // Asserted on the lift helper directly rather than through a guest, for the reason
-// `TestACrossComponentResultShapeRefusesByName` gives one level over: no committed artefact returns an
-// aggregate from a `task.return`, and *a negative claim buys a branch an exemption only if something
-// checks the exemption*.
+// `TestACrossComponentResultShapeRefusesByName` gives one level over: no committed artefact returns a
+// variant or a record from a `task.return`, and *a negative claim buys a branch an exemption only if
+// something checks the exemption*.
+//
+// # `list` was in this table and had to come out, and the way it would have stayed green is the lesson
+//
+// It was here as "carryable by the bridge, not by a flat lift". The list arm now lifts, so the case is
+// false — and it would have **passed anyway**. The table calls `liftTaskReturnValue(nil, vt, nil)` with
+// no flat values, so the list arm reaches its arity guard first and refuses with *"task.return for a
+// list result got 0 flat value(s), want 2"*, which contains "list" and satisfies the assertion. A test
+// asserting a refusal by substring cannot tell *which* refusal it got, so this one would have gone on
+// reporting that lists are unliftable while the engine lifted them. **Protection by coincidence**: the
+// arity guard stood in for the verdict the test was named after.
+//
+// Two repairs, because the near-miss is about the method and not only about `list`:
+//
+//   - Each case supplies **well-formed flat values for its own shape**, so the arity guard is satisfied
+//     and the refusal under test is the one that fires.
+//   - The refusal is matched on the mechanism it names (`LoadVia`), not just on the kind's name, which
+//     an arity message also carries.
 func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		vt   ValType
+		flat []interp.Value
 		want string
 	}{
-		// Carryable by the bridge, not by a FLAT lift — the distinction this refusal draws.
-		{"list", ValType{Kind: VList, Elem: &ValType{Kind: VU8}}, "list"},
-		{"variant", ValType{Kind: VVariant, Cases: []VarCase{{Name: "a"}}}, "variant"},
-		// Not carryable by the bridge either, so it refuses one step earlier. Included so the two
-		// refusal sites are both exercised and a change that collapsed them would show up.
-		{"record", ValType{Kind: VRecord, Fields: []NamedVal{{Name: "x", Type: ValType{Kind: VU32}}}}, "record"},
+		// Carryable by the bridge, not by a flat lift — the distinction this refusal draws. A variant
+		// flattens to a discriminant plus its widest case, so one word is a legitimate arity for a
+		// payload-less single case; the refusal must be about the KIND, not the count.
+		{
+			"variant",
+			ValType{Kind: VVariant, Cases: []VarCase{{Name: "a"}}},
+			[]interp.Value{interp.I32(0)},
+			"LoadVia",
+		},
+		// Not carryable by the bridge either, so it refuses one step earlier and names the record rather
+		// than the composable load. Included so the two refusal sites are both exercised and a change
+		// that collapsed them would show up.
+		{
+			"record",
+			ValType{Kind: VRecord, Fields: []NamedVal{{Name: "x", Type: ValType{Kind: VU32}}}},
+			[]interp.Value{interp.I32(0)},
+			"record",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := liftTaskReturnValue(nil, c.vt, nil)
+			_, err := liftTaskReturnValue(nil, c.vt, c.flat)
 			if err == nil {
 				t.Fatalf("a %s result lifted successfully from flat values", c.name)
 			}
 			if !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("the refusal %q does not name %q", err, c.want)
+				t.Fatalf("the refusal %q does not name %q, so this may be a different refusal than the "+
+					"one under test — an arity guard also names the kind", err, c.want)
+			}
+			// And it must NOT be the arity guard, which is the specific way this table went stale: that
+			// message is the one that let `list` sit here after the list arm started lifting.
+			if strings.Contains(err.Error(), "flat value(s), want") {
+				t.Fatalf("the refusal %q is the arity guard, not the kind refusal. The case supplied the "+
+					"wrong number of flat values, so this subtest is passing for a reason unrelated to "+
+					"its name", err)
 			}
 		})
+	}
+}
+
+// TestTaskReturnLiftsAListFromItsFlatPair is the positive case `list` moved into when the arm landed, so
+// the kind is asserted in exactly one place and that place says what is true.
+//
+// The end-to-end witness is `TestAnEmbedderReadsAListResult` in the root package, which drives a guest
+// that clobbers its own backing after resolving. This one is the unit half: it pins the **arity** (two
+// words, `(ptr, count)`) and the refusal of a nil element type, neither of which needs a guest.
+func TestTaskReturnLiftsAListFromItsFlatPair(t *testing.T) {
+	lu32 := ValType{Kind: VList, Elem: &ValType{Kind: VU32}}
+
+	// A list is two flat words. One is a wrong arity and must be refused as one — the guard the table
+	// above now asserts it is NOT getting.
+	_, err := liftTaskReturnValue(nil, lu32, []interp.Value{interp.I32(0)})
+	if err == nil {
+		t.Fatal("a list result lifted from one flat value; a list is (ptr, count)")
+	}
+	if !strings.Contains(err.Error(), "flat value(s), want 2") {
+		t.Errorf("the one-word refusal %q does not name the arity it wanted", err)
+	}
+
+	// A list type with no element type is refused, and **the layer that refuses it is the bridge, not
+	// the lift arm**. Worth asserting as such rather than as "it fails somehow": `canonTypeOf` walks the
+	// result type before the arm is reached and declines a `list` with a nil `Elem` as unmodeled, so the
+	// arm's own nil check never fires.
+	//
+	// The arm keeps that check anyway and its comment says it is unreachable — a nil there would be a
+	// dereference inside a guest-driven load, which is the one failure mode worth a redundant guard. The
+	// first draft of this test asserted the arm's wording and failed, which is how the layering got
+	// established rather than assumed.
+	_, err = liftTaskReturnValue(nil, ValType{Kind: VList}, []interp.Value{interp.I32(0), interp.I32(0)})
+	if err == nil {
+		t.Fatal("a list with no element type lifted successfully")
+	}
+	if !strings.Contains(err.Error(), "not modeled") {
+		t.Errorf("the refusal %q is not the bridge's unmodeled-type refusal; if the arm's own guard now "+
+			"fires first, the two layers have swapped and the arm's 'unreachable' comment is wrong", err)
 	}
 }
 

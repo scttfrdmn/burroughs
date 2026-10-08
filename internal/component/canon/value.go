@@ -11,7 +11,10 @@
 // at the value surface.
 package canon
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Kind is a WIT value type's discriminant, for the types slice 2's guest drives. Modeled: the scalars,
 // char, string, list, variant/result, own/borrow, and `tuple`'s size/alignment (for lowering an empty
@@ -113,6 +116,67 @@ type Type struct {
 type Case struct {
 	Name string
 	Type *Type
+}
+
+// String renders a type **structurally**, as WIT spells it: `list<u32>`, `list<list<string>>`,
+// `tuple<u32, string>`, `variant{ok(u32), error}`.
+//
+// # Why a type needs its own String when Kind already has one
+//
+// `Kind.String()` says `list` for every list. A message built from the kind therefore names the two
+// sides of a type mismatch **identically** — "parameter is list, want list" — which reads as though the
+// engine had refused a type for matching, and sends its reader looking for a bug in the comparison
+// rather than at their own element type. That cost a review cycle one layer up, in `lowerFlatArgs`.
+//
+// So this exists for the same reason [TypeEqual] does, and the pair should be read together: comparing
+// kinds is the defect, and **reporting** kinds is how the defect hides. There is one structural
+// comparison and one structural rendering, and everything that refuses a type uses both.
+//
+// Having it as `String()` rather than a named helper is deliberate: it makes `%s` on a `Type` correct by
+// default, so the next message to format a type gets the right rendering without its author knowing any
+// of this. Safe to add now because nothing formatted a `Type` directly — every existing message reaches
+// for `.Kind` explicitly, which is exactly the habit this replaces.
+func (t Type) String() string { return t.describe(0) }
+
+// describe is String's recursion. The depth bound is `canonTypeWalk`'s: a resolved type is acyclic by
+// construction, so the bound is reachable only by a hand-built type — and a renderer that recursed
+// forever would turn a diagnostic into a hang, which is a worse failure than an imprecise name.
+func (t Type) describe(depth int) string {
+	if depth > 8 {
+		return "…"
+	}
+	switch t.Kind {
+	case KindList:
+		if t.Elem == nil {
+			// A list with no element type is malformed rather than unmodeled. Rendered rather than
+			// dereferenced, because the one place a reader meets this string is a diagnostic, and a
+			// renderer that panics while explaining a defect has destroyed the explanation.
+			return "list<?>"
+		}
+		return "list<" + t.Elem.describe(depth+1) + ">"
+	case KindTuple:
+		parts := make([]string, 0, len(t.Fields))
+		for i := range t.Fields {
+			parts = append(parts, t.Fields[i].describe(depth+1))
+		}
+		return "tuple<" + strings.Join(parts, ", ") + ">"
+	case KindVariant:
+		parts := make([]string, 0, len(t.Cases))
+		for _, c := range t.Cases {
+			if c.Type == nil {
+				parts = append(parts, c.Name)
+				continue
+			}
+			parts = append(parts, c.Name+"("+c.Type.describe(depth+1)+")")
+		}
+		return "variant{" + strings.Join(parts, ", ") + "}"
+	case KindOwn, KindBorrow:
+		// The resource id is part of the type: `own<rt=3>` and `own<rt=4>` are different types, and
+		// TypeEqual says so, so a rendering that dropped the id would print a mismatch as a match.
+		return fmt.Sprintf("%s<rt=%d>", t.Kind, t.RT)
+	default:
+		return t.Kind.String()
+	}
 }
 
 // TypeEqual reports whether two WIT types are **structurally** equal — element types, case names and
@@ -234,6 +298,30 @@ func (v Value) Str() (string, bool) {
 	return v.s, true
 }
 
+// List returns the elements a KindList carries, and whether it is one.
+//
+// # The copy is deliberate
+//
+// `Value` is handed around by value and is otherwise immutable from outside the package — every payload
+// field is unexported and every constructor copies. Returning the backing slice directly would hand a
+// caller a writable window into a value somebody else also holds: a list lifted from a guest and then
+// mutated through an accessor would change under the host that lifted it, which is the aliasing bug
+// `List(…)`'s own `append([]Value(nil), elems...)` already declines to create on the way in. The way out
+// gets the same treatment, so the asymmetry cannot be the hole.
+//
+// The cost is one allocation per read of a list, paid at the boundary and not per element of anything.
+//
+// Kind-checked for [Value.Str]'s reason, and the boolean matters more here than it looks: an **empty
+// list** is a legitimate value — `list<u32>` with no elements is what the WASI getters return — so
+// `(nil, false)` for a non-list and `(empty, true)` for an empty list have to be distinguishable, and a
+// bare `len() == 0` read cannot tell them apart.
+func (v Value) List() ([]Value, bool) {
+	if v.Type.Kind != KindList {
+		return nil, false
+	}
+	return append([]Value(nil), v.list...), true
+}
+
 // Stream builds a stream<T> result the host returns to a guest to write to. Carries no payload; the
 // async-lower wrapper mints a writable-stream-end handle (component layer), never codec-lowered.
 func Stream() Value { return Value{Type: Type{Kind: KindStream}} }
@@ -260,10 +348,15 @@ func Str(s string) Value { return Value{Type: Type{Kind: KindString}, s: s} }
 
 // List constructs a list against a declared element type, refusing an element whose type does not match
 // at construction rather than at the boundary (ADR 0085).
+//
+// The comparison was always structural; **the message was not**, and printed `.Kind` on both sides until
+// the shared renderer existed. So a `list<string>` handed to a `list<list<u32>>`'s element slot was
+// refused with "element 0 is list, want list" — the right verdict reported in a way that reads like a
+// bug in the check. See [Type.String].
 func List(elem Type, elems ...Value) (Value, error) {
 	for i, e := range elems {
 		if !typeEqual(e.Type, elem) {
-			return Value{}, fmt.Errorf("canon: list element %d is %s, want %s", i, e.Type.Kind, elem.Kind)
+			return Value{}, fmt.Errorf("canon: list element %d is %s, want %s", i, e.Type, elem)
 		}
 	}
 	return Value{Type: Type{Kind: KindList, Elem: &elem}, list: append([]Value(nil), elems...)}, nil

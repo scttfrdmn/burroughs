@@ -168,12 +168,52 @@ func ComponentTypeString() ComponentType {
 	return ComponentType{kind: KindComponentString, t: canon.Type{Kind: canon.KindString}}
 }
 
+// ComponentTypeList is the `list<elem>` type.
+//
+// # Why this one returns an error where ComponentTypeU32 does not
+//
+// A list has a validity condition its scalars do not: **the element type can be the zero type.** `var e
+// ComponentType` names nothing, so `ComponentTypeList(e)` would be a list of nothing — and if that were
+// allowed to construct, it would reach the boundary as a `canon.Type{Kind: KindList, Elem: &zero}` whose
+// element reads as `bool`, because the codec's zero `Kind` **is** `bool`. A list of nothing would lower
+// as a list of booleans. That is the silent-wrong-value outcome the whole construction-time discipline
+// exists to prevent, so it is refused here, at construction, per ADR 0085.
+//
+// Nesting needs no special case: `ComponentTypeList` of a list is a list of lists, and the element check
+// in [ComponentList] compares whole types, so `list<list<u32>>` will not accept a `list<string>` element.
+func ComponentTypeList(elem ComponentType) (ComponentType, error) {
+	if elem.kind == KindComponentNone {
+		return ComponentType{}, fmt.Errorf("a list's element type must be a type, and the zero " +
+			"ComponentType names none; build the element with ComponentTypeU32, ComponentTypeString or " +
+			"ComponentTypeList first. A list of the zero type would lower as a list of bools, because " +
+			"the codec's zero type tag is bool")
+	}
+	e := elem.t
+	return ComponentType{kind: KindComponentList, t: canon.Type{Kind: canon.KindList, Elem: &e}}, nil
+}
+
 // Kind reports which WIT type this is, or KindComponentNone for the zero value.
 func (t ComponentType) Kind() ComponentKind { return t.kind }
 
 // String renders the type as WIT spells it, so a refusal naming a type reads in the embedder's
 // vocabulary. The zero value renders as "none" rather than as a guess.
-func (t ComponentType) String() string { return t.kind.String() }
+//
+// **Structural, not the kind alone** — `list<u32>` and `list<string>` must not both render as "list".
+// This was `t.kind.String()` while `u32` and `string` were the only types, where the two agree; it
+// stops agreeing the moment a list exists, and a refusal that named both sides of a mismatch
+// identically would read as though the engine had rejected a type for matching. The rendering is
+// `canon.Type.String`'s, which is the same one the engine's internal refusals use, so the embedder and
+// the engine describe a type the same way.
+//
+// The zero value is special-cased rather than delegated, for the reason [ComponentType] records: the
+// codec's own zero `Kind` is `bool`, so handing a zero `canon.Type` to the renderer would print "bool"
+// for a type nobody built.
+func (t ComponentType) String() string {
+	if t.kind == KindComponentNone {
+		return "none"
+	}
+	return t.t.String()
+}
 
 // ComponentValue is a WIT value crossing the component boundary — the argument and result type of
 // [Component.Call].
@@ -197,7 +237,8 @@ func (t ComponentType) String() string { return t.kind.String() }
 type ComponentValue struct {
 	typ  ComponentType
 	bits uint64
-	s    string // KindComponentString's payload
+	s    string           // KindComponentString's payload
+	list []ComponentValue // KindComponentList's payload
 }
 
 // Kind reports which WIT type this value carries.
@@ -249,6 +290,54 @@ func ComponentString(s string) (ComponentValue, error) {
 	return ComponentValue{typ: ComponentTypeString(), s: s}, nil
 }
 
+// ComponentList constructs a `list<elem>` from values that must each **be** an `elem`.
+//
+// # The element check is structural, and it is the same function the engine uses
+//
+// ADR 0097's first change: as first drafted this compared `vals[i].Kind()` against the element kind, so
+// `list<list<u32>>` would have accepted a `list<string>` element — both being lists. It calls
+// [canon.TypeEqual] instead, through the value's full internal type, and that is the **same** function
+// `Instantiated.CallValues` uses on every parameter. One structural comparison with two callers, rather
+// than two that agree until they do not.
+//
+// The signature-level check at [Component.Call] is not made redundant by this and is not meant to be:
+// this refuses a list that is internally inconsistent, that one refuses a well-formed list handed to the
+// wrong parameter. Both are needed because `CallValues` is reachable without going through this
+// constructor at all.
+//
+// # An empty list is legitimate and needs the element type
+//
+// `ComponentList(ComponentTypeU32())` is an empty `list<u32>`, which is a different value from an empty
+// `list<string>` and must stay so — nothing in an empty list says what it is a list of. That is the
+// whole reason [ComponentType] exists as a spellable thing, and the reason `elem` is a separate
+// parameter rather than inferred from `vals[0]`.
+func ComponentList(elem ComponentType, vals ...ComponentValue) (ComponentValue, error) {
+	// Routed through the type constructor rather than building the type here, so the zero-element-type
+	// refusal has one home. Duplicating that check would be the second copy that drifts.
+	lt, err := ComponentTypeList(elem)
+	if err != nil {
+		return ComponentValue{}, err
+	}
+	for i, v := range vals {
+		if v.typ.kind == KindComponentNone {
+			// Named separately from a type mismatch because it is a different mistake: an unset value
+			// rather than a wrong one. Reporting "want u32, got none" invites a reader to look for a
+			// `none` type; what happened is that `vals[i]` was never constructed.
+			return ComponentValue{}, fmt.Errorf("list element %d was never constructed — the zero "+
+				"ComponentValue carries no type, so it is not a %s", i, elem)
+		}
+		if !canon.TypeEqual(v.typ.t, elem.t) {
+			return ComponentValue{}, fmt.Errorf("list element %d is %s, but the list's element type is "+
+				"%s; the types must match structurally, so a list of the wrong element type is refused "+
+				"here rather than lowered at the wrong stride", i, v.typ, elem)
+		}
+	}
+	// Copied, so a caller's later write to their own slice cannot reach inside a value they have already
+	// handed over. `canon.List` does the same on the way in and `canon.Value.List` on the way out; a
+	// value that is immutable in two of three directions is mutable.
+	return ComponentValue{typ: lt, list: append([]ComponentValue(nil), vals...)}, nil
+}
+
 // U32 reads a `u32`, and reports whether this value is one.
 //
 // The boolean is the refusal: a value of another kind returns `(0, false)` rather than reinterpreting its
@@ -286,6 +375,28 @@ func (v ComponentValue) Str() (string, bool) {
 	return v.s, true
 }
 
+// List reads a `list`'s elements, and reports whether this value is one.
+//
+// The boolean carries more weight here than for the scalars, because **an empty list is a legitimate
+// value**: `(nil, false)` for a non-list and `(empty, true)` for an empty `list<u32>` must be
+// distinguishable, and a caller checking `len(xs) == 0` cannot tell them apart. A `list<u32>` with no
+// elements is exactly what a WASI getter returns.
+//
+// The slice is a copy, for the reason [ComponentList] records on the other side: a `ComponentValue` is
+// passed by value and is immutable from outside this package, and handing back the backing array would
+// be a writable window into a value somebody else also holds.
+//
+// There is deliberately **no element-type accessor** to go with this. A caller knows the signature it
+// called, so it knows what the elements are; `ComponentType` introspection is ADR 0097's deferred
+// surface with a recorded trigger — code that must branch on a returned value's type rather than
+// knowing it in advance.
+func (v ComponentValue) List() ([]ComponentValue, bool) {
+	if v.typ.kind != KindComponentList {
+		return nil, false
+	}
+	return append([]ComponentValue(nil), v.list...), true
+}
+
 // String renders the value for diagnostics, naming its kind so an unexpected one is legible.
 //
 // **This is the debug rendering, not the content** — see [ComponentValue.Str], which is the content and
@@ -301,6 +412,13 @@ func (v ComponentValue) String() string {
 			return fmt.Sprintf("string(%q… %d bytes)", v.s[:renderLimit], len(v.s))
 		}
 		return fmt.Sprintf("string(%q)", v.s)
+	case KindComponentList:
+		// **The length and the type, not the elements.** A `list<u32>` of a hundred million elements is
+		// a value this engine accepts (that is the whole point of the kind-dependent byte cap), so a
+		// renderer that expanded it would turn a diagnostic into a denial of service against whoever is
+		// reading the log. The type comes from `v.typ`, which renders structurally, so an empty list
+		// still says what it is a list of — the one question an empty list raises.
+		return fmt.Sprintf("%s(%d element(s))", v.typ, len(v.list))
 	default:
 		// Every kind that cannot cross the boundary renders as its name alone, which is all there is to
 		// say about a value that cannot exist yet. An explicit default rather than a fallthrough, so the
@@ -329,6 +447,34 @@ func (v ComponentValue) toCanon() (canon.Value, error) {
 		// or no `(memory)` canonopt — a condition of the *component*, not of this value, and so not
 		// knowable at this point.
 		return canon.Str(v.s), nil
+	case KindComponentList:
+		// **Elements convert through this same method**, so a `list<string>` gets `string`'s arm and a
+		// `list<list<u32>>` recurses — rather than this arm learning each element kind, which is how the
+		// two conversions would drift.
+		//
+		// The element type comes from the **list's own type descriptor**, not from `elems[0].Type`: an
+		// empty list has no element to ask, and that is precisely the value whose type must survive the
+		// crossing. `ComponentList` has already established that every element matches it.
+		if v.typ.t.Elem == nil {
+			// Unreachable through `ComponentList`, which always sets it, and checked rather than
+			// dereferenced: this is the one place a nil would become a panic instead of an error, and a
+			// hand-built zero value reaching here must refuse rather than crash the embedder's process.
+			return canon.Value{}, fmt.Errorf("%w: a list value carries no element type, so it was not "+
+				"built by ComponentList", ErrUnsupported)
+		}
+		elems := make([]canon.Value, 0, len(v.list))
+		for i, e := range v.list {
+			ce, err := e.toCanon()
+			if err != nil {
+				return canon.Value{}, fmt.Errorf("%w: list element %d: %w", ErrUnsupported, i, err)
+			}
+			elems = append(elems, ce)
+		}
+		// Through `canon.List` rather than building the value here, so the codec's own structural element
+		// check runs on the way in as well. It is the third check on the same property and the cheapest:
+		// a disagreement between it and `ComponentList` is a bug in the conversion, and this is where it
+		// would surface rather than inside a lowering.
+		return canon.List(*v.typ.t.Elem, elems...)
 	case KindComponentNone:
 		return canon.Value{}, fmt.Errorf("%w: a ComponentValue with no kind cannot cross the boundary — "+
 			"the zero value names no WIT type, so it is a value nobody constructed rather than a u32(0)",
@@ -368,8 +514,73 @@ func fromCanon(v canon.Value) (ComponentValue, error) {
 		// the two ever disagreed, this is the side that would wrongly report an engine fault as a value
 		// the embedder built wrong.
 		return ComponentValue{typ: ComponentTypeString(), s: s}, nil
+	case canon.KindList:
+		elems, ok := v.List()
+		if !ok {
+			return ComponentValue{}, fmt.Errorf("%w: a canon value tagged list did not read as one",
+				ErrUnsupported)
+		}
+		if v.Type.Elem == nil {
+			return ComponentValue{}, fmt.Errorf("%w: a canon list carries no element type", ErrUnsupported)
+		}
+		// **The element type is converted first, and its refusal is the list's.** A `list<record>` coming
+		// back has to fail here, naming `record`, rather than succeeding as a list whose elements then
+		// each fail — which would report the same gap once per element and bury the one fact that matters.
+		et, err := componentTypeFromCanon(*v.Type.Elem)
+		if err != nil {
+			return ComponentValue{}, err
+		}
+		out := make([]ComponentValue, 0, len(elems))
+		for i, e := range elems {
+			ce, cerr := fromCanon(e)
+			if cerr != nil {
+				return ComponentValue{}, fmt.Errorf("%w: list element %d: %w", ErrUnsupported, i, cerr)
+			}
+			out = append(out, ce)
+		}
+		// Through the public constructor, so an element whose type disagrees with the declared element
+		// type is caught on the way **out** too. A guest cannot produce that through a correct codec, but
+		// "cannot through a correct codec" is the assumption worth checking at a boundary: this is the
+		// last place a wrong value is still an error rather than data in an embedder's hands.
+		return ComponentList(et, out...)
 	default:
 		return ComponentValue{}, fmt.Errorf("%w: an export returned a %s, which this release cannot carry "+
-			"across the public boundary; it carries u32 and string", ErrUnsupported, v.Type.Kind)
+			"across the public boundary; it carries u32, string and list", ErrUnsupported, v.Type)
+	}
+}
+
+// componentTypeFromCanon converts a codec type to the public one, refusing a kind the public surface
+// cannot spell — **by name**, in the direction nobody was looking.
+//
+// It exists because a list arriving from a guest needs its element type spelled publicly, and the value
+// conversion cannot supply that: `fromCanon` maps a *value*, and an empty list has no element value to
+// map. So the type needs its own conversion, and it needs to refuse on the same terms — a
+// `list<record>` is refused naming `record`, not silently given some other element type.
+//
+// Kept beside `fromCanon` rather than hung off `ComponentType` as a method: it is a boundary conversion
+// in this package's private direction, and ADR 0029's treatment is that those stay unexported so the
+// representation can widen without any of it being API.
+func componentTypeFromCanon(t canon.Type) (ComponentType, error) {
+	switch t.Kind {
+	case canon.KindU32:
+		return ComponentTypeU32(), nil
+	case canon.KindString:
+		return ComponentTypeString(), nil
+	case canon.KindList:
+		if t.Elem == nil {
+			return ComponentType{}, fmt.Errorf("%w: a canon list type carries no element type",
+				ErrUnsupported)
+		}
+		// Recursive, so `list<list<u32>>` is spellable the moment `list<u32>` is. The depth is the
+		// guest's type's depth, which the decoder has already bounded.
+		et, err := componentTypeFromCanon(*t.Elem)
+		if err != nil {
+			return ComponentType{}, err
+		}
+		return ComponentTypeList(et)
+	default:
+		return ComponentType{}, fmt.Errorf("%w: an export returned a value of type %s, which this release "+
+			"cannot spell across the public boundary; it spells u32, string and list of those",
+			ErrUnsupported, t)
 	}
 }

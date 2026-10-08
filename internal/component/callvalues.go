@@ -117,20 +117,29 @@ func (in *Instantiated) CallValuesCtx(ctx context.Context, name string, args ...
 // `task.return` at all.
 func liftFlatResult(name string, sig *FuncType, res liftResult) ([]canon.Value, error) {
 	if res.lifted != nil {
-		// The declared result still has to agree with what arrived — a lifted value of the wrong kind
+		// The declared result still has to agree with what arrived — a lifted value of the wrong type
 		// would be the mis-typing this whole path exists to refuse, just sourced from the guest.
 		if sig == nil || sig.Result == nil {
 			return nil, fmt.Errorf("%w: export %q declares no result but its task.return lifted a %s",
-				ErrUnsupportedForm, name, res.lifted.Type.Kind)
+				ErrUnsupportedForm, name, res.lifted.Type)
 		}
 		want, werr := canonTypeOf(*sig.Result)
 		if werr != nil {
 			return nil, fmt.Errorf("%w: export %q's declared result cannot be carried: %w",
 				ErrUnsupportedForm, name, werr)
 		}
-		if res.lifted.Type.Kind != want.Kind {
+		// **Structural, like the parameter check** — this was `Kind != want.Kind` until the same defect
+		// was noticed in the same file in the other direction. Nothing reaches it today that a kind
+		// comparison would miss, because the eager lift refuses every compound result, so this is a
+		// repair made while the arm is still unreachable rather than after a wrong value crossed.
+		//
+		// That is the whole argument for doing it now: when the lift arm lands, a `list<string>` lifted
+		// against a declared `list<u32>` is a real engine bug, and a check that compared kinds would pass
+		// it through to an embedder as data. The cost of being early is one line; the cost of being late
+		// is a plausible wrong value in the direction nobody is watching.
+		if !canon.TypeEqual(res.lifted.Type, want) {
 			return nil, fmt.Errorf("%w: export %q declares a %s result but its task.return lifted a %s",
-				ErrUnsupportedForm, name, want.Kind, res.lifted.Type.Kind)
+				ErrUnsupportedForm, name, want, res.lifted.Type)
 		}
 		return []canon.Value{*res.lifted}, nil
 	}
@@ -206,8 +215,11 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 		// guest reads as 4-byte integers. A plausible wrong value, not an error. (Caught by the chair on
 		// the #924 review; it is ADR 0097's first change, one layer below where that change was written.)
 		//
-		// `canon.TypeEqual` is the one structural comparison, shared with the public constructors' element
-		// check, so the two cannot drift about what "the same type" means.
+		// `canon.TypeEqual` is the one structural comparison, shared with the public constructors'
+		// element check, so the two cannot drift about what "the same type" means. `canon.Type.String`
+		// is the matching structural **rendering**, and the pair belongs together: comparing kinds is
+		// the defect, and reporting kinds is how the defect hides. Both now live beside the type they
+		// are about, so the `%s` verbs below name `list<u32>` rather than `list` with no help from here.
 		want, berr := canonTypeOf(p.Type)
 		if berr != nil {
 			return nil, nil, fmt.Errorf("%w: export %q parameter %q: %w",
@@ -217,7 +229,7 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 			return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared %s but the value given is "+
 				"%s; the types must match structurally, so a list of the wrong element type is refused "+
 				"here rather than written at the wrong stride",
-				ErrUnsupportedForm, name, p.Name, describeCanonType(want), describeCanonType(args[i].Type))
+				ErrUnsupportedForm, name, p.Name, want, args[i].Type)
 		}
 		// The declared kind drives the lowering, and the value's own kind must agree with it. Trusting
 		// the value alone would let a caller smuggle a kind past the signature; trusting the signature
