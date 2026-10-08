@@ -19,11 +19,24 @@ stack machine. The gopher gets its burrows back, one letter askew.
 
 ## Where this is
 
-**v0, the interpreter phase.** The pipeline that exists today is decoder →
-internal form (decision 0002) → validator → interpreter, in pure Go, no cgo,
-no dependency outside the standard library. There is no compiler, and v0 does
-not have one on its ladder — correctness and spec-tracking agility are this
-phase's product.
+**v0's closure conditions are discharged** — all twelve, at the signed `v0.4.0`
+tag of 2026-08-28, with the `v0 interpreter` milestone closed at 99 issues and
+the MVP core suite green: the mark ADR 0004's table numbers `v0.1.0`. That
+release's own notes are explicit that this is not the same thing as the next
+phase beginning, so **this file does not declare a phase**; `CLAUDE.md`'s ladder
+is where the current one is recorded. What has landed since is contract §§2–5
+work — thread spawn, futex wait/notify, the safepoint poll — listed below.
+
+The pipeline is decoder → internal form (decision 0002) → validator →
+interpreter, in pure Go, no cgo, no dependency outside the standard library.
+There is still no compiler, and no rung on the published ladder adds one —
+correctness and spec-tracking agility are what this buys.
+
+**64-bit hosts only.** Burroughs is built, tested and measured on 64-bit
+machines; CI, the cross-build and the contract are all 64-bit, and nothing here
+claims a 32-bit target. Where the engine does width-sensitive arithmetic it does
+it in `uint64` — not a portability promise, but so that a future port starts
+from working code rather than from a sweep.
 
 What that buys today:
 
@@ -41,17 +54,41 @@ What that buys today:
   runs, and names the construct that went unchecked (`Instance.Decline`). Pass
   `--strict`, or set `Config.Strict`, to refuse instead of running.
 
-What is not here, stated because a README that implies otherwise is the more
-expensive kind of wrong:
+What is not here, or is here only in part — stated because a README that implies
+otherwise is the more expensive kind of wrong, and that holds in **both**
+directions: overstating what works costs a reader the same hunt as understating
+it.
 
-- **No host imports and no WASI.** Nothing in the public API supplies an import,
-  so a module that imports a function reaches `ErrUnsupported` at the point of
-  use.
-- **No threads, no stack switching, no component model.** Those are contract
-  §§2–5, §7 and §6 — the v1, v2 and v3 rungs. None has started.
-- **Proposal gates default off, and a flip is its own stamped event** (contract
-  §9). `internal/binary.DefaultFeatures` is the single line that says which are
-  on today; every flip is a `CHANGELOG.md` **Added** entry naming its `gate:`.
+- **The core `Instantiate`/`Call` path supplies no host imports.** `Config`
+  carries one field and it is not an import set, so a core module that imports a
+  function reaches `ErrUnsupported` at the point of use. **WASI preview 1 is a
+  separate public path and does exist**: `WASIP1Config.Run`, with `Args`, `Env`,
+  the three standard streams, and `Preopen` grants. There is no default grant —
+  a guest with no `Preopen` reaches no filesystem, and nothing is visible unless
+  named (decision 0083).
+- **The component model is on by default, and its value surface is narrower than
+  its mechanism.** `gate:components` flipped on 2026-09-11 and `gate:async` on
+  2026-09-18, each its own stamped event, and each keeps an env-var rollback
+  (`BURROUGHS_COMPONENTS=0`, `BURROUGHS_ASYNC=0`). `LoadComponent`,
+  `Component.Call` and `Component.Close` are public. What crosses that boundary
+  as a **value** is less: `u32` and `string` today, in both directions;
+  `list<u32>` crosses the engine's own call path with its public constructor
+  landing next; `record` is not in the codec yet. A kind that cannot cross is
+  refused **by name**, never marshalled approximately.
+- **Threads: the mechanism is on main, the gate is not flipped.** `thread.spawn`,
+  futex wait/notify, the safepoint poll, and thread exit/join/detach are
+  implemented. `gate:threads` stays off by default, and contract §4's litmus
+  battery beyond what spawn needed is outstanding and not currently scheduled.
+  `FeatureThreads` is a different thing from that gate: an embedder supplies it
+  to declare that their artifact needs the 0xFE atomics region and shared
+  memories — which every Go guest does, Go emitting atomics unconditionally —
+  and supplying it flips no default.
+- **Stack switching has not started.** Contract §7, the v2 rung.
+- **Nothing defaults on without its own suite green** (contract §9) — which is
+  not the same as everything defaulting off. Several gates have flipped, each by
+  its own stamped decision with a pre-registered forecast and a stated rollback.
+  `internal/binary.DefaultFeatures` is the single line that says which are on
+  today, and every flip is a `CHANGELOG.md` **Added** entry naming its `gate:`.
 
 ## Try it
 

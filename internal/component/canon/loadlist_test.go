@@ -3,6 +3,8 @@
 package canon
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -55,12 +57,46 @@ func TestListByteLengthCannotOverflow(t *testing.T) {
 		}
 	}
 
+	// Negatives are refused rather than converted: a count is a guest word on the lifting side, and
+	// `int(negative)` reaching the multiplication would produce a negative length a bounds check reads
+	// as "nothing to read". Asserted **before** the width guard below, because unlike the bound and the
+	// overflow arms a negative is expressible at any int width.
+	if _, err := ListByteLength(-1, 4); err == nil {
+		t.Error("a negative count was accepted")
+	}
+	if _, err := ListByteLength(4, -1); err == nil {
+		t.Error("a negative element size was accepted")
+	}
+
+	// **Everything past this point needs an `int` wider than 32 bits to express at all**, and until this
+	// was noticed the whole function would not even compile on a 32-bit host: `int(ReallocI32Max)` and
+	// `1 << 32` are **constant** conversions, which Go checks whether or not their branch runs. So the
+	// witness for #922 — whose stated subject was typing `ReallocI32Max` so the engine builds on
+	// `GOARCH=386` — was itself 64-bit-only. The engine was portable; the test that said so was not.
+	//
+	// Found by running `GOARCH=386 go vet ./internal/component/...` in the slice after. CI has no 32-bit
+	// arm, so nothing else was ever going to say it.
+	//
+	// The repair is a width guard plus **runtime** conversions through `wide`, and the arms are skipped
+	// rather than weakened on a narrow host, because there they are not weaker but meaningless: no `int`
+	// can reach `ReallocI32Max`, so "one past the bound" truncates to a small number the guard rightly
+	// accepts, and an assertion that it is refused would be a false failure.
+	if strconv.IntSize < 64 {
+		t.Logf("int is %d bits here, so no int can reach ReallocI32Max (%d): the bound and the overflow "+
+			"arms are unreachable on this platform, not merely untested", strconv.IntSize, ReallocI32Max)
+		return
+	}
+	// Every width-dependent value below goes through `wide`, which makes its conversion a **runtime**
+	// one. That is the whole repair: `int(ReallocI32Max)` is a compile-time conversion of a typed
+	// constant and fails to build on a narrow host; `wide(ReallocI32Max)` converts a function argument.
+	wide := func(v uint64) int { return int(v) }
+
 	// Exactly at the bound is allowed; one past is not. The pair is what says the comparison is not
 	// off by one in either direction.
-	if _, err := ListByteLength(int(ReallocI32Max), 1); err != nil {
+	if _, err := ListByteLength(wide(ReallocI32Max), 1); err != nil {
 		t.Errorf("a byte length of exactly ReallocI32Max was refused: %v", err)
 	}
-	if _, err := ListByteLength(int(ReallocI32Max)+1, 1); err == nil {
+	if _, err := ListByteLength(wide(ReallocI32Max+1), 1); err == nil {
 		t.Error("a byte length one past ReallocI32Max was accepted")
 	}
 
@@ -70,34 +106,25 @@ func TestListByteLengthCannotOverflow(t *testing.T) {
 	// value that may have landed on a plausible small positive.
 	for _, c := range []struct {
 		name        string
-		count, elem int
+		count, elem uint64
 	}{
 		{"count past 32 bits, 4-byte elements", 1 << 32, 4},
 		{"count past 32 bits, 1-byte elements", 1 << 33, 1},
 		{"a product that would wrap a 64-bit int", 1 << 62, 8},
-		{"the largest int times a wide element", int(^uint(0) >> 1), 8},
+		{"the largest int times a wide element", uint64(math.MaxInt), 8},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			n, err := ListByteLength(c.count, c.elem)
+			count, elem := wide(c.count), wide(c.elem)
+			n, err := ListByteLength(count, elem)
 			if err == nil {
 				t.Fatalf("ListByteLength(%d, %d) = %d with no error; the product cannot be addressed by "+
 					"the ABI's 32-bit pointer space, and if it wrapped it may look small and plausible",
-					c.count, c.elem, n)
+					count, elem, n)
 			}
 			if !strings.Contains(err.Error(), "32-bit") {
 				t.Errorf("the refusal %q does not say why the length is out of range", err)
 			}
 		})
-	}
-
-	// Negatives are refused rather than converted: a count is a guest word on the lifting side, and
-	// `int(negative)` reaching the multiplication would produce a negative length a bounds check reads
-	// as "nothing to read".
-	if _, err := ListByteLength(-1, 4); err == nil {
-		t.Error("a negative count was accepted")
-	}
-	if _, err := ListByteLength(4, -1); err == nil {
-		t.Error("a negative element size was accepted")
 	}
 }
 

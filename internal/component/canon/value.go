@@ -115,6 +115,22 @@ type Case struct {
 	Type *Type
 }
 
+// TypeEqual reports whether two WIT types are **structurally** equal — element types, case names and
+// payloads, tuple fields and resource ids, all the way down.
+//
+// # Why this is exported, and why comparing kinds is the bug it prevents
+//
+// `Kind` alone says `list` for both `list<u32>` and `list<string>`. A parameter check that compares kinds
+// therefore accepts a `list<string>` where a `list<u32>` is declared, and the lowering then writes
+// strings at the **value's** element stride into a buffer the guest reads as 4-byte integers: a plausible
+// wrong value, not an error. That is ADR 0097's first change — compare whole types, not kinds — and it
+// applies at **every** boundary a value crosses, not only at the public constructor, because
+// `Instantiated.CallValues` is reachable without going through one.
+//
+// So this is the single structural comparison: the public constructors' element check and the
+// argument lowering's parameter check both call it, rather than each growing a version.
+func TypeEqual(a, b Type) bool { return typeEqual(a, b) }
+
 // typeEqual reports structural equality. Type carries slices (Cases) and pointers (Elem), so it is not
 // comparable with ==; a constructor's type check uses this.
 func typeEqual(a, b Type) bool {

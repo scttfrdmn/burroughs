@@ -104,6 +104,27 @@ own condition rather than as a prediction.
   multiple of 2 and not of 4 — where it previously had only a hand-built request to catch. The guest sums
   the elements it reads at a 4-byte stride, so a lowering at the wrong pitch gives a wrong **sum** rather
   than a wrong length.
+- **A parameter's type is compared structurally, through one `canon.TypeEqual`, where it was compared by
+  outer kind** ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). The kind comparison was a
+  correctness hole rather than a shortcut, and it was reachable the moment the entry above landed: `Kind`
+  says `list` for both `list<u32>` and `list<string>`, so a `list<string>` passed where a `list<u32>` was
+  declared, and the lowering then wrote strings at the **value's** element stride into a buffer the guest
+  reads as 4-byte integers — **a plausible wrong value, not an error**. The comparison now runs for
+  **every** parameter before any arm looks at a kind, at `CallValues` and not only at the public
+  constructor, because `CallValues` is reachable without going through one; the public element check calls
+  the same function, so the two cannot drift about what "the same type" means. The refusal renders both
+  types structurally (`list<u32>` against `list<string>`), since a message printing "list" twice reads as
+  though the engine had refused a type for matching. Caught on review of the entry above.
+- **The byte-length cap depends on the argument's kind**, where a single string-shaped cap applied to
+  every allocation ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). A `list<u32>` of 100
+  million elements is 400 MB, which the model allows and which nothing stops a guest reading back, and it
+  was refused for a reason belonging to strings. Only a **string** carries the load-side 2²⁸−1 cap — ADR
+  0098's recorded divergence from the model's store side, because a longer one could be stored and never
+  read back. Everything else is bounded by `REALLOC_I32_MAX`, the model's own bound on a store
+  (`definitions.py:1713`), rather than by a limit this engine invented. Found in the same review, which
+  also found that **`storeListData` computed its byte length with a bare multiplication**: the claim that
+  `canon.ListByteLength` is the one place `count × elem_size` happens was **false in the code** until it
+  was asked about.
 - **The list lifting framing: `canon.LoadList` with an injected per-element load, and
   `canon.ListByteLength`'s overflow guard** ([#902](https://github.com/scttfrdmn/burroughs/issues/902)).
   `LoadList` is the mirror of `StoreList`'s injected element store, and takes the same shape for the same
@@ -1032,6 +1053,67 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **The README's "what is not here" list named three things as absent that are on main, and its phase
+  line was stale.** It said *"No host imports and no WASI"*, *"No threads, no stack switching,
+  no component model … None has started"*, and headed the section *"v0, the interpreter phase"* — all true
+  when written, all left standing across the work that falsified them.
+  **The phase heading's first repair asserted the wrong thing in the other direction**, and the chair's
+  pre-merge check is what caught it: it read *"v1, the threads phase, since the signed `v0.4.0` tag"*,
+  citing for the phase change the one record that **denies** it — that release's own notes say *"it is
+  not v1 … v0 closing means v0's conditions are discharged, not that the next phase has begun."* The
+  closure record is solid and is what the README now states (twelve conditions, #464, #499, the milestone
+  closed at 99 issues, the MVP core suite green). The phase itself is **not declared here at all**, and
+  the file says where it is recorded instead — because a project's claim about its own phase should not
+  have a README as its first home. That is the foreclosing-words
+  shape: a sentence telling the next reader the tree is in a state it is not, in the one file whose own
+  preamble says *"a README that implies otherwise is the more expensive kind of wrong."* The preamble now
+  says that holds in **both** directions, because the repair's risk is overstating.
+  Restored at the precision the code supports, with the true remainders kept where they were: the core
+  `Instantiate`/`Call` path still supplies no imports (`Config` has one field and it is not an import
+  set), and **stack switching still has not started**. WASI preview 1 is named as the separate public
+  path it is, with decision 0083's no-default-grant. The component model is named as **on by default** —
+  `gate:components` flipped 2026-09-11, `gate:async` 2026-09-18, each with its env-var rollback — and its
+  **value** surface is stated as narrower than its mechanism: `u32` and `string` cross today, `list<u32>`
+  crosses the engine's own call path with the public constructor still to come, `record` is not in the
+  codec. Threads are named as mechanism-on-main-with-the-gate-unflipped, with `FeatureThreads`
+  distinguished from `gate:threads` — supplying a capability is an embedder declaring what their artifact
+  needs, not a gate flipping. And *"Proposal gates default off"* became **nothing defaults on without its
+  own suite green**, which is the actual rule and does not contradict the four gates that have flipped.
+- **The refusal-log guard accused the test suite of a write the live hook had made, and its message was
+  unreadable by any test** ([#902](https://github.com/scttfrdmn/burroughs/issues/902), grave
+  [#852](https://github.com/scttfrdmn/burroughs/issues/852)'s guard). `make ci` reddened at the `strict`
+  gate with every test passing: `internal/testenv`'s `TestMain` found `.editroute-log` 48 bytes longer
+  than when the package started and reported *"this package's tests MODIFIED"* and *"Some test drove
+  scripts/editroute.py without redirecting EDITROUTE_LOG"* — **both false**. The writer was the hook
+  itself, serving the session that had launched the gate in the background: the agent tripped a real
+  `sleep-as-wait` refusal mid-run and the hook appended it, which is exactly what it should do, since a
+  true positive is what the rate is made of. The hook was right and the guard's *reading* was wrong, so
+  the repair is entirely on the guard's side.
+  It **still fails** — relaxing it is what reopens #852 — and it now says what it knows: that the
+  artifact moved, that it cannot see the writer, which two writers produce that observation, and that
+  **re-running discriminates them**, because a test's write recurs every run and a session's refusal does
+  not. It prints the appended entries when the log was a strict append, which is safe because an entry
+  carries a *hash* of the command rather than the command. The second half of the repair is why nothing
+  caught this: the message could only be read by making the guard fire, which means writing to the one
+  artifact no test may touch, so it was factored into `refusalLogGuardFailure` and is now asserted —
+  including that the two false sentences do not come back. `appendedLines` gained its own witness for the
+  overreach one level in: a log that was rewritten or truncated has no well-defined delta, and printing
+  one would be the guard testifying past what it observed.
+- **Two test files did not compile for a 32-bit target, and one of them was the witness for a 32-bit
+  portability fix** ([#902](https://github.com/scttfrdmn/burroughs/issues/902),
+  [#921](https://github.com/scttfrdmn/burroughs/issues/921)). `GOARCH=386 GOOS=linux go vet ./...` — run
+  by hand while checking the new byte-length cap — failed in `canon` at `int(ReallocI32Max)`, which is a
+  **constant** conversion and so is checked whether or not its branch runs, and in `interp` at an untyped
+  `maxPages32*pageSize` passed to `Fatalf`, which defaults to `int` and overflows. The first is the sharp
+  one: typing `ReallocI32Max` as `uint64` so the **engine** builds on `GOARCH=386` was the stated subject
+  of that slice, and the test asserting the bound was itself 64-bit-only. The engine was portable; the
+  test that said so was not. Both now convert at runtime, and the arms that need a wide `int` are
+  **skipped with a reason** on a narrow host rather than weakened — there "one past the bound" truncates
+  to a small number the guard rightly accepts, so asserting a refusal would be a false failure. The
+  portable arms (negatives, the ordinary products) were moved above the guard so a narrow host still runs
+  them. **CI has no 32-bit arm**, so nothing but a hand-typed command was ever going to say this; the
+  whole tree, tests included, vets clean for `GOARCH=386` as of this entry, and that is a measurement
+  taken once rather than a standing claim.
 - **`ComponentString` classified the caller's bad input as an engine gap**
   ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). Invalid UTF-8 was wrapped in
   `ErrUnsupported`, which means *"this engine does not implement that yet"* and carries its own CLI exit

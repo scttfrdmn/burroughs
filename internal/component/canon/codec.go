@@ -834,7 +834,17 @@ func (h *heap) store(v Value, ptr int) error {
 func storeListData(h Heap, v Value, storeElem func(Value, int) error) (int, error) {
 	elem := *v.Type.Elem
 	es := size(elem)
-	p, err := h.Realloc(0, 0, alignment(elem), len(v.list)*es)
+	// **Through `ListByteLength`, not a bare `len(v.list)*es`.** It was the bare multiplication until the
+	// #924 review asked whether the "one place the product is computed" claim was true in the code — it
+	// was not. On the store side the count comes from a host-built value rather than a guest word, so the
+	// overflow is far-fetched here; routing it through the one guard anyway is what makes the claim
+	// checkable instead of merely intended, and it bounds the store side by `REALLOC_I32_MAX` the way
+	// definitions.py:1713 does.
+	byteLen, err := ListByteLength(len(v.list), es)
+	if err != nil {
+		return 0, err
+	}
+	p, err := h.Realloc(0, 0, alignment(elem), byteLen)
 	if err != nil {
 		return 0, err
 	}

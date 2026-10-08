@@ -197,6 +197,28 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 	flat := make([]interp.Value, 0, len(args))
 	var pend []pendingLower
 	for i, p := range sig.Params {
+		// **The value's whole type must equal the declared type, structurally** — checked here, for every
+		// parameter, before any arm looks at the kind.
+		//
+		// Comparing kinds was a correctness hole and not a shortcut: `Kind` says `list` for both
+		// `list<u32>` and `list<string>`, so a `list<string>` passed where a `list<u32>` was declared got
+		// through, and the lowering then wrote strings at the **value's** element stride into a buffer the
+		// guest reads as 4-byte integers. A plausible wrong value, not an error. (Caught by the chair on
+		// the #924 review; it is ADR 0097's first change, one layer below where that change was written.)
+		//
+		// `canon.TypeEqual` is the one structural comparison, shared with the public constructors' element
+		// check, so the two cannot drift about what "the same type" means.
+		want, berr := canonTypeOf(p.Type)
+		if berr != nil {
+			return nil, nil, fmt.Errorf("%w: export %q parameter %q: %w",
+				ErrUnsupportedForm, name, p.Name, berr)
+		}
+		if !canon.TypeEqual(args[i].Type, want) {
+			return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared %s but the value given is "+
+				"%s; the types must match structurally, so a list of the wrong element type is refused "+
+				"here rather than written at the wrong stride",
+				ErrUnsupportedForm, name, p.Name, describeCanonType(want), describeCanonType(args[i].Type))
+		}
 		// The declared kind drives the lowering, and the value's own kind must agree with it. Trusting
 		// the value alone would let a caller smuggle a kind past the signature; trusting the signature
 		// alone would lower a mismatched payload as though it were the declared type.
@@ -206,18 +228,9 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 		// length on purpose — a lowering that forgot to patch them traps in any guest that reads the
 		// value, rather than silently passing an empty one.
 		if p.Type.Kind == VString || p.Type.Kind == VList {
-			// The declared type drives the lowering and the value must agree with it. The **bridge** is
-			// what builds the codec type, so a parameter whose declared type the codec cannot carry is
-			// refused here by name rather than at a marshal.
-			ct, berr := canonTypeOf(p.Type)
-			if berr != nil {
-				return nil, nil, fmt.Errorf("%w: export %q parameter %q: %w",
-					ErrUnsupportedForm, name, p.Name, berr)
-			}
-			if args[i].Type.Kind != ct.Kind {
-				return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared %s but the value given "+
-					"is %s", ErrUnsupportedForm, name, p.Name, ct.Kind, args[i].Type.Kind)
-			}
+			// No kind check here: the structural comparison above already established that this value's
+			// type **equals** the declared one, which is strictly stronger and covers the element type a
+			// kind check could not see.
 			ptrSlot, lenSlot := len(flat), len(flat)+1
 			flat = append(flat, interp.I32(0), interp.I32(0))
 			pend = append(pend, pendingLower{
@@ -234,12 +247,14 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 			return nil, nil, fmt.Errorf("%w: export %q parameter %q is %s; this engine lowers u32, string "+
 				"and list arguments", ErrUnsupportedForm, name, p.Name, valKindName(p.Type.Kind))
 		}
-		// `U32` is kind-checked, so the value's agreement with the declared type is the accessor's answer
-		// rather than a separate test that could drift from it.
+		// The accessor's boolean is **unreachable** now that the structural comparison runs first — a
+		// value whose type equals `u32` reads as one. Checked anyway rather than discarded: the accessor
+		// is the authority on whether the kind and the payload agree, and trusting the type tag alone
+		// here is the mis-read `U32`'s own doc comment exists to prevent.
 		u, ok := args[i].U32()
 		if !ok {
-			return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared u32 but the value given is %v",
-				ErrUnsupportedForm, name, p.Name, args[i].Type.Kind)
+			return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared u32 and its type says so, "+
+				"but the value did not read as one", ErrUnsupportedForm, name, p.Name)
 		}
 		// A u32 is one flat i32 in the Canonical ABI: the low 32 bits, carried as two's complement. No
 		// memory and no realloc are involved, which is why this slice needs neither.

@@ -59,10 +59,30 @@ import (
 type argHeap struct {
 	f     *compFunc
 	param string
+	// kind is the ARGUMENT's kind, not the allocation's — a `list<string>`'s element allocations come
+	// through here too. It selects which byte-length cap applies, which is a property of the argument
+	// being lowered rather than of each realloc it makes: a string's cap is the load side's 2²⁸−1 (ADR
+	// 0098's recorded divergence), and anything else is bounded only by `REALLOC_I32_MAX`.
+	kind canon.Kind
+}
+
+// allocRequest is one `cabi_realloc` call's worth of intent.
+//
+// **Split out of `pendingLower` on the #924 review**, which caught that one struct was doing two jobs —
+// a pending argument and an allocation request — with a comment conceding the two "share the parameter
+// name". A struct whose fields mean different things depending on the caller is how a field ends up set
+// for one use and read in the other, and the two uses here had already diverged: a pending argument
+// carries a value and flat slots, a request carries a size and an alignment, and neither needs the
+// other's fields.
+type allocRequest struct {
+	param   string     // the argument's name, so a refusal says which one failed
+	kind    canon.Kind // the argument's kind, for the cap
+	align   int
+	byteLen int
 }
 
 func (a argHeap) Realloc(_, _, align, newSize int) (int, error) {
-	return a.f.guestAlloc(&pendingLower{param: a.param, align: align, byteLen: newSize})
+	return a.f.guestAlloc(allocRequest{param: a.param, kind: a.kind, align: align, byteLen: newSize})
 }
 
 func (a argHeap) WriteBytes(ptr int, data []byte) error {
@@ -81,13 +101,11 @@ func (a argHeap) StoreInt(v uint64, ptr, nbytes int) error {
 //
 // It carries the **value** and the flat slots to patch, rather than pre-serialised bytes: the codec is
 // what knows how a value becomes bytes, and a `list<string>` has no single byte string to hand over.
-// `byteLen` and `align` are set when the record is used as `argHeap.Realloc`'s request rather than as a
-// pending argument — the two uses share the parameter name, which is the only thing a refusal needs.
+// It carries **only** what a pending argument needs. The allocation request it eventually makes is
+// [allocRequest], a separate type — see that type for why they were one and are not.
 type pendingLower struct {
 	param   string // the parameter's name, for a refusal that says which argument failed
 	val     canon.Value
-	align   int
-	byteLen int
 	ptrSlot int
 	lenSlot int
 }
@@ -101,7 +119,10 @@ type pendingLower struct {
 func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error {
 	for i := range pend {
 		p := &pend[i]
-		h := argHeap{f: f, param: p.param}
+		// The heap carries the ARGUMENT's kind, so every allocation the codec makes while lowering it —
+		// including a `list<string>`'s per-element string allocations — is capped by the rule that
+		// belongs to the argument rather than by one guessed per realloc.
+		h := argHeap{f: f, param: p.param, kind: p.val.Type.Kind}
 
 		// **The codec does the lowering.** Both arms are the model's `*_into_range` forms: they allocate
 		// through the guest's realloc, write through the boundary accessor (which takes ADR 0073's growth
@@ -182,24 +203,37 @@ func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error 
 // speculatively. The overflow guard itself is live, consumed by `canon.LoadList` on the lifting side of
 // the same bound. *Decline speculative API with a consumer trigger*; the trigger is the list argument
 // path.
-func checkLowerSize(param string, n int) error {
+// **The cap depends on the kind, which it did not until the #924 review.** A single string-shaped cap
+// applied to every allocation, so a `list<u32>` of 100 million elements — 400 MB, which the model allows
+// and which nothing stops a guest reading back — was refused with a message about strings.
+//
+//   - A **string** keeps the load-side 2²⁸−1 cap and ADR 0098's recorded divergence: a longer one could
+//     be stored and never read back, because `load_string` traps past it.
+//   - **Everything else** is bounded only by `REALLOC_I32_MAX`, which is the model's own bound on a
+//     store (definitions.py:1713) and is already enforced inside `canon.ListByteLength`. So a list needs
+//     no second cap here, and imposing one would be this engine inventing a limit the ABI does not have.
+func checkLowerSize(param string, kind canon.Kind, n int) error {
 	if n < 0 {
 		return fmt.Errorf("%w: argument %q has a negative byte length %d", ErrUnsupportedForm, param, n)
 	}
-	if n > canon.MaxStringByteLength {
-		return fmt.Errorf("%w: argument %q is %d bytes, past the %d-byte cap a component string can "+
-			"carry; a longer one could be stored but never read back, because a load of it traps "+
+	if kind == canon.KindString && n > canon.MaxStringByteLength {
+		return fmt.Errorf("%w: argument %q is a %d-byte string, past the %d-byte cap a component string "+
+			"can carry; a longer one could be stored but never read back, because a load of it traps "+
 			"(definitions.py:1383), so it is refused here rather than allocated for",
 			ErrUnsupportedForm, param, n, canon.MaxStringByteLength)
+	}
+	if uint64(n) > canon.ReallocI32Max {
+		return fmt.Errorf("%w: argument %q needs %d bytes, past the %d the Canonical ABI's 32-bit pointer "+
+			"space can address", ErrUnsupportedForm, param, n, canon.ReallocI32Max)
 	}
 	return nil
 }
 
-func (f *compFunc) guestAlloc(p *pendingLower) (int, error) {
+func (f *compFunc) guestAlloc(p allocRequest) (int, error) {
 	// **Before the realloc**, so the guest is never asked for an allocation this engine would refuse to
 	// use. The order is the point: checking after would mean a guest had already grown its memory by a
 	// quarter of a gigabyte to satisfy a request about to be rejected.
-	if err := checkLowerSize(p.param, p.byteLen); err != nil {
+	if err := checkLowerSize(p.param, p.kind, p.byteLen); err != nil {
 		return 0, err
 	}
 	if f.reallocCore.inst == nil {
