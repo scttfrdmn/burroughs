@@ -140,19 +140,35 @@ func TestAnUnspellableElementRefusesNamingTheKind(t *testing.T) {
 		t.Errorf("the refusal %q does not name the element type it could not spell", err)
 	}
 
-	// And a record element, now that the codec models one: the refusal names the record structurally,
-	// so an embedder sees which record rather than "a record". This is also where a **tuple** lands,
-	// since it despecializes — so `tuple<u32>` is refused as `record{0: u32}`, which is the ABI's own
-	// name for it and the one price of having a single field-carrying arm.
+	// **A record element IS spellable now, and this assertion was the opposite one slice ago.**
+	//
+	// It read "list<record{x: u32}> was spelled across the public boundary, which has no record yet" —
+	// true when written and false the moment `ComponentTypeRecord` landed. That is the **third** time in
+	// this campaign a naming assertion held against a specimen chosen *because it was unimplemented*
+	// has expired: `tuple` as the unspellable element, `record` as the obstacle behind a resolved
+	// reference, and now this. The comment a few lines up predicted it in those words, which is why the
+	// `char` specimen above is the one that stayed.
+	//
+	// Kept as a **positive** case rather than deleted: it is now the check that the list and record arms
+	// compose, which nothing else asserts.
 	rec := canon.RecordType(canon.Field{Name: "x", Type: canon.Type{Kind: canon.KindU32}})
 	rlt := canon.Type{Kind: canon.KindList, Elem: &rec}
-	rerr2 := func() error { _, e := componentTypeFromCanon(rlt); return e }()
-	if rerr2 == nil {
-		t.Fatal("list<record{x: u32}> was spelled across the public boundary, which has no record yet")
+	rt, rerr2 := componentTypeFromCanon(rlt)
+	if rerr2 != nil {
+		t.Fatalf("list<record{x: u32}> is not spellable publicly: %v — the list and record arms must "+
+			"compose, since a record field or a list element can be either", rerr2)
 	}
-	if !strings.Contains(rerr2.Error(), "record{x: u32}") {
-		t.Errorf("the refusal %q does not name the record structurally; \"record\" alone would not say "+
-			"which one, and the fields are part of the type", rerr2)
+	if got := rt.String(); got != "list<record{x: u32}>" {
+		t.Errorf("list<record{x: u32}> renders as %q; the fields are part of the type, so a rendering "+
+			"that dropped them would print two different records identically", got)
+	}
+	// A record whose FIELD is unspellable is still refused, naming the field — which is the refusal the
+	// deleted assertion was really about, relocated to a specimen that cannot expire.
+	badRec := canon.RecordType(canon.Field{Name: "c", Type: canon.Type{Kind: canon.KindChar}})
+	if _, err := componentTypeFromCanon(badRec); err == nil {
+		t.Error("record{c: char} was spelled publicly; char is not in the public vocabulary")
+	} else if !strings.Contains(err.Error(), "char") || !strings.Contains(err.Error(), `"c"`) {
+		t.Errorf("the refusal %q names neither the field nor its type", err)
 	}
 
 	// Empty is not an escape hatch. An empty `list<char>` has no element to fail on, so a conversion

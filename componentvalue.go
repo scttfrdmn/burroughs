@@ -5,6 +5,7 @@ package burroughs
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -192,6 +193,120 @@ func ComponentTypeList(elem ComponentType) (ComponentType, error) {
 	return ComponentType{kind: KindComponentList, t: canon.Type{Kind: canon.KindList, Elem: &e}}, nil
 }
 
+// ComponentField is one field of a [ComponentTypeRecord]: its WIT label and its type.
+//
+// **The fields are exported where everything else here is opaque**, and ADR 0097 records why it is not
+// just convenience: a per-field constructor cannot check the condition that matters. Duplicate labels
+// and an empty field set are whole-set properties only `ComponentTypeRecord` can see, so a
+// `ComponentFieldOf` would catch nothing the record constructor does not — and would imply that a
+// validated field is a safe one.
+type ComponentField struct {
+	Name string
+	Type ComponentType
+}
+
+// ComponentTypeRecord is the `record` type with the given fields, in the given order.
+//
+// # Order is the layout, so it is the caller's to fix here and nowhere else
+//
+// A record's field order determines its byte layout: `record { a: u8, b: u32 }` is eight bytes with
+// three of padding between the fields, and `record { b: u32, a: u8 }` is eight bytes with three of
+// padding at the **end**. So the order given here is part of the type, and `ComponentRecord` takes a map
+// precisely so that no later caller can disagree with it.
+//
+// # Three conditions, each refused at construction (ADR 0085's rule)
+//
+//   - **At least one field.** Not an API nicety: the Canonical ABI gives an empty record **no size** —
+//     `elem_size_record` asserts `s > 0` — so there is no layout for a value to inhabit, and
+//     `wasm-tools validate` refuses a component declaring one. This engine refuses it at decode for the
+//     same reason.
+//   - **Labels are valid WIT labels.** ADR 0097's change 2: checked when the type is built rather than
+//     left to fail later against a signature.
+//   - **No duplicate labels.** A record's fields are matched to a value's by name
+//     (`definitions.py:1727`), so two fields with one name make the match ambiguous — and the
+//     *duplicate* would silently win or lose depending on iteration order.
+func ComponentTypeRecord(fields ...ComponentField) (ComponentType, error) {
+	if len(fields) == 0 {
+		return ComponentType{}, fmt.Errorf("a record must have at least one field: the Canonical ABI " +
+			"gives an empty record no size at all, so no value could inhabit it, and a component " +
+			"declaring one is refused by this engine and by the reference validator")
+	}
+	seen := make(map[string]int, len(fields))
+	cf := make([]canon.Field, len(fields))
+	for i, f := range fields {
+		if err := validWITLabel(f.Name); err != nil {
+			return ComponentType{}, fmt.Errorf("record field %d: %w", i, err)
+		}
+		if j, dup := seen[f.Name]; dup {
+			return ComponentType{}, fmt.Errorf("record fields %d and %d are both named %q; a record's "+
+				"fields are matched to a value's by name, so a duplicate makes that match ambiguous",
+				j, i, f.Name)
+		}
+		seen[f.Name] = i
+		if f.Type.kind == KindComponentNone {
+			return ComponentType{}, fmt.Errorf("record field %q has no type: the zero ComponentType "+
+				"names none, so build it with ComponentTypeU32, ComponentTypeString, ComponentTypeList "+
+				"or ComponentTypeRecord first", f.Name)
+		}
+		cf[i] = canon.Field{Name: f.Name, Type: f.Type.t}
+	}
+	return ComponentType{kind: KindComponentRecord, t: canon.RecordType(cf...)}, nil
+}
+
+// validWITLabel reports whether s is a WIT label, with the grammar taken from the reference rather than
+// recalled.
+//
+// # The grammar, and how it was established
+//
+//	label ::= word ('-' word)*
+//	word  ::= [a-z][0-9a-z]* | [A-Z][0-9A-Z]*
+//
+// Each word is internally uniform in case; **different words in one label need not agree**, which is
+// the part worth not guessing at. Measured by putting fifteen candidate field names through
+// `wasm-tools validate`, whose verdicts the grammar above reproduces exactly:
+//
+//	accepted: a  my-field  field0  ABC  ABC-DEF  a-B
+//	rejected: MyField  camelCase  my_field  0field  My-Field  ""  a--b  a-  -a
+//
+// `a-B` being accepted is why the rule is per-word rather than per-label: a single "all lower or all
+// upper" test would reject it, and a reader checking this engine against the reference would find a
+// disagreement on a name the reference allows.
+//
+// The message borrows the reference's phrase — *"is not in kebab case"* — for the reason the empty-form
+// refusal does: a reader meeting this is most likely comparing against wasm-tools' output, and one rule
+// with two spellings makes that comparison guesswork. Nothing in the tree validated labels before this;
+// the decoder's `labelName` is `coreName` with no syntax rule, so there was no existing rule to reuse.
+func validWITLabel(s string) error {
+	if s == "" {
+		return fmt.Errorf("a record field name cannot be empty")
+	}
+	for _, word := range strings.Split(s, "-") {
+		if word == "" {
+			// Catches a leading `-`, a trailing `-`, and `--` anywhere, which `strings.Split` renders as
+			// an empty element in each case.
+			return fmt.Errorf("record field name %q is not in kebab case: it has an empty word, so it "+
+				"begins or ends with %q or contains %q", s, "-", "--")
+		}
+		upper := word[0] >= 'A' && word[0] <= 'Z'
+		lower := word[0] >= 'a' && word[0] <= 'z'
+		if !upper && !lower {
+			return fmt.Errorf("record field name %q is not in kebab case: the word %q starts with %q, "+
+				"and a word must start with a letter", s, word, string(word[0]))
+		}
+		for i := 1; i < len(word); i++ {
+			c := word[i]
+			digit := c >= '0' && c <= '9'
+			ok := digit || (upper && c >= 'A' && c <= 'Z') || (lower && c >= 'a' && c <= 'z')
+			if !ok {
+				return fmt.Errorf("record field name %q is not in kebab case: the word %q mixes case or "+
+					"carries %q, and each word must be all-lowercase or all-uppercase letters and digits "+
+					"(words in one label may differ from each other)", s, word, string(c))
+			}
+		}
+	}
+	return nil
+}
+
 // Kind reports which WIT type this is, or KindComponentNone for the zero value.
 func (t ComponentType) Kind() ComponentKind { return t.kind }
 
@@ -239,6 +354,14 @@ type ComponentValue struct {
 	bits uint64
 	s    string           // KindComponentString's payload
 	list []ComponentValue // KindComponentList's payload
+	// rec is KindComponentRecord's payload, held as the codec's own value rather than as a Go map.
+	//
+	// The codec value already stores the fields in **descriptor order** and already looks one up by
+	// label, so a second representation here would be a second place for field order to live — and
+	// field order is the byte layout. `canon.Value` is internal and converted at the boundary, so
+	// holding one costs nothing in API terms: ADR 0029's treatment, the same the rest of this struct
+	// gets.
+	rec canon.Value
 }
 
 // Kind reports which WIT type this value carries.
@@ -338,6 +461,82 @@ func ComponentList(elem ComponentType, vals ...ComponentValue) (ComponentValue, 
 	return ComponentValue{typ: lt, list: append([]ComponentValue(nil), vals...)}, nil
 }
 
+// ComponentRecord constructs a record of the given type from a **map of field name to value**.
+//
+// # Why a map, and what it buys over checking the order
+//
+// ADR 0097's ruling, and it goes further than catching a misordered field: a map makes misordering
+// **unrepresentable**, because the caller supplies no order at all. The order comes from the type
+// descriptor, which is the only order in the system — lowering walks the descriptor's fields in
+// declared order and looks each name up, so Go's map-iteration nondeterminism never reaches the ABI
+// layout. That matters more than it sounds: field order *is* the byte layout, and a record lowered in
+// the wrong order is a plausible wrong value rather than an error.
+//
+// # The keys must match the descriptor exactly, in both directions
+//
+// A **missing** field cannot be defaulted: no WIT value means "absent", so a default would hand the
+// guest a field the caller never set. An **extra** key is almost always a typo for a real field, and
+// accepting it silently would lower the record with the intended field missing — the same wrong value,
+// arrived at from the other side. Both are named, and the extra key is reported by name because it is
+// the one the caller actually wrote.
+//
+// Field *types* are compared with [canon.TypeEqual], not by kind — ADR 0097's first change, applied to
+// fields: a `record { xs: list<u32> }` must not accept a `list<string>` for `xs`, and both are lists.
+func ComponentRecord(t ComponentType, fields map[string]ComponentValue) (ComponentValue, error) {
+	if t.kind != KindComponentRecord {
+		return ComponentValue{}, fmt.Errorf("ComponentRecord needs a record type, got %s; build one with "+
+			"ComponentTypeRecord", t)
+	}
+	cv := make(map[string]canon.Value, len(fields))
+	for name, v := range fields {
+		if v.typ.kind == KindComponentNone {
+			// Named apart from a type mismatch because it is a different mistake: an unset value rather
+			// than a wrong one. "want u32, got none" would send a reader looking for a `none` type.
+			return ComponentValue{}, fmt.Errorf("record field %q was never constructed — the zero "+
+				"ComponentValue carries no type", name)
+		}
+		c, err := v.toCanon()
+		if err != nil {
+			return ComponentValue{}, fmt.Errorf("record field %q: %w", name, err)
+		}
+		cv[name] = c
+	}
+	// **The exact-key and per-field structural checks are `canon.Record`'s**, not repeated here. One
+	// place decides what "the fields match the descriptor" means, so the public constructor and the
+	// codec cannot drift about it — the same argument that put `TypeEqual` in `canon` rather than at
+	// each boundary.
+	rec, err := canon.Record(t.t, cv)
+	if err != nil {
+		return ComponentValue{}, err
+	}
+	return ComponentValue{typ: t, rec: rec}, nil
+}
+
+// Field reads a record field by name, and reports whether this value is a record with one.
+//
+// The boolean distinguishes "not a record" and "no such field" from a field whose value is a legitimate
+// zero — the reason every accessor here carries one. A caller that knows the signature it called knows
+// the field names; `ComponentType` introspection stays ADR 0097's deferred surface, with its trigger
+// recorded as code that must branch on a returned value's type rather than knowing it in advance.
+func (v ComponentValue) Field(name string) (ComponentValue, bool) {
+	if v.typ.kind != KindComponentRecord {
+		return ComponentValue{}, false
+	}
+	fv, ok := v.rec.Field(name)
+	if !ok {
+		return ComponentValue{}, false
+	}
+	out, err := fromCanon(fv)
+	if err != nil {
+		// A field whose type this release cannot spell publicly. Reported as "not readable" rather than
+		// panicking or returning a half-built value: the boolean is the refusal channel this accessor
+		// has, and `Call` already refuses such a record at the boundary, so this is unreachable through
+		// a call and reachable only through a hand-built value.
+		return ComponentValue{}, false
+	}
+	return out, true
+}
+
 // U32 reads a `u32`, and reports whether this value is one.
 //
 // The boolean is the refusal: a value of another kind returns `(0, false)` rather than reinterpreting its
@@ -419,6 +618,12 @@ func (v ComponentValue) String() string {
 		// reading the log. The type comes from `v.typ`, which renders structurally, so an empty list
 		// still says what it is a list of — the one question an empty list raises.
 		return fmt.Sprintf("%s(%d element(s))", v.typ, len(v.list))
+	case KindComponentRecord:
+		// **The type, not the field values.** A record can carry a string field of any length and a
+		// list field of any size, so expanding the contents turns a diagnostic into whatever the guest
+		// chose to put there. The type renders structurally, so the field names and their types are
+		// visible — which is what a reader needs to know *which* record they are looking at.
+		return v.typ.String()
 	default:
 		// Every kind that cannot cross the boundary renders as its name alone, which is all there is to
 		// say about a value that cannot exist yet. An explicit default rather than a fallthrough, so the
@@ -475,6 +680,19 @@ func (v ComponentValue) toCanon() (canon.Value, error) {
 		// a disagreement between it and `ComponentList` is a bug in the conversion, and this is where it
 		// would surface rather than inside a lowering.
 		return canon.List(*v.typ.t.Elem, elems...)
+	case KindComponentRecord:
+		// **Already a `canon.Value`.** `ComponentRecord` built it through `canon.Record`, which is
+		// where the exact-key and per-field structural checks live, so there is nothing to convert and
+		// nothing to re-check here. The payload field holding the codec's value rather than a Go map is
+		// exactly what makes this arm a return rather than a loop.
+		if v.rec.Type.Kind != canon.KindRecord {
+			// A hand-built `ComponentValue{typ: recordType}` with no payload. Unreachable through
+			// `ComponentRecord`; checked because the alternative is handing the codec a zero value whose
+			// type tag says record.
+			return canon.Value{}, fmt.Errorf("%w: a record value carries no fields, so it was not built "+
+				"by ComponentRecord", ErrUnsupported)
+		}
+		return v.rec, nil
 	case KindComponentNone:
 		return canon.Value{}, fmt.Errorf("%w: a ComponentValue with no kind cannot cross the boundary — "+
 			"the zero value names no WIT type, so it is a value nobody constructed rather than a u32(0)",
@@ -543,6 +761,19 @@ func fromCanon(v canon.Value) (ComponentValue, error) {
 		// "cannot through a correct codec" is the assumption worth checking at a boundary: this is the
 		// last place a wrong value is still an error rather than data in an embedder's hands.
 		return ComponentList(et, out...)
+	case canon.KindRecord:
+		// The type is converted first and its refusal is the record's, for the list arm's reason one
+		// level over: a record with an unspellable field must fail **naming that field's type**, once,
+		// rather than succeeding and then failing per field.
+		rt, err := componentTypeFromCanon(v.Type)
+		if err != nil {
+			return ComponentValue{}, err
+		}
+		// The codec value is kept as-is, which is the point of holding one: a record that came back
+		// from a guest is already in descriptor order and already matched to its type, so rebuilding it
+		// through `ComponentRecord`'s map would be a lossy round trip (map, then back to order) for no
+		// check that has not already run inside the codec.
+		return ComponentValue{typ: rt, rec: v}, nil
 	default:
 		return ComponentValue{}, fmt.Errorf("%w: an export returned a %s, which this release cannot carry "+
 			"across the public boundary; it carries u32, string and list", ErrUnsupported, v.Type)
@@ -566,6 +797,24 @@ func componentTypeFromCanon(t canon.Type) (ComponentType, error) {
 		return ComponentTypeU32(), nil
 	case canon.KindString:
 		return ComponentTypeString(), nil
+	case canon.KindRecord:
+		// A despecialized **tuple** lands here too, and is spelled as the record it is: WIT
+		// distinguishes the two and the Canonical ABI does not, so a `tuple<u32, u32>` coming back from
+		// a guest crosses as `record { "0": u32, "1": u32 }`. Stated because the field names look odd
+		// until you know why they are digits.
+		fields := make([]ComponentField, 0, len(t.Fields))
+		for i := range t.Fields {
+			ft, err := componentTypeFromCanon(t.Fields[i].Type)
+			if err != nil {
+				return ComponentType{}, fmt.Errorf("record field %q: %w", t.Fields[i].Name, err)
+			}
+			fields = append(fields, ComponentField{Name: t.Fields[i].Name, Type: ft})
+		}
+		// Through the public constructor, so a record arriving from a guest is held to the **same**
+		// label grammar and duplicate rule an embedder's record is. A guest cannot produce an invalid
+		// label through a conforming decoder — this engine now refuses one at decode — so this is the
+		// belt behind that brace, and it is where a disagreement between the two would surface.
+		return ComponentTypeRecord(fields...)
 	case canon.KindList:
 		if t.Elem == nil {
 			return ComponentType{}, fmt.Errorf("%w: a canon list type carries no element type",

@@ -494,6 +494,30 @@ func Record(t Type, fields map[string]Value) (Value, error) {
 	return Value{Type: t, list: vals}, nil
 }
 
+// Record returns a record's field values **in descriptor order**, and whether this value is a record.
+//
+// # Ordered, where Field is by name, and both are needed
+//
+// [Value.Field] answers "what is field `x`", which is what a reader who knows the type wants. This
+// answers "what are the fields, in layout order", which is what a *lowering* wants: the flat form and
+// the memory form are both the fields in declared order, and looking each one up by name to rebuild
+// that order would reintroduce the name-to-order step the descriptor exists to own.
+//
+// Copied, for [Value.List]'s reason: a `Value` is passed around by value and is otherwise immutable
+// from outside the package, so handing back the backing array would be a writable window into a value
+// somebody else also holds.
+//
+// The length is guaranteed to equal `len(v.Type.Fields)` for any value a constructor built, which is
+// what lets a caller index the two together. A value whose payload disagrees with its type reads as
+// **not a record** rather than returning a short slice — a caller pairing the two would otherwise index
+// past the end of one of them.
+func (v Value) Record() ([]Value, bool) {
+	if v.Type.Kind != KindRecord || len(v.list) != len(v.Type.Fields) {
+		return nil, false
+	}
+	return append([]Value(nil), v.list...), true
+}
+
 // Field returns the value of a record's named field, and whether this value is a record with one.
 //
 // The two-result form distinguishes "not a record" and "no such field" from a field whose value is a

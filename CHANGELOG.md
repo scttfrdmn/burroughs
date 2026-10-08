@@ -30,6 +30,45 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The public record surface: `ComponentTypeRecord`, `ComponentField`, `ComponentRecord` and
+  `ComponentValue.Field`** ([#904](https://github.com/scttfrdmn/burroughs/issues/904)) — ADR 0097's last
+  three held names, with **both directions working end to end**. A guest takes a
+  `record { a: u32, b: u32 }` and returns a `record { name: string, n: u32 }`, and the result fixture
+  **clobbers its own string field immediately after resolving**, so the content proves the lift was
+  *eager*: a late lift hands back `"XXXXXXXXX"`, nine bytes of valid UTF-8, and only the content
+  separates it from `"burroughs"`.
+  `ComponentRecord` takes a **map** of label to value, so misordering is *unrepresentable* rather than
+  merely checked — the caller supplies no order at all and the descriptor is the only order in the
+  system. That matters because field order **is** the byte layout. Asserted by building the same map 32
+  times and requiring the same answer: Go randomises map iteration, so a lowering that read the caller's
+  order would be intermittent by construction.
+  **The label grammar came from the reference, not from recall.** Fifteen candidate field names were put
+  through `wasm-tools validate` first: it accepts `a`, `my-field`, `field0`, `ABC`, `ABC-DEF` and
+  **`a-B`**, and rejects `MyField`, `camelCase`, `my_field`, `0field`, `My-Field`, `""`, `a--b`, `a-` and
+  `-a`. `a-B` is the case worth having measured — words are each internally uniform in case but **need
+  not agree with each other**, so a single "all lower or all upper" test would reject a name the
+  reference allows. The refusal borrows the reference's phrase, *"is not in kebab case"*. Nothing in the
+  tree validated labels before this: the decoder's `labelName` is `coreName` with no syntax rule.
+- **A record crosses as an argument and as a result, which needed two engine arms the public names
+  revealed were missing** ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). Both were found by
+  the end-to-end witnesses, which is the whole reason that condition exists — the public names alone
+  would have shipped as callable-but-unusable.
+  `lowerFlatArgs` became one recursive walk (`lowerOneArg`), because **a record's flat form is the
+  concatenation of its fields'**: a `record { name: string, n: u32 }` is three words of which two are a
+  deferred `(ptr, len)` pair. Extending the old per-parameter switch would have meant a record arm
+  reimplementing the string arm. Each memory-resident piece gets its own `pendingLower`, which needed no
+  new mechanism — `pendingLower` already carried slot *indices* rather than pointers precisely so `flat`
+  could grow underneath it.
+  The eager lift became `liftResultValue`, and **the arity check moved** with it: it was per-arm
+  (`len(args) == n`), and a record's word count is a property of the whole tree, so the walk now reports
+  what it consumed and the caller compares that to what arrived. The second form is strictly stronger —
+  it catches a record whose fields together consumed too **few** words, which no per-kind count could
+  see, and an extra word that would otherwise be silently dropped. Both neuters confirm it: not
+  advancing the cursor gives *"consumed 0 flat value(s) of the 3 that arrived"*, and lowering only the
+  first field gives `10+10=20` where 42 was expected.
+  `canon.Value.Record` is the ordered-field accessor the walk needs — `Field` answers "what is field
+  *x*", this answers "what are the fields, in layout order", which is what a lowering wants.
+
 - **`record` in the codec, as the base field-carrying form, with `tuple` despecialized into it**
   ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). `canon.RecordType`, `canon.Record`,
   `canon.Value.Field`, `canon.StoreRecord`/`canon.LoadRecord`, and record arms in `store`, `load`,
@@ -1166,6 +1205,15 @@ own condition rather than as a prediction.
   gate had been green because the advisory was not yet in the live database, which is the other half of
   this instance and the half that cannot be pinned away. Recorded under the containment rule in
   [operations.md](docs/laws/operations.md).
+- **The eager lift's compound refusal has now been wrong three times, in three different ways, so it
+  stopped naming a mechanism** ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). It said the
+  engine lifts "scalars and string" while only `u32` worked; then that a compound needs "a per-element
+  load the codec does not yet expose", which `canon.LoadList` had just built; then that a record "needs
+  `canon.LoadVia` to compose it", which `LoadVia`'s record arm had made false one slice earlier. **Each
+  version was wrong for the same reason** — it described a *state of the engine*, which then changed.
+  It now names only what is true by construction: the kinds with an arm, and a forward to
+  `canon.LoadVia`'s own refusal as the single place the limit is stated. A message that points at where
+  a limit lives cannot go stale when the limit moves; all three previous versions could.
 - **A component declaring `record {}` or `tuple<>` loaded, where the reference validator refuses it**
   ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). Asked of the authority rather than
   reasoned about: `wasm-tools parse` **accepts** both — the bytes are well-formed — and
