@@ -1053,6 +1053,32 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **The README's "what is not here" list named three things as absent that are on main, and its phase
+  line was stale.** It said *"No host imports and no WASI"*, *"No threads, no stack switching,
+  no component model … None has started"*, and headed the section *"v0, the interpreter phase"* — all true
+  when written, all left standing across the work that falsified them.
+  **The phase heading's first repair asserted the wrong thing in the other direction**, and the chair's
+  pre-merge check is what caught it: it read *"v1, the threads phase, since the signed `v0.4.0` tag"*,
+  citing for the phase change the one record that **denies** it — that release's own notes say *"it is
+  not v1 … v0 closing means v0's conditions are discharged, not that the next phase has begun."* The
+  closure record is solid and is what the README now states (twelve conditions, #464, #499, the milestone
+  closed at 99 issues, the MVP core suite green). The phase itself is **not declared here at all**, and
+  the file says where it is recorded instead — because a project's claim about its own phase should not
+  have a README as its first home. That is the foreclosing-words
+  shape: a sentence telling the next reader the tree is in a state it is not, in the one file whose own
+  preamble says *"a README that implies otherwise is the more expensive kind of wrong."* The preamble now
+  says that holds in **both** directions, because the repair's risk is overstating.
+  Restored at the precision the code supports, with the true remainders kept where they were: the core
+  `Instantiate`/`Call` path still supplies no imports (`Config` has one field and it is not an import
+  set), and **stack switching still has not started**. WASI preview 1 is named as the separate public
+  path it is, with decision 0083's no-default-grant. The component model is named as **on by default** —
+  `gate:components` flipped 2026-09-11, `gate:async` 2026-09-18, each with its env-var rollback — and its
+  **value** surface is stated as narrower than its mechanism: `u32` and `string` cross today, `list<u32>`
+  crosses the engine's own call path with the public constructor still to come, `record` is not in the
+  codec. Threads are named as mechanism-on-main-with-the-gate-unflipped, with `FeatureThreads`
+  distinguished from `gate:threads` — supplying a capability is an embedder declaring what their artifact
+  needs, not a gate flipping. And *"Proposal gates default off"* became **nothing defaults on without its
+  own suite green**, which is the actual rule and does not contradict the four gates that have flipped.
 - **The refusal-log guard accused the test suite of a write the live hook had made, and its message was
   unreadable by any test** ([#902](https://github.com/scttfrdmn/burroughs/issues/902), grave
   [#852](https://github.com/scttfrdmn/burroughs/issues/852)'s guard). `make ci` reddened at the `strict`
