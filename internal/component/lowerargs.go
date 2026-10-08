@@ -113,6 +113,13 @@ func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error 
 //
 // **Factored so it can be called on its own**, which is what makes it testable without allocating a
 // 256 MiB string: the check is about the length, so the test supplies a length.
+//
+// A `checkLowerCount` companion — `canon.ListByteLength` followed by this, so a `list<T>` and a `string`
+// are bounded by one rule at one point — belongs beside it and is **deliberately not written yet**: the
+// list *argument* lowering that would call it does not exist, and `deadcode` said so when it was written
+// speculatively. The overflow guard itself is live, consumed by `canon.LoadList` on the lifting side of
+// the same bound. *Decline speculative API with a consumer trigger*; the trigger is the list argument
+// path.
 func checkLowerSize(param string, n int) error {
 	if n < 0 {
 		return fmt.Errorf("%w: argument %q has a negative byte length %d", ErrUnsupportedForm, param, n)

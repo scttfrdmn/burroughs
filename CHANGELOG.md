@@ -90,6 +90,20 @@ own condition rather than as a prediction.
   constructors and accessors arrive with the internal directions that carry them, per ADR 0097's
   each-piece-when-its-direction-works rule. **No release is cut.**
 
+- **The list lifting framing: `canon.LoadList` with an injected per-element load, and
+  `canon.ListByteLength`'s overflow guard** ([#902](https://github.com/scttfrdmn/burroughs/issues/902)).
+  `LoadList` is the mirror of `StoreList`'s injected element store, and takes the same shape for the same
+  reason: the framing — stride, span, header — is shared while the element handling is not, which is what
+  lets `list<string>` and later `list<record>` reuse one framing instead of each growing a loop.
+  `ListByteLength` is `count × elem_size` **computed so it cannot overflow**. The model computes that
+  product and asserts it against `REALLOC_I32_MAX` (`definitions.py:1711-1713`) — Python integers do not
+  overflow, Go's do, and on the lifting side the count is a word the **guest** supplies. The division
+  form is used rather than multiply-then-check: with the naive form, a count of 2⁶² times an 8-byte
+  element returns **0 with no error** — a wrapped product landing on "nothing to read" — and the largest
+  `int` returns **−8**. Both measured by neutering. The span is also bounds-checked **once, before any
+  element is read**, so a list running off the end is refused rather than discovered partway through a
+  loop that has already handed back partial data; and a misaligned list pointer is refused
+  (def:1715), which unlike a string's is **not** vacuous once the element is wider than a byte.
 - **The codec's lifting side: `canon.ReadHeap`, `LoadString`, `LoadStringFromRange`, `LoadListU8` and
   `canon.Value.Str()`** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). Every prior use of
   the codec **lowered** — the host answers a guest through `StoreString`/`StoreVia` against guest memory,
