@@ -26,7 +26,8 @@ import definitions  # noqa: E402
 from definitions import (  # noqa: E402
     BoolType, U8Type, U16Type, U32Type, U64Type, S8Type, S16Type, S32Type, S64Type,
     F32Type, F64Type, CharType, StringType, ListType, VariantType, ResultType,
-    OwnType, BorrowType, TupleType, CaseType, MemInst, CanonicalOptions, ComponentInstance,
+    OwnType, BorrowType, TupleType, CaseType, RecordType, FieldType,
+    MemInst, CanonicalOptions, ComponentInstance,
     LiftLowerContext, Store, store, load, lower_flat_values, flatten_types, align_to,
     alignment, elem_size, ResourceType, ResourceHandle,
 )
@@ -90,6 +91,16 @@ def build_type(spec):
         case "string": return StringType()
         case "list": return ListType(build_type(spec["elem"]))
         case "tuple": return TupleType([build_type(f) for f in spec["fields"]])
+        # `record` is the BASE form and `tuple` despecializes to it (definitions.py:1133 maps
+        # TupleType(ts) -> RecordType([FieldType(str(i), t) ...])), so a tuple case and a record case with
+        # fields named "0", "1", ... must produce byte-identical readings. That equality is the point of
+        # generating both rather than only the one the codec implements first.
+        #
+        # A field's key is "name" here and `label` in the model. Deliberately not renamed: `cases.json`
+        # spells a field the way WIT does, and the mapping to the model's vocabulary belongs in this
+        # function — which is the one place that already translates between the two.
+        case "record":
+            return RecordType([FieldType(f["name"], build_type(f["type"])) for f in spec["fields"]])
         case "variant":
             return VariantType([CaseType(c["name"], build_type(c["type"]) if c.get("type") else None)
                                 for c in spec["cases"]])
@@ -118,6 +129,26 @@ def build_value(spec, value):
         return (value, "utf8", len(value.encode("utf-8")))
     if k == "list":
         return [build_value(spec["elem"], e) for e in value]
+    if k in ("record", "tuple"):
+        # The model's record value is a plain dict keyed by field LABEL — `store_record` reads
+        # `v[f.label]` (definitions.py:1727). A tuple's labels are its indices as strings, which is what
+        # despecialize produces, so the two share this arm and a tuple's JSON value stays a list.
+        #
+        # **Built by iterating the TYPE's fields, not the value's keys**, so field order comes from the
+        # descriptor in exactly the way it will at the boundary. A JSON object preserves insertion order
+        # in Python, but relying on that would make the fixture's layout depend on how someone typed the
+        # case rather than on the declared type.
+        if k == "tuple":
+            return {str(i): build_value(f, value[i]) for i, f in enumerate(spec["fields"])}
+        missing = [f["name"] for f in spec["fields"] if f["name"] not in value]
+        if missing:
+            raise ValueError(f"record case is missing field(s) {missing}")
+        extra = [key for key in value if key not in {f["name"] for f in spec["fields"]}]
+        if extra:
+            # Loud rather than ignored: a typo'd field name would otherwise silently fall back to the
+            # declared field being absent, and `store_record` would KeyError somewhere less legible.
+            raise ValueError(f"record case has field(s) not in its type: {extra}")
+        return {f["name"]: build_value(f["type"], value[f["name"]]) for f in spec["fields"]}
     if k == "variant":
         (name, payload), = value.items()
         c = next(c for c in spec["cases"] if c["name"] == name)

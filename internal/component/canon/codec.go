@@ -27,18 +27,24 @@ func alignment(t Type) int {
 		return 8
 	case KindVariant:
 		return alignmentVariant(t.Cases)
-	case KindTuple:
-		return alignmentTuple(t.Fields)
+	case KindRecord:
+		return alignmentRecord(t.Fields)
 	default:
 		panic(fmt.Sprintf("canon: alignment: unmodeled kind %s", t.Kind))
 	}
 }
 
-// alignmentTuple is a tuple's alignment: the max of its fields' (CanonicalABI.md, an empty tuple is 1).
-func alignmentTuple(fields []Type) int {
+// alignmentRecord is a record's alignment: the max of its fields', floor 1 (`alignment_record`,
+// definitions.py:1193-1197).
+//
+// **An empty field set gives 1 here, and that matches the model** — the loop does not run and `a` stays
+// 1, exactly as the model's does. Unlike `elem_size_record`, there is no assertion: the model is willing
+// to say what an empty record's alignment is and unwilling to say what its size is. That asymmetry is
+// the model's, recorded rather than smoothed over, and it is why only [sizeRecord] refuses.
+func alignmentRecord(fields []Field) int {
 	a := 1
 	for i := range fields {
-		if fa := alignment(fields[i]); fa > a {
+		if fa := alignment(fields[i].Type); fa > a {
 			a = fa
 		}
 	}
@@ -47,13 +53,51 @@ func alignmentTuple(fields []Type) int {
 
 // sizeTuple is a tuple's size: each field placed at its aligned offset, the whole aligned to the tuple's
 // alignment (CanonicalABI.md `record`/`tuple` layout).
-func sizeTuple(fields []Type) int {
+// sizeRecord is a record's in-memory size (`elem_size_record`, definitions.py:1251-1257).
+//
+// # Padding happens TWICE, and only one of them is obvious
+//
+//   - **Per field**: each field starts at `align_to(s, alignment(f))`, so a `u8` followed by a `u32`
+//     leaves three bytes between them (def:1254).
+//   - **Once at the end**: the total is rounded up to the record's own alignment (def:1257), so a `u32`
+//     followed by a `u8` is five bytes of content and **eight** of size.
+//
+// A layout implementing only the first is correct for the first shape and wrong for the second, and the
+// second is the one that matters inside a list: `size(elem)` is the stride, so a short record puts every
+// element after the first at the wrong offset. Both orderings are differential cases
+// (`record-pad-u8-then-u32`, `record-pad-u32-then-u8`) precisely so that asymmetry cannot be half-done.
+//
+// # An empty field set has NO SIZE, and is refused rather than answered
+//
+// The model ends this function with `assert(s > 0)` (def:1256). An empty record reaches it with `s == 0`
+// and **fails the assertion** — asked of the pinned model directly, `elem_size(RecordType([]))` raises
+// `AssertionError`, and so does `elem_size(TupleType([]))`, since `elem_size` despecializes first
+// (def:1228). So the model does not define a layout for an empty record, and there is nothing here to
+// match.
+//
+// This used to return **0** for an empty tuple, and that was worse than wrong in one specific way: a
+// zero-size element makes `ListByteLength` return 0 for *any* count, so a list of a million empty
+// records would be read as zero bytes with no error. A guard that cannot be reached is better than an
+// answer the model never gave. (Chair's ruling: refuse, do not justify returning 0.)
+//
+// A panic rather than an error because `size` has no error return and its existing idiom for "this
+// should never be asked" is exactly this — the unmodeled-kind panic three lines down. What makes the
+// panic unreachable is the refusal at every layer that *can* return an error: `Record`, `StoreVia`,
+// `LoadVia`, and the bridge in `internal/component`, which is the layer a component's declared type
+// passes through. Nothing in the decoder or validator rejects an empty record or tuple — searched, and
+// the finding is recorded at the bridge.
+func sizeRecord(fields []Field) int {
+	if len(fields) == 0 {
+		panic("canon: size: a record with no fields has no size in the Canonical ABI " +
+			"(definitions.py:1256 asserts elem_size > 0); it must be refused before any layout is " +
+			"computed, and reaching here means a caller skipped that refusal")
+	}
 	s := 0
 	for i := range fields {
-		s = alignTo(s, alignment(fields[i]))
-		s += size(fields[i])
+		s = alignTo(s, alignment(fields[i].Type))
+		s += size(fields[i].Type)
 	}
-	return alignTo(s, alignmentTuple(fields))
+	return alignTo(s, alignmentRecord(fields))
 }
 
 // size is the in-memory element size of a type (CanonicalABI.md `elem_size`). A string and a
@@ -72,8 +116,8 @@ func size(t Type) int {
 		return 2 * ptrSize
 	case KindVariant:
 		return sizeVariant(t.Cases)
-	case KindTuple:
-		return sizeTuple(t.Fields)
+	case KindRecord:
+		return sizeRecord(t.Fields)
 	default:
 		panic(fmt.Sprintf("canon: size: unmodeled kind %s", t.Kind))
 	}
@@ -144,6 +188,16 @@ func flattenType(t Type) []string {
 		return []string{"i32"}
 	case KindVariant:
 		return flattenVariant(t.Cases)
+	case KindRecord:
+		// `flatten_record` is the concatenation of the fields' flat types (CanonicalABI.md
+		// `flatten_record`): a record has no discriminant and no join, so unlike a variant it is a plain
+		// append in field order. Field order is the layout here too, which is why the fields are walked
+		// in declaration order rather than by name.
+		var flat []string
+		for i := range t.Fields {
+			flat = append(flat, flattenType(t.Fields[i].Type)...)
+		}
+		return flat
 	default:
 		panic(fmt.Sprintf("canon: flattenType: unmodeled kind %s", t.Kind))
 	}
@@ -433,8 +487,21 @@ func ListByteLength(count, elemSize int) (int, error) {
 		return 0, fmt.Errorf("canon: list element size %d is negative", elemSize)
 	}
 	if elemSize == 0 {
-		// A zero-size element makes the byte length zero for any count, which is a legitimate shape (an
-		// empty tuple's) and must not divide by zero below.
+		// **Unreachable for a valid element type, and kept only for divide-by-zero safety.**
+		//
+		// This said the zero-size case was "a legitimate shape (an empty tuple's)", which became false
+		// when the empty forms were refused: the model gives an empty record — and so an empty tuple,
+		// which despecializes to one — **no size at all** rather than zero (definitions.py:1256
+		// asserts `elem_size > 0`), so `sizeRecord` refuses it and no valid type reaches here with 0.
+		//
+		// The guard stays because the hazard it answers is real and is *not* about empty records: the
+		// division below is the overflow guard, and dividing by a zero that arrived some other way
+		// would panic inside a function whose whole purpose is to refuse bad arithmetic safely.
+		//
+		// What it must NOT be read as is a licence for a zero-size element. A zero stride makes the
+		// byte length 0 for **any** count, so a list of a million such elements would be framed as
+		// zero bytes with no error — which is why the refusal belongs upstream, where the type is
+		// known, and not here, where only the number is.
 		return 0, nil
 	}
 	// **The comparison is in `uint64`, so the ABI's bound does not constrain the host's word size.**
@@ -617,6 +684,13 @@ func LoadVia(h ReadHeap, t Type, ptr int) (Value, error) {
 			}
 			return LoadVia(h, *t.Elem, at)
 		})
+	case KindRecord:
+		// The mirror of `StoreVia`'s record arm, landed in the same slice for the reason recorded
+		// there: a kind composable in one direction only has to be in the symmetry control's allow-set,
+		// and this one has no business being there.
+		return LoadRecord(h, t, ptr, func(ft Type, at int) (Value, error) {
+			return LoadVia(h, ft, at)
+		})
 	default:
 		return Value{}, fmt.Errorf("canon: LoadVia: kind %s is not heap-composable (the mirror of "+
 			"StoreVia's own limit — a kind becomes composable in both directions at once)", t.Kind)
@@ -760,6 +834,12 @@ func StoreVia(h Heap, v Value, ptr int) error {
 		return StoreString(h, v.s, ptr)
 	case KindList:
 		return StoreList(h, v, ptr, func(e Value, p int) error { return StoreVia(h, e, p) })
+	case KindRecord:
+		// Added in the same slice as LoadVia's record arm, deliberately: the symmetry control
+		// (TestLoadViaIsStoreViasMirrorOverTheSameKinds) allows exactly two one-directional kinds, so a
+		// kind landing on one side alone has to either grow that allow-set or fail. Landing both is the
+		// cheaper half of that choice and the one the chair ordered.
+		return StoreRecord(h, v, ptr, func(e Value, p int) error { return StoreVia(h, e, p) })
 	case KindVariant:
 		return StoreVariant(h, v, ptr, func(e Value, p int) error { return StoreVia(h, e, p) })
 	case KindOwn:
@@ -917,6 +997,11 @@ func (h *heap) store(v Value, ptr int) error {
 		// payload store, so this is the same StoreVariant the guest-memory heap runs, verified by the
 		// definitions.py variant/result fixtures.
 		return StoreVariant(h, v, ptr, h.store)
+	case KindRecord:
+		// The one record framing, shared with the host's canon adapter: `h.store` is the full field
+		// store, so this is the same StoreRecord the guest-memory heap runs, verified by the
+		// definitions.py record fixtures — including both padding shapes.
+		return StoreRecord(h, v, ptr, h.store)
 	case KindOwn:
 		// The model heap assigns the handle index through its own table (lower_own); the guest heap
 		// receives an already-minted handle (StoreVia's KindOwn). Both write an i32 — the same encoding.
@@ -925,6 +1010,64 @@ func (h *heap) store(v Value, ptr int) error {
 	default:
 		return fmt.Errorf("canon: store: unmodeled kind %s", v.Type.Kind)
 	}
+}
+
+// StoreRecord lowers a `record` (CanonicalABI.md `store_record`, definitions.py:1724-1728): each field
+// is stored at `align_to(ptr, alignment(field))` via `storeElem`, advancing by the field's `elem_size`.
+//
+// `storeElem` is injected for [StoreList]'s reason — the model heap can lower any field kind through
+// `*heap.store` while a guest heap lowers only the composable ones ([StoreVia]) — and the framing, which
+// is where padding lives, is shared regardless.
+//
+// **The fields are walked in the TYPE's declared order, and the value supplies them by position.** A
+// record value stores its fields in descriptor order (see [Record]), so field *i* of the value is field
+// *i* of the type; the label is what matched them at construction, and after that the order is the
+// layout. Nothing here looks a name up, which is what keeps Go's map iteration order away from the ABI.
+func StoreRecord(h Heap, v Value, ptr int, storeElem func(Value, int) error) error {
+	fields := v.Type.Fields
+	if len(fields) == 0 {
+		// Refused before any layout is computed, because the model has no size for it
+		// (definitions.py:1256) — see sizeRecord. This is one of the error-returning layers that keeps
+		// that panic unreachable.
+		return fmt.Errorf("canon: store: a record with no fields has no layout in the Canonical ABI")
+	}
+	if len(v.list) != len(fields) {
+		// A value whose field count disagrees with its type is a value nobody built through `Record`.
+		// Named rather than indexed into: the alternative is reading past the end of the payload.
+		return fmt.Errorf("canon: store: a record of %d field(s) carries %d value(s)",
+			len(fields), len(v.list))
+	}
+	at := ptr
+	for i := range fields {
+		at = alignTo(at, alignment(fields[i].Type))
+		if err := storeElem(v.list[i], at); err != nil {
+			return fmt.Errorf("canon: store: record field %q: %w", fields[i].Name, err)
+		}
+		at += size(fields[i].Type)
+	}
+	return nil
+}
+
+// LoadRecord lifts a `record` (`load_record`, definitions.py:1420-1426) — [StoreRecord]'s mirror, with
+// the per-field load injected the same way.
+func LoadRecord(h ReadHeap, t Type, ptr int, loadElem func(Type, int) (Value, error)) (Value, error) {
+	if len(t.Fields) == 0 {
+		return Value{}, fmt.Errorf("canon: load: a record with no fields has no layout in the Canonical ABI")
+	}
+	vals := make([]Value, len(t.Fields))
+	at := ptr
+	for i := range t.Fields {
+		at = alignTo(at, alignment(t.Fields[i].Type))
+		v, err := loadElem(t.Fields[i].Type, at)
+		if err != nil {
+			return Value{}, fmt.Errorf("canon: load: record field %q: %w", t.Fields[i].Name, err)
+		}
+		vals[i] = v
+		at += size(t.Fields[i].Type)
+	}
+	// Built positionally rather than through `Record`'s map, because the fields are already in
+	// descriptor order and going via a map would add an order-losing round trip for nothing.
+	return Value{Type: t, list: vals}, nil
 }
 
 // storeListData allocates the element region through the heap's realloc, stores each element into it via
@@ -992,6 +1135,32 @@ func (h *heap) lowerFlat(v Value) ([]flatVal, error) {
 		return []flatVal{{"i32", uint64(p)}, {"i32", uint64(len(v.list))}}, nil
 	case KindVariant:
 		return h.lowerFlatVariant(v)
+	case KindRecord:
+		// `lower_flat_record` is the concatenation of the fields' flat lowerings, in declared order —
+		// no discriminant and no join, unlike a variant, which is why this is an append rather than a
+		// call into the variant's padding logic.
+		//
+		// **Padding does not appear here at all**, and that is worth stating because it is the one place
+		// a record's layout rules do not apply: flat lowering is to a *value sequence*, not to memory,
+		// so the alignment that `sizeRecord` computes has no analogue. A reader coming from `store` will
+		// look for it.
+		if len(v.Type.Fields) == 0 {
+			return nil, fmt.Errorf("canon: lowerFlat: a record with no fields has no lowering in the " +
+				"Canonical ABI")
+		}
+		if len(v.list) != len(v.Type.Fields) {
+			return nil, fmt.Errorf("canon: lowerFlat: a record of %d field(s) carries %d value(s)",
+				len(v.Type.Fields), len(v.list))
+		}
+		var flat []flatVal
+		for i := range v.Type.Fields {
+			fv, err := h.lowerFlat(v.list[i])
+			if err != nil {
+				return nil, fmt.Errorf("canon: lowerFlat: record field %q: %w", v.Type.Fields[i].Name, err)
+			}
+			flat = append(flat, fv...)
+		}
+		return flat, nil
 	case KindOwn:
 		return []flatVal{{"i32", uint64(h.lowerOwn(v))}}, nil
 	default:
@@ -1053,6 +1222,15 @@ func (h *heap) load(ptr int, t Type) (Value, error) {
 		return List(*t.Elem, vals...)
 	case KindVariant:
 		return h.loadVariant(ptr, t)
+	case KindRecord:
+		// The one record framing, as the store side uses: `h.load` is the full field load, so the
+		// definitions.py record fixtures verify this path and the guest-memory one through the same
+		// function.
+		// Wrapped rather than reordering either signature: `*heap.load` takes `(ptr, type)` and the
+		// composable loads take `(type, ptr)`, an inconsistency that predates this arm. Adapting here
+		// is two lines; renaming a parameter order across the package would be a diff whose subject is
+		// not records.
+		return LoadRecord(h, t, ptr, func(ft Type, at int) (Value, error) { return h.load(at, ft) })
 	case KindOwn:
 		return h.liftOwn(int(h.loadInt(ptr, 4)), t)
 	default:
@@ -1182,6 +1360,27 @@ func (h *heap) liftFlat(it *coreValueIter, t Type) (Value, error) {
 		}
 		it.i = start + len(total) // drain the unused joined slots
 		return Variant(t, c.Name, payload)
+	case KindRecord:
+		// `lift_flat_record`: each field lifted in declared order from the same iterator, so the fields
+		// consume consecutive slots. **No draining**, unlike the variant arm above — a record has no
+		// join, so every slot belongs to exactly one field and none is unused.
+		if len(t.Fields) == 0 {
+			return Value{}, fmt.Errorf("canon: liftFlat: a record with no fields has no lowering in the " +
+				"Canonical ABI")
+		}
+		fields := make(map[string]Value, len(t.Fields))
+		for i := range t.Fields {
+			fv, err := h.liftFlat(it, t.Fields[i].Type)
+			if err != nil {
+				return Value{}, fmt.Errorf("canon: liftFlat: record field %q: %w", t.Fields[i].Name, err)
+			}
+			fields[t.Fields[i].Name] = fv
+		}
+		// Through `Record` rather than built positionally, so the constructor's exact-key and
+		// structural-type checks run on the lift path too. The fields were produced in descriptor order
+		// and are immediately re-keyed by label, which looks redundant and is not: it is the one place a
+		// lift's own output is checked against the declared type rather than assumed to match it.
+		return Record(t, fields)
 	case KindOwn:
 		return h.liftOwn(int(it.next("i32")), t)
 	default:

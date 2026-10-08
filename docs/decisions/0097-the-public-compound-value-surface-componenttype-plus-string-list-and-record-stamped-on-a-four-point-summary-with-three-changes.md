@@ -69,6 +69,38 @@ func (v ComponentValue) Field(name string) (ComponentValue, bool)
 - **`ComponentString` returns an `error`.** The ABI's `string` is UTF-8 and a Go `string` is an arbitrary byte sequence; an invalid one lowered raw puts invalid UTF-8 in guest memory where a Rust guest's `String::from_utf8` panics. The in-tree precedent is `canon.Char`, which already refuses a surrogate or out-of-range code point at construction for the same reason.
 - **`ComponentField` keeps exported fields** where everything else is opaque, and the reason is specific rather than convenience: **a per-field constructor cannot check the condition that matters.** Duplicate field names and an empty field set are whole-set properties only `ComponentTypeRecord` can see, so a `ComponentFieldOf` would catch nothing the record constructor does not and would imply a validated field is a safe one.
 
+### The empty-field-set refusal comes from the model, not from API style
+
+Added on the #904 review, because the proposal treated it as a validity condition the public
+constructor imposes — *"duplicate field names and an empty field set are whole-set properties only
+`ComponentTypeRecord` can see"* — which is true and is not the whole reason.
+
+**The Canonical ABI gives an empty record no size at all.** `elem_size_record` ends with
+`assert(s > 0)` (`definitions.py:1256`), so an empty record is not a type with a zero-byte layout; it is
+a type the model declines to lay out. Asked of the pinned model directly rather than read off the
+source: `elem_size(RecordType([]))` raises `AssertionError`, and so does `elem_size(TupleType([]))`,
+because `elem_size` despecializes first (`:1228`). **Alignment, by contrast, is defined and is 1** —
+`alignment_record` has no assertion and its loop simply does not run (`:1193-1197`). That asymmetry is
+the model's, and this engine reproduces it rather than smoothing it over.
+
+So `ComponentTypeRecord`'s refusal is not this engine being strict about a shape it could have
+supported. There is no behaviour to support, and a value of such a type could not be lowered by any
+conforming implementation.
+
+**The codec answered 0, and 0 was worse than wrong.** `sizeTuple` returned 0 for an empty field set,
+which fed `canon.ListByteLength`: a zero-size element makes the byte length 0 for *any* count, so a list
+of a million empty records would have been framed as zero bytes with **no error**. The refusal therefore
+belongs where the type is known — `sizeRecord` panics, and `Record`, `StoreVia`, `LoadVia`, `lowerFlat`
+and the bridge each refuse before that panic is reachable — rather than in the byte-length guard, which
+sees only numbers. `ListByteLength`'s zero-size branch is kept for divide-by-zero safety and now says it
+is unreachable for a valid type.
+
+Nothing upstream rejects one: searched, and the tuple decoder reads a count and loops with no `n > 0`
+check, the record decoder does the same through `namedValVec`, and no emptiness check exists in
+`internal/component` or `internal/validate`. The bridge is therefore the first layer that can decline it
+with an error instead of a panic, and that is where it declines. (Chair's ruling: refuse, do not justify
+returning 0.)
+
 ## The limit this stamp carries, unchanged from 0096's
 
 **If building it needs anything beyond the stamped block plus those three changes — another exported name, a different signature, different error behaviour — the slice stops and reports before merging.**

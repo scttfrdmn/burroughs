@@ -7,6 +7,23 @@ import (
 	"testing"
 )
 
+// U8v is a `u8` value, for the record cases below. `canon` has no exported per-integer constructor
+// (values come from the differential's JSON or from `LiftFlatScalar`), so the test builds one.
+func U8v(v uint8) Value { return Value{Type: Type{Kind: KindU8}, u: uint64(v)} }
+
+// mustRecord builds a two-field record from name/value pairs **in the given order**, so a case can fix
+// the field order that determines the layout. Order is the point of the padding cases: the same two
+// fields in the other order have a different image and the same size.
+func mustRecord(t *testing.T, n1 string, v1 Value, n2 string, v2 Value) Value {
+	t.Helper()
+	rt := RecordType(Field{Name: n1, Type: v1.Type}, Field{Name: n2, Type: v2.Type})
+	v, err := Record(rt, map[string]Value{n1: v1, n2: v2})
+	if err != nil {
+		t.Fatalf("building record{%s, %s}: %v", n1, n2, err)
+	}
+	return v
+}
+
 // twos returns v's two's-complement bits, which is how `Value` stores a signed integer.
 //
 // A function and not `uint64(int64(-3))` written inline: that is a **constant** conversion of a negative
@@ -63,6 +80,22 @@ func TestLoadViaIsStoreViasMirrorOverTheSameKinds(t *testing.T) {
 			lt := Type{Kind: KindList, Elem: &e}
 			v, err := List(e, U32(1), U32(2))
 			return v, lt, err == nil
+		case KindRecord:
+			// **A NON-EMPTY record, and the empty one is why this arm exists.**
+			//
+			// Without it the probe fell to the default below and asked both functions about
+			// `Type{Kind: KindRecord}` — an *empty* record, which both correctly refuse because the
+			// model gives it no size. So the control reported `record` as composable in NEITHER
+			// direction, which is false, and it reported it while **passing**: an asymmetry check only
+			// fails on a one-sided answer, and two wrong answers agree.
+			//
+			// Found by reading the control's own log line rather than its verdict. A probe that cannot
+			// construct a valid specimen answers a different question from the one it was built to ask,
+			// and the classification it prints is the only place that shows.
+			rf := Field{Name: "x", Type: Type{Kind: KindU32}}
+			rt := RecordType(rf)
+			v, err := Record(rt, map[string]Value{"x": U32(7)})
+			return v, rt, err == nil
 		case KindFuture, KindStream:
 			// Wrapper-minted, never codec-lowered. `canon`'s own doc says they must not reach the Kind
 			// switches, so excluding them here is the documented contract and not a convenience.
@@ -202,6 +235,10 @@ func TestLoadViaRoundTripsEveryCompositeItAccepts(t *testing.T) {
 		{"empty list<u32>", empty},
 		// Nesting, so the recursion in both directions is exercised rather than extrapolated.
 		{"list<list<u32>>", outer},
+		// **The padding shapes**, both of them, because a round trip through a short `elem_size` can
+		// still return the right values for a single record — the wrongness only shows inside a list.
+		{"record u8 then u32", mustRecord(t, "small", U8v(255), "wide", U32(2882400001))},
+		{"record u32 then u8", mustRecord(t, "wide", U32(2882400001), "small", U8v(255))},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHeap(1 << 14)
@@ -257,6 +294,88 @@ func valuesEqualForTest(a, b Value) bool {
 		return true
 	default:
 		return a.u == b.u
+	}
+}
+
+// TestAnEmptyRecordIsRefusedAtEveryLayerThatCanSayNo is the chair's change 1: the model gives an empty
+// record no size, so this engine refuses one rather than answering 0.
+//
+// # Why 0 was worse than wrong
+//
+// `sizeTuple` used to return 0 for an empty field set, and a zero-size element makes [ListByteLength]
+// return 0 for **any** count — so a list of a million empty records would have been framed as zero
+// bytes with no error. That is why the refusal is upstream, where the type is known, and not in the
+// byte-length guard, which sees only numbers.
+//
+// # What each layer contributes
+//
+// `sizeRecord` panics, because `size` has no error return and its existing idiom for "this should never
+// be asked" is exactly that. The panic is kept **unreachable** by the layers below, each of which can
+// return an error — which is what this asserts, one layer at a time. The bridge in `internal/component`
+// is the fourth, covered there by `bridgeRefused`'s `empty-record` and `empty-tuple` cases.
+func TestAnEmptyRecordIsRefusedAtEveryLayerThatCanSayNo(t *testing.T) {
+	empty := RecordType()
+	if empty.Kind != KindRecord || len(empty.Fields) != 0 {
+		t.Fatalf("RecordType() built %s", empty)
+	}
+
+	// Alignment is answerable and is 1, matching the model: `alignment_record` has no assertion and its
+	// loop simply does not run (definitions.py:1193-1197). The asymmetry — alignment defined, size not —
+	// is the model's, and reproducing it rather than smoothing it over is the point.
+	if a := alignment(empty); a != 1 {
+		t.Errorf("alignment(record{}) = %d, want 1 — the model gives an empty record alignment 1", a)
+	}
+
+	// 1. The value constructor.
+	if _, err := Record(empty, map[string]Value{}); err == nil {
+		t.Error("Record built a value of an empty record type; there is no layout to build it against")
+	}
+
+	h := newHeap(1 << 10)
+	ptr, err := h.Realloc(0, 0, 8, 32)
+	if err != nil {
+		t.Fatalf("heap realloc: %v", err)
+	}
+	// 2. StoreVia, before any layout is computed. 3. LoadVia, its mirror.
+	if serr := StoreVia(h, Value{Type: empty}, ptr); serr == nil {
+		t.Error("StoreVia lowered an empty record")
+	}
+	if _, lerr := LoadVia(h, empty, ptr); lerr == nil {
+		t.Error("LoadVia lifted an empty record")
+	}
+
+	// The flat paths are a separate switch from the memory ones and would otherwise be the hole: a
+	// record with no fields flattens to no core values at all, which is not a refusal.
+	if _, ferr := h.lowerFlat(Value{Type: empty}); ferr == nil {
+		t.Error("lowerFlat lowered an empty record to an empty flat sequence; nothing downstream could " +
+			"tell that from a record that happened to need no words")
+	}
+
+	// 4. `size` panics rather than answering, and the panic is what the refusals above keep unreachable.
+	// Asserted so `sizeRecord`'s comment is checked rather than trusted, and so that a change making it
+	// return 0 again fails here rather than inside a list's byte length.
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Error("size(record{}) returned instead of panicking. If it now answers, the answer " +
+					"had better not be 0: a zero-size element makes ListByteLength return 0 for any " +
+					"count, so a list of them is framed as zero bytes with no error")
+				return
+			}
+			if msg, ok := r.(string); ok && !strings.Contains(msg, "no size") {
+				t.Errorf("size(record{}) panicked with %q, which does not say an empty record has no size",
+					msg)
+			}
+		}()
+		_ = size(empty)
+	}()
+
+	// An empty TUPLE is the same condition reached the other way, since `TupleType` despecializes: it
+	// produces a record with no fields, so every refusal above applies to it with no second arm.
+	if et := TupleType(); et.Kind != KindRecord || len(et.Fields) != 0 {
+		t.Errorf("TupleType() = %s, want an empty record — the despecialization is what makes the "+
+			"empty-tuple case need no code of its own", et)
 	}
 }
 
