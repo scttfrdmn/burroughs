@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -146,9 +148,9 @@ func TestAReallocThatTrapsIsReportedAsTheGuestsRefusal(t *testing.T) {
 func TestALiftWithNoReallocRefusesAStringArgumentByName(t *testing.T) {
 	// A compFunc with neither canonopt, which is what a lift that declared none leaves behind.
 	f := &compFunc{}
-	p := pendingLower{param: "s", byteLen: 3, align: 1}
+	p := allocRequest{param: "s", kind: canon.KindString, byteLen: 3, align: 1}
 
-	_, err := f.guestAlloc(&p)
+	_, err := f.guestAlloc(p)
 	if err == nil {
 		t.Fatal("a lift with no realloc allocated something; there is nowhere to put the bytes")
 	}
@@ -169,7 +171,7 @@ func TestALiftWithNoReallocRefusesAStringArgumentByName(t *testing.T) {
 		t.Fatal("the fixture exports no echo")
 	}
 	noMem := &compFunc{reallocCore: cd.fn.reallocCore}
-	if _, err := noMem.guestAlloc(&p); err == nil {
+	if _, err := noMem.guestAlloc(p); err == nil {
 		t.Fatal("a lift with no memory allocated something; there is nowhere to write the bytes")
 	} else if !strings.Contains(err.Error(), "memory") {
 		t.Errorf("the no-memory refusal %q does not mention memory", err)
@@ -190,13 +192,13 @@ func TestALiftWithNoReallocRefusesAStringArgumentByName(t *testing.T) {
 // **No 256 MiB string is allocated**, because the check is factored to take a length. That is why it is
 // a separate function rather than three lines inside `guestAlloc`.
 func TestALoweredPayloadPastTheStringCapIsRefusedBeforeTheRealloc(t *testing.T) {
-	if err := checkLowerSize("s", canon.MaxStringByteLength); err != nil {
-		t.Fatalf("a payload exactly at the cap was refused: %v", err)
+	if err := checkLowerSize("s", canon.KindString, canon.MaxStringByteLength); err != nil {
+		t.Fatalf("a string payload exactly at the cap was refused: %v", err)
 	}
 	for _, n := range []int{canon.MaxStringByteLength + 1, 1 << 30, -1} {
-		err := checkLowerSize("s", n)
+		err := checkLowerSize("s", canon.KindString, n)
 		if err == nil {
-			t.Fatalf("a payload of %d bytes was accepted; the cap is %d", n, canon.MaxStringByteLength)
+			t.Fatalf("a string payload of %d bytes was accepted; the cap is %d", n, canon.MaxStringByteLength)
 		}
 		if !errors.Is(err, ErrUnsupportedForm) {
 			t.Errorf("%d: the refusal is not ErrUnsupportedForm: %v", n, err)
@@ -204,6 +206,43 @@ func TestALoweredPayloadPastTheStringCapIsRefusedBeforeTheRealloc(t *testing.T) 
 		if !strings.Contains(err.Error(), "\"s\"") {
 			t.Errorf("%d: the refusal %q does not name the argument", n, err)
 		}
+	}
+
+	// **The cap is the STRING's, and must not be applied to a list** (the #924 review). A `list<u32>` of
+	// 100 million elements is 400 MB; the model allows it, nothing stops a guest reading it back, and a
+	// single string-shaped cap refused it with a message about strings.
+	//
+	// No 400 MB is allocated here either — that is what taking a length buys.
+	const fourHundredMB = 100_000_000 * 4
+	if fourHundredMB <= canon.MaxStringByteLength {
+		t.Fatalf("this test's premise is gone: %d is meant to exceed the string cap of %d, so the two "+
+			"arms below no longer differ", fourHundredMB, canon.MaxStringByteLength)
+	}
+	if err := checkLowerSize("xs", canon.KindList, fourHundredMB); err != nil {
+		t.Errorf("a %d-byte list was refused: %v — that is the string cap applied to a kind it does not "+
+			"govern; a list is bounded by REALLOC_I32_MAX, which this is well inside", fourHundredMB, err)
+	}
+	// And a list IS still bounded — by the ABI's pointer space, not by the string rule.
+	//
+	// **`math.MaxInt` rather than `ReallocI32Max + 1`**, and the reason is the one `ReallocI32Max`'s own
+	// doc comment records: `int(canon.ReallocI32Max)+1` is a *constant* conversion, so it fails to
+	// compile on a 32-bit host whether or not the branch runs. `math.MaxInt` is the width-dependent
+	// bound, which also makes the arm's unreachability on a 32-bit host explicit instead of accidental:
+	// no `int` there can exceed REALLOC_I32_MAX, so there is nothing to refuse.
+	if uint64(math.MaxInt) > canon.ReallocI32Max {
+		if err := checkLowerSize("xs", canon.KindList, math.MaxInt); err == nil {
+			t.Error("a list past REALLOC_I32_MAX was accepted; the ABI's 32-bit pointer space cannot " +
+				"address it")
+		}
+	} else {
+		t.Logf("int is %d bits here, so no length can pass REALLOC_I32_MAX (%d) and the upper bound is "+
+			"unreachable on this platform", strconv.IntSize, canon.ReallocI32Max)
+	}
+	// The string cap still applies to a string of the same size, which is what says the two arms are
+	// distinguished by kind rather than by the number.
+	if err := checkLowerSize("s", canon.KindString, fourHundredMB); err == nil {
+		t.Error("a 400 MB string was accepted; the load side traps past 2^28-1, so it could never be " +
+			"read back")
 	}
 
 	// And the order: a `compFunc` with NO realloc still refuses on **size** for an over-cap payload,
@@ -215,8 +254,8 @@ func TestALoweredPayloadPastTheStringCapIsRefusedBeforeTheRealloc(t *testing.T) 
 	// If the two checks were in the other order this would still name the realloc, so this is a weaker
 	// assertion than the ordering comment above and is labelled as such rather than oversold.
 	f := &compFunc{}
-	small := pendingLower{param: "s", byteLen: 3, align: 1}
-	if _, err := f.guestAlloc(&small); err == nil {
+	small := allocRequest{param: "s", kind: canon.KindString, byteLen: 3, align: 1}
+	if _, err := f.guestAlloc(small); err == nil {
 		t.Fatal("guestAlloc with no realloc accepted a payload")
 	} else if !strings.Contains(err.Error(), "realloc") {
 		t.Errorf("with a small payload and no realloc the refusal should name the realloc, got %q", err)
@@ -248,7 +287,7 @@ func TestAMisalignedReallocResultIsRefused(t *testing.T) {
 	// without it, a refusal below could be about the demand rather than about the pointer.
 	ok := &compFunc{mem: aligned.fn.mem, reallocCore: aligned.fn.reallocCore}
 	for _, align := range []int{1, 2, 4, 8} {
-		if _, err := ok.guestAlloc(&pendingLower{param: "s", byteLen: 3, align: align}); err != nil {
+		if _, err := ok.guestAlloc(allocRequest{param: "s", kind: canon.KindString, byteLen: 3, align: align}); err != nil {
 			t.Fatalf("the page-aligned realloc was refused at alignment %d: %v", align, err)
 		}
 	}
@@ -258,13 +297,13 @@ func TestAMisalignedReallocResultIsRefused(t *testing.T) {
 	// **Alignment 1 and 2 are satisfied by page+2**, which is what makes this the realistic case rather
 	// than an impossible address: a `string` crosses through this very realloc, and a `u16` would too.
 	for _, align := range []int{1, 2} {
-		if _, err := bad.guestAlloc(&pendingLower{param: "s", byteLen: 3, align: align}); err != nil {
+		if _, err := bad.guestAlloc(allocRequest{param: "s", kind: canon.KindString, byteLen: 3, align: align}); err != nil {
 			t.Errorf("page+2 was refused at alignment %d, which it satisfies: %v", align, err)
 		}
 	}
 
 	// **Alignment 4 is not** — a `list<u32>`'s demand, and definitions.py:1599's trap.
-	_, err := bad.guestAlloc(&pendingLower{param: "xs", byteLen: 4, align: 4})
+	_, err := bad.guestAlloc(allocRequest{param: "xs", kind: canon.KindList, byteLen: 4, align: 4})
 	if err == nil {
 		t.Fatal("a pointer at page+2 was accepted for an alignment-4 payload; that is a list<u32>'s " +
 			"alignment and the model traps on it (definitions.py:1599)")
@@ -335,6 +374,59 @@ func TestAListArgumentIsLoweredThroughTheCodecsFraming(t *testing.T) {
 					"were written at the wrong pitch or the wrong place", c.elems, got, want, len(c.elems))
 			}
 		})
+	}
+}
+
+// TestAParameterTypeIsComparedStructurallyNotByKind closes a correctness hole the chair found on the
+// #924 review.
+//
+// # The hole
+//
+// The parameter check compared `args[i].Type.Kind` against the declared kind. `Kind` says `list` for
+// both `list<u32>` and `list<string>`, so a `list<string>` passed to `sum-list` **got through** — and the
+// lowering then wrote strings at the *value's* element stride into a buffer the guest reads as 4-byte
+// integers. A plausible wrong value, not an error.
+//
+// It is ADR 0097's first change one layer down, and it had to be fixed **here** rather than only at the
+// public constructor: `Instantiated.CallValues` is reachable without going through `ComponentList`.
+func TestAParameterTypeIsComparedStructurallyNotByKind(t *testing.T) {
+	in := loadStringArgFixture(t)
+
+	strs, err := canon.List(canon.Type{Kind: canon.KindString}, canon.Str("a"), canon.Str("bb"))
+	if err != nil {
+		t.Fatalf("building the list<string> value: %v", err)
+	}
+
+	_, err = in.CallValues("sum-list", strs)
+	if err == nil {
+		t.Fatal("a list<string> was accepted for a list<u32> parameter. Both are lists, so a kind " +
+			"comparison lets it through; the elements then go in at the string stride and the guest " +
+			"reads them as u32s — a plausible wrong value, which is the outcome this check exists to stop")
+	}
+	if !errors.Is(err, ErrUnsupportedForm) {
+		t.Errorf("the refusal is not ErrUnsupportedForm: %v", err)
+	}
+	// **The message must distinguish the two types**, not print "list" twice: a refusal naming both sides
+	// identically reads as though the engine had refused a type for matching.
+	for _, want := range []string{"list<u32>", "list<string>", "\"xs\""} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not mention %q", err, want)
+		}
+	}
+
+	// The declared type still crosses, so the refusal is about the element type and not about lists.
+	nums, err := canon.List(canon.Type{Kind: canon.KindU32}, canon.U32(1), canon.U32(2))
+	if err != nil {
+		t.Fatalf("building the list<u32> value: %v", err)
+	}
+	if _, werr := in.CallValues("sum-list", nums); werr != nil {
+		t.Fatalf("a list<u32> was refused by the structural check: %v", werr)
+	}
+
+	// And the scalar arm is covered by the same comparison: a `u32` value for a `string` parameter is
+	// refused by type rather than by an accessor's boolean further down.
+	if _, serr := in.CallValues("echo", canon.U32(7)); serr == nil {
+		t.Error("a u32 was accepted for a string parameter")
 	}
 }
 

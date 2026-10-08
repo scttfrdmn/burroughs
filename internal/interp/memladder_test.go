@@ -515,10 +515,16 @@ func growLadderRung(b *testing.B, rung uint64, reps, batch int, mapped bool) (be
 	}
 	img := mem.img.Load().bytes
 	switch {
-	case mapped && uint64(cap(img)) != maxPages32*pageSize:
+	// `uint64(maxPages32) * pageSize` in the message too, not the untyped product: a bare
+	// `maxPages32*pageSize` passed to `Fatalf` defaults to `int` and **fails to compile on a 32-bit
+	// host**, where 4294901760 overflows it. Line 303 of this file already types it; this one did not,
+	// which is why `GOARCH=386 go vet ./...` stopped here. Fixing the compile is all that is claimed —
+	// a 4 GiB reservation is not a thing this arm could measure on a 32-bit host anyway, since `cap`
+	// there cannot reach the figure it is compared against.
+	case mapped && uint64(cap(img)) != uint64(maxPages32)*pageSize:
 		b.Fatalf("rung %d asked for the mapped arm and got %d bytes of capacity, want the "+
 			"reservation's %d: a mapped column measured on the fallback makes arm F's ratio "+
-			"1.0 and reports the defect as absent", rung, cap(img), maxPages32*pageSize)
+			"1.0 and reports the defect as absent", rung, cap(img), uint64(maxPages32)*pageSize)
 	case !mapped && cap(img) != len(img):
 		b.Fatalf("rung %d asked for the fallback and got %d bytes of capacity behind %d of "+
 			"length, so the seam did not take effect and this column is the mapping wearing "+

@@ -4,6 +4,7 @@ package component
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 )
@@ -58,6 +59,48 @@ func canonTypeOf(vt ValType) (canon.Type, error) {
 func canonUnmodeled(vt ValType) (ValKind, bool) {
 	_, k, ok := canonTypeWalk(vt, 0)
 	return k, !ok
+}
+
+// describeCanonType renders a codec type **structurally**, so a refusal distinguishes `list<string>` from
+// `list<u32>`.
+//
+// `Kind.String()` says `list` for both, which is exactly the conflation the structural comparison exists
+// to prevent — so a refusal that printed the kind would name the two sides of a mismatch identically and
+// read as though the engine had refused a type for matching. Depth is bounded for `canonTypeWalk`'s
+// reason: a resolved type is acyclic, so the bound is reached only by a hand-built one.
+func describeCanonType(t canon.Type) string { return describeCanonTypeAt(t, 0) }
+
+func describeCanonTypeAt(t canon.Type, depth int) string {
+	if depth > 8 {
+		return "…"
+	}
+	switch t.Kind {
+	case canon.KindList:
+		if t.Elem == nil {
+			return "list<?>"
+		}
+		return "list<" + describeCanonTypeAt(*t.Elem, depth+1) + ">"
+	case canon.KindTuple:
+		parts := make([]string, 0, len(t.Fields))
+		for i := range t.Fields {
+			parts = append(parts, describeCanonTypeAt(t.Fields[i], depth+1))
+		}
+		return "tuple<" + strings.Join(parts, ", ") + ">"
+	case canon.KindVariant:
+		parts := make([]string, 0, len(t.Cases))
+		for _, c := range t.Cases {
+			if c.Type == nil {
+				parts = append(parts, c.Name)
+				continue
+			}
+			parts = append(parts, c.Name+"("+describeCanonTypeAt(*c.Type, depth+1)+")")
+		}
+		return "variant{" + strings.Join(parts, ", ") + "}"
+	case canon.KindOwn, canon.KindBorrow:
+		return fmt.Sprintf("%s<rt=%d>", t.Kind, t.RT)
+	default:
+		return t.Kind.String()
+	}
 }
 
 // canonSigUnmodeled reports the first value kind anywhere in a function signature that the codec cannot

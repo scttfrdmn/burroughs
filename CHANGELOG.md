@@ -104,6 +104,27 @@ own condition rather than as a prediction.
   multiple of 2 and not of 4 — where it previously had only a hand-built request to catch. The guest sums
   the elements it reads at a 4-byte stride, so a lowering at the wrong pitch gives a wrong **sum** rather
   than a wrong length.
+- **A parameter's type is compared structurally, through one `canon.TypeEqual`, where it was compared by
+  outer kind** ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). The kind comparison was a
+  correctness hole rather than a shortcut, and it was reachable the moment the entry above landed: `Kind`
+  says `list` for both `list<u32>` and `list<string>`, so a `list<string>` passed where a `list<u32>` was
+  declared, and the lowering then wrote strings at the **value's** element stride into a buffer the guest
+  reads as 4-byte integers — **a plausible wrong value, not an error**. The comparison now runs for
+  **every** parameter before any arm looks at a kind, at `CallValues` and not only at the public
+  constructor, because `CallValues` is reachable without going through one; the public element check calls
+  the same function, so the two cannot drift about what "the same type" means. The refusal renders both
+  types structurally (`list<u32>` against `list<string>`), since a message printing "list" twice reads as
+  though the engine had refused a type for matching. Caught on review of the entry above.
+- **The byte-length cap depends on the argument's kind**, where a single string-shaped cap applied to
+  every allocation ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). A `list<u32>` of 100
+  million elements is 400 MB, which the model allows and which nothing stops a guest reading back, and it
+  was refused for a reason belonging to strings. Only a **string** carries the load-side 2²⁸−1 cap — ADR
+  0098's recorded divergence from the model's store side, because a longer one could be stored and never
+  read back. Everything else is bounded by `REALLOC_I32_MAX`, the model's own bound on a store
+  (`definitions.py:1713`), rather than by a limit this engine invented. Found in the same review, which
+  also found that **`storeListData` computed its byte length with a bare multiplication**: the claim that
+  `canon.ListByteLength` is the one place `count × elem_size` happens was **false in the code** until it
+  was asked about.
 - **The list lifting framing: `canon.LoadList` with an injected per-element load, and
   `canon.ListByteLength`'s overflow guard** ([#902](https://github.com/scttfrdmn/burroughs/issues/902)).
   `LoadList` is the mirror of `StoreList`'s injected element store, and takes the same shape for the same
@@ -1032,6 +1053,21 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **Two test files did not compile for a 32-bit target, and one of them was the witness for a 32-bit
+  portability fix** ([#902](https://github.com/scttfrdmn/burroughs/issues/902),
+  [#921](https://github.com/scttfrdmn/burroughs/issues/921)). `GOARCH=386 GOOS=linux go vet ./...` — run
+  by hand while checking the new byte-length cap — failed in `canon` at `int(ReallocI32Max)`, which is a
+  **constant** conversion and so is checked whether or not its branch runs, and in `interp` at an untyped
+  `maxPages32*pageSize` passed to `Fatalf`, which defaults to `int` and overflows. The first is the sharp
+  one: typing `ReallocI32Max` as `uint64` so the **engine** builds on `GOARCH=386` was the stated subject
+  of that slice, and the test asserting the bound was itself 64-bit-only. The engine was portable; the
+  test that said so was not. Both now convert at runtime, and the arms that need a wide `int` are
+  **skipped with a reason** on a narrow host rather than weakened — there "one past the bound" truncates
+  to a small number the guard rightly accepts, so asserting a refusal would be a false failure. The
+  portable arms (negatives, the ordinary products) were moved above the guard so a narrow host still runs
+  them. **CI has no 32-bit arm**, so nothing but a hand-typed command was ever going to say this; the
+  whole tree, tests included, vets clean for `GOARCH=386` as of this entry, and that is a measurement
+  taken once rather than a standing claim.
 - **`ComponentString` classified the caller's bad input as an engine gap**
   ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). Invalid UTF-8 was wrapped in
   `ErrUnsupported`, which means *"this engine does not implement that yet"* and carries its own CLI exit
