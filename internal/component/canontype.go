@@ -144,11 +144,27 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		return canon.Type{Kind: canon.KindList, Elem: &e}, 0, true
 
 	case VTuple:
-		// `tuple` is modeled for size and alignment only — enough to lower an *empty* `list<tuple>`, which
-		// is what the WASI getters return. Its element lowering is #904's, and the codec refuses it at
-		// marshal rather than here, so the TYPE is buildable and a value of it is not. That split is
-		// deliberate and is the reason this arm succeeds: refusing the type would refuse
-		// `get-environment`'s empty list, which works today.
+		// **An empty tuple is refused here, and this is the layer that has to do it.**
+		//
+		// The model gives an empty tuple no size: `elem_size` despecializes (definitions.py:1228) so
+		// `tuple<>` becomes `RecordType([])`, which fails `assert(s > 0)` at def:1256. Asked of the
+		// pinned model directly rather than inferred — `elem_size(TupleType([]))` raises
+		// `AssertionError`. So there is no layout for this engine to match, and the codec panics rather
+		// than inventing one.
+		//
+		// **Nothing upstream rejects it.** Searched: the tuple decoder reads a count and loops with no
+		// `n > 0` check (`types.go`'s `valType`, the 0x6f arm), the record decoder goes through
+		// `namedValVec` which does the same, and no emptiness check exists anywhere in
+		// `internal/component` or `internal/validate`. So a component declaring `tuple<>` decodes fine
+		// and this is the first place that can decline it with an error rather than a panic.
+		//
+		// It costs nothing real: no in-tree caller builds a zero-field tuple (`canon.TupleType()` with
+		// no arguments appears nowhere), and `get-environment`'s `list<tuple<string, string>>` has a
+		// **two**-field element, so the empty `list<tuple>` that this arm was written to support is
+		// untouched — what was empty there is the list, not the tuple.
+		if len(vt.Elems) == 0 {
+			return canon.Type{}, VTuple, false
+		}
 		fields := make([]canon.Type, len(vt.Elems))
 		for i, e := range vt.Elems {
 			ft, k, ok := canonTypeWalk(e, depth+1)
@@ -157,7 +173,32 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 			}
 			fields[i] = ft
 		}
+		// `canon.TupleType` **despecializes** to a record with fields labelled "0", "1", … exactly as
+		// definitions.py:1133 does, so the codec has one field-carrying arm rather than two. The
+		// `VTuple`/`VRecord` distinction survives here, in the decoded type, which is where WIT's view
+		// belongs; the ABI's view does not have it.
 		return canon.TupleType(fields...), 0, true
+
+	case VRecord:
+		// Modeled as of #904 — `record` is the codec's base field-carrying form and `tuple`
+		// despecializes to it, so this arm and the one above build the same thing.
+		//
+		// An empty field set is refused for `VTuple`'s reason, which is the model's: no size exists for
+		// it. The labels come through unchanged, because they are part of the type — `record{x: u32}`
+		// and `record{y: u32}` have an identical layout and are different types, since a value's fields
+		// are matched to the declaration by name (def:1727).
+		if len(vt.Fields) == 0 {
+			return canon.Type{}, VRecord, false
+		}
+		fields := make([]canon.Field, len(vt.Fields))
+		for i, f := range vt.Fields {
+			ft, k, ok := canonTypeWalk(f.Type, depth+1)
+			if !ok {
+				return canon.Type{}, k, false
+			}
+			fields[i] = canon.Field{Name: f.Name, Type: ft}
+		}
+		return canon.RecordType(fields...), 0, true
 
 	case VVariant:
 		cases := make([]canon.Case, len(vt.Cases))
@@ -201,7 +242,8 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		return canon.BorrowType(int(vt.Ref)), 0, true
 
 	default:
-		// VRecord, VFlags, VEnum, VOption, VErrorContext, VUnresolvedAlias — not modeled by the codec.
+		// VFlags, VEnum, VOption, VErrorContext, VUnresolvedAlias — not modeled by the codec.
+		// (VRecord moved out of this list when #904 gave the codec its base field-carrying arm.)
 		//
 		// **VStream and VFuture are refused here even though `canon.KindStream`/`KindFuture` exist**, and
 		// that is not an inconsistency: those two are minted by the async lower/lift wrapper into the

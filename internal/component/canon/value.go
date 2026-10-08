@@ -13,6 +13,8 @@ package canon
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -41,6 +43,9 @@ const (
 	KindOwn
 	KindBorrow
 	KindTuple
+	// KindRecord is the base field-carrying form; `tuple` despecializes to it (definitions.py:1133),
+	// so a tuple value never reaches a layout rule as itself. See [TupleType].
+	KindRecord
 	// KindFuture (gate:async increment 3) is a future<T> the host returns to a guest. Unlike the other
 	// kinds it is NOT codec-lowered: a future handle is minted in the per-instance async handle table
 	// (component layer), which the codec cannot reach, so the async-lower wrapper intercepts a KindFuture
@@ -91,7 +96,11 @@ func (k Kind) String() string {
 	case KindBorrow:
 		return "borrow"
 	case KindTuple:
+		// Unreachable through [TupleType], which despecializes. Named anyway: a hand-built
+		// `Type{Kind: KindTuple}` must render as something truthful rather than as a number.
 		return "tuple"
+	case KindRecord:
+		return "record"
 	case KindFuture:
 		return "future"
 	case KindStream:
@@ -102,13 +111,31 @@ func (k Kind) String() string {
 }
 
 // Type is a WIT value type. Elem is the element type of a list; Cases are a variant's cases (a result
-// is a two-case variant, "ok"/"err"). Both are nil/empty for the other kinds.
+// is a two-case variant, "ok"/"err"); Fields are a record's fields. All are nil/empty for the other
+// kinds.
 type Type struct {
 	Kind   Kind
 	Elem   *Type
 	Cases  []Case
-	Fields []Type // tuple field types (KindTuple)
-	RT     int    // resource-type id for own/borrow (PR A models a resource type as an opaque id)
+	Fields []Field // record fields (KindRecord); a tuple's are labelled "0", "1", … — see [TupleType]
+	RT     int     // resource-type id for own/borrow (PR A models a resource type as an opaque id)
+}
+
+// Field is one record field: its WIT label and its type.
+//
+// # Why the label is part of the type, and why a tuple has labels too
+//
+// The model's `FieldType` carries a `label` (definitions.py:128-130), and `store_record` reaches a
+// field's value by that label — `v[f.label]` (def:1727). The label is therefore load-bearing for the
+// layout's *input*, not decoration: it is how a record value's fields are matched to the declared order.
+//
+// A tuple's fields are labelled `"0"`, `"1"`, … because that is what `despecialize` produces
+// (def:1133). This was `[]Type` with no labels while tuple was the only field-carrying kind, which was
+// adequate and is not once records exist — two records with the same field *types* and different field
+// *names* are different types, and `typeEqual` has to say so.
+type Field struct {
+	Name string
+	Type Type
 }
 
 // Case is one variant case: its name and payload type (nil for a payload-less case, like `closed` or an
@@ -154,12 +181,20 @@ func (t Type) describe(depth int) string {
 			return "list<?>"
 		}
 		return "list<" + t.Elem.describe(depth+1) + ">"
-	case KindTuple:
+	case KindRecord:
+		// **Labels included**, which is the whole reason this is not `tuple<…>`: `record{x: u32}` and
+		// `record{y: u32}` have the same layout and are different types, so a rendering that dropped
+		// the names would print a mismatch as a match — the exact defect this renderer exists for, one
+		// level in. A despecialized tuple therefore reads `record{0: u8, 1: u32}`; see [TupleType].
 		parts := make([]string, 0, len(t.Fields))
 		for i := range t.Fields {
-			parts = append(parts, t.Fields[i].describe(depth+1))
+			parts = append(parts, t.Fields[i].Name+": "+t.Fields[i].Type.describe(depth+1))
 		}
-		return "tuple<" + strings.Join(parts, ", ") + ">"
+		return "record{" + strings.Join(parts, ", ") + "}"
+	case KindTuple:
+		// Unreachable through `TupleType`. A hand-built one renders as itself rather than being
+		// mistaken for a record, so a diagnostic about it says what the reader actually has.
+		return "tuple(not despecialized)"
 	case KindVariant:
 		parts := make([]string, 0, len(t.Cases))
 		for _, c := range t.Cases {
@@ -225,18 +260,58 @@ func typeEqual(a, b Type) bool {
 		return false
 	}
 	for i := range a.Fields {
-		if !typeEqual(a.Fields[i], b.Fields[i]) {
+		// **The label is compared, not only the type.** Two records with the same field types and
+		// different field names are different types: `record{x: u32}` and `record{y: u32}` have an
+		// identical byte layout and are not interchangeable, because a value's fields are matched to the
+		// declaration *by name* (definitions.py:1727's `v[f.label]`). Comparing types alone would make
+		// them equal and let a value built against one satisfy a signature declaring the other.
+		//
+		// Order matters too, and is compared by position rather than sorted: field order is the layout,
+		// so `record{a: u8, b: u32}` and `record{b: u32, a: u8}` are different types with different
+		// sizes.
+		if a.Fields[i].Name != b.Fields[i].Name {
+			return false
+		}
+		if !typeEqual(a.Fields[i].Type, b.Fields[i].Type) {
 			return false
 		}
 	}
 	return true
 }
 
-// TupleType is a `tuple<…>` of the given field types. This slice models a tuple's size and alignment
-// (needed to lower an *empty* `list<tuple>` — the getters' result — whose backing realloc takes the
-// element alignment) but not its element lowering: a non-empty `list<tuple>` is refused by name until a
-// guest drives one (#725, guest-driven).
-func TupleType(fields ...Type) Type { return Type{Kind: KindTuple, Fields: fields} }
+// RecordType is a `record` of the given fields. **It is the base form**: every field-carrying WIT type
+// in this codec is one of these, and `tuple` is built from it.
+//
+// An empty field set is **not** refused here, because a constructor that cannot report an error would
+// have to panic to do it, and a type is a description rather than an operation. It is refused where it
+// becomes one: [Record] at construction, `StoreVia`/`LoadVia` before any layout is computed, and the
+// bridge in `internal/component`, which is the layer a component's declared type actually passes
+// through. See [sizeRecord] for why the model leaves it undefined.
+func RecordType(fields ...Field) Type { return Type{Kind: KindRecord, Fields: fields} }
+
+// TupleType is a `tuple<…>` of the given types, **despecialized to a record** with fields labelled
+// "0", "1", … — exactly what `despecialize` does (definitions.py:1133).
+//
+// # Why the despecialization happens here rather than at each use
+//
+// The model calls `despecialize(t)` at the top of `alignment`, `elem_size`, `store`, `load` and
+// `flatten`, so a `TupleType` never reaches a layout rule as itself. Doing it once in the constructor
+// gives the same result with one arm instead of five, and makes "tuple derives from record" literal:
+// there is no tuple arm to keep in step with the record one. The two readings are verified identical by
+// the differential — `tuple-u8-u32` and `record-as-tuple-u8-u32` in `gen/cases.json` produce
+// byte-identical store images and flat lowerings, which is what licenses the single arm.
+//
+// The consequence to know: a tuple **renders and compares as a record**. `TupleType(u8, u32).String()`
+// is `record{0: u8, 1: u32}`, and `TypeEqual` finds it equal to the hand-built record of the same
+// labels. That is the ABI's own view — WIT distinguishes the two, the Canonical ABI does not — and the
+// distinction survives where it matters, in `ValKind`'s `VTuple`/`VRecord` and in `ComponentKind`.
+func TupleType(ts ...Type) Type {
+	fields := make([]Field, len(ts))
+	for i := range ts {
+		fields[i] = Field{Name: strconv.Itoa(i), Type: ts[i]}
+	}
+	return Type{Kind: KindRecord, Fields: fields}
+}
 
 // Value is one component value. Exactly one payload field is meaningful per Type.Kind: u holds the raw
 // bits of bool/ints/char (a signed integer is held as its two's-complement bits, so a fixed-width store
@@ -353,6 +428,88 @@ func Str(s string) Value { return Value{Type: Type{Kind: KindString}, s: s} }
 // the shared renderer existed. So a `list<string>` handed to a `list<list<u32>>`'s element slot was
 // refused with "element 0 is list, want list" — the right verdict reported in a way that reads like a
 // bug in the check. See [Type.String].
+// Record constructs a record value against its type, from a **map of field name to value**.
+//
+// # Why a map, when the payload is stored positionally
+//
+// ADR 0097's record ruling, and it goes further than checking for a misordered field: a map makes
+// misordering **unrepresentable**, because the caller supplies no order at all. The order comes from the
+// descriptor, which is the only order in the system — this constructor walks `t.Fields` and looks each
+// name up, so Go's map-iteration nondeterminism never reaches the ABI layout.
+//
+// The payload is then positional (`list`, in descriptor order), which is what [StoreRecord] walks. So
+// the label does its work exactly once, here, at construction.
+//
+// # The keys must match the descriptor EXACTLY
+//
+// Both directions: a missing field and an unexpected one are each refused, and named. A missing field
+// cannot be defaulted — there is no zero value for a WIT type that means "absent", and storing one
+// would hand the guest a field the caller never set. An extra key is almost always a typo for a real
+// field, so accepting it silently would lower the record with the intended field *missing*.
+//
+// The field *types* are compared with [TypeEqual] rather than by kind, for ADR 0097's first change: a
+// `record{xs: list<u32>}` must not accept a `list<string>` for `xs`.
+func Record(t Type, fields map[string]Value) (Value, error) {
+	if t.Kind != KindRecord {
+		return Value{}, fmt.Errorf("canon: Record on non-record type %s", t)
+	}
+	if len(t.Fields) == 0 {
+		// The model has no size for an empty record (definitions.py:1256), so there is no layout to
+		// build a value against. One of the error-returning layers that keeps `sizeRecord`'s panic
+		// unreachable.
+		return Value{}, fmt.Errorf("canon: a record type with no fields has no layout in the " +
+			"Canonical ABI, so no value of it can be built")
+	}
+	vals := make([]Value, len(t.Fields))
+	for i := range t.Fields {
+		f := t.Fields[i]
+		v, ok := fields[f.Name]
+		if !ok {
+			return Value{}, fmt.Errorf("canon: record field %q is missing; a record's fields must all be "+
+				"supplied, because no WIT value means \"absent\"", f.Name)
+		}
+		if !typeEqual(v.Type, f.Type) {
+			return Value{}, fmt.Errorf("canon: record field %q is %s, want %s", f.Name, v.Type, f.Type)
+		}
+		vals[i] = v
+	}
+	if len(fields) != len(t.Fields) {
+		// Reported by name, and only after the loop above, so a caller with one typo'd key is told
+		// which key is unexpected rather than which field is missing — both are true, and the extra key
+		// is the one they wrote.
+		declared := make(map[string]bool, len(t.Fields))
+		for i := range t.Fields {
+			declared[t.Fields[i].Name] = true
+		}
+		extra := make([]string, 0, len(fields)-len(t.Fields))
+		for k := range fields {
+			if !declared[k] {
+				extra = append(extra, k)
+			}
+		}
+		sort.Strings(extra) // deterministic, since map order is not
+		return Value{}, fmt.Errorf("canon: record has no field(s) %v; the type is %s",
+			extra, t)
+	}
+	return Value{Type: t, list: vals}, nil
+}
+
+// Field returns the value of a record's named field, and whether this value is a record with one.
+//
+// The two-result form distinguishes "not a record" and "no such field" from a field whose value is a
+// legitimate zero — the reason every accessor here carries a boolean.
+func (v Value) Field(name string) (Value, bool) {
+	if v.Type.Kind != KindRecord || len(v.list) != len(v.Type.Fields) {
+		return Value{}, false
+	}
+	for i := range v.Type.Fields {
+		if v.Type.Fields[i].Name == name {
+			return v.list[i], true
+		}
+	}
+	return Value{}, false
+}
+
 func List(elem Type, elems ...Value) (Value, error) {
 	for i, e := range elems {
 		if !typeEqual(e.Type, elem) {

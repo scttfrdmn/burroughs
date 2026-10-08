@@ -35,13 +35,22 @@ type fixtureCase struct {
 }
 
 type typeSpec struct {
-	Kind   string     `json:"kind"`
-	Elem   *typeSpec  `json:"elem"`
-	Cases  []caseSpec `json:"cases"`
-	Fields []typeSpec `json:"fields"`
-	Ok     *typeSpec  `json:"ok"`
-	Err    *typeSpec  `json:"err"`
-	Rt     int        `json:"rt"`
+	Kind  string     `json:"kind"`
+	Elem  *typeSpec  `json:"elem"`
+	Cases []caseSpec `json:"cases"`
+	// Fields is raw because the two field-carrying kinds spell it differently, as WIT does: a `tuple`'s
+	// entries are bare types and a `record`'s are `{name, type}`. Decoding it per kind is the honest
+	// mirror of `gen.py`, which reads the same key the same two ways. The alternative — one shape for
+	// both — would mean renaming a key in a committed case for a cosmetic reason.
+	Fields []json.RawMessage `json:"fields"`
+	Ok     *typeSpec         `json:"ok"`
+	Err    *typeSpec         `json:"err"`
+	Rt     int               `json:"rt"`
+}
+
+type fieldSpec struct {
+	Name string   `json:"name"`
+	Type typeSpec `json:"type"`
 }
 
 type caseSpec struct {
@@ -104,11 +113,35 @@ func typeFromSpec(t *testing.T, s typeSpec) Type {
 	case "borrow":
 		return BorrowType(s.Rt)
 	case "tuple":
-		fields := make([]Type, len(s.Fields))
+		// A tuple's entries are bare types; `TupleType` despecializes them into a record with fields
+		// labelled "0", "1", … exactly as definitions.py:1133 does. The `tuple-u8-u32` and
+		// `record-as-tuple-u8-u32` cases assert the two readings are byte-identical, which is what
+		// licenses the codec having one field-carrying arm.
+		types := make([]Type, len(s.Fields))
 		for i := range s.Fields {
-			fields[i] = typeFromSpec(t, s.Fields[i])
+			var ts typeSpec
+			if err := json.Unmarshal(s.Fields[i], &ts); err != nil {
+				t.Fatalf("tuple field %d: %v", i, err)
+			}
+			types[i] = typeFromSpec(t, ts)
 		}
-		return TupleType(fields...)
+		return TupleType(types...)
+	case "record":
+		fields := make([]Field, len(s.Fields))
+		for i := range s.Fields {
+			var fs fieldSpec
+			if err := json.Unmarshal(s.Fields[i], &fs); err != nil {
+				t.Fatalf("record field %d: %v", i, err)
+			}
+			if fs.Name == "" {
+				// A field with no label would compare equal to another unlabelled one and lose the
+				// property `typeEqual` relies on. The generator cannot produce this, so it is a guard
+				// against a hand-edited case rather than a reachable path.
+				t.Fatalf("record field %d has no name", i)
+			}
+			fields[i] = Field{Name: fs.Name, Type: typeFromSpec(t, fs.Type)}
+		}
+		return RecordType(fields...)
 	}
 	k, ok := map[string]Kind{
 		"bool": KindBool, "u8": KindU8, "u16": KindU16, "u32": KindU32, "u64": KindU64,
@@ -188,6 +221,39 @@ func valueFromJSON(t *testing.T, typ Type, raw any) Value {
 			}
 		}
 		v, err := Variant(typ, name, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	case KindRecord:
+		// **A record's fixture value arrives one of two ways**, because a tuple despecialized into a
+		// record keeps its JSON spelling: a record case is a JSON object keyed by field label, and a
+		// tuple case is a JSON array in field order. Both are turned into the label-keyed map `Record`
+		// takes, so the constructor's exact-key check runs on the fixture path too rather than being
+		// bypassed by a positional build.
+		fields := make(map[string]Value, len(typ.Fields))
+		switch src := raw.(type) {
+		case map[string]any:
+			for i := range typ.Fields {
+				f := typ.Fields[i]
+				fv, ok := src[f.Name]
+				if !ok {
+					t.Fatalf("record fixture value has no field %q", f.Name)
+				}
+				fields[f.Name] = valueFromJSON(t, f.Type, fv)
+			}
+		case []any:
+			if len(src) != len(typ.Fields) {
+				t.Fatalf("tuple fixture value has %d element(s), type has %d field(s)",
+					len(src), len(typ.Fields))
+			}
+			for i := range typ.Fields {
+				fields[typ.Fields[i].Name] = valueFromJSON(t, typ.Fields[i].Type, src[i])
+			}
+		default:
+			t.Fatalf("record fixture value is %T, want an object (record) or an array (tuple)", raw)
+		}
+		v, err := Record(typ, fields)
 		if err != nil {
 			t.Fatal(err)
 		}

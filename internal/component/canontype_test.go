@@ -82,7 +82,11 @@ var bridgeAccepted = []struct {
 	{"char", ValType{Kind: VChar}, canon.KindChar},
 	{"string", ValType{Kind: VString}, canon.KindString},
 	{"list", ValType{Kind: VList, Elem: &ValType{Kind: VU32}}, canon.KindList},
-	{"tuple", ValType{Kind: VTuple, Elems: []ValType{{Kind: VU32}, {Kind: VString}}}, canon.KindTuple},
+	// **KindRecord, not KindTuple** — `canon.TupleType` despecializes (definitions.py:1133), so the
+	// codec has one field-carrying arm. The WIT distinction survives in `ValKind`, which is where it
+	// belongs; the ABI does not have it.
+	{"tuple", ValType{Kind: VTuple, Elems: []ValType{{Kind: VU32}, {Kind: VString}}}, canon.KindRecord},
+	{"record", ValType{Kind: VRecord, Fields: []NamedVal{{Name: "x", Type: ValType{Kind: VU32}}}}, canon.KindRecord},
 	{"variant", ValType{Kind: VVariant, Cases: []VarCase{{Name: "a"}, {Name: "b", Type: &ValType{Kind: VU32}}}}, canon.KindVariant},
 	{"result", ValType{Kind: VResult, Ok: &ValType{Kind: VU32}}, canon.KindVariant},
 	{"own", ValType{Kind: VOwn, Ref: 3}, canon.KindOwn},
@@ -96,7 +100,11 @@ var bridgeRefused = []struct {
 	name string
 	in   ValType
 }{
-	{"record", ValType{Kind: VRecord, Fields: []NamedVal{{Name: "x", Type: ValType{Kind: VU32}}}}},
+	// `record` moved to bridgeAccepted when #904 landed the codec arm. What stays refused is an EMPTY
+	// one: the model gives it no size (definitions.py:1256 asserts elem_size > 0), so there is no
+	// layout to match. Same for an empty tuple, which despecializes to an empty record.
+	{"empty-record", ValType{Kind: VRecord}},
+	{"empty-tuple", ValType{Kind: VTuple}},
 	{"flags", ValType{Kind: VFlags, Labels: []string{"a"}}},
 	{"enum", ValType{Kind: VEnum, Labels: []string{"a"}}},
 	{"option", ValType{Kind: VOption, Elem: &ValType{Kind: VU32}}},
@@ -385,17 +393,25 @@ func TestCanonSigUnmodeledIsTheExportCallRefusal(t *testing.T) {
 		}
 
 		// And once resolved — which is what the bind sites now do — the obstacle is named properly.
+		//
+		// **The obstacle behind the reference used to be a `record`, and had to change**: #904 gave the
+		// codec a record arm, so a reference to a record now resolves to a type the bridge *carries*,
+		// and the subtest would have been asserting that a working type is an obstacle. `flags` is the
+		// replacement — unmodeled for a reason unrelated to which compound forms have landed, which is
+		// what a specimen holding this assertion needs. (The same lesson as `componentlistconv_test`'s
+		// `tuple`-to-`char` swap, one package over and in the same slice: a specimen chosen because it
+		// happens to be unimplemented expires when it gets implemented.)
 		at := sliceTypeAt([]TypeDef{
 			{},
 			{},
 			{},
 			{},
-			{Kind: TDVal, Val: ValType{Kind: VRecord, Fields: []NamedVal{{Name: "a", Type: ValType{Kind: VU32}}}}},
+			{Kind: TDVal, Val: ValType{Kind: VFlags, Labels: []string{"a", "b"}}},
 		})
 		resolved := resolveFunc(ref, at)
 		k, bad = canonSigUnmodeled(resolved)
-		if !bad || k != VRecord {
-			t.Fatalf("after resolution the refusal gave (%s, %v), want (record, true) — the point of "+
+		if !bad || k != VFlags {
+			t.Fatalf("after resolution the refusal gave (%s, %v), want (flags, true) — the point of "+
 				"resolving at bind is that the refusal names the real obstacle", valKindName(k), bad)
 		}
 	})
@@ -419,6 +435,38 @@ func TestTheBridgeAndTheUnmodeledPredicateAgree(t *testing.T) {
 	declaredDivergence := map[ValKind]string{
 		VRef: "the predicate counts a typeidx reference modeled (a handle is an i32); the bridge cannot " +
 			"follow one because a ValType does not record its index space",
+		// Declared when #904 gave the codec its record arm. The bridge builds a record now; the
+		// predicate still refuses one, and **that asymmetry is deliberate rather than lag**.
+		//
+		// `unmodeledValKind` is consulted at **instantiate**, for every implemented lower, so widening
+		// its verdict changes which components load — a different blast radius from the bridge's, which
+		// is consulted at the call. `callvalues.go` records the rule this follows: the predicate is not
+		// retired in the slice that outgrows it, because changing what instantiates is its own slice
+		// with its own witness.
+		//
+		// The consequence for a reader: a component whose *signature* carries a record still fails to
+		// instantiate, and a record that reaches the codec does so through a `task.return` result or a
+		// value built in-process. Lifting that restriction is the next slice, not this one.
+		VRecord: "the bridge builds a record (#904's codec arm); the predicate still refuses one, and " +
+			"is consulted at instantiate where widening it changes which components load — its own " +
+			"slice, per callvalues.go's rule about not retiring it in the slice that outgrows it",
+		// **The tuple divergence is the EMPTY one, and the first draft of this entry said otherwise.**
+		//
+		// I declared a `VTuple` divergence on the theory that despecialization would make the bridge
+		// and the predicate disagree about a tuple the way they do about a record. Measured, that is
+		// false: `unmodeledValKind`'s tuple arm recurses into the elements and otherwise falls through
+		// as *modeled*, so a non-empty tuple of modeled elements is modeled by both and they agree —
+		// and the control said so on its other arm, that a declaration nothing exercises is a claim
+		// that has stopped being true.
+		//
+		// What does diverge is `tuple<>`. The bridge refuses it (the model gives an empty record no
+		// size); the predicate accepts it, because a loop over zero elements finds nothing to refuse.
+		// So the divergence is the predicate being *permissive about emptiness*, which is a different
+		// fact from the record one above and is worth having found by measurement rather than by
+		// reasoning from the despecialization.
+		VTuple: "the bridge refuses an EMPTY tuple, because an empty record has no size in the model " +
+			"(definitions.py:1256); the predicate accepts it, since its element loop finds nothing to " +
+			"refuse in zero elements. The two agree on every non-empty tuple",
 	}
 
 	all := append([]ValType(nil), func() []ValType {

@@ -113,15 +113,22 @@ func TestAListConvertsBackFromTheCodecsValue(t *testing.T) {
 // list whose elements then each fail, which would report the same gap per element and bury the one fact
 // that matters.
 func TestAnUnspellableElementRefusesNamingTheKind(t *testing.T) {
-	// `tuple` is the usable specimen: the codec models its size and alignment (for lowering an empty
-	// `list<tuple>`, which is what the WASI getters return), so the TYPE is buildable while the public
-	// surface cannot spell it. That is precisely the gap this refusal covers.
-	tup := canon.TupleType(canon.Type{Kind: canon.KindU32})
-	lt := canon.Type{Kind: canon.KindList, Elem: &tup}
+	// **`char` is the specimen, and it used to be `tuple`.** The swap is itself a finding worth
+	// recording rather than a silent test edit: this asserted that a `list<tuple<u32>>` is refused
+	// "naming tuple", and it broke the moment `canon.TupleType` started despecializing — the refusal
+	// now reads `record{0: u32}`, because at the ABI layer that *is* what a tuple is
+	// (definitions.py:1133). The assertion was about a name the type no longer has.
+	//
+	// `char` is the stable choice: the codec models it fully and the public value surface spells only
+	// `u32`, `string` and lists of those, so it is unspellable for a reason that has nothing to do with
+	// which compound forms have landed. A specimen whose name can change under a refactor was the wrong
+	// one to hold a naming assertion against.
+	ch := canon.Type{Kind: canon.KindChar}
+	lt := canon.Type{Kind: canon.KindList, Elem: &ch}
 
 	_, err := componentTypeFromCanon(lt)
 	if err == nil {
-		t.Fatal("list<tuple<u32>> was spelled across the public boundary, which has no tuple")
+		t.Fatal("list<char> was spelled across the public boundary, which has no char")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Errorf("the refusal is not ErrUnsupported: %v — this one IS an engine gap, unlike a caller's "+
@@ -129,19 +136,34 @@ func TestAnUnspellableElementRefusesNamingTheKind(t *testing.T) {
 	}
 	// It must name the element, not just "list": a refusal saying "cannot spell list" would be false,
 	// since lists are spellable.
-	if !strings.Contains(err.Error(), "tuple") {
+	if !strings.Contains(err.Error(), "char") {
 		t.Errorf("the refusal %q does not name the element type it could not spell", err)
 	}
 
-	// Empty is not an escape hatch. An empty `list<tuple>` has no element to fail on, so a conversion
-	// that checked only the elements would let its type through and hand back a list of nothing.
-	emptyTup, cerr := canon.List(tup)
-	if cerr != nil {
-		t.Fatalf("canon.List(empty list<tuple>): %v", cerr)
+	// And a record element, now that the codec models one: the refusal names the record structurally,
+	// so an embedder sees which record rather than "a record". This is also where a **tuple** lands,
+	// since it despecializes — so `tuple<u32>` is refused as `record{0: u32}`, which is the ABI's own
+	// name for it and the one price of having a single field-carrying arm.
+	rec := canon.RecordType(canon.Field{Name: "x", Type: canon.Type{Kind: canon.KindU32}})
+	rlt := canon.Type{Kind: canon.KindList, Elem: &rec}
+	rerr2 := func() error { _, e := componentTypeFromCanon(rlt); return e }()
+	if rerr2 == nil {
+		t.Fatal("list<record{x: u32}> was spelled across the public boundary, which has no record yet")
 	}
-	if _, verr := fromCanon(emptyTup); verr == nil {
-		t.Error("an empty list<tuple<u32>> crossed the public boundary; with no element to refuse, only " +
-			"the type check can catch it")
+	if !strings.Contains(rerr2.Error(), "record{x: u32}") {
+		t.Errorf("the refusal %q does not name the record structurally; \"record\" alone would not say "+
+			"which one, and the fields are part of the type", rerr2)
+	}
+
+	// Empty is not an escape hatch. An empty `list<char>` has no element to fail on, so a conversion
+	// that checked only the elements would let its type through and hand back a list of nothing.
+	emptyCh, cerr := canon.List(ch)
+	if cerr != nil {
+		t.Fatalf("canon.List(empty list<char>): %v", cerr)
+	}
+	if _, verr := fromCanon(emptyCh); verr == nil {
+		t.Error("an empty list<char> crossed the public boundary; with no element to refuse, only the " +
+			"type check can catch it")
 	}
 }
 

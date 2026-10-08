@@ -30,6 +30,36 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **`record` in the codec, as the base field-carrying form, with `tuple` despecialized into it**
+  ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). `canon.RecordType`, `canon.Record`,
+  `canon.Value.Field`, `canon.StoreRecord`/`canon.LoadRecord`, and record arms in `store`, `load`,
+  `StoreVia`, `LoadVia`, `flattenType`, `lowerFlat` and `liftFlat`. `canon.TupleType` now returns a
+  **record** with fields labelled `"0"`, `"1"`, … exactly as `despecialize` does
+  (`definitions.py:1133`), so there is **one** field-carrying arm rather than two to keep in step. The
+  licence for that is measured, not assumed: `tuple-u8-u32` and `record-as-tuple-u8-u32` produce
+  **byte-identical** store images, realloc traces and flat lowerings.
+  `Type.Fields` carries **labels** now (`canon.Field{Name, Type}`), because a label is load-bearing
+  input to the layout — `store_record` reaches a field's value by it (`:1727`) — and because
+  `record{x: u32}` and `record{y: u32}` have an identical byte layout and are **different types**.
+  `TypeEqual` compares labels and order, so a value built against one cannot satisfy the other.
+  `Record` takes a **map** of label to value (ADR 0097's ruling): misordering becomes unrepresentable
+  rather than merely checked, since the caller supplies no order at all and the descriptor is the only
+  order in the system. Keys must match the descriptor exactly — a missing field cannot be defaulted,
+  because no WIT value means "absent", and an extra key is almost always a typo for a real field, which
+  silently accepted would lower the record with the intended field *missing*.
+- **Ten record reference readings generated from the pinned model** (`2bed77e`,
+  [#904](https://github.com/scttfrdmn/burroughs/issues/904)): flat scalars, a string field, a string
+  field after a scalar, a record in a list, a nested record, three padding shapes and the
+  despecialization pin. `gen.py` gained `record` arms in both `build_type` and `build_value`; the
+  generator had none, and none of the 49 committed cases carried a record.
+  **Padding turned out to be in two places, and only one is obvious.** `elem_size_record` pads per
+  field (`:1254`) *and* once at the end, to the record's own alignment (`:1257`). So `u8` then `u32` is
+  `ff 00 00 00 | 01 ef cd ab` — three bytes between — while `u32` then `u8` is five bytes of content and
+  **eight** of size. A layout implementing only the first is correct for one shape and wrong for the
+  other, and the second matters most inside a list, where `size(elem)` is the stride and a short record
+  puts every element after the first at the wrong offset. Both orderings are cases precisely so that
+  asymmetry cannot be half-done, and `list-record-pad` uses the padded shape.
+
 - **The public list surface: `ComponentTypeList`, `ComponentList` and `ComponentValue.List`**
   ([#902](https://github.com/scttfrdmn/burroughs/issues/902), ADR 0097's stamped names). An embedder
   builds a `list<u32>` and a guest sums it — witnessed end-to-end through the public boundary, including
@@ -1111,6 +1141,25 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **An empty record and an empty tuple were sized 0, where the model gives them no size at all**
+  ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). `elem_size_record` ends with
+  `assert(s > 0)` (`definitions.py:1256`), so an empty record is not a type with a zero-byte layout but
+  one the model declines to lay out — asked of the pinned model directly rather than read off the
+  source: `elem_size(RecordType([]))` raises `AssertionError`, and so does `elem_size(TupleType([]))`,
+  since `elem_size` despecializes first. **Alignment is defined and is 1**, because
+  `alignment_record` has no assertion and its loop does not run; that asymmetry is the model's and is
+  reproduced rather than smoothed over.
+  **The 0 was worse than wrong**, which is why it is a fix and not a tidy-up: `sizeTuple` returned 0,
+  and a zero-size element makes `canon.ListByteLength` return 0 for *any* count — so a list of a million
+  empty records would have been framed as **zero bytes with no error**. The refusal now lives where the
+  type is known: `sizeRecord` panics, and `Record`, `StoreVia`, `LoadVia`, `lowerFlat` and the bridge
+  each refuse before that panic is reachable, each witnessed. `ListByteLength`'s zero-size branch kept
+  its guard — dividing by zero is still the hazard — and its comment no longer claims the case is "an
+  empty tuple's", which stopped being true.
+  Nothing upstream rejects one: **searched**, and the tuple decoder reads a count and loops with no
+  `n > 0` check, the record decoder does the same through `namedValVec`, and no emptiness check exists
+  anywhere in `internal/component` or `internal/validate`. The bridge is the first layer that can
+  decline it with an error instead of a panic, so that is where it declines.
 - **A result's type was compared by kind too, in the direction nobody was watching**
   ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). `liftFlatResult` checked
   `res.lifted.Type.Kind != want.Kind` against the declared result. Nothing reaches it today that a kind
