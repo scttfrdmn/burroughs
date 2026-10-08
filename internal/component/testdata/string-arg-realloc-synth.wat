@@ -38,6 +38,7 @@
 (component
   (type $echot (;0;) (func async (param "s" string) (result u32)))
   (type $peekt (;1;) (func async (result u32)))
+  (type $sumt (;2;) (func async (param "xs" (list u32)) (result u32)))
 
   (core module $memmod (;0;)
     ;; One page to start, growable to four. The limit is deliberate: an unbounded maximum would let a
@@ -152,6 +153,44 @@
       i32.const 0          ;; EXIT
     )
 
+    ;; sum-list(ptr, count) -> packed. Sums `count` u32s at `ptr` and resolves with the total.
+    ;;
+    ;; A `list<u32>` is the first argument whose **alignment is not 1**: elements are 4 bytes at a 4-byte
+    ;; stride, so the realloc's pointer must be a multiple of 4 and the engine's misalignment trap stops
+    ;; being vacuous. It also reads through the stride, so a lowering that packed the elements at the
+    ;; wrong pitch produces a wrong sum rather than merely a wrong length.
+    (func $sumList (;5;) (type $echoT) (param $ptr i32) (param $count i32) (result i32)
+      (local $i i32)
+      (local $sum i32)
+      i32.const 0
+      local.set $i
+      block $done
+        loop $l
+          local.get $i
+          local.get $count
+          i32.ge_u
+          br_if $done
+          local.get $sum
+          local.get $ptr
+          local.get $i
+          i32.const 2
+          i32.shl            ;; i * 4 — the u32 stride
+          i32.add
+          i32.load
+          i32.add
+          local.set $sum
+          local.get $i
+          i32.const 1
+          i32.add
+          local.set $i
+          br $l
+        end
+      end
+      local.get $sum
+      call $taskret
+      i32.const 0          ;; EXIT
+    )
+
     ;; peek-arg() -> packed. Resolves with the byte at 65536 — the first allocation's address.
     (func $peek (;4;) (type $peekT) (result i32)
       i32.const 65536
@@ -169,6 +208,7 @@
     (export "realloc-trap" (func $reallocTrap))
     (export "realloc-misaligned" (func $reallocMisaligned))
     (export "echo" (func $echo))
+    (export "sum-list" (func $sumList))
     (export "peek" (func $peek))
     (export "cb" (func $cb))
   )
@@ -180,6 +220,7 @@
   (alias core export $mi "realloc" (core func $reallocf (;1;)))
   (alias core export $mi "realloc-trap" (core func $realloctrapf (;2;)))
   (alias core export $mi "realloc-misaligned" (core func $reallocmisf (;3;)))
+  (alias core export $mi "sum-list" (core func $sumlistf (;7;)))
   (alias core export $mi "echo" (core func $echof (;3;)))
   (alias core export $mi "peek" (core func $peekf (;4;)))
   (alias core export $mi "cb" (core func $cbf (;5;)))
@@ -196,9 +237,19 @@
   ;; asserted too — it shows the check is alignment-sensitive rather than address-sensitive.
   (func (;3;) (type $echot) (canon lift (core func $echof) async (callback $cbf)
       (memory $mem) (realloc $reallocmisf)))
+  ;; `list<u32>` through the page-aligned realloc: the working path for an argument whose alignment is 4.
+  (func (;4;) (type $sumt) (canon lift (core func $sumlistf) async (callback $cbf)
+      (memory $mem) (realloc $reallocf)))
+  ;; The same signature through the realloc that returns page+2. **This is the pair's live half**: a
+  ;; `list<u32>` demands alignment 4, page+2 is a multiple of 2 and not of 4, so the misalignment trap
+  ;; fires through a real parameter rather than a hand-built request.
+  (func (;5;) (type $sumt) (canon lift (core func $sumlistf) async (callback $cbf)
+      (memory $mem) (realloc $reallocmisf)))
 
   (export (;3;) "echo" (func 0))
   (export (;4;) "echo-trap" (func 1))
   (export (;5;) "peek" (func 2))
   (export (;6;) "echo-misaligned" (func 3))
+  (export (;7;) "sum-list" (func 4))
+  (export (;8;) "sum-list-misaligned" (func 5))
 )

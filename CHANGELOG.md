@@ -90,6 +90,20 @@ own condition rather than as a prediction.
   constructors and accessors arrive with the internal directions that carry them, per ADR 0097's
   each-piece-when-its-direction-works rule. **No release is cut.**
 
+- **A `list<u32>` argument crosses into a component call, through the codec's own framing**
+  ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). The argument lowering no longer serialises
+  bytes by hand: `canon.StoreStringIntoRange` and `canon.StoreListIntoRange` are the model's
+  `*_into_range` forms (`definitions.py:1560`, `:1711`), extracted out of `StoreString`/`StoreList` so
+  there is **one** lowering of each — those two are now the extracted half plus a header write, and the
+  differential's string and list fixtures verify both through it. The list's element store is **injected**
+  and is `StoreVia`, the same composable store the WASI lowerings use, so `list<string>` and later
+  `list<record>` reuse one framing rather than each growing a loop.
+  `argHeap` is the `canon.Heap` over a lift's own `(realloc)` and `(memory)`, used only from inside the
+  callee's entry. **A `list<u32>` is the first argument whose alignment is not 1**, so the misalignment
+  trap now fires through a real parameter — `sum-list-misaligned` names the realloc returning page+2, a
+  multiple of 2 and not of 4 — where it previously had only a hand-built request to catch. The guest sums
+  the elements it reads at a 4-byte stride, so a lowering at the wrong pitch gives a wrong **sum** rather
+  than a wrong length.
 - **The list lifting framing: `canon.LoadList` with an injected per-element load, and
   `canon.ListByteLength`'s overflow guard** ([#902](https://github.com/scttfrdmn/burroughs/issues/902)).
   `LoadList` is the mirror of `StoreList`'s injected element store, and takes the same shape for the same

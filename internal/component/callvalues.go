@@ -200,22 +200,29 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 		// The declared kind drives the lowering, and the value's own kind must agree with it. Trusting
 		// the value alone would let a caller smuggle a kind past the signature; trusting the signature
 		// alone would lower a mismatched payload as though it were the declared type.
-		if p.Type.Kind == VString {
-			s, ok := args[i].Str()
-			if !ok {
-				return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared string but the value "+
-					"given is %v", ErrUnsupportedForm, name, p.Name, args[i].Type.Kind)
+		// **A `string` and a `list` both flatten to `(i32 ptr, i32 len)` and both need guest memory**, so
+		// they take one arm: reserve two placeholder slots, and defer the lowering to the entry where the
+		// codec can run against the guest's realloc. The placeholders are a null pointer and a zero
+		// length on purpose — a lowering that forgot to patch them traps in any guest that reads the
+		// value, rather than silently passing an empty one.
+		if p.Type.Kind == VString || p.Type.Kind == VList {
+			// The declared type drives the lowering and the value must agree with it. The **bridge** is
+			// what builds the codec type, so a parameter whose declared type the codec cannot carry is
+			// refused here by name rather than at a marshal.
+			ct, berr := canonTypeOf(p.Type)
+			if berr != nil {
+				return nil, nil, fmt.Errorf("%w: export %q parameter %q: %w",
+					ErrUnsupportedForm, name, p.Name, berr)
 			}
-			// A string flattens to `(i32 ptr, i32 len)`. The slots are reserved now and filled inside the
-			// entry; their values here are **not** a plausible pointer by accident — a lowering that
-			// forgot to patch them would hand the guest a null pointer and a zero length, which traps in
-			// any guest that reads the string rather than silently passing an empty one.
+			if args[i].Type.Kind != ct.Kind {
+				return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared %s but the value given "+
+					"is %s", ErrUnsupportedForm, name, p.Name, ct.Kind, args[i].Type.Kind)
+			}
 			ptrSlot, lenSlot := len(flat), len(flat)+1
 			flat = append(flat, interp.I32(0), interp.I32(0))
 			pend = append(pend, pendingLower{
 				param: p.Name,
-				bytes: []byte(s),
-				align: 1, // utf-8 string data: the model allocates it at alignment 1
+				val:   args[i],
 				// The slots are indices into `flat`, not pointers into it, because `flat` is appended to
 				// after this and a slice header captured mid-build can be left behind by a reallocation.
 				ptrSlot: ptrSlot,
@@ -224,8 +231,8 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 			continue
 		}
 		if p.Type.Kind != VU32 {
-			return nil, nil, fmt.Errorf("%w: export %q parameter %q is %s; this engine lowers u32 and "+
-				"string arguments", ErrUnsupportedForm, name, p.Name, valKindName(p.Type.Kind))
+			return nil, nil, fmt.Errorf("%w: export %q parameter %q is %s; this engine lowers u32, string "+
+				"and list arguments", ErrUnsupportedForm, name, p.Name, valKindName(p.Type.Kind))
 		}
 		// `U32` is kind-checked, so the value's agreement with the declared type is the accessor's answer
 		// rather than a separate test that could drift from it.

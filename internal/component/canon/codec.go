@@ -569,20 +569,61 @@ func LoadString(h ReadHeap, ptr int) (Value, error) {
 // (`string-hello`/`-empty`/`-utf8`) verify it, and the host's canon adapter calls it against guest memory
 // (#719), so the bytes the guest reads are lowered by the same verified code, not a hand path.
 func StoreString(h Heap, s string, ptr int) error {
-	data := []byte(s)
-	p, err := h.Realloc(0, 0, 1, len(data))
+	p, n, err := StoreStringIntoRange(h, s)
 	if err != nil {
 		return err
-	}
-	if len(data) > 0 {
-		if err := h.WriteBytes(p, data); err != nil {
-			return err
-		}
 	}
 	if err := h.StoreInt(uint64(p), ptr, ptrSize); err != nil {
 		return err
 	}
-	return h.StoreInt(uint64(len(data)), ptr+ptrSize, ptrSize)
+	return h.StoreInt(uint64(n), ptr+ptrSize, ptrSize)
+}
+
+// StoreStringIntoRange allocates a string's bytes and writes them, returning the `(pointer, byte-length)`
+// pair **without storing it anywhere** — the model's `store_string_into_range` (definitions.py:1560).
+//
+// # Why this half exists separately
+//
+// `lower_flat_values` and `store_string` want different things from the same work. Storing a string
+// *into memory* writes the pair at a pointer, which is [StoreString]. Lowering one as a **flat
+// argument** puts the pair in two core words instead, so there is no pointer to write it at — the
+// caller takes the numbers. #902's argument lowering is that caller.
+//
+// Extracted rather than copied, so there is **one** string lowering: `StoreString` is now this plus two
+// `StoreInt`s, and the differential's `string-hello`/`-empty`/`-utf8` fixtures verify both through it.
+//
+// The allocation is at **alignment 1**, which is the model's for utf-8 string data.
+func StoreStringIntoRange(h Heap, s string) (ptr, byteLen int, err error) {
+	data := []byte(s)
+	p, err := h.Realloc(0, 0, 1, len(data))
+	if err != nil {
+		return 0, 0, err
+	}
+	// A zero-length string still calls realloc — the model's `allocate` is unconditional — and writes
+	// nothing. Skipping the write rather than calling `WriteBytes` with an empty slice keeps a heap
+	// implementation from having to special-case it.
+	if len(data) > 0 {
+		if werr := h.WriteBytes(p, data); werr != nil {
+			return 0, 0, werr
+		}
+	}
+	return p, len(data), nil
+}
+
+// StoreListIntoRange allocates a list's backing and stores its elements through `storeElem`, returning
+// the `(pointer, count)` pair **without storing it anywhere** — the model's `store_list_into_range`
+// (definitions.py:1711).
+//
+// It is [StoreStringIntoRange]'s counterpart for the same reason, and it is the **store** side of the
+// injected-element framing whose load side is [LoadList]: the allocation, its alignment, the stride and
+// the element loop are shared, while `storeElem` is what differs between the model heap and a guest one.
+// That is what lets `list<string>` and later `list<record>` reuse one framing.
+func StoreListIntoRange(h Heap, v Value, storeElem func(Value, int) error) (ptr, count int, err error) {
+	p, err := storeListData(h, v, storeElem)
+	if err != nil {
+		return 0, 0, err
+	}
+	return p, len(v.list), nil
 }
 
 // StoreList lowers a `list<T>` (CanonicalABI.md `store_list`): the element backing is allocated through

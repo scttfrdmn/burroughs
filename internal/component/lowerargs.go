@@ -38,15 +38,56 @@ import (
 // re-read, no retained pointer. Stated because the opposite instinct is strong: a host that allocated
 // something usually cleans it up, and doing so here would free memory the guest still owns.
 
-// pendingLower is one argument whose bytes must be placed in guest memory before the callee runs.
+// argHeap is a [canon.Heap] over a lift's own `(realloc)` and `(memory)` canonopts, so an argument is
+// lowered **by the codec** rather than by a hand path here.
 //
-// It carries the bytes and the **flat slots to patch**, rather than a closure, so that the work done
-// inside the entry is data a reader can see: allocate `len(bytes)`, write them, put the pointer in
-// `ptrSlot` and the length in `lenSlot`.
+// # Why this exists rather than serialising bytes locally
+//
+// A `string` argument could be lowered by hand — its bytes are its bytes. A `list<u32>` could too, by
+// packing little-endian words. A `list<string>` could not, and a `list<record>` certainly not: each needs
+// the element framing the codec already owns and the differential already verifies. Writing the easy
+// cases by hand is how the engine would end up with two list lowerings, which is the thing
+// `StoreList`'s injected element store exists to prevent.
+//
+// So the argument path builds this and calls `canon.StoreStringIntoRange` /
+// `canon.StoreListIntoRange` — the model's `*_into_range` forms, which return the `(ptr, len)` pair for
+// the flat slots instead of writing it at a pointer.
+//
+// **Every method runs inside the callee's entry**, because `argHeap` is only ever used from
+// `lowerPending`, which `enterInvokeLowering` calls while holding the entry slot. `Realloc` enters guest
+// code (an ordinary `Invoke` of `cabi_realloc`); the writes do not.
+type argHeap struct {
+	f     *compFunc
+	param string
+}
+
+func (a argHeap) Realloc(_, _, align, newSize int) (int, error) {
+	return a.f.guestAlloc(&pendingLower{param: a.param, align: align, byteLen: newSize})
+}
+
+func (a argHeap) WriteBytes(ptr int, data []byte) error {
+	return interp.WriteBoundaryMemory(a.f.mem, uint64(ptr), data)
+}
+
+func (a argHeap) StoreInt(v uint64, ptr, nbytes int) error {
+	buf := make([]byte, nbytes)
+	for i := range nbytes {
+		buf[i] = byte(v >> (8 * i))
+	}
+	return interp.WriteBoundaryMemory(a.f.mem, uint64(ptr), buf)
+}
+
+// pendingLower is one argument whose payload must be placed in guest memory before the callee runs.
+//
+// It carries the **value** and the flat slots to patch, rather than pre-serialised bytes: the codec is
+// what knows how a value becomes bytes, and a `list<string>` has no single byte string to hand over.
+// `byteLen` and `align` are set when the record is used as `argHeap.Realloc`'s request rather than as a
+// pending argument — the two uses share the parameter name, which is the only thing a refusal needs.
 type pendingLower struct {
 	param   string // the parameter's name, for a refusal that says which argument failed
-	bytes   []byte
+	val     canon.Value
 	align   int
+	byteLen int
 	ptrSlot int
 	lenSlot int
 }
@@ -60,24 +101,45 @@ type pendingLower struct {
 func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error {
 	for i := range pend {
 		p := &pend[i]
-		ptr, err := f.guestAlloc(p)
+		h := argHeap{f: f, param: p.param}
+
+		// **The codec does the lowering.** Both arms are the model's `*_into_range` forms: they allocate
+		// through the guest's realloc, write through the boundary accessor (which takes ADR 0073's growth
+		// lock and resolves the image *inside* it — load-bearing, because the realloc may have grown the
+		// memory to satisfy this very allocation), and hand back the pair for the flat slots.
+		var (
+			ptr, length int
+			err         error
+		)
+		switch p.val.Type.Kind {
+		case canon.KindString:
+			s, ok := p.val.Str()
+			if !ok {
+				return fmt.Errorf("%w: argument %q is tagged string but does not read as one",
+					ErrUnsupportedForm, p.param)
+			}
+			ptr, length, err = canon.StoreStringIntoRange(h, s)
+		case canon.KindList:
+			// The element store is **injected**, and it is `StoreVia` — the same composable store the
+			// host's WASI lowerings use and the differential verifies. So `list<u32>` today and
+			// `list<string>` when a guest wants one go through one framing rather than two loops.
+			ptr, length, err = canon.StoreListIntoRange(h, p.val, func(e canon.Value, at int) error {
+				return canon.StoreVia(h, e, at)
+			})
+		default:
+			return fmt.Errorf("%w: argument %q is a %s, which does not need guest memory and should not "+
+				"have been deferred to the entry", ErrUnsupportedForm, p.param, p.val.Type.Kind)
+		}
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: lowering argument %q: %w", ErrUnsupportedForm, p.param, err)
 		}
-		// **Written through the boundary accessor**, which takes ADR 0073's growth lock and resolves the
-		// image inside it. That ordering is load-bearing here rather than merely correct: `cabi_realloc`
-		// may have **grown** the memory to satisfy this very allocation, so a base and length captured
-		// before the call would describe an image that no longer exists.
-		if werr := interp.WriteBoundaryMemory(f.mem, uint64(ptr), p.bytes); werr != nil {
-			return fmt.Errorf("%w: writing argument %q's %d byte(s) at %d: %w",
-				ErrUnsupportedForm, p.param, len(p.bytes), ptr, werr)
-		}
+
 		if p.ptrSlot >= len(flat) || p.lenSlot >= len(flat) {
 			return fmt.Errorf("%w: argument %q names flat slots %d/%d of %d",
 				ErrUnsupportedForm, p.param, p.ptrSlot, p.lenSlot, len(flat))
 		}
 		flat[p.ptrSlot] = interp.I32(int32(uint32(ptr)))
-		flat[p.lenSlot] = interp.I32(int32(uint32(len(p.bytes))))
+		flat[p.lenSlot] = interp.I32(int32(uint32(length)))
 	}
 	return nil
 }
@@ -133,30 +195,30 @@ func checkLowerSize(param string, n int) error {
 	return nil
 }
 
-func (f *compFunc) guestAlloc(p *pendingLower) (int32, error) {
+func (f *compFunc) guestAlloc(p *pendingLower) (int, error) {
 	// **Before the realloc**, so the guest is never asked for an allocation this engine would refuse to
 	// use. The order is the point: checking after would mean a guest had already grown its memory by a
 	// quarter of a gigabyte to satisfy a request about to be rejected.
-	if err := checkLowerSize(p.param, len(p.bytes)); err != nil {
+	if err := checkLowerSize(p.param, p.byteLen); err != nil {
 		return 0, err
 	}
 	if f.reallocCore.inst == nil {
 		return 0, fmt.Errorf("%w: argument %q is a %d-byte value that must live in guest memory, but this "+
 			"lift declares no (realloc) canonopt — there is nowhere to put it",
-			ErrUnsupportedForm, p.param, len(p.bytes))
+			ErrUnsupportedForm, p.param, p.byteLen)
 	}
 	if f.mem == nil {
 		return 0, fmt.Errorf("%w: argument %q must live in guest memory, but this lift declares no "+
 			"(memory) canonopt", ErrUnsupportedForm, p.param)
 	}
 	res, err := f.reallocCore.inst.Invoke(f.reallocCore.name,
-		interp.I32(0), interp.I32(0), interp.I32(int32(p.align)), interp.I32(int32(len(p.bytes))))
+		interp.I32(0), interp.I32(0), interp.I32(int32(p.align)), interp.I32(int32(p.byteLen)))
 	if err != nil {
 		// A realloc that traps is the guest refusing the allocation, and it is reported as the guest's
 		// failure rather than translated: the error carries the trap, so an embedder sees what the guest
 		// did and not a paraphrase of it.
 		return 0, fmt.Errorf("%w: argument %q: the guest's realloc failed for %d byte(s): %w",
-			ErrUnsupportedForm, p.param, len(p.bytes), err)
+			ErrUnsupportedForm, p.param, p.byteLen, err)
 	}
 	if len(res) != 1 {
 		return 0, fmt.Errorf("%w: argument %q: the guest's realloc returned %d value(s), want 1",
@@ -166,9 +228,9 @@ func (f *compFunc) guestAlloc(p *pendingLower) (int32, error) {
 	// A realloc that answers 0 for a non-empty request has not allocated anything, and writing at 0
 	// would corrupt whatever the guest keeps at the bottom of its memory. An empty request legitimately
 	// gets any pointer, including 0, and writes nothing.
-	if ptr == 0 && len(p.bytes) > 0 {
+	if ptr == 0 && p.byteLen > 0 {
 		return 0, fmt.Errorf("%w: argument %q: the guest's realloc returned a null pointer for %d byte(s)",
-			ErrUnsupportedForm, p.param, len(p.bytes))
+			ErrUnsupportedForm, p.param, p.byteLen)
 	}
 	if ptr < 0 {
 		return 0, fmt.Errorf("%w: argument %q: the guest's realloc returned %d, which is not an address",
@@ -184,5 +246,7 @@ func (f *compFunc) guestAlloc(p *pendingLower) (int32, error) {
 		return 0, fmt.Errorf("%w: argument %q: the guest's realloc returned %d, which is not aligned to "+
 			"%d", ErrUnsupportedForm, p.param, ptr, p.align)
 	}
-	return ptr, nil
+	// Returned as an `int` because that is the codec's offset type, converted here at the one edge where
+	// the guest's i32 becomes a host offset.
+	return int(ptr), nil
 }
