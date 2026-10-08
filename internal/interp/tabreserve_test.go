@@ -447,6 +447,12 @@ func TestANewBoundaryAccessorMustDecideOnTheTableGrowthLock(t *testing.T) {
 		"Thread":  "no guest storage",
 		"Read":    "guest memory, under memory.growMu.RLock",
 		"Write":   "guest memory, under memory.growMu.RLock",
+		// `CheckRange` validates a span and returns no bytes (#902's list framing). **It reaches no
+		// table**, which is the decision this control asks for: it resolves the same memory `Read` does
+		// and takes the same `memory.growMu.RLock`, because the bounds it checks are a property of the
+		// image and a concurrent relocation would otherwise make the answer stale the moment it returned.
+		// Nothing about it touches a table, so `table.growMu` does not arise.
+		"CheckRange": "guest memory bounds only, under memory.growMu.RLock",
 	}
 
 	typ := reflect.TypeOf(&Caller{})

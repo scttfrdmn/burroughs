@@ -47,6 +47,19 @@ func (g guestHeap) ReadBytes(ptr, n int) ([]byte, error) {
 	return g.c.Read(uint64(uint32(ptr)), uint64(uint32(n)))
 }
 
+// CheckRange validates a span without copying it, which is why `canon.ReadHeap` carries it separately
+// from `ReadBytes`: **this** implementation's `ReadBytes` allocates and copies, so using it for a framing
+// check over a guest-supplied length would copy up to the whole addressable memory and throw it away.
+//
+// `CanonCaller.CheckRange` reuses the engine's own effective-address and bounds logic and discards the
+// sub-slice it validates, so the condition is the same one an element read would meet.
+func (g guestHeap) CheckRange(ptr, n int) error {
+	if ptr < 0 || n < 0 {
+		return fmt.Errorf("component: guest range of %d byte(s) at %d: a negative offset is not an address", n, ptr)
+	}
+	return g.c.CheckRange(uint64(uint32(ptr)), uint64(uint32(n)))
+}
+
 // The real preview-2 host (PR C.2). The stub host (link_component.go) refuses every wasi import by name;
 // this host provides the ten the guest-driven `wasi:cli/run` world reaches. Each import is a canon
 // lower, so its impl is a `interp.CanonFunc` dispatched through the canonical-ABI adapter

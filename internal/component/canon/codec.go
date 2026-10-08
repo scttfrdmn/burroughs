@@ -251,6 +251,15 @@ func (h *heap) ReadBytes(ptr, n int) ([]byte, error) {
 	return h.mem[ptr : ptr+n], nil
 }
 
+// CheckRange is the model heap's bounds-only check. It shares `ReadBytes`'s condition by calling it and
+// discarding the slice — which costs nothing **here**, because this heap's `ReadBytes` returns a
+// sub-slice rather than a copy. The guest heap's cannot, which is the whole reason the interface carries
+// both methods.
+func (h *heap) CheckRange(ptr, n int) error {
+	_, err := h.ReadBytes(ptr, n)
+	return err
+}
+
 // ReadHeap is the memory a value **lifting** reads through — the mirror of [Heap], which only writes.
 //
 // # Why this did not exist until #903
@@ -271,6 +280,17 @@ type ReadHeap interface {
 	// bounds check**: the model traps when `ptr + byte_length > len(memory)` (definitions.py:1385), and an
 	// implementation over a Go slice must not be allowed to panic instead.
 	ReadBytes(ptr, n int) ([]byte, error)
+
+	// CheckRange reports whether `[ptr, ptr+n)` is readable **without copying it**.
+	//
+	// It exists because a *framing* check is not a read. `ReadBytes` over a guest heap allocates and
+	// copies; using it to validate a span would copy — and discard — up to the whole addressable memory
+	// before a single element was read, on a length the **guest** supplied. [LoadList] is that caller,
+	// and the chair caught it on the #921 review.
+	//
+	// A reader that actually wants the bytes keeps using `ReadBytes`: the string lift copies what it
+	// returns, so nothing is wasted there.
+	CheckRange(ptr, n int) error
 }
 
 // MaxStringByteLength is the model's cap on a lifted string's byte length (definitions.py:1360), which it
@@ -416,7 +436,10 @@ func ListByteLength(count, elemSize int) (int, error) {
 		// empty tuple's) and must not divide by zero below.
 		return 0, nil
 	}
-	if count > ReallocI32Max/elemSize {
+	// **The comparison is in `uint64`, so the ABI's bound does not constrain the host's word size.**
+	// Written as `uint64(count) > ReallocI32Max/uint64(elemSize)` rather than multiplying: see the doc
+	// comment for why the division form is the guard. Both operands are already known non-negative.
+	if uint64(count) > ReallocI32Max/uint64(elemSize) {
 		return 0, fmt.Errorf("canon: a list of %d elements of %d bytes needs %d×%d bytes, past the %d-byte "+
 			"maximum the Canonical ABI's 32-bit pointer space can address",
 			count, elemSize, count, elemSize, ReallocI32Max)
@@ -426,7 +449,24 @@ func ListByteLength(count, elemSize int) (int, error) {
 
 // ReallocI32Max is the model's `REALLOC_I32_MAX` (definitions.py:1359): the largest byte count the ABI's
 // 32-bit pointer space can address.
-const ReallocI32Max = 1<<32 - 1
+//
+// # Typed `uint64`, and why that is not incidental
+//
+// As an untyped constant this does **not compile on a 32-bit host**: `1<<32 - 1` overflows a 32-bit
+// `int`, so `count > ReallocI32Max/elemSize` with `int` operands is a compile error. Measured rather than
+// reasoned — `GOOS=linux GOARCH=386 go build ./internal/component/canon/` reported
+// *"ReallocI32Max (untyped int constant 4294967295) overflows int"* before this was typed.
+//
+// **No 32-bit `GOARCH` is supported or built**, and the search for that is: CI's matrix is
+// `ubuntu-24.04` and `ubuntu-24.04-arm`, the Makefile's one cross-build is `GOOS=windows GOARCH=amd64`,
+// and no `GOARCH=` appears anywhere else in the tree. So the chair's #921 review offered the choice of
+// documenting the assumption instead of fixing it.
+//
+// It is typed anyway, because the fix costs one conversion and **removes the hazard rather than
+// explaining it**: a future port then meets working arithmetic rather than a stated assumption it has to
+// act on. The assumption is still recorded here, because a reader who sees `uint64` should know it is
+// load-bearing and not decoration.
+const ReallocI32Max uint64 = 1<<32 - 1
 
 // LoadList lifts a `list<T>` given its (pointer, count), with the per-element load **injected** — the
 // mirror of [StoreList]'s injected element store.
@@ -460,10 +500,16 @@ func LoadList(h ReadHeap, ptr, count int, elem Type, loadElem func(int) (Value, 
 		// alignment. Non-vacuous as soon as the element is wider than a byte, unlike a string's.
 		return Value{}, fmt.Errorf("canon: list pointer %d is not aligned to %d", ptr, a)
 	}
-	// **Bounds-checked once, over the whole span**, before any element is read — so a count that runs off
-	// the end is refused rather than discovered partway through a loop that has already allocated.
-	if _, rerr := h.ReadBytes(ptr, byteLen); rerr != nil {
-		return Value{}, fmt.Errorf("canon: reading a %d-element list at %d (%d bytes): %w",
+	// **Bounds-checked once over the whole span, and WITHOUT copying it**, before any element is read.
+	//
+	// Two properties, and the second was a defect until the #921 review. Checking once means a count
+	// that runs off the end is refused rather than discovered partway through a loop that has already
+	// handed back partial data. Checking without copying means a guest-supplied count cannot make the
+	// framing check itself copy the whole addressable span — `ReadBytes` on a guest heap allocates and
+	// copies, so the first draft did exactly that, discarded the result, and then read every element
+	// again.
+	if rerr := h.CheckRange(ptr, byteLen); rerr != nil {
+		return Value{}, fmt.Errorf("canon: a %d-element list at %d spans %d bytes: %w",
 			count, ptr, byteLen, rerr)
 	}
 	vals := make([]Value, count)
