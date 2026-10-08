@@ -46,11 +46,15 @@ own condition rather than as a prediction.
   copied on the way in, and a value immutable in two of three directions is mutable. The boolean carries
   more weight than for a scalar — an **empty list is legitimate**, so `(nil, false)` for a non-list and
   `(empty, true)` for an empty `list<u32>` must be distinguishable, which `len(xs) == 0` cannot do.
-  **The read direction crosses the conversion but not a guest**, and is tested where it can be: the eager
-  lift refuses every compound `task.return` result, so no guest returns a list today. That limit is
-  pinned behaviourally one package down by `TestTaskReturnRefusesAResultKindItCannotLift`, and the
-  conversion gets white-box witnesses rather than none — leaving the arm out would make `fromCanon`'s
-  refusal say "this release cannot carry a list", which becomes false the moment the lift arm lands.
+  **Both directions work end to end**, which is the condition ADR 0097 puts on each public piece. A
+  guest returns a `list<u32>` through `task.return` and the embedder reads its elements — and the
+  fixture **clobbers its own element backing immediately after resolving**, so the values prove the lift
+  was *eager* rather than merely correct: an engine that read after the guest resumed hands back four
+  copies of `0xFFFFFFFF`, which are four well-formed `u32`s, so only the values tell a correct engine
+  from a plausible wrong one. `peek` reports the overwritten word, so "the embedder got the right
+  elements" and "the guest did overwrite them" are independent facts rather than one assumed from the
+  other. Neutering the arm to read the second flat word as a byte length instead of a **count** returns
+  one element where four are expected.
 - **`canon.Type.String` — one structural rendering, beside the one structural comparison**
   ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). Comparing kinds is the defect; **reporting
   kinds is how the defect hides**, so the renderer is part of the repair rather than a cosmetic
@@ -67,6 +71,23 @@ own condition rather than as a prediction.
   ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). `Value` had `U32`, `Str` and `FutureValue`
   and no way to read a list out, so the public boundary had nothing to source a list result from. The
   mirror of `Str()`, in the same shape and with the same kind check.
+- **`canon.LoadVia` and `canon.LoadListAt` — the lifting side's composable load and header framing**
+  ([#902](https://github.com/scttfrdmn/burroughs/issues/902)), so `task.return`'s list arm injects an
+  element load exactly as the lowering side injects `StoreVia`. Without them the first caller writes a
+  per-kind load loop and the second copies it, which is how a codec ends up with two of itself — the
+  reason `StoreList` takes its store injected rather than switching internally. `LoadListAt` reads a
+  `(pointer, count)` header from memory where `LoadList` takes the pair directly, the same split as
+  `StoreString`/`StoreStringIntoRange`: a `task.return` carries the pair in flat words, a nested list
+  carries it in memory, and the framing is shared.
+  **`LoadVia`'s doc comment claimed its kind coverage was identical to `StoreVia`'s, and its own control
+  found that false on the first run.** `variant` and `own` are composable in one direction only. The two
+  have different standings and are now recorded as different: **`own` is structural** — the store side
+  writes a handle the component layer minted, and lifting one needs that layer's handle table, which
+  `canon` cannot reach by design — while **`variant` is simply unwritten** and declined on spec, since
+  no guest returns one and its mirror would be a `LoadVariant` that `deadcode` would report. The control
+  keeps an allow-set keyed by kind **name** rather than position, fails on an *undocumented* asymmetry,
+  and also fails on an allowance that has gone **stale**: an exemption for a condition since fixed is an
+  instrument looking away from nothing.
 - **`Close`'s bound witness waited on a timer instead of on the signal it needed, and `make strict`
   caught it.** `TestCloseReachesItsBoundWithANamedOutcome` slept 20ms for a call to be in flight before
   asserting that a zero bound produces `ErrCloseIncomplete`. Under `strict`, which runs every package at
@@ -1103,8 +1124,21 @@ own condition rather than as a prediction.
   injected load. **That message has now been wrong twice in opposite directions** — it previously claimed
   the engine lifted "scalars and string" while only `u32` worked — and both are the same defect: a
   sentence left standing across the work that falsified it. An error message is the worst place for it,
-  because a reader meets it already looking for a cause. It now names the gap as the **wiring in that
-  arm**, which is what is actually missing.
+  because a reader meets it already looking for a cause. It now names a **mechanism** rather than a
+  to-do — `canon.LoadVia`, where the composability limit lives for both directions at once — which is
+  the phrasing that does not go stale when the work moves.
+- **A refusal table listed `list` as unliftable after the list arm landed, and it would have stayed
+  green** ([#902](https://github.com/scttfrdmn/burroughs/issues/902)).
+  `TestTaskReturnRefusesAResultKindItCannotLift` called the lift with **no flat values**, so a list
+  reached the **arity** guard first and was refused with *"got 0 flat value(s), want 2"* — which contains
+  the word "list" and satisfied a substring assertion. **Protection by coincidence**: the arity guard
+  stood in for the verdict the test was named after, and the table would have gone on reporting that
+  lists are unliftable while the engine lifted them. Repaired as a method and not just for `list`: each
+  case now supplies well-formed flat values for its own shape so the refusal under test is the one that
+  fires, the match is on the *mechanism* a refusal names rather than on the kind's name alone, and the
+  subtest **fails if it gets the arity guard at all**. `list` moved to a positive test, where the
+  layering also turned out to be worth pinning — a list with no element type is refused by the
+  **bridge**, not by the arm, whose own nil guard is unreachable and says so.
 - **The README's "what is not here" list named three things as absent that are on main, and its phase
   line was stale.** It said *"No host imports and no WASI"*, *"No threads, no stack switching,
   no component model … None has started"*, and headed the section *"v0, the interpreter phase"* — all true

@@ -90,6 +90,84 @@ func TestAnEmbedderPassesAListArgument(t *testing.T) {
 	}
 }
 
+// TestAnEmbedderReadsAListResult is the read direction's end-to-end witness: a guest returns a
+// `list<u32>` through `task.return` and the embedder reads its elements out of [ComponentValue.List].
+//
+// # It uses the clobbering fixture, so the EAGER lift is what is proved
+//
+// The guest resolves with the four u32s at 1024 and then overwrites all sixteen bytes with `0xFF`. An
+// engine that lifted eagerly hands back `[10 20 30 40]`; one that lifted after the guest resumed hands
+// back four copies of `0xFFFFFFFF`. Both are four well-formed u32s, so the *values* are the only thing
+// that distinguishes a correct engine from a plausible wrong one — which is why this asserts them and
+// not the length.
+//
+// `peek` is the anti-vacuity half: it reports the first word as it stands afterwards, so "the embedder
+// got the right elements" and "the guest did overwrite them" are independent facts. Without it, a
+// clobber loop that never ran would satisfy the assertion above for the wrong reason.
+func TestAnEmbedderReadsAListResult(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	wasm, err := os.ReadFile("internal/component/testdata/task-return-list-clobber-synth.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	c, err := burroughs.LoadComponent(wasm)
+	if err != nil {
+		t.Fatalf("LoadComponent: %v", err)
+	}
+	defer func() {
+		if cerr := c.Close(); cerr != nil {
+			t.Errorf("Close: %v", cerr)
+		}
+	}()
+
+	res, err := c.Call(context.Background(), "run")
+	if err != nil {
+		t.Fatalf("Call(run): %v", err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("Call(run) returned %d value(s), want 1", len(res))
+	}
+	xs, ok := res[0].List()
+	if !ok {
+		t.Fatalf("the result is %v, not a list — the accessor refuses a mis-typed read rather than "+
+			"returning an empty slice, so this means the kind crossed wrong", res[0])
+	}
+	if len(xs) != 4 {
+		t.Fatalf("the result has %d element(s), want 4 — the second flat word is a COUNT, not a byte "+
+			"length; sixteen bytes of data is four u32s", len(xs))
+	}
+	for i, want := range []uint32{10, 20, 30, 40} {
+		got, uok := xs[i].U32()
+		if !uok {
+			t.Errorf("element %d is %v, not a u32", i, xs[i])
+			continue
+		}
+		if got == 0xFFFF_FFFF {
+			t.Fatalf("element %d is the guest's clobber, not its result. The embedder is being handed "+
+				"memory the guest reused after resolving, which means the lift was not eager", i)
+		}
+		if got != want {
+			t.Errorf("element %d = %d, want %d — a wrong value at the right length is a load at the "+
+				"wrong element stride", i, got, want)
+		}
+	}
+
+	// The anti-vacuity half: if the clobber never ran, the assertions above would hold for the trivial
+	// reason that nothing overwrote the bytes.
+	pk, err := c.Call(context.Background(), "peek")
+	if err != nil {
+		t.Fatalf("Call(peek): %v", err)
+	}
+	w0, ok := pk[0].U32()
+	if !ok {
+		t.Fatalf("peek returned %v, not a u32", pk[0])
+	}
+	if w0 != 0xFFFF_FFFF {
+		t.Fatalf("peek says the first word is %#x, want %#x — the guest did not reuse its backing, so "+
+			"this test did not exercise the window it exists for", w0, uint32(0xFFFF_FFFF))
+	}
+}
+
 // TestAListElementIsCheckedStructurallyNotByKind is ADR 0097's first change on the public side, and the
 // neuter target.
 //

@@ -4,6 +4,7 @@ package canon
 
 import (
 	"fmt"
+	"math"
 	"unicode/utf8"
 )
 
@@ -521,6 +522,105 @@ func LoadList(h ReadHeap, ptr, count int, elem Type, loadElem func(int) (Value, 
 		vals[i] = v
 	}
 	return List(elem, vals...)
+}
+
+// LoadListAt lifts a `list<T>` whose **(pointer, count) header** sits at ptr — `load_list`'s framing, and
+// the mirror of [StoreList].
+//
+// Separate from [LoadList], which takes the pair directly, for the reason
+// [StoreStringIntoRange]/[StoreString] are separate: a `task.return` carries the pair in **flat words**
+// and never writes a header, while a list nested inside another compound has its header in memory. One
+// framing, reached two ways, rather than two framings.
+func LoadListAt(h ReadHeap, t Type, ptr int, loadElem func(int) (Value, error)) (Value, error) {
+	if t.Elem == nil {
+		return Value{}, fmt.Errorf("canon: a list type with no element type cannot be lifted")
+	}
+	hdr, err := h.ReadBytes(ptr, 2*ptrSize)
+	if err != nil {
+		return Value{}, fmt.Errorf("canon: reading a list header at %d: %w", ptr, err)
+	}
+	var begin, count uint64
+	for i := range ptrSize {
+		begin |= uint64(hdr[i]) << (8 * i)
+		count |= uint64(hdr[ptrSize+i]) << (8 * i)
+	}
+	// **Both header words are guest-supplied**, so each is bounded before it becomes an `int`. A count
+	// past the pointer space is `ListByteLength`'s refusal inside `LoadList`; this is the narrower
+	// question of whether the word even fits the host's `int`, which on a 32-bit host it need not.
+	if begin > uint64(math.MaxInt) || count > uint64(math.MaxInt) {
+		return Value{}, fmt.Errorf("canon: a list header at %d names pointer %d and count %d, which this "+
+			"host's int cannot hold", ptr, begin, count)
+	}
+	return LoadList(h, int(begin), int(count), *t.Elem, loadElem)
+}
+
+// LoadVia lifts a value of type t from a read-only heap — **the mirror of [StoreVia]**, and composable in
+// the same way and over the same kinds.
+//
+// # Why the pair matters more than either half
+//
+// `StoreVia` is the composable store the host's WASI lowerings use and the differential verifies;
+// everything compound reaches it through an injected element store so there is one framing rather than
+// one per call site. The lifting side had no such function: `LoadList`'s element load had to be supplied
+// by every caller, which means the first caller writes a per-kind load loop and the second copies it.
+// That is how a codec ends up with two of itself, and the whole reason `StoreList` takes its store
+// injected rather than switching internally.
+//
+// # The coverage is NOT identical to StoreVia's, and the two exceptions have different standings
+//
+// This comment claimed the sets were identical. They are not, and the control that checks the claim —
+// `TestLoadViaIsStoreViasMirrorOverTheSameKinds` — found it false on its first run. `StoreVia` has arms
+// for `variant` and `own` that this has no mirror for:
+//
+//   - **`own` cannot be symmetric at this layer, as a matter of mechanism.** The store side writes an
+//     already-minted handle index, which the *component* layer minted; reading one back means resolving
+//     an index against that instance's handle table, and the codec cannot reach it. So the asymmetry is
+//     structural rather than unfinished, and widening `LoadVia` would require handing it a capability
+//     the package is defined not to have.
+//   - **`variant` is simply not written yet**, and is deliberately not written on spec. The mirror would
+//     be a `LoadVariant` taking an injected element load, exactly as `StoreVariant` takes an injected
+//     store — but nothing needs it: no guest returns a variant, and `deadcode` would report it as what
+//     it would be. It arrives with its consumer, which is the same rule every other kind here landed
+//     under. *Decline speculative API with a consumer trigger.*
+//
+// `f32` and `f64` are composable in **neither** direction (`intBytes` returns 0 for both and neither has
+// a switch arm on either side), which is a gap and not an asymmetry.
+//
+// The pair still matters, and the control enforces the part that is enforceable: the asymmetric set must
+// be **exactly** those two, so a new one-directional kind fails, and so does an allowance that has
+// become stale. The reason to care is that a kind this engine can hand a guest and cannot read back
+// makes a round trip untestable — and untestability is the property nobody notices.
+func LoadVia(h ReadHeap, t Type, ptr int) (Value, error) {
+	if n := intBytes(t.Kind); n > 0 {
+		b, err := h.ReadBytes(ptr, n)
+		if err != nil {
+			return Value{}, fmt.Errorf("canon: reading a %s at %d: %w", t.Kind, ptr, err)
+		}
+		// Little-endian, assembled the same way `LoadString`'s header read does and `StoreInt` writes.
+		var word uint64
+		for i := range n {
+			word |= uint64(b[i]) << (8 * i)
+		}
+		// Through `LiftFlatScalar`, so sign extension, `bool`'s nonzero-is-true and `char`'s two traps
+		// come from the one place the differential verifies them rather than from a second narrowing here.
+		return LiftFlatScalar(t, word)
+	}
+	switch t.Kind {
+	case KindString:
+		return LoadString(h, ptr)
+	case KindList:
+		return LoadListAt(h, t, ptr, func(at int) (Value, error) {
+			if t.Elem == nil {
+				// Unreachable: LoadListAt refuses a nil Elem before calling this. Checked rather than
+				// dereferenced because a nil here is a panic inside a guest-driven load.
+				return Value{}, fmt.Errorf("canon: LoadVia: a list element type went missing")
+			}
+			return LoadVia(h, *t.Elem, at)
+		})
+	default:
+		return Value{}, fmt.Errorf("canon: LoadVia: kind %s is not heap-composable (the mirror of "+
+			"StoreVia's own limit — a kind becomes composable in both directions at once)", t.Kind)
+	}
 }
 
 // LoadListU8 lifts the elements of a `list<u8>` given its (pointer, count) — the one case where the

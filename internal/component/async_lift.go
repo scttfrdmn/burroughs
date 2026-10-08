@@ -475,28 +475,62 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 		}
 		return v, nil
 
+	case canon.KindList:
+		// Two flat words, `(ptr, count)` — **not** a byte length, which is `string`'s second word. The
+		// two kinds flatten to the same shape and mean different things by it, which is why they are
+		// separate arms rather than one that reads "two words".
+		//
+		// **Read now**, for `string`'s reason and more sharply: the guest resumes after this call and may
+		// reuse both the element backing *and* anything a nested element points at.
+		if err := want(2); err != nil {
+			return canon.Value{}, err
+		}
+		if ct.Elem == nil {
+			// A list type with no element type is malformed rather than unmodeled. It cannot arrive from
+			// the bridge, which refuses one; checked because this is where a nil would be dereferenced.
+			return canon.Value{}, &interp.Trap{Reason: "task.return declares a list with no element type"}
+		}
+		ptr := int(uint32(args[0].Int32()))
+		count := int(uint32(args[1].Int32()))
+		h := guestHeap{c}
+		// **The framing is the codec's and the element load is injected** — the same shape the lowering
+		// side uses (`canon.StoreListIntoRange` with `canon.StoreVia`), now with the mirror pair. So the
+		// stride, the span's single bounds check, the overflow guard on count×element-size and the
+		// alignment trap are all the verified framing rather than a loop written here, and
+		// `list<string>` works the day a guest returns one without this arm changing.
+		v, lerr := canon.LoadList(h, ptr, count, *ct.Elem, func(at int) (canon.Value, error) {
+			return canon.LoadVia(h, *ct.Elem, at)
+		})
+		if lerr != nil {
+			// A guest's own `(ptr, count)` failing the model's traps is a guest fault, not an engine
+			// error — it traps, as `load_list`'s alignment and bounds checks do (def:1715 and the span
+			// check), and as the string arm above does for the same class of defect.
+			return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf("task.return's %s result: %v", ct, lerr)}
+		}
+		return v, nil
+
 	default:
-		// Everything left is compound: list, variant (and so result/option/enum, which despecialize to
-		// one), record, tuple, own/borrow.
+		// Everything left is compound and not a list: variant (and so result/option/enum, which
+		// despecialize to one), record, tuple, own/borrow.
 		//
 		// **This message has now been wrong twice, in opposite directions, and both are worth naming.**
 		// It first said "this engine lifts scalars and string" while only `u32` was handled, which made
 		// it false for every other scalar. It was then accurate, and said a compound "needs a
 		// per-element load the codec does not yet expose — the mirror of the per-element store
 		// canon.StoreList takes". That became false when `canon.LoadList` landed with exactly that
-		// injected per-element load: the capability it named as missing exists, and the message was
-		// still sending readers to look for it.
+		// injected load, and the message kept sending readers to look for a capability that existed.
 		//
-		// So it now names what is actually missing, which is the wiring here and not a codec gap. The
-		// general shape is the one `CLAUDE.md` calls foreclosing words — a sentence true when written,
-		// left standing across the work that falsified it — and an error message is the worst place for
-		// it, because a reader meets it already looking for a cause.
+		// The general shape is the one `CLAUDE.md` calls foreclosing words — a sentence true when
+		// written, left standing across the work that falsified it — and an error message is the worst
+		// place for it, because a reader meets it already looking for a cause. So this one now names a
+		// **mechanism** rather than a to-do: what a variant or record needs is a composable load for
+		// that kind, and `canon.LoadVia`'s own refusal is where that limit lives, in one place, for both
+		// directions at once.
 		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
-			"task.return declares a %s result; this engine lifts bool, the integers, the floats, char "+
-				"and string from a task.return's flat values and refuses the rest by name. The codec "+
-				"does expose the per-element load a list needs (canon.LoadList, the mirror of "+
-				"canon.StoreList's injected element store); what is missing is this arm using it, which "+
-				"is its own slice", ct.Kind)}
+			"task.return declares a %s result; this engine lifts bool, the integers, the floats, char, "+
+				"string and list from a task.return's flat values, and refuses the rest by name. A %s "+
+				"needs canon.LoadVia to compose it, which is the mirror of StoreVia's own limit — a kind "+
+				"becomes composable in both directions at once", ct, ct.Kind)}
 	}
 }
 

@@ -5,33 +5,37 @@ package burroughs
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 )
 
-// White-box witnesses for the list **read** direction (#902, ADR 0097 item 4's public half).
+// White-box unit witnesses for the list **read** conversion (#902, ADR 0097 item 4's public half).
 //
-// # Why these are in package `burroughs` and not `burroughs_test`
+// # These are supplementary, and this comment used to say they were the only witness
 //
-// Because they have to be: `fromCanon` and `componentTypeFromCanon` are unexported, and **no guest
-// returns a list today.** The eager lift refuses a compound `task.return` result by name — the codec
-// exposes `canon.LoadList` now, but that arm does not use it yet, which is its own slice. So the
-// conversion cannot be reached through `Component.Call`, and a path with no test is the thing this
-// tree is least willing to ship.
+// They were written when no guest could return a list: the eager lift refused every compound
+// `task.return` result, so `fromCanon`'s list arm was unreachable through `Component.Call` and these
+// unit tests were all the coverage it could have. That header is now **false** — the lift arm was wired
+// through `canon.LoadList` in the same PR, on the chair's ruling that a read accessor must not ship as
+// a name an embedder can call but cannot use for its purpose. Repaired rather than left standing,
+// because a test file's own account of why it exists is the first thing its next reader believes.
 //
-// The alternative was to leave the arm out until a guest drove it. That is worse: `fromCanon`'s default
-// arm would then refuse a list with "this release cannot carry a list", which will be **false** the
-// moment the lift arm lands, and the gap between the two slices is exactly when someone would read it.
-// Stated plainly rather than implied: the write direction is witnessed end-to-end through a real guest
-// (`TestAnEmbedderPassesAListArgument`); the read direction is witnessed here, at the conversion, and
-// its end-to-end witness arrives with the lift arm.
+// The real witness is `TestAnEmbedderReadsAListResult` in `burroughs_test`: a guest returns a
+// `list<u32>` and clobbers its own backing immediately afterwards, so the embedder's elements prove the
+// lift was **eager** and not merely correct. What is left here is what a guest cannot conveniently
+// reach:
 //
-// The lift's own limit is pinned where it belongs — `TestTaskReturnRefusesAResultKindItCannotLift` in
-// `internal/component` drives `liftTaskReturnValue` with a `list<u8>` result and asserts the refusal
-// names `list`. So "no guest returns a list today" is a checked claim and not a recalled one, and it is
-// checked by a behaviour rather than by this file.
+//   - the **empty** list's element type surviving the conversion, which needs a list with no element to
+//     infer from;
+//   - **nesting**, so the recursion in both the value and the type conversion is exercised rather than
+//     extrapolated from one level;
+//   - an **unspellable element type** refused by name, which needs a type the codec models and the
+//     public surface does not — a condition no guest can be built to produce.
+//
+// Those are the cases that justify a white-box test. The rest moved out.
 
 func TestAListConvertsBackFromTheCodecsValue(t *testing.T) {
 	u32 := canon.Type{Kind: canon.KindU32}
@@ -141,26 +145,29 @@ func TestAnUnspellableElementRefusesNamingTheKind(t *testing.T) {
 	}
 }
 
-// TestAListIsSpellablePubliclyEvenThoughNoGuestReturnsOne is the anti-vacuity half: it says the reason
-// these tests are white-box is the **lift's** limit and not a gap in the conversion they exercise.
+// TestTheListReadPathHasAnEndToEndWitness is this file's own anti-vacuity guard, and it exists because
+// the header above was wrong once.
 //
-// The engine-side limit itself is already pinned behaviourally, one package down, by
-// `TestTaskReturnRefusesAResultKindItCannotLift`'s `list` case — it calls `liftTaskReturnValue` with a
-// `list<u8>` result and asserts the refusal names `list`. That is the witness, and this test
-// deliberately does **not** duplicate it: a second assertion over the same property, written here as a
-// grep for a phrase in the lift's error message, was drafted and deleted. *A check that greps will match
-// its own documentation* — and a test asserting a sentence rather than a behaviour fails when the
-// sentence is improved, which trains the next reader to edit the test rather than read it.
-func TestAListIsSpellablePubliclyEvenThoughNoGuestReturnsOne(t *testing.T) {
-	u32 := canon.Type{Kind: canon.KindU32}
-	lt := canon.Type{Kind: canon.KindList, Elem: &u32}
-
-	// The public surface CAN spell and carry a list outward. So when the lift arm lands, nothing here
-	// has to change — which is the property that makes landing it a small slice rather than a wide one.
-	if _, err := componentTypeFromCanon(lt); err != nil {
-		t.Fatalf("list<u32> is not spellable publicly: %v — the read direction would then be blocked "+
-			"by this boundary as well as by the lift, and this file's premise is wrong", err)
+// A white-box test over a path with no end-to-end witness is defensible; one that *claims* to be
+// supplementary while the real witness has quietly stopped existing is not. So the claim is checked:
+// the guest fixture the end-to-end test drives must be present, and the conversion these tests exercise
+// must be the one that test reaches.
+//
+// If the fixture is deleted, this fails here with the reason — rather than leaving a file whose header
+// says "the real witness is elsewhere" pointing at nothing.
+func TestTheListReadPathHasAnEndToEndWitness(t *testing.T) {
+	const fixture = "internal/component/testdata/task-return-list-clobber-synth.wasm"
+	if _, err := os.Stat(fixture); err != nil {
+		t.Fatalf("the end-to-end witness's fixture is gone (%v), so the tests in this file are the only "+
+			"coverage of the list read path again — and this file's header says they are not. Either "+
+			"restore %s and TestAnEmbedderReadsAListResult, or rewrite the header to say what is true",
+			err, fixture)
 	}
+
+	// And the conversion is reachable for a list of a spellable element, which is what makes the
+	// end-to-end path work at all. A failure here and a pass there would mean the guest route bypasses
+	// this conversion, which is worth knowing.
+	u32 := canon.Type{Kind: canon.KindU32}
 	cv, err := canon.List(u32, canon.U32(9))
 	if err != nil {
 		t.Fatalf("canon.List: %v", err)
