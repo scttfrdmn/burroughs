@@ -450,23 +450,20 @@ func TestTheBridgeAndTheUnmodeledPredicateAgree(t *testing.T) {
 		VRecord: "the bridge builds a record (#904's codec arm); the predicate still refuses one, and " +
 			"is consulted at instantiate where widening it changes which components load — its own " +
 			"slice, per callvalues.go's rule about not retiring it in the slice that outgrows it",
-		// **The tuple divergence is the EMPTY one, and the first draft of this entry said otherwise.**
+		// **There is no VTuple entry, and the history of this one is the useful part.**
 		//
-		// I declared a `VTuple` divergence on the theory that despecialization would make the bridge
-		// and the predicate disagree about a tuple the way they do about a record. Measured, that is
-		// false: `unmodeledValKind`'s tuple arm recurses into the elements and otherwise falls through
-		// as *modeled*, so a non-empty tuple of modeled elements is modeled by both and they agree —
-		// and the control said so on its other arm, that a declaration nothing exercises is a claim
-		// that has stopped being true.
+		// It was declared twice and is now retired, each time on a measurement this control forced:
 		//
-		// What does diverge is `tuple<>`. The bridge refuses it (the model gives an empty record no
-		// size); the predicate accepts it, because a loop over zero elements finds nothing to refuse.
-		// So the divergence is the predicate being *permissive about emptiness*, which is a different
-		// fact from the record one above and is worth having found by measurement rather than by
-		// reasoning from the despecialization.
-		VTuple: "the bridge refuses an EMPTY tuple, because an empty record has no size in the model " +
-			"(definitions.py:1256); the predicate accepts it, since its element loop finds nothing to " +
-			"refuse in zero elements. The two agree on every non-empty tuple",
+		//  1. First declared on the theory that despecialization would make the two disagree about a
+		//     tuple the way they do about a record. False — `unmodeledValKind`'s tuple arm recurses
+		//     into the elements and otherwise falls through as *modeled*, so they agree on every
+		//     non-empty tuple. The control's stale-declaration arm caught it.
+		//  2. Re-declared on the real divergence: `tuple<>`, which the bridge refused (no layout in the
+		//     model) and the predicate accepted (a loop over zero elements finds nothing to refuse).
+		//  3. Retired, because the divergence was **closed** rather than merely described. The decoder
+		//     now refuses an empty tuple outright, matching `wasm-tools validate`, and the predicate
+		//     refuses one too — so nothing disagrees and there is nothing to declare. A divergence
+		//     nobody needs is one a later reader takes for intentional.
 	}
 
 	all := append([]ValType(nil), func() []ValType {

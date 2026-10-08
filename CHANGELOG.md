@@ -1141,6 +1141,25 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **A component declaring `record {}` or `tuple<>` loaded, where the reference validator refuses it**
+  ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). Asked of the authority rather than
+  reasoned about: `wasm-tools parse` **accepts** both — the bytes are well-formed — and
+  `wasm-tools validate` refuses both, with *"record type must have at least one field (at offset 0xb)"*
+  and *"tuple type must have at least one type (at offset 0xb)"*. So the rule is the reference's and this
+  engine was the permissive one; `valType` refuses both at decode now, **matching those messages** so a
+  reader comparing the two can do it by reading rather than by inference. The two specimens are
+  committed with the reference's verdict recorded in their `.wat` headers.
+  Reported as the **rule** being broken rather than as a short read, because parse accepting them means
+  the encoding is fine — grave #301's distinction, applied in the direction an engine has to watch:
+  manufacturing a malformedness the reference does not report.
+  **Three things this closes.** `sizeRecord`'s panic becomes unreachable from any decoded component (the
+  error-returning refusals below it stay, for a hand-built type). `unmodeledValKind` refuses an empty
+  tuple too, so the **declared divergence** between it and the bridge over `tuple<>` is *closed* rather
+  than described — a divergence nobody needs is one a later reader takes for intentional, and that entry
+  had been declared twice: once on a theory the control falsified, once on the real condition. And
+  rejecting more components at load is a narrowing that is a **correctness fix** rather than a policy
+  choice, precisely because the reference draws the line in the same place. Neutering the record arm
+  loads the component again, with the test naming what the reference said.
 - **An empty record and an empty tuple were sized 0, where the model gives them no size at all**
   ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). `elem_size_record` ends with
   `assert(s > 0)` (`definitions.py:1256`), so an empty record is not a type with a zero-byte layout but

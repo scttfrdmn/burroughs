@@ -95,11 +95,30 @@ and the bridge each refuse before that panic is reachable — rather than in the
 sees only numbers. `ListByteLength`'s zero-size branch is kept for divide-by-zero safety and now says it
 is unreachable for a valid type.
 
-Nothing upstream rejects one: searched, and the tuple decoder reads a count and loops with no `n > 0`
-check, the record decoder does the same through `namedValVec`, and no emptiness check exists in
-`internal/component` or `internal/validate`. The bridge is therefore the first layer that can decline it
-with an error instead of a panic, and that is where it declines. (Chair's ruling: refuse, do not justify
-returning 0.)
+Nothing upstream rejected one when this was written: searched, and the tuple decoder read a count and
+looped with no `n > 0` check, the record decoder did the same through `namedValVec`, and no emptiness
+check existed in `internal/component` or `internal/validate`. So the bridge was the first layer that
+could decline it with an error instead of a panic, and that is where it declined. (Chair's ruling:
+refuse, do not justify returning 0.)
+
+**The decoder rejects it now, and that paragraph is amended rather than left standing.** Asked of the
+reference on the following review: `wasm-tools parse` accepts a component declaring `record {}` or
+`tuple<>` — the bytes are well-formed — and `wasm-tools validate` refuses both, with *"record type must
+have at least one field"* and *"tuple type must have at least one type"*. So the rule is the reference's
+and this engine was the permissive one. `valType` refuses both forms at decode, matching those messages
+so a reader can check the two by reading, and the two specimens are committed
+(`testdata/empty-record-type.wasm`, `empty-tuple-type.wasm`) with the reference's verdict recorded in
+their `.wat` headers.
+
+Three consequences, all narrowings of what loads and all matching the reference:
+
+- `sizeRecord`'s panic is now unreachable from any **decoded** component. The error-returning refusals
+  below it are kept, because a hand-built `canon.Type` still reaches them.
+- `unmodeledValKind` refuses an empty tuple too, so the **declared divergence** between it and the
+  bridge over `tuple<>` is closed rather than described. A divergence nobody needs is one a later
+  reader takes for intentional.
+- Rejecting more components at load is a narrowing, and it is a **correctness fix** rather than a policy
+  choice precisely because the reference draws the line in the same place.
 
 ## The limit this stamp carries, unchanged from 0096's
 
