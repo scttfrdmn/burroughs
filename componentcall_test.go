@@ -339,15 +339,41 @@ func TestCloseReturnsTheGoroutineCountToWhereItStarted(t *testing.T) {
 		_, cErr := c.Call(context.Background(), "run")
 		done <- cErr
 	}()
-	// Waits on the rise rather than sleeping and then noting whether it happened (the #918 sweep). The
-	// old form only `t.Logf`'d when the count had not risen, so it was no false-pass risk — but the note
-	// it printed was load-dependent, which makes it a log a reader cannot act on. Now the rise is the
-	// condition, and a call that never starts fails rather than annotating.
-	inFlight(t, base, 5*time.Second)
+	// **The stated-asymmetry sleep, as at `TestCloseCancelsAnInFlightCall`** — and the history is worth
+	// keeping, because a goroutine-count wait was tried here and **silently broke this test**.
+	//
+	// The #918 sweep replaced a sleep with `inFlight`, a poll on the goroutine count rising above the
+	// baseline. That proxy returns in microseconds: the `Call` goroutine is scheduled and *counted*
+	// before it reaches `Component`'s in-flight increment. With the call's own outcome unasserted — it
+	// was `<-done`, discarded — `Close` then tore down an **idle** component, the count settled because
+	// nothing had been running, and the leak check passed having released nothing. **6 runs out of 6**
+	// once the assertion below was added. The sweep's own fix had created the false-pass shape the sweep
+	// was hunting; the chair caught it on the #919 review.
+	//
+	// So the sleep returns, with the same asymmetry recorded at the other site: too long is harmless
+	// (the fixture cannot finish on its own), too short now **fails** on the assertion below rather than
+	// passing quietly. The condition — a non-zero in-flight counter — is not observable from
+	// `burroughs_test`, which is the containment that makes these tests a reachability claim.
+	time.Sleep(20 * time.Millisecond)
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	<-done
+
+	// **The call's own outcome is asserted, and that is what makes the leak check mean anything.**
+	//
+	// `<-done` discarded this error until the chair caught it on the #919 review. Without the assertion
+	// the test had a **false-pass shape — the one this sweep was hunting**: if the wait above returns
+	// before the call has entered, `Close` tears down an *idle* component, the call comes back
+	// `ErrComponentClosed`, the goroutine count settles because nothing was ever running, and the leak
+	// check passes having released nothing.
+	//
+	// `ErrCancelled` can only be the answer if the call was in flight when `Close` arrived, so this
+	// assertion converts that silent pass into a visible failure — the safe direction.
+	if cErr := <-done; !errors.Is(cErr, burroughs.ErrCancelled) {
+		t.Fatalf("the call returned %v; want ErrCancelled. Only a call that was IN FLIGHT when Close "+
+			"arrived can answer that, so any other error means this test tore down an idle component and "+
+			"the goroutine settle below would have proved nothing", cErr)
+	}
 
 	if !settle(t, base, 5*time.Second) {
 		t.Errorf("goroutines did not return to the baseline %d within 5s (now %d) — Close released the "+
@@ -355,34 +381,16 @@ func TestCloseReturnsTheGoroutineCountToWhereItStarted(t *testing.T) {
 	}
 }
 
-// inFlight waits until the goroutine count rises above `base`, which from **outside** the module is the
-// only observable sign that a `Call` has actually started.
+// An `inFlight` helper stood here, polling until the goroutine count rose above a baseline as a proxy for
+// "the `Call` has started". **It is deleted rather than kept for a future caller, because it does not
+// work**: the `Call` goroutine is scheduled and counted *before* it reaches `Component`'s in-flight
+// increment, so the poll returns in microseconds and answers a question it looks like it answers.
 //
-// # Why a proxy, and why it is still right
+// Both sites that used it are back on a sleep whose asymmetry is stated at each. A helper that returns
+// too early is worse than no helper: it reads as a wait on a real condition, which is exactly the
+// property a reviewer would stop checking. *A control that cannot distinguish "the condition holds" from
+// "I did not look" is not a control*, and the same goes for a wait.
 //
-// These tests are in `burroughs_test` on purpose — the claim is reachability from outside — so `Component`'s
-// own in-flight counter is unreachable. A goroutine-count rise is indirect, but it is a **real condition
-// with a deadline** rather than a timer, which is the whole difference: a fast machine does not wait, a
-// slow one is not failed, and a call that never starts **fails the test** instead of letting it assert
-// against an idle component.
-//
-// It replaced `time.Sleep(20 * time.Millisecond)` at two sites (the #918 sweep). At one of them the sleep
-// was a genuine false-pass risk: if `Close` ran before the call entered, the call would return
-// `ErrComponentClosed` and the test's `ErrCancelled` assertion would fail for a reason having nothing to
-// do with the behaviour under test.
-func inFlight(t *testing.T, base int, bound time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(bound)
-	for time.Now().Before(deadline) {
-		if runtime.NumGoroutine() > base {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("no goroutine appeared above the baseline %d within %s, so the call never started and this "+
-		"test would have asserted against an idle component", base, bound)
-}
-
 // settle polls until the goroutine count is at or below want, and reports whether it got there. A poll on
 // a real condition rather than a sleep, so a fast machine does not wait and a slow one is not failed.
 func settle(t *testing.T, want int, bound time.Duration) bool {
