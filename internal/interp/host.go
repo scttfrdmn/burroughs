@@ -221,6 +221,37 @@ func (c *Caller) Write(offset uint64, buf []byte) error {
 	return writeUnderGrowthLock(mem, offset, buf)
 }
 
+// CheckRange reports whether `[offset, offset+n)` is readable, **without copying any of it**.
+//
+// # Why this exists beside Read
+//
+// [Caller.Read] allocates `n` bytes and copies into them. That is right when the caller wants the bytes,
+// and wrong when it only wants to know the range is valid: a framing check over a guest-supplied length
+// would then copy — and discard — up to the whole addressable span before reading a single element.
+// `canon.LoadList` is that caller; the chair caught it on the #921 review.
+//
+// It reuses `read`, which returns a **sub-slice** of the live image rather than a copy — the copy in
+// `Read` is at this boundary, not in `read` — so the effective-address and wrap checks are the same ones
+// an element read would make. Validating by reimplementing `offset+n <= size` here would be a second
+// opinion about bounds, which is the arithmetic those checks exist to centralise.
+//
+// The returned slice is deliberately discarded: handing it out would hand out a window onto the live
+// image, which is exactly what ADR 0073's copy-at-the-boundary prevents.
+func (c *Caller) CheckRange(offset, n uint64) error {
+	mem, err := c.guestMemory()
+	if err != nil {
+		return err
+	}
+	enterGuest()
+	defer leaveGuest()
+
+	mem.growMu.RLock()
+	defer mem.growMu.RUnlock()
+
+	_, err = mem.read(offset, 0, n)
+	return err
+}
+
 // writeUnderGrowthLock is the one locked boundary write, shared by [Caller.Write] and
 // [WriteBoundaryMemory] (#902's string arguments).
 //

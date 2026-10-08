@@ -14,6 +14,28 @@ import (
 // tests own is what no model-emitted fixture can carry: a count the model's own Python integers could
 // never overflow, a misaligned pointer, and a span that runs off the end of memory.
 
+// countingReadHeap records which [ReadHeap] method a caller reached, so a test can assert that a framing
+// check did not copy. It delegates rather than reimplementing, so the bounds condition under test is the
+// real one.
+type countingReadHeap struct {
+	inner  ReadHeap
+	reads  int
+	checks int
+	bytes  int
+}
+
+func (c *countingReadHeap) ReadBytes(ptr, n int) ([]byte, error) {
+	c.reads++
+	b, err := c.inner.ReadBytes(ptr, n)
+	c.bytes += len(b)
+	return b, err
+}
+
+func (c *countingReadHeap) CheckRange(ptr, n int) error {
+	c.checks++
+	return c.inner.CheckRange(ptr, n)
+}
+
 func TestListByteLengthCannotOverflow(t *testing.T) {
 	// The ordinary cases, so the guard is not the only thing tested.
 	for _, c := range []struct{ count, elem, want int }{
@@ -35,10 +57,10 @@ func TestListByteLengthCannotOverflow(t *testing.T) {
 
 	// Exactly at the bound is allowed; one past is not. The pair is what says the comparison is not
 	// off by one in either direction.
-	if _, err := ListByteLength(ReallocI32Max, 1); err != nil {
+	if _, err := ListByteLength(int(ReallocI32Max), 1); err != nil {
 		t.Errorf("a byte length of exactly ReallocI32Max was refused: %v", err)
 	}
-	if _, err := ListByteLength(ReallocI32Max+1, 1); err == nil {
+	if _, err := ListByteLength(int(ReallocI32Max)+1, 1); err == nil {
 		t.Error("a byte length one past ReallocI32Max was accepted")
 	}
 
@@ -131,6 +153,30 @@ func TestLoadListFramesTheSpanBeforeReadingAnyElement(t *testing.T) {
 	if ran {
 		t.Error("the injected loader ran for a list whose span is out of range; the bounds check must " +
 			"frame the whole span before any element is read")
+	}
+
+	// **The framing check copies nothing**, which is the #921 repair and is asserted rather than assumed.
+	//
+	// A counting `ReadHeap` records which method the framing used. `LoadList` must reach `CheckRange` and
+	// must **not** call `ReadBytes` for the span: on a guest heap `ReadBytes` allocates and copies, so a
+	// guest-supplied count would make the check itself copy up to the whole addressable memory before a
+	// single element was read. The element loader is injected, so any `ReadBytes` seen here is the
+	// framing's.
+	counting := &countingReadHeap{inner: h}
+	if _, cerr := LoadList(counting, 64, 4, u32, func(at int) (Value, error) {
+		return Value{Type: u32, u: h.loadInt(at, 4)}, nil
+	}); cerr != nil {
+		t.Fatalf("LoadList over the counting heap: %v", cerr)
+	}
+	if counting.checks == 0 {
+		t.Error("LoadList never called CheckRange; the span was not framed")
+	}
+	if counting.reads != 0 {
+		t.Errorf("LoadList called ReadBytes %d time(s) for the framing. On a guest heap that copies the "+
+			"whole span and discards it — the check must be bounds-only", counting.reads)
+	}
+	if counting.bytes != 0 {
+		t.Errorf("the framing check returned %d byte(s); a bounds-only check returns none", counting.bytes)
 	}
 
 	// An empty list reads nothing, runs the loader zero times, and is not an error.
