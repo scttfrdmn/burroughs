@@ -30,6 +30,32 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **`Close`'s bound witness waited on a timer instead of on the signal it needed, and `make strict`
+  caught it.** `TestCloseReachesItsBoundWithANamedOutcome` slept 20ms for a call to be in flight before
+  asserting that a zero bound produces `ErrCloseIncomplete`. Under `strict`, which runs every package at
+  once, 20ms was not enough: `Close` found nothing active and returned cleanly, and the test reported that
+  the bound had not fired — **a true statement about a run that never set up the condition**. The
+  load-sensitive false failure is the mild outcome; the same sleep could have passed over a genuinely
+  broken bound on an idle machine. It now waits on `active`, which `Call` increments before any guest
+  work, with a deadline so a call that never enters fails rather than hangs. This tree's first operational
+  rule — *wait on the verdict, never on a timer* — applied to a test rather than to CI.
+- **ADR 0073's decision 6 — the read lock that keeps a retained `Caller` safe from a relocating `grow` —
+  had no witness, and now has one** ([#916](https://github.com/scttfrdmn/burroughs/issues/916)). The ADR's
+  two existing tests drive the sibling agent as a host call **parked inside the guest**, which is a
+  *counted* agent, so they witness the world-count refusal. A retained `Caller` is in **no** world count —
+  that is the whole reason `growMu` is an `RWMutex` — so the arm the read lock exists for was the arm with
+  no test. Reachable today rather than theoretical: the public core API hands a host function a `*Caller`
+  and nothing refuses one that is kept.
+  `TestARetainedCallersWritesSurviveARelocatingGrow` captures a `Caller` from a host call that **returns**
+  (so its agent leaves the count and the grow relocates rather than refusing), writes and **reads its own
+  write back** each iteration so a lost write is a per-iteration verdict, and runs eight relocating grows
+  against it. Neutering the `RLock` is caught **reliably by `-race`** (5 of 5 runs); the lost-write
+  assertion is opportunistic and is labelled as such rather than tuned until it looked deterministic.
+  Found by a review question — #902's factoring prompted "which test covers the shared code", and the
+  search came back empty. **The test's own write-count floor then caught a defect in the test** on CI's
+  arm64 runner, where the grows completed before the writer goroutine was scheduled: it failed with
+  *"the writer completed no iterations"* instead of reporting a green over an overlap that never happened.
+
 - **A `string` argument crosses into a component call, through the guest's own `cabi_realloc`**
   ([#902](https://github.com/scttfrdmn/burroughs/issues/902),
   [ADR 0098](docs/decisions/0098-a-string-argument-is-lowered-inside-the-callees-task-through-an-ordinary-call-to-the-guests-cabi-realloc.md)).

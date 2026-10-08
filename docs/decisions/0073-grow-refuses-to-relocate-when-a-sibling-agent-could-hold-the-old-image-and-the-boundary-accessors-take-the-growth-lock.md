@@ -275,9 +275,32 @@ The pre-registration's response to that state is that the run is repeated, and t
 repeat, at the same host, group and round count. The favourable-looking −3.39% is not banked; it was never
 a measurement.
 
+## Decision 6's own witness, added later (#916, 2026-10-07)
+
+**The two tests below witness the *world-count* exclusion, and for a long time nothing witnessed decision 6 at all.** The distinction is the one decision 6 exists for: a relocating grow refuses while any world holds an agent besides the grower, but **a retained `Caller` is in no world count**, so that refusal never fires for it and `growMu`'s read lock is the only thing standing between it and an abandoned image.
+
+Both tests below drive the sibling as a host call **parked inside the guest**, which is a counted agent, and `TestARelocatingGrowRefusesWhileASiblingAgentCouldHoldTheImage` ignores its `Caller` entirely (`func(_ *Caller, _ []Value)`). So the arm with a witness was the arm the count already handled.
+
+Found by a review question rather than a failure: #902's string lowering factored the locked write out of `Caller.Write`, and the chair asked which existing test covered the shared code. **The search came back empty** — of every test in this package that both spawns a goroutine and calls `.Write(`, one existed and it never grew.
+
+`TestARetainedCallersWritesSurviveARelocatingGrow` (`internal/interp/retainedcaller_test.go`) is the witness:
+
+- a host function **captures its `Caller` and returns**, so the agent leaves the world count while the caller stays usable — the opposite of the parked sibling, and what makes the grow *relocate* rather than refuse;
+- `withoutReservation` puts the memory on the allocator's fallback path, since ADR 0076's M-1 means a reserved memory reslices and never relocates;
+- a goroutine writes **and reads its own write back** each iteration, so a lost write is a per-iteration verdict rather than a final-state comparison a later write could mask;
+- eight relocating grows run against it, with floors on both the write count and the relocation count.
+
+**Neutered by removing the `RLock`. `-race` is the channel that discriminates — 5 failures in 5 runs — and the lost-write assertion is opportunistic.** Both figures are measured. The race detector does not need the bad interleaving to occur; the lost write does (resolve the old image, relocation completes, write lands in the abandoned array), and once the test's start synchronisation was corrected it stopped appearing within six runs. The first draft of this paragraph claimed both channels fail, on an observation taken **before** that correction — the lost write was then showing up because the writer was racing an unsynchronised start, which is not the condition the test is meant to create.
+
+Both assertions are kept and labelled. Tuning the loop until the probabilistic detector looked deterministic was the alternative and is refused: *a verdict that depends on luck should be labelled, not disguised.* `make race` runs this package, so the discriminating channel is the one CI exercises.
+
+**The test's own floor caught a defect in the test, on the second machine.** The first version never synchronised the writer's start, so on CI's arm64 runner the eight grows completed before the writer goroutine was scheduled — and the write-count floor failed with *"the writer completed no iterations; this test measured nothing"* rather than reporting a green over an overlap that never happened. That is the floor earning itself: *a control that cannot distinguish "nothing went wrong" from "nothing happened" is not a control.*
+
+**This closes a gap that predates the slice that found it.** The rollback paragraph above contemplated dropping decision 6 and *"taking the retained-`Caller` hole as a stated named limit with its own issue instead"* — the bar was met, decision 6 was kept, and the hole it closes went unwitnessed anyway. That is the shape worth noting: a decision taken *because* a hazard exists is not the same as a test that the hazard is excluded.
+
 ## The witnesses, and the battery they were watched to die under
 
-Two unit tests in `internal/interp/memimage_test.go`, in the pair this ADR's consequences pre-committed:
+**These two witness the world-count exclusion**; decision 6's is above. Two unit tests in `internal/interp/memimage_test.go`, in the pair this ADR's consequences pre-committed:
 `TestARelocatingGrowRefusesWhileASiblingAgentCouldHoldTheImage` (the refusal, the counter, the size left
 alone, a byte written through the *held* image read back through the memory — the lost write asserted
 directly — and then the sole-agent relocation succeeding once the sibling returns) and
