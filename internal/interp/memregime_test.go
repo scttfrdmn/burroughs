@@ -93,10 +93,16 @@ var guestMemoryRegimes = map[string]memRegime{
 	"host.go:Caller.Read": regimePlain,
 
 	// `CheckRange` reaches the image to *validate* a span and returns none of it (#902's list framing).
-	// The regime is `Caller.Read`'s because the access is the same one — `read`, under the growth lock —
-	// and the sub-slice it gets is discarded rather than handed out. **Discarding it is the reason it is
-	// bounds-only and not a read**: handing out a window onto the live image is what ADR 0073's
+	// The regime is `Caller.Read`'s because the access is the same one — `read` under the growth lock —
+	// and the sub-slice it gets is discarded rather than handed out. **Discarding it is what makes it
+	// bounds-only rather than a read**: handing out a window onto the live image is what ADR 0073's
 	// copy-at-the-boundary exists to prevent.
+	//
+	// **It reads no guest byte**, only the image's length, which is why the regime is a formality here
+	// rather than a constraint: a plain-regime read's hazard is torn guest data, and this access looks at
+	// no data. The lock is uniformity with the other boundary accessors, measured as unnecessary for
+	// correctness — see `Caller.CheckRange`, which records the measurement and the two wrong reasons that
+	// preceded it.
 	"host.go:Caller.CheckRange": regimePlain,
 
 	// `writeUnderGrowthLock` and NOT `Caller.Write`, since #902 factored the locked write out of it:
