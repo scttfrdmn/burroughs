@@ -448,11 +448,14 @@ func TestANewBoundaryAccessorMustDecideOnTheTableGrowthLock(t *testing.T) {
 		"Read":    "guest memory, under memory.growMu.RLock",
 		"Write":   "guest memory, under memory.growMu.RLock",
 		// `CheckRange` validates a span and returns no bytes (#902's list framing). **It reaches no
-		// table**, which is the decision this control asks for: it resolves the same memory `Read` does
-		// and takes the same `memory.growMu.RLock`, because the bounds it checks are a property of the
-		// image and a concurrent relocation would otherwise make the answer stale the moment it returned.
-		// Nothing about it touches a table, so `table.growMu` does not arise.
-		"CheckRange": "guest memory bounds only, under memory.growMu.RLock",
+		// table**, which is the decision this control asks for, so `table.growMu` does not arise.
+		//
+		// It takes `memory.growMu.RLock` for **uniformity** with `Read` and `Write`, not necessity: the
+		// image is an atomic pointer to a descriptor never mutated after its store, and wasm memory never
+		// shrinks, so the check is race-free and monotone with no lock at all — measured at 5 `-race` runs
+		// and 6088 concurrent checks against 8 relocating grows, with the lock removed.
+		// `Caller.CheckRange` carries that measurement and the two wrong reasons attached here first.
+		"CheckRange": "guest memory bounds only, under memory.growMu.RLock (uniformity, not necessity)",
 	}
 
 	typ := reflect.TypeOf(&Caller{})

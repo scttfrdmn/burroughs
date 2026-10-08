@@ -237,6 +237,27 @@ func (c *Caller) Write(offset uint64, buf []byte) error {
 //
 // The returned slice is deliberately discarded: handing it out would hand out a window onto the live
 // image, which is exactly what ADR 0073's copy-at-the-boundary prevents.
+//
+// # Why it takes the growth lock, stated accurately after two wrong reasons
+//
+// **It does not need it for correctness, and that is measured.** Two facts make the check safe with no
+// lock at all: the image is an `atomic.Pointer[memImage]` whose pointee is never mutated after its
+// `Store`, so the header read cannot tear or race; and **wasm memory never shrinks** — both arms of
+// `grow` only lengthen (`cur[:n]` reslices up, `publish` allocates larger and copies) — so a range valid
+// against any image is valid against every later one. With the lock removed: **5 runs under `-race`, zero
+// races**, and **6088 concurrent checks against 8 relocating grows, zero spurious refusals.**
+//
+// It takes the lock because [ADR 0073][0073]'s decision 6 is that *the boundary accessors* take it, and
+// an accessor that opts out is an exception the next reader has to re-derive. That is **uniformity**, and
+// it is recorded as uniformity rather than dressed as necessity.
+//
+// Two reasons previously attached here were wrong and are named so they are not re-derived. *"A
+// concurrent relocation would make the answer stale on return"* — incoherent, since the lock is released
+// before the caller uses the result, and wrong anyway because memory never shrinks. *"`-race` would flag
+// the image header read, and a torn read could report a false bound"* — falsified by the measurement
+// above; the atomic pointer is what rules it out.
+//
+// [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 func (c *Caller) CheckRange(offset, n uint64) error {
 	mem, err := c.guestMemory()
 	if err != nil {

@@ -223,33 +223,87 @@ func TestALoweredPayloadPastTheStringCapIsRefusedBeforeTheRealloc(t *testing.T) 
 	}
 }
 
-// TestAMisalignedReallocResultIsRefused covers definitions.py:1599's trap, which is **vacuous for a
-// string** — alignment 1, so every pointer satisfies it.
+// TestAMisalignedReallocResultIsRefused covers definitions.py:1599's trap with a pointer the ABI can
+// actually produce.
 //
-// Implemented and tested anyway: the first kind whose alignment is not 1 is a `list<u32>` at alignment 4,
-// and a check written at that point would be a check nothing had ever run. Asserted here against a
-// hand-built `pendingLower`, since no fixture's realloc returns a misaligned pointer yet — the list work
-// owes that variant.
+// # Why the fixture grew a third realloc
+//
+// The first version of this test demanded alignment **65537** of a page-aligned pointer: that shows the
+// engine's check *runs*, and nothing about whether it catches a case a guest could hand it. The chair
+// named the realistic offence on the #915 review — **a multiple of 2 but not of 4**, which is what a
+// guest allocator with a 2-byte bump produces and what a `list<u32>` at alignment 4 refuses.
+//
+// So `realloc-misaligned` returns page start **+ 2**, and `echo-misaligned` is a lift naming it. The
+// alignment-4 demand stands in for a `list<u32>` argument until the list lowering lands; the pointer is
+// the guest's own.
 func TestAMisalignedReallocResultIsRefused(t *testing.T) {
 	in := loadStringArgFixture(t)
-	cd := in.export.exports["echo"]
-	if cd.fn == nil {
-		t.Fatal("the fixture exports no echo")
+	aligned := in.export.exports["echo"]
+	misaligned := in.export.exports["echo-misaligned"]
+	if aligned.fn == nil || misaligned.fn == nil {
+		t.Fatal("the fixture must export both echo and echo-misaligned")
 	}
-	f := &compFunc{mem: cd.fn.mem, reallocCore: cd.fn.reallocCore}
 
-	// The fixture's realloc returns 65536 on its first call — aligned to anything. At alignment 1 it is
-	// accepted, which is the vacuity being asserted.
-	if _, err := f.guestAlloc(&pendingLower{param: "s", bytes: []byte("abc"), align: 1}); err != nil {
-		t.Fatalf("an alignment-1 payload was refused: %v", err)
+	// The page-aligned realloc satisfies every alignment, including a u32's. That is the control arm:
+	// without it, a refusal below could be about the demand rather than about the pointer.
+	ok := &compFunc{mem: aligned.fn.mem, reallocCore: aligned.fn.reallocCore}
+	for _, align := range []int{1, 2, 4, 8} {
+		if _, err := ok.guestAlloc(&pendingLower{param: "s", bytes: []byte("abc"), align: align}); err != nil {
+			t.Fatalf("the page-aligned realloc was refused at alignment %d: %v", align, err)
+		}
 	}
-	// A demand the fixture's pointer cannot satisfy shows the check is live rather than dead code. The
-	// second call returns 131072, so an alignment it is not a multiple of is what discriminates.
-	const odd = 65537 // not a divisor of any page boundary
-	if _, err := f.guestAlloc(&pendingLower{param: "s", bytes: []byte("abc"), align: odd}); err == nil {
-		t.Fatalf("a pointer not aligned to %d was accepted", odd)
-	} else if !strings.Contains(err.Error(), "aligned") {
-		t.Errorf("the refusal %q does not name the alignment", err)
+
+	bad := &compFunc{mem: misaligned.fn.mem, reallocCore: misaligned.fn.reallocCore}
+
+	// **Alignment 1 and 2 are satisfied by page+2**, which is what makes this the realistic case rather
+	// than an impossible address: a `string` crosses through this very realloc, and a `u16` would too.
+	for _, align := range []int{1, 2} {
+		if _, err := bad.guestAlloc(&pendingLower{param: "s", bytes: []byte("abc"), align: align}); err != nil {
+			t.Errorf("page+2 was refused at alignment %d, which it satisfies: %v", align, err)
+		}
+	}
+
+	// **Alignment 4 is not** — a `list<u32>`'s demand, and definitions.py:1599's trap.
+	_, err := bad.guestAlloc(&pendingLower{param: "xs", bytes: []byte("abcd"), align: 4})
+	if err == nil {
+		t.Fatal("a pointer at page+2 was accepted for an alignment-4 payload; that is a list<u32>'s " +
+			"alignment and the model traps on it (definitions.py:1599)")
+	}
+	if !errors.Is(err, ErrUnsupportedForm) {
+		t.Errorf("the refusal is not ErrUnsupportedForm: %v", err)
+	}
+	for _, want := range []string{"aligned", "\"xs\""} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestAStringStillCrossesAMisalignedRealloc is the other half of the pair above, end to end: a `string`
+// argument lowered through the realloc that returns page+2 **succeeds**, because a string's alignment is
+// 1.
+//
+// It is what says the alignment check is **alignment-sensitive rather than address-sensitive**. A check
+// that refused page+2 outright would pass the test above and break this one.
+func TestAStringStillCrossesAMisalignedRealloc(t *testing.T) {
+	in := loadStringArgFixture(t)
+
+	const arg = "abc"
+	var want uint32
+	for _, b := range []byte(arg) {
+		want += uint32(b)
+	}
+	res, err := in.CallValues("echo-misaligned", canon.Str(arg))
+	if err != nil {
+		t.Fatalf("CallValues(echo-misaligned, %q): %v", arg, err)
+	}
+	got, ok := res[0].U32()
+	if !ok {
+		t.Fatalf("echo-misaligned returned a %s, want a u32", res[0].Type.Kind)
+	}
+	if got != want {
+		t.Fatalf("echo-misaligned summed to %d, want %d — the bytes were written at the misaligned "+
+			"pointer the guest returned, and the guest read from the same place", got, want)
 	}
 }
 

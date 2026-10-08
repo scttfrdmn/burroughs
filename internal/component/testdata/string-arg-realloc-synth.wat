@@ -42,7 +42,13 @@
   (core module $memmod (;0;)
     ;; One page to start, growable to four. The limit is deliberate: an unbounded maximum would let a
     ;; runaway realloc allocate until the host OOMs, and a fixture should fail rather than swap.
-    (memory (;0;) (export "mem") 1 4)
+    ;; One page to start, growable to 16. The ceiling is deliberate — an unbounded maximum would let a
+    ;; runaway realloc allocate until the host swaps, and a fixture should fail rather than that. 16
+    ;; rather than 4 because each lowering grows by a page and one test makes seven of them; at 4 the
+    ;; ceiling was reached mid-test and `memory.grow` returned -1, which this module turns into a trap.
+    ;; That surfaced as an alignment test failing on a REALLOC error, which is the right failure for the
+    ;; wrong reason and is why the number is now justified rather than picked.
+    (memory (;0;) (export "mem") 1 16)
   )
   (core instance $memi (;0;) (instantiate $memmod))
   (alias core export $memi "mem" (core memory $mem (;0;)))
@@ -60,7 +66,7 @@
     (type $cbT (;4;) (func (param i32 i32 i32) (result i32)))
 
     (import "" "taskret" (func $taskret (;0;) (type $ret1)))
-    (import "mem" "mem" (memory (;0;) 1 4))
+    (import "mem" "mem" (memory (;0;) 1 16))
 
     ;; cabi_realloc(orig_ptr, orig_size, align, new_size) -> ptr
     ;;
@@ -88,6 +94,31 @@
     ;; A realloc that refuses. `echo-trap`'s lift names this one.
     (func $reallocTrap (;2;) (type $reallocT) (param i32 i32 i32 i32) (result i32)
       unreachable
+    )
+
+    ;; A realloc that returns a MISALIGNED pointer: the page start plus 2.
+    ;;
+    ;; Two is the realistic offence and the reason this is not just "an odd address". It is a multiple of
+    ;; 2 and not of 4, so it satisfies a `string`'s alignment of 1 and a `u16`'s of 2 while violating a
+    ;; `u32`'s of 4 — which is exactly the case definitions.py:1599 and :1715 trap on, and exactly the
+    ;; case a guest allocator with a 2-byte bump could produce by accident. A non-power-of-two demand
+    ;; shows the engine's check runs; this shows it catches something the ABI can actually hand it.
+    (func $reallocMisaligned (;3;) (type $reallocT) (param i32 i32 i32 i32) (result i32)
+      (local $old i32)
+      i32.const 1
+      memory.grow
+      local.set $old
+      local.get $old
+      i32.const 0
+      i32.lt_s
+      if
+        unreachable
+      end
+      local.get $old
+      i32.const 16
+      i32.shl
+      i32.const 2
+      i32.add            ;; page start + 2: aligned to 2, never to 4
     )
 
     ;; echo(ptr, len) -> packed. Sums the bytes it was handed and resolves with the sum.
@@ -136,6 +167,7 @@
 
     (export "realloc" (func $realloc))
     (export "realloc-trap" (func $reallocTrap))
+    (export "realloc-misaligned" (func $reallocMisaligned))
     (export "echo" (func $echo))
     (export "peek" (func $peek))
     (export "cb" (func $cb))
@@ -147,6 +179,7 @@
   )
   (alias core export $mi "realloc" (core func $reallocf (;1;)))
   (alias core export $mi "realloc-trap" (core func $realloctrapf (;2;)))
+  (alias core export $mi "realloc-misaligned" (core func $reallocmisf (;3;)))
   (alias core export $mi "echo" (core func $echof (;3;)))
   (alias core export $mi "peek" (core func $peekf (;4;)))
   (alias core export $mi "cb" (core func $cbf (;5;)))
@@ -156,8 +189,16 @@
   (func (;1;) (type $echot) (canon lift (core func $echof) async (callback $cbf)
       (memory $mem) (realloc $realloctrapf)))
   (func (;2;) (type $peekt) (canon lift (core func $peekf) async (callback $cbf) (memory $mem)))
+  ;; `echo-misaligned` exists to make the misaligned realloc **reachable**, not because a `string`
+  ;; argument exercises its offence: a string's alignment is 1, so page+2 satisfies it and this export
+  ;; succeeds. The trap it witnesses is the alignment-4 demand a `list<u32>` makes, asked of this lift's
+  ;; realloc directly until the list argument path lands. That a string still crosses through it is
+  ;; asserted too — it shows the check is alignment-sensitive rather than address-sensitive.
+  (func (;3;) (type $echot) (canon lift (core func $echof) async (callback $cbf)
+      (memory $mem) (realloc $reallocmisf)))
 
   (export (;3;) "echo" (func 0))
   (export (;4;) "echo-trap" (func 1))
   (export (;5;) "peek" (func 2))
+  (export (;6;) "echo-misaligned" (func 3))
 )
