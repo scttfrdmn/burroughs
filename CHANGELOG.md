@@ -1053,6 +1053,26 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **The refusal-log guard accused the test suite of a write the live hook had made, and its message was
+  unreadable by any test** ([#902](https://github.com/scttfrdmn/burroughs/issues/902), grave
+  [#852](https://github.com/scttfrdmn/burroughs/issues/852)'s guard). `make ci` reddened at the `strict`
+  gate with every test passing: `internal/testenv`'s `TestMain` found `.editroute-log` 48 bytes longer
+  than when the package started and reported *"this package's tests MODIFIED"* and *"Some test drove
+  scripts/editroute.py without redirecting EDITROUTE_LOG"* — **both false**. The writer was the hook
+  itself, serving the session that had launched the gate in the background: the agent tripped a real
+  `sleep-as-wait` refusal mid-run and the hook appended it, which is exactly what it should do, since a
+  true positive is what the rate is made of. The hook was right and the guard's *reading* was wrong, so
+  the repair is entirely on the guard's side.
+  It **still fails** — relaxing it is what reopens #852 — and it now says what it knows: that the
+  artifact moved, that it cannot see the writer, which two writers produce that observation, and that
+  **re-running discriminates them**, because a test's write recurs every run and a session's refusal does
+  not. It prints the appended entries when the log was a strict append, which is safe because an entry
+  carries a *hash* of the command rather than the command. The second half of the repair is why nothing
+  caught this: the message could only be read by making the guard fire, which means writing to the one
+  artifact no test may touch, so it was factored into `refusalLogGuardFailure` and is now asserted —
+  including that the two false sentences do not come back. `appendedLines` gained its own witness for the
+  overreach one level in: a log that was rewritten or truncated has no well-defined delta, and printing
+  one would be the guard testifying past what it observed.
 - **Two test files did not compile for a 32-bit target, and one of them was the witness for a 32-bit
   portability fix** ([#902](https://github.com/scttfrdmn/burroughs/issues/902),
   [#921](https://github.com/scttfrdmn/burroughs/issues/921)). `GOARCH=386 GOOS=linux go vet ./...` — run
