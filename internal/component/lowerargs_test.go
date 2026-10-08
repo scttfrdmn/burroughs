@@ -146,7 +146,7 @@ func TestAReallocThatTrapsIsReportedAsTheGuestsRefusal(t *testing.T) {
 func TestALiftWithNoReallocRefusesAStringArgumentByName(t *testing.T) {
 	// A compFunc with neither canonopt, which is what a lift that declared none leaves behind.
 	f := &compFunc{}
-	p := pendingLower{param: "s", bytes: []byte("abc"), align: 1}
+	p := pendingLower{param: "s", byteLen: 3, align: 1}
 
 	_, err := f.guestAlloc(&p)
 	if err == nil {
@@ -215,7 +215,7 @@ func TestALoweredPayloadPastTheStringCapIsRefusedBeforeTheRealloc(t *testing.T) 
 	// If the two checks were in the other order this would still name the realloc, so this is a weaker
 	// assertion than the ordering comment above and is labelled as such rather than oversold.
 	f := &compFunc{}
-	small := pendingLower{param: "s", bytes: []byte("abc"), align: 1}
+	small := pendingLower{param: "s", byteLen: 3, align: 1}
 	if _, err := f.guestAlloc(&small); err == nil {
 		t.Fatal("guestAlloc with no realloc accepted a payload")
 	} else if !strings.Contains(err.Error(), "realloc") {
@@ -248,7 +248,7 @@ func TestAMisalignedReallocResultIsRefused(t *testing.T) {
 	// without it, a refusal below could be about the demand rather than about the pointer.
 	ok := &compFunc{mem: aligned.fn.mem, reallocCore: aligned.fn.reallocCore}
 	for _, align := range []int{1, 2, 4, 8} {
-		if _, err := ok.guestAlloc(&pendingLower{param: "s", bytes: []byte("abc"), align: align}); err != nil {
+		if _, err := ok.guestAlloc(&pendingLower{param: "s", byteLen: 3, align: align}); err != nil {
 			t.Fatalf("the page-aligned realloc was refused at alignment %d: %v", align, err)
 		}
 	}
@@ -258,13 +258,13 @@ func TestAMisalignedReallocResultIsRefused(t *testing.T) {
 	// **Alignment 1 and 2 are satisfied by page+2**, which is what makes this the realistic case rather
 	// than an impossible address: a `string` crosses through this very realloc, and a `u16` would too.
 	for _, align := range []int{1, 2} {
-		if _, err := bad.guestAlloc(&pendingLower{param: "s", bytes: []byte("abc"), align: align}); err != nil {
+		if _, err := bad.guestAlloc(&pendingLower{param: "s", byteLen: 3, align: align}); err != nil {
 			t.Errorf("page+2 was refused at alignment %d, which it satisfies: %v", align, err)
 		}
 	}
 
 	// **Alignment 4 is not** — a `list<u32>`'s demand, and definitions.py:1599's trap.
-	_, err := bad.guestAlloc(&pendingLower{param: "xs", bytes: []byte("abcd"), align: 4})
+	_, err := bad.guestAlloc(&pendingLower{param: "xs", byteLen: 4, align: 4})
 	if err == nil {
 		t.Fatal("a pointer at page+2 was accepted for an alignment-4 payload; that is a list<u32>'s " +
 			"alignment and the model traps on it (definitions.py:1599)")
@@ -276,6 +276,93 @@ func TestAMisalignedReallocResultIsRefused(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not mention %q", err, want)
 		}
+	}
+}
+
+// TestAListArgumentIsLoweredThroughTheCodecsFraming is the list argument path end to end.
+//
+// # What a list adds over a string
+//
+// Three things, and each is why the string arm could not have stood in:
+//
+//   - **Alignment 4 rather than 1.** A `list<u32>`'s elements are 4 bytes at a 4-byte stride, so the
+//     realloc's pointer must be a multiple of 4 — the first argument for which the misalignment trap is
+//     not vacuous.
+//   - **A stride**, which the guest reads through. A lowering that packed the elements at the wrong pitch
+//     yields a wrong **sum**, not merely a wrong length — so the assertion is on content, as with the
+//     string's checksum.
+//   - **The framing is the codec's.** The elements go in through `canon.StoreListIntoRange` with
+//     `StoreVia` as the injected element store, which is the same framing the differential verifies and
+//     the same one `list<string>` and later `list<record>` will reuse.
+func TestAListArgumentIsLoweredThroughTheCodecsFraming(t *testing.T) {
+	in := loadStringArgFixture(t)
+	u32 := canon.Type{Kind: canon.KindU32}
+
+	for _, c := range []struct {
+		name  string
+		elems []uint32
+	}{
+		{"three elements", []uint32{1, 2, 3}},
+		{"one element", []uint32{42}},
+		// An empty list still allocates (the model's `allocate` is unconditional) and writes nothing. It
+		// is the case most likely to be special-cased wrongly in either direction.
+		{"empty", nil},
+		// Values with the high bit set, so a lowering that sign-extended or truncated shows up.
+		{"high bits", []uint32{0xFFFFFFFF, 0x80000000}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			vals := make([]canon.Value, 0, len(c.elems))
+			var want uint32
+			for _, e := range c.elems {
+				vals = append(vals, canon.U32(e))
+				want += e
+			}
+			lst, err := canon.List(u32, vals...)
+			if err != nil {
+				t.Fatalf("building the list value: %v", err)
+			}
+			res, err := in.CallValues("sum-list", lst)
+			if err != nil {
+				t.Fatalf("CallValues(sum-list, %v): %v", c.elems, err)
+			}
+			got, ok := res[0].U32()
+			if !ok {
+				t.Fatalf("sum-list returned a %s, want a u32", res[0].Type.Kind)
+			}
+			if got != want {
+				t.Fatalf("sum-list summed %v to %d, want %d — the guest read %d element(s) at a 4-byte "+
+					"stride from the address its own realloc returned, so a mismatch means the elements "+
+					"were written at the wrong pitch or the wrong place", c.elems, got, want, len(c.elems))
+			}
+		})
+	}
+}
+
+// TestAListArgumentThroughAMisalignedReallocIsRefused is the misalignment trap firing through a **real
+// parameter**, which is what the hand-built `pendingLower` in `TestAMisalignedReallocResultIsRefused`
+// stood in for until the list argument path existed.
+//
+// `sum-list-misaligned` has the same signature as `sum-list` and names the realloc returning page+2. A
+// `list<u32>` demands alignment 4; page+2 is a multiple of 2 and not of 4.
+func TestAListArgumentThroughAMisalignedReallocIsRefused(t *testing.T) {
+	in := loadStringArgFixture(t)
+	lst, err := canon.List(canon.Type{Kind: canon.KindU32}, canon.U32(1), canon.U32(2))
+	if err != nil {
+		t.Fatalf("building the list value: %v", err)
+	}
+
+	_, err = in.CallValues("sum-list-misaligned", lst)
+	if err == nil {
+		t.Fatal("a list<u32> was lowered through a realloc returning page+2; its elements require " +
+			"alignment 4 and the model traps on a misaligned pointer (definitions.py:1715)")
+	}
+	if !strings.Contains(err.Error(), "aligned") {
+		t.Errorf("the refusal %q does not name the alignment", err)
+	}
+	// And the same list through the page-aligned realloc works, so the refusal is about the pointer and
+	// not about lists.
+	if _, werr := in.CallValues("sum-list", lst); werr != nil {
+		t.Fatalf("the same list through the aligned realloc was refused: %v", werr)
 	}
 }
 
@@ -318,7 +405,7 @@ func TestASyncLiftRefusesAStringArgument(t *testing.T) {
 	// `context.Background()` rather than nil: the refusal happens before the context is read, which is
 	// the property being relied on, but a nil Context is a thing to pass nowhere on principle.
 	_, err := f.invokeWithPending(context.Background(), nil,
-		[]pendingLower{{param: "s", bytes: []byte("x"), align: 1}})
+		[]pendingLower{{param: "s", val: canon.Str("x")}})
 	if err == nil {
 		t.Fatal("a sync lift accepted a pending argument lowering")
 	}
