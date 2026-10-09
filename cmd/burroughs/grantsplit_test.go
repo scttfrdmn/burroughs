@@ -224,7 +224,7 @@ func TestSplitGrantIsTodaysParseWhereThereIsNoDrivePrefix(t *testing.T) {
 // first colon. Kept here, in the test, as the thing the containment property compares against —
 // *not* in the production file, where a second parser would be a second answer.
 func splitGrantReference(v string) (host, guest string, found bool) {
-	for i := 0; i < len(v); i++ {
+	for i := range len(v) {
 		if v[i] == ':' {
 			return v[:i], v[i+1:], true
 		}

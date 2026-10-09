@@ -132,10 +132,13 @@ func (f *preopenFlag) Set(v string) error { return f.set(v, "--dir") }
 //
 // A parameter rather than a field on `preopenFlag`: the name belongs to the call, not to the
 // collection, and a field would be one more piece of state to get wrong on the zero value.
-func (f *preopenFlag) set(v, flag string) error {
+//
+// Named `flagName` and not `flag`, which `gocritic` caught: this file imports `flag`, and a
+// parameter of that name shadows the package for the whole function body.
+func (f *preopenFlag) set(v, flagName string) error {
 	host, guest, found := splitGrant(v, runtime.GOOS)
 	if host == "" {
-		return fmt.Errorf("empty host directory in %s %q", flag, v)
+		return fmt.Errorf("empty host directory in %s %q", flagName, v)
 	}
 	// **A bare drive letter is refused before the bare-form branch below can resolve it.** On
 	// Windows `C:` names the current directory *on drive C* — per-process state, not a fixed path —
@@ -149,7 +152,7 @@ func (f *preopenFlag) set(v, flag string) error {
 			"On Windows %q means the current directory ON drive %q, which is per-process state "+
 			"rather than a path; elsewhere it reads as host directory %q with an empty guest path. "+
 			"Name both halves: %s %s:\\path:/guest",
-			flag, v, v, v[:1], v[:1], flag, v[:1])
+			flagName, v, v, v[:1], v[:1], flagName, v[:1])
 	}
 	if !found || guest == "" {
 		// **"Under its own name" means its RESOLVED name.** A bare `--dir .` or `--dir sub/dir` used to grant
@@ -159,7 +162,7 @@ func (f *preopenFlag) set(v, flag string) error {
 		// side this way, so the two sides now agree rather than differing by a call.
 		abs, err := filepath.Abs(host)
 		if err != nil {
-			return fmt.Errorf("%s %q: resolving the host directory: %w", flag, v, err)
+			return fmt.Errorf("%s %q: resolving the host directory: %w", flagName, v, err)
 		}
 		guest = abs
 	}
@@ -175,20 +178,20 @@ func (f *preopenFlag) set(v, flag string) error {
 		return fmt.Errorf("%s %q: this platform's absolute paths are not guest paths, so the "+
 			"bare %s HOST form cannot map %q under its own name — it resolves to %q, which a "+
 			"wasip1 guest cannot open through. Give the guest path explicitly: %s %s:/guest",
-			flag, v, flag, host, guest, flag, host)
+			flagName, v, flagName, host, guest, flagName, host)
 	}
 	// Checked before the colon case so that `--dir /h::/g` is reported as the `::` mistake it almost certainly
 	// is, rather than as the generic "not absolute" it also is.
 	if strings.HasPrefix(guest, ":") {
 		return fmt.Errorf("%s %q: the guest path %q starts with a colon, so nothing can open through it. "+
 			"Burroughs' separator is ONE colon (%s HOST:/guest/path); two is wasmtime's grammar",
-			flag, v, guest, flag)
+			flagName, v, guest, flagName)
 	}
 	if !strings.HasPrefix(guest, "/") {
 		return fmt.Errorf("%s %q: the guest path %q is not absolute, so the guest can never resolve "+
 			"against it — the grant would succeed and every open through it would fail with EBADF. "+
 			"Use %s HOST:/guest/path, or a bare %s HOST to map it under its own name",
-			flag, v, guest, flag, flag)
+			flagName, v, guest, flagName, flagName)
 	}
 	*f = append(*f, burroughs.Preopen{Host: host, Guest: guest})
 	return nil
