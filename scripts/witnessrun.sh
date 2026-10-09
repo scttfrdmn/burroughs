@@ -13,8 +13,32 @@
 # this asserts the thing itself: *each named witness ran, passed, was not skipped, and was not cached.*
 #
 # That is *measure the condition, not its proxy*, applied to an instrument this project built an hour earlier.
-# The floor survives as a **secondary backstop in CI only** (see `budget.sh`), where the runners it was
-# calibrated against actually run.
+#
+# ## The floor is now a SANITY BOUND, not a calibrated check (chair's ruling, 2026-10-09)
+#
+# The floor outlived its purpose and then cost something. It was re-pinned to 20s/29s, and the race arm
+# **failed twice in six runs** at about 2s under 29s — #931 and #934 — with every clause test passing,
+# `collected=8`, `mutations=600`, and non-zero deltas on both clause-2 arms. A ~1-in-3 red over a 2-second
+# margin, on a condition the log showed was satisfied.
+#
+# That is not a calibration error to re-pin; it is a proxy competing with the direct measurement that
+# replaced it, and losing. **The primary check is the per-test `run` and `pass` events below.** The floor now
+# guards one thing those cannot: a run that finished in about a second because *nothing executed* — a cache
+# hit the `(cached)` grep somehow misses, or an event parse that silently reads nothing and so finds no
+# failures either. At 5s it is an assertion about zero rather than a measurement of work.
+#
+# **What was deliberately NOT added**, both refused on the same review and worth recording so they are not
+# proposed again:
+#
+#   - *Scraping the counts from `t.Logf` output* (`collected=8`, `mutations=600`, the clause-2 deltas). The
+#     tests already assert those exactly — `clause3_test.go` compares against `c3WantCollected` and
+#     `c3WantMutations` — so a `pass` event already means they held. Re-asserting them from log text trusts
+#     the **line** over the verdict: it would pass with the assertion behind the line deleted. And it would
+#     have got an arm backwards — "a non-zero delta on every clause-2 arm" contradicts `mechanism_absent`,
+#     whose registered reading *requires* sibling B's delta to be **zero**; what is asserted in both arms is
+#     that sibling **A** advanced, without which B's zero is vacuous rather than discriminating.
+#   - *A source-level check that `c3WantCollected` is still 8.* That is a second copy of the number.
+#     Weakening a witness's constant is a change to a test, visible in the diff and owned by its reviewer.
 #
 # ## Why one script rather than a pipeline
 #
@@ -22,12 +46,19 @@
 # whatever ran last**. So the JSON goes to a file, `go test`'s own status is captured on its own, and the
 # assertions read the file. Two verdicts, neither hiding the other.
 #
-# Usage: witnessrun.sh <label> <budget-seconds> <floor-seconds> [--race]
+# Usage: witnessrun.sh <label> <budget-seconds> <sanity-bound-seconds> [--race]
+#
+# A sanity bound of **0 means no bound**: `elapsed -lt 0` is never true, so the check is skipped. That falls
+# out of the arithmetic rather than being written, and it is documented here because a test now relies on
+# it — `TestWitnessRunRefusesARunThatDidNotDoTheWork` passes 0 for every case whose subject is the event
+# stream rather than the clock, so a stub can answer instantly and no content assertion depends on timing.
+# An undocumented behaviour something depends on is one refactor away from being removed as dead.
 set -eu
 
 label=${1:?usage: witnessrun.sh <label> <budget> <floor> [--race]}
 budget=${2:?usage: witnessrun.sh <label> <budget> <floor> [--race]}
-floor=${3:?usage: witnessrun.sh <label> <budget> <floor> [--race]}
+# A bound of 0 means no bound -- see the usage note in the header.
+floor=${3:?usage: witnessrun.sh <label> <budget> <sanity-bound> [--race]}
 # **A floor prefixed `~` is PROVISIONAL: advisory in CI as well as locally.**
 #
 # A wall-clock floor is calibrated against an engine, and twice now a change to the engine's default has made
@@ -127,7 +158,7 @@ pct=$((elapsed * 100 / budget))
 printf 'witnessrun: %s used %ss of %ss (%s%%), floor %ss%s\n' \
 	"$label" "$elapsed" "$budget" "$pct" "$floor" \
 	"$(if [ "$provisional" -eq 1 ]; then echo ' [PROVISIONAL: advisory everywhere, awaiting a re-pin]';
-	    elif [ -n "${CI:-}" ]; then echo ' [CI: floor binds]'; else echo ' [local: floor advisory]'; fi)" >&2
+	    elif [ -n "${CI:-}" ]; then echo ' [CI: sanity bound binds]'; else echo ' [local: sanity bound advisory]'; fi)" >&2
 if [ "$pct" -ge 75 ]; then
 	printf '::warning title=%s budget::%s used %s%% of its %ss budget. Re-measure before adding to it.\n' \
 		"$label" "$label" "$pct" "$budget" >&2
@@ -139,11 +170,16 @@ if [ "$elapsed" -lt "$floor" ]; then
 		note "      re-pin should be derived from (half the lowest observed). The primary checks are what"
 		note "      decide whether the tests ran."
 	elif [ -n "${CI:-}" ]; then
-		note "FAIL below the ${floor}s floor, on a runner this floor was calibrated for."
+		note "FAIL finished in ${elapsed}s, under the ${floor}s SANITY BOUND. This is not a calibration"
+		note "     figure and is not about hardware speed: a real run is tens of seconds and a run that"
+		note "     executed nothing is sub-second. Under the bound means the primary checks above found"
+		note "     nothing to object to in a run that cannot have done the work — so suspect the event"
+		note "     PARSING rather than the tests: a \`-json\` format change, or an empty file, makes every"
+		note "     grep above succeed by having nothing to match."
 		fail=1
 	else
-		note "note: below the ${floor}s floor, which is ADVISORY locally — the floor is calibrated to CI's"
-		note "      runners and a faster machine trips it with nothing wrong. The primary checks above are"
+		note "note: finished in ${elapsed}s, under the ${floor}s sanity bound, which is ADVISORY locally."
+		note "      The bound exists to catch a run that executed nothing; the primary checks above are"
 		note "      what decide whether the tests ran."
 	fi
 fi

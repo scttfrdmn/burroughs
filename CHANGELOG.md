@@ -63,6 +63,49 @@ says what it now requires and what it gives up.
   use `git clone`, so they inherit the machine's own `core.autocrlf` and are untouched by this file. On
   Windows they would still arrive CRLF; whether that matters is for the Windows CI job to measure, and
   it is not assumed either way here.
+- **`witnessrun.sh` gains its own witness**, which it had none of while its verdict was mostly one clock
+  comparison. That stopped being tolerable when the real verdict became four `grep`s over a
+  `go test -json` format the script does not control: **if the stream is empty, every check agrees by
+  matching nothing**, so a run that executed nothing and a run that went perfectly produce the same
+  verdict. `TestWitnessRunRefusesARunThatDidNotDoTheWork` feeds crafted streams to the real script
+  through a stubbed `go` and requires each bad shape to be refused **by name** — a cached result, a
+  witness that never emitted `run`, a skipped witness, a skipped arm, and a run under the bound — with a
+  full passing stream as the control, since without one every refusal below could be refusing for an
+  unrelated reason. The witness names are **parsed out of the script** rather than written in, so a
+  rename cannot leave the fixtures asserting about a set that no longer exists, and a parse finding
+  fewer than three refuses rather than proceeding over an empty set.
+  **No case sleeps, and that separates the time question from the content question.** Five of the six
+  are about what the event stream contains, so they pass a bound of **0** — which means no bound, since
+  `elapsed -lt 0` is never true — and the one case that *is* about time pairs an instant stub with a
+  positive bound, which is the whole of its claim. With a sleep per case every content assertion was
+  also implicitly asserting that the stub outran the bound, so a timing change could have turned a
+  content failure into a bound failure or masked one. It also takes the suite from **16s to 0.8s** on
+  every `make check`. The zero-bound behaviour is now documented in the script's usage line, because an
+  undocumented behaviour something depends on is one refactor away from being removed as dead.
+
+### Changed
+
+- **The `witnesses` duration floor becomes a sanity bound, because the proxy lost to the direct
+  measurement that replaced it** (chair's ruling, 2026-10-09). The floor's job was to show the race arm
+  actually ran; `witnessrun.sh` came to assert that **directly** — each named witness emitting `run` and
+  `pass`, not skipped, not served from cache. Once the condition itself is asserted the proxy is pure
+  cost, and it was: at 29s the race arm **failed twice in six runs** at ~2s under, on #931 and #934,
+  with every clause test passing, `collected=8`, `mutations=600`, and non-zero deltas on both clause-2
+  arms. A ~1-in-3 red over a two-second margin, on a condition the log showed was satisfied.
+  **5s, chosen from purpose rather than from measurement**: a real run is 24s/27s at the low end, a run
+  that executed nothing is sub-second, and nothing in between has an interpretation here. Deliberately
+  *not* half-the-lowest-observed any more — the floor stopped being a measurement and became an
+  assertion about zero. Its failure text says so, and points at the **event parsing** rather than the
+  tests as the thing to suspect, since an empty `-json` stream makes every grep agree by matching
+  nothing. The upper budget is untouched and is still the real calibration.
+  **Two things were refused on review and are recorded so they are not proposed again.** Scraping the
+  counts from `t.Logf` output would trust the **line** over the verdict — it passes with the assertion
+  behind the line deleted — and it would have got an arm backwards: "a non-zero delta on every clause-2
+  arm" contradicts `mechanism_absent`, whose registered reading *requires* sibling B's delta to be
+  **zero**; what both arms assert is that sibling **A** advanced, without which B's zero is vacuous
+  rather than discriminating. And a source-level check that `c3WantCollected` is still 8 would be a
+  second copy of the number — weakening a witness's constant is a change to a test, visible in the diff
+  and owned by its reviewer.
 
 ## [0.7.0] - 2026-10-09
 *Implements contract v0.1.*
