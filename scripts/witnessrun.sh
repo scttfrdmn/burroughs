@@ -21,6 +21,10 @@
 # `collected=8`, `mutations=600`, and non-zero deltas on both clause-2 arms. A ~1-in-3 red over a 2-second
 # margin, on a condition the log showed was satisfied.
 #
+# A third observation arrived inside the margin while this very change was being gated: the `make ci` run
+# that greened it recorded the race arm at **28s**, one second under the floor being removed here, on the
+# machine that floor was calibrated below. The run certifying the fix would have been failed by the defect.
+#
 # That is not a calibration error to re-pin; it is a proxy competing with the direct measurement that
 # replaced it, and losing. **The primary check is the per-test `run` and `pass` events below.** The floor now
 # guards one thing those cannot: a run that finished in about a second because *nothing executed* — a cache

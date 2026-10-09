@@ -92,6 +92,11 @@ says what it now requires and what it gives up.
   cost, and it was: at 29s the race arm **failed twice in six runs** at ~2s under, on #931 and #934,
   with every clause test passing, `collected=8`, `mutations=600`, and non-zero deltas on both clause-2
   arms. A ~1-in-3 red over a two-second margin, on a condition the log showed was satisfied.
+  **A third observation landed inside the margin while this change was being gated**: the `make ci` run
+  that greened the repair recorded the race arm at **28s**, one second under the floor it removes, on
+  the machine that floor was calibrated below. So the run certifying the fix would have been reddened by
+  the defect — which is the cleanest available statement of what was wrong, and makes the rate three in
+  seven rather than two in six.
   **5s, chosen from purpose rather than from measurement**: a real run is 24s/27s at the low end, a run
   that executed nothing is sub-second, and nothing in between has an interpretation here. Deliberately
   *not* half-the-lowest-observed any more — the floor stopped being a measurement and became an
