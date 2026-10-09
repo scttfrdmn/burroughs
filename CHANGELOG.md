@@ -30,6 +30,23 @@ own condition rather than as a prediction.
 
 ### Added
 
+- **The project's phase is recorded where a reader can cite it** — [ADR
+  0099](docs/decisions/0099-the-project-is-in-the-threads-phase-recorded-outside-the-agent-brief-because-a-phase-claim-needs-a-citable-home.md),
+  on Scott's ruling on the #534 review and his 2026-10-08 authorisation to record it. **The problem was
+  never which phase**; it was that nothing outside `CLAUDE.md` said so, while the `v0.4.0` release block
+  said *"it is not v1"* in writing and was not marked otherwise. A reader who went looking therefore
+  found a release note **denying** the phase and nothing affirming it — worse than an unrecorded phase,
+  because it is a contradiction in the record with no marker saying which half is current.
+  That `v0.4.0` sentence now carries a **superseded marker** pointing at 0099, with its original text
+  left exactly as written: a release note records what was claimed at the time, and rewriting it would
+  destroy that. The README names the phase again, citing the ADR — it had declined to while the only
+  home was the agent's own brief, which is the *durability is not independence* shape applied to a claim
+  the project makes about itself.
+  **Being in the threads phase is not having finished it.** `v1.0.0` stays reserved on ADR 0004's
+  restated requirement (#795), and contract §4's litmus battery beyond what spawn needed is outstanding
+  and, by Scott's #670 ruling, unscheduled. Stated in the ADR because a reader could otherwise take the
+  phase name for a completion claim.
+
 - **The public record surface: `ComponentTypeRecord`, `ComponentField`, `ComponentRecord` and
   `ComponentValue.Field`** ([#904](https://github.com/scttfrdmn/burroughs/issues/904)) — ADR 0097's last
   three held names, with **both directions working end to end**. A guest takes a
@@ -6045,6 +6062,16 @@ terms 0004 requires of a version:
   wait/notify, engine-native epochs and STW, the §4 memory model with its litmus battery — is
   untouched, and the `v1 threads + safepoints` milestone has 3 open issues. v0 closing means v0's
   conditions are discharged, not that the next phase has begun.
+
+  > **Superseded on 2026-10-08 by [ADR
+  > 0099](docs/decisions/0099-the-project-is-in-the-threads-phase-recorded-outside-the-agent-brief-because-a-phase-claim-needs-a-citable-home.md).**
+  > The project **is** in the v1 threads phase. The sentence above is left exactly as written, because a
+  > release note records what was claimed at the time and rewriting it would destroy that — but a reader
+  > arriving here needed a way out of the contradiction, since for a while this was the only document
+  > outside the agent brief that spoke to the phase at all, and it denied it. What was true when this was
+  > written: the §§2–5 artifacts had not started. What overtook it: they did, and v0's milestone closed,
+  > so no value naming v0 is true (Scott's ruling on the #534 review). Being *in* the threads phase is
+  > not the same as having finished it — `v1.0.0` stays reserved on ADR 0004's restated requirement.
 
 ### Added
 
