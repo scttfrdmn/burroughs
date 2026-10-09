@@ -14,6 +14,17 @@ import (
 // gitIn runs git in dir and fails the test with the command and its output on error.
 func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	// An empty real file, not `/dev/null` and not `os.DevNull`. The global and system config must
+	// be neutralised, because the setting under test is one a developer or runner may well have
+	// set globally — on Windows, `core.autocrlf=true` is what the installer writes, so inheriting
+	// it would make this test's own scenario depend on the machine. `/dev/null` is not a path
+	// native Windows git can read, and whether it accepts `NUL` there is not something this test
+	// should be betting on, so the portable answer is a file that exists and is empty.
+	empty := filepath.Join(t.TempDir(), "empty.gitconfig")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatalf("writing the empty git config: %v", err)
+	}
+
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
@@ -22,9 +33,7 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 		// test's behaviour depend on their config.
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
-		// And no global config may reach it, or the very setting under test could be
-		// inherited from the machine running the test.
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_GLOBAL="+empty, "GIT_CONFIG_SYSTEM="+empty,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -108,8 +117,15 @@ func TestCorpusLFRepairsACRLFWorktreeThatGitCallsClean(t *testing.T) {
 		t.Fatalf("reading the seeded file: %v", err)
 	}
 	if !bytes.Contains(got, []byte("\r\n")) {
-		t.Skipf("this git (%s) did not produce a CRLF worktree under core.autocrlf=true, so the "+
-			"scenario under test does not exist here and a pass would mean nothing",
+		// **A failure, not a skip.** The first draft skipped here, defensively, and that was an
+		// unlicensed skip with no mechanism behind it: `core.autocrlf=true` over an index holding
+		// LF produces CRLF in the worktree on every git, and this repo is synthetic with no
+		// `.gitattributes` to override it. If that ever stops being true it is news about git on
+		// this platform and the Windows repair rests on it, so it should be loud rather than
+		// quietly reduce the suite — *find the checkable layer rather than license a skip*.
+		t.Fatalf("this git (%s) did not produce a CRLF worktree under core.autocrlf=true. The "+
+			"scenario this witness exists for cannot be constructed here, which also means the "+
+			"premise `corpus-lf.sh` rests on does not hold on this platform.",
 			strings.TrimSpace(gitIn(t, dir, "--version")))
 	}
 
@@ -182,10 +198,22 @@ func TestCorpusLFRefusesAnEmptyOrAbsentPopulation(t *testing.T) {
 	}
 	dir := t.TempDir()
 	gitIn(t, dir, "init", "-q")
+	// A real commit, because `verify` resolves the revision **before** scanning and would
+	// otherwise refuse for that reason instead — which is the ordering this file's sibling
+	// control asked for, and the reason these arms have to supply a revision that works. Asking
+	// about vacuity with an unresolvable rev would measure the rev check twice and the population
+	// check not at all.
+	if err := os.WriteFile(filepath.Join(dir, "present.ml"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("writing the fixture file: %v", err)
+	}
+	gitIn(t, dir, "add", "present.ml")
+	gitIn(t, dir, "commit", "-q", "-m", "fixture")
+	rev := strings.TrimSpace(gitIn(t, dir, "rev-parse", "HEAD"))
 
 	for _, c := range []struct {
 		name  string
 		stdin string
+		rev   string
 		want  string
 	}{
 		{
@@ -198,9 +226,23 @@ func TestCorpusLFRefusesAnEmptyOrAbsentPopulation(t *testing.T) {
 			stdin: "no/such/file.ml\nalso/missing.mll\n",
 			want:  "none of the",
 		},
+		{
+			// The revision arm, here as well as in `TestABadRevisionIsNeverAPass`: that control
+			// owns the *rule* across every revision-taking script, and this owns the ordering
+			// claim this script makes — refused before the scan, with a population that WOULD
+			// have reported clean. Without the ordering, this input is a green.
+			name:  "an unresolvable revision is refused before the scan, not at the repair",
+			stdin: "present.ml\n",
+			rev:   "no-such-revision-grave-549",
+			want:  "does not resolve to a commit",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			cmd := exec.Command("sh", script, "verify", ".", "deadbeef")
+			useRev := rev
+			if c.rev != "" {
+				useRev = c.rev
+			}
+			cmd := exec.Command("sh", script, "verify", ".", useRev)
 			cmd.Dir = dir
 			cmd.Stdin = strings.NewReader(c.stdin)
 			out, rerr := cmd.CombinedOutput()

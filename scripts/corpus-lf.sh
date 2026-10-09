@@ -102,6 +102,21 @@ config)
 verify)
 	rev=${3:?usage: corpus-lf.sh verify <dest> <rev> (paths on stdin)}
 
+	# **The revision is resolved BEFORE anything is scanned, and that ordering is the whole point.**
+	#
+	# The scan's verdict does not depend on `$rev` when the tree is already clean: the repair is the
+	# only consumer, and a clean tree never reaches it. So a mistyped revision would print
+	# `LF-clean over N file(s)` and exit 0 — a green from a check that never used the argument it
+	# was handed, which is grave #549's shape exactly. `TestABadRevisionIsNeverAPass` derives its
+	# domain from the scripts' own usage strings and caught this on the first gate run.
+	if ! git -C "$dest" rev-parse --verify --quiet "$rev^{commit}" >/dev/null 2>&1; then
+		echo "corpus-lf: $rev does not resolve to a commit in $dest, so this cannot run." >&2
+		echo "           Refused before scanning rather than at the repair, because a clean tree" >&2
+		echo "           never reaches the repair -- so the scan would have reported LF-clean and" >&2
+		echo "           exited 0 on a revision that does not exist (grave #549)." >&2
+		exit 1
+	fi
+
 	# The paths come from the caller because each corpus knows its own authorities: nine OCaml
 	# sources for the spec reference, two plus a .wast for the threads reference, and every vector
 	# for the suite. Sharing the repair while leaving the population local is the seam -- a shared
