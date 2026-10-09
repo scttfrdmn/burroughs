@@ -517,6 +517,41 @@ Containment can fail in either direction, and the direction determines what to d
 *Text mirrors are not failure-behaviour mirrors*; so are absence mirrors, and so is a mirror whose two
 halves run in two shells.
 
+### An instance: the toolchain version is machine state, and so is the vulnerability database
+
+Both halves of the `vuln` gate's verdict came from outside the repo, and each failed containment in a
+different direction.
+
+**The toolchain.** CI pinned `go-version: '1.26'`, which resolves to whatever the newest 1.26 patch is
+on the runner that day; a developer machine ran whatever was installed. So `make ci` green meant
+*"green on some toolchain"*, and the two gates were never asking the same question. The cost was
+measured: CI reported **GO-2026-6604** — `os.Root.Mkdir` can follow a junction out of the root on
+Windows — against the 1.26.8 it had resolved, on a tree whose local gate was green over 17 gates, with
+the advisory's three live traces running through `internal/wasi/fs.go`'s `--scratch` write path. The gap
+hid a **confinement** finding, not a cosmetic one.
+
+The repair makes the version repo state: `go.mod`'s `toolchain` line is the one place it is written, the
+Makefile exports `GOTOOLCHAIN` from it, CI reads it through `go-version-file: go.mod`, and
+`make toolchain-check` fails when the version that actually ran is a different one. The last part is the
+load-bearing part — the first three make the versions *agree by default*, and only the gate makes a
+disagreement a **stated failure** rather than a silent superset.
+
+**Two corrections the measurement forced, both worth keeping.** First: a `toolchain` line is necessary
+and **not sufficient.** Under the default `GOTOOLCHAIN=auto` the go command switches *up* to satisfy it
+and never down, so a machine on 1.27.1 keeps running 1.27.1 and the line is satisfied; exactness needs
+`GOTOOLCHAIN=go1.26.9`. Second, and sharper: the first account of this instance said the local gate was
+green *because the local toolchain was newer than the fix*. **That was wrong.** The advisory affects both
+release lines — fixed in `go1.26.9` **and** `go1.27.2` — so 1.27.1 was never past it, and running the
+gate on 1.27.1 afterwards reproduced the failure. The local gate had been green because the advisory was
+not yet in the database when it ran.
+
+**Which is the second half, and it cannot be pinned away.** `govulncheck`'s oracle is a network resource
+that changes under you, so the same tree and the same toolchain can be green at one hour and red the
+next, with nothing in the repo different. That is containment failing in the *CI observes more* direction
+with no repair available — the honest move is to know it, so that a `vuln` gate that flips without a
+code change is read as a new advisory rather than as a regression. It is also why "the vuln gate was
+green" is a claim with a timestamp attached, not a property of a commit.
+
 ### An instance: fetched-artifact presence is machine state, not repo state
 
 There is a class the Makefile cannot observe: **whether a fetched artifact is present on the machine.**

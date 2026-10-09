@@ -1,5 +1,26 @@
 GO ?= go
 
+# **The toolchain version is read from `go.mod` and exported, so every `go` below runs the version CI
+# runs.** One source of truth; nothing here names a version.
+#
+# # The gap this closes, and why the `toolchain` line alone would not
+#
+# CI pinned `go-version: '1.26'` and a developer machine ran whatever was installed, so `make ci` green
+# meant "green on some toolchain" rather than "green on CI's". That is not hypothetical: GO-2026-6604
+# (a Windows `os.Root` escape, fixed in go1.26.9) was invisible to a machine on 1.27 and reported by CI
+# on 1.26.8, and its traces ran through the `--scratch` write path — so the gap hid a confinement
+# finding on a tree whose local gate was green over 17 gates.
+#
+# A `toolchain` line in `go.mod` is necessary and **not sufficient**: under the default
+# `GOTOOLCHAIN=auto` the go command switches *up* to satisfy it and never down, so 1.27.1 keeps
+# running and the line is satisfied. Measured. `GOTOOLCHAIN=go1.26.9` is what pins it exactly, and it
+# self-downloads the toolchain on first use.
+#
+# `?=` so a deliberate override is still possible — `GOTOOLCHAIN=local make vet` to see what the
+# installed compiler says. `toolchain-check` is what stops an *accidental* one from passing silently.
+GO_TOOLCHAIN := $(shell awk '/^toolchain /{print $$2}' go.mod)
+export GOTOOLCHAIN ?= $(GO_TOOLCHAIN)
+
 # Recipes run under bash with `pipefail`. Make's default is `/bin/sh -c`, which does not
 # have it, and the cost was a real lost verdict: `make bench` piped `go test -bench` into
 # `tee`, so a benchmark package that failed to *compile* left `[build failed]` inside
@@ -56,7 +77,7 @@ TOOL = $(GO) tool -modfile=tools/go.mod
 all: check
 
 # The gate list, named once so the recipe below cannot drift from it.
-CHECK_GATES = pipefail-check fmt-check build vet lint test test-endtable deadcode
+CHECK_GATES = pipefail-check toolchain-check fmt-check build vet lint test test-endtable deadcode
 
 # **`ci` is what "report green" means, and `check` is not.** Ordered on the #829 review, after
 # `make strict` reddened CI on a tree `make check` had just passed green: *"`make strict` caught a
@@ -642,6 +663,45 @@ lint:
 
 vuln:
 	$(TOOL) govulncheck ./...
+
+# toolchain-check: the toolchain that actually ran must be the one `go.mod` names.
+#
+# # Why this is a gate and not a comment
+#
+# `GOTOOLCHAIN` above makes the versions agree by default; this makes a *disagreement* a stated
+# failure. The two are not the same guarantee. An override (`GOTOOLCHAIN=local`), a stale
+# environment, a CI change that stops honouring `go-version-file`, or a `go.mod` edit that nothing
+# re-reads would each leave the build running one toolchain while the repo named another — and the
+# symptom would be a green local gate over a red CI, which is exactly the shape that hid
+# GO-2026-6604. A silent superset is the failure mode; naming it is the fix.
+#
+# It prints the version on success, because *the gate that only speaks when it fails leaves a reader
+# guessing what it checked*. `make ci`'s own summary quotes this line.
+#
+# Derived from `go.mod` on both sides — the expected version from the `toolchain` directive, the
+# actual from `go version` — so neither is typed here. A gate that hardcoded either would be the
+# second source of truth this exists to prevent.
+.PHONY: toolchain-check
+toolchain-check:
+	@want="$(GO_TOOLCHAIN)"; \
+	if [ -z "$$want" ]; then \
+		echo "toolchain-check: FAIL — go.mod has no 'toolchain' line."; \
+		echo "  That line is the one place the version is written, and the Makefile exports"; \
+		echo "  GOTOOLCHAIN from it. Without it every machine runs whatever is installed, which is"; \
+		echo "  the gap GO-2026-6604 exposed. Add e.g. 'toolchain go1.26.9'."; \
+		exit 1; \
+	fi; \
+	got="$$($(GO) version | awk '{print $$3}')"; \
+	if [ "$$got" != "$$want" ]; then \
+		echo "toolchain-check: FAIL — ran under $$got, but go.mod names $$want."; \
+		echo "  GOTOOLCHAIN is currently '$${GOTOOLCHAIN:-<unset>}'."; \
+		echo "  A local gate green on one toolchain says nothing about CI on another: that is how"; \
+		echo "  GO-2026-6604 stayed invisible here while CI reported it. Unset any GOTOOLCHAIN"; \
+		echo "  override and re-run, or change go.mod's toolchain line if the bump is intended"; \
+		echo "  (a toolchain bump is its own gated PR)."; \
+		exit 1; \
+	fi; \
+	echo "toolchain-check: $$got, matching go.mod's toolchain line"
 
 # The unreachable-error grave (#3) promoted to a tool. Every finding is a
 # classification question to answer: declared-and-tracked passes, silent fails.

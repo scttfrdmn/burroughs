@@ -1141,6 +1141,31 @@ own condition rather than as a prediction.
 
 ### Fixed
 
+- **CI pinned the Go *minor* version and developer machines ran whatever was installed, so a green
+  local gate meant "green on some toolchain"** — and the first thing that gap hid was a filesystem
+  **confinement** advisory. CI reported **GO-2026-6604** (`os.Root.Mkdir` can follow a junction out of
+  the root on Windows) against the `1.26.8` its `go-version: '1.26'` had resolved to, on a tree whose
+  `make ci` had just gone green over 17 gates. The three live traces were all in the `--scratch` write
+  path — `pathCreateDirectory`, `pathUnlinkFile`, `pathOpen` — which is exactly the confinement ADR
+  0083 promises.
+  The version is now **repo state**: `go.mod`'s `toolchain` line is the one place it is written, the
+  Makefile exports `GOTOOLCHAIN` from it, all **six** `setup-go` sites read `go-version-file: go.mod`,
+  and **`make toolchain-check`** fails when the version that actually ran differs — which is the
+  load-bearing part, since the first three make the versions agree *by default* and only the gate makes
+  a disagreement a stated failure. It prints the version on success, because a gate that speaks only
+  when it fails leaves a reader guessing what it checked.
+  **`go1.26.9`, not `go1.27.2`**: the smallest change that clears the advisory, keeping the language
+  line at `go 1.26`. A minor-line move carries new vet and lint behaviour, and conflating that with a
+  security fix makes both harder to review and to revert. Measured clean on the pinned version, red on
+  both 1.26.8 and 1.27.1.
+  **Two things the measurement corrected.** A `toolchain` line is necessary and **not sufficient** —
+  under `GOTOOLCHAIN=auto` the go command switches *up* and never down, so a machine on 1.27.1 keeps
+  1.27.1 and the line is satisfied; exactness needs `GOTOOLCHAIN=go1.26.9`. And the first account of
+  *why* the local gate was green — "the local toolchain is newer than the fix" — was **wrong**: the
+  advisory affects both lines, fixed in `go1.26.9` **and** `go1.27.2`, so 1.27.1 was never past it. The
+  gate had been green because the advisory was not yet in the live database, which is the other half of
+  this instance and the half that cannot be pinned away. Recorded under the containment rule in
+  [operations.md](docs/laws/operations.md).
 - **A component declaring `record {}` or `tuple<>` loaded, where the reference validator refuses it**
   ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). Asked of the authority rather than
   reasoned about: `wasm-tools parse` **accepts** both — the bytes are well-formed — and
