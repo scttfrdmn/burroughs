@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -73,8 +74,32 @@ func TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon(t *testing.T) {
 		return strings.Contains(out.String(), body), code, errBuf.String()
 	}
 
+	// **The bare form's outcome is platform-split, and each side asserts something positive.**
+	//
+	// Off Windows a bare HOST means `HOST:abs(HOST)` and grants. On Windows it cannot: the resolved
+	// name is a Windows path, which a wasip1 guest can never open through, so the form is refused by
+	// name there (#534's separator slice). Mapping one onto the other would mean inventing a
+	// host→guest translation, which is a design decision deferred until Windows is supported.
+	//
+	// Written as two positive assertions rather than as "grants, unless Windows, where we don't
+	// check": a platform whose arm only says "not the other thing" is a platform this test stops
+	// measuring.
 	t.Run("bare_host_maps_under_its_resolved_own_name", func(t *testing.T) {
 		ok, code, stderr := readable(t, dir, filepath.Join(dir, "in.txt"))
+		if runtime.GOOS == "windows" {
+			if ok {
+				t.Errorf("a bare HOST was granted on Windows, where the resolved name is a Windows "+
+					"path a guest cannot open through. Either the refusal was lost or a host→guest "+
+					"mapping was introduced — the second is a decision, not a fix (exit %d): %s",
+					code, stderr)
+			}
+			if !strings.Contains(stderr, "bare --dir HOST form cannot map") {
+				t.Errorf("the bare form was refused on Windows but not by the refusal written for "+
+					"it, so this arm cannot tell the intended refusal from an unrelated failure "+
+					"(exit %d): %s", code, stderr)
+			}
+			return
+		}
 		if !ok {
 			t.Errorf("a bare HOST did not make the file readable at the HOST path (exit %d): %s\n"+
 				"\tHOST alone means HOST:abs(HOST). This is the form that DID work during the sweep, which is "+

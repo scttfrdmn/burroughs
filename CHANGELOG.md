@@ -66,6 +66,22 @@ says what it now requires and what it gives up.
   over every unconditionally-refusing shape, because a threaded parameter is exactly what gets
   dropped at one call site out of six.
 
+- **Two `--dir` test expectations are split by OS, each side asserting something positive.** Both are
+  the drive-letter slice's own fallout, found by its Windows run rather than by the gate.
+  `bare_host_maps_under_its_resolved_own_name` asserted the grant unconditionally; on Windows the
+  bare form is now refused, so that arm asserts the **named** refusal there and the grant elsewhere.
+  And the `/h:` control, which exists to show the bare-drive-letter guard has not widened past its
+  subject, asserted *acceptance* unconditionally — `filepath.Abs("/h")` is `D:\h` on Windows, which
+  the general absolute-guest check legitimately refuses. Its real claim, that the drive-letter guard
+  does not fire, is now asserted on **every** OS, with acceptance still asserted where acceptance is
+  expected: absence of a message alone would also pass if the input were refused for a reason nobody
+  intended (the chair's ruling on the #937 review). **The Linux gate structurally could not have found
+  either**, which
+  is the same argument that put the OS parameter on `splitGrant`.
+
+  ADR 0083's `--dir .` example now carries a note that the bare form does not apply on Windows, with
+  the reason, so a decision that was never measured on that platform does not read as covering it.
+
 - **Every vendored corpus is held at LF, and a CRLF checkout is repaired rather than reported.**
   `.gitattributes` governs this repository; the corpora are **separate** git repositories under
   gitignored paths, so they inherit the *machine's* `core.autocrlf` — which Git for Windows'
@@ -251,6 +267,27 @@ says what it now requires and what it gives up.
   rather than discriminating. And a source-level check that `c3WantCollected` is still 8 would be a
   second copy of the number — weakening a witness's constant is a change to a test, visible in the diff
   and owned by its reviewer.
+
+### Fixed
+
+- **A provenance control compared `filepath.Glob` output against forward-slash literals**, so on
+  Windows nothing matched and **twelve files reported their citations unverified** — on a run where
+  every citation was fine. `TestEveryFixtureFileIsChecked` globs `../*/*_test.go`, and Glob returns
+  OS-separator paths, so `..\binary\binary_test.go` matched no key; this package's own `../spec/`
+  skip never fired either, which is why its own test file appeared in the findings. Results are
+  normalised with `filepath.ToSlash` once, keeping one canonical spelling for the literals, the map
+  keys and the messages a reader greps for.
+
+  **The existing reverse check could not see this, and the one that can is now there too.** A
+  `for p := range checked { os.Stat(p) }` loop asked "is this a path on disk" — and a forward-slash
+  literal *is* one on Windows, which accepts them — so it passed while not a single key matched a
+  discovered path. The new check asserts **membership in the discovered set**, which is the property
+  that was false: the keys must live in the same namespace as the lookups that consume them. Its
+  message names both causes it cannot distinguish, a file moved out of the glob and a separator
+  disagreement. Falsified locally by registering a file that exists outside the glob; the separator
+  cause itself is **not** locally reproducible — on Linux a backslash path is unreadable, so the
+  vacuity floor fires first — and the Windows job is its witness.
+
 
 ## [0.7.0] - 2026-10-09
 *Implements contract v0.1.*
