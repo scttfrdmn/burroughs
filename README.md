@@ -19,13 +19,20 @@ stack machine. The gopher gets its burrows back, one letter askew.
 
 ## Where this is
 
-**v0's closure conditions are discharged** — all twelve, at the signed `v0.4.0`
-tag of 2026-08-28, with the `v0 interpreter` milestone closed at 99 issues and
-the MVP core suite green: the mark ADR 0004's table numbers `v0.1.0`. That
-release's own notes are explicit that this is not the same thing as the next
-phase beginning, so **this file does not declare a phase**; `CLAUDE.md`'s ladder
-is where the current one is recorded. What has landed since is contract §§2–5
-work — thread spawn, futex wait/notify, the safepoint poll — listed below.
+**v1, the threads phase** ([decision
+0099](docs/decisions/0099-the-project-is-in-the-threads-phase-recorded-outside-the-agent-brief-because-a-phase-claim-needs-a-citable-home.md)).
+v0's closure conditions are all twelve discharged, at the signed `v0.4.0` tag of
+2026-08-28, with the `v0 interpreter` milestone closed at 99 issues and the MVP
+core suite green — the mark ADR 0004's table numbers `v0.1.0`. What has landed
+since is contract §§2–5 work: thread spawn, futex wait/notify, the safepoint
+poll, listed below.
+
+This file declined to name a phase until 0099 existed, and the reason is worth a
+line: the `v0.4.0` release notes say *"it is not v1"*, true about the artifacts
+when written, and for a while that was the only statement on the phase outside
+the agent's own brief. **Being in the threads phase is not having finished it** —
+`v1.0.0` stays reserved on ADR 0004's restated requirement, and contract §4's
+litmus battery beyond what spawn needed is outstanding and unscheduled.
 
 The pipeline is decoder → internal form (decision 0002) → validator →
 interpreter, in pure Go, no cgo, no dependency outside the standard library.
