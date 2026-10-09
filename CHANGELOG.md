@@ -26,6 +26,58 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **Windows runs the suite, as a measurement and explicitly not as a gate** — a new `windows.yml`
+  workflow on `windows-latest`, with Go from `go.mod`, a real Python via `setup-python`, the pinned
+  corpora, `go test -race ./...`, and a Windows-only **confinement witness**. The README's platform
+  line is **unchanged**: a job that runs is not a platform that works, and the claim waits for green.
+  **It is its own workflow rather than a job in `ci.yml`, and that is a correctness choice.**
+  `scripts/ciwatch.sh` derives the *required* job keys from `ci.yml`'s own `jobs:` block, so a job added
+  there is one every green must account for. The first attempt was `continue-on-error: true` inside
+  `ci.yml`, and it was wrong in a precise way: `continue-on-error` makes a job's conclusion `success`
+  even when its steps fail, so `ciwatch` would have required a key that **cannot go red**. *A job that
+  cannot fail must not be read as one that passed* — worse than absent, because it looks like coverage.
+  The derivation caught it on the first run. Outside `ci.yml`, its red is visible **as red** without
+  being laundered into the main verdict or blocking a merge while the platform is characterised.
+  **The witness step carries `if: always()` and reports its own verdict to the job summary**, because
+  the job's first run proved the alternative broken: the suite failed for seven unrelated reasons and
+  the witness was **skipped**, so the job could not measure the one thing it was added to measure — on
+  the very run that introduced the ability to take it. The dependency was also backwards on the merits:
+  the witness builds one `os.Root` over a temp dir and has no dependency on the rest of the suite, so
+  gating it on an unrelated green means any Windows regression silently removes the **security** check.
+  That is the shape where a failure hides a failure. Its verdict goes to `$GITHUB_STEP_SUMMARY`
+  separately **and to the log**, from one source via `tee -a`, so a reader scanning a red job learns
+  whether confinement held without unfolding a 1300-line log to discover the step never ran. The `tee`
+  is not decoration: with a plain `>>` the verdict was readable by **no** means except the step's own
+  conclusion — GitHub echoes a `run:` block's source, so both the PASS and FAIL `echo` lines appear in
+  the log as script text while neither appears as output, and the rendered summary is HTML-only, absent
+  from the jobs API. That is the box-ticking a verifier must not accept, so the same bytes now go to
+  both places.
+  **The first draft of that fix was a comment and not a directive** — the step carried a paragraph
+  explaining `if: always()` and no `if: always()` line. Caught by listing the parsed steps rather than
+  trusting the edit, which is the only way that defect is visible: *a comment names one constraint and
+  the code embodies another*, here in the one step whose entire purpose is to run unconditionally.
+  **The witness probes a junction, which is the vector a symlink test misses.** GO-2026-6604 let
+  `os.Root.Mkdir` follow a *junction* out of the root — a directory reparse point the OS resolves more
+  eagerly than a symlink, and one that needs **no** Developer Mode to create. The existing Unix
+  confinement test covers symlinks and would have passed throughout the advisory's window. Setup
+  failure is a **fatal, not a skip**: a skip would read as "confinement verified on Windows" in a board
+  that counts passes, having exercised nothing.
+  **Three controls objected, each to something real.** The trigger control required the `edited`
+  opt-out, which is the failure mode #411 predicted — *a job added later without the condition* — and
+  this job was exactly that. `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` refused a job that runs
+  the suite without the pinned corpora: not because it would fail (this workflow sets no
+  `BURROUGHS_NO_SKIP`, so an absent corpus is a licensed skip) but because it would **measure less
+  while reporting the same shape** — and for a job whose purpose is measurement that is the worst
+  outcome. It then caught `make spec-tests spec-ref threads-ref` on one line, since the derivation reads
+  the **first** target per invocation: the three-on-one-line form satisfied it for one corpus and left
+  two unfetched. A hand-maintained list would have been ticked off.
+  And the **positional citation census** objected to the witness's own doc comment, which cited
+  a file path followed by a **line number**, copied from the advisory's output. ADR 0047's rule applies,
+  and is right here for a specific reason: those lines move the next time `fs.go` is touched, and a
+  rotted citation
+  in a *security* witness points a reader at whatever drifted into its place. Rewritten as
+  `internal/wasi/fs.go:pathCreateDirectory`, which `TestSymbolCitationsResolveToADeclaration` checks —
+  nothing can check a number. The pin was not bumped; the citations were fixed.
 - **`.gitattributes`: line endings are LF in the working tree on every platform, and binary fixtures
   are declared rather than sniffed.** Three of nine failing gates on Windows were this file's absence
   and nothing about the engine. Git for Windows' installer sets `core.autocrlf=true`, and with no
