@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 # Count the spec-suite vectors in a directory — and count them the way Go counts them.
 #
-# usage: scripts/suite-count.sh [dir]      # default testdata/spec; prints one integer
+# usage: scripts/suite-count.sh [dir]          # default testdata/spec; prints one integer
+#        scripts/suite-count.sh --list [dir]   # the same population, one basename per line
 #
 # # Why this is a file and not four expressions (#340)
 #
@@ -31,7 +32,21 @@
 #   - An absent or empty directory is an honest `0` rather than an error, because every caller
 #     has its own diagnostic for that and a floor's message is more use than `find`'s. `[ -e ]`
 #     is what makes an unmatched glob honest instead of literal.
+#   - **`--list` shares the loop rather than reimplementing the globs.** `fetch-spec-tests.sh`
+#     needs the population as *names* for the LF check, not as a count, and a second enumeration
+#     written next door is how the AppleDouble grave happened the first time: two expressions
+#     intended to mean the same set, differing on a case nobody had in mind. One loop, two output
+#     shapes, so the dot-blindness fix and the `._*` exclusion cannot apply to one caller and not
+#     the other.
 set -eu
+
+mode=count
+case "${1:-}" in
+--list)
+	mode=list
+	shift
+	;;
+esac
 
 dir="${1:-testdata/spec}"
 n=0
@@ -39,6 +54,9 @@ for f in "$dir"/*.wast "$dir"/.*.wast; do
 	case "${f##*/}" in
 	._*) continue ;;
 	esac
-	if [ -e "$f" ]; then n=$((n + 1)); fi
+	if [ -e "$f" ]; then
+		n=$((n + 1))
+		if [ "$mode" = list ]; then printf '%s\n' "${f##*/}"; fi
+	fi
 done
-echo "$n"
+if [ "$mode" = count ]; then echo "$n"; fi
