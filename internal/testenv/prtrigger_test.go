@@ -120,6 +120,8 @@ func TestBodyEditRetriggersOnlyTheBodyScans(t *testing.T) {
 	}
 
 	scoped := 0
+	// The union of job names across every scoped workflow, for the global staleness check below.
+	seenJobs := map[string]bool{}
 	for _, path := range paths {
 		src := readFile(t, path)
 		types, ok := pullRequestTypes(src)
@@ -131,8 +133,12 @@ func TestBodyEditRetriggersOnlyTheBodyScans(t *testing.T) {
 		}
 		scoped++
 		checkTriggerTypes(t, path, types)
-		checkJobConditions(t, path, src)
+		for _, job := range checkJobConditions(t, path, src) {
+			seenJobs[job] = true
+		}
 	}
+	// Asked once, over the union — see checkAllowListIsNotStale for why it cannot be per-workflow.
+	checkAllowListIsNotStale(t, seenJobs)
 	if scoped == 0 {
 		t.Fatal("no workflow in .github/workflows has a pull_request trigger, so this control " +
 			"asserted nothing at all — either the trigger moved or pullRequestTypes stopped parsing " +
@@ -160,16 +166,35 @@ func checkTriggerTypes(t *testing.T, path string, types []string) {
 	}
 }
 
-// checkJobConditions asserts every job either carries the opt-out or is a named body-scan job.
-func checkJobConditions(t *testing.T, path, src string) {
+// checkJobConditions asserts every job either carries the opt-out or is a named body-scan job, and
+// returns the job names it saw so the caller can check the global allow-list once over their union.
+func checkJobConditions(t *testing.T, path, src string) []string {
 	t.Helper()
 
 	bodies, order := jobBodies(src)
-	// The vacuity floor. An empty job map agrees with every assertion below by having no
-	// subject, and a reformatted `jobs:` block or a changed indent produces exactly that.
-	if len(bodies) < 5 {
-		t.Fatalf("%s: parsed only %d jobs (%v); the parse is not finding them, so the allow-list "+
-			"check has nothing to run against", path, len(bodies), order)
+	// The vacuity floor. An empty job map agrees with every assertion below by having no subject, and
+	// a reformatted `jobs:` block or a changed indent produces exactly that.
+	//
+	// **It was `len(bodies) < 5`, and that was a constant tuned to one file.** When this control was
+	// written `ci.yml` was the only workflow with a `pull_request:` trigger and it had seven jobs, so a
+	// floor of five read as "the parse found roughly what it should". It is wrong as soon as a second
+	// such workflow exists with fewer: `windows.yml` legitimately has **one** job, and the floor failed
+	// it for having the right number. A magic number cannot tell "too few jobs" from "few jobs".
+	//
+	// So the floor is **derived**: count the job headers textually and require the structured parse to
+	// agree. That catches what the constant was for — a reformatted block where the regex finds 0 while
+	// the file plainly has jobs — and it works for a one-job workflow and a twenty-job one without
+	// anyone retuning it. *A literal duplicating a property of the thing it describes is correct once;
+	// derive it instead.*
+	wantJobs := countJobHeaders(src)
+	if wantJobs == 0 {
+		t.Fatalf("%s: no job headers found at all; either the file has no `jobs:` block or the text "+
+			"scan stopped matching, and both look like a pass to every assertion below", path)
+	}
+	if len(bodies) != wantJobs {
+		t.Fatalf("%s: the structured parse found %d job(s) (%v) where the text scan found %d; the "+
+			"parse is not finding them, so the allow-list check has nothing to run against",
+			path, len(bodies), order, wantJobs)
 	}
 	conds := map[string]string{}
 	for job, body := range bodies {
@@ -212,14 +237,46 @@ func checkJobConditions(t *testing.T, path, src string) {
 		}
 	}
 
+	// **Counted from this file's own jobs, not from the global allow-list.** This read
+	// `len(conds)-len(bodyScanJobs)` and `len(bodyScanJobs)`, which is the one-scoped-workflow
+	// assumption again: it subtracts the size of a map describing *all* workflows from the job count of
+	// *one*. For a workflow holding none of the allow-listed jobs it reported one fewer gated job than
+	// there are and a body scan that is not there — `windows.yml` logged "1 jobs, 0 gated, 1 body
+	// scans" for a file whose single job is gated and scans nothing.
 	if !t.Failed() {
+		gated, scans := 0, 0
+		for job, cond := range conds {
+			if _, isScan := bodyScanJobs[job]; isScan {
+				scans++
+				continue
+			}
+			if cond != "" {
+				gated++
+			}
+		}
 		t.Logf("%s: %d jobs, %d gated off `edited`, %d body scans running on it",
-			path, len(conds), len(conds)-len(bodyScanJobs), len(bodyScanJobs))
+			path, len(conds), gated, scans)
 	}
+	return order
+}
+
+// checkAllowListIsNotStale asserts every `bodyScanJobs` entry is a real job **somewhere**.
+//
+// It was per-workflow and inside `checkJobConditions`, which was right while `ci.yml` was the only
+// workflow with a `pull_request:` trigger and wrong the moment a second one existed: it demanded that
+// every allow-listed job appear in *every* scoped workflow, so `windows.yml` failed for not containing
+// `citations` — a job it has no business containing.
+//
+// The allow-list is **global**, so its staleness is a global question and is asked once, over the union
+// of jobs across every scoped workflow. The check itself is worth keeping exactly as it was in spirit:
+// *an exemption for a condition that no longer exists is an instrument looking away from nothing*, and
+// this is the arm that catches a renamed or deleted body-scan job leaving its exemption behind.
+func checkAllowListIsNotStale(t *testing.T, seen map[string]bool) {
+	t.Helper()
 	for job, reason := range bodyScanJobs {
-		if _, ok := conds[job]; !ok {
-			t.Errorf("%s: bodyScanJobs names %q (%s), which is not a job in this workflow; a stale "+
-				"exemption is an exemption for nothing", path, job, reason)
+		if !seen[job] {
+			t.Errorf("bodyScanJobs names %q (%s), which is not a job in ANY workflow with a "+
+				"pull_request trigger; a stale exemption is an exemption for nothing", job, reason)
 		}
 	}
 }
@@ -291,6 +348,37 @@ type jobBody struct {
 
 // jobBodies maps each job in the workflow to its jobBody, plus the jobs in file order so a
 // diagnosis reads in the order a reader would scroll.
+// countJobHeaders counts job headers by a **second, independent** scan, so the structured parse above
+// can be checked against something rather than against a constant.
+//
+// Deliberately not sharing `jobBodies`' state machine: the point is a cross-check, and two readings
+// that share the bug they are meant to catch is one reading wearing two names. This walks the whole
+// file looking for the two-space `name:` shape at the top of the `jobs:` block, with no notion of
+// "current job" to lose — so the reformatting that would make the state machine return an empty map
+// does not make this return zero.
+//
+// The one thing it must not do is count a two-space key that is *not* a job. `on:`, `permissions:` and
+// `defaults:` sit at column zero, and everything nested under a job is indented four or more, so the
+// two-space depth is the job level by construction in this repo's workflows — and the comparison fails
+// loudly if that ever stops being true, which is the right outcome rather than a silent miscount.
+func countJobHeaders(src string) int {
+	loc := jobsHeaderRE.FindStringIndex(src)
+	if loc == nil {
+		return 0
+	}
+	n := 0
+	for _, line := range strings.Split(src[loc[1]:], "\n") {
+		// A column-zero key ends the `jobs:` block: nothing after it belongs to a job.
+		if len(line) > 0 && line[0] != ' ' && line[0] != '\t' && line[0] != '#' {
+			break
+		}
+		if jobNameRE.MatchString(line) {
+			n++
+		}
+	}
+	return n
+}
+
 func jobBodies(src string) (map[string]jobBody, []string) {
 	loc := jobsHeaderRE.FindStringIndex(src)
 	if loc == nil {

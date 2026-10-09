@@ -1,0 +1,197 @@
+# Windows, measured. **This is not a gate, and it is a separate workflow so that it cannot be mistaken
+# for one.**
+#
+# ## Why Windows is tested at all
+#
+# `make build` cross-compiled `GOOS=windows` and nothing ever ran there, so "it compiles" was the whole
+# of the claim. The gap was not theoretical: **GO-2026-6604** was a Windows-only hole in `os.Root` — the
+# mechanism that confines a `--scratch` grant — and its three live traces were this engine's own write
+# paths (`pathCreateDirectory`, `pathUnlinkFile`, `pathOpen`). A platform nothing runs on cannot report
+# that, and a confinement guarantee stated unconditionally was false there for the advisory's window.
+#
+# ## Why this is its own file rather than a job in `ci.yml`
+#
+# Not tidiness — correctness of the verdict. `scripts/ciwatch.sh` derives the **required** job keys from
+# `ci.yml`'s own `jobs:` block, so a job added there is a job every green must account for. Adding this
+# one as `continue-on-error: true` was the first attempt, and it was wrong in a specific way:
+# `continue-on-error` makes a job's conclusion `success` even when its steps fail, so `ciwatch` would
+# have counted a key that *cannot* go red. **A job that cannot fail must not be read as one that
+# passed** — that is worse than its absence, because it looks like coverage. The control caught it
+# immediately, which is what that derivation is for.
+#
+# Keeping it outside `ci.yml` means its red is visible **as red**, on its own workflow, without being
+# laundered into the main verdict or blocking a merge while Windows is still being characterised.
+#
+# ## What it may and may not claim
+#
+# **The README's platform line is not widened by this file existing.** Windows stays unsupported until
+# this is green. The confinement witness is the part that would earn the claim, because it is the one
+# with a known past failure.
+#
+# **Making this a gate is a deliberate, separate change**: move the job into `ci.yml`, where `ciwatch`
+# will require it and `TestCIGatesCoverWhatCIInvokes` will check its `make` targets. That PR is also
+# where the README's platform line moves. Until then, this file's job is to be *informative*.
+#
+# ## The first run is a measurement and nothing here is tuned to pass
+#
+# `black3.local` already characterised the terrain: **9 of 17 gates failing**, for causes ranging from
+# `SHELL := /bin/bash -o pipefail` being discarded by native Windows make, to `:` colliding with a drive
+# letter in `--dir`'s parser, to a `python3` WindowsApps stub that exits 0 for `--version` and 49 for
+# `-c` with empty stdout. Three of nine were line endings and are fixed by `.gitattributes`; one was the
+# Go version and is fixed by the `toolchain` pin. The rest are real and unfixed **on purpose** — the
+# measurement is the deliverable, and fixing them inside the PR that introduces the job would make both
+# unreviewable.
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # `edited` is included for the reason `ci.yml` records: `types:` is workflow-wide, and the body
+    # scans there need it. Every job here has the tree as its subject, so each opts back out below —
+    # `TestBodyEditRetriggersOnlyTheBodyScans` globs *every* workflow, not just `ci.yml`, precisely
+    # because the failure mode is a job added later without the condition.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # **Load-bearing, and not a style preference.** On `windows-latest` GitHub runs `run:` blocks in
+    # **PowerShell** unless told otherwise, and the confinement witness below is bash: `set +e`,
+    # `PIPESTATUS[0]`, a `{ … } >> "$GITHUB_STEP_SUMMARY"` group, and a `grep`/`head` pipe. Under
+    # PowerShell `set +e` is not a command and `PIPESTATUS` does not exist, so that step would fail —
+    # or worse, report the wrong status — **for a reason unrelated to confinement, in the step whose job
+    # is to report confinement**.
+    #
+    # Declared once here rather than per-step, which is also what makes the Windows run use Git Bash
+    # the way `make` is used on the lab host rather than making one step special. Observed in the first
+    # run's log on all four `run:` steps:
+    #
+    #	shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+    #
+    # The `-e -o pipefail` in that line is exactly why the witness wraps its run in `set +e` and reads
+    # `PIPESTATUS[0]`: `-e` would otherwise abort before the status could be reported, and `tee` would
+    # otherwise supply the status in place of `go test`'s.
+    shell: bash
+
+jobs:
+  windows:
+    name: windows (measured, not a gate)
+    # The tree is this job's subject, and editing a PR body cannot change the tree.
+    if: github.event.action != 'edited'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          # From `go.mod`, which on Windows matters twice over: GO-2026-6604's fix landed in `go1.26.9`,
+          # so the toolchain the pin names is the one whose `os.Root` the confinement witness asserts
+          # about. A job that silently ran an older Go would be testing the hole rather than the fix.
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          # **A real Python, so the WindowsApps stub is never reached.** Measured on `black3.local`: the
+          # stub at `python3` prints to stderr, leaves stdout **empty**, and exits 49 for `-c` while
+          # exiting **0** for `--version` — a false success, and the single largest cause of test
+          # failures there. It made `ciwatch.sh` parse an empty result and poll its full 180-second
+          # bound per case, timing out three gates at ten minutes each.
+          python-version: '3.13'
+
+      - name: versions, so any failure below is readable against what produced it
+        run: |
+          go version
+          git --version
+          python3 --version
+          # The stub's tell: `--version` exits 0 while `-c` exits 49 with empty stdout. Asserting the
+          # `-c` form is what distinguishes a real interpreter from the alias.
+          python3 -c "print('python3 -c works, stdout non-empty')"
+
+      - name: the toolchain is the one go.mod names
+        run: make toolchain-check
+
+      - name: vendor the pinned corpora
+        # **Required by `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob`, and right on its merits.**
+        # A job that runs the suite without these does not fail — this workflow sets no
+        # `BURROUGHS_NO_SKIP`, so an absent corpus is a licensed *skip* — it simply measures **less**
+        # while reporting the same shape of result. For a job whose entire purpose is measurement, a
+        # silent reduction in the population is the worst available outcome, so the corpora come along
+        # and the Windows run covers what the Linux runs cover.
+        #
+        # It is also the only way to **measure** a limit `.gitattributes` could not fix: these live in
+        # separate clones under gitignored paths, fetched by `git clone`, so they inherit the machine's
+        # own `core.autocrlf` and arrive CRLF on Windows. Whether that breaks anything is a question
+        # this step turns into an answer rather than a guess.
+        #
+        # One `make` invocation per corpus, not `make spec-tests spec-ref threads-ref`. The derivation
+        # in `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` reads the **first** target of each
+        # invocation, so the three-on-one-line form satisfied it for `spec-tests` and left the other two
+        # unfetched — and the control said so by name, which is the derivation earning its keep: a
+        # hand-maintained list would have been ticked off and the job would have run two corpora short.
+        run: |
+          make spec-tests
+          make spec-ref
+          make threads-ref
+
+      - name: go test -race
+        # `-race` needs cgo, and whether `windows-latest` ships a usable C compiler is a question for
+        # this run to answer rather than for this comment to assume. On `black3.local` it did not, and
+        # `race` failed in 0s with "requires cgo".
+        run: go test -race ./...
+
+      - name: the confinement witness — a scratch grant is not escapable through a junction
+        id: witness
+        if: always()
+        # **`if: always()`, and this is the step the job exists for.**
+        #
+        # Without it the witness is gated behind `go test -race ./...` passing, and the first run proved
+        # why that is wrong rather than merely untidy: the suite failed for seven unrelated reasons —
+        # CRLF corpora, a drive-letter colon, an MSYS pid probe — and this step was **skipped**. So the
+        # job could not measure the one thing it was added to measure, and a confinement verdict was
+        # unavailable precisely on the run that introduced the ability to take it.
+        #
+        # The dependency is also backwards on the merits. This witness has **no** dependency on the rest
+        # of the suite: it builds one `os.Root` over a temp dir and probes it. Gating it on an unrelated
+        # green means a Windows regression anywhere silently removes the security check, which is the
+        # shape where a failure hides a failure.
+        #
+        # Windows-only by filename suffix, so this is the only place it runs at all, and its setup
+        # failure is a FATAL rather than a skip: a skip would read as "confinement verified on Windows"
+        # while having exercised nothing.
+        run: |
+          # `set +e` around the run so the status can be reported before it is re-raised. PIPESTATUS[0]
+          # is `go test`'s own, not `tee`'s — the distinction this repo has paid for twice.
+          set +e
+          go test -race -run TestAScratchGrantIsNotEscapableThroughAJunction -v ./internal/wasi/ 2>&1 | tee witness.log
+          status=${PIPESTATUS[0]}
+          set -e
+          # **The verdict goes in the job summary, separately from the suite's.** A reader scanning a red
+          # job needs to know whether confinement held, and that answer must not require unfolding a
+          # 1300-line log to find out whether this step ran at all.
+          #
+          # **`tee -a` and not `>>`, so the same bytes land in the log too.** This was `>>`, and the
+          # consequence surfaced the moment anyone tried to *verify* the summary: GitHub echoes a `run:`
+          # block's source into the log, so both the PASS and the FAIL `echo` lines appear there as
+          # script text while neither appears as output — and the rendered summary is HTML-only, absent
+          # from `repos/{o}/{r}/actions/jobs/{id}`. The verdict was therefore unreadable by any means
+          # except the step's own conclusion, which is the box-ticking a verifier must not accept.
+          #
+          # One source, two destinations: whatever the summary says, the log says, and a future reader
+          # needs neither web access nor trust.
+          {
+            if [ "$status" -eq 0 ]; then
+              echo "## Confinement witness: **PASS**"
+              echo "A scratch grant was not escapable through a junction or a symlink on this runner."
+            else
+              echo "## Confinement witness: **FAIL** (exit $status)"
+              echo "A \`--scratch\` grant may be escapable on this runner, or the witness could not set"
+              echo "up its own vector. Either way the Windows support claim stays unmade."
+            fi
+            echo
+            echo '```'
+            grep -E "WINDOWS-CONFINEMENT|ESCAPE PERMITTED|could not create the junction|symlink arm|^--- (PASS|FAIL|SKIP)|^(ok|FAIL)" witness.log | head -20 || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
