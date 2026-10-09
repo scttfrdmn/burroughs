@@ -231,48 +231,86 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 				"here rather than written at the wrong stride",
 				ErrUnsupportedForm, name, p.Name, want, args[i].Type)
 		}
-		// The declared kind drives the lowering, and the value's own kind must agree with it. Trusting
-		// the value alone would let a caller smuggle a kind past the signature; trusting the signature
-		// alone would lower a mismatched payload as though it were the declared type.
-		// **A `string` and a `list` both flatten to `(i32 ptr, i32 len)` and both need guest memory**, so
-		// they take one arm: reserve two placeholder slots, and defer the lowering to the entry where the
-		// codec can run against the guest's realloc. The placeholders are a null pointer and a zero
-		// length on purpose — a lowering that forgot to patch them traps in any guest that reads the
-		// value, rather than silently passing an empty one.
-		if p.Type.Kind == VString || p.Type.Kind == VList {
-			// No kind check here: the structural comparison above already established that this value's
-			// type **equals** the declared one, which is strictly stronger and covers the element type a
-			// kind check could not see.
-			ptrSlot, lenSlot := len(flat), len(flat)+1
-			flat = append(flat, interp.I32(0), interp.I32(0))
-			pend = append(pend, pendingLower{
-				param: p.Name,
-				val:   args[i],
-				// The slots are indices into `flat`, not pointers into it, because `flat` is appended to
-				// after this and a slice header captured mid-build can be left behind by a reallocation.
-				ptrSlot: ptrSlot,
-				lenSlot: lenSlot,
-			})
-			continue
+		// The lowering is one recursive walk, because **a record's flat form is the concatenation of
+		// its fields'** (CanonicalABI.md `lower_flat_record`). So a record of scalars is words, a
+		// record with a string field is words plus a deferred allocation, and a nested record is
+		// neither special nor a second arm — which is why the record parameter arrived here as a
+		// refactor rather than as a fourth `if`.
+		if err := lowerOneArg(name, p.Name, args[i], &flat, &pend); err != nil {
+			return nil, nil, err
 		}
-		if p.Type.Kind != VU32 {
-			return nil, nil, fmt.Errorf("%w: export %q parameter %q is %s; this engine lowers u32, string "+
-				"and list arguments", ErrUnsupportedForm, name, p.Name, valKindName(p.Type.Kind))
-		}
-		// The accessor's boolean is **unreachable** now that the structural comparison runs first — a
-		// value whose type equals `u32` reads as one. Checked anyway rather than discarded: the accessor
-		// is the authority on whether the kind and the payload agree, and trusting the type tag alone
-		// here is the mis-read `U32`'s own doc comment exists to prevent.
-		u, ok := args[i].U32()
-		if !ok {
-			return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared u32 and its type says so, "+
-				"but the value did not read as one", ErrUnsupportedForm, name, p.Name)
-		}
-		// A u32 is one flat i32 in the Canonical ABI: the low 32 bits, carried as two's complement. No
-		// memory and no realloc are involved, which is why this slice needs neither.
-		flat = append(flat, interp.I32(int32(u)))
 	}
 	return flat, pend, nil
+}
+
+// lowerOneArg appends one value's flat words to `flat`, and a `pendingLower` for each piece of it whose
+// bytes must land in guest memory.
+//
+// # Why this recurses rather than switching per parameter
+//
+// It was a flat `if string || list { … } else if u32 { … }` over the parameter's own kind. A record
+// broke that shape rather than extending it: a record's flat form is its fields' flat forms
+// concatenated, so a `record { name: string, n: u32 }` is three words of which the first two are a
+// deferred `(ptr, len)` pair and the third is a scalar. Handling that with a per-parameter switch means
+// the record arm reimplements the string arm, which is how a codec grows two of itself.
+//
+// **Each memory-resident piece gets its own `pendingLower`**, with its own pair of slot indices into
+// `flat`. The existing machinery already supported this — `pendingLower` carries slot *indices* rather
+// than pointers precisely so `flat` can keep growing underneath it — so a record's string field needed
+// no new mechanism, only the walk.
+//
+// The declared type is **not** passed down: the structural comparison in the caller already established
+// that this value's type equals the declared one, which is strictly stronger than anything a per-field
+// kind check could assert, so the value's own type is the authority from here on.
+func lowerOneArg(export, param string, v canon.Value, flat *[]interp.Value, pend *[]pendingLower) error {
+	switch v.Type.Kind {
+	case canon.KindU32:
+		// The accessor's boolean is **unreachable** given the caller's structural comparison. Checked
+		// anyway: the accessor is the authority on whether the kind and the payload agree, and trusting
+		// the type tag alone is the mis-read `U32`'s own doc comment exists to prevent.
+		u, ok := v.U32()
+		if !ok {
+			return fmt.Errorf("%w: export %q parameter %q is declared u32 and its type says so, but the "+
+				"value did not read as one", ErrUnsupportedForm, export, param)
+		}
+		// A u32 is one flat i32: the low 32 bits, carried as two's complement. No memory, no realloc.
+		*flat = append(*flat, interp.I32(int32(u)))
+		return nil
+
+	case canon.KindString, canon.KindList:
+		// **Both flatten to `(i32 ptr, i32 len)` and both need guest memory**, so they take one arm:
+		// reserve two placeholder slots and defer the lowering to the entry where the codec can run
+		// against the guest's realloc. The placeholders are a null pointer and a zero length on
+		// purpose — a lowering that forgot to patch them traps in any guest that reads the value,
+		// rather than silently passing an empty one.
+		ptrSlot, lenSlot := len(*flat), len(*flat)+1
+		*flat = append(*flat, interp.I32(0), interp.I32(0))
+		*pend = append(*pend, pendingLower{param: param, val: v, ptrSlot: ptrSlot, lenSlot: lenSlot})
+		return nil
+
+	case canon.KindRecord:
+		// `lower_flat_record` is the fields' flat lowerings concatenated, in **declared** order — no
+		// discriminant and no join, unlike a variant. The field order is the layout, and it comes from
+		// the type's own field list; `canon.Record` already matched the caller's values to it by label,
+		// so from here the order is positional and no name is looked up.
+		fields, ok := v.Record()
+		if !ok {
+			return fmt.Errorf("%w: export %q parameter %q is tagged record but does not read as one",
+				ErrUnsupportedForm, export, param)
+		}
+		for i, fv := range fields {
+			// The parameter name is qualified per field, so a refusal three levels into a nested record
+			// says which field rather than just which parameter.
+			if err := lowerOneArg(export, param+"."+v.Type.Fields[i].Name, fv, flat, pend); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("%w: export %q parameter %q is %s; this engine lowers u32, string, list and "+
+			"record arguments", ErrUnsupportedForm, export, param, v.Type)
+	}
 }
 
 // liftFlatCoreResult lifts an export's flat core result back to a component value.

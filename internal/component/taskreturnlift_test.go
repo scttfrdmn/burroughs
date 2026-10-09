@@ -387,15 +387,16 @@ func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 			[]interp.Value{interp.I32(0)},
 			"LoadVia",
 		},
-		// Not carryable by the bridge either, so it refuses one step earlier and names the record rather
-		// than the composable load. Included so the two refusal sites are both exercised and a change
-		// that collapsed them would show up.
-		{
-			"record",
-			ValType{Kind: VRecord, Fields: []NamedVal{{Name: "x", Type: ValType{Kind: VU32}}}},
-			[]interp.Value{interp.I32(0)},
-			"record",
-		},
+		// **`record` was here and has gone, which is the FOURTH time this campaign a specimen chosen
+		// because it happened to be unimplemented has expired** — and this table's own repair predicted
+		// it in those words one slice ago, when `list` left for the same reason. It now lifts
+		// (`TestTaskReturnLiftsARecordFromItsFieldsWords`), so asserting it is refused would assert the
+		// opposite of the engine.
+		//
+		// The table is down to one entry, and that is the honest state rather than a gap: `variant` is
+		// the only kind the bridge carries and the flat lift does not. When a variant arm lands, this
+		// table becomes empty — at which point it should be **deleted**, not kept with a comment, since
+		// a refusal table over no kinds asserts nothing.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := liftTaskReturnValue(nil, c.vt, c.flat)
@@ -417,6 +418,64 @@ func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 	}
 }
 
+// TestTaskReturnLiftsARecordFromItsFieldsWords is where `record` moved when its arm landed, for the
+// reason `list` moved before it: a kind is asserted in exactly one place and that place says what is
+// true.
+//
+// # What a record adds over the kinds before it
+//
+// Its flat form is the **concatenation of its fields'**, so the word count is a property of the whole
+// tree rather than of the top-level kind. That is why the arity check moved from per-arm (`len(args) ==
+// n`) to "the walk consumed exactly what arrived" — and the second form is stronger: it catches a record
+// whose fields together consumed too few words, which no per-kind count could see.
+//
+// The end-to-end witness is `TestAnEmbedderReadsARecordResult` in the root package, driving a guest that
+// clobbers its own string field after resolving. This is the unit half: the word accounting, which needs
+// no guest.
+func TestTaskReturnLiftsARecordFromItsFieldsWords(t *testing.T) {
+	pair := ValType{Kind: VRecord, Fields: []NamedVal{
+		{Name: "a", Type: ValType{Kind: VU32}},
+		{Name: "b", Type: ValType{Kind: VU32}},
+	}}
+
+	// Two u32 fields are two words, and a record of scalars needs no memory — so this lifts with a nil
+	// caller, which is itself the assertion that nothing here reaches guest memory.
+	v, err := liftTaskReturnValue(nil, pair, []interp.Value{interp.I32(7), interp.I32(9)})
+	if err != nil {
+		t.Fatalf("a record{a: u32, b: u32} did not lift from two words: %v", err)
+	}
+	a, ok := v.Field("a")
+	if !ok {
+		t.Fatalf("the lifted record has no field \"a\": %v", v)
+	}
+	if u, uok := a.U32(); !uok || u != 7 {
+		t.Errorf("field \"a\" = %v, want u32(7) — the fields must come off the words in DECLARED order", a)
+	}
+	b, _ := v.Field("b")
+	if u, uok := b.U32(); !uok || u != 9 {
+		t.Errorf("field \"b\" = %v, want u32(9)", b)
+	}
+
+	// **Too few words**, which is the case the old per-kind arity check could not express: a record's
+	// expected count comes from its fields, so one word for a two-u32 record must be refused.
+	if _, err := liftTaskReturnValue(nil, pair, []interp.Value{interp.I32(7)}); err == nil {
+		t.Error("a two-field record lifted from one word")
+	}
+	// **Too many**, which the walk catches by consuming less than arrived rather than by counting up
+	// front. Without the caller's `used != len(args)` comparison this would pass, having lifted a
+	// correct record and ignored a word the guest meant as part of the result.
+	if _, err := liftTaskReturnValue(nil, pair,
+		[]interp.Value{interp.I32(7), interp.I32(9), interp.I32(11)}); err == nil {
+		t.Error("a two-field record lifted from three words; the extra word was silently dropped")
+	}
+
+	// An empty record is refused before `canon.Record` is reached, so the trap names the record rather
+	// than a layout rule three frames down. Unreachable through the decoder, which refuses the type.
+	if _, err := liftTaskReturnValue(nil, ValType{Kind: VRecord}, nil); err == nil {
+		t.Error("a record with no fields lifted")
+	}
+}
+
 // TestTaskReturnLiftsAListFromItsFlatPair is the positive case `list` moved into when the arm landed, so
 // the kind is asserted in exactly one place and that place says what is true.
 //
@@ -432,7 +491,12 @@ func TestTaskReturnLiftsAListFromItsFlatPair(t *testing.T) {
 	if err == nil {
 		t.Fatal("a list result lifted from one flat value; a list is (ptr, count)")
 	}
-	if !strings.Contains(err.Error(), "flat value(s), want 2") {
+	// **"left, want 2", not "got 1, want 2"** — the arity check moved when the record arm landed. It
+	// was per-kind (`len(args) != n` for this arm's own `n`); a record's flat form is its fields'
+	// concatenated, so the expected count stopped being a property of the top-level kind and the walk
+	// now reports what it consumed, with the caller comparing that to what arrived. The wording follows
+	// the mechanism: a field sees the words *left*, not the whole frame.
+	if !strings.Contains(err.Error(), "flat value(s) left, want 2") {
 		t.Errorf("the one-word refusal %q does not name the arity it wanted", err)
 	}
 

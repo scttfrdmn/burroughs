@@ -427,13 +427,49 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 			"task.return declares a result this engine's Canonical ABI cannot lift: %v", err)}
 	}
 
+	// **The arity check moved to the end**, because a record's flat form is its fields' concatenated and
+	// so the expected count is no longer a property of the top-level kind alone. The walk reports how
+	// many words it consumed and this compares that to what arrived — which is a stronger check than the
+	// old per-kind `want(n)`: it catches a record whose fields consumed too few words as well as a
+	// scalar handed too many.
+	v, used, err := liftResultValue(c, ct, args)
+	if err != nil {
+		return canon.Value{}, err
+	}
+	if used != len(args) {
+		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
+			"task.return for a %s result consumed %d flat value(s) of the %d that arrived", ct, used, len(args))}
+	}
+	return v, nil
+}
+
+// liftResultValue lifts one value from the head of `words`, returning it and the count it consumed.
+//
+// # Why this recurses, and why the arity check had to move
+//
+// It was a switch over the result's own kind, each arm asserting `len(args) == n` for its own `n`. A
+// record broke that shape: its flat form is **the concatenation of its fields'**
+// (CanonicalABI.md `lift_flat_record`), so the word count is a property of the whole tree rather than of
+// the top-level kind, and a field consumes from wherever the previous one stopped. Extending the old
+// shape would have meant a record arm that reimplemented the string and list arms to consume their
+// words — which is how a codec grows two of itself.
+//
+// So the arity check became "the walk consumed exactly what arrived", asserted once by the caller. That
+// is strictly stronger than the per-arm version: it catches a record whose fields together consumed too
+// few words, which no per-kind count could see.
+//
+// **Everything here reads guest memory NOW.** The guest resumes after `task.return` and may reuse
+// anything a field points at, which is the whole reason the lift is eager — and it compounds for a
+// record, where several fields may point into memory independently.
+func liftResultValue(c *interp.CanonCaller, ct canon.Type, words []interp.Value) (canon.Value, int, error) {
 	want := func(n int) error {
-		if len(args) != n {
+		if len(words) < n {
 			return &interp.Trap{Reason: fmt.Sprintf(
-				"task.return for a %s result got %d flat value(s), want %d", ct.Kind, len(args), n)}
+				"task.return for a %s result has %d flat value(s) left, want %d", ct, len(words), n)}
 		}
 		return nil
 	}
+	args := words
 
 	switch ct.Kind {
 	// Every one-word kind — bool, the eight integers, the two floats, char — goes through the codec's
@@ -445,25 +481,25 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 		canon.KindS8, canon.KindS16, canon.KindS32, canon.KindS64,
 		canon.KindF32, canon.KindF64, canon.KindChar:
 		if err := want(1); err != nil {
-			return canon.Value{}, err
+			return canon.Value{}, 0, err
 		}
 		// `Bits` and not `Int32()`: the lift is defined on the unsigned word (definitions.py's iterator
 		// yields one, and `char`'s trap depends on it), and a 64-bit kind needs all 64 bits. Narrowing is
 		// the codec's business, per kind, where `flattenType` says how wide the word is.
-		v, lerr := canon.LiftFlatScalar(ct, args[0].Bits)
+		sv, lerr := canon.LiftFlatScalar(ct, args[0].Bits)
 		if lerr != nil {
 			// A `char` outside the Unicode scalar range is the reachable case, and it is a **guest fault**:
 			// the model traps there (def:1343-1347), so this does too.
-			return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
+			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf(
 				"task.return's %s result: %v", ct.Kind, lerr)}
 		}
-		return v, nil
+		return sv, 1, nil
 
 	case canon.KindString:
 		// Two flat words, `(ptr, byte-length)`. **Read now**, which is the whole point: the guest resumes
 		// after this call and may reuse the buffer.
 		if err := want(2); err != nil {
-			return canon.Value{}, err
+			return canon.Value{}, 0, err
 		}
 		ptr := int(uint32(args[0].Int32()))
 		n := int(uint32(args[1].Int32()))
@@ -471,9 +507,9 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 		if lerr != nil {
 			// A guest's own (ptr, len) failing the model's traps is a guest fault, not an engine error —
 			// it traps, as `load_string_from_range` does (def:1383-1389).
-			return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf("task.return's string result: %v", lerr)}
+			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf("task.return's string result: %v", lerr)}
 		}
-		return v, nil
+		return v, 2, nil
 
 	case canon.KindList:
 		// Two flat words, `(ptr, count)` — **not** a byte length, which is `string`'s second word. The
@@ -483,12 +519,12 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 		// **Read now**, for `string`'s reason and more sharply: the guest resumes after this call and may
 		// reuse both the element backing *and* anything a nested element points at.
 		if err := want(2); err != nil {
-			return canon.Value{}, err
+			return canon.Value{}, 0, err
 		}
 		if ct.Elem == nil {
 			// A list type with no element type is malformed rather than unmodeled. It cannot arrive from
 			// the bridge, which refuses one; checked because this is where a nil would be dereferenced.
-			return canon.Value{}, &interp.Trap{Reason: "task.return declares a list with no element type"}
+			return canon.Value{}, 0, &interp.Trap{Reason: "task.return declares a list with no element type"}
 		}
 		ptr := int(uint32(args[0].Int32()))
 		count := int(uint32(args[1].Int32()))
@@ -505,9 +541,49 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 			// A guest's own `(ptr, count)` failing the model's traps is a guest fault, not an engine
 			// error — it traps, as `load_list`'s alignment and bounds checks do (def:1715 and the span
 			// check), and as the string arm above does for the same class of defect.
-			return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf("task.return's %s result: %v", ct, lerr)}
+			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf("task.return's %s result: %v", ct, lerr)}
 		}
-		return v, nil
+		return v, 2, nil
+
+	case canon.KindRecord:
+		// `lift_flat_record`: each field lifted in declared order from the words the previous one left,
+		// so the fields consume **consecutive** slots and the record's count is their sum. No join and
+		// no draining, unlike a variant — every word belongs to exactly one field.
+		//
+		// A despecialized **tuple** arrives here too, which is why there is no tuple arm.
+		if len(ct.Fields) == 0 {
+			// Unreachable: the decoder refuses an empty record and the bridge refuses one too. Checked
+			// because `canon.Record` would refuse it with a message about layout, three frames down from
+			// the thing a reader is looking at.
+			return canon.Value{}, 0, &interp.Trap{Reason: "task.return declares a record with no fields"}
+		}
+		fields := make(map[string]canon.Value, len(ct.Fields))
+		used := 0
+		for i := range ct.Fields {
+			fv, n, ferr := liftResultValue(c, ct.Fields[i].Type, args[used:])
+			if ferr != nil {
+				// Wrapped with the field's name, so a trap several fields in says which one rather than
+				// just naming the record.
+				var tr *interp.Trap
+				if errors.As(ferr, &tr) {
+					return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf(
+						"task.return's %s result, field %q: %s", ct, ct.Fields[i].Name, tr.Reason)}
+				}
+				return canon.Value{}, 0, ferr
+			}
+			fields[ct.Fields[i].Name] = fv
+			used += n
+		}
+		// Through `canon.Record` rather than built positionally, so the constructor's exact-key and
+		// structural-type checks run on the lift path too. The fields were produced in descriptor order
+		// and are immediately re-keyed by label, which looks redundant and is not: it is the one place a
+		// lift's own output is checked against the declared type rather than assumed to match it.
+		rv, rerr := canon.Record(ct, fields)
+		if rerr != nil {
+			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf(
+				"task.return's %s result: %v", ct, rerr)}
+		}
+		return rv, used, nil
 
 	default:
 		// Everything left is compound and not a list: variant (and so result/option/enum, which
@@ -520,17 +596,21 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 		// canon.StoreList takes". That became false when `canon.LoadList` landed with exactly that
 		// injected load, and the message kept sending readers to look for a capability that existed.
 		//
-		// The general shape is the one `CLAUDE.md` calls foreclosing words — a sentence true when
-		// written, left standing across the work that falsified it — and an error message is the worst
-		// place for it, because a reader meets it already looking for a cause. So this one now names a
-		// **mechanism** rather than a to-do: what a variant or record needs is a composable load for
-		// that kind, and `canon.LoadVia`'s own refusal is where that limit lives, in one place, for both
-		// directions at once.
-		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
-			"task.return declares a %s result; this engine lifts bool, the integers, the floats, char, "+
-				"string and list from a task.return's flat values, and refuses the rest by name. A %s "+
-				"needs canon.LoadVia to compose it, which is the mirror of StoreVia's own limit — a kind "+
-				"becomes composable in both directions at once", ct, ct.Kind)}
+		// **And a THIRD time, which is why the current wording names no mechanism at all.** The second
+		// repair said a compound "needs canon.LoadVia to compose it" — accurate for a variant, and
+		// false for a record from the moment `LoadVia` gained its record arm, which was one slice
+		// earlier than this one. Three wrong versions of one sentence, each wrong because it described
+		// a *state of the engine* that then changed.
+		//
+		// So this names only what is true by construction: the kinds this arm reaches are the ones with
+		// no arm above, and the authority on why is `canon.LoadVia`'s own refusal rather than a summary
+		// kept in step by hand. A message that forwards to the single place the limit lives cannot go
+		// stale when that limit moves — which the three previous versions all could.
+		return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf(
+			"task.return declares a %s result, which this engine does not lift from flat values. The "+
+				"kinds it does are the ones with an arm here — the scalars, char, string, list and "+
+				"record; what a %s would need is a composable load, and canon.LoadVia's refusal is "+
+				"where that limit is stated for both directions at once", ct, ct.Kind)}
 	}
 }
 
