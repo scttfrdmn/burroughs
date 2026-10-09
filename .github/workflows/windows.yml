@@ -149,8 +149,33 @@ jobs:
       - name: go test -race
         # `-race` needs cgo, and whether `windows-latest` ships a usable C compiler is a question for
         # this run to answer rather than for this comment to assume. On `black3.local` it did not, and
-        # `race` failed in 0s with "requires cgo".
-        run: go test -race ./...
+        # `race` failed in 0s with "requires cgo". Answered since: it works here, no cgo gap.
+        #
+        # ## `-timeout 30m`, because the default was truncating the measurement
+        #
+        # `go test`'s default is **10 minutes per package**, and on Windows two packages hit it — so
+        # their failure lists were **lower bounds** rather than results: a package that panics on the
+        # timeout never runs the tests scheduled after the cutoff.
+        #
+        #	package            default-timeout run   cause
+        #	internal/testenv   600.062s, truncated   a HANG: the detach witness spun 9m49s (#939)
+        #	internal/spec      600.101s, truncated   SLOWNESS: 50s on Linux, >10m here under -race
+        #
+        # Those are different facts and only one of them was a bug. The hang is fixed, and
+        # `internal/testenv` now completes in 387s — which immediately revealed **six** failures that
+        # had been hidden behind the cutoff. `internal/spec` is not hung: at the moment it panicked only
+        # `TestGatedVectors` was running, 4s in, so the preceding ~596s were completed work.
+        #
+        # **This does not relax a gate.** The job is a measurement and not a gate (see the header), so
+        # there is no verdict here to weaken; the bound was cutting the measurement short. Raising it is
+        # what lets the run finish and the full failure set be read — which is the input the remaining
+        # Windows items get scoped against, and scoping them against a truncated list would mean
+        # re-scoping them again later.
+        #
+        # 30m rather than 0 (no limit): a real hang must still end the job rather than burn the runner's
+        # six-hour ceiling, and 30m is ~3x the slowest observed package. If a package ever reaches it,
+        # that is a hang to diagnose and not a bound to raise.
+        run: go test -race -timeout 30m ./...
 
       - name: the confinement witness — a scratch grant is not escapable through a junction
         id: witness
