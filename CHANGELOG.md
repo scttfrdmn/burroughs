@@ -337,6 +337,31 @@ from the three obviously-wrong `#534` trailers to all eleven.
   second copy of the number — weakening a witness's constant is a change to a test, visible in the diff
   and owned by its reviewer.
 
+- **The Windows job's `go test` gets `-timeout 30m`, because the default was truncating the
+  measurement rather than bounding it.** `go test`'s default is 10 minutes **per package**, and two
+  packages hit it — so their failure lists were **lower bounds**, since a package that panics on the
+  timeout never runs the tests scheduled after the cutoff:
+
+  | package | default-timeout run | cause |
+  |---|---|---|
+  | `internal/testenv` | 600.062s, truncated | a **hang** — the detach witness spun 9m49s |
+  | `internal/spec` | 600.101s, truncated | **slowness** — 50s on Linux, over 10m here under `-race` |
+
+  Two different facts, and only one was a bug. The hang is fixed, `internal/testenv` now completes in
+  387s, and that alone revealed **six** failures hidden behind the cutoff:
+  `TestCIWatchTakesEachJobClassFromItsOwnRun`, `TestEditRouteHookRefusesBashEditsOfTrackedFiles`,
+  `TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork`, `TestEveryRefusalReasonHasARule`,
+  `TestRefusalLogRecordsOneLinePerRefusal`, `TestShellAndGoAgreeOnTheSuitePopulation`.
+  `internal/spec` is **not** hung: when it panicked only `TestGatedVectors` was running, 4s in, so the
+  preceding ~596s were completed work.
+
+  **This relaxes no gate.** That job is a measurement and explicitly not a gate, so there is no verdict
+  to weaken — the bound was cutting the measurement short, and raising it is what lets the full failure
+  set be read. Scoping the remaining Windows items against a truncated list would mean re-scoping them
+  later. **30m rather than no limit**: a real hang must still end the job rather than burn the runner's
+  six-hour ceiling, and 30m is ~3x the slowest observed package. A package reaching it is a hang to
+  diagnose, not a bound to raise.
+
 ### Fixed
 
 - **`detach.sh`'s witness pasted paths into a shell string, and hung for 9m49s on Windows instead of
