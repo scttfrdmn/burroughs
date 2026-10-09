@@ -24,6 +24,75 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+**Record correction, 2026-10-09: eleven merges carry a `Ratio-Class: ordered` trailer whose citation
+is not an approval, and the ratio figures quoted in those PRs overstate the ordered share.** Not a
+Keep a Changelog group — the spec has six and this is not one of them, so it sits in the block's
+prose where a reader meets it before the groups, the same placement `v0.7.0`'s known limits use.
+
+`ordered` moves lines *out* of the column that measures the actor, so it must cite something outside
+the actor: a Scott stamp, or a ruling recorded somewhere citable. `carried` is the honest class for an
+order given in session, which has no artifact to point at. The trailers below cite **work items** —
+a merged PR, or a tracking issue the actor filed — which is a citation that resolves without being an
+approval.
+
+The search, so a reader can rerun it rather than trust this list:
+
+```sh
+git log --first-parent --format='%h %s' origin/main | head -24 | while read -r sha rest; do
+  pr=$(echo "$rest" | grep -oE '\(#[0-9]+\)$' | tr -d '(#)')
+  cls=$(git log -1 --format=%B "$sha" | grep -E '^Ratio-Class:' | head -1)
+  printf 'PR=%-5s %-9s %s\n' "${pr:-?}" "$sha" "$cls"
+done
+```
+
+| PR | merge | trailer | the citation is |
+|---|---|---|---|
+| 937 | `72d7186` | `ordered #534` | a PR merged 2026-08-30 about atomic mnemonics |
+| 936 | `7cc6cf7` | `ordered #534` | the same |
+| 934 | `ffc1980` | `ordered #534` | the same |
+| 933 | `4f2a102` | `ordered #534` | the same |
+| 932 | `07f7909` | `ordered #534` | the same |
+| 931 | `5ddcc17` | `ordered #534` | the same |
+| 930 | `9597b73` | `ordered #929` | a sibling PR |
+| 929 | `488237a` | `ordered #904` | a tracking issue the actor filed, **0 comments** |
+| 928 | `20604fc` | `ordered #904` | the same |
+| 927 | `3e97591` | `ordered #904` | the same |
+| 925 | `1e7c102` | `ordered #924` | a merged PR |
+
+**All eleven should read `carried`.** #935 (`277a84d`) and #926 (`03f926b`) are already `carried` and
+are correct; they are the control that says this is not uniform carelessness but a specific wrong
+reach — `ordered` felt right because the chair had asked for the work, and *asking for work is not
+approving a claim about who caused its lines*.
+
+**#534 is worse than unrelated.** It holds exactly **one** comment, in the actor's own voice, about a
+board correction, mentioning nothing about Windows, the phase or drive letters. Six trailers cite it
+as the authority for work done five weeks later.
+
+**The merge trailers cannot be amended, and the squash carried them onto main** — the branch commits
+that held them are unreachable and will be collected, so the SHAs above are the merges, which is what
+`classify` actually reads. Two mitigations, both real: `scripts/ratio.sh` **refuses** a provenance
+split for `--window` over squash merges by name, so nobody reading the campaign window gets a split
+at all; the wrong class is reachable only through a direct `make ratio RATIO=<merge-sha>`. And no
+override mechanism was built for this — `classify` reads the trailer and nothing else, which is the
+right shape for a provenance field.
+
+**The practice did not fail from ignorance, which is the part worth keeping.** Twelve PRs earlier the
+form was right:
+
+```
+PR #913  Ratio-Class: ordered Scott's stamp 2026-10-06 on the chair's four-point summary (#902)
+PR #889  Ratio-Class: ordered Scott's stamp 2026-10-04 on the chair's corrected summary
+PR #883  Ratio-Class: ordered chat-Claude review of #862
+```
+
+Each names an approval **event** — an actor and a date. From #925 the citations became bare issue
+numbers, and a bare `#N` passes `classify` because the script only requires an alphanumeric character
+after `ordered`: it cannot tell an approval from a backlog entry. The script prints every citation
+"so review can refuse it", and that is the only check there is — it worked, on the eleventh merge,
+when the chair read one. **The repair is the form, not a checker:** an `ordered` citation names who
+approved and when. Found on the chair's #938 review, which also ordered the sweep that widened this
+from the three obviously-wrong `#534` trailers to all eleven.
+
 ### Added
 
 - **`--dir` and `--scratch` recognise a Windows drive letter, on Windows only.** `strings.Cut(v, ":")`
@@ -269,6 +338,40 @@ says what it now requires and what it gives up.
   and owned by its reviewer.
 
 ### Fixed
+
+- **`detach.sh`'s witness pasted paths into a shell string, and hung for 9m49s on Windows instead of
+  failing.** The launch built `bash -c "<detach> <stamp> 120 -- <payload>"` by interpolation, and bash
+  consumes backslashes as escapes — measured, `C:\Users\x\scripts\detach.sh` becomes
+  `C:Usersxscriptsdetach.sh`. So the script was never found, its error went to the launch's own
+  `>/dev/null 2>&1`, the stamp was never written, and an **unbounded** `while [ ! -s "$stamp" ]` loop
+  spun until `go test`'s 10-minute timeout, **panicking the package and truncating every test
+  scheduled after it**. Two Windows runs, the same hang, no diagnostic. The cause was reported before
+  anything was changed, on the chair's instruction, because the hypothesis on the table was POSIX
+  process groups and that was not it.
+
+  **No shell in the launch at all** — `detach.sh` runs its command as `"$@"`, and `bash <script>
+  <args…>` needs no shell either, so every path is an argv element and nothing parses it. This is the
+  shape the `--stop` call three lines below *already used*: the launch was the only place in the file
+  that built a shell string, and the only place that broke. Chosen over `filepath.ToSlash` on the
+  chair's ruling, because converting separators fixes backslashes and still breaks on a path
+  containing a space or a quote.
+
+  **Witnessed with a space in the working directory's name**, so the argument passing is exercised on
+  the platform the gate runs rather than only on the one it does not. Falsified by restoring the
+  pasted form: it fails **on Linux**, in 20s, naming itself and quoting `usage: detach.sh
+  <stampfile>…` from the launcher's own stderr.
+
+  **The stamp wait is bounded and reports the launcher's output.** `detach.sh` records the stamp
+  *before* starting its child, so an empty stamp means the script itself did not run — which the
+  failure now says, instead of a ten-minute silence.
+
+  **And moving to `cmd.Start()` changed the process topology, which made `kill -0` lie.** Backgrounded
+  inside a shell the launcher was a *grandchild*: the shell exited, init reparented and reaped it, so
+  `kill -0` began failing promptly. Started from Go it is a direct *child*, nothing reaps it, and
+  `kill -0` **succeeds on a killed-but-unreaped zombie** — so the existing poll loop waited 5 seconds
+  and then reported that SIGKILL had been survived, which was false. The launcher is now reaped with
+  `Wait` before its liveness is asserted, which is also the synchronisation, so there is no interval
+  left to tune.
 
 - **A provenance control compared `filepath.Glob` output against forward-slash literals**, so on
   Windows nothing matched and **twelve files reported their citations unverified** — on a run where
