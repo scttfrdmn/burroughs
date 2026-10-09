@@ -585,20 +585,32 @@ race:
 # current pins of 338s and 642s are twice. Lowest on record: 96s and 192s, which is what the floors are half
 # of. **Third sample still owed** before these pins are treated as settled.
 #
-# **The FLOOR is the other half, and it FAILS rather than warns.** Earned immediately: this gauge's first real
-# run reported `0s of 1800s (0%)` because the target had omitted `-count=1`, and an upper-end warning is
-# structurally unable to see a job that did nothing. Floors are stated in SECONDS, never as a percentage of
-# the budget — a percentage would drift every time the budget moved, and the budget moves for reasons (runner
-# drift, added work) unrelated to how fast the work *cannot* be.
+# **The FLOOR was the other half, and it is now a SANITY BOUND at 5s.** Chair's ruling, 2026-10-09.
 #
-# **The floors are calibrated to CI, and a fast developer machine sits closer to them than CI does.** Measured
-# on the machine this was pinned from: 78s and 170s, against CI's 96s/135s and 192s/269s — so local runs are
-# already faster than either runner, and a machine ~1.6x faster again would trip a floor with nothing wrong.
-# Stated because the failure message says "check that the tests actually executed", and the first thing to
-# check when it fires locally is whether the floor is simply CI-shaped rather than whether the run was real.
+# It was earned honestly: this gauge's first real run reported `0s of 1800s (0%)` because the target had
+# omitted `-count=1`, and an upper-end warning is structurally unable to see a job that did nothing. But a
+# wall-clock floor is a **proxy** for "the tests ran", and `witnessrun.sh` came to assert that condition
+# *directly* — each named witness emitting `run` and `pass`, not skipped, not served from cache. Once the
+# thing itself is asserted, the proxy is pure cost, and it was: calibrated at 96s/192s halved to 48s/96s and
+# later re-pinned to 20s/29s, the race arm then failed **twice in six runs** at ~2s under its 29s number
+# (#931 and #934) with every clause test passing, `collected=8`, `mutations=600`, and non-zero deltas on both
+# clause-2 arms. A ~1-in-3 red over a 2-second margin, on a condition demonstrably satisfied.
+#
+# So the floor keeps only the job no direct check covers: catching a run that finished in about a second
+# because **nothing executed** — a cache hit the `(cached)` grep somehow misses, or an event parse that
+# silently reads nothing. 5s is chosen from that purpose rather than from a measurement: a real run is 24s
+# and 27s at the low end here, a no-op run is sub-second, and anything in between is not a number this
+# project has an interpretation for. It is deliberately **not** half-the-lowest-observed any more, because it
+# is no longer calibrated to a workload — *the floor stopped being a measurement and became an assertion
+# about zero.*
+#
+# Floors are still stated in SECONDS, never as a percentage of the budget — a percentage drifts every time
+# the budget moves, and the budget moves for reasons (runner drift, added work) unrelated to how fast the
+# work *cannot* be. The upper BUDGET is untouched and still the real calibration: 338s and 642s, twice the
+# slowest on record.
 witnesses:
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 338 20
-	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 29 --race
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-norace 338 5
+	@GO=$(GO) ./scripts/witnessrun.sh witnesses-race 642 5 --race
 
 vet:
 	$(GO) vet ./...
