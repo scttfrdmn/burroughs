@@ -1,0 +1,46 @@
+# Line endings are LF in the working tree on every platform, and binary fixtures are declared rather
+# than sniffed.
+#
+# ## Why this file exists, measured rather than anticipated
+#
+# Git for Windows' installer sets `core.autocrlf=true`, and with no `.gitattributes` the repo inherited
+# it: a clone on Windows got CRLF in every text file, *including the vendored spec corpora*, because the
+# fetch scripts use `git clone`/`checkout`. Measured on `black3.local` (Windows 11, same SHA, same
+# tools, two clones differing only in `core.autocrlf`):
+#
+#   | gate                            | CRLF | LF   |
+#   |---------------------------------|------|------|
+#   | fmt-check                       | rc=2 | rc=0 |
+#   | keyword-drift                   | rc=2 | rc=0 |
+#   | opcode-drift                    | rc=2 | rc=0 |
+#   | failing packages in `go test`   | 13   | 5    |
+#
+# `fmt-check`'s diff was **437,214 lines** — every line of every file, with zero real formatting drift.
+# The mechanism was pinned arithmetically rather than inferred: `internal/text/keywords.go` is 709 lines
+# and 62,984 bytes checked out, 62,275 with `\r` stripped, and the generator emits exactly 62,275. One
+# `\r` per line.
+#
+# So three of nine failing gates on Windows were this file's absence, and nothing about the engine.
+#
+# ## `eol=lf`, not `eol=native`
+#
+# `text=auto` alone normalises the *repository* to LF and still checks out CRLF where `core.autocrlf`
+# says so, which is the defect. `eol=lf` fixes the **working tree** too, on every platform, so a Go
+# source file and a `.wast` fixture have the same bytes everywhere. Nothing here wants platform-native
+# endings: the goldens are byte-exact strings in Go source, and a `\r` in one is a wrong answer.
+#
+# ## This is a no-op on Linux and macOS, and that is checked, not assumed
+#
+# No tracked text file currently contains a `\r` — surveyed before writing this — so renormalising
+# changes no content and `git diff` is empty but for this file. That is the condition this change was
+# required to meet before merging, and it is why the change is safe: it constrains what *future*
+# checkouts do without rewriting anything present.
+*               text=auto eol=lf
+
+# Binary fixtures, declared. Git's own detection is a heuristic — a NUL byte in the first 8000 — and it
+# happens to get these right today because a `.wasm` begins `\0asm`. Declaring them replaces a
+# heuristic that holds by luck with a rule that holds by statement, which matters most for the 2069
+# committed `.wasm` files: `eol=lf` applied to one would corrupt it silently, and a corrupted module
+# fails as a decode error somewhere far from its cause.
+*.wasm          binary
+*.bin           binary
