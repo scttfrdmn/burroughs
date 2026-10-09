@@ -24,8 +24,45 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
-Nothing yet. The next entry lands with the Windows CI job, whose scope is measured and whose
-support claim is deliberately **not** made until that job is green.
+### Added
+
+- **`.gitattributes`: line endings are LF in the working tree on every platform, and binary fixtures
+  are declared rather than sniffed.** Three of nine failing gates on Windows were this file's absence
+  and nothing about the engine. Git for Windows' installer sets `core.autocrlf=true`, and with no
+  `.gitattributes` a clone inherited it — measured on `black3.local` with two clones at the same SHA
+  differing only in that setting:
+
+  | gate | CRLF | LF |
+  |---|---|---|
+  | `fmt-check` | rc=2 | **rc=0** |
+  | `keyword-drift` | rc=2 | **rc=0** |
+  | `opcode-drift` | rc=2 | **rc=0** |
+  | failing packages in `go test ./...` | 13 | **5** |
+
+  `fmt-check`'s diff was **437,214 lines** — every line of every file, with zero real formatting
+  drift — and the mechanism was pinned arithmetically rather than inferred: `internal/text/keywords.go`
+  is 709 lines and 62,984 bytes checked out, 62,275 with `\r` stripped, and its generator emits exactly
+  62,275. One `\r` per line. The drift gates fail for the same reason: the *committed* generated file
+  gets CRLF while the generator's own output is LF, so the comparison was byte-wise unequal over
+  identical content.
+  **`eol=lf`, not `eol=native`** — `text=auto` alone normalises the repository and still checks out
+  CRLF where `core.autocrlf` says so, which is the defect. Nothing here wants platform-native endings:
+  the goldens are byte-exact strings in Go source, and a `\r` in one is a wrong answer.
+  **`*.wasm` and `*.bin` are declared `binary`**, replacing a heuristic that holds by luck — git sniffs
+  a NUL byte in the first 8000, and a `.wasm` happens to begin `\0asm` — with a rule that holds by
+  statement. That matters most for the 2069 committed `.wasm` files, where `eol=lf` applied to one
+  would corrupt it silently and surface as a decode error far from its cause.
+  **Proven a no-op on this platform before merging**, which was the condition: no tracked text file
+  contained a `\r` (surveyed first), `git add --renormalize .` rewrote **nothing**, and the only tree
+  change is the new file. The attributes were confirmed *active* with `git check-attr` rather than
+  assumed — a renormalise that changed nothing because no rule was in effect would have proven nothing
+  — and a `.wasm` and a `.go` were each deleted, re-checked-out, and compared by SHA-256 to show they
+  round-trip byte-identical.
+  **One limit, stated because it bounds the fix:** this governs *this* repository's checkout only. The
+  vendored spec and wabt corpora live in separate clones under gitignored paths, fetched by scripts that
+  use `git clone`, so they inherit the machine's own `core.autocrlf` and are untouched by this file. On
+  Windows they would still arrive CRLF; whether that matters is for the Windows CI job to measure, and
+  it is not assumed either way here.
 
 ## [0.7.0] - 2026-10-09
 *Implements contract v0.1.*
