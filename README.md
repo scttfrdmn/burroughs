@@ -32,11 +32,23 @@ interpreter, in pure Go, no cgo, no dependency outside the standard library.
 There is still no compiler, and no rung on the published ladder adds one —
 correctness and spec-tracking agility are what this buys.
 
-**64-bit hosts only.** Burroughs is built, tested and measured on 64-bit
-machines; CI, the cross-build and the contract are all 64-bit, and nothing here
-claims a 32-bit target. Where the engine does width-sensitive arithmetic it does
-it in `uint64` — not a portability promise, but so that a future port starts
-from working code rather than from a sweep.
+**Platforms: 64-bit Linux and macOS.** Those are what is built *and tested* —
+CI runs `ubuntu-24.04` and `ubuntu-24.04-arm`, and development is on macOS.
+Nothing here claims a 32-bit target; where the engine does width-sensitive
+arithmetic it does it in `uint64`, which is not a portability promise but means
+a future port starts from working code rather than from a sweep.
+
+**Windows is compiled, not tested.** `make build` cross-compiles
+`GOOS=windows GOARCH=amd64`, so it is in `make ci` and a break in the shared
+body is caught — but no test ever runs there, so "it compiles" is the whole of
+the claim. Treat it as unsupported until a Windows job runs the suite.
+
+**The toolchain is pinned exactly**, by `go.mod`'s `toolchain` line, and
+`make toolchain-check` fails if the version that actually ran is a different
+one. That is not housekeeping: CI pinned only the Go *minor* version while
+developer machines ran whatever was installed, so a green local gate could mean
+"green on some toolchain" — and the first thing that gap hid was a filesystem
+confinement advisory.
 
 What that buys today:
 
