@@ -81,6 +81,19 @@ host module (ADR 0080).**
 
 - **Capability line:** a program compiled by a third-party toolchain reads a file the user granted it
   — `burroughs run cat.wasm --dir . -- input.txt`.
+  **That bare form does not apply on Windows, which this decision never ran on.** A bare `--dir HOST`
+  maps the directory under its own *resolved* name, and a resolved Windows path (`C:\data`, or
+  `C:\cwd\data` for a relative one) is never a POSIX-absolute guest path — so the shape has no correct
+  outcome there for any input, and it is refused by name rather than granted. Making it work would
+  mean **inventing** a host→guest translation (strip the drive, convert separators), under which two
+  host paths on different drives can collide on one guest path; that is a design decision, it only
+  matters once Windows is supported, and it is deferred until then. `HOST:/GUEST` is unaffected on
+  every platform. Noted here on the **chair's ruling on the #937 review** — not a stamped decision, and
+  said that way because in an ADR attribution *is* provenance: naming the owner would give this note an
+  authority it does not have, and a later reader would take it for a stamp. What is recorded is that the
+  bare form's unavailability on Windows was ruled a deferral rather than a defect; the mapping question
+  itself remains open and unstamped. Added so this decision does not read as covering a platform it was
+  never measured on.
 - **The fd table is the reusable structure**; the write slice, `fd_seek`, and directory enumeration
   widen the surface over it when a guest needs them (guest-driven).
 - **The two security controls are negative tests, and must be watched dying with the escape *actually

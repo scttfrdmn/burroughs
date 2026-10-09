@@ -262,14 +262,49 @@ func TestABareDriveLetterIsRefusedByNameOnEveryOS(t *testing.T) {
 		})
 	}
 
-	// And the neighbouring forms are NOT caught by it, or the guard would be refusing a class
-	// rather than the input: `/h:` is a host with an empty guest, which resolves fine.
-	t.Run("an absolute host with an empty guest is still accepted", func(t *testing.T) {
+	// And a neighbouring form is NOT caught by the guard, or it would be refusing a class rather
+	// than the input. `/h:` is a host with an empty guest, which is the bare form with a trailing
+	// separator.
+	//
+	// **Two assertions, because either alone is weak in a different way.** The claim under test is
+	// "the bare-drive-letter guard does not fire on this input", which holds on every OS and is
+	// checked on every OS. But absence of that message, alone, would also pass if the input were
+	// refused for some reason nobody intended — so where acceptance is the expected outcome, it is
+	// still asserted.
+	//
+	// Acceptance is off-Windows only, and that asymmetry is not a weakening: `filepath.Abs("/h")`
+	// yields `D:\h` on Windows, which is not a POSIX guest path, so the input is legitimately
+	// refused there by the general absolute-guest check. Measured on the Windows job (#937's run),
+	// where the first draft of this arm asserted acceptance unconditionally and failed — the Linux
+	// gate could not have told me, which is the whole reason the injected-OS table exists next door.
+	t.Run("the guard does not fire on an absolute host with an empty guest", func(t *testing.T) {
 		var f preopenFlag
-		if err := f.Set("/h:"); err != nil {
-			t.Errorf("--dir \"/h:\" was refused (%v), but it is the bare form with a trailing "+
-				"separator and resolves to a real guest path — the bare-drive-letter guard has "+
-				"widened past its subject", err)
+		err := f.Set("/h:")
+
+		// Every OS: whatever happens, it is not the drive-letter guard's doing.
+		if err != nil && strings.Contains(err.Error(), "bare drive letter") {
+			t.Errorf("--dir \"/h:\" was refused BY THE BARE-DRIVE-LETTER GUARD (%v). That guard's "+
+				"subject is a two-character drive reference; this input is a host path with a "+
+				"trailing separator, so the guard has widened past what it was written for.", err)
+		}
+
+		if runtime.GOOS == "windows" {
+			// Positive assertion for this platform: refused, and for the stated reason.
+			if err == nil {
+				t.Errorf("--dir \"/h:\" was accepted on Windows, where abs(\"/h\") is a " +
+					"drive-rooted path a guest cannot open through; granting it would mean a " +
+					"mapping was invented")
+				return
+			}
+			if !strings.Contains(err.Error(), "is not absolute") {
+				t.Errorf("--dir \"/h:\" was refused on Windows but not by the absolute-guest "+
+					"check, so this arm cannot say which rule rejected it: %v", err)
+			}
+			return
+		}
+		if err != nil {
+			t.Errorf("--dir \"/h:\" was refused (%v), but off Windows it is the bare form with a "+
+				"trailing separator and resolves to a real guest path", err)
 		}
 	})
 }

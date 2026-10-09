@@ -545,9 +545,27 @@ func TestEveryFixtureFileIsChecked(t *testing.T) {
 		"../text/annot_test.go":  true,
 	}
 
-	paths, err := filepath.Glob("../*/*_test.go")
+	rawPaths, err := filepath.Glob("../*/*_test.go")
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// **`filepath.Glob` returns OS-separator paths, and every literal above is forward-slash.**
+	//
+	// On Windows the results come back as `..\binary\binary_test.go`, so neither the `checked`
+	// lookup nor the `../spec/` skip below could ever match — and the failure mode was not a quiet
+	// one in the right direction: *every* discovered file reported as "in no provenance checker's
+	// file list; its citations are unverified", including this package's own test file, whose skip
+	// also never fired. Twelve false findings, on a run where the citations were all verified.
+	// Measured on the Windows job (#936's run).
+	//
+	// Normalised to forward slashes once, here, rather than by writing the literals with
+	// `filepath.Join`: the literals are also what the error messages quote and what a reader greps
+	// for, so one canonical spelling for the whole function is the shape that cannot drift. Windows
+	// accepts forward slashes in paths it is *given*; it only emits backslashes.
+	paths := make([]string, len(rawPaths))
+	for i, raw := range rawPaths {
+		paths[i] = filepath.ToSlash(raw)
 	}
 
 	var scanned, withRows int
@@ -594,6 +612,31 @@ func TestEveryFixtureFileIsChecked(t *testing.T) {
 	for p := range checked {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("%s is in the file list but does not exist: %v", p, err)
+		}
+	}
+	// **And every registered file must be one the glob actually reached**, which is a different
+	// question from whether it exists and is the one the separator bug slipped past.
+	//
+	// `os.Stat` answers "is this a path on disk", and on Windows a forward-slash literal *is* —
+	// Windows accepts them. So the stat loop above passed while not one key matched a discovered
+	// path, and the mismatch surfaced at the far end as twelve files reporting their citations
+	// unverified. The registration list was intact, the discovery was intact, and the two could
+	// not see each other.
+	//
+	// Checked as membership rather than as a second stat, because the consumer above is a map
+	// lookup keyed by the discovered spelling: this asserts the keys are in the same namespace as
+	// the lookups, which is the property that was false.
+	discovered := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		discovered[p] = true
+	}
+	for p := range checked {
+		if !discovered[p] {
+			t.Errorf("%s is registered but the glob did not reach it under that spelling, so the "+
+				"lookup in the loop above can never match it. It exists (the stat loop would have "+
+				"said otherwise), which leaves two causes: the file moved out of ../*/ , or this "+
+				"list and filepath.Glob disagree on path SEPARATORS — the Windows failure, where "+
+				"Glob returns ..\\pkg\\x_test.go and every literal here is forward-slash.", p)
 		}
 	}
 }
