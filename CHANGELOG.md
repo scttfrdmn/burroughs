@@ -26,6 +26,46 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **`--dir` and `--scratch` recognise a Windows drive letter, on Windows only.** `strings.Cut(v, ":")`
+  split at the first colon, which on Windows is the drive letter's: `--dir C:\data:/d` parsed as host
+  `C` and guest `\data:/d` and was refused as non-absolute. Measured on the Windows job as
+  `TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon` failing.
+
+  **A last-colon split was the obvious repair and is wrong twice over**, which is why the rule is
+  narrower than it looks. `--dir /h::/g` — wasmtime's two-colon form — becomes host `/h:` and guest
+  `/g` under a last-colon rule and is *accepted*, where today it is refused **by name**; on Linux a
+  directory literally named `h:` can exist, so that is a grant against the wrong target rather than
+  a late failure. And `--dir C:/x:/d` on Linux is a **valid grant today** — host `C`, guest `/x:/d` —
+  which any off-Windows drive-letter reading silently retargets.
+
+  So: on Windows, if the argument starts with a letter, a colon and a separator, the split is taken
+  at the first colon **after** that prefix; everywhere else, and on Windows with no drive prefix, the
+  parse is byte-for-byte what it was. `splitGrant` takes the OS as a **parameter** rather than
+  reading `runtime.GOOS`, so the Linux and macOS gates exercise the Windows rule — a rule only its
+  own platform can test is a rule nobody reviews, and the Windows job is a measurement run after the
+  fact rather than a gate. The containment claim is checked as a **property** over 25 inputs × 5 OS
+  values, not just the table's cases, because "byte-for-byte today's parse except for a drive prefix"
+  is a claim about every input; it also asserts the divergence region is non-empty, since a
+  containment claim that excludes nothing is not a containment claim.
+
+  **Two shapes now refuse by name instead of falling through.** A bare `C:` is refused on *every* OS,
+  because its two readings are *different* wrong answers — on Windows the current directory on drive
+  C, which is per-process state rather than a path; elsewhere host directory `C` with an empty guest,
+  which the bare form would resolve against the working directory and grant under a name nobody
+  wrote. And on Windows the bare `--dir HOST` form is refused outright: it maps a directory under its
+  own *resolved* name, and a resolved Windows path is never a POSIX guest path, so the shape has no
+  correct outcome for any input and the message names the missing half rather than reporting a near
+  miss.
+
+- **A refusal names the flag the operator typed.** `scratchFlag` shares `preopenFlag`'s parser so
+  their *refusals* cannot diverge — the right call — but the messages were hard-coded to `--dir`, so
+  `--scratch C:` was refused with text naming a flag that was not on the command line, and whose
+  suggested remedy (`--dir HOST:/guest`) would have produced a **read-only** grant for an operator
+  asking for a writable one. A wrong remedy is worse than a terse one. The flag name is threaded
+  through the one parser as a parameter; `TestARefusalNamesTheFlagTheOperatorTyped` checks both flags
+  over every unconditionally-refusing shape, because a threaded parameter is exactly what gets
+  dropped at one call site out of six.
+
 - **Every vendored corpus is held at LF, and a CRLF checkout is repaired rather than reported.**
   `.gitattributes` governs this repository; the corpora are **separate** git repositories under
   gitignored paths, so they inherit the *machine's* `core.autocrlf` — which Git for Windows'

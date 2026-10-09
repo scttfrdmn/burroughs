@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -50,10 +51,105 @@ func (f *preopenFlag) String() string {
 //
 // wasmtime rejects its own relative-grant form too (`--dir D::.` → `EBADF` on read, measured on 49.0.1), so
 // refusing here is not narrowing something another engine honours.
-func (f *preopenFlag) Set(v string) error {
-	host, guest, found := strings.Cut(v, ":")
+// asciiLetter reports whether c is an unaccented A–Z letter, which is what a Windows drive letter
+// is. Written out rather than reached for in `unicode`, because the question is about the drive
+// namespace and not about letters in general.
+func asciiLetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+// drivePrefixLen reports 3 if s begins with a Windows drive prefix — a letter, a colon, then a
+// separator — and 0 otherwise. It is the *only* place the drive-letter shape is recognised.
+//
+// **A bare `C:` is deliberately not a drive prefix by this test**, because it does not name a fixed
+// directory: on Windows `C:` means "the current directory on drive C", which is per-process state.
+// `splitGrant` therefore does not special-case it, and `Set` refuses it by name through
+// `bareDriveLetter`.
+func drivePrefixLen(s string) int {
+	if len(s) < 3 || s[1] != ':' || !asciiLetter(s[0]) {
+		return 0
+	}
+	if s[2] != '\\' && s[2] != '/' {
+		return 0
+	}
+	return 3
+}
+
+// bareDriveLetter reports whether s is exactly a drive letter and a colon, with nothing after it.
+func bareDriveLetter(s string) bool {
+	return len(s) == 2 && s[1] == ':' && asciiLetter(s[0])
+}
+
+// splitGrant splits a `--dir`/`--scratch` argument into its host and guest halves.
+//
+// # Why this is not `strings.Cut` any more, and not a last-colon split either
+//
+// `strings.Cut(v, ":")` splits at the FIRST colon, which on Windows collides with the drive letter:
+// `--dir C:\data:/d` becomes host `C`, guest `\data:/d`, and the grant is refused as non-absolute.
+// Measured on the Windows CI job as `TestDirFlagMapsOnlyAnAbsoluteGuestPathAndTakesOneColon` failing.
+//
+// **A last-colon split was the obvious repair and it is wrong twice over**, which is why the rule
+// below is narrower than it looks:
+//
+//   - `--dir /h::/g` — wasmtime's two-colon form — splits to host `/h:` and guest `/g` under a
+//     last-colon rule, and is *accepted*. Today it is **refused by name**, with a message saying
+//     the separator is one colon and two is wasmtime's grammar. On Windows that host fails later as
+//     a bad path; on Linux a directory literally named `h:` can exist, so the grant would succeed
+//     against the wrong target. Turning a named refusal into a silent acceptance is the worst
+//     available direction.
+//   - `--dir C:/x:/d` on Linux is a **valid grant today**: host directory `C`, guest path `/x:/d`.
+//     Any rule that reads `C:` as a drive letter off-Windows silently rewrites that grant to a
+//     different host directory.
+//
+// So the drive-letter shape is recognised **on Windows only**, and everywhere else — and on Windows
+// when there is no drive prefix — this is byte-for-byte today's parse. `goos` is a parameter rather
+// than a read of `runtime.GOOS` so the Windows rule is exercised by the Linux and macOS runs too;
+// a rule that only its own platform can test is a rule nobody reviews.
+func splitGrant(v, goos string) (host, guest string, found bool) {
+	if goos == "windows" {
+		if off := drivePrefixLen(v); off > 0 {
+			i := strings.IndexByte(v[off:], ':')
+			if i < 0 {
+				// A drive-absolute path with no guest half: the bare form.
+				return v, "", false
+			}
+			return v[:off+i], v[off+i+1:], true
+		}
+	}
+	return strings.Cut(v, ":")
+}
+
+func (f *preopenFlag) Set(v string) error { return f.set(v, "--dir") }
+
+// set is the one parser, with the flag's own name threaded through for the error text.
+//
+// **Every refusal below names the flag the operator actually typed.** `scratchFlag` delegates here
+// rather than restating the validation — a second copy's *refusals* could silently diverge, which
+// is worse than a copy of a permit — but the delegation had the messages hard-coded to `--dir`, so
+// `--scratch C:` was reported against a flag that was not on the command line, and its remedy
+// suggested `--dir`, which would have granted read-only access to the operator asking for a
+// writable one. An error message is testimony, so it names the subject it is testifying about.
+//
+// A parameter rather than a field on `preopenFlag`: the name belongs to the call, not to the
+// collection, and a field would be one more piece of state to get wrong on the zero value.
+func (f *preopenFlag) set(v, flag string) error {
+	host, guest, found := splitGrant(v, runtime.GOOS)
 	if host == "" {
-		return fmt.Errorf("empty host directory in --dir %q", v)
+		return fmt.Errorf("empty host directory in %s %q", flag, v)
+	}
+	// **A bare drive letter is refused before the bare-form branch below can resolve it.** On
+	// Windows `C:` names the current directory *on drive C* — per-process state, not a fixed path —
+	// so `filepath.Abs` would silently turn it into whatever that happened to be. Refused on every
+	// OS rather than only on Windows: off Windows `--dir C:` parses as host `C` with an empty guest
+	// path, which the bare form would resolve against the process's working directory and grant
+	// under a name the operator never wrote. The two readings differ and neither is a grant anyone
+	// meant, which is what makes the input ambiguous rather than merely unusual.
+	if bareDriveLetter(v) {
+		return fmt.Errorf("%s %q: a bare drive letter is not a directory this can grant. "+
+			"On Windows %q means the current directory ON drive %q, which is per-process state "+
+			"rather than a path; elsewhere it reads as host directory %q with an empty guest path. "+
+			"Name both halves: %s %s:\\path:/guest",
+			flag, v, v, v[:1], v[:1], flag, v[:1])
 	}
 	if !found || guest == "" {
 		// **"Under its own name" means its RESOLVED name.** A bare `--dir .` or `--dir sub/dir` used to grant
@@ -63,20 +159,36 @@ func (f *preopenFlag) Set(v string) error {
 		// side this way, so the two sides now agree rather than differing by a call.
 		abs, err := filepath.Abs(host)
 		if err != nil {
-			return fmt.Errorf("--dir %q: resolving the host directory: %w", v, err)
+			return fmt.Errorf("%s %q: resolving the host directory: %w", flag, v, err)
 		}
 		guest = abs
+	}
+	// **The bare form cannot work on Windows, and says so rather than failing as "not absolute".**
+	//
+	// `--dir HOST` maps the directory under its own *resolved* name, and a resolved Windows path is
+	// never a POSIX-absolute guest path — `C:\x` resolves to `C:\x`, and `data` to `C:\cwd\data`.
+	// So this is not a near miss to be reported generically: on Windows the bare shape has no
+	// correct outcome, for every input, and the only useful message names the guest path as the
+	// missing half. Reached only where `filepath.Abs` does not produce a `/`-rooted path, so on
+	// Linux and macOS it is unreachable and the bare form is untouched.
+	if !found && !strings.HasPrefix(guest, "/") {
+		return fmt.Errorf("%s %q: this platform's absolute paths are not guest paths, so the "+
+			"bare %s HOST form cannot map %q under its own name — it resolves to %q, which a "+
+			"wasip1 guest cannot open through. Give the guest path explicitly: %s %s:/guest",
+			flag, v, flag, host, guest, flag, host)
 	}
 	// Checked before the colon case so that `--dir /h::/g` is reported as the `::` mistake it almost certainly
 	// is, rather than as the generic "not absolute" it also is.
 	if strings.HasPrefix(guest, ":") {
-		return fmt.Errorf("--dir %q: the guest path %q starts with a colon, so nothing can open through it. "+
-			"Burroughs' separator is ONE colon (--dir HOST:/guest/path); two is wasmtime's grammar", v, guest)
+		return fmt.Errorf("%s %q: the guest path %q starts with a colon, so nothing can open through it. "+
+			"Burroughs' separator is ONE colon (%s HOST:/guest/path); two is wasmtime's grammar",
+			flag, v, guest, flag)
 	}
 	if !strings.HasPrefix(guest, "/") {
-		return fmt.Errorf("--dir %q: the guest path %q is not absolute, so the guest can never resolve "+
+		return fmt.Errorf("%s %q: the guest path %q is not absolute, so the guest can never resolve "+
 			"against it — the grant would succeed and every open through it would fail with EBADF. "+
-			"Use --dir HOST:/guest/path, or a bare --dir HOST to map it under its own name", v, guest)
+			"Use %s HOST:/guest/path, or a bare %s HOST to map it under its own name",
+			flag, v, guest, flag, flag)
 	}
 	*f = append(*f, burroughs.Preopen{Host: host, Guest: guest})
 	return nil
@@ -97,7 +209,10 @@ type scratchFlag struct{ inner preopenFlag }
 
 func (f *scratchFlag) String() string { return f.inner.String() }
 
-func (f *scratchFlag) Set(v string) error { return f.inner.Set(v) }
+// Set delegates to the one parser, naming its own flag so the refusals testify about `--scratch`
+// rather than about `--dir`. Suggesting `--dir` to an operator who asked for a writable grant would
+// hand them a remedy that silently produces a read-only one.
+func (f *scratchFlag) Set(v string) error { return f.inner.set(v, "--scratch") }
 
 func (f scratchFlag) preopens() []burroughs.Preopen {
 	out := make([]burroughs.Preopen, 0, len(f.inner))
