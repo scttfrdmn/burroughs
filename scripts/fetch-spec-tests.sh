@@ -46,6 +46,9 @@ dest="testdata/spec"
 # the SHA it describes cannot drift apart silently.
 
 if [ -d "$dest/.git" ]; then
+  # Before any checkout, and on this path too — the corpus is a separate repository and inherits
+  # the machine's `core.autocrlf`, which Git for Windows sets to `true`. See corpus-lf.sh.
+  ./scripts/corpus-lf.sh config "$dest"
   if [ "$(git -C "$dest" rev-parse HEAD)" != "$rev" ]; then
     git -C "$dest" fetch --depth 1 origin "$rev"
     git -C "$dest" checkout --detach FETCH_HEAD
@@ -56,6 +59,8 @@ else
   # which is the authority this script is copied from rather than re-derived against.)
   mkdir -p "$dest"
   git -C "$dest" init -q
+  # After `init` and before `fetch`/`checkout`, so the first materialisation is already LF.
+  ./scripts/corpus-lf.sh config "$dest"
   git -C "$dest" remote add origin "$repo"
   git -C "$dest" fetch -q --depth 1 origin "$rev"
   git -C "$dest" checkout -q --detach FETCH_HEAD
@@ -117,4 +122,18 @@ if [ "$n" -ne "$files" ]; then
   echo "  it did not measure." >&2
   exit 1
 fi
+
+# And no carriage returns in any vector, on EVERY path including the already-at-the-right-rev one.
+#
+# A `.wast` is parsed byte-exactly and its `assert_malformed` cases carry byte offsets, so a `\r`
+# per line is not cosmetic here either. The population comes from `suite-count.sh --list`, which is
+# the same loop that produced `$n` above — the one place the vector set is defined, after four
+# disagreeing definitions turned into the AppleDouble grave (#340).
+#
+# **The pipe here would swallow an enumeration failure**, which is the defect that script's own
+# header refuses a pipe over. What makes it safe is the far end rather than this line: `corpus-lf`
+# refuses an empty path list by name, and an empty list is exactly what a failed enumeration
+# produces. The guard is at the consumer because that is where the vacuity can be *seen*.
+./scripts/suite-count.sh --list "$dest" | ./scripts/corpus-lf.sh verify "$dest" "$rev"
+
 echo "spec suite vendored at $dest ($got, $n .wast files, reconciled)"

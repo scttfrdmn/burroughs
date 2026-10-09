@@ -23,6 +23,9 @@ rev="bdd7164bfe18cf0bd5c3d90ef8cc3b8919fb9c0a" # 2026-07-28
 dest="third_party/spec"
 
 if [ -d "$dest/.git" ]; then
+  # Before any checkout, and on this path too — the corpus is a separate repository and inherits
+  # the machine's `core.autocrlf`, which Git for Windows sets to `true`. See corpus-lf.sh.
+  ./scripts/corpus-lf.sh config "$dest"
   if [ "$(git -C "$dest" rev-parse HEAD)" != "$rev" ]; then
     git -C "$dest" fetch --depth 1 origin "$rev"
     git -C "$dest" checkout --detach FETCH_HEAD
@@ -32,6 +35,8 @@ else
   # out at an arbitrary rev. Fetch exactly the one commit wanted instead.
   mkdir -p "$dest"
   git -C "$dest" init -q
+  # After `init` and before `fetch`/`checkout`, so the first materialisation is already LF.
+  ./scripts/corpus-lf.sh config "$dest"
   git -C "$dest" remote add origin "$repo"
   git -C "$dest" fetch -q --depth 1 origin "$rev"
   git -C "$dest" checkout -q --detach FETCH_HEAD
@@ -72,14 +77,35 @@ fi
 # link, which is what licensing them together says.
 # The list is here rather than derived because a shell script cannot read Go constants;
 # TestEveryPinsFetchScriptAssertsItsAuthorities is what keeps the two agreeing.
-for f in interpreter/binary/decode.ml interpreter/text/lexer.mll interpreter/text/parser.mly \
-         interpreter/binary/encode.ml interpreter/syntax/free.ml \
-         interpreter/valid/valid.ml interpreter/valid/match.ml \
-         interpreter/syntax/mnemonics.ml interpreter/exec/v128.ml; do
+# **One list, two consumers.** The presence loop below and the LF check after it are the same
+# population asked two different questions, so the names are written once. Written twice, an
+# authority added to one and not the other would leave the LF check covering a subset — which is
+# the narrowing `TestEveryPinsFetchScriptAssertsItsAuthorities` exists to stop, one scope in.
+authorities='interpreter/binary/decode.ml
+interpreter/text/lexer.mll
+interpreter/text/parser.mly
+interpreter/binary/encode.ml
+interpreter/syntax/free.ml
+interpreter/valid/valid.ml
+interpreter/valid/match.ml
+interpreter/syntax/mnemonics.ml
+interpreter/exec/v128.ml'
+
+for f in $authorities; do
   if [ ! -f "$dest/$f" ]; then
     echo "reference vendored at $got but $dest/$f is missing" >&2
     exit 1
   fi
   echo "  $f $(wc -c <"$dest/$f" | tr -d ' ') bytes"
 done
+
+# And no carriage returns in any of them, on EVERY path including the already-at-the-right-rev one.
+#
+# Same reason the assertions above run there: that path is a no-op, so a corpus checked out before
+# this config existed keeps its CRLF bytes, and every byte-exact production check then reads a `\r`
+# that is not in the reference. The `wc -c` above and this check read the same files for different
+# properties — a CRLF checkout inflates that byte count by one per line, which is why a size that
+# looks plausible is not evidence of LF.
+echo "$authorities" | ./scripts/corpus-lf.sh verify "$dest" "$rev"
+
 echo "reference vendored at $dest ($got)"

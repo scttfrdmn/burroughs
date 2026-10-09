@@ -66,6 +66,9 @@ rev="cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0" # 2026-07-30
 dest="third_party/spec-threads"
 
 if [ -d "$dest/.git" ]; then
+  # Before any checkout, and on this path too — the corpus is a separate repository and inherits
+  # the machine's `core.autocrlf`, which Git for Windows sets to `true`. See corpus-lf.sh.
+  ./scripts/corpus-lf.sh config "$dest"
   if [ "$(git -C "$dest" rev-parse HEAD)" != "$rev" ]; then
     git -C "$dest" fetch --depth 1 origin "$rev"
     git -C "$dest" checkout --detach FETCH_HEAD
@@ -77,6 +80,8 @@ else
   # something re-derived against it.)
   mkdir -p "$dest"
   git -C "$dest" init -q
+  # After `init` and before `fetch`/`checkout`, so the first materialisation is already LF.
+  ./scripts/corpus-lf.sh config "$dest"
   git -C "$dest" remote add origin "$repo"
   git -C "$dest" fetch -q --depth 1 origin "$rev"
   git -C "$dest" checkout -q --detach FETCH_HEAD
@@ -99,15 +104,37 @@ fi
 # TestEveryPinsFetchScriptAssertsItsAuthorities is what keeps the two agreeing, and it
 # derives the pin set so a third pin is covered on arrival rather than looking like
 # this one's hole.
-for f in interpreter/binary/decode.ml interpreter/valid/valid.ml \
-         interpreter/text/lexer.mll interpreter/text/parser.mly \
-         interpreter/binary/encode.ml interpreter/syntax/operators.ml; do
+# **One list, two consumers** — the presence loop and the LF check after it. Written twice, an
+# authority added to one and not the other would leave the LF check covering a subset, which is the
+# narrowing `TestEveryPinsFetchScriptAssertsItsAuthorities` exists to stop, one scope in.
+#
+# `test/core/threads/atomic.wast` is in the list and is NOT one of testenv's licensed authorities for
+# this pin. That direction is the harmless one by that control's own statement — a file the script
+# checks and Go does not is an extra assertion — and it is here because it is read byte-exactly by
+# `internal/validate` (align_atomic_test.go, atomic.go) and `internal/text` (code.go), both of which
+# failed on the Windows run. The LF population is "what the parsers read", which is a superset of
+# "what testenv licenses as an oracle".
+authorities='interpreter/binary/decode.ml
+interpreter/valid/valid.ml
+interpreter/text/lexer.mll
+interpreter/text/parser.mly
+interpreter/binary/encode.ml
+interpreter/syntax/operators.ml
+test/core/threads/atomic.wast'
+
+for f in $authorities; do
   if [ ! -f "$dest/$f" ]; then
     echo "threads reference vendored at $got but $dest/$f is missing" >&2
     exit 1
   fi
   echo "  $f $(wc -c <"$dest/$f" | tr -d ' ') bytes"
 done
+
+# And no carriage returns in any of them, on EVERY path including the already-at-the-right-rev one,
+# for the reason this script's other post-conditions run there: that path is a no-op, so a corpus
+# checked out before this config existed keeps its CRLF bytes and every byte-exact production check
+# reads a `\r` that is not in the reference.
+echo "$authorities" | ./scripts/corpus-lf.sh verify "$dest" "$rev"
 
 # A positive check on the *content*, which the core pin's script does not need and this
 # one does: the whole reason this pin exists is that the other one has no threads

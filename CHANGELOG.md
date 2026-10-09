@@ -26,6 +26,54 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **Every vendored corpus is held at LF, and a CRLF checkout is repaired rather than reported.**
+  `.gitattributes` governs this repository; the corpora are **separate** git repositories under
+  gitignored paths, so they inherit the *machine's* `core.autocrlf` — which Git for Windows'
+  installer sets to `true`. Measured on the Windows job's first run: **7 reference-parser controls
+  failing** (`TestExpr1LeadersMatchTheReference`, `TestPlaininstrShapesMatchTheReference`,
+  `TestIdxLookupKindsMatchTheReference`, `TestIdxPairLookupKindsMatchTheReference`,
+  `TestLabelTakingArmsMatchTheReference`, `TestLabelLookupProductionsAreAllRead`,
+  `TestReferenceDecodesUTF8AtNameAndVarOnly`), each of which compares byte-exact productions against
+  the reference OCaml sources, where a `\r` is a wrong answer rather than a formatting preference.
+
+  `scripts/corpus-lf.sh` sets `core.autocrlf=false` and `core.eol=lf` in each corpus repo **before
+  any checkout, on both the create and the update path**, and then asserts no carriage returns in
+  the files the parsers read — on every path, *including* the already-at-the-right-revision one,
+  which is the grave these scripts already paid for once.
+
+  **It repairs rather than only asserting**, because the config alone fixes only the *next*
+  checkout. The update path is a no-op when the revision already matches, so a corpus fetched before
+  this existed keeps its CRLF bytes indefinitely, and an assertion that merely failed would leave
+  every existing Windows checkout broken until a human deleted the directory.
+
+  **The hard part is that such a tree is clean by git's own reckoning**: written as CRLF by a
+  checkout under `autocrlf=true`, its cached stat information agrees and `git status` reports
+  nothing, so a repair relying on git noticing a modification has nothing to notice.
+  `TestCorpusLFRepairsACRLFWorktreeThatGitCallsClean` builds exactly that state and **asserts the
+  tree is stat-clean before repairing**, because without that precondition the test would pass
+  against a much easier scenario and claim the harder one. It uses a synthetic repository rather
+  than the real corpus: `go test ./...` runs packages in parallel and three of them read those files
+  byte-exactly, so a test that corrupted shared state to prove it could repair it would fail its
+  neighbours while working — and a synthetic repo needs no vendored corpus, so the witness carries
+  **no skip license**.
+
+  **The repair's second stage exists on evidence, and its first justification was wrong.** The
+  script was first written to clear the index before resetting, reasoning that `git reset --hard`
+  decides from cached stat information and would leave a stat-clean worktree alone. Measured on git
+  2.54.0 (Apple Git-157): a plain reset repaired it in **both** scenarios — the stat-dirty one
+  (37594 → 36686 bytes) and the stat-clean Windows shape (37594 → 36686). So the cheap stage runs
+  first and the index-clearing stage is reached only when the readback says the first did not work,
+  kept for the one platform that cannot be measured from here. Falsifying it by disabling stage 1
+  showed stage 2 does carry the repair.
+
+  Also measured, and now named in the failure diagnostic as suspect #1: **the `config` call is
+  load-bearing.** With it skipped, *both* stages faithfully reproduce the CRLF, because the reset
+  re-materialises under the machine's own setting.
+
+  `suite-count.sh` gained a `--list` mode that **shares its loop** rather than re-globbing, so the
+  LF population and the counted population cannot diverge — a second enumeration written next door
+  is how the AppleDouble grave happened the first time.
+
 - **Windows runs the suite, as a measurement and explicitly not as a gate** — a new `windows.yml`
   workflow on `windows-latest`, with Go from `go.mod`, a real Python via `setup-python`, the pinned
   corpora, `go test -race ./...`, and a Windows-only **confinement witness**. The README's platform

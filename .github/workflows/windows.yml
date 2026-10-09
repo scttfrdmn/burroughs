@@ -120,10 +120,21 @@ jobs:
         # silent reduction in the population is the worst available outcome, so the corpora come along
         # and the Windows run covers what the Linux runs cover.
         #
-        # It is also the only way to **measure** a limit `.gitattributes` could not fix: these live in
-        # separate clones under gitignored paths, fetched by `git clone`, so they inherit the machine's
-        # own `core.autocrlf` and arrive CRLF on Windows. Whether that breaks anything is a question
-        # this step turns into an answer rather than a guess.
+        # It is also the only way to **measure** a limit `.gitattributes` could not fix: these are
+        # separate git repositories under gitignored paths — created by `git init` + `git fetch
+        # --depth 1` + `git checkout --detach`, never by `git clone`, since a shallow clone of a
+        # default branch cannot be checked out at an arbitrary rev — so they inherit the *machine's*
+        # `core.autocrlf` rather than this repository's attributes, and arrive CRLF on Windows.
+        #
+        # That question is now answered rather than open: **7 reference-parser controls failed** on
+        # this job's first run for exactly this reason, and `scripts/corpus-lf.sh` sets the LF config
+        # in each corpus and repairs a worktree that is already CRLF. This step is what measured it.
+        #
+        # (The first version of this comment said "fetched by `git clone`". No script here clones.
+        # The conclusion was right and the named mechanism was wrong, which is worth leaving a note
+        # about: `core.autocrlf` is consulted at checkout time whatever created the repository, so
+        # the inference survived its own false premise — and a premise nobody checks is how a
+        # plausible wrong sentence lasts.)
         #
         # One `make` invocation per corpus, not `make spec-tests spec-ref threads-ref`. The derivation
         # in `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` reads the **first** target of each

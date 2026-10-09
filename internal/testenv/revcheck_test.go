@@ -34,10 +34,50 @@ import (
 // The table is not the domain — `revFormScripts` derives that from the scripts themselves and the
 // test fails if the two disagree, in either direction. A hand-written domain would inherit today's
 // list of siblings, and the point of this control is the sibling written next.
-var revFormChecks = map[string]struct{ successPhrase, flagRefusal string }{
+var revFormChecks = map[string]revFormCheck{
 	"citecheck.sh":  {successPhrase: "added lines", flagRefusal: "is not a form this script has"},
 	"closecheck.sh": {successPhrase: "lines scanned"},
 	"ratio.sh":      {successPhrase: "engine "},
+	// `corpus-lf.sh` is the first member whose revision is not argument one, which is why the
+	// table gained `argv` and `stdin`. Its form is `verify <dest> <rev>` with the population on
+	// stdin, and `main.go` is the fixture repo's own committed file — named here so the good arm
+	// exercises a real scan rather than hitting the script's own "none of the listed paths exist"
+	// refusal, which would make it exit non-zero for a reason that is not the revision.
+	"corpus-lf.sh": {
+		successPhrase: "LF-clean over",
+		argv:          []string{"verify", ".", "{REV}"},
+		stdin:         "main.go\n",
+	},
+}
+
+// revFormCheck is one script's row. `argv` and `stdin` were added when the first script whose
+// revision is not its first argument joined the domain: before that the invocation `script <rev>`
+// was universal, and a single hard-coded shape in the runner looked like a property of the domain
+// rather than a coincidence of its first three members. A row with no `argv` keeps the old shape,
+// so the siblings are untouched.
+type revFormCheck struct {
+	successPhrase, flagRefusal string
+	// argv is the script's argument vector, with the literal "{REV}" standing where the revision
+	// goes. Empty means `[]string{rev}`.
+	argv []string
+	// stdin is fed to the script, for the members that read their population from it.
+	stdin string
+}
+
+// argvFor renders a row's argument vector for one revision.
+func (c revFormCheck) argvFor(rev string) []string {
+	if len(c.argv) == 0 {
+		return []string{rev}
+	}
+	out := make([]string, len(c.argv))
+	for i, a := range c.argv {
+		if a == "{REV}" {
+			out[i] = rev
+		} else {
+			out[i] = a
+		}
+	}
+	return out
 }
 
 // revFormScripts derives the domain: every script under `scripts/` that advertises a `<rev>` form
@@ -194,10 +234,14 @@ func TestABadRevisionIsNeverAPass(t *testing.T) {
 	fixture := citationFreeRepo(t)
 
 	// Run a script in the fixture repo and return its combined output and exit code.
-	run := func(t *testing.T, script string, args ...string) (string, int) {
+	run := func(t *testing.T, script string, check revFormCheck, rev string) (string, int) {
 		t.Helper()
+		args := check.argvFor(rev)
 		cmd := exec.Command("sh", append([]string{filepath.Join(repo, "scripts", script)}, args...)...)
 		cmd.Dir = fixture
+		if check.stdin != "" {
+			cmd.Stdin = strings.NewReader(check.stdin)
+		}
 		out, err := cmd.CombinedOutput()
 		code := 0
 		if err != nil {
@@ -231,7 +275,7 @@ func TestABadRevisionIsNeverAPass(t *testing.T) {
 			{what: "a flag no script has", arg: "--no-such-flag-grave-549", isFlag: true},
 		} {
 			t.Run(script+" refuses to report green on "+bad.what, func(t *testing.T) {
-				out, code := run(t, script, bad.arg)
+				out, code := run(t, script, want, bad.arg)
 				if code == 0 {
 					t.Errorf("%s %s exited 0, so a mistyped argument reports this check green "+
 						"having read nothing — grave #549 exactly. Output:\n%s",
@@ -257,7 +301,7 @@ func TestABadRevisionIsNeverAPass(t *testing.T) {
 		}
 
 		t.Run(script+" still reads a diff on a revision that resolves", func(t *testing.T) {
-			out, code := run(t, script, "HEAD")
+			out, code := run(t, script, want, "HEAD")
 			if code != 0 {
 				t.Fatalf("%s HEAD exited %d in the fixture repo — the runner is breaking the "+
 					"script for some reason other than the revision, which would make the arms "+
