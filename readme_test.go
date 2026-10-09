@@ -126,6 +126,61 @@ func TestREADMEGoBlocksAreRealCode(t *testing.T) {
 	}
 }
 
+// TestCHANGELOGGoBlocksAreRealCode is [TestREADMEGoBlocksAreRealCode] for `CHANGELOG.md`, and it
+// exists because a release note is the **first** thing an embedder copies.
+//
+// # Why the changelog needed this and the README already had it
+//
+// `v0.7.0`'s notes lead with a worked example of the component value surface. As first drafted it was
+// prose: it named an export and claimed a result, and nothing compiled either — so it could drift away
+// from the API it documents, silently, and the drift would be discovered by a reader whose copy-paste
+// failed. The README's blocks have been held to a compiled file since the "Use from Go" section
+// existed; the changelog's had not, and the asymmetry had no reason behind it.
+//
+// Caught on review of the release itself, which is the right place: a release note is the one document
+// whose readers are mostly strangers.
+//
+// # Scoped to the space, not to today's block
+//
+// Any `go` block added to `CHANGELOG.md` later is checked by the same walk, with no one remembering to
+// come back here. Deliberately **no length anchor**, unlike the README's: that file promises a copyable
+// "Use from Go" section and a one-liner would satisfy it vacuously, whereas a changelog may legitimately
+// quote three lines to show one call. What is asserted here is only that whatever it quotes is real.
+func TestCHANGELOGGoBlocksAreRealCode(t *testing.T) {
+	changelog, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		t.Fatalf("reading CHANGELOG.md: %v", err)
+	}
+
+	blocks := fencedBlocks(string(changelog), "go")
+	if len(blocks) == 0 {
+		// Not a failure: a changelog with no code sample is a normal state, and demanding one would
+		// pressure a future release into adding a block for the control's sake. Logged so a green here
+		// cannot be read as "the blocks were checked" when there were none — *a control that passes
+		// over an empty population should say the population was empty.*
+		t.Log("CHANGELOG.md holds no fenced `go` block; this check had an empty population")
+		return
+	}
+
+	sources := goSources(t)
+	for i, b := range blocks {
+		norm := normalizeIndent(b)
+		found := false
+		for _, src := range sources {
+			if strings.Contains(normalizeIndent(src.body), norm) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("CHANGELOG.md `go` block %d is in no .go file this module builds, so nothing "+
+				"compiles it. A release note is the first thing an embedder copies, so a block here "+
+				"that drifts from the API is worse than one in any other file:\n%s", i+1, b)
+		}
+	}
+	t.Logf("CHANGELOG-GO-BLOCKS %d block(s) checked against %d compiled source(s)", len(blocks), len(sources))
+}
+
 type goSource struct {
 	path string
 	body string

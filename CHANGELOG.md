@@ -24,12 +24,127 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
-**The fork surfaced a missing Burroughs mechanism, which is the one case ADR 0087 §3
-admits** — so this block is no longer empty, and the sentence it replaces said so as its
-own condition rather than as a prediction.
+Nothing yet. The next entry lands with the Windows CI job, whose scope is measured and whose
+support claim is deliberately **not** made until that job is green.
+
+## [0.7.0] - 2026-10-09
+*Implements contract v0.1.*
+
+**What an embedder gets: a component's values now cross the public boundary in both
+directions.** `LoadComponent`, `Component.Call` with a `context`, and `Component.Close` were
+already the shape; what this release adds is that the values are usable. `u32`, `string`,
+`list` and `record` go **in as arguments and come back as results**, built and read through
+constructors that refuse a mis-typed value at construction rather than at the boundary:
+
+```go
+pair, err := burroughs.ComponentTypeRecord(
+	burroughs.ComponentField{Name: "a", Type: burroughs.ComponentTypeU32()},
+	burroughs.ComponentField{Name: "b", Type: burroughs.ComponentTypeU32()},
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+// The value is a map, so a misordered field is unrepresentable rather than merely caught. The keys
+// must match the descriptor exactly: a missing field cannot be defaulted, because no WIT value
+// means "absent".
+rec, err := burroughs.ComponentRecord(pair, map[string]burroughs.ComponentValue{
+	"a": burroughs.ComponentU32(10),
+	"b": burroughs.ComponentU32(32),
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+res, err := c.Call(context.Background(), "addrec", rec)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+That block is **`ExampleComponent_record`'s own body**, held equal to it by
+`TestCHANGELOGGoBlocksAreRealCode` — so `go test` runs this code and asserts the `42` it prints,
+against the committed `record-synth.wasm` fixture whose `addrec` export does the arithmetic. **Every
+constructor error is handled on purpose**: this interface's claim is that a mis-typed value is refused
+*at construction*, and a snippet that discarded those with `_` would teach a reader to ignore the very
+refusals the release is built around.
+
+A record takes a **map**, so a misordered field is not merely caught but **unrepresentable** —
+the caller supplies no order and the type descriptor is the only order in the system, which
+matters because field order *is* the byte layout. A list carries its element type, so an empty
+`list<u32>` stays distinguishable from an empty `list<string>`. Every element and field type is
+compared **structurally**, so a `list<string>` handed to a `list<u32>` is refused by name rather
+than written at the wrong stride.
+
+**Results are read before the guest can reuse the memory they point at.** Each compound's
+witness drives a guest that overwrites its own buffer immediately after resolving, so "the
+embedder got the right value" and "the guest did overwrite it" are asserted as independent
+facts. A late lift would hand back well-formed garbage of the right length and type; the tests
+distinguish the two by content.
+
+**The toolchain is pinned exactly**, in `go.mod`'s `toolchain` line, which the Makefile exports
+and every CI job reads, with `make toolchain-check` turning a mismatch into a stated failure.
+This is in the release notes rather than buried because of what the previous arrangement cost: a
+minor-version-only pin meant a green local gate could mean "green on some toolchain", and the
+first thing that hid was a filesystem **confinement** advisory (GO-2026-6604) whose traces ran
+through the `--scratch` write path.
+
+**Platforms: 64-bit Linux and macOS are built and tested.** Windows is **cross-compiled** by
+`make build` — so a break in shared code is caught — but no test runs there, which makes "it
+compiles" the whole of that claim. Treat Windows as unsupported. 32-bit is not a target.
+
+**What `v0.7.0` claims, since the digit does not say it.** ADR 0004's 2026-08-28 amendment
+decoupled the minor from the milestone mapping, so the meaning travels here: this is the release
+where the **public component value surface is complete for the kinds a guest drives today**. It
+is not a `v1.0.0` claim and not a threads claim — [decision
+0099](docs/decisions/0099-the-project-is-in-the-threads-phase-recorded-outside-the-agent-brief-because-a-phase-claim-needs-a-citable-home.md)
+records that the project is *in* the threads phase, which is not the same as having finished it.
+
+**Known limits, stated because a release that implies otherwise is the more expensive kind of
+wrong.** Not a Keep a Changelog group — the spec has six and this is not one of them, so it sits
+in the block's prose where a reader meets it before the groups rather than after.
+
+- **`variant`, `flags` and resource handles do not cross** the public boundary. `option`, `enum`
+  and `result` despecialize to `variant`, so they do not either. Each arrives when a guest needs
+  one (ADR 0085's guest-driven rule); none does today, and building them on spec would be
+  exactly the speculative surface that rule declines.
+- **A record in a component's *imports* still will not load.** The bridge models records, but
+  `unmodeledValKind` — consulted at **instantiate**, where widening it changes which components
+  load — still refuses one, and that divergence is *declared* rather than closed. An export
+  carrying a record loads and calls fine; an implemented import carrying one does not. Its own
+  slice.
+- **`Close` with a zero bound returns `nil` on Windows** where `ErrCloseIncomplete` is wanted.
+  Observed on `black3.local`; cause not investigated, and not investigated *before* being
+  written down, because a release note that omits a known wrong answer is worse than one that
+  admits an unexplained one.
+- **A sync lift returning a non-scalar is refused by name.** A result flattening wider than one
+  word comes back through a return pointer, and freeing the guest's buffer needs the lift's
+  `post-return`; this engine does neither. A `string`, `list` or `record` result does cross from
+  an **async** export, through `task.return`.
+- **An empty `record {}` or `tuple<>` is refused at decode**, matching `wasm-tools validate`. The
+  Canonical ABI gives an empty record no size at all, so this is a narrowing that follows the
+  reference rather than a restriction invented here.
 
 ### Added
 
+- **The release notes' code example is real code, checked by `go test`** — `ExampleComponent_record`,
+  with `TestCHANGELOGGoBlocksAreRealCode` holding the fenced block and the function body equal. As first
+  drafted the snippet was **prose**: it named an export, claimed a result, and nothing compiled either,
+  so it could drift away from the API it documents and the drift would surface as a stranger's failed
+  copy-paste. The README's blocks have been held to a compiled file since the "Use from Go" section
+  existed; the changelog's had not, and the asymmetry had no reason behind it. Caught on review of the
+  release, which is the right place — a release note is the one document whose readers are mostly
+  strangers.
+  The new control is **scoped to the space**, so any `go` block a later release adds is checked without
+  anyone remembering to come back, and it deliberately carries **no length anchor** where the README's
+  does: that file promises a copyable section and a one-liner would satisfy it vacuously, while a
+  changelog may legitimately quote three lines to show one call. An empty population is logged rather
+  than passed silently. Neutering one token in the block — `ComponentU32(32)` to `(999)` — fails it by
+  name.
+  The example also **handles every constructor error**, which the first draft discarded with `_`. That
+  was worse than untidy: this interface's whole claim is that a mis-typed value is refused *at
+  construction*, so a snippet ignoring those refusals teaches a reader to ignore the thing the release
+  is built around.
 - **The project's phase is recorded where a reader can cite it** — [ADR
   0099](docs/decisions/0099-the-project-is-in-the-threads-phase-recorded-outside-the-agent-brief-because-a-phase-claim-needs-a-citable-home.md),
   on Scott's ruling on the #534 review and his 2026-10-08 authorisation to record it. **The problem was
