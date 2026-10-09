@@ -176,9 +176,10 @@ func TestWitnessRunRefusesARunThatDidNotDoTheWork(t *testing.T) {
 				t.Fatalf("writing the stub: %v", err)
 			}
 
-			// Bound of 2s with a 3s stub, not the Makefile's 5s with a 6s one: the mechanism is identical
-			// and the number is an argument, so fidelity to the Makefile value is not available either
-			// way -- and six cases at 6s each put 31s on every `make check` for no extra assertion.
+			// The budget is 600 only to keep it out of the way: `witnessrun` warns at 75% of budget, and a
+			// warning here would be noise about a stub. The BOUND is the per-case argument above, and
+			// neither number is the Makefile's -- the mechanism is identical and both arrive as arguments,
+			// so fidelity to the Makefile's values is not available either way and is not what is tested.
 			cmd := exec.Command("sh", script, "witnesses-test", "600", c.bound)
 			cmd.Dir = repoRoot
 			// CI= set, because the sanity bound only BINDS there — locally it is advisory, and a test
