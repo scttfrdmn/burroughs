@@ -424,6 +424,46 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **One refusal crossed as different public errors depending on which load function you called.**
+  Three entry points load a component — `LoadComponent`, `ComponentConfig.LoadComponent` and
+  `ComponentConfig.Run` — and each wrapped a different subset of the engine's refusals. Measured
+  through all three with `gate:async` on and the committed `p3async-cancel` fixture:
+
+  | entry point | before |
+  |---|---|
+  | `LoadComponent` | **raw — no public sentinel** |
+  | `ComponentConfig.LoadComponent` | `ErrUnsupported` |
+  | `ComponentConfig.Run` | `ErrUnsupported` |
+
+  So `errors.Is(err, ErrUnsupported)` was **false through one door and true through the other two**,
+  and a CLI reading it fell to the catch-all exit code instead of the named one. A sentinel exists so
+  a caller can branch on it; a boundary whose answer depends on which function you called is one a
+  caller cannot branch on at all. No names, signatures or sentinels change — this is the classification
+  the other two already performed.
+
+  **Nine cells, because three methods that agree today agree by coincidence** unless the agreement is
+  asserted per refusal: every refusal against every entry point, so a fourth of either shows up as a
+  missing row rather than as silence.
+
+  **Each cell asserts the refusal behind the sentinel, by message.** `Run` accepts only components
+  exporting `wasi:cli/run`, so a fixture built for one refusal can fail *earlier* at another entry
+  point for an unrelated reason and produce the right sentinel from the wrong cause — measured:
+  `record-synth` through `Run` fails with *"no callable run export"*, which is not any of these
+  refusals.
+
+  **One row is unreachable and says so rather than passing.** No committed fixture produces
+  `ErrUnsupportedForm` through a public entry point: it is raised while *binding*, and the test that
+  exercises it calls `walkComponent` directly with a stub host — the public path loads `p3hello`
+  without error. All three entry points now carry that classification anyway, so the row is written
+  and begins asserting the moment a fixture reaches it. Its arm still checks something falsifiable:
+  that the fixture really does **not** produce the refusal, so a future fixture that does will fail
+  the row rather than leave it decorative.
+
+  Falsified by removing the repaired classification: exactly one cell fails, naming the door and the
+  sentinel a caller cannot branch on through it.
+
+  Recorded under **Fixed** because nothing has been released since `v0.7.0`.
+
 - **A guest asking to remove a non-empty directory on Windows was told the host had an I/O error.**
   ADR 0091 requires `path_remove_directory` to name `ENOTEMPTY` rather than fall back to `errIO`, and
   the switch has had a `syscall.ENOTEMPTY` arm since that slice — which on Windows **never matched**.
