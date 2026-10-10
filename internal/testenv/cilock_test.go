@@ -43,11 +43,19 @@ func TestCILockAllowsOneGateAtATime(t *testing.T) {
 
 	// MAKEFLAGS is cleared on every invocation below. Without it, running these arms under `make ci` would
 	// inherit the parent's flags and the dry-run guard could decline — the arm would pass by doing nothing.
-	runLock := func(t *testing.T, args ...string) (int, string) {
+	//
+	// **`BURROUGHS_GATE_PGID` is cleared for the same class of reason, and it is the sharper case.**
+	// `make ci` is normally launched through `detach.sh`, which exports that variable, and a child
+	// started from inside that run stays in the same process group — so an arm meaning to test the
+	// *not-owned* path would inherit a **matching** pgid and record `group_owned=yes`. It would then
+	// pass or fail according to how the suite was launched rather than according to what it asserts.
+	// Cleared here so every arm's environment is the one it describes; `runLockEnv` sets it explicitly
+	// for the arms whose subject it is.
+	runLockEnv := func(t *testing.T, gatePGID string, args ...string) (int, string) {
 		t.Helper()
 		cmd := exec.Command("bash", append([]string{lockSh}, args...)...)
 		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "MAKEFLAGS=")
+		cmd.Env = append(os.Environ(), "MAKEFLAGS=", "BURROUGHS_GATE_PGID="+gatePGID)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
@@ -62,6 +70,141 @@ func TestCILockAllowsOneGateAtATime(t *testing.T) {
 		}
 		return code, out.String()
 	}
+	runLock := func(t *testing.T, args ...string) (int, string) {
+		t.Helper()
+		return runLockEnv(t, "", args...)
+	}
+
+	// The arms below cover which advice the refusal gives — a subtest of this function rather than a
+	// test of its own, because they need the same `runLockEnv` and lock fixtures as its siblings.
+	//
+	// (This comment first opened by naming a top-level test that does not exist, written as though
+	// the arms had been split out. `TestEveryCitedTestNameResolves` refused it — the fourth
+	// citation-shaped fabrication in this campaign, after two issue numbers and a PR number, and the
+	// same error each time: naming what sounded right instead of what exists.)
+	//
+	// **The old message said "End it by its process GROUP, not its pid" unconditionally, and following
+	// it could kill the reader.** A gate started with a plain `&` from a non-interactive shell stays in
+	// the LAUNCHER's process group, so `kill -TERM -- -<pgid>` signals the launcher too — an agent's
+	// session, or a person's terminal. Observed while measuring the lock's own TERM trap: the probe
+	// killed its own driver and returned 144.
+	//
+	// Nothing inside a `make` recipe can decide whether its group is safe to kill; four candidate
+	// signals were measured and all fail. `detach.sh` creates the group, so it exports the pgid it made
+	// and `cilock.sh` compares against that — a positive fact at the point of creation rather than an
+	// inference afterwards. These arms pin the comparison, including the two ways it must answer `no`.
+	t.Run("the_stop_advice_matches_whether_the_group_is_the_gates_own", func(t *testing.T) {
+		for _, c := range []struct {
+			name string
+			// gatePGID is what `BURROUGHS_GATE_PGID` holds when the lock is acquired. The sentinel
+			// "MATCH" means "the holder's real pgid", resolved below — a literal cannot be written
+			// here because the pgid is not known until the holder exists.
+			gatePGID    string
+			wantOwned   string
+			wantSaid    []string
+			wantNotSaid []string
+			why         string
+		}{
+			{
+				name: "detached_or_nested_so_the_group_is_ours", gatePGID: "MATCH",
+				wantOwned: "group_owned=yes",
+				wantSaid:  []string{"process GROUP", "detach.sh --stop"},
+				why: "detach.sh made this group, or we are nested inside a run that did. Either way " +
+					"it holds only gate processes, so killing it cannot reach anyone's session — " +
+					"which is why the nested case is correctly `yes` rather than a leak.",
+			},
+			{
+				name: "plain_ampersand_so_the_group_may_be_the_launchers", gatePGID: "",
+				wantOwned:   "group_owned=no",
+				wantSaid:    []string{"End it by its PID", "pgrep -f golangci-lint", "agent's session"},
+				wantNotSaid: []string{"detach.sh --stop"},
+				why: "no exported pgid, so ownership cannot be proved. The advice leads with the PID " +
+					"and the group-kill line carries a warning naming the group leader. `--stop` is " +
+					"NOT offered: there is no stamp for it to find, and a refusal naming the wrong " +
+					"route is worse than one naming none.",
+			},
+			{
+				name: "a_forged_or_stale_pgid_does_not_count_as_ownership", gatePGID: "999999",
+				wantOwned:   "group_owned=no",
+				wantSaid:    []string{"End it by its PID"},
+				wantNotSaid: []string{"detach.sh --stop"},
+				why: "the variable is set but does not match. Being unable to prove ownership is not " +
+					"ownership, so this fails safe — a stale value from an earlier run must not " +
+					"license a group kill.",
+			},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				dir := t.TempDir()
+				lock := filepath.Join(dir, "lock")
+				pidFile := filepath.Join(dir, "holder.pid")
+
+				// A live holder in the shape a real one has: a bash process recording its own `$$`.
+				holder := exec.Command("bash", "-c", `echo $$ > "$1"; while :; do sleep 1; done`,
+					"_", pidFile)
+				if startErr := holder.Start(); startErr != nil {
+					t.Fatal(startErr)
+				}
+				defer func() {
+					_ = holder.Process.Kill()
+					_, _ = holder.Process.Wait()
+				}()
+				hpid := ""
+				deadline := time.Now().Add(20 * time.Second)
+				for time.Now().Before(deadline) {
+					if b, readErr := os.ReadFile(pidFile); readErr == nil {
+						if s := strings.TrimSpace(string(b)); s != "" {
+							hpid = s
+							break
+						}
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				if hpid == "" {
+					t.Fatal("the holder shell wrote no pid, so this arm has no live holder")
+				}
+
+				gate := c.gatePGID
+				if gate == "MATCH" {
+					// The holder's real process group, read the same way cilock.sh reads it.
+					out, psErr := exec.Command("ps", "-o", "pgid=", "-p", hpid).Output()
+					if psErr != nil {
+						t.Fatalf("reading the holder's pgid: %v", psErr)
+					}
+					gate = strings.TrimSpace(string(out))
+					if gate == "" {
+						t.Fatal("ps reported no pgid for the holder, so the MATCH case cannot be built")
+					}
+				}
+
+				if code, out := runLockEnv(t, gate, "acquire", lock, hpid, "deadbeef"); code != 0 {
+					t.Fatalf("the first acquire failed: exit %d\n%s", code, out)
+				}
+				b, readErr := os.ReadFile(lock)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if !strings.Contains(string(b), c.wantOwned) {
+					t.Errorf("the lock does not record %q.\nwhy this case: %s\nlock:\n%s",
+						c.wantOwned, c.why, b)
+				}
+
+				// The second gate's refusal is where the advice lives.
+				_, out := runLockEnv(t, gate, "acquire", lock, strconv.Itoa(os.Getpid()))
+				for _, want := range c.wantSaid {
+					if !strings.Contains(out, want) {
+						t.Errorf("the refusal does not say %q.\nwhy this case: %s\nrefusal:\n%s",
+							want, c.why, out)
+					}
+				}
+				for _, notWant := range c.wantNotSaid {
+					if strings.Contains(out, notWant) {
+						t.Errorf("the refusal says %q, which does not apply here.\nwhy this case: "+
+							"%s\nrefusal:\n%s", notWant, c.why, out)
+					}
+				}
+			})
+		}
+	})
 
 	t.Run("a_second_gate_is_refused_while_the_first_is_live", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "lock")
@@ -134,7 +277,14 @@ func TestCILockAllowsOneGateAtATime(t *testing.T) {
 		}
 		// The refusal must IDENTIFY the holder and say how to end it. A refusal that does neither teaches
 		// the reader to delete the lock file, which is the mechanism's own defeat.
-		for _, want := range []string{"REFUSED", "pid=" + hpid, "detach.sh --stop", "Do not delete"} {
+		//
+		// **`detach.sh --stop` is NOT asserted here**, and its absence is the point. This holder was
+		// acquired with `BURROUGHS_GATE_PGID` cleared (see `runLock`), so the lock records
+		// `group_owned=no` and the refusal takes the PID-advice branch. `--stop` only works for a run
+		// detach.sh actually launched; naming it here would send the reader to a tool with no stamp to
+		// find, and this file's own rule is that a refusal naming the wrong route is worse than one
+		// naming none. The two advice shapes get their own arms below.
+		for _, want := range []string{"REFUSED", "pid=" + hpid, "Do not delete"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("the refusal does not mention %q:\n%s", want, out)
 			}

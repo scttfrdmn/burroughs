@@ -238,7 +238,8 @@ CI_LOCK ?= .ci-lock
 #
 # Bash does not run a trap while a foreground command is executing; it notes the signal and runs
 # the handler when that command finishes. So this trap earns its keep on the documented route —
-# `kill -TERM -- -<pgid>`, which delivers to the children too — and does nothing for a signal sent
+# `kill -TERM -- -<pgid>` **where that group is the gate's own**, which delivers to the children too
+# — and does nothing for a signal sent
 # to the recipe shell alone while `go test` is running. That is worth knowing rather than assuming:
 # the fix is real but narrower than it looks.
 #
@@ -247,11 +248,15 @@ CI_LOCK ?= .ci-lock
 # it. The exit codes are the signal's own — 130 for INT, 143 for TERM — so a caller reading the
 # status still learns which signal ended it.
 #
-# **A hazard in the advice, not fixed here:** the `pgid` this lock records is the recipe shell's
-# group, which for a gate started with a plain `&` is the *launching* shell's group too. Following
-# `cilock`'s own refusal message then signals the launcher as well — observed, a probe of this very
-# trap killed its own driver and returned 144. `scripts/detach.sh` exists precisely to give a
-# launched run a group of its own.
+# **That hazard is now fixed in the advice itself.** The `pgid` this lock records is the recipe
+# shell's group, which for a gate started with a plain `&` is the *launching* shell's group too —
+# so `cilock`'s old unconditional "End it by its process GROUP, not its pid" could kill the reader.
+# Observed: a probe of this very trap killed its own driver and returned 144.
+#
+# `scripts/detach.sh` creates the group it runs the gate in, so it now exports that pgid and
+# `cilock.sh` records `group_owned=yes` only on an exact match. Owned groups get the group-kill
+# advice; anything else gets the PID first, with the group-kill line naming the group leader and
+# saying not to use it if that is a shell or an agent session.
 ci:
 	@rc=0; me=$$$$; \
 	scripts/cilock.sh acquire $(CI_LOCK) $$me || exit 1; \

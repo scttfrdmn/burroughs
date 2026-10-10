@@ -364,6 +364,46 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **`cilock`'s instructions for stopping a gate could kill whoever followed them.** The refusal said
+  *"End it by its process GROUP, not its pid"* unconditionally, with `kill -TERM -- -<pgid>`. A gate
+  started with a plain `&` from a non-interactive shell stays in the **launcher's** process group, so
+  following that advice signals the launcher too — an agent's session, or a person's terminal.
+  Observed while measuring the lock's own TERM trap: the probe killed its own driver and returned 144.
+
+  **Nothing inside a `make` recipe can decide whether its group is safe to kill.** Four candidate
+  signals were measured and all fail: the recipe shell never leads its own group (it is `make`'s
+  child, in every launch shape); the group leader's command is a shell in both the safe and unsafe
+  cases, differing only by which shell launched it; the leader is an ancestor either way; and
+  `ps -o sess=` reports `0` on macOS.
+
+  **So the fact comes from where the group is created.** `scripts/detach.sh` makes the group, and now
+  exports its pgid — from inside the subshell, using `BASHPID`, because the group does not exist until
+  the child does and `$$` there is the launcher's. `cilock.sh acquire` records `group_owned=yes` only
+  on an **exact match**, so a missing, stale or forged value gives `no`: being unable to prove
+  ownership is not ownership.
+
+  | `group_owned` | advice |
+  |---|---|
+  | `yes` | today's — `detach.sh --stop` first, then the group kill. The group holds only gate processes. |
+  | `no` | the **PID** first, plus `pgrep -f golangci-lint` to check for strays, and a group-kill line that **names the group leader** and says not to use it if that is a shell or an agent session. `--stop` is **not** offered: there is no stamp for it to find, and this file's own rule is that a refusal naming the wrong route is worse than one naming none. |
+
+  **A nested gate records `yes`, and that is correct rather than a leak**: one started with `&` from
+  inside a detached run is in the outer gate's group, which still holds only gate processes.
+
+  Four arms, and the environment is cleared in all of them for a reason that would otherwise have
+  made one of them meaningless: `make ci` is normally launched through `detach.sh`, so a child started
+  from inside the suite **inherits a matching pgid** — an arm meaning to test the not-owned path would
+  have recorded `yes` and passed according to how the suite was launched rather than what it asserts.
+  **Neutered to confirm it is not vacuous**: dropping the comparison makes the plain-`&` and
+  forged-pgid arms fail, by name, with the lock recording `yes` and the refusal offering `--stop`.
+
+  Verified end to end through the real `detach.sh`: `group_owned=yes`. The search for every place the
+  old advice appeared, over `*.sh`, `*.py`, `*.go`, `*.md`, `Makefile` and `*.yml` excluding vendored
+  trees, plus `docs/`, `README.md` and `CLAUDE.md`: `cilock.sh`'s two lines (replaced), the
+  `Makefile`'s trap comment (now carries the ownership caveat), and `detach.sh`'s own `kill_handle`,
+  which is **correct as it stands** because `detach.sh` owns the group it prints. The `docs/` mentions
+  are descriptive, not advice.
+
 - **A failed `cd` let a write to a tracked file through the edit-route hook, on every platform.**
   Found by the chair while reviewing a Windows symptom; it is not a Windows defect. Bash leaves the
   working directory **unchanged** when `cd` fails, so `cd /nonexistent; printf x > CHANGELOG.md`

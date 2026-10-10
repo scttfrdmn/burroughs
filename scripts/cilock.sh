@@ -68,9 +68,29 @@ acquire)
 			echo "        holder pid=$holder pgid=${hpgid:-?} sha=${hsha:0:12} since=${hwhen:-?}" >&2
 			echo "        Two gates at once collide on the linter and can write each other's verdict:" >&2
 			echo "        a run finishing LATE overwrites the file a newer run already reset." >&2
-			echo "        End it by its process GROUP, not its pid:" >&2
-			echo "          scripts/detach.sh --stop <stampfile>   # if it was launched detached" >&2
-			echo "          kill -TERM -- -${hpgid:-<pgid>}        # otherwise" >&2
+			if [ "$(field group_owned)" = "yes" ]; then
+				# The group was created by detach.sh for this gate, so it holds nothing else.
+				echo "        End it by its process GROUP — the group is this gate's own:" >&2
+				echo "          scripts/detach.sh --stop <stampfile>   # if it was launched detached" >&2
+				echo "          kill -TERM -- -${hpgid:-<pgid>}        # otherwise" >&2
+			else
+				# **The group is NOT known to be the gate's, so the group kill is not recommended.**
+				# A gate started with a plain `&` shares its launcher's process group, and the
+				# launcher may be an agent's session or a person's terminal. This advice used to say
+				# "End it by its process GROUP, not its pid" unconditionally, and following it killed
+				# the launcher — observed, with exit 144.
+				leader_cmd=$(ps -o comm= -p "${hpgid:-0}" 2>/dev/null | sed 's|.*/||')
+				echo "        End it by its PID. Its process group is NOT known to be this gate's" >&2
+				echo "        own (group_owned=no), so a group kill may signal whatever launched it:" >&2
+				echo "          kill -TERM $holder" >&2
+				echo "        Then check nothing was left behind, because the pid is not the handle" >&2
+				echo "        for a gate's children:" >&2
+				echo "          pgrep -f golangci-lint" >&2
+				echo "        A group kill WOULD end the children, and would also signal the group" >&2
+				echo "        leader pid=${hpgid:-?}${leader_cmd:+ ($leader_cmd)}. Do NOT use it if" >&2
+				echo "        that is your shell or an agent's session:" >&2
+				echo "          kill -TERM -- -${hpgid:-<pgid>}        # reads the warning above first" >&2
+			fi
 			echo "        Do not delete $lock by hand: that is the mechanism's own defeat." >&2
 			exit 1
 		fi
@@ -80,14 +100,34 @@ acquire)
 	fi
 	pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
 	[ -n "$pgid" ] || pgid=$pid
+	# **Is this process group the gate's own, or is it shared with whatever launched it?**
+	#
+	# It decides which advice the refusal gives, and getting it wrong is not cosmetic: a gate started
+	# with a plain `&` from a non-interactive shell stays in the LAUNCHER's group, so
+	# `kill -TERM -- -<pgid>` signals the launcher too — an agent's session, or a person's terminal.
+	# Observed: a probe of this very mechanism killed its own driver and returned 144.
+	#
+	# Nothing inside a `make` recipe can work this out; four candidate signals were measured and all
+	# fail. `scripts/detach.sh` creates the group, so it exports the pgid it made and this compares
+	# against it. **`yes` requires an exact match**, so a missing, stale or forged value gives `no`:
+	# being unable to prove ownership is not ownership.
+	#
+	# A nested gate — one started with `&` from inside a detached run — correctly records `yes`: the
+	# pgid matches because the group really is the outer gate's, and that group holds only gate
+	# processes, so killing it cannot reach anyone's session.
+	group_owned=no
+	if [ -n "${BURROUGHS_GATE_PGID:-}" ] && [ "$BURROUGHS_GATE_PGID" = "$pgid" ]; then
+		group_owned=yes
+	fi
 	sha=${4:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}
 	{
 		echo "pid=$pid"
 		echo "pgid=$pgid"
+		echo "group_owned=$group_owned"
 		echo "sha=$sha"
 		echo "when=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	} >"$lock"
-	echo "cilock: acquired $lock pid=$pid pgid=$pgid sha=${sha:0:12}" >&2
+	echo "cilock: acquired $lock pid=$pid pgid=$pgid group_owned=$group_owned sha=${sha:0:12}" >&2
 	;;
 holds)
 	# Deliberately quiet on success: this runs on the verdict path and a line per gate run would train the
