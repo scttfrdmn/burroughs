@@ -107,6 +107,29 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 		}
 	}
 
+	// A directory that EXISTS and cannot be entered, for the arm that shows why an existence check
+	// cannot stand in for "the `cd` succeeded". `0o000` is the whole point: `os.Stat` sees it, bash
+	// cannot `cd` into it, and a guard that consults the filesystem calls that a success.
+	//
+	// Restored to `0o755` on cleanup so `t.TempDir`'s own removal can descend into it — without
+	// that the test leaves a directory `RemoveAll` cannot delete, and the failure surfaces as an
+	// unrelated cleanup error in whatever test runs next.
+	lockedDir := filepath.Join(t.TempDir(), "locked")
+	if err := os.MkdirAll(lockedDir, 0o755); err != nil {
+		t.Fatalf("creating the unenterable directory: %v", err)
+	}
+	if err := os.Chmod(lockedDir, 0o000); err != nil {
+		t.Fatalf("locking the directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) })
+	// The premise, asserted rather than assumed: if this platform lets the owner enter a 0o000
+	// directory then the arm below measures nothing, and that is a finding about the platform
+	// rather than a reason to skip.
+	if _, err := os.ReadDir(lockedDir); err == nil {
+		t.Fatalf("%s is readable at mode 0o000, so 'a directory that exists and cannot be "+
+			"entered' cannot be constructed here and its arm has no subject", lockedDir)
+	}
+
 	type arm struct {
 		name string
 		tool string
@@ -401,6 +424,142 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			want: "CHANGELOG.md",
 		},
 		{
+			// **A FAILED `cd` leaves bash where it was, and this hook used to allow the write.**
+			//
+			// `cd /nonexistent; <write>` runs the write in the directory the command started in —
+			// measured: `bash -c 'cd /nonexistent-dir-xyz; pwd'` prints the original directory. The
+			// hook resolved the bare name only against the `cd` target, found nothing tracked
+			// there, and returned exit 0. A guard failing OPEN on a tracked file, and not a
+			// Windows matter: this arm fails on Linux without the fix (chair's ruling, #942
+			// review).
+			//
+			// The repair is in `cd_base`: a target that is not an existing directory keeps the
+			// pre-`cd` directory as a candidate, which is what bash does.
+			name: "a_failed_cd_then_a_write_still_resolves_to_the_tracked_file",
+			cmd:  "cd /nonexistent-dir-xyz; echo broken > CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
+			// The `&&` twin, where the write never runs at all — so refusing costs nothing, and
+			// over-refusing is the direction this check is allowed to err in. Pinned beside its
+			// `;` sibling because the two differ in consequence and not in parse: without both,
+			// a future narrowing could fix the harmless case and leave the harmful one.
+			// **Allowed, and the `;` twin above is refused — that pair IS the rule.**
+			//
+			// This arm was written `deny: true` one slice earlier, on the reasoning that the write
+			// never runs so over-refusing is free. The operator rule supersedes that: `&&` means
+			// the write cannot run unless the `cd` succeeded, so there is no write to refuse and
+			// refusing it is a false positive, not a free one. Kept as the complement of the `;`
+			// arm because the two differ only in the separator, which is the one thing the rule
+			// reads — if both ever agree, the operator test has stopped being consulted.
+			name: "a_failed_cd_with_andand_is_allowed_because_the_write_cannot_run",
+			cmd:  "cd /nonexistent-dir-xyz && echo broken > CHANGELOG.md",
+			deny: false,
+		},
+		{
+			// **The target does not have to be absent for the `cd` to fail**, which is why the rule
+			// is the operator and not the filesystem. Here an earlier `mkdir` fails, so the `cd`
+			// fails, so the write lands in the original directory — and a draft of this guard that
+			// tracked `mkdir` targets as "will exist" allowed it. Measured `rc=0` before the
+			// operator rule, `rc=2` after.
+			name: "a_cd_after_a_failing_mkdir_keeps_the_previous_directory",
+			cmd:  "mkdir /proc/nope; cd /proc/nope; echo broken > CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
+			// `{LOCKED}` exists and cannot be entered, so an existence check calls the `cd` a
+			// success and the shell stays put. The second of the two unsound cases, and the one
+			// that cannot be written with a literal path because it needs a mode the test creates.
+			name: "a_cd_into_an_unenterable_directory_keeps_the_previous_directory",
+			cmd:  "cd {LOCKED}; echo broken > CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
+			// `||` runs the next command precisely WHEN the `cd` failed, so the previous directory
+			// is not merely possible but likely. Pinned beside `&&` because the two operators are
+			// the whole of the rule: if this arm ever passes while the `&&` arm below still does,
+			// the operator test has collapsed into "any separator".
+			name: "a_cd_with_orelse_keeps_the_previous_directory",
+			cmd:  "cd /tmp || echo broken >> CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
+			// The `&&` complement of the arm above, and the one that keeps the rule from becoming
+			// "refuse everything after any `cd`": the write cannot run unless the `cd` worked, so
+			// the target is the only candidate and a bare name there is someone else's file.
+			name: "a_cd_to_an_existing_dir_with_andand_resolves_to_the_target_only",
+			cmd:  "cd /tmp && printf x > Makefile",
+			deny: false,
+		},
+		{
+			// **`&&` says the `cd` succeeded, not which directory it started from.** The first `cd`
+			// fails, so bash is still in the repo root; `cd scripts` then succeeds and the write
+			// lands on the tracked `scripts/editroute.py`. Resolving `scripts` against the first
+			// candidate alone gave `/nonexistent/scripts`, which `&&` then narrowed to — allowing
+			// the write, measured `rc=0`. A relative target now resolves against every candidate.
+			name: "a_relative_cd_after_an_uncertain_one_resolves_against_every_candidate",
+			cmd:  "cd /nonexistent-dir-xyz; cd scripts && echo broken >> editroute.py",
+			deny: true,
+			want: "editroute.py",
+		},
+		{
+			// **A `cd` inside a subshell never moves the parent shell**, so this writes the repo's
+			// tracked `CHANGELOG.md`. The splitter treats `(` as a separator and discards it, so
+			// the inner `cd` looked like any other and `&&` narrowed to `/tmp`: allowed, measured
+			// `rc=0`. Now any `(` in the command stops every `cd` from narrowing — the stance
+			// recorded in `cd_base`'s docstring, that an unmodelled construct must never narrow.
+			name: "a_cd_inside_a_subshell_does_not_move_the_parent",
+			cmd:  "(cd /tmp && true) && echo broken >> CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
+			// The same subshell, written with no space before `&&`. Pins that the tokeniser splits
+			// punctuation rather than handing back `true)&&` as one word — if it ever stops, the
+			// arm above keeps passing while this one fails, which is the only way to tell a rule
+			// that works from a rule that happens to match the spacing it was written with.
+			name: "a_subshell_with_no_space_before_the_operator_is_still_a_subshell",
+			cmd:  "(cd /tmp && true)&& echo broken >> CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
+			// **Command substitution is a child shell too.** `$( … )` arrives with a `(` token, so
+			// the subshell rule already covers it — pinned because that is a property of the
+			// tokeniser rather than of this rule, and a tokeniser that stopped emitting `(` for
+			// `$(` would reopen the gap silently.
+			name: "a_cd_inside_a_command_substitution_does_not_move_the_parent",
+			cmd:  "x=$(cd /tmp && true) && echo broken >> CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
+			// **The backtick form refused only by accident before this slice**: the token is
+			// `` `cd ``, so `basename` never matched "cd" and no `cd` was detected at all. That is
+			// fail-closed by a property of the tokeniser, one change away from failing open — so a
+			// backtick anywhere now stops narrowing by design. Verified to change behaviour where a
+			// `cd` IS detected: `cd /tmp && printf x > Makefile` is allowed, and the same command
+			// with a `` `date` `` in it is refused.
+			name: "a_cd_inside_backticks_does_not_move_the_parent",
+			cmd:  "`cd /tmp` && echo broken >> CHANGELOG.md",
+			deny: true,
+			want: "CHANGELOG.md",
+		},
+		{
+			// **The arm that keeps the repair from becoming the false positive it replaced.**
+			// `cd_base` exists because `cd /tmp/x && printf … > Makefile` was once refused against
+			// the repo's tracked `Makefile`. A target that EXISTS still narrows the candidates to
+			// it alone, so this stays allowed — if it ever starts being refused, the fix above has
+			// widened past a failed `cd` into every `cd`.
+			name: "a_cd_to_an_existing_dir_outside_the_repo_is_still_allowed",
+			cmd:  "cd /tmp && printf x > Makefile",
+			deny: false,
+		},
+		{
 			// The known gap, pinned as a deliberate arm rather than left to be discovered: a command
 			// that cannot be tokenised is allowed, with a warning. Failing closed selectively would
 			// mean grepping the raw text, which is the defect property 21 names.
@@ -421,7 +580,22 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			// that directory does not exist, so the hook correctly resolved the bare path against a
 			// non-repo directory and ALLOWED the write, and both arms inverted. A witness that hard-codes
 			// where the tree lives is asserting something about a machine, not about the hook.
-			cmdText := strings.ReplaceAll(a.cmd, "{ROOT}", root)
+			// **Single-quoted, because an unquoted path is not a command a real user would type.**
+			//
+			// On Windows `root` is `D:\a\burroughs\burroughs`, and bash removes those backslashes as
+			// escapes — so the unquoted form gave `cd D:aburroughsburroughs`, the hook resolved bare
+			// names against a directory that does not exist, and three arms inverted on the Windows
+			// job. The hook was right: it predicted what bash does, which is what a guard on a bash
+			// command must do. What was wrong was this substitution, handing it input no shell would
+			// honour — the same shape as the CI-lock witness building a holder from Go.
+			//
+			// Single quotes are what `shlex.quote` emits for such a path, and they survive the
+			// hook's own POSIX-mode tokeniser: measured, `shlex.split` returns
+			// `D:\a\burroughs\burroughs` intact from the quoted form and `D:aburroughsburroughs`
+			// from the bare one. Fixing the tokeniser instead would make the hook disagree with the
+			// shell it guards, which is strictly worse (chair's ruling, #942 review).
+			cmdText := strings.ReplaceAll(a.cmd, "{ROOT}", "'"+root+"'")
+			cmdText = strings.ReplaceAll(cmdText, "{LOCKED}", "'"+lockedDir+"'")
 			input := map[string]any{"command": cmdText}
 			if a.editInput != nil {
 				input = map[string]any{}

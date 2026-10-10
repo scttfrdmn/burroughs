@@ -364,6 +364,109 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **A failed `cd` let a write to a tracked file through the edit-route hook, on every platform.**
+  Found by the chair while reviewing a Windows symptom; it is not a Windows defect. Bash leaves the
+  working directory **unchanged** when `cd` fails, so `cd /nonexistent; printf x > CHANGELOG.md`
+  writes the tracked file where the command started — measured, `bash -c 'cd /nonexistent-dir-xyz;
+  pwd'` prints the original directory. The hook resolved the bare name only against the `cd` target,
+  found nothing tracked there, and returned **exit 0**. Measured before the fix on Linux: the same
+  redirection *without* the `cd` was refused `rc=2`, and with it `rc=0`. **A guard failing open.**
+
+  **The rule is the shell's operator, not the filesystem** — and reaching that took two unsound
+  drafts, both caught by the chair reading the fix rather than by a test. `cd_base` now returns
+  **candidate** directories, decided by the separator that follows the `cd`:
+
+  | written | the shell guarantees | candidates |
+  |---|---|---|
+  | `cd X && …` | the next command runs **only if** the `cd` succeeded | X alone |
+  | `cd X; …`, `cd X \|\| …`, newline | it runs either way | X **and** the previous directory |
+
+  **Why not ask the filesystem.** The first draft checked `os.path.isdir(target)`; the second added a
+  carve-out for directories an earlier `mkdir` creates, to stop the first from reinstating the false
+  positive `cd_base` exists to remove. Both are unsound, in both directions, measured:
+
+  - `cd <directory with mode 0o000>; printf x > CHANGELOG.md` — the target **exists**, so the check
+    called the `cd` a success; bash cannot enter it and stays put. `rc=0`, and the write lands on the
+    tracked file.
+  - `mkdir /proc/nope; cd /proc/nope; printf x > CHANGELOG.md` — the `mkdir` **fails**, so the `cd`
+    fails; the carve-out had already recorded the target as "will exist". `rc=0`, same write.
+
+  Both are the same error: inferring a runtime outcome from a filesystem snapshot taken at a
+  different time. The operator is a fact about the program text, which is all this hook has and all
+  it needs.
+
+  **The operator rule needs no exceptions, which is the evidence it is the right one.**
+  `mkdir -p /tmp/x && cd /tmp/x && printf … > Makefile` is joined by `&&` throughout, so the original
+  false positive stays fixed with **no special handling for `mkdir` at all** — both dead checks are
+  removed rather than kept as insurance, because leaving them would make the rule look more complete
+  than it is. `simple_commands` dropped the separators, so a variant that carries them was added
+  rather than reconstructing them by re-scanning afterwards.
+
+  It also **retired an arm I had written the slice before**: `cd /nonexistent && <write>` was asserted
+  as refused on the reasoning that the write never runs so over-refusing is free. Under the operator
+  rule that is a false positive rather than a free one — `&&` means there is no write to refuse — and
+  the arm now asserts `allowed`, paired with its `;` twin so the two differ only in the separator.
+
+  **Two further gaps in how the rule carried a target forward, both found by the chair reading it
+  and both measured `rc=0` before the fix:**
+
+  - `cd /nonexistent; cd scripts && printf x > editroute.py` — the first `cd` fails, so bash is
+    still in the repo root; `cd scripts` then succeeds and the write lands on the tracked
+    `scripts/editroute.py`. The relative target was resolved against the **first** candidate only,
+    giving `/nonexistent/scripts`, which `&&` then narrowed to. **`&&` says the `cd` succeeded, not
+    which directory it started from** — a relative target now resolves against *every* candidate and
+    `&&` keeps all of those results.
+  - `(cd /tmp && true) && printf x > CHANGELOG.md` — a `cd` inside a subshell never moves the parent
+    shell, so this writes the repo's tracked `CHANGELOG.md`. The splitter treats `(` as a separator
+    and discards it, so the inner `cd` looked like any other. Any `(` in the command now stops every
+    `cd` from narrowing.
+
+  **The stance is written into `cd_base`'s docstring, because narrowing is the only way this guard
+  can be made to miss a write.** Anything not modelled must leave every candidate in place:
+  subshells, `pushd`/`popd`, `builtin cd`, `command cd`, `eval`, `bash -c '…'`, functions. Measured,
+  the recognisable ones already refuse — `pushd /tmp; <write>`, `pushd /tmp && <write>`,
+  `builtin cd /tmp && <write>` and `command cd /tmp && <write>` all return `rc=2`. The `&&` forms are
+  false positives, the same one the `cd` handling exists to remove, and they are **left unmodelled on
+  purpose**: each construct added is another way to narrow, and a false positive costs an operator one
+  rewrite while failing open costs a tracked file.
+
+  Witnessed on Linux: both unsound cases refused, both new gaps refused, `&&` resolving to the target
+  only, `||` keeping the previous directory, and the original false positive still allowed.
+  **Neutered three ways to confirm none of it is vacuous**, each caught by its own arm by name:
+  ignoring the separator fails all four non-`&&` arms; resolving a relative target against the first
+  candidate only fails the relative-`cd` arm; ignoring subshells fails the subshell arm. All with
+  `exit 0 (denied=false), want denied=true`.
+
+  One note on a probe rather than the code: the first re-check of the original false positive came
+  back refused, and the cause was the probe — written `printf (x) > Makefile` as shorthand to dodge
+  quoting, whose literal parens made it look like a subshell. The shorthand changed the meaning of
+  the test.
+
+  Two call sites took the directory for a different purpose and had to be threaded by hand:
+  `git_discard_subject` and `dirty_paths` resolve a relative `git -C`, so they need the shell's
+  **actual** directory and get `bases[-1]` — when the `cd` succeeded there is one element, and when
+  it could not have, the shell stayed where it was and that is the element appended last. Both were
+  missed on the first pass because the search was for *call sites of the two functions I had changed*
+  rather than for the identifier; the hook then crashed with a `NameError`, which exits non-zero and
+  so read as "refused for the wrong reason" rather than as a crash.
+
+- **The hook's refusal log gained a `\r` per record on Windows**, because Python's text mode
+  translates `\n` to the platform line ending. Measured as `field 3 is not a 12-char digest:
+  "61d961bd2b8a\r"`. Not only a test's problem: `scripts/refusals.sh` prints field 3 of each recent
+  row, so the digest it reported was wrong by one character. Written with `newline="\n"` — the
+  artifact is machine-read, so its bytes are part of its contract, which is `.gitattributes`'
+  reasoning applied to a file this repo writes rather than checks out.
+
+- **Three test arms fed the hook commands no shell would honour**, and the hook was right to parse
+  them as bash does. `{ROOT}` and `git -C <path>` were substituted **unquoted**, so on Windows bash
+  removed the backslashes as escapes and `cd D:\a\b` arrived as `cd D:ab`: the hook resolved bare
+  names against a directory that does not exist and allowed the write, while the `-C` arms refused
+  with *"could not be checked"* instead of naming the discard. Fixing the **tokeniser** instead would
+  make the hook disagree with the shell it guards, which is strictly worse — so the tests now
+  single-quote, which is what `shlex.quote` emits and which survives the hook's POSIX-mode tokeniser
+  intact (`shlex.split` returns `D:\a\burroughs` from the quoted form and `D:aburroughs` from the
+  bare one). Same shape as the CI-lock witness building a holder from Go: the test, not the subject.
+
 - **The edit-route hook was silently inert on Windows: it refused nothing at all.** `scripts/editroute.py`
   is what stops a Bash command from editing a tracked file, and its single predicate is `git ls-files`.
   `tracked_set` keyed its entries as `os.path.join(root, p)` — and `git ls-files` emits **forward**

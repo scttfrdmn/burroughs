@@ -57,6 +57,32 @@ the hook's stdin and never a file in the tree. The class of defect property 21 n
 cannot arise here, which is worth stating rather than assuming: it is the first check in this tree
 whose subject is not a file.
 
+A known FALSE POSITIVE: reading a tracked file inside an inline interpreter
+---------------------------------------------------------------------------
+
+An inline script that **reads** a tracked file and writes somewhere else is refused as though it
+wrote the tracked one. Reproduced:
+
+	python3 -c "import pathlib; s=pathlib.Path('scripts/editroute.py').read_text(); \
+	            pathlib.Path('/tmp/out.py').write_text(s)"
+	-> editroute: REFUSED
+	   * an inline interpreter opens the tracked file 'scripts/editroute.py' for writing
+
+The write target is `/tmp/out.py`. The inline-interpreter route sees a tracked path and a
+write-shaped call in the same body and attributes the write to the path, without matching which
+argument belongs to which call.
+
+**Not fixed, deliberately.** Matching the path to the call means parsing the embedded language —
+Python here, but the route covers any interpreter — and a half-parse would be a new way to miss a
+real write, which is the one direction this guard may not err in. The cost is an operator rewriting
+one command, usually by reading the file through the Read tool instead, and it was paid twice in the
+session that found it: once copying a tracked script to /tmp, once building a neutered variant of
+this very file.
+
+Recorded rather than filed because nothing here will act on it: it is a standing property of the
+route, not a defect awaiting a slice. (Chair's ruling, in session, 2026-10-10: record it, do not fix
+it now.)
+
 Two known gaps, stated rather than filed
 ----------------------------------------
 
@@ -188,7 +214,16 @@ def log_refusal(texts: list[str], subject: str, root: str) -> None:
         path = os.environ.get("EDITROUTE_LOG") or (
             os.path.join(root, REFUSAL_LOG) if root else REFUSAL_LOG
         )
-        with open(path, "a", encoding="utf-8") as fh:
+        # **`newline="\n"`, because this file has a format and Windows would change it.** Python's
+        # text mode translates `\n` to the platform line ending, so on Windows every record gained a
+        # `\r` — measured on the Windows job as `field 3 is not a 12-char digest: "61d961bd2b8a\r"`.
+        #
+        # That is not only a test's problem: `scripts/refusals.sh` parses this log by tab-separated
+        # field, so a trailing `\r` rides along on the last field of every line and the digest it
+        # reports is wrong by one character. A log whose own format drifts by platform cannot be the
+        # record of a refusal rate. Same reasoning as `.gitattributes` pinning `eol=lf`: the artifact
+        # is machine-read, so its bytes are part of its contract.
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{when}\t{rules}\t{digest}\n")
     except OSError:
         pass
@@ -265,8 +300,13 @@ def tracked_set(root: str) -> set[str]:
     return _tracked
 
 
-def cd_base(tokens: list[str], cwd: str) -> tuple[str, bool]:
-    """The directory a relative path in this command resolves against, and whether a `cd` set it.
+def cd_base(tokens: list[str], cwd: str) -> tuple[list[str], bool]:
+    """The directories a relative path in this command may resolve against, and whether a `cd` set them.
+
+    **A list, not one directory, because a `cd` can fail.** Bash leaves the working directory
+    unchanged when `cd` fails, so a command like `cd /nonexistent; printf x > CHANGELOG.md` writes
+    the tracked file where it started. Returning only the target made this hook allow that. The
+    first element is the shell's most likely directory; the rest are the ones it may still be in.
 
     **This exists because the hook produced a false positive on its author.** A command beginning
     `cd /tmp/mfprobe && printf ... > Makefile` was refused as overwriting the tracked root `Makefile`:
@@ -280,9 +320,48 @@ def cd_base(tokens: list[str], cwd: str) -> tuple[str, bool]:
     The last `cd` wins, because that is what the shell does. `~` is expanded; a `cd` with no argument
     means home; `cd -` is left alone rather than guessed at, since tracking OLDPWD is beyond what this
     needs and a wrong guess here is another false positive.
+
+    # The stance: a construct this function does not model must never NARROW
+
+    Narrowing the candidate list is the only way this guard can be made to miss a write. So the rule
+    for anything not modelled here is that it leaves every candidate in place:
+
+      * **subshells** — `( … )`; a `cd` inside one never moves the parent, handled below;
+      * **`pushd` / `popd`** — not recognised as a `cd` at all, so the candidates stand;
+      * **`builtin cd` / `command cd`** — the command word is `builtin` or `command`, so likewise;
+      * **`eval`, `bash -c '…'`, shell functions** — the directory change is inside a string or a
+        body this function never reads.
+
+    Measured, all four of the recognisable ones refuse rather than allow: `pushd /tmp; <write>`,
+    `pushd /tmp && <write>`, `builtin cd /tmp && <write>` and `command cd /tmp && <write>` all come
+    back `rc=2`. The `&&` forms are false positives — the same one the `cd` handling exists to
+    remove — and they are **left unmodelled on purpose**: adding each construct is adding a way to
+    narrow, and the cost of a false positive here is an operator rewriting one command, while the
+    cost of failing open is a tracked file silently overwritten.
+
+    So the next construct someone finds starts from refusing. If one is ever modelled, the arm that
+    proves it narrows correctly belongs beside the `&&`/`;` pair in `editroute_test.go`, because
+    those two are what test the rule rather than its instances.
     """
-    base, moved = cwd, False
-    for cmdv in simple_commands(tokens):
+    bases, moved = [cwd], False
+    # **A subshell is a construct this function does not model, so no `cd` anywhere in the command
+    # may narrow.** A `cd` inside `( … )` changes the subshell's directory and never the parent's,
+    # so `(cd /tmp && true) && printf x > CHANGELOG.md` writes the repo's tracked `CHANGELOG.md`.
+    # The splitter treats `(` as a separator and discards it, so the inner `cd` looked like any
+    # other, `&&` narrowed to `/tmp`, and the write was allowed — measured `rc=0`.
+    #
+    # Deciding *which* subshell a write belongs to is real modelling, and this guard does not do it.
+    # The consequence, taken deliberately: `(cd /tmp && printf x > Makefile)` is refused even though
+    # the `cd` does apply to that write, because the whole command is inside the subshell. That is a
+    # false positive on the safe side, and the alternative is a construct that silently fails open.
+    # Command substitution runs its body in a child shell too, so it is the same case. `$( … )`
+    # already arrives with a `(` token — verified, `x=$(cd /tmp && true) && …` tokenises with one —
+    # but a **backtick** substitution does not, and that form refuses today only by accident: the
+    # token is `` `cd ``, so `basename` does not match "cd" and the `cd` is never detected at all.
+    # Fail-closed by a property of the tokeniser rather than by this rule, which is one tokeniser
+    # change away from failing open. Named here so it holds by design.
+    has_subshell = "(" in tokens or any("`" in t for t in tokens)
+    for cmdv, sep in simple_commands_with_sep(tokens):
         head = 0
         while head < len(cmdv) and cmdv[head] in SHELL_KEYWORDS:
             head += 1
@@ -290,21 +369,79 @@ def cd_base(tokens: list[str], cwd: str) -> tuple[str, bool]:
             continue
         args = [a for a in cmdv[head + 1 :] if not a.startswith("-")]
         if not args:
-            base, moved = os.path.expanduser("~"), True
+            bases, moved = [os.path.expanduser("~")], True
             continue
-        target = os.path.expanduser(args[0])
-        base = target if os.path.isabs(target) else os.path.normpath(os.path.join(base, target))
-        moved = True
-    return base, moved
+        raw = os.path.expanduser(args[0])
+        # **A relative target resolves against EVERY current candidate, not just the first.**
+        #
+        # `cd /nonexistent; cd scripts && printf x > editroute.py` is the case: the first `cd` fails,
+        # bash stays in the repo root, `cd scripts` succeeds, and the write lands on the tracked
+        # `scripts/editroute.py`. Resolving `scripts` against `bases[0]` alone gave
+        # `/nonexistent/scripts`, and then `&&` narrowed to that one candidate and the write was
+        # allowed — measured `rc=0`.
+        #
+        # `&&` says the `cd` succeeded. It does **not** say which directory it started from, and
+        # when the preceding `cd` was uncertain there is more than one answer. So each candidate
+        # produces a resolved target and `&&` keeps all of them.
+        if os.path.isabs(raw):
+            targets = [path_key(raw)]
+        else:
+            targets = [path_key(os.path.join(b, raw)) for b in bases if b]
+        # **The OPERATOR decides, not the filesystem.**
+        #
+        # Whether the `cd` succeeded is not knowable here, and two drafts of this function tried to
+        # know it anyway. Checking `os.path.isdir(target)` is unsound in both directions, measured:
+        #
+        #   - `cd <dir with mode 000>; printf x > CHANGELOG.md` — the target EXISTS, so the check
+        #     said the `cd` worked, but bash cannot enter it and stays put. Allowed, and the write
+        #     lands on the tracked file.
+        #   - `mkdir /proc/nope; cd /proc/nope; printf x > CHANGELOG.md` — a `mkdir`-tracking
+        #     carve-out (added to keep the false positive below from returning) assumed the
+        #     directory would exist. The `mkdir` fails, so the `cd` fails. Allowed, same write.
+        #
+        # Both were found by the chair reading the fix rather than by a test, and both are the same
+        # error: inferring a runtime outcome from a filesystem snapshot taken at a different time.
+        #
+        # So ask the shell instead. Bash guarantees that after `&&` the next command runs ONLY if
+        # this one succeeded; after `;`, `||`, `&` or a newline it runs either way. That is a
+        # statement about the program text, which is all this hook has and all it needs:
+        #
+        #   `cd X && …`   the write cannot run unless the `cd` worked, so X alone is the candidate.
+        #   `cd X; …`     the shell may still be where it was, so keep BOTH.
+        #   `cd X || …`   likewise — `||` runs the next command precisely when the `cd` failed.
+        #
+        # This also retires the `mkdir` carve-out rather than keeping it as insurance:
+        # `mkdir -p /tmp/x && cd /tmp/x && printf … > Makefile` is joined by `&&` throughout, so the
+        # original false positive stays fixed with no special case for `mkdir` at all. A rule that
+        # needs no exceptions is the evidence it is the right rule — and leaving the dead checks in
+        # would make this look more complete than it is.
+        #
+        # The cost is that `cd /tmp; printf x > Makefile` is refused. That is the safe direction, and
+        # `&&` is the obvious rewrite.
+        #
+        # (Chair's ruling, given in session on the two unsound drafts above. Deliberately no issue
+        # number: the ruling predates this slice's own PR, and the first draft of this comment cited
+        # a guess at what that number would turn out to be. `citecheck` refused it as not resolving,
+        # which is the check earning its keep — an in-session order has no citation, and inventing
+        # one that looks like an artifact is worse than saying there is none.)
+        if sep == "&&" and not has_subshell:
+            bases, moved = targets, True
+        else:
+            bases = targets + [b for b in bases if b not in targets]
+            moved = True
+    return bases, moved
 
 
-def is_tracked(path: str, root: str, cwd: str, moved: bool = False) -> bool:
+def is_tracked(path: str, root: str, cwds: list[str], moved: bool = False) -> bool:
     """True when `path` names a file git tracks in this repo.
 
-    `cwd` is the directory the command actually ends up in, so a `cd` has already been applied by
-    `cd_base`. The repo root is tried as a fallback **only when no `cd` moved us** — with an explicit
-    `cd`, the shell's answer is unambiguous and a second guess can only manufacture a false match,
-    which is precisely the false positive this signature was changed to fix.
+    `cwds` are the directories the command may actually end up in, with any `cd` already applied by
+    `cd_base` — a list rather than one directory because a failed `cd` leaves the shell where it was.
+    The repo root is tried as a fallback **only when no `cd` moved us**: with a `cd` whose target
+    exists the shell's answer is unambiguous, and a second guess could only manufacture a false
+    match, which is precisely the false positive this signature was changed to fix. Where the `cd`
+    could not have succeeded, `cd_base` supplies the pre-`cd` directory as a candidate instead, so
+    that case is covered without widening the no-`cd` rule.
 
     `realpath` is not used: a symlink is a different question and resolving one would silently widen
     the subject.
@@ -314,10 +451,9 @@ def is_tracked(path: str, root: str, cwd: str, moved: bool = False) -> bool:
     cands = []
     if os.path.isabs(path):
         cands.append(path_key(path))
-    elif moved:
-        cands.append(path_key(os.path.join(cwd, path)))
     else:
-        for base in (cwd, root):
+        bases = list(cwds) if moved else list(cwds) + [root]
+        for base in bases:
             if base:
                 cands.append(path_key(os.path.join(base, path)))
     t = tracked_set(root)
@@ -435,13 +571,27 @@ def tokenize(text: str) -> list[str] | None:
 
 
 def simple_commands(tokens: list[str]) -> list[list[str]]:
-    out: list[list[str]] = [[]]
+    return [c for c, _ in simple_commands_with_sep(tokens)]
+
+
+def simple_commands_with_sep(tokens: list[str]) -> list[tuple[list[str], str]]:
+    """Each simple command with the separator token that FOLLOWS it (`""` for the last).
+
+    The separator is carried rather than dropped because it is the shell's own statement about
+    whether the next command runs: after `&&` it runs only if this one succeeded, and after `;`,
+    `||` or a newline it runs either way. `cd_base` needs exactly that, and nothing else in this
+    file can supply it — reconstructing it by re-scanning the token list afterwards would be
+    guessing back information the splitter already had.
+    """
+    out: list[tuple[list[str], str]] = [([], "")]
     for t in tokens:
         if t in SEPARATORS:
-            out.append([])
+            cmd, _ = out[-1]
+            out[-1] = (cmd, t)
+            out.append(([], ""))
         else:
-            out[-1].append(t)
-    return [c for c in out if c]
+            out[-1][0].append(t)
+    return [(c, s) for c, s in out if c]
 
 
 def basename(word: str) -> str:
@@ -663,7 +813,7 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     # Where a relative path in this command actually resolves. Computed once, before any path is judged,
     # because every judgement below depends on it — and because the version that skipped this step refused a
     # `cd /tmp/mfprobe && printf … > Makefile` as overwriting the tracked root `Makefile`.
-    base, moved = cd_base(tokens, cwd)
+    bases, moved = cd_base(tokens, cwd)
 
     # subst1.py's own invocation is the one explicit exemption: it IS a permitted route, and it
     # writes its target by design. But the exemption is conditional on the route still being the route.
@@ -734,14 +884,14 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     for i, t in enumerate(tokens):
         if t in REDIRECTS and i + 1 < len(tokens):
             target = tokens[i + 1]
-            if is_tracked(target, root, base, moved):
+            if is_tracked(target, root, bases, moved):
                 reasons.append(
                     f"a shell redirection ({t}) would overwrite the tracked file {target!r}"
                 )
     for cmdv in simple_commands(tokens):
         if cmdv and basename(cmdv[0]) in ("tee",):
             for arg in cmdv[1:]:
-                if is_tracked(arg, root, base, moved):
+                if is_tracked(arg, root, bases, moved):
                     reasons.append(f"tee would overwrite the tracked file {arg!r}")
 
         # --- route 2: in-place stream editors -------------------------------------------------
@@ -749,7 +899,7 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
             inplace = any(a == "-i" or a.startswith("-i") for a in cmdv[1:])
             if inplace:
                 for arg in cmdv[1:]:
-                    if is_tracked(arg, root, base, moved):
+                    if is_tracked(arg, root, bases, moved):
                         reasons.append(
                             f"{basename(cmdv[0])} -i would edit the tracked file {arg!r} in place"
                         )
@@ -775,11 +925,19 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
         # and it is the move the refusal message below recommends. Refusing it would block the remedy.
         # What discards is `stash drop` and `stash clear`.
         if cmdv and basename(cmdv[0]) == "git" and discard_override() is None:
-            what = git_discard_subject(cmdv, base)
+            # `bases[-1]`, not `bases[0]`, and the distinction is load-bearing. This resolves a
+            # relative `git -C` against the shell's ACTUAL directory, so unlike `is_tracked` —
+            # which asks `any()` over candidates and does not care about order — it needs the one
+            # right answer. When the `cd` succeeded `cd_base` returns a single element, so first
+            # and last agree. When it could not have succeeded the shell stayed where it was, and
+            # that directory is the one `cd_base` appends last.
+            what = git_discard_subject(cmdv, bases[-1])
             if what is not None:
                 # `-C <dir>` moves the repository the dirtiness must be measured in; without it the check
                 # would read the session's root and clear a discard aimed somewhere else entirely.
-                dirty = dirty_paths(what.get("cdir") or root, what.get("cdir") or base, what["paths"])
+                dirty = dirty_paths(
+                    what.get("cdir") or root, what.get("cdir") or bases[-1], what["paths"]
+                )
                 if dirty == [UNKNOWN_DIRTY]:
                     reasons.append(
                         f"`git {what['spelling']}` could not be checked: git would not report whether "
@@ -860,7 +1018,7 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
         if not inline_present or not WRITE_OPEN.search(prog):
             continue
         lits = [m.group(1) for m in LITERAL.finditer(prog)]
-        hit = [l for l in lits if is_tracked(l, root, base, moved)]
+        hit = [l for l in lits if is_tracked(l, root, bases, moved)]
         if hit:
             reasons.append(
                 "an inline interpreter opens the tracked file "
@@ -868,7 +1026,7 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
                 + " for writing"
             )
         elif not any(
-            is_tracked(l, root, base, moved) or os.path.sep in l or "." in l for l in lits
+            is_tracked(l, root, bases, moved) or os.path.sep in l or "." in l for l in lits
         ):
             # A write whose target is computed rather than written down cannot be shown to be
             # outside the subject. Exemption is by explicit path, so an unresolvable target is
@@ -916,7 +1074,7 @@ def main() -> int:
             )
     if tool in ("Edit", "MultiEdit") and wide:
         target = inp.get("file_path") or ""
-        if is_tracked(target, root, cwd):
+        if is_tracked(target, root, [cwd]):
             log_refusal(["`replace_all: true`"], tool + " " + target, root)
             print(
                 "editroute: REFUSED — `replace_all: true` on the tracked file "
