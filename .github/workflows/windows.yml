@@ -184,7 +184,16 @@ jobs:
         #
         # Without it the witness is gated behind `go test -race ./...` passing, and the first run proved
         # why that is wrong rather than merely untidy: the suite failed for seven unrelated reasons —
-        # CRLF corpora, a drive-letter colon, an MSYS pid probe — and this step was **skipped**. So the
+        # CRLF corpora, a drive-letter colon, a test that built its CI-lock holder from Go — and this
+        # step was **skipped**. So the
+        #
+        # (That third cause was first written here as "an MSYS pid probe", which invited the reading
+        # that the CI lock has a Windows limit. **It does not, and no limit is recorded.** In real use
+        # `make ci` passes the recipe shell's own `$$` under `SHELL := /bin/bash`, and `cilock.sh`
+        # probes it from that same bash, so both sides are MSYS. Measured on a real Windows host — the
+        # commands, the `.ci-lock` contents and the refusal text are in `CHANGELOG.md`, which is the
+        # citation to use rather than a session, because this job never runs `make ci` at all. The test
+        # was at fault: it built its holder from Go, which is a native pid MSYS cannot resolve.)
         # job could not measure the one thing it was added to measure, and a confinement verdict was
         # unavailable precisely on the run that introduced the ability to take it.
         #
