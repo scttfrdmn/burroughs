@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -255,12 +256,39 @@ func contained(hostRoot, resolved string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// errnoWindowsDirNotEmpty is Windows' `ERROR_DIR_NOT_EMPTY`, and it is **not** `syscall.ENOTEMPTY`.
+//
+// Go defines the POSIX-ish `ENOTEMPTY` on Windows too (41), but `os.Remove` on a non-empty directory
+// there fails with the Win32 code, 145. So the `syscall.ENOTEMPTY` arm below never matched and the
+// error fell through to `errIO` — measured on the Windows job:
+//
+//	a non-empty rmdir reported "ERR remove /s/d: I/O error", want it to name ENOTEMPTY:
+//	an unmapped host errno becomes errIO, which blames the host for a request the guest got wrong
+//
+// Written as a plain constant rather than behind a `_windows.go` build tag precisely so the table
+// test can feed it in on any platform. It is consulted **only** when the injected OS is Windows, so
+// no other platform's errno 145 — whatever that may be — is affected.
+const errnoWindowsDirNotEmpty = syscall.Errno(145)
+
 // errnoForPathError maps a host OS error onto a preview-1 errno. The host's `syscall.Errno` is the
 // runner's platform, and its values map onto the witx enum the guest reads; the `os.Err*` fallbacks
 // cover the wrapped cases.
 func errnoForPathError(err error) uint16 {
+	return errnoForPathErrorOn(err, runtime.GOOS)
+}
+
+// errnoForPathErrorOn is the mapping with the platform as a parameter, so a table test on Linux can
+// exercise the Windows arm. The same reasoning as `splitGrant`'s injected `goos`: a rule only its own
+// platform can test is a rule nothing that gates a merge ever checks, and the Windows job is a
+// measurement run after the fact.
+func errnoForPathErrorOn(err error, goos string) uint16 {
 	var se syscall.Errno
 	if errors.As(err, &se) {
+		// Checked before the portable switch, because on Windows this value is what actually
+		// arrives and the switch below would otherwise send it to `errIO`.
+		if goos == "windows" && se == errnoWindowsDirNotEmpty {
+			return errNotempty
+		}
 		switch se {
 		case syscall.ENOENT:
 			return errNoent
