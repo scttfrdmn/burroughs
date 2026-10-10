@@ -89,6 +89,9 @@ cancel-wat-parent/composed.wasm    d2d02c27cc322b95e92ba64a388f623589fe9b525b755
 cancel-wat.reading / cancel-rust.reading                                                       byte-identical
 call-wat-parent/parent.wasm        ded1d755c619aea5fe03e8f659712bcf7369ecac23376ba98fe1a0eb33c570b2  MATCH
 call-wat-parent/composed.wasm      7ef2273c074ece4da16dfa70ef7e2bfeae52a0934245a64d71b73485d576bf7b  MATCH
+starting-wat-child/child.wasm      b3585505f4d29c49d24d32841befd40a75058bf7cd0e14c9603d7448904cb1b1  MATCH
+starting-wat-parent/parent.wasm    e475a2bae9103f062a10dbe030f0f1f7db141e1608ed5e833661bcb268e7f3f9  MATCH
+starting-wat-parent/composed.wasm  5e0079493f8dab9874ad69a3826517cf9a11a4758f7e653c7761cd25b9c10426  MATCH
 ```
 
 **The #862 rows include the COMPOSED artefacts, so `wac`'s output is checked here too** — the composition
@@ -102,6 +105,14 @@ not the whole `build.sh`**, and that is a narrower claim stated as one: both of 
 (`call-wat-parent/parent.wat` and `receipt/component.wasm`) are committed, so those two steps are the entire
 derivation of its bytes. The Rust rows above still carry the full-build claim; this one does not and does not
 need to.
+
+**The #884 rows were taken the same narrow way as #888's**, from `/tmp/repro-884` with all three
+outputs deleted first, `git status` reporting nothing changed. Only the two `wasm-tools parse` steps
+and the `wac plug` were re-run, and here that is the *whole* derivation with nothing left over: both
+inputs are committed WAT and **no Rust toolchain enters this fixture at all**, which is the one thing
+the rows above cannot say. The `.reading` is not a row — re-taking it needs the harness and wasmtime,
+and what is recorded about it instead is that two runs in the same tree were byte-identical
+(`CANCELLATION.md`).
 
 **All three guests are rows in this check, not two rows and an exception.** The run above is a clean
 `git worktree` at `/tmp/repro-allthree` — a different absolute path from the tree that produced the bytes —
