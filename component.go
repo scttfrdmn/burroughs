@@ -171,6 +171,18 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 		if errors.Is(err, component.ErrAsyncNotImplemented) {
 			return 0, fmt.Errorf("%w: %w", ErrUnsupported, err)
 		}
+		// **Added for symmetry, and UNREACHABLE from outside today** — said plainly rather than
+		// presented as covered. `ErrUnsupportedForm` is raised while binding a component, and no
+		// committed fixture reaches it through a public entry point: the test that exercises it
+		// calls `walkComponent` directly with a stub host. So the nine-cell table in
+		// `componenterrclass_test.go` marks this row unreachable and does not assert it here.
+		//
+		// It is still written, because the alternative is three entry points that agree only by
+		// coincidence of which refusals happen to be reachable this month. When a fixture does
+		// reach it, the row stops being unreachable and the assertion costs nothing to add.
+		if errors.Is(err, component.ErrUnsupportedForm) {
+			return 0, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
 		return 0, err
 	}
 	defer in.Close()
@@ -331,6 +343,15 @@ func LoadComponent(wasm []byte) (*Component, error) {
 			return nil, fmt.Errorf("%w: %w", ErrGated, err)
 		}
 		if errors.Is(err, component.ErrUnsupportedForm) {
+			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
+		// **This classification was missing, and the error crossed unwrapped.** Measured through
+		// this entry point with the committed `p3async-cancel` fixture and `gate:async` on: the
+		// refusal arrived with no public sentinel, so `errors.Is(err, ErrUnsupported)` was false
+		// and a CLI reading it fell to the catch-all exit code instead of the named one. The other
+		// two entry points classified it; this one did not, which is the whole defect — a boundary
+		// whose answer depends on which of three doors you came through.
+		if errors.Is(err, component.ErrAsyncNotImplemented) {
 			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
 		}
 		return nil, err
