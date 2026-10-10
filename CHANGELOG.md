@@ -364,6 +364,42 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **A guest asking to remove a non-empty directory on Windows was told the host had an I/O error.**
+  ADR 0091 requires `path_remove_directory` to name `ENOTEMPTY` rather than fall back to `errIO`, and
+  the switch has had a `syscall.ENOTEMPTY` arm since that slice — which on Windows **never matched**.
+  Go defines the POSIX-ish `ENOTEMPTY` there (41), but `os.Remove` on a non-empty directory fails
+  with the Win32 code `ERROR_DIR_NOT_EMPTY` (**145**), so the error fell through to `errIO`. Measured
+  on the Windows job:
+
+  ```
+  a non-empty rmdir reported "ERR remove /s/d: I/O error", want it to name ENOTEMPTY:
+  an unmapped host errno becomes errIO, which blames the host for a request the guest got wrong
+  ```
+
+  **This is the one Windows finding that is a wrong answer at the engine's public surface**, which is
+  why it was fixed while the rest were parked: the guest asked for something it got wrong and was
+  told the host had a problem. Every other parked item is a test asserting a POSIX property on a
+  platform that lacks one.
+
+  `errnoForPathErrorOn` takes the OS as a **parameter**, so the Linux and macOS gates exercise the
+  Windows arm — a rule only its own platform can test is a rule nothing that gates a merge ever
+  checks, since the Windows job is a measurement run after the fact. Same argument as `splitGrant`'s
+  injected `goos`. Eight rows, including the containment that **errno 145 off Windows is still
+  `errIO`** (mapping it elsewhere would be inventing a meaning), the pre-existing POSIX arm, the
+  `errIO` fallback, and the wrapped `os.ErrNotExist` path which the new check sits above and must not
+  shadow. Two further arms assert the wiring the table cannot reach: that the live entry point passes
+  `runtime.GOOS` rather than a hard-coded value, and that the constant really is 145 and really does
+  differ from `syscall.ENOTEMPTY` — a row asserting a mapping is worthless if the thing mapped is the
+  wrong number.
+
+  **Falsified on the Linux gate**: removing the arm fails the first row by name, `= 29` where `55` is
+  wanted.
+
+  It also corrects an earlier report of mine. I searched the Windows log for the literal
+  `ERROR_DIR_NOT_EMPTY`, found zero, and concluded no test covered it on that runner. The *condition*
+  was covered all along — by `TestAScratchGrantIsRequiredForEveryWrite`, which CI runs — and the token
+  never appeared because the engine never named it.
+
 - **`cilock`'s instructions for stopping a gate could kill whoever followed them.** The refusal said
   *"End it by its process GROUP, not its pid"* unconditionally, with `kill -TERM -- -<pgid>`. A gate
   started with a plain `&` from a non-interactive shell stays in the **launcher's** process group, so
