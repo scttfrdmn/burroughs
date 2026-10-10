@@ -364,6 +364,39 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **The edit-route hook was silently inert on Windows: it refused nothing at all.** `scripts/editroute.py`
+  is what stops a Bash command from editing a tracked file, and its single predicate is `git ls-files`.
+  `tracked_set` keyed its entries as `os.path.join(root, p)` — and `git ls-files` emits **forward**
+  slashes on every platform, while `join` does not rewrite a component's internal separators — whereas
+  `is_tracked` looked its candidates up through `normpath`, which on Windows converts `/` to `\`.
+  Measured with Python's `ntpath`, which gives Windows semantics on any host:
+
+  ```
+  tracked_set entry : D:\a\burroughs\burroughs\scripts/ratio.sh
+  is_tracked lookup : D:\a\burroughs\burroughs\scripts\ratio.sh
+  membership        : False          (POSIX: True)
+  ```
+
+  So `is_tracked` returned False for **every** path, and the hook allowed what it exists to refuse.
+  **One cause, four failing tests** on the Windows job — `TestEditRouteHookRefusesBashEditsOfTrackedFiles`,
+  `TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork`, `TestRefusalLogRecordsOneLinePerRefusal`
+  and `TestEveryRefusalReasonHasARule` — which is why they were analysed as a group before anything was
+  changed. The failure direction is the bad one: a guard that reports `exit 0` is indistinguishable from
+  a guard that considered the command and allowed it.
+
+  **The repair is a shared constructor, not a check.** `path_key` is now the one spelling a path is
+  compared by, and both the set and its lookups go through it, so the two sides *cannot* diverge —
+  there is no second place to forget. That is deliberately stronger than what the provenance control
+  needed one slice earlier: there, two independent constructors had to be reconciled by a membership
+  check; here one function removes the possibility.
+
+  **No test is added, and that is a judgement rather than an omission.** The entry-side normalisation
+  is unobservable on POSIX — `normpath` is a no-op on these strings, which is exactly why the defect was
+  invisible where it was written — and with one keying function a test comparing the two sides would
+  assert a tautology. A vacuous test is worse than none, because it reads as coverage. The witness is
+  the Windows job: those four tests passing there is the claim, and it is the only place the claim can
+  be made.
+
 - **The CI-lock witness built a holder that cannot occur in a real run, and that — not the lock — is
   what failed on Windows.** The arm started its holder with `exec.Command("sleep", "60")`, straight
   from Go, which on Windows is a **native** process; `cilock.sh` runs under **MSYS** bash, whose
