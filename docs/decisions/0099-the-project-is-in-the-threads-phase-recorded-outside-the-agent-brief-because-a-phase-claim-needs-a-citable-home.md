@@ -38,3 +38,39 @@ The authority is Scott's, twice: the ruling on the #534 review that no value nam
 - **This ADR does not move the phase, and must not be read as doing so.** It records a ruling already given. If the project's phase changes again, that is a principal's decision and will need its own record — and this ADR is then the thing to supersede, which is the property it exists to provide.
 - **`v1.0.0` remains reserved and is untouched.** ADR 0004's row, as restated by its 2026-09-18 amendment (#795), gates `v1.0.0` on requirements this ADR says nothing about — being *in* the threads phase is not the same as having finished it. In particular §4's litmus battery beyond what spawn needed is outstanding and, by Scott's #670 ruling, **not currently scheduled**. A reader who takes "the threads phase" to mean the threads work is done would be wrong, and that is worth the sentence.
 - **No code changes.** This is a records decision, so the one thing to check is that the record now agrees with itself: `CLAUDE.md`, this ADR, the README, and the `v0.4.0` block with its marker.
+
+## Amendment, 2026-10-09: the `#534` citation above does not point to a ruling
+
+**The `Status:` line and the body are left exactly as written.** This is an amendment rather than an
+edit for the reason the `v0.4.0` superseded marker exists: a record of what was claimed at the time is
+worth more intact than tidied, and the honest repair is a marker a reader meets, not a rewrite that
+makes the error unfindable.
+
+**What was checked, and how.** PR **#534** — *"atomics: the 67 mnemonics get immediate shapes, so
+atomic.wast parses"* — was **merged 2026-08-30** and holds **exactly one comment**, in the actor's own
+voice, about a board correction on a red CI run. It mentions neither the phase, nor v0's closure
+conditions, nor #527. Searched with the issues API for the comment body and count, not with a cached
+listing.
+
+So *"Scott's ruling on the #534 review"*, in the `Status:` line and twice in the body above, **cites a
+pull request that contains no such ruling**. The citation resolves — the PR exists — which is exactly
+how it survived review: a resolving pointer is not a pointing-at-the-right-thing.
+
+**This does not unmake the decision, and the reason is specific rather than reassuring.** The `Status:`
+line names **two** authorities, not one: the #534 reading, *and* Scott's confirmation of 2026-10-08
+(*"cut release, record what is needed"*) authorising this record. The second is independently
+verifiable and is what this ADR actually rests on. A decision resting on two citations, one of which
+fails, is weakened precisely by one citation — not voided, and not fine either.
+
+**What is therefore open.** Where Scott gave the phase ruling is not established by this record. The
+likelihood is a chat review, which leaves no artifact in the tracker; if so, the correct citation is
+*"Scott's ruling, relayed in session"*, which is weaker than a PR review and should be written as the
+weaker thing rather than dressed as a link. `CLAUDE.md` carries the same `#534` citation in two places
+and **is deliberately not edited here**: it is Scott's brief, only he knows where the ruling was given,
+and an actor rewriting a principal's record of his own decision is the shape this project refuses even
+when the actor is right about the defect. The chair has put the question to him; this amendment stands
+whatever the answer, because the finding — that #534 holds no such ruling — is a fact about #534.
+
+(Found on the chair's #938 review, in the sweep that also found eleven `Ratio-Class: ordered` trailers
+citing work items rather than approvals. Same shape, one level up: a citation that resolves, to
+something that is not an approval of the thing citing it.)

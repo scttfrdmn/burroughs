@@ -66,14 +66,58 @@ func TestCILockAllowsOneGateAtATime(t *testing.T) {
 	t.Run("a_second_gate_is_refused_while_the_first_is_live", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "lock")
 
-		// A real live process to be the holder. `sleep` is the payload because the arm is about liveness,
-		// not about what the holder does.
-		holder := exec.Command("sleep", "60")
+		// **A live holder created the way a REAL holder is created: a bash process recording its own
+		// `$$`.** `make ci`'s recipe is `me=$$$$` under `SHELL := /bin/bash`, and it passes that to
+		// `cilock.sh acquire`, which probes it with `kill -0` from the same `/bin/bash`. So in real use
+		// the recorded pid and the probe are both the shell's.
+		//
+		// The first version started the holder with `exec.Command("sleep", "60")` — straight from Go —
+		// and that is what made this arm fail on Windows. There, a Go-started process is a **native**
+		// Windows process, `cilock.sh` runs under **MSYS** bash, and MSYS `kill -0` cannot resolve a pid
+		// MSYS did not spawn: it reported a live holder gone, the lock was reclaimed as stale, and the
+		// second gate was allowed.
+		//
+		// **The expectation is that this is a defect in this test's premise rather than in the lock** —
+		// the holder it built could not occur in a real run — and that is read off the code above, not
+		// yet measured. Two runs settle it and neither has happened at the time of writing:
+		//
+		//   - **this arm, on the Windows job**, which shows whether a bash-created holder is seen there;
+		//   - **`make ci` twice over on a real Windows host**, which is the only thing that shows the
+		//     *real* lock works, because the Windows job never invokes `make ci` at all.
+		//
+		// A green here alone would not license the claim: it shows a bash-started holder behaves, not
+		// that the lock does. Until both are recorded this comment states an expectation, and the
+		// wording is to be tightened to cite the runs once they exist (chair's ruling on the #940
+		// review, which is also where the "don't get ahead of the evidence" instruction came from).
+		holderPIDFile := filepath.Join(t.TempDir(), "holder.pid")
+		holder := exec.Command("bash", "-c", `echo $$ > "$1"; while :; do sleep 1; done`, "_", holderPIDFile)
 		if startErr := holder.Start(); startErr != nil {
 			t.Fatal(startErr)
 		}
-		defer func() { _ = holder.Process.Kill() }()
-		hpid := strconv.Itoa(holder.Process.Pid)
+		defer func() {
+			_ = holder.Process.Kill()
+			// Reaped, because `kill -0` cannot tell a zombie from a live process and a later arm in
+			// this package may ask about a pid. Same reason as the detach witness.
+			_, _ = holder.Process.Wait()
+		}()
+
+		// The holder's own pid, read from the file it wrote, bounded — not `holder.Process.Pid`, which
+		// is what Go started and on Windows is the wrong namespace.
+		hpid := ""
+		pidDeadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(pidDeadline) {
+			if b, readErr := os.ReadFile(holderPIDFile); readErr == nil {
+				if s := strings.TrimSpace(string(b)); s != "" {
+					hpid = s
+					break
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if hpid == "" {
+			t.Fatalf("the holder shell wrote no pid within 20s, so this arm has no live holder to " +
+				"witness and would otherwise measure nothing")
+		}
 
 		if code, out := runLock(t, "acquire", lock, hpid, "deadbeef"); code != 0 {
 			t.Fatalf("the first acquire failed: exit %d\n%s", code, out)
@@ -106,13 +150,31 @@ func TestCILockAllowsOneGateAtATime(t *testing.T) {
 	t.Run("a_stale_lock_is_reclaimed_and_says_so", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "lock")
 
-		// A pid that is certainly dead: start a process and wait for it.
-		dead := exec.Command("true")
+		// A pid that is certainly dead, **and in the same namespace a real holder's pid lives in** — a
+		// bash process that records `$$` and exits.
+		//
+		// The namespace matters here for a subtler reason than in the live arm. A Go-started process is
+		// a native Windows pid, which MSYS `kill -0` cannot resolve *whether or not it is alive* — so
+		// this arm would have passed on Windows by reading an unseeable pid as dead, which is the right
+		// answer reached by a mechanism that cannot distinguish it from the wrong one. It would still
+		// pass with the process very much alive. **A premise that holds for a reason other than the one
+		// stated is a vacuous premise**, and the `Fatalf` below guards it only against the case the
+		// stated reason covers.
+		deadPIDFile := filepath.Join(t.TempDir(), "dead.pid")
+		dead := exec.Command("bash", "-c", `echo $$ > "$1"`, "_", deadPIDFile)
 		if startErr := dead.Start(); startErr != nil {
 			t.Fatal(startErr)
 		}
 		_ = dead.Wait()
-		deadPID := strconv.Itoa(dead.Process.Pid)
+		pidBytes, readErr := os.ReadFile(deadPIDFile)
+		if readErr != nil {
+			t.Fatalf("the short-lived holder shell wrote no pid (%v), so 'a dead holder' cannot be "+
+				"constructed here and this arm has no subject", readErr)
+		}
+		deadPID := strings.TrimSpace(string(pidBytes))
+		if deadPID == "" {
+			t.Fatal("the short-lived holder shell wrote an empty pid file, so this arm has no subject")
+		}
 		for range 50 {
 			if exec.Command("kill", "-0", deadPID).Run() != nil {
 				break

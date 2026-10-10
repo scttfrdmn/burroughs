@@ -364,6 +364,55 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **The CI-lock witness built a holder that cannot occur in a real run, and that — not the lock — is
+  what failed on Windows.** The arm started its holder with `exec.Command("sleep", "60")`, straight
+  from Go, which on Windows is a **native** process; `cilock.sh` runs under **MSYS** bash, whose
+  `kill -0` cannot resolve a pid MSYS did not spawn. It reported a live holder gone, reclaimed the lock
+  as stale, and allowed a second gate. Both arms now create their holder the way `make ci` does — a
+  bash process recording its own `$$` — which is also what makes the live arm an instrument rather
+  than a demonstration.
+
+  **The stale arm had the subtler version of the same fault.** Its "dead" holder was a native pid too,
+  and MSYS cannot resolve one *whether or not it is alive* — so on Windows that arm passed by reading
+  an unseeable pid as dead: the right answer from a mechanism that cannot distinguish it from the wrong
+  one, and it would still have passed with the process fully alive. A premise that holds for a reason
+  other than the stated one is vacuous.
+
+  **The real lock works on Windows, measured rather than argued.** On `black3.local` (`MINGW64_NT`,
+  bash 5.2.37), **2026-10-09**, through `C:\Program Files\Git\bin\bash.exe` as a **login** shell —
+  needed because `make` lives in a WinGet shim directory the non-login PATH omits:
+
+  ```sh
+  cd ~/src/burroughs && rm -f .ci-lock
+  make ci >/tmp/first.log 2>&1 &          # no setsid: MSYS has none
+  until [ -s .ci-lock ]; do sleep 0.2; done
+  cat .ci-lock; kill -0 "$(grep -m1 '^pid=' .ci-lock | cut -d= -f2)"
+  make ci                                 # the second gate, while the first holds it
+  ```
+
+  ```
+  pid=315448
+  pgid=315448
+  sha=fa49e73039f2a67edcaa7cb3d5a59215ff0c8416
+  when=2026-10-09T23:44:28Z
+  HOLDER_VISIBLE=yes  (pid=315448)
+
+  second rc=2
+  cilock: REFUSED — a gate is already running.
+          holder pid=315448 pgid=315448 sha=fa49e73039f2 since=2026-10-09T23:44:28Z
+  ```
+
+  The recorded pid is MSYS's, MSYS's `kill -0` sees it, and the second gate is refused **by name with
+  the holder shown alive**. **No limit is recorded and nothing is skipped** — a skip citing a limit the
+  lock does not have would be a false record. This belongs in the changelog rather than only in a
+  session, because the Windows CI job never runs `make ci` at all, so this is the only place the real
+  lock has been exercised and the only citation `windows.yml` can point at.
+
+  Three incidental facts about that host, since each cost an attempt: **MSYS has no `setsid`**; `bash`
+  resolves to **WSL2**'s, whose disk image is missing, so the Windows toolchain needs Git Bash by full
+  path; and `SHELL := /bin/bash -o pipefail` **is** honoured by that WinGet `make` — the recipe ran
+  bash and `$$` produced an MSYS pid.
+
 - **`detach.sh`'s witness pasted paths into a shell string, and hung for 9m49s on Windows instead of
   failing.** The launch built `bash -c "<detach> <stamp> 120 -- <payload>"` by interpolation, and bash
   consumes backslashes as escapes — measured, `C:\Users\x\scripts\detach.sh` becomes
