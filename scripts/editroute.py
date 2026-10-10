@@ -220,6 +220,25 @@ def repo_root() -> str:
 _tracked: set[str] | None = None
 
 
+def path_key(path: str) -> str:
+    """The one spelling a path is compared by, for both the tracked set and its lookups.
+
+    **This exists because the two sides were keyed differently and the hook went silently inert.**
+    `tracked_set` built `os.path.join(root, p)` from `git ls-files` output — forward slashes on
+    every platform, and `join` does not rewrite a component's internal separators — while
+    `is_tracked` looked up through `normpath`. On Windows that is `D:\\repo\\scripts/ratio.sh`
+    against `D:\\repo\\scripts\\ratio.sh`: never equal, `is_tracked` False for every path, nothing
+    refused. On POSIX `normpath` leaves both alone, which is why it was invisible where it was
+    written.
+
+    A function rather than a rule in a comment, so the two sides *cannot* diverge: there is no
+    second place to forget. The same shape as the fix to the provenance control's glob keys, and
+    the reason that one needed a membership check afterwards while this one does not — a shared
+    constructor is a stronger guarantee than a check over two independent constructors.
+    """
+    return os.path.normpath(path)
+
+
 def tracked_set(root: str) -> set[str]:
     """Absolute paths of every tracked file. Computed at most once, and lazily — most Bash commands
     never reach a write candidate, and they should not pay for `git ls-files`."""
@@ -233,8 +252,13 @@ def tracked_set(root: str) -> set[str]:
                     capture_output=True, text=True, timeout=30, check=False,
                 )
                 if out.returncode == 0:
+                    # Keyed through `path_key`, which is also what every lookup uses. See its
+                    # docstring: keying these two sides differently is what made this hook refuse
+                    # nothing at all on Windows.
                     _tracked = {
-                        os.path.join(root, p) for p in out.stdout.split("\0") if p
+                        path_key(os.path.join(root, p))
+                        for p in out.stdout.split("\0")
+                        if p
                     }
             except (OSError, subprocess.SubprocessError):
                 _tracked = set()
@@ -289,13 +313,13 @@ def is_tracked(path: str, root: str, cwd: str, moved: bool = False) -> bool:
         return False
     cands = []
     if os.path.isabs(path):
-        cands.append(os.path.normpath(path))
+        cands.append(path_key(path))
     elif moved:
-        cands.append(os.path.normpath(os.path.join(cwd, path)))
+        cands.append(path_key(os.path.join(cwd, path)))
     else:
         for base in (cwd, root):
             if base:
-                cands.append(os.path.normpath(os.path.join(base, path)))
+                cands.append(path_key(os.path.join(base, path)))
     t = tracked_set(root)
     return any(c in t for c in cands)
 
