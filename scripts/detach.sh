@@ -150,6 +150,22 @@ rcfile=$(mktemp "${TMPDIR:-/tmp}/detach-rc.XXXXXX")
 set -m
 (
 	set +e
+	# **The group's owner says so, here, where the group is created.**
+	#
+	# `cilock.sh` has to decide whether `kill -TERM -- -<pgid>` is safe to recommend, and nothing
+	# inside a `make` recipe can work that out — four candidate signals were measured and all fail:
+	# the recipe shell never leads its own group (it is `make`'s child); the group leader's command
+	# is a shell in both the safe and unsafe cases, differing only by which shell launched it; the
+	# leader is an ancestor either way; and `ps -o sess=` reports 0 on macOS.
+	#
+	# But *this* script created the group, so the fact is positive at this point rather than
+	# inferable later. `BASHPID` is the subshell's own pid — `$$` here would be the launcher's — and
+	# with job control on, the backgrounded subshell leads its own group, so that is the group every
+	# descendant inherits. `cilock.sh` records `group_owned=yes` only on an exact match, so a missing
+	# or stale value fails safe.
+	BURROUGHS_GATE_PGID=$(ps -o pgid= -p "$BASHPID" 2>/dev/null | tr -d ' ')
+	[ -n "$BURROUGHS_GATE_PGID" ] || BURROUGHS_GATE_PGID=$BASHPID
+	export BURROUGHS_GATE_PGID
 	"$@"
 	echo $? >"$rcfile"
 ) &
