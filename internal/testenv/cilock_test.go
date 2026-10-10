@@ -77,18 +77,21 @@ func TestCILockAllowsOneGateAtATime(t *testing.T) {
 		// MSYS did not spawn: it reported a live holder gone, the lock was reclaimed as stale, and the
 		// second gate was allowed.
 		//
-		// **The expectation is that this is a defect in this test's premise rather than in the lock** —
-		// the holder it built could not occur in a real run — and that is read off the code above, not
-		// yet measured. Two runs settle it and neither has happened at the time of writing:
+		// **That was a defect in this test's premise, not in the lock, and both halves are measured.**
+		// The holder it built could not occur in a real run. Two runs were needed because neither alone
+		// licenses the claim — a green here shows a bash-started holder behaves, not that the lock does:
 		//
-		//   - **this arm, on the Windows job**, which shows whether a bash-created holder is seen there;
-		//   - **`make ci` twice over on a real Windows host**, which is the only thing that shows the
-		//     *real* lock works, because the Windows job never invokes `make ci` at all.
+		//   - **this arm on the Windows job**, green on #941's run, where it had failed on the four
+		//     before it;
+		//   - **`make ci` twice over on `black3.local`, 2026-10-09**: the recorded pid is MSYS's, MSYS
+		//     `kill -0` resolves it, and the second gate is refused by name with the holder shown
+		//     alive. That is the only exercise of the *real* lock anywhere, because the Windows job
+		//     never invokes `make ci`. Commands, `.ci-lock` contents and refusal text are in
+		//     `CHANGELOG.md` — cite that rather than a session.
 		//
-		// A green here alone would not license the claim: it shows a bash-started holder behaves, not
-		// that the lock does. Until both are recorded this comment states an expectation, and the
-		// wording is to be tightened to cite the runs once they exist (chair's ruling on the #940
-		// review, which is also where the "don't get ahead of the evidence" instruction came from).
+		// **So no limit is recorded and nothing is skipped**: a skip citing a limit the lock does not
+		// have would be a false record. (Chair's rulings on the #940 and #941 reviews — investigate what
+		// a limit affects before skipping anything, and do not let the comment outrun the evidence.)
 		holderPIDFile := filepath.Join(t.TempDir(), "holder.pid")
 		holder := exec.Command("bash", "-c", `echo $$ > "$1"; while :; do sleep 1; done`, "_", holderPIDFile)
 		if startErr := holder.Start(); startErr != nil {
