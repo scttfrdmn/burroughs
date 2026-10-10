@@ -116,6 +116,18 @@ func TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork(t *testing.T) {
 		return code, out.String()
 	}
 
+	// **Paths that go into a command string are single-quoted, because an unquoted one is not a
+	// command anybody types.** On Windows `repo` is a `D:\…` temp path, and bash removes those
+	// backslashes as escapes — so `git -C D:\a\b` arrived as `git -C D:ab`, git could not read that
+	// directory, and the guard refused with *"could not be checked"* instead of naming the discard.
+	// Two arms failed that way on the Windows job.
+	//
+	// The guard was behaving correctly: it predicts what bash will do, which is the only useful
+	// thing for a guard on a bash command to do. The defect was feeding it input no shell would
+	// honour. Single quotes are what `shlex.quote` emits for such a path and they survive the hook's
+	// POSIX-mode tokeniser intact (chair's ruling, #942 review).
+	sq := func(p string) string { return "'" + p + "'" }
+
 	for _, a := range []struct{ name, cwd, cmd, wantPath string }{
 		{"checkout_ddash", repo, "git checkout -- sub/f.go", "sub/f.go"},
 		{"restore_worktree", repo, "git restore sub/f.go", "sub/f.go"},
@@ -123,11 +135,11 @@ func TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork(t *testing.T) {
 		{"clean_f_deletes_untracked", repo, "git clean -fd", "sub/untracked"},
 		// Global options before the subcommand: `a[0]` is the option, so an early version matched nothing
 		// and the guard was bypassed by the most ordinary scripted spelling there is.
-		{"dash_C_repo", repo, "git -C " + repo + " checkout -- sub/f.go", "sub/f.go"},
+		{"dash_C_repo", repo, "git -C " + sq(repo) + " checkout -- sub/f.go", "sub/f.go"},
 		{"dash_c_config", repo, "git -c user.name=x reset --hard", "sub/f.go"},
 		// `-C` at a SUBDIRECTORY: `git status --porcelain` reports root-relative paths whatever `-C`
 		// names, so a relative path computed against the subdirectory never matched a status line.
-		{"dash_C_subdir", repo, "git -C " + filepath.Join(repo, "sub") + " checkout -- f.go", "sub/f.go"},
+		{"dash_C_subdir", repo, "git -C " + sq(filepath.Join(repo, "sub")) + " checkout -- f.go", "sub/f.go"},
 		// A bare path typed FROM a subdirectory: the is-this-a-path test must resolve against the shell's
 		// cwd, or it reads as a branch name and is let through.
 		{"bare_path_from_subdir", filepath.Join(repo, "sub"), "git checkout f.go", "sub/f.go"},
@@ -177,7 +189,9 @@ func TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork(t *testing.T) {
 	t.Run("an_unanswerable_git_fails_CLOSED", func(t *testing.T) {
 		// The first version returned "nothing dirty" when git could not be asked, so the discard went
 		// through — *absence read as permission*, inside the guard built to stop a data loss.
-		code, out := run(t, repo, "git -C "+notARepo+" reset --hard")
+		// Quoted for the reason the table above records; here the path is meant to be unreadable as
+		// a repo, but it must be unreadable for THAT reason rather than because bash mangled it.
+		code, out := run(t, repo, "git -C '"+notARepo+"' reset --hard")
 		if code == 0 {
 			t.Fatalf("ALLOWED — the dirty state could not be determined, so this must refuse:\n%s", out)
 		}

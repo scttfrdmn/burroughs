@@ -223,9 +223,40 @@ CI_LOCK ?= .ci-lock
 # a run that PASSES on A and finishes after a commit to B writes `exit=0 sha=B`: a green for a tree never
 # tested, which `prmerge.sh` accepts. Passing the start SHA makes a moved tip a mismatch, which prmerge already
 # refuses by name.
+#
+# **The lock is released on INT and TERM as well as EXIT, because an EXIT trap alone does not run
+# when the shell is killed by a signal.** Across three kills of superseded gates in one session the
+# lock was released twice and left behind once. The reclaim path handles a stale lock and says so
+# loudly, but a gate told to stop should release what it holds rather than leave the next run to
+# notice.
+#
+# **Measured, because the obvious reading of "add a TERM trap" is wrong**, with a script mirroring
+# this recipe's shape — a trap set, then a long foreground child:
+#
+#	signal to the shell ALONE, child still running   -> trap DEFERRED, lock stays
+#	signal to the shell AND the child                -> child dies, then TERM trap, then EXIT trap
+#
+# Bash does not run a trap while a foreground command is executing; it notes the signal and runs
+# the handler when that command finishes. So this trap earns its keep on the documented route —
+# `kill -TERM -- -<pgid>`, which delivers to the children too — and does nothing for a signal sent
+# to the recipe shell alone while `go test` is running. That is worth knowing rather than assuming:
+# the fix is real but narrower than it looks.
+#
+# Both handlers do run in that case, TERM then EXIT, so `release` is called twice. That is safe by
+# construction: it does nothing when the file is already gone, and refuses when another pid holds
+# it. The exit codes are the signal's own — 130 for INT, 143 for TERM — so a caller reading the
+# status still learns which signal ended it.
+#
+# **A hazard in the advice, not fixed here:** the `pgid` this lock records is the recipe shell's
+# group, which for a gate started with a plain `&` is the *launching* shell's group too. Following
+# `cilock`'s own refusal message then signals the launcher as well — observed, a probe of this very
+# trap killed its own driver and returned 144. `scripts/detach.sh` exists precisely to give a
+# launched run a group of its own.
 ci:
 	@rc=0; me=$$$$; \
 	scripts/cilock.sh acquire $(CI_LOCK) $$me || exit 1; \
+	trap 'scripts/cilock.sh release $(CI_LOCK) '"$$me"'; exit 130' INT; \
+	trap 'scripts/cilock.sh release $(CI_LOCK) '"$$me"'; exit 143' TERM; \
 	trap 'scripts/cilock.sh release $(CI_LOCK) '"$$me" EXIT; \
 	rm -f $(CI_VERDICT); \
 	start=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
