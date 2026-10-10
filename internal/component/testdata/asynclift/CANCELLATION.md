@@ -99,11 +99,100 @@ distinguish this from a mis-set-up run.
 The constants match the model exactly (`definitions.py` `Subtask.State`): 0 STARTING, 1 STARTED,
 2 RETURNED, 3 CANCELLED_BEFORE_STARTED, 4 CANCELLED_BEFORE_RETURNED.
 
-**Status 3 is not reachable with this child, and that is stated rather than left as a gap.** The async
-lower returns STARTED synchronously, because the child runs to its first `await` before yielding — so
-there is no window in which the parent holds a subtask that has not started. Reaching 3 needs a child that
-cannot start promptly (backpressure, or an instance already holding its exclusive thread), which is a
-different fixture and a different slice. **What is measured here is 4; 3 is unmeasured, not assumed.**
+**Status 3 is not reachable with THIS child**, and that was recorded here as unmeasured rather than
+assumed until #884 measured it with a different one. The async lower returns STARTED synchronously,
+because this child runs to its first `await` before yielding — so there is no window in which the
+parent holds a subtask that has not started.
+
+## Status 3, measured (#884)
+
+`starting-wat-child` + `starting-wat-parent`, composed with `wac`, mode `cancel-starting`. The child
+is **hand-authored WAT**: the canceller was already WAT and backpressure is a canonical built-in a
+component can call directly, so this needs neither Rust toolchain and avoids all three of
+`build.sh`'s recorded blocked paths. It also makes the fixture precise — the only thing holding the
+subtask is one `canon backpressure.inc` visible in the source.
+
+```
+MODE      cancel-starting
+EVENTS    lower-state(0) -> cancel-status(3)
+OUTCOME   go() returned
+ARRIVALS  0
+RECEIPT   none
+TICKDROP  false
+LOWERSTATE  0 (STARTING)
+STATUS  3 (CANCELLED_BEFORE_STARTED)
+```
+
+Byte-identical across two runs.
+
+### The negative control: backpressure is what holds it
+
+Without a control the reading shows a subtask that did not start but not *why*. So the same child with
+the single `call $bpinc` replaced by `nop` — one instruction, nothing else:
+
+```
+MODE      cancel-starting
+EVENTS    receipt(1) -> lower-state(1)
+OUTCOME   host/task error: error while executing at wasm backtrace:
+    0:    0x34b - m!go
+ARRIVALS  0
+RECEIPT   observed, code=1
+TICKDROP  false
+LOWERSTATE  1 (STARTED)
+```
+
+The state flips 0 → 1 and the receipt fires, so **the hold is measured rather than assumed**.
+
+**The control traps, and that is reported rather than presented as a clean 4.** No `cancel-status`
+event appears: this child's callback returns YIELD unconditionally and never handles a cancellation
+event, so `subtask.cancel` on the started task traps. That is a limitation of a child written only for
+the never-starts case — status 4 is measured properly by `cancel-wat` above — and the control's job is
+the state flip, which it does.
+
+### The four facts, 3 against 4
+
+| fact | 4 (`cancel-wat`) | 3 (`cancel-starting`) |
+|---|---|---|
+| events delivered | `enter(1) → suspend(1) → lower-state(1) → tick-dropped → receipt(1) → cancel-status(4)` | `lower-state(0) → cancel-status(3)` — no guest entry at all |
+| may the task call an import | **yes**, `RECEIPT observed, code=1` | **no** — channel present, never used |
+| pending host call dropped | **yes**, `TICKDROP true` | no pending call existed |
+| guest cancellation path reached | **yes**, the `Drop` guard ran | **no** — no guest code ran |
+
+They differ on all four, and every difference reduces to one cause: the task never started.
+
+**What is measured and what is derived**, because the two readings use different children and are not
+on equal footing:
+
+* **Measured.** The state and the status, both runs. And *"may the task call an import"* — the child
+  imports `note` and its callee calls it as its **first** act, so `RECEIPT none` is a channel that
+  existed and went unused rather than a channel that was absent. That silence is also a second,
+  independent check on the hold: had the task started, the receipt would have fired.
+* **Derived.** *"Pending host call dropped"* and *"cancellation path reached"*. This child has no
+  `tick` import — it suspends by yielding, which is what lets it be WAT — so there is no pending host
+  call to drop and no `Drop` guard to run. That a task which never starts has neither follows from the
+  state, but it is an inference from the ABI rather than an observation of this run.
+
+### How Burroughs stands on it
+
+**It refuses, but as the wrong kind of thing** — and identically whether `gate:async` is on or off:
+
+```
+burroughs: component: instantiate core module 0: unknown import: "" "bpinc" (interp: link failed)
+```
+
+`backpressure.inc` decodes as `CanonAsyncBuiltin` and `asyncSurface` would name it, but a
+`CanonAsyncBuiltin` has no lowering, so the core import is never produced and **core-module
+instantiation fails before `gateAsync` runs**. A well-formed component that wasmtime 49 executes is
+reported as a malformed one. Filed as
+[#952](https://github.com/scttfrdmn/burroughs/issues/952) with this fixture as its witness; the
+ordering is the bug, and implementing backpressure is a separate decision.
+
+**That is also why `starting.reading` has no Go consumer while `cancel-wat.reading` does.** Each of
+those tests runs the composed component through this engine and holds it to the committed reading;
+this component cannot be run through this engine at all yet. Pinning the current refusal in a test
+would pin the defect, so the reading is held by `build.sh`'s two assertions (the state here, the
+flipped state in the control) and its Go consumer arrives with #952's fix, which uses this fixture
+gate-off and gate-on.
 
 ## Ruling 1, settled: ONE sentinel
 

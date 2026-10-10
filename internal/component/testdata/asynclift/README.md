@@ -53,9 +53,12 @@ targets. See `build.sh` for that and for three blocked paths worth not re-paying
 | `cancel-rust-parent/` | #862's **real** canceller: drops an in-flight async import, which is what a Rust guest does. Sees no status — see [CANCELLATION.md](CANCELLATION.md) |
 | `cancel-wat-parent/` | #862's **synthetic** canceller: calls `subtask.cancel` by hand and reports the numeric status it returns. Its `.wat` is committed beside its `.wasm` |
 | `call-wat-parent/` | #888's **completer**: calls the child, parks on its subtask, and reports the value it returned. The only composed artefact here that does **not** cancel — see below. Its `.wat` is committed beside its `.wasm` |
+| `starting-wat-child/` | #884's **held** child: one `canon backpressure.inc` is all that keeps its subtask from starting, so status 3 is reachable. The only child here that is WAT and therefore the only one needing **no Rust toolchain at all** |
+| `starting-wat-parent/` | #884's **early canceller**: cancels while the subtask is still STARTING and reports the status. Pairs with `starting-wat-child/`; both `.wat`s are committed beside their `.wasm`s |
 | `harness/` | the wasmtime embedding that answers the concurrency question. Its own lockfile, outside the Go build |
 | `concurrent.reading` | the positive arm's reading |
 | `sequential.reading` | the negative arm's reading |
+| `starting.reading` | #884's status-3 reading. No Go consumer **because this engine cannot run its component at all yet** ([#952](https://github.com/scttfrdmn/burroughs/issues/952)); `build.sh` holds it instead, and [CANCELLATION.md](CANCELLATION.md) has the reasoning |
 
 Each guest carries its **own `Cargo.lock`**, and that is load-bearing rather than tidiness: the manifests say
 `wit-bindgen = "0.62"`, a caret range, so without the lock a rebuild is free to resolve a later 0.62.x and emit
