@@ -92,11 +92,32 @@ func resolveFeatures(fs []Feature) (bin.Features, error) {
 // genuinely still open (the ADR commits to the *shape* and shows a `Variant("closed", nil)` constructor), so
 // this comment names the shape and the entry points that are decided, rather than inventing the one that
 // is not.
+// # Where this differs from WASIP1Config, field by field
+//
+// The names are the same and two of the meanings are not, so an embedder who knows one does **not**
+// know the other without this list. The difference is deliberate and is not being reconciled: a
+// component is embedded in someone's program, and it should not write to that program's terminal
+// unless the embedder hands it a writer. A `wasip1` module is the command-line shape, where inheriting
+// the process's streams is what a caller expects.
+//
+//	Stdin    nil is an EMPTY STREAM here; nil is os.Stdin  for a WASIP1Config
+//	Stdout   nil DISCARDS here;           nil is os.Stdout for a WASIP1Config
+//	Stderr   nil DISCARDS here;           nil is os.Stderr for a WASIP1Config
+//	Args     same meaning, no default program name is substituted
+//	Features same meaning, same [Feature] names, same refusal of an unrecognized one
+//
+// Two fields a [WASIP1Config] has and this does not:
+//
+//	Env       a component reads its environment through wasi:cli/environment, not modelled here
+//	Preopens  a component's filesystem capabilities are not modelled here
+//
+// Both are absences rather than defaults: a component gets no environment and no filesystem through
+// this type, and nothing here grants either.
 type ComponentConfig struct {
 	Args   []string  // the component's argv, lowered by wasi:cli/environment.get-arguments
-	Stdin  io.Reader // the component's stdin; nil means an empty stream
-	Stdout io.Writer // the component's stdout; nil discards
-	Stderr io.Writer // the component's stderr; nil discards
+	Stdin  io.Reader // the component's stdin; nil means an empty stream (NOT os.Stdin — see above)
+	Stdout io.Writer // the component's stdout; nil discards (NOT os.Stdout — see above)
+	Stderr io.Writer // the component's stderr; nil discards (NOT os.Stderr — see above)
 
 	// Features are the proposal capabilities this component's core modules require (ADR 0088).
 	// Empty — the zero value — is the engine's default set, so an existing embedder is unaffected
@@ -162,6 +183,76 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	return 0, nil
 }
 
+// LoadComponent loads a component against this configuration and returns it for [Component.Call],
+// the capability-carrying twin of the bare [LoadComponent].
+//
+// # What it is for
+//
+// The bare [LoadComponent] hard-codes discarded output and no argv, so a component that prints
+// through [Component.Call] writes **nowhere** and cannot be given arguments. [ComponentConfig.Run]
+// threads those capabilities but only for `wasi:cli/run`, and it moves no values. This is the gap
+// between them: configured streams *and* value calls.
+//
+// # The defaults are Run's, exactly
+//
+// `nil` Stdout and Stderr **discard**; a `nil` Stdin is an empty stream; `Args` and `Features` are
+// passed as given. That is not a choice made here — it is the same handling
+// [ComponentConfig.Run] performs, because two methods on one configuration must mean the same thing
+// by that configuration. `TestAZeroConfigComponentWritesNowhereThroughBothPaths` holds them equal by
+// driving both.
+//
+// **A zero-value configuration still sends output nowhere**, and that is deliberate rather than an
+// oversight inherited from the bare form: a component embedded in someone's program should not write
+// to that program's terminal unless the embedder hands it a writer. [ComponentConfig]'s own
+// documentation records where these defaults differ from [WASIP1Config]'s.
+//
+// # Refusals
+//
+// Three classifications, which is **one more than either existing path performs** and the reason is
+// that this method is the only one that can meet all three: it loads (so a form this engine does not
+// model is reachable, as in the bare [LoadComponent]) *and* it resolves features (so the async tier's
+// unimplemented execution is reachable, as in [ComponentConfig.Run]).
+//
+//	gate off, well-formed component  -> ErrGated
+//	form this engine does not model  -> ErrUnsupported
+//	async on, execution not built    -> ErrUnsupported
+//
+// Each is refused **at load**, which is the earliest point any of them can be known.
+func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
+	if !componentsEnabled() {
+		return nil, fmt.Errorf("%w: gate:components is off in this build (%s=0); unset it to load a "+
+			"component (the gate is on by default as of the 2026-09-11 flip)",
+			ErrGated, componentsGateEnv)
+	}
+	stdout, stderr := c.Stdout, c.Stderr
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	h := component.NewHost(stdout, stderr, c.Stdin)
+	h.Args = c.Args
+	feats, ferr := resolveFeatures(c.Features)
+	if ferr != nil {
+		return nil, ferr
+	}
+	in, err := component.InstantiateWithHostFeatures(wasm, h, feats)
+	if err != nil {
+		if errors.Is(err, component.ErrAsyncGated) {
+			return nil, fmt.Errorf("%w: %w", ErrGated, err)
+		}
+		if errors.Is(err, component.ErrUnsupportedForm) {
+			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
+		if errors.Is(err, component.ErrAsyncNotImplemented) {
+			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
+		return nil, err
+	}
+	return &Component{in: in}, nil
+}
+
 // IsComponent reports whether wasm is a WebAssembly component rather than a core module: it reads the
 // 8-byte preamble's layer field (a component is layer 1, a core module layer 0), mirroring
 // [IsWASIP1Command]'s fact-based detection without instantiating. Bad magic or a short header is
@@ -212,9 +303,13 @@ var componentCloseBound = 5 * time.Second
 // LoadComponent loads and instantiates a component, returning a handle whose exports can be called.
 //
 // It mirrors [Instantiate]/[Instance], which is what ADR 0085 commits to in those words. Streams and
-// arguments are the zero configuration — stdout and stderr discarded, stdin empty — because a
-// capability-carrying twin is a further exported name and this release ships only what was stamped;
-// [ComponentConfig.Run] remains the configured path for running `wasi:cli/run`.
+// arguments are the zero configuration — stdout and stderr discarded, stdin empty.
+//
+// **For configured streams or argv, use [ComponentConfig.LoadComponent]**, the capability-carrying
+// twin. It takes the same defaults this method does, so moving to it changes nothing until a field is
+// set. (This paragraph said the twin was "a further exported name and this release ships only what
+// was stamped" until that twin landed.) [ComponentConfig.Run] remains the path for running
+// `wasi:cli/run` rather than calling exports.
 //
 // A component using a proposal whose gate is off is refused as [ErrGated]; one whose form this engine
 // does not model, as [ErrUnsupported]. Both are refused **at load**, which is the earliest point either
@@ -243,6 +338,40 @@ func LoadComponent(wasm []byte) (*Component, error) {
 	return &Component{in: in}, nil
 }
 
+// Exports returns the names of this component's callable exports, sorted, in exactly the form
+// [Component.Call] accepts.
+//
+// # Why this exists
+//
+// Without it an embedder has to know the names in advance, and the export grammar makes that worse
+// rather than better: a name is either bare or `interface#function`, and nothing in the artifact tells
+// a caller which form a given component wants. [Instance] has had this since it shipped; a component
+// is the surface where guessing is harder.
+//
+// # What is in the list, and what is not
+//
+//	Call(ctx, name, …)   // every name returned here resolves
+//
+// A top-level exported function appears by its bare name; a function inside an exported interface
+// appears as `interface#function`. **An exported interface's own name does not appear**, because
+// naming one is refused — it is an instance, not a function — and a list of names must not contain a
+// string that cannot be called. `TestExportsNamesEveryCallableAndNothingElse` holds that by **calling
+// every name this returns** rather than by comparing two lists, which is the only way the list and
+// the resolver cannot drift apart.
+//
+// Sorted, because a map's iteration order is not a fact about the component and an embedder printing
+// these for a human should not see them shuffle. A fresh slice each call, so writing to the result
+// cannot reach the engine's own view.
+//
+// # Scope
+//
+// Names only. An export's **type** is a further method when something needs it, and adding one does
+// not change this signature — the A-then-D shape ADR 0085 uses for the value constructors: the total
+// form first, never instead of.
+func (c *Component) Exports() []string {
+	return c.in.ValueExportNames()
+}
+
 // Call invokes an exported function with component values and returns its results.
 //
 // # Naming
@@ -265,9 +394,21 @@ func LoadComponent(wasm []byte) (*Component, error) {
 //
 // # Value scope
 //
-// This release carries **`u32` only** across the boundary. An argument or result of any other kind is
-// refused **by name** as [ErrUnsupported], naming the kind. The other kinds are added one at a time and
-// each is additive, so nothing here breaks when they arrive.
+// `u32`, `string`, `list` and `record` cross the boundary, constructed with [ComponentU32],
+// [ComponentString], [ComponentList] and [ComponentRecord]. A `tuple` arrives as a record, because
+// that is what the Canonical ABI despecializes it to.
+//
+// An argument or result of any **other** kind is refused **by name** as [ErrUnsupported], naming the
+// kind. `variant`, `flags` and resource handles do not cross, and `option`, `enum` and `result`
+// despecialize to `variant`, so they do not either — each arrives when a guest needs one (ADR 0085's
+// guest-driven rule). Those are listed in `CHANGELOG.md`'s known limits for the release that shipped
+// this surface.
+//
+// (This paragraph read *"This release carries `u32` only"* until the slice that added the two methods
+// above. It was true when ADR 0096 stamped it — point 5, *"first merge carries `u32` only"* — and ADR
+// 0097 superseded that point without this godoc being revisited. A doc comment on a public method is
+// where a stranger reads what the method accepts, so a stale one there is worse than a stale note in
+// a changelog.)
 func (c *Component) Call(ctx context.Context, name string, args ...ComponentValue) ([]ComponentValue, error) {
 	if ctx == nil {
 		// A nil context is a programming error, and saying so beats substituting Background: an embedder

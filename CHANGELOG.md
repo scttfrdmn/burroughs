@@ -95,6 +95,66 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **`ComponentConfig.LoadComponent` and `Component.Exports()`** — the two conveniences #858's review
+  deferred, on Scott's stamp given in session, 2026-10-10. Both additive; nothing existing changes.
+
+  **`ComponentConfig` is not a new type**, which narrowed what the stamp covers: it already exists with
+  `Args`, `Stdin`, `Stdout`, `Stderr` and `Features`, carrying `ComponentConfig.Run`. So this adds two
+  names, not three, and no new public fields.
+
+  **`LoadComponent` closes the gap between the two existing paths.** The bare `LoadComponent`
+  hard-codes discarded output and no argv, so a component that prints through `Component.Call` wrote
+  **nowhere**; `ComponentConfig.Run` threads those capabilities but only for `wasi:cli/run`, and moves
+  no values. This is configured streams *and* value calls.
+
+  Its stream defaults are `Run`'s **exactly** — `nil` discards, a `nil` stdin is an empty stream —
+  because two methods on one configuration must mean the same thing by that configuration. It also
+  classifies **three** refusals where each existing path classifies two: it is the only one that both
+  loads (so an unmodelled form is reachable, as in the bare `LoadComponent`) and resolves features (so
+  the async tier's unimplemented execution is reachable, as in `Run`). That each existing path misses
+  one of the other's is reported rather than changed, since altering a shipped method's error
+  classification is not additive.
+
+  **The component stream defaults differ from `WASIP1Config`'s, deliberately, and that is now
+  documented field by field** on `ComponentConfig` itself: `nil` means *discard* here and
+  *os.Stdout* there; `Env` and `Preopens` are absent rather than defaulted. A component embedded in
+  someone's program should not write to that program's terminal unless the embedder hands it a writer,
+  while a `wasip1` module is the command-line shape where inheriting the process's streams is what a
+  caller expects. **So a zero-value config still sends output nowhere** — the change is that an
+  embedder now *can* supply a writer, not that the default moved.
+
+  **`Exports()` returns a sorted fresh slice in exactly the forms `Call` accepts**: a top-level
+  function by its bare name, a function inside an exported interface as `interface#function`. An
+  exported interface's **own** name is absent, because naming one is refused — it is an instance, not
+  a function — and a name list must not contain a string that cannot be called. The enumerator lives
+  beside `resolveValueExport`, since the two are one fact held in two places.
+
+  **The witness calls every name it returns** rather than comparing two lists, which would agree by
+  construction and drift silently — the defect this campaign already paid for twice, in the provenance
+  glob keys and the edit-route hook's `tracked_set`.
+
+  **The discriminator was too narrow in its first draft, and neutering found it.** Calling with no
+  arguments fails on *arity* for a real export, so the test needs to recognise a name-rejection
+  specifically. It matched only *"no callable run export"* — and an exported interface's name
+  **resolves** before failing as *"is an instance, not a function"*, so the dedicated arm caught the
+  neutered enumerator while the general check did not. A check whose comment claims "every name is
+  callable" while testing "every name resolves" is narrower than it reads; both phrases are now
+  matched, and both arms fire.
+
+- **`Component.Call`'s documentation said the boundary carries `u32` only.** It had been false since
+  the string, list and record work shipped in `v0.7.0`: true when ADR 0096 stamped point 5, *"first
+  merge carries `u32` only"*, and superseded by ADR 0097 without the godoc being revisited. A doc
+  comment on a public method is where a stranger reads what the method accepts, so a stale one there
+  is worse than a stale note in a changelog. It now names the four kinds that cross, says a `tuple`
+  arrives as a record, and points at the known-limits list for what does not.
+
+  The sweep, stated: `component.go` for *u32-only* / *this release ships* / *other kinds* phrasing,
+  then the same across every non-test file in the public surface, then `README.md` and `docs/`. Two
+  sites in `component.go` — this one and the bare `LoadComponent`'s claim that a capability-carrying
+  twin *"is a further exported name and this release ships only what was stamped"*, which this slice
+  falsifies. The `docs/decisions/` mentions are **historical records** of what was stamped at the
+  time, and ADR 0097 already supersedes 0096's point 5, so those stand.
+
 - **`--dir` and `--scratch` recognise a Windows drive letter, on Windows only.** `strings.Cut(v, ":")`
   split at the first colon, which on Windows is the drive letter's: `--dir C:\data:/d` parsed as host
   `C` and guest `\data:/d` and was refused as non-absolute. Measured on the Windows job as

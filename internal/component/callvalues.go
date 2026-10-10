@@ -5,6 +5,7 @@ package component
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -189,6 +190,46 @@ func (in *Instantiated) resolveValueExport(name string) (*compFunc, error) {
 		return nil, fmt.Errorf("%w: %q is not a callable function", ErrUnsupportedForm, name)
 	}
 	return rd.fn, nil
+}
+
+// ValueExportNames returns every name `resolveValueExport` accepts, sorted.
+//
+// **It lives beside the resolver on purpose**: the two are one fact — which strings name a callable
+// export — and a producer that drifts from its consumer is the defect this project keeps paying for.
+// Anything this returns must resolve, which `TestExportsNamesEveryCallableAndNothingElse` checks by
+// calling every name rather than by comparing two lists.
+//
+// The forms are the resolver's own, and nothing else is emitted:
+//
+//   - a top-level callable export, by its bare name;
+//   - a function inside an exported instance, as `interface#function`.
+//
+// **An exported instance's own name is deliberately absent.** Naming one is refused by the resolver —
+// *"export %q is an instance, not a function"* — so including it would hand a caller a string that
+// cannot be called, which is the one thing a name list must not do.
+//
+// Sorted because a map's order is not a fact about the component, and an embedder printing this for a
+// human should not see it shuffle between runs. A fresh slice each call, so a caller cannot mutate the
+// engine's view by writing to the result.
+func (in *Instantiated) ValueExportNames() []string {
+	if in == nil || in.export == nil {
+		return nil
+	}
+	out := make([]string, 0, len(in.export.exports))
+	for name, cd := range in.export.exports {
+		if cd.fn != nil {
+			out = append(out, name)
+		}
+		if cd.inst != nil {
+			for fname, rd := range cd.inst.exports {
+				if rd.fn != nil {
+					out = append(out, name+"#"+fname)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // lowerFlatArgs lowers component values to the flat core args an export's lifted callee takes.
