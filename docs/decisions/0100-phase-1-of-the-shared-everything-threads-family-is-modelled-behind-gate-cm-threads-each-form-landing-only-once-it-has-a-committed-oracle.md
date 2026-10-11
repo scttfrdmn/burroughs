@@ -502,10 +502,19 @@ Chair's ruling, in session, 2026-10-11, under Scott's stated deferral. Five poin
    § Goals). Phase 2 stays refused by name: two of its three forms are not defined in the reference at the
    pin and the 🧵② marker is ambiguous, so it needs nothing further until the pin moves.
 2. **Behind a new gate, `gate:cm-threads`, default off, which requires `gate:async` to be on.** Threads
-   live inside tasks, so the dependency is real. A separate gate lets `gate:async` flip to default-on
-   without carrying unmeasured thread semantics with it, and wasmtime separates the two the same way
-   (`component-model-threading`). With `gate:cm-threads` on and `gate:async` off, the engine refuses by
-   name and says which gate is missing.
+   live inside tasks, so the dependency is real. **`gate:async` is already default-on** — its
+   `asyncEnabled` reads `os.Getenv(asyncGateEnv) != "0"`, on since the 2026-09-18 flip (ADR 0086's
+   amendment, #792), measured here with the variable unset — so a shared gate would put 🧵 semantics on by
+   default with it. That is the argument for a separate gate rather than against it: `gate:cm-threads`
+   defaults off and nothing in the async default carries thread semantics. wasmtime separates the two the
+   same way (`component-model-threading`). With `gate:cm-threads` on and `gate:async` off, the engine
+   refuses by name and says which gate is missing — and `BURROUGHS_ASYNC=0` is how that cell is reached,
+   since the async gate is not off by default.
+
+   *An earlier draft of this point read "a separate gate lets `gate:async` flip to default-on without
+   carrying unmeasured thread semantics with it", which described the flip as still to come. It happened
+   on 2026-09-18. The conclusion is unchanged and the premise is corrected rather than the sentence left
+   standing.*
 3. **The env spelling follows the existing component-model gates**, which are
    `componentsGateEnv = "BURROUGHS_COMPONENTS"` (ADR 0084) and `asyncGateEnv = "BURROUGHS_ASYNC"`
    (ADR 0086) — so `BURROUGHS_CM_THREADS`, declared as a const beside its check, not invented at a call
