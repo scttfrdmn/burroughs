@@ -24,6 +24,15 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+**ADR 0100 is proposed and nothing is built.** The shared-everything-threads (🧵) family stays refused by
+name at decode, exactly as #957 left it; the record asks Scott whether to model it, behind which gate, and
+in what order relative to the core `gate:threads` work. Not a Keep a Changelog group for the same reason
+the record correction below is not one — the spec has six and "a decision was proposed" is none of them —
+and noted here because a reader comparing the tree against this file would otherwise find a new
+`docs/decisions/` entry with no mention. **No behaviour changes.** Two of the actor's premises are
+retracted inside the record: the family needs neither a shared memory (`gate:threads`) nor §7's
+stack-switching proposal, and both wrong premises came from a name shared across proposals.
+
 **Record correction, 2026-10-09: eleven merges carry a `Ratio-Class: ordered` trailer whose citation
 is not an approval, and the ratio figures quoted in those PRs overstate the ordered share.** Not a
 Keep a Changelog group — the spec has six and this is not one of them, so it sits in the block's
