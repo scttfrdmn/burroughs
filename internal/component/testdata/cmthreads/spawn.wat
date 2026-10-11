@@ -57,9 +57,30 @@
       (i32.const 1) ;; YIELD
     )
 
-    ;; The callback, entered after the yield. By now the spawned Thread has run, so the mask and both
-    ;; indices are in memory. Pack: marker in bit 0, entry index in bits 4-7, body index in bits 8-11.
+    ;; The callback. **It re-YIELDs until the spawned body's marker is set, and only then packs and
+    ;; returns** — so the result does not depend on which ready Thread the scheduler picks first.
+    ;;
+    ;; The first version of this fixture packed on its first re-entry, on the assumption that "by now
+    ;; the spawned Thread has run". The reference does not promise that. Its YIELD arm is
+    ;;
+    ;;     case CallbackCode.YIELD:
+    ;;       thread.wait_until(lambda: inst.exclusive_thread is None)
+    ;;
+    ;; with `exclusive_thread` set to None on the line before, so the predicate is already true, and
+    ;; `Thread.wait_until` begins
+    ;;
+    ;;     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
+    ;;       return
+    ;;
+    ;; — half the time it returns at once, re-entering this callback with EVENT_NONE before the body
+    ;; has run. wasmtime 49.0.2 happens always to run the body first (30 of 30 runs gave 529 on the
+    ;; first version), which is why the first reading looked order-independent: it pinned one
+    ;; implementation's fixed choice. With the loop, both orders reach the same packed value.
+    ;;
+    ;; Pack: marker in bit 0, entry index in bits 4-7, body index in bits 8-11.
     (func (export "cb") (type $cbt) (param i32 i32 i32) (result i32)
+      (if (i32.eqz (i32.load (i32.const 0)))
+        (then (return (i32.const 1)))) ;; YIELD again: the body has not run yet
       (call $taskret
         (i32.or (i32.load (i32.const 0))
           (i32.or (i32.shl (i32.load (i32.const 4)) (i32.const 4))

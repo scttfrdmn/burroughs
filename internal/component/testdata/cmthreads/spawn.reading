@@ -5,7 +5,10 @@ FORMS     0x26 thread.index, 0x27 thread.new-indirect, 0x28 thread.resume-later
           all eight; index-call.wat needs one.
 RESULT    529  (0x211)
 EXIT      0
-RUNS      2, identical
+RUNS      30, identical, on the CORRECTED fixture (callback re-YIELDs until the body's marker is
+          set). The first version, which packed on the first re-entry, also gave 529 in 30 of 30 —
+          see "The execution order" below for why that agreement was luck about wasmtime, not a
+          property of the reference.
 
 PACKING   bit 0 the spawned body's marker; bits 4-7 the entry Thread's index; bits 8-11 the body's.
 
@@ -26,9 +29,39 @@ WHAT IT DOES NOT PIN
   * The slot-reuse ORDER. Nothing is freed before the call ends, so no reuse policy is
     discriminated — the same gap switch.reading and index-call.reading record for their own
     reasons. A fixture holding two Threads live and freeing them out of order would.
-  * The execution order. The reference schedules ready Threads with random.choice, so an order is
-    not a property of a conforming implementation; the marker is a store and each index is written
-    by its own Thread, so the asserted value is order-independent by construction.
+  * The execution order — and the first version of this reading CLAIMED that and was wrong.
+
+    It said the value was order-independent because "each index is written by its own Thread".
+    That was true of the writes and false of the read: the callback packed the indices on its FIRST
+    re-entry, assuming the spawned body had run by then. The reference does not promise that. Its
+    YIELD arm, in canon_lift's callback case:
+
+        inst.exclusive_thread = None
+        match code:
+          case CallbackCode.YIELD:
+            thread.wait_until(lambda: inst.exclusive_thread is None)
+
+    The predicate is already true, and Thread.wait_until begins
+
+        if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
+          return
+
+    so half the time it returns at once and the callback is re-entered with EVENT_NONE before the
+    body has run. A conforming implementation taking that branch would have produced 0x011 — body
+    field never written — from the first version.
+
+    wasmtime 49.0.2 never takes it here: 30 of 30 runs of the first version gave 529. So the first
+    reading pinned ONE IMPLEMENTATION'S FIXED SCHEDULING CHOICE, not a property of the reference.
+
+    CORRECTED: the callback now re-YIELDs while mem[0] (the body's marker) is 0, and packs only once
+    it is set. Every order now reaches the same packed value, so the result IS order-independent —
+    by the loop, not by assumption. Re-taken: 30 of 30 runs give 529, exit 0.
+
+    Still worth stating: wasmtime exercises only the branch where the body runs first, so the
+    re-YIELD path is correct by construction and NOT yet exercised by any implementation. Burroughs
+    will be the first to exercise it if its scheduling point at YIELD re-enters before running the
+    ready Thread — and the current engine, which re-enters at once with no scheduling point at all,
+    would loop forever against this fixture. That is the defect made visible, not a fixture bug.
 
 GATE OFF (wasmtime)
   `thread.index` requires the component model threading feature (at offset 0x47)
@@ -41,7 +74,7 @@ BURROUGHS, before this slice
   exit 5 — refused by name at decode, because 0x27 and 0x28 are not modeled yet
 
 PROVENANCE
-  taken      2026-10-11T20:06:34Z
+  taken      2026-10-11T20:34:55Z (re-taken on the corrected fixture; first version 20:06:34Z)
   host       Darwin arm64
   wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
   flags      -W component-model-threading=y -W component-model-async=y
