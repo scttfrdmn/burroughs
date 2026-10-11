@@ -1,0 +1,50 @@
+MODE      cm-threads-spawn
+FORMS     0x26 thread.index, 0x27 thread.new-indirect, 0x28 thread.resume-later
+          — and nothing else, which is why this fixture exists: ADR 0100's point 4 lands one form
+          at a time, so each slice needs a fixture using only the forms it models. switch.wat needs
+          all eight; index-call.wat needs one.
+RESULT    529  (0x211)
+EXIT      0
+RUNS      2, identical
+
+PACKING   bit 0 the spawned body's marker; bits 4-7 the entry Thread's index; bits 8-11 the body's.
+
+DECODED
+  marker            1   the spawned Thread ran
+  entry index       1   the entry (implicit) Thread
+  body index        2   the Thread created by thread.new-indirect
+
+WHAT IT PINS, and the second line is what index-call.reading could not reach
+  * The entry Thread is 1 and the spawned Thread is 2 — the reference's Table policy showing
+    through: array starts as [None], so index 0 is reserved and allocations run 1, 2.
+  * CONCURRENT DISTINCT INDICES. The entry Thread yields rather than returning, so it is still
+    registered while the spawned Thread runs: two Threads live at once, holding 1 and 2. An
+    implementation that freed the entry's slot at the yield would hand the body a 1 and pass a
+    reachability check while being wrong about observable guest state.
+
+WHAT IT DOES NOT PIN
+  * The slot-reuse ORDER. Nothing is freed before the call ends, so no reuse policy is
+    discriminated — the same gap switch.reading and index-call.reading record for their own
+    reasons. A fixture holding two Threads live and freeing them out of order would.
+  * The execution order. The reference schedules ready Threads with random.choice, so an order is
+    not a property of a conforming implementation; the marker is a store and each index is written
+    by its own Thread, so the asserted value is order-independent by construction.
+
+GATE OFF (wasmtime)
+  `thread.index` requires the component model threading feature (at offset 0x47)
+  exit 1 — a parse refusal naming the first 🧵 production in the canon section
+
+BURROUGHS, before this slice
+  burroughs: feature not implemented in this phase: component: canon 1: canon thread.resume-later
+  (0x28) is a shared-everything-threads built-in, which this engine does not support — the
+  component is well-formed and no gate admits this proposal
+  exit 5 — refused by name at decode, because 0x27 and 0x28 are not modeled yet
+
+PROVENANCE
+  taken      2026-10-11T20:06:34Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  flags      -W component-model-threading=y -W component-model-async=y
+  invoke     --invoke 'run(0)'
+  wasm-tools wasm-tools 1.258.0
+  source     spawn.wat -> spawn.wasm, hand-authored WAT, no Rust toolchain
