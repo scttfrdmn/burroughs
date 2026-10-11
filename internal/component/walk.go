@@ -18,8 +18,35 @@ import (
 // funcs (a refusing stub host, typed from the importing module's own declaration). A synthetic
 // inline-export instance is a projection over already-defined entries and does no interpreter work.
 
-// ErrUnsupportedForm reports an instantiation form the engine does not model (refuse-at-instantiate by
-// name).
+// ErrUnsupportedForm reports a component-model construct this engine does not model, refused **by name**
+// at whichever stage meets it. It is the sentinel all three public entry points map to the public
+// `ErrUnsupported`.
+//
+// # Its documented meaning was narrower than its producers, which is the drift #957 fixed in a message
+//
+// This said *"an instantiation form the engine does not model (refuse-at-instantiate by name)"*. That
+// described one of four stages that raise it, and the `Error()` text still says *"unsupported
+// instantiation form"* — kept, because it is the sentinel's identity and a caller may match on it.
+// **Four stages, derived with a parser rather than listed** (every `ErrUnsupportedForm` identifier in
+// this package's non-test files, grouped by enclosing declaration: 49 sites in 23 declarations):
+//
+//   - **Decode.** The 🧵 shared-everything-threads built-ins, #957 — a `threadBuiltinError` whose
+//     `Unwrap` returns this sentinel, so the classification is inherited while the message says what it
+//     actually is. This is the stage the old doc comment did not cover at all.
+//   - **The instantiation walk.** `walker.step`, `coreInstanceStep`, `aliasExport`, `compExportRef`,
+//     `canonTypeOf` — a core instance naming a module that is not there, an alias kind the component
+//     space does not carry, an unresolved value kind. This is what the old wording described.
+//   - **Lift/lower binding and invocation.** `invokeWith`, `invokeWithPending`, `runLiftTask`,
+//     `enterAndInvoke`, `enterInvokeLowering`, `bindCrossComponent`, and `ErrCrossComponentResult`.
+//   - **Value calls.** `Call`, `CallValuesCtx`, `resolveValueExport`, `lowerFlatArgs`, `lowerOneArg`,
+//     `liftFlatResult`, `liftFlatCoreResult`, `lowerPending`, `guestAlloc`, `checkLowerSize` — an
+//     export that is not callable, a kind the codec does not carry, a string past a lowering limit.
+//
+// **So do not read the name as the scope.** A sentinel whose documented meaning is narrower than its
+// producers sends a reader looking in one stage for a refusal raised in another, which is the same
+// defect #957 repaired one level down — there in a message a user reads, here in a comment the next
+// actor reads. The stage list is accurate as derived and is not machine-checked; a fifth stage would
+// need this comment amended, which is the standing cost of a prose list and is said rather than hidden.
 var ErrUnsupportedForm = errors.New("component: unsupported instantiation form")
 
 // coreDef is a resolved core index-space entry: a real extern (a core instance's export, or an aliased

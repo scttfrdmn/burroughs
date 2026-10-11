@@ -163,7 +163,10 @@ type CanonOpts struct {
 // the async family (waitable-set / stream / future / task / subtask / context / backpressure /
 // error-context, discriminants 0x05–0x25) is *recognized* — decoded into the graph as CanonAsyncBuiltin
 // so the section survives to bind, where gate:async refuses it by name (ADR 0086; its semantics are
-// slice 1's, not this shell's). The thread family (0x26–0x2d, 0x40–0x42) stays a decode refusal.
+// slice 1's, not this shell's). The 🧵 thread family (0x26–0x2d, 0x40–0x42) is refused at decode and so
+// gets no kind of its own — but **by name and as unsupported** since #957, not as an unmodeled opcode;
+// `threadbuiltins.go` records why the refusal stays at decode rather than being recognized like the
+// async family.
 type CanonKind uint8
 
 const (
@@ -442,6 +445,16 @@ func (r *reader) canon() (Canon, error) {
 		// The async family (Binary.md @ 2bed77e, 🔀 + 📝): recognized, not modeled. The operands are read
 		// so the section advances exactly; the built-in refuses by name at bind under gate:async (ADR 0086).
 		return r.canonAsyncBuiltin(kind)
+	case 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x40, 0x41, 0x42:
+		// NEUTER THIS ARM to reproduce #957: delete it and the family falls through to `default`
+		// again, returning `canon built-in 0x26 is not modeled (this slice: …)` with no sentinel and
+		// exit 1. Named here because this is the line a reader would reach for.
+		//
+		// The 🧵 shared-everything-threads family: refused BY NAME, as unsupported, right here (#957).
+		// **This case arm is the set** — `threadBuiltinNames` only spells it, and a test holds the two
+		// equal in both directions so neither can gain a member alone. The operands are deliberately
+		// not read: see threadbuiltins.go for why reading them would be worse than refusing here.
+		return Canon{}, threadBuiltinRefusal(kind)
 	default:
 		return Canon{}, fmt.Errorf("canon built-in %#x is not modeled (this slice: lift, lower, resource.new/drop/rep, the async family)", kind)
 	}

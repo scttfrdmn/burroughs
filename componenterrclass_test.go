@@ -76,6 +76,11 @@ func TestEveryEntryPointClassifiesARefusalTheSameWay(t *testing.T) {
 		because string
 		// unreachable, when non-empty, says this refusal cannot be produced through any public
 		// entry point and why. The arm then asserts that rather than asserting a classification.
+		//
+		// **No row sets it today**, and the mechanism is kept rather than deleted: the one row that
+		// did (ErrUnsupportedForm) went live when #957 gave it a fixture, which is what the field is
+		// for — a refusal with no fixture is written down and starts asserting when one arrives,
+		// instead of being left out and forgotten.
 		unreachable string
 	}{
 		{
@@ -92,19 +97,21 @@ func TestEveryEntryPointClassifiesARefusalTheSameWay(t *testing.T) {
 			want:    burroughs.ErrUnsupported,
 			because: "execution is not yet implemented",
 		},
+		// **This row was declared unreachable and is now live**, which is the outcome it was written
+		// for: *"the row is written and will start asserting the moment a fixture reaches it."*
+		// #957's committed `thread-index-synth.wasm` reaches it. What it does NOT make reachable is
+		// the *binding-stage* producer the old note described — `ErrUnsupportedForm` raised while
+		// walking, which is still only exercised by `walkComponent` called directly with a stub host
+		// (internal/component's TestBindingRefusesImplementedFilesystemErrorCodeOnRealGuest), and the
+		// public path still loads `p3hello` without error. So the SENTINEL is reached, at decode, by
+		// another route. That distinction is kept rather than smoothed over: a row that claimed to
+		// cover the binding path would be asserting something no arm here measures.
 		{
-			refusal: "a component form this engine does not model",
-			fixture: "internal/component/testdata/p3hello.wasm",
+			refusal: "a canonical built-in this engine does not model",
+			fixture: "internal/component/testdata/thread-index-synth.wasm",
 			async:   "1",
 			want:    burroughs.ErrUnsupported,
-			because: "unsupported instantiation form",
-			unreachable: "No committed fixture produces ErrUnsupportedForm through a public entry " +
-				"point. It is raised while BINDING, and the test that exercises it " +
-				"(internal/component's TestBindingRefusesImplementedFilesystemErrorCodeOnRealGuest) " +
-				"calls walkComponent directly with a stub host — the public path loads p3hello " +
-				"without error, measured. All three entry points DO carry the classification, so " +
-				"the row is written and will start asserting the moment a fixture reaches it. " +
-				"Stated rather than dropped, because a row quietly removed is a row nobody misses.",
+			because: "shared-everything-threads built-in",
 		},
 	} {
 		t.Run(r.refusal, func(t *testing.T) {
