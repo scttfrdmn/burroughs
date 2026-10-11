@@ -161,7 +161,7 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
   **New interp surface, reusing the existing path.** `interp.ResolveTableFunc` reads a table slot step
   for step as `resolveCallIndirect` does — `tab.load`, `uninitializedElem`, `funcRefTarget` — so graves
-  #163, #246 and #669 stay covered by the code that already covers them, and the call goes through the
+  #163 and #246, and the issue #669, stay covered by the code that already covers them, and the call goes through the
   funcref's own instance's `invokeIndex`, inheriting the closed check, `enterGuest`, the caller count and
   ADR 0071's recover.
 

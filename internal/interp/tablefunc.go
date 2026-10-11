@@ -23,14 +23,15 @@ type TableFunc struct {
 // ResolveTableFunc reads slot `slot` of table `tbl` and resolves it to a callable function of type
 // `(i32) -> ()`, which is `thread.new-indirect`'s entry type for a 32-bit address space.
 //
-// # It is `resolveCallIndirect`'s read, step for step, so three graves stay covered by the code that
-// already covers them
+// # It is `resolveCallIndirect`'s read, step for step, so three past defects stay covered by the code
+// that already covers them
 //
 // `tab.load` for the bounds check (`undefined element i`), `uninitializedElem` for a null slot, and
-// `funcRefTarget` for the resolution — which is where grave #163 (resolve against the funcref's own
-// instance, never the caller's), grave #246 (a zero `ref` that is not null) and #669 (a non-null ref
-// with no defining instance) are all handled. A second resolution here would be a second place for
-// each of those to come back.
+// `funcRefTarget` for the resolution — which is where two graves and one issue are handled: grave #163
+// (resolve against the funcref's own instance, never the caller's), grave #246 (a zero `ref` that is not
+// null), and #669 (a non-null ref with no defining instance — an issue rather than a grave, because it
+// was not live on main when found). A second resolution here would be a second place for each of those to
+// come back.
 //
 // # The type check is against the CALLEE, and that leaves one recorded divergence
 //
