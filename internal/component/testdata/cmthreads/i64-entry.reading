@@ -1,0 +1,30 @@
+MODE      cm-threads-i64-entry
+SUBJECT   thread.new-indirect whose canon declares ft = (i32) -> () while its table holds an
+          (i64) -> () function — valid at load, a mismatch at the call
+
+WASM-TOOLS VALIDATE (--features all)
+  exit 0 — valid
+
+WASMTIME (-W component-model-threading=y -W component-model-async=y, --invoke 'run(0)')
+  Error: failed to run main module `i64-entry.wasm`
+  
+  Caused by:
+      0: error while executing at wasm backtrace:
+      0:     0xcc - runmod!<wasm function 2>
+      1: wasm trap: start function does not match expected type (currently only `(i32) -> ()` is supported)
+  
+  exit 134 — TRAPS at the call
+
+BURROUGHS, before #969
+  refused at the call under interp.ErrUnsupportedOp as "the memory64 form", on the ground that ft
+  was never decoded and so could not be compared — a classification difference, not an acceptance
+
+BURROUGHS, after #969
+  traps at the call: ft is checked at load, so the callee check is trap_if(f.t != ft)
+
+PROVENANCE
+  taken      2026-10-11T22:33:43Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  wasm-tools wasm-tools 1.258.0
+  source     i64-entry.wat -> i64-entry.wasm, hand-authored WAT (i64-ft.wat with the widths swapped)

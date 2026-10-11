@@ -1,0 +1,32 @@
+MODE      cm-threads-i64-ft
+SUBJECT   thread.new-indirect whose canon declares ft = (i64) -> () while its table holds an
+          (i32) -> () function — the shape #969 found Burroughs accepting
+
+WASM-TOOLS VALIDATE (--features all)
+  error: start function must take a single `i32` argument (currently) (at offset 0x6d)
+  exit 1 — INVALID
+
+WASMTIME (-W component-model-threading=y -W component-model-async=y)
+  Error: failed to parse WebAssembly module
+  Caused by:
+      start function must take a single `i32` argument (currently) (at offset 0x6d)
+  exit 1 — refused at parse, before anything runs
+
+BURROUGHS, before #969
+  accepted; run returned 2 — the defect
+
+BURROUGHS, after #969
+  refused at load under ErrUnsupportedForm, quoting the same constraint
+
+WHAT THE REFERENCE IMPLEMENTATION SAYS, for completeness
+  definitions.py's canon_thread_new_indirect asserts ft is (i32)->() or (i64)->() and then
+  trap_if(f.t != ft): in the spec implementation the i64 form is valid and a mismatch TRAPS. The
+  toolchains are stricter today and refuse ANY i64 ft at validation — "(currently)" — and this repo
+  measures against the toolchains, so the right answer here is a refusal at load, not a trap.
+
+PROVENANCE
+  taken      2026-10-11T22:27:02Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  wasm-tools wasm-tools 1.258.0
+  source     i64-ft.wat -> i64-ft.wasm, hand-authored WAT

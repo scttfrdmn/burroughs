@@ -168,7 +168,9 @@ from the three obviously-wrong `#534` trailers to all eleven.
   **One divergence, recorded.** The loader does not decode `core:type` sections, so `new-indirect`'s `ft`
   operand is read but cannot be resolved. The callee is checked to be `(i32) -> ()`; an `(i64) -> ()`
   callee is refused by name as the memory64 form; and a guest whose canon declares i64 while its table
-  holds i32 would run here where the reference traps.
+  holds i32 would run here, where `wasm-tools validate` and wasmtime 49.0.2 **reject it at validation**.
+  *(Corrected after #969's measurement: this entry said "where the reference traps", which was
+  `definitions.py`'s answer and not the toolchains'. Closed by #969 — see Fixed.)*
 
   **Three of my own defects, each caught by an instrument.** `killParked` closed a channel while holding
   `threadTable.mu`, which `TestNoEngineLockIsHeldAcrossAChannelOperation` refused under §4 B-MM-3. The
@@ -639,6 +641,30 @@ from the three obviously-wrong `#534` trailers to all eleven.
   diagnose, not a bound to raise.
 
 ### Fixed
+
+- **A component whose `thread.new-indirect` declared `ft = (i64) -> ()` over an `(i32) -> ()` table entry
+  loaded and ran, where `wasm-tools validate` and wasmtime 49.0.2 reject it as invalid**
+  ([#969](https://github.com/scttfrdmn/burroughs/issues/969)). The loader decoded no `core:type` section,
+  so `ft` was an index nothing had read. It now decodes the plain-functype case and **counts every entry**
+  into the core type space, decoded or not, so later indices stay right; the first entry it cannot read
+  (a rec group, a subtype, a GC type) makes the rest of that section opaque, and an opaque `ft` is refused
+  rather than accepted. Any `ft` that is not `(i32) -> ()` refuses at load under `ErrUnsupportedForm`,
+  quoting the toolchains' constraint — *"start function must take a single `i32` argument
+  (currently)"*. The reference implementation's validator admits the i64 form and traps on the mismatch;
+  this repo measures against the toolchains, which are stricter. Witness: `cmthreads/i64-ft.wasm`,
+  reading committed. **Neuter, run:** skipping the check brings back *"ran, returned 2"*.
+
+  **The other width, as a consequence.** An `(i64) -> ()` table entry under an `(i32) -> ()` `ft` was
+  refused at the call as *"the memory64 form"*, on the ground that without `ft` a matching pair could not
+  be told from a mismatched one. With `ft` known that ground is gone: it is `trap_if(f.t != ft)`, and it
+  now traps, as wasmtime does (`cmthreads/i64-entry.wasm`, reading committed). **Neuter, run:** restoring
+  the arm fails the witness with *"not a trap"*.
+
+  **And a sentinel.** `new-indirect` from a sync lift — where the scheduling loop that would run the
+  Thread is not built — was refused under `ErrAsyncNotImplemented`, which names a missing async tier on a
+  call that is not async. It is `ErrUnsupportedForm`, refused by name; wasmtime runs the same fixture and
+  returns 2 (`cmthreads/sync-new.wasm`, reading committed), so this is a form not yet supported.
+  **Neuter, run:** restoring the old sentinel fails both classification assertions.
 
 - **`internal/interp`'s `race` gate failed 8 of 20 runs with `too many address space collisions for
   -race mode`, because one test held 171 address-space reservations at once**
