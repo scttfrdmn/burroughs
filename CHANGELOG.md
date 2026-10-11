@@ -463,6 +463,80 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **The 🧵 shared-everything-threads family refused a well-formed component at decode as *"not
+  modeled"*, with the exit code a corrupt file gets**
+  ([#957](https://github.com/scttfrdmn/burroughs/issues/957)). #952's class, one proposal over. All
+  eleven productions fell through `canon`'s `default` arm:
+
+  ```
+  burroughs: component: canon 0: canon built-in 0x26 is not modeled
+             (this slice: lift, lower, resource.new/drop/rep, the async family)
+  exit 1
+  ```
+
+  Four things were wrong and only the first is the exit code: the message's shape reads as a parse
+  failure, it names an opcode rather than `thread.index`, it never names the proposal, and *"this
+  slice"* is a note about the async tier's increments with nothing to do with 🧵. Measured against
+  the async family for contrast — `p3async-cancel` gets **5** (unsupported) with the gate on and **6**
+  (gate decline) with it off, while a 38-byte `thread.index` component got **1**.
+
+  **Now**, quoted from the same binary on the same committed fixture so the two compare like for like
+  — the decoder's `component: canon %d:` prefix is still there, which is what carries the sentinel:
+
+  ```
+  burroughs: feature not implemented in this phase: component: canon 0: canon thread.index (0x26)
+             is a shared-everything-threads built-in, which this engine does not support — the
+             component is well-formed and no gate admits this proposal
+  exit 5
+  ```
+
+  Byte-identical with `BURROUGHS_ASYNC=0`, because no gate is involved.
+
+  **No thread semantics are added and no ADR was needed.** Nothing executes; the change is a sentinel
+  and a string. Three decisions, each narrower than it looks:
+
+  - **The refusal stays at decode** rather than the decoder learning to read these operands.
+    Recognising them the way the async family is recognised means reading each form's operands so the
+    section advances exactly — **six distinct operand shapes over the eleven productions**, counted
+    from Binary.md at `CANON_PIN`, plus the `sh?` sub-production. Model work no ADR has authorised,
+    where a wrong reader turns a clean refusal into a mis-advanced section. (The first draft of this
+    entry said *"a per-production operand reader for each of eleven forms"*, which overstated it:
+    `0x26`/`0x28` carry nothing and `0x29`–`0x2d` share one vestigial `0x00`.)
+  - **`ErrUnsupportedForm`, which already existed**, rather than a new sentinel: all three public entry
+    points already map it to `ErrUnsupported`, the classification `b8d371d` made uniform.
+    `ErrAsyncNotImplemented` is wrong by its own text — this is neither that gate nor that tier.
+  - **The message says unsupported, not gated**, because that is a fact about today: `gate:threads` is
+    the *core-wasm* proposal (§§2–5) and does not cover this family.
+
+  **The sentinel is inherited through `Unwrap`, not through `%w`, and that was a measurement.** The
+  plain `fmt.Errorf("%w: …", ErrUnsupportedForm, …)` spelling printed two `component:` prefixes and
+  the claim that the component had an unsupported *instantiation form* — which it does not; a canon
+  built-in is not an instantiation form. A small error type carries the classification without the
+  sentence.
+
+  **The set is the decoder's own `case` arm; the names are a table with a control.** Naming
+  `thread.index` rather than `0x26` needs a map, since the engine cannot read the pinned spec table at
+  run time — so the map is checked in **both** directions and a third: every discriminant the decoder
+  refuses has a name, every name equals the pinned table's production, and the map holds nothing the
+  decoder does not refuse. That is `isBuiltAsyncBuiltin`'s arrangement, for grave #850's reason.
+  `thread.yield` (0x0c) is **not** a member — the pinned table marks it 🔀 async, so `gateAsync`
+  refuses it.
+
+  **The nine-cell boundary table's unreachable row is now live**, which is what it was written for:
+  *"the row is written and will start asserting the moment a fixture reaches it."* `thread-index-synth`
+  reaches it. The *binding-stage* producer it originally described is still only exercised by
+  `walkComponent` called directly — so the **sentinel** is reached, at decode, by another route, and
+  that distinction is kept rather than smoothed over.
+
+  **Witnessed on committed bytes with the toolchain off the test path**, and the neuter spread is the
+  evidence: restoring the `default`-arm wording fails **three** tests — the refusal's own arms at both
+  gate settings, the name control's vacuity guard, and the boundary table on both the sentinel and the
+  message through all three doors.
+
+  **One figure corrected against the issue:** the committed fixture is **38** bytes, not the 37 quoted
+  on #957. The same component with a one-character symbol name is 37 — `wasm-tools` emits a
+  `component-name` custom section, and `cmp -l` puts the whole difference there.
+
 - **A nested component was never gated, so a built-in `gate:async` exists to refuse by name arrived as
   a malformed artefact instead** ([#952](https://github.com/scttfrdmn/burroughs/issues/952)).
   `gateAsync` was called at the two public entry points, ahead of their `walkComponent` call — which

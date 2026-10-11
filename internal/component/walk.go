@@ -18,8 +18,29 @@ import (
 // funcs (a refusing stub host, typed from the importing module's own declaration). A synthetic
 // inline-export instance is a projection over already-defined entries and does no interpreter work.
 
-// ErrUnsupportedForm reports an instantiation form the engine does not model (refuse-at-instantiate by
-// name).
+// ErrUnsupportedForm reports a component-model construct this engine does not model, refused by name at
+// whichever stage meets it. All three public entry points — LoadComponent, ComponentConfig.LoadComponent
+// and ComponentConfig.Run — map it to the public ErrUnsupported.
+//
+// # Stages that raise it
+//
+//   - Decode: the 🧵 shared-everything-threads built-ins (#957), through a threadBuiltinError whose
+//     Unwrap returns this sentinel.
+//   - The instantiation walk: walker.step, coreInstanceStep, aliasExport, compExportRef, canonTypeOf —
+//     a core instance naming a module that is not there, an alias kind the component space does not
+//     carry, an unresolved value kind.
+//   - Lift/lower binding and invocation: invokeWith, invokeWithPending, runLiftTask, enterAndInvoke,
+//     enterInvokeLowering, bindCrossComponent, and ErrCrossComponentResult.
+//   - Value calls: Call, CallValuesCtx, resolveValueExport, lowerFlatArgs, lowerOneArg, liftFlatResult,
+//     liftFlatCoreResult, lowerPending, guestAlloc, checkLowerSize — an export that is not callable, a
+//     kind the codec does not carry, a string past a lowering limit.
+//
+// The list was derived by parsing this package's non-test files for every ErrUnsupportedForm identifier
+// and grouping by enclosing declaration: 49 sites in 23 declarations. It is not machine-checked, so a
+// fifth stage needs this comment amended.
+//
+// The Error() text says "unsupported instantiation form", which is narrower than the stages above. It is
+// kept because a caller may match on it.
 var ErrUnsupportedForm = errors.New("component: unsupported instantiation form")
 
 // coreDef is a resolved core index-space entry: a real extern (a core instance's export, or an aliased
