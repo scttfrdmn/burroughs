@@ -80,6 +80,39 @@ func releaseMapping(bs []byte) {
 		return
 	}
 	reservationReleased.Add(1)
+	reservationLive.Add(-1)
+}
+
+// reservationLive and reservationPeak are a **gauge**, where the five counters above are totals.
+//
+// The totals cannot answer the question #962 asks. `released=326` over a package run says 326 mappings of
+// just under 4 GiB each were made and unmapped — about 1.3 TiB of address space over the run — and says
+// nothing about how many were held **at once**, which is the only quantity a fixed address-space budget
+// cares about. Under `-race` that budget is shared with the detector's shadow mapping, and the collision
+// is a peak-concurrency failure, not a throughput one.
+//
+// Live is incremented where the reservation is made (`newMemory`'s mapped arm) and decremented here,
+// which is the only place a mapping is unmapped. Peak is a monotone high-water mark, raced-up with a
+// compare-and-swap loop rather than a plain store so two concurrent reservations cannot lose one
+// another's maximum.
+//
+// **Not a gate, for `TestMain`'s reason one level in**: the peak is a claim about what the host was asked
+// for, so a threshold here would bound the runner rather than the engine. It is reported, and #962's
+// acceptance compares a before and an after taken the same way.
+var (
+	reservationLive atomic.Int64
+	reservationPeak atomic.Int64
+)
+
+// noteReservation records one live reservation and raises the high-water mark if this is a new maximum.
+func noteReservation() {
+	live := reservationLive.Add(1)
+	for {
+		peak := reservationPeak.Load()
+		if live <= peak || reservationPeak.CompareAndSwap(peak, live) {
+			return
+		}
+	}
 }
 
 // reservationUnavailable counts a memory that **asked** for a mapping and did not get one, and therefore

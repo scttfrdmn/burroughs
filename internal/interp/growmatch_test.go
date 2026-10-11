@@ -8,6 +8,7 @@ import (
 	"go/printer"
 	"go/token"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +103,25 @@ func TestImportMatchingDoesNotRaceAGrowingMemory(t *testing.T) {
 
 	reached := 0
 	for range growMatchIters {
+		// **Release the previous iteration's reservation before taking another** (#962).
+		//
+		// Each iteration builds its own supplier — which the constant's comment requires, so the racing
+		// pair is a fresh address — and each supplier's memory reserves just under 4 GiB of address
+		// space under decision 0076. `sup` goes out of scope every iteration, but the mapping is
+		// released from a `runtime.AddCleanup` callback, so it is freed when the GC collects the
+		// `*memory` and not when the reference is dropped. A reservation costs address space and almost
+		// no heap, so it exerts **no GC pressure**: nothing made the collector run, and 200 iterations
+		// held ~171 mappings at once. Measured, this test alone: peak 171 of the package's 270.
+		//
+		// Under `-race` that address space is shared with the detector's shadow mapping, which is
+		// `too many address space collisions for -race mode` — 8 of 20 runs of this package, before
+		// this line.
+		//
+		// `runtime.GC()` rather than a close: `newMemory`'s own comment records why `Instance.Close`
+		// cannot unmap (*"a memory may be imported into several instances and the closing one has no
+		// way to know it is the last"*), so reachability is the only lifetime there is and a test's only
+		// lever on it is to make the collector run. Test hygiene, with the engine untouched.
+		runtime.GC()
 		sup := supplier(t, `(module
 			(memory (export "mem") 1)
 			(func (export "grow") (result i32) (memory.grow (i32.const 1))))`)

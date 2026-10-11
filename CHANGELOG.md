@@ -486,6 +486,46 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **`internal/interp`'s `race` gate failed 8 of 20 runs with `too many address space collisions for
+  -race mode`, because one test held 171 address-space reservations at once**
+  ([#962](https://github.com/scttfrdmn/burroughs/issues/962)). The engine is unchanged; the fix is one
+  line of test hygiene.
+
+  **A gauge, because the existing counters are totals.** `reserve_test.go:TestMain` already printed five
+  reservation counters, but `released=326` says 326 mappings of just under 4 GiB each were made and
+  unmapped over a run — it says nothing about how many were held **at once**, which is the only quantity
+  a fixed address-space budget cares about. `reservationLive`/`reservationPeak` and `noteReservation` are
+  that gauge, reported and **not gated**, for `TestMain`'s own reason: the figure is a claim about the
+  host, so a threshold would bound the runner rather than the engine. **Peak = 270**, about 1.05 TiB held
+  simultaneously.
+
+  **The mechanism, in three measurements.** Release runs only from a `runtime.AddCleanup` callback —
+  `newMemory`'s comment records why nothing else can do it, since *"a memory may be imported into several
+  instances and the closing one has no way to know it is the last"* — so release is **GC-paced, not
+  scope-paced**. A reservation costs address space and almost no heap, so it exerts **no GC pressure** and
+  nothing makes the collector run: peak **170** at `GOGC=20`, **270** at the default, **270** at
+  `GOGC=400`. And it is not parallelism — the package has exactly one `t.Parallel()`, and `-parallel 1`
+  leaves the peak at 270.
+
+  **One test, found by bisecting on the gauge**: A–L 240 / M–Z 21 → G–I 124 → `TestI*` 155 →
+  `TestImportMatchingDoesNotRaceAGrowingMemory`, **peak 171 alone**. It builds 200 suppliers and must:
+  `growMatchIters`'s comment requires a fresh address per racing pair *"which is what keeps the detector's
+  shadow memory from having to retain an access across unrelated traffic"*, so the fix cannot reduce the
+  number of memories — only how many are live at once.
+
+  **The fix is one `runtime.GC()` per iteration**, releasing the previous mapping before taking the next.
+  Peak **270 → 27–33** over five samples (that test alone, **171 → 1**), and **0 of 30** `-race` runs fail
+  against 8 of 20 before, each run logged. The after-figure varies because GC timing does; the before
+  figure does not, which is itself the mechanism showing.
+
+  **Neuter, run:** a no-op use of the import in place of the call brings the peak back to **270** and
+  fails **6 of 6** race runs. The first attempt removed the line outright and broke the build on an unused
+  import, so it measured nothing until repaired — recorded, because a neuter that does not compile is not
+  a neuter.
+
+  Not done, by ruling: ADR 0076's reservation unchanged, no smaller reservation under `-race`, no skipped
+  test, no documented retry.
+
 - **`TestCloseReachesItsBoundWithANamedOutcome` reached `Close`'s bound by arithmetic, so a cooperating
   guest could win the race and the correct answer was reported as a failure**
   ([#963](https://github.com/scttfrdmn/burroughs/issues/963)). It failed `make ci`'s `test-endtable`

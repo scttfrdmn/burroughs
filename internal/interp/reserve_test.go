@@ -52,6 +52,12 @@ func TestMain(m *testing.M) {
 		"refuseReservation), declined=%d, released=%d, release failures=%d\n",
 		reservationUnavailable.Load(), deliberateRefusals.Load(), reservationDeclined.Load(),
 		reservationReleased.Load(), reservationReleaseFailed.Load())
+	// The gauge, which is the figure #962 is about: `released` is a total and says nothing about how
+	// many mappings were held AT ONCE. `live` at this point is what the package still holds when the
+	// process exits — not a defect in itself (the GC has no obligation to have run) but the quantity a
+	// hygiene fix moves.
+	fmt.Printf("0076 reservation gauge: peak=%d live-at-exit=%d\n",
+		reservationPeak.Load(), reservationLive.Load())
 	os.Exit(code)
 }
 
