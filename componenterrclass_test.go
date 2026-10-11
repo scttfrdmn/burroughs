@@ -110,10 +110,14 @@ func TestEveryEntryPointClassifiesARefusalTheSameWay(t *testing.T) {
 		// **The fixture moved from `thread-index-synth` to `cmthreads/switch`, because 0x26 is modeled
 		// now.** ADR 0100's first build slice lowers `thread.index`, so that fixture is *gated* rather
 		// than unsupported and this row failed on it through all three doors for exactly one run. The
-		// row's subject is an UNMODELED production, and `switch.wasm`'s first 🧵 canon is
-		// `thread.resume-later` (0x28). **As forms land this row has to move again**, and it runs out
-		// of subjects when the last one is modeled — at which point the row goes back to being
-		// declared unreachable, with that as its reason.
+		// row's subject is an UNMODELED production, and the decoder stops at `switch.wasm`'s first one:
+		// `thread.resume-later` (0x28) after the first slice, `thread.suspend` (0x29) after the second.
+		// The row's assertion is the generic *"shared-everything-threads built-in"*, so it follows the
+		// subject without an edit.
+		//
+		// **It never runs out of subjects**, which an earlier version of this comment predicted it
+		// would. ADR 0100's point 1 leaves the three 🧵② forms refused by name permanently, so once
+		// phase 1 is complete a fixture using one of them keeps this row live.
 		{
 			refusal: "a canonical built-in this engine does not model",
 			fixture: "internal/component/testdata/cmthreads/switch.wasm",

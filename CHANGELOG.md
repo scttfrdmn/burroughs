@@ -118,6 +118,67 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **`thread.new-indirect`, `thread.resume-later`, and a scheduling point at the callback loop's YIELD** —
+  ADR 0100's second build slice, behind `gate:cm-threads`. The 🧵 partition goes from 1 modelled / 10
+  refused to **3 / 8**.
+
+  **The oracle was committed before the engine code, and was wrong the first time.** `cmthreads/spawn.wat`
+  creates a Thread, readies it, and YIELDs; wasmtime 49.0.2 answers **529** (`0x211`: marker 1, entry
+  Thread 1, spawned Thread 2). Its first callback packed the indices on its first re-entry, assuming the
+  body had run — and the reference does not promise that. Its YIELD arm calls
+  `wait_until(lambda: inst.exclusive_thread is None)` on a predicate already true, and `wait_until` opens
+  with `if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1): return`, so half the time it
+  re-enters before the body runs. wasmtime never took that branch (30 of 30), so the first reading pinned
+  **one implementation's scheduling choice**. The callback now re-YIELDs until the body's marker is set;
+  re-taken, 30 of 30 give 529.
+
+  **Through Burroughs it returns 529**, and one value discharges three obligations: the two productions
+  (the body runs only if both did their part), **concurrent distinct indices** (the entry yields still
+  registered, so two Threads are live holding 1 and 2), and **`thread.index` under an async lift**.
+
+  **The scheduling point is the YIELD arm**, between leaving the callee's entry and re-entering the
+  callback — the moment the entry slot (`entrySem`, this engine's `exclusive_thread`) is free. It runs the
+  ready queue FIFO before re-entering, which is `wait_until` taking its blocking branch and `Store.tick`'s
+  `random.choice` resolved deterministically; both are choices the reference permits. **Neuter, run:**
+  without it, `run` never returns — the callback re-YIELDs forever on a body that never runs.
+
+  **Each created Thread is a goroutine created parked**, per ADR 0100. It takes the entry slot only when
+  the scheduler hands it over, calls its entry as itself through `interp.TableFunc.InvokeCMThread`, and
+  unregisters on the way out. A trap crosses back as a value written before `done` closes, and kills the
+  task's remaining parked Threads.
+
+  **The parked-Thread wake.** `cmthreads/spawn-parked.wat` creates a Thread and never readies it; wasmtime
+  returns **2** and never runs the body. In this engine that Thread is a goroutine in a Go `select`, which
+  **neither reclamation path reaches**: `interp.ErrClosed` needs a re-entry through `invokeIndex`, and
+  `interp.ErrTerminated` needs a safepoint in guest code. So `walker.close` kills parked Threads and waits
+  for each goroutine before closing the core instances. **Neuter, run:** without it the goroutine is still
+  parked 5s after `Close` returns.
+
+  **The unlocked `threadIdx` write is dissolved rather than re-argued.** `thread.index` used to read
+  `h.lift.threadIdx` first, which would answer **1** for a spawned body, since it runs with `h.lift` set
+  to the same task. It now reads only the stack carrier, so `task.threadIdx` is written once before the
+  task is published and read only by the loop's own goroutine.
+
+  **New interp surface, reusing the existing path.** `interp.ResolveTableFunc` reads a table slot step
+  for step as `resolveCallIndirect` does — `tab.load`, `uninitializedElem`, `funcRefTarget` — so graves
+  #163, #246 and #669 stay covered by the code that already covers them, and the call goes through the
+  funcref's own instance's `invokeIndex`, inheriting the closed check, `enterGuest`, the caller count and
+  ADR 0071's recover.
+
+  **One divergence, recorded.** The loader does not decode `core:type` sections, so `new-indirect`'s `ft`
+  operand is read but cannot be resolved. The callee is checked to be `(i32) -> ()`; an `(i64) -> ()`
+  callee is refused by name as the memory64 form; and a guest whose canon declares i64 while its table
+  holds i32 would run here where the reference traps.
+
+  **Three of my own defects, each caught by an instrument.** `killParked` closed a channel while holding
+  `threadTable.mu`, which `TestNoEngineLockIsHeldAcrossAChannelOperation` refused under §4 B-MM-3. The
+  goroutine census refused `go t.run` until it had an entry citing ADR 0100. And the partition control
+  probed each opcode from **one byte**, so `0x27`'s operands were a short read and a correctly modelled
+  form was reported as #957's defect; it now supplies operand bytes.
+
+  **Not covered, stated:** the sync lift's scheduling loop (`new-indirect` outside an async task is
+  refused by name), and the slot-reuse *order* — nothing is freed out of order in either fixture.
+
 - **`gate:cm-threads` (`BURROUGHS_CM_THREADS`), the component-model Thread table, and `thread.index`** —
   ADR 0100's first build slice. **Default off**, and it requires `gate:async`. One 🧵 production is
   modelled; the other ten still refuse by name at decode, which is ADR 0100's point 4: a form lands only

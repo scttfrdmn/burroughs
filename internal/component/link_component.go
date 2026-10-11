@@ -419,10 +419,19 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 			return liftResult{flat: task.result, lifted: task.lifted}, nil
 
 		case callbackYield:
-			// A cooperative yield: no set, no event. Re-enter at once with EVENT_NONE. There is nothing
-			// to wait for, so a yield that parked would deadlock on a set the guest never named — and
-			// `si` is not read here for exactly that reason (the model packs no index with YIELD).
+			// A cooperative yield: no set, no event. There is nothing to wait for, so a yield that
+			// parked would deadlock on a set the guest never named — and `si` is not read here for
+			// exactly that reason (the model packs no index with YIELD).
+			//
+			// **But it is a scheduling point, and until ADR 0100's second slice it was not one.** This
+			// arm re-entered at once with EVENT_NONE, so a Thread made ready by `thread.resume-later`
+			// never ran before the callback did — and against `cmthreads/spawn.wat`, whose callback
+			// re-YIELDs until its spawned body has run, the loop would never end. `runReady` is the
+			// reference's `wait_until(...)` taking its blocking branch; see it for the citation.
 			task.waitSet = 0
+			if rerr := f.threads.runReady(); rerr != nil {
+				return liftResult{}, rerr
+			}
 			res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventNone}))
 			if err != nil {
 				return liftResult{}, err

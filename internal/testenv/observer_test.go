@@ -120,6 +120,18 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"code runs only on this goroutine, serialized by the child's own `entrySem`. The " +
 				"goroutine ends when the child's task resolves, traps, or its park's bound expires.",
 		},
+		{"internal/component/cmthreads.go", "threadNewIndirect"}: {
+			count: 1,
+			by: "ADR 0100 — a component-model Thread is \"a new pairing of the shared core `thread` " +
+				"with its own goroutine and stack\"; one goroutine per `thread.new-indirect`, created " +
+				"parked. It runs guest code only while holding the instance's `entrySem`, handed to it " +
+				"by the scheduling point at the callback loop's YIELD arm, so it never executes beside " +
+				"another Thread of the instance. It ends three ways, each witnessed: its entry returns " +
+				"(`TestASpawnedThreadRunsAtTheYieldAndHoldsItsOwnIndex`), a sibling's trap kills it " +
+				"while parked, or `Close` kills it while parked " +
+				"(`TestCloseEndsAParkedThreadsGoroutine`) — the last because neither `interp.ErrClosed` " +
+				"nor `interp.ErrTerminated` can reach a goroutine parked in a select.",
+		},
 	}
 
 	seen := map[site]int{}

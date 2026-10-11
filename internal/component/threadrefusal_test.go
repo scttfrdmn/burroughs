@@ -45,14 +45,17 @@ import (
 // The gate-setting loop is what shows the refusal is not a gate's doing: it is identical with
 // `BURROUGHS_ASYNC` on and off, because no gate admits an UNMODELED production and the message says so.
 //
-// # The subject moved from 0x26 to 0x28, because 0x26 is modeled now
+// # The subject has moved twice, and will move again as each form lands
 //
-// This read `testdata/thread-index-synth.wasm` until ADR 0100's first build slice, and that fixture's
-// `thread.index` is no longer a decode refusal — it is gated. The test kept its old subject for exactly
-// one run and failed with `gate:cm-threads is off in this build`, which is the correct answer to a
-// question this test is not asking. **An unmodeled production is what it is about**, so it reads
-// `cmthreads/switch.wasm`, whose first 🧵 canon is `thread.resume-later` (0x28) — the production
-// wasmtime also names when its own flag is off.
+// It read `testdata/thread-index-synth.wasm` until ADR 0100's first build slice modelled `thread.index`
+// (0x26), then `cmthreads/switch.wasm`'s first 🧵 canon, `thread.resume-later` (0x28), until the second
+// slice modelled that and `thread.new-indirect` (0x27). Each time the test failed for one run with the
+// right answer to a question it is not asking. **An UNMODELED production is what it is about**, and the
+// decoder stops at the first one, so it now names `switch.wasm`'s first unmodelled canon:
+// `thread.suspend` (0x29) — measured with the built binary rather than read off the source order.
+//
+// The fixture runs out of unmodelled forms when phase 1 is complete; the three 🧵② forms are refused by
+// name for good under ADR 0100's point 1, so the test's last subject will be one of those.
 func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
 	wasm, err := os.ReadFile("testdata/cmthreads/switch.wasm")
 	if err != nil {
@@ -64,7 +67,7 @@ func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
 			t.Setenv(asyncGateEnv, gate)
 			_, err := Instantiate(wasm)
 			if err == nil {
-				t.Fatal("the fixture was accepted; nothing in this engine executes thread.resume-later")
+				t.Fatal("the fixture was accepted; nothing in this engine executes thread.suspend")
 			}
 			// The sentinel a caller branches on, and the one the public boundary maps to
 			// ErrUnsupported. No new sentinel was added for this family.
@@ -75,11 +78,11 @@ func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
 			msg := err.Error()
 			// Four arms, one per thing that was wrong with the old refusal. Separate rather than one
 			// combined match, so a failure says WHICH property regressed.
-			if !strings.Contains(msg, "thread.resume-later") {
+			if !strings.Contains(msg, "thread.suspend") {
 				t.Errorf("the refusal does not name the production, so a reader gets an opcode and "+
 					"has to look it up: %v", err)
 			}
-			if !strings.Contains(msg, "0x28") {
+			if !strings.Contains(msg, "0x29") {
 				t.Errorf("the refusal does not carry the opcode, which is what a reader comparing "+
 					"against Binary.md matches on: %v", err)
 			}
