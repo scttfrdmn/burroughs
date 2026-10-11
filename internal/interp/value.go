@@ -302,6 +302,16 @@ type stack struct {
 	// per-invocation and per-thread holds under v1 and is revisited when §7 growable continuations split
 	// them (0050's live expiry, recorded on #739). Two slots, matching the model's fixed storage.
 	ctxSlots [2]uint32
+
+	// cmThreadIdx is the component-model Thread index of the implicit Thread this invocation IS
+	// (`canon thread.index`, ADR 0100 phase 1). Beside `ctxSlots` and for exactly its reason: the
+	// model's numbering is per-Thread, Burroughs' `thread` object is shared by concurrent callers, so
+	// the per-caller unit is the stack.
+	//
+	// **Zero means unallocated**, which is unambiguous because the reference reserves index 0
+	// (`Table.array` starts as `[None]`), so no Thread can ever hold it. That is what lets the
+	// component package allocate on first use without a second flag.
+	cmThreadIdx uint32
 }
 
 // frame is a call's local-variable storage: 0002's parallel-array split applied to *locals*

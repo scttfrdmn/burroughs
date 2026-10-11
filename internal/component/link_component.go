@@ -545,7 +545,14 @@ func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, 
 	if gerr := gateAsync(c); gerr != nil {
 		return nil, gerr
 	}
-	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, async: newAsyncHandles()}
+	// `gate:cm-threads` sits beside `gate:async` and for the same reason: this is the one place every
+	// component passes through at every depth (#952). Checked AFTER the async gate, so a component
+	// carrying both surfaces reports the async refusal first — the order the two proposals stand in,
+	// since 🧵 requires async and not the reverse.
+	if gerr := gateCMThreads(c); gerr != nil {
+		return nil, gerr
+	}
+	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, async: newAsyncHandles(), threads: newThreadTable()}
 	for _, d := range c.Defs {
 		if err := w.stepAll(d); err != nil {
 			w.close()

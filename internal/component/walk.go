@@ -103,6 +103,12 @@ type coreDef struct {
 	// asyncBuiltinSlot is the static slot index a context.get/set built-in names (its u32 operand,
 	// captured at decode into Canon.TypeIdx). Unused by the other async built-ins.
 	asyncBuiltinSlot uint32
+	// threadBuiltin marks a MODELED 🧵 built-in core func and carries its opcode (ADR 0100 phase 1).
+	// Its own pair of fields rather than a reuse of `asyncBuiltin`/`asyncBuiltinOp`, for `Canon.ThreadOp`'s
+	// reason: the two families share no opcode space and no gate, and one field for both would let a
+	// 🧵 opcode reach the async dispatch.
+	threadBuiltin   bool
+	threadBuiltinOp byte
 	// asyncBuiltinResult is the value type a `task.return` declares (Canon.Result), resolved against the
 	// component's type-index space. nil for the empty form, and for every other built-in.
 	//
@@ -170,6 +176,12 @@ type walker struct {
 	// in one index space. The blocking arm of an async lower registers a subtask here; the waitable-set
 	// built-ins allocate and consume from it. Per-instance (component-model handles are per-ComponentInstance).
 	async *asyncHandles
+	// threads is this component instance's component-model Thread table (ADR 0100 phase 1), on the
+	// reference's `Table` policy: index 0 reserved, LIFO free list. **A separate table from `async`
+	// above, deliberately** — `asyncHandles` nils a freed slot and does not reuse it, with a stated
+	// reason and a stated trigger ("when something needs the compaction"); Threads are that trigger,
+	// because the committed wasmtime reading measures index reuse as observable guest behaviour.
+	threads *threadTable
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -256,6 +268,16 @@ func (w *walker) step(d Def) error {
 			}
 			if cn.Kind == CanonResourceDrop {
 				w.appendCore(SpaceCoreFunc, coreDef{resourceDrop: true})
+				return nil
+			}
+			if cn.Kind == CanonThreadBuiltin {
+				// A MODELED 🧵 built-in binds to a Go impl (ADR 0100 phase 1). `gate:cm-threads` has
+				// already had its say in `walkComponent`, so reaching here means both gates admit it.
+				// No memory and no slot: `thread.index` carries no immediates and reads no linear memory.
+				w.appendCore(SpaceCoreFunc, coreDef{
+					threadBuiltin:   true,
+					threadBuiltinOp: cn.ThreadOp,
+				})
 				return nil
 			}
 			if cn.Kind == CanonAsyncBuiltin {
@@ -383,7 +405,8 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// to it. That is the shape worth noting rather than the one-line fix: a predicate written as "none
 		// of the known special cases" silently admits the next special case, and admits it into the
 		// *default* arm, where the failure surfaces as far as possible from the cause.
-		if d.lowerName == "" && d.lowerCallee == nil && !d.isStub() && !d.resourceDrop && !d.asyncBuiltin {
+		if d.lowerName == "" && d.lowerCallee == nil && !d.isStub() && !d.resourceDrop &&
+			!d.asyncBuiltin && !d.threadBuiltin {
 			return d.extern, true // a real export, by reference (memory/global/func sharing)
 		}
 		ft, ok := funcImportType(m, mod, name)
@@ -394,6 +417,16 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// the guest's to free — typed from the importing module's own declaration.
 		if d.resourceDrop {
 			return interp.HostExtern(ft, dropNoop), true
+		}
+		// A modeled 🧵 built-in binds to its Go impl, typed from the guest's import signature. Before the
+		// async arm because the two dispatch on different fields and a 🧵 opcode must never reach
+		// `asyncBuiltinFunc`: `0x26` is `stream.read`'s neighbour in no table, but a single shared opcode
+		// field would have made that collision expressible, which is why `Canon.ThreadOp` is its own.
+		if d.threadBuiltin {
+			if fn, ok := w.threadBuiltinFunc(d.threadBuiltinOp); ok {
+				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{}), true
+			}
+			return interp.Extern{}, false
 		}
 		// A waitable-set canon built-in (gate:async 2a-i-B-2) binds to its Go impl, typed from the guest's
 		// import signature; waitable-set.wait stores its event in the memory it carried (d.lowerMem).

@@ -99,16 +99,24 @@ func TestEveryEntryPointClassifiesARefusalTheSameWay(t *testing.T) {
 		},
 		// **This row was declared unreachable and is now live**, which is the outcome it was written
 		// for: *"the row is written and will start asserting the moment a fixture reaches it."*
-		// #957's committed `thread-index-synth.wasm` reaches it. What it does NOT make reachable is
-		// the *binding-stage* producer the old note described — `ErrUnsupportedForm` raised while
-		// walking, which is still only exercised by `walkComponent` called directly with a stub host
+		// #957's by-name decode refusal reaches it. What it does NOT make reachable is the
+		// *binding-stage* producer the old note described — `ErrUnsupportedForm` raised while walking,
+		// which is still only exercised by `walkComponent` called directly with a stub host
 		// (internal/component's TestBindingRefusesImplementedFilesystemErrorCodeOnRealGuest), and the
 		// public path still loads `p3hello` without error. So the SENTINEL is reached, at decode, by
 		// another route. That distinction is kept rather than smoothed over: a row that claimed to
 		// cover the binding path would be asserting something no arm here measures.
+		//
+		// **The fixture moved from `thread-index-synth` to `cmthreads/switch`, because 0x26 is modeled
+		// now.** ADR 0100's first build slice lowers `thread.index`, so that fixture is *gated* rather
+		// than unsupported and this row failed on it through all three doors for exactly one run. The
+		// row's subject is an UNMODELED production, and `switch.wasm`'s first 🧵 canon is
+		// `thread.resume-later` (0x28). **As forms land this row has to move again**, and it runs out
+		// of subjects when the last one is modeled — at which point the row goes back to being
+		// declared unreachable, with that as its reason.
 		{
 			refusal: "a canonical built-in this engine does not model",
-			fixture: "internal/component/testdata/thread-index-synth.wasm",
+			fixture: "internal/component/testdata/cmthreads/switch.wasm",
 			async:   "1",
 			want:    burroughs.ErrUnsupported,
 			because: "shared-everything-threads built-in",

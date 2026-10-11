@@ -163,10 +163,14 @@ type CanonOpts struct {
 // the async family (waitable-set / stream / future / task / subtask / context / backpressure /
 // error-context, discriminants 0x05–0x25) is *recognized* — decoded into the graph as CanonAsyncBuiltin
 // so the section survives to bind, where gate:async refuses it by name (ADR 0086; its semantics are
-// slice 1's, not this shell's). The 🧵 thread family (0x26–0x2d, 0x40–0x42) is refused at decode and so
-// gets no kind of its own — but **by name and as unsupported** since #957, not as an unmodeled opcode;
-// `threadbuiltins.go` records why the refusal stays at decode rather than being recognized like the
-// async family.
+// slice 1's, not this shell's).
+//
+// The 🧵 thread family (0x26–0x2d, 0x40–0x42) is **split**, and the split is ADR 0100's point 4: a form
+// is modeled only once it has a committed wasmtime reading under `testdata`. A modeled one decodes as
+// CanonThreadBuiltin and is governed at bind by `gate:cm-threads`; the rest stay a decode refusal, by
+// name and as unsupported since #957. `threadbuiltins.go` records why that refusal stays at decode, and
+// `TestEveryThreadProductionIsModeledOrRefusedNeverBoth` is what keeps the two sets a partition of the
+// eleven.
 type CanonKind uint8
 
 const (
@@ -176,6 +180,8 @@ const (
 	CanonResourceDrop
 	CanonResourceRep
 	CanonAsyncBuiltin
+	// CanonThreadBuiltin is a MODELED 🧵 built-in; `ThreadOp` carries its discriminant.
+	CanonThreadBuiltin
 )
 
 // Canon is a canonical function definition. FuncIdx/Opts apply to lift and lower; TypeIdx is the
@@ -187,6 +193,13 @@ type Canon struct {
 	Opts    CanonOpts
 	TypeIdx uint32
 	AsyncOp byte
+	// ThreadOp is the discriminant of a CanonThreadBuiltin. **Its own field rather than reusing
+	// `AsyncOp`**, because the two families overlap in neither opcode space nor gate: `0x26` as an
+	// `AsyncOp` would make `asyncSurface` report a 🧵 built-in as async surface and `gate:async` refuse
+	// it, which is the wrong gate naming the wrong proposal — the defect #956 asks about for
+	// error-context, reintroduced deliberately. Separate fields make that unreachable rather than
+	// merely avoided.
+	ThreadOp byte
 	// AsyncForm is the `async?` OPERAND some async built-ins carry — currently `subtask.cancel` (0x06).
 	// It is **not** `Opts.Async`, and the separation is load-bearing twice over: `Opts.Async` is the
 	// canonopt vec's `async` marker on a lift/lower, and `asyncSurface` keys the gate's refusal message
@@ -445,9 +458,19 @@ func (r *reader) canon() (Canon, error) {
 		// The async family (Binary.md @ 2bed77e, 🔀 + 📝): recognized, not modeled. The operands are read
 		// so the section advances exactly; the built-in refuses by name at bind under gate:async (ADR 0086).
 		return r.canonAsyncBuiltin(kind)
-	case 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x40, 0x41, 0x42:
+	case 0x26:
+		// **The MODELED 🧵 arm, and it is one opcode because one has an oracle** (ADR 0100 point 4:
+		// *"Each form is built only once it has a wasmtime reading committed under `testdata`"*).
+		// `thread.index` carries no immediates — `Binary.md`'s production is bare `0x26` — so there is
+		// no operand reader here and the section advances by the discriminant alone.
+		//
+		// NEUTER THIS ARM to make `thread.index` unmodeled again: move `0x26` back to the refusal arm
+		// below and `TestThreadIndexIsLoweredAndReturnsTheEntryThreadsIndex` fails on the refusal
+		// rather than on a value.
+		return Canon{Kind: CanonThreadBuiltin, ThreadOp: kind}, nil
+	case 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x40, 0x41, 0x42:
 		// NEUTER THIS ARM to reproduce #957: delete it and the family falls through to `default`
-		// again, returning `canon built-in 0x26 is not modeled (this slice: …)` with no sentinel and
+		// again, returning `canon built-in 0x27 is not modeled (this slice: …)` with no sentinel and
 		// exit 1. Named here because this is the line a reader would reach for.
 		//
 		// The 🧵 shared-everything-threads family: refused BY NAME, as unsupported, right here (#957).

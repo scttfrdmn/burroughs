@@ -748,6 +748,36 @@ func (c *CanonCaller) ContextSet(i, v uint32) error {
 	return nil
 }
 
+// CMThreadIndex reads the calling agent's component-model Thread index, and reports whether one has been
+// allocated. **Zero is the unallocated answer rather than a valid index**, because the reference reserves
+// index 0 — `Table.array` begins as `[None]` — so no Thread can hold it and the sentinel costs no flag.
+//
+// Per-stack for `ContextGet`'s reason: the model numbers Threads, and the per-caller unit here is the
+// stack rather than the `thread` object, which concurrent callers share.
+func (c *CanonCaller) CMThreadIndex() (uint32, bool) {
+	if c.st == nil {
+		return 0, false
+	}
+	return c.st.cmThreadIdx, c.st.cmThreadIdx != 0
+}
+
+// SetCMThreadIndex records the calling agent's component-model Thread index. Refused with no stack for
+// `ContextSet`'s reason, and refused on a second write: an index that moved under a running guest would
+// make `thread.index` answer two values for one Thread, which is observable guest state and not an
+// internal detail.
+func (c *CanonCaller) SetCMThreadIndex(i uint32) error {
+	if c.st == nil {
+		return fmt.Errorf("%w: no stack to record a component-model Thread index on", ErrUnsupportedOp)
+	}
+	if c.st.cmThreadIdx != 0 {
+		return &Trap{Reason: fmt.Sprintf(
+			"component-model Thread index already %d on this agent; refusing to rewrite it to %d",
+			c.st.cmThreadIdx, i)}
+	}
+	c.st.cmThreadIdx = i
+	return nil
+}
+
 func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32, error) {
 	if c.realloc == nil {
 		return 0, fmt.Errorf("%w: this canon lower declared no realloc option", ErrUnsupportedOp)

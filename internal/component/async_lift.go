@@ -60,6 +60,18 @@ type liftTask struct {
 	result  []interp.Value // the flat result task.return received; read at resolution
 	storage [2]uint32      // the task's context (context.get/set), NOT the per-call stack's — see below
 
+	// threadIdx is the component-model Thread index of this task's implicit Thread (`canon thread.index`,
+	// ADR 0100 phase 1). Beside `storage` and for its reason: the callback loop spans several
+	// stack-creating calls, so a per-stack index would change between re-entries while the Thread does
+	// not. Zero means unallocated — the reference reserves index 0, so no Thread holds it.
+	//
+	// **Written under no lock, and that is sound only while one agent may be entered.** `enterTask`
+	// serialises entry per instance ("several may be in flight, one may be entered"), and this field is
+	// touched only from a built-in running inside the entered task. The slice that models
+	// `thread.new-indirect` adds Threads that run while this task is parked, and it owes a re-reading of
+	// that argument rather than an inheritance of it.
+	threadIdx uint32
+
 	// lifted is the result `task.return` lifted **eagerly**, when its canonopts gave it a result type to
 	// lift against. nil when the export declares no result, or when the type is one the flat lift cannot
 	// carry (in which case `task.return` has already refused).

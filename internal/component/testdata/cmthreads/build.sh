@@ -88,5 +88,27 @@ case $off in
 esac
 echo "build.sh: gate-off refusal carries the feature name" >&2
 
+# ## index-call: the single-production fixture ADR 0100's first build slice needs
+#
+# `switch.wasm` uses all eight phase-1 forms, so Burroughs cannot run it until all eight are modeled.
+# One form lands at a time (ADR 0100 point 4), so the slice that models `thread.index` needs a fixture
+# using only that, with its own reading. This is it.
+"$WASM_TOOLS" parse "$here/index-call.wat" -o "$here/index-call.wasm"
+echo "build.sh: index-call.wasm is $(wc -c <"$here/index-call.wasm" | tr -d ' ') bytes" >&2
+
+ic=$("$WASMTIME" run -W component-model-threading=y --invoke 'idx()' "$here/index-call.wasm" 2>&1) || {
+	echo "build.sh: the index-call run FAILED:" >&2
+	echo "$ic" >&2
+	exit 1
+}
+# Asserted: the entry Thread's index is 1, which is the reference's reserved-zero Table policy showing
+# through. A different figure here is the upstream's numbering having moved, not a formatting change.
+[ "$ic" = "1" ] || {
+	echo "build.sh: index-call expected 1 (the entry Thread's index), got '$ic'." >&2
+	echo "          The reference reserves index 0, so the first allocation is 1." >&2
+	exit 1
+}
+echo "build.sh: index-call result $ic" >&2
+
 echo "build.sh: switch.reading is hand-assembled from the three channels above — update it by hand" >&2
 echo "          when a figure here moves, and say which channel moved." >&2

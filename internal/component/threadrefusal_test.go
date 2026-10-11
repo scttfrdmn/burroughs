@@ -43,9 +43,18 @@ import (
 // boundary and not only here.
 //
 // The gate-setting loop is what shows the refusal is not a gate's doing: it is identical with
-// `BURROUGHS_ASYNC` on and off, because no gate admits this proposal and the message says so.
+// `BURROUGHS_ASYNC` on and off, because no gate admits an UNMODELED production and the message says so.
+//
+// # The subject moved from 0x26 to 0x28, because 0x26 is modeled now
+//
+// This read `testdata/thread-index-synth.wasm` until ADR 0100's first build slice, and that fixture's
+// `thread.index` is no longer a decode refusal — it is gated. The test kept its old subject for exactly
+// one run and failed with `gate:cm-threads is off in this build`, which is the correct answer to a
+// question this test is not asking. **An unmodeled production is what it is about**, so it reads
+// `cmthreads/switch.wasm`, whose first 🧵 canon is `thread.resume-later` (0x28) — the production
+// wasmtime also names when its own flag is off.
 func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
-	wasm, err := os.ReadFile("testdata/thread-index-synth.wasm")
+	wasm, err := os.ReadFile("testdata/cmthreads/switch.wasm")
 	if err != nil {
 		t.Fatalf("the committed fixture is missing, so this witness has no subject: %v", err)
 	}
@@ -55,7 +64,7 @@ func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
 			t.Setenv(asyncGateEnv, gate)
 			_, err := Instantiate(wasm)
 			if err == nil {
-				t.Fatal("the fixture was accepted; nothing in this engine executes thread.index")
+				t.Fatal("the fixture was accepted; nothing in this engine executes thread.resume-later")
 			}
 			// The sentinel a caller branches on, and the one the public boundary maps to
 			// ErrUnsupported. No new sentinel was added for this family.
@@ -66,11 +75,11 @@ func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
 			msg := err.Error()
 			// Four arms, one per thing that was wrong with the old refusal. Separate rather than one
 			// combined match, so a failure says WHICH property regressed.
-			if !strings.Contains(msg, "thread.index") {
+			if !strings.Contains(msg, "thread.resume-later") {
 				t.Errorf("the refusal does not name the production, so a reader gets an opcode and "+
 					"has to look it up: %v", err)
 			}
-			if !strings.Contains(msg, "0x26") {
+			if !strings.Contains(msg, "0x28") {
 				t.Errorf("the refusal does not carry the opcode, which is what a reader comparing "+
 					"against Binary.md matches on: %v", err)
 			}
@@ -127,12 +136,14 @@ func TestTheThreadBuiltinNamesAgreeWithThePinnedTable(t *testing.T) {
 				"name for it, so its refusal prints an unnamed opcode", op)
 		}
 	}
-	for op := range threadBuiltinNames {
-		if !refused[op] {
-			t.Errorf("threadBuiltinNames spells %#x but the decoder does not refuse it as a thread "+
-				"built-in, so this entry is stale", op)
-		}
-	}
+	// **The stale-entry direction is gone, replaced rather than relaxed.** It asserted *"the map holds
+	// nothing the decoder does not refuse"*, which was true while all eleven productions were refused
+	// and became false the moment ADR 0100 modeled one: `thread.index` is still **named** — the map
+	// spells all eleven, because a modeled form's name is what the gate's refusal prints — and is no
+	// longer **refused**. Weakening it would have left no total accounting of the eleven, so
+	// `TestEveryThreadProductionIsModeledOrRefusedNeverBoth` carries that instead: every production is
+	// in exactly one of the two sets, never both and never neither. The vacuity guard above and
+	// direction 2 below are unaffected.
 
 	// Direction 2: every name against the pinned spec table.
 	spec := readPinnedCanonNames(t)

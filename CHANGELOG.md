@@ -118,6 +118,75 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **`gate:cm-threads` (`BURROUGHS_CM_THREADS`), the component-model Thread table, and `thread.index`** —
+  ADR 0100's first build slice. **Default off**, and it requires `gate:async`. One 🧵 production is
+  modelled; the other ten still refuse by name at decode, which is ADR 0100's point 4: a form lands only
+  once it has a committed wasmtime reading under `testdata`.
+
+  **The gate reads `== "1"`, the opposite of the other two component gates.** `componentsEnabled` and
+  `asyncEnabled` read `!= "0"` because their flips happened (2026-09-11 and 2026-09-18); this one has not
+  flipped, so it is an explicit opt-in.
+
+  **The three-way matrix, measured end to end on `cmthreads/index-call.wasm`:**
+
+  | `BURROUGHS_CM_THREADS` | `BURROUGHS_ASYNC` | exit | refusal |
+  |---|---|---|---|
+  | 0 | 0 | **6** | `gate:cm-threads is off in this build … set BURROUGHS_CM_THREADS=1 to run it` |
+  | 1 | 0 | **6** | `gate:cm-threads requires gate:async … Either unset BURROUGHS_ASYNC (its default is on) or unset BURROUGHS_CM_THREADS` |
+  | 1 | 1 | — | admitted; `Call("idx")` returns **1** |
+
+  Both refusals name the production and the opcode, and both classify as `ErrGated` through all three
+  public entry points — a gate *combination* the build will not run is still a gate decline, not a
+  malformed artefact. **`BURROUGHS_ASYNC=0` is how the dependency cell is reached**, since the async gate
+  is on by default; leaving both unset lands in "both on".
+
+  **Two defects in my own first draft, found by running it rather than reading it.** The dependency
+  message said *"unset BURROUGHS_ASYNC or set BURROUGHS_CM_THREADS=1"* — telling an operator who had just
+  set that variable to set it again, reached by copying the gated arm's wording into a different
+  condition. And the two sentinels had no public classification at all, so the matrix's first run showed
+  **exit 1** instead of 6.
+
+  **The Thread table implements the reference's `Table` policy exactly** — index 0 reserved (`array`
+  starts as `[None]`, so the first allocation is 1), LIFO free list (`remove` appends, `add` pops the
+  end). **It is a separate table from `asyncHandles`, deliberately:** that one nils a freed slot and does
+  not reuse it, with a stated reason and a stated trigger — *"a decision to take when something needs the
+  compaction and not before"* — and Threads are that trigger, because the committed reading measures
+  index reuse as observable guest behaviour. The LIFO order is held by a unit witness against the
+  reference's source, because **neither committed reading discriminates it**: `switch.reading` has exactly
+  one slot free at each creation and `index-call.reading` never frees one.
+
+  **`Canon.ThreadOp` and `coreDef.threadBuiltin` are their own fields rather than a reuse of the async
+  pair**, so a 🧵 opcode cannot reach the async dispatch — which would be the wrong gate naming the wrong
+  proposal, the defect #956 asks about for error-context, reintroduced deliberately. Separate fields make
+  it unexpressible rather than merely avoided.
+
+  **`thread.index`'s index lives where the async context already does** — on the lift task under an async
+  callback lift, on the caller's stack for a sync call — which is a measured placement copied rather than
+  a new one invented. Allocation is **lazy** and that is indistinguishable from eager only while one
+  Thread exists; the slice that models `thread.new-indirect` must move it to call entry, because
+  registration order decides indices once a second Thread exists. Stated at the site rather than
+  discovered there.
+
+  **A new fixture, because the oracle could not be used directly.** `cmthreads/switch.wasm` exercises all
+  eight forms, so `thread.resume-later` is still refused at *decode* and no gate ever speaks — the
+  matrix's first run showed the same decode refusal in all three cells, asserting nothing.
+  `cmthreads/index-call.wat` (168 bytes, sync lift) uses `thread.index` alone; wasmtime 49.0.2 answers
+  **1**, the same entry index `switch.reading` records for its async lift, so the number is the Table
+  policy showing through and not an artefact of either lift shape. Its reading and the `build.sh`
+  assertion are committed.
+
+  **Two existing controls had to move, and neither was relaxed.** The by-name decode refusal test and the
+  boundary's nine-cell `ErrUnsupportedForm` row both used `thread-index-synth.wasm`, whose `0x26` is now
+  *gated* rather than unsupported; both failed on it for exactly one run and now read an **unmodelled**
+  production (`thread.resume-later`, 0x28). The names-map control's third direction — *"the map holds
+  nothing the decoder does not refuse"* — became false by design, since a modelled form is still named
+  and no longer refused; it is **replaced** by
+  `TestEveryThreadProductionIsModeledOrRefusedNeverBoth`, which keeps a total accounting: every one of
+  the eleven is in exactly one set, never both and never neither.
+
+  **Neuter run:** `0x26` back in the refusal arm fails **three** tests 3/3 — the differential on
+  `Instantiate`, the gate matrix on all three cells, and the partition control on its explicit arm.
+
 - **`subtask.cancel` status 3 is measured** ([#884](https://github.com/scttfrdmn/burroughs/issues/884)),
   where `CANCELLATION.md` had recorded it as *"unmeasured, not assumed"*. Reaching it needed a child
   whose subtask never starts, which `suspending` cannot be: it runs to its first `await` before
