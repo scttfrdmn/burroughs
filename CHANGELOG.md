@@ -463,6 +463,62 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **A nested component was never gated, so a built-in `gate:async` exists to refuse by name arrived as
+  a malformed artefact instead** ([#952](https://github.com/scttfrdmn/burroughs/issues/952)).
+  `gateAsync` was called at the two public entry points, ahead of their `walkComponent` call — which
+  gated the **outermost** component and nothing else. The recursion that walks a nested component called
+  `walkComponent` directly, with no gate, so an unlowered canonical built-in reached core-module
+  instantiation as an unsatisfied core import:
+
+  ```
+  burroughs: component: instantiate core module 0: unknown import: "" "bpinc" (interp: link failed)
+  ```
+
+  **Identically with the gate on and off**, which is the tell that the gate had no say at all. A
+  well-formed component wasmtime 49 executes, reported as a malformed one.
+
+  **The filed analysis named the wrong mechanism and the correction is recorded on the issue.** It said
+  core-module instantiation ran *before* `gateAsync`; it does not. The discriminator is **nesting**,
+  found by running the same child both ways rather than by reading the code a second time:
+
+  | | gate on | gate off |
+  |---|---|---|
+  | `child.wasm` alone (top level) | names `0x24` | `ErrAsyncGated` |
+  | `composed.wasm` (nested) | `unknown import` | `unknown import` |
+
+  **The gate now lives in `walkComponent`**, which every component passes through at every depth, and
+  the entry points no longer call it. Fixing the recursion's call site would have closed this instance;
+  putting it where the walk is makes it structural, so a future third entry point cannot forget it.
+
+  **The class is derived, not listed.** Per the chair's instruction, the affected set comes from the
+  decoder's own `case` list for `canonAsyncBuiltin` minus `isBuiltAsyncBuiltin` — 31 opcodes decode as
+  `CanonAsyncBuiltin`, 22 have a lowering, so **nine** do not: `thread.yield` (0x0c), `stream.read`
+  (0x0f), `future.cancel-read` (0x18), `future.drop-writable` (0x1b), `error-context.new`/
+  `.debug-message`/`.drop` (0x1c–0x1e), `backpressure.inc`/`.dec` (0x24/0x25). Nothing was built but
+  undecoded. `TestEveryUnloweredBuiltinIsRefusedByNameNotAsAnUnknownImport` recomputes that difference
+  at run time and refuses an empty result, so a landing lowering shrinks the class with no edit and a
+  tenth member cannot appear unreported.
+
+  **Two fixtures witness it, holding the class fixed while varying nesting.** Every committed `.wasm`
+  under `internal/component/testdata` was searched for the nine production names; two carry any of them.
+  #884's `composed.wasm` (nested, `0x24`) is the subject; `p3async-cancel.wasm` (top level, `0x18` and
+  `0x1b`) is the control that refused correctly before this slice and still does.
+
+  **Two neuterings, because one of them does not localise — and the first draft of the comment claimed
+  it did.** The pre-fix arrangement fails the nested rows and passes the control, which is what
+  localises the defect to nesting. Deleting the single new call fails **all four**, control included,
+  surfacing `p3async-cancel`'s own `unknown import: "[export]$root" "[future-cancel-read-0]mk"`. That is
+  the flip side of one call site: no single deletion can leave the top-level path standing.
+
+  **Backpressure is not implemented here**, which the refusal's correctness does not depend on: the
+  engine declines a built-in it does not execute, and status 3 stays wasmtime's reading. `starting.reading`
+  gains the Go consumer it lacked when #884 landed, pairing the reading's status and provenance with the
+  artefact the gate refuses — **provenance, not parity**, stated as such.
+
+  **One inaccuracy found and left**: the three `error-context` built-ins (0x1c–0x1e) are a separate
+  proposal and are reported as *"an async canon built-in"*. Whether `gate:async` should speak for them
+  at all is a gate-scope question rather than this repair.
+
 - **One refusal crossed as different public errors depending on which load function you called.**
   Three entry points load a component — `LoadComponent`, `ComponentConfig.LoadComponent` and
   `ComponentConfig.Run` — and each wrapped a different subset of the engine's refusals. Measured

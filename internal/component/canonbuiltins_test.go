@@ -58,6 +58,12 @@ const (
 	statusAsyncBuiltUndemanded canonBuiltinStatus = "async-built-undemanded"
 	// statusAsyncRefusedByName: decoded into the graph as CanonAsyncBuiltin and refused at bind with
 	// ErrAsyncNotImplemented. The gate is open; the mechanism is not there.
+	//
+	// **This claim was true at top level and false under nesting until #952.** `gateAsync` ran at the
+	// public entry points, so a nested component's unlowered built-in reached core-module instantiation
+	// and came back as `unknown import` instead — with the gate on *or* off. The status said
+	// "refused by name" throughout, and this witness could not see it, because it asks the predicate
+	// rather than a component. `TestANestedComponentIsGatedByName` is the arm that asks a component.
 	statusAsyncRefusedByName canonBuiltinStatus = "async-refused-by-name"
 	// statusErrorContext is the 📝 error-context family — a separate proposal from 🔀 async, refused as an
 	// unmodeled kind at marshal rather than by the async tier.
