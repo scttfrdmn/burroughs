@@ -160,10 +160,18 @@ async fn main() -> Result<()> {
     // The composed cancellation modes (#862). `tick` must be PENDING FOREVER in both, so the child
     // parks and is cancelled after it has STARTED — which is the case the witness exists for, and the
     // one the WAT parent's reported state is there to confirm rather than assume.
-    let cancelling = mode == "cancel-wat" || mode == "cancel-rust";
+    // `cancel-starting` is #884's mode: a child held by backpressure so its subtask never starts, for
+    // `subtask.cancel` status 3. It joins `cancelling` because it uses the same `go` path and the same
+    // report channel — and is kept out of the two registrations below, because **its child declares
+    // neither `tick` nor `note`**. That child reaches its suspension by yielding rather than awaiting a
+    // host import, which is what lets it be WAT at all; registering an import a component does not
+    // declare is itself an error, so the two are gated rather than left to the `cancelling` flag.
+    let starting = mode == "cancel-starting";
+    let cancelling = mode == "cancel-wat" || mode == "cancel-rust" || starting;
     let pending_tick_mode = abandoning || cancelling;
     let mut linker: Linker<HostState> = Linker::new(&engine);
-    linker.root().func_wrap_concurrent("tick", move |acc, (id,): (u32,)| {
+    if !starting {
+        linker.root().func_wrap_concurrent("tick", move |acc, (id,): (u32,)| {
         let rv = acc.with(|mut s| s.get().rv.clone());
         Box::pin(async move {
             if inlining {
@@ -174,7 +182,8 @@ async fn main() -> Result<()> {
                 rendezvous(rv, id).await.map(|v| (v,))
             }
         })
-    })?;
+        })?;
+    }
 
     // The receipt channel. SYNC, because the guest calls it from a `Drop` impl, which cannot await.
     // Registered as a host import rather than stdout so the harness is the witness rather than the
@@ -183,6 +192,10 @@ async fn main() -> Result<()> {
     // **Amendment 2's question — may a cancelled task call an import? — is NOT reached by this mode**,
     // because nothing here cancels. The receipt is wired up anyway and its absence is part of the
     // reading: it is what shows the guest's cancellation path never ran.
+    // `starting` DOES declare `note`, deliberately: its receipt channel exists so that the silence is
+    // a measurement rather than a structural absence. Without the channel, `RECEIPT none` would be
+    // indistinguishable from "this child has no way to report", which answers nothing about whether a
+    // task cancelled before starting can call an import. It is `tick` that `starting` does not have.
     if abandoning || cancelling {
         let rv_note = rv.clone();
         linker
@@ -196,7 +209,7 @@ async fn main() -> Result<()> {
 
     // The WAT canceller's reporting channel (#862). Only that parent has it, so it is registered only
     // for its mode — registering an import the component does not declare is itself an error.
-    if mode == "cancel-wat" {
+    if mode == "cancel-wat" || starting {
         let rv_rep = rv.clone();
         linker
             .root()

@@ -95,6 +95,45 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **`subtask.cancel` status 3 is measured** ([#884](https://github.com/scttfrdmn/burroughs/issues/884)),
+  where `CANCELLATION.md` had recorded it as *"unmeasured, not assumed"*. Reaching it needed a child
+  whose subtask never starts, which `suspending` cannot be: it runs to its first `await` before
+  yielding, so the async lower returns STARTED synchronously and there is no window to cancel in.
+  `starting-wat-child` is held by one `canon backpressure.inc` instead, and wasmtime 49 reports
+  `LOWERSTATE 0 (STARTING)` / `STATUS 3 (CANCELLED_BEFORE_STARTED)`. Byte-identical across two runs.
+
+  **The child is hand-authored WAT, and that is the slice's cheapest decision** (chair's ruling, in
+  session, 2026-10-10): backpressure is a canonical built-in a component may call directly, the
+  canceller was already WAT, and `build.sh`'s three recorded blocked paths are all on the Rust side.
+  It is the only guest here needing no Rust toolchain, and it puts the holding mechanism in one
+  readable instruction.
+
+  **A negative control says backpressure is what holds it**, derived in `build.sh` from the *same*
+  child by replacing its single `call $bpinc` with `nop` — one instruction, so the contrast has one
+  attributable cause. The control reads `LOWERSTATE 1 (STARTED)` with the receipt fired. Both
+  assertions are in `build.sh`, and the substitution is guarded by `cmp -s`: if the line moves or goes,
+  the control changes nothing and the build fails rather than quietly measuring the fixture twice.
+
+  **The control also traps, and that is reported rather than dressed as a clean 4.** Its callback
+  returns YIELD unconditionally and never handles a cancellation event, so cancelling the *started*
+  task traps — a limit of a child written for the never-starts case. Status 4 is measured properly by
+  `cancel-wat`.
+
+  **Three of the four facts separating 3 from 4 are measured and one pair is derived**, split
+  explicitly in `CANCELLATION.md` because the two readings use different children. *"May the task call
+  an import"* is measured: the child imports `note` and its callee calls it **first**, so `RECEIPT
+  none` is an unused channel rather than an absent one — and a second, independent check on the hold.
+  *"Pending host call dropped"* and *"cancellation path reached"* are inferences from the ABI: this
+  child has no `tick` import, which is what lets it be WAT.
+
+  **Run through Burroughs it refuses as the wrong kind of thing, identically with the gate on and
+  off** — `unknown import: "" "bpinc"`. `backpressure.inc` decodes as `CanonAsyncBuiltin` and
+  `asyncSurface` would name it, but a built-in with no lowering produces no core import, so
+  core-module instantiation fails before `gateAsync` runs. Filed as
+  [#952](https://github.com/scttfrdmn/burroughs/issues/952) with this fixture as its witness. Nothing
+  was built for Burroughs in this slice, which is why `starting.reading` is the one reading here held
+  by `build.sh` rather than by a Go test: pinning the current refusal would pin the defect.
+
 - **`ComponentConfig.LoadComponent` and `Component.Exports()`** — the two conveniences #858's review
   deferred, on Scott's stamp given in session, 2026-10-10. Both additive; nothing existing changes.
 

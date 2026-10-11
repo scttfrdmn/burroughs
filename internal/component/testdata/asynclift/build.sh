@@ -232,6 +232,51 @@ done
 "$bin" cancel-rust "$here/cancel-rust-parent/composed.wasm" > "$here/cancel-rust.reading" 2>&1 || true
 cat "$here/cancel-wat.reading" "$here/cancel-rust.reading" >&2
 
+# #884's status-3 fixture: a child held by `canon backpressure.inc` so its subtask never starts.
+#
+# **Both components are hand-authored WAT**, so this block needs neither Rust toolchain — it is the one
+# artefact here that does not. That is why it is WAT: the canceller already was, backpressure is a
+# canonical built-in a component can call directly, and `build.sh`'s three blocked paths are all on the
+# Rust side.
+echo "== status 3 (#884) ==" >&2
+"$WASM_TOOLS" parse "$here/starting-wat-child/child.wat"   -o "$here/starting-wat-child/child.wasm"
+"$WASM_TOOLS" parse "$here/starting-wat-parent/parent.wat" -o "$here/starting-wat-parent/parent.wasm"
+"$WAC" plug "$here/starting-wat-parent/parent.wasm" \
+	--plug "$here/starting-wat-child/child.wasm" -o "$here/starting-wat-parent/composed.wasm"
+"$bin" cancel-starting "$here/starting-wat-parent/composed.wasm" > "$here/starting.reading" 2>&1 || true
+
+# **The negative control, derived from the SAME child by one substitution.** Keeping one child source
+# is the point: a separately written control could differ in a second way and the contrast would not be
+# attributable to backpressure. The control is not committed as an artefact — it is regenerated here and
+# its reading is quoted in CANCELLATION.md, because what is worth keeping is the contrast, not a second
+# near-identical component in the tree.
+nc=$(mktemp -d)
+sed 's|^      call \$bpinc$|      nop|' "$here/starting-wat-child/child.wat" > "$nc/child.wat"
+cmp -s "$nc/child.wat" "$here/starting-wat-child/child.wat" && {
+	echo "build.sh: the control substitution changed NOTHING, so it is not a control." >&2
+	echo "          The 'call \$bpinc' line in starting-wat-child/child.wat has moved or gone." >&2
+	exit 1
+}
+"$WASM_TOOLS" parse "$nc/child.wat" -o "$nc/child.wasm"
+"$WAC" plug "$here/starting-wat-parent/parent.wasm" --plug "$nc/child.wasm" -o "$nc/composed.wasm"
+"$bin" cancel-starting "$nc/composed.wasm" > "$nc/control.reading" 2>&1 || true
+cat "$here/starting.reading" "$nc/control.reading" >&2
+
+# The contrast IS the measurement: with backpressure the subtask never starts, without it the subtask
+# starts and the receipt fires. Asserted rather than left to the eye, the same way the two cancellation
+# readings above are held to their shared facts.
+grep -q '^LOWERSTATE  0 (STARTING)' "$here/starting.reading" || {
+	echo "build.sh: the status-3 reading does not show LOWERSTATE 0 — backpressure did not hold the" >&2
+	echo "          subtask, so this run measured something other than status 3. Report the reading." >&2
+	exit 1
+}
+grep -q '^LOWERSTATE  1 (STARTED)' "$nc/control.reading" || {
+	echo "build.sh: the CONTROL does not show LOWERSTATE 1 — removing backpressure.inc did not let the" >&2
+	echo "          subtask start, so the contrast attributes nothing to backpressure." >&2
+	exit 1
+}
+rm -rf "$nc"
+
 # **The two readings must AGREE on every shared fact**, which is what licenses the WAT parent's status as
 # what a real canceller would have seen. Asserted here rather than left to the eye: a disagreement is the
 # finding, and a silent one would let the status be trusted when it should not be.
