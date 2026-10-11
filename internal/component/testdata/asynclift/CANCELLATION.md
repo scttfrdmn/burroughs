@@ -174,25 +174,35 @@ on equal footing:
 
 ### How Burroughs stands on it
 
-**It refuses, but as the wrong kind of thing** — and identically whether `gate:async` is on or off:
+**It refuses by name, naming the built-in.** This paragraph said *"it refuses, but as the wrong kind of
+thing"* when #884 landed, which was true then and is falsified by #952's fix one slice later:
 
 ```
-burroughs: component: instantiate core module 0: unknown import: "" "bpinc" (interp: link failed)
+# gate on
+... this component uses an async canon built-in (0x24), and gate:async is on, but that async
+surface's execution is not yet implemented — it lands incrementally (#739 slice 1)
+
+# gate off
+... gate:async is off in this build: this component uses the async component-model ABI
+(an async canon lift); unset BURROUGHS_ASYNC to run it
 ```
 
-`backpressure.inc` decodes as `CanonAsyncBuiltin` and `asyncSurface` would name it, but a
-`CanonAsyncBuiltin` has no lowering, so the core import is never produced and **core-module
-instantiation fails before `gateAsync` runs**. A well-formed component that wasmtime 49 executes is
-reported as a malformed one. Filed as
-[#952](https://github.com/scttfrdmn/burroughs/issues/952) with this fixture as its witness; the
-ordering is the bug, and implementing backpressure is a separate decision.
+What it used to say, and why, is worth keeping because the mechanism was **not** what #952 was filed
+believing. Both settings produced `unknown import: "" "bpinc"`, and the filed analysis said core-module
+instantiation ran *before* `gateAsync`. It does not: the gate ran first at both entry points, but **only
+on the outermost component**, and this fixture is `wac plug`'s nesting. Measured on the same child, nested
+and not — alone it refused by name through both settings, composed it refused as an unknown import through
+both. `gateAsync` now lives in `walkComponent`, which every component passes through at every depth.
 
-**That is also why `starting.reading` has no Go consumer while `cancel-wat.reading` does.** Each of
-those tests runs the composed component through this engine and holds it to the committed reading;
-this component cannot be run through this engine at all yet. Pinning the current refusal in a test
-would pin the defect, so the reading is held by `build.sh`'s two assertions (the state here, the
-flipped state in the control) and its Go consumer arrives with #952's fix, which uses this fixture
-gate-off and gate-on.
+**Implementing backpressure is still a separate decision.** The refusal is correct, not a parity result:
+the engine declines a built-in it does not execute. Status 3 remains wasmtime's reading.
+
+**`starting.reading` now has a Go consumer**, which it did not when #884 landed.
+`TestTheRefusedFixtureIsTheOneWasmtimeMeasured` holds the reading's status and its provenance against the
+artefact the gate test refuses, so the two cannot drift into being files that merely sit beside each
+other. It is **provenance, not parity** — unlike `cancel-wat.reading`, whose tests run the component and
+hold it to the reading, this engine still does not execute `backpressure.inc`. `build.sh`'s two assertions
+(the state here, the flipped state in the control) remain the reading's other holder.
 
 ## Ruling 1, settled: ONE sentinel
 

@@ -58,7 +58,7 @@ targets. See `build.sh` for that and for three blocked paths worth not re-paying
 | `harness/` | the wasmtime embedding that answers the concurrency question. Its own lockfile, outside the Go build |
 | `concurrent.reading` | the positive arm's reading |
 | `sequential.reading` | the negative arm's reading |
-| `starting.reading` | #884's status-3 reading. No Go consumer **because this engine cannot run its component at all yet** ([#952](https://github.com/scttfrdmn/burroughs/issues/952)); `build.sh` holds it instead, and [CANCELLATION.md](CANCELLATION.md) has the reasoning |
+| `starting.reading` | #884's status-3 reading. Held by `build.sh`'s two assertions and, since [#952](https://github.com/scttfrdmn/burroughs/issues/952)'s fix, by a Go consumer that pairs it with the artefact this engine refuses — **provenance, not parity**, since `backpressure.inc` still has no lowering. [CANCELLATION.md](CANCELLATION.md) has the reasoning |
 
 Each guest carries its **own `Cargo.lock`**, and that is load-bearing rather than tidiness: the manifests say
 `wit-bindgen = "0.62"`, a caret range, so without the lock a rebuild is free to resolve a later 0.62.x and emit

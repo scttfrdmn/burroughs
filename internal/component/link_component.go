@@ -526,7 +526,25 @@ func stubHost(name string) (compDef, bool) {
 // walkComponent runs the whole walk (core spaces then component spaces) for a component with a given
 // import host, and returns a walker holding the resolved spaces. A nested component recurses through
 // this same function.
+//
+// # The async gate is applied HERE, because a nested component is a component (#952)
+//
+// It used to sit at the two public entry points, ahead of their `walkComponent` call — which gated the
+// outermost component and nothing else. The recursion below (`stepComponentInstance`) walks a nested
+// component with no gate, so a built-in the gate exists to refuse by name instead reached core-module
+// instantiation as an unsatisfied import. Measured on one child, nested and not:
+//
+//	child.wasm alone     -> "an async canon built-in (0x24)", by name, both gate settings
+//	composed.wasm        -> `unknown import: "" "bpinc"`, both gate settings
+//
+// A well-formed component wasmtime 49 executes, reported as a malformed one — and identically whether
+// the gate was on or off, so the gate had no say at all. Putting the call here rather than fixing the
+// recursion's call site makes it structural: every component that gets walked gets gated, at every
+// depth, and a future third entry point cannot forget it. The entry points no longer call it.
 func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl, streamConsumers map[string]streamConsumer) (*walker, error) {
+	if gerr := gateAsync(c); gerr != nil {
+		return nil, gerr
+	}
 	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, async: newAsyncHandles()}
 	for _, d := range c.Defs {
 		if err := w.stepAll(d); err != nil {
@@ -1019,9 +1037,7 @@ func Instantiate(bytes []byte) (*Instantiated, error) {
 	if err != nil {
 		return nil, err
 	}
-	if gerr := gateAsync(c); gerr != nil {
-		return nil, gerr
-	}
+	// gateAsync is not called here: it lives in walkComponent, so nested components are gated too (#952).
 	w, err := c.walkComponent(stubHost, nil, nil, nil)
 	if err != nil {
 		return nil, err
@@ -1045,9 +1061,7 @@ func InstantiateWithHostFeatures(bytes []byte, h *Host, feats bin.Features) (*In
 	if err != nil {
 		return nil, err
 	}
-	if gerr := gateAsync(c); gerr != nil {
-		return nil, gerr
-	}
+	// gateAsync is not called here: it lives in walkComponent, so nested components are gated too (#952).
 	w, err := c.walkComponent(stubHost, h.wasi(), h.asyncWasi(), h.streamConsumers())
 	if err != nil {
 		return nil, err
