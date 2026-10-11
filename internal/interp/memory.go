@@ -271,6 +271,8 @@ func newMemory(m binary.Memory) (*memory, error) {
 		// `internal/interp/host.go:Caller.Read` copies. That property has a control rather than a
 		// sentence, because it is what a future edit would break.
 		runtime.AddCleanup(mem, releaseMapping, bs[:cap(bs):cap(bs)])
+		// The gauge, beside the cleanup it is paired with: live up here, down in `releaseMapping`.
+		noteReservation()
 	}
 	// The store is the publication, and it happens before the memory is reachable from anything.
 	// `img` is therefore never nil for a memory this constructor returns, which is what lets `view`
