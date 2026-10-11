@@ -24,14 +24,23 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
-**ADR 0100 is proposed and nothing is built.** The shared-everything-threads (🧵) family stays refused by
-name at decode, exactly as #957 left it; the record asks Scott whether to model it, behind which gate, and
-in what order relative to the core `gate:threads` work. Not a Keep a Changelog group for the same reason
-the record correction below is not one — the spec has six and "a decision was proposed" is none of them —
-and noted here because a reader comparing the tree against this file would otherwise find a new
-`docs/decisions/` entry with no mention. **No behaviour changes.** Two of the actor's premises are
-retracted inside the record: the family needs neither a shared memory (`gate:threads`) nor §7's
-stack-switching proposal, and both wrong premises came from a name shared across proposals.
+**ADR 0100 is accepted and nothing is built yet.** Phase 1 of the shared-everything-threads (🧵) family —
+the eight forms `0x26`–`0x2d` — will be modelled behind a new gate `gate:cm-threads`
+(`BURROUGHS_CM_THREADS`), default off, requiring `gate:async`; phase 2 (`0x40`–`0x42`) stays refused by
+name. Each form lands only once it has a wasmtime reading committed under `testdata`. Chair's ruling, in
+session, 2026-10-11, under Scott's stated deferral. Not a Keep a Changelog group for the same reason the
+record correction below is not one — the spec has six and "a decision was taken" is none of them — and
+noted here because a reader comparing the tree against this file would otherwise find a new
+`docs/decisions/` entry and a new `testdata/cmthreads/` directory with no mention. **No engine behaviour
+changes in this slice:** all eleven productions still refuse by name at decode, as #957 left them.
+
+What does land is **measurement**. `testdata/cmthreads/switch.wat` is one hand-authored WAT component
+that exercises all eight phase-1 forms and terminates; wasmtime 49.0.2 returns **63** — a bitmask with
+every marker set, so each switching production is positively witnessed by a body that could only have run
+if its switch happened — and the reading, its source and its build script are committed. Two of the
+actor's premises are retracted inside the record: the family needs neither a shared memory
+(`gate:threads`) nor §7's stack-switching proposal, and both wrong premises came from a name shared
+across proposals.
 
 **Record correction, 2026-10-09: eleven merges carry a `Ratio-Class: ordered` trailer whose citation
 is not an approval, and the ratio figures quoted in those PRs overstate the ordered share.** Not a

@@ -1,0 +1,32 @@
+MODE      cm-threads-switch
+FORMS     0x26 0x27 0x28 0x29 0x2a 0x2b 0x2c 0x2d  (all eight 🧵 phase-1 productions)
+RESULT    63
+MASK      0b111111 — every marker set
+  bit 1   thread.index returned the entry Thread's own index
+  bit 2   thread.suspend-then-resume  (0x2a) — body ran, resumed the suspended switcher
+  bit 4   thread.yield-then-resume    (0x2b) — body ran, switcher stayed ready
+  bit 8   thread.suspend-then-promote (0x2c) — body ran after resume-later made it READY
+  bit 16  thread.yield-then-promote   (0x2d) — body ran after resume-later made it READY
+  bit 32  thread.suspend              (0x29) — body ran and resumed the suspended switcher
+OUTCOME   task.return(63) then EXIT (code 0); the call completed
+EXIT      0
+RUNS      2, byte-identical
+
+GATE OFF
+  `thread.resume-later` requires the component model threading feature (at offset 0x47)
+  exit 1 — a parse refusal naming the first 🧵 production in the canon section
+
+BURROUGHS
+  burroughs: feature not implemented in this phase: component: canon 0: canon thread.resume-later
+  (0x28) is a shared-everything-threads built-in, which this engine does not support — the
+  component is well-formed and no gate admits this proposal
+  exit 5 — refused by name, the same production wasmtime names
+
+PROVENANCE
+  taken      2026-10-11T03:19:45Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  flags      -W component-model-threading=y -W component-model-async=y
+  invoke     --invoke 'run(0)'
+  wasm-tools wasm-tools 1.258.0
+  source     switch.wat -> switch.wasm, hand-authored WAT, no Rust toolchain
