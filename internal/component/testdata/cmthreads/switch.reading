@@ -1,16 +1,42 @@
 MODE      cm-threads-switch
 FORMS     0x26 0x27 0x28 0x29 0x2a 0x2b 0x2c 0x2d  (all eight 🧵 phase-1 productions)
-RESULT    63
+RESULT    143165567  (0x0888887f)
+EXIT      0
+RUNS      2, byte-identical
+
+PACKING   bits 0-5 the marker mask; then six 4-bit thread.index values — the entry Thread at
+          bit 6, then the five bodies in creation order at 10, 14, 18, 22, 26. 30 bits of 32.
+
 MASK      0b111111 — every marker set
-  bit 1   thread.index returned the entry Thread's own index
+  bit 1   thread.index                (0x26) — the entry Thread recorded its own index
   bit 2   thread.suspend-then-resume  (0x2a) — body ran, resumed the suspended switcher
   bit 4   thread.yield-then-resume    (0x2b) — body ran, switcher stayed ready
   bit 8   thread.suspend-then-promote (0x2c) — body ran after resume-later made it READY
   bit 16  thread.yield-then-promote   (0x2d) — body ran after resume-later made it READY
   bit 32  thread.suspend              (0x29) — body ran and resumed the suspended switcher
-OUTCOME   task.return(63) then EXIT (code 0); the call completed
-EXIT      0
-RUNS      2, byte-identical
+
+INDICES
+  entry                      1
+  body k=0 suspend-then-resume   2
+  body k=1 yield-then-resume     2
+  body k=2 suspend-then-promote  2
+  body k=3 yield-then-promote    2
+  body k=4 plain suspend         2
+  Every body is 2, and that is the measurement rather than an artefact: each body returns and
+  UNREGISTERS before the next is created, so `inst.threads` frees the slot and the next Thread
+  reuses it. An implementation that numbered Threads monotonically would read 2,3,4,5,6 here and
+  would set every marker bit while being wrong about observable guest state.
+
+WHAT THIS READING PINS, AND WHAT IT DOES NOT
+  Pinned:     the mask (reachability of each production) and the six index values.
+  NOT pinned: the ORDER in which ready Threads run. The reference schedules them
+              nondeterministically — `Store.tick` picks `random.choice(list(candidates))` from the
+              ready set — so an order is not a property of a conforming implementation. The mask is
+              an OR and is order-independent by construction; the indices are each written by their
+              own body and do not depend on order either. A witness built on this reading must
+              assert these values and must not assert an execution order.
+
+OUTCOME   task.return(143165567) then EXIT (code 0); the call completed
 
 GATE OFF
   `thread.resume-later` requires the component model threading feature (at offset 0x47)
@@ -22,8 +48,13 @@ BURROUGHS
   component is well-formed and no gate admits this proposal
   exit 5 — refused by name, the same production wasmtime names
 
+NOT MEASURED
+  Whether an instance is usable after a 🧵 trap. `wasmtime run` instantiates afresh for each
+  invocation, so re-entry after a trap is not observable through this harness, and no fixture for
+  it was built.
+
 PROVENANCE
-  taken      2026-10-11T03:19:45Z
+  taken      2026-10-11T03:45Z
   host       Darwin arm64
   wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
   flags      -W component-model-threading=y -W component-model-async=y

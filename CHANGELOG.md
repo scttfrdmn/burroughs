@@ -35,9 +35,14 @@ noted here because a reader comparing the tree against this file would otherwise
 changes in this slice:** all eleven productions still refuse by name at decode, as #957 left them.
 
 What does land is **measurement**. `testdata/cmthreads/switch.wat` is one hand-authored WAT component
-that exercises all eight phase-1 forms and terminates; wasmtime 49.0.2 returns **63** — a bitmask with
-every marker set, so each switching production is positively witnessed by a body that could only have run
-if its switch happened — and the reading, its source and its build script are committed. Two of the
+that exercises all eight phase-1 forms and terminates; wasmtime 49.0.2 returns **143165567**
+(`0x0888887f`) — a marker mask with every bit set, so each switching production is positively witnessed
+by a body that could only have run if its switch happened, **plus six 4-bit `thread.index` values** that
+pin what the productions returned. The entry Thread is 1 and every body is 2, because each body
+unregisters before the next is created and the index is reused; an implementation numbering Threads
+monotonically would set every marker bit and still be wrong. The reading states what it pins (the mask
+and the indices) and what it deliberately does not (the execution order, which the reference schedules
+with `random.choice`). The reading, its source and its build script are committed. Two of the
 actor's premises are retracted inside the record: the family needs neither a shared memory
 (`gate:threads`) nor §7's stack-switching proposal, and both wrong premises came from a name shared
 across proposals.

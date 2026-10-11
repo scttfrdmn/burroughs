@@ -15,9 +15,14 @@
 # ## What the fixture does, and why the mask is the witness
 #
 # The entry Thread records its own index, then creates five Threads and reaches each of them through a
-# different switching production. Each body ORs one bit into `mem[0]`. **A body can only run if its switch
-# happened**, so the mask is positive evidence per production rather than a claim that the call did not
-# trap: `RESULT 63` is six bodies having run, not one path having survived.
+# different switching production. Each body ORs one bit into `mem[0]` **and writes its own
+# `thread.index`** to its own slot. **A body can only run if its switch happened**, so the mask is
+# positive evidence per production rather than a claim that the call did not trap; the indices then pin
+# what the productions returned, which a reachability bit cannot.
+#
+# **The order of execution is deliberately not asserted.** `Store.tick` picks `random.choice` from the
+# ready set, so an order is not a property of a conforming implementation. The mask is an OR and each
+# index is written by its own body, so the asserted value is order-independent by construction.
 #
 # Two table slots, and the split is load-bearing. The `yield-*` forms leave the switcher **ready**, and
 # `thread.resume-later` traps on a target that is not suspended — so a body reached by a `yield-*` switch
@@ -57,10 +62,16 @@ on=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
 }
 echo "build.sh: gate-on result $on" >&2
 
-# **Asserted, not eyeballed.** 63 is every marker; anything less is a switch that did not happen, and the
-# whole point of the mask is that a partial result is distinguishable from a trap.
-[ "$on" = "63" ] || {
-	echo "build.sh: expected 63 (all six markers), got '$on' — a switching production did not run." >&2
+# **Asserted whole, not eyeballed, and not just the mask.** The packed value carries the six marker bits
+# AND six 4-bit thread.index values, so this check pins what each production RETURNED and not merely that
+# it was reached: a run that set every marker while numbering Threads monotonically would give a different
+# figure here. See switch.reading for the layout and for which properties are pinned.
+[ "$on" = "143165567" ] || {
+	echo "build.sh: expected 143165567 (0x0888887f), got '$on'." >&2
+	echo "          Decode: mask = value & 0x3f (want 0x3f); index k = (value >> (6 + 4k)) & 0xf," >&2
+	echo "          entry at k=0 (want 1) then the five bodies in creation order (want 2 each)." >&2
+	echo "          A mask short of 0x3f is a switch that did not happen; a changed index is the" >&2
+	echo "          upstream's Thread numbering having moved." >&2
 	exit 1
 }
 
