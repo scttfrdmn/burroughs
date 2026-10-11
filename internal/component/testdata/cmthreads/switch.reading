@@ -1,0 +1,79 @@
+MODE      cm-threads-switch
+FORMS     0x26 0x27 0x28 0x29 0x2a 0x2b 0x2c 0x2d  (all eight 🧵 phase-1 productions)
+RESULT    143165567  (0x0888887f)
+EXIT      0
+RUNS      2, byte-identical
+
+PACKING   bits 0-5 the marker mask; then six 4-bit thread.index values — the entry Thread at
+          bit 6, then the five bodies in creation order at 10, 14, 18, 22, 26. 30 bits of 32.
+
+MASK      0b111111 — every marker set
+  bit 1   thread.index                (0x26) — the entry Thread recorded its own index
+  bit 2   thread.suspend-then-resume  (0x2a) — body ran, resumed the suspended switcher
+  bit 4   thread.yield-then-resume    (0x2b) — body ran, switcher stayed ready
+  bit 8   thread.suspend-then-promote (0x2c) — body ran after resume-later made it READY
+  bit 16  thread.yield-then-promote   (0x2d) — body ran after resume-later made it READY
+  bit 32  thread.suspend              (0x29) — body ran and resumed the suspended switcher
+
+INDICES
+  entry                      1
+  body k=0 suspend-then-resume   2
+  body k=1 yield-then-resume     2
+  body k=2 suspend-then-promote  2
+  body k=3 yield-then-promote    2
+  body k=4 plain suspend         2
+  Every body is 2, and that is the measurement rather than an artefact: each body returns and
+  UNREGISTERS before the next is created, so `inst.threads` frees the slot and the next Thread
+  reuses it. An implementation that numbered Threads monotonically would read 2,3,4,5,6 here and
+  would set every marker bit while being wrong about observable guest state.
+
+  WHAT THE INDICES DO NOT DISCRIMINATE: the slot-REUSE POLICY. Exactly one slot is free at each
+  creation here, so a LIFO free list, a lowest-free-index policy and any other reuse order all
+  produce 2. The reference's `Table.add` pops the free list (`i = self.free.pop()` — LIFO) and
+  `Table.remove` appends (`self.free.append(i)`), with `array = [None]` at construction so index 0
+  is reserved and the first allocation is 1. This reading pins the 1 and the 2s; it does not test
+  the LIFO order. A fixture holding two Threads live and freeing them out of order would.
+
+WHAT THIS READING PINS, AND WHAT IT DOES NOT
+  Pinned:     the mask (reachability of each production) and the six index values.
+  NOT pinned: the ORDER in which ready Threads run. The reference schedules them
+              nondeterministically — `Store.tick` picks `random.choice(list(candidates))` from the
+              ready set — so an order is not a property of a conforming implementation. The mask is
+              an OR and is order-independent by construction; the indices are each written by their
+              own body and do not depend on order either. A witness built on this reading must
+              assert these values and must not assert an execution order.
+
+OUTCOME   task.return(143165567) then EXIT (code 0); the call completed
+
+GATE OFF
+  `thread.resume-later` requires the component model threading feature (at offset 0x47)
+  exit 1 — a parse refusal naming the first 🧵 production in the canon section
+
+BURROUGHS
+  burroughs: feature not implemented in this phase: component: canon 0: canon thread.resume-later
+  (0x28) is a shared-everything-threads built-in, which this engine does not support — the
+  component is well-formed and no gate admits this proposal
+  exit 5 — refused by name, the same production wasmtime names
+
+NOT MEASURED
+  Whether an instance is usable after a 🧵 trap. `wasmtime run` instantiates afresh for each
+  invocation, so re-entry after a trap is not observable through this harness, and no fixture for
+  it was built.
+
+  Whether a Thread executes after its task has RESOLVED. A fixture was built for it and its
+  CONTROL falsified the discriminator: resolve with task.return(7), then create a Thread, make it
+  ready, and suspend with nothing else able to resume the entry Thread — and the arm with the
+  resume-later deleted, so nothing CAN resume it, returns 7 and exit 0 just the same. The call's
+  result is delivered at resolution, so anything after it is invisible to `--invoke`. Neither
+  fixture is committed: an artefact whose control does not discriminate measures nothing.
+
+  The slot-reuse ORDER, per the note above.
+
+PROVENANCE
+  taken      2026-10-11T03:45Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  flags      -W component-model-threading=y -W component-model-async=y
+  invoke     --invoke 'run(0)'
+  wasm-tools wasm-tools 1.258.0
+  source     switch.wat -> switch.wasm, hand-authored WAT, no Rust toolchain

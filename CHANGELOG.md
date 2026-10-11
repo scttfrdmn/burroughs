@@ -24,6 +24,29 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+**ADR 0100 is accepted and nothing is built yet.** Phase 1 of the shared-everything-threads (🧵) family —
+the eight forms `0x26`–`0x2d` — will be modelled behind a new gate `gate:cm-threads`
+(`BURROUGHS_CM_THREADS`), default off, requiring `gate:async`; phase 2 (`0x40`–`0x42`) stays refused by
+name. Each form lands only once it has a wasmtime reading committed under `testdata`. Chair's ruling, in
+session, 2026-10-11, under Scott's stated deferral. Not a Keep a Changelog group for the same reason the
+record correction below is not one — the spec has six and "a decision was taken" is none of them — and
+noted here because a reader comparing the tree against this file would otherwise find a new
+`docs/decisions/` entry and a new `testdata/cmthreads/` directory with no mention. **No engine behaviour
+changes in this slice:** all eleven productions still refuse by name at decode, as #957 left them.
+
+What does land is **measurement**. `testdata/cmthreads/switch.wat` is one hand-authored WAT component
+that exercises all eight phase-1 forms and terminates; wasmtime 49.0.2 returns **143165567**
+(`0x0888887f`) — a marker mask with every bit set, so each switching production is positively witnessed
+by a body that could only have run if its switch happened, **plus six 4-bit `thread.index` values** that
+pin what the productions returned. The entry Thread is 1 and every body is 2, because each body
+unregisters before the next is created and the index is reused; an implementation numbering Threads
+monotonically would set every marker bit and still be wrong. The reading states what it pins (the mask
+and the indices) and what it deliberately does not (the execution order, which the reference schedules
+with `random.choice`). The reading, its source and its build script are committed. Two of the
+actor's premises are retracted inside the record: the family needs neither a shared memory
+(`gate:threads`) nor §7's stack-switching proposal, and both wrong premises came from a name shared
+across proposals.
+
 **Record correction, 2026-10-09: eleven merges carry a `Ratio-Class: ordered` trailer whose citation
 is not an approval, and the ratio figures quoted in those PRs overstate the ordered share.** Not a
 Keep a Changelog group — the spec has six and this is not one of them, so it sits in the block's
