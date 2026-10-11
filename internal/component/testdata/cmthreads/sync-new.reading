@@ -1,0 +1,20 @@
+MODE      cm-threads-sync-new
+SUBJECT   thread.new-indirect called from a SYNC lift, with a valid (i32) -> () ft and entry
+
+WASM-TOOLS VALIDATE (--features all)
+  exit 0 — valid
+
+WASMTIME (-W component-model-threading=y -W component-model-async=y, --invoke 'run(0)')
+  2
+  exit 0 — the new Thread's index; it is never resumed, and the sync lift returns
+
+BURROUGHS
+  refused at the call under ErrUnsupportedForm, naming thread.new-indirect: the sync lift's
+  scheduling loop is not built, so this is a form not yet supported rather than a value that differs
+
+PROVENANCE
+  taken      2026-10-11T22:31:46Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  wasm-tools wasm-tools 1.258.0
+  source     sync-new.wat -> sync-new.wasm, hand-authored WAT

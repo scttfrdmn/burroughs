@@ -434,6 +434,14 @@ func (c *Component) parseCanons(body []byte) error {
 		if err != nil {
 			return fmt.Errorf("component: canon %d: %w", i, err)
 		}
+		// `thread.new-indirect`'s `ft` is checked HERE, at load, because the definition stream is in
+		// index order: every core type this canon can name was defined by an earlier section (#969).
+		// NEUTER THIS to bring back the defect: an i64 `ft` over an i32 table entry then loads and runs.
+		if cn.Kind == CanonThreadBuiltin && cn.ThreadOp == 0x27 {
+			if ferr := c.checkNewIndirectFT(cn.TypeIdx); ferr != nil {
+				return fmt.Errorf("component: canon %d: %w", i, ferr)
+			}
+		}
 		c.Canons = append(c.Canons, cn)
 		c.def(cn.space(), SectionCanon, len(c.Canons)-1)
 	}

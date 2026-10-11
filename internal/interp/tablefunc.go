@@ -33,20 +33,22 @@ type TableFunc struct {
 // was not live on main when found). A second resolution here would be a second place for each of those to
 // come back.
 //
-// # The type check is against the CALLEE, and that leaves one recorded divergence
+// # The type check is `trap_if(f.t != ft)`, in two halves
 //
-// The reference's check is `trap_if(f.t != ft)`, where `ft` is the canon's declared core type —
-// validated to be `(i32)->()` or `(i64)->()`. The component loader does not decode `core:type`
-// sections at all, so `ft` is an index this engine has never read. What is checked instead:
+// The reference's check is `trap_if(f.t != ft)`, where `ft` is the canon's declared core type. Its
+// validator admits `(i32)->()` or `(i64)->()`; `wasm-tools validate` and wasmtime 49.0.2 admit only the
+// first — *"start function must take a single `i32` argument (currently)"* — and this repo measures
+// against them. So the check is split across load and call:
 //
-//   - the callee is `(i32) -> ()`, by the structural comparison `call_indirect` uses for a host callee
-//     and the declared type for a defined one;
-//   - an `(i64) -> ()` callee — the memory64 form — is refused by name as unsupported, because without
-//     `ft` the engine cannot tell a matching i64 pair from a mismatched one.
+//   - at LOAD, the component loader refuses any `ft` that is not `(i32) -> ()` (#969,
+//     `component.checkNewIndirectFT`), so by the time this runs `ft` is known;
+//   - here, the callee must equal it, by the structural comparison `call_indirect` uses for a host
+//     callee and the declared type for a defined one, and anything else traps — an `(i64) -> ()` entry
+//     included, which wasmtime traps on as *"start function does not match expected type"*.
 //
-// **The divergence left:** a component whose declared `ft` is `(i64)->()` but whose table entry is
-// `(i32)->()` traps in the reference and runs here. That is a guest whose own canon and table disagree
-// on width; closing it needs `core:type` decoding, which is its own piece of work.
+// Until #969 the loader decoded no `core:type` section, so `ft` was never read, an `(i64) -> ()` entry was
+// refused as an unsupported memory64 form, and an i64 `ft` over an i32 entry loaded and ran where both
+// toolchains reject it as invalid.
 func ResolveTableFunc(tbl Extern, slot uint32) (TableFunc, error) {
 	if tbl.tab == nil {
 		return TableFunc{}, fmt.Errorf("%w: thread.new-indirect's table operand is not a table",
@@ -73,19 +75,12 @@ func ResolveTableFunc(tbl Extern, slot uint32) (TableFunc, error) {
 			return TableFunc{}, err
 		}
 	}
-	i32Entry := &binary.FuncType{Params: []binary.ValType{binary.I32}}
-	i64Entry := &binary.FuncType{Params: []binary.ValType{binary.I64}}
-	switch {
-	case funcTypesMatch(got, i32Entry):
-		return TableFunc{inst: r.Inst, addr: r.Addr}, nil
-	case funcTypesMatch(got, i64Entry):
-		return TableFunc{}, fmt.Errorf("%w: thread.new-indirect's entry in table slot %d is (i64) -> (), the "+
-			"memory64 form; this engine does not decode core:type sections, so it cannot check that form "+
-			"against the canon's declared type and refuses it rather than guessing", ErrUnsupportedOp, slot)
-	default:
+	// `ft` is `(i32) -> ()` by the load-time check, so this IS `trap_if(f.t != ft)`.
+	if !funcTypesMatch(got, &binary.FuncType{Params: []binary.ValType{binary.I32}}) {
 		return TableFunc{}, &Trap{Reason: fmt.Sprintf("thread.new-indirect: table slot %d holds %s, "+
 			"want (i32) -> ()", slot, funcTypeString(got))}
 	}
+	return TableFunc{inst: r.Inst, addr: r.Addr}, nil
 }
 
 // InvokeCMThread calls the resolved function with `args`, as component-model Thread `cmThread`.

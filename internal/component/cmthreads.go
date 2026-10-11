@@ -348,7 +348,8 @@ func (w *walker) threadBuiltinFunc(op byte, tbl interp.Extern) (interp.CanonFunc
 // sync lift as well, where `canon_lift`'s sync tail runs ready Threads until the task resolves. This slice
 // builds the scheduling point at the callback loop's YIELD arm and not that sync loop, so a
 // `new-indirect` with no lift task in flight is refused by name rather than creating a Thread nothing
-// could ever run.
+// could ever run — under ErrUnsupportedForm, since it is a form this engine does not support yet, and not
+// ErrAsyncNotImplemented, which says the async tier itself is missing when this call is not async at all.
 func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
@@ -360,7 +361,7 @@ func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) inte
 		if task == nil {
 			return nil, fmt.Errorf("%w: thread.new-indirect outside an async lift task — the sync lift's "+
 				"scheduling loop is not built in this slice, so the Thread could never run",
-				ErrAsyncNotImplemented)
+				ErrUnsupportedForm)
 		}
 		entry, err := interp.ResolveTableFunc(tbl, uint32(args[0].Bits))
 		if err != nil {

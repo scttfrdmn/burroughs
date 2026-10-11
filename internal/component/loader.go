@@ -192,6 +192,7 @@ type Component struct {
 	Imports          []Import
 	Exports          []Export
 	CoreInstances    []CoreInstance
+	CoreTypes        []CoreTypeDef // core:type entries (id 3), decoded only as far as #969 needs
 	Aliases          []Alias
 	Canons           []Canon
 	Instances        []Instance
@@ -277,6 +278,12 @@ func LoadWithFeatures(b []byte, feats bin.Features) (*Component, error) {
 			}
 		case SectionCoreInstance:
 			if perr := c.parseCoreInstances(body); perr != nil {
+				return nil, perr
+			}
+		case SectionCoreType:
+			// Decoded as far as `thread.new-indirect`'s `ft` needs (#969), and every entry counted into
+			// the core type space so later indices stay right. See coretype.go.
+			if perr := c.parseCoreTypes(body); perr != nil {
 				return nil, perr
 			}
 		case SectionAlias:
