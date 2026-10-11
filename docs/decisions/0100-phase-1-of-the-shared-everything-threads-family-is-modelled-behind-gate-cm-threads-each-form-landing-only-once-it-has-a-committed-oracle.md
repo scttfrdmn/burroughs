@@ -562,7 +562,9 @@ to the chair.
 ## Amendment, 2026-10-11: the handoff, before the switching forms
 
 Chair's ruling, in session, 2026-10-11: derive the handoff from the reference and write it down before
-building any of `0x29`–`0x2d`. This amendment adds design; it reverses nothing above.
+building any of `0x29`–`0x2d`. This amendment adds design; it reverses nothing above. **Revised the same
+day, before anything was built**, on the chair's second ruling: a dedicated scheduler goroutine replaces
+the first text's implicit-Thread-as-driver design, which is kept below as considered and rejected.
 
 ### Why the second slice's scheduler cannot carry the switching forms
 
@@ -619,45 +621,104 @@ suspends if that suspension names a successor. The resumers in the reference are
 `promote`'s *"if ready, `stop_waiting`, then switch"* is a membership test and a removal by identity on the
 ready set, which ADR 0100 already required; a FIFO slice with a scan meets it.
 
-**2. Whoever holds the entry slot drives the chain.** There is no scheduler goroutine. The **driver** is
-the goroutine that holds `asyncHandles.entrySem`, and it runs `resumeChain(first)`: wake `first`, wait for
-its `giveBack(next)`, and if `next` is set, wake `next` — the reference's `while thread is not None` loop.
-**The slot is never released and reacquired inside a chain**, so a resumed Thread runs under the driver's
-hold rather than taking `entrySem` itself (which it could not: the driver holds it).
+**2. One scheduler goroutine per instance drives every chain.** Chair's ruling, in session, 2026-10-11,
+replacing the driver design recorded under *Considered and rejected* below. The **scheduler** runs
+`resumeChain(first)`: wake `first`, wait for its `giveBack(next)`, and if `next` is set, wake `next`. That
+is the reference's `while thread is not None` loop. It then pops the ready queue for the next chain. Its
+properties are the reasons it was chosen:
 
-There are two drivers, and they are the two places control can come back to:
+- **Exactly one driver, and its identity never changes.** No Thread ever becomes the driver, so "who runs
+  the next chain" has one answer on every path.
+- **It holds `asyncHandles.entrySem` on behalf of the running chain.** The slot is never released and
+  reacquired inside a chain, so a resumed Thread runs under the scheduler's hold rather than taking
+  `entrySem` itself.
+- **It never runs guest code.** It wakes goroutines and waits on them, and nothing else.
+- **Created lazily**, on the first `thread.new-indirect` an instance executes, so an instance that never
+  uses 🧵 pays nothing — no goroutine, no channel.
 
-- **The YIELD arm** (the callback loop, not in guest code). It takes the slot, runs chains from the ready
-  queue until the queue is empty, and releases. This is `runReady`'s place, with "wait for exit" replaced
-  by "wait for the chain to end" — the reference's `wait_until` blocking and `Store.tick` picking.
-- **The implicit Thread, when it gives the slot up inside the callee.** It already holds the slot — it is
-  inside guest code. So its `giveBack` does not park and wait for a driver that does not exist; **it
-  becomes the driver**: it runs the chain starting at its `next`, then pops ready Threads, **until a chain
-  hands control back to it** — a switch to it, or `resume-later` on it putting it in the ready queue —
-  and then returns to the guest. That is the reference's store resuming the implicit Thread, performed by
-  the implicit Thread's own goroutine because that goroutine is the only one free to do it.
+Every Thread, the implicit one included, gives control up the same way: `giveBack(next)` and park.
 
-**3. What a driver does when nothing is runnable.** The reference's answer depends on the callee, and
-ADR 0100's two branches already say which: a **sync** callee traps (`trap_if(not candidates)`), and an
-**async** callee simply does not progress. For the implicit-Thread driver inside an async callee that means
-waiting — on its own resumption, **or on the wake**, never on nothing.
+- **The implicit Thread suspending inside the callee** calls `giveBack(next)` and parks like any other.
+  The scheduler runs the chain; a later chain that switches to it, or a `resume-later` on it, wakes it,
+  and it returns to the guest.
+- **The YIELD arm** (the callback loop, not in guest code) hands off to the scheduler and **waits for the
+  chain to end**, replacing `runReady`'s "wait for the goroutine to exit". This is the reference's
+  `wait_until` blocking and `Store.tick` picking.
 
-**4. The wake reaches every parked state, not only the never-started one.** `killParked` currently ends
-only Threads that never started. After this design there are three parked shapes, and **none** is reached
-by `interp.ErrClosed` (needs a re-entry) or `interp.ErrTerminated` (needs a safepoint in guest code):
+So parked Threads come in two shapes only: **parked inside `giveBack`**, or **never started**. One wake
+mechanism reaches both (point 4).
+
+**3. What the scheduler does when nothing is runnable.** It waits: on the ready queue, or on the wake.
+Never on nothing. The reference's answer for a Thread waiting with nothing runnable depends on the
+callee, and ADR 0100's two branches already say which. A **sync** callee traps
+(`trap_if(not candidates)`), which is #970's subject and not built here. An **async** callee simply does
+not progress.
+
+**4. The wake reaches both parked shapes.** `killParked` currently ends only Threads that never started.
+Neither shape is reached by `interp.ErrClosed` (needs a re-entry) or by `interp.ErrTerminated` (needs a
+safepoint in guest code):
 
 | parked shape | where its goroutine is | how the wake ends it |
 |---|---|---|
 | never started | the Thread goroutine's first `select` | exits without running |
-| **suspended partway** (spawned) | inside a `giveBack` canon call, mid-guest | the call returns a terminal error, the guest unwinds, the goroutine exits |
-| **the implicit Thread driving, nothing runnable** | inside its own `giveBack`, waiting | same: a terminal error, the callee unwinds, the lift returns it |
+| **parked inside `giveBack`** (spawned or implicit) | inside a canon call, mid-guest | the call returns a terminal error, the guest unwinds, the goroutine exits; for the implicit Thread, the lift returns it |
 
-The second and third are new states, and each gets a witness with a neuter.
+`Close` ends the scheduler goroutine **last**: after every Thread it could be waiting on has been woken
+and has exited, so the scheduler is never left waiting on a `giveBack` that will not come. The second
+shape is new and gets a witness with a neuter.
 
-**5. `h.lift` is set by the driver.** A resumed Thread may belong to another task on the same instance,
-so the driver sets `h.lift` to the resumed Thread's task when it wakes it and restores its own when the
-chain gives back — under `asyncHandles.mu`, with the channel operations outside it (§4 B-MM-3, which the
-second slice's `killParked` was already corrected against).
+**5. `h.lift` is set by the scheduler.** A resumed Thread may belong to another task on the same
+instance. So the scheduler sets `h.lift` to the resumed Thread's task when it wakes it, under
+`asyncHandles.mu`, with the channel operations outside the lock (§4 B-MM-3, which the second slice's
+`killParked` was already corrected against).
+
+**6. Contract.** **The scheduler is not a T-1 agent and runs no guest code**: it is not created by
+`spawn`, it holds no per-agent globals, and it never calls through `invokeIndex`. So T-1 (1:1 backing of
+a spawned agent) and T-6 (per-agent global storage) do not apply to it. The Threads it wakes are what
+those clauses govern, and they are unchanged.
+
+**SP-2, confirmed by symbol, and the premise needed a correction.** The ruling's premise was *"a Thread
+parked inside `giveBack` is inside a canon call, so `enterBlocked` already counts it"*. A 🧵 built-in is a
+`CanonFunc`, which `interp.Instance.callAdapter` dispatches. **`callAdapter` does not call
+`enterBlocked`** — its own comment says so, because an ABI lower's marshaling is brief and "never leaves
+guest execution". Only three places call `thread.enterBlocked`:
+
+- `interp.Instance.callHost` (embedder host functions);
+- `interp.CanonCaller.Blocking`;
+- futex `wait` (`memory.atomic.wait`).
+
+So a Thread parked in `giveBack` is counted **only if the park itself runs inside `c.Blocking`**. That is
+how `async_waitset.go`'s `waitable-set.wait` already parks. Without it, a `Stop` would wait forever on a
+caller that is neither at a safepoint nor blocked. **The design therefore requires `giveBack`'s park to
+run under `CanonCaller.Blocking`**, so that `enterBlocked` counts it and `leaveBlocked`'s poll is the
+boundary SP-2 asks for on the way out.
+
+- A never-started Thread is not a caller yet: it has not reached `invokeIndex`, so it adds no term.
+- The scheduler is never a caller.
+- The YIELD arm waits outside guest code, between core calls, so it is not a caller either.
+
+**7. The goroutine census.** The scheduler is a new `go` statement. Its census entry in
+`internal/testenv/observer_test.go` cites **this amendment**, beside the existing `threadNewIndirect`
+entry that cites ADR 0100.
+
+**8. The handoff's cost is measured on `switch.wasm` and quoted** by the slice that builds this. It is one
+figure from the fixture that exercises all five forms, not a benchmark suite.
+
+### Considered and rejected: the implicit Thread as driver
+
+This amendment's first text had no scheduler goroutine. Whoever held `entrySem` drove the chain: the
+YIELD arm, or the implicit Thread itself when it gave the slot up inside the callee, which would run
+chains until one handed control back to it. **Rejected by the chair, 2026-10-11**, for the case it could
+not express: **two implicit Threads from two tasks on one instance.**
+
+Task 1's implicit Thread suspends inside its callee and becomes a driver, parked in its own driver loop.
+Task 2's chain then reaches it: a switch to it, or a promote of it. The goroutine to be woken is a
+*driver*, waiting for a chain to end, not a Thread parked in `giveBack`. So "wake the next Thread" has two
+meanings depending on whose loop the target is in, and a chain can end inside a loop that belongs to a
+different task.
+
+With one scheduler whose identity never changes, every parked Thread is in the same place and is woken
+the same way.
 
 ### Witnesses owed by the slice that builds this
 
@@ -665,13 +726,13 @@ second slice's `killParked` was already corrected against).
   neutered by reverting to "wait for exit".
 - **A Thread suspended partway is reached by the `Close` wake** — neutered by restricting `killParked` to
   never-started Threads, which is the second slice's behaviour.
-- **`switch.wasm` runs through Burroughs and returns `0x0888887f`**, the committed reading — which is the
-  implicit-Thread-driver case on all five forms, and the slice's completion condition.
+- **`switch.wasm` runs through Burroughs and returns `0x0888887f`**, the committed reading — the implicit
+  Thread parking in `giveBack` on all five forms, and the slice's completion condition.
 
 ### What this does not decide
 
-- **The sync lift's loop** (#970). The implicit-Thread driver inside a **sync** callee would trap when
-  nothing is runnable, per the reference; whether this slice builds that, or keeps refusing
-  `new-indirect` from a sync lift by name, is #970's.
+- **The sync lift's loop** (#970). A Thread inside a **sync** callee with nothing runnable traps, per the
+  reference. Whether this slice builds that, or keeps refusing `new-indirect` from a sync lift by name
+  (under `ErrUnsupportedForm` since #973), is #970's.
 - **Cancellation delivered to a suspended Thread.** The reference schedules Threads to deliver it
   (`Concurrency.md` § Cancellation), and no reading measures it. Unchanged from ADR 0100's Consequences.
