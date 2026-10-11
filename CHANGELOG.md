@@ -486,6 +486,39 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **`TestCloseReachesItsBoundWithANamedOutcome` reached `Close`'s bound by arithmetic, so a cooperating
+  guest could win the race and the correct answer was reported as a failure**
+  ([#963](https://github.com/scttfrdmn/burroughs/issues/963)). It failed `make ci`'s `test-endtable`
+  gate on a tree whose Go files were byte-identical to one the same gate had passed minutes earlier.
+
+  **`Close`'s accounting is sound and is unchanged.** `Component.Call` takes `c.mu` once for both the
+  `closed` check and `active++`; `Close` sets `closed` under the same mutex before `CancelAll` and then
+  samples `active` under it. No interval exists where the two disagree.
+
+  **The mechanism was established by forcing the order, not by counting failures.** `Close(0)` samples
+  `active` exactly once, after `CancelAll`. Drive the call to completion before that sample and the
+  result is a deterministic **nil, 20/20**, with the call carrying the cancellation sentinel; the
+  unmodified ordering gives `ErrCloseIncomplete` **60/60** on an idle host. So a cooperating guest that
+  finishes inside that window leaves nothing in flight, and the clean close was right.
+
+  **The fix is the uncooperative guest the test itself said was missing** — its old comment named the
+  better specimen and declined to author it. `lift-uncooperative-synth`'s callback ignores its event
+  triple, TASK_CANCELLED included, and returns YIELD without ever calling `task.return`, so `active`
+  cannot fall to zero **by construction**. No new engine surface: a test-controlled blocking host import
+  would have needed one.
+
+  **Reclamation of a guest that never stops is two mechanisms, and the test accepts either** —
+  `interp.ErrClosed` when the guest was between re-entries and `invokeIndex` refused it, or
+  `interp.ErrTerminated` when it was inside guest execution and met a safepoint with `exitReq` set
+  (ADR 0071). A probe saw the first and the test sees the second; asserting one alone would have put the
+  timing dependence back somewhere new. Measured at ~14µs to the bound and ~49µs to the call's end, so
+  the 5-second assertion bound is four orders of margin on a measured figure. `liftParkBound` is ruled
+  out rather than raced: the yield arm re-enters at once and never parks.
+
+  **Neuter run:** `Close` with its sample skipped fails the test 5/5, and the new diagnostic distinguishes
+  the two ways a nil can arrive — *"the call's outcome at this point: still running"* versus a call that
+  had already ended.
+
 - **The 🧵 shared-everything-threads family refused a well-formed component at decode as *"not
   modeled"*, with the exit code a corrupt file gets**
   ([#957](https://github.com/scttfrdmn/burroughs/issues/957)). #952's class, one proposal over. All
