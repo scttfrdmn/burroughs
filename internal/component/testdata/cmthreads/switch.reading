@@ -27,6 +27,13 @@ INDICES
   reuses it. An implementation that numbered Threads monotonically would read 2,3,4,5,6 here and
   would set every marker bit while being wrong about observable guest state.
 
+  WHAT THE INDICES DO NOT DISCRIMINATE: the slot-REUSE POLICY. Exactly one slot is free at each
+  creation here, so a LIFO free list, a lowest-free-index policy and any other reuse order all
+  produce 2. The reference's `Table.add` pops the free list (`i = self.free.pop()` — LIFO) and
+  `Table.remove` appends (`self.free.append(i)`), with `array = [None]` at construction so index 0
+  is reserved and the first allocation is 1. This reading pins the 1 and the 2s; it does not test
+  the LIFO order. A fixture holding two Threads live and freeing them out of order would.
+
 WHAT THIS READING PINS, AND WHAT IT DOES NOT
   Pinned:     the mask (reachability of each production) and the six index values.
   NOT pinned: the ORDER in which ready Threads run. The reference schedules them
@@ -52,6 +59,15 @@ NOT MEASURED
   Whether an instance is usable after a 🧵 trap. `wasmtime run` instantiates afresh for each
   invocation, so re-entry after a trap is not observable through this harness, and no fixture for
   it was built.
+
+  Whether a Thread executes after its task has RESOLVED. A fixture was built for it and its
+  CONTROL falsified the discriminator: resolve with task.return(7), then create a Thread, make it
+  ready, and suspend with nothing else able to resume the entry Thread — and the arm with the
+  resume-later deleted, so nothing CAN resume it, returns 7 and exit 0 just the same. The call's
+  result is delivered at resolution, so anything after it is invisible to `--invoke`. Neither
+  fixture is committed: an artefact whose control does not discriminate measures nothing.
+
+  The slot-reuse ORDER, per the note above.
 
 PROVENANCE
   taken      2026-10-11T03:45Z

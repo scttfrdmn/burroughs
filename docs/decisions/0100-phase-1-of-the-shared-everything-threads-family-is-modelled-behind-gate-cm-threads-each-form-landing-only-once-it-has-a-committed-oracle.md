@@ -281,11 +281,14 @@ reading says so.
 
 ---
 
-## Threads left suspended when a task completes
+## Threads that outlive their task's resolution
 
-### Completion with Threads still registered cannot arise
+**An earlier draft of this record had this backwards**, from the chair's own first reading carried into
+the text: it said a task cannot complete while Threads are registered. It can, and post-resolution work
+on other Threads is part of the model. The section is derived from the code below in the direction the
+code actually constrains.
 
-`Task.unregister_thread`:
+### The ordering constraint `unregister_thread` imposes, stated in its own direction
 
 ```python
 def unregister_thread(self, thread):
@@ -294,37 +297,32 @@ def unregister_thread(self, thread):
     trap_if(self.state != Task.State.RESOLVED)
 ```
 
-A Thread unregisters when its function returns, and when the **last** Thread of a task unregisters it
-traps unless the task has resolved. A task's lifetime is therefore the union of its Threads' lifetimes:
-it cannot complete while any Thread remains registered. So "the task finished and some Threads are still
-suspended" is not a state the model has.
+The `trap_if` fires only when the count reaches **zero**. So the constraint is one-directional:
+**resolution must come before the last Thread exits.** It says nothing about Threads still being
+registered at resolution, and it forbids nothing about them.
 
-What can arise is every Thread of a task suspended with none ready. **The answer differs by whether the
-callee is sync or async**, and the two branches are below. An earlier draft of this record carried only
-the sync branch and would have had the engine trap a legitimately waiting async task.
+`Task.return_` and `Task.cancel` bear that out — each calls `on_resolve` and sets
+`state = RESOLVED`, and neither touches `self.threads` or `store.waiting`.
 
-### Sync callee: trap the call
+### Threads do outlive resolution, in both parked states
 
-`Concurrency.md` § Blocking, whose rule is explicitly conditional on the callee's type:
+**The sync lift's own loop stops at resolution rather than at thread exit.** `canon_lift`'s tail:
 
-> Lastly, if the task has not yet returned a value and the callee's function type does *not* declare the
-> `async` effect, then the task is not allowed to "block" and will trap if it ends up blocking. However,
-> … the Component Model repeatedly resumes threads that are ready to run until either the task returns a
-> value or there are no more eligible ready threads (and the call traps).
+```python
+thread.resume()
+if not ft.async_:
+  while task.state != Task.State.RESOLVED:
+    candidates = { t for t in inst.threads if t.ready() }
+    trap_if(not candidates)
+    random.choice(list(candidates)).resume()
+return task.request_cancellation
+```
 
-The code encodes it as an assertion rather than a `trap_if`: `canon_lower`'s sync arm asserts
-`ft.async_ or subtask.state == Subtask.State.RETURNED` immediately after calling the callee, so a sync
-callee that has not returned is a model-level contradiction. wasmtime renders it as a trap, measured:
-`wasm trap: cannot block a synchronous task before returning`.
+The loop's condition is the task's state. It exits the moment the task resolves and returns, **with other
+Threads still registered in `inst.threads`**.
 
-**What the engine owes here:** a positive detector for *no eligible ready Thread*, and a trap of the call
-when it fires. The reference's emulation never has to look for this — a never-resumed Python thread is a
-blocked OS thread the interpreter abandons at process exit — so the deadlock is invisible there and would
-be a hang here.
-
-### Async callee: wait, do not trap
-
-For an async callee the scheduler is the host's, and `Store.tick` is the whole of it:
+**For an async lift the host's scheduler keeps running them.** `Store.tick` filters on readiness and
+nothing else:
 
 ```python
 def tick(self):
@@ -334,53 +332,64 @@ def tick(self):
     thread.resume()
 ```
 
-**With no ready candidate, `tick` does nothing.** There is no trap and no error: the task stays
-unresolved, and a later `tick` will resume a Thread once something makes its `ready_func` true. That is
-what an async task waiting on a waitable, a stream or a future looks like from the scheduler's side —
-`Waitable.wait_from_callback` installs exactly such a predicate.
+There is no task-state term, so a **waiting** Thread stays schedulable after its task has resolved. And a
+**bare-suspended** Thread — `ready_func is None`, not in `store.waiting` — can still be revived by any
+live or waiting Thread that names it with `thread.resume-later` or a `*-then-resume` / `*-then-promote`
+form. Neither parked state is terminated by resolution.
 
-The reference distinguishes two parked states, and the distinction is what makes the branch safe:
+**So cancellation must not unwind.** `Task.request_cancellation` resumes the implicit Thread and the task
+resolves; an explicit Thread that was waiting may then legitimately run. Unwinding at cancel would cut off
+work the reference permits.
 
-- **waiting** — `Thread.waiting()` is `not running() and ready_func is not None`, and the Thread is in
-  `store.waiting`. `tick` considers it, and the host can satisfy the predicate later.
-- **suspended** — `Thread.suspended()` is `not running() and ready_func is None`, which is where a bare
-  `thread.suspend` leaves a Thread. It is **not** in `store.waiting`, so `tick` never considers it. Only
-  another Thread naming it (`thread.resume-later`, `*-then-resume`, `*-then-promote`) can revive it.
+### Where the trap rule does apply, and it is the sync lift's loop
 
-So if every Thread of an async task is bare-suspended, nothing in the model can resume any of them and
-the task stays unresolved **forever**. The reference does not trap that either; it simply never
-progresses. The caller's recourse is cancellation, and `Task.request_cancellation` shows what it reaches:
+`trap_if(not candidates)` above is the code behind `Concurrency.md` § Blocking's *"there are no more
+eligible ready threads (and the call traps)"*. It is inside `if not ft.async_`, so it is the **sync**
+rule. (`canon_lower`'s sync arm separately asserts `ft.async_ or subtask.state == RETURNED`, which is the
+caller-side fact; the lift's loop is the one that traps.) wasmtime renders it as `wasm trap: cannot block
+a synchronous task before returning`, measured on a sync fixture in this slice.
 
-```python
-def request_cancellation(self):
-  if self.state == Task.State.INITIAL:
-    self.state = Task.State.PENDING_CANCEL
-    self.implicit_thread.resume()
-```
+For an **async** callee there is no such loop and no such trap: with no ready candidate, `tick` does
+nothing and the task simply does not progress.
 
-It resumes the **implicit** Thread only. Explicitly created Threads are not resumed by cancellation.
+### Which parked goroutines can never run again, and the bound the engine takes
 
-**What the engine owes here: no detector.** The existing wait is correct, and a detector built from the
-sync rule would turn a waiting async task into a trap. What it owes is correct unwinding — because
-`request_cancellation` revives one Thread and leaves the rest parked, and a parked goroutine does not
-disappear the way an abandoned Python thread does.
+A bare-suspended Thread is dead only once **no live or waiting Thread can name it**. That is a
+reachability question over a set that any still-running Thread can change, and the engine cannot decide it
+cheaply. **No reachability analysis is proposed.**
 
-### The parked-goroutine unwind, and the three paths that need it
+The bound instead: **unwind every Thread on a trap, and on `Instance.Close`.** A goroutine parked past its
+task's resolution persists until `Close`, which is what the reference's Threads do — they stay in
+`inst.threads` and `store.waiting`, schedulable, until the embedding goes away. The cost is a goroutine
+per such Thread for the instance's remaining life; the alternative costs either a reachability analysis
+or cutting off work the model permits.
 
-The mechanism exists: `thread.exitReq` plus the `threadTerminated` sentinel panic that `runEntry`'s
-recover converts into `ErrTerminated` — ADR 0071's terminal unwind, today driven only by
-`Instance.Close`. A task-scoped version of that path is what the engine needs, and it is reached from
-**three** places:
+**So two paths, not three.** The mechanism is `thread.exitReq` plus the `threadTerminated` sentinel panic
+that `runEntry`'s recover converts into `ErrTerminated` — ADR 0071's terminal unwind, today driven by
+`Instance.Close`:
 
-1. a **trap**, on any Thread (§ Trap transport);
-2. a **cancel**, which revives the implicit Thread and leaves the others parked;
-3. **`Close`**, which already drives this path for core threads.
+1. a **trap**, on any Thread, which ends the computation for all of them (§ Trap transport);
+2. **`Close`**, which already drives this path for core threads.
 
-**Completion is not one of the three**, because a task cannot complete while Threads are still
-registered. That is the correction the two branches above make to the first draft.
+**Cancel is not one of them**: it resolves the task and leaves the Threads to the model.
+
+### Post-resolution execution is unmeasured, and the control is why
+
+A fixture was built to observe it and **its control falsified the discriminator**, so nothing is claimed.
+The attempt: resolve with `task.return(7)` first, then create a Thread, make it ready with
+`thread.resume-later`, and `thread.suspend` with nothing else able to resume the entry Thread — on the
+theory that the call completing would prove the created Thread ran after resolution.
+
+| arm | result |
+|---|---|
+| with the `resume-later` | `7`, exit 0 |
+| **control**: `resume-later` deleted, so nothing can ever resume the entry Thread | `7`, exit 0 |
+
+Both complete identically, so **the call's result is delivered at resolution** and anything after it is
+invisible to `--invoke`. Neither fixture is committed: an artefact whose control does not discriminate
+measures nothing. Recorded as unmeasured, on the same footing as re-entry after a trap.
 
 ---
-
 ## Consistency with the contract
 
 **The clauses that govern threads in this engine are about T-1 agents, and a CM Thread is not one.**
@@ -433,6 +442,26 @@ than a claim that the call did not trap. Identical across two runs.
 `inst.threads` frees the slot and the next Thread reuses it. Thread numbering is observable guest
 behaviour: an implementation that numbered monotonically would read 2, 3, 4, 5, 6 here and would set every
 marker bit while being wrong.
+
+**What the indices do not discriminate is the slot-reuse *policy*.** Exactly one slot is free at each
+creation in this fixture, so LIFO, lowest-free and any other order all produce 2. The reference's policy,
+quoted because the build slice has to implement it exactly:
+
+```python
+def __init__(self):            def add(self, e):                  def remove(self, i):
+  self.array = [None]            if self.free:                      e = self.get(i)
+  self.free = []                   i = self.free.pop()              self.array[i] = None
+                                 else:                              self.free.append(i)
+                                   i = len(self.array)              return e
+                                   self.array.append(e)
+                                 return i
+```
+
+`array = [None]` at construction, so **index 0 is reserved** and the first allocation is 1 — which is
+where the entry Thread's 1 comes from. `free` is **LIFO**: `remove` appends and `add` pops the end, so a
+reused index is the most recently freed one, not the lowest. The committed reading pins the 1 and the 2s
+and **does not test the LIFO order**; a fixture holding two Threads live and freeing them out of order
+would.
 
 **What the reading pins, and what it deliberately does not.** Pinned: the mask and the six index values.
 Not pinned: the **order** in which ready Threads run. `Store.tick` picks
@@ -502,6 +531,11 @@ to the chair.
   switching, and exercises the per-instance Thread table and the gate end to end. Then
   `thread.new-indirect` with `thread.resume-later`, then the switching forms, each with its oracle. The
   per-Thread TLS placement lands with the first form that creates a second Thread.
+- **The Thread table implements the reference's `Table` policy exactly as quoted**: index 0 reserved,
+  LIFO free list, append when the free list is empty. The differential witness asserts the entry Thread's
+  index of **1** from the committed reading — and not an execution order, which the reading does not pin.
+- **The unwind is on two paths, trap and `Close`.** A goroutine parked past its task's resolution persists
+  until `Close`, which is the bound this record chooses over a reachability analysis.
 - **Phase 2's refusal is unchanged**, and `threadBuiltinNames` keeps all eleven names: the three phase-2
   entries are still what the by-name refusal prints.
 - **Two of the actor's premises are retracted in the record above, with their cause**: the `gateThreads`
