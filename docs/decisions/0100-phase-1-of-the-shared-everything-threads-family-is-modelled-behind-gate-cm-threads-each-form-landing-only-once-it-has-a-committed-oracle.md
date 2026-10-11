@@ -556,3 +556,122 @@ to the chair.
   cancellation readings constrains what `subtask.cancel` must do to a suspended Thread. That reading does
   not exist yet, and `switch.reading` does not take it either.
 - **Releases and version numbers remain Scott's.** Nothing here ships until he cuts a release.
+
+---
+
+## Amendment, 2026-10-11: the handoff, before the switching forms
+
+Chair's ruling, in session, 2026-10-11: derive the handoff from the reference and write it down before
+building any of `0x29`–`0x2d`. This amendment adds design; it reverses nothing above.
+
+### Why the second slice's scheduler cannot carry the switching forms
+
+`threadTable.runReady` (the second build slice) closes a Thread's `start` and waits on `<-t.done` — until
+its goroutine **exits**. That is correct only while every Thread runs straight through. With `suspend` and
+the switching forms, a Thread can give the slot back partway, and two deadlocks follow:
+
+1. **A spawned Thread suspends partway.** `runReady` waits on a `done` that closes only after someone
+   resumes that Thread — and the only goroutine that could is the one blocked in `runReady`. (The chair's
+   finding.)
+2. **The implicit Thread suspends partway, inside the callee.** `switch.wat` does exactly this: its callee
+   calls `suspend-then-resume`, `yield-then-resume`, both `*-then-promote` forms and plain `suspend`.
+   The implicit Thread is the lift loop's own goroutine, now blocked inside a canon call holding the entry
+   slot, so **nothing is left to drive scheduling at all**.
+
+### What the reference does
+
+The unit the reference resumes is a **chain**, not a Thread. `Thread.resume`:
+
+```python
+thread = self
+while thread is not None:
+  cont = thread.cont
+  thread.cont = None
+  (thread.cont, switch_to) = resume(cont, thread)
+  thread = switch_to
+```
+
+and every way of giving control up goes through one primitive, `suspend(switch_to)`, which hands the
+resumer `(continuation, switch_to)`:
+
+- `block()` is `suspend(switch_to=None)` — the chain ends and control returns to the resumer;
+- `switch_to(other)` is `suspend(switch_to=other)` — the **same** resumer runs `other` next;
+- a Thread whose function returns ends with `switch_to=None` too.
+
+So **a resumer gets control back when the chain ends**, not when one Thread exits, and not when one Thread
+suspends if that suspension names a successor. The resumers in the reference are the host's store
+(`Store.tick`), `canon_lift` (which resumes the implicit Thread once), and `Task.request_cancellation`.
+
+### The design
+
+**1. One handoff primitive, on the Thread's own goroutine.** Every form that gives the slot up calls
+`giveBack(next)` and then parks until resumed:
+
+| form | `next` | the giver's state afterwards |
+|---|---|---|
+| `thread.suspend` (0x29) | none | suspended |
+| `suspend-then-resume` (0x2a) | the named Thread (must be suspended) | suspended |
+| `yield-then-resume` (0x2b) | the named Thread (must be suspended) | **ready** |
+| `suspend-then-promote` (0x2c) | the named Thread **if ready**, removed from the ready set by identity; else none | suspended |
+| `yield-then-promote` (0x2d) | as above | ready |
+| the entry function returns | none | gone |
+
+`promote`'s *"if ready, `stop_waiting`, then switch"* is a membership test and a removal by identity on the
+ready set, which ADR 0100 already required; a FIFO slice with a scan meets it.
+
+**2. Whoever holds the entry slot drives the chain.** There is no scheduler goroutine. The **driver** is
+the goroutine that holds `asyncHandles.entrySem`, and it runs `resumeChain(first)`: wake `first`, wait for
+its `giveBack(next)`, and if `next` is set, wake `next` — the reference's `while thread is not None` loop.
+**The slot is never released and reacquired inside a chain**, so a resumed Thread runs under the driver's
+hold rather than taking `entrySem` itself (which it could not: the driver holds it).
+
+There are two drivers, and they are the two places control can come back to:
+
+- **The YIELD arm** (the callback loop, not in guest code). It takes the slot, runs chains from the ready
+  queue until the queue is empty, and releases. This is `runReady`'s place, with "wait for exit" replaced
+  by "wait for the chain to end" — the reference's `wait_until` blocking and `Store.tick` picking.
+- **The implicit Thread, when it gives the slot up inside the callee.** It already holds the slot — it is
+  inside guest code. So its `giveBack` does not park and wait for a driver that does not exist; **it
+  becomes the driver**: it runs the chain starting at its `next`, then pops ready Threads, **until a chain
+  hands control back to it** — a switch to it, or `resume-later` on it putting it in the ready queue —
+  and then returns to the guest. That is the reference's store resuming the implicit Thread, performed by
+  the implicit Thread's own goroutine because that goroutine is the only one free to do it.
+
+**3. What a driver does when nothing is runnable.** The reference's answer depends on the callee, and
+ADR 0100's two branches already say which: a **sync** callee traps (`trap_if(not candidates)`), and an
+**async** callee simply does not progress. For the implicit-Thread driver inside an async callee that means
+waiting — on its own resumption, **or on the wake**, never on nothing.
+
+**4. The wake reaches every parked state, not only the never-started one.** `killParked` currently ends
+only Threads that never started. After this design there are three parked shapes, and **none** is reached
+by `interp.ErrClosed` (needs a re-entry) or `interp.ErrTerminated` (needs a safepoint in guest code):
+
+| parked shape | where its goroutine is | how the wake ends it |
+|---|---|---|
+| never started | the Thread goroutine's first `select` | exits without running |
+| **suspended partway** (spawned) | inside a `giveBack` canon call, mid-guest | the call returns a terminal error, the guest unwinds, the goroutine exits |
+| **the implicit Thread driving, nothing runnable** | inside its own `giveBack`, waiting | same: a terminal error, the callee unwinds, the lift returns it |
+
+The second and third are new states, and each gets a witness with a neuter.
+
+**5. `h.lift` is set by the driver.** A resumed Thread may belong to another task on the same instance,
+so the driver sets `h.lift` to the resumed Thread's task when it wakes it and restores its own when the
+chain gives back — under `asyncHandles.mu`, with the channel operations outside it (§4 B-MM-3, which the
+second slice's `killParked` was already corrected against).
+
+### Witnesses owed by the slice that builds this
+
+- **A spawned Thread that suspends partway lets the yielding callback continue** — the first deadlock,
+  neutered by reverting to "wait for exit".
+- **A Thread suspended partway is reached by the `Close` wake** — neutered by restricting `killParked` to
+  never-started Threads, which is the second slice's behaviour.
+- **`switch.wasm` runs through Burroughs and returns `0x0888887f`**, the committed reading — which is the
+  implicit-Thread-driver case on all five forms, and the slice's completion condition.
+
+### What this does not decide
+
+- **The sync lift's loop** (#970). The implicit-Thread driver inside a **sync** callee would trap when
+  nothing is runnable, per the reference; whether this slice builds that, or keeps refusing
+  `new-indirect` from a sync lift by name, is #970's.
+- **Cancellation delivered to a suspended Thread.** The reference schedules Threads to deliver it
+  (`Concurrency.md` § Cancellation), and no reading measures it. Unchanged from ADR 0100's Consequences.
