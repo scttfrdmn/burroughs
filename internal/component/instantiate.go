@@ -485,9 +485,9 @@ func (r *reader) canon() (Canon, error) {
 		// `0x27 ft:<core:typeidx> tbl:<core:tableidx>`, so two u32 operands — the section must advance
 		// past both or every canon after this one is misread.
 		//
-		// `ft` is READ AND KEPT but cannot be resolved: this loader does not decode `core:type` sections
-		// at all. The callee's real type is checked instead, at call time — see `threadNewIndirect` for
-		// the one divergence that leaves and why it is recorded rather than closed here.
+		// `ft` is read and kept, and checked against the `core:type` section after this canon is read
+		// (`checkNewIndirectFT`, #969): any `ft` other than `(i32) -> ()` refuses at load, as the
+		// toolchains do. The callee is checked against it at call time (`interp.ResolveTableFunc`).
 		ft, err := r.u32()
 		if err != nil {
 			return Canon{}, fmt.Errorf("thread.new-indirect: ft: %w", err)
@@ -500,7 +500,27 @@ func (r *reader) canon() (Canon, error) {
 	case 0x28:
 		// `thread.resume-later` — bare `0x28`, no immediates.
 		return Canon{Kind: CanonThreadBuiltin, ThreadOp: kind}, nil
-	case 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x40, 0x41, 0x42:
+	case 0x29, 0x2a, 0x2b, 0x2c, 0x2d:
+		// `thread.suspend` and the four switching forms (ADR 0100's switching slice). `Binary.md` at the pin
+		// gives each a fixed `0x00` after the discriminant; wasm-tools 1.258.0 reads that byte as
+		// `cancellable` and would emit `0x01` for the cancellable variant. Cancellation delivered to a
+		// suspended Thread is what ADR 0100 leaves undecided and no reading measures, so `0x01` is refused
+		// by name rather than run as though it were `0x00`, and any other byte is malformed.
+		b, err := r.byte()
+		if err != nil {
+			return Canon{}, fmt.Errorf("%s: %w", threadBuiltinNames[kind], err)
+		}
+		switch b {
+		case 0x00:
+			return Canon{Kind: CanonThreadBuiltin, ThreadOp: kind}, nil
+		case 0x01:
+			return Canon{}, &threadBuiltinError{msg: fmt.Sprintf("canon %s (%#x) cancellable is a "+
+				"shared-everything-threads form this engine does not support: cancellation delivered to a "+
+				"suspended Thread is not modelled (ADR 0100)", threadBuiltinNames[kind], kind)}
+		default:
+			return Canon{}, fmt.Errorf("%s: byte %#x after the discriminant is not 0x00", threadBuiltinNames[kind], b)
+		}
+	case 0x40, 0x41, 0x42:
 		// NEUTER THIS ARM to reproduce #957: delete it and the family falls through to `default`
 		// again, returning `canon built-in 0x29 is not modeled (this slice: …)` with no sentinel and
 		// exit 1. Named here because this is the line a reader would reach for.

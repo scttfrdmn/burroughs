@@ -51,13 +51,24 @@ import (
 // (0x26), then `cmthreads/switch.wasm`'s first 🧵 canon, `thread.resume-later` (0x28), until the second
 // slice modelled that and `thread.new-indirect` (0x27). Each time the test failed for one run with the
 // right answer to a question it is not asking. **An UNMODELED production is what it is about**, and the
-// decoder stops at the first one, so it now names `switch.wasm`'s first unmodelled canon:
-// `thread.suspend` (0x29) — measured with the built binary rather than read off the source order.
+// decoder stops at the first one. It named `switch.wasm`'s `thread.suspend` (0x29) until the switching
+// slice modelled the last five phase-1 forms, which left `switch.wasm` with no unmodelled canon at all.
 //
-// The fixture runs out of unmodelled forms when phase 1 is complete; the three 🧵② forms are refused by
-// name for good under ADR 0100's point 1, so the test's last subject will be one of those.
+// **This is the last move, as this comment predicted.** The three 🧵② forms are refused by name for good
+// under ADR 0100's point 1, so the subject is now one of those, in a fixture of its own:
+//
+//	$ cat testdata/thread-ap-synth.wat
+//	(component
+//	  (canon thread.available_parallelism (core func $ap))
+//	)
+//	$ wasm-tools parse thread-ap-synth.wat -o thread-ap-synth.wasm     # wasm-tools 1.258.0, 38 bytes
+//
+// The text spelling is wasm-tools' underscore; the refusal spells it the pinned table's hyphenated way
+// (`threadbuiltins.go` records the discrepancy). `wasm-tools validate --features all` accepts it, and
+// wasmtime 49.0.2 refuses it as *"requires the shared-everything-threads proposal"* — the toolchain's own
+// form of "no gate admits it".
 func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
-	wasm, err := os.ReadFile("testdata/cmthreads/switch.wasm")
+	wasm, err := os.ReadFile("testdata/thread-ap-synth.wasm")
 	if err != nil {
 		t.Fatalf("the committed fixture is missing, so this witness has no subject: %v", err)
 	}
@@ -67,7 +78,7 @@ func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
 			t.Setenv(asyncGateEnv, gate)
 			_, err := Instantiate(wasm)
 			if err == nil {
-				t.Fatal("the fixture was accepted; nothing in this engine executes thread.suspend")
+				t.Fatal("the fixture was accepted; nothing in this engine executes thread.available-parallelism")
 			}
 			// The sentinel a caller branches on, and the one the public boundary maps to
 			// ErrUnsupported. No new sentinel was added for this family.
@@ -78,11 +89,11 @@ func TestAThreadBuiltinIsRefusedByNameAsUnsupported(t *testing.T) {
 			msg := err.Error()
 			// Four arms, one per thing that was wrong with the old refusal. Separate rather than one
 			// combined match, so a failure says WHICH property regressed.
-			if !strings.Contains(msg, "thread.suspend") {
+			if !strings.Contains(msg, "thread.available-parallelism") {
 				t.Errorf("the refusal does not name the production, so a reader gets an opcode and "+
 					"has to look it up: %v", err)
 			}
-			if !strings.Contains(msg, "0x29") {
+			if !strings.Contains(msg, "0x42") {
 				t.Errorf("the refusal does not carry the opcode, which is what a reader comparing "+
 					"against Binary.md matches on: %v", err)
 			}

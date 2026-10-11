@@ -88,7 +88,8 @@ func callRunBounded(t *testing.T, in *Instantiated) uint32 {
 // **It asserts the value and no execution order.** The corrected fixture re-YIELDs until the body's
 // marker is set, so either of the reference's YIELD branches reaches the same value.
 //
-// **Neuter, run:** removing `runReady` from the YIELD arm makes `run` never return — the callback
+// **Neuter, run:** removing `yieldPoint` (the second slice's `runReady`, re-run under its new name) from the
+// YIELD arm makes `run` never return — the callback
 // re-YIELDs forever — and the deferred `Close` then reclaims it with `interp.ErrClosed` at the next
 // re-entry, #963's mechanism, failing this on the bound.
 func TestASpawnedThreadRunsAtTheYieldAndHoldsItsOwnIndex(t *testing.T) {

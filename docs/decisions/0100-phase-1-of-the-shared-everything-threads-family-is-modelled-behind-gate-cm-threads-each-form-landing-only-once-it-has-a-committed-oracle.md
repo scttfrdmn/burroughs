@@ -648,6 +648,20 @@ Every Thread, the implicit one included, gives control up the same way: `giveBac
 So parked Threads come in two shapes only: **parked inside `giveBack`**, or **never started**. One wake
 mechanism reaches both (point 4).
 
+**Two refinements, found while building it and recorded here because each narrows a sentence above.**
+
+- **The scheduler never acquires `entrySem` itself.** The ruling's *"holds `entrySem` on behalf of the
+  running chain"* is kept in meaning. The slot is held by whoever starts the chain: the implicit Thread,
+  which is inside its callee, or the YIELD arm, which takes it before handing off. A scheduler that
+  acquired the slot could block on one held by an implicit Thread parked mid-callee, which only the
+  scheduler can resume. This is the reference's shape too: `exclusive_thread` stays the implicit
+  Thread's while it is suspended mid-callee, and a Thread a chain resumes never takes it.
+- **Resuming an implicit Thread ends the scheduler's chain.** The implicit Thread returns to its own
+  goroutine and may leave the callee for the callback loop without giving back again. A scheduler still
+  waiting for its handoff would miss the YIELD arm's next request. So the scheduler resumes it and goes
+  idle, and the implicit Thread's next handoff starts a new chain from idle, which the guest cannot tell
+  apart.
+
 **3. What the scheduler does when nothing is runnable.** It waits: on the ready queue, or on the wake.
 Never on nothing. The reference's answer for a Thread waiting with nothing runnable depends on the
 callee, and ADR 0100's two branches already say which. A **sync** callee traps
@@ -728,11 +742,20 @@ the same way.
   never-started Threads, which is the second slice's behaviour.
 - **`switch.wasm` runs through Burroughs and returns `0x0888887f`**, the committed reading — the implicit
   Thread parking in `giveBack` on all five forms, and the slice's completion condition.
+- **A Thread parked inside `giveBack` is at a safepoint** — every core instance `Stop`s while one is
+  parked, neutered by parking outside `c.Blocking`. Added by the building slice: point 6's correction was
+  an argument by symbol, and this makes it a measurement. Under the neuter the stop reports *"0 of 1
+  callers at a safepoint (0 parked, 0 blocked)"*.
 
 ### What this does not decide
 
 - **The sync lift's loop** (#970). A Thread inside a **sync** callee with nothing runnable traps, per the
   reference. Whether this slice builds that, or keeps refusing `new-indirect` from a sync lift by name
   (under `ErrUnsupportedForm` since #973), is #970's.
+- **`promote` naming an implicit Thread that is waiting at its own YIELD arm.** In the reference that
+  Thread is `waiting()` with a ready function, so `other.ready()` can be true and the promote switches to
+  it. In Burroughs a YIELDing implicit Thread is not in the ready queue, so the promote falls to a plain
+  suspend or yield. No reading measures it: a different task's Thread would have to run while that
+  task's implicit Thread YIELDs, which no committed fixture constructs.
 - **Cancellation delivered to a suspended Thread.** The reference schedules Threads to deliver it
   (`Concurrency.md` § Cancellation), and no reading measures it. Unchanged from ADR 0100's Consequences.

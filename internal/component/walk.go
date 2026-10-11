@@ -613,13 +613,25 @@ func (w *walker) close() {
 	// it is at neither. Killed before the core instances close, so no parked Thread can be started into
 	// an instance that is already torn down; waited for, so `Close` returning means the goroutines are
 	// gone rather than going. `threads` is nil for a walker built without a component table.
+	//
+	// Both parked shapes are reached — never started, and parked inside a handoff (ADR 0100's amendment) —
+	// and only a created Thread has a goroutine to wait for: a killed implicit Thread's lift returns the
+	// error on the lift's own goroutine.
 	if w.threads != nil {
 		for _, t := range w.threads.killParked(nil) {
-			<-t.done
+			if t.done != nil {
+				<-t.done
+			}
 		}
 	}
 	for _, in := range w.toClose {
 		_ = in.Close()
+	}
+	// **The scheduler goroutine ends LAST**, after every Thread it could be waiting on has been woken and
+	// the instances closed — a Thread still running guest code is ended by its instance's `Close` and
+	// reports back to a scheduler that is still there to receive it.
+	if w.threads != nil {
+		w.threads.stopScheduler()
 	}
 }
 

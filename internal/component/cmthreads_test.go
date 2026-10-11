@@ -409,6 +409,11 @@ func TestEveryThreadProductionIsModeledOrRefusedNeverBoth(t *testing.T) {
 		0x26: "cmthreads/index-call.reading and cmthreads/spawn.reading",
 		0x27: "cmthreads/spawn.reading and cmthreads/spawn-parked.reading",
 		0x28: "cmthreads/spawn.reading",
+		0x29: "cmthreads/switch.reading",
+		0x2a: "cmthreads/switch.reading",
+		0x2b: "cmthreads/switch.reading",
+		0x2c: "cmthreads/switch.reading",
+		0x2d: "cmthreads/switch.reading",
 	}
 	got := map[byte]bool{}
 	for _, op := range modeled {
