@@ -364,7 +364,13 @@ func TestEveryThreadProductionIsModeledOrRefusedNeverBoth(t *testing.T) {
 		if !strings.HasPrefix(name, "thread.") || name == "thread.yield" {
 			continue // thread.yield (0x0c) is 🔀 async per the pinned table, not 🧵
 		}
-		r := &reader{b: []byte{op}}
+		// **The discriminant followed by zero operand bytes**, not the discriminant alone. This probed with
+		// `[]byte{op}` until `thread.new-indirect` (0x27) was modelled, and that form carries two u32
+		// operands — so a one-byte probe hit a short read and classified a correctly modelled form as
+		// "neither", reporting #957's defect where there was none. The one-byte assumption held only while
+		// every modelled form was bare. A zero LEB128 is a valid u32 for any operand, and a refused form
+		// is refused at its discriminant before any operand is read.
+		r := &reader{b: append([]byte{op}, make([]byte, 16)...)}
 		cn, err := r.canon()
 		isModeled := err == nil && cn.Kind == CanonThreadBuiltin
 		isRefused := err != nil && errors.Is(err, ErrUnsupportedForm)
@@ -395,10 +401,30 @@ func TestEveryThreadProductionIsModeledOrRefusedNeverBoth(t *testing.T) {
 	}
 	t.Logf("partition: %d modeled %#x, %d refused %#x", len(modeled), modeled, len(refused), refused)
 
-	// ADR 0100's point 4 in one assertion: a form is modeled only with a committed oracle, and this
-	// slice lands exactly one. A second modeled form without its reading is what this catches.
-	if len(modeled) != 1 || modeled[0] != 0x26 {
-		t.Errorf("modeled set is %#x; ADR 0100's first build slice models exactly thread.index (0x26), "+
-			"and a form joins it only when a wasmtime reading is committed under testdata", modeled)
+	// ADR 0100's point 4 in one assertion: a form is modeled only with a committed oracle. The expected
+	// set is written out — not derived from the decoder, which is what is under test — and each member
+	// names the reading that licenses it. A form joining the decoder's modeled arm without being added
+	// here, with its reading, fails; so does one leaving it.
+	licensed := map[byte]string{
+		0x26: "cmthreads/index-call.reading and cmthreads/spawn.reading",
+		0x27: "cmthreads/spawn.reading and cmthreads/spawn-parked.reading",
+		0x28: "cmthreads/spawn.reading",
+	}
+	got := map[byte]bool{}
+	for _, op := range modeled {
+		got[op] = true
+		if _, ok := licensed[op]; !ok {
+			t.Errorf("%#x is modeled with no committed reading licensing it; a form joins the modeled "+
+				"set only when a wasmtime reading is committed under testdata", op)
+		}
+	}
+	for op, reading := range licensed {
+		if !got[op] {
+			t.Errorf("%#x is licensed by %s but the decoder refuses it, so the expected set and the "+
+				"decoder have drifted apart", op, reading)
+		}
+		if _, err := os.Stat(filepath.Join("testdata", strings.Fields(reading)[0])); err != nil {
+			t.Errorf("%#x's licensing reading %s is missing from the tree: %v", op, reading, err)
+		}
 	}
 }

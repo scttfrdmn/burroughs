@@ -110,5 +110,30 @@ ic=$("$WASMTIME" run -W component-model-threading=y --invoke 'idx()' "$here/inde
 }
 echo "build.sh: index-call result $ic" >&2
 
+# ## spawn: the three-production fixture ADR 0100's second build slice needs
+#
+# thread.index + thread.new-indirect + thread.resume-later, and nothing else. The entry Thread yields
+# rather than returning, so it is still registered while the spawned Thread runs — which is what makes
+# this the first fixture able to measure CONCURRENT distinct indices.
+"$WASM_TOOLS" parse "$here/spawn.wat" -o "$here/spawn.wasm"
+echo "build.sh: spawn.wasm is $(wc -c <"$here/spawn.wasm" | tr -d ' ') bytes" >&2
+
+sp=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+	--invoke 'run(0)' "$here/spawn.wasm" 2>&1) || {
+	echo "build.sh: the spawn run FAILED:" >&2
+	echo "$sp" >&2
+	exit 1
+}
+# Asserted whole: marker in bit 0, entry index 1 in bits 4-7, body index 2 in bits 8-11. A changed
+# figure is the upstream's Thread numbering or scheduling having moved, not a formatting change.
+[ "$sp" = "529" ] || {
+	echo "build.sh: spawn expected 529 (0x211), got '$sp'." >&2
+	echo "          Decode: marker = v & 1 (want 1); entry = (v >> 4) & 0xf (want 1);" >&2
+	echo "          body = (v >> 8) & 0xf (want 2). A body index of 1 is the entry's slot having" >&2
+	echo "          been freed at the yield, which is two Threads sharing one index." >&2
+	exit 1
+}
+echo "build.sh: spawn result $sp" >&2
+
 echo "build.sh: switch.reading is hand-assembled from the three channels above — update it by hand" >&2
 echo "          when a figure here moves, and say which channel moved." >&2

@@ -1,0 +1,28 @@
+MODE      cm-threads-spawn-parked
+FORMS     0x27 thread.new-indirect (and task.return), with the created Thread NEVER readied
+RESULT    2
+EXIT      0
+RUNS      3, identical
+
+WHAT IT PINS
+  The created Thread's index is 2, with the implicit Thread at 1 — the reference's Table policy.
+  The call RETURNS with that Thread still registered and never started: its body is `unreachable`
+  and did not trap, so it did not run. That is legal in the reference — unregister_thread constrains
+  only the LAST Thread's exit to follow resolution, and Threads outlive resolution (ADR 0100).
+
+WHY IT EXISTS
+  It is the subject of ADR 0100's parked-Thread wake. In this engine a created Thread is a goroutine
+  parked in a Go select. Neither reclamation path reaches it: interp.ErrClosed needs the goroutine to
+  RE-ENTER through invokeIndex, and interp.ErrTerminated needs it at a SAFEPOINT running guest code. A
+  parked Thread is at neither, so Close must wake it explicitly. The wasmtime reading pins only the
+  index and the fact that the body never runs; the wake itself is engine-internal and witnessed by
+  TestCloseEndsAParkedThreadsGoroutine.
+
+PROVENANCE
+  taken      2026-10-11T20:55:05Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  flags      -W component-model-threading=y -W component-model-async=y
+  invoke     --invoke 'run(0)'
+  wasm-tools wasm-tools 1.258.0
+  source     spawn-parked.wat -> spawn-parked.wasm, hand-authored WAT, no Rust toolchain

@@ -109,6 +109,9 @@ type coreDef struct {
 	// 🧵 opcode reach the async dispatch.
 	threadBuiltin   bool
 	threadBuiltinOp byte
+	// threadTable is `thread.new-indirect`'s table of entry points, resolved from the canon's `tbl`
+	// operand against the core table space at definition time.
+	threadTable interp.Extern
 	// asyncBuiltinResult is the value type a `task.return` declares (Canon.Result), resolved against the
 	// component's type-index space. nil for the empty form, and for every other built-in.
 	//
@@ -273,11 +276,19 @@ func (w *walker) step(d Def) error {
 			if cn.Kind == CanonThreadBuiltin {
 				// A MODELED 🧵 built-in binds to a Go impl (ADR 0100 phase 1). `gate:cm-threads` has
 				// already had its say in `walkComponent`, so reaching here means both gates admit it.
-				// No memory and no slot: `thread.index` carries no immediates and reads no linear memory.
-				w.appendCore(SpaceCoreFunc, coreDef{
-					threadBuiltin:   true,
-					threadBuiltinOp: cn.ThreadOp,
-				})
+				// `thread.new-indirect` also names a core table, the table of entry points; it is
+				// resolved HERE, at definition time, because the walk defines index spaces in order and
+				// the table must already exist for this canon to name it.
+				d := coreDef{threadBuiltin: true, threadBuiltinOp: cn.ThreadOp}
+				if cn.ThreadOp == 0x27 {
+					tabs := w.coreSpace[SpaceCoreTable]
+					if int(cn.TableIdx) >= len(tabs) {
+						return fmt.Errorf("component: thread.new-indirect names core table %d of %d",
+							cn.TableIdx, len(tabs))
+					}
+					d.threadTable = tabs[cn.TableIdx].extern
+				}
+				w.appendCore(SpaceCoreFunc, d)
 				return nil
 			}
 			if cn.Kind == CanonAsyncBuiltin {
@@ -423,7 +434,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// `asyncBuiltinFunc`: `0x26` is `stream.read`'s neighbour in no table, but a single shared opcode
 		// field would have made that collision expressible, which is why `Canon.ThreadOp` is its own.
 		if d.threadBuiltin {
-			if fn, ok := w.threadBuiltinFunc(d.threadBuiltinOp); ok {
+			if fn, ok := w.threadBuiltinFunc(d.threadBuiltinOp, d.threadTable); ok {
 				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{}), true
 			}
 			return interp.Extern{}, false
@@ -596,6 +607,17 @@ func refuse(mod, name, lowerName string) interp.HostFunc {
 
 // close tears down every instantiated core instance.
 func (w *walker) close() {
+	// **Parked Threads first, and waited for.** A Thread created by `thread.new-indirect` and never run is
+	// a goroutine blocked in a Go `select`, which neither reclamation path reaches: `interp.ErrClosed`
+	// needs it to re-enter through `invokeIndex` and `interp.ErrTerminated` needs it at a safepoint, and
+	// it is at neither. Killed before the core instances close, so no parked Thread can be started into
+	// an instance that is already torn down; waited for, so `Close` returning means the goroutines are
+	// gone rather than going. `threads` is nil for a walker built without a component table.
+	if w.threads != nil {
+		for _, t := range w.threads.killParked(nil) {
+			<-t.done
+		}
+	}
 	for _, in := range w.toClose {
 		_ = in.Close()
 	}

@@ -81,13 +81,49 @@ type threadTable struct {
 	mu    sync.Mutex
 	array []*cmThread // array[0] is the reserved nil slot
 	free  []uint32    // LIFO: remove appends, add pops the end
+	// ready is the instance's ready queue, FIFO, and it is the reference's `store.waiting` filtered to
+	// `ready()` Threads. FIFO is a CONFORMING choice rather than the reference's choice: `Store.tick` picks
+	// with `random.choice`, so any order is permitted and a deterministic one is easier to reason about.
+	ready []*cmThread
 }
 
-// cmThread is one component-model Thread's record. Phase 1 slice 1 models `thread.index` only, so the
-// record carries its index and nothing else; the goroutine, the stack and the TLS slot a switching form
-// needs arrive with the slice that creates a second Thread.
+// threadState is where a component-model Thread is in its life, mirroring the reference's predicates.
+type threadState uint8
+
+const (
+	// threadImplicit is a lift's implicit Thread. It has no goroutine of its own — it runs on the lift's
+	// goroutine — so it is never parked, readied or killed by this table.
+	threadImplicit threadState = iota
+	// threadSuspended is the reference's `suspended()`: `not running() and ready_func is None`. A Thread
+	// created by `thread.new-indirect` starts here (`assert(new_thread.suspended())`), with its goroutine
+	// parked on `start`/`kill`.
+	threadSuspended
+	// threadReady is `resume_later()`'s effect — `start_waiting(ready_func = lambda: True)` — so the
+	// Thread is in the ready queue and the next scheduling point may run it.
+	threadReady
+	// threadRunning: the scheduler has handed it the entry slot.
+	threadRunning
+	// threadKilled: its goroutine was ended without running, by a trap or a `Close`.
+	threadKilled
+)
+
+// cmThread is one component-model Thread's record.
+//
+// An implicit Thread uses only `index`. A Thread created by `thread.new-indirect` uses the rest: it has a
+// goroutine — ADR 0100's *"a new pairing of the shared core `thread` with its own goroutine and stack"* —
+// created parked, which is why `Close` must be able to reach it (see `killParked`).
 type cmThread struct {
 	index uint32
+	state threadState // guarded by threadTable.mu
+
+	entry interp.TableFunc // resolved at creation, as `canon_thread_new_indirect` reads `ftbl.get(fi)`
+	arg   int32            // the `c` operand, passed to the entry
+	task  *liftTask        // the task the Thread belongs to — `Thread(task, thread_func)`
+
+	start chan struct{} // closed by the scheduler to run it
+	kill  chan struct{} // closed to end it while still parked
+	done  chan struct{} // closed when its goroutine has exited, AFTER err is written
+	err   error         // the entry's error, if any; read only after done closes
 }
 
 func newThreadTable() *threadTable {
@@ -122,6 +158,97 @@ func (tt *threadTable) remove(i uint32) {
 	}
 	tt.array[i] = nil
 	tt.free = append(tt.free, i)
+}
+
+// get returns the Thread at index i, or nil — the reference's `inst.threads.get(i)`, whose `trap_if` the
+// caller renders.
+func (tt *threadTable) get(i uint32) *cmThread {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	if i == 0 || int(i) >= len(tt.array) {
+		return nil
+	}
+	return tt.array[i]
+}
+
+// markReady is `canon_thread_resume_later`'s state change: `trap_if(not other_thread.suspended())`, then
+// `resume_later()`, which puts the Thread in the ready queue.
+//
+// The implicit Thread is never suspended in this sense — it is running, or it is the lift's own
+// goroutine waiting on the scheduler — so naming it traps, as the reference's assertion would.
+func (tt *threadTable) markReady(i uint32) error {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	if i == 0 || int(i) >= len(tt.array) || tt.array[i] == nil {
+		return &interp.Trap{Reason: fmt.Sprintf("thread.resume-later: no Thread at index %d", i)}
+	}
+	t := tt.array[i]
+	if t.state != threadSuspended {
+		return &interp.Trap{Reason: fmt.Sprintf("thread.resume-later: Thread %d is not suspended", i)}
+	}
+	t.state = threadReady
+	tt.ready = append(tt.ready, t)
+	return nil
+}
+
+// popReady takes the first ready Thread and marks it running, under the lock, so `killParked` cannot race
+// it into the killed state between the pop and the start.
+func (tt *threadTable) popReady() *cmThread {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	if len(tt.ready) == 0 {
+		return nil
+	}
+	t := tt.ready[0]
+	tt.ready = tt.ready[1:]
+	t.state = threadRunning
+	return t
+}
+
+// killParked ends every Thread whose goroutine is still parked — suspended or ready, never started — and
+// returns them so the caller can wait for each goroutine to exit.
+//
+// **This is the wake a parked Thread needs, and neither existing reclamation path supplies it.** The two
+// that end an in-flight call both need the goroutine to be somewhere it is not:
+// `internal/interp/host.go:ErrClosed` reaches a goroutine when it RE-ENTERS through `invokeIndex`, and
+// `internal/interp/thread.go:ErrTerminated` reaches one at a SAFEPOINT while it runs guest code. A
+// Thread parked on `start` is at neither — it is in a Go `select` with no guest frame — so without this,
+// `Close` would leave its goroutine blocked for the life of the process.
+//
+// Scoped by `task` when non-nil (a trap ends its own task's Threads), every Thread when nil (`Close`).
+//
+// **The `close` is after the unlock, and a control put it there.** The first draft closed `kill` inside
+// the critical section; `TestNoEngineLockIsHeldAcrossAChannelOperation` refused it under contract §4
+// B-MM-3 — *"`close` on a release channel IS the resume"* — so the guarded state is cleared under the lock
+// (`threadKilled`, and out of the ready queue) and the channels are closed after it. The state change
+// under the lock is what makes the order safe: a killed Thread cannot be popped as ready in between.
+func (tt *threadTable) killParked(task *liftTask) []*cmThread {
+	tt.mu.Lock()
+	var killed []*cmThread
+	for _, t := range tt.array {
+		if t == nil || (t.state != threadSuspended && t.state != threadReady) {
+			continue
+		}
+		if task != nil && t.task != task {
+			continue
+		}
+		t.state = threadKilled
+		killed = append(killed, t)
+	}
+	if len(killed) > 0 {
+		kept := tt.ready[:0]
+		for _, t := range tt.ready {
+			if t.state != threadKilled {
+				kept = append(kept, t)
+			}
+		}
+		tt.ready = kept
+	}
+	tt.mu.Unlock()
+	for _, t := range killed {
+		close(t.kill)
+	}
+	return killed
 }
 
 // live reports how many Threads are registered, for teardown accounting and for a test to assert that a
@@ -190,14 +317,155 @@ func cmThreadSurface(c *Component) (string, bool) {
 // threadBuiltinFunc binds a modeled 🧵 built-in to its Go impl. One arm, because one form has an oracle
 // (ADR 0100's point 4). A `false` return is a modeled opcode with no impl, which the partition control
 // makes unreachable rather than merely unlikely.
-func (w *walker) threadBuiltinFunc(op byte) (interp.CanonFunc, bool) {
-	// An `if` rather than a one-case `switch`, which the linter is right about: a switch promises a
-	// dispatch and there is one arm. It becomes a switch again when a second form is modeled, which is
-	// ADR 0100's point 4 — one per slice, each with its own oracle.
-	if op == 0x26 { // thread.index
-		return threadIndex(w.async, w.threads), true
+func (w *walker) threadBuiltinFunc(op byte, tbl interp.Extern) (interp.CanonFunc, bool) {
+	switch op {
+	case 0x26: // thread.index
+		return threadIndex(), true
+	case 0x27: // thread.new-indirect
+		return threadNewIndirect(w.async, w.threads, tbl), true
+	case 0x28: // thread.resume-later
+		return threadResumeLater(w.threads), true
 	}
 	return nil, false
+}
+
+// threadNewIndirect implements `canon thread.new-indirect` (0x27, `canon_thread_new_indirect`): resolve
+// the entry from the table NOW, create a suspended Thread registered on the task, and return its index.
+//
+// The reference, for the order of operations:
+//
+//	f = ftbl.get(fi)
+//	trap_if(f.t != ft)
+//	new_thread = Thread(task, thread_func)
+//	assert(new_thread.suspended())
+//	task.register_thread(new_thread)
+//	return [new_thread.index]
+//
+// **The goroutine is started here and parks at once**, on `start` or `kill`. That is what "suspended"
+// means for an engine whose Threads are goroutines: it exists, holds an index, and runs nothing.
+//
+// **Only from inside an async lift task, in this slice.** The reference reaches `current_task()` from a
+// sync lift as well, where `canon_lift`'s sync tail runs ready Threads until the task resolves. This slice
+// builds the scheduling point at the callback loop's YIELD arm and not that sync loop, so a
+// `new-indirect` with no lift task in flight is refused by name rather than creating a Thread nothing
+// could ever run.
+func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("component: thread.new-indirect: got %d args, want (fi, c)", len(args))
+		}
+		h.mu.Lock()
+		task := h.lift
+		h.mu.Unlock()
+		if task == nil {
+			return nil, fmt.Errorf("%w: thread.new-indirect outside an async lift task — the sync lift's "+
+				"scheduling loop is not built in this slice, so the Thread could never run",
+				ErrAsyncNotImplemented)
+		}
+		entry, err := interp.ResolveTableFunc(tbl, uint32(args[0].Bits))
+		if err != nil {
+			return nil, err
+		}
+		t := &cmThread{
+			state: threadSuspended,
+			entry: entry,
+			arg:   int32(uint32(args[1].Bits)),
+			task:  task,
+			start: make(chan struct{}),
+			kill:  make(chan struct{}),
+			done:  make(chan struct{}),
+		}
+		idx := tt.add(t)
+		go t.run(h, tt)
+		return []interp.Value{interp.I32(int32(idx))}, nil
+	}
+}
+
+// run is a created Thread's goroutine: park until started or killed; when started, take the entry slot
+// for the Thread's task and call the entry as this Thread; then unregister and signal.
+//
+// **The error crosses goroutines as a value, written before `done` closes.** That is `thread.err` →
+// `retire` → `done`'s two-step at Thread scope, and it is the whole of trap transport here: an entry that
+// traps returns its trap as an error from `InvokeCMThread` — `invokeIndex` already converts the terminal
+// unwind — so there is no panic to carry. A Go panic that is NOT a trap is an engine bug and is left to
+// crash, for ADR 0070's reason: converting an embedder's panic into a value is a promise this engine has
+// declined to make.
+//
+// Unregistering on the way out is the reference's `thread_func` ending in
+// `task.unregister_thread(new_thread)`, which frees the index for reuse.
+func (t *cmThread) run(h *asyncHandles, tt *threadTable) {
+	defer close(t.done)
+	select {
+	case <-t.start:
+	case <-t.kill:
+		tt.remove(t.index)
+		return
+	}
+	prev, ok := h.enterTask(t.task)
+	if !ok {
+		t.err = fmt.Errorf("%w: Thread %d could not take the instance's execution slot", ErrCancelled, t.index)
+		tt.remove(t.index)
+		return
+	}
+	_, t.err = t.entry.InvokeCMThread(t.index, interp.I32(t.arg))
+	h.leaveTask(prev)
+	tt.remove(t.index)
+}
+
+// threadResumeLater implements `canon thread.resume-later` (0x28): `trap_if(not other_thread.suspended())`,
+// then `resume_later()` — the named Thread joins the ready queue and runs at the next scheduling point.
+func threadResumeLater(tt *threadTable) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("component: thread.resume-later: got %d args, want (i)", len(args))
+		}
+		if err := tt.markReady(uint32(args[0].Bits)); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+}
+
+// runReady is the SCHEDULING POINT: run every ready Thread to completion, in queue order, before the
+// caller re-enters its own guest code.
+//
+// # Where it is called, and the reference's equivalent
+//
+// From the callback loop's YIELD arm, between leaving the callee's entry and re-entering the callback —
+// the one moment the instance's entry slot (`asyncHandles.entrySem`, this engine's `exclusive_thread`) is
+// free and the yielding Thread is itself ready. The reference's YIELD arm is
+//
+//	inst.exclusive_thread = None
+//	thread.wait_until(lambda: inst.exclusive_thread is None)
+//
+// and `Thread.wait_until` either returns at once (half the time, `random.randint(0,1)`) or starts waiting
+// and blocks so `Store.tick` can `random.choice` among ready candidates. **This takes the blocking branch
+// every time and runs the ready queue FIFO**: both are choices the reference permits, and the corrected
+// `cmthreads/spawn.wat` tolerates either branch by re-YIELDing until its body has run.
+//
+// **The YIELD arm used to re-enter at once with EVENT_NONE and run nothing.** Against `spawn.wat` that
+// would loop forever — the callback re-YIELDs until a body runs that this arm never let run — which is
+// the defect visible rather than plausible.
+//
+// # A Thread that traps ends its task's other parked Threads
+//
+// A trap ends the computation for every Thread of the task (ADR 0100, trap transport), so the remaining
+// parked ones are killed and waited for before the error returns. `Close` kills the rest of the instance's.
+func (tt *threadTable) runReady() error {
+	for {
+		t := tt.popReady()
+		if t == nil {
+			return nil
+		}
+		close(t.start)
+		<-t.done
+		if t.err != nil {
+			for _, k := range tt.killParked(t.task) {
+				<-k.done
+			}
+			return t.err
+		}
+	}
 }
 
 // threadIndex implements `canon thread.index` (0x26, the reference's `canon_thread_index`): return the
@@ -228,14 +496,21 @@ func (w *walker) threadBuiltinFunc(op byte) (interp.CanonFunc, bool) {
 // **A zero answer is a refusal rather than an index**, because the reference reserves index 0: reaching
 // here with no Thread registered means a `thread.index` from somewhere no lift entered, and answering 0
 // would hand the guest a number the model cannot produce.
-func threadIndex(h *asyncHandles, _ *threadTable) interp.CanonFunc {
+//
+// # It reads ONLY the stack carrier, which is what makes a spawned Thread's answer right
+//
+// The first slice read `h.lift.threadIdx` first and the carrier second. Once `thread.new-indirect`
+// exists that is wrong, not merely redundant: a spawned Thread runs with `h.lift` set to the SAME task —
+// it belongs to it (`Thread(task, thread_func)`) — so the lift read would answer the implicit Thread's
+// index, **1**, for a body the committed `spawn.reading` measures at **2**. Every entry now carries its
+// own Thread's index — the callback loop passes `task.threadIdx`, a spawned Thread passes its own — so
+// the carrier is the only source.
+//
+// That also discharges the unlocked-`threadIdx` argument rather than re-arguing it: `task.threadIdx` is
+// written once in `newLiftTask`, before the task is published to any other goroutine, and is now read
+// only by the loop's own goroutine to pass into `InvokeCMThread`. No other goroutine reads it.
+func threadIndex() interp.CanonFunc {
 	return func(c *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
-		h.mu.Lock()
-		lift := h.lift
-		h.mu.Unlock()
-		if lift != nil && lift.threadIdx != 0 {
-			return []interp.Value{interp.I32(int32(lift.threadIdx))}, nil
-		}
 		if i, ok := c.CMThreadIndex(); ok {
 			return []interp.Value{interp.I32(int32(i))}, nil
 		}

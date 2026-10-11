@@ -200,6 +200,10 @@ type Canon struct {
 	// error-context, reintroduced deliberately. Separate fields make that unreachable rather than
 	// merely avoided.
 	ThreadOp byte
+	// TableIdx is `thread.new-indirect`'s `tbl` operand: an index into the component's CORE TABLE space,
+	// which is where the table of thread entry points lives. Its own field because no other canon kind
+	// names a core table, and reusing `FuncIdx` would make a table index readable as a function's.
+	TableIdx uint32
 	// AsyncForm is the `async?` OPERAND some async built-ins carry — currently `subtask.cancel` (0x06).
 	// It is **not** `Opts.Async`, and the separation is load-bearing twice over: `Opts.Async` is the
 	// canonopt vec's `async` marker on a lift/lower, and `asyncSurface` keys the gate's refusal message
@@ -468,9 +472,29 @@ func (r *reader) canon() (Canon, error) {
 		// below and `TestThreadIndexIsLoweredAndReturnsTheEntryThreadsIndex` fails on the refusal
 		// rather than on a value.
 		return Canon{Kind: CanonThreadBuiltin, ThreadOp: kind}, nil
-	case 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x40, 0x41, 0x42:
+	case 0x27:
+		// `thread.new-indirect` (ADR 0100's second build slice). `Binary.md`:
+		// `0x27 ft:<core:typeidx> tbl:<core:tableidx>`, so two u32 operands — the section must advance
+		// past both or every canon after this one is misread.
+		//
+		// `ft` is READ AND KEPT but cannot be resolved: this loader does not decode `core:type` sections
+		// at all. The callee's real type is checked instead, at call time — see `threadNewIndirect` for
+		// the one divergence that leaves and why it is recorded rather than closed here.
+		ft, err := r.u32()
+		if err != nil {
+			return Canon{}, fmt.Errorf("thread.new-indirect: ft: %w", err)
+		}
+		tbl, err := r.u32()
+		if err != nil {
+			return Canon{}, fmt.Errorf("thread.new-indirect: tbl: %w", err)
+		}
+		return Canon{Kind: CanonThreadBuiltin, ThreadOp: kind, TypeIdx: ft, TableIdx: tbl}, nil
+	case 0x28:
+		// `thread.resume-later` — bare `0x28`, no immediates.
+		return Canon{Kind: CanonThreadBuiltin, ThreadOp: kind}, nil
+	case 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x40, 0x41, 0x42:
 		// NEUTER THIS ARM to reproduce #957: delete it and the family falls through to `default`
-		// again, returning `canon built-in 0x27 is not modeled (this slice: …)` with no sentinel and
+		// again, returning `canon built-in 0x29 is not modeled (this slice: …)` with no sentinel and
 		// exit 1. Named here because this is the line a reader would reach for.
 		//
 		// The 🧵 shared-everything-threads family: refused BY NAME, as unsupported, right here (#957).
