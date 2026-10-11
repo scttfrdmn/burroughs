@@ -165,6 +165,12 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 		if errors.Is(err, component.ErrAsyncGated) {
 			return 0, fmt.Errorf("%w: %w", ErrGated, err)
 		}
+		// `gate:cm-threads` off, or on without `gate:async` (ADR 0100). Both are gate declines over a
+		// well-formed component, so both are exit 6 — the dependency case included, because what the
+		// operator chose is a *gate combination* this build will not run, not a defect in the artefact.
+		if errors.Is(err, component.ErrCMThreadsGated) || errors.Is(err, component.ErrCMThreadsNeedsAsync) {
+			return 0, fmt.Errorf("%w: %w", ErrGated, err)
+		}
 		// `gate:async` on but the async tier's execution not yet built (#739 slice 1): the engine reached
 		// something it does not implement in this phase — exit 5 (exitUnsupported), not a gate decline (the
 		// gate is on) and not the invocation's own failure. It refuses by name, never a silent no-op.
@@ -254,6 +260,11 @@ func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
 		if errors.Is(err, component.ErrAsyncGated) {
 			return nil, fmt.Errorf("%w: %w", ErrGated, err)
 		}
+		// `gate:cm-threads`, both arms — see ComponentConfig.Run for why the dependency case is also a
+		// gate decline rather than an unsupported form.
+		if errors.Is(err, component.ErrCMThreadsGated) || errors.Is(err, component.ErrCMThreadsNeedsAsync) {
+			return nil, fmt.Errorf("%w: %w", ErrGated, err)
+		}
 		if errors.Is(err, component.ErrUnsupportedForm) {
 			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
 		}
@@ -340,6 +351,10 @@ func LoadComponent(wasm []byte) (*Component, error) {
 		// crosses as ErrGated rather than as a malformedness this boundary would be manufacturing
 		// (grave #301).
 		if errors.Is(err, component.ErrAsyncGated) {
+			return nil, fmt.Errorf("%w: %w", ErrGated, err)
+		}
+		// `gate:cm-threads`, both arms — see ComponentConfig.Run.
+		if errors.Is(err, component.ErrCMThreadsGated) || errors.Is(err, component.ErrCMThreadsNeedsAsync) {
 			return nil, fmt.Errorf("%w: %w", ErrGated, err)
 		}
 		if errors.Is(err, component.ErrUnsupportedForm) {

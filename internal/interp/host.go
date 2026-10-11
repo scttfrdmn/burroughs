@@ -748,6 +748,27 @@ func (c *CanonCaller) ContextSet(i, v uint32) error {
 	return nil
 }
 
+// CMThreadIndex reads the calling agent's component-model Thread index, and reports whether one has been
+// allocated. **Zero is the unallocated answer rather than a valid index**, because the reference reserves
+// index 0 — `Table.array` begins as `[None]` — so no Thread can hold it and the sentinel costs no flag.
+//
+// Per-stack for `ContextGet`'s reason: the model numbers Threads, and the per-caller unit here is the
+// stack rather than the `thread` object, which concurrent callers share.
+func (c *CanonCaller) CMThreadIndex() (uint32, bool) {
+	if c.st == nil {
+		return 0, false
+	}
+	return c.st.cmThreadIdx, c.st.cmThreadIdx != 0
+}
+
+// There is deliberately no setter. `SetCMThreadIndex` existed for one slice, while the component package
+// allocated the index lazily from inside the `thread.index` built-in — and that laziness was the cause of
+// a leak: the index landed on the stack, the stack died with the call, and nothing ever freed the table
+// entry, so successive calls on one instance read 1, 2, 3 instead of 1, 1, 1. Allocation moved to call
+// entry, where the free has an obvious home, and the setter lost its only caller. **Removed rather than
+// kept for a later slice**, because a setter here is a second way to establish a value the carrier
+// already establishes, and the reference writes `thread.index` exactly once per Thread.
+
 func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32, error) {
 	if c.realloc == nil {
 		return 0, fmt.Errorf("%w: this canon lower declared no realloc option", ErrUnsupportedOp)

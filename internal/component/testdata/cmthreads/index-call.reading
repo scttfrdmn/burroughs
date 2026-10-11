@@ -1,0 +1,43 @@
+MODE      cm-threads-index-call
+FORM      0x26 thread.index  (the one 🧵 production modeled in ADR 0100's first build slice)
+RESULT    1
+EXIT      0
+RUNS      2, identical
+
+WHAT IT PINS
+  The entry Thread's index is 1. That is the reference's `Table` policy showing through: `array`
+  starts as `[None]`, so index 0 is reserved and the first allocation is 1. `switch.reading` records
+  the same 1 for its ASYNC lift, so the number is not an artefact of either lift shape.
+
+WHAT IT DOES NOT PIN
+  The slot-reuse ORDER. One Thread exists here, so nothing is ever freed and no policy is
+  discriminated — see switch.reading's note, which cannot discriminate it either for a different
+  reason (exactly one slot free at each creation). A fixture holding two Threads live and freeing
+  them out of order would.
+
+  Execution order. Not applicable: one Thread.
+
+GATE OFF (wasmtime)
+  `thread.index` requires the component model threading feature (at offset 0xb)
+  exit 1 — a parse refusal naming the production
+
+BURROUGHS, the three-way gate matrix
+  both gates off              exit 6  gate:cm-threads is off in this build: this component uses
+                                      canon thread.index (0x26); set BURROUGHS_CM_THREADS=1 to run it
+  cm-threads on, async off    exit 6  gate:cm-threads requires gate:async, which is off in this
+                                      build: ... Either unset BURROUGHS_ASYNC (its default is on) or
+                                      unset BURROUGHS_CM_THREADS
+  both on                             admitted; `Component.Call("idx")` returns 1
+
+  `burroughs run` on the admitted cell reports `no callable run export`, which is correct and not a
+  gate outcome: this fixture exports a value call (`idx`), not `wasi:cli/run`. The differential
+  witness therefore goes through the value-call path.
+
+PROVENANCE
+  taken      2026-10-11T06:26:35Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  flags      -W component-model-threading=y
+  invoke     --invoke 'idx()'
+  wasm-tools wasm-tools 1.258.0
+  source     index-call.wat -> index-call.wasm, hand-authored WAT, no Rust toolchain
