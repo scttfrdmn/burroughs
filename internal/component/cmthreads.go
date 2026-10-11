@@ -191,8 +191,10 @@ func cmThreadSurface(c *Component) (string, bool) {
 // (ADR 0100's point 4). A `false` return is a modeled opcode with no impl, which the partition control
 // makes unreachable rather than merely unlikely.
 func (w *walker) threadBuiltinFunc(op byte) (interp.CanonFunc, bool) {
-	switch op {
-	case 0x26: // thread.index
+	// An `if` rather than a one-case `switch`, which the linter is right about: a switch promises a
+	// dispatch and there is one arm. It becomes a switch again when a second form is modeled, which is
+	// ADR 0100's point 4 — one per slice, each with its own oracle.
+	if op == 0x26 { // thread.index
 		return threadIndex(w.async, w.threads), true
 	}
 	return nil, false
@@ -209,33 +211,35 @@ func (w *walker) threadBuiltinFunc(op byte) (interp.CanonFunc, bool) {
 // calls and a per-stack value would change between re-entries; for a sync call the caller **is** a stack,
 // so it lives there. Copying a measured placement rather than inventing one.
 //
-// # Allocation is lazy, and that is indistinguishable from eager ONLY while one Thread exists
+// # This built-in ALLOCATES NOTHING, and that is the repair
 //
-// The index is allocated on first use rather than at call entry. With a single implicit Thread per call
-// and nothing else registering, first-use and entry produce the same number — the committed reading's
-// **1** — so nothing observable turns on it today. **The slice that models `thread.new-indirect` must
-// move allocation to entry**, because registration order is what decides indices once a second Thread
-// exists, and a `thread.index` that has never been called would otherwise leave slot 1 free for a
-// spawned Thread to take. Stated here rather than discovered there.
-func threadIndex(h *asyncHandles, tt *threadTable) interp.CanonFunc {
+// The first draft allocated here, on first use, and argued the laziness was harmless because
+// registration ORDER only matters once a second Thread exists. The argument was about the wrong thing:
+// lazy allocation has no natural free point. The index landed on the per-call stack, the stack died with
+// the call, and nothing freed the table entry — so three calls on one instance read **1, 2, 3** where the
+// reference gives 1, 1, 1 (`unregister_thread` → `inst.threads.remove`, and *"each call to an export
+// logically creates a fresh thread"*). Found because `live()` was written for a leak test, flagged unused
+// by the linter, and tested rather than deleted.
+//
+// Registration is now at the lift's entry (`invokeWith` for a sync lift, `newLiftTask` for an async one)
+// and the free is in a `defer` on the way out, which is where the reference puts both. This function only
+// reads.
+//
+// **A zero answer is a refusal rather than an index**, because the reference reserves index 0: reaching
+// here with no Thread registered means a `thread.index` from somewhere no lift entered, and answering 0
+// would hand the guest a number the model cannot produce.
+func threadIndex(h *asyncHandles, _ *threadTable) interp.CanonFunc {
 	return func(c *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
 		h.mu.Lock()
 		lift := h.lift
 		h.mu.Unlock()
-		if lift != nil {
-			if lift.threadIdx == 0 {
-				lift.threadIdx = tt.add(&cmThread{})
-			}
+		if lift != nil && lift.threadIdx != 0 {
 			return []interp.Value{interp.I32(int32(lift.threadIdx))}, nil
 		}
 		if i, ok := c.CMThreadIndex(); ok {
 			return []interp.Value{interp.I32(int32(i))}, nil
 		}
-		i := tt.add(&cmThread{})
-		if err := c.SetCMThreadIndex(i); err != nil {
-			tt.remove(i)
-			return nil, err
-		}
-		return []interp.Value{interp.I32(int32(i))}, nil
+		return nil, &interp.Trap{Reason: "thread.index: no component-model Thread is registered for " +
+			"this agent, so there is no index to return (the reference reserves 0, so it is not an answer)"}
 	}
 }

@@ -162,10 +162,23 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
   **`thread.index`'s index lives where the async context already does** — on the lift task under an async
   callback lift, on the caller's stack for a sync call — which is a measured placement copied rather than
-  a new one invented. Allocation is **lazy** and that is indistinguishable from eager only while one
-  Thread exists; the slice that models `thread.new-indirect` must move it to call entry, because
-  registration order decides indices once a second Thread exists. Stated at the site rather than
-  discovered there.
+  a new one invented.
+
+  **A leak the first draft had, and the repair.** That draft allocated the index inside the built-in on
+  first use, and argued the laziness was harmless because registration *order* only matters once a second
+  Thread exists. The argument was about the wrong thing: **lazy allocation has no natural free point.**
+  The index landed on the per-call stack, the stack died with the call, and nothing freed the table entry
+  — so three calls on one instance read **1, 2, 3** where the reference gives 1, 1, 1
+  (`unregister_thread` → `inst.threads.remove`, and *"each call to an export logically creates a fresh
+  thread"*). Found because `live()` was written for a leak test, flagged **unused** by the linter, and
+  tested rather than deleted to satisfy the lint.
+
+  Registration moved to the lift's entry and the free to a `defer` on the way out, which is where the
+  reference puts both — `enter_implicit_thread` ends in `register_thread`, and `exit_implicit_thread` is
+  called from `canon_lift`'s sync arm after `post_return`, and from the callback arm **after** the loop
+  ends on EXIT. The built-in now allocates nothing and only reads; `interp` gained one carrier,
+  `InvokeCMThread`, which puts the number on the stack and owns neither the table nor its lifetime.
+  `SetCMThreadIndex` lost its only caller and was **removed** rather than kept for a later slice.
 
   **A new fixture, because the oracle could not be used directly.** `cmthreads/switch.wasm` exercises all
   eight forms, so `thread.resume-later` is still refused at *decode* and no gate ever speaks — the
@@ -184,8 +197,19 @@ from the three obviously-wrong `#534` trailers to all eleven.
   `TestEveryThreadProductionIsModeledOrRefusedNeverBoth`, which keeps a total accounting: every one of
   the eleven is in exactly one set, never both and never neither.
 
-  **Neuter run:** `0x26` back in the refusal arm fails **three** tests 3/3 — the differential on
-  `Instantiate`, the gate matrix on all three cells, and the partition control on its explicit arm.
+  **Two neuters, both run.** `0x26` back in the refusal arm fails **three** tests 3/3 — the differential
+  on `Instantiate`, the gate matrix on all three cells, and the partition control on its explicit arm.
+  Skipping the free in `invokeWith` reproduces the original leak exactly: `thread.index = 2` then `= 3`,
+  with the live count rising 1, 2, 3, failing the reuse and no-leak witnesses 2/2. The second neuter *is*
+  the defect rather than an approximation of it.
+
+  **What is not covered, stated rather than implied.** Two concurrent calls on one instance must hold
+  distinct indices; **no committed fixture can keep one call in flight while a second reads
+  `thread.index`**, so that is unmeasured and owed to the `new-indirect` slice. And `thread.index` under
+  an **async** lift is unmeasured for the same reason — `cmthreads/switch.wasm` uses all eight forms, so
+  it is still refused at decode. What *is* measured on the async path is the free, using an existing
+  async fixture carrying no 🧵 surface: the table returns to empty after each of two calls, so the
+  registration and free in `newLiftTask`/`runLiftTask` are exercised even though the value is not.
 
 - **`subtask.cancel` status 3 is measured** ([#884](https://github.com/scttfrdmn/burroughs/issues/884)),
   where `CANCELLATION.md` had recorded it as *"unmeasured, not assumed"*. Reaching it needed a child

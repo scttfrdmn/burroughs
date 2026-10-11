@@ -679,7 +679,26 @@ func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
 	if !ok {
 		return nil, fmt.Errorf("interp: no exported function %q", name)
 	}
-	return in.invokeIndex(idx, name, args)
+	return in.invokeIndex(idx, name, args, 0)
+}
+
+// InvokeCMThread is [Instance.Invoke] carrying the component-model Thread index this invocation runs as
+// (`canon thread.index`, ADR 0100 phase 1). **A carrier and nothing more**: this package allocates no
+// index, frees none, and reads none — the component package owns the table and its lifetime, and the only
+// thing `interp` does is put the number where `CanonCaller.CMThreadIndex` can read it.
+//
+// **Zero means "no component-model Thread"**, which is unambiguous because the reference reserves index 0
+// (`Table.array` begins as `[None]`), so no Thread can hold it. `Invoke` therefore passes 0 and needs no
+// second entry point for callers that have no Thread.
+func (in *Instance) InvokeCMThread(name string, cmThread uint32, args ...Value) ([]Value, error) {
+	if fault := in.world.takeFaultReport(); fault != nil {
+		return nil, fault
+	}
+	idx, ok := in.exportedFunc(name)
+	if !ok {
+		return nil, fmt.Errorf("interp: no exported function %q", name)
+	}
+	return in.invokeIndex(idx, name, args, cmThread)
 }
 
 // Global reads an exported global's current value. `Invoke`'s sibling for the other action the
@@ -736,7 +755,10 @@ func (in *Instance) Global(name string) (Value, error) {
 // to happen after the name resolves and before anything is checked, which is precisely this seam.
 // `name` travels along for the error messages only: a host that asked for `"call"` should be told
 // about `"call"`, not about whatever index it turned out to be two instances away.
-func (in *Instance) invokeIndex(idx uint32, name string, args []Value) (results []Value, err error) {
+// cmThread is the component-model Thread index this invocation runs as, carried from the component
+// package and stored on the stack for `CanonCaller.CMThreadIndex` to read. Zero means none, which the
+// reference's reserved index 0 makes unambiguous.
+func (in *Instance) invokeIndex(idx uint32, name string, args []Value, cmThread uint32) (results []Value, err error) {
 	// **A closed instance runs no guest code, and after [ADR 0071] the refusal has to be here rather than
 	// at the host-call boundary.** `beginHostCall` was the only site that knew, so a closed instance ran the
 	// guest until it happened to reach a host import and refused there — correct for the module that has
@@ -848,7 +870,9 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) (results 
 			return nil, fmt.Errorf("%w: %q re-exports a host function, which this boundary does not "+
 				"call back out to (decision 0069; call it directly)", ErrUnsupportedOp, name)
 		}
-		return ext.owner.invokeIndex(ext.fnIdx, name, args)
+		// The Thread index travels with the delegation: a re-exported import runs as the same
+		// component-model Thread as the call that reached it.
+		return ext.owner.invokeIndex(ext.fnIdx, name, args, cmThread)
 	}
 	ft, err := in.funcType(fn)
 	if err != nil {
@@ -978,6 +1002,11 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) (results 
 		// spawned thread runs on its own — which is why `TestEveryStackCreationSiteCarriesAThread`
 		// partitions the sites on that distinction and derives its domain rather than listing them.
 		t: &in.host,
+
+		// The component-model Thread index this invocation runs as, carried in rather than allocated
+		// here: `interp` owns no Thread table. Zero for every caller that has no Thread, which the
+		// reference's reserved index 0 makes an unambiguous "none".
+		cmThreadIdx: cmThread,
 	}
 	numResults, refResults := countByArray(ft.Results)
 	// §3 SP-2's denominator, decision 0067 and the repair for #592: `Stop` asks whether *every* caller

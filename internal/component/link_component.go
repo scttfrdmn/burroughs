@@ -37,6 +37,11 @@ type compFunc struct {
 	h     *asyncHandles
 	cb    coreDef // the `(callback $f)` canonopt's core func — the re-entry target
 
+	// threads is the instance's component-model Thread table (ADR 0100 phase 1). A lift registers its
+	// implicit Thread here on entry and frees it on exit, which is `enter_implicit_thread` /
+	// `exit_implicit_thread` in the reference.
+	threads *threadTable
+
 	// The lift's own `(memory $m)` and `(realloc $f)` canonopts, for lowering an argument that does not
 	// fit in flat words — a `string` today (#902).
 	//
@@ -126,7 +131,24 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 	// A sync lift carries **no** eagerly-lifted value: there is no `task.return` on this path, so the
 	// core func's own returns are the whole result and the caller lifts them. That asymmetry is what
 	// `liftResult` exists to make explicit rather than leave to a nil check nobody documents.
-	flat, err := f.core.inst.Invoke(f.core.name, params...)
+	// **The implicit Thread is registered here and freed on every exit path** — the reference's
+	// `enter_implicit_thread` (which ends in `register_thread`, so the allocation is eager) and
+	// `exit_implicit_thread`, called from `canon_lift`'s sync arm after the callee and `post_return`
+	// have run.
+	//
+	// The `defer` is the whole of "every exit path": a sync lift can leave by a trap as readily as by a
+	// return, and a free that ran only on success would leak the slot on exactly the runs an operator
+	// is already investigating.
+	//
+	// **Eager, not lazy, and that is a repair rather than a preference.** The first draft of this slice
+	// allocated inside the `thread.index` built-in on first use, and argued the laziness was harmless
+	// because registration ORDER only matters once a second Thread exists. The argument was about the
+	// wrong thing: lazy allocation has no natural free point — the index lands on the per-call stack,
+	// the stack dies with the call, and nothing frees the table entry. Measured: three calls on one
+	// instance read 1, 2, 3 where the reference gives 1, 1, 1.
+	tid := f.threads.add(&cmThread{})
+	defer f.threads.remove(tid)
+	flat, err := f.core.inst.InvokeCMThread(f.core.name, tid, params...)
 	if err != nil {
 		return liftResult{}, err
 	}
@@ -203,6 +225,13 @@ func (f *compFunc) newLiftTask(ctx context.Context) *liftTask {
 	// window is refused by name as the before-started case (status 3, no reference reading, #884) rather
 	// than silently taking the started path and claiming a status Burroughs has never measured.
 	task := &liftTask{cb: f.cb, state: liftInitial, cancelWake: make(chan struct{}), ctx: ctx}
+	// **The task's implicit Thread is registered with the task**, eagerly, which is where the reference
+	// puts it: `enter_implicit_thread` ends in `register_thread(self.implicit_thread)`, before the callee
+	// runs. `runLiftTask` frees it on exit — the reference frees at `exit_implicit_thread`, which
+	// `canon_lift`'s callback arm calls **after** the loop ends on EXIT, i.e. after resolution. Freeing
+	// at resolution instead would unregister a Thread that is still running, and ADR 0100 records that
+	// resolution and a Thread's exit are separate events.
+	task.threadIdx = f.threads.add(&cmThread{})
 	f.h.mu.Lock()
 	f.h.liftsInFlight++
 	f.h.cancellable[task] = struct{}{}
@@ -239,6 +268,11 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 		f.h.liftsInFlight--
 		delete(f.h.cancellable, task)
 		f.h.mu.Unlock()
+		// The implicit Thread leaves with the task, which is `exit_implicit_thread` at the end of
+		// `canon_lift`'s callback arm — **after** the loop, so after resolution. In the same defer as
+		// the count for the same reason: however this exits, by EXIT, a trap, a park's bound or a
+		// cancellation resolving, the Thread is unregistered and its index returns to the free list.
+		f.threads.remove(task.threadIdx)
 	}()
 
 	// `Task.start()` (def:483-486): INITIAL → STARTED, immediately before the callee is entered. Set
@@ -473,7 +507,10 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 			"slot", ErrCancelled)
 	}
 	defer f.h.leaveTask(prev)
-	return target.inst.Invoke(target.name, args...)
+	// The task's implicit Thread index travels into every entry — the callee's and each callback
+	// re-entry's — so `thread.index` answers the same number across the loop, which is what makes it
+	// the TASK's Thread rather than one per stack.
+	return target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
 }
 
 // eventArgs flattens an event into the callback's three i32 parameters — `__callback(ev0, ev1, ev2) -> u32`
@@ -587,7 +624,8 @@ func (w *walker) funcStep(d Def) error {
 		if int(cn.FuncIdx) >= len(w.coreSpace[SpaceCoreFunc]) {
 			return fmt.Errorf("component: canon lift names core func %d of %d", cn.FuncIdx, len(w.coreSpace[SpaceCoreFunc]))
 		}
-		lf := &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn)}
+		lf := &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn),
+			threads: w.threads}
 		// The lift's memory and realloc (#902). Captured for every lift, used only by an argument that
 		// needs guest memory; a lift carrying neither canonopt leaves them zero and the lowering refuses
 		// by name rather than dereferencing nothing.

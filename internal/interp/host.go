@@ -761,22 +761,13 @@ func (c *CanonCaller) CMThreadIndex() (uint32, bool) {
 	return c.st.cmThreadIdx, c.st.cmThreadIdx != 0
 }
 
-// SetCMThreadIndex records the calling agent's component-model Thread index. Refused with no stack for
-// `ContextSet`'s reason, and refused on a second write: an index that moved under a running guest would
-// make `thread.index` answer two values for one Thread, which is observable guest state and not an
-// internal detail.
-func (c *CanonCaller) SetCMThreadIndex(i uint32) error {
-	if c.st == nil {
-		return fmt.Errorf("%w: no stack to record a component-model Thread index on", ErrUnsupportedOp)
-	}
-	if c.st.cmThreadIdx != 0 {
-		return &Trap{Reason: fmt.Sprintf(
-			"component-model Thread index already %d on this agent; refusing to rewrite it to %d",
-			c.st.cmThreadIdx, i)}
-	}
-	c.st.cmThreadIdx = i
-	return nil
-}
+// There is deliberately no setter. `SetCMThreadIndex` existed for one slice, while the component package
+// allocated the index lazily from inside the `thread.index` built-in — and that laziness was the cause of
+// a leak: the index landed on the stack, the stack died with the call, and nothing ever freed the table
+// entry, so successive calls on one instance read 1, 2, 3 instead of 1, 1, 1. Allocation moved to call
+// entry, where the free has an obvious home, and the setter lost its only caller. **Removed rather than
+// kept for a later slice**, because a setter here is a second way to establish a value the carrier
+// already establishes, and the reference writes `thread.index` exactly once per Thread.
 
 func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32, error) {
 	if c.realloc == nil {

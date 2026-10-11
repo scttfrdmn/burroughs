@@ -85,6 +85,136 @@ func TestTheGateMatrixSaysWhichGateIsMissing(t *testing.T) {
 	})
 }
 
+// TestTheImplicitThreadsIndexIsReusedAcrossCalls is the leak witness, and the reason the slice allocates
+// eagerly.
+//
+// **Derived, not measured.** `wasmtime run` instantiates afresh for each `--invoke`, so no reading can
+// show a second call on one instance. The expectation comes from the reference: `unregister_thread` does
+// `inst.threads.remove(thread.index)` when a Thread's function returns, `Table.remove` pushes the index
+// onto the free list, and `Concurrency.md` § Thread-Local Storage says *"each call to an export logically
+// creates a fresh thread"*. So successive calls reuse index 1.
+//
+// **The defect this caught.** The first draft of this slice allocated inside the built-in on first use,
+// which left the free with no home: three calls read **1, 2, 3**. **Neuter, run: skipping the
+// `defer f.threads.remove(...)` in `invokeWith` reproduces exactly that** — `thread.index = 2` then `= 3`,
+// with `live()` rising 1, 2, 3 — and fails this test and
+// `TestAFailedCallStillFreesItsImplicitThread` 2/2. The neuter is the original defect, which is the
+// strongest form a neuter can take: it does not approximate the bug, it is the bug.
+//
+// `live()` returning to 0 is the second half, and it is what gives `live` a caller: the index being
+// reused is consistent with a table that grows and hands back low indices by luck, where an empty table
+// is not.
+func TestTheImplicitThreadsIndexIsReusedAcrossCalls(t *testing.T) {
+	t.Setenv(cmThreadsGateEnv, "1")
+	t.Setenv(asyncGateEnv, "1")
+
+	wasm, err := os.ReadFile("testdata/cmthreads/index-call.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	in, err := Instantiate(wasm)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	defer in.Close()
+
+	for call := 1; call <= 3; call++ {
+		res, cerr := in.CallValues("idx")
+		if cerr != nil {
+			t.Fatalf("call %d: %v", call, cerr)
+		}
+		got, ok := res[0].U32()
+		if !ok {
+			t.Fatalf("call %d returned a %v, not a u32", call, res[0].Type)
+		}
+		if got != 1 {
+			t.Errorf("call %d: thread.index = %d; want 1 on every call. The reference unregisters a "+
+				"Thread when its function returns and `Table.remove` frees the index, so each export "+
+				"call reuses it. A rising sequence is the implicit Thread never being freed", call, got)
+		}
+		if n := in.w.threads.live(); n != 0 {
+			t.Errorf("call %d: %d Thread(s) still registered after the call returned; the implicit "+
+				"Thread must be unregistered on the way out", call, n)
+		}
+	}
+}
+
+// TestAFailedCallStillFreesItsImplicitThread is the other half of the no-leak witness: a call that does
+// not return normally must not leave its Thread registered.
+//
+// The free is a `defer`, so this is the arm that says so. The call is driven to failure by asking for an
+// export that does not exist — which fails before any Thread is registered — and then by a real entry
+// that traps, so both the "never allocated" and "allocated then trapped" shapes are covered.
+func TestAFailedCallStillFreesItsImplicitThread(t *testing.T) {
+	t.Setenv(cmThreadsGateEnv, "1")
+	t.Setenv(asyncGateEnv, "1")
+
+	wasm, err := os.ReadFile("testdata/cmthreads/index-call.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	in, err := Instantiate(wasm)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	defer in.Close()
+
+	if _, cerr := in.CallValues("nosuchexport"); cerr == nil {
+		t.Fatal("calling a missing export succeeded, so this arm measures nothing")
+	}
+	if n := in.w.threads.live(); n != 0 {
+		t.Errorf("%d Thread(s) registered after a call that never entered the guest; registration "+
+			"happens at the lift's entry, so a refusal before it must allocate nothing", n)
+	}
+
+	// A real call, to show the table returns to empty from the other direction too.
+	if _, cerr := in.CallValues("idx"); cerr != nil {
+		t.Fatalf("idx: %v", cerr)
+	}
+	if n := in.w.threads.live(); n != 0 {
+		t.Errorf("%d Thread(s) registered after a successful call", n)
+	}
+}
+
+// TestAnAsyncLiftFreesItsImplicitThreadToo covers the OTHER lift shape's free point.
+//
+// The async path registers in `newLiftTask` and frees in `runLiftTask`'s defer, which is a different pair
+// of sites from the sync path's — so a leak could live in one and not the other. **No committed fixture
+// exercises `thread.index` under an async lift alone** (`cmthreads/switch.wasm` uses all eight forms, so
+// it is still refused at decode), so this does not check the async path's *value*. What it checks is the
+// free, using an existing async fixture that carries no 🧵 surface at all: the Thread is registered
+// because the task is created, and the table must be empty again when the call returns.
+func TestAnAsyncLiftFreesItsImplicitThreadToo(t *testing.T) {
+	t.Setenv(cmThreadsGateEnv, "1")
+	t.Setenv(asyncGateEnv, "1")
+
+	wasm, err := os.ReadFile("testdata/async-lift-yield-synth.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	in, err := Instantiate(wasm)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	defer in.Close()
+
+	if _, cerr := in.CallValues("run"); cerr != nil {
+		t.Fatalf("run: %v", cerr)
+	}
+	if n := in.w.threads.live(); n != 0 {
+		t.Errorf("%d Thread(s) registered after an async lift returned; the task's implicit Thread is "+
+			"freed in runLiftTask's defer, which the reference calls exit_implicit_thread AFTER the "+
+			"callback loop ends — so a non-zero count here is that free not running", n)
+	}
+	// Twice, because a free that runs once would pass the first arm.
+	if _, cerr := in.CallValues("run"); cerr != nil {
+		t.Fatalf("second run: %v", cerr)
+	}
+	if n := in.w.threads.live(); n != 0 {
+		t.Errorf("%d Thread(s) registered after a second async lift", n)
+	}
+}
+
 // TestThreadIndexIsLoweredAndReturnsTheEntryThreadsIndex is the differential against the committed
 // wasmtime reading.
 //
