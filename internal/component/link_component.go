@@ -624,8 +624,10 @@ func (w *walker) funcStep(d Def) error {
 		if int(cn.FuncIdx) >= len(w.coreSpace[SpaceCoreFunc]) {
 			return fmt.Errorf("component: canon lift names core func %d of %d", cn.FuncIdx, len(w.coreSpace[SpaceCoreFunc]))
 		}
-		lf := &compFunc{core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn),
-			threads: w.threads}
+		lf := &compFunc{
+			core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn),
+			threads: w.threads,
+		}
 		// The lift's memory and realloc (#902). Captured for every lift, used only by an argument that
 		// needs guest memory; a lift carrying neither canonopt leaves them zero and the lowering refuses
 		// by name rather than dereferencing nothing.
