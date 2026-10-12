@@ -124,6 +124,11 @@ type cmThread struct {
 	entry interp.TableFunc // resolved at creation, as `canon_thread_new_indirect` reads `ftbl.get(fi)`
 	arg   int32            // the `c` operand, passed to the entry
 	task  *liftTask        // the task the Thread belongs to — `Thread(task, thread_func)`; nil for a sync lift's
+	// owner is the implicit Thread of the lift the Thread belongs to — itself, for an implicit Thread. It
+	// is the reference's `Thread.task` as an identity, and it exists because `task` cannot be one: a sync
+	// lift has no `liftTask`, so its Threads' `task` is nil, and `killParked(nil)` means every Thread in the
+	// instance (#970).
+	owner *cmThread
 
 	// resume is sent to by the scheduler alone, to run the Thread: nil to continue, an error to end its
 	// handoff with one. Capacity 1. Made at creation for a created Thread and at an implicit Thread's
@@ -231,21 +236,23 @@ func (tt *threadTable) popReady() *cmThread {
 // errThreadKilled and the guest unwinds. Without it, `Close` would leave the goroutine blocked for the
 // life of the process.
 //
-// Scoped by `task` when non-nil (a trap ends its own task's Threads), every Thread when nil (`Close`).
+// Scoped by `owner` when non-nil — a trap ends its own lift's Threads — and every Thread when nil (`Close`).
+// It was scoped by `task`, which a sync lift does not have: its Threads' `task` is nil, and nil already
+// meant every Thread in the instance (#970).
 //
 // **The `close` is after the unlock, and a control put it there.** The first draft closed `kill` inside
 // the critical section; `TestNoEngineLockIsHeldAcrossAChannelOperation` refused it under contract §4
 // B-MM-3 — *"`close` on a release channel IS the resume"* — so the guarded state is cleared under the lock
 // (`threadKilled`, and out of the ready queue) and the channels are closed after it. The state change
 // under the lock is what makes the order safe: a killed Thread cannot be popped as ready in between.
-func (tt *threadTable) killParked(task *liftTask) []*cmThread {
+func (tt *threadTable) killParked(owner *cmThread) []*cmThread {
 	tt.mu.Lock()
 	var killed []*cmThread
 	for _, t := range tt.array {
 		if t == nil || (t.state != threadSuspended && t.state != threadReady) {
 			continue
 		}
-		if task != nil && t.task != task {
+		if owner != nil && t.owner != owner {
 			continue
 		}
 		t.state = threadKilled
@@ -362,23 +369,24 @@ func (w *walker) threadBuiltinFunc(op byte, tbl interp.Extern) (interp.CanonFunc
 // **The goroutine is started here and parks at once**, on `resume` or `kill`. That is what "suspended"
 // means for an engine whose Threads are goroutines: it exists, holds an index, and runs nothing.
 //
-// **Only from inside an async lift task, in this slice.** The reference reaches `current_task()` from a
-// sync lift as well, where `canon_lift`'s sync tail runs ready Threads until the task resolves. This slice
-// builds the scheduling point at the callback loop's YIELD arm and not that sync loop, so a
-// `new-indirect` with no lift task in flight is refused by name rather than creating a Thread nothing
-// could ever run — under ErrUnsupportedForm, since it is a form this engine does not support yet, and not
-// ErrAsyncNotImplemented, which says the async tier itself is missing when this call is not async at all.
+// **From any lift, sync or async (#970).** The new Thread belongs to the CALLER's task, found the way
+// `thread.index` finds the caller: through the index the stack carries. A sync lift has no `liftTask`, so
+// its Threads carry a nil `task` and are tied to their lift by `owner`. This was refused from a sync lift
+// until #970 built the sync branch (`cmScheduler.loop`'s sync origin), because nothing could have run the
+// Thread.
+//
+// **Refused by name only where there is no component-model Thread at all**: a core-level `Invoke` that
+// bypasses the component carries no index, and the reference has no `current_thread()` to give the new
+// Thread a task.
 func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("component: thread.new-indirect: got %d args, want (fi, c)", len(args))
 		}
-		h.mu.Lock()
-		task := h.lift
-		h.mu.Unlock()
-		if task == nil {
-			return nil, fmt.Errorf("%w: thread.new-indirect outside an async lift task — the sync lift's "+
-				"scheduling loop is not built in this slice, so the Thread could never run",
+		caller := tt.current(c)
+		if caller == nil {
+			return nil, fmt.Errorf("%w: thread.new-indirect outside any component-model Thread — the call "+
+				"did not enter through a lift, so there is no task for the new Thread to belong to",
 				ErrUnsupportedForm)
 		}
 		entry, err := interp.ResolveTableFunc(tbl, uint32(args[0].Bits))
@@ -389,7 +397,8 @@ func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) inte
 			state:  threadSuspended,
 			entry:  entry,
 			arg:    int32(uint32(args[1].Bits)),
-			task:   task,
+			task:   caller.task,
+			owner:  caller.owner,
 			resume: make(chan error, 1),
 			kill:   make(chan struct{}),
 			done:   make(chan struct{}),
@@ -474,9 +483,9 @@ func threadResumeLater(tt *threadTable) interp.CanonFunc {
 // **The calling Thread is the carrier's**, read the way `thread.index` reads it, so a created Thread and
 // an implicit one are found the same way.
 //
-// **Only from inside an async lift task**, for `new-indirect`'s reason (#970): the sync lift's loop that
-// would decide what a suspended sync callee does is not built, so a sync caller is refused by name under
-// ErrUnsupportedForm rather than parked where nothing could resume it.
+// **From any lift, sync included (#970).** A sync callee that suspends with nothing runnable traps, as the
+// reference's sync branch does (`trap_if(not candidates)`); `cmScheduler.loop` delivers that trap. Refused
+// by name only where there is no component-model Thread at all, for `new-indirect`'s reason.
 //
 // **`may_leave` is not checked**: every form's first line is `trap_if(not ...may_leave)`, which no
 // committed reading reaches and this engine does not model for the async built-ins either.
@@ -484,9 +493,9 @@ func threadSwitch(op byte, h *asyncHandles, tt *threadTable) interp.CanonFunc {
 	name := threadBuiltinNames[op]
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		self := tt.current(c)
-		if self == nil || self.task == nil {
-			return nil, fmt.Errorf("%w: %s outside an async lift task — the sync lift's scheduling "+
-				"loop is not built in this slice, so nothing could resume the Thread", ErrUnsupportedForm, name)
+		if self == nil {
+			return nil, fmt.Errorf("%w: %s outside any component-model Thread — the call did not enter "+
+				"through a lift, so there is no Thread to suspend", ErrUnsupportedForm, name)
 		}
 		var target uint32
 		if op != 0x29 {

@@ -146,7 +146,10 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 	// wrong thing: lazy allocation has no natural free point — the index lands on the per-call stack,
 	// the stack dies with the call, and nothing frees the table entry. Measured: three calls on one
 	// instance read 1, 2, 3 where the reference gives 1, 1, 1.
-	tid := f.threads.add(&cmThread{implicit: true}) // no task: a sync lift's, which the switching forms refuse (#970)
+	// No task: a sync lift has none. Its own owner, so the Threads it creates are scoped to it (#970).
+	implicit := &cmThread{implicit: true}
+	implicit.owner = implicit
+	tid := f.threads.add(implicit)
 	defer f.threads.remove(tid)
 	// **The run slot, which this path did not take until #975** (ADR 0101): one task of the instance
 	// executes at a time, as the reference's store runs one thread at a time. Without it two callers of a
@@ -243,7 +246,9 @@ func (f *compFunc) newLiftTask(ctx context.Context) *liftTask {
 	// `canon_lift`'s callback arm calls **after** the loop ends on EXIT, i.e. after resolution. Freeing
 	// at resolution instead would unregister a Thread that is still running, and ADR 0100 records that
 	// resolution and a Thread's exit are separate events.
-	task.threadIdx = f.threads.add(&cmThread{implicit: true, task: task})
+	implicit := &cmThread{implicit: true, task: task}
+	implicit.owner = implicit // its own owner: the Threads it creates are scoped to it (#970)
+	task.threadIdx = f.threads.add(implicit)
 	f.h.mu.Lock()
 	f.h.liftsInFlight++
 	f.h.cancellable[task] = struct{}{}

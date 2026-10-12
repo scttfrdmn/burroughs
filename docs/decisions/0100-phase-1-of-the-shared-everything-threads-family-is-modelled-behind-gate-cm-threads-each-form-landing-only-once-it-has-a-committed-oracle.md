@@ -665,8 +665,8 @@ mechanism reaches both (point 4).
 **3. What the scheduler does when nothing is runnable.** It waits: on the ready queue, or on the wake.
 Never on nothing. The reference's answer for a Thread waiting with nothing runnable depends on the
 callee, and ADR 0100's two branches already say which. A **sync** callee traps
-(`trap_if(not candidates)`), which is #970's subject and not built here. An **async** callee simply does
-not progress.
+(`trap_if(not candidates)`), which was #970's subject and was built by its own amendment below. An
+**async** callee simply does not progress.
 
 **4. The wake reaches both parked shapes.** `killParked` currently ends only Threads that never started.
 Neither shape is reached by `interp.ErrClosed` (needs a re-entry) or by `interp.ErrTerminated` (needs a
@@ -750,8 +750,8 @@ the same way.
 ### What this does not decide
 
 - **The sync lift's loop** (#970). A Thread inside a **sync** callee with nothing runnable traps, per the
-  reference. Whether this slice builds that, or keeps refusing `new-indirect` from a sync lift by name
-  (under `ErrUnsupportedForm` since #973), is #970's.
+  reference. This list left that to #970, and #970 built it: see *Amendment, 2026-10-12: the sync
+  branch* below.
 - **`promote` naming an implicit Thread that is waiting at its own YIELD arm.** In the reference that
   Thread is `waiting()` with a ready function, so `other.ready()` can be true and the promote switches to
   it. In Burroughs a YIELDing implicit Thread is not in the ready queue, so the promote falls to a plain
@@ -759,3 +759,47 @@ the same way.
   task's implicit Thread YIELDs, which no committed fixture constructs.
 - **Cancellation delivered to a suspended Thread.** The reference schedules Threads to deliver it
   (`Concurrency.md` § Cancellation), and no reading measures it. Unchanged from ADR 0100's Consequences.
+
+## Amendment, 2026-10-12: the sync branch (#970)
+
+The chair's order on the #976 review: *"the design follows from the amendment: the scheduler and `giveBack`
+already exist, and the sync branch's 'nothing runnable means trap' comes from `canon_lift`'s
+`trap_if(not candidates)`."* The oracle came first. All three readings were taken with wasmtime 49.0.2
+before the engine change:
+
+| fixture | what it does | wasmtime |
+|---|---|---|
+| `sync-new` (#973) | creates a Thread from a sync lift and never resumes it | 2 |
+| `sync-spawn` | creates and readies a Thread, then suspends; the body readies the caller back | 3, on 10 of 10 |
+| `sync-trap` | creates a Thread it never readies, then suspends | traps, *"cannot block a synchronous task before returning"*, on 10 of 10 |
+
+**The design, as built.**
+
+1. **`new-indirect` and the switching forms accept a sync caller.** The caller is found the way
+   `thread.index` finds it, through the index the stack carries. Each form refuses by name only where
+   there is no component-model Thread at all: a core-level `Invoke` that bypasses the component.
+2. **Threads are scoped by `owner`, not by `task`.** `owner` is the implicit Thread of the lift a Thread
+   belongs to, and an implicit Thread is its own. A sync lift has no `liftTask`, and `killParked(nil)`
+   already meant every Thread in the instance, so a trap in a sync lift's Thread would otherwise have
+   ended every parked Thread of the instance.
+3. **The trap is delivered by the scheduler**, in `cmScheduler.loop`: when a chain started by a **sync**
+   lift's implicit Thread ends with nothing runnable (`drive`'s `idle`) and that Thread is still parked,
+   it is claimed and sent the trap. An async origin in the same position keeps waiting, as point 3 of the
+   handoff amendment records. The claim makes the trap and a late resume mutually exclusive.
+4. **The sync lift's run slot carries the chain**, as ADR 0101 point 1 already provides: the sync lift
+   takes the slot in `compFunc.invokeWith` and holds it through `giveBack`, so the Threads it readies run
+   under its hold.
+
+**One edge, recorded rather than closed.** The trap fires only when the sync origin's own chain ends
+idle. If that chain instead ends by resuming a **different** task's implicit Thread, the sync origin stays
+parked. The reference would re-enter its sync loop whenever control came back, and would trap if nothing
+were ready then. No fixture constructs it, since it needs two tasks' Threads in one chain.
+
+**Witnesses, each neutered and run.** The first neuter fails on the error, the second on the refusal, and
+the third on its bound:
+
+- `TestANewIndirectFromASyncLiftMatchesTheReading`: neutered by restoring the sync refusal in
+  `threadNewIndirect`.
+- `TestASyncLiftRunsASpawnedThreadBeforeItReturns`: neutered by restoring it in `threadSwitch`.
+- `TestASyncLiftThatSuspendsWithNothingReadyTraps`: neutered by deleting the sync arm in
+  `cmScheduler.loop`. `run` then hangs, as an async callee would.

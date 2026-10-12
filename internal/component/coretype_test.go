@@ -96,17 +96,19 @@ func TestTheCoreTypeDecoderCountsWhatItCannotDecode(t *testing.T) {
 	}
 }
 
-// TestANewIndirectOutsideAnAsyncLiftIsAnUnsupportedForm holds the classification of the one refusal
-// `thread.new-indirect` still makes at run time: called from a SYNC lift, where the scheduling loop that
-// would run the Thread is not built.
+// TestANewIndirectFromASyncLiftMatchesTheReading is `sync-new.reading`'s differential (#970).
 //
-// wasmtime 49.0.2 runs `cmthreads/sync-new.wasm` and returns 2, the new Thread's index (recorded in
-// `sync-new.reading`), so this is a form Burroughs does not support yet. It was refused under
-// ErrAsyncNotImplemented, which says the async tier is missing — wrong twice over, since gate:async is
-// beside the point and the call is not async at all. It is ErrUnsupportedForm, and must not be both.
-func TestANewIndirectOutsideAnAsyncLiftIsAnUnsupportedForm(t *testing.T) {
+// `new-indirect` from a SYNC lift is valid, and wasmtime 49.0.2 runs `cmthreads/sync-new.wasm` and returns
+// 2: the new Thread's index, its body never resumed, the sync lift returning. Burroughs refused it by name
+// under ErrUnsupportedForm until #970 built the sync branch. This test asserted that refusal as a
+// classification; the refusal is gone, so the test is now the reading's value.
+//
+// **Neuter, run:** restoring the refusal (`caller == nil` widened back to "no async lift task", i.e.
+// `caller.task == nil`) fails this on the error.
+func TestANewIndirectFromASyncLiftMatchesTheReading(t *testing.T) {
 	t.Setenv(cmThreadsGateEnv, "1")
 	t.Setenv(asyncGateEnv, "1")
+	want := readCmthreadsResult(t, "sync-new.reading")
 	wasm, err := os.ReadFile("testdata/cmthreads/sync-new.wasm")
 	if err != nil {
 		t.Fatalf("the committed fixture is missing: %v", err)
@@ -116,19 +118,8 @@ func TestANewIndirectOutsideAnAsyncLiftIsAnUnsupportedForm(t *testing.T) {
 		t.Fatalf("Instantiate: %v", err)
 	}
 	defer in.Close()
-	_, err = in.CallValues("run", canon.U32(0))
-	if err == nil {
-		t.Fatal("a sync-lift new-indirect ran; the sync scheduling loop is not built, so either it was " +
-			"and this test is stale, or a Thread was created that nothing can ever run")
-	}
-	if !errors.Is(err, ErrUnsupportedForm) {
-		t.Errorf("not classified ErrUnsupportedForm: %v", err)
-	}
-	if errors.Is(err, ErrAsyncNotImplemented) {
-		t.Errorf("still classified ErrAsyncNotImplemented, which names a missing async tier: %v", err)
-	}
-	if !strings.Contains(err.Error(), "thread.new-indirect") {
-		t.Errorf("the refusal does not name the built-in: %v", err)
+	if got := callRunBounded(t, in); got != want {
+		t.Fatalf("run returned %d; sync-new.reading records %d — the new Thread's index", got, want)
 	}
 }
 

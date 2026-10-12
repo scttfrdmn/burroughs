@@ -1,0 +1,19 @@
+MODE      cm-threads-sync-trap
+FORMS     0x26 0x27 0x29  (thread.index, thread.new-indirect, thread.suspend)
+RESULT    trap
+EXIT      134
+RUNS      10, all trap
+
+WASMTIME
+  1: wasm trap: cannot block a synchronous task before returning
+
+SUBJECT   a SYNC lift's callee creates a Thread it never readies, then suspends: nothing is runnable and
+          the task is unresolved, so the reference's sync branch traps (canon_lift: trap_if(not
+          candidates)) (#970)
+
+PROVENANCE
+  taken      2026-10-12T18:42:42Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)  (-W component-model-threading=y -W component-model-async=y, --invoke 'run(0)')
+  wasm-tools wasm-tools 1.258.0
+  source     sync-trap.wat -> sync-trap.wasm, hand-authored WAT

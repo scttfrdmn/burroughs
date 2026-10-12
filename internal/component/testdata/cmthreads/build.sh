@@ -159,5 +159,33 @@ for f in suspend-partway:6 suspend-parked:2; do
 	echo "build.sh: $name result $got" >&2
 done
 
+# The sync branch (#970): a sync lift that suspends runs a ready Thread before returning (sync-spawn, 3),
+# and traps when nothing is ready (sync-trap). The trap's line is matched by its CONTENT, because
+# `tail -1` has twice captured a trailing blank line instead of the message.
+"$WASM_TOOLS" parse "$here/sync-spawn.wat" -o "$here/sync-spawn.wasm"
+ss=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+	--invoke 'run(0)' "$here/sync-spawn.wasm" 2>&1) || {
+	echo "build.sh: the sync-spawn run FAILED:" >&2
+	echo "$ss" >&2
+	exit 1
+}
+[ "$ss" = "3" ] || { echo "build.sh: sync-spawn expected 3, got '$ss'." >&2; exit 1; }
+echo "build.sh: sync-spawn result $ss" >&2
+
+"$WASM_TOOLS" parse "$here/sync-trap.wat" -o "$here/sync-trap.wasm"
+if st=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+	--invoke 'run(0)' "$here/sync-trap.wasm" 2>&1); then
+	echo "build.sh: sync-trap RETURNED where a trap is expected: '$st'" >&2
+	exit 1
+fi
+case "$st" in
+*"cannot block a synchronous task before returning"*) echo "build.sh: sync-trap trapped, as expected" >&2 ;;
+*)
+	echo "build.sh: sync-trap failed, but not with the expected trap:" >&2
+	echo "$st" >&2
+	exit 1
+	;;
+esac
+
 echo "build.sh: switch.reading is hand-assembled from the three channels above — update it by hand" >&2
 echo "          when a figure here moves, and say which channel moved." >&2

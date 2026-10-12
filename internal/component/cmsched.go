@@ -108,11 +108,29 @@ func (s *cmScheduler) loop() {
 			// A handoff with no chain running can only come from an implicit Thread: a created Thread runs
 			// only when this goroutine resumes it, which is inside `drive`. So `hb.from` is the origin, and
 			// it is parked in `giveBack` until a chain resumes it or the chain's error does.
-			if deliver, err := s.drive(hb.from, hb.next); deliver {
+			idle, deliver, err := s.drive(hb.from, hb.next)
+			switch {
+			case deliver:
 				hb.from.resume <- err
+			case idle && hb.from.task == nil && s.tt.claim(hb.from):
+				// **The sync branch (#970).** A SYNC lift's implicit Thread suspended, and the chain ended
+				// with nothing runnable while it is still parked. The reference's sync tail is
+				//
+				//	while task.state != Task.State.RESOLVED:
+				//	  candidates = { t for t in inst.threads if t.ready() }
+				//	  trap_if(not candidates)
+				//
+				// so it traps. An ASYNC origin does not, because its callee simply does not progress until
+				// something resumes it, which ADR 0100 already records. The claim makes the trap and a
+				// late resume mutually exclusive: whichever moves the Thread to running first wins.
+				//
+				// NEUTER THIS to see `sync-trap.wasm` hang instead of trapping, as an async callee would.
+				hb.from.resume <- &interp.Trap{Reason: "cannot block a synchronous task before returning: " +
+					"it suspended with no other Thread ready to run (the reference's sync branch, " +
+					"trap_if(not candidates))"}
 			}
 		case reply := <-s.yield:
-			_, err := s.drive(nil, nil)
+			_, _, err := s.drive(nil, nil)
 			reply <- err
 		case <-s.stop:
 			return
@@ -128,10 +146,14 @@ func (s *cmScheduler) loop() {
 // error goes back to whoever started the chain. `deliver` reports that `origin` — the implicit Thread that
 // started it, nil for the YIELD arm — was claimed for that error and must be sent it.
 //
-// **The origin is claimed BEFORE the kill**, because when it belongs to the trapping task it is one of the
+// **The origin is claimed BEFORE the kill**, because when it belongs to the trapping lift it is one of the
 // parked Threads the kill would end, and the lift would then report "ended while parked" instead of the
-// trap that caused it.
-func (s *cmScheduler) drive(origin, first *cmThread) (deliver bool, err error) {
+// trap that caused it. The kill is scoped by the trapping Thread's `owner`, its lift, which a sync lift
+// has where it has no `task` (#970).
+//
+// `idle` reports that the chain ended because nothing was runnable — not by resuming an implicit Thread,
+// not by a trap, not by `stop` — which is the one ending the sync branch in `loop` traps on.
+func (s *cmScheduler) drive(origin, first *cmThread) (idle, deliver bool, err error) {
 	cur := first
 	for {
 		if cur == nil {
@@ -141,29 +163,29 @@ func (s *cmScheduler) drive(origin, first *cmThread) (deliver bool, err error) {
 			continue
 		}
 		if cur == nil {
-			return false, nil
+			return true, false, nil
 		}
 		s.h.mu.Lock()
 		s.h.lift = cur.task
 		s.h.mu.Unlock()
 		cur.resume <- nil // capacity 1, and only this goroutine sends
 		if cur.implicit {
-			return false, nil
+			return false, false, nil
 		}
 		var hb handoff
 		select {
 		case hb = <-s.back:
 		case <-s.stop:
-			return false, nil
+			return false, false, nil
 		}
 		if hb.exited && hb.err != nil {
 			deliver = origin != nil && s.tt.claim(origin)
-			for _, k := range s.tt.killParked(hb.from.task) {
+			for _, k := range s.tt.killParked(hb.from.owner) {
 				if k.done != nil {
 					<-k.done
 				}
 			}
-			return deliver, hb.err
+			return false, deliver, hb.err
 		}
 		cur = hb.next
 	}
