@@ -109,7 +109,19 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 			// imaginary.
 			// The sync arm hands back flat core values: `bindCrossComponent` refuses an async callee on
 			// this arm by name, so there is never an eagerly-lifted value to carry here.
-			res, cerr := callee.invokeWith(context.Background(), args)
+			//
+			// **The caller's run chain IS propagated**, and that one is not imaginary: the callee's entry
+			// reads it from the context (`runChainFrom`), so a call back into an instance this chain already
+			// holds re-enters its run slot. Without it, parent → child → parent through a lift the parent
+			// passed its child self-deadlocked after #976 (`reenter.wasm`; wasmtime returns 8).
+			ctx := context.Background()
+			if rec := w.threads.current(c); rec != nil {
+				w.async.mu.Lock()
+				ch := rec.chain
+				w.async.mu.Unlock()
+				ctx = withRunChain(ctx, ch)
+			}
+			res, cerr := callee.invokeWith(ctx, args)
 			return res.flat, cerr
 		}, opts), true
 	}

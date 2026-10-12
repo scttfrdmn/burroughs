@@ -717,6 +717,42 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **An async lower's result store wrote guest memory outside the run slot, while another task of the
+  instance executed** ([#983](https://github.com/scttfrdmn/burroughs/issues/983), grave). The path is
+  default-on: a nested child component resolves a parent's subtask from the child's own goroutine
+  (`crossComponentResolve`), and that is reachable through `Component.Call` with a guest-authored nested
+  component.
+  - **How it surfaced:** once, in main's Windows race job on `9f11079`, *after* #976. It was rebuilt
+    heap-backed on darwin.
+  - **Why #976 missed it:** #976 kept two tasks from executing at once, but a result store is
+    guest-memory work done by no task.
+  - **The fix:** `onResolve` takes the caller instance's run slot before it writes, except while the
+    slot's holder is in host code (an impl or `onCancel`), when no guest code can run and waiting would
+    deadlock. The exception is per instance, not per subtask. A per-subtask first draft deadlocked three
+    liftpark tests, where one task's impl resolves another task's subtask.
+
+  **Witnesses**, ADR 0101's result-store amendment, each neutered and run:
+  - `TestAResultStoreWaitsForTheExecutingTask`, on a heap-backed fixture. Under the neuter it fails on
+    ordering, 3 of 3, and `-race` reports the pair.
+  - `TestAChildsResultStoreWaitsForTheParentsExecutingTask`, the nested-child production path. Under the
+    neuter, caller 1 sees the store land mid-spin (`0x10065`), 3 of 3.
+
+  The public door is held by `TestConcurrentCallsIntoANestedComponentDoNotInterleaveAResultStore`, through
+  two concurrent `Component.Call`s on `xc.wasm`, for which wasmtime returns 101 and 102.
+
+- **#976's run slot self-deadlocked a valid synchronous call chain, parent → child → parent through a lift
+  the parent passes its child** ([#984](https://github.com/scttfrdmn/burroughs/issues/984), grave). This
+  was a regression of mine, on a default-on path.
+  - **The oracle:** wasmtime 49.0.2 returns 8 for `reenter.wasm`. Burroughs returned 8 at `d2eccdf`, the
+    commit before #976, and hung on `7dddfea`.
+  - **The cause:** #976 recorded the slot's holder by agent, so the inner entry waited for a slot its own
+    call chain held.
+  - **The fix:** the slot is now held by a call chain. The synchronous cross-component arm passes the
+    chain to its callee, and a nested entry on that chain re-enters the slot.
+  - **How it was found:** by the deadlock analysis ordered before #983's fix.
+
+  Witness: `TestAChainReentersAnInstanceItAlreadyHolds`, bounded. Neutered by dropping the chain, it hangs.
+
 - **Two calls into one component instance could execute guest code at the same time, over one unshared
   memory** ([#975](https://github.com/scttfrdmn/burroughs/issues/975), grave). The path is default-on:
   `gate:async` is on by default and `Component.Call` uses it. The reference runs one thread at a time:
