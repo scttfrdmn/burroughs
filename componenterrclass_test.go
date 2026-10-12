@@ -117,10 +117,12 @@ func TestEveryEntryPointClassifiesARefusalTheSameWay(t *testing.T) {
 		//
 		// **It never runs out of subjects**, which an earlier version of this comment predicted it
 		// would. ADR 0100's point 1 leaves the three 🧵② forms refused by name permanently, so once
-		// phase 1 is complete a fixture using one of them keeps this row live.
+		// phase 1 is complete a fixture using one of them keeps this row live — and phase 1 is now
+		// complete: the switching slice modelled 0x29–0x2d, so the row reads `thread-ap-synth.wasm`'s
+		// `thread.available-parallelism` (0x42).
 		{
 			refusal: "a canonical built-in this engine does not model",
-			fixture: "internal/component/testdata/cmthreads/switch.wasm",
+			fixture: "internal/component/testdata/thread-ap-synth.wasm",
 			async:   "1",
 			want:    burroughs.ErrUnsupported,
 			because: "shared-everything-threads built-in",

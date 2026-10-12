@@ -124,13 +124,24 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 			count: 1,
 			by: "ADR 0100 — a component-model Thread is \"a new pairing of the shared core `thread` " +
 				"with its own goroutine and stack\"; one goroutine per `thread.new-indirect`, created " +
-				"parked. It runs guest code only while holding the instance's `entrySem`, handed to it " +
-				"by the scheduling point at the callback loop's YIELD arm, so it never executes beside " +
-				"another Thread of the instance. It ends three ways, each witnessed: its entry returns " +
-				"(`TestASpawnedThreadRunsAtTheYieldAndHoldsItsOwnIndex`), a sibling's trap kills it " +
-				"while parked, or `Close` kills it while parked " +
-				"(`TestCloseEndsAParkedThreadsGoroutine`) — the last because neither `interp.ErrClosed` " +
-				"nor `interp.ErrTerminated` can reach a goroutine parked in a select.",
+				"parked. It runs guest code only when the instance's scheduler resumes it, under the " +
+				"running chain's hold on `entrySem` (ADR 0100's handoff amendment), so it never executes " +
+				"beside another Thread of the instance. It ends three ways, each witnessed: its entry " +
+				"returns (`TestASpawnedThreadRunsAtTheYieldAndHoldsItsOwnIndex`), a sibling's trap kills " +
+				"it while parked, or `Close` kills it while parked — never started " +
+				"(`TestCloseEndsAParkedThreadsGoroutine`) or inside a handoff " +
+				"(`TestCloseEndsAThreadParkedInsideAHandoff`) — because neither `interp.ErrClosed` nor " +
+				"`interp.ErrTerminated` can reach a goroutine parked in a select.",
+		},
+		{"internal/component/cmsched.go", "(*threadTable).scheduler"}: {
+			count: 1,
+			by: "ADR 0100's handoff amendment — one scheduler goroutine per instance, the only " +
+				"goroutine that resumes a component-model Thread, created lazily on the first " +
+				"`thread.new-indirect`. It runs NO guest code and is not a T-1 agent, so T-1 and T-6 do " +
+				"not apply to it; it never takes `entrySem`, so it cannot block on a slot held by a " +
+				"Thread parked mid-callee. `walker.close` ends it LAST, after the parked Threads are " +
+				"woken and the core instances closed, and waits for it " +
+				"(`TestCloseEndsAThreadParkedInsideAHandoff` exercises that path).",
 		},
 	}
 

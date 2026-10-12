@@ -135,5 +135,29 @@ sp=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
 }
 echo "build.sh: spawn result $sp" >&2
 
+# The two parked shapes ADR 0100's handoff amendment names, each a created Thread that suspends PARTWAY:
+# resumed once by the callback (suspend-partway, 6), or never (suspend-parked, 2). Both callbacks re-YIELD
+# until the marker they wait for is set, so either YIELD branch reaches the same value.
+#
+# A fourth fixture that did not work: suspend-partway's first draft tested `(i32.and (i32.and m 2)
+# (i32.eqz f))`, which is `2 & 1 = 0` — never true — so the callback never readied the body and wasmtime
+# looped forever. A probe with a YIELD bound returned 2 and found it. The fixture's, not the engine's.
+for f in suspend-partway:6 suspend-parked:2; do
+	name=${f%%:*}
+	want=${f##*:}
+	"$WASM_TOOLS" parse "$here/$name.wat" -o "$here/$name.wasm"
+	got=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+		--invoke 'run(0)' "$here/$name.wasm" 2>&1) || {
+		echo "build.sh: the $name run FAILED:" >&2
+		echo "$got" >&2
+		exit 1
+	}
+	[ "$got" = "$want" ] || {
+		echo "build.sh: $name expected $want, got '$got' (bit 1: ran to the suspend; bit 2: resumed)." >&2
+		exit 1
+	}
+	echo "build.sh: $name result $got" >&2
+done
+
 echo "build.sh: switch.reading is hand-assembled from the three channels above — update it by hand" >&2
 echo "          when a figure here moves, and say which channel moved." >&2

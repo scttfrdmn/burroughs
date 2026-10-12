@@ -85,45 +85,53 @@ type threadTable struct {
 	// `ready()` Threads. FIFO is a CONFORMING choice rather than the reference's choice: `Store.tick` picks
 	// with `random.choice`, so any order is permitted and a deterministic one is easier to reason about.
 	ready []*cmThread
+	// sched is the instance's scheduler goroutine, started by the first `thread.new-indirect` (cmsched.go).
+	sched *cmScheduler
 }
 
 // threadState is where a component-model Thread is in its life, mirroring the reference's predicates.
 type threadState uint8
 
 const (
-	// threadImplicit is a lift's implicit Thread. It has no goroutine of its own — it runs on the lift's
-	// goroutine — so it is never parked, readied or killed by this table.
-	threadImplicit threadState = iota
+	// threadRunning is the reference's `running()`: it holds control. A lift's implicit Thread starts
+	// here, and a created Thread enters it when the scheduler resumes it.
+	threadRunning threadState = iota
 	// threadSuspended is the reference's `suspended()`: `not running() and ready_func is None`. A Thread
 	// created by `thread.new-indirect` starts here (`assert(new_thread.suspended())`), with its goroutine
-	// parked on `start`/`kill`.
+	// parked; any Thread returns here from `thread.suspend` and the `suspend-*` forms.
 	threadSuspended
-	// threadReady is `resume_later()`'s effect — `start_waiting(ready_func = lambda: True)` — so the
-	// Thread is in the ready queue and the next scheduling point may run it.
+	// threadReady is `resume_later()`'s effect — `start_waiting(ready_func = lambda: True)` — and the
+	// `yield-*` forms' state for the giver, so the Thread is in the ready queue and a chain may run it.
 	threadReady
-	// threadRunning: the scheduler has handed it the entry slot.
-	threadRunning
-	// threadKilled: its goroutine was ended without running, by a trap or a `Close`.
+	// threadKilled: the wake ended it while it was parked, by a trap in its task or by a `Close`.
 	threadKilled
 )
 
 // cmThread is one component-model Thread's record.
 //
-// An implicit Thread uses only `index`. A Thread created by `thread.new-indirect` uses the rest: it has a
-// goroutine — ADR 0100's *"a new pairing of the shared core `thread` with its own goroutine and stack"* —
-// created parked, which is why `Close` must be able to reach it (see `killParked`).
+// A lift's implicit Thread (`implicit`) runs on the lift's own goroutine. A Thread created by
+// `thread.new-indirect` has a goroutine of its own — ADR 0100's *"a new pairing of the shared core
+// `thread` with its own goroutine and stack"* — created parked, which is why `Close` must be able to
+// reach it (see `killParked`).
+//
+// **Both park the same way once they have given control up**, inside [cmScheduler.giveBack], so there are
+// two parked shapes and no more: parked inside `giveBack`, or never started. One wake reaches both.
 type cmThread struct {
-	index uint32
-	state threadState // guarded by threadTable.mu
+	index    uint32
+	state    threadState // guarded by threadTable.mu
+	implicit bool        // a lift's implicit Thread; resuming it ends the scheduler's chain (cmsched.go)
 
 	entry interp.TableFunc // resolved at creation, as `canon_thread_new_indirect` reads `ftbl.get(fi)`
 	arg   int32            // the `c` operand, passed to the entry
-	task  *liftTask        // the task the Thread belongs to — `Thread(task, thread_func)`
+	task  *liftTask        // the task the Thread belongs to — `Thread(task, thread_func)`; nil for a sync lift's
 
-	start chan struct{} // closed by the scheduler to run it
-	kill  chan struct{} // closed to end it while still parked
-	done  chan struct{} // closed when its goroutine has exited, AFTER err is written
-	err   error         // the entry's error, if any; read only after done closes
+	// resume is sent to by the scheduler alone, to run the Thread: nil to continue, an error to end its
+	// handoff with one. Capacity 1. Made at creation for a created Thread and at an implicit Thread's
+	// first handoff, so a lift that never uses 🧵 allocates neither channel.
+	resume chan error
+	kill   chan struct{} // closed by the wake to end it while parked
+	done   chan struct{} // a created Thread's: closed when its goroutine has exited, AFTER err is written
+	err    error         // the entry's error, if any; read only after done closes
 }
 
 func newThreadTable() *threadTable {
@@ -174,8 +182,8 @@ func (tt *threadTable) get(i uint32) *cmThread {
 // markReady is `canon_thread_resume_later`'s state change: `trap_if(not other_thread.suspended())`, then
 // `resume_later()`, which puts the Thread in the ready queue.
 //
-// The implicit Thread is never suspended in this sense — it is running, or it is the lift's own
-// goroutine waiting on the scheduler — so naming it traps, as the reference's assertion would.
+// An implicit Thread qualifies exactly when the reference's does: once it has suspended inside its callee
+// (`switch.wat`'s bodies resume theirs this way). A running one traps, as the reference's check would.
 func (tt *threadTable) markReady(i uint32) error {
 	tt.mu.Lock()
 	defer tt.mu.Unlock()
@@ -205,15 +213,23 @@ func (tt *threadTable) popReady() *cmThread {
 	return t
 }
 
-// killParked ends every Thread whose goroutine is still parked — suspended or ready, never started — and
-// returns them so the caller can wait for each goroutine to exit.
+// killParked ends every parked Thread — suspended or ready, in either parked shape — and returns them so
+// the caller can wait for each created Thread's goroutine to exit (`done`; an implicit Thread has none,
+// and its lift returns the error instead).
 //
 // **This is the wake a parked Thread needs, and neither existing reclamation path supplies it.** The two
 // that end an in-flight call both need the goroutine to be somewhere it is not:
 // `internal/interp/host.go:ErrClosed` reaches a goroutine when it RE-ENTERS through `invokeIndex`, and
 // `internal/interp/thread.go:ErrTerminated` reaches one at a SAFEPOINT while it runs guest code. A
-// Thread parked on `start` is at neither — it is in a Go `select` with no guest frame — so without this,
-// `Close` would leave its goroutine blocked for the life of the process.
+// Thread is at neither in both of its parked shapes:
+//
+//   - **never started**: its goroutine's first `select`, with no guest frame;
+//   - **parked inside `giveBack`**: inside a canon call, mid-guest, in a Go `select` — the shape the
+//     switching forms add, and the one the second build slice's wake did not reach.
+//
+// Closing `kill` ends both: the first exits without running, the second's `giveBack` returns
+// errThreadKilled and the guest unwinds. Without it, `Close` would leave the goroutine blocked for the
+// life of the process.
 //
 // Scoped by `task` when non-nil (a trap ends its own task's Threads), every Thread when nil (`Close`).
 //
@@ -314,9 +330,9 @@ func cmThreadSurface(c *Component) (string, bool) {
 	return "", false
 }
 
-// threadBuiltinFunc binds a modeled 🧵 built-in to its Go impl. One arm, because one form has an oracle
-// (ADR 0100's point 4). A `false` return is a modeled opcode with no impl, which the partition control
-// makes unreachable rather than merely unlikely.
+// threadBuiltinFunc binds a modeled 🧵 built-in to its Go impl — every form with an oracle, which since the
+// switching slice is all eight of phase 1 (ADR 0100's point 4). A `false` return is a modeled opcode with
+// no impl, which the partition control makes unreachable rather than merely unlikely.
 func (w *walker) threadBuiltinFunc(op byte, tbl interp.Extern) (interp.CanonFunc, bool) {
 	switch op {
 	case 0x26: // thread.index
@@ -325,6 +341,8 @@ func (w *walker) threadBuiltinFunc(op byte, tbl interp.Extern) (interp.CanonFunc
 		return threadNewIndirect(w.async, w.threads, tbl), true
 	case 0x28: // thread.resume-later
 		return threadResumeLater(w.threads), true
+	case 0x29, 0x2a, 0x2b, 0x2c, 0x2d: // suspend and the four switching forms
+		return threadSwitch(op, w.async, w.threads), true
 	}
 	return nil, false
 }
@@ -341,7 +359,7 @@ func (w *walker) threadBuiltinFunc(op byte, tbl interp.Extern) (interp.CanonFunc
 //	task.register_thread(new_thread)
 //	return [new_thread.index]
 //
-// **The goroutine is started here and parks at once**, on `start` or `kill`. That is what "suspended"
+// **The goroutine is started here and parks at once**, on `resume` or `kill`. That is what "suspended"
 // means for an engine whose Threads are goroutines: it exists, holds an index, and runs nothing.
 //
 // **Only from inside an async lift task, in this slice.** The reference reaches `current_task()` from a
@@ -368,22 +386,29 @@ func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) inte
 			return nil, err
 		}
 		t := &cmThread{
-			state: threadSuspended,
-			entry: entry,
-			arg:   int32(uint32(args[1].Bits)),
-			task:  task,
-			start: make(chan struct{}),
-			kill:  make(chan struct{}),
-			done:  make(chan struct{}),
+			state:  threadSuspended,
+			entry:  entry,
+			arg:    int32(uint32(args[1].Bits)),
+			task:   task,
+			resume: make(chan error, 1),
+			kill:   make(chan struct{}),
+			done:   make(chan struct{}),
 		}
+		s := tt.scheduler(h) // started here, lazily: an instance that never creates a Thread has none
 		idx := tt.add(t)
-		go t.run(h, tt)
+		go t.run(s)
 		return []interp.Value{interp.I32(int32(idx))}, nil
 	}
 }
 
-// run is a created Thread's goroutine: park until started or killed; when started, take the entry slot
-// for the Thread's task and call the entry as this Thread; then unregister and signal.
+// run is a created Thread's goroutine: park until the scheduler resumes it or the wake ends it; when
+// resumed, call the entry as this Thread under the chain's hold on the entry slot; then unregister and
+// report the exit to the scheduler, whose chain is waiting for it.
+//
+// **It does not take the entry slot**, which the second build slice's version did. The slot is the
+// chain's (cmsched.go): held by the implicit Thread when the chain starts inside its callee, and by the
+// YIELD arm when it starts there. Taking it here would deadlock the first case on a slot held by a Thread
+// parked mid-callee.
 //
 // **The error crosses goroutines as a value, written before `done` closes.** That is `thread.err` →
 // `retire` → `done`'s two-step at Thread scope, and it is the whole of trap transport here: an entry that
@@ -392,25 +417,26 @@ func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) inte
 // crash, for ADR 0070's reason: converting an embedder's panic into a value is a promise this engine has
 // declined to make.
 //
-// Unregistering on the way out is the reference's `thread_func` ending in
-// `task.unregister_thread(new_thread)`, which frees the index for reuse.
-func (t *cmThread) run(h *asyncHandles, tt *threadTable) {
+// Unregistering BEFORE the report is the reference's `thread_func` ending in
+// `task.unregister_thread(new_thread)` before the chain continues, which frees the index for the next
+// Thread the chain creates — the reuse `switch.reading` measures.
+func (t *cmThread) run(s *cmScheduler) {
 	defer close(t.done)
 	select {
-	case <-t.start:
+	case <-t.resume:
 	case <-t.kill:
-		tt.remove(t.index)
-		return
-	}
-	prev, ok := h.enterTask(t.task)
-	if !ok {
-		t.err = fmt.Errorf("%w: Thread %d could not take the instance's execution slot", ErrCancelled, t.index)
-		tt.remove(t.index)
+		s.tt.remove(t.index)
 		return
 	}
 	_, t.err = t.entry.InvokeCMThread(t.index, interp.I32(t.arg))
-	h.leaveTask(prev)
-	tt.remove(t.index)
+	s.tt.remove(t.index)
+	if errors.Is(t.err, errThreadKilled) {
+		return // the wake ended it while parked in a handoff; nothing is waiting for its report
+	}
+	select {
+	case s.back <- handoff{from: t, exited: true, err: t.err}:
+	case <-s.stop:
+	}
 }
 
 // threadResumeLater implements `canon thread.resume-later` (0x28): `trap_if(not other_thread.suspended())`,
@@ -427,46 +453,100 @@ func threadResumeLater(tt *threadTable) interp.CanonFunc {
 	}
 }
 
-// runReady is the SCHEDULING POINT: run every ready Thread to completion, in queue order, before the
-// caller re-enters its own guest code.
+// threadSwitch implements `thread.suspend` (0x29) and the four switching forms (0x2a–0x2d): each gives the
+// entry slot up through [cmScheduler.giveBack] and returns `[0]` when the calling Thread is resumed.
 //
-// # Where it is called, and the reference's equivalent
+// The reference, per form (`definitions.py`, `canon_thread_*` and `Thread`'s methods of the same names):
 //
-// From the callback loop's YIELD arm, between leaving the callee's entry and re-entering the callback —
-// the one moment the instance's entry slot (`asyncHandles.entrySem`, this engine's `exclusive_thread`) is
-// free and the yielding Thread is itself ready. The reference's YIELD arm is
+//	suspend               block()                                         -> suspended
+//	suspend-then-resume   trap_if(not other.suspended()); switch_to(other) -> suspended
+//	yield-then-resume     trap_if(not other.suspended()); start_waiting;  -> ready
+//	                      switch_to(other)
+//	suspend-then-promote  trap_if(i == thread.index); if other.ready():   -> suspended
+//	                      stop_waiting; switch_to(other) else block()
+//	yield-then-promote    as above, with start_waiting / yield_           -> ready
 //
-//	inst.exclusive_thread = None
-//	thread.wait_until(lambda: inst.exclusive_thread is None)
+// `promote`'s `if other.ready(): other.stop_waiting()` is [threadTable.takeReady], a membership test and a
+// removal by identity on the ready queue. `yield_` with nothing to promote is `wait_until(lambda: True)`,
+// whose immediate-return branch the reference takes half the time; this takes the blocking branch every
+// time, as the YIELD arm does, which the reference permits.
 //
-// and `Thread.wait_until` either returns at once (half the time, `random.randint(0,1)`) or starts waiting
-// and blocks so `Store.tick` can `random.choice` among ready candidates. **This takes the blocking branch
-// every time and runs the ready queue FIFO**: both are choices the reference permits, and the corrected
-// `cmthreads/spawn.wat` tolerates either branch by re-YIELDing until its body has run.
+// **The calling Thread is the carrier's**, read the way `thread.index` reads it, so a created Thread and
+// an implicit one are found the same way.
 //
-// **The YIELD arm used to re-enter at once with EVENT_NONE and run nothing.** Against `spawn.wat` that
-// would loop forever — the callback re-YIELDs until a body runs that this arm never let run — which is
-// the defect visible rather than plausible.
+// **Only from inside an async lift task**, for `new-indirect`'s reason (#970): the sync lift's loop that
+// would decide what a suspended sync callee does is not built, so a sync caller is refused by name under
+// ErrUnsupportedForm rather than parked where nothing could resume it.
 //
-// # A Thread that traps ends its task's other parked Threads
-//
-// A trap ends the computation for every Thread of the task (ADR 0100, trap transport), so the remaining
-// parked ones are killed and waited for before the error returns. `Close` kills the rest of the instance's.
-func (tt *threadTable) runReady() error {
-	for {
-		t := tt.popReady()
-		if t == nil {
-			return nil
+// **`may_leave` is not checked**: every form's first line is `trap_if(not ...may_leave)`, which no
+// committed reading reaches and this engine does not model for the async built-ins either.
+func threadSwitch(op byte, h *asyncHandles, tt *threadTable) interp.CanonFunc {
+	name := threadBuiltinNames[op]
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		self := tt.current(c)
+		if self == nil || self.task == nil {
+			return nil, fmt.Errorf("%w: %s outside an async lift task — the sync lift's scheduling "+
+				"loop is not built in this slice, so nothing could resume the Thread", ErrUnsupportedForm, name)
 		}
-		close(t.start)
-		<-t.done
-		if t.err != nil {
-			for _, k := range tt.killParked(t.task) {
-				<-k.done
+		var target uint32
+		if op != 0x29 {
+			if len(args) < 1 {
+				return nil, fmt.Errorf("component: %s: got %d args, want (i)", name, len(args))
 			}
-			return t.err
+			target = uint32(args[0].Bits)
 		}
+		next, state, err := tt.switchTarget(op, name, self, target)
+		if err != nil {
+			return nil, err
+		}
+		if err := tt.scheduler(h).giveBack(c, self, next, state); err != nil {
+			return nil, err
+		}
+		return []interp.Value{interp.I32(0)}, nil
 	}
+}
+
+// switchTarget resolves a switching form's operand to the Thread to run next (nil for none) and the state
+// the caller gives itself, trapping where the reference traps.
+func (tt *threadTable) switchTarget(op byte, name string, self *cmThread, i uint32) (*cmThread, threadState, error) {
+	state := threadSuspended
+	if op == 0x2b || op == 0x2d {
+		state = threadReady
+	}
+	if op == 0x29 {
+		return nil, state, nil
+	}
+	if (op == 0x2c || op == 0x2d) && i == self.index {
+		return nil, 0, &interp.Trap{Reason: fmt.Sprintf("%s: Thread %d cannot promote itself", name, i)}
+	}
+	other := tt.get(i)
+	if other == nil {
+		return nil, 0, &interp.Trap{Reason: fmt.Sprintf("%s: no Thread at index %d", name, i)}
+	}
+	switch op {
+	case 0x2a, 0x2b: // *-then-resume: the target must be suspended
+		tt.mu.Lock()
+		suspended := other.state == threadSuspended
+		tt.mu.Unlock()
+		if !suspended {
+			return nil, 0, &interp.Trap{Reason: fmt.Sprintf("%s: Thread %d is not suspended", name, i)}
+		}
+		return other, state, nil
+	default: // *-then-promote: switch only to a READY target, else a plain suspend or yield
+		if tt.takeReady(other) {
+			return other, state, nil
+		}
+		return nil, state, nil
+	}
+}
+
+// current is the calling Thread's record, found by the index the stack carries.
+func (tt *threadTable) current(c *interp.CanonCaller) *cmThread {
+	i, ok := c.CMThreadIndex()
+	if !ok {
+		return nil
+	}
+	return tt.get(i)
 }
 
 // threadIndex implements `canon thread.index` (0x26, the reference's `canon_thread_index`): return the

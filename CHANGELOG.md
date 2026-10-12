@@ -118,6 +118,45 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **`thread.suspend` and the four switching forms, on a scheduler goroutine per instance** — ADR 0100's
+  switching slice, behind `gate:cm-threads`. The 🧵 partition goes from 3 modelled / 8 refused to **8 /
+  3**: phase 1 is complete, and the three refused forms are 🧵②'s, refused for good under ADR 0100's point 1.
+  **`cmthreads/switch.wasm` returns `0x0888887f` through Burroughs**, the wasmtime reading committed with
+  #960 before any of these forms was built. That value is all six markers, the entry Thread at index 1, and
+  every body at 2 (the reference's slot reuse).
+
+  **The design is the amendment's, ruled by the chair before it was built.** One scheduler goroutine per
+  instance is the only goroutine that resumes a Thread. It runs no guest code and is created on the first
+  `thread.new-indirect`, so an instance that never uses 🧵 pays nothing. Every Thread, the implicit one
+  included, gives control up through one primitive, `giveBack(next)`, and parks. So there are two parked
+  shapes, never started and parked inside a handoff, and one wake reaches both. It replaces the second
+  slice's `runReady`, which waited for a Thread to **exit** and so deadlocked on the first Thread that
+  suspended partway.
+
+  **SP-2's accounting needed a correction to its premise, and a witness.** The ruling assumed that a
+  Thread parked in a canon call is already counted blocked. A 🧵 built-in is dispatched by
+  `interp.Instance.callAdapter`, which does **not** call `enterBlocked`. So `giveBack` parks inside
+  `CanonCaller.Blocking`, as `waitable-set.wait` does, and `TestAThreadParkedInsideAHandoffIsAtASafepoint`
+  stops every core instance while a body is parked. **Neuter, run:** parking outside `Blocking`, the stop
+  reports *"0 of 1 callers at a safepoint (0 parked, 0 blocked)"*.
+
+  **Three witnesses, each neutered and run.**
+
+  - `switch.wasm`'s value. Neuter: `giveBack` returns without handing off, and `run` returns `0x41`, no
+    body having run.
+  - `cmthreads/suspend-partway.wasm`: a Thread suspends partway under a YIELDing callback. wasmtime returns
+    6 on 30 of 30 runs. Neuter: the scheduler waits for exit, and `run` hangs.
+  - `cmthreads/suspend-parked.wasm`: a Thread suspends partway and is never resumed. wasmtime returns 2 on
+    30 of 30. Neuter: the wake cannot reach a handoff, and `Close` hangs on the parked caller.
+
+  The witness had to bound `Close` itself, not only the goroutine after it, and this was measured: the
+  first draft's neuter hung until the test timeout.
+
+  **The cancellable byte.** Binary.md at the pin gives each of `0x29`–`0x2d` a fixed `0x00`; wasm-tools
+  1.258.0 reads it as `cancellable`. `0x01` is refused by name, since cancellation delivered to a suspended
+  Thread is undecided and unmeasured. The 🧵 refusal witnesses moved to `thread-ap-synth.wasm`'s
+  `thread.available-parallelism` (0x42), because `switch.wasm` has no unmodelled canon left.
+
 - **`thread.new-indirect`, `thread.resume-later`, and a scheduling point at the callback loop's YIELD** —
   ADR 0100's second build slice, behind `gate:cm-threads`. The 🧵 partition goes from 1 modelled / 10
   refused to **3 / 8**.

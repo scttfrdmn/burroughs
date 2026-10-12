@@ -146,7 +146,7 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 	// wrong thing: lazy allocation has no natural free point — the index lands on the per-call stack,
 	// the stack dies with the call, and nothing frees the table entry. Measured: three calls on one
 	// instance read 1, 2, 3 where the reference gives 1, 1, 1.
-	tid := f.threads.add(&cmThread{state: threadImplicit})
+	tid := f.threads.add(&cmThread{implicit: true}) // no task: a sync lift's, which the switching forms refuse (#970)
 	defer f.threads.remove(tid)
 	flat, err := f.core.inst.InvokeCMThread(f.core.name, tid, params...)
 	if err != nil {
@@ -231,7 +231,7 @@ func (f *compFunc) newLiftTask(ctx context.Context) *liftTask {
 	// `canon_lift`'s callback arm calls **after** the loop ends on EXIT, i.e. after resolution. Freeing
 	// at resolution instead would unregister a Thread that is still running, and ADR 0100 records that
 	// resolution and a Thread's exit are separate events.
-	task.threadIdx = f.threads.add(&cmThread{state: threadImplicit})
+	task.threadIdx = f.threads.add(&cmThread{implicit: true, task: task})
 	f.h.mu.Lock()
 	f.h.liftsInFlight++
 	f.h.cancellable[task] = struct{}{}
@@ -426,10 +426,10 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 			// **But it is a scheduling point, and until ADR 0100's second slice it was not one.** This
 			// arm re-entered at once with EVENT_NONE, so a Thread made ready by `thread.resume-later`
 			// never ran before the callback did — and against `cmthreads/spawn.wat`, whose callback
-			// re-YIELDs until its spawned body has run, the loop would never end. `runReady` is the
+			// re-YIELDs until its spawned body has run, the loop would never end. `yieldPoint` is the
 			// reference's `wait_until(...)` taking its blocking branch; see it for the citation.
 			task.waitSet = 0
-			if rerr := f.threads.runReady(); rerr != nil {
+			if rerr := f.threads.yieldPoint(f.h, task); rerr != nil {
 				return liftResult{}, rerr
 			}
 			res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventNone}))

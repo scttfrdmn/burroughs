@@ -1,0 +1,22 @@
+MODE      cm-threads-suspend-partway
+FORMS     0x27 0x28 0x29  (thread.new-indirect, thread.resume-later, thread.suspend)
+RESULT    6
+EXIT      0
+RUNS      30, all 6
+
+SUBJECT   a created Thread that suspends PARTWAY through its body, under a callback that keeps
+          YIELDing — the first deadlock ADR 0100's handoff amendment names
+
+MASK      0b110
+  bit 1   the body ran up to its thread.suspend
+  bit 2   the body was resumed (the callback's one thread.resume-later) and ran to the end
+
+ORDER     not asserted: the callback re-YIELDs until bit 2 is set, so either of the reference's
+          YIELD branches reaches the same value
+
+PROVENANCE
+  taken      2026-10-11T23:38:58Z
+  host       Darwin arm64
+  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)  (-W component-model-threading=y -W component-model-async=y, --invoke 'run(0)')
+  wasm-tools wasm-tools 1.258.0
+  source     suspend-partway.wat -> suspend-partway.wasm, hand-authored WAT
