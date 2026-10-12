@@ -85,7 +85,10 @@ type asyncHandles struct {
 	// call site (`walkComponent`), so one slot serves the whole instance. The prose claimed something
 	// NARROWER than the code enforced, which would have told a reader two agents could each hold a lift.
 	// Per-agent is what #869 makes true, and it is the scope the Canonical ABI wants: several async-lifted
-	// tasks may run concurrently in one instance, each built-in acting on the task calling it.
+	// tasks may be in flight in one instance at once, each built-in acting on the task calling it. **In
+	// flight, not executing in parallel:** one task executes at a time, and they interleave only at
+	// suspension points (ADR 0101's run slot, #975). This said "may run concurrently", which read as
+	// parallel execution once #975 showed the sync path really did execute in parallel.
 	lift *liftTask
 
 	// liftsInFlight counts the lift tasks this instance hosts — **a count, not a flag** (#869).

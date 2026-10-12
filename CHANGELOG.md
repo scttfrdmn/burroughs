@@ -627,6 +627,22 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Changed
 
+- **Concurrent `Component.Call`s on one `Component` now execute one at a time** ([ADR 0101](docs/decisions/0101-a-component-instance-executes-one-task-at-a-time-through-a-run-slot-released-only-where-the-reference-suspends.md),
+  #975). This is a change in observable concurrency on a default-on path.
+  - Several calls may still be **in flight** at once, but each executes guest code until it suspends,
+    for instance by waiting on a subtask, and only then can another call into the same `Component` run.
+  - Before this, two concurrent calls to a sync-lifted export executed in parallel over one unshared
+    memory, which the component model never permits and which raced on guest memory. The fix is under
+    **Fixed**.
+  - **An embedder that wants guest code executing in parallel uses separate `Component`s**, one per
+    goroutine that needs it.
+  - A call waiting for the instance is cancellable through its context until it starts.
+
+  Stated in `Component`'s doc comment under *Concurrent calls*. A sweep of the README, `docs/` and the
+  component doc comments found one sentence that read as parallel execution
+  (`asyncHandles.lift`'s *"may run concurrently in one instance"*), now corrected. A core module's
+  `Instance` is unchanged: ADR 0073's two-agents population still holds at the core API.
+
 - **The `witnesses` duration floor becomes a sanity bound, because the proxy lost to the direct
   measurement that replaced it** (chair's ruling, 2026-10-09). The floor's job was to show the race arm
   actually ran; `witnessrun.sh` came to assert that **directly** — each named witness emitting `run` and
