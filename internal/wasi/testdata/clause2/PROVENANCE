@@ -35,7 +35,7 @@ at the SHA above in a fresh directory gave 1920287 bytes, not 1922664. This buil
 
   Superseded (the 2026-09-26 build, host-sampled guest):
     c2_present.wasm sha256 c56c97a6df0b9c5280315b4fc03d47da79e9cf6b2cf5172de4932fbbafaecf67, 1922664 bytes
-    c2_absent.wasm  sha256 d9a3667b38f68831643dbb2e1435b4422cbdd5e3b488caa0d40594d89d8fe671, 1922396 bytes
+    c2_absent.wasm sha256 d9a3667b38f68831643dbb2e1435b4422cbdd5e3b488caa0d40594d89d8fe671, 1922396 bytes
 
 WHY THE NEGATIVE ARM IS A SEPARATE BINARY, not a build flag: the mechanism is a build-tagged file pair keyed
 on goexperiment.burroughsspawn, so dropping the experiment would also remove the spawn door and the arms
