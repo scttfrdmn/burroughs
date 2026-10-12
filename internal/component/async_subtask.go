@@ -107,6 +107,16 @@ type asyncHandles struct {
 	// enterTask for why entries wait rather than refuse.
 	entrySem chan struct{}
 
+	// runSlot is a capacity-1 semaphore held by whichever agent is EXECUTING this instance's guest code —
+	// the reference's one-thread-at-a-time (ADR 0101, #975). It is not `entrySem`: that is
+	// `exclusive_thread`, backpressure an async-callback task holds across its whole callee including its
+	// waits, while this is released at every suspension point so another task can run. Taken after
+	// `entrySem` where both are taken, never before. See runslot.go.
+	runSlot chan struct{}
+	// runHolder is the component-model Thread index of the agent holding runSlot, 0 when none does or the
+	// holder has no index. Guarded by mu. A suspension point releases only a slot its caller holds.
+	runHolder uint32
+
 	// cancellable holds every lift task this instance currently hosts, which is what a cancellation
 	// request is aimed at (ADR 0094). It is a SET and not the `lift` slot, because those answer
 	// different questions: `lift` is the *entered* task, and it is **nil while a task is parked** —
@@ -330,6 +340,7 @@ func newAsyncHandles() *asyncHandles {
 	return &asyncHandles{
 		entries:     []any{nil},
 		entrySem:    make(chan struct{}, 1),
+		runSlot:     make(chan struct{}, 1),
 		cancellable: make(map[*liftTask]struct{}),
 	}
 }
@@ -521,7 +532,10 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			//
 			// The return value carries the expiry out of the excursion rather than being handled inside,
 			// because `Blocking`'s own contract is that realloc and lowering must not run inside `fn`.
-			if werr := c.Blocking(func() error {
+			//
+			// And `h.suspending` inside it, because the reference's sync cancel waits with `wait_until` — a
+			// suspension — so another task of the instance may execute meanwhile (ADR 0101).
+			if werr := c.Blocking(h.suspending(c, func() error {
 				select {
 				case <-wake:
 					return nil
@@ -530,7 +544,7 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 						"the host impl's cancel handler never resolved it", ErrSubtaskCancelExpired, i,
 						subtaskCancelBound)
 				}
-			}); werr != nil {
+			})); werr != nil {
 				return nil, werr
 			}
 		}

@@ -92,10 +92,6 @@ func TestConcurrentHostCallsShareOneThreadID(t *testing.T) {
 		t.Fatalf("instantiate: %v", err)
 	}
 	defer in.Close()
-	ci := coreInstanceWithExport(in, "run")
-	if ci == nil {
-		t.Fatal("no core instance exports run")
-	}
 
 	// **Both callers must be `run`, because `run` is the export that calls `op`.** A first draft used
 	// `run` and `sibling`, and only one caller ever reached the import — `sibling` returns 42 without
@@ -103,13 +99,22 @@ func TestConcurrentHostCallsShareOneThreadID(t *testing.T) {
 	// callers reached the host import") rather than a false agreement, which is the arm's own vacuity
 	// guard working.
 	//
-	// The second `Invoke` proceeds only once the first has PARKED in `waitable-set.wait`, whose
-	// `c.Blocking` excursion releases the engine thread (the H-1/H-4 sibling-progress property). So this
-	// pair is concurrent in the sense that matters: both callers are inside the instance at once.
+	// The second call proceeds only once the first has PARKED in `waitable-set.wait`, whose excursion
+	// releases the engine thread (the H-1/H-4 sibling-progress property) and the instance's run slot
+	// (ADR 0101). So this pair is concurrent in the sense that matters: both callers are in flight in the
+	// instance at once.
+	//
+	// **Through `CallValues`, not the core instance's `Invoke`, since #975.** The core door has no run
+	// slot. Two core `Invoke`s are two agents on one unshared memory (ADR 0073), and once released both
+	// stored `waitable-set.wait`'s event at the same `ptr` through `Caller.Write`, which is ADR 0064's
+	// plain region (its #651 amendment). That is two agents writing one guest address with nothing
+	// ordering them, a guest race the detector is entitled to report, and it did, on Windows. The
+	// component door orders those writes. The measurement is unchanged by the move: `CallValues` reaches
+	// the same `invokeIndex` on the same `&in.host`.
 	done := make(chan error, 2)
 	for range 2 {
 		go func() {
-			_, e := ci.Invoke("run")
+			_, e := in.CallValues("run")
 			done <- e
 		}()
 	}

@@ -681,6 +681,33 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **Two calls into one component instance could execute guest code at the same time, over one unshared
+  memory** ([#975](https://github.com/scttfrdmn/burroughs/issues/975), grave). The path is default-on:
+  `gate:async` is on by default and `Component.Call` uses it. The reference runs one thread at a time:
+  `Store.tick` resumes one, and `Thread.resume` runs it until it suspends.
+  - **What was missing:** the sync-lift path (`compFunc.invokeWith`) took no per-instance slot, and
+    `entrySem` is the async path's `exclusive_thread`.
+  - **Measured:** two `CallValues` on one sync export took the wall time of one, scaling 10× with the work.
+  - **How it surfaced:** once, on Windows, as a `-race` report. Two `waitable-set.wait`s stored their events
+    at the same `ptr`. Darwin did not reproduce it in 8,200 runs.
+
+  **The fix is ADR 0101's run slot** (status open, awaiting the chair). `asyncHandles.runSlot` is held by
+  the agent executing the instance's guest code. It is taken at every entry, after `entrySem` where both are
+  taken, and released only where the reference suspends: `waitable-set.wait`, and a sync `subtask.cancel`'s
+  wait. Both release and re-take happen inside `c.Blocking`, so a waiting agent stays at a safepoint. Two
+  locks rather than one, because the reference has two rules: an async callee keeps `exclusive_thread`
+  across its waits, but does not stop another task from running.
+
+  **Witness:** `TestTwoCallsIntoOneInstanceNeverExecuteAtOnce` (`run-slot.wasm`). Two callers park, wake,
+  and reach a probe that executes inline. **Two neuters, both run:**
+  - without the acquire, the second caller reaches the probe while the first is inside it, 5 of 5;
+  - with the slot kept across the wait, the second caller cannot even park.
+
+  **The test that surfaced it** drove two core `Invoke`s, i.e. two agents (ADR 0073) writing one guest
+  address through `Caller.Write`, which is ADR 0064's plain region, with nothing ordering them. It now
+  drives `CallValues`, and its measurement is unchanged. Also: `enterInvokeLowering` now enters with the
+  component-model Thread index, as `enterAndInvoke` did.
+
 - **A component whose `thread.new-indirect` declared `ft = (i64) -> ()` over an `(i32) -> ()` table entry
   loaded and ran, where `wasm-tools validate` and wasmtime 49.0.2 reject it as invalid**
   ([#969](https://github.com/scttfrdmn/burroughs/issues/969)). The loader decoded no `core:type` section,
