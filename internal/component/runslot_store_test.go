@@ -3,7 +3,6 @@ package component
 import (
 	"io"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,22 +16,27 @@ import (
 //
 // # What it constructs
 //
-// `result-store-heap.wasm`'s `run` async-lowers an import, waits on the subtask, then runs a long load
-// loop over its retptr. Two callers X and Y park in the wait. X alone is resolved, and the test waits
-// until X has left the wait AND the slot is held again: X is executing its loop. Only then is Y resolved,
-// from this goroutine. Y's result store writes Y's retptr into the guest memory X is reading.
+// `result-store-heap.wasm`'s `run` async-lowers an import into retptr 0, waits on the subtask, then runs a
+// long loop watching retptr 0 for a change, and returns `(changed << 16) | mem[0]`. Two callers X and Y
+// park in the wait, and both lowered into the same word. X alone is resolved, with 1. The test then waits
+// until X has left the wait AND the slot is held again, i.e. X is executing its loop, and only then
+// resolves Y, with 2, from this goroutine. Y's result store writes the word X is watching.
 //
-// **Under the fix Y's resolve cannot return until X has returned**, because the store takes the run slot,
-// and X holds it until it returns. That ordering is the assertion, and it is deterministic: the slot is
-// the only thing that can make Y's resolve wait.
+// **The assertion is the guest's observation, not a clock.** Under the fix, Y's store takes the run slot
+// and X holds it until it returns, so X never sees the word change. X returns 1, and Y, which runs after,
+// returns 2. Under the neuter the store lands mid-loop, and X returns `0x10002`.
+//
+// **It used to compare two wall-clock points and was wrong to.** It asserted that Y's resolve returned after
+// X's `CallValues` did. But X releases the slot inside `invokeWith`, BEFORE `CallValues` returns, and Y's
+// store may legitimately complete in that gap. CI's ubuntu amd64 runner caught it at 2 ms, on #986, a PR
+// that touched none of this.
 //
 // **And the memory is heap-backed** (`(memory 1 1)`, #979), so under `-race` the detector can see the
 // store and X's loads. Under the neuter the race job reports the pair the Windows job reported on
 // `9f11079`.
 //
-// **Neuter, run:** skipping the acquisition in `asyncLowerFunc`'s `onResolve` lets Y's resolve return
-// while X is still executing, and this fails on the ordering assertion. Under `-race` it also reports the
-// race.
+// **Neuter, run:** skipping the acquisition in `asyncLowerFunc`'s `onResolve` lets the store land while X
+// executes, and this fails on X's value. Under `-race` it also reports the race.
 func TestAResultStoreWaitsForTheExecutingTask(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
 	b, err := os.ReadFile("testdata/result-store-heap.wasm")
@@ -46,13 +50,20 @@ func TestAResultStoreWaitsForTheExecutingTask(t *testing.T) {
 	}
 	defer in.Close()
 
-	var xDone atomic.Int64 // when the first caller to return did so
-	done := make(chan error, 2)
+	type out struct {
+		v   uint32
+		err error
+	}
+	results := make(chan out, 2)
 	for range 2 {
 		go func() {
-			_, e := in.CallValues("run")
-			xDone.CompareAndSwap(0, time.Now().UnixNano())
-			done <- e
+			r, e := in.CallValues("run")
+			if e != nil {
+				results <- out{err: e}
+				return
+			}
+			v, _ := r[0].U32()
+			results <- out{v: v}
 		}()
 	}
 	var rs []func(canon.Value)
@@ -73,24 +84,24 @@ func TestAResultStoreWaitsForTheExecutingTask(t *testing.T) {
 		in.w.async.mu.Unlock()
 		return parkedWaiters(in.w.async) == 1 && held
 	})
+	rs[1](canon.U32(2)) // Y's store, from this goroutine, into the word X is watching
 
-	rs[1](canon.U32(2)) // Y's store, from this goroutine, while X executes
-	yReturned := time.Now().UnixNano()
-
+	got := map[uint32]int{}
 	for range 2 {
 		select {
-		case e := <-done:
-			if e != nil {
-				t.Fatalf("run: %v", e)
+		case o := <-results:
+			if o.err != nil {
+				t.Fatalf("run: %v", o.err)
 			}
+			got[o.v]++
 		case <-time.After(30 * time.Second):
 			t.Fatal("a caller never returned")
 		}
 	}
-	if x := xDone.Load(); x == 0 || yReturned < x {
-		t.Fatalf("Y's result store returned before X finished executing (Y at %d, X at %d): the store did "+
-			"not wait for the run slot, so it wrote guest memory while another task of the instance "+
-			"executed — the reference stores results while no other thread runs", yReturned, x)
+	if got[1] != 1 || got[2] != 1 {
+		t.Fatalf("the two callers returned %v; want exactly one 1 (X: the word never changed while it "+
+			"executed) and one 2 (Y). A value with bit 16 set (0x10002) is X seeing Y's result store land "+
+			"while it executed: the store did not wait for the run slot", got)
 	}
 }
 

@@ -3,20 +3,39 @@ shell a toolchain at test time). Neither binary is reproducible from this reposi
 
 Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch wasmpreempt/phase4
 Fork SHA:     de8e915c0c8ed94f4238203c3c9900450ac140f7
-Built on:     darwin/arm64, 2026-09-26
+Built on:     darwin/arm64, 2026-10-12 (REBUILT; the 2026-09-26 build is superseded, see below)
 Guest source: guest.go.txt in this directory (byte-identical for BOTH arms)
+
+REBUILT, 2026-10-12, because the guest changed (the chair's ruling on the Windows race classification):
+the guest now REPORTS its counters through `burroughs.report` instead of the host sampling them with
+`Caller.Read` while the spinners wrote them, which was a host plain read racing a guest store (ADR 0064's
+#651 amendment) and put 12 reports into every Windows race run (#979: Windows is the one platform whose guest
+memory is on the Go heap). Both arms were rebuilt from the same source the same way, each against its own
+fork worktree at the SHA above (the absent arm's with the stub below), toolchains built with make.bash.
+
+What the record did not pin, and why the old bytes could not be reproduced first: the module path and the
+build directory, both of which the binary embeds (the command uses no -trimpath). Rebuilding the OLD source
+at the SHA above in a fresh directory gave 1920287 bytes, not 1922664. This build pins them:
+
+  module:   clause2   (go.mod: "module clause2" / "go 1.26")
+  dir:      a fresh directory holding only main.go (= guest.go.txt) and that go.mod
+  toolchain: $(fork)/bin/go, go1.28-devel_de8e915c0c
 
   c2_present.wasm  — the mechanism is present
     GOEXPERIMENT=burroughsspawn GOOS=wasip1 GOARCH=wasm $(fork)/bin/go build \
         -gcflags=all=-d=ssa/insert_resched_checks/off -o c2_present.wasm .
-    sha256: c56c97a6df0b9c5280315b4fc03d47da79e9cf6b2cf5172de4932fbbafaecf67
-    bytes:   1922664
+    sha256: 8de61d2b211b383ebe8d8026fb178bba3d1083b0105ef9b92436142fe42b940c
+    bytes:   1921041
 
   c2_absent.wasm   — the SAME source, built against a fork whose
                      src/syscall/blocking_wasip1_spawn.go has enterBlockingSyscall and
                      exitBlockingSyscall stubbed to empty bodies. Same build command.
-    sha256: d9a3667b38f68831643dbb2e1435b4422cbdd5e3b488caa0d40594d89d8fe671
-    bytes:   1922396
+    sha256: a79cd664b9515f034434f705d5f58a003f9001aa6972481a04e98cff7bb4c565
+    bytes:   1921954
+
+  Superseded (the 2026-09-26 build, host-sampled guest):
+    c2_present.wasm sha256 c56c97a6df0b9c5280315b4fc03d47da79e9cf6b2cf5172de4932fbbafaecf67, 1922664 bytes
+    c2_absent.wasm sha256 d9a3667b38f68831643dbb2e1435b4422cbdd5e3b488caa0d40594d89d8fe671, 1922396 bytes
 
 WHY THE NEGATIVE ARM IS A SEPARATE BINARY, not a build flag: the mechanism is a build-tagged file pair keyed
 on goexperiment.burroughsspawn, so dropping the experiment would also remove the spawn door and the arms
@@ -30,15 +49,28 @@ THE DIFFERENCE IS CHECKABLE IN THE ARTIFACT (standing property 13), not merely i
   c2_absent.wasm  -> 0
 
 REGISTERED READINGS (phase4/clause2-recon.md, "The discriminating pair") and what this pair produces:
-  mechanism present -> sibling B advanced, 10 of 10     REPRODUCED: 10 of 10, deltaB ~1.0M per 400ms hold
-  mechanism absent  -> sibling B delta 0, every run     REPRODUCED: 0 of 3, deltaB = 0 every run
+  mechanism present -> sibling B advanced, 10 of 10     REPRODUCED (rebuild): 10 of 10
+  mechanism absent  -> sibling B delta 0, every run     REPRODUCED (rebuild): deltaB = 0, 3 of 3
   Sibling A advanced in both arms on every run (observation 1), asserted per run so a zero for B cannot be
   vacuous.
+
+THE MAGNITUDES CHANGED WITH THE REBUILD, AND THE DISCRIMINATOR DID NOT. The guest's closing report runs
+only when `main` regains a P. In the PRESENT arm both Ps are held by spinners once the P is handed off, so
+`main` reports after they finish, and the deltas read ~the whole bound (deltaA ~8.0M, deltaB ~8.0M), not
+the old ~1.0M-per-hold, which was the host's sample taken inside the hold. In the ABSENT arm `main` keeps
+its P, returns and reports at once (deltaA ~2.4M, deltaB = 0). B still advances only if the P was handed
+off, so B > 0 against B = 0 discriminates as before. The interval is wider and the question is the same.
+
+RACE-FREE UNDER A DETECTOR THAT CAN SEE IT (#979): the present arm re-encoded with
+`(memory 1024 1024 shared)`, so its memory is on the Go heap. 0 race reports in 3 -race runs. The old
+host-sampled guest, re-encoded the same way, gave 3 reports in 1 run.
 
 SPIN BOUND: 8,000,000, and the constraint is an ORDERING rather than a duration: sibling A must NOT finish
 its spin during the 400ms hold. If it does, it frees its own P, sibling B runs on that P, and the negative
 arm shows B advancing for a reason unrelated to the handoff.
 
+  (Measured on the superseded 2026-09-26 build, whose host sampled the counters inside the hold. The
+  ordering constraint is the guest's and carries over unchanged.)
   Measured at 2,000,000 (a first attempt to make CI cheaper):
     ABSENT arm -> deltaA=2000000 exactly, deltaB~350000, 3 of 3.  Discrimination DESTROYED.
   Measured at 8,000,000:

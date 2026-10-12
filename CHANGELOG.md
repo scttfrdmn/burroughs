@@ -717,6 +717,27 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **The clause-2 witness raced its own guest, and put 12 reports into every Windows race run.** This was
+  conflict A of the race classification, behind `gate:threads`.
+  - **The race:** the test's `fd_read` host function sampled the spinners' counters with `Caller.Read`
+    while they wrote them. That is a host goroutine plain-reading words a guest agent is writing. ADR
+    0064's #651 amendment makes `Caller` plain on purpose, so the detector was entitled to report it, and
+    Windows, whose guest memory is on the Go heap (#979), did on every run.
+  - **The fix:** the guest now reports its counters through a `burroughs.report` import, immediately
+    before and after the held read. The host measures what the guest says and never reads the counters.
+    There's no test-side atomic accessor, by the chair's ruling: that would reach around `Caller`'s
+    deliberate plainness.
+  - **The rebuild:** both arms, at the PROVENANCE's fork SHA (`de8e915`), each against its own fork
+    worktree, with the absent arm's notification stubbed. The artifact check still reads 2 against 0
+    scheduler hooks in `syscall.Read`.
+  - **Readings:** the registered discrimination reproduces (present: B advanced 10 of 10; absent: B 0,
+    3 of 3). The magnitudes changed, because the guest's closing report waits for a P. PROVENANCE records
+    why that leaves the question unchanged.
+  - **Heap-backed check:** the present arm re-encoded heap-backed gives 0 race reports in 3 `-race` runs,
+    where the old guest gave 3 in 1.
+  - **The record:** the old binaries could not be reproduced first, because the build embeds the module
+    path and directory, which the record did not pin. This PROVENANCE pins both.
+
 - **An async lower's result store wrote guest memory outside the run slot, while another task of the
   instance executed** ([#983](https://github.com/scttfrdmn/burroughs/issues/983), grave). The path is
   default-on: a nested child component resolves a parent's subtask from the child's own goroutine
@@ -732,8 +753,10 @@ from the three obviously-wrong `#534` trailers to all eleven.
     liftpark tests, where one task's impl resolves another task's subtask.
 
   **Witnesses**, ADR 0101's result-store amendment, each neutered and run:
-  - `TestAResultStoreWaitsForTheExecutingTask`, on a heap-backed fixture. Under the neuter it fails on
-    ordering, 3 of 3, and `-race` reports the pair.
+  - `TestAResultStoreWaitsForTheExecutingTask`, on a heap-backed fixture. Under the neuter, X sees the
+    store land mid-loop (`0x10002`), 3 of 3, and `-race` reports the pair. Its first assertion compared two
+    wall clocks and flaked on CI: X releases the slot before `CallValues` returns. Corrected in #986 to the
+    guest's own observation.
   - `TestAChildsResultStoreWaitsForTheParentsExecutingTask`, the nested-child production path. Under the
     neuter, caller 1 sees the store land mid-spin (`0x10065`), 3 of 3.
 
