@@ -1,5 +1,6 @@
 ;; result-store-heap: two sync-lift callers of one instance park in waitable-set.wait; one is woken and runs a
-;; long load loop over its retptr while the OTHER's subtask is resolved (ADR 0101's result-store amendment).
+;; long load loop over its retptr while the OTHER's subtask is resolved (ADR 0101's result-store amendment),
+;; and reports in bit 16 whether that word changed under it — the guest's observation, not a clock.
 ;; Derived from async-waitset-synth.wasm (printed with wasm-tools 1.258.0): the loop after the wait, and
 ;; `(memory 1 1)` so the memory is heap-backed and visible to the race detector (#979).
 (component
@@ -59,14 +60,18 @@
       i32.const 8
       call $wswait
       drop
+      ;; The loop watches the shared retptr for a change while this caller executes: $subtaski holds the
+      ;; value seen on entry and $packed the changed flag (both dead by now). Returns (changed << 16) | mem[0].
+      (local.set $subtaski (i32.load (i32.const 0)))
+      (local.set $packed (i32.const 0))
       (local.set $si (i32.const 0))
       (block $done
         (loop $again
-          (drop (i32.load (i32.const 0)))
+          (if (i32.ne (i32.load (i32.const 0)) (local.get $subtaski))
+            (then (local.set $packed (i32.const 1)) (br $done)))
           (local.set $si (i32.add (local.get $si) (i32.const 1)))
           (br_if $again (i32.lt_u (local.get $si) (i32.const 1000000)))))
-      i32.const 0
-      i32.load
+      (i32.or (i32.shl (local.get $packed) (i32.const 16)) (i32.load (i32.const 0)))
     )
     (func (;5;) (type 1) (result i32)
       i32.const 42

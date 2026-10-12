@@ -753,8 +753,10 @@ from the three obviously-wrong `#534` trailers to all eleven.
     liftpark tests, where one task's impl resolves another task's subtask.
 
   **Witnesses**, ADR 0101's result-store amendment, each neutered and run:
-  - `TestAResultStoreWaitsForTheExecutingTask`, on a heap-backed fixture. Under the neuter it fails on
-    ordering, 3 of 3, and `-race` reports the pair.
+  - `TestAResultStoreWaitsForTheExecutingTask`, on a heap-backed fixture. Under the neuter, X sees the
+    store land mid-loop (`0x10002`), 3 of 3, and `-race` reports the pair. Its first assertion compared two
+    wall clocks and flaked on CI: X releases the slot before `CallValues` returns. Corrected in #986 to the
+    guest's own observation.
   - `TestAChildsResultStoreWaitsForTheParentsExecutingTask`, the nested-child production path. Under the
     neuter, caller 1 sees the store land mid-spin (`0x10065`), 3 of 3.
 

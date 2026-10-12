@@ -213,7 +213,7 @@ child → parent, all synchronous, through a lift the parent passes its child (`
 
 | Witness | Neuter | Result |
 |---|---|---|
-| `TestAResultStoreWaitsForTheExecutingTask` (`result-store-heap.wasm`) | skip the acquisition in `onResolve` | fails on the ordering (Y's store returned 60–75 ms before X finished), 3 of 3; under `-race` it also reports the pair |
+| `TestAResultStoreWaitsForTheExecutingTask` (`result-store-heap.wasm`) | skip the acquisition in `onResolve` | X sees the store land mid-loop and returns `0x10002`, 3 of 3; under `-race` it also reports the pair. **Its first assertion was a clock comparison and was wrong**: X releases the slot inside `invokeWith`, before `CallValues` returns, so Y's store may legitimately complete in that gap, and CI's ubuntu amd64 runner caught it at 2 ms on #986. It now asserts the guest's own observation. |
 | `TestAChildsResultStoreWaitsForTheParentsExecutingTask` (`xc-gated.wasm`) | the same | fails on the value (`0x10065`), 3 of 3 |
 | `TestAChainReentersAnInstanceItAlreadyHolds` (`reenter.wasm`) | drop the chain from the synchronous arm | hangs, and fails on its bound |
 
