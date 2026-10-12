@@ -118,6 +118,26 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **The sync lift's scheduling branch: 🧵 from a sync lift** (#970), behind `gate:cm-threads`. This is the
+  remaining phase-1 gap. `thread.new-indirect` and the switching forms now accept a sync caller, and a
+  sync callee that suspends lets ready Threads run before it returns. With nothing ready it traps, as the
+  reference's sync branch does: `canon_lift`'s `trap_if(not candidates)`, and wasmtime's *"cannot block a
+  synchronous task before returning"*.
+
+  **Three readings, all taken with wasmtime 49.0.2 before the engine change:**
+  - `cmthreads/sync-new.wasm`: 2, which Burroughs refused by name until now;
+  - `cmthreads/sync-spawn.wasm`: 3, on 10 of 10;
+  - `cmthreads/sync-trap.wasm`: a trap, on 10 of 10.
+
+  Each witness was neutered and run. The design is recorded in ADR 0100's sync-branch amendment:
+  - the caller is found through the index the stack carries;
+  - Threads are scoped by `owner` rather than `task`. A sync lift has no `liftTask`, and `killParked(nil)`
+    already meant every Thread in the instance;
+  - the scheduler delivers the trap when a sync origin's chain ends with nothing runnable.
+
+  One edge is recorded and not closed: a sync origin whose chain ends by resuming a different task's
+  implicit Thread is not trapped.
+
 - **`thread.suspend` and the four switching forms, on a scheduler goroutine per instance** — ADR 0100's
   switching slice, behind `gate:cm-threads`. The 🧵 partition goes from 3 modelled / 8 refused to **8 /
   3**: phase 1 is complete, and the three refused forms are 🧵②'s, refused for good under ADR 0100's point 1.

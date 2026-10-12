@@ -1,5 +1,7 @@
 MODE      cm-threads-sync-new
 SUBJECT   thread.new-indirect called from a SYNC lift, with a valid (i32) -> () ft and entry
+RESULT    2
+          (added with #970 for the shared parser; the value is the WASMTIME line below, unchanged)
 
 WASM-TOOLS VALIDATE (--features all)
   exit 0 — valid
@@ -8,9 +10,12 @@ WASMTIME (-W component-model-threading=y -W component-model-async=y, --invoke 'r
   2
   exit 0 — the new Thread's index; it is never resumed, and the sync lift returns
 
-BURROUGHS
+BURROUGHS, before #970
   refused at the call under ErrUnsupportedForm, naming thread.new-indirect: the sync lift's
   scheduling loop is not built, so this is a form not yet supported rather than a value that differs
+
+BURROUGHS, after #970
+  2, matching wasmtime: the Thread is created and never resumed, and the sync lift returns
 
 PROVENANCE
   taken      2026-10-11T22:31:46Z
