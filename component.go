@@ -298,7 +298,21 @@ func IsComponent(wasm []byte) (bool, error) {
 // So the component call carries a context and the core call does not. That is a real inconsistency in the
 // public surface, accepted knowingly, and it was cheap only because `Component.Call` had not shipped.
 //
+// # Concurrent calls
+//
+// A Component may be called from several goroutines at once, and the calls are all in flight together,
+// but **they execute one at a time**: a call runs guest code until it suspends — waits on a subtask, for
+// instance — and only then can another call into the same Component run. That is the component model's
+// own rule; its reference runs one thread at a time. An embedder that wants guest code executing in
+// parallel uses separate Components, one per goroutine that needs it.
+//
+// This changed with [ADR 0101]: before it, two concurrent calls to a sync-lifted export executed in
+// parallel over one unshared memory, which the model never permits and which raced on guest memory
+// (#975). A call waiting for the instance to finish another one is cancellable through its context
+// until it starts.
+//
 // [ADR 0085]: https://github.com/scttfrdmn/burroughs/blob/main/docs/decisions/0085-the-public-component-api-surface-a-new-component-value-type-resource-handles-first-class-and-wit-typed-constructors.md
+// [ADR 0101]: https://github.com/scttfrdmn/burroughs/blob/main/docs/decisions/0101-a-component-instance-executes-one-task-at-a-time-through-a-run-slot-released-only-where-the-reference-suspends.md
 type Component struct {
 	in *component.Instantiated
 

@@ -1,8 +1,11 @@
 # 0101 — A component instance executes one task at a time, through a run slot released only where the reference suspends
 
-Date: 2026-10-12 · Status: **open** — awaiting the chair's ruling. Implemented in the same slice under the
-chair's #975 order (*"If it's an engine defect: fix it with a witness that fails without the fix"*). Open
-rather than accepted because that order directs a fix and does not stamp a design. `Ratio-Class: carried`.
+Date: 2026-10-12 · Status: **accepted** — chair's ruling, in session, 2026-10-12, on the #976 review:
+engine design rather than scope, so the chair's to stamp. It was implemented first, under the chair's #975
+order (*"If it's an engine defect: fix it with a witness that fails without the fix"*), and held open until
+this ruling, since that order directed a fix and did not stamp a design. The acceptance came with four
+requirements, discharged in the follow-up and recorded under **Follow-up** below. `Ratio-Class: carried` on
+both commits: the order and the ruling are in session and have no approval artifact to cite.
 
 **Every citation into this tree names a symbol rather than a line**, per ADR 0047. Citations into
 `definitions.py` name a function or a method, since that file is fetched material under a gitignored path.
@@ -81,16 +84,63 @@ code.**
   violating the component model, and loses it here.
 - **The race #975 reported is closed at its cause.** Two callers can no longer be past `waitable-set.wait`
   at once, so its event store is ordered by the slot's channel.
-- **Not covered, recorded rather than closed:**
-  - A created Thread that blocks in `waitable-set.wait` keeps its chain's slot. In the reference its
-    `block` ends the chain. That is ADR 0100's open edge and not this one: the scheduler waits on a handoff
-    and a wait is not one.
-  - An async task's callee that suspends with nothing runnable keeps the slot under its chain's hold, so a
-    sync task cannot run meanwhile. The reference would run it.
-- **The core-level test that first showed the race** still drives two core `Invoke`s with no slot, which is
+- **Not covered, filed as issues** (both behind `gate:cm-threads`, which defaults off):
+  - [#977](https://github.com/scttfrdmn/burroughs/issues/977): a created Thread that blocks in
+    `waitable-set.wait` keeps its chain's slot. **It can deadlock, and the sequence is reachable**,
+    derived from the code: the parent passes the child one of its own lifts (`walker.compArgRef`), and
+    the child calls it to service the Thread's request. The reference progresses there, because its
+    `block` ends the chain.
+  - [#978](https://github.com/scttfrdmn/burroughs/issues/978): an async task's implicit Thread suspended
+    mid-callee with nothing runnable keeps the slot, so a sync-typed call cannot enter. **Divergent:** in
+    the reference, `Task.enter_implicit_thread` consults `exclusive_thread` only for async-typed entries,
+    so the sync call enters and runs.
+- **The core-level test that first showed the race** drove two core `Invoke`s with no slot, which is
   ADR 0073's population and ADR 0064's plain region (`Caller.Write`). Two agents of one unshared memory
-  writing one address is a guest race the detector is entitled to report. The test stops constructing it
+  writing one address is a guest race the detector is entitled to report. The test no longer constructs it
   (#975).
-- **An open observation, not decided here:** under `-race`, two goroutines byte-writing one 4 KiB region
-  for about 14 ms through `memory.fill` produced no report. No synchronization on the dispatch path explains
-  it. Recorded on #975 as a question about what `-race` can see of the plain region.
+
+## Follow-up: the chair's four requirements on accepting this record
+
+**1. The behaviour change is stated where embedders read it.** `Component`'s doc comment now has a
+*Concurrent calls* section: calls execute one at a time, interleaving at suspension points, and an embedder
+wanting parallel guest execution uses separate `Component`s. The change is also under **Changed** in the
+CHANGELOG, not only under Fixed. A sweep of the README, `docs/` and the component doc comments found one
+sentence that read as parallel execution (`asyncHandles.lift`'s *"may run concurrently in one instance"*),
+now corrected. `docs/laws/controls.md`'s three-concurrent-callers specimen is about a core interp
+instance, ADR 0073's population, and is unchanged.
+
+**2. The core door is not public, by symbol.**
+- `burroughs.Component`'s one field is an unexported `*component.Instantiated`, and its methods are
+  `Exports`, `Call` and `Close`.
+- `ComponentConfig.Run` reaches guest code through `Instantiated.CallRun` → `Instantiated.Call` →
+  `compFunc.invoke` → `compFunc.invokeWith`.
+- `Component.Call` reaches it through `Instantiated.CallValuesCtx` → `compFunc.invokeWithPending`.
+- A component's core instances live only in the unexported `walker.toClose`, and `internal/component`
+  cannot be imported from outside the module. The only reader of `toClose` beside `walker.close` is the
+  test helper `coreInstanceWithExport`.
+
+So no embedder can reach a component's core `Invoke`, and every public entry into guest code takes the
+run slot. #975's hole is closed on every public path.
+
+**3. The race detector's silence is explained, and it is an instrument finding with reach**
+([#979](https://github.com/scttfrdmn/burroughs/issues/979)).
+- `interp.allocate` maps linear memory as an anonymous `syscall.Mmap` reservation on unix
+  (`reserve_unix.go:mapReservation`). The only exception is when `reservationFor` returns 0: a declared
+  max that fits the initial size, i.e. max equal to the initial size.
+- On `!unix`, Windows included, `mapReservation` always fails, so `allocate` falls back to `make`, which
+  is Go heap.
+- The race detector shadows only memory the Go runtime allocates.
+
+**Measured on darwin/arm64, with the run slot neutered:** one guest program whose only difference is the
+memory's declared max. `(memory 1)`, mmap: **0 reports** in 5 runs. `(memory 1 1)`, heap: **reported**,
+`execMemoryFill` against `execMemoryFill`. With the slot restored, the heap variant gave **0 reports in 50
+runs**. That is #976's fix confirmed under a detector that can see guest memory, which the record's
+earlier evidence could not claim.
+
+This is why Windows reported #975 once and 8,200 darwin runs and every Linux CI run never did. The reach is
+that **the `race` gate sees no guest-memory race on unix** unless a memory's max equals its initial size.
+The remedy is proposed in #979 and not adopted: race witnesses that cover guest memory use heap-backed
+memories.
+
+**4. The two uncovered items are filed** as #977 and #978, above, each with its deadlock or conformance
+classification.
