@@ -11,14 +11,28 @@
 // the comparison would stop isolating the handoff.
 //
 // Counters live in the zero page [0,4096), which the linker documents as never accessed in correct
-// execution, so the HOST can read them while the guest runs. 0x0F00.. is clear of the trap marker
-// (0x10), the fd_write sink's byte count (0x14) and the gc phase mark (0x18).
+// execution. 0x0F00.. is clear of the trap marker (0x10), the fd_write sink's byte count (0x14) and the gc
+// phase mark (0x18).
+//
+// **The guest reports its counters; the host does not read them.** Until the race-classification slice the
+// host sampled 0x0F00.. with `Caller.Read` while the spinners wrote them, which is a host goroutine
+// plain-reading words a guest agent is writing: ADR 0064's #651 amendment makes `Caller` plain on purpose,
+// so that was a race the detector was entitled to report, and Windows (the one platform whose guest memory
+// is on the Go heap, #979) reported it on every run. Now `main` reads the counters itself, guest loads the
+// engine makes atomic for aligned words (ADR 0054), and passes them to `burroughs.report` immediately
+// before and after the read the host holds. The measurement is what the guest says, and the bracket adds
+// only the instructions between the report and the read to the interval.
 package main
 
 import (
 	"syscall"
 	"unsafe"
 )
+
+// report hands the host the two counters at one end of the held read: phase 1 just before, 2 just after.
+//
+//go:wasmimport burroughs report
+func report(phase, a, b uint32)
 
 const (
 	addrA     = 0x0F00 // sibling A's counter
@@ -60,7 +74,9 @@ func main() {
 	go spin(slot(addrB))
 
 	*slot(addrPhase) = 1
+	report(1, *slot(addrA), *slot(addrB))
 	var b [1]byte
-	_, _ = syscall.Read(0, b[:]) // the host holds this and samples the counters across the hold
+	_, _ = syscall.Read(0, b[:]) // the host holds this; the two reports bracket the hold
+	report(2, *slot(addrA), *slot(addrB))
 	*slot(addrPhase) = 2
 }

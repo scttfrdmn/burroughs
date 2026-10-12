@@ -17,19 +17,21 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
-// Zero-page slots the clause-2 guest stores into. `[0,4096)` is what
-// `cmd/link/internal/ld/data.go`'s `wasmMinDataAddr` documents as *"never accessed in correct
-// execution"*, which is why the host may read it while the guest runs; `0x0F00..` is clear of the
-// fork's trap marker (`0x10`), its `fd_write` byte count (`0x14`) and its gc phase mark (`0x18`).
+// Zero-page slots the clause-2 guest uses. `[0,4096)` is what `cmd/link/internal/ld/data.go`'s
+// `wasmMinDataAddr` documents as *"never accessed in correct execution"*; the guest's counters live at
+// `0x0F00..` (A, then B — THE DISCRIMINATOR), clear of the fork's trap marker (`0x10`), its `fd_write` byte
+// count (`0x14`) and its gc phase mark (`0x18`). **The host no longer reads the counters** — the guest
+// reports them through `burroughs.report` — so the addresses the host still needs are only these two.
 const (
-	c2AddrA     = 0x0F00 // sibling A's counter
-	c2AddrB     = 0x0F04 // sibling B's counter — THE DISCRIMINATOR
 	c2AddrPhase = 0x0F08 // 1 = about to block in fd_read, 2 = returned from it
 	c2AddrSink  = 0x14   // the fork's fd_write byte count, asserted 0 so the overlap below is checked
 )
 
-// c2Hold is how long the host keeps the guest's `fd_read` in flight. The registered reading samples
-// sibling B's counter "during the 400 ms hold", so the number is the registration's, not a tuning knob.
+// c2Hold is how long the host keeps the guest's `fd_read` in flight. The registered reading asks whether
+// sibling B advances "during the 400 ms hold", so the number is the registration's, not a tuning knob.
+// Since the guest reports its own counters, the measured interval runs from its report before the read to
+// its report after: wider than the hold in the present arm, where `main` regains a P only after the
+// spinners finish, and the same question (`testdata/clause2/PROVENANCE`).
 const c2Hold = 400 * time.Millisecond
 
 // c2Reading is one arm's registered outcome, from phase4/clause2-recon.md's discriminating pair:
@@ -181,11 +183,32 @@ func runClause2Arm(t *testing.T, file string) (deltaA, deltaB uint32, err error)
 
 	var in *interp.Instance
 	var reads atomic.Int32
-	var gotA, gotB atomic.Uint32
 	var sinkBytes atomic.Uint32
+	// The guest's two reports bracketing the held read: [phase-1][a, b]. See `burroughs.report` below.
+	var reported [2][2]atomic.Uint32
+	var reports atomic.Int32
 	hostImports := h.imports()
 
 	imp := func(mod, name string) (interp.Extern, bool) {
+		if mod == "burroughs" && name == "report" {
+			// **The guest reports its counters; the host no longer reads them** (the race-classification
+			// slice). The host used to sample 0x0F00.. with `Caller.Read` across the hold while the spinners
+			// wrote them, which is a host goroutine plain-reading words a guest agent is writing. ADR 0064's
+			// #651 amendment makes `Caller` plain on purpose, so that was a race the detector was entitled to
+			// report, and Windows, the one platform whose guest memory is on the Go heap (#979), reported it
+			// on every run. Now `main` reads the counters itself, with aligned guest loads the engine makes
+			// atomic (ADR 0054), and passes them here immediately before and after the held read.
+			return interp.HostExtern(
+				bin.FuncType{Params: []bin.ValType{bin.I32, bin.I32, bin.I32}},
+				func(_ *interp.Caller, v []interp.Value) ([]interp.Value, error) {
+					if phase := u32(v, 0); phase == 1 || phase == 2 {
+						reported[phase-1][0].Store(u32(v, 1))
+						reported[phase-1][1].Store(u32(v, 2))
+						reports.Add(1)
+					}
+					return nil, nil
+				}), true
+		}
 		if mod == "burroughs" && name == "spawn" {
 			return interp.HostExtern(spawnFT,
 				func(_ *interp.Caller, v []interp.Value) ([]interp.Value, error) {
@@ -197,10 +220,9 @@ func runClause2Arm(t *testing.T, file string) (deltaA, deltaB uint32, err error)
 				}), true
 		}
 		if mod == module && name == "fd_read" {
-			// **The hold and the measurement are in the SAME host function, on the blocking goroutine.**
-			// `Caller.Read` is documented as usable from a goroutine in no world at all, so sampling here
-			// needs no retained caller and no second thread — and it samples exactly the interval the
-			// registration names.
+			// **The hold is here; the measurement is the guest's two reports on either side of it.** The
+			// sink count is still read here, after the hold: no sibling writes 0x14, so that read is not
+			// the race the counter sampling was.
 			return interp.HostExtern(
 				bin.FuncType{
 					Params:  []bin.ValType{bin.I32, bin.I32, bin.I32, bin.I32},
@@ -211,11 +233,7 @@ func runClause2Arm(t *testing.T, file string) (deltaA, deltaB uint32, err error)
 						// Later reads report EOF: one hold per run keeps the interval unambiguous.
 						return clause2SetNread(c, u32(v, 3), 0)
 					}
-					a0, b0 := clause2Load(c, c2AddrA), clause2Load(c, c2AddrB)
 					time.Sleep(c2Hold)
-					a1, b1 := clause2Load(c, c2AddrA), clause2Load(c, c2AddrB)
-					gotA.Store(a1 - a0)
-					gotB.Store(b1 - b0)
 					sinkBytes.Store(clause2Load(c, c2AddrSink))
 					return clause2SetNread(c, u32(v, 3), 0)
 				}), true
@@ -253,7 +271,12 @@ func runClause2Arm(t *testing.T, file string) (deltaA, deltaB uint32, err error)
 		return 0, 0, fmt.Errorf("fd_write sink recorded %d bytes, so the counter slots may hold "+
 			"diagnostic bytes rather than counters", n)
 	}
-	return gotA.Load(), gotB.Load(), nil
+	// Both reports must have arrived, or the deltas are against a zero the guest never said: a missing
+	// report is an error, not "no progress", so it cannot manufacture the negative arm's zero.
+	if n := reports.Load(); n != 2 {
+		return 0, 0, fmt.Errorf("the guest made %d of its 2 counter reports, so there is no bracket to measure", n)
+	}
+	return reported[1][0].Load() - reported[0][0].Load(), reported[1][1].Load() - reported[0][1].Load(), nil
 }
 
 // clause2Load reads a little-endian u32 from guest memory, or 0 if it cannot be read — a failure to read
