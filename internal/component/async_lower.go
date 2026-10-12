@@ -68,7 +68,29 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			// calls onResolve leaves the retptr untouched. The mutex is one of the TWO edges carrying §4
 			// B-MM-1's acquire guarantee to a parked waiter; the other is signalLocked's wake-channel
 			// close→receive (see async_waitset.go's header, corrected after the litmus witness).
+			//
+			// **The result store takes the caller instance's run slot** (ADR 0101's result-store
+			// amendment). Lowering a result writes guest memory and may call the caller's `realloc`, which
+			// is guest code. So unless the slot's holder is in HOST code right now — inside an impl or an
+			// onCancel, when no guest code of the instance can be executing (`asyncHandles.inHost`) — the
+			// resolving goroutine takes the slot first, as a chain of its own. Without it, a host resolver
+			// or a child component's goroutine (`crossComponentResolve`) wrote the result while another
+			// task of the instance executed (#983): the Windows race job's report on `9f11079`, rebuilt
+			// heap-backed on darwin.
+			//
+			// **The count is read, and the store made, under one `h.mu` hold**, and the holder lowers it
+			// under `h.mu` before its guest resumes. So a store made while it was raised is ordered before
+			// the guest continues, and one that finds it at zero waits for the slot like any other entry.
+			//
+			// NEUTER THIS to bring the race back: skip the acquisition, and
+			// `TestAResultStoreWaitsForTheExecutingTask` sees the store land while another task executes.
 			h.mu.Lock()
+			if h.inHost == 0 {
+				h.mu.Unlock()
+				h.acquireRun(&runChain{}, nil, nil)
+				defer h.releaseRun()
+				h.mu.Lock()
+			}
 			defer h.mu.Unlock()
 			if st.cancellationRequested {
 				// A cancel resolution (the model's on_resolve(None), def:2214–2220): no result is lowered,
@@ -115,7 +137,12 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			st.resolveLocked(subtaskReturned)
 		}
 
+		// The impl is host code on this agent's goroutine, under the run slot it holds: while it runs, a
+		// resolution of ANY subtask writes without waiting for the slot (`asyncHandles.inHost`). Lowered
+		// under `h.mu` before the guest resumes (see `onResolve`).
+		h.enterHost()
 		onCancel, err := impl(c, onStart, onResolve)
+		h.leaveHost()
 		if err != nil {
 			return nil, err
 		}

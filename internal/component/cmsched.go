@@ -167,6 +167,11 @@ func (s *cmScheduler) drive(origin, first *cmThread) (idle, deliver bool, err er
 		}
 		s.h.mu.Lock()
 		s.h.lift = cur.task
+		if !cur.implicit {
+			// A created Thread executes under its chain's hold, so it carries that chain: a synchronous
+			// cross-component call it makes, back into this instance, re-enters the slot (runslot.go).
+			cur.chain = s.h.runChain
+		}
 		s.h.mu.Unlock()
 		cur.resume <- nil // capacity 1, and only this goroutine sends
 		if cur.implicit {
@@ -310,7 +315,7 @@ func (tt *threadTable) yieldPoint(h *asyncHandles, task *liftTask) error {
 	defer h.leaveTask(prev)
 	// The chain executes guest code, so it runs under the run slot too, taken after the entry slot
 	// (ADR 0101). The scheduler takes neither: the hold is the chain's.
-	h.acquireRun(task.threadIdx, nil)
+	h.acquireRun(&runChain{}, tt.get(task.threadIdx), nil)
 	defer h.releaseRun()
 	reply := make(chan error, 1)
 	select {

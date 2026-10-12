@@ -144,3 +144,96 @@ memories.
 
 **4. The two uncovered items are filed** as #977 and #978, above, each with its deadlock or conformance
 classification.
+
+## Amendment, 2026-10-12: the run slot covers result stores, and it is held by a call chain
+
+Chair's ruling, in session, 2026-10-12, on the classification of main's Windows race reports: *"Take the
+run slot at the result store … Do not defer the store to the waiter."* Two defects are fixed under it,
+and both are graves.
+
+### #983: the run slot covers result stores as well as execution
+
+**The gap.** #976's witness checked only that two tasks never **execute** at once. A subtask's result
+store is guest-memory work done by a goroutine that is not executing any task, and nothing made it take
+the slot.
+- The store path is `asyncLowerFunc`'s `onResolve` → `canon.StoreVia` → `Caller.Write`.
+- The production caller is `crossComponentResolve`, on a nested child's goroutine.
+- It wrote into the caller instance's memory while another task executed there. Main's Windows race job
+  reported it on `9f11079`, and it was rebuilt heap-backed on darwin.
+
+**The rule.** `onResolve` takes the caller instance's run slot, as a fresh chain, before it writes. It
+writes at the store, not deferred to the waiter, for the chair's two reasons:
+- lowering a result may call the caller's `realloc`, which is guest code and must run under the slot in
+  every case;
+- deferring would move the write later than the reference's resolution point, a timing change with nothing
+  to measure it against.
+
+**The one exception: the slot's holder is in host code.** That means inside an async lower's impl, or a
+subtask's `onCancel`, on its own goroutine with the slot held. No guest code of the instance can run
+then, so the store writes without waiting. Waiting would deadlock: the holder may be the very goroutine
+resolving. The exception is per **instance** (`asyncHandles.inHost`), not per subtask, and a measurement
+put it there. The first draft flagged only the subtask whose own impl was running, and three liftpark
+tests deadlocked. In one of them, task B's impl resolves task A's subtask from inside B's own impl call.
+
+**Every path that resolves a subtask, and what the slot's holder does while waiting:**
+
+| resolver | where `onResolve` runs | the waiting holder | deadlock? |
+|---|---|---|---|
+| an impl resolving inline | the lowering agent's goroutine, inside the impl | none: it *is* the holder, in host code | no (`inHost`) |
+| `onCancel` resolving inline | the cancelling agent's goroutine | none, likewise | no (`inHost`) |
+| a host impl resolving later | the host's goroutine | waits through `waitable-set.wait` or a sync `subtask.cancel`, both via `suspending`, or between callback entries (`awaitEvent`), where no slot is held | no |
+| `crossComponentResolve` | the child's goroutine | likewise | no |
+| a sync lower of an async-lifted child | — | refused by name in `bindCrossComponent`: the lower must match its import's asyncness | unreachable |
+
+The chair's case to check by symbol was a parent that blocks until a child returns without suspending.
+That case does not exist: the sync arm refuses an async callee, and a sync callee runs inline on the
+parent's goroutine with no resolver at all. **But checking it found #984.**
+
+### #984: the slot is held by a call chain, not an agent
+
+#976 recorded the holder by component-model Thread index. That self-deadlocked a valid chain, parent →
+child → parent, all synchronous, through a lift the parent passes its child (`walker.compArgRef`).
+- In `reenter.wasm`, the parent's two core instances share its slot, and the inner entry waited for a slot
+  its own call chain held.
+- **wasmtime 49.0.2 returns 8.** The reference has no reentrance rule at this pin (`canon_lower` checks
+  only `may_leave`), and the chain is one thread there.
+- **Burroughs returned 8 at `d2eccdf`, the commit before #976, and hung on `7dddfea`.**
+
+**The repair.**
+- **The slot belongs to a `runChain`.** Each record of a component-model Thread carries the chain it
+  executes under.
+- **The chain travels with the call.** The synchronous cross-component arm passes it to its callee through
+  the context, and the callee's entry re-enters a slot its chain holds instead of waiting (`runDepth`).
+- **A suspension releases the whole slot**, whatever the depth, and restores the depth on the re-take.
+- **The scheduler stamps the holding chain on each created Thread it resumes**, so that Thread's
+  synchronous calls re-enter too. A created Thread's `waitable-set.wait` still releases nothing, which is
+  #977's edge, left for #977.
+
+### Witnesses, each neutered and run
+
+| Witness | Neuter | Result |
+|---|---|---|
+| `TestAResultStoreWaitsForTheExecutingTask` (`result-store-heap.wasm`) | skip the acquisition in `onResolve` | fails on the ordering (Y's store returned 60–75 ms before X finished), 3 of 3; under `-race` it also reports the pair |
+| `TestAChildsResultStoreWaitsForTheParentsExecutingTask` (`xc-gated.wasm`) | the same | fails on the value (`0x10065`), 3 of 3 |
+| `TestAChainReentersAnInstanceItAlreadyHolds` (`reenter.wasm`) | drop the chain from the synchronous arm | hangs, and fails on its bound |
+
+- **`TestAResultStoreWaitsForTheExecutingTask`:** caller Y's subtask is resolved from outside while caller X
+  executes. Y's resolve must not return before X does. The fixture is heap-backed, so `-race` can see the
+  pair.
+- **`TestAChildsResultStoreWaitsForTheParentsExecutingTask`:** the production path. A nested child resolves
+  the parent's subtask, gated on a test host import, while another parent task spins over that result
+  word.
+- **`TestAChainReentersAnInstanceItAlreadyHolds`:** returns wasmtime's 8, bounded.
+- **The public door:** `TestConcurrentCallsIntoANestedComponentDoNotInterleaveAResultStore` drives
+  `xc.wasm`, for which wasmtime returns 101 and 102, through two concurrent `Component.Call`s. Its passing
+  direction is deterministic. Its failing direction depends on timing, because the public API has no hook
+  to gate the child (ADR 0096).
+
+### A divergence the fixtures found, recorded
+
+**wasmtime 49.0.2 traps a SYNC task that calls `waitable-set.wait`** (*"cannot block a synchronous task
+before returning"*). The pin's reference has no such rule: there is no `may_block` in `definitions.py`, and
+`canon_waitable_set_wait` checks only `may_leave`. Burroughs follows the pin, so a sync-lifted callee may
+wait, as `async-waitset-synth.wasm` and `run-slot.wasm` do. The cross-component fixtures use an async
+parent, so wasmtime can run them. The divergence is wasmtime's lead on the pin, and is recorded rather
+than adopted.

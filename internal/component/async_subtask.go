@@ -116,9 +116,26 @@ type asyncHandles struct {
 	// waits, while this is released at every suspension point so another task can run. Taken after
 	// `entrySem` where both are taken, never before. See runslot.go.
 	runSlot chan struct{}
-	// runHolder is the component-model Thread index of the agent holding runSlot, 0 when none does or the
-	// holder has no index. Guarded by mu. A suspension point releases only a slot its caller holds.
-	runHolder uint32
+	// runChain is the CALL CHAIN holding runSlot, nil when none does, and runDepth how many entries of
+	// that chain are inside it. Guarded by mu. A chain is the reference's thread seen as a call stack: a
+	// nested synchronous call on the same chain — parent → child → parent through a lift the parent
+	// passed its child — re-enters the slot rather than waiting for it. Keyed by agent index until #984:
+	// that keying self-deadlocked exactly that chain, which #976 had introduced (runslot.go).
+	runChain *runChain
+	runDepth int
+	// threads is this instance's Thread table, so a suspension point can find its caller's chain.
+	threads *threadTable
+	// inHost counts how deep the run slot's holder is inside an async lower's impl or a subtask's
+	// onCancel — HOST code, run on the holder's goroutine with the slot held. While it is above zero no
+	// guest code of the instance can execute, so a result store from any goroutine is safe, and must not
+	// wait for the slot: the holder may be the one resolving, and would be waiting for itself. Guarded by
+	// mu. ADR 0101's result-store amendment.
+	//
+	// **Per instance, not per subtask, and a measurement put it here.** The first draft flagged the
+	// subtask whose impl was running. `TestASiblingWaitsForABlockingImportAndDoesNotTrap`'s impl for task B
+	// resolves task A's subtask from inside B's own impl call, and A's flag was clear, so A's store waited
+	// for the slot B's goroutine held. Three liftpark tests deadlocked that way.
+	inHost int
 
 	// cancellable holds every lift task this instance currently hosts, which is what a cancellation
 	// request is aimed at (ADR 0094). It is a SET and not the `lift` slot, because those answer
@@ -480,7 +497,12 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			return []interp.Value{interp.I32(int32(*inlineState))}, nil
 		}
 		if onCancel != nil {
+			// onCancel is host code on this agent's goroutine, under the run slot it holds, so a resolution
+			// made meanwhile must not wait for that slot (`asyncHandles.inHost`, ADR 0101's result-store
+			// amendment): waiting would be this goroutine waiting for itself.
+			h.enterHost()
 			onCancel() // may call onResolve (which locks); must run without the table lock held
+			h.leaveHost()
 		}
 
 		h.mu.Lock()

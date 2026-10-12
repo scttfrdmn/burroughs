@@ -129,6 +129,11 @@ type cmThread struct {
 	// lift has no `liftTask`, so its Threads' `task` is nil, and `killParked(nil)` means every Thread in the
 	// instance (#970).
 	owner *cmThread
+	// chain is the call chain this Thread executes under (runslot.go), guarded by asyncHandles.mu: set by
+	// the entry that took the run slot, or by the scheduler when it resumes a Thread under its chain's
+	// hold. A synchronous cross-component call passes it on, so a nested call back into this instance
+	// re-enters the slot instead of waiting for it.
+	chain *runChain
 
 	// resume is sent to by the scheduler alone, to run the Thread: nil to continue, an error to end its
 	// handoff with one. Capacity 1. Made at creation for a created Thread and at an implicit Thread's

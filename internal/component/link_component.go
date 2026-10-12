@@ -158,7 +158,12 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 	//
 	// NEUTER THIS to bring #975 back: `TestTwoCallsIntoOneInstanceNeverExecuteAtOnce` then sees the second
 	// caller reach its probe while the first is inside it.
-	if !f.h.acquireRun(tid, ctx.Done()) {
+	//
+	// **Under the CALLER's chain when there is one** (runChainFrom): a synchronous cross-component call
+	// passes its chain in the context, so a call back into an instance this chain already holds re-enters
+	// it. Keyed by agent until #984, which found #976's keying self-deadlocking exactly
+	// that chain (`reenter.wasm`).
+	if !f.h.acquireRun(runChainFrom(ctx), implicit, ctx.Done()) {
 		return liftResult{}, fmt.Errorf("%w: the call's context ended while waiting for this instance to "+
 			"finish executing another task", ErrCancelled)
 	}
@@ -508,7 +513,9 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// The run slot after the entry slot, never before (ADR 0101). Not abandonable: once `enterTask` has
 	// admitted the task, its entries proceed (enterTask's rule), and the holder of the run slot releases it
 	// at its next suspension point or return.
-	f.h.acquireRun(task.threadIdx, nil)
+	// A fresh chain per entry: an async entry is never nested inside a synchronous call (a sync lower of
+	// an async lift is refused by name in `bindCrossComponent`).
+	f.h.acquireRun(&runChain{}, f.threads.get(task.threadIdx), nil)
 	defer f.h.releaseRun()
 
 	// Allocate and write, then call — all three inside the one acquisition above. `lowerPending` does not
@@ -541,7 +548,7 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 			"slot", ErrCancelled)
 	}
 	defer f.h.leaveTask(prev)
-	f.h.acquireRun(task.threadIdx, nil) // after the entry slot, never before (ADR 0101)
+	f.h.acquireRun(&runChain{}, f.threads.get(task.threadIdx), nil) // after the entry slot (ADR 0101)
 	defer f.h.releaseRun()
 	// The task's implicit Thread index travels into every entry — the callee's and each callback
 	// re-entry's — so `thread.index` answers the same number across the loop, which is what makes it
@@ -626,6 +633,7 @@ func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, 
 		return nil, gerr
 	}
 	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, async: newAsyncHandles(), threads: newThreadTable()}
+	w.async.threads = w.threads // a suspension point finds its caller's chain through the table (runslot.go)
 	for _, d := range c.Defs {
 		if err := w.stepAll(d); err != nil {
 			w.close()
