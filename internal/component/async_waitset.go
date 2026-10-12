@@ -245,7 +245,11 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 		}()
 
 		var ev event
-		err := c.Blocking(func() error {
+		// `h.suspending` inside the excursion: this is where the reference's thread SUSPENDS (`wait_until`),
+		// so another task of the instance may execute meanwhile, and this one takes the run slot back before
+		// it stores the event (ADR 0101). Without the slot this was #975: the sync path took none, so two
+		// waiters woke and stored their events at `ptr` in parallel.
+		err := c.Blocking(h.suspending(c, func() error {
 			for {
 				h.mu.Lock()
 				if e, ready := set.pendingEventLocked(); ready {
@@ -261,7 +265,7 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 					return c.Context().Err()
 				}
 			}
-		})
+		}))
 		if err != nil {
 			return nil, err
 		}

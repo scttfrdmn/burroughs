@@ -148,6 +148,18 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 	// instance read 1, 2, 3 where the reference gives 1, 1, 1.
 	tid := f.threads.add(&cmThread{implicit: true}) // no task: a sync lift's, which the switching forms refuse (#970)
 	defer f.threads.remove(tid)
+	// **The run slot, which this path did not take until #975** (ADR 0101): one task of the instance
+	// executes at a time, as the reference's store runs one thread at a time. Without it two callers of a
+	// sync export executed guest code in parallel over one unshared memory. The wait may be abandoned on
+	// the context because nothing has entered yet.
+	//
+	// NEUTER THIS to bring #975 back: `TestTwoCallsIntoOneInstanceNeverExecuteAtOnce` then sees the second
+	// caller reach its probe while the first is inside it.
+	if !f.h.acquireRun(tid, ctx.Done()) {
+		return liftResult{}, fmt.Errorf("%w: the call's context ended while waiting for this instance to "+
+			"finish executing another task", ErrCancelled)
+	}
+	defer f.h.releaseRun()
 	flat, err := f.core.inst.InvokeCMThread(f.core.name, tid, params...)
 	if err != nil {
 		return liftResult{}, err
@@ -488,13 +500,21 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 			"slot", ErrCancelled)
 	}
 	defer f.h.leaveTask(prev)
+	// The run slot after the entry slot, never before (ADR 0101). Not abandonable: once `enterTask` has
+	// admitted the task, its entries proceed (enterTask's rule), and the holder of the run slot releases it
+	// at its next suspension point or return.
+	f.h.acquireRun(task.threadIdx, nil)
+	defer f.h.releaseRun()
 
 	// Allocate and write, then call — all three inside the one acquisition above. `lowerPending` does not
 	// take the entry itself, precisely so it cannot be called from somewhere that does not hold it.
 	if lerr := f.lowerPending(pend, args); lerr != nil {
 		return nil, lerr
 	}
-	return target.inst.Invoke(target.name, args...)
+	// **With the Thread index**, as `enterAndInvoke` passes it (ADR 0101 point 5). This was a plain `Invoke`,
+	// so a callee entered with lowered arguments carried no index — `thread.index` had nothing to read, and
+	// a suspension point could not tell that its caller holds the run slot.
+	return target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
 }
 
 func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.Value) ([]interp.Value, error) {
@@ -516,6 +536,8 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 			"slot", ErrCancelled)
 	}
 	defer f.h.leaveTask(prev)
+	f.h.acquireRun(task.threadIdx, nil) // after the entry slot, never before (ADR 0101)
+	defer f.h.releaseRun()
 	// The task's implicit Thread index travels into every entry — the callee's and each callback
 	// re-entry's — so `thread.index` answers the same number across the loop, which is what makes it
 	// the TASK's Thread rather than one per stack.
@@ -633,9 +655,12 @@ func (w *walker) funcStep(d Def) error {
 		if int(cn.FuncIdx) >= len(w.coreSpace[SpaceCoreFunc]) {
 			return fmt.Errorf("component: canon lift names core func %d of %d", cn.FuncIdx, len(w.coreSpace[SpaceCoreFunc]))
 		}
+		// `h` for EVERY lift, sync included (#975): it carries the instance's run slot, which a sync lift
+		// takes too (ADR 0101). It was set only for the callback lift below, since only that path needed
+		// the async handles.
 		lf := &compFunc{
 			core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn),
-			threads: w.threads,
+			threads: w.threads, h: w.async,
 		}
 		// The lift's memory and realloc (#902). Captured for every lift, used only by an argument that
 		// needs guest memory; a lift carrying neither canonopt leaves them zero and the lowering refuses
@@ -659,7 +684,6 @@ func (w *walker) funcStep(d Def) error {
 					cbIdx, len(w.coreSpace[SpaceCoreFunc]))
 			}
 			lf.async = true
-			lf.h = w.async
 			lf.cb = w.coreSpace[SpaceCoreFunc][cbIdx]
 		}
 		w.compFuncs = append(w.compFuncs, compDef{fn: lf})

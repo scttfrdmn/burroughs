@@ -286,6 +286,10 @@ func (tt *threadTable) yieldPoint(h *asyncHandles, task *liftTask) error {
 			"slot", ErrCancelled)
 	}
 	defer h.leaveTask(prev)
+	// The chain executes guest code, so it runs under the run slot too, taken after the entry slot
+	// (ADR 0101). The scheduler takes neither: the hold is the chain's.
+	h.acquireRun(task.threadIdx, nil)
+	defer h.releaseRun()
 	reply := make(chan error, 1)
 	select {
 	case s.yield <- reply:
