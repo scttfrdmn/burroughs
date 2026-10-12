@@ -465,6 +465,27 @@ test-endtable:
 # interpreter, measured insensitive to the guest's structure), and squeezing them into a budget already at
 # 2.0x only postpones the break. They have their own job — `make witnesses` — with its own budget, on both
 # arches, and they run **under `-race` there**. So the question is relocated, not skipped.
+#
+# **WHAT THIS GATE CANNOT SEE: guest memory on a reservation (#979).** Go's race detector shadows only
+# memory the Go runtime allocates. On unix (darwin, Linux, so every leg this gate runs on),
+# `interp.allocate` places a linear memory in an anonymous `syscall.Mmap` reservation
+# (`reserve_unix.go:mapReservation`) unless its declared max equals its initial size (`reservationFor`
+# returns 0). A reservation is outside the shadow, so **a race between two agents' guest-memory accesses is
+# invisible here, and a green says nothing about it.** Races on engine structures, which live on the Go
+# heap, are still seen.
+#
+# - **The rule for a race witness over guest memory:** declare max equal to initial, e.g. `(memory 1 1)`
+#   or `(memory 1 1 shared)`, so the memory is on the Go heap. That is a real production path on every
+#   platform, not a race-only variant of the engine. No engine knob forces heap memory under `-race`;
+#   that variant was ruled out on #962.
+# - **Where it stands:** the §4 battery and the interp concurrency tests already declare max equal to min,
+#   and that is now load-bearing rather than incidental. #979 converted the component witnesses that did
+#   not.
+# - **Measured:** the same guest, its run slot neutered, gave 0 reports on `(memory 1)` and a report on
+#   `(memory 1 1)`.
+# - **Windows' race job is the only one that sees guest memory for a fixture that is NOT heap-backed**,
+#   because `mapReservation` always fails there and every memory is on the Go heap. That makes its reports
+#   more significant than its "measured, not a gate" label suggests (see `.github/workflows/windows.yml`).
 race:
 	@./scripts/budget.sh 1500 race -- $(GO) test -race -timeout 25m -shuffle=on \
 		-skip 'TestClause2|TestClause3' ./...

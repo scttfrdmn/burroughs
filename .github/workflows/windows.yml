@@ -22,6 +22,21 @@
 # Keeping it outside `ci.yml` means its red is visible **as red**, on its own workflow, without being
 # laundered into the main verdict or blocking a merge while Windows is still being characterised.
 #
+# ## Its race reports are more significant than "not a gate" suggests (#979)
+#
+# **This is the only race job that sees guest memory for a fixture that is not heap-backed.** On unix,
+# `interp.allocate` maps a linear memory in an mmap reservation, outside the race detector's shadow, unless
+# its max equals its initial size. On Windows `reserve_other.go:mapReservation` always fails, so every
+# linear memory is on the Go heap and the detector sees it.
+#
+# **A guest-memory race reported here may be real everywhere and invisible on unix.** Two engine defects
+# were found that way: #975, and #983 after #976. Each was then rebuilt heap-backed on darwin and
+# reproduced.
+#
+# **Triage is a lookup.** Every recurring report maps to an issue number (#982 while it is parked), and a
+# report that maps to none is new and is classified before anything merges (chair's order, 2026-10-12).
+# Whether this job should become a gate is a separate question, not decided here.
+#
 # ## What it may and may not claim
 #
 # **The README's platform line is not widened by this file existing.** Windows stays unsupported until
