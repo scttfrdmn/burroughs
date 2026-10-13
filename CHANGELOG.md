@@ -661,6 +661,17 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Changed
 
+- **One rule for when the pinned reference and a toolchain disagree** ([ADR 0102](docs/decisions/0102-the-pinned-reference-defines-the-semantics-and-a-toolchains-stricter-refusal-is-followed-unless-burroughs-implements-and-witnesses-what-the-pin-admits.md),
+  proposed; the chair's interim rule, going to Scott decided-unless-he-objects).
+  - **The rule:** the pin defines the semantics. Where a toolchain refuses something the pin admits,
+    Burroughs follows the pin only if it implements those semantics and has a witness for them, and
+    otherwise refuses. Each such divergence is recorded with both readings.
+  - **Why now:** #969 (refused: an i64 `ft` the pin admits, but which Burroughs does not model) and a sync
+    `waitable-set.wait` (admitted: the pin admits it, Burroughs models it, and wasmtime 49.0.2 traps it)
+    went opposite ways without a stated reason. Under the rule they are consistent, and both stand.
+  - **What the contract says:** G-3 names "the reference" as the accept-direction oracle without defining
+    it for the component model, and never names a toolchain. The ADR reads G-3's reference as the pin.
+
 - **The race gate now says what it cannot see, and the component concurrency witnesses moved to memory it
   can** ([#979](https://github.com/scttfrdmn/burroughs/issues/979)).
   - **The blind spot:** on unix, a linear memory is an mmap reservation outside the race detector's
