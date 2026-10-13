@@ -88,7 +88,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 					"would park an agent that is inside guest execution (§5 H-1)", ErrUnsupportedForm)
 			}, opts), true
 		}
-		return interp.CanonLowerExtern(ft, func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		return interp.CanonLowerExtern(ft, mayLeaveGuard("cross-component lower", func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 			// A sync callee: `invokeWith` reaches `inst.Invoke` directly, with no loop and no park. This
 			// is guest-calling-guest on one goroutine, which is what a sync call means, so there is
 			// nothing to mark and nothing to wait on.
@@ -123,14 +123,15 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 			}
 			res, cerr := callee.invokeWith(ctx, args)
 			return res.flat, cerr
-		}, opts), true
+		}), opts), true
 	}
 
 	// The async arm: the flat ABI is the sync signature's params plus a packed i32 return, exactly as the
 	// host-impl async arm builds it, and the subtask protocol is reused whole.
 	hasResult := callee.sig != nil && callee.sig.Result != nil
 	aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
-	return interp.CanonLowerExtern(aft, asyncLowerFunc(liftAsAsyncImpl(callee), hasResult, w.async), opts), true
+	return interp.CanonLowerExtern(aft, mayLeaveGuard("cross-component async lower",
+		asyncLowerFunc(liftAsAsyncImpl(callee), hasResult, w.async)), opts), true
 }
 
 // liftAsAsyncImpl adapts a component func whose definition is an async (callback) lift into the

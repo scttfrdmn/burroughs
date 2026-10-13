@@ -1,0 +1,22 @@
+# Committed wasmtime reading for realloc-wait.wasm — a cabi_realloc that calls waitable-set.wait (#990).
+# Built:       wasm-tools parse realloc-wait.wat -o realloc-wait.wasm   (wasm-tools 1.258.0)
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02), -W component-model-threading=y -W component-model-async=y
+# Box:         darwin/arm64 (Apple Silicon).
+#
+# Invocation:  --invoke 'arg("hi")'
+# Output:      wasm trap: cannot leave component instance      (backtrace: allocmod, the realloc)
+# Exit:        nonzero
+#
+# Invocation:  --invoke 'res()'
+# Output:      wasm trap: cannot leave component instance      (backtrace: allocmod <- cm, the child's task.return)
+# Exit:        nonzero
+#
+# Invocation:  --invoke 'ctl("hi")'
+# Output:      2
+# Exit:        0
+#
+# Meaning:     a realloc runs with may_leave = False (definitions.py LiftLowerContext.reallocate), so the
+#              checked built-in waitable-set.wait traps whether the realloc lowers an argument (arg) or a
+#              cross-component result (res), and the unchecked context.set does not (ctl).
+# Burroughs:   arg and ctl match (TestAReallocThatCallsABuiltInTraps). res returns 0 rather than trapping:
+#              the guard fires, but a late cross-component store's error has no reader (#994).

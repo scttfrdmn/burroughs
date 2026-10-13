@@ -94,5 +94,5 @@ func (f TableFunc) InvokeCMThread(cmThread uint32, args ...Value) ([]Value, erro
 	if fault := f.inst.world.takeFaultReport(); fault != nil {
 		return nil, fault
 	}
-	return f.inst.invokeIndex(f.addr, "thread.new-indirect entry", args, cmThread)
+	return f.inst.invokeIndex(f.addr, "thread.new-indirect entry", args, cmThread, false)
 }

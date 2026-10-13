@@ -769,6 +769,27 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **A `cabi_realloc` could call any canon built-in or lowered import; the reference traps it**
+  ([#990](https://github.com/scttfrdmn/burroughs/issues/990)).
+  - **Where the reference sets the flag:** found by searching the pin's `definitions.py`, it sets
+    `may_leave = False` at two sites. One is around `LiftLowerContext.reallocate`. The other is around
+    `post_return`, which Burroughs refuses at load.
+  - **The realloc site, in two places:** the realloc runs on a stack marked may-not-leave, both from a
+    lift's argument lowering (`interp.Instance.InvokeMayNotLeave`) and from a lower's
+    (`interp.CanonCaller.Realloc`).
+  - **The check:** every canon built-in and every lowered import (host, async host, stream-consumer and
+    cross-component) traps on the mark, read through `CanonCaller.MayLeave`. This is the reference's
+    `trap_if(not may_leave)`. Exempt are the five built-ins the reference does not check; of those,
+    `context.get` and `context.set` are the two bound here. `resource.drop` became a canon adapter so it can
+    be checked.
+  - **The fixture:** `realloc-wait.wasm`. Its realloc calls `waitable-set.wait`, and wasmtime 49.0.2 traps
+    with *"cannot leave component instance"*. A control realloc calling `context.set` returns 2.
+  - **Witnesses:** `TestAReallocThatCallsABuiltInTraps` (component) and
+    `TestMayLeaveIsFalseExactlyInsideARealloc` (interp), each neutered at its mechanism.
+  - **Not asserted:** the fixture's `res()` row, where Burroughs returns 0. The guard fires, but a late
+    cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
+    Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
+
 - **A created Thread parked in `waitable-set.wait` kept its chain's run slot, and that deadlocked a nested
   child calling back into the parent** ([#977](https://github.com/scttfrdmn/burroughs/issues/977), grave;
   behind `gate:cm-threads`). Fixture first, as ordered.

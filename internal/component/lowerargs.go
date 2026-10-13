@@ -245,7 +245,9 @@ func (f *compFunc) guestAlloc(p allocRequest) (int, error) {
 		return 0, fmt.Errorf("%w: argument %q must live in guest memory, but this lift declares no "+
 			"(memory) canonopt", ErrUnsupportedForm, p.param)
 	}
-	res, err := f.reallocCore.inst.Invoke(f.reallocCore.name,
+	// Through `InvokeMayNotLeave` (#990): the reference's `reallocate` clears `may_leave` for the call, so a
+	// built-in or lowered import the realloc calls traps.
+	res, err := f.reallocCore.inst.InvokeMayNotLeave(f.reallocCore.name,
 		interp.I32(0), interp.I32(0), interp.I32(int32(p.align)), interp.I32(int32(p.byteLen)))
 	if err != nil {
 		// A realloc that traps is the guest refusing the allocation, and it is reported as the guest's
