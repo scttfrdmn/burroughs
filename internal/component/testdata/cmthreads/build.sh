@@ -198,5 +198,17 @@ twc=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y 
 [ "$twc" = "8" ] || { echo "build.sh: thread-wait-callback expected 8, got '$twc'." >&2; exit 1; }
 echo "build.sh: thread-wait-callback result $twc" >&2
 
+# #978's oracle: a sync-typed call enters past a suspended async task's exclusive_thread. 8 = 7 + 1. No
+# engine witness yet: Burroughs hangs on it, and the fix awaits the chair's ruling on the scheduler model.
+"$WASM_TOOLS" parse "$here/sync-enters-past-suspended.wat" -o "$here/sync-enters-past-suspended.wasm"
+sep=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+	--invoke 'run()' "$here/sync-enters-past-suspended.wasm" 2>&1) || {
+	echo "build.sh: the sync-enters-past-suspended run FAILED:" >&2
+	echo "$sep" >&2
+	exit 1
+}
+[ "$sep" = "8" ] || { echo "build.sh: sync-enters-past-suspended expected 8, got '$sep'." >&2; exit 1; }
+echo "build.sh: sync-enters-past-suspended result $sep" >&2
+
 echo "build.sh: switch.reading is hand-assembled from the three channels above — update it by hand" >&2
 echo "          when a figure here moves, and say which channel moved." >&2
