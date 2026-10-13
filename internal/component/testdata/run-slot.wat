@@ -9,9 +9,12 @@
 ;;
 ;; The reference runs one thread at a time (`Store.tick` resumes one; `Thread.resume` runs until it
 ;; suspends), so the second caller can never reach the probe while the first is inside it.
+;;
+;; `(memory 1 1)`: max equal to initial, so the memory is on the Go heap and `-race` can see it (#979). A
+;; memory with room to grow is an mmap reservation on unix, outside the detector's shadow.
 (component
   (core module $memmod (;0;)
-    (memory (;0;) 1)
+    (memory (;0;) 1 1)
     (export "m" (memory 0))
   )
   (core instance $memi (;0;) (instantiate $memmod))

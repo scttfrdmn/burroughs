@@ -647,6 +647,22 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Changed
 
+- **The race gate now says what it cannot see, and the component concurrency witnesses moved to memory it
+  can** ([#979](https://github.com/scttfrdmn/burroughs/issues/979)).
+  - **The blind spot:** on unix, a linear memory is an mmap reservation outside the race detector's
+    shadow, unless its max equals its initial size. So `make race` and CI's race legs see no
+    guest-memory race between agents. The Makefile's `race` target documents it.
+  - **The fix is the fixture-level remedy, as the chair ruled:** a race witness over guest memory declares
+    max equal to initial, which is a real production path. There is no engine knob, which was ruled out
+    on #962.
+  - **Converted:** the four component fixtures that let memory grow, each changed in its one defined
+    memory and nothing else. The whole component package then ran 5 times under `-race` with 0 reports.
+  - **Already heap-backed:** the §4 battery and the interp concurrency tests, now recorded as
+    load-bearing.
+  - **Windows:** its race job is the only one that sees guest memory in a fixture that isn't
+    heap-backed. That's recorded in its workflow, with the triage rule that every recurring report maps
+    to an issue.
+
 - **Concurrent `Component.Call`s on one `Component` now execute one at a time** ([ADR 0101](docs/decisions/0101-a-component-instance-executes-one-task-at-a-time-through-a-run-slot-released-only-where-the-reference-suspends.md),
   #975). This is a change in observable concurrency on a default-on path.
   - Several calls may still be **in flight** at once, but each executes guest code until it suspends,

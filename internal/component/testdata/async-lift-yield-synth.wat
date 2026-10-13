@@ -27,9 +27,12 @@
 ;; Authored with `wasm-tools parse` 1.258.0, modelled on `task-cancel-synth.wat`. **The .wat is committed
 ;; alongside the .wasm**, as that fixture does and the older ones do not — regenerating one of those means
 ;; re-authoring it from its prose description.
+;;
+;; `(memory 1 1)` since #979: max equal to initial puts the memory on the Go heap, where `-race` can see it.
+;; A memory with room to grow is an mmap reservation on unix, outside the detector's shadow.
 (component
   (core module $memmod (;0;)
-    (memory (;0;) 1)
+    (memory (;0;) 1 1)
     (export "m" (memory 0))
   )
   (core instance $memi (;0;) (instantiate $memmod))

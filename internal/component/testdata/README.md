@@ -501,3 +501,25 @@ Authored with `wasm-tools parse` (1.258.0); the `.wat` is committed beside the `
 ```sh
 wasm-tools parse string-arg-realloc-synth.wat -o string-arg-realloc-synth.wasm
 ```
+
+## Heap-backed memories for concurrency witnesses (#979)
+
+Go's race detector shadows only memory the Go runtime allocates. On unix, a linear memory is an mmap
+reservation outside that shadow **unless its declared max equals its initial size**. A concurrency
+witness whose fixture lets its memory grow is therefore blind to guest-memory races under `-race` on
+darwin and Linux. The rule, and why there is no engine knob instead, is in the Makefile's `race` target.
+
+#979 re-encoded these fixtures' one defined memory from `(memory 1)` to `(memory 1 1)`. **Nothing else
+changed**, checked by diffing `wasm-tools print` before and after: exactly one line differs in each.
+
+| fixture | how |
+|---|---|
+| `run-slot.wasm` | edited `run-slot.wat`, re-parsed |
+| `async-lift-yield-synth.wasm` | edited `async-lift-yield-synth.wat`, re-parsed; byte-identical to the round-trip below |
+| `async-waitset-synth.wasm` | no committed source: `wasm-tools print`, the memory line edited, `wasm-tools parse` (1.258.0) |
+| `async-wake-bmm1-synth.wasm` | the same |
+
+Fixtures written for the run-slot and result-store witnesses (`result-store-heap`, `xc`, `xc-gated`) were
+authored heap-backed. **Not converted:** `asynclift/suspending/component.wasm`. It is Rust-built, its
+witness's oracle is an event order rather than the detector, and re-encoding a generated binary would
+detach it from its build record.
