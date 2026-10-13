@@ -60,7 +60,9 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			return params
 		}
 		var resolveErr error
-		onResolve := func(v canon.Value) {
+		// applyLocked is the store itself — lower the result, then resolve — and runs with `h.mu` held, under
+		// the run slot or on the slot holder's goroutine as it leaves host code (see `onResolve` below).
+		applyLocked := func(v canon.Value) {
 			// Lower the result to the retptr, then mark RETURNED and wake any set the subtask has joined.
 			// For the blocking arm this can fire on the impl's OWN goroutine while a guest agent is parked
 			// in waitable-set.wait, so it runs under the table mutex; the retptr write precedes `resolved`
@@ -68,30 +70,6 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			// calls onResolve leaves the retptr untouched. The mutex is one of the TWO edges carrying §4
 			// B-MM-1's acquire guarantee to a parked waiter; the other is signalLocked's wake-channel
 			// close→receive (see async_waitset.go's header, corrected after the litmus witness).
-			//
-			// **The result store takes the caller instance's run slot** (ADR 0101's result-store
-			// amendment). Lowering a result writes guest memory and may call the caller's `realloc`, which
-			// is guest code. So unless the slot's holder is in HOST code right now — inside an impl or an
-			// onCancel, when no guest code of the instance can be executing (`asyncHandles.inHost`) — the
-			// resolving goroutine takes the slot first, as a chain of its own. Without it, a host resolver
-			// or a child component's goroutine (`crossComponentResolve`) wrote the result while another
-			// task of the instance executed (#983): the Windows race job's report on `9f11079`, rebuilt
-			// heap-backed on darwin.
-			//
-			// **The count is read, and the store made, under one `h.mu` hold**, and the holder lowers it
-			// under `h.mu` before its guest resumes. So a store made while it was raised is ordered before
-			// the guest continues, and one that finds it at zero waits for the slot like any other entry.
-			//
-			// NEUTER THIS to bring the race back: skip the acquisition, and
-			// `TestAResultStoreWaitsForTheExecutingTask` sees the store land while another task executes.
-			h.mu.Lock()
-			if h.inHost == 0 {
-				h.mu.Unlock()
-				h.acquireRun(&runChain{}, nil, nil)
-				defer h.releaseRun()
-				h.mu.Lock()
-			}
-			defer h.mu.Unlock()
 			if st.cancellationRequested {
 				// A cancel resolution (the model's on_resolve(None), def:2214–2220): no result is lowered,
 				// and the terminal state is chosen by whether the subtask had started — STARTING ->
@@ -135,6 +113,43 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 				}
 			}
 			st.resolveLocked(subtaskReturned)
+		}
+
+		// onResolve is the resolution the impl is handed. It applies the store under the right ordering.
+		//
+		// **Under the caller instance's run slot** (ADR 0101's result-store amendment, #983). Lowering a
+		// result writes guest memory and may call the caller's `realloc`, which is guest code. Without the
+		// slot, a host resolver or a child component's goroutine (`crossComponentResolve`) wrote the result
+		// while another task of the instance executed: the Windows race job's report on `9f11079`, rebuilt
+		// heap-backed on darwin.
+		//
+		// **Or, while the slot's holder is in HOST code (`asyncHandles.inHost`), queued for the holder to
+		// apply as it leaves host code** (`asyncHandles.leaveHost`), on its own goroutine, before its guest
+		// resumes. Waiting for the slot there can deadlock, because the holder may be the one resolving. And
+		// writing at once was #983's first fix, which `TestAResultStoreDoesNotLandWhileTheHolderIsInHostCode`
+		// showed wrong: the holder's host code reaches guest memory through `Caller`, ADR 0064's plain
+		// region, and a store from another goroutine landed underneath it with nothing ordering the two. The
+		// reference orders them: the resolver's work is another thread's execution, which cannot run during
+		// this thread's host call, but does run before this thread executes guest code again. The queue is
+		// that ordering. It is not deferral to the waiter, which the chair ruled out on #983: the store
+		// still lands before any guest code of the instance runs.
+		//
+		// NEUTER THIS (either arm) to bring a race back. Skipping the acquisition fails
+		// `TestAResultStoreWaitsForTheExecutingTask`. Applying at once instead of queueing fails
+		// `TestAResultStoreDoesNotLandWhileTheHolderIsInHostCode`.
+		onResolve := func(v canon.Value) {
+			h.mu.Lock()
+			if h.inHost > 0 {
+				h.hostStores = append(h.hostStores, func() { applyLocked(v) })
+				h.mu.Unlock()
+				return
+			}
+			h.mu.Unlock()
+			h.acquireRun(&runChain{}, nil, nil)
+			defer h.releaseRun()
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			applyLocked(v)
 		}
 
 		// The impl is host code on this agent's goroutine, under the run slot it holds: while it runs, a

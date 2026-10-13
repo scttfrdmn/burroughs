@@ -90,10 +90,19 @@ func (h *asyncHandles) enterHost() {
 	h.mu.Unlock()
 }
 
+// leaveHost lowers the count, and on the way out of the outermost host call applies every result store
+// queued meanwhile (`asyncHandles.hostStores`), here, on the holder's goroutine, before its guest resumes.
+// That is the reference's order: another thread's resolution cannot run during this thread's host call,
+// and does run before this thread executes guest code again.
 func (h *asyncHandles) leaveHost() {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.inHost--
-	h.mu.Unlock()
+	for h.inHost == 0 && len(h.hostStores) > 0 {
+		apply := h.hostStores[0]
+		h.hostStores = h.hostStores[1:]
+		apply() // applyLocked: h.mu held, as the store requires
+	}
 }
 
 // releaseRun undoes one acquireRun: a nested entry only drops the depth, and the last one gives the slot

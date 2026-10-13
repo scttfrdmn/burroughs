@@ -118,6 +118,20 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **A control that keeps race witnesses' memory visible to the race detector** (#979's follow-up, chair's
+  order). The registries are `raceWitnessFixtures` in `internal/component` and `raceWitnessSources` in
+  `internal/interp`: the #979 conversions, the run-slot, result-store and `xc` fixtures, and the §4
+  battery's named sources.
+  - **What it checks:** two tests decode every registered fixture or source, nested components included,
+    and fail on any defined memory whose max differs from its initial size, naming the file.
+  - **Vacuity guards:** an empty registry fails, and so does a registry that checks no memory.
+  - **Neuters, run:** `run-slot.wat` back to `(memory 1)`, and `litmusWakerSrc` to `1 2`. Each fails its
+    control by name.
+  - **What it can't see, stated in the controls:** a witness added without registering its fixture, and the
+    battery's inline sources.
+  - `xc`'s nested child memory became heap-backed too, so the rule holds for every memory in a registered
+    fixture.
+
 - **The sync lift's scheduling branch: 🧵 from a sync lift** (#970), behind `gate:cm-threads`. This is the
   remaining phase-1 gap. `thread.new-indirect` and the switching forms now accept a sync caller, and a
   sync callee that suspends lets ready Threads run before it returns. With nothing ready it traps, as the
@@ -732,6 +746,20 @@ from the three obviously-wrong `#534` trailers to all eleven.
   diagnose, not a bound to raise.
 
 ### Fixed
+
+- **#983's exception left a window: a result store could land under the slot holder's own host code.**
+  #985 let a store skip the run slot while its holder ran host code, to avoid a deadlock.
+  - **Why that was unsafe:** the holder's impl can reach guest memory through `Caller`, ADR 0064's plain
+    region, and a resolver on another goroutine wrote into that memory meanwhile, with nothing ordering
+    the two. The chair asked for this window to be checked by symbol or witnessed.
+  - **The witness:** `TestAResultStoreDoesNotLandWhileTheHolderIsInHostCode` shows it deterministically.
+    The holder's probe impl wrote a sentinel, resolved another caller on another goroutine, and read back
+    that caller's result.
+  - **The fix:** such a store is now queued, and the holder applies it as it leaves host code, on its own
+    goroutine, before its guest resumes. That is the reference's order. It keeps the deadlock fix, and it
+    isn't deferral to the waiter.
+  - **Neuter:** applying at once reads back `0x2`, 3 of 3. ADR 0101's result-store amendment records the
+    answer.
 
 - **The clause-2 witness raced its own guest, and put 12 reports into every Windows race run.** This was
   conflict A of the race classification, behind `gate:threads`.
