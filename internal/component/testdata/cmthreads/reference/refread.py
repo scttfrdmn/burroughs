@@ -287,6 +287,86 @@ def nested_sync_unwind(t_traps):
     return body
 
 
+def residual(t2_sets_flag):
+    """d, cmthreads/residual.wat (#977's residual): T1 waits on a child's `g`, `g` WAITs on the parent's own
+    async `h2`, and `h2` YIELDs until a flag only T2 sets. wasmtime 49.0.2 hits its "delivering non-present
+    event" bug on this shape, so this reading is the oracle. Control (not t2_sets_flag): T2 does nothing."""
+
+    def body(out, site):
+        store = d.Store()
+        p = d.ComponentInstance(store)
+        pmem = d.MemInst(bytearray(65536), "i32")
+        flag = {"set": False, "t1": False}
+        hft = d.FuncType([], [d.U32Type()], async_=True)
+
+        def h2(args):
+            return [1]  # YIELD
+
+        def h2_cb(args):
+            if flag["set"]:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [7])
+                return [0]
+            return [1]
+
+        h2_fi = store.lift(h2, hft, d.CanonicalOptions(async_=True, callback=h2_cb), p)
+
+        c = d.ComponentInstance(store)
+        cmem = d.MemInst(bytearray(65536), "i32")
+        hlow = store.lower(h2_fi, hft, d.CanonicalOptions(async_=True, memory=cmem), c)
+
+        def g(args):
+            [q] = hlow([16])
+            if q & 0xF == 2:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(cmem, 16) + 1])
+                return [0]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(q >> 4, s)
+            return [2 | (s << 4)]  # WAIT
+
+        def g_cb(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(cmem, 16) + 1])
+            return [0]
+
+        g_fi = store.lift(g, hft, d.CanonicalOptions(async_=True, callback=g_cb), c)
+        glow = store.lower(g_fi, hft, d.CanonicalOptions(async_=True, memory=pmem), p)
+
+        def t1(args):
+            [q] = glow([24])
+            if q & 0xF != 2:
+                [s] = d.canon_waitable_set_new()
+                d.canon_waitable_join(q >> 4, s)
+                d.canon_waitable_set_wait(pmem, s, 32)
+            flag["t1"] = True
+            return []
+
+        def t2(args):
+            if t2_sets_flag:
+                flag["set"] = True
+            return []
+
+        tbl = d.Table()
+        f1 = tbl.add(d.CoreFuncRef(BODYT, t1))
+        f2 = tbl.add(d.CoreFuncRef(BODYT, t2))
+
+        def run(args):
+            [a] = d.canon_thread_new_indirect(BODYT, tbl, f1, 0)
+            [b] = d.canon_thread_new_indirect(BODYT, tbl, f2, 0)
+            d.canon_thread_resume_later(a)
+            d.canon_thread_resume_later(b)
+            return [1]
+
+        def cb(args):
+            if flag["t1"]:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(pmem, 24)])
+                return [0]
+            return [1]
+
+        run_fi = store.lift(run, hft, d.CanonicalOptions(async_=True, callback=cb), p)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
 if __name__ == "__main__":
     import hashlib
 
@@ -302,3 +382,5 @@ if __name__ == "__main__":
     read("trap-while-waiting control (unreachable -> nop)", trap_while_waiting(False))
     read("nested-sync-unwind (T traps)", nested_sync_unwind(True))
     read("nested-sync-unwind control (T releases)", nested_sync_unwind(False))
+    read("residual (#977; wasmtime 49.0.2: BUG)", residual(True))
+    read("residual control (T2 does nothing)", residual(False))

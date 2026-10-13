@@ -8,3 +8,5 @@ trap-while-waiting (wasmtime 49.0.2: trap in t2): trap t2
 trap-while-waiting control (unreachable -> nop): value 1
 nested-sync-unwind (T traps): trap T
 nested-sync-unwind control (T releases): trap h's wait (the sync tail)
+residual (#977; wasmtime 49.0.2: BUG): value 8
+residual control (T2 does nothing): HANG

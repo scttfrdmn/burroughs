@@ -672,15 +672,20 @@ waiter whose wait sits inside a synchronous call into instance C: C's sync lift 
 caller's goroutine through `bindCrossComponent`'s sync arm, and its implicit Thread waits. The unwind, by
 symbol, from the wake outward:
 
-1. **The wait returns.** `waitableSetWait`'s loop, or sync `subtask.cancel`'s, receives its record's `kill`
-   or its owner's `faulted`, and returns `errThreadKilled` or the trap.
-2. **The slot is taken back.** That happens inside `asyncHandles.suspending` before the excursion ends,
-   whatever `fn` returned, and the saved `(chain, depth)` is restored. So C's depth is whole for the
-   unwind's `releaseRun`.
+1. **The wait returns.** `waitableSetWait`'s loop, or sync `subtask.cancel`'s, receives its record's
+   `waitAbort` (closed by the kill, or by the owner's trap when the waiter is the owner), and
+   `suspending` returns `errThreadKilled` or the trap.
+2. **The slot is NOT taken back** (corrected by the build). This step first read *"the slot is taken back
+   … whatever `fn` returned"*. The build ended an aborted wait without the re-take instead. The re-take
+   would have the ended Thread contend for a slot it will not use, and at `Close` it would wait on a
+   Thread the close has not yet ended. So the Thread unwinds holding nothing, and **`releaseRun` became
+   `releaseRunFor(ch)`**, which releases only a slot its own chain holds.
+   - **C's frames:** their entry still holds C's slot under the same chain, and releases it.
+   - **The aborted frames' instance:** its slot is released by whoever holds it.
 3. **The canon call's error becomes a trap of C's guest.** `interp.Instance.callAdapter` returns the
    error, and the interpreter unwinds C's frames as it does for any failing host call. That is the
    existing path every refusing canon built-in already takes.
-4. **C's entry cleans up.** `compFunc.invokeWith`'s deferred `f.h.releaseRun()` drops C's run-slot depth,
+4. **C's entry cleans up.** `compFunc.invokeWith`'s deferred `f.h.releaseRunFor(ch)` drops C's run-slot depth,
    and its deferred `f.threads.remove(tid)` frees C's implicit Thread record. The error is returned as the
    call's.
 5. **The caller sees an error.** `bindCrossComponent`'s sync arm returns `res.flat, cerr`. The caller's
@@ -721,6 +726,17 @@ gives wasmtime's 5. Readings, over both `DETERMINISTIC_PROFILE` settings and eig
   another instance. ADR 0102 is with Scott, and its text is not touched here.
 
 So the fixture discriminates by trap **site**: T's trap where the control traps in the sync tail.
+
+**And wasmtime does read this case after all; the build measured it.** The text above expected that it
+could not, on the strength of ADR 0102's note. It reads both arms, 10 of 10 each, and agrees with the
+reference on both:
+
+| arm | wasmtime 49.0.2 | reference | Burroughs under A |
+|---|---|---|---|
+| T traps (`nested-sync-unwind.wasm`) | `unreachable` in `tmod` (T) | T's trap | **T's trap** |
+| control (`nested-sync-unwind-control.wasm`) | *"cannot block a synchronous task before returning"* | sync-tail trap | **5**, the divergence (#999) |
+
+So the divergence is from both oracles, not from one.
 
 **`killParked`'s close follows the rule from its earlier fix.** It already closes every `kill` *after*
 `tt.mu.Unlock()`, and it takes no `asyncHandles.mu`. A's extension keeps both properties:
@@ -811,3 +827,68 @@ they name moved.
   admission nor what it waits for. Only the slot moves, at point 4.
 - **Cancellation delivered to a suspended Thread, and the promote divergence.** These are the two slices the
   chair ordered after A's build.
+
+### The build, as measured
+
+Built against the owed list, in the chair's order. Every witness is in `cmthreads_optiona_test.go` unless
+named, and every neuter below was run.
+
+| item | fixture | oracle | Burroughs | neuter (run) → result |
+|---|---|---|---|---|
+| a | `sync-enters-past-suspended` | wasmtime 8 | 8 | the scheduler keeps the slot after a giver parks → hang; no kick → hang |
+| b | `wait-runs-ready` (#998) | wasmtime 5, reference 5 | 5 | no kick → hang |
+| c | `trap-while-waiting` + `-control` | wasmtime and reference `trap t2`; control: reference `value 1` | T2's trap, every Thread gone; control 1 | `trap` drops the error → hang; `killParked` skips waiters → T1 stays registered |
+| c′ | `nested-sync-unwind` + `-control` | wasmtime and reference: T's trap; control: both trap in `h`'s wait | T's trap, the child's slot and table empty; control **5** (#999) | `routeFault` not aborting a waiting owner → *"ended while parked"* in place of T's trap (the note had predicted a hang) |
+| d | `residual` | reference 8, control HANG; wasmtime hits its bug | 8 | the wait as a bare release → hang |
+| e | `yield-admits-entry` | wasmtime 8 | 8 | `yieldPoint` re-taking `entrySem` → **passes** (below) |
+| f | `orphan-trap` | none (post-resolution) | the trap is in `orphanTraps` | not appending → empty |
+| g | (unit) | — | `markReady` panics without the slot | the assertion returning at once → no panic |
+
+**Item d's first shape did not discriminate, and was replaced.** In it, `g` called the parent's sync `f`,
+which readied T2 and suspended. The bare-release neuter passed, because `f`'s own handoff satisfied a
+scheduler still waiting on T1. The replacement puts T2 behind `h2`'s YIELD, a scheduling point that a stuck
+scheduler never hears. wasmtime then hits its bug, so the oracle is the reference reading.
+
+**Item e's neuter does not fail, and under A it cannot.**
+- While a YIELD's chain runs, the run slot already excludes every entrant, and the chain hands the slot on
+  without freeing it.
+- A waiting Thread ends the chain, and the reply then frees `entrySem`.
+
+So the re-take only deadlocked under the chain model. The fixture guards that deadlock, and the re-take's
+removal is kept because it is the reference's order (point 3), not because a guest can see it. No shape
+that makes it observable was found. It would need an async entry required while a Thread of the yielding
+task executes without waiting, and a sync call cannot reach an async lift.
+
+**Two mechanism details the text did not fix, decided in the build:**
+- **`releaseRun` → `releaseRunFor(ch)`:** it releases only a slot its own chain holds, because an ended
+  waiter or parked Thread unwinds without the slot (point 7, corrected above).
+- **`threadTable.finish`:** a lift's final answer reads its fault and marks the owner returned in one
+  critical section. A trap routed after that is an orphan, and no trap is lost between the check and the
+  lift's return.
+
+**The existing witnesses, against the prediction table:** all of them pass unchanged in value. Where the
+table predicted a mechanism change, the mechanism changed: `giveBack` carries the slot, `yieldPoint` takes
+neither lock, and the sync branch hands the slot to its origin with the trap. The one restated neuter,
+`TestACreatedThreadsWaitReleasesTheRunSlot`'s, was run in its new form (the wait keeps the slot), and it
+hangs.
+
+**Repeated runs:**
+- **YIELD order:** `TestASpawnedThreadRunsAtTheYieldAndHoldsItsOwnIndex` and
+  `TestAThreadThatSuspendsPartwayLetsTheYieldingCallbackContinue`, 50 times each: 100 of 100 pass.
+- **Race:** the concurrency witnesses (30 tests: run-slot, result-store, liftpark, cross-component and every
+  🧵 one), 50 times each under `-race`, on fixtures registered heap-backed in `raceWitnessFixtures`:
+  `go test` passes, with no race reported.
+
+**The handoff's cost, `switch.wasm`, by `make ab`** (10 rounds, base `main`, head this build, plus a null
+arm built independently from `main`; darwin/arm64, Apple M4 Pro, not queued):
+
+| | base | head | null |
+|---|---|---|---|
+| sec/op | 45.30µ ± 77% | 45.61µ ± 33%, ~ (p=0.353) | 45.48µ ± 122%, ~ (p=0.896) |
+| B/op | 11.97Ki | 12.46Ki, +4.05% (p=0.000) | 11.97Ki, ~ |
+| allocs/op | 216 | 221, +2.31% (p=0.000) | 216, ~ |
+
+- **No time change is detectable** against the chair's 45.15 µs baseline. The null arm's own spread is
+  ±122%, so this box cannot resolve a change smaller than that.
+- **The cost that is measured is five allocations per run.** That is one `runChain` per created Thread,
+  and `switch.wasm` creates five.

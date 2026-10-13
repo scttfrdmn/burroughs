@@ -249,7 +249,7 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 		// so another task of the instance may execute meanwhile, and this one takes the run slot back before
 		// it stores the event (ADR 0101). Without the slot this was #975: the sync path took none, so two
 		// waiters woke and stored their events at `ptr` in parallel.
-		err := c.Blocking(h.suspending(c, func() error {
+		err := c.Blocking(h.suspending(c, func(abort <-chan struct{}) error {
 			for {
 				h.mu.Lock()
 				if e, ready := set.pendingEventLocked(); ready {
@@ -263,6 +263,8 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 				case <-wake: // a member resolved (or another waiter's cycle) — re-check
 				case <-c.Context().Done(): // Close: tear the agent down (H-3)
 					return c.Context().Err()
+				case <-abort: // a trap in this Thread's task ended it (ADR 0101's Option A, point 7)
+					return nil // `suspending` returns the abort's error
 				}
 			}
 		}))

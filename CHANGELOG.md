@@ -838,6 +838,32 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **The run slot is now held by the Thread executing guest code** (ADR 0101's Option A, behind
+  `gate:cm-threads`). This fixes [#978](https://github.com/scttfrdmn/burroughs/issues/978),
+  [#998](https://github.com/scttfrdmn/burroughs/issues/998) and #977's residual.
+  - **The handoff carries the slot:** every handoff gives it to the scheduler, and a Thread that waits
+    hands it over with a `detach`.
+  - **The YIELD arm** takes neither `entrySem` nor the slot.
+  - **The `Store.tick` equivalent:** a free with ready Threads queued kicks the scheduler.
+  - **A created Thread's trap goes to its owner**, and ends the owner's Threads, waiters included. A trap
+    after the owner's call has returned is kept in `threadTable.orphanTraps`.
+  - **Witnessed by eight fixtures:**
+    - #978's sync call past a suspended task, 8;
+    - #998's Thread readied before WAIT, 5;
+    - a trap while a sibling waits, plus its completing control;
+    - a trap unwinding through a sync cross-component call, plus its control, a divergence on #999;
+    - #977's residual, 8;
+    - an async entry during a YIELD, 8;
+    - an orphaned trap;
+    - an append without the slot.
+
+    Each comes with its oracle (wasmtime, or the calibrated reference where wasmtime hits its bug), and
+    every neuter was run.
+  - **One neuter cannot fail under A, and that is recorded:** `yieldPoint` re-taking `entrySem` is no
+    longer observable to a guest. The details are in ADR 0101's build record.
+  - **Cost:** no time change detectable on `switch.wasm` (45.30µ → 45.61µ, p=0.353; the null arm spreads
+    ±122%), plus 5 allocations per run, one `runChain` per created Thread.
+
 - **A created Thread parked in `waitable-set.wait` kept its chain's run slot, and that deadlocked a nested
   child calling back into the parent** ([#977](https://github.com/scttfrdmn/burroughs/issues/977), grave;
   behind `gate:cm-threads`). Fixture first, as ordered.

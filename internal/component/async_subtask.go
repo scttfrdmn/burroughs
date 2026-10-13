@@ -123,6 +123,10 @@ type asyncHandles struct {
 	// that keying self-deadlocked exactly that chain, which #976 had introduced (runslot.go).
 	runChain *runChain
 	runDepth int
+	// schedHolds reports that the run slot is held by the component-model scheduler, between Threads: set
+	// by a Thread handing the slot over, or by the scheduler's own acquire, and cleared when it gives the
+	// slot to a Thread or frees it. Guarded by mu. ADR 0101's Option A: the handoff carries the slot.
+	schedHolds bool
 	// threads is this instance's Thread table, so a suspension point can find its caller's chain.
 	threads *threadTable
 	// inHost counts how deep the run slot's holder is inside an async lower's impl or a subtask's
@@ -565,10 +569,12 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			//
 			// And `h.suspending` inside it, because the reference's sync cancel waits with `wait_until` — a
 			// suspension — so another task of the instance may execute meanwhile (ADR 0101).
-			if werr := c.Blocking(h.suspending(c, func() error {
+			if werr := c.Blocking(h.suspending(c, func(abort <-chan struct{}) error {
 				select {
 				case <-wake:
 					return nil
+				case <-abort: // a trap in this Thread's task ended it (ADR 0101's Option A, point 7)
+					return nil // `suspending` returns the abort's error
 				case <-time.After(subtaskCancelBound):
 					return fmt.Errorf("%w: subtask %d did not resolve within %s of its cancellation — "+
 						"the host impl's cancel handler never resolved it", ErrSubtaskCancelExpired, i,

@@ -163,14 +163,20 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 	// passes its chain in the context, so a call back into an instance this chain already holds re-enters
 	// it. Keyed by agent until #984, which found #976's keying self-deadlocking exactly
 	// that chain (`reenter.wasm`).
-	if !f.h.acquireRun(runChainFrom(ctx), implicit, ctx.Done()) {
+	ch := runChainFrom(ctx)
+	if !f.h.acquireRun(ch, implicit, ctx.Done()) {
 		return liftResult{}, fmt.Errorf("%w: the call's context ended while waiting for this instance to "+
 			"finish executing another task", ErrCancelled)
 	}
-	defer f.h.releaseRun()
+	defer f.h.releaseRunFor(ch)
 	flat, err := f.core.inst.InvokeCMThread(f.core.name, tid, params...)
 	if err != nil {
 		return liftResult{}, err
+	}
+	// **A trap in one of this lift's Threads is this call's trap** (ADR 0101's Option A, point 7), even
+	// when the lift returned normally after it: the reference's trap ends the computation.
+	if ferr := f.threads.finish(implicit); ferr != nil {
+		return liftResult{}, ferr
 	}
 	return liftResult{flat: flat}, nil
 }
@@ -332,7 +338,13 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 	// (YIELD), or parks and re-enters with an event (WAIT). The callee's return and every callback's
 	// return go through the SAME decode — a second decode for the re-entry path is how the two could
 	// drift, which is what #788's multi-cycle pin exists to catch.
+	owner := f.threads.get(task.threadIdx)
 	for {
+		// **A trap routed to this task ends it here** (ADR 0101's Option A, point 7), before any decode or
+		// re-entry: one of its Threads trapped while this loop was between entries.
+		if ferr := f.threads.faultOf(owner); ferr != nil {
+			return liftResult{}, ferr
+		}
 		if len(res) != 1 {
 			return liftResult{}, fmt.Errorf("%w: async lift callee returned %d core values, want 1 (packed)", ErrUnsupportedForm, len(res))
 		}
@@ -413,6 +425,11 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 
 		switch code {
 		case callbackExit:
+			// The final answer, taken with the fault in one critical section (`threadTable.finish`): a trap
+			// routed to this task before here is the call's, and one routed after is an orphan.
+			if ferr := f.threads.finish(owner); ferr != nil {
+				return liftResult{}, ferr
+			}
 			// **Read the LOCAL task, never the shared slot.** This was `f.h.lift.resolved`, which is
 			// correct only while one task exists: with interleaving it asks whether *whatever task is
 			// current* resolved, and the answer can be another task's. A wrong answer here is silent —
@@ -451,7 +468,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 			// re-YIELDs until its spawned body has run, the loop would never end. `yieldPoint` is the
 			// reference's `wait_until(...)` taking its blocking branch; see it for the citation.
 			task.waitSet = 0
-			if rerr := f.threads.yieldPoint(f.h, task); rerr != nil {
+			if rerr := f.threads.yieldPoint(task); rerr != nil {
 				return liftResult{}, rerr
 			}
 			res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventNone}))
@@ -515,8 +532,9 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// at its next suspension point or return.
 	// A fresh chain per entry: an async entry is never nested inside a synchronous call (a sync lower of
 	// an async lift is refused by name in `bindCrossComponent`).
-	f.h.acquireRun(&runChain{}, f.threads.get(task.threadIdx), nil)
-	defer f.h.releaseRun()
+	ch := &runChain{}
+	f.h.acquireRun(ch, f.threads.get(task.threadIdx), nil)
+	defer f.h.releaseRunFor(ch)
 
 	// Allocate and write, then call — all three inside the one acquisition above. `lowerPending` does not
 	// take the entry itself, precisely so it cannot be called from somewhere that does not hold it.
@@ -548,8 +566,9 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 			"slot", ErrCancelled)
 	}
 	defer f.h.leaveTask(prev)
-	f.h.acquireRun(&runChain{}, f.threads.get(task.threadIdx), nil) // after the entry slot (ADR 0101)
-	defer f.h.releaseRun()
+	ch := &runChain{}
+	f.h.acquireRun(ch, f.threads.get(task.threadIdx), nil) // after the entry slot (ADR 0101)
+	defer f.h.releaseRunFor(ch)
 	// The task's implicit Thread index travels into every entry — the callee's and each callback
 	// re-entry's — so `thread.index` answers the same number across the loop, which is what makes it
 	// the TASK's Thread rather than one per stack.
@@ -634,6 +653,7 @@ func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, 
 	}
 	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, async: newAsyncHandles(), threads: newThreadTable()}
 	w.async.threads = w.threads // a suspension point finds its caller's chain through the table (runslot.go)
+	w.threads.h = w.async       // the append assertion reads the slot's holder (ADR 0101, Option A, point 5)
 	for _, d := range c.Defs {
 		if err := w.stepAll(d); err != nil {
 			w.close()

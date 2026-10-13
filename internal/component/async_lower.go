@@ -179,8 +179,9 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 				return
 			}
 			h.mu.Unlock()
-			h.acquireRun(&runChain{}, nil, nil)
-			defer h.releaseRun()
+			ch := &runChain{}
+			h.acquireRun(ch, nil, nil)
+			defer h.releaseRunFor(ch)
 			apply(v) // takes h.mu for its bookkeeping only, never across its guest-memory work
 		}
 

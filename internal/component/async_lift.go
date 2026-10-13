@@ -753,6 +753,15 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 	// `task.ctx` because the context is the caller's and this function does not own it.
 	requested := false
 
+	// The task's own fault channel: a trap routed to this task ends the WAIT (ADR 0101's Option A, point 7).
+	// Nil, so never ready, for an instance with no Thread table.
+	var owner *cmThread
+	var faulted <-chan struct{}
+	if h.threads != nil {
+		owner = h.threads.get(task.threadIdx)
+		faulted = h.threads.faultChan(owner)
+	}
+
 	for {
 		h.mu.Lock()
 		set, ok := handleAt[*waitableSet](h, si)
@@ -808,6 +817,9 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 			// pass reports that outcome, so the refusal has no consumer.
 			_ = task.requestCancelLocked()
 			h.mu.Unlock()
+		case <-faulted:
+			// One of this task's Threads trapped while it waited (ADR 0101's Option A, point 7).
+			return event{}, h.threads.faultOf(owner)
 		case <-deadline.C:
 			return event{}, fmt.Errorf("%w: waitable set %d produced nothing in %s — the host impl or "+
 				"guest that would resolve it never did", ErrLiftParkExpired, si, bound)
