@@ -702,8 +702,15 @@ from the three obviously-wrong `#534` trailers to all eleven.
   - **Reference readings:** where wasmtime cannot read a fixture, the oracle is a scenario run against the
     pinned `definitions.py`, labelled as a reference reading (ADR 0102).
   - **The `gate:cm-threads` flip list** is [#999](https://github.com/scttfrdmn/burroughs/issues/999).
-  - **A wasmtime bug report is prepared, not filed,** under `docs/upstream/`.
-  - **Oracles committed first**, under `testdata/cmthreads`, both heap-backed:
+  - **The reference-reading method, calibrated** (the chair's ruling after the merge). `testdata/cmthreads/reference/refread.py`
+    drives the pinned `definitions.py`, which it records by commit and by the vendored file's sha256. It
+    gives wasmtime's 5 on `wait-runs-ready`, where wasmtime reads, and its control hangs there.
+    - **`trap-while-waiting`:** `trap t2`, and the completing control gives `value 1`.
+    - **The nested sync unwind (c′):** T's trap, which agrees with point 7. Its control traps in the sync
+      tail (`trap_if(not candidates)`) where Burroughs would admit the wait. That is a measured divergence,
+      added to #999. It narrows ADR 0102's example, whose text is untouched.
+  - **The wasmtime bug's reproduction** is `testdata/cmthreads/wasmtime-bug-repro.wat`. `build.sh` asserts
+    the bug, so a fixed wasmtime fails it, and the prepared upstream report is a comment on #999.  - **Oracles committed first**, under `testdata/cmthreads`, both heap-backed:
     - `wait-runs-ready.wasm`: wasmtime 49.0.2 returns 5, and Burroughs does not return. It is
       [#998](https://github.com/scttfrdmn/burroughs/issues/998), new: the WAIT arm is not a scheduling
       point.
