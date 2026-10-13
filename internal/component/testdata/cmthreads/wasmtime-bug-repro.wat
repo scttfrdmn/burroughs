@@ -1,8 +1,13 @@
 ;; Minimal reproduction: wasmtime 49.0.2 reports "BUG: delivering non-present event"
 ;; (crates/wasmtime/src/runtime/component/concurrent.rs:948).
 ;;
-;; Run:  wasm-tools parse repro.wat -o repro.wasm
-;;       wasmtime run -W component-model-threading=y -W component-model-async=y --invoke 'run()' repro.wasm
+;; A recorded limit of the oracle, not a fixture Burroughs is measured on. build.sh ASSERTS the BUG message,
+;; so the day a wasmtime upgrade fixes it, that entry fails and the limit is re-read. The prepared (unfiled)
+;; upstream report is a comment on #999.
+;;
+;; Run:  wasm-tools parse wasmtime-bug-repro.wat -o wasmtime-bug-repro.wasm
+;;       wasmtime run -W component-model-threading=y -W component-model-async=y --invoke 'run()' \
+;;         wasmtime-bug-repro.wasm
 ;;
 ;; A created Thread T async-lowers a nested child's `g` and blocks in a sync `waitable-set.wait` on its
 ;; subtask. `g` is a callback-lifted async function that YIELDs until a flag is set. The parent's `run`

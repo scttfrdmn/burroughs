@@ -1,0 +1,10 @@
+# REFERENCE READING — definitions.py @ 2bed77e4228841c1d2721996d3ecc169ff96b158, not a wasmtime reading.
+# vendored file sha256 a23cc41e4b3ce198003f22d524b16e52bef84d9930a5d4a0422327ecc0458180
+# Each line is the set of outcomes over DETERMINISTIC_PROFILE in {False, True} x seeds [0, 1, 2, 3, 4, 5, 6, 7].
+# HANG means no result and no trap within 5s.
+wait-runs-ready (calibration; wasmtime 49.0.2: 5): value 5
+wait-runs-ready control (T never readied): HANG
+trap-while-waiting (wasmtime 49.0.2: trap in t2): trap t2
+trap-while-waiting control (unreachable -> nop): value 1
+nested-sync-unwind (T traps): trap T
+nested-sync-unwind control (T releases): trap h's wait (the sync tail)

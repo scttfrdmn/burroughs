@@ -238,5 +238,23 @@ case "$tww" in
 	;;
 esac
 
+# A recorded LIMIT of the oracle (#999): wasmtime 49.0.2's "BUG: delivering non-present event". Asserted, so
+# a wasmtime that fixes it fails here and the fixtures that route around it are re-read. Parsed to a temp
+# file: the repro is not a fixture, so no .wasm is committed for it.
+bug_wasm=$(mktemp -t wasmtime-bug-repro.XXXXXX)
+"$WASM_TOOLS" parse "$here/wasmtime-bug-repro.wat" -o "$bug_wasm"
+bug=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+	--invoke 'run()' "$bug_wasm" 2>&1 || true)
+rm -f "$bug_wasm"
+case "$bug" in
+*"BUG: delivering non-present event"*) echo "build.sh: wasmtime-bug-repro still hits the recorded wasmtime bug" >&2 ;;
+*)
+	echo "build.sh: wasmtime-bug-repro no longer reports the recorded BUG. The limit has moved: re-read" >&2
+	echo "          trap-while-waiting's control and #977's residual against wasmtime. Got:" >&2
+	echo "$bug" >&2
+	exit 1
+	;;
+esac
+
 echo "build.sh: switch.reading is hand-assembled from the three channels above — update it by hand" >&2
 echo "          when a figure here moves, and say which channel moved." >&2

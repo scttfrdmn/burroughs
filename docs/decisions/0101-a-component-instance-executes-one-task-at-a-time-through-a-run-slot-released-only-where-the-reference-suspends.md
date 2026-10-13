@@ -701,6 +701,27 @@ trap through a sync cross-component call at all. **So the build owes a fixture, 
 ADR 0102 records that wasmtime 49.0.2 traps a sync-lift `waitable-set.wait` outright. So this oracle is the
 **reference reading** (below), with wasmtime's refusal recorded beside it.
 
+**The reference has decided the case, and the expected value above holds** (the chair's ruling after the
+merge: the reference decides, not the prose). The scenario is `nested_sync_unwind` in
+`testdata/cmthreads/reference/refread.py`, calibrated first on `wait-runs-ready`, where the reference
+gives wasmtime's 5. Readings, over both `DETERMINISTIC_PROFILE` settings and eight seeds each:
+
+| arm | reference reading |
+|---|---|
+| T traps | **T's trap**, the only outcome |
+| control: T releases instead | **the wait's own trap**, raised at `canon_lift`'s sync tail, `trap_if(not candidates)` (traced) |
+
+- **The trap arm agrees with the prose:** the parent's call returns T's trap.
+- **The control arm does not complete.** `h`'s wait is on a subtask whose callee runs in *another*
+  instance, and the sync tail resumes only `h`'s own instance's Threads. Once T has run, no candidate is
+  left, and the tail traps.
+- **Burroughs admits that wait and would return 5 under A.** That is a **measured divergence**, added to
+  #999. It also narrows ADR 0102's recorded example, that the pin admits a sync `waitable-set.wait`. The pin
+  admits it where a Thread of the waiting instance can satisfy it, and traps it where the event depends on
+  another instance. ADR 0102 is with Scott, and its text is not touched here.
+
+So the fixture discriminates by trap **site**: T's trap where the control traps in the sync tail.
+
 **`killParked`'s close follows the rule from its earlier fix.** It already closes every `kill` *after*
 `tt.mu.Unlock()`, and it takes no `asyncHandles.mu`. A's extension keeps both properties:
 - **Waiter `kill` channels:** closed in the same post-unlock loop.
@@ -763,8 +784,10 @@ they name moved.
   with this amendment). wasmtime 49.0.2 traps with `unreachable` in `bodymod!t2`, 10 of 10. The call must
   return that trap, not hang, and T1's wait must be ended. Neuter: the scheduler frees the slot and drops
   the trap, which hangs, bounded.
-  - **Its completing control** (`unreachable` → `nop`) gets a **reference reading** from the pin, by the
-    scenario method above, because both wasmtime control shapes hit the wasmtime bug. That makes the
+  - **Its completing control** (`unreachable` → `nop`) has a **reference reading** from the pin, because
+    both wasmtime control shapes hit the wasmtime bug. The reading is `value 1`, and the trap arm reads
+    `trap t2`. Both are in `testdata/cmthreads/reference/refread.reading`, taken after the method's
+    calibration on `wait-runs-ready`. That makes the
     fixture discriminate in both directions: a trap with `t2` and a completion without it. The fixture's
     header records the wasmtime bug.
 - **The owner-resolved trap test** (point 7): the trap is read from `threadTable.orphanTraps` after the
