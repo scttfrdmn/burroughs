@@ -684,6 +684,24 @@ from the three obviously-wrong `#534` trailers to all eleven.
   - **#984's re-entry:** it survives on a chain per Thread.
   - **Witnesses:** all 40 existing ones are listed with predicted changes, and three new fixtures are
     owed, oracle first.
+  - **Amended on the chair's first review** (three items).
+    - **Point 7:** a created Thread's trap now goes to its owner rather than to the chain's origin, and a
+      waiting Thread can be ended by the trap's wake. Today an unclaimed trap is dropped, and a waiter is
+      woken only by `Close`.
+    - **Point 3:** `yieldPoint` waits for the scheduler's reply, and that wait also responds to `stop` and
+      to the task's context.
+    - **Point 5:** every ready-queue write site is enumerated, and the two that append get a test-build
+      assertion.
+    - **Back to the chair:** item 1 is new mechanism, so the record returns for a second review.
+  - **Oracles committed first**, under `testdata/cmthreads`, both heap-backed:
+    - `wait-runs-ready.wasm`: wasmtime 49.0.2 returns 5, and Burroughs does not return. It is
+      [#998](https://github.com/scttfrdmn/burroughs/issues/998), new: the WAIT arm is not a scheduling
+      point.
+    - `trap-while-waiting.wasm`: wasmtime 49.0.2 traps in `t2`, and Burroughs does not return.
+  - **Two wasmtime 49.0.2 limits, recorded in the fixtures:**
+    - it refuses a future copy whose two ends are in one instance;
+    - it reports *"BUG: delivering non-present event"* when a created Thread's wait receives the event of a
+      YIELD-looping callee's subtask.
 
 - **One rule for when the pinned reference and a toolchain disagree** ([ADR 0102](docs/decisions/0102-the-pinned-reference-defines-the-semantics-and-a-toolchains-stricter-refusal-is-followed-unless-burroughs-implements-and-witnesses-what-the-pin-admits.md),
   proposed; the chair's interim rule, going to Scott decided-unless-he-objects).
