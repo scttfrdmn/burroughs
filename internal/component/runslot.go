@@ -94,15 +94,23 @@ func (h *asyncHandles) enterHost() {
 // queued meanwhile (`asyncHandles.hostStores`), here, on the holder's goroutine, before its guest resumes.
 // That is the reference's order: another thread's resolution cannot run during this thread's host call,
 // and does run before this thread executes guest code again.
+//
+// **Each store runs with `h.mu` RELEASED.** A store's lowering may call the caller's `cabi_realloc`, which is
+// guest code, and guest code must not run under an engine lock (`asyncLowerFunc`'s `apply`). So the queue
+// is popped under the lock and each store applied outside it. A store that arrives meanwhile finds
+// `inHost` at zero and takes the run slot, which this holder still has, so it waits its turn rather than
+// joining this queue.
 func (h *asyncHandles) leaveHost() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.inHost--
 	for h.inHost == 0 && len(h.hostStores) > 0 {
 		apply := h.hostStores[0]
 		h.hostStores = h.hostStores[1:]
-		apply() // applyLocked: h.mu held, as the store requires
+		h.mu.Unlock()
+		apply() // takes h.mu for its own bookkeeping, never across its guest-memory work
+		h.mu.Lock()
 	}
+	h.mu.Unlock()
 }
 
 // releaseRun undoes one acquireRun: a nested entry only drops the depth, and the last one gives the slot

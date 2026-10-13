@@ -60,16 +60,33 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			return params
 		}
 		var resolveErr error
-		// applyLocked is the store itself — lower the result, then resolve — and runs with `h.mu` held, under
-		// the run slot or on the slot holder's goroutine as it leaves host code (see `onResolve` below).
-		applyLocked := func(v canon.Value) {
-			// Lower the result to the retptr, then mark RETURNED and wake any set the subtask has joined.
-			// For the blocking arm this can fire on the impl's OWN goroutine while a guest agent is parked
-			// in waitable-set.wait, so it runs under the table mutex; the retptr write precedes `resolved`
-			// so a waiter that observes the resolution sees the lowered result. A blocked callee that never
-			// calls onResolve leaves the retptr untouched. The mutex is one of the TWO edges carrying §4
-			// B-MM-1's acquire guarantee to a parked waiter; the other is signalLocked's wake-channel
-			// close→receive (see async_waitset.go's header, corrected after the litmus witness).
+		// apply is the store itself — lower the result, then resolve — run under the run slot, or on the slot
+		// holder's goroutine as it leaves host code (see `onResolve` below). It takes `h.mu` only for its
+		// bookkeeping, and **never across the guest-memory work**.
+		//
+		// **Why not one `h.mu` hold, as this was.** Lowering a string or list result calls `Heap.Realloc`
+		// (`canon.StoreString`, `canon.StoreList`), which `guestHeap` routes to `CanonCaller.Realloc`: the
+		// caller's `cabi_realloc`, which is guest code. Inside one `h.mu` hold that is guest execution under
+		// an engine lock, the shape the §4 B-MM rules exist to prevent: a guest that stops at a safepoint there
+		// holds `h.mu` across the stop. `TestAResultStoresReallocRunsWithNoEngineLockHeld` measured the lock
+		// held for the whole realloc. So the store is three steps, and only the middle one touches guest
+		// memory, with no engine lock held:
+		//
+		//  1. under `h.mu`: the cancellation check, and minting a future or stream handle (`addLocked`);
+		//  2. no lock: the retptr write or the codec's store, realloc included;
+		//  3. under `h.mu`: record an error, or mark RETURNED and wake any set the subtask has joined.
+		//
+		// **The B-MM-1 edge is unchanged.** The retptr write in step 2 precedes step 3's acquisition, and
+		// `resolved` is published inside it, so a waiter that observes the resolution under `h.mu` sees the
+		// lowered result. The mutex is one of the TWO edges carrying §4 B-MM-1's acquire guarantee to a parked
+		// waiter; the other is signalLocked's wake-channel close→receive (see async_waitset.go's header,
+		// corrected after the litmus witness). A blocked callee that never calls onResolve leaves the retptr
+		// untouched.
+		//
+		// NEUTER THIS by holding `h.mu` across step 2 again, and the realloc witness sees the lock held for the
+		// realloc's duration.
+		apply := func(v canon.Value) {
+			h.mu.Lock()
 			if st.cancellationRequested {
 				// A cancel resolution (the model's on_resolve(None), def:2214–2220): no result is lowered,
 				// and the terminal state is chosen by whether the subtask had started — STARTING ->
@@ -81,36 +98,53 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 				} else {
 					st.resolveLocked(subtaskCancelledBeforeReturned)
 				}
+				h.mu.Unlock()
 				return
 			}
+			// A future<T> or stream<T> result: mint its end in the async handle table now, under the lock, and
+			// write the handle (an i32) in step 2. The codec cannot lower these — their handles live in the
+			// component-layer table, not the codec's — so the wrapper writes them (gate:async increment 3:
+			// a readable end for a future, a writable end, which the guest writes to, for a stream).
+			var handle int
+			var kind canon.Kind
 			if hasResult {
-				if v.Type.Kind == canon.KindFuture {
-					// A future<T> result: mint a readable end in the async handle table and write its handle
-					// (an i32). The codec cannot lower it — future handles live in the component-layer table,
-					// not the codec's — so the wrapper writes the handle here (gate:async increment 3).
+				kind = v.Type.Kind
+				switch kind {
+				case canon.KindFuture:
 					fe := &readableFutureEnd{value: v.FutureValue()}
 					fe.index = h.addLocked(fe)
-					var buf [4]byte
-					binary.LittleEndian.PutUint32(buf[:], uint32(fe.index))
-					if err := c.Write(uint64(uint32(retptr)), buf[:]); err != nil {
-						resolveErr = fmt.Errorf("component: async lower: writing future handle to retptr: %w", err)
-						return
-					}
-				} else if v.Type.Kind == canon.KindStream {
-					// A stream<T> result: mint a writable end (the guest writes to it) and write its handle,
-					// the same component-layer minting as a future (gate:async increment 3, write side).
+					handle = fe.index
+				case canon.KindStream:
 					se := &writableStreamEnd{}
 					se.index = h.addLocked(se)
-					var buf [4]byte
-					binary.LittleEndian.PutUint32(buf[:], uint32(se.index))
-					if err := c.Write(uint64(uint32(retptr)), buf[:]); err != nil {
-						resolveErr = fmt.Errorf("component: async lower: writing stream handle to retptr: %w", err)
-						return
-					}
-				} else if err := canon.StoreVia(guestHeap{c}, v, int(uint32(retptr))); err != nil {
-					resolveErr = fmt.Errorf("component: async lower: lowering result to retptr: %w", err)
-					return
+					handle = se.index
+				default:
+					// Every other kind mints nothing: the codec lowers it in step 2.
 				}
+			}
+			h.mu.Unlock()
+
+			var err error
+			if hasResult {
+				switch kind {
+				case canon.KindFuture, canon.KindStream:
+					var buf [4]byte
+					binary.LittleEndian.PutUint32(buf[:], uint32(handle))
+					if werr := c.Write(uint64(uint32(retptr)), buf[:]); werr != nil {
+						err = fmt.Errorf("component: async lower: writing %s handle to retptr: %w", kind, werr)
+					}
+				default:
+					if serr := canon.StoreVia(guestHeap{c}, v, int(uint32(retptr))); serr != nil {
+						err = fmt.Errorf("component: async lower: lowering result to retptr: %w", serr)
+					}
+				}
+			}
+
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if err != nil {
+				resolveErr = err
+				return
 			}
 			st.resolveLocked(subtaskReturned)
 		}
@@ -140,16 +174,14 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 		onResolve := func(v canon.Value) {
 			h.mu.Lock()
 			if h.inHost > 0 {
-				h.hostStores = append(h.hostStores, func() { applyLocked(v) })
+				h.hostStores = append(h.hostStores, func() { apply(v) })
 				h.mu.Unlock()
 				return
 			}
 			h.mu.Unlock()
 			h.acquireRun(&runChain{}, nil, nil)
 			defer h.releaseRun()
-			h.mu.Lock()
-			defer h.mu.Unlock()
-			applyLocked(v)
+			apply(v) // takes h.mu for its bookkeeping only, never across its guest-memory work
 		}
 
 		// The impl is host code on this agent's goroutine, under the run slot it holds: while it runs, a
