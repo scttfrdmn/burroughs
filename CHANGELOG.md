@@ -118,6 +118,17 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **#978's oracle, committed before any engine change** (behind `gate:cm-threads`).
+  - **The fixture:** `cmthreads/sync-enters-past-suspended.wasm`. An async task's implicit Thread suspends
+    mid-callee holding `exclusive_thread`, and a sync-typed call, the parent's `f` called back by a nested
+    child, enters anyway and `resume-later`s it.
+  - **The oracle:** wasmtime 49.0.2 returns 8, on 10 of 10 runs. That measures #978's "divergent"
+    classification instead of deriving it.
+  - **Burroughs:** hangs. The implicit Thread's `giveBack` keeps the run slot under its chain's hold, and
+    nothing outside a handoff or the YIELD arm would drive the readied Thread.
+  - **The fix is held for the chair**, because it changes the chain-holds-the-slot model that ADR 0100's
+    handoff amendment and ADR 0101 rest on.
+
 - **A control that keeps race witnesses' memory visible to the race detector** (#979's follow-up, chair's
   order). The registries are `raceWitnessFixtures` in `internal/component` and `raceWitnessSources` in
   `internal/interp`: the #979 conversions, the run-slot, result-store and `xc` fixtures, and the §4
