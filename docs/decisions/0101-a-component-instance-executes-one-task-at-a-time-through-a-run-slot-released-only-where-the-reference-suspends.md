@@ -89,7 +89,8 @@ code.**
     `waitable-set.wait` keeps its chain's slot. **It can deadlock, and the sequence is reachable**,
     derived from the code: the parent passes the child one of its own lifts (`walker.compArgRef`), and
     the child calls it to service the Thread's request. The reference progresses there, because its
-    `block` ends the chain.
+    `block` ends the chain. **Since fixed:** see *Amendment: #977* below. A fixture built the sequence,
+    wasmtime returned 8, and Burroughs hung until a created Thread's wait released the slot.
   - [#978](https://github.com/scttfrdmn/burroughs/issues/978): an async task's implicit Thread suspended
     mid-callee with nothing runnable keeps the slot, so a sync-typed call cannot enter. **Divergent:** in
     the reference, `Task.enter_implicit_thread` consults `exclusive_thread` only for async-typed entries,
@@ -267,8 +268,8 @@ child → parent, all synchronous, through a lift the parent passes its child (`
   the context, and the callee's entry re-enters a slot its chain holds instead of waiting (`runDepth`).
 - **A suspension releases the whole slot**, whatever the depth, and restores the depth on the re-take.
 - **The scheduler stamps the holding chain on each created Thread it resumes**, so that Thread's
-  synchronous calls re-enter too. A created Thread's `waitable-set.wait` still releases nothing, which is
-  #977's edge, left for #977.
+  synchronous calls re-enter too. A created Thread's `waitable-set.wait` released nothing at the time,
+  which was #977's edge, left for #977. It now releases the slot (*Amendment: #977* below).
 
 ### Witnesses, each neutered and run
 
@@ -298,3 +299,35 @@ before returning"*). The pin's reference has no such rule: there is no `may_bloc
 wait, as `async-waitset-synth.wasm` and `run-slot.wasm` do. The cross-component fixtures use an async
 parent, so wasmtime can run them. The divergence is wasmtime's lead on the pin, and is recorded rather
 than adopted.
+
+## Amendment, 2026-10-12: #977 — a created Thread's wait releases its chain's slot
+
+The chair's order: build #977's fixture first, then fix it so the slot is released where the reference
+suspends.
+
+**The fixture** is `cmthreads/thread-wait-callback.wasm`:
+- the parent's async `run` spawns Thread T and YIELDs until T is done;
+- T async-lowers a nested child's `g` and parks in `waitable-set.wait`;
+- the child's `g` calls back into a lift of the parent's own `f` (`walker.compArgRef`) and returns
+  `f() + 1`.
+
+**wasmtime 49.0.2 returns 8, on 10 of 10 runs. Burroughs hung**, exactly as #977 derived. T's wait
+released nothing, so the child's call into the parent waited for the slot T's chain held, and T waited for
+the child.
+
+**The repair is this record's own rule, applied.** The slot is released only where the reference
+suspends, and a created Thread's `wait_until` is a `block()`: a suspension. So `asyncHandles.suspending`
+now releases the chain's slot for a created Thread as well as an implicit one, finding the chain the
+scheduler stamped on it. T then holds no slot while it waits. The child's call runs, the child's result
+store resolves T's subtask, and T takes the slot back with its chain and depth restored.
+
+**Witness:** `TestACreatedThreadsWaitReleasesTheRunSlot` returns wasmtime's 8, bounded. Neutered by
+restricting `suspending` to implicit Threads again, it hangs.
+
+**What is left, recorded as a divergence rather than a deadlock.** In the reference, T's `block()` ends
+the *chain*, so the store may run other ready Threads while T waits. Here the slot is released, but the
+scheduler still waits on T's handoff, so another ready Thread of the instance does not run until T comes
+back. A task outside the chain can now enter, which is what #977's sequence needed. A sequence whose
+progress needs another *Thread of the same chain* to run while T waits would still stall here, where the
+reference progresses. No fixture constructs one. Closing it means making a wait a handoff, a scheduler
+change for ADR 0100.
