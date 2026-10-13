@@ -334,9 +334,12 @@ change for ADR 0100.
 
 ## Amendment, 2026-10-13: Option A — the run slot is held by the executing Thread (#978)
 
-Status: **proposed, held for the chair's second review before any engine code.** The chair ruled Option A
-on #978 and ordered this design first, as its own commit. It amends ADR 0100's handoff design as well as
-this record, and ADR 0100 carries a pointer here rather than a second copy.
+Status: **accepted** — the chair's second review, in session, 2026-10-13, on the PR that carries this
+amendment. That review accepted owner routing and killable waiters, accepted items 2 and 3 as written, and
+required three text additions before merge, which are made in point 7. The chair ruled Option A on #978
+and ordered this design first, as its own commit. It amends ADR 0100's handoff design as well as this
+record, and ADR 0100 carries a pointer here rather than a second copy. `Ratio-Class: carried`: both reviews
+are in session and have no approval artifact to cite.
 
 **The chair's first review, in session, 2026-10-13, on #997.** It accepted the invariant and transitions
 1–6, and required three amendments before merge, on points 7, 3 and 5. It also gave a merge rule: if the
@@ -635,11 +638,78 @@ Two further facts about today:
   in which case it takes the slot, as today's `deliver` does.
 - **The one case with no call to surface to:** an owner whose lift has already resolved, a Thread
   outliving its task. ADR 0100 records post-resolution execution as unmeasured. The trap ends that owner's
-  Threads and is otherwise dropped. That is stated here as a choice, not left as a silence. No reading
-  constrains it, and it is not the fixture's case.
+  Threads, and it is **not dropped silently** (the chair's second review). It is recorded on the instance
+  in an internal field, `threadTable.orphanTraps`, appended under `threadTable.mu`, which a test reads
+  after the fact.
+  - **Witness:** the build adds a test that resolves a task, lets one of its Threads trap afterwards, and
+    reads the field.
+  - **Neuter:** the field is never set.
+  - **Surfacing it publicly would be public API.** It is on the flip list
+    ([#999](https://github.com/scttfrdmn/burroughs/issues/999)), decided *internal only* unless Scott
+    objects.
 
-The design has changed on two counts. The routing is by owner, and waiters become killable. **That is why
-this record goes back for review** (see the status line).
+The design changed on two counts in the first review's amendment: the routing is by owner, and waiters
+become killable. The second review accepted both, and added the three items below.
+
+**A divergence that remains, recorded with both readings (the chair's second review, item 1).**
+- **The reference:** `trap()` raises `Trap(BaseException)`, and nothing in `canon_lift`, `Thread.resume`
+  or `Store.tick` catches it. The whole store's computation ends, so every task's call ends, not only the
+  owner's.
+- **Burroughs under A:** the trap ends the owner's call and the owner's Threads. Other tasks' calls on the
+  instance continue, under ADR 0100's choice not to poison an instance.
+
+Owner routing is the closest to the reference that the no-poison choice allows. It is on the flip list
+(#999) as **unmeasured**, with no fixture. A two-call fixture needs a parent driving both calls at once,
+which is the two-task note above.
+
+The same divergence covers one nested case. A **sync lift's** implicit Thread is its own owner (#970), so
+it is a different task from any Thread that called it. A trap in one task therefore does not end a wait
+inside a nested sync lift of the same instance that a sibling task entered. That is a waiter outside the
+owner, and in the reference it would end with the store.
+
+**A killed waiter nested in another component's frames (the chair's second review, item 3).** Take a
+waiter whose wait sits inside a synchronous call into instance C: C's sync lift has been entered on the
+caller's goroutine through `bindCrossComponent`'s sync arm, and its implicit Thread waits. The unwind, by
+symbol, from the wake outward:
+
+1. **The wait returns.** `waitableSetWait`'s loop, or sync `subtask.cancel`'s, receives its record's `kill`
+   or its owner's `faulted`, and returns `errThreadKilled` or the trap.
+2. **The slot is taken back.** That happens inside `asyncHandles.suspending` before the excursion ends,
+   whatever `fn` returned, and the saved `(chain, depth)` is restored. So C's depth is whole for the
+   unwind's `releaseRun`.
+3. **The canon call's error becomes a trap of C's guest.** `interp.Instance.callAdapter` returns the
+   error, and the interpreter unwinds C's frames as it does for any failing host call. That is the
+   existing path every refusing canon built-in already takes.
+4. **C's entry cleans up.** `compFunc.invokeWith`'s deferred `f.h.releaseRun()` drops C's run-slot depth,
+   and its deferred `f.threads.remove(tid)` frees C's implicit Thread record. The error is returned as the
+   call's.
+5. **The caller sees an error.** `bindCrossComponent`'s sync arm returns `res.flat, cerr`. The caller's
+   canon call fails, and step 3 repeats in the caller's frames.
+
+Two fields have nothing to clean:
+- **No subtask entry:** the sync arm creates none (a subtask exists only on the async arm,
+  `asyncLowerFunc`).
+- **No borrow entry:** the sync arm passes flat core values and lowers no handle.
+
+**The existing trap-unwind path covers steps 3–5.** Steps 1 and 2 are A's, and no committed fixture drives a
+trap through a sync cross-component call at all. **So the build owes a fixture, oracle first:**
+- a nested child's sync lift spawns T and waits;
+- T traps;
+- the parent called the child synchronously;
+- expected: the parent's call returns T's trap, and C's run slot and Thread table are left empty.
+
+ADR 0102 records that wasmtime 49.0.2 traps a sync-lift `waitable-set.wait` outright. So this oracle is the
+**reference reading** (below), with wasmtime's refusal recorded beside it.
+
+**`killParked`'s close follows the rule from its earlier fix.** It already closes every `kill` *after*
+`tt.mu.Unlock()`, and it takes no `asyncHandles.mu`. A's extension keeps both properties:
+- **Waiter `kill` channels:** closed in the same post-unlock loop.
+- **The owner's `faulted` channel:** closed after its `fault` is written under `tt.mu` and the lock is
+  released.
+- **The receivers** (the wait loops, `awaitEvent`, `yieldPoint`) select with no lock held. The wait loop
+  drops `h.mu` before its `select`, as `waitableSetWait` does today.
+
+So no close is made while the closer holds a lock a receiver needs in order to observe it.
 
 ### Witnesses: every existing one, and what changes
 
@@ -676,17 +746,31 @@ they name moved.
   when a created Thread's `waitable-set.wait` receives the event of a subtask whose callee YIELD-looped.
   #977's own fixture avoids it, because its callee calls back synchronously and does not loop.
 
-  So the build tries a shape on that pattern. If no shape reads on wasmtime, the residual is reported to
-  the chair without a fixture rather than witnessed against an unread oracle. Neuter: the wait as a bare
-  release, which hangs (the #977 amendment's behaviour).
+  So the build tries a shape on that pattern first. **If no shape reads on wasmtime, the oracle is the
+  pinned reference itself**, under ADR 0102: the pin defines the semantics, and it is executable.
+  - **The scenario:** written in Python against the vendored `definitions.py` (the `Store`, `canon_lift`
+    and Thread API, driven the way `canon/gen/gen.py` already drives the pin), mirroring the fixture.
+  - **Where it lives:** committed beside the fixture, its output labelled **reference reading** so it is
+    never mistaken for a wasmtime reading.
+  - **The wasmtime bug** is recorded against the fixture, as now.
+
+  Reporting without a fixture is **not** the fallback; the chair's second review ruled it out. Neuter: the
+  wait as a bare release, which hangs (the #977 amendment's behaviour).
 - **#998's fixture, `cmthreads/wait-runs-ready.wasm`, returns 5** (wasmtime 49.0.2, 10 of 10; committed
   with this amendment, oracle first). A Thread readied before the callback returns WAIT runs during the
   wait. Neuter: `releaseRun` never kicks, which hangs, bounded.
 - **The trap-while-waiting fixture, `cmthreads/trap-while-waiting.wasm`** (the chair's item 1; committed
   with this amendment). wasmtime 49.0.2 traps with `unreachable` in `bodymod!t2`, 10 of 10. The call must
   return that trap, not hang, and T1's wait must be ended. Neuter: the scheduler frees the slot and drops
-  the trap, which hangs, bounded. The fixture has no completing control: both control shapes hit the
-  wasmtime bug above, and the fixture's header records them.
+  the trap, which hangs, bounded.
+  - **Its completing control** (`unreachable` → `nop`) gets a **reference reading** from the pin, by the
+    scenario method above, because both wasmtime control shapes hit the wasmtime bug. That makes the
+    fixture discriminate in both directions: a trap with `t2` and a completion without it. The fixture's
+    header records the wasmtime bug.
+- **The owner-resolved trap test** (point 7): the trap is read from `threadTable.orphanTraps` after the
+  fact. Neuter: the field is never set.
+- **The nested sync-call unwind** (point 7): a fixture, with its oracle the reference reading. The parent's
+  call returns T's trap, and C's run slot and Thread table are left empty.
 - **The append assertion** (point 5), with its neuter run.
 - **The YIELD arm's `entrySem`, its own fixture, oracle first.** While task A YIELDs, its created Thread
   makes a call that reaches an async lift of the same instance, which needs `entrySem`. Under the old

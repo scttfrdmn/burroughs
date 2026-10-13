@@ -804,9 +804,10 @@ the third on its bound:
 - `TestASyncLiftThatSuspendsWithNothingReadyTraps`: neutered by deleting the sync arm in
   `cmScheduler.loop`. `run` then hangs, as an async callee would.
 
-## Amendment, 2026-10-13: the handoff carries the run slot (#978, proposed)
+## Amendment, 2026-10-13: the handoff carries the run slot (#978)
 
-**Proposed, held for the chair's review.** The design is one amendment covering this record and ADR 0101,
+**Accepted on the chair's second review**, in session, 2026-10-13. The build has not started. The design
+is one amendment covering this record and ADR 0101,
 and it is written once, in [ADR 0101's Option A
 amendment](0101-a-component-instance-executes-one-task-at-a-time-through-a-run-slot-released-only-where-the-reference-suspends.md#amendment-2026-10-13-option-a--the-run-slot-is-held-by-the-executing-thread-978).
 What it would change here, once accepted:
@@ -815,5 +816,5 @@ What it would change here, once accepted:
 - *"the scheduler never acquires `entrySem` itself"*.
 
 Under it, every handoff carries the run slot and the scheduler holds it between Threads. The YIELD arm
-takes neither the slot nor `entrySem`, and a wait is a handoff. Until the chair accepts it, the text above
-is what the tree implements.
+takes neither the slot nor `entrySem`, and a wait is a handoff. Until A's build lands, the text above is
+what the tree implements.

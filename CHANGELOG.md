@@ -693,6 +693,16 @@ from the three obviously-wrong `#534` trailers to all eleven.
     - **Point 5:** every ready-queue write site is enumerated, and the two that append get a test-build
       assertion.
     - **Back to the chair:** item 1 is new mechanism, so the record returns for a second review.
+  - **Accepted on the chair's second review**, with three text additions to point 7:
+    - the divergence that remains (other tasks' calls continue after a trap), recorded with both readings;
+    - an owner-resolved trap is recorded in `threadTable.orphanTraps` rather than dropped;
+    - the unwind of a killed waiter nested in a sync cross-component call, traced by symbol.
+
+    No engine code is in this entry.
+  - **Reference readings:** where wasmtime cannot read a fixture, the oracle is a scenario run against the
+    pinned `definitions.py`, labelled as a reference reading (ADR 0102).
+  - **The `gate:cm-threads` flip list** is [#999](https://github.com/scttfrdmn/burroughs/issues/999).
+  - **A wasmtime bug report is prepared, not filed,** under `docs/upstream/`.
   - **Oracles committed first**, under `testdata/cmthreads`, both heap-backed:
     - `wait-runs-ready.wasm`: wasmtime 49.0.2 returns 5, and Burroughs does not return. It is
       [#998](https://github.com/scttfrdmn/burroughs/issues/998), new: the WAIT arm is not a scheduling
