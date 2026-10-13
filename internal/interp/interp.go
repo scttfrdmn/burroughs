@@ -679,7 +679,7 @@ func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
 	if !ok {
 		return nil, fmt.Errorf("interp: no exported function %q", name)
 	}
-	return in.invokeIndex(idx, name, args, 0)
+	return in.invokeIndex(idx, name, args, 0, false)
 }
 
 // InvokeCMThread is [Instance.Invoke] carrying the component-model Thread index this invocation runs as
@@ -698,7 +698,22 @@ func (in *Instance) InvokeCMThread(name string, cmThread uint32, args ...Value) 
 	if !ok {
 		return nil, fmt.Errorf("interp: no exported function %q", name)
 	}
-	return in.invokeIndex(idx, name, args, cmThread)
+	return in.invokeIndex(idx, name, args, cmThread, false)
+}
+
+// InvokeMayNotLeave is Invoke on a stack marked may-not-leave (#990): the component package calls a
+// lift's `cabi_realloc` through it, while lowering a lift's arguments, so that a canon built-in or lowered
+// import the realloc calls traps as the reference's `may_leave = False` makes it (see
+// `CanonCaller.MayLeave`). `CanonCaller.Realloc` marks its own stack the same way, for a lower's realloc.
+func (in *Instance) InvokeMayNotLeave(name string, args ...Value) ([]Value, error) {
+	if fault := in.world.takeFaultReport(); fault != nil {
+		return nil, fault
+	}
+	idx, ok := in.exportedFunc(name)
+	if !ok {
+		return nil, fmt.Errorf("interp: no exported function %q", name)
+	}
+	return in.invokeIndex(idx, name, args, 0, true)
 }
 
 // Global reads an exported global's current value. `Invoke`'s sibling for the other action the
@@ -758,7 +773,7 @@ func (in *Instance) Global(name string) (Value, error) {
 // cmThread is the component-model Thread index this invocation runs as, carried from the component
 // package and stored on the stack for `CanonCaller.CMThreadIndex` to read. Zero means none, which the
 // reference's reserved index 0 makes unambiguous.
-func (in *Instance) invokeIndex(idx uint32, name string, args []Value, cmThread uint32) (results []Value, err error) {
+func (in *Instance) invokeIndex(idx uint32, name string, args []Value, cmThread uint32, mayNotLeave bool) (results []Value, err error) {
 	// **A closed instance runs no guest code, and after [ADR 0071] the refusal has to be here rather than
 	// at the host-call boundary.** `beginHostCall` was the only site that knew, so a closed instance ran the
 	// guest until it happened to reach a host import and refused there — correct for the module that has
@@ -872,7 +887,7 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value, cmThread 
 		}
 		// The Thread index travels with the delegation: a re-exported import runs as the same
 		// component-model Thread as the call that reached it.
-		return ext.owner.invokeIndex(ext.fnIdx, name, args, cmThread)
+		return ext.owner.invokeIndex(ext.fnIdx, name, args, cmThread, mayNotLeave)
 	}
 	ft, err := in.funcType(fn)
 	if err != nil {
@@ -1007,6 +1022,9 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value, cmThread 
 		// here: `interp` owns no Thread table. Zero for every caller that has no Thread, which the
 		// reference's reserved index 0 makes an unambiguous "none".
 		cmThreadIdx: cmThread,
+	}
+	if mayNotLeave {
+		st.mayNotLeave = 1 // a lift's realloc, entered through InvokeMayNotLeave (#990)
 	}
 	numResults, refResults := countByArray(ft.Results)
 	// §3 SP-2's denominator, decision 0067 and the repair for #592: `Stop` asks whether *every* caller

@@ -312,6 +312,18 @@ type stack struct {
 	// (`Table.array` starts as `[None]`), so no Thread can ever hold it. That is what lets the
 	// component package allocate on first use without a second flag.
 	cmThreadIdx uint32
+
+	// mayNotLeave counts how deep this stack is inside a `cabi_realloc` call (#990): the reference's
+	// `may_leave = False`, which `LiftLowerContext.reallocate` sets around the call, and which every canon
+	// built-in but five, and every `canon_lower`, trap on. Raised by `CanonCaller.Realloc` and by
+	// `Instance.InvokeMayNotLeave`, read through `CanonCaller.MayLeave`.
+	//
+	// **Per stack rather than per instance.** The reference's flag is the instance's. But a `realloc`
+	// runs on the calling agent's own stack (`CanonCaller.Realloc` invokes it on `c.st`), and every
+	// built-in it calls is dispatched by `callAdapter` from that same stack. So the stack carries the
+	// flag to exactly the calls the reference checks. And one agent of a component instance executes at a
+	// time (ADR 0101's run slot), so no other agent of the instance can be calling built-ins meanwhile.
+	mayNotLeave int
 }
 
 // frame is a call's local-variable storage: 0002's parallel-array split applied to *locals*

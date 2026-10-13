@@ -426,8 +426,11 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		}
 		// A canon resource.drop of a host resource is a no-op — the stream/error is the process's, not
 		// the guest's to free — typed from the importing module's own declaration.
+		//
+		// Every arm below that binds a canon built-in or a lowered import wraps it in `mayLeaveGuard`
+		// (#990), the reference's `trap_if(not may_leave)`, except the two unchecked built-ins bound here.
 		if d.resourceDrop {
-			return interp.HostExtern(ft, dropNoop), true
+			return interp.CanonLowerExtern(ft, mayLeaveGuard("resource.drop", dropNoop), interp.CanonOptions{}), true
 		}
 		// A modeled 🧵 built-in binds to its Go impl, typed from the guest's import signature. Before the
 		// async arm because the two dispatch on different fields and a 🧵 opcode must never reach
@@ -435,7 +438,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// field would have made that collision expressible, which is why `Canon.ThreadOp` is its own.
 		if d.threadBuiltin {
 			if fn, ok := w.threadBuiltinFunc(d.threadBuiltinOp, d.threadTable); ok {
-				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{}), true
+				return interp.CanonLowerExtern(ft, mayLeaveGuard(name, fn), interp.CanonOptions{}), true
 			}
 			return interp.Extern{}, false
 		}
@@ -444,6 +447,9 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if d.asyncBuiltin {
 			if fn, ok := w.asyncBuiltinFunc(d.asyncBuiltinOp, d.asyncBuiltinSlot, d.asyncBuiltinForm,
 				d.asyncBuiltinResult); ok {
+				if !asyncBuiltinMayLeaveExempt(d.asyncBuiltinOp) {
+					fn = mayLeaveGuard(name, fn)
+				}
 				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
 			}
 			return interp.Extern{}, false
@@ -467,7 +473,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				sig := w.lowerSignature(d.lowerName)
 				hasResult := sig != nil && sig.Result != nil
 				aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
-				return interp.CanonLowerExtern(aft, asyncLowerFunc(aimpl, hasResult, w.async), interp.CanonOptions{
+				return interp.CanonLowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFunc(aimpl, hasResult, w.async)), interp.CanonOptions{
 					Memory:  d.lowerMem,
 					Realloc: d.lowerRealloc,
 				}), true
@@ -480,7 +486,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// which needs this instance's async handle table (to reach the readable end the guest hands it). The
 		// factory is called with w.async to produce the marshaling impl, bound to the lower's memory/realloc.
 		if f, ok := w.streamConsumers[stripVersion(d.lowerName)]; ok {
-			return interp.CanonLowerExtern(ft, f(w.async), interp.CanonOptions{
+			return interp.CanonLowerExtern(ft, mayLeaveGuard(d.lowerName, f(w.async)), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
@@ -493,7 +499,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			// the guest arguments through the memory-less trampoline and can lower a host-produced list
 			// through the guest's allocator. A lower with no memory/realloc option (the stdio getters,
 			// exit) binds neither.
-			return interp.CanonLowerExtern(ft, impl, interp.CanonOptions{
+			return interp.CanonLowerExtern(ft, mayLeaveGuard(d.lowerName, impl), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
@@ -564,7 +570,7 @@ func funcImportType(m *bin.Module, mod, name string) (bin.FuncType, bool) {
 
 // dropNoop is a canon resource.drop for a host resource: it takes the handle and returns, freeing
 // nothing (the streams and errors are the process's, not the guest's to free).
-func dropNoop(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) { return nil, nil }
+func dropNoop(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) { return nil, nil }
 
 // refuse is the stub host function: called, it refuses by name — the "imports reach a stub host that
 // refuses" boundary (PR B). The real host is PR C.

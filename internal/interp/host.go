@@ -795,11 +795,22 @@ func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32,
 	c.st.pushI32(int32(origSize))
 	c.st.pushI32(int32(align))
 	c.st.pushI32(int32(newSize))
-	if err := target.inst.invoke(target.fn, ft, c.st, c.depth); err != nil {
+	// **may_leave is false for the call (#990)**: the reference's `LiftLowerContext.reallocate` sets
+	// `inst.may_leave = False` around it, so a canon built-in or lowered import the realloc calls traps.
+	// The realloc runs on this stack, so the built-ins it calls see the mark through `MayLeave`.
+	c.st.mayNotLeave++
+	err = target.inst.invoke(target.fn, ft, c.st, c.depth)
+	c.st.mayNotLeave--
+	if err != nil {
 		return 0, err
 	}
 	return uint32(c.st.popNum()), nil
 }
+
+// MayLeave reports the reference's `may_leave` for this call (#990): false while the call is nested inside
+// a `cabi_realloc`, where the reference traps every canon built-in but five and every `canon_lower`. The
+// component package checks it at each of those. A caller with no stack (a test harness's) may leave.
+func (c *CanonCaller) MayLeave() bool { return c.st == nil || c.st.mayNotLeave == 0 }
 
 // Blocking runs fn as a blocking excursion of the calling agent — the §5 H-1/H-3 path, now on the canon
 // adapter. For fn's duration the agent is marked blocked (parked, and a concurrent Stop sees it at a
