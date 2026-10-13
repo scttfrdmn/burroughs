@@ -139,10 +139,20 @@ func (h *asyncHandles) releaseRun() {
 // control exists to catch, so the shape moved rather than the control.
 //
 // **Only a slot the caller's chain holds is released**, found through the caller's Thread record (by the
-// index its stack carries), and only for an implicit Thread. A core-level `Invoke` that bypasses the
-// component has no record (ADR 0073's population). A created Thread runs under its chain's hold (ADR 0100's
-// amendment) and releases nothing, which is #977's open edge and is left for #977. For both this returns
-// `fn` as is.
+// index its stack carries). A core-level `Invoke` that bypasses the component has no record (ADR 0073's
+// population), and for it this returns `fn` as is.
+//
+// **A created Thread releases its chain's slot too (#977).** It runs under the chain's hold (ADR 0100's
+// amendment), and the scheduler stamps that chain on it. Until #977 it released nothing, and that
+// deadlocked a sequence wasmtime completes (`cmthreads/thread-wait-callback.wasm`, 8):
+//   - a created Thread parks here waiting on a call into a nested child;
+//   - the child services it by calling back into a lift the parent passed it;
+//   - that call waits for the parent's slot, which the parent's chain held.
+//
+// In the reference the Thread's `wait_until` is a `block()`, and the chain ends there. Releasing the slot
+// is that suspension's run-slot half. The scheduler half is not built: the scheduler still waits on the
+// Thread's handoff, so other ready Threads do not run while it waits. That is recorded in ADR 0101's
+// #977 amendment as a divergence, not a deadlock.
 //
 // **The whole slot is released, whatever the re-entry depth**, and the depth is restored on the re-take.
 // A nested entry suspending means the chain suspends: the outer entries of the same chain are blocked in
@@ -158,7 +168,7 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, fn func() error) func()
 	}
 	return func() error {
 		h.mu.Lock()
-		held := rec != nil && rec.implicit && rec.chain != nil && h.runChain == rec.chain
+		held := rec != nil && rec.chain != nil && h.runChain == rec.chain
 		var ch *runChain
 		var depth int
 		if held {

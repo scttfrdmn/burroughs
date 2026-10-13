@@ -758,6 +758,20 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **A created Thread parked in `waitable-set.wait` kept its chain's run slot, and that deadlocked a nested
+  child calling back into the parent** ([#977](https://github.com/scttfrdmn/burroughs/issues/977), grave;
+  behind `gate:cm-threads`). Fixture first, as ordered.
+  - **The fixture:** `cmthreads/thread-wait-callback.wasm` builds the sequence the issue derived. Thread
+    T waits on a nested child's `g`, and `g` calls back into a lift of the parent's own `f`. wasmtime
+    49.0.2 returns 8, on 10 of 10 runs, and Burroughs hung.
+  - **The fix:** `asyncHandles.suspending` now releases the chain's slot for a created Thread too, as the
+    reference's `wait_until` → `block()` suspends it.
+  - **Witness:** `TestACreatedThreadsWaitReleasesTheRunSlot`, bounded. Neutered by restricting the release
+    to implicit Threads, it hangs.
+  - **Recorded as a divergence:** while T waits, the scheduler still waits on its handoff, so other ready
+    Threads of the chain don't run. The reference's chain would end and let them. This is in ADR 0101's
+    #977 amendment.
+
 - **A result store ran the caller's `cabi_realloc`, which is guest code, while holding `asyncHandles.mu`.**
   A string or list result reaches `canon.StoreString` / `canon.StoreList` → `Heap.Realloc` →
   `CanonCaller.Realloc`, and the store made that call inside one engine-lock hold. Guest code under an

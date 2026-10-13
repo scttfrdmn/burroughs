@@ -187,5 +187,16 @@ case "$st" in
 	;;
 esac
 
+# #977: a created Thread waits on a nested child that calls back into the parent. 8 = 7 + 1.
+"$WASM_TOOLS" parse "$here/thread-wait-callback.wat" -o "$here/thread-wait-callback.wasm"
+twc=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+	--invoke 'run()' "$here/thread-wait-callback.wasm" 2>&1) || {
+	echo "build.sh: the thread-wait-callback run FAILED:" >&2
+	echo "$twc" >&2
+	exit 1
+}
+[ "$twc" = "8" ] || { echo "build.sh: thread-wait-callback expected 8, got '$twc'." >&2; exit 1; }
+echo "build.sh: thread-wait-callback result $twc" >&2
+
 echo "build.sh: switch.reading is hand-assembled from the three channels above — update it by hand" >&2
 echo "          when a figure here moves, and say which channel moved." >&2
