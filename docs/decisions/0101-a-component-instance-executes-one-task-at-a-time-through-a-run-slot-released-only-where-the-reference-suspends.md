@@ -201,6 +201,41 @@ this thread's host call, but does run before this thread executes guest code aga
 Neutered by applying at once instead of queueing, the witness reads back `0x2`, the other caller's result,
 in place of its sentinel, on 3 of 3 runs.
 
+**The store's guest code runs with no engine lock held.** The chair asked whether the store ever runs
+guest code while holding `h.mu`. It did. A string or list result is lowered by `canon.StoreString` /
+`canon.StoreList`, which call `Heap.Realloc`, and `guestHeap.Realloc` routes that to
+`CanonCaller.Realloc`, the caller's `cabi_realloc`. The store made that call inside one `h.mu` hold.
+`TestAResultStoresReallocRunsWithNoEngineLockHeld` measured it:
+- **the setup:** `result-store-realloc.wasm`'s import returns a string, and its impl resolves inline, so the
+  store takes the queued path. Its `realloc` is a pure bump allocator, legal under the reference's
+  `may_leave = False`, with a long spin. A poller recorded the longest unbroken stretch `h.mu` was held;
+- **before:** about **120 ms**, which is the whole realloc;
+- **after:** under **1 µs**;
+- **the neuter**, holding `h.mu` across the guest-memory step again, brings back 121 ms, 3 of 3.
+
+The store is now three steps: (1) under `h.mu`, the cancellation check and minting any future or stream
+handle; (2) with no lock, the retptr write or the codec's store, `realloc` included; (3) under `h.mu`,
+recording an error or resolving. `leaveHost` releases `h.mu` around each queued store. The §4 B-MM-1
+edge is unchanged: the write in (2) precedes (3)'s acquisition, inside which `resolved` is published.
+
+**The queue cannot strand a store for a valid guest, and the reason is a symbol search.** The chair's case:
+the holder's impl gives up the run slot while `inHost` is raised, another task runs, a store for it is
+queued, and that task waits for a store that drains only when the holder's host call returns.
+- **The slot is given up in exactly two places:** `asyncHandles.releaseRun`, at an entry's end, and
+  `asyncHandles.suspending`. `suspending` is called only by `waitableSetWait` and `subtaskCancel`, which
+  are canon built-ins that guest code calls.
+- **`CanonCaller.Blocking` does not touch the slot.** It marks the agent blocked and nothing else, which is
+  `TestASiblingWaitsForABlockingImportAndDoesNotTrap`'s guarantee that no other task runs while a host
+  import blocks.
+- **So the holder can give up the slot while in host code only by running guest code that suspends.** The
+  only guest code `CanonCaller` lets host code run is `Realloc` (ADR 0064's H-2 carve-out).
+- **And the reference forbids a `realloc` from calling any built-in.** `LiftLowerContext.reallocate` sets
+  `may_leave = False`, and every built-in and `canon_lower` traps on it.
+
+So for a valid guest the queued store's owner never runs, and so never waits, while the store is queued.
+**Burroughs does not enforce `may_leave`**, so an invalid `realloc` that calls `waitable-set.wait` would
+release the slot here where the reference traps. That is filed as #990 rather than closed here.
+
 **Every path that resolves a subtask, and what the slot's holder does while waiting:**
 
 | resolver | where `onResolve` runs | the waiting holder | deadlock? |

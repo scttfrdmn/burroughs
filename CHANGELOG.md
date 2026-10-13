@@ -758,6 +758,21 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **A result store ran the caller's `cabi_realloc`, which is guest code, while holding `asyncHandles.mu`.**
+  A string or list result reaches `canon.StoreString` / `canon.StoreList` → `Heap.Realloc` →
+  `CanonCaller.Realloc`, and the store made that call inside one engine-lock hold. Guest code under an
+  engine mutex is the shape the §4 B-MM rules forbid.
+  - **The witness:** `TestAResultStoresReallocRunsWithNoEngineLockHeld` (`result-store-realloc.wasm`, a
+    pure bump-allocator `realloc` with a long spin). It measured the lock held for about 120 ms, the whole
+    realloc.
+  - **The fix:** the store now takes the lock only for its bookkeeping, and does the guest-memory work with
+    no lock held. The longest hold is under 1 µs.
+  - **Neuter:** holding the lock across the guest-memory step brings back 121 ms, 3 of 3.
+  - **The queue's other question:** can it strand a store whose owner runs while the holder is in host
+    code? It is settled by symbol in ADR 0101 as unreachable for valid guests. The one route is a
+    `realloc` calling a built-in, which the reference's `may_leave` forbids and Burroughs does not
+    enforce (#990, filed and parked).
+
 - **#983's exception left a window: a result store could land under the slot holder's own host code.**
   #985 let a store skip the run slot while its holder ran host code, to avoid a deadlock.
   - **Why that was unsafe:** the holder's impl can reach guest memory through `Caller`, ADR 0064's plain
