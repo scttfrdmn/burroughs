@@ -331,3 +331,231 @@ back. A task outside the chain can now enter, which is what #977's sequence need
 progress needs another *Thread of the same chain* to run while T waits would still stall here, where the
 reference progresses. No fixture constructs one. Closing it means making a wait a handoff, a scheduler
 change for ADR 0100.
+
+## Amendment, 2026-10-13: Option A — the run slot is held by the executing Thread (#978)
+
+Status: **proposed, held for the chair's review before any engine code.** The chair ruled Option A on
+#978 and ordered this design first, as its own commit. It amends ADR 0100's handoff design as well as this
+record, and ADR 0100 carries a pointer here rather than a second copy.
+
+### The invariant
+
+**The run slot is held exactly by the Thread executing guest code, re-entrantly for that Thread's own
+synchronous nesting.**
+
+Everything below follows from that sentence and from one consequence of it. A Thread that stops executing
+guest code gives the slot to whoever runs next, and nothing else may take it in between. **Every handoff to
+the scheduler therefore carries the slot, like a baton.** Three conditions keep that true:
+
+- whoever sends on `cmScheduler.back` holds the slot at the moment of sending;
+- the scheduler holds it from the receive until it resumes a Thread, which then holds it;
+- when nothing is runnable, the scheduler frees it.
+
+What this replaces is the chain model of ADR 0100's handoff amendment and of this record's #984
+amendment:
+- the hold belonged to whoever *started* a chain;
+- a created Thread ran under that hold;
+- a parked implicit Thread kept it.
+
+#978's sequence is the one that model cannot express. An async task's implicit Thread suspends mid-callee
+with nothing runnable, so under the old model it keeps the slot, and the sync-typed call that would resume
+it can never enter.
+
+### What the reference does, by symbol
+
+There are two rules, and they stay two locks.
+
+**`exclusive_thread` is backpressure, and Burroughs's `entrySem` is it.**
+- **Where it is consulted:** `Task.needs_exclusive` asserts an async-typed function. `Task.enter_implicit_thread`
+  consults `exclusive_thread` only under `if self.ft.async_:`.
+- **Where it is set:** `enter_implicit_thread` sets it, and `Task.exit_implicit_thread` clears it.
+- **In the callback loop:** `canon_lift` clears it on every callback return, before the `match code:`
+  (`assert(inst.exclusive_thread is task.implicit_thread)` then `inst.exclusive_thread = None`). It takes
+  it back after the arm (`inst.exclusive_thread = task.implicit_thread`).
+- **While suspended mid-callee:** nothing clears it. `Thread.suspend` → `block()` touches no instance
+  field.
+
+**"One thread runs" is execution, and the run slot is it.** In the reference it is not a field at all.
+- The Python threads are serialised by `Continuation.lock` and `Handler.lock`, so exactly one runs.
+- Control passes only through `suspend(switch_to)`, under `block`, `switch_to`, or a returning
+  `cont_func`.
+- `Thread.resume` loops `while thread is not None`, and `Store.tick` resumes one ready Thread when nothing
+  runs.
+
+So the slot's owner at every instant is "the Thread whose continuation holds the lock", which is the
+invariant above.
+
+### Each transition, derived
+
+**1. Entry.** Unchanged in mechanism. The sites are:
+- `compFunc.invokeWith` (sync lift);
+- `compFunc.enterAndInvoke` and `compFunc.enterInvokeLowering` (async entries);
+- `asyncLowerFunc`'s `onResolve` (a result store).
+
+Each takes the slot through `acquireRun`, after `entrySem` where both are taken. A sync-typed entry takes
+no `entrySem`, so it enters past a suspended async task's `exclusive_thread`, as
+`enter_implicit_thread`'s `if self.ft.async_:` admits. #978's fixture needs exactly this, and it was
+already true. What blocked the fixture was the slot, not `entrySem`.
+
+**2. `giveBack` and each switching form.** The reference sources, by form:
+
+| form | reference | what happens to the giver |
+|---|---|---|
+| `thread.suspend` | `Thread.suspend` → `block()` | suspended |
+| `suspend-then-resume` | `Thread.suspend_then_resume` → `switch_to(other)` | suspended |
+| `yield-then-resume` | `Thread.yield_then_resume` → `start_waiting`, then `switch_to(other)` | waiting |
+| `suspend-then-promote` / `yield-then-promote` | `if other.ready(): other.stop_waiting()` → the matching form above, else `suspend()` / `yield_()` | suspended / waiting |
+
+All five end in `suspend(switch_to)`: the giver's continuation stops holding the lock, and `switch_to`'s
+runs, or the resumer's does. **So `giveBack` hands the slot over in the same step as the handoff:**
+1. Under `h.mu`, save `(h.runChain, h.runDepth)` on the giver's record, and set `h.runChain` to nil. The
+   channel stays full, because the slot is in transit, not free.
+2. Send the handoff.
+3. The scheduler restores the next Thread's saved `(chain, depth)` (depth 1 for a first resume) before
+   waking it.
+
+The giver's resume is the same restore, done by the scheduler. It is never a contended `acquireRun`,
+because in the reference nothing runs between `switch_to(other)` and `other` running.
+
+- **A created Thread's entry returning** (`cont_func` returning `None`) is the same handoff, with nothing
+  saved.
+- **A created Thread's first resume** no longer inherits `h.runChain`. It gets its own chain at
+  `thread.new-indirect`, because the hold is now the Thread's.
+
+**3. The YIELD arm.** The cited lines settle it. The reference has already cleared `exclusive_thread` when
+the YIELD arm runs (`inst.exclusive_thread = None` above, on every callback return). Its
+`thread.wait_until(lambda: inst.exclusive_thread is None)` then gives `Store.tick` the chance to run other
+ready Threads **with `exclusive_thread` clear**, and takes it back only after the arm.
+
+- **Burroughs already matches on the callback's return.** `leaveTask` releases `entrySem` at the end of
+  every entry.
+- **But `threadTable.yieldPoint` re-took `entrySem` before running the ready queue.** That is a
+  divergence. While the yielding task's created Threads ran, another async task could not enter, where
+  the reference admits it.
+- **Under A, `yieldPoint` takes neither lock.** It sends its request, and the scheduler acquires the slot
+  on the queue's behalf (point 5). `entrySem` stays free for the whole arm, and the callback re-entry
+  takes both back through `enterAndInvoke`, which is the reference's `inst.exclusive_thread =
+  task.implicit_thread`.
+- The old note "the scheduler never takes the slot" was right under the chain model, where a parked
+  implicit Thread held it. Under A no parked Thread holds it, so the scheduler waiting for the slot waits
+  only on a Thread that is executing.
+
+**4. `waitable-set.wait` and a sync `subtask.cancel`.** Both are `wait_until` in the reference:
+- `WaitableSet.wait` → `current_thread().wait_until(self.has_pending_event)`;
+- `canon_subtask_cancel`'s `if not async_: thread.wait_until(subtask.resolved)`.
+
+`wait_until` is `start_waiting` then `block()`, so the chain ends there, and `Store.tick` picks another
+ready Thread. **So `asyncHandles.suspending` becomes a handoff too**, not a bare release:
+
+- **Where the instance has a scheduler** (the ready queue can be non-empty only there), the waiter saves
+  its `(chain, depth)` and sends a `detach` handoff: *"I have stopped executing and am not parked in
+  `giveBack`."* The scheduler takes the slot with it and continues with the ready queue, which is the
+  `Store.tick` half. When nothing is runnable, it frees the slot.
+- **Where there is no scheduler**, the release is a plain free, as it is today.
+- **The waiter takes the slot back by contention** (`acquireRun` with its saved chain and depth) after
+  its event, inside the same `c.Blocking`. That is the reference's waiting Thread becoming `ready()` and
+  being picked by a later `tick`, an order the reference leaves to `random.choice`.
+
+**This closes #977's residual.** Another ready Thread runs while T waits, because T's wait is now the end
+of the scheduler's chain rather than a release the scheduler cannot see. The async form of `subtask.cancel`
+is `thread.yield_()` in the reference. Burroughs returns BLOCKED without yielding, and that is not changed
+here. It belongs to the cancellation slice the chair has ordered after A.
+
+**5. What triggers the scheduler when the slot is freed with ready Threads queued: the `Store.tick`
+equivalent.** Under A, a Thread made ready by a task that then *returns*, rather than suspending, has
+nobody to run it. #978 is exactly that: `f` calls `resume-later(run)` and returns. So:
+
+- **`releaseRun`, when it frees the slot at depth 0, kicks the scheduler if the ready queue is non-empty**:
+  a non-blocking send on a capacity-1 `tick` channel, coalescing. So does `suspending`'s plain-free path,
+  for completeness.
+- **The scheduler answers a kick, or a YIELD request, by acquiring the slot** in a `select` that also
+  receives `back`. Either the slot comes free, or an executing Thread hands it over, and either way the
+  scheduler then holds it. It also receives `stop`. Without the `back` arm, a Thread whose `giveBack`
+  sends to a scheduler blocked waiting for the slot that Thread holds would deadlock.
+- **No wakeup is lost.** Every append to the ready queue is made by a Thread that holds the slot:
+  - `park` with `threadReady`, by a giver;
+  - `resume-later`, by guest code.
+
+  The scheduler pops until the queue is empty while it holds the slot, so a non-empty queue at a free is
+  always seen by the free.
+
+**6. #984's re-entry survives**, because what it keys on was never "who started the chain". It keys on the
+identity a *synchronous call* carries.
+
+- **Each Thread has its own `runChain`:**
+  - an implicit Thread's is its entry's, from `runChainFrom(ctx)` for a sync lift and fresh for an async
+    entry;
+  - a created Thread's is minted at `thread.new-indirect`.
+- **The sync cross-component arm still passes its caller's chain** in the context, and the callee's entry
+  still re-enters when `h.runChain` equals it.
+
+`reenter.wasm` is parent → child → parent, all synchronous on one Thread. Its outer parent frame holds the
+parent's slot under that Thread's chain, and the inner entry finds that chain holding it and nests.
+
+- **What A changes is when `h.runChain` moves:** only at a handoff, to the next Thread's own chain. A
+  re-entry from a *suspended* Thread's nested frames is impossible, because those frames are not
+  executing.
+- **One case to state:** a Thread inside a synchronous call P → C keeps P's slot while C executes, though
+  no P code runs. That is the invariant's *"re-entrantly for that Thread's own synchronous nesting"*, and
+  it is the reference's shape too. `canon_lift`'s sync tail resumes only candidates from `inst.threads`
+  of C until C's task resolves, so no P Thread runs meanwhile.
+- **If C's nested entry back into P suspends**, it releases P's whole slot, as `suspending` already does
+  at any depth. The reference's sync tail then picks among P's `inst.threads`, so other P Threads may run.
+
+**7. The sync branch and the trap delivery** keep their logic, and A adds only where the slot goes.
+- **Sync branch:** the origin is resumed with the trap, so the slot goes to the origin, which unwinds
+  through its entry's `releaseRun`.
+- **A chain whose created Thread trapped:** the slot goes to the origin when it is claimed, and the
+  scheduler frees it otherwise.
+- **An origin that reached the scheduler by a `detach`** is not parked, so `claim` refuses it, and it
+  receives neither the trap nor the sync-branch trap. That is right on both counts: it is waiting on an
+  event, not suspended.
+
+### Witnesses: every existing one, and what changes
+
+The predictions name **what each asserts and whether that moves**. Neuters move only where the mechanism
+they name moved.
+
+| witness | value | mechanism |
+|---|---|---|
+| `TestTwoCallsIntoOneInstanceNeverExecuteAtOnce` | unchanged | unchanged |
+| `TestAChainReentersAnInstanceItAlreadyHolds` (`reenter.wasm`, 8) | unchanged | unchanged: the chain is the Thread's, and the sync arm still carries it |
+| `TestAResultStoreWaitsForTheExecutingTask`, `TestAChildsResultStoreWaitsForTheParentsExecutingTask` | unchanged | unchanged; the scheduler is one more contender for the slot |
+| `TestAResultStoreDoesNotLandWhileTheHolderIsInHostCode`, `TestAResultStoresReallocRunsWithNoEngineLockHeld` | unchanged | unchanged (`inHost` and `hostStores` are untouched) |
+| `TestACreatedThreadsWaitReleasesTheRunSlot` (8) | unchanged | **changes**: the wait is a `detach` handoff, not a bare release. Its neuter ("restrict `suspending` to implicit Threads") names a branch that no longer exists. It becomes "make the wait keep the slot", which hangs. |
+| `TestSwitchWasmReturnsTheCommittedReading` (`0x0888887f`) | unchanged | **changes**: `giveBack` carries the slot. Neuter unchanged. |
+| `TestAThreadThatSuspendsPartwayLetsTheYieldingCallbackContinue`, `TestASpawnedThreadRunsAtTheYieldAndHoldsItsOwnIndex` | unchanged | **changes**: `yieldPoint` takes neither lock. Neuters unchanged. |
+| `TestASyncLiftRunsASpawnedThreadBeforeItReturns`, `TestASyncLiftThatSuspendsWithNothingReadyTraps` | unchanged | the trap's slot goes to the origin (point 7). Neuters unchanged. |
+| `TestCloseEndsAParkedThreadsGoroutine`, `TestCloseEndsAThreadParkedInsideAHandoff` | unchanged | the scheduler's new acquire `select` must also receive `stop`, or Close hangs on it |
+| `TestAThreadParkedInsideAHandoffIsAtASafepoint` | unchanged | unchanged: the park is still inside `c.Blocking`. The scheduler is not a caller. |
+| the `cmthreads_test.go` index and gate tests (7) | unchanged | unchanged |
+| the `liftpark_test.go` witnesses (7) | unchanged | unchanged: `entrySem` around each entry is untouched |
+| the `ctxcancel_test.go` witnesses (5) | unchanged | unchanged. `TestCancellingTheContextOfAYieldingGuestEndsIt` uses no 🧵, so `yieldPoint` returns before the change. It loses one wait, the context-abandonable `enterTask` it took when the queue was non-empty. |
+| `crosscall_test.go`, `resultlist_test.go` (6) | unchanged | unchanged |
+
+### Owed by the build
+
+- **#978's fixture returns 8:** `cmthreads/sync-enters-past-suspended.wasm`, wasmtime 49.0.2's reading.
+  - Neuter 1: `giveBack` keeps the slot. Neuter 2: `releaseRun` never kicks. Each hangs, bounded.
+- **#977's residual gets a fixture, oracle first.** The shape:
+  - the parent's `run` readies T1 and T2;
+  - T1 creates a future, reads it, and waits;
+  - T2 writes the future, so T1's wait can end only if T2 runs while T1 waits.
+
+  Neuter: the wait as a bare release, which hangs (the #977 amendment's behaviour).
+- **The YIELD arm's `entrySem`, its own fixture, oracle first.** While task A YIELDs, its created Thread
+  makes a call that reaches an async lift of the same instance, which needs `entrySem`. Under the old
+  arm that deadlocks. Neuter: `yieldPoint` re-taking `entrySem`.
+- **Unchanged unless predicted above:** every existing 🧵, run-slot, liftpark, result-store and
+  cross-component witness.
+- **The handoff re-measured on `switch.wasm`** against the chair's baseline of 45.15 µs, by `make ab`.
+  Each handoff gains an `h.mu` save and restore, so the forecast is a small increase, quoted with its
+  p-value.
+- **The concurrency witnesses, 50 times under `-race`**, on heap-backed fixtures.
+
+### What this does not decide
+
+- **A sync-typed task's `waitable-set.wait`.** ADR 0102 records it as admitted, and A changes neither its
+  admission nor what it waits for. Only the slot moves, at point 4.
+- **Cancellation delivered to a suspended Thread, and the promote divergence.** These are the two slices the
+  chair ordered after A's build.

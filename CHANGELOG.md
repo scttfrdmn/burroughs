@@ -672,6 +672,19 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Changed
 
+- **Proposed: the run slot is held by the Thread executing guest code**
+  ([#978](https://github.com/scttfrdmn/burroughs/issues/978); the chair ruled Option A). This is one
+  amendment covering ADR 0100 and ADR 0101, written into ADR 0101 and held for the chair's review before
+  any engine code. No behaviour changes in this entry.
+  - **The design:** every handoff to the scheduler carries the slot.
+  - **The YIELD arm:** it takes neither the slot nor `entrySem`. The reference has cleared
+    `exclusive_thread` by the time the arm runs.
+  - **A wait** becomes a handoff that ends the scheduler's chain.
+  - **The `Store.tick` equivalent:** a free with ready Threads queued kicks the scheduler.
+  - **#984's re-entry:** it survives on a chain per Thread.
+  - **Witnesses:** all 40 existing ones are listed with predicted changes, and three new fixtures are
+    owed, oracle first.
+
 - **One rule for when the pinned reference and a toolchain disagree** ([ADR 0102](docs/decisions/0102-the-pinned-reference-defines-the-semantics-and-a-toolchains-stricter-refusal-is-followed-unless-burroughs-implements-and-witnesses-what-the-pin-admits.md),
   proposed; the chair's interim rule, going to Scott decided-unless-he-objects).
   - **The rule:** the pin defines the semantics. Where a toolchain refuses something the pin admits,
