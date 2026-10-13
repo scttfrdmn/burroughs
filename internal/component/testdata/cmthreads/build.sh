@@ -210,5 +210,33 @@ sep=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y 
 [ "$sep" = "8" ] || { echo "build.sh: sync-enters-past-suspended expected 8, got '$sep'." >&2; exit 1; }
 echo "build.sh: sync-enters-past-suspended result $sep" >&2
 
+# #998's oracle: a Thread readied before the callback returns WAIT runs during the wait. 5 = g's result.
+"$WASM_TOOLS" parse "$here/wait-runs-ready.wat" -o "$here/wait-runs-ready.wasm"
+wrr=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+	--invoke 'run()' "$here/wait-runs-ready.wasm" 2>&1) || {
+	echo "build.sh: the wait-runs-ready run FAILED:" >&2
+	echo "$wrr" >&2
+	exit 1
+}
+[ "$wrr" = "5" ] || { echo "build.sh: wait-runs-ready expected 5, got '$wrr'." >&2; exit 1; }
+echo "build.sh: wait-runs-ready result $wrr" >&2
+
+# The chair's item 1 on #997: T1 waits on a subtask, and T2, which would release it, traps first. The trap
+# is matched by CONTENT and by FRAME, so a trap from anywhere else does not pass.
+"$WASM_TOOLS" parse "$here/trap-while-waiting.wat" -o "$here/trap-while-waiting.wasm"
+if tww=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+	--invoke 'run()' "$here/trap-while-waiting.wasm" 2>&1); then
+	echo "build.sh: trap-while-waiting RETURNED where a trap is expected: '$tww'" >&2
+	exit 1
+fi
+case "$tww" in
+*"bodymod!t2"*"unreachable"*) echo "build.sh: trap-while-waiting trapped in t2, as expected" >&2 ;;
+*)
+	echo "build.sh: trap-while-waiting failed, but not with T2's trap:" >&2
+	echo "$tww" >&2
+	exit 1
+	;;
+esac
+
 echo "build.sh: switch.reading is hand-assembled from the three channels above — update it by hand" >&2
 echo "          when a figure here moves, and say which channel moved." >&2

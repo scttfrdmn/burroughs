@@ -672,6 +672,47 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Changed
 
+- **Proposed: the run slot is held by the Thread executing guest code**
+  ([#978](https://github.com/scttfrdmn/burroughs/issues/978); the chair ruled Option A). This is one
+  amendment covering ADR 0100 and ADR 0101, written into ADR 0101 and held for the chair's review before
+  any engine code. No behaviour changes in this entry.
+  - **The design:** every handoff to the scheduler carries the slot.
+  - **The YIELD arm:** it takes neither the slot nor `entrySem`. The reference has cleared
+    `exclusive_thread` by the time the arm runs.
+  - **A wait** becomes a handoff that ends the scheduler's chain.
+  - **The `Store.tick` equivalent:** a free with ready Threads queued kicks the scheduler.
+  - **#984's re-entry:** it survives on a chain per Thread.
+  - **Witnesses:** all 40 existing ones are listed with predicted changes, and three new fixtures are
+    owed, oracle first.
+  - **Amended on the chair's first review** (three items).
+    - **Point 7:** a created Thread's trap now goes to its owner rather than to the chain's origin, and a
+      waiting Thread can be ended by the trap's wake. Today an unclaimed trap is dropped, and a waiter is
+      woken only by `Close`.
+    - **Point 3:** `yieldPoint` waits for the scheduler's reply, and that wait also responds to `stop` and
+      to the task's context.
+    - **Point 5:** every ready-queue write site is enumerated, and the two that append get a test-build
+      assertion.
+    - **Back to the chair:** item 1 is new mechanism, so the record returns for a second review.
+  - **Accepted on the chair's second review**, with three text additions to point 7:
+    - the divergence that remains (other tasks' calls continue after a trap), recorded with both readings;
+    - an owner-resolved trap is recorded in `threadTable.orphanTraps` rather than dropped;
+    - the unwind of a killed waiter nested in a sync cross-component call, traced by symbol.
+
+    No engine code is in this entry.
+  - **Reference readings:** where wasmtime cannot read a fixture, the oracle is a scenario run against the
+    pinned `definitions.py`, labelled as a reference reading (ADR 0102).
+  - **The `gate:cm-threads` flip list** is [#999](https://github.com/scttfrdmn/burroughs/issues/999).
+  - **A wasmtime bug report is prepared, not filed,** under `docs/upstream/`.
+  - **Oracles committed first**, under `testdata/cmthreads`, both heap-backed:
+    - `wait-runs-ready.wasm`: wasmtime 49.0.2 returns 5, and Burroughs does not return. It is
+      [#998](https://github.com/scttfrdmn/burroughs/issues/998), new: the WAIT arm is not a scheduling
+      point.
+    - `trap-while-waiting.wasm`: wasmtime 49.0.2 traps in `t2`, and Burroughs does not return.
+  - **Two wasmtime 49.0.2 limits, recorded in the fixtures:**
+    - it refuses a future copy whose two ends are in one instance;
+    - it reports *"BUG: delivering non-present event"* when a created Thread's wait receives the event of a
+      YIELD-looping callee's subtask.
+
 - **One rule for when the pinned reference and a toolchain disagree** ([ADR 0102](docs/decisions/0102-the-pinned-reference-defines-the-semantics-and-a-toolchains-stricter-refusal-is-followed-unless-burroughs-implements-and-witnesses-what-the-pin-admits.md),
   proposed; the chair's interim rule, going to Scott decided-unless-he-objects).
   - **The rule:** the pin defines the semantics. Where a toolchain refuses something the pin admits,
