@@ -40,6 +40,17 @@ var raceWitnessFixtures = []string{
 	"result-store-heap.wasm",
 	"xc.wasm",
 	"xc-gated.wasm",
+	// authored heap-backed for ADR 0101's Option A witnesses (cmthreads_optiona_test.go), and #977's
+	"cmthreads/thread-wait-callback.wasm",
+	"cmthreads/sync-enters-past-suspended.wasm",
+	"cmthreads/wait-runs-ready.wasm",
+	"cmthreads/trap-while-waiting.wasm",
+	"cmthreads/trap-while-waiting-control.wasm",
+	"cmthreads/nested-sync-unwind.wasm",
+	"cmthreads/nested-sync-unwind-control.wasm",
+	"cmthreads/residual.wasm",
+	"cmthreads/yield-admits-entry.wasm",
+	"cmthreads/orphan-trap.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

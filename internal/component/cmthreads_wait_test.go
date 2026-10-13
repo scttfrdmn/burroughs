@@ -21,8 +21,12 @@ import (
 //
 // **Bounded**, because the defect is a hang.
 //
-// **Neuter, run:** restricting `asyncHandles.suspending` to implicit Threads again (the `rec.implicit`
-// condition) brings the hang back, and this fails on its bound.
+// **Neuter, run:** making the wait keep the run slot, with `suspending` calling `fn` without giving the
+// slot up, brings the hang back, and this fails on its bound.
+//
+// The neuter first named here was restricting `suspending` to implicit Threads (the `rec.implicit`
+// condition). ADR 0101's Option A removed that branch, because under A every waiting Thread gives the slot
+// up, so the neuter was restated as the amendment predicted.
 func TestACreatedThreadsWaitReleasesTheRunSlot(t *testing.T) {
 	t.Setenv(cmThreadsGateEnv, "1")
 	t.Setenv(asyncGateEnv, "1")

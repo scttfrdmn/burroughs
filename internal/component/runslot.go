@@ -113,11 +113,22 @@ func (h *asyncHandles) leaveHost() {
 	h.mu.Unlock()
 }
 
-// releaseRun undoes one acquireRun: a nested entry only drops the depth, and the last one gives the slot
-// up. The state is cleared under the lock and the channel operation is after it (§4 B-MM-3: no engine
-// lock across a channel operation).
-func (h *asyncHandles) releaseRun() {
+// releaseRunFor undoes one acquireRun by chain `ch`: a nested entry only drops the depth, and the last one
+// gives the slot up. The state is cleared under the lock and the channel operation is after it (§4
+// B-MM-3: no engine lock across a channel operation).
+//
+// **Only if `ch` holds the slot** (ADR 0101's Option A). Under A a Thread parked in a handoff or waiting
+// holds nothing, and one the wake ENDS there unwinds without taking the slot back, so its entry's release
+// must not drain a token that another Thread or the scheduler holds. Until A every entry held the slot to
+// its end, and the release was unconditional.
+//
+// **Freeing the slot kicks the scheduler when Threads are ready**: the `Store.tick` equivalent (point 5).
+func (h *asyncHandles) releaseRunFor(ch *runChain) {
 	h.mu.Lock()
+	if ch == nil || h.runChain != ch {
+		h.mu.Unlock()
+		return
+	}
 	h.runDepth--
 	if h.runDepth > 0 {
 		h.mu.Unlock()
@@ -126,11 +137,38 @@ func (h *asyncHandles) releaseRun() {
 	h.runChain = nil
 	h.mu.Unlock()
 	<-h.runSlot
+	h.kick()
+}
+
+// kick asks the scheduler to run the ready queue, after the slot has been freed with Threads ready: the
+// reference's `Store.tick`, which resumes a ready Thread whenever none is running (ADR 0101's Option A,
+// point 5). A non-blocking send on a capacity-1 channel, so kicks coalesce.
+//
+// **No wakeup is lost**: every append to the ready queue is made under the slot, so a queue that is
+// non-empty when the slot is freed is seen here, and one appended to later is seen by that holder's own
+// free. The scheduler's own free does not kick (`cmScheduler.free`), so a stale kick cannot re-arm itself.
+func (h *asyncHandles) kick() {
+	tt := h.threads
+	if tt == nil {
+		return
+	}
+	tt.mu.Lock()
+	s, n := tt.sched, len(tt.ready)
+	tt.mu.Unlock()
+	if s == nil || n == 0 {
+		return
+	}
+	select {
+	case s.tick <- struct{}{}:
+	default:
+	}
 }
 
 // suspending wraps the body of a `c.Blocking` excursion at a point where the reference SUSPENDS the calling
-// thread: the run slot is released for `fn`'s duration, so another task of the instance can execute, and
-// taken back before the excursion ends. Used as `c.Blocking(h.suspending(c, fn))`.
+// thread: `waitable-set.wait` and a sync `subtask.cancel`, both `wait_until`, which is a `block()`. The run
+// slot is given up for `fn`'s duration and taken back before the excursion ends. Used as
+// `c.Blocking(h.suspending(c, fn))`, and `fn` receives an `abort` channel, closed when a trap or the wake
+// ends the wait.
 //
 // **A wrapper of the excursion's body, not a replacement for `Blocking`**, so every call site still reads
 // `c.Blocking(` — the shape `TestEveryCanonFunctionsWaitIsInsideABlockingExcursion` checks for H-1. The
@@ -138,52 +176,87 @@ func (h *asyncHandles) releaseRun() {
 // were no longer lexically inside a `Blocking(...)` call. Hiding `Blocking` behind another name is what the
 // control exists to catch, so the shape moved rather than the control.
 //
-// **Only a slot the caller's chain holds is released**, found through the caller's Thread record (by the
+// **Only a slot the caller's chain holds is given up**, found through the caller's Thread record (by the
 // index its stack carries). A core-level `Invoke` that bypasses the component has no record (ADR 0073's
 // population), and for it this returns `fn` as is.
 //
-// **A created Thread releases its chain's slot too (#977).** It runs under the chain's hold (ADR 0100's
-// amendment), and the scheduler stamps that chain on it. Until #977 it released nothing, and that
-// deadlocked a sequence wasmtime completes (`cmthreads/thread-wait-callback.wasm`, 8):
-//   - a created Thread parks here waiting on a call into a nested child;
-//   - the child services it by calling back into a lift the parent passed it;
-//   - that call waits for the parent's slot, which the parent's chain held.
+// **Under ADR 0101's Option A the wait is a handoff, not a bare release** (point 4). In the reference the
+// chain ends at the `block()`, and `Store.tick` runs another ready Thread.
+//   - Where the instance has a scheduler, the slot goes to it with a `detach`, and it runs the ready queue
+//     while this Thread waits. That is #977's residual, witnessed by
+//     `TestAnotherThreadOfTheChainRunsWhileOneWaits`.
+//   - Where there is no scheduler, nothing can be ready, and the slot is freed.
 //
-// In the reference the Thread's `wait_until` is a `block()`, and the chain ends there. Releasing the slot
-// is that suspension's run-slot half. The scheduler half is not built: the scheduler still waits on the
-// Thread's handoff, so other ready Threads do not run while it waits. That is recorded in ADR 0101's
-// #977 amendment as a divergence, not a deadlock.
+// Before A the wait freed the slot (#977) but the scheduler still waited on the Thread's handoff, so no other
+// Thread of the chain ran.
 //
-// **The whole slot is released, whatever the re-entry depth**, and the depth is restored on the re-take.
+// **The whole slot is given up, whatever the re-entry depth**, and the depth is restored on the re-take.
 // A nested entry suspending means the chain suspends: the outer entries of the same chain are blocked in
 // host code (the synchronous cross-component arm), not executing.
 //
-// **Both the release and the re-take are inside the excursion**, so the agent is counted blocked — at a
-// safepoint, SP-2 — while it waits for its event and while it waits for another task to suspend. If the
-// wake's poll then ends the agent, it unwinds holding the slot, and the entry that took it releases it.
-func (h *asyncHandles) suspending(c *interp.CanonCaller, fn func() error) func() error {
+// **The re-take is by contention**, as the reference's waiting Thread is picked by a later `tick`. It is
+// inside the excursion, so the agent is counted blocked (at a safepoint, SP-2) while it waits.
+//
+// **A wait ended by a trap or the wake is NOT followed by a re-take** (point 7). The Thread unwinds holding
+// nothing, and its entry's `releaseRunFor` finds another holder and releases nothing. ADR 0101's text first
+// said the slot is taken back "whatever fn returned". Under A that would have the ended Thread contend for
+// a slot it will not use, and at `Close` wait on a Thread the close has not yet ended. The build amends the
+// sentence.
+func (h *asyncHandles) suspending(c *interp.CanonCaller, fn func(abort <-chan struct{}) error) func() error {
 	var rec *cmThread
-	if h.threads != nil {
-		rec = h.threads.current(c)
+	tt := h.threads
+	if tt != nil {
+		rec = tt.current(c)
 	}
 	return func() error {
 		h.mu.Lock()
 		held := rec != nil && rec.chain != nil && h.runChain == rec.chain
-		var ch *runChain
-		var depth int
 		if held {
-			ch, depth = h.runChain, h.runDepth
+			rec.saved.chain, rec.saved.depth, rec.saved.lift = h.runChain, h.runDepth, h.lift
 			h.runChain, h.runDepth = nil, 0
 		}
 		h.mu.Unlock()
 		if !held {
-			return fn()
+			return fn(nil)
 		}
-		<-h.runSlot
-		err := fn()
+		// **ADR 0101's Option A, point 4: the wait is a `block()`, so it is a handoff.** Where the instance
+		// has a scheduler, the slot goes to it with a `detach`, and it runs the ready queue while this Thread
+		// waits (#977's residual). Where it has none, nothing can be ready, and the slot is simply freed.
+		tt.mu.Lock()
+		rec.state = threadWaiting
+		rec.waitAbort = make(chan struct{})
+		rec.abortErr = nil
+		abort, s := rec.waitAbort, tt.sched
+		tt.mu.Unlock()
+		if s != nil {
+			h.mu.Lock()
+			h.schedHolds = true
+			h.mu.Unlock()
+			select {
+			case s.back <- handoff{from: rec, detach: true}:
+			case <-s.stop:
+			}
+		} else {
+			<-h.runSlot
+		}
+		err := fn(abort)
+		tt.mu.Lock()
+		aborted := rec.state != threadWaiting
+		if !aborted {
+			rec.state = threadRunning
+		}
+		abortErr := rec.abortErr
+		tt.mu.Unlock()
+		if aborted {
+			// **Ended while waiting: the slot is NOT taken back.** The Thread unwinds holding nothing, and
+			// its entry's `releaseRunFor` finds another holder and releases nothing.
+			return abortErr
+		}
+		// Taken back by contention, as the reference's waiting Thread is picked by a later `tick`.
 		h.runSlot <- struct{}{}
 		h.mu.Lock()
-		h.runChain, h.runDepth = ch, depth
+		h.runChain, h.runDepth, h.lift = rec.saved.chain, rec.saved.depth, rec.saved.lift
+		rec.saved.chain, rec.saved.depth, rec.saved.lift = nil, 0, nil
 		h.mu.Unlock()
 		return err
 	}

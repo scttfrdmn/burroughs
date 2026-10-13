@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
@@ -87,6 +88,11 @@ type threadTable struct {
 	ready []*cmThread
 	// sched is the instance's scheduler goroutine, started by the first `thread.new-indirect` (cmsched.go).
 	sched *cmScheduler
+	// h is the instance's async handle table, whose run slot the append assertion checks (point 5).
+	h *asyncHandles
+	// orphanTraps holds the traps routed to an owner whose lift had already returned, so no call could
+	// surface them (ADR 0101's Option A, point 7). Internal only, read by a test (#999's item 2).
+	orphanTraps []error
 }
 
 // threadState is where a component-model Thread is in its life, mirroring the reference's predicates.
@@ -105,6 +111,10 @@ const (
 	threadReady
 	// threadKilled: the wake ended it while it was parked, by a trap in its task or by a `Close`.
 	threadKilled
+	// threadWaiting is a Thread blocked in `waitable-set.wait` or a sync `subtask.cancel` — the reference's
+	// `wait_until`, which is a `block()`. It holds no run slot (ADR 0101's Option A, point 4), and the
+	// trap's wake reaches it through `waitAbort` (point 7).
+	threadWaiting
 )
 
 // cmThread is one component-model Thread's record.
@@ -129,11 +139,29 @@ type cmThread struct {
 	// lift has no `liftTask`, so its Threads' `task` is nil, and `killParked(nil)` means every Thread in the
 	// instance (#970).
 	owner *cmThread
-	// chain is the call chain this Thread executes under (runslot.go), guarded by asyncHandles.mu: set by
-	// the entry that took the run slot, or by the scheduler when it resumes a Thread under its chain's
-	// hold. A synchronous cross-component call passes it on, so a nested call back into this instance
-	// re-enters the slot instead of waiting for it.
+	// chain is the Thread's own call chain (runslot.go), guarded by asyncHandles.mu: set by the entry that
+	// took the run slot for an implicit Thread, and minted at `thread.new-indirect` for a created one (ADR
+	// 0101's Option A: the hold is the Thread's). A synchronous cross-component call passes it on, so a
+	// nested call back into this instance re-enters the slot instead of waiting for it.
 	chain *runChain
+	// saved is the slot state the Thread gave up at its last handoff or wait, guarded by asyncHandles.mu:
+	// the chain and depth it held and the current task, restored when it next holds the slot.
+	saved struct {
+		chain *runChain
+		depth int
+		lift  *liftTask
+	}
+	// waitAbort is closed to end a WAITING Thread (threadWaiting), with abortErr set first, both guarded by
+	// threadTable.mu: errThreadKilled from the wake, or its own task's trap when it is the owner (point 7).
+	waitAbort chan struct{}
+	abortErr  error
+	// fault and faulted are an OWNER's: the first trap routed to it, and a channel closed when it is set,
+	// made lazily by `faultChan`, both guarded by threadTable.mu (point 7).
+	fault   error
+	faulted chan struct{}
+	// returned is set by `finish` when the owner's lift takes its final answer, guarded by threadTable.mu.
+	// A trap routed after it has no call to reach and goes to `orphanTraps`.
+	returned bool
 
 	// resume is sent to by the scheduler alone, to run the Thread: nil to continue, an error to end its
 	// handoff with one. Capacity 1. Made at creation for a created Thread and at an implicit Thread's
@@ -195,6 +223,7 @@ func (tt *threadTable) get(i uint32) *cmThread {
 // An implicit Thread qualifies exactly when the reference's does: once it has suspended inside its callee
 // (`switch.wat`'s bodies resume theirs this way). A running one traps, as the reference's check would.
 func (tt *threadTable) markReady(i uint32) error {
+	tt.assertSlotHeld("markReady")
 	tt.mu.Lock()
 	defer tt.mu.Unlock()
 	if i == 0 || int(i) >= len(tt.array) || tt.array[i] == nil {
@@ -253,11 +282,21 @@ func (tt *threadTable) popReady() *cmThread {
 func (tt *threadTable) killParked(owner *cmThread) []*cmThread {
 	tt.mu.Lock()
 	var killed []*cmThread
+	var aborted []chan struct{}
 	for _, t := range tt.array {
-		if t == nil || (t.state != threadSuspended && t.state != threadReady) {
+		if t == nil || (owner != nil && t.owner != owner) {
 			continue
 		}
-		if owner != nil && t.owner != owner {
+		// A WAITING Thread is ended too (ADR 0101's Option A, point 7): its wait receives `waitAbort` and
+		// returns errThreadKilled. It is not in `killed`, because it reports nothing and is not parked in a
+		// handoff; a created waiter's goroutine exits on its own once the wait unwinds.
+		if t.state == threadWaiting {
+			t.state = threadKilled
+			t.abortErr = errThreadKilled
+			aborted = append(aborted, t.waitAbort)
+			continue
+		}
+		if t.state != threadSuspended && t.state != threadReady {
 			continue
 		}
 		t.state = threadKilled
@@ -273,10 +312,106 @@ func (tt *threadTable) killParked(owner *cmThread) []*cmThread {
 		tt.ready = kept
 	}
 	tt.mu.Unlock()
+	// Every close is after the unlock, and no receiver needs a lock to observe it (point 7).
 	for _, t := range killed {
 		close(t.kill)
 	}
+	for _, ch := range aborted {
+		close(ch)
+	}
 	return killed
+}
+
+// faultChan returns owner's `faulted` channel, making it on first use: once per lift that WAITs, and never
+// for one that does not. A wait selects on it to learn that its task trapped (ADR 0101's Option A, point 7).
+func (tt *threadTable) faultChan(owner *cmThread) <-chan struct{} {
+	if owner == nil {
+		return nil
+	}
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	if owner.faulted == nil {
+		owner.faulted = make(chan struct{})
+	}
+	return owner.faulted
+}
+
+// faultOf is the trap routed to owner, if any.
+func (tt *threadTable) faultOf(owner *cmThread) error {
+	if owner == nil {
+		return nil
+	}
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	return owner.fault
+}
+
+// finish is the owner's lift taking its final answer: it returns any trap routed to it, and marks it
+// returned in the same critical section, so a trap routed afterwards is an orphan and is never lost
+// between the check and the lift's return (ADR 0101's Option A, point 7).
+func (tt *threadTable) finish(owner *cmThread) error {
+	if owner == nil {
+		return nil
+	}
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	owner.returned = true
+	return owner.fault
+}
+
+// routeFault records a created Thread's trap on its OWNER rather than on whoever started the chain (ADR
+// 0101's Option A, point 7), for an owner that is not parked in a handoff (the scheduler resumes a parked
+// one with the error instead). The first trap wins:
+//   - an owner still registered gets `fault` set and `faulted` closed, and if it is itself waiting, its wait
+//     is aborted with the trap;
+//   - an owner whose lift has returned can surface it to no call, so it is kept in `orphanTraps`.
+//
+// The closes are after the unlock.
+func (tt *threadTable) routeFault(owner *cmThread, err error) {
+	tt.mu.Lock()
+	registered := owner != nil && int(owner.index) < len(tt.array) && tt.array[owner.index] == owner
+	if !registered || owner.returned {
+		tt.orphanTraps = append(tt.orphanTraps, err)
+		tt.mu.Unlock()
+		return
+	}
+	var closeFault, closeWait chan struct{}
+	if owner.fault == nil {
+		owner.fault = err
+		if owner.faulted == nil {
+			owner.faulted = make(chan struct{})
+		}
+		closeFault = owner.faulted
+	}
+	if owner.state == threadWaiting {
+		owner.state = threadKilled
+		owner.abortErr = err
+		closeWait = owner.waitAbort
+	}
+	tt.mu.Unlock()
+	if closeFault != nil {
+		close(closeFault)
+	}
+	if closeWait != nil {
+		close(closeWait)
+	}
+}
+
+// assertSlotHeld is the lost-wakeup argument as an instrument (ADR 0101's Option A, point 5): in a test
+// binary, an append to the ready queue panics unless the run slot is held, by an executing Thread or by the
+// scheduler. Only the two appending sites call it.
+func (tt *threadTable) assertSlotHeld(site string) {
+	if !testing.Testing() || tt.h == nil {
+		return
+	}
+	h := tt.h
+	h.mu.Lock()
+	held := h.runChain != nil || h.schedHolds
+	h.mu.Unlock()
+	if !held {
+		panic("component: " + site + " appended to the ready queue with the run slot not held (ADR 0101's " +
+			"Option A, point 5: every append is made under the slot, or a wakeup can be lost)")
+	}
 }
 
 // live reports how many Threads are registered, for teardown accounting and for a test to assert that a
@@ -404,6 +539,7 @@ func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) inte
 			arg:    int32(uint32(args[1].Bits)),
 			task:   caller.task,
 			owner:  caller.owner,
+			chain:  &runChain{}, // its own: the slot is held by the Thread executing (ADR 0101, Option A)
 			resume: make(chan error, 1),
 			kill:   make(chan struct{}),
 			done:   make(chan struct{}),

@@ -238,6 +238,30 @@ case "$tww" in
 	;;
 esac
 
+# ADR 0101's Option A fixtures. Each asserts its wasmtime reading, or, where the oracle is the REFERENCE
+# READING (reference/refread.reading), asserts the wasmtime bug that stops wasmtime reading it, so a fixed
+# wasmtime fails here and the fixture is re-read.
+opta() { # opta <name> <want-substring>: run <name>.wasm and require its output to contain <want>
+	"$WASM_TOOLS" parse "$here/$1.wat" -o "$here/$1.wasm"
+	out=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+		--invoke 'run()' "$here/$1.wasm" 2>&1 || true)
+	case "$out" in
+	*"$2"*) echo "build.sh: $1 reads '$2', as recorded" >&2 ;;
+	*)
+		echo "build.sh: $1 no longer reads '$2'. Got:" >&2
+		echo "$out" >&2
+		exit 1
+		;;
+	esac
+}
+opta yield-admits-entry 8
+opta nested-sync-unwind "unreachable"
+opta nested-sync-unwind-control "cannot block a synchronous task before returning"
+opta residual "BUG: delivering non-present event"                   # oracle: the reference reading, 8
+opta trap-while-waiting-control "BUG: delivering non-present event" # oracle: the reference reading, 1
+# orphan-trap has no wasmtime reading: its trap lands after its call returned (ADR 0100). Parsed only.
+"$WASM_TOOLS" parse "$here/orphan-trap.wat" -o "$here/orphan-trap.wasm"
+
 # A recorded LIMIT of the oracle (#999): wasmtime 49.0.2's "BUG: delivering non-present event". Asserted, so
 # a wasmtime that fixes it fails here and the fixtures that route around it are re-read. Parsed to a temp
 # file: the repro is not a fixture, so no .wasm is committed for it.

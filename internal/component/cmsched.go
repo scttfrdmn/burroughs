@@ -4,7 +4,6 @@ package component
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
@@ -35,17 +34,25 @@ import (
 // created lazily, on the first `thread.new-indirect` an instance executes, so an instance that never uses
 // 🧵 pays for no goroutine and no channel.
 //
-// # The entry slot is the CHAIN's, and the scheduler never takes it
+// # Two locks, and since ADR 0101's Option A the scheduler holds one of them between Threads
 //
-// Whoever starts a chain already holds `asyncHandles.entrySem`: the implicit Thread, which is inside its
-// callee, or the YIELD arm, which takes the slot before handing off ([threadTable.yieldPoint]). The hold
-// is the chain's for its whole run, and a resumed Thread runs under it rather than taking the slot itself.
-// That is the reference's `exclusive_thread`, which stays the implicit Thread's while it is suspended
-// mid-callee and is never taken by a Thread a chain resumes.
+// **`asyncHandles.entrySem` is the reference's `exclusive_thread`, and no Thread a chain resumes takes it.**
+// An implicit Thread suspended mid-callee keeps it, as the reference's `exclusive_thread` stays set across
+// a `block()`. The YIELD arm does NOT take it, because the reference has cleared `exclusive_thread` by then
+// (`canon_lift`: `inst.exclusive_thread = None` on every callback return); until Option A
+// [threadTable.yieldPoint] re-took it.
 //
-// **The scheduler does not acquire the slot itself, and that is a refinement of the ruling's wording, not
-// a departure from its intent.** A scheduler that acquired it could block on a slot held by an implicit
-// Thread parked mid-callee — which only the scheduler can resume.
+// **The run slot is held exactly by the Thread executing guest code**, re-entrantly for that Thread's own
+// synchronous nesting (ADR 0101's Option A). Every handoff carries it:
+//   - a Thread sending on `back` holds it;
+//   - the scheduler holds it from the receive until it gives it to the next Thread (`giveTo`) or frees it
+//     (`free`);
+//   - when the slot is freed with Threads ready, the scheduler is kicked (`tick`) and acquires it itself.
+//
+// Before Option A the scheduler never took the slot. That was right while a parked implicit Thread held it,
+// because a scheduler waiting on it could have waited on a Thread only it could resume. Under A no parked
+// Thread holds the slot, so the scheduler waits only on one that is executing. And its acquire also
+// receives `back`, so a Thread handing the slot over is never stuck behind it.
 //
 // # Resuming an implicit Thread ENDS the chain, as far as the scheduler is concerned
 //
@@ -60,18 +67,25 @@ type cmScheduler struct {
 	// back carries every handoff: a Thread giving the slot up, or a created Thread's entry returning.
 	// The scheduler is the only receiver, in both its idle loop and a running chain.
 	back chan handoff
-	// yield carries the YIELD arm's request to run the ready queue; the reply is the chain's error.
+	// yield carries the YIELD arm's request to run the ready queue. The reply is sent once the chain has
+	// ended, and is nil, or errThreadKilled when `stop` closed first.
 	yield chan chan error
-	stop  chan struct{} // closed by `walker.close`, LAST, to end the goroutine
-	done  chan struct{} // closed when the goroutine has exited
+	// tick is the `Store.tick` equivalent: kicked, capacity 1 and coalescing, when the run slot is freed with
+	// Threads ready (ADR 0101's Option A, point 5).
+	tick chan struct{}
+	stop chan struct{} // closed by `walker.close`, LAST, to end the goroutine
+	done chan struct{} // closed when the goroutine has exited
 }
 
 // handoff is one `suspend(switch_to)`: who gave control up, who runs next (nil for none), and — when the
-// giver is a created Thread whose entry returned — its error.
+// giver is a created Thread whose entry returned — its error. **It carries the run slot** (ADR 0101's Option
+// A). `detach` marks a Thread that has begun to WAIT rather than parked in `giveBack`: it is not
+// resumed by a chain, and takes the slot back itself once its event arrives.
 type handoff struct {
 	from   *cmThread
 	next   *cmThread
 	exited bool
+	detach bool
 	err    error
 }
 
@@ -89,6 +103,7 @@ func (tt *threadTable) scheduler(h *asyncHandles) *cmScheduler {
 			h: h, tt: tt,
 			back:  make(chan handoff),
 			yield: make(chan chan error),
+			tick:  make(chan struct{}, 1),
 			stop:  make(chan struct{}),
 			done:  make(chan struct{}),
 		}
@@ -98,62 +113,128 @@ func (tt *threadTable) scheduler(h *asyncHandles) *cmScheduler {
 	return tt.sched
 }
 
-// loop is the scheduler goroutine: idle until a Thread gives back from outside any chain (an implicit
-// Thread inside its callee) or the YIELD arm asks for the ready queue to run; then drive a chain.
+// loop is the scheduler goroutine. It is idle until one of three things happens:
+//   - a Thread hands the slot over from outside any chain (`back`);
+//   - the YIELD arm asks for the ready queue to run (`yield`);
+//   - a freed slot finds Threads ready (`tick`).
+//
+// Then it drives a chain. **Every `back` carries the run slot** (ADR 0101's Option A): its sender held the
+// slot when it sent, and the scheduler holds it from the receive until it gives it to a Thread or frees it.
 func (s *cmScheduler) loop() {
 	defer close(s.done)
 	for {
 		select {
 		case hb := <-s.back:
-			// A handoff with no chain running can only come from an implicit Thread: a created Thread runs
-			// only when this goroutine resumes it, which is inside `drive`. So `hb.from` is the origin, and
-			// it is parked in `giveBack` until a chain resumes it or the chain's error does.
-			idle, deliver, err := s.drive(hb.from, hb.next)
-			switch {
-			case deliver:
-				hb.from.resume <- err
-			case idle && hb.from.task == nil && s.tt.claim(hb.from):
-				// **The sync branch (#970).** A SYNC lift's implicit Thread suspended, and the chain ended
-				// with nothing runnable while it is still parked. The reference's sync tail is
-				//
-				//	while task.state != Task.State.RESOLVED:
-				//	  candidates = { t for t in inst.threads if t.ready() }
-				//	  trap_if(not candidates)
-				//
-				// so it traps. An ASYNC origin does not, because its callee simply does not progress until
-				// something resumes it, which ADR 0100 already records. The claim makes the trap and a
-				// late resume mutually exclusive: whichever moves the Thread to running first wins.
-				//
-				// NEUTER THIS to see `sync-trap.wasm` hang instead of trapping, as an async callee would.
-				hb.from.resume <- &interp.Trap{Reason: "cannot block a synchronous task before returning: " +
-					"it suspended with no other Thread ready to run (the reference's sync branch, " +
-					"trap_if(not candidates))"}
-			}
+			s.serve(hb)
 		case reply := <-s.yield:
-			_, _, err := s.drive(nil, nil)
-			reply <- err
+			s.acquireAndRun([]chan error{reply})
+		case <-s.tick:
+			s.acquireAndRun(nil)
 		case <-s.stop:
 			return
 		}
 	}
 }
 
+// acquireAndRun takes the run slot for the ready queue and runs it, then answers every YIELD request it was
+// holding. That is the answer to a `tick` or a YIELD arm (ADR 0101's Option A, points 3 and 5).
+//
+// **The acquire is a `select`, not a bare channel send.** It receives:
+//   - `back`, because an executing Thread may hand the slot over instead of freeing it, and a scheduler
+//     blocked on the slot while that Thread blocked on `back` would deadlock;
+//   - `yield`, so a YIELD request arriving meanwhile is answered by this same chain;
+//   - `stop`.
+//
+// It takes no context and never waits on `entrySem`.
+//
+// **A stale tick costs one acquire and nothing else.** One that arrives after the queue was drained finds
+// it empty, and `free` does not kick.
+func (s *cmScheduler) acquireAndRun(replies []chan error) {
+	answer := func(err error) {
+		for _, r := range replies {
+			r <- err // capacity 1, and each request is answered exactly once
+		}
+	}
+	for {
+		select {
+		case s.h.runSlot <- struct{}{}:
+			s.h.mu.Lock()
+			s.h.schedHolds = true
+			s.h.mu.Unlock()
+			if s.drive(nil) {
+				s.free()
+			}
+			answer(nil)
+			return
+		case hb := <-s.back:
+			s.serve(hb)
+			answer(nil)
+			return
+		case r := <-s.yield:
+			replies = append(replies, r)
+		case <-s.stop:
+			answer(errThreadKilled)
+			return
+		}
+	}
+}
+
+// serve takes a handoff, and with it the run slot, and runs the chain it starts: the handoff's `next`, then
+// the ready queue.
+//
+// The giver is one of:
+//   - a Thread parked in `giveBack`;
+//   - a Thread that began to wait (`detach`);
+//   - a created Thread whose entry returned (`exited`).
+func (s *cmScheduler) serve(hb handoff) {
+	var first *cmThread
+	if hb.exited && hb.err != nil {
+		if s.trap(hb.from, hb.err) {
+			return // the owner was resumed with the trap, and holds the slot
+		}
+	} else {
+		first = hb.next
+	}
+	if !s.drive(first) {
+		return
+	}
+	if !hb.detach && !hb.exited && hb.from.implicit && hb.from.task == nil && s.tt.claim(hb.from) {
+		// **The sync branch (#970).** A SYNC lift's implicit Thread suspended, and the chain ended with
+		// nothing runnable while it is still parked. The reference's sync tail is
+		//
+		//	while task.state != Task.State.RESOLVED:
+		//	  candidates = { t for t in inst.threads if t.ready() }
+		//	  trap_if(not candidates)
+		//
+		// so it traps. An ASYNC origin does not, because its callee simply does not progress until something
+		// resumes it, which ADR 0100 already records. The claim makes the trap and a late resume mutually
+		// exclusive: whichever moves the Thread to running first wins. The slot goes with the trap, and the
+		// Thread unwinds through its entry's release.
+		//
+		// NEUTER THIS to see `sync-trap.wasm` hang instead of trapping, as an async callee would.
+		s.giveTo(hb.from)
+		hb.from.resume <- &interp.Trap{Reason: "cannot block a synchronous task before returning: " +
+			"it suspended with no other Thread ready to run (the reference's sync branch, " +
+			"trap_if(not candidates))"}
+		return
+	}
+	s.free()
+}
+
 // drive runs one chain starting at `first`, or at the head of the ready queue when `first` is nil, and
 // continues with each handoff's `next` — the reference's `while thread is not None` — then with the ready
-// queue, until nothing is runnable. It returns early, with no error, when it resumes an implicit Thread.
+// queue, until nothing is runnable. The scheduler holds the run slot on entry.
 //
-// A created Thread whose entry TRAPPED ends the chain: its task's other parked Threads are ended, and the
-// error goes back to whoever started the chain. `deliver` reports that `origin` — the implicit Thread that
-// started it, nil for the YIELD arm — was claimed for that error and must be sent it.
+// `idle` reports how the chain ended:
+//   - **true:** nothing was runnable, and the scheduler still holds the slot for the caller to free or
+//     hand on.
+//   - **false:** it resumed an implicit Thread, routed a trap to a parked owner, or `stop` closed. In
+//     each case the slot is no longer the scheduler's.
 //
-// **The origin is claimed BEFORE the kill**, because when it belongs to the trapping lift it is one of the
-// parked Threads the kill would end, and the lift would then report "ended while parked" instead of the
-// trap that caused it. The kill is scoped by the trapping Thread's `owner`, its lift, which a sync lift
-// has where it has no `task` (#970).
-//
-// `idle` reports that the chain ended because nothing was runnable — not by resuming an implicit Thread,
-// not by a trap, not by `stop` — which is the one ending the sync branch in `loop` traps on.
-func (s *cmScheduler) drive(origin, first *cmThread) (idle, deliver bool, err error) {
+// **A created Thread's trap is routed to its OWNER, not to whoever started the chain** (ADR 0101's Option
+// A, point 7). See `trap`. The chain then continues with the ready queue, because other tasks' Threads are
+// not ended by it: a divergence recorded on #999.
+func (s *cmScheduler) drive(first *cmThread) (idle bool) {
 	cur := first
 	for {
 		if cur == nil {
@@ -163,37 +244,83 @@ func (s *cmScheduler) drive(origin, first *cmThread) (idle, deliver bool, err er
 			continue
 		}
 		if cur == nil {
-			return true, false, nil
+			return true
 		}
-		s.h.mu.Lock()
-		s.h.lift = cur.task
-		if !cur.implicit {
-			// A created Thread executes under its chain's hold, so it carries that chain: a synchronous
-			// cross-component call it makes, back into this instance, re-enters the slot (runslot.go).
-			cur.chain = s.h.runChain
-		}
-		s.h.mu.Unlock()
+		s.giveTo(cur)
 		cur.resume <- nil // capacity 1, and only this goroutine sends
 		if cur.implicit {
-			return false, false, nil
+			return false
 		}
 		var hb handoff
 		select {
 		case hb = <-s.back:
 		case <-s.stop:
-			return false, false, nil
+			return false
 		}
 		if hb.exited && hb.err != nil {
-			deliver = origin != nil && s.tt.claim(origin)
-			for _, k := range s.tt.killParked(hb.from.owner) {
-				if k.done != nil {
-					<-k.done
-				}
+			if s.trap(hb.from, hb.err) {
+				return false
 			}
-			return false, deliver, hb.err
+			cur = nil
+			continue
 		}
 		cur = hb.next
 	}
+}
+
+// trap routes a created Thread's trap to its owner (ADR 0101's Option A, point 7) and ends the owner's
+// other Threads. It reports true when it resumed a parked owner with the trap, which then holds the slot.
+//
+// **The owner is claimed BEFORE the kill**, because a parked owner is one of the Threads the kill would end,
+// and its lift would then report "ended while parked" instead of the trap that caused it.
+//
+// An owner that is not parked gets the trap through `routeFault`:
+//   - an owner waiting has its wait aborted with the trap;
+//   - an owner in its callback loop finds it at the loop's next pass;
+//   - an owner whose lift has returned has it kept in `orphanTraps`.
+func (s *cmScheduler) trap(from *cmThread, err error) bool {
+	owner := from.owner
+	if owner != nil && s.tt.claim(owner) {
+		for _, k := range s.tt.killParked(owner) {
+			if k.done != nil {
+				<-k.done
+			}
+		}
+		s.giveTo(owner)
+		owner.resume <- err
+		return true
+	}
+	s.tt.routeFault(owner, err)
+	for _, k := range s.tt.killParked(owner) {
+		if k.done != nil {
+			<-k.done
+		}
+	}
+	return false
+}
+
+// giveTo hands the scheduler's run slot to `t`, which is about to run: its saved chain and depth (its own
+// chain at depth 1 on a first resume) and its task. Under `asyncHandles.mu`, with the resume sent after.
+func (s *cmScheduler) giveTo(t *cmThread) {
+	s.h.mu.Lock()
+	ch, depth := t.saved.chain, t.saved.depth
+	if ch == nil {
+		ch, depth = t.chain, 1
+	}
+	s.h.runChain, s.h.runDepth = ch, depth
+	s.h.lift = t.task
+	s.h.schedHolds = false
+	t.saved.chain, t.saved.depth, t.saved.lift = nil, 0, nil
+	s.h.mu.Unlock()
+}
+
+// free gives up the scheduler's run slot when nothing is runnable. **It does not kick**: the scheduler has
+// just drained the queue while holding the slot, so a kick here could only re-arm a tick for nothing.
+func (s *cmScheduler) free() {
+	s.h.mu.Lock()
+	s.h.schedHolds = false
+	s.h.mu.Unlock()
+	<-s.h.runSlot
 }
 
 // giveBack is the one handoff primitive: `self` gives the entry slot up, `next` runs (or the ready queue
@@ -210,6 +337,16 @@ func (s *cmScheduler) drive(origin, first *cmThread) (idle, deliver bool, err er
 // parks the same way.
 func (s *cmScheduler) giveBack(c *interp.CanonCaller, self, next *cmThread, state threadState) error {
 	s.tt.park(self, state)
+	// **The handoff carries the run slot** (ADR 0101's Option A, point 2): `self` saves the chain, depth
+	// and task it holds, and the scheduler holds the slot from the receive until it gives it on. That
+	// includes giving it back to `self` with exactly this state (`giveTo`), so a resume is never a contended
+	// acquire: nothing runs between `switch_to(other)` and `other` running. A Thread the wake ENDS while
+	// parked is never given the slot back, and unwinds holding nothing (`releaseRunFor`).
+	s.h.mu.Lock()
+	self.saved.chain, self.saved.depth, self.saved.lift = s.h.runChain, s.h.runDepth, s.h.lift
+	s.h.runChain, s.h.runDepth = nil, 0
+	s.h.schedHolds = true
+	s.h.mu.Unlock()
 	return c.Blocking(func() error {
 		select {
 		case s.back <- handoff{from: self, next: next}:
@@ -237,6 +374,9 @@ func (tt *threadTable) park(self *cmThread, state threadState) {
 	}
 	self.state = state
 	if state == threadReady {
+		tt.mu.Unlock()
+		tt.assertSlotHeld("park") // the giver still holds the slot: park runs before the handoff
+		tt.mu.Lock()
 		tt.ready = append(tt.ready, self)
 	}
 }
@@ -281,8 +421,9 @@ func (tt *threadTable) unreadyLocked(t *cmThread) {
 	}
 }
 
-// yieldPoint is the callback loop's YIELD arm as a scheduling point: take the entry slot for `task`, hand
-// the ready queue to the scheduler, and wait for the chain to end.
+// yieldPoint is the callback loop's YIELD arm as a scheduling point: hand the ready queue to the scheduler,
+// which takes the run slot for it, and wait for the chain to end. It takes no slot itself (ADR 0101's
+// Option A, point 3; see the body).
 //
 // The reference's YIELD arm is
 //
@@ -300,30 +441,50 @@ func (tt *threadTable) unreadyLocked(t *cmThread) {
 //
 // Nothing to do, and no slot taken, when no Thread is ready — including on every instance that has never
 // executed `thread.new-indirect`, which has no scheduler to ask.
-func (tt *threadTable) yieldPoint(h *asyncHandles, task *liftTask) error {
+func (tt *threadTable) yieldPoint(task *liftTask) error {
 	tt.mu.Lock()
 	s, n := tt.sched, len(tt.ready)
 	tt.mu.Unlock()
 	if s == nil || n == 0 {
 		return nil
 	}
-	prev, ok := h.enterTask(task)
-	if !ok {
-		return fmt.Errorf("%w: the call's context ended while waiting for this instance's execution "+
-			"slot", ErrCancelled)
-	}
-	defer h.leaveTask(prev)
-	// The chain executes guest code, so it runs under the run slot too, taken after the entry slot
-	// (ADR 0101). The scheduler takes neither: the hold is the chain's.
-	h.acquireRun(&runChain{}, tt.get(task.threadIdx), nil)
-	defer h.releaseRun()
+	// **Under ADR 0101's Option A this takes neither `entrySem` nor the run slot** (point 3). The
+	// reference has already cleared `exclusive_thread` by the time its YIELD arm runs — `canon_lift`'s
+	// loop sets `inst.exclusive_thread = None` on every callback return, before the `match code:` — so
+	// another async task may enter while this one's Threads run. Re-taking `entrySem` here was a
+	// divergence. The scheduler acquires the slot on the queue's behalf, and the callback re-entry takes
+	// both back through `enterAndInvoke`.
+	//
+	// **And it blocks until the scheduler replies**, so the re-entry cannot race the queue (the chair's item
+	// 2). The reply comes once the chain has drained the queue and freed the slot. The wait also answers:
+	//   - `stop`;
+	//   - the task's context, because the loop's re-entry delivers the cancellation;
+	//   - the task's fault, because the loop's next pass reports it.
+	//
+	// An abandoned wait leaves `reply` unread, which is safe: it has capacity 1, so the scheduler never
+	// blocks on it.
+	ctxDone := task.context().Done()
+	faulted := tt.faultChan(tt.get(task.threadIdx))
 	reply := make(chan error, 1)
 	select {
 	case s.yield <- reply:
 	case <-s.stop:
 		return errThreadKilled
+	case <-ctxDone:
+		return nil
+	case <-faulted:
+		return nil
 	}
-	return <-reply
+	select {
+	case err := <-reply:
+		return err
+	case <-s.stop:
+		return errThreadKilled
+	case <-ctxDone:
+		return nil
+	case <-faulted:
+		return nil
+	}
 }
 
 // stopScheduler ends the scheduler goroutine and waits for it. Called by `walker.close` LAST — after every
