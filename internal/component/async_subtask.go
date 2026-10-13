@@ -136,6 +136,11 @@ type asyncHandles struct {
 	// resolves task A's subtask from inside B's own impl call, and A's flag was clear, so A's store waited
 	// for the slot B's goroutine held. Three liftpark tests deadlocked that way.
 	inHost int
+	// hostStores are result stores that arrived while inHost was raised, queued for the holder to apply as
+	// it leaves host code, on its own goroutine, before its guest resumes. Guarded by mu. Writing them at
+	// once let a store from another goroutine land under the holder's own host code (ADR 0101's
+	// result-store amendment, #983's follow-up).
+	hostStores []func()
 
 	// cancellable holds every lift task this instance currently hosts, which is what a cancellation
 	// request is aimed at (ADR 0094). It is a SET and not the `lift` slot, because those answer

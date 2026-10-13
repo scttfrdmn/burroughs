@@ -12,7 +12,7 @@
   (component $child
     (type $copt (func async (param "x" u32) (result u32)))
     (import "op" (func $op (type $copt)))
-    (core module $cmem (memory (export "m") 1))
+    (core module $cmem (memory (export "m") 1 1)) ;; heap-backed too, so the race-fixture registry's rule holds
     (core instance $cmemi (instantiate $cmem))
     (alias core export $cmemi "m" (core memory $chm))
     (core func $ret (canon task.return (result u32)))

@@ -169,18 +169,44 @@ writes at the store, not deferred to the waiter, for the chair's two reasons:
   to measure it against.
 
 **The one exception: the slot's holder is in host code.** That means inside an async lower's impl, or a
-subtask's `onCancel`, on its own goroutine with the slot held. No guest code of the instance can run
-then, so the store writes without waiting. Waiting would deadlock: the holder may be the very goroutine
-resolving. The exception is per **instance** (`asyncHandles.inHost`), not per subtask, and a measurement
-put it there. The first draft flagged only the subtask whose own impl was running, and three liftpark
-tests deadlocked. In one of them, task B's impl resolves task A's subtask from inside B's own impl call.
+subtask's `onCancel`, on its own goroutine with the slot held. Waiting for the slot there would deadlock,
+because the holder may be the very goroutine resolving. The exception is per **instance**
+(`asyncHandles.inHost`), not per subtask, and a measurement put it there. The first draft flagged only the
+subtask whose own impl was running, and three liftpark tests deadlocked. In one of them, task B's impl
+resolves task A's subtask from inside B's own impl call.
+
+**And the store does not write at once there: it is queued, and the holder applies it as it leaves host
+code.** #985 wrote at once, on the argument that no guest code can run while the holder is in host code.
+That argument was about *guest* code. The chair asked whether the window was safe against the holder's
+*host* code, and it was not:
+- the holder's impl runs on its goroutine and reaches guest memory through `Caller`, ADR 0064's
+  deliberately plain region;
+- a resolver on **another** goroutine wrote a result into that same memory meanwhile;
+- nothing ordered the two.
+
+`TestAResultStoreDoesNotLandWhileTheHolderIsInHostCode` shows it deterministically. The holder's probe impl
+writes a sentinel to a retptr through `c.Write`, resolves another caller's subtask on another goroutine,
+and reads the word back. Under #985 it read the other caller's result.
+
+**The ordering now** is `asyncHandles.hostStores`: a store arriving while `inHost` is raised is queued,
+and `asyncHandles.leaveHost` applies the queue on the holder's own goroutine, before its guest resumes.
+That is the reference's order. The resolver's work is another thread's execution, which cannot run during
+this thread's host call, but does run before this thread executes guest code again.
+- **It keeps #983's deadlock fix**, since nothing waits.
+- **It is not the deferral to the waiter the chair ruled out**, since the store lands before any guest code
+  of the instance runs.
+- **Inline resolutions are queued too**, and applied as the impl returns, before the lower reads the
+  subtask's status. So the sync-resolving arm still sees RETURNED.
+
+Neutered by applying at once instead of queueing, the witness reads back `0x2`, the other caller's result,
+in place of its sentinel, on 3 of 3 runs.
 
 **Every path that resolves a subtask, and what the slot's holder does while waiting:**
 
 | resolver | where `onResolve` runs | the waiting holder | deadlock? |
 |---|---|---|---|
-| an impl resolving inline | the lowering agent's goroutine, inside the impl | none: it *is* the holder, in host code | no (`inHost`) |
-| `onCancel` resolving inline | the cancelling agent's goroutine | none, likewise | no (`inHost`) |
+| an impl resolving inline | the lowering agent's goroutine, inside the impl | none: it *is* the holder, in host code | no (`inHost`: queued, applied as the impl returns) |
+| `onCancel` resolving inline | the cancelling agent's goroutine | none, likewise | no (`inHost`: queued, applied as `onCancel` returns) |
 | a host impl resolving later | the host's goroutine | waits through `waitable-set.wait` or a sync `subtask.cancel`, both via `suspending`, or between callback entries (`awaitEvent`), where no slot is held | no |
 | `crossComponentResolve` | the child's goroutine | likewise | no |
 | a sync lower of an async-lifted child | — | refused by name in `bindCrossComponent`: the lower must match its import's asyncness | unreachable |

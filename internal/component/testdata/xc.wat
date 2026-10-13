@@ -4,7 +4,7 @@
 ;; wasmtime 49.0.2: run(1) = 101, run(2) = 102, 3 of 3 each. The parent's memory is (memory 1 1), heap-backed (#979).
 (component
   (component $child
-    (core module $cmem (memory (export "m") 1))
+    (core module $cmem (memory (export "m") 1 1)) ;; heap-backed too, so the race-fixture registry's rule holds
     (core instance $cmemi (instantiate $cmem))
     (alias core export $cmemi "m" (core memory $chm))
     (core func $ret (canon task.return (result u32)))
