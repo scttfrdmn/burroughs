@@ -838,6 +838,16 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **The A/B instrument records what it ran under, and A's handoff is re-measured on a quiet host.**
+  - **What was wrong:** the first `switch.wasm` A/B ran on the dev box. Rounds 8–10 spiked in all three arms
+    at once, and the null arm read ±122%.
+  - **The instrument fix:** `scripts/ab.sh` now samples the load before every round, prints a per-round
+    table, and flags any round that wasn't quiet. The benchmark reports `gcs/op`.
+  - **The re-measurement** (`make lab-ab` on janus, 12 rounds, every arm at ±1–2%): A plus the embedding
+    costs **+2.26% (p=0.024)** against the last pre-A commit. The null arm reads ~ (p=0.755).
+  - **`runChain` is embedded in `cmThread`,** which returns `switch.wasm` to 216 allocs/op, pre-A's count.
+  - The figures are in ADR 0101's build record.
+
 - **A sync lift's `waitable-set.wait` with no candidate in its own instance now traps at the reference's
   sync tail** ([#1005](https://github.com/scttfrdmn/burroughs/issues/1005), behind `gate:cm-threads`). Until
   now Burroughs admitted it, where the pin and wasmtime 49.0.2 both trap. The chair classified that as a

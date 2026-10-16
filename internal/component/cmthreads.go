@@ -144,6 +144,9 @@ type cmThread struct {
 	// 0101's Option A: the hold is the Thread's). A synchronous cross-component call passes it on, so a
 	// nested call back into this instance re-enters the slot instead of waiting for it.
 	chain *runChain
+	// ownChain is the created Thread's own chain, which `chain` points at: embedded, so creating a Thread
+	// allocates no separate one. An implicit Thread's `chain` is its entry's and does not use it.
+	ownChain runChain
 	// saved is the slot state the Thread gave up at its last handoff or wait, guarded by asyncHandles.mu:
 	// the chain and depth it held and the current task, restored when it next holds the slot.
 	saved struct {
@@ -627,11 +630,14 @@ func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) inte
 			arg:    int32(uint32(args[1].Bits)),
 			task:   caller.task,
 			owner:  caller.owner,
-			chain:  &runChain{}, // its own: the slot is held by the Thread executing (ADR 0101, Option A)
 			resume: make(chan error, 1),
 			kill:   make(chan struct{}),
 			done:   make(chan struct{}),
 		}
+		// Its own chain, embedded in the record rather than allocated beside it (the chair's ruling on the
+		// Option A build: the separate `&runChain{}` was 5 allocations a run on `switch.wasm`). The chain's
+		// only property is identity, and `&t.ownChain` is as unique as a fresh allocation.
+		t.chain = &t.ownChain
 		s := tt.scheduler(h) // started here, lazily: an instance that never creates a Thread has none
 		idx := tt.add(t)
 		go t.run(s)
