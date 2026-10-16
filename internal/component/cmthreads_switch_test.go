@@ -2,6 +2,7 @@ package component
 
 import (
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -225,9 +226,20 @@ func BenchmarkSwitchWasm(b *testing.B) {
 	}
 	defer in.Close()
 	b.ReportAllocs()
+	// **GC in the timed region, reported rather than inferred** (the chair's ruling on the Option A A/B,
+	// which asked whether GC fell inside it). `gcs/op` is the number of collections the loop's allocation
+	// drove, per op, so a row whose time moved can be read against whether its GC count did.
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	n := 0
 	for b.Loop() {
 		if _, err := in.CallValues("run", canon.U32(0)); err != nil {
 			b.Fatalf("run: %v", err)
 		}
+		n++
+	}
+	runtime.ReadMemStats(&after)
+	if n > 0 {
+		b.ReportMetric(float64(after.NumGC-before.NumGC)/float64(n), "gcs/op")
 	}
 }

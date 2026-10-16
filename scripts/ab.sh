@@ -348,8 +348,23 @@ for a in $ARMS; do
 	[ -z "$PROV" ] || printf '%s\n\n' "$PROV" >> "$OUTDIR/$a.txt"
 done
 
+# **The host's load, sampled before every round, kept beside the per-round values** (the chair's ruling on
+# ADR 0101's Option A A/B). That run's arms read 45 µs in rounds 1–7 and 52–202 µs in rounds 8–10, in all
+# three arms at once: a disturbance on the box, not an arm effect. benchstat's ± over the ten rounds then
+# made a null arm read ±122%. A summary cannot show which rounds were disturbed, and the per-round table
+# below can, so the next measurement inherits it rather than re-deriving it.
+load1() {
+	if [ -r /proc/loadavg ]; then
+		cut -d' ' -f1 /proc/loadavg
+	else
+		sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}'
+	fi
+}
+: > "$OUTDIR/loads.txt" || die "cannot write $OUTDIR/loads.txt"
+
 r=0
 while [ "$r" -lt "$ROUNDS" ]; do
+	load1 >> "$OUTDIR/loads.txt"
 	slot=0
 	while [ "$slot" -lt "$NARMS" ]; do
 		arm="$(arm_at $(( (slot + r) % NARMS )))" || die "internal: no arm at slot $slot"
@@ -380,5 +395,24 @@ printf '\nab.sh: benchstat over %s arms, so every row carries a p-value:\n\n' "$
 set --
 for a in $ARMS; do set -- "$@" "$a=$OUTDIR/$a.txt"; done
 benchstat "$@" || die "benchstat failed over $OUTDIR"
+
+# The per-round values, one column per arm, with the load each round started at. Each arm's Benchmark lines
+# are in round order, because one round appends one line per arm.
+printf '\nab.sh: per-round sec/op (ns) and the 1-minute load each round started at:\n\n'
+printf 'round\tload'
+for a in $ARMS; do printf '\t%s' "$a"; done
+printf '\n'
+r=1
+while [ "$r" -le "$ROUNDS" ]; do
+	printf '%s\t%s' "$r" "$(sed -n "${r}p" "$OUTDIR/loads.txt")"
+	for a in $ARMS; do
+		printf '\t%s' "$(grep '^Benchmark' "$OUTDIR/$a.txt" | sed -n "${r}p" | awk '{for (i = 1; i < NF; i++) if ($(i+1) == "ns/op") print $i}')"
+	done
+	printf '\n'
+	r=$((r + 1))
+done
+ncpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+awk -v n="$ncpu" '$1 > n / 4 { busy = 1 } END { exit !busy }' "$OUTDIR/loads.txt" &&
+	printf '\nab.sh: NOTE a round started with the 1-minute load above a quarter of the %s CPUs: the host was not\n       quiet, and a wide ± here is the box, not the arms. Re-run on a quiet host before quoting it.\n' "$ncpu"
 
 printf '\nab.sh: logs kept at %s\n' "$OUTDIR"
