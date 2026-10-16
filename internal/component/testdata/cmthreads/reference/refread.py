@@ -412,6 +412,49 @@ def sync_wait_own_thread(t_writes):
     return body
 
 
+def promote_implicit(promote_run):
+    """Step 4, cmthreads/promote-implicit.wat: T yield-then-promotes its task's implicit Thread, which waits
+    at its YIELD arm (promote_run), or a Thread U that was never readied (the control). The value is 16 + the
+    flag run's callback saw for "T resumed" on its first entry after T started."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        m = {"started": 0, "resumed": 0, "target": 0, "seen": -1}
+
+        def t(args):
+            m["started"] = 1
+            d.canon_thread_yield_then_promote(m["target"])
+            m["resumed"] = 1
+            return []
+
+        tbl = d.Table()
+        fi = tbl.add(d.CoreFuncRef(BODYT, t))
+
+        def run(args):
+            if promote_run:
+                [m["target"]] = d.canon_thread_index()
+            else:
+                [m["target"]] = d.canon_thread_new_indirect(BODYT, tbl, fi, 1)  # U: never readied
+            [ti] = d.canon_thread_new_indirect(BODYT, tbl, fi, 0)
+            d.canon_thread_resume_later(ti)
+            return [1]  # YIELD
+
+        def cb(args):
+            if m["started"] and m["seen"] == -1:
+                m["seen"] = m["resumed"]
+            if m["resumed"] and m["seen"] != -1:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [16 + m["seen"]])
+                return [0]
+            return [1]
+
+        rft = d.FuncType([], [d.U32Type()], async_=True)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(async_=True, callback=cb), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
 if __name__ == "__main__":
     import hashlib
 
@@ -431,3 +474,5 @@ if __name__ == "__main__":
     read("residual control (T2 does nothing)", residual(False))
     read("sync-wait-own-thread (#1005's admitted case; wasmtime 49.0.2: 7)", sync_wait_own_thread(True))
     read("sync-wait-own-thread control (T does not write)", sync_wait_own_thread(False))
+    read("promote-implicit (#1012; wasmtime 49.0.2: 16)", promote_implicit(True))
+    read("promote-implicit control (a never-readied U; wasmtime 49.0.2: 16)", promote_implicit(False))

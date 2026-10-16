@@ -858,3 +858,38 @@ handed a cancel. Its task receives it when the Thread resumes and its callee ret
   - It had **masked** this step's neuter: with the loop's delivery removed, `cancel-suspended` still read 4.
 - **Grave #1010.** `Close` hung on a nested child with a Thread parked in a handoff, because `walker.close`
   killed only its own table's parked Threads.
+
+## Amendment, 2026-10-16: a promote switches to an implicit Thread waiting at its YIELD arm (#1012, the chair's step 4)
+
+The *What this does not decide* item above, *"`promote` naming an implicit Thread that is waiting at its own
+YIELD arm"*, said that no reading measured it. It is measured now, and it was a conformance defect.
+
+**The pin.**
+- `canon_lift`'s YIELD arm is `thread.wait_until(lambda: inst.exclusive_thread is None)`, so the implicit
+  Thread is `waiting()` with that `ready_func`. That is true once the callback's return has cleared
+  `exclusive_thread`.
+- `yield_then_promote(other)` is `if other.ready(): other.stop_waiting(); self.yield_then_resume(other)`,
+  a mandatory switch.
+
+**The oracle needs the reference, not wasmtime.** In `cmthreads/promote-implicit.wasm`, T promotes `run`.
+In `-control.wasm`, T promotes a Thread that was never readied, so the promote falls to a plain yield.
+
+| | promote | control |
+|---|---|---|
+| reference (32 seeds × 2 profiles) | **{16}** | {16, 17}, because `random.choice` permits either |
+| wasmtime 49.0.2, 10 of 10 | 16 | 16 |
+| Burroughs before | **17** | 17 |
+| Burroughs after | **16**, 100 of 100 | 17 |
+
+**The fix, by symbol.**
+- **`threadTable.takeReady`** counts an implicit Thread at its YIELD arm (`yielding`, set by `yieldPoint`)
+  as ready while `entrySem` is free. That is the pin's `exclusive_thread is None`.
+- **`promoteYielding`:** when a handoff names such a Thread, it signals `yieldPoint` through `promoted` and
+  ends the chain.
+- **`threadTable.promotedWait`** keeps the queue from running until that task re-enters (`entering`) or
+  finishes. This is the load-bearing half: without it, a stale tick won the freed slot and resumed the
+  promoter first, in 42 of 100 runs.
+
+**Three other changes were tried, measured as not load-bearing, and removed.** They were a
+requester-aware YIELD request, releasing `entrySem` before the run slot, and marking the YIELD at the entry's
+return. Each was disabled alone over 100 runs with 0 failures.

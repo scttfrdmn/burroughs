@@ -543,6 +543,7 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// **With the Thread index**, as `enterAndInvoke` passes it (ADR 0101 point 5). This was a plain `Invoke`,
 	// so a callee entered with lowered arguments carried no index — `thread.index` had nothing to read, and
 	// a suspension point could not tell that its caller holds the run slot.
+	f.threads.entering(task.threadIdx)
 	return target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
 }
 
@@ -571,6 +572,8 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 	// The task's implicit Thread index travels into every entry — the callee's and each callback
 	// re-entry's — so `thread.index` answers the same number across the loop, which is what makes it
 	// the TASK's Thread rather than one per stack.
+	// An entry starting ends any YIELD arm this task was in, and a promote's wait for it (#1012).
+	f.threads.entering(task.threadIdx)
 	return target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
 }
 

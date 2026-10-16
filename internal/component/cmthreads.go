@@ -90,6 +90,9 @@ type threadTable struct {
 	sched *cmScheduler
 	// h is the instance's async handle table, whose run slot the append assertion checks (point 5).
 	h *asyncHandles
+	// promotedWait is the task a promote has just switched to, until it re-enters (#1012): the scheduler
+	// runs no queue meanwhile, so the promoter cannot resume ahead of the callback the promote chose.
+	promotedWait *cmThread
 	// orphanTraps holds the traps routed to an owner whose lift had already returned, so no call could
 	// surface them (ADR 0101's Option A, point 7). Internal only, read by a test (#999's item 2).
 	orphanTraps []error
@@ -165,6 +168,12 @@ type cmThread struct {
 	// made lazily by `faultChan`, both guarded by threadTable.mu (point 7).
 	fault   error
 	faulted chan struct{}
+	// yielding is an implicit Thread's "waiting at its YIELD arm" (`yieldPoint`), guarded by threadTable.mu.
+	// The reference's YIELD arm is `wait_until(lambda: exclusive_thread is None)`, so such a Thread is
+	// `ready()` to a promote while `entrySem` is free (#1012). promoted, capacity 1, is how the scheduler
+	// tells `yieldPoint` that a promote switched to it.
+	yielding bool
+	promoted chan struct{}
 	// returned is set by `finish` when the owner's lift takes its final answer, guarded by threadTable.mu.
 	// A trap routed after it has no call to reach and goes to `orphanTraps`.
 	returned bool
@@ -362,6 +371,9 @@ func (tt *threadTable) finish(owner *cmThread) error {
 	tt.mu.Lock()
 	defer tt.mu.Unlock()
 	owner.returned = true
+	if tt.promotedWait == owner {
+		tt.promotedWait = nil // a promoted task that finishes without re-entering must not stall the queue
+	}
 	return owner.fault
 }
 

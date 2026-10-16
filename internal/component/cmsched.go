@@ -161,6 +161,17 @@ func (s *cmScheduler) acquireAndRun(replies []chan error) {
 			s.h.mu.Lock()
 			s.h.schedHolds = true
 			s.h.mu.Unlock()
+			// **While a promoted task has not yet re-entered, the queue does not run** (#1012). The promote
+			// was `switch_to` that task's callback, and a stale tick or a request that wins the slot first
+			// must not resume the promoter ahead of it. It is answered, and the slot freed for the re-entry.
+			s.tt.mu.Lock()
+			awaiting := s.tt.promotedWait != nil
+			s.tt.mu.Unlock()
+			if awaiting {
+				s.free()
+				answer(nil)
+				return
+			}
 			if s.drive(nil) {
 				s.tt.syncTail(s.h) // a blocked sync task with no candidate traps here (#1005)
 				s.free()
@@ -239,6 +250,9 @@ func (s *cmScheduler) serve(hb handoff) {
 func (s *cmScheduler) drive(first *cmThread) (idle bool) {
 	cur := first
 	for {
+		if cur != nil && s.tt.promoteYielding(cur) {
+			return true // a promote switched to a YIELDing task's callback: the chain ends here (#1012)
+		}
 		if cur == nil {
 			cur = s.tt.popReady()
 		} else if !s.tt.claim(cur) {
@@ -406,11 +420,57 @@ func (tt *threadTable) claim(t *cmThread) bool {
 func (tt *threadTable) takeReady(t *cmThread) bool {
 	tt.mu.Lock()
 	defer tt.mu.Unlock()
+	// **An implicit Thread waiting at its YIELD arm is ready too** (#1012). The reference's arm is
+	// `wait_until(lambda: inst.exclusive_thread is None)`, so `other.ready()` holds while no task holds
+	// `exclusive_thread`, which in Burroughs is a free `entrySem`. It is not in the queue, so nothing is
+	// removed; the handoff that follows promotes it (`promoteYielding`).
+	if t.implicit && t.yielding {
+		return tt.h != nil && len(tt.h.entrySem) == 0
+	}
 	if t.state != threadReady {
 		return false
 	}
 	tt.unreadyLocked(t)
 	t.state = threadSuspended
+	return true
+}
+
+// entering records that task Thread i is starting an entry (#1012): it is no longer at a YIELD arm, and if a
+// promote was waiting for it to re-enter, the wait is over and the queue may run again.
+func (tt *threadTable) entering(i uint32) {
+	t := tt.get(i)
+	if t == nil {
+		return
+	}
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	t.yielding = false
+	if tt.promotedWait == t {
+		tt.promotedWait = nil
+	}
+}
+
+// promoteYielding switches to an implicit Thread that waits at its YIELD arm (#1012): it signals
+// `yieldPoint` to return, and reports true. The caller ends its chain, because control now belongs to that
+// task's callback, which runs before the promoter resumes. The promoter is already ready in the queue (the
+// `yield-*` forms park it there), so it runs at the next scheduling point.
+func (tt *threadTable) promoteYielding(t *cmThread) bool {
+	tt.mu.Lock()
+	if !t.implicit || !t.yielding || t.promoted == nil {
+		tt.mu.Unlock()
+		return false
+	}
+	ch := t.promoted
+	// Until that task re-enters, the queue does not run: control is its callback's (`switch_to`), and a
+	// stale tick that wins the slot meanwhile must not resume the promoter first. Measured: before this,
+	// 45 of 100 runs of `promote-implicit` read 17 after a successful promote.
+	tt.promotedWait = t
+	tt.mu.Unlock()
+	// The signal after the unlock (§4 B-MM-3): capacity 1 and non-blocking, so a duplicate is dropped.
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 	return true
 }
 
@@ -466,7 +526,30 @@ func (tt *threadTable) yieldPoint(task *liftTask) error {
 	// An abandoned wait leaves `reply` unread, which is safe: it has capacity 1, so the scheduler never
 	// blocks on it.
 	ctxDone := task.context().Done()
-	faulted := tt.faultChan(tt.get(task.threadIdx))
+	self := tt.get(task.threadIdx)
+	faulted := tt.faultChan(self)
+	// **Waiting at the YIELD arm is a state a promote can see** (#1012): `yielding` makes this implicit
+	// Thread ready to `takeReady`, and `promoted` is how the scheduler says a promote switched to it. A stale
+	// signal from an earlier arm is drained first, so it cannot end this one. The next entry clears the
+	// state (`entering`).
+	var promoted chan struct{}
+	if self != nil {
+		tt.mu.Lock()
+		if self.promoted == nil {
+			self.promoted = make(chan struct{}, 1)
+		}
+		promoted = self.promoted
+		tt.mu.Unlock()
+		// Drained outside the lock (§4 B-MM-3), and BEFORE `yielding` is set: until then no promote can
+		// name this Thread, so only a stale signal can be drained here.
+		select {
+		case <-promoted:
+		default:
+		}
+		tt.mu.Lock()
+		self.yielding = true
+		tt.mu.Unlock()
+	}
 	reply := make(chan error, 1)
 	select {
 	case s.yield <- reply:
@@ -475,6 +558,8 @@ func (tt *threadTable) yieldPoint(task *liftTask) error {
 	case <-ctxDone:
 		return nil
 	case <-faulted:
+		return nil
+	case <-promoted:
 		return nil
 	}
 	select {
@@ -486,6 +571,8 @@ func (tt *threadTable) yieldPoint(task *liftTask) error {
 		return nil
 	case <-faulted:
 		return nil
+	case <-promoted:
+		return nil // a promote switched to this task: its callback runs now, ahead of the queue
 	}
 }
 
