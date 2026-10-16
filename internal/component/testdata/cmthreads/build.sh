@@ -280,6 +280,12 @@ for f in cancel-suspended-control cancel-suspended-cancellable; do
 	[ "$rc" = "124" ] || { echo "build.sh: $f expected no return (exit 124), got exit $rc." >&2; exit 1; }
 	echo "build.sh: $f does not return, as recorded" >&2
 done
+
+# The chair's step 4 (#1012): wasmtime reads 16 on BOTH arms, so it does not tell the promote from its own
+# scheduling choice. The discriminating oracle is the reference reading: {16} on the promote, {16, 17} on
+# the control.
+opta promote-implicit 16
+opta promote-implicit-control 16
 # orphan-trap has no wasmtime reading: its trap lands after its call returned (ADR 0100). Parsed only.
 "$WASM_TOOLS" parse "$here/orphan-trap.wat" -o "$here/orphan-trap.wasm"
 

@@ -838,6 +838,26 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **A promote naming an implicit Thread that waits at its YIELD arm now switches to it**
+  ([#1012](https://github.com/scttfrdmn/burroughs/issues/1012), behind `gate:cm-threads`; the chair's step 4).
+  - **Before:** it fell to a plain yield, because a YIELDing implicit Thread was not in the ready queue.
+  - **The pin's arm:** `wait_until(lambda: exclusive_thread is None)` makes the Thread `ready()`, and
+    `yield_then_promote` must switch to it.
+  - **Oracle:** `cmthreads/promote-implicit.wasm` and its control. The reference reads {16} on the promote
+    and {16, 17} on the control. wasmtime reads 16 on both, so the reference is the discriminating oracle.
+  - **Burroughs:** it read 17 on the promote, and now reads 16: 1,000 of 1,000, and 600 of 600 under
+    `-race`.
+  - **The fix closes every window in which the task looks "not yet waiting"**, which the pin never has
+    because only one Thread runs:
+    - `takeReady` counts the yielding Thread;
+    - `markYield` marks the arm before the entry releases its slots;
+    - `entrySem` is released before the run slot;
+    - `entrySem` held by the task's own pending re-entry counts as free;
+    - `promotedWait` keeps the queue still until the promoted task re-enters.
+  - **Every piece has a neuter that was run.** Two were first removed after 0 failures in 100 macOS runs,
+    and Windows CI then read 17. They are now shown by widening their windows. ADR 0100's amendment records
+    it.
+
 - **A callee that returns a value after its cancellation was requested now resolves RETURNED with the value**
   ([#1009](https://github.com/scttfrdmn/burroughs/issues/1009), on the default `gate:async` path).
   - **What it did:** it resolved CANCELLED_BEFORE_RETURNED with the value dropped, because the async lower's

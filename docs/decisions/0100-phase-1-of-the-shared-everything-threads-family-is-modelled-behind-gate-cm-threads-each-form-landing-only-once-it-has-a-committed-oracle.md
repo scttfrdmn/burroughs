@@ -858,3 +858,45 @@ handed a cancel. Its task receives it when the Thread resumes and its callee ret
   - It had **masked** this step's neuter: with the loop's delivery removed, `cancel-suspended` still read 4.
 - **Grave #1010.** `Close` hung on a nested child with a Thread parked in a handoff, because `walker.close`
   killed only its own table's parked Threads.
+
+## Amendment, 2026-10-16: a promote switches to an implicit Thread waiting at its YIELD arm (#1012, the chair's step 4)
+
+The *What this does not decide* item above, *"`promote` naming an implicit Thread that is waiting at its own
+YIELD arm"*, said that no reading measured it. It is measured now, and it was a conformance defect.
+
+**The pin.**
+- `canon_lift`'s YIELD arm is `thread.wait_until(lambda: inst.exclusive_thread is None)`, so the implicit
+  Thread is `waiting()` with that `ready_func`. That is true once the callback's return has cleared
+  `exclusive_thread`.
+- `yield_then_promote(other)` is `if other.ready(): other.stop_waiting(); self.yield_then_resume(other)`,
+  a mandatory switch.
+
+**The oracle needs the reference, not wasmtime.** In `cmthreads/promote-implicit.wasm`, T promotes `run`.
+In `-control.wasm`, T promotes a Thread that was never readied, so the promote falls to a plain yield.
+
+| | promote | control |
+|---|---|---|
+| reference (32 seeds × 2 profiles) | **{16}** | {16, 17}, because `random.choice` permits either |
+| wasmtime 49.0.2, 10 of 10 | 16 | 16 |
+| Burroughs before | **17** | 17 |
+| Burroughs after | **16**: 1,000 of 1,000, and 600 of 600 under `-race` | 17 |
+
+**The fix, by symbol.** In the pin, the callback's return, the clearing of `exclusive_thread` and the YIELD
+arm's wait happen with no other Thread running. Burroughs runs the promoter on another goroutine, so every
+point where the task can look "not yet waiting" is a window, and each needed closing:
+
+| piece | what it closes | its neuter |
+|---|---|---|
+| `takeReady` counts an implicit Thread at its YIELD arm (`yielding`) while `exclusive_thread is None` | the divergence itself | 17, 20 of 20 |
+| `markYield` sets `yielding` when the entry's result decodes as YIELD, **before** the entry releases its slots | the kick from that release running the promoter before the task reaches `yieldPoint` | with the gap widened by a 2 ms sleep, 17 in 30 of 30 (0 of 30 with it) |
+| the entry releases `entrySem` **before** the run slot | the promoter finding `entrySem` still held, because two defers ran in LIFO order | widened between the two releases, 17 in 30 of 30 |
+| `entrySem` held by the task's **own** pending re-entry counts as free (`liftTask.entryHeld`) | that re-entry taking `entrySem` while the promoter runs. In the reference it could not, because only one Thread runs | 17 in 4 of 600 under `-race` (0 of 600 with it) |
+| `promoteYielding` and `threadTable.promotedWait` | a stale tick winning the freed slot and resuming the promoter before the promoted callback | 17 in 42 of 100 |
+
+**The record of how these were found, because it went wrong once.** The second and third rows were
+first disabled alone over 100 macOS runs, with 0 failures. They were removed as not load-bearing, and
+Windows CI then read 17. Zero failures in N runs bounds the rate on one host's scheduling; it does not show
+the window is absent. The fourth row was found by tracing a `-race` failure: it logged every scheduler
+decision, and in the failing run `yieldPoint` saw an empty queue and let the re-entry take `entrySem`.
+**Each row is now shown by a widened window or a trace**, not by an absence of failures. One change, a
+requester-aware YIELD request, never had a window shown for it, and it stays removed.

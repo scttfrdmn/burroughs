@@ -56,6 +56,8 @@ var raceWitnessFixtures = []string{
 	"cmthreads/cancel-suspended.wasm",
 	"cmthreads/cancel-suspended-control.wasm",
 	"ignore-cancel.wasm",
+	"cmthreads/promote-implicit.wasm",
+	"cmthreads/promote-implicit-control.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,
