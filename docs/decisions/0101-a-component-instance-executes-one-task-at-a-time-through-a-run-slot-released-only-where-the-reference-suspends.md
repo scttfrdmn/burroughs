@@ -906,3 +906,45 @@ arm built independently from `main`; darwin/arm64, Apple M4 Pro, not queued):
   ±122%, so this box cannot resolve a change smaller than that.
 - **The cost that is measured is five allocations per run.** That is one `runChain` per created Thread,
   and `switch.wasm` creates five.
+
+**Superseded: the instrument could not support "no change detectable"** (the chair's ruling on this build,
+re-issued 2026-10-16). The table above stays as it was taken. What replaces its reading:
+
+- **The per-round values show what the ± hid.** All three arms read about 44.7–45.9 µs in rounds 1–7, and
+  52–202 µs in rounds 8–10, *at once*. That is a disturbance on the host, not an arm effect.
+  - The host was this repo's dev box: an interactive desktop with a terminal at 115% CPU and a 15-minute
+    load of 13.9.
+  - The `-race` run had finished before the A/B began, so the two did not overlap. The rest of the desktop
+    did.
+  - **Core placement:** the M4 Pro mixes 8 performance and 4 efficiency cores, and macOS offers no affinity
+    to pin a run. janus (below) has no efficiency cores, which removes the question rather than answering it.
+  - **GC in the timed region:** the benchmark now reports `gcs/op`. It is 0.0047, about one collection per
+    213 runs, so small and now visible on every row.
+- **The instrument fix, where the next measurement inherits it:** `scripts/ab.sh` now:
+  - samples the 1-minute load before every round;
+  - prints a per-round table with the load and each arm's ns/op;
+  - flags any round that started above a quarter of the CPUs.
+- **`runChain` is embedded in `cmThread`** (`ownChain`). Creating a Thread then allocates no separate chain,
+  and `switch.wasm` is back to 216 allocs/op. No witness moved, because the chain's only property is
+  identity.
+
+**Re-measured on a quiet host:** `make lab-ab` on `janus.local`'s `measured` group (task 28, 0 concurrent at
+submit), i9-9960X, linux/amd64, 12 rounds, every round's load between 2.9 and 3.6 on 32 CPUs. The base is
+`d01ca19`, the last commit before A; the head is `0689190`, A plus the embedding.
+
+| | base (pre-A) | head | null |
+|---|---|---|---|
+| sec/op | 111.8µ ± 2% | **114.4µ ± 1%, +2.26% (p=0.024)** | 112.1µ ± 2%, ~ (p=0.755) |
+| B/op | 11.99Ki | 12.55Ki, +4.71% (p=0.000) | 11.99Ki, ~ |
+| allocs/op | 216 | 216, ~ | 216, ~ |
+
+- **A's handoff costs +2.26% on `switch.wasm`**, resolved against a null arm that reads no difference
+  (p=0.755).
+- **Bytes per op are up 4.71%**, from the larger Thread record (the saved slot state, the wait fields and the
+  embedded chain). The allocation count is equal.
+- **The 45.15 µs baseline is darwin's**, from the same fixture on the dev box. janus's absolute figure is
+  about 112 µs, so the comparison is base against head on one host, and 45.15 µs is quoted for its scale
+  only.
+
+A second janus run (task 27) put the post-A `main` against the embedding: 113.2µ against 113.4µ (p=1.000),
+and 221 against 216 allocs/op. So the embedding removes A's five allocations at no time cost.
