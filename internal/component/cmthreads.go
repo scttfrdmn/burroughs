@@ -168,6 +168,10 @@ type cmThread struct {
 	// waitReady is a WAITING Thread's `ready_func`, set with its state and read under asyncHandles.mu: true
 	// once the wait could complete. The sync tail's candidate test counts it (#1005).
 	waitReady func() bool
+	// waitUngated says the sync tail judges this wait with `gate:cm-threads` off too, because both oracles
+	// trap it there. It is set with waitReady. Only a `waitable-set.wait` sets it; a sync `subtask.cancel`'s
+	// wait does not, because the oracles split on it (see syncTail).
+	waitUngated bool
 	// fault and faulted are an OWNER's: the first trap routed to it, and a channel closed when it is set,
 	// made lazily by `faultChan`, both guarded by threadTable.mu (point 7).
 	fault   error
@@ -425,7 +429,7 @@ func (tt *threadTable) routeFault(owner *cmThread, err error) {
 const errSyncTail = "cannot block a synchronous task before returning: it waits with no Thread of its instance " +
 	"able to run (the reference's sync tail, trap_if(not candidates))"
 
-// syncTail is `canon_lift`'s sync tail for WAITING sync tasks (#1005), behind `gate:cm-threads`:
+// syncTail is `canon_lift`'s sync tail for WAITING sync tasks (#1005):
 //
 //	while task.state != Task.State.RESOLVED:
 //	  candidates = { t for t in inst.threads if t.ready() }
@@ -447,10 +451,24 @@ const errSyncTail = "cannot block a synchronous task before returning: it waits 
 // would.
 //
 // With no candidate, every waiting sync task is ended with the trap, and the aborted waiters are returned.
+//
+// # With `gate:cm-threads` off, only a `waitable-set.wait` is judged
+//
+// Off, no Thread exists, so the only call site is the wait itself (`suspending`, no scheduler). The tail
+// judges a waiter there only if its wait sets `waitUngated`, which is the row whose readings agree:
+//   - **A sync `waitable-set.wait` on another instance's event** traps on both oracles. wasmtime 49.0.2 does
+//     so 10 of 10 on `async-waitset-synth`, `run-slot` and `result-store-heap` with a YIELDing provider.
+//     The reference traps at `canon_lift:2161` in every run that reaches the wait. Burroughs admitted it
+//     until this applied with the gate off (#1016).
+//   - **A sync `subtask.cancel` of another instance's subtask** is where the oracles split. The reference
+//     traps at the tail. wasmtime 49.0.2 returns status 4 (`asynclift/cancel-wat.reading`). It is left
+//     admitting with the gate off and recorded on #999, as the gate-on rule was (#1005).
+//
+// NEUTER THIS: drop the `waitUngated` test, and a sync `subtask.cancel` traps with the gate off (the
+// cancellation witnesses go red). Drop the gate test's `||`, and `TestASyncWaitOnAnotherInstancesEventTraps`
+// admits.
 func (tt *threadTable) syncTail(h *asyncHandles) []*cmThread {
-	if !cmThreadsEnabled() {
-		return nil
-	}
+	gated := cmThreadsEnabled()
 	tt.mu.Lock()
 	if len(tt.ready) > 0 {
 		tt.mu.Unlock()
@@ -465,7 +483,7 @@ func (tt *threadTable) syncTail(h *asyncHandles) []*cmThread {
 		if t.waitReady != nil {
 			readies = append(readies, t.waitReady)
 		}
-		if t.implicit && t.task == nil {
+		if t.implicit && t.task == nil && (gated || t.waitUngated) {
 			syncWaiters = append(syncWaiters, t)
 		}
 	}

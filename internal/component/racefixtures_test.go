@@ -60,6 +60,9 @@ var raceWitnessFixtures = []string{
 	"cmthreads/promote-implicit-control.wasm",
 	"context-clobber.wasm",
 	"cmthreads/thread-context.wasm",
+	// the callback-lift twins the run-slot and result-store witnesses moved to (ADR 0102's sync-wait row)
+	"run-slot-cb.wasm",
+	"result-store-heap-cb.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

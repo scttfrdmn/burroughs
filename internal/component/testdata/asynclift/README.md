@@ -87,8 +87,8 @@ cancel-rust-parent/composed.wasm   b2d5d0f3bf597de39b649212710d070496e8b3bd3bde2
 cancel-wat-parent/parent.wasm      189ea0de6396c597a9e0c6b9401b692a83da0f0188164d163a128c4cb3e37238  MATCH
 cancel-wat-parent/composed.wasm    d2d02c27cc322b95e92ba64a388f623589fe9b525b7550d14326a6d9d35beeb2  MATCH
 cancel-wat.reading / cancel-rust.reading                                                       byte-identical
-call-wat-parent/parent.wasm        ded1d755c619aea5fe03e8f659712bcf7369ecac23376ba98fe1a0eb33c570b2  MATCH
-call-wat-parent/composed.wasm      7ef2273c074ece4da16dfa70ef7e2bfeae52a0934245a64d71b73485d576bf7b  MATCH
+call-wat-parent/parent.wasm        51979c8060a43ad1c570fefd452bc694059b45f6c4075a4c040903452194b356  MATCH
+call-wat-parent/composed.wasm      0cebb7b7ede9853c4ead02527fb71fac9ea77ba4431179da6ac8dbe25f792a63  MATCH
 starting-wat-child/child.wasm      b3585505f4d29c49d24d32841befd40a75058bf7cd0e14c9603d7448904cb1b1  MATCH
 starting-wat-parent/parent.wasm    e475a2bae9103f062a10dbe030f0f1f7db141e1608ed5e833661bcb268e7f3f9  MATCH
 starting-wat-parent/composed.wasm  5e0079493f8dab9874ad69a3826517cf9a11a4758f7e653c7761cd25b9c10426  MATCH
@@ -105,6 +105,10 @@ not the whole `build.sh`**, and that is a narrower claim stated as one: both of 
 (`call-wat-parent/parent.wat` and `receipt/component.wasm`) are committed, so those two steps are the entire
 derivation of its bytes. The Rust rows above still carry the full-build claim; this one does not and does not
 need to.
+
+**The two `call-wat-parent` rows were re-taken on 2026-10-16**, when `go` became a callback lift. The method
+was the same: from `/tmp/ob/wt`, a clean worktree at another path, with both outputs deleted first, and
+`git status` there reported nothing changed.
 
 **The #884 rows were taken the same narrow way as #888's**, from `/tmp/repro-884` with all three
 outputs deleted first, `git status` reporting nothing changed. Only the two `wasm-tools parse` steps
@@ -224,13 +228,22 @@ waits — for a reason that is not about the call.
 
 This parent is the completing path: start the child, park on its subtask, read the result the lower lowered
 to the retptr, report it. The value crosses **two** boundaries (host `tick` → child `task.return` → parent
-retptr → the parent's own lift result), which is why the witness asserts a value rather than a success.
+retptr → the parent's own `task.return`), which is why the witness asserts a value rather than a success.
+
+**`go` has been an async callback lift since 2026-10-16.** Before that it was a sync lift parked in
+`waitable-set.wait`, which both oracles trap (ADR 0102's sync-wait row; see the parent's header).
 
 **It carries no committed `.reading`**, and that is a property of the subject rather than an omission. The
 other parents have readings because wasmtime can run them; this one's subject is a capability Burroughs is
 adding, and the reference side of it is the composed cancellation already recorded in
 [CANCELLATION.md](CANCELLATION.md). There is no wasmtime number here that would mean anything a reading
 could hold — *a figure with no subject is worse than no figure.*
+
+**One wasmtime number did turn out to have a subject (2026-10-16)**, which is whether the parent's own shape
+is admitted at all. Nested with a provider that stands in for the child and the host, the sync `go` traps
+*"cannot block a synchronous task before returning"*, and the callback `go` reads 49, each 10 of 10 on
+wasmtime 49.0.2. That reading is recorded in `../sync-wait-gate-off.reading`, beside the fixtures it moved
+with, rather than as this parent's `.reading`: it reads the parent's lift kind, not the composed call.
 
 ## Coverage, stated so these readings are not read as more than they are
 

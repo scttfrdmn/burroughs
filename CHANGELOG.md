@@ -838,6 +838,32 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **Default-path conformance defect: a sync lift could block in `waitable-set.wait` on another instance's
+  event** ([#1016](https://github.com/scttfrdmn/burroughs/issues/1016); ADR 0102's sync-wait row, measured
+  before the `gate:cm-threads` flip; `gate:async`, on since 2026-09-18, with `gate:cm-threads` off).
+  - **Both oracles trap it** (`testdata/sync-wait-gate-off.reading`, `refread.reading`):
+    - wasmtime 49.0.2 traps *"cannot block a synchronous task before returning"*, 10 of 10, on
+      `async-waitset-synth`, `run-slot` and `result-store-heap`, each nested in a provider whose `op` YIELDs;
+    - the pinned reference traps at `canon_lift`'s sync tail in every run that reaches the wait.
+
+    Burroughs admitted it, because #1005's sync tail applied only with the gate on.
+  - **The fix:** the tail judges a sync `waitable-set.wait` with the gate off too
+    (`cmThread.waitUngated`). `TestASyncWaitOnAnotherInstancesEventTraps` witnesses the trap on all three
+    fixtures, with a control resolving `op` inline that returns 7. Neuter, run: judging only with the gate on
+    makes the fixtures park, and the witness fails on its bound.
+  - **Witnesses moved to admitted shapes.**
+    - The run-slot and result-store witnesses use callback-lift twins, `run-slot-cb` and
+      `result-store-heap-cb`, which read 7 on wasmtime.
+    - `call-wat-parent`'s `go` is a callback lift. Its sync form trapped on wasmtime; its callback form
+      reads 49.
+    - Each witness's neuter was re-run on the new shape. On the callback shape, the run-slot witness
+      catches only the removal of **both** the entry slot and the run slot, since either alone keeps the
+      callers apart, and its doc says so.
+  - **Not changed: a sync `subtask.cancel` of another instance's subtask, where the oracles split.** The
+    reference traps at the tail, and wasmtime 49.0.2 returns status 4 (`asynclift/cancel-wat.reading`). It
+    still admits with the gate off. With the gate on it already traps, as it did before this change, and
+    that is recorded on #999 for the flip.
+
 - **Default-on defect: a task could read another task's context, or resolve another task with
   `task.return`** ([#1013](https://github.com/scttfrdmn/burroughs/issues/1013); `gate:async`, on since
   2026-09-18, with `gate:cm-threads` off).

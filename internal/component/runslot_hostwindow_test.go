@@ -27,8 +27,12 @@ import (
 //
 // # The witness
 //
-// `run-slot.wasm`, heap-backed: two callers lower into retptr 0 and park. X alone is resolved, X wakes, and
-// X's probe impl, host code on X's goroutine with the slot held, does three things:
+// `run-slot-cb.wasm`, heap-backed: two callers lower into retptr 0 and park. Both are async callback lifts,
+// which park by returning WAIT. Until 2026-10-16 this drove `run-slot.wasm`, whose sync `run` parks in
+// `waitable-set.wait`, which both oracles trap (`TestASyncWaitOnAnotherInstancesEventTraps`).
+//
+// X alone is resolved, X wakes, and X's probe impl, host code on X's goroutine with the slot held, does three
+// things:
 //
 //  1. writes a sentinel to retptr 0 through `c.Write`;
 //  2. resolves Y's subtask on ANOTHER goroutine and waits for that call to return;
@@ -39,10 +43,10 @@ import (
 // clock.
 //
 // **Neuter, run:** writing directly while `inHost` is raised, as #983's first fix did, lets Y's store
-// overwrite the sentinel, and this fails on the read-back.
+// overwrite the sentinel, and this fails on the read-back. On the callback shape it failed 5 of 5.
 func TestAResultStoreDoesNotLandWhileTheHolderIsInHostCode(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
-	b, err := os.ReadFile("testdata/run-slot.wasm")
+	b, err := os.ReadFile("testdata/run-slot-cb.wasm")
 	if err != nil {
 		t.Fatalf("the committed fixture is missing: %v", err)
 	}
