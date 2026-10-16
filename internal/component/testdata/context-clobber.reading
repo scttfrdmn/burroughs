@@ -1,0 +1,10 @@
+# Committed wasmtime reading for context-clobber.wasm — #1013 on the DEFAULT path (gate:cm-threads off).
+# Built:       wasm-tools parse context-clobber.wat -o context-clobber.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'run()' context-clobber.wasm
+# Output:      0
+# Runs:        10 of 10
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+# Box:         darwin/arm64 (Apple Silicon).
+# Meaning:     the parent's sync `peek`, entered while its async `run` waits, reads its OWN context (a new
+#              Thread's storage, [0,0]), not run's 5. Burroughs read 5 before #1013: context.get read the
+#              instance's shared `asyncHandles.lift`, which still named the waiting `run`.

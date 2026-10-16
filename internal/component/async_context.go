@@ -28,19 +28,48 @@ import (
 // single call. Recorded as a dated disposition (the asyncLowerImpl / stream.write-consumer form on #739),
 // not an unremarked change. The storage split lives in async_lift.go's liftTask.
 
+// callerStorage is the calling Thread's context storage, the reference's `current_thread().storage` (#1013):
+//   - a created Thread's own;
+//   - an implicit Thread's task's, under an async lift;
+//   - nil for a sync lift, whose context is the stack's.
+//
+// **It is the CALLER's, found through the Thread record its stack carries**, not `asyncHandles.lift`. That
+// field is the instance's "current task", and it was not the caller's on the default path. A sync entry made
+// while an async task waited read the waiting task's context (`context-clobber.wasm`: 5 where both oracles
+// read 0). Only a caller with no Thread record (a core-level call bypassing the component) falls back to
+// `h.lift`, which is all it ever had.
+func callerStorage(h *asyncHandles, c *interp.CanonCaller) *[2]uint32 {
+	if h.threads != nil {
+		if rec := h.threads.current(c); rec != nil {
+			switch {
+			case !rec.implicit:
+				return &rec.storage
+			case rec.task != nil:
+				return &rec.task.storage
+			default:
+				return nil // a sync lift: the stack's
+			}
+		}
+	}
+	h.mu.Lock()
+	lift := h.lift
+	h.mu.Unlock()
+	if lift != nil {
+		return &lift.storage
+	}
+	return nil
+}
+
 // contextGet implements `canon context.get` (0xa, definitions.py:2293) for a static slot: read the calling
-// agent's context slot, returning it as an i32 (slice-1 scope is i32 context). Under an async lift, the
-// slot is the lift task's; otherwise the caller's stack's.
+// Thread's context slot, returning it as an i32 (slice-1 scope is i32 context). See callerStorage for whose
+// storage that is.
 func contextGet(h *asyncHandles, slot uint32) interp.CanonFunc {
 	return func(c *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
-		h.mu.Lock()
-		lift := h.lift
-		h.mu.Unlock()
-		if lift != nil {
-			if int(slot) >= len(lift.storage) {
-				return nil, &interp.Trap{Reason: fmt.Sprintf("context.get: slot %d out of range (%d task slots)", slot, len(lift.storage))}
+		if st := callerStorage(h, c); st != nil {
+			if int(slot) >= len(st) {
+				return nil, &interp.Trap{Reason: fmt.Sprintf("context.get: slot %d out of range (%d task slots)", slot, len(st))}
 			}
-			return []interp.Value{interp.I32(int32(lift.storage[slot]))}, nil
+			return []interp.Value{interp.I32(int32(st[slot]))}, nil
 		}
 		v, err := c.ContextGet(slot)
 		if err != nil {
@@ -58,14 +87,11 @@ func contextSet(h *asyncHandles, slot uint32) interp.CanonFunc {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: context.set: got %d args, want (v)", len(args))
 		}
-		h.mu.Lock()
-		lift := h.lift
-		h.mu.Unlock()
-		if lift != nil {
-			if int(slot) >= len(lift.storage) {
-				return nil, &interp.Trap{Reason: fmt.Sprintf("context.set: slot %d out of range (%d task slots)", slot, len(lift.storage))}
+		if st := callerStorage(h, c); st != nil {
+			if int(slot) >= len(st) {
+				return nil, &interp.Trap{Reason: fmt.Sprintf("context.set: slot %d out of range (%d task slots)", slot, len(st))}
 			}
-			lift.storage[slot] = uint32(args[0].Bits)
+			st[slot] = uint32(args[0].Bits)
 			return nil, nil
 		}
 		if err := c.ContextSet(slot, uint32(args[0].Bits)); err != nil {

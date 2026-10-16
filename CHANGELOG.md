@@ -838,6 +838,24 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **Default-on defect: a task could read another task's context, or resolve another task with
+  `task.return`** ([#1013](https://github.com/scttfrdmn/burroughs/issues/1013); `gate:async`, on since
+  2026-09-18, with `gate:cm-threads` off).
+  - **The cause:** `context.get`/`set`, `task.return` and `task.cancel` read `asyncHandles.lift`, the
+    instance's shared "current task", as though it were the caller's. The reference has no such field: each
+    built-in uses `current_thread()` or `current_task()`.
+  - **On the default path** (`context-clobber.wasm`): a sync export entered while an async task waits read
+    the waiting task's context. It read 5 where wasmtime 49.0.2 and the pin read 0, deterministically.
+  - **Under `gate:cm-threads`:** a waiter's re-take restored a stale `h.lift`, and an entry's `task.return`
+    then resolved an already-resolved task. That was rare: about 1 in 300–400 under `-race`, traced
+    (`yield-admits-entry`).
+  - **The fix:** the four built-ins read the **calling Thread's** own task and storage, found through the
+    Thread record its stack carries. `h.lift` remains only for a caller with no record.
+  - **A created Thread now has its own context,** starting at [0,0] as the pin's does. `thread-context.wasm`
+    reads 0 on wasmtime and on Burroughs, where Burroughs read the task's 5.
+  - **Measured:** `yield-admits-entry` failed 0 in 3,000 runs and 0 in 600 under `-race`. Before, it was 2
+    in 3,000, and the neuter brings back 4 in 3,000.
+
 - **A promote naming an implicit Thread that waits at its YIELD arm now switches to it**
   ([#1012](https://github.com/scttfrdmn/burroughs/issues/1012), behind `gate:cm-threads`; the chair's step 4).
   - **Before:** it fell to a plain yield, because a YIELDing implicit Thread was not in the ready queue.

@@ -362,15 +362,37 @@ func (t *liftTask) cancelLocked() error {
 // blocked #864's value-carrying call and #857's parity readings. The guests never *call* it absent a
 // cancellation; they only need it bound.
 func taskCancel(h *asyncHandles) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+	return func(c *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+		task := callerTask(h, c) // before h.mu: the lookup takes threadTable.mu
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		if h.lift == nil {
+		if task == nil {
 			// Same discipline as task.return's: outside an async lift this is a guest error, not a no-op.
 			return nil, &interp.Trap{Reason: "task.cancel called with no async lift task in flight"}
 		}
-		return nil, h.lift.cancelLocked()
+		return nil, task.cancelLocked()
 	}
+}
+
+// callerTask is the reference's `current_task()`, which is `current_thread().task` (#1013): the task of the
+// Thread whose stack made the call, found through the record that stack carries. A sync lift's Thread has no
+// task, so it answers nil, and `task.return`/`task.cancel` trap as the reference's `trap_if(not
+// task.opts.async_)` does.
+//
+// **It replaces `asyncHandles.lift` as the caller's task.** That field is the instance's "current task",
+// written by every entry, by the scheduler and by a waiter's re-take, and it was not the caller's. Traced on
+// `yield-admits-entry`: a waiter's re-take restored a stale `h.lift` between another entry's `enterTask` and
+// its slot, and that entry's `task.return` resolved a task already resolved. Only a caller with no Thread
+// record (a core-level call bypassing the component) falls back to `h.lift`. Called without `h.mu` held.
+func callerTask(h *asyncHandles, c *interp.CanonCaller) *liftTask {
+	if h.threads != nil {
+		if rec := h.threads.current(c); rec != nil {
+			return rec.task
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lift
 }
 
 func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
@@ -392,22 +414,24 @@ func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
 			lifted = &v
 		}
 
+		// The CALLER's task, the reference's `current_task()` (#1013), looked up before h.mu.
+		task := callerTask(h, c)
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		if h.lift == nil {
+		if task == nil {
 			return nil, &interp.Trap{Reason: "task.return called with no async lift task in flight"}
 		}
 		// definitions.py `Task.return_` traps on an already-resolved task (def:487). Burroughs had no such
 		// check, because with no cancellation a task reached RESOLVED exactly once — through here. A
 		// cancelled task is resolved by `task.cancel`, so a `task.return` after it is now reachable and is
 		// a guest error: the guest was told its task was cancelled and returned a value anyway.
-		if h.lift.state == liftResolved {
+		if task.state == liftResolved {
 			return nil, &interp.Trap{Reason: "task.return called on a task that is already resolved"}
 		}
-		h.lift.result = append([]interp.Value(nil), args...)
-		h.lift.lifted = lifted
-		h.lift.cancelledResolution = false
-		h.lift.state = liftResolved
+		task.result = append([]interp.Value(nil), args...)
+		task.lifted = lifted
+		task.cancelledResolution = false
+		task.state = liftResolved
 		return nil, nil
 	}
 }
