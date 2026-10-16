@@ -159,6 +159,9 @@ type walker struct {
 	// stream order, so an inline export or module import resolves against earlier definitions.
 	coreSpace map[Space][]coreDef
 	toClose   []*interp.Instance
+	// children are the nested component instances this walker instantiated, whose core instances it adopted
+	// into toClose, so `close` can end their parked Threads and schedulers too.
+	children []*walker
 	// Component-space resolutions (link_component.go): component funcs (canon lifts, func imports,
 	// aliased exports), component instances (recursive instantiations, instance imports, aliased
 	// exports), and Load'd nested components. host supplies this component's imports.
@@ -623,6 +626,23 @@ func (w *walker) close() {
 	// Both parked shapes are reached — never started, and parked inside a handoff (ADR 0100's amendment) —
 	// and only a created Thread has a goroutine to wait for: a killed implicit Thread's lift returns the
 	// error on the lift's own goroutine.
+	//
+	// **Across the whole tree of nested instances**, not this walker's table alone. `toClose` holds the
+	// children's core instances too, so a child's Thread still parked in a handoff would hold its instance's
+	// `Close` forever. That is how `cancel-suspended-control` first hung `Close` (grave #1010).
+	w.killAllParked()
+	for _, in := range w.toClose {
+		_ = in.Close()
+	}
+	// **The scheduler goroutines end LAST**, after every Thread they could be waiting on has been woken and
+	// the instances closed — a Thread still running guest code is ended by its instance's `Close` and
+	// reports back to a scheduler that is still there to receive it.
+	w.stopAllSchedulers()
+}
+
+// killAllParked ends the parked Threads of this walker and every nested one, waiting for each created
+// Thread's goroutine to exit.
+func (w *walker) killAllParked() {
 	if w.threads != nil {
 		for _, t := range w.threads.killParked(nil) {
 			if t.done != nil {
@@ -630,14 +650,18 @@ func (w *walker) close() {
 			}
 		}
 	}
-	for _, in := range w.toClose {
-		_ = in.Close()
+	for _, c := range w.children {
+		c.killAllParked()
 	}
-	// **The scheduler goroutine ends LAST**, after every Thread it could be waiting on has been woken and
-	// the instances closed — a Thread still running guest code is ended by its instance's `Close` and
-	// reports back to a scheduler that is still there to receive it.
+}
+
+// stopAllSchedulers ends this walker's scheduler and every nested one's.
+func (w *walker) stopAllSchedulers() {
 	if w.threads != nil {
 		w.threads.stopScheduler()
+	}
+	for _, c := range w.children {
+		c.stopAllSchedulers()
 	}
 }
 

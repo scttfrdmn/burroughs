@@ -1,0 +1,11 @@
+# Committed wasmtime reading for ignore-cancel.wasm — a callee that ignores a delivered cancellation (#1009).
+# Built:       wasm-tools parse ignore-cancel.wat -o ignore-cancel.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
+#                --invoke 'run()' ignore-cancel.wasm
+# Output:      41
+# Runs:        10 of 10
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+# Box:         darwin/arm64 (Apple Silicon).
+# Meaning:     run() returns state*16 + value = RETURNED (2) with 9. The callee returned a value after its
+#              cancellation was requested, and the reference's on_resolve takes the cancel arm only for
+#              `result is None`. Burroughs read 64 (CANCELLED_BEFORE_RETURNED, no value) before #1009.

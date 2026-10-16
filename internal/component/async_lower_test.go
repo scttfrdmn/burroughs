@@ -402,7 +402,7 @@ func TestSubtaskCancelProducesCancelledStates(t *testing.T) {
 			}
 			return func() {
 				if inlineResolve {
-					onResolve(canon.Value{}) // the callee resolves on cancel; value ignored on the cancel path
+					onResolve(canon.NoResolution()) // the callee resolves on cancel: on_resolve(None) (#1009)
 				}
 			}, nil
 		}
@@ -515,7 +515,7 @@ func TestSyncSubtaskCancelWaitsForALaterResolution(t *testing.T) {
 			// can honestly say the call is gone, so this is the ordinary shape rather than an edge.
 			go func() {
 				time.Sleep(10 * time.Millisecond)
-				onResolve(canon.Value{})
+				onResolve(canon.NoResolution()) // a cancel resolution: on_resolve(None) (#1009)
 			}()
 		}, nil
 	}

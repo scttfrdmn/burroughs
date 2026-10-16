@@ -262,6 +262,24 @@ opta trap-while-waiting-control "BUG: delivering non-present event" # oracle: th
 # #1005's pair: a sync lift's wait on its own instance's future, written by its own Thread (7) or not (trap).
 opta sync-wait-own-thread 7
 opta sync-wait-own-thread-control "cannot block a synchronous task before returning"
+
+# The chair's step 3: cancellation requested while a Thread is suspended. The async subtask.cancel needs
+# wasmtime's `more-async-builtins` feature. The control and the cancellable variant read as NO RETURN, so
+# their check is that the bounded run times out (exit 124), not that it prints a figure.
+MORE=-Wcomponent-model-more-async-builtins=y
+"$WASM_TOOLS" parse "$here/cancel-suspended.wat" -o "$here/cancel-suspended.wasm"
+cs=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y "$MORE" \
+	--invoke 'run()' "$here/cancel-suspended.wasm" 2>&1 || true)
+[ "$cs" = "4" ] || { echo "build.sh: cancel-suspended expected 4, got '$cs'." >&2; exit 1; }
+echo "build.sh: cancel-suspended reads 4, as recorded" >&2
+for f in cancel-suspended-control cancel-suspended-cancellable; do
+	"$WASM_TOOLS" parse "$here/$f.wat" -o "$here/$f.wasm"
+	rc=0
+	timeout 15 "$WASMTIME" run -W component-model-threading=y -W component-model-async=y "$MORE" \
+		--invoke 'run()' "$here/$f.wasm" >/dev/null 2>&1 || rc=$?
+	[ "$rc" = "124" ] || { echo "build.sh: $f expected no return (exit 124), got exit $rc." >&2; exit 1; }
+	echo "build.sh: $f does not return, as recorded" >&2
+done
 # orphan-trap has no wasmtime reading: its trap lands after its call returned (ADR 0100). Parsed only.
 "$WASM_TOOLS" parse "$here/orphan-trap.wat" -o "$here/orphan-trap.wasm"
 
