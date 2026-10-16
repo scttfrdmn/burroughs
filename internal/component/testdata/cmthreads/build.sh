@@ -286,6 +286,8 @@ done
 # the control.
 opta promote-implicit 16
 opta promote-implicit-control 16
+# #1013: a created Thread's context is its own, starting at [0,0].
+opta thread-context 0
 # orphan-trap has no wasmtime reading: its trap lands after its call returned (ADR 0100). Parsed only.
 "$WASM_TOOLS" parse "$here/orphan-trap.wat" -o "$here/orphan-trap.wasm"
 

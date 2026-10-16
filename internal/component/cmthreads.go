@@ -147,6 +147,10 @@ type cmThread struct {
 	// 0101's Option A: the hold is the Thread's). A synchronous cross-component call passes it on, so a
 	// nested call back into this instance re-enters the slot instead of waiting for it.
 	chain *runChain
+	// storage is a CREATED Thread's own context (`context.get`/`set`). The reference keeps context per Thread
+	// (`current_thread().storage`), and a new Thread's starts at [0,0] (#1013). An implicit Thread's context
+	// is its task's (`liftTask.storage`), or the stack's for a sync lift, so this is unused for one.
+	storage [2]uint32
 	// ownChain is the created Thread's own chain, which `chain` points at: embedded, so creating a Thread
 	// allocates no separate one. An implicit Thread's `chain` is its entry's and does not use it.
 	ownChain runChain
