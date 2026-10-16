@@ -327,6 +327,19 @@ type Value struct {
 // Bool, the unsigned and signed integers, Char, Str, and List construct a value against the type it
 // claims. A constructor is where a mis-typed value is refused (ADR 0085); a signed integer keeps its
 // two's-complement bits, and List requires every element to match the declared element type.
+// kindNoResolution marks NoResolution. It is outside every WIT type's kind, so no lowered value can carry
+// it, and it never reaches the codec: `component`'s async-lower store checks for it before lowering.
+const kindNoResolution Kind = 255
+
+// NoResolution is the reference's `on_resolve(None)`: a subtask resolving with NO result, which is a
+// cancellation (`Task.cancel`) and not a value. It exists because the zero Value is `bool` false, so "no
+// result" needed a name of its own (#1009): before it, a callee that returned a value after a cancel request
+// was resolved as cancelled, with the value dropped.
+func NoResolution() Value { return Value{Type: Type{Kind: kindNoResolution}} }
+
+// IsNoResolution reports whether v is NoResolution.
+func (v Value) IsNoResolution() bool { return v.Type.Kind == kindNoResolution }
+
 func Bool(b bool) Value {
 	var u uint64
 	if b {

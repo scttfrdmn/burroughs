@@ -503,9 +503,15 @@ func (r *reader) canon() (Canon, error) {
 	case 0x29, 0x2a, 0x2b, 0x2c, 0x2d:
 		// `thread.suspend` and the four switching forms (ADR 0100's switching slice). `Binary.md` at the pin
 		// gives each a fixed `0x00` after the discriminant; wasm-tools 1.258.0 reads that byte as
-		// `cancellable` and would emit `0x01` for the cancellable variant. Cancellation delivered to a
-		// suspended Thread is what ADR 0100 leaves undecided and no reading measures, so `0x01` is refused
-		// by name rather than run as though it were `0x00`, and any other byte is malformed.
+		// `cancellable` and would emit `0x01` for the cancellable variant. `0x01` is refused by name rather
+		// than run as though it were `0x00`, and any other byte is malformed.
+		//
+		// **The reason was measured on the chair's step 3** (`TestTheCancellableSuspendIsRefusedByName`). The
+		// pin defines no cancellable form: `canon_thread_suspend` takes no flag. wasmtime 49.0.2 accepts
+		// one, but in `cmthreads/cancel-suspended-cancellable.wasm` it does not wake the suspended Thread on
+		// cancellation either. That leaves no oracle with a behaviour to model. A non-cancellable suspended
+		// Thread's cancel is delivered at its callback loop, as both oracles do
+		// (`TestACancelRequestedWhileSuspendedIsDeliveredAtTheLoop`).
 		b, err := r.byte()
 		if err != nil {
 			return Canon{}, fmt.Errorf("%s: %w", threadBuiltinNames[kind], err)

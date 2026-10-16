@@ -265,14 +265,18 @@ func crossComponentResolve(onResolve func(canon.Value), sig *FuncType, res liftR
 		// asked. When it did not ask, this is a RETURNED carrying nothing, which is **not ideal and not
 		// this slice's to invent**: there is no ABI status for "the callee trapped", the model traps the
 		// whole store instead, and a status no reading has would be worse than a thin one.
-		onResolve(canon.Value{})
+		//
+		// **`NoResolution`, the model's `on_resolve(None)`, named** (#1009). This was the zero Value, which is
+		// `bool` false, so the store could not tell "no result" from a result and chose by the cancel request
+		// instead.
+		onResolve(canon.NoResolution())
 		return
 	}
 	v, err := crossComponentValue(sig, res)
 	if err != nil {
 		// Refused rather than guessed. Reaching here means the child returned a shape this slice does
 		// not lift, and resolving with a fabricated value would hand the parent a plausible wrong answer.
-		onResolve(canon.Value{})
+		onResolve(canon.NoResolution())
 		return
 	}
 	onResolve(v)

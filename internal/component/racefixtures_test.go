@@ -53,6 +53,9 @@ var raceWitnessFixtures = []string{
 	"cmthreads/orphan-trap.wasm",
 	"cmthreads/sync-wait-own-thread.wasm",
 	"cmthreads/sync-wait-own-thread-control.wasm",
+	"cmthreads/cancel-suspended.wasm",
+	"cmthreads/cancel-suspended-control.wasm",
+	"ignore-cancel.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

@@ -838,6 +838,31 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **A callee that returns a value after its cancellation was requested now resolves RETURNED with the value**
+  ([#1009](https://github.com/scttfrdmn/burroughs/issues/1009), on the default `gate:async` path).
+  - **What it did:** it resolved CANCELLED_BEFORE_RETURNED with the value dropped, because the async lower's
+    store chose the cancel arm by the request alone.
+  - **The fix:** the reference's `on_resolve` takes that arm only for `result is None`, which is now
+    `canon.NoResolution`, named. The zero Value is `bool` false and could not mean "no result".
+  - **Oracle and witness:** `ignore-cancel.wasm`, where wasmtime 49.0.2 reads 41 (RETURNED, 9) and Burroughs
+    read 64. `TestACalleeThatIgnoresACancelResolvesReturnedWithItsValue`, neuter run.
+  - **Two test hosts changed:** their cancel responses passed the zero Value to mean "no result". They now
+    pass `NoResolution`.
+
+- **`Close` no longer hangs on a nested child whose Thread is parked in a handoff**
+  ([#1010](https://github.com/scttfrdmn/burroughs/issues/1010), grave).
+  - **The cause:** `walker.close` killed only its own table's parked Threads before closing core instances
+    that included the child's.
+  - **The fix:** it now ends parked Threads across the whole tree of nested instances first, and stops every
+    scheduler last.
+
+- **Cancellation delivered to a suspended Thread, measured** (behind `gate:cm-threads`; ADR 0100's
+  amendment). The pin delivers a pending cancel only at the callback loop, never to a suspended Thread.
+  - **Oracle:** `cmthreads/cancel-suspended.wasm` reads 4 on wasmtime 49.0.2, and its control does not
+    return. Burroughs matches both.
+  - **The cancellable `0x01` form stays refused by name:** the pin has no such form, and wasmtime does not
+    wake on it either.
+
 - **The A/B instrument records what it ran under, and A's handoff is re-measured on a quiet host.**
   - **What was wrong:** the first `switch.wasm` A/B ran on the dev box. Rounds 8–10 spiked in all three arms
     at once, and the null arm read ±122%.

@@ -816,5 +816,45 @@ What it would change here, once accepted:
 - *"the scheduler never acquires `entrySem` itself"*.
 
 Under it, every handoff carries the run slot and the scheduler holds it between Threads. The YIELD arm
-takes neither the slot nor `entrySem`, and a wait is a handoff. Until A's build lands, the text above is
-what the tree implements.
+takes neither the slot nor `entrySem`, and a wait is a handoff. **A's build landed in #1004**, so the
+handoff design above is superseded where ADR 0101's amendment says so. This sentence read *"Until A's build
+lands, the text above is what the tree implements"* until then.
+
+## Amendment, 2026-10-16: cancellation delivered to a suspended Thread, measured (the chair's step 3)
+
+This record left it undecided: the *What this does not decide* list above, and Consequences' *"no reading
+measures it"*. It is now measured.
+
+**The pin, by symbol.** A pending cancel is delivered at four places only:
+- `enter_implicit_thread`'s backpressure wait;
+- `wait_from_callback`;
+- `canon_lift`'s callback loop top;
+- its YIELD arm.
+
+`Task.request_cancellation` on a STARTED task only sets `PENDING_CANCEL`. So a suspended Thread is never
+handed a cancel. Its task receives it when the Thread resumes and its callee returns to the loop.
+
+**The oracle**, `cmthreads/cancel-suspended.wasm`:
+- **The shape:** a nested child's `work` readies its own Thread T and suspends. The parent cancels at once
+  and waits. T resumes `work`, whose callback then sees TASK_CANCELLED.
+- **The reading:** wasmtime 49.0.2 (with `-W component-model-more-async-builtins=y` for the async
+  `subtask.cancel`) reads **4** (CANCELLED_BEFORE_RETURNED), 10 of 10.
+- **The control,** `-control` (T never resumes `work`), does not return. The cancel is never delivered to the
+  suspended Thread itself.
+- **Burroughs** matches both, and needed no model change
+  (`TestACancelRequestedWhileSuspendedIsDeliveredAtTheLoop`).
+
+**The cancellable form (`0x01`) stays refused by name.**
+- **The pin:** `canon_thread_suspend` takes no flag, and `Binary.md` fixes the byte at `0x00`.
+- **wasmtime 49.0.2:** it accepts the form. But in `-cancellable.wasm` it does not wake the suspended Thread
+  on cancellation either, and does not return, 5 of 5.
+- **So** no oracle shows a waking behaviour to model (`TestTheCancellableSuspendIsRefusedByName`).
+
+**Two defects the step found, both fixed in its PR:**
+- **#1009, on the default `gate:async` path.** A callee that returned a value after a cancel request was
+  resolved CANCELLED with the value dropped. The reference's `on_resolve` takes the cancel arm only for
+  `result is None`, so this is now `canon.NoResolution`, named.
+  - Oracle: `ignore-cancel.wasm`, where wasmtime reads 41 (RETURNED, 9).
+  - It had **masked** this step's neuter: with the loop's delivery removed, `cancel-suspended` still read 4.
+- **Grave #1010.** `Close` hung on a nested child with a Thread parked in a handoff, because `walker.close`
+  killed only its own table's parked Threads.

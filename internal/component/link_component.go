@@ -352,7 +352,6 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 		if uerr != nil {
 			return liftResult{}, uerr
 		}
-
 		// **Cancellation is delivered IN PLACE OF WAITING** (definitions.py def:2129, ADR 0094), which is
 		// the placement and not merely the timing: the model's check sits at the top of the loop body,
 		// *before* exclusivity is released, so a task with a pending cancel never parks and never yields —
@@ -829,6 +828,10 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		return compDef{}, err
 	}
 	w.toClose = append(w.toClose, nw.toClose...)
+	// Kept so `close` reaches the child's parked Threads and scheduler before the instances it adopted
+	// above are closed: without it a child's Thread parked in a handoff held its core instance's `Close`
+	// forever (grave #1010, found by `cancel-suspended-control`).
+	w.children = append(w.children, nw)
 	return compDef{inst: nw.exportInstance()}, nil
 }
 

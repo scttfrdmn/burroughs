@@ -87,7 +87,12 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 		// realloc's duration.
 		apply := func(v canon.Value) {
 			h.mu.Lock()
-			if st.cancellationRequested {
+			// **The cancel arm is chosen by the resolution, not by the request** (#1009). The reference's
+			// `on_resolve` branches on `result is None`, and `cancellation_requested` chooses nothing on the
+			// value arm, so a callee that ignores a delivered cancellation and returns a value is RETURNED.
+			// This branched on `st.cancellationRequested` alone until #1009, which resolved such a callee
+			// CANCELLED with its value dropped.
+			if st.cancellationRequested && v.IsNoResolution() {
 				// A cancel resolution (the model's on_resolve(None), def:2214–2220): no result is lowered,
 				// and the terminal state is chosen by whether the subtask had started — STARTING ->
 				// CANCELLED_BEFORE_STARTED, STARTED -> CANCELLED_BEFORE_RETURNED. This is the cancel-resolution
@@ -107,7 +112,10 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			// a readable end for a future, a writable end, which the guest writes to, for a stream).
 			var handle int
 			var kind canon.Kind
-			if hasResult {
+			// A NoResolution with no cancel request (a child that failed while nobody asked to cancel it)
+			// resolves RETURNED with nothing lowered, as before #1009: there is no value to store.
+			store := hasResult && !v.IsNoResolution()
+			if store {
 				kind = v.Type.Kind
 				switch kind {
 				case canon.KindFuture:
@@ -125,7 +133,7 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 			h.mu.Unlock()
 
 			var err error
-			if hasResult {
+			if store {
 				switch kind {
 				case canon.KindFuture, canon.KindStream:
 					var buf [4]byte
