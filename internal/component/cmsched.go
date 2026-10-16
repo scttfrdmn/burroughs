@@ -425,7 +425,10 @@ func (tt *threadTable) takeReady(t *cmThread) bool {
 	// `exclusive_thread`, which in Burroughs is a free `entrySem`. It is not in the queue, so nothing is
 	// removed; the handoff that follows promotes it (`promoteYielding`).
 	if t.implicit && t.yielding {
-		return tt.h != nil && len(tt.h.entrySem) == 0
+		// `exclusive_thread is None`: `entrySem` free, or held only by this task's own re-entry, which
+		// waits for the slot the promoter holds and so has not, in the reference's terms, left its arm.
+		// Traced: that re-entry taking `entrySem` while T ran was the last window, 1 in 300 under -race.
+		return tt.h != nil && (len(tt.h.entrySem) == 0 || (t.task != nil && t.task.entryHeld.Load()))
 	}
 	if t.state != threadReady {
 		return false
@@ -433,6 +436,33 @@ func (tt *threadTable) takeReady(t *cmThread) bool {
 	tt.unreadyLocked(t)
 	t.state = threadSuspended
 	return true
+}
+
+// markYield records that task Thread i's entry has just returned YIELD (#1012), from its packed result: it is
+// now at its YIELD arm, so a promote can switch to it. Called before the entry releases its slots. A stale
+// promote signal is drained first, outside the lock (§4 B-MM-3), and before `yielding` is set, so only a
+// stale one can be drained.
+func (tt *threadTable) markYield(i uint32, res []interp.Value) {
+	if len(res) != 1 || uint32(res[0].Bits)&0xf != uint32(callbackYield) {
+		return
+	}
+	t := tt.get(i)
+	if t == nil {
+		return
+	}
+	tt.mu.Lock()
+	if t.promoted == nil {
+		t.promoted = make(chan struct{}, 1)
+	}
+	ch := t.promoted
+	tt.mu.Unlock()
+	select {
+	case <-ch:
+	default:
+	}
+	tt.mu.Lock()
+	t.yielding = true
+	tt.mu.Unlock()
 }
 
 // entering records that task Thread i is starting an entry (#1012): it is no longer at a YIELD arm, and if a
@@ -528,27 +558,20 @@ func (tt *threadTable) yieldPoint(task *liftTask) error {
 	ctxDone := task.context().Done()
 	self := tt.get(task.threadIdx)
 	faulted := tt.faultChan(self)
-	// **Waiting at the YIELD arm is a state a promote can see** (#1012): `yielding` makes this implicit
-	// Thread ready to `takeReady`, and `promoted` is how the scheduler says a promote switched to it. A stale
-	// signal from an earlier arm is drained first, so it cannot end this one. The next entry clears the
-	// state (`entering`).
+	// **Waiting at the YIELD arm is a state a promote can see** (#1012). The entry that returned YIELD
+	// marked it before releasing its slots (`markYield`), so a promote may already have switched to this
+	// task. Its signal is taken first, so the request below is never sent after the switch happened. The
+	// next entry clears the state (`entering`).
 	var promoted chan struct{}
 	if self != nil {
 		tt.mu.Lock()
-		if self.promoted == nil {
-			self.promoted = make(chan struct{}, 1)
-		}
 		promoted = self.promoted
 		tt.mu.Unlock()
-		// Drained outside the lock (§4 B-MM-3), and BEFORE `yielding` is set: until then no promote can
-		// name this Thread, so only a stale signal can be drained here.
-		select {
-		case <-promoted:
-		default:
-		}
-		tt.mu.Lock()
-		self.yielding = true
-		tt.mu.Unlock()
+	}
+	select {
+	case <-promoted:
+		return nil
+	default:
 	}
 	reply := make(chan error, 1)
 	select {

@@ -525,7 +525,6 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 		return nil, fmt.Errorf("%w: the call's context ended while waiting for this instance's execution "+
 			"slot", ErrCancelled)
 	}
-	defer f.h.leaveTask(prev)
 	// The run slot after the entry slot, never before (ADR 0101). Not abandonable: once `enterTask` has
 	// admitted the task, its entries proceed (enterTask's rule), and the holder of the run slot releases it
 	// at its next suspension point or return.
@@ -533,7 +532,15 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// an async lift is refused by name in `bindCrossComponent`).
 	ch := &runChain{}
 	f.h.acquireRun(ch, f.threads.get(task.threadIdx), nil)
-	defer f.h.releaseRunFor(ch)
+	// **The entry slot is released BEFORE the run slot** (#1012). The run slot's release can kick the
+	// scheduler, and a Thread it runs must find `exclusive_thread` already clear, as the reference clears it
+	// on the callback's return. Two separate defers ran in the other order (last in, first out). Windows
+	// showed the window that this and `markYield` close, after 100 macOS runs had not.
+	defer func() {
+		task.entryHeld.Store(false)
+		f.h.leaveTask(prev)
+		f.h.releaseRunFor(ch)
+	}()
 
 	// Allocate and write, then call — all three inside the one acquisition above. `lowerPending` does not
 	// take the entry itself, precisely so it cannot be called from somewhere that does not hold it.
@@ -544,7 +551,9 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// so a callee entered with lowered arguments carried no index — `thread.index` had nothing to read, and
 	// a suspension point could not tell that its caller holds the run slot.
 	f.threads.entering(task.threadIdx)
-	return target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
+	res, err := target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
+	f.threads.markYield(task.threadIdx, res) // before the deferred releases (#1012)
+	return res, err
 }
 
 func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.Value) ([]interp.Value, error) {
@@ -565,16 +574,26 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 		return nil, fmt.Errorf("%w: the call's context ended while waiting for this instance's execution "+
 			"slot", ErrCancelled)
 	}
-	defer f.h.leaveTask(prev)
 	ch := &runChain{}
 	f.h.acquireRun(ch, f.threads.get(task.threadIdx), nil) // after the entry slot (ADR 0101)
-	defer f.h.releaseRunFor(ch)
+	// The entry slot is released before the run slot, whose release can kick the scheduler (#1012; see
+	// enterInvokeLowering).
+	defer func() {
+		task.entryHeld.Store(false)
+		f.h.leaveTask(prev)
+		f.h.releaseRunFor(ch)
+	}()
 	// The task's implicit Thread index travels into every entry — the callee's and each callback
 	// re-entry's — so `thread.index` answers the same number across the loop, which is what makes it
 	// the TASK's Thread rather than one per stack.
 	// An entry starting ends any YIELD arm this task was in, and a promote's wait for it (#1012).
 	f.threads.entering(task.threadIdx)
-	return target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
+	res, err := target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
+	// **Marked as at its YIELD arm before the deferred releases run** (#1012). The release can kick the
+	// scheduler, and a Thread it runs may promote this task. In the reference, the callback's return, the
+	// clearing of `exclusive_thread` and the YIELD arm's wait happen with nothing else running.
+	f.threads.markYield(task.threadIdx, res)
+	return res, err
 }
 
 // eventArgs flattens an event into the callback's three i32 parameters — `__callback(ev0, ev1, ev2) -> u32`

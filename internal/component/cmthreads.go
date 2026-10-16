@@ -168,7 +168,8 @@ type cmThread struct {
 	// made lazily by `faultChan`, both guarded by threadTable.mu (point 7).
 	fault   error
 	faulted chan struct{}
-	// yielding is an implicit Thread's "waiting at its YIELD arm" (`yieldPoint`), guarded by threadTable.mu.
+	// yielding is an implicit Thread's "waiting at its YIELD arm", set by `markYield` when the entry's result
+	// decodes as YIELD (before it releases its slots) and cleared by `entering`; guarded by threadTable.mu.
 	// The reference's YIELD arm is `wait_until(lambda: exclusive_thread is None)`, so such a Thread is
 	// `ready()` to a promote while `entrySem` is free (#1012). promoted, capacity 1, is how the scheduler
 	// tells `yieldPoint` that a promote switched to it.
