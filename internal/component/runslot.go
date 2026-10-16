@@ -202,7 +202,7 @@ func (h *asyncHandles) kick() {
 // said the slot is taken back "whatever fn returned". Under A that would have the ended Thread contend for
 // a slot it will not use, and at `Close` wait on a Thread the close has not yet ended. The build amends the
 // sentence.
-func (h *asyncHandles) suspending(c *interp.CanonCaller, fn func(abort <-chan struct{}) error) func() error {
+func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, fn func(abort <-chan struct{}) error) func() error {
 	var rec *cmThread
 	tt := h.threads
 	if tt != nil {
@@ -226,8 +226,28 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, fn func(abort <-chan st
 		rec.state = threadWaiting
 		rec.waitAbort = make(chan struct{})
 		rec.abortErr = nil
+		rec.waitReady = ready
 		abort, s := rec.waitAbort, tt.sched
 		tt.mu.Unlock()
+		// **The sync tail with no scheduler (#1005):** no Thread exists, so nothing can be a candidate except
+		// the waiter's own event or another task of the instance; `syncTail` decides, and a trapped waiter
+		// never gave the slot up, so it is restored as it was.
+		if s == nil {
+			for _, w := range tt.syncTail(h) {
+				if w != rec {
+					continue
+				}
+				h.mu.Lock()
+				h.runChain, h.runDepth, h.lift = rec.saved.chain, rec.saved.depth, rec.saved.lift
+				rec.saved.chain, rec.saved.depth, rec.saved.lift = nil, 0, nil
+				h.mu.Unlock()
+				tt.mu.Lock()
+				terr := rec.abortErr
+				rec.state = threadRunning
+				tt.mu.Unlock()
+				return terr
+			}
+		}
 		if s != nil {
 			h.mu.Lock()
 			h.schedHolds = true

@@ -22,6 +22,23 @@ the record did not say why:
   it. wasmtime 49.0.2 traps that: *"cannot block a synchronous task before returning"*. Burroughs admits it,
   and the run-slot, result-store and waitable-set witnesses depend on it.
 
+  **Corrected by measurement, 2026-10-16** (#1005; the chair's ruling on ADR 0101's Option A build, which
+  asked for this correction; the original text above is kept so the correction is visible):
+  - **The pin admits the wait only where a Thread of the waiting instance can satisfy it.** `canon_lift`'s
+    sync tail runs `trap_if(not candidates)` over `inst.threads` alone, so the pin traps the wait wherever
+    its event can only come from elsewhere.
+  - **Measured on the reference** (`testdata/cmthreads/reference/refread.reading`):
+    `sync-wait-own-thread`, which an own-instance Thread satisfies, completes with 7, and its control traps
+    at `canon_lift:2161`. `nested-sync-unwind-control`, which only a third instance can satisfy, traps
+    there too.
+  - **wasmtime agrees** on all three arms, so this example's *"the pin admits it"* holds only in the first
+    shape.
+  - **What follows for this record's argument:** where no Thread can satisfy the wait, Burroughs admits
+    what both oracles trap. That is not the toolchain-stricter case this rule covers. Under
+    `gate:cm-threads`, #1005 makes it trap. The gate-off path (the witnesses named above, which use no
+    Threads at all) still admits, and whether it should follow is recorded on #1005, undecided.
+  - This changes text Scott has under review. Its substance stands unless he objects (noted on #999).
+
 ## What the contract says, and where it is silent
 
 - **It names the suites.** G-1 and G-4: a gate's acceptance is its upstream spec test suite, and the
@@ -57,7 +74,7 @@ input is invalid. The pin says the input is valid.
 | case | the pin | the toolchain | modelled and witnessed? | Burroughs |
 |---|---|---|---|---|
 | #969: `(i64) -> ()` `ft` | admits; traps on a mismatch | wasm-tools and wasmtime 49.0.2 reject at validation | **no**: the memory64 Thread entry is not modelled | **refuses**, `ErrUnsupportedForm`, quoting the toolchains' constraint |
-| sync `waitable-set.wait` | admits (`may_leave` only) | wasmtime 49.0.2 traps | **yes**: `async-waitset-synth`, `run-slot`, `result-store-heap` and their witnesses | **admits** |
+| sync `waitable-set.wait` | admits where a Thread of the waiting instance can satisfy it, else traps at the sync tail (corrected, #1005) | wasmtime 49.0.2 traps where it would block | **yes**: `async-waitset-synth`, `run-slot`, `result-store-heap` and their witnesses | **admits** with `gate:cm-threads` off; **traps** without a candidate under it (#1005) |
 
 Both decisions stand, and are now consistent under one rule. #969's refusal message already names the
 toolchains' constraint; its reason under this rule is *not modelled*, and that is recorded here rather than

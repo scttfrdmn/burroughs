@@ -838,6 +838,21 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **A sync lift's `waitable-set.wait` with no candidate in its own instance now traps at the reference's
+  sync tail** ([#1005](https://github.com/scttfrdmn/burroughs/issues/1005), behind `gate:cm-threads`). Until
+  now Burroughs admitted it, where the pin and wasmtime 49.0.2 both trap. The chair classified that as a
+  conformance defect, not a divergence.
+  - **The model:** `threadTable.syncTail` evaluates `trap_if(not candidates)` over this instance's Threads
+    only. Candidates are any ready Thread, any waiter whose `ready_func` holds, and, conservatively, any
+    async lift in flight. It runs when the scheduler's chain ends idle, and at the wait where there is no
+    scheduler.
+  - **Witnesses:** `nested-sync-unwind-control` and the new `sync-wait-own-thread-control` trap there,
+    matched by site, 50 of 50. A unit test covers the admit branch.
+  - **The admitted twin** (both oracles: 7) needs an intra-instance future copy that is not built yet:
+    [#1006](https://github.com/scttfrdmn/burroughs/issues/1006).
+  - **ADR 0102's example is corrected to the measured narrowing.** The pin admits the wait only where a
+    Thread of the waiting instance can satisfy it.
+
 - **The run slot is now held by the Thread executing guest code** (ADR 0101's Option A, behind
   `gate:cm-threads`). This fixes [#978](https://github.com/scttfrdmn/burroughs/issues/978),
   [#998](https://github.com/scttfrdmn/burroughs/issues/998) and #977's residual.

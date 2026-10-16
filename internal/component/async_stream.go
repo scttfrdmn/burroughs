@@ -52,6 +52,9 @@ func (e *writableStreamEnd) pendingEventLocked() (event, bool) {
 	return event{}, false
 }
 
+// hasPendingEventLocked is pendingEventLocked's test without the take (#1005).
+func (e *writableStreamEnd) hasPendingEventLocked() bool { return e.resolved && !e.delivered }
+
 // joinTo records the set this end belongs to, so a completed write can wake its waiters.
 func (e *writableStreamEnd) joinTo(s *waitableSet) { e.set = s }
 
@@ -207,6 +210,9 @@ func (e *readableStreamEnd) pendingEventLocked() (event, bool) {
 	}
 	return event{}, false
 }
+
+// hasPendingEventLocked is pendingEventLocked's test without the take (#1005).
+func (e *readableStreamEnd) hasPendingEventLocked() bool { return e.resolved && !e.delivered }
 
 // joinTo records the set this end belongs to, so a completed copy can wake its waiters.
 func (e *readableStreamEnd) joinTo(s *waitableSet) { e.set = s }

@@ -127,9 +127,9 @@ func TestATrapWhileASiblingWaitsEndsTheCallAndTheWaiter(t *testing.T) {
 // and waits, and T traps. wasmtime 49.0.2 and the reference both read T's trap. The unwind runs through the
 // sync cross-component arm, and the child's run slot and Thread table are left empty.
 //
-// The control arm (T releases instead) is a MEASURED DIVERGENCE (#999). Both oracles trap in `h`'s wait,
-// because the sync tail resumes only the waiting instance's Threads. Burroughs admits the wait and returns
-// 5. It is asserted as 5 so that a change in it is seen, not because it is right.
+// The control arm (T releases instead) traps in `h`'s wait, at the sync tail, as both oracles do. The sync
+// tail resumes only the waiting instance's Threads, and `g` runs in a third instance. It returned 5 until
+// #1005, a conformance defect the chair classified on the Option A build's review.
 //
 // **Neuter, run:** `routeFault` not aborting a waiting owner. `h` is T's owner and is itself waiting, so
 // the trap never reaches its wait. `killParked(owner)` still ends that wait, as one of the owner's waiters,
@@ -160,7 +160,8 @@ func TestATrapUnwindsThroughASyncCrossComponentCall(t *testing.T) {
 	}
 
 	_, res, cerr := callBounded(t, "nested-sync-unwind-control", "run")
-	wantU32(t, "nested-sync-unwind-control (a recorded divergence, #999)", res, cerr, 5)
+	_ = res
+	wantTrapContaining(t, "nested-sync-unwind-control", cerr, "trap_if(not candidates)")
 }
 
 // TestAnotherThreadOfTheChainRunsWhileOneWaits is item d, #977's residual.

@@ -67,6 +67,10 @@ type waitable interface {
 	// pendingEventLocked returns this waitable's deliverable event and marks it taken, or (event{}, false)
 	// if it is not yet resolved. The caller holds asyncHandles.mu.
 	pendingEventLocked() (event, bool)
+	// hasPendingEventLocked is pendingEventLocked without taking the event: the reference's
+	// `has_pending_event`, which the sync tail's candidate test reads (#1005). The caller holds
+	// asyncHandles.mu.
+	hasPendingEventLocked() bool
 	// joinTo records the set this waitable belongs to, so its own resolution can wake the set's waiters.
 	joinTo(s *waitableSet)
 	// currentSet reports the set this waitable is joined to, or nil. Needed because `waitable.join` must
@@ -102,6 +106,18 @@ func (s *waitableSet) pendingEventLocked() (event, bool) {
 		}
 	}
 	return event{}, false
+}
+
+// hasPendingEventLocked reports whether some member has an event to deliver, without taking it: the
+// reference's `WaitableSet.has_pending_event`, which is a waiting Thread's `ready_func` (#1005). The caller
+// holds asyncHandles.mu.
+func (s *waitableSet) hasPendingEventLocked() bool {
+	for _, m := range s.members {
+		if m.hasPendingEventLocked() {
+			return true
+		}
+	}
+	return false
 }
 
 // signalLocked wakes any agent parked on the set. The caller holds mu and has just resolved a member (the
@@ -249,7 +265,10 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 		// so another task of the instance may execute meanwhile, and this one takes the run slot back before
 		// it stores the event (ADR 0101). Without the slot this was #975: the sync path took none, so two
 		// waiters woke and stored their events at `ptr` in parallel.
-		err := c.Blocking(h.suspending(c, func(abort <-chan struct{}) error {
+		// `ready` is the wait's `ready_func`, `has_pending_event`, which the sync tail's candidate test reads
+		// (#1005). It is evaluated under h.mu.
+		ready := func() bool { return set.hasPendingEventLocked() }
+		err := c.Blocking(h.suspending(c, ready, func(abort <-chan struct{}) error {
 			for {
 				h.mu.Lock()
 				if e, ready := set.pendingEventLocked(); ready {

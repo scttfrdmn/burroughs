@@ -367,6 +367,51 @@ def residual(t2_sets_flag):
     return body
 
 
+def sync_wait_own_thread(t_writes):
+    """#1005's admitted case, cmthreads/sync-wait-own-thread.wat: a sync lift `h` waits on a future that a
+    Thread of its OWN instance writes, so the sync tail has a candidate and the wait completes. Control (not
+    t_writes): T does not write, so no candidate remains and the tail traps."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        fut = d.FutureType(d.U8Type())
+        aopts = d.CanonicalOptions(async_=True, memory=mem)
+
+        def t(args):
+            if t_writes:
+                mem.bytes[80] = 7
+                d.canon_future_write(fut, aopts, u32(mem, 20), 80)
+            return []
+
+        tbl = d.Table()
+        fi = tbl.add(d.CoreFuncRef(BODYT, t))
+
+        def h(args):
+            [packed] = d.canon_future_new(fut)
+            mem.bytes[16:20] = (packed & 0xFFFFFFFF).to_bytes(4, "little")
+            mem.bytes[20:24] = (packed >> 32).to_bytes(4, "little")
+            [r] = d.canon_future_read(fut, aopts, u32(mem, 16), 64)
+            if r == d.BLOCKED:
+                [s] = d.canon_waitable_set_new()
+                d.canon_waitable_join(u32(mem, 16), s)
+                [ti] = d.canon_thread_new_indirect(BODYT, tbl, fi, 0)
+                d.canon_thread_resume_later(ti)
+                site["name"] = "h's wait (the sync tail)"
+                d.canon_waitable_set_wait(mem, s, 72)
+            return [mem.bytes[64]]
+
+        hft = d.FuncType([], [d.U32Type()])
+        h_fi = store.lift(h, hft, d.CanonicalOptions(), inst)
+        got = []
+        store.invoke(h_fi, lambda: [], lambda r: got.append(r))
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
 if __name__ == "__main__":
     import hashlib
 
@@ -384,3 +429,5 @@ if __name__ == "__main__":
     read("nested-sync-unwind control (T releases)", nested_sync_unwind(False))
     read("residual (#977; wasmtime 49.0.2: BUG)", residual(True))
     read("residual control (T2 does nothing)", residual(False))
+    read("sync-wait-own-thread (#1005's admitted case; wasmtime 49.0.2: 7)", sync_wait_own_thread(True))
+    read("sync-wait-own-thread control (T does not write)", sync_wait_own_thread(False))
