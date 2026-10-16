@@ -738,6 +738,20 @@ reference on both:
 
 So the divergence is from both oracles, not from one.
 
+**Reclassified, and fixed (#1005; the chair's ruling on this build).** Admitting what both oracles trap is
+a **conformance defect**, not a divergence: ADR 0102's rule covers a toolchain refusing what the pin admits,
+and here neither oracle admits it.
+
+`threadTable.syncTail` now models the sync tail's `trap_if(not candidates)`, behind `gate:cm-threads`:
+- **Candidates:** this instance's Threads only. That is any ready Thread, and any waiter whose
+  `ready_func` holds (`waitReady`). Conservatively, it also counts any async lift in flight, standing in for
+  a callback task at its YIELD arm.
+- **When it is evaluated:** where control would return to the sync lift. That is when the scheduler's
+  chain ends idle while it holds the slot, so no cross-instance store can land during the test, and at the
+  wait itself where the instance has no scheduler.
+- **Result:** the control now traps at the sync tail, matched by site (`TestASyncWaitWithNoCandidateTrapsAtTheSyncTail`,
+  50 of 50). The entry has moved from #999 to #1005.
+
 **`killParked`'s close follows the rule from its earlier fix.** It already closes every `kill` *after*
 `tt.mu.Unlock()`, and it takes no `asyncHandles.mu`. A's extension keeps both properties:
 - **Waiter `kill` channels:** closed in the same post-unlock loop.
@@ -838,9 +852,9 @@ named, and every neuter below was run.
 | a | `sync-enters-past-suspended` | wasmtime 8 | 8 | the scheduler keeps the slot after a giver parks → hang; no kick → hang |
 | b | `wait-runs-ready` (#998) | wasmtime 5, reference 5 | 5 | no kick → hang |
 | c | `trap-while-waiting` + `-control` | wasmtime and reference `trap t2`; control: reference `value 1` | T2's trap, every Thread gone; control 1 | `trap` drops the error → hang; `killParked` skips waiters → T1 stays registered |
-| c′ | `nested-sync-unwind` + `-control` | wasmtime and reference: T's trap; control: both trap in `h`'s wait | T's trap, the child's slot and table empty; control **5** (#999) | `routeFault` not aborting a waiting owner → *"ended while parked"* in place of T's trap (the note had predicted a hang) |
+| c′ | `nested-sync-unwind` + `-control` | wasmtime and reference: T's trap; control: both trap in `h`'s wait | T's trap, the child's slot and table empty; control **5** at the build, a **conformance defect** (#1005, fixed after it: now the sync-tail trap) | `routeFault` not aborting a waiting owner → *"ended while parked"* in place of T's trap (the note had predicted a hang) |
 | d | `residual` | reference 8, control HANG; wasmtime hits its bug | 8 | the wait as a bare release → hang |
-| e | `yield-admits-entry` | wasmtime 8 | 8 | `yieldPoint` re-taking `entrySem` → **passes** (below) |
+| e | `yield-admits-entry` | wasmtime 8 | 8 | `yieldPoint` re-taking `entrySem` → **passes** (below). **A regression guard for the chain model's deadlock, not a discriminating witness** (the chair's ruling on this build) |
 | f | `orphan-trap` | none (post-resolution) | the trap is in `orphanTraps` | not appending → empty |
 | g | (unit) | — | `markReady` panics without the slot | the assertion returning at once → no panic |
 

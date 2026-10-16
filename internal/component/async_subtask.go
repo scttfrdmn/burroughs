@@ -362,6 +362,9 @@ func (st *subtask) resolveLocked(state subtaskState) {
 // joinTo records the set this subtask belongs to, so onResolve can wake its waiters.
 func (st *subtask) joinTo(s *waitableSet) { st.set = s }
 
+// hasPendingEventLocked is pendingEventLocked's test without the take (#1005).
+func (st *subtask) hasPendingEventLocked() bool { return st.resolved && !st.delivered }
+
 // currentSet reports the set this subtask is joined to, so `waitable.join` can remove it before re-joining.
 func (st *subtask) currentSet() *waitableSet { return st.set }
 
@@ -569,7 +572,9 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			//
 			// And `h.suspending` inside it, because the reference's sync cancel waits with `wait_until` — a
 			// suspension — so another task of the instance may execute meanwhile (ADR 0101).
-			if werr := c.Blocking(h.suspending(c, func(abort <-chan struct{}) error {
+			// `ready` is `wait_until(subtask.resolved)`'s predicate, read under h.mu by the sync tail (#1005).
+			ready := func() bool { return st.resolved }
+			if werr := c.Blocking(h.suspending(c, ready, func(abort <-chan struct{}) error {
 				select {
 				case <-wake:
 					return nil

@@ -259,6 +259,9 @@ opta nested-sync-unwind "unreachable"
 opta nested-sync-unwind-control "cannot block a synchronous task before returning"
 opta residual "BUG: delivering non-present event"                   # oracle: the reference reading, 8
 opta trap-while-waiting-control "BUG: delivering non-present event" # oracle: the reference reading, 1
+# #1005's pair: a sync lift's wait on its own instance's future, written by its own Thread (7) or not (trap).
+opta sync-wait-own-thread 7
+opta sync-wait-own-thread-control "cannot block a synchronous task before returning"
 # orphan-trap has no wasmtime reading: its trap lands after its call returned (ADR 0100). Parsed only.
 "$WASM_TOOLS" parse "$here/orphan-trap.wat" -o "$here/orphan-trap.wasm"
 

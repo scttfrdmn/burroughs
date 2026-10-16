@@ -155,6 +155,9 @@ type cmThread struct {
 	// threadTable.mu: errThreadKilled from the wake, or its own task's trap when it is the owner (point 7).
 	waitAbort chan struct{}
 	abortErr  error
+	// waitReady is a WAITING Thread's `ready_func`, set with its state and read under asyncHandles.mu: true
+	// once the wait could complete. The sync tail's candidate test counts it (#1005).
+	waitReady func() bool
 	// fault and faulted are an OWNER's: the first trap routed to it, and a channel closed when it is set,
 	// made lazily by `faultChan`, both guarded by threadTable.mu (point 7).
 	fault   error
@@ -395,6 +398,91 @@ func (tt *threadTable) routeFault(owner *cmThread, err error) {
 	if closeWait != nil {
 		close(closeWait)
 	}
+}
+
+// errSyncTail is the reference's sync-tail trap for a wait: wasmtime 49.0.2 words the same rule *"cannot block
+// a synchronous task before returning"*, so the reason opens with that text and then names the rule.
+const errSyncTail = "cannot block a synchronous task before returning: it waits with no Thread of its instance " +
+	"able to run (the reference's sync tail, trap_if(not candidates))"
+
+// syncTail is `canon_lift`'s sync tail for WAITING sync tasks (#1005), behind `gate:cm-threads`:
+//
+//	while task.state != Task.State.RESOLVED:
+//	  candidates = { t for t in inst.threads if t.ready() }
+//	  trap_if(not candidates)
+//
+// **Called where the reference evaluates it**, which is where control would return to a blocked sync lift:
+//   - when the scheduler's chain ends with nothing runnable, while it still holds the slot;
+//   - at the wait itself in an instance with no scheduler, where no Thread can ever be ready.
+//
+// **The candidates are this instance's Threads only**, as `inst.threads` is:
+//   - any ready Thread;
+//   - any waiting Thread whose `ready_func` holds now (`waitReady`), the sync waiter's own included;
+//   - and, conservatively, any async lift in flight (`liftsInFlight`). A callback task at its YIELD arm is a
+//     candidate in the reference, and Burroughs does not track which arm a task is in, so an in-flight async
+//     task is taken to be one. That errs towards admitting, the pre-#1005 behaviour.
+//
+// An event another instance produces never counts. While the scheduler holds the slot, no cross-instance
+// result store can land (`onResolve` takes the slot), so the test sees what the reference's single thread
+// would.
+//
+// With no candidate, every waiting sync task is ended with the trap, and the aborted waiters are returned.
+func (tt *threadTable) syncTail(h *asyncHandles) []*cmThread {
+	if !cmThreadsEnabled() {
+		return nil
+	}
+	tt.mu.Lock()
+	if len(tt.ready) > 0 {
+		tt.mu.Unlock()
+		return nil
+	}
+	var syncWaiters []*cmThread
+	var readies []func() bool
+	for _, t := range tt.array {
+		if t == nil || t.state != threadWaiting {
+			continue
+		}
+		if t.waitReady != nil {
+			readies = append(readies, t.waitReady)
+		}
+		if t.implicit && t.task == nil {
+			syncWaiters = append(syncWaiters, t)
+		}
+	}
+	tt.mu.Unlock()
+	if len(syncWaiters) == 0 {
+		return nil
+	}
+	h.mu.Lock()
+	candidate := h.liftsInFlight > 0
+	for _, r := range readies {
+		if candidate {
+			break
+		}
+		candidate = r()
+	}
+	h.mu.Unlock()
+	if candidate {
+		return nil
+	}
+	trap := &interp.Trap{Reason: errSyncTail}
+	tt.mu.Lock()
+	var aborted []*cmThread
+	var closes []chan struct{}
+	for _, t := range syncWaiters {
+		if t.state != threadWaiting {
+			continue
+		}
+		t.state = threadKilled
+		t.abortErr = trap
+		aborted = append(aborted, t)
+		closes = append(closes, t.waitAbort)
+	}
+	tt.mu.Unlock()
+	for _, ch := range closes {
+		close(ch)
+	}
+	return aborted
 }
 
 // assertSlotHeld is the lost-wakeup argument as an instrument (ADR 0101's Option A, point 5): in a test

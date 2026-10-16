@@ -51,6 +51,8 @@ var raceWitnessFixtures = []string{
 	"cmthreads/residual.wasm",
 	"cmthreads/yield-admits-entry.wasm",
 	"cmthreads/orphan-trap.wasm",
+	"cmthreads/sync-wait-own-thread.wasm",
+	"cmthreads/sync-wait-own-thread-control.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

@@ -162,6 +162,7 @@ func (s *cmScheduler) acquireAndRun(replies []chan error) {
 			s.h.schedHolds = true
 			s.h.mu.Unlock()
 			if s.drive(nil) {
+				s.tt.syncTail(s.h) // a blocked sync task with no candidate traps here (#1005)
 				s.free()
 			}
 			answer(nil)
@@ -218,6 +219,7 @@ func (s *cmScheduler) serve(hb handoff) {
 			"trap_if(not candidates))"}
 		return
 	}
+	s.tt.syncTail(s.h) // a blocked sync task with no candidate traps here (#1005)
 	s.free()
 }
 

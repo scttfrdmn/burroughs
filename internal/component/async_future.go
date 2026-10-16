@@ -71,6 +71,9 @@ func (e *readableFutureEnd) pendingEventLocked() (event, bool) {
 	return event{}, false
 }
 
+// hasPendingEventLocked is pendingEventLocked's test without the take (#1005).
+func (e *readableFutureEnd) hasPendingEventLocked() bool { return e.resolved && !e.delivered }
+
 // joinTo records the set this end belongs to, so a completed copy can wake its waiters.
 func (e *readableFutureEnd) joinTo(s *waitableSet) { e.set = s }
 
@@ -180,6 +183,9 @@ func (e *writableFutureEnd) pendingEventLocked() (event, bool) {
 	}
 	return event{}, false
 }
+
+// hasPendingEventLocked is pendingEventLocked's test without the take (#1005).
+func (e *writableFutureEnd) hasPendingEventLocked() bool { return e.resolved && !e.delivered }
 
 func (e *writableFutureEnd) joinTo(s *waitableSet) { e.set = s }
 
