@@ -1,0 +1,26 @@
+# Committed readings for future-self-copy-{bool,char,f32,f32one,f64}.wasm: #1006's element types (the chair's
+# item 3 of 2026-10-17). Default path: gate:async on, gate:cm-threads off.
+# Built:       wasm-tools parse future-self-copy-<t>.wat -o future-self-copy-<t>.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'run()' future-self-copy-<t>.wasm
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02), darwin/arm64. Runs: 3 of 3 per line.
+# Reference:   definitions.py @ 2e7895c (the pin), uv-managed Python 3.14.8, DETERMINISTIC_PROFILE in
+#              {False, True} x 8 seeds.
+#
+# Each fixture: one callback task reads its own future, writes a value of the element type, and WAITs. The
+# value is (event code << 16) + the read buffer's u32.
+#
+# fixture   written                  wasmtime 49.0.2                            pin 2e7895c
+# bool      byte 2                   trap: cannot read from and write to         trap at future.write's copy
+#                                    intra-component future/stream with
+#                                    non-numeric payload
+# char      u32 0x41                 the same trap                              trap at future.write's copy
+# f32one    1.5 (0x3fc00000)         1069809664                                 1069809664
+# f32       NaN 0x7fc00001           2143551489 (payload preserved)             2143551488 (deterministic:
+#                                                                               canonical) | 8 random NaNs
+# f64       NaN 0x7ff8000000000001   262145 (low word: payload preserved)       262144 (deterministic) |
+#                                                                               8 random NaNs
+#
+# The pin's rule is `End.copy`'s `trap_if(self.owner and self.owner is self.other.owner and not
+# none_or_number_type(self.t))`: within one instance only integers and floats copy. A float's lift
+# canonicalizes NaN in the deterministic profile and randomizes it otherwise, so wasmtime's preserved payload
+# is inside the pin's set. Burroughs takes the deterministic outcome, which is the codec's own NaN rule.
