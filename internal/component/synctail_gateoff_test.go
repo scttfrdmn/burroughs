@@ -30,7 +30,7 @@ import (
 // The witnesses that needed two of these callers parked at once moved to callback-lift twins
 // (`run-slot-cb`, `result-store-heap-cb`), which both oracles admit.
 //
-// **Neuter, run:** making `syncTail` judge a waiter only with the gate on (dropping `|| t.waitUngated`). Each
+// **Neuter, run:** making `syncTail` judge a waiter only with the gate on (`waitJudged && cmThreadsEnabled()`). Each
 // fixture then parks and never returns, and the trap arm fails on its bound.
 func TestASyncWaitOnAnotherInstancesEventTraps(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")

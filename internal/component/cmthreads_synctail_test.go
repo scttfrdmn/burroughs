@@ -39,7 +39,7 @@ func TestASyncTailCountsAWaiterWhoseEventIsPending(t *testing.T) {
 		h := newAsyncHandles()
 		tt := newThreadTable()
 		tt.h = h
-		w := &cmThread{implicit: true, state: threadWaiting, waitAbort: make(chan struct{})}
+		w := &cmThread{implicit: true, state: threadWaiting, waitAbort: make(chan struct{}), waitJudged: true}
 		w.owner = w
 		w.waitReady = func() bool { return ready }
 		tt.add(w)

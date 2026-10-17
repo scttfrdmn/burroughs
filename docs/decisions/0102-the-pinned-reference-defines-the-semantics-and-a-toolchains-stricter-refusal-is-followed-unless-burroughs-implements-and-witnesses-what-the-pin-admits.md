@@ -61,6 +61,26 @@ the record did not say why:
     That row is left as it was, admitting with the gate off and judged by the tail with it on, and the
     split is recorded on #999.
 
+  **The sync `subtask.cancel` row, decided 2026-10-17** (the chair's ruling of that date; the sentence above is
+  kept so the change stays visible). Four facts were established first and posted on #999:
+  - **Calibration:** the async-canceller control reads 20 on wasmtime 49.0.2, as on the reference.
+  - **The toolchain:** wit-bindgen-rt 0.44.0 issues the sync `[subtask-cancel]` only from `Drop`, and only
+    from an async export. The sync-lift canceller is hand-written WAT.
+  - **The pin is stale on this row.** Upstream #726 (2f1e56f56, 2026-09-23) resumes a cancellable, ready
+    implicit callback Thread synchronously on cancellation. Head (2e7895c) reads 20 where the pin traps.
+  - **wasmtime's reason:** `subtask_cancel` yields to a callee in a cancellable wait, and blocks only if it is
+    still unresolved.
+
+  Head and wasmtime agree on all four arms (`internal/component/testdata/cancel726/`), so **Burroughs follows
+  #726 in both gate states**:
+  - a callee that resolves on TASK_CANCELLED returns 20;
+  - a callee that does not is judged by the sync tail and traps, as both oracles do.
+
+  This is a measured divergence **from the pin**, which predates #726. It is recorded with both readings
+  (`refread.reading`, `refread-head.reading`), and the rule's own text, *"the pinned reference defines the
+  semantics"*, is not changed by it: re-pinning is the move that would reconcile the two, and it is its own
+  slice. Scott may object on #999.
+
 ## What the contract says, and where it is silent
 
 - **It names the suites.** G-1 and G-4: a gate's acceptance is its upstream spec test suite, and the

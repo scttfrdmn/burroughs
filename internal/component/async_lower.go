@@ -39,6 +39,12 @@ type asyncLowerImpl func(c *interp.CanonCaller, onStart func() []interp.Value, o
 // the impl calls it only on resolution — so a blocked callee (which never calls onResolve) leaves the
 // retptr untouched, a registered subtask rather than a half-lowered result.
 func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp.CanonFunc {
+	return asyncLowerFuncFor(func(*subtask) asyncLowerImpl { return impl }, hasResult, h)
+}
+
+// asyncLowerFuncFor is asyncLowerFunc with the impl made per call, from the call's subtask, so that the
+// cross-component adapter can attach its cancellation hand-back (`subtask.cancelTransfer`, #726).
+func asyncLowerFuncFor(implFor func(*subtask) asyncLowerImpl, hasResult bool, h *asyncHandles) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		// A result-returning async lower's flat args end in a retptr; an empty-result one has none (the
 		// fixture's empty case: flat_params []). `hasResult` gates the split.
@@ -197,7 +203,7 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 		// resolution of ANY subtask writes without waiting for the slot (`asyncHandles.inHost`). Lowered
 		// under `h.mu` before the guest resumes (see `onResolve`).
 		h.enterHost()
-		onCancel, err := impl(c, onStart, onResolve)
+		onCancel, err := implFor(st)(c, onStart, onResolve)
 		h.leaveHost()
 		if err != nil {
 			return nil, err

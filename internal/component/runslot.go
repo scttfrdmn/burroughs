@@ -203,8 +203,8 @@ func (h *asyncHandles) kick() {
 // a slot it will not use, and at `Close` wait on a Thread the close has not yet ended. The build amends the
 // sentence.
 //
-// `ungated` is the wait's `waitUngated`: whether the sync tail judges it with `gate:cm-threads` off.
-func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, ungated bool, fn func(abort <-chan struct{}) error) func() error {
+// `judged` is the wait's `waitJudged`: whether the sync tail judges it, in either gate state.
+func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, judged bool, fn func(abort <-chan struct{}) error) func() error {
 	var rec *cmThread
 	tt := h.threads
 	if tt != nil {
@@ -229,7 +229,7 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, unga
 		rec.waitAbort = make(chan struct{})
 		rec.abortErr = nil
 		rec.waitReady = ready
-		rec.waitUngated = ungated
+		rec.waitJudged = judged
 		abort, s := rec.waitAbort, tt.sched
 		tt.mu.Unlock()
 		// **The sync tail with no scheduler (#1005):** no Thread exists, so nothing can be a candidate except

@@ -1,0 +1,20 @@
+# Committed wasmtime readings for the sync `subtask.cancel` row (the chair's ruling of 2026-10-17, item 1).
+# Built:       wasm-tools parse <f>.wat -o <f>.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'go()' <f>.wasm
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02), darwin/arm64. Runs: 10 of 10 per line.
+#
+# Each fixture: a child's callback-lifted `run` WAITs on an empty set. A parent async-lowers it, then calls
+# `subtask.cancel` on the subtask: SYNC (`go` a sync lift) or from an ASYNC callback lift. The child
+# answers TASK_CANCELLED with `task.cancel` and EXIT, or (-late) with YIELD, resolving on its next event.
+# `go` returns lower-state * 16 + cancel status, so 20 is STARTED (1), then CANCELLED_BEFORE_RETURNED (4).
+#
+# fixture             wasmtime 49.0.2
+# cancel-sync         20
+# cancel-async        20   (the calibration control: the pin's reference reading is also 20)
+# cancel-sync-late    wasm trap: cannot block a synchronous task before returning   (in gm!core)
+# cancel-async-late   20
+#
+# The reference readings, pin and head, are in ../cmthreads/reference/refread.reading and refread-head.reading.
+# wasmtime's reason, by symbol: `ComponentInstance::subtask_cancel` (runtime/component/concurrent.rs:4167) yields
+# to a callee Thread in a cancellable wait (`wake_on_cancel`, `DeliverEvent`), then blocks only if the subtask
+# has not returned or cancelled. A sync task that must block traps.

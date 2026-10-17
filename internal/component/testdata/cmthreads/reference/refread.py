@@ -460,12 +460,12 @@ def sync_wait_host_import(eager):
     return body
 
 
-def cancel_other_instance(canceller_async):
-    """`asynclift/cancel-wat`'s shape, where the oracles split: a parent's `go` async-lowers a child's
+def cancel_other_instance(canceller_async, late=False):
+    """`asynclift/cancel-wat`'s shape, where the pin and wasmtime split: a parent's `go` async-lowers a child's
     callback-lifted `run`, which WAITs (the receipt child WAITs on a host `tick`), then calls `subtask.cancel`
-    SYNCHRONOUSLY. The child answers TASK_CANCELLED with `task.cancel` and EXIT. canceller_async=False: `go`
-    is a sync lift, as in the fixture. True: an async callback lift, the control. The value is
-    lower-state * 16 + cancel-status."""
+    SYNCHRONOUSLY. The child answers TASK_CANCELLED with `task.cancel` and EXIT, or (late) with YIELD,
+    resolving only on its next event. canceller_async=False: `go` is a sync lift, as in the fixture. True: an
+    async callback lift, the control. The value is lower-state * 16 + cancel-status."""
 
     def body(out, site):
         store = d.Store()
@@ -477,7 +477,9 @@ def cancel_other_instance(canceller_async):
             return [2 | (s << 4)]  # WAIT on s
 
         def run_cb(args):
-            if args[0] == 6:  # TASK_CANCELLED
+            if args[0] == 6 and late:  # TASK_CANCELLED, left unresolved for one more event
+                return [1]  # YIELD
+            if args[0] == 6 or (late and args[0] == 0):  # TASK_CANCELLED, or late's next (NONE) event
                 site["name"] = "child's task.cancel"
                 d.canon_task_cancel()
                 return [0]  # EXIT
@@ -581,4 +583,6 @@ if __name__ == "__main__":
     read("sync-wait-host-import (ADR 0102's gate-off row; wasmtime 49.0.2: trap)", sync_wait_host_import(False))
     read("sync-wait-host-import, eager control (wasmtime 49.0.2: 7)", sync_wait_host_import(True))
     read("cancel-wat's shape, sync canceller (wasmtime 49.0.2 harness: returned, 1 then 4)", cancel_other_instance(False))
-    read("cancel-wat's shape, async canceller (control)", cancel_other_instance(True))
+    read("cancel-wat's shape, async canceller (control; wasmtime 49.0.2: 20)", cancel_other_instance(True))
+    read("cancel, late child, sync canceller (wasmtime 49.0.2: trap)", cancel_other_instance(False, late=True))
+    read("cancel, late child, async canceller (wasmtime 49.0.2: 20)", cancel_other_instance(True, late=True))
