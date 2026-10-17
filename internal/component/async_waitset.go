@@ -120,6 +120,39 @@ func (s *waitableSet) hasPendingEventLocked() bool {
 	return false
 }
 
+// waitTake is a sync `waitable-set.wait`'s readiness, as the sync tail reads it.
+//
+// **A wait that has taken its event is ready, though the set no longer has one** (#1031). The wait body takes
+// the event under asyncHandles.mu and returns. The waiter leaves `threadWaiting` only afterwards, when
+// `suspending` re-takes the thread table's lock. Between the two, the set's `has_pending_event` is false for
+// a waiter still marked waiting. A chain ending in that gap ran `syncTail`, found no candidate, and killed a
+// waiter that held its event: 17 in 2,000 under `-race -cpu 2` on `sync-wait-own-thread`, where both oracles
+// return 7. In the reference a woken Thread is running before it reads its event, so the state cannot arise.
+//
+// `taken` and the set are read and written under asyncHandles.mu, which `syncTail` holds while it reads
+// readiness, so taking the event and becoming ready are one step to it.
+//
+// NEUTER THIS: `readyLocked` returning the set's readiness alone fails
+// `TestASyncTailCountsAWaiterThatHasTakenItsEvent`.
+type waitTake struct {
+	set   *waitableSet
+	taken bool
+}
+
+// readyLocked is the reference's `has_pending_event`, or this wait has already taken its event. The caller
+// holds asyncHandles.mu.
+func (w *waitTake) readyLocked() bool { return w.taken || w.set.hasPendingEventLocked() }
+
+// takeLocked takes the set's pending event, if any, and records that it did. The caller holds
+// asyncHandles.mu.
+func (w *waitTake) takeLocked() (event, bool) {
+	e, ok := w.set.pendingEventLocked()
+	if ok {
+		w.taken = true
+	}
+	return e, ok
+}
+
 // signalLocked wakes any agent parked on the set. The caller holds mu and has just resolved a member (the
 // member reaches its set through the joinTo back-pointer, where its own kind is known).
 func (s *waitableSet) signalLocked() {
@@ -265,14 +298,14 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 		// so another task of the instance may execute meanwhile, and this one takes the run slot back before
 		// it stores the event (ADR 0101). Without the slot this was #975: the sync path took none, so two
 		// waiters woke and stored their events at `ptr` in parallel.
-		// `ready` is the wait's `ready_func`, `has_pending_event`, which the sync tail's candidate test reads
-		// (#1005). It is evaluated under h.mu.
-		ready := func() bool { return set.hasPendingEventLocked() }
+		// The wait's readiness, which the sync tail's candidate test reads (#1005), is `waitTake.readyLocked`:
+		// the reference's `ready_func`, plus the event this wait has already taken (#1031).
+		wt := &waitTake{set: set}
 		// `true`: both oracles trap this wait at the sync tail with no candidate, gate on or off (syncTail).
-		err := c.Blocking(h.suspending(c, ready, true, func(abort <-chan struct{}) error {
+		err := c.Blocking(h.suspending(c, wt.readyLocked, true, func(abort <-chan struct{}) error {
 			for {
 				h.mu.Lock()
-				if e, ready := set.pendingEventLocked(); ready {
+				if e, ready := wt.takeLocked(); ready {
 					ev = e
 					h.mu.Unlock()
 					return nil

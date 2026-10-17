@@ -29,6 +29,64 @@ func TestASyncWaitWithNoCandidateTrapsAtTheSyncTail(t *testing.T) {
 	}
 }
 
+// oneEvent is a waitable holding one deliverable event until it is taken.
+type oneEvent struct{ pending bool }
+
+func (e *oneEvent) pendingEventLocked() (event, bool) {
+	if !e.pending {
+		return event{}, false
+	}
+	e.pending = false
+	return event{code: 1}, true
+}
+func (e *oneEvent) hasPendingEventLocked() bool { return e.pending }
+func (e *oneEvent) joinTo(*waitableSet)         {}
+func (e *oneEvent) currentSet() *waitableSet    { return nil }
+
+// TestASyncTailCountsAWaiterThatHasTakenItsEvent is #1031's witness, as a unit: a sync waiter that has taken
+// its event while still marked waiting is a candidate, so `syncTail` aborts nothing.
+//
+// That state is real. `waitable-set.wait` takes the event under asyncHandles.mu, and the waiter becomes
+// `threadRunning` only afterwards, under the thread table's lock. A chain ending between the two judged the
+// waiter with the set's readiness alone, which the taking had made false, and killed it: 17 in 2,000 on
+// `sync-wait-own-thread` under `-race -cpu 2`, where both oracles return 7. The state is built here
+// directly, so the arm does not depend on scheduling.
+//
+// The second arm is the control: a wait that has taken nothing, on a set with nothing pending, is still
+// aborted. Without it, the first arm would pass against a readiness that is always true.
+//
+// **Neuter, run:** `waitTake.readyLocked` returning the set's readiness alone fails the first arm.
+func TestASyncTailCountsAWaiterThatHasTakenItsEvent(t *testing.T) {
+	t.Setenv(cmThreadsGateEnv, "1")
+	for _, take := range []bool{true, false} {
+		h := newAsyncHandles()
+		tt := newThreadTable()
+		tt.h = h
+		member := &oneEvent{pending: take}
+		wt := &waitTake{set: &waitableSet{members: []waitable{member}, wake: make(chan struct{})}}
+		if take {
+			h.mu.Lock()
+			if _, ok := wt.takeLocked(); !ok {
+				h.mu.Unlock()
+				t.Fatal("the fixture's member had no event to take")
+			}
+			h.mu.Unlock()
+		}
+		w := &cmThread{implicit: true, state: threadWaiting, waitAbort: make(chan struct{}), waitJudged: true}
+		w.owner = w
+		w.waitReady = wt.readyLocked
+		tt.add(w)
+		aborted := tt.syncTail(h)
+		if take && len(aborted) != 0 {
+			t.Fatalf("a sync waiter that has taken its event was aborted at the sync tail; it was satisfied, " +
+				"and in the reference it would already be running")
+		}
+		if !take && (len(aborted) != 1 || aborted[0] != w) {
+			t.Fatalf("a sync waiter with nothing taken and nothing pending was not aborted (aborted %d)", len(aborted))
+		}
+	}
+}
+
 // TestASyncTailCountsAWaiterWhoseEventIsPending is the rule's admit branch, as a unit: a sync waiter whose
 // own `ready_func` holds is a candidate, so `syncTail` aborts nothing. With the predicate false, the same
 // waiter is aborted with the sync-tail trap.
