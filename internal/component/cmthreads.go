@@ -147,6 +147,10 @@ type cmThread struct {
 	// 0101's Option A: the hold is the Thread's). A synchronous cross-component call passes it on, so a
 	// nested call back into this instance re-enters the slot instead of waiting for it.
 	chain *runChain
+	// fenceKey is the chain this Thread's current execution holds a fence reader on (ADR 0095's amendment,
+	// F1), or nil. Touched only by whoever is running the Thread: the Thread itself, or the scheduler that
+	// resumes it, across a channel handoff that orders the two.
+	fenceKey *runChain
 	// storage is a CREATED Thread's own context (`context.get`/`set`). The reference keeps context per Thread
 	// (`current_thread().storage`), and a new Thread's starts at [0,0] (#1013). An implicit Thread's context
 	// is its task's (`liftTask.storage`), or the stack's for a sync lift, so this is unused for one.
@@ -716,6 +720,7 @@ func (t *cmThread) run(s *cmScheduler) {
 		return
 	}
 	_, t.err = t.entry.InvokeCMThread(t.index, interp.I32(t.arg))
+	fenceRelease(t) // a fenced task's Thread stops executing here for good (F1)
 	s.tt.remove(t.index)
 	if errors.Is(t.err, errThreadKilled) {
 		return // the wake ended it while parked in a handoff; nothing is waiting for its report

@@ -64,6 +64,10 @@ type cmScheduler struct {
 	h  *asyncHandles
 	tt *threadTable
 
+	// fenceSkipped is set when the last chain ended because a fenced task's Thread could not run (F1), so
+	// the chain ending is not "nothing runnable". Touched only by the scheduler's own goroutine.
+	fenceSkipped bool
+
 	// back carries every handoff: a Thread giving the slot up, or a created Thread's entry returning.
 	// The scheduler is the only receiver, in both its idle loop and a running chain.
 	back chan handoff
@@ -161,8 +165,23 @@ func (s *cmScheduler) acquireAndRun(replies []chan error) {
 		}
 	}
 	for {
+		// **The fence is tried, not waited on** (ADR 0095's amendment, F1): this loop must keep serving
+		// `back`, so a fence that is closed disables the slot case and adds its wake to the select. A writer
+		// counted for a select that another case wins is uncounted.
+		counted, fenceWake := s.h.fenceWriterTry(nil)
+		slot := s.h.runSlot
+		if !counted {
+			slot = nil // a send on a nil channel never proceeds
+		}
+		uncount := func() {
+			if counted {
+				s.h.fenceWriterLeave()
+			}
+		}
 		select {
-		case s.h.runSlot <- struct{}{}:
+		case <-fenceWake: // nil when counted, so this case never fires then
+			continue
+		case slot <- struct{}{}:
 			s.h.mu.Lock()
 			s.h.schedHolds = true
 			s.h.mu.Unlock()
@@ -184,12 +203,15 @@ func (s *cmScheduler) acquireAndRun(replies []chan error) {
 			answer(nil)
 			return
 		case hb := <-s.back:
+			uncount()
 			s.serve(hb)
 			answer(nil)
 			return
 		case r := <-s.yield:
+			uncount()
 			replies = append(replies, r)
 		case <-s.stop:
+			uncount()
 			answer(errThreadKilled)
 			return
 		}
@@ -219,7 +241,9 @@ func (s *cmScheduler) serve(hb handoff) {
 	if !s.drive(first) {
 		return
 	}
-	if !hb.detach && !hb.exited && hb.from.implicit && hb.from.task == nil && s.tt.claim(hb.from) {
+	// Not when the chain ended on a closed fence: a Thread is still ready then, so the sync tail has a
+	// candidate (F1), and it will run when the fence opens.
+	if !s.fenceSkipped && !hb.detach && !hb.exited && hb.from.implicit && hb.from.task == nil && s.tt.claim(hb.from) {
 		// **The sync branch (#970).** A SYNC lift's implicit Thread suspended, and the chain ended with
 		// nothing runnable while it is still parked. The reference's sync tail is
 		//
@@ -257,6 +281,7 @@ func (s *cmScheduler) serve(hb handoff) {
 // A, point 7). See `trap`. The chain then continues with the ready queue, because other tasks' Threads are
 // not ended by it: a divergence recorded on #999.
 func (s *cmScheduler) drive(first *cmThread) (idle bool) {
+	s.fenceSkipped = false
 	cur := first
 	for {
 		if cur != nil && s.tt.promoteYielding(cur) {
@@ -269,6 +294,16 @@ func (s *cmScheduler) drive(first *cmThread) (idle bool) {
 			continue
 		}
 		if cur == nil {
+			return true
+		}
+		// **A fenced task's Thread runs only while its caller instance executes no guest code** (ADR 0095's
+		// amendment, F1). The reader is tried, never waited on: this scheduler holds its own instance's slot,
+		// and waiting for another instance's fence while holding it is the order the fence forbids. A Thread
+		// that cannot run goes back to the head of the queue, the chain ends, and the caller's last writer
+		// kicks this scheduler when the fence opens.
+		if !s.fenceAdmit(cur) {
+			s.tt.requeueFront(cur)
+			s.fenceSkipped = true
 			return true
 		}
 		s.giveTo(cur)
@@ -346,6 +381,7 @@ func (s *cmScheduler) free() {
 	s.h.schedHolds = false
 	s.h.mu.Unlock()
 	<-s.h.runSlot
+	s.h.fenceWriterLeave()
 }
 
 // giveBack is the one handoff primitive: `self` gives the entry slot up, `next` runs (or the ready queue
@@ -391,6 +427,11 @@ func (s *cmScheduler) giveBack(c *interp.CanonCaller, self, next *cmThread, stat
 // channels a resume or the wake reaches it by. An implicit Thread's channels are made here, on its first
 // handoff, so a lift that never uses 🧵 allocates none.
 func (tt *threadTable) park(self *cmThread, state threadState) {
+	// A Thread of a task that parks ends that task's first segment (F0): this is a `block()` in the reference,
+	// which returns control to a cross-component caller's lower. And a fenced task's Thread stops executing
+	// here, so its reader on the caller's fence is dropped (F1); whoever resumes it takes one again.
+	liftTaskOf(self).endFirstSegment()
+	fenceRelease(self)
 	tt.mu.Lock()
 	defer tt.mu.Unlock()
 	if self.resume == nil {
@@ -404,6 +445,41 @@ func (tt *threadTable) park(self *cmThread, state threadState) {
 		tt.mu.Lock()
 		tt.ready = append(tt.ready, self)
 	}
+}
+
+// fenceAdmit takes the reader a fenced task's Thread needs before it runs, if it needs one (F1). False when
+// the Thread's caller instance is executing; this scheduler is then kicked when that fence opens.
+func (s *cmScheduler) fenceAdmit(t *cmThread) bool {
+	task := liftTaskOf(t)
+	a := task.fenceOf()
+	if a == nil || t.fenceKey != nil {
+		return true
+	}
+	s.h.mu.Lock()
+	exempt := task.inHandBackLocked()
+	key := t.saved.chain
+	if key == nil {
+		key = t.chain
+	}
+	s.h.mu.Unlock()
+	if exempt {
+		return true // inside a caller's cancel, on the caller's thread (#726's hand-back)
+	}
+	if !a.fenceReaderTry(key, s.h) {
+		return false
+	}
+	t.fenceKey = key
+	return true
+}
+
+// requeueFront puts a Thread the scheduler chose but could not run back at the head of the ready queue, as
+// ready: a fenced task's Thread whose caller instance is executing (F1). It runs when that fence opens,
+// first, as it would have run now.
+func (tt *threadTable) requeueFront(t *cmThread) {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	t.state = threadReady
+	tt.ready = append([]*cmThread{t}, tt.ready...)
 }
 
 // claim moves a parked Thread to running, for the scheduler about to resume it. False when the Thread is

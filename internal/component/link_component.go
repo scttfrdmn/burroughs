@@ -333,6 +333,10 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 	if err != nil {
 		return liftResult{}, err
 	}
+	// **The first segment does not end when the first entry returns** (F0). In the reference the segment runs
+	// on through the callback loop's cancel check and the arm's decision, and ends at the arm's `wait_until`:
+	// the WAIT arm's wait in `awaitEvent`, or the YIELD arm's `yieldPoint`. An EXIT ends it once the result
+	// store is queued (`liftAsAsyncImpl`), so the lower sees the resolution and returns RETURNED.
 
 	// One context request per call, the same discipline the park uses. See the check inside the loop.
 	ctxRequested := false
@@ -471,10 +475,28 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 			// re-YIELDs until its spawned body has run, the loop would never end. `yieldPoint` is the
 			// reference's `wait_until(...)` taking its blocking branch; see it for the citation.
 			task.waitSet = 0
+			// The YIELD arm's `wait_until` is where a segment ends (F0 for the first, F1 for a fenced
+			// task's): the caller's lower is released, and a fenced task's reader is dropped across the yield.
+			task.endFirstSegment()
+			fenceRelease(owner)
 			if rerr := f.threads.yieldPoint(task); rerr != nil {
 				return liftResult{}, rerr
 			}
-			res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventNone}))
+			// **The next segment begins before the arm's decision** (F1): the reader first, then the
+			// reference's second check (def:canon_lift.thread_func:"case CallbackCode.YIELD:"), NONE or
+			// TASK_CANCELLED, made while no guest of the caller instance executes.
+			ev := event{code: eventNone}
+			if f.segmentBegin(task, owner) {
+				f.h.mu.Lock()
+				if task.deliverPendingCancelLocked() {
+					ev = event{code: eventTaskCancelled}
+				}
+				f.h.mu.Unlock()
+			}
+			res, err = f.enterAndInvoke(task, task.cb, eventArgs(ev))
+			if ev.code == eventTaskCancelled {
+				f.h.handBack(task, err != nil) // the callback exited or blocked: control goes back (#726)
+			}
 			if err != nil {
 				return liftResult{}, err
 			}
@@ -484,6 +506,14 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 			// goroutine — the guest's agent was released when it returned WAIT, which is the whole
 			// difference from waitableSetWait's blocking excursion.
 			task.waitSet = si
+			// **The WAIT arm always ends the segment** (F0 for the first, F1 for a fenced task's), as the
+			// reference's deterministic profile does: `wait_until` blocks even when its condition already
+			// holds. That is an outcome the reference allows, and it is the one that does not depend on when
+			// a host impl's goroutine ran. A host event is a host Thread's in the reference, which runs only
+			// on a later tick, so continuing the first segment on an event a goroutine resolved early read
+			// RETURNED on `cancel-wat-parent`, where the reference reads 20.
+			task.endFirstSegment()
+			fenceRelease(owner)
 			ev, aerr := f.h.awaitEvent(task, si, liftParkBound)
 			if aerr != nil {
 				return liftResult{}, aerr
@@ -535,10 +565,15 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// The run slot after the entry slot, never before (ADR 0101). Not abandonable: once `enterTask` has
 	// admitted the task, its entries proceed (enterTask's rule), and the holder of the run slot releases it
 	// at its next suspension point or return.
-	// A fresh chain per entry: an async entry is never nested inside a synchronous call (a sync lower of
-	// an async lift is refused by name in `bindCrossComponent`).
-	ch := &runChain{}
-	f.h.acquireRun(ch, f.threads.get(task.threadIdx), nil)
+	// A fresh chain per entry, except the first entry of a cross-component callee, which runs on its caller's
+	// chain (`takeFirstChain`, ADR 0095's amendment, F0's corollary). In the reference that segment runs on
+	// the caller's thread, inside the caller's lower, so a call back into the caller's instance from it is a
+	// re-entry of a slot the chain already holds.
+	rec := f.threads.get(task.threadIdx)
+	// Normally unfenced: this is the first entry. It is fenced when it had to wait in `enterTask`, which
+	// ended the first segment before the entry ran (F0), so it is then a segment like any later one (F1).
+	ch := f.entryChain(task, rec)
+	f.h.acquireRun(ch, rec, nil)
 	// **The entry slot is released BEFORE the run slot** (#1012). The run slot's release can kick the
 	// scheduler, and a Thread it runs must find `exclusive_thread` already clear, as the reference clears it
 	// on the callback's return. Two separate defers ran in the other order (last in, first out), and Windows
@@ -547,25 +582,55 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// with it reversed and the gap widened, the promote witness reads 17 in 30 of 30, because a promote reads
 	// `exclusive_thread`.
 	var res []interp.Value
+	var err error
 	defer func() {
 		f.h.leaveTask(prev)
 		if !f.threads.yieldHandoff(f.h, task.threadIdx, ch, res) {
 			f.h.releaseRunFor(ch)
 		}
+		fenceEntryEnd(rec, res, err)
 	}()
 
 	// Allocate and write, then call — all three inside the one acquisition above. `lowerPending` does not
 	// take the entry itself, precisely so it cannot be called from somewhere that does not hold it.
+	// Assigned to the named `err`, not shadowed: the deferred `fenceEntryEnd` reads it.
 	if lerr := f.lowerPending(pend, args); lerr != nil {
-		return nil, lerr
+		err = lerr
+		return nil, err
 	}
 	// **With the Thread index**, as `enterAndInvoke` passes it (ADR 0101 point 5). This was a plain `Invoke`,
 	// so a callee entered with lowered arguments carried no index — `thread.index` had nothing to read, and
 	// a suspension point could not tell that its caller holds the run slot.
 	f.threads.entering(task.threadIdx)
-	var err error
 	res, err = target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
 	return res, err
+}
+
+// entryChain is the chain an entry of task runs on, taking the entry's fence reader if it needs one (F1, the
+// reader before the slot). A Thread that already holds a reader enters on its chain, so the entry's own
+// stores and calls back into the caller's instance are on a chain the fence admits. Otherwise the first
+// entry of a cross-component callee runs on its caller's chain (F0's corollary), and every other on a fresh
+// one.
+func (f *compFunc) entryChain(task *liftTask, rec *cmThread) *runChain {
+	if rec != nil && rec.fenceKey != nil {
+		return rec.fenceKey
+	}
+	ch := task.takeFirstChain()
+	fenceAcquire(f.h, rec, ch)
+	return ch
+}
+
+// segmentBegin takes the reader a fenced task's next segment needs, before that segment makes any decision
+// (F1), and reports whether the task is fenced. A no-op when the implicit Thread already holds one, or the
+// task is in a hand-back window (`fenceAcquire`).
+func (f *compFunc) segmentBegin(task *liftTask, owner *cmThread) bool {
+	if task.fenceOf() == nil || owner == nil {
+		return false
+	}
+	if owner.fenceKey == nil {
+		fenceAcquire(f.h, owner, &runChain{})
+	}
+	return true
 }
 
 func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.Value) ([]interp.Value, error) {
@@ -586,24 +651,26 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 		return nil, fmt.Errorf("%w: the call's context ended while waiting for this instance's execution "+
 			"slot", ErrCancelled)
 	}
-	ch := &runChain{}
-	f.h.acquireRun(ch, f.threads.get(task.threadIdx), nil) // after the entry slot (ADR 0101)
+	rec := f.threads.get(task.threadIdx)
+	ch := f.entryChain(task, rec) // the reader before the slot (F1), and the chain the entry runs on
+	f.h.acquireRun(ch, rec, nil)  // after the entry slot (ADR 0101)
 	// The entry slot is released before the run slot, whose release can kick the scheduler (#1012; see
 	// enterInvokeLowering). At YIELD with Threads ready, the run slot is handed to the scheduler instead
 	// (`yieldHandoff`).
 	var res []interp.Value
+	var err error
 	defer func() {
 		f.h.leaveTask(prev)
 		if !f.threads.yieldHandoff(f.h, task.threadIdx, ch, res) {
 			f.h.releaseRunFor(ch)
 		}
+		fenceEntryEnd(rec, res, err)
 	}()
 	// The task's implicit Thread index travels into every entry — the callee's and each callback
 	// re-entry's — so `thread.index` answers the same number across the loop, which is what makes it
 	// the TASK's Thread rather than one per stack.
 	// An entry starting ends any YIELD arm this task was in, and a promote's wait for it (#1012).
 	f.threads.entering(task.threadIdx)
-	var err error
 	// The YIELD arm's registration happens in the deferred handoff, not here (`yieldHandoff`), so it is made
 	// while the slot is still held.
 	res, err = target.inst.InvokeCMThread(target.name, task.threadIdx, args...)

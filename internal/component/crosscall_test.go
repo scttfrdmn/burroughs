@@ -136,11 +136,15 @@ func TestACrossComponentAsyncCallCarriesParamsAndResult(t *testing.T) {
 		// a **scheduling fact, not a property of the callee's ABI**. Measured: `darwin/arm64` always
 		// parked; CI's `ubuntu-24.04-arm` reached inline.
 		//
-		// So this test no longer asserts which arm. It asserts that the arm taken is one of the two, and
-		// that the value is correct **in whichever arm's channel reports it** — because the thing under
-		// test is that the value crosses, not which path it crossed by. *A witness whose subject depends
-		// on scheduling is a sample, not an assertion* (grave #891), and that lesson arrived here one
-		// slice after I wrote it down.
+		// So this test stopped asserting which arm, and asserted only that the value crossed. *A witness
+		// whose subject depends on scheduling is a sample, not an assertion* (grave #891).
+		//
+		// **It asserts the arm again, because the arm stopped being a scheduling fact** (ADR 0095's
+		// amendment, F0, #1020's mechanism (c)). The reference runs the callee's first segment inside the
+		// lower, so a child that resolves there (the inline `tick`: its first core call EXITs) is RETURNED,
+		// and one that waits (the later `tick`) is STARTED. Burroughs read STARTED for the inline arm 200 of
+		// 200 on darwin before F0, which "both are legitimate" accepted, and the pin reads only RETURNED
+		// (`host-event-inline` in refread.reading). **Neuter, run:** without F0's wait, the inline arm parks.
 		{"tick_resolves_inline", false},
 		{"tick_resolves_later", true},
 	} {
@@ -236,6 +240,13 @@ func TestACrossComponentAsyncCallCarriesParamsAndResult(t *testing.T) {
 					t.Errorf("post-park read (kind 3) = %d, want %d", parkedVal, tickValue)
 				}
 				t.Logf("arm: PARKED (lower returned STARTED) — value %d", parkedVal)
+			}
+			// The arm the reference takes: inline exactly when the child resolved in its first segment.
+			if wantInline := !tc.defer_; sawInline != wantInline {
+				t.Errorf("the parent took the %s arm, and the reference takes the %s one: a child that "+
+					"resolves in its first segment is RETURNED, one that waits is STARTED (F0). reports=%v",
+					map[bool]string{true: "inline", false: "parked"}[sawInline],
+					map[bool]string{true: "inline", false: "parked"}[wantInline], reports)
 			}
 		})
 	}
