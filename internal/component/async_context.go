@@ -60,7 +60,7 @@ func callerStorage(h *asyncHandles, c *interp.CanonCaller) *[2]uint32 {
 	return nil
 }
 
-// contextGet implements `canon context.get` (0xa, definitions.py:2293) for a static slot: read the calling
+// contextGet implements `canon context.get` (0xa, definitions.py:2255) for a static slot: read the calling
 // Thread's context slot, returning it as an i32 (slice-1 scope is i32 context). See callerStorage for whose
 // storage that is.
 func contextGet(h *asyncHandles, slot uint32) interp.CanonFunc {
@@ -79,7 +79,7 @@ func contextGet(h *asyncHandles, slot uint32) interp.CanonFunc {
 	}
 }
 
-// contextSet implements `canon context.set` (0xb, definitions.py:2303) for a static slot: write the value
+// contextSet implements `canon context.set` (0xb, definitions.py:2265) for a static slot: write the value
 // (a runtime i32 arg) into the calling agent's context slot — the lift task's under an async lift, else the
 // caller's stack's.
 func contextSet(h *asyncHandles, slot uint32) interp.CanonFunc {

@@ -13,7 +13,7 @@ import (
 )
 
 // The differential fixtures are the reference model's own reading. `gen/gen.py` drives the pinned
-// `definitions.py` (component-model @ 2bed77e) over `gen/cases.json` and emits `testdata/fixtures.json`;
+// `definitions.py` (component-model @ 2e7895c) over `gen/cases.json` and emits `testdata/fixtures.json`;
 // this test compares Burroughs' codec to it with no Python in the loop — the wabt precedent, so
 // BURROUGHS_NO_SKIP=1 passes with no interpreter present. Regenerate with `make canon-fixtures`.
 const fixturesPath = "testdata/fixtures.json"
@@ -114,7 +114,7 @@ func typeFromSpec(t *testing.T, s typeSpec) Type {
 		return BorrowType(s.Rt)
 	case "tuple":
 		// A tuple's entries are bare types; `TupleType` despecializes them into a record with fields
-		// labelled "0", "1", … exactly as definitions.py:1133 does. The `tuple-u8-u32` and
+		// labelled "0", "1", … exactly as definitions.py:1105 does. The `tuple-u8-u32` and
 		// `record-as-tuple-u8-u32` cases assert the two readings are byte-identical, which is what
 		// licenses the codec having one field-carrying arm.
 		types := make([]Type, len(s.Fields))

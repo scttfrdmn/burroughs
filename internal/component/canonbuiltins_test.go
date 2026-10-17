@@ -73,6 +73,10 @@ const (
 	// Their gate is `gate:threads`, whose own state is unrelated to gate:async.
 	statusThreads       canonBuiltinStatus = "threads"
 	statusThreadsPhase2 canonBuiltinStatus = "threads-phase2"
+	// statusForward is the ➡️ `{stream,future}.forward` pair (upstream #717), new at pin 2e7895c. A DECODE
+	// refusal by name (`canon`'s 0x2e/0x2f arm, ErrUnsupportedForm): no toolchain emits them yet, so there is
+	// no oracle reading to model them against (ADR 0102).
+	statusForward canonBuiltinStatus = "forward"
 )
 
 // canonStatus is the authored classification: every production in the committed table, with exactly one
@@ -115,6 +119,7 @@ var canonStatus = map[string]canonBuiltinStatus{
 	"stream.cancel-write":  statusAsyncBuiltUndemanded,
 	"stream.drop-readable": statusAsyncBuiltUndemanded,
 	"stream.drop-writable": statusAsyncBuiltUndemanded,
+	"stream.forward":       statusForward,
 
 	"future.new":           statusAsyncBuiltUndemanded,
 	"future.read":          statusAsyncBuiltUndemanded,
@@ -123,6 +128,7 @@ var canonStatus = map[string]canonBuiltinStatus{
 	"future.cancel-write":  statusAsyncBuiltUndemanded,
 	"future.drop-readable": statusAsyncBuiltUndemanded,
 	"future.drop-writable": statusAsyncRefusedByName,
+	"future.forward":       statusForward,
 
 	"error-context.new":           statusErrorContext,
 	"error-context.debug-message": statusErrorContext,
@@ -167,7 +173,7 @@ func (s canonBuiltinStatus) isAsyncFamily() bool {
 	case statusAsyncDemandedBuilt, statusAsyncDemandedAbsent, statusAsyncBuiltUndemanded,
 		statusAsyncRefusedByName:
 		return true
-	case statusLifting, statusResource, statusErrorContext, statusThreads, statusThreadsPhase2:
+	case statusLifting, statusResource, statusErrorContext, statusThreads, statusThreadsPhase2, statusForward:
 		return false
 	}
 	return false
@@ -177,7 +183,7 @@ func (s canonBuiltinStatus) isAsyncFamily() bool {
 type canonRow struct {
 	ops    []byte // every opcode byte of the form; ops[0] is what the engine keys on
 	name   string
-	marker string // "", "async", "error-context", "threads", "threads-phase2"
+	marker string // "", "async", "error-context", "threads", "threads-phase2", "forward"
 }
 
 // readCanonTable parses the committed table, returning the pin and the productions.
@@ -299,7 +305,7 @@ func TestEveryCanonProductionHasExactlyOneStatus(t *testing.T) {
 	// --- the status values themselves are a closed set ---
 	for name, st := range canonStatus {
 		if !st.isAsyncFamily() && st != statusLifting && st != statusResource && st != statusErrorContext &&
-			st != statusThreads && st != statusThreadsPhase2 {
+			st != statusThreads && st != statusThreadsPhase2 && st != statusForward {
 			t.Errorf("%s carries status %q, which is outside the closed set", name, st)
 		}
 	}
@@ -322,6 +328,8 @@ func TestEveryCanonProductionHasExactlyOneStatus(t *testing.T) {
 			want = "threads"
 		case st == statusThreadsPhase2:
 			want = "threads-phase2"
+		case st == statusForward:
+			want = "forward"
 		default:
 			want = "" // lift/lower and the resource built-ins carry no proposal marker
 		}
@@ -527,7 +535,8 @@ func TestTheDemandedAbsentSetIsSliceTwosWorkList(t *testing.T) {
 			}
 			built = append(built, fmt.Sprintf("%#x %s", r.ops[0], r.name))
 		case statusLifting, statusResource, statusAsyncBuiltUndemanded, statusAsyncRefusedByName,
-			statusErrorContext, statusThreads, statusThreadsPhase2:
+			statusErrorContext, statusThreads, statusThreadsPhase2,
+			statusForward: // ➡️: no committed guest imports them, and no toolchain emits them yet
 			// Not part of the demand set, so not part of slice 2's list. Named rather than left to a
 			// `default` so that a status added later lands here as a linter failure and gets a decision:
 			// whether a new status is demanded is exactly the question this arm exists to answer.

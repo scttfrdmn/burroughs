@@ -101,7 +101,8 @@ def scenario_lend_released():
 
 
 def main():
-    out = {"pin": "2bed77e4228841c1d2721996d3ecc169ff96b158", "borrow": [scenario_lend_released()]}
+    # Re-run at 2e7895c when the pin moved (2026-10-17): lend-released-at-return still reads 0, 1, 0.
+    out = {"pin": "2e7895c76905cd3fb7e6be4ac632258972b1f688", "borrow": [scenario_lend_released()]}
     json.dump(out, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

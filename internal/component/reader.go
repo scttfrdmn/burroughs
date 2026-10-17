@@ -82,7 +82,7 @@ func (r *reader) take(n int) ([]byte, error) {
 	return s, nil
 }
 
-// name reads a `nameattributes` (Binary.md @ 2bed77e): a discriminant byte, a u32 length, and the
+// name reads a `nameattributes` (Binary.md @ 2e7895c): a discriminant byte, a u32 length, and the
 // UTF-8 bytes. The 0x02 case carries a trailing attribute vector this slice does not model; it is
 // refused, named, rather than skipped (no fixture exercises it, and a silent skip would desync the
 // enclosing vec).

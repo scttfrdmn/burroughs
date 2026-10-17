@@ -7,7 +7,8 @@
 // import/export names and their kinds — so a loaded component can be enumerated and its core modules
 // reached. It does **not** lift or lower values across the Canonical ABI; that is slice 2.
 //
-// The grammar is read at the pinned spec commit `WebAssembly/component-model @ 2bed77e` (ADR 0084).
+// The grammar is read at the pinned spec commit `WebAssembly/component-model @ 2e7895c` (ADR 0084; moved from
+// 2bed77e on 2026-10-17, and every claim below re-checked against that Binary.md).
 // The internal contents of the type, canon, instance, alias, core-instance/core-type, and value
 // sections are walked at the framing level and recorded, not interpreted — their semantics belong to
 // later slices. An undefined section id refuses at load with the id named, the unknown-opcode
@@ -27,7 +28,7 @@ import (
 // from a malformed one.
 var ErrNotComponent = errors.New("component: not a component binary")
 
-// SectionKind is a top-level component section id (Binary.md @ 2bed77e).
+// SectionKind is a top-level component section id (Binary.md @ 2e7895c).
 type SectionKind uint8
 
 // The thirteen top-level section kinds the pin defines. An id past [SectionValue] is undefined and
@@ -204,7 +205,7 @@ type Component struct {
 	Defs []Def
 }
 
-// componentVersion is the format version at the pin (Binary.md @ 2bed77e: version 0x000d, layer
+// componentVersion is the format version at the pin (Binary.md @ 2e7895c: version 0x000d, layer
 // 0x0001). A different version is a different format and refuses at load, named — the same discipline
 // as an unknown opcode, because the loader was written against exactly one spec state.
 const (

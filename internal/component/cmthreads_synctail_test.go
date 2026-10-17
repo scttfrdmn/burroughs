@@ -11,7 +11,7 @@ import (
 // Two fixtures, each read by both oracles, 10 of 10 on wasmtime 49.0.2:
 //   - **`nested-sync-unwind-control`**: the wait's event can only come from a THIRD instance. wasmtime
 //     reads *"cannot block a synchronous task before returning"*, and the reference traps at
-//     `canon_lift:2161`. Burroughs returned 5 before #1005.
+//     `canon_lift:2123`. Burroughs returned 5 before #1005.
 //   - **`sync-wait-own-thread-control`**: the wait is on the instance's own future, and no Thread writes
 //     it. Both oracles trap the same way. Burroughs hung before #1005.
 //

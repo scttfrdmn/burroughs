@@ -18,8 +18,8 @@ import (
 //
 // # The claim, and why only a non-scalar can carry it
 //
-// The model lifts inside `canon_task_return` (definitions.py:2336) and hands `Task.return_` a value that
-// is already lifted (def:487-492). Burroughs stored the flat words and lifted them after the callback
+// The model lifts inside `canon_task_return` (definitions.py:2298) and hands `Task.return_` a value that
+// is already lifted (def:493-498). Burroughs stored the flat words and lifted them after the callback
 // loop exited. For a `u32` the two are the same thing — the value IS the word — so **every committed
 // guest in this tree passed either way**, and that is precisely why the defect survived: the only result
 // type any fixture used could not distinguish the orders.
@@ -60,7 +60,7 @@ func TestTaskReturnLiftsItsStringResultBeforeTheGuestReusesTheBuffer(t *testing.
 	if got == clobbered {
 		t.Fatalf("run returned %q — the guest's scratch, not its result. This is the late lift: the "+
 			"(ptr, len) was kept and read after the callback loop exited, by which time the guest had "+
-			"reused the buffer. definitions.py:2336 lifts inside canon_task_return for this reason.", got)
+			"reused the buffer. definitions.py:2298 lifts inside canon_task_return for this reason.", got)
 	}
 	if got != want {
 		t.Fatalf("run returned %q, want %q", got, want)
@@ -252,7 +252,7 @@ func mustChar(t *testing.T, r rune) canon.Value {
 
 // TestTaskReturnTrapsOnACharOutsideTheUnicodeScalarRange is the one scalar arm with a model TRAP rather
 // than a conversion, so it gets its own test: `convert_i32_to_char` traps past the last code point and
-// inside the surrogate range (definitions.py:1343-1347).
+// inside the surrogate range (definitions.py:1320-1324).
 //
 // A guest can produce either from one word, so both are guest faults rather than engine errors.
 func TestTaskReturnTrapsOnACharOutsideTheUnicodeScalarRange(t *testing.T) {
@@ -543,7 +543,7 @@ func TestTaskReturnChecksItsFlatArity(t *testing.T) {
 //
 // It refuses by name, and this pins that — because the alternative is not a wrong error but a **plausible
 // wrong value**. A sync result flattening wider than one word returns through a return **pointer**
-// (`MAX_FLAT_RESULTS` is 1, definitions.py:2109), so the single flat word is an address. The `u32` path
+// (`MAX_FLAT_RESULTS` is 1, definitions.py:2069), so the single flat word is an address. The `u32` path
 // would read that address as the number and hand it back as data.
 //
 // Asserted on the lift helper directly: no committed guest is a sync lift declaring a string result, and

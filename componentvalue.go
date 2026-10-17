@@ -223,7 +223,7 @@ type ComponentField struct {
 //   - **Labels are valid WIT labels.** ADR 0097's change 2: checked when the type is built rather than
 //     left to fail later against a signature.
 //   - **No duplicate labels.** A record's fields are matched to a value's by name
-//     (`definitions.py:1727`), so two fields with one name make the match ambiguous — and the
+//     (`definitions.py:1685`), so two fields with one name make the match ambiguous — and the
 //     *duplicate* would silently win or lose depending on iteration order.
 func ComponentTypeRecord(fields ...ComponentField) (ComponentType, error) {
 	if len(fields) == 0 {
@@ -727,7 +727,7 @@ func fromCanon(v canon.Value) (ComponentValue, error) {
 		// **Not through `ComponentString`**, deliberately. That constructor validates UTF-8 because a Go
 		// string from an embedder can be arbitrary bytes; this string came up through
 		// `canon.LoadStringFromRange`, which already applied the model's UTF-8 trap
-		// (`definitions.py:1386-1389`) against guest memory. Re-validating would be a second opinion about
+		// (`definitions.py:1363-1366`) against guest memory. Re-validating would be a second opinion about
 		// a check that has already run and whose failure is a guest trap, not an embedder error — and if
 		// the two ever disagreed, this is the side that would wrongly report an engine fault as a value
 		// the embedder built wrong.

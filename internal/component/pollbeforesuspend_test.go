@@ -16,7 +16,7 @@ import (
 //
 // The readings (`testdata/poll-before-suspend.reading`):
 //   - wasmtime 49.0.2 reads 1, 10 of 10;
-//   - the reference reads {1, 9002} on the pin and on head;
+//   - the reference reads {1, 9002} on the pin (2e7895c) and on the previous pin (2bed77e);
 //   - 101, a poll seeing the event while STARTED, is the outcome the reference forbids.
 //
 // Burroughs reads 1, because a callee's result store needs the caller's run slot (#983) and the caller holds

@@ -2,10 +2,10 @@
 ;;
 ;; # Why this fixture exists: the check had no witness, and that was measured
 ;;
-;; ADR 0094 put a `deliver_pending_cancel` at the top of the lift loop, mirroring definitions.py def:2129.
+;; ADR 0094 put a `deliver_pending_cancel` at the top of the lift loop, mirroring definitions.py def:2089.
 ;; Neutering it left **the whole component suite green**, including #887's own end-to-end cancellation
 ;; witness — because that witness drives a `wit-bindgen` guest, which awaits an import and therefore
-;; returns WAIT, and a WAIT's cancellation is delivered by the park's own check (def:789, `awaitEvent`).
+;; returns WAIT, and a WAIT's cancellation is delivered by the park's own check (def:807, `awaitEvent`).
 ;; So the engine had a check nothing covered: the same shape as grave #885 one level up, found by
 ;; falsifying rather than by review.
 ;;

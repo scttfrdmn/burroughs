@@ -12,7 +12,7 @@ import (
 // creates a future, reads it (BLOCKED), writes 7 into it itself, and WAITs for the read's event.
 //
 // **The readings were taken before the fix** (`testdata/future-self-copy.reading`): wasmtime 49.0.2 (10 of
-// 10), the pin and upstream head all read 262151 = 0x40007. That is event FUTURE_READ (4), write status
+// 10), the previous pin (2bed77e) and the pin (2e7895c) all read 262151 = 0x40007. That is event FUTURE_READ (4), write status
 // COMPLETED (0) and byte 7. Burroughs did not return: `future.write` only parked, so the read stayed pending
 // forever. Run in both gate states, since no Thread is involved.
 //

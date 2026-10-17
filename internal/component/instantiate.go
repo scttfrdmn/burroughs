@@ -74,7 +74,7 @@ func sortSpace(s Sort) Space {
 	}
 }
 
-// The instantiation sections (Binary.md @ 2bed77e), parsed structurally here so PR B's engine can wire
+// The instantiation sections (Binary.md @ 2e7895c), parsed structurally here so PR B's engine can wire
 // them. Slice 1 framed these; this parses their contents. An unmodeled form refuses at parse with the
 // discriminant named, and every parser requires its body consumed exactly — the loader's discipline
 // extended to the instantiation grammar.
@@ -213,18 +213,18 @@ type Canon struct {
 	// **The byte was read and thrown away** until grave #892: the decoder's `readAsyncQ` was
 	// `func() error { _, err := r.byte(); return err }`. The two forms are semantically different — the
 	// model's `canon_subtask_cancel(async_, i)` **waits** for resolution on the sync form and returns
-	// BLOCKED only on the async one (def:2426-2433) — so discarding it collapsed a distinction the ABI
+	// BLOCKED only on the async one (def:2386-2394) — so discarding it collapsed a distinction the ABI
 	// draws, and Burroughs took the async branch for both. A conforming guest's synchronous drop glue
 	// then met a BLOCKED it cannot handle and panicked.
 	AsyncForm bool
 	// Result is the value type a `canon task.return` (0x09) declares it returns, or nil for the empty
 	// form. It is NOT the lift's result type — the two must agree, and the model checks exactly that
-	// (`trap_if(result_type != task.ft.result)`, definitions.py:2333).
+	// (`trap_if(result_type != task.ft.result)`, definitions.py:2295).
 	//
 	// **It was decoded and thrown away** until #903: `if _, err := r.resultList(); err != nil`. Harmless
 	// while every result was a `u32`, because a u32's whole value is its flat word and the loop could lift
 	// it later from the flat args alone. It is not harmless for anything else — the model lifts *inside*
-	// `canon_task_return` (def:2336) precisely because the payload of a non-scalar lives in guest memory
+	// `canon_task_return` (def:2298) precisely because the payload of a non-scalar lives in guest memory
 	// behind a pointer the guest may reuse the moment it resumes. Lifting eagerly needs the type, so the
 	// type has to survive the decode.
 	//
@@ -467,7 +467,7 @@ func (r *reader) canon() (Canon, error) {
 	case 0x05, 0x06, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
 		0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23,
 		0x24, 0x25:
-		// The async family (Binary.md @ 2bed77e, 🔀 + 📝): recognized, not modeled. The operands are read
+		// The async family (Binary.md @ 2e7895c, 🔀 + 📝): recognized, not modeled. The operands are read
 		// so the section advances exactly; the built-in refuses by name at bind under gate:async (ADR 0086).
 		return r.canonAsyncBuiltin(kind)
 	case 0x26:
@@ -526,6 +526,18 @@ func (r *reader) canon() (Canon, error) {
 		default:
 			return Canon{}, fmt.Errorf("%s: byte %#x after the discriminant is not 0x00", threadBuiltinNames[kind], b)
 		}
+	case 0x2e, 0x2f:
+		// `stream.forward` and `future.forward`, the ➡️ productions upstream #717 added. They are in the pin
+		// from 2e7895c. Refused BY NAME: no toolchain emits them yet (wasm-tools 1.258.0 rejects the opcode as
+		// an invalid leading byte), so there is no oracle reading to model them against, and ADR 0102 follows
+		// the toolchains' stricter refusal until Burroughs implements and witnesses what the pin admits.
+		// Before this arm, they fell to `default` with no name and no sentinel.
+		//
+		// NEUTER THIS ARM, and `TestTheForwardBuiltinsAreRefusedByName` fails on the missing sentinel.
+		name := map[byte]string{0x2e: "stream.forward", 0x2f: "future.forward"}[kind]
+		return Canon{}, fmt.Errorf("%w: canon %s (%#x) is the ➡️ forwarding proposal (upstream #717), which this "+
+			"engine does not model: no toolchain emits it yet, so there is no oracle reading", ErrUnsupportedForm,
+			name, kind)
 	case 0x40, 0x41, 0x42:
 		// NEUTER THIS ARM to reproduce #957: delete it and the family falls through to `default`
 		// again, returning `canon built-in 0x29 is not modeled (this slice: …)` with no sentinel and

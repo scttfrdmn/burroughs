@@ -4,7 +4,7 @@
 // between a component's linear memory and a value, for the guest-driven type scope on #694.
 //
 // This slice is the value codec proper — `size`/`alignment`/`store`/`load` and the flat lowering — read
-// at the pinned reference model (`component-model @ 2bed77e`, `CanonicalABI.md` and `definitions.py`).
+// at the pinned reference model (`component-model @ 2e7895c`, `CanonicalABI.md` and `definitions.py`).
 // Its correctness is held by a differential test against fixtures the reference model itself emits
 // (`gen/`), so a wrong offset, width, or encoding is caught rather than reasoned about. A type outside
 // the modeled scope has no case here and is refused by name — the loader's refuse-by-name discipline,
@@ -43,7 +43,7 @@ const (
 	KindOwn
 	KindBorrow
 	KindTuple
-	// KindRecord is the base field-carrying form; `tuple` despecializes to it (definitions.py:1133),
+	// KindRecord is the base field-carrying form; `tuple` despecializes to it (definitions.py:1105),
 	// so a tuple value never reaches a layout rule as itself. See [TupleType].
 	KindRecord
 	// KindFuture (gate:async increment 3) is a future<T> the host returns to a guest. Unlike the other
@@ -125,12 +125,12 @@ type Type struct {
 //
 // # Why the label is part of the type, and why a tuple has labels too
 //
-// The model's `FieldType` carries a `label` (definitions.py:128-130), and `store_record` reaches a
-// field's value by that label — `v[f.label]` (def:1727). The label is therefore load-bearing for the
+// The model's `FieldType` carries a `label` (definitions.py:119-121), and `store_record` reaches a
+// field's value by that label — `v[f.label]` (def:1685). The label is therefore load-bearing for the
 // layout's *input*, not decoration: it is how a record value's fields are matched to the declared order.
 //
 // A tuple's fields are labelled `"0"`, `"1"`, … because that is what `despecialize` produces
-// (def:1133). This was `[]Type` with no labels while tuple was the only field-carrying kind, which was
+// (def:1105). This was `[]Type` with no labels while tuple was the only field-carrying kind, which was
 // adequate and is not once records exist — two records with the same field *types* and different field
 // *names* are different types, and `typeEqual` has to say so.
 type Field struct {
@@ -263,7 +263,7 @@ func typeEqual(a, b Type) bool {
 		// **The label is compared, not only the type.** Two records with the same field types and
 		// different field names are different types: `record{x: u32}` and `record{y: u32}` have an
 		// identical byte layout and are not interchangeable, because a value's fields are matched to the
-		// declaration *by name* (definitions.py:1727's `v[f.label]`). Comparing types alone would make
+		// declaration *by name* (definitions.py:1685's `v[f.label]`). Comparing types alone would make
 		// them equal and let a value built against one satisfy a signature declaring the other.
 		//
 		// Order matters too, and is compared by position rather than sorted: field order is the layout,
@@ -290,7 +290,7 @@ func typeEqual(a, b Type) bool {
 func RecordType(fields ...Field) Type { return Type{Kind: KindRecord, Fields: fields} }
 
 // TupleType is a `tuple<…>` of the given types, **despecialized to a record** with fields labelled
-// "0", "1", … — exactly what `despecialize` does (definitions.py:1133).
+// "0", "1", … — exactly what `despecialize` does (definitions.py:1105).
 //
 // # Why the despecialization happens here rather than at each use
 //
@@ -467,7 +467,7 @@ func Record(t Type, fields map[string]Value) (Value, error) {
 		return Value{}, fmt.Errorf("canon: Record on non-record type %s", t)
 	}
 	if len(t.Fields) == 0 {
-		// The model has no size for an empty record (definitions.py:1256), so there is no layout to
+		// The model has no size for an empty record (definitions.py:1233), so there is no layout to
 		// build a value against. One of the error-returning layers that keeps `sizeRecord`'s panic
 		// unreachable.
 		return Value{}, fmt.Errorf("canon: a record type with no fields has no layout in the " +

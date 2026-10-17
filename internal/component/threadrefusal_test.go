@@ -136,7 +136,11 @@ func TestTheThreadBuiltinNamesAgreeWithThePinnedTable(t *testing.T) {
 		b := byte(op)
 		r := &reader{b: []byte{b}}
 		_, err := r.canon()
-		if err != nil && errors.Is(err, ErrUnsupportedForm) {
+		// **The thread refusal's own type, not any ErrUnsupportedForm.** The threads family was the only
+		// decode refusal by name until pin 2e7895c added the ➡️ forward pair (0x2e/0x2f). Those also refuse
+		// with ErrUnsupportedForm, and counting them made this control demand thread names for them.
+		var te *threadBuiltinError
+		if err != nil && errors.As(err, &te) {
 			refused[b] = true
 		}
 	}

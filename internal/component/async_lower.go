@@ -13,7 +13,7 @@ import (
 // gate:async slice-1 increment 2a-i-A/B: the async `canon lower`'s execution.
 //
 // An async-lowered import's flat ABI is the sync lower's flat args (params + a retptr) plus a PACKED i32
-// return (definitions.py `canon_lower`, def:2187–2251): `[RETURNED]` (= 2) when the callee resolves inline
+// return (definitions.py `canon_lower`, def:2149–2213): `[RETURNED]` (= 2) when the callee resolves inline
 // (2a-i-A, the sync-resolving arm), or `[state | (subtaski<<4)]` when it blocks (2a-i-B, the blocking arm —
 // the callee starts but defers resolution, so the subtask is registered and its index returned). The
 // waitable-set loop that observes a blocked subtask's resolution is 2a-i-B-2, refused by name until then.
@@ -22,7 +22,7 @@ import (
 // through the model's own `Store.lift`/`invoke` establishes the Task/Thread context, never a stub (#728).
 
 // asyncLowerImpl performs an async-lowered import call, mirroring the reference model's callee shape
-// `callee(on_start, on_resolve) -> on_cancel` (definitions.py FuncInst, def:383–386). It lifts the flat
+// `callee(on_start, on_resolve) -> on_cancel` (definitions.py FuncInst, def:387–390). It lifts the flat
 // params by calling onStart (which returns the lifted param Values), then RESOLVES by calling onResolve
 // with the result value — synchronously for the sync-resolving arm, or later (from its own async progress)
 // for the blocking arm, in which case it returns without having called onResolve. onCancel is invoked if
@@ -99,7 +99,7 @@ func asyncLowerFuncFor(implFor func(*subtask) asyncLowerImpl, hasResult bool, h 
 			// This branched on `st.cancellationRequested` alone until #1009, which resolved such a callee
 			// CANCELLED with its value dropped.
 			if st.cancellationRequested && v.IsNoResolution() {
-				// A cancel resolution (the model's on_resolve(None), def:2214–2220): no result is lowered,
+				// A cancel resolution (the model's on_resolve(None), def:2176–2182): no result is lowered,
 				// and the terminal state is chosen by whether the subtask had started — STARTING ->
 				// CANCELLED_BEFORE_STARTED, STARTED -> CANCELLED_BEFORE_RETURNED. This is the cancel-resolution
 				// path the re-check found missing: before increment 4 onResolve only ever produced RETURNED,

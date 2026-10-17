@@ -15,7 +15,7 @@ import (
 //
 // The model lowers a lift's parameters **inside the callee's task**: `canon_lift`'s thread body runs
 // `enter_implicit_thread()`, then `task.start()`, then `lower_flat_values(...)`, and only then calls the
-// core function (definitions.py:2097-2107). The lowering is therefore inside the callee's exclusive
+// core function (definitions.py:2057-2067). The lowering is therefore inside the callee's exclusive
 // context, not before it.
 //
 // Burroughs' analogue of that context is the instance's **entry slot** (`asyncHandles.entrySem`), and the
@@ -184,13 +184,13 @@ func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error 
 // # This is stricter than the model, and the reason is worth stating
 //
 // On the **store** side the model only asserts `dst_byte_length <= REALLOC_I32_MAX` (2³²−1,
-// definitions.py:1597) — an `assert`, not a `trap_if`. The 2²⁸−1 cap is the **load** side's trap
-// (def:1383, `MAX_STRING_BYTE_LENGTH`), and it is the one this engine already applies in
+// definitions.py:1577) — an `assert`, not a `trap_if`. The 2²⁸−1 cap is the **load** side's trap
+// (def:1360, `MAX_STRING_BYTE_LENGTH`), and it is the one this engine already applies in
 // `canon.LoadStringFromRange`.
 //
 // So refusing at the load cap here declines a string the model would store. That is deliberate: a string
 // past that cap **can never be read back as one** — any `load_string` of it traps — so it is unusable in
-// both directions, and the model's own `assert(REALLOC_I32_MAX > 2 * MAX_STRING_BYTE_LENGTH)` (def:1361)
+// both directions, and the model's own `assert(REALLOC_I32_MAX > 2 * MAX_STRING_BYTE_LENGTH)` (def:1338)
 // is the statement that the two bounds are meant to sit in that relation. Asking a guest for a
 // quarter-gigabyte allocation it is going to refuse is worse than declining before the call.
 //
@@ -210,7 +210,7 @@ func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error 
 //   - A **string** keeps the load-side 2²⁸−1 cap and ADR 0098's recorded divergence: a longer one could
 //     be stored and never read back, because `load_string` traps past it.
 //   - **Everything else** is bounded only by `REALLOC_I32_MAX`, which is the model's own bound on a
-//     store (definitions.py:1713) and is already enforced inside `canon.ListByteLength`. So a list needs
+//     store (definitions.py:1673) and is already enforced inside `canon.ListByteLength`. So a list needs
 //     no second cap here, and imposing one would be this engine inventing a limit the ABI does not have.
 func checkLowerSize(param string, kind canon.Kind, n int) error {
 	if n < 0 {
@@ -219,7 +219,7 @@ func checkLowerSize(param string, kind canon.Kind, n int) error {
 	if kind == canon.KindString && n > canon.MaxStringByteLength {
 		return fmt.Errorf("%w: argument %q is a %d-byte string, past the %d-byte cap a component string "+
 			"can carry; a longer one could be stored but never read back, because a load of it traps "+
-			"(definitions.py:1383), so it is refused here rather than allocated for",
+			"(definitions.py:1360), so it is refused here rather than allocated for",
 			ErrUnsupportedForm, param, n, canon.MaxStringByteLength)
 	}
 	if uint64(n) > canon.ReallocI32Max {
@@ -272,7 +272,8 @@ func (f *compFunc) guestAlloc(p allocRequest) (int, error) {
 		return 0, fmt.Errorf("%w: argument %q: the guest's realloc returned %d, which is not an address",
 			ErrUnsupportedForm, p.param, ptr)
 	}
-	// **The misalignment trap** (definitions.py:1599, `trap_if(ptr != align_to(ptr, dst_alignment))`).
+	// **The misalignment trap** (definitions.py:641, `reallocate`'s `trap_if(ptr != align_to(ptr, alignment))`;
+	// at the previous pin, 2bed77e, the same check sat at each call site as `align_to(ptr, dst_alignment)`).
 	//
 	// **Vacuous for a `string`**, whose alignment is 1 — every pointer satisfies it. Implemented anyway,
 	// and said to be vacuous, because the first kind whose alignment is not 1 is a `list<u32>` at

@@ -366,7 +366,7 @@ func TestSynthAsyncLowerBindsAndReachesTheWrapper(t *testing.T) {
 // # Both forms are driven, which they were not before grave #892
 //
 // `canon_subtask_cancel(async_, i)` takes the flag and branches on it: the sync form **waits** for the
-// resolution and only the async form yields and may return BLOCKED (def:2426-2433). This test used to call
+// resolution and only the async form yields and may return BLOCKED (def:2386-2394). This test used to call
 // `subtaskCancel(h)` with no form at all — because the engine had none — and the fixture it compares
 // against was generated with `canon_subtask_cancel(True, …)` hard-coded. **So the oracle had the same
 // blind spot as the engine**, and every row that existed was either one the two forms agree on or one the
@@ -443,8 +443,9 @@ func TestSubtaskCancelProducesCancelledStates(t *testing.T) {
 		t.Errorf("starting cancel (async form) = %d, want %d (CANCELLED_BEFORE_STARTED)", got, fx.StartingCancelRet[0])
 	}
 
-	// callee does not resolve during the cancel -> BLOCKED. **ASYNC form only**: this is the model's
-	// `thread.yield_()` arm, and it is the row the sync form cannot produce.
+	// callee does not resolve during the cancel -> BLOCKED. **ASYNC form only**: the model's async arm (it
+	// yielded once first at the previous pin, 2bed77e, and returns BLOCKED at once at 2e7895c; the fixture reads
+	// the same at both), and it is the row the sync form cannot produce.
 	h, cc, sti, _ = lower(t, true, false)
 	if got := cancel(t, h, cc, sti, true); got != uint32(fx.AsyncCancelRet[0]) {
 		t.Errorf("async cancel = %#x, want %#x (BLOCKED)", got, uint32(fx.AsyncCancelRet[0]))
@@ -534,7 +535,7 @@ func TestSyncSubtaskCancelWaitsForALaterResolution(t *testing.T) {
 	got := uint32(ret[0].Int32())
 	if got == uint32(asyncBlocked) {
 		t.Fatalf("sync subtask.cancel returned BLOCKED (%#x). The model waits here "+
-			"(definitions.py def:2428, `thread.wait_until(subtask.resolved)`) and only the ASYNC form "+
+			"(definitions.py def:2391, `thread.wait_until(subtask.resolved)`) and only the ASYNC form "+
 			"may return BLOCKED. A wit-bindgen guest's drop glue is synchronous, cannot await, and "+
 			"panics on this value — grave #892 returning", got)
 	}

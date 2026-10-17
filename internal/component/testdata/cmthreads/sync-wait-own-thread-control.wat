@@ -1,7 +1,7 @@
 ;; sync-wait-own-thread-control: sync-wait-own-thread.wat with T's future.write removed, so no Thread of the
 ;; instance can satisfy run's wait. Both oracles trap it, 10 of 10: wasmtime 49.0.2 "cannot block a
 ;; synchronous task before returning"; the REFERENCE READING at the sync tail, `trap_if(not candidates)`
-;; (canon_lift:2161). #1005's witness matches that trap by site.
+;; (canon_lift:2123). #1005's witness matches that trap by site.
 (component
   (core module $memmod (memory (export "m") 1 1))
   (core instance $memi (instantiate $memmod))

@@ -96,7 +96,7 @@ type coreDef struct {
 	asyncBuiltinOp byte
 	// asyncBuiltinForm carries the built-in's `async?` operand (`Canon.AsyncForm`) — `subtask.cancel`'s
 	// today. It is threaded because the two forms are **different functions**: the model's sync form
-	// WAITS for the cancellation to resolve and the async form returns BLOCKED (def:2426-2433). Until
+	// WAITS for the cancellation to resolve and the async form returns BLOCKED (def:2386-2394). Until
 	// grave #892 the operand was decoded and discarded, so one impl served both and took the async
 	// branch — which a conforming guest's synchronous drop glue cannot handle.
 	asyncBuiltinForm bool
@@ -116,7 +116,7 @@ type coreDef struct {
 	// component's type-index space. nil for the empty form, and for every other built-in.
 	//
 	// It is what lets `task.return` lift its argument **eagerly**, which the model does inside
-	// `canon_task_return` (definitions.py:2336) rather than leaving the flat words for later. The
+	// `canon_task_return` (definitions.py:2298) rather than leaving the flat words for later. The
 	// difference is invisible for a `u32` — the value *is* the word — and decisive for anything whose
 	// payload lives in guest memory behind a pointer the guest may reuse on resumption.
 	asyncBuiltinResult *ValType

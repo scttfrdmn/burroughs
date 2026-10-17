@@ -8,8 +8,12 @@
 #
 # Run offline, never in CI (the vendored file is fetched by `make canon-fixtures` into a gitignored dir):
 #
-#   uv run --no-project python3 internal/component/testdata/cmthreads/reference/refread.py > \
+#   uv run --no-project --managed-python --python 3.14.8 python3 \
+#     internal/component/testdata/cmthreads/reference/refread.py > \
 #     internal/component/testdata/cmthreads/reference/refread.reading
+#
+# The interpreter is named exactly (the Makefile's CANON_PYTHON): the pin needs >= 3.14, and an unpinned
+# `python3` once resolved to a Homebrew 3.15.0 and once to a uv-managed 3.12.2.
 #
 # # Calibration before reliance (the chair's ruling)
 #
@@ -35,7 +39,7 @@ import random
 import sys
 import threading
 
-PIN = "2bed77e4228841c1d2721996d3ecc169ff96b158"  # the Makefile's CANON_PIN
+PIN = "2e7895c76905cd3fb7e6be4ac632258972b1f688"  # the Makefile's CANON_PIN (from 2bed77e, 2026-10-17)
 VENDOR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "canon", "gen", "vendor")
 # REFREAD_DEFINITIONS reads a definitions.py other than the vendored pin, to compare a candidate pin against
 # the current one row by row. Unset, the vendored pin is read.

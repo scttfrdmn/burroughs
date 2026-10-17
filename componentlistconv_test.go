@@ -117,7 +117,7 @@ func TestAnUnspellableElementRefusesNamingTheKind(t *testing.T) {
 	// recording rather than a silent test edit: this asserted that a `list<tuple<u32>>` is refused
 	// "naming tuple", and it broke the moment `canon.TupleType` started despecializing — the refusal
 	// now reads `record{0: u32}`, because at the ABI layer that *is* what a tuple is
-	// (definitions.py:1133). The assertion was about a name the type no longer has.
+	// (definitions.py:1105). The assertion was about a name the type no longer has.
 	//
 	// `char` is the stable choice: the codec models it fully and the public value surface spells only
 	// `u32`, `string` and lists of those, so it is unspellable for a reason that has nothing to do with

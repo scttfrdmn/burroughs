@@ -11,7 +11,7 @@
 ;;
 ;; ## Why this is the same rule and not a second one
 ;;
-;; A tuple **despecializes to a record** (definitions.py:1133), so `tuple<>` is `record {}` by the time
+;; A tuple **despecializes to a record** (definitions.py:1105), so `tuple<>` is `record {}` by the time
 ;; any layout rule sees it — `elem_size` despecializes first (:1228), and `elem_size(TupleType([]))`
 ;; raises the same `AssertionError`. One rule, reached two ways, which is why the two decoder arms refuse
 ;; together rather than one being the general case.

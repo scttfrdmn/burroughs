@@ -26,7 +26,7 @@ import (
 //	cancel-rust-parent  trap: unreachable
 //
 // Both are this defect. `subtask.cancel` returned BLOCKED where the model **waits** on the sync-lowered
-// form (`definitions.py` def:2426-2433), and `wit-bindgen`'s drop glue is synchronous — it runs in `Drop`,
+// form (`definitions.py` def:2386-2394), and `wit-bindgen`'s drop glue is synchronous — it runs in `Drop`,
 // which cannot await — so it meets BLOCKED in `in_progress_update`'s
 // `other => panic!("unknown code {other:#x}")`, which is `unreachable` in wasm.
 //

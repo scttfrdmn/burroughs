@@ -70,7 +70,7 @@ func TestTaskCancelTrapsOnAnUncancelledTask(t *testing.T) {
 //
 // # The precondition is CANCEL_DELIVERED and not "cancelled somehow", which is the discriminating arm
 //
-// `Task.cancel` traps unless the state is CANCEL_DELIVERED (definitions.py def:494). So a guest calling
+// `Task.cancel` traps unless the state is CANCEL_DELIVERED (definitions.py def:500). So a guest calling
 // `task.cancel` on a cancellation that has been *requested* but not *handed to it* is as wrong as one
 // calling it with no cancellation at all. The two-state arm below is what makes `liftState`'s separation
 // of PENDING_CANCEL from CANCEL_DELIVERED load-bearing rather than decorative: collapse them and the
@@ -87,7 +87,7 @@ func TestTaskCancelResolvesADeliveredCancellation(t *testing.T) {
 			t.Fatalf("task.cancel on a CANCEL_DELIVERED task: %v, want success", err)
 		}
 		if task.state != liftResolved {
-			t.Errorf("state = %s, want resolved — task.cancel resolves the task (def:498)", task.state)
+			t.Errorf("state = %s, want resolved — task.cancel resolves the task (def:504)", task.state)
 		}
 		// The discriminant, not the payload: an empty result is what a guest returning nothing resolves
 		// with legitimately (grave #885's artefact), so `result == nil` cannot carry this fact.
@@ -107,7 +107,7 @@ func TestTaskCancelResolvesADeliveredCancellation(t *testing.T) {
 		_, err := taskCancel(h)(nil, nil)
 		if err == nil {
 			t.Fatal("task.cancel succeeded on a PENDING_CANCEL task; the model's precondition is " +
-				"CANCEL_DELIVERED specifically (def:494), so a request the guest has not been handed " +
+				"CANCEL_DELIVERED specifically (def:500), so a request the guest has not been handed " +
 				"must trap")
 		}
 		if !strings.Contains(err.Error(), "has not been delivered") {
@@ -128,7 +128,7 @@ func TestTaskCancelResolvesADeliveredCancellation(t *testing.T) {
 //
 // ADR 0094 refused the arm because it was believed to produce `subtask.cancel` status 3, which has no
 // reference reading (#884). **That reason is true of the model and false of Burroughs**: the model calls
-// `on_start` *inside* the lift (`canon_lift`'s `thread_func`, def:2097-2102), so a lift task still INITIAL
+// `on_start` *inside* the lift (`canon_lift`'s `thread_func`, def:2057-2062), so a lift task still INITIAL
 // means the parent's subtask is still STARTING, means status 3. Burroughs' cross-component adapter calls
 // `onStart()` itself, synchronously, before the child's lift task exists — it has to, because `on_start`
 // reads the caller's flat args — so the parent's subtask is already STARTED and the terminal state is 4
@@ -169,17 +169,17 @@ func TestCancelStateTransitionsFollowTheModel(t *testing.T) {
 			t.Fatalf("requestCancel on a STARTED task: %v", err)
 		}
 		if task.state != liftPendingCancel {
-			t.Errorf("state = %s, want pending-cancel (def:469-470)", task.state)
+			t.Errorf("state = %s, want pending-cancel (def:473-474)", task.state)
 		}
 	})
 
 	t.Run("deliver_is_one_shot", func(t *testing.T) {
 		task := &liftTask{state: liftPendingCancel}
 		if !task.deliverPendingCancelLocked() {
-			t.Fatal("deliverPendingCancel returned false on a PENDING_CANCEL task (def:476)")
+			t.Fatal("deliverPendingCancel returned false on a PENDING_CANCEL task (def:482)")
 		}
 		if task.state != liftCancelDelivered {
-			t.Fatalf("state = %s, want cancel-delivered (def:477)", task.state)
+			t.Fatalf("state = %s, want cancel-delivered (def:483)", task.state)
 		}
 		// One-shot by construction: the state moved, so a second call cannot find a pending cancel. This
 		// is what lets the lift loop park — a `true` every time would deliver TASK_CANCELLED forever and

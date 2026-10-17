@@ -2,7 +2,7 @@
 # Every canonical built-in in Binary.md's `canon` production, at the pin below. Spec facts only:
 # Burroughs' status for each is authored in canonbuiltins_test.go, so the equality witness that
 # compares the two is not comparing the engine to itself.
-pin	2bed77e4228841c1d2721996d3ecc169ff96b158
+pin	2e7895c76905cd3fb7e6be4ac632258972b1f688
 # opcodes	name	marker
 0x00 0x00	lift	
 0x01 0x00	lower	
@@ -24,6 +24,7 @@ pin	2bed77e4228841c1d2721996d3ecc169ff96b158
 0x12	stream.cancel-write	async
 0x13	stream.drop-readable	async
 0x14	stream.drop-writable	async
+0x2e	stream.forward	forward
 0x15	future.new	async
 0x16	future.read	async
 0x17	future.write	async
@@ -31,6 +32,7 @@ pin	2bed77e4228841c1d2721996d3ecc169ff96b158
 0x19	future.cancel-write	async
 0x1a	future.drop-readable	async
 0x1b	future.drop-writable	async
+0x2f	future.forward	forward
 0x1c	error-context.new	error-context
 0x1d	error-context.debug-message	error-context
 0x1e	error-context.drop	error-context

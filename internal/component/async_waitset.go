@@ -31,26 +31,26 @@ import (
 // handle table. B-MM-1's async-wake acquire edge is thus IDENTICAL to the wake delivery, not merely carried
 // alongside it (litmus TestBMM1AsyncWakeIsAnAcquireEdgeOverTheAddressSpace).
 
-// eventCode mirrors definitions.py EventCode (def:696–703). Slice-1 delivered NONE and SUBTASK; the
+// eventCode mirrors definitions.py EventCode (def:715–722). Slice-1 delivered NONE and SUBTASK; the
 // enum is now complete, TASK_CANCELLED having been the last gap (ADR 0094).
 type eventCode uint32
 
 const (
 	eventNone        eventCode = 0
 	eventSubtask     eventCode = 1
-	eventStreamRead  eventCode = 2 // definitions.py EventCode.STREAM_READ (def:699)
-	eventStreamWrite eventCode = 3 // definitions.py EventCode.STREAM_WRITE (def:700)
-	eventFutureRead  eventCode = 4 // definitions.py EventCode.FUTURE_READ (def:701)
-	eventFutureWrite eventCode = 5 // definitions.py EventCode.FUTURE_WRITE (def:702)
+	eventStreamRead  eventCode = 2 // definitions.py EventCode.STREAM_READ (def:718)
+	eventStreamWrite eventCode = 3 // definitions.py EventCode.STREAM_WRITE (def:719)
+	eventFutureRead  eventCode = 4 // definitions.py EventCode.FUTURE_READ (def:720)
+	eventFutureWrite eventCode = 5 // definitions.py EventCode.FUTURE_WRITE (def:721)
 
 	// eventTaskCancelled is delivered to the LIFT's callback, not by a waitable set — the lift loop
-	// synthesises it from the task's own state (def:2129/2137) rather than receiving it from a member.
+	// synthesises it from the task's own state (def:2089/2137) rather than receiving it from a member.
 	// It lives in this enum anyway because the enum is the ABI's, and a code the guest can see must be
 	// named where a reader looks the codes up.
-	eventTaskCancelled eventCode = 6 // definitions.py EventCode.TASK_CANCELLED (def:703)
+	eventTaskCancelled eventCode = 6 // definitions.py EventCode.TASK_CANCELLED (def:722)
 )
 
-// event is a waitable-set.wait result (definitions.py EventTuple / unpack_event, def:2367–2372): a code
+// event is a waitable-set.wait result (definitions.py EventTuple / unpack_event, def:2329–2336): a code
 // plus two u32 payloads. For a SUBTASK event the payload is (subtaski, subtask state).
 type event struct {
 	code   eventCode
@@ -74,7 +74,7 @@ type waitable interface {
 	// joinTo records the set this waitable belongs to, so its own resolution can wake the set's waiters.
 	joinTo(s *waitableSet)
 	// currentSet reports the set this waitable is joined to, or nil. Needed because `waitable.join` must
-	// REMOVE the waitable from its previous set before adding it to the new one (def:737-743), and only
+	// REMOVE the waitable from its previous set before adding it to the new one (def:756-762), and only
 	// the waitable knows which set that was. The caller holds asyncHandles.mu.
 	currentSet() *waitableSet
 }
@@ -87,17 +87,17 @@ type waitableSet struct {
 	members []waitable
 	wake    chan struct{}
 	// waiting counts the agents and lift loops currently parked on this set — the model's
-	// `WaitableSet.num_waiting` (def:752), which `WaitableSet.drop` traps on (def:796).
+	// `WaitableSet.num_waiting` (def:770), which `WaitableSet.drop` traps on (def:814).
 	//
-	// Both parks increment it, and that is not a detail: the model counts in `wait` (def:769-772) **and**
-	// in `wait_from_callback` (def:782-786), so the stackless park is as much a waiter as the blocking
+	// Both parks increment it, and that is not a detail: the model counts in `wait` (def:787-790) **and**
+	// in `wait_from_callback` (def:800-804), so the stackless park is as much a waiter as the blocking
 	// excursion. Counting only one of them would make `drop`'s trap depend on which park a guest happened
 	// to use.
 	waiting int
 }
 
 // pendingEventLocked returns the first ready member's deliverable event, or (event{}, false) if none is
-// ready. The caller holds asyncHandles.mu. Mirrors WaitableSet.get_pending_event (def:761–767) — kind
+// ready. The caller holds asyncHandles.mu. Mirrors WaitableSet.get_pending_event (def:779–785) — kind
 // -agnostic: whichever member kind is ready supplies its own (code, p1, p2).
 func (s *waitableSet) pendingEventLocked() (event, bool) {
 	for _, m := range s.members {
@@ -158,7 +158,7 @@ func (s *waitableSet) removeLocked(w waitable) {
 }
 
 // joinWaitableLocked moves w into set, or out of any set when set is nil — the whole of the model's
-// `Waitable.join` (def:737-743), which is three steps and not one:
+// `Waitable.join` (def:756-762), which is three steps and not one:
 //
 //	if self.wset:  self.wset.elems.remove(self)    # leave the old set
 //	self.wset = wset                               # record the new one
@@ -185,7 +185,7 @@ func joinWaitableLocked(w waitable, set *waitableSet) {
 	}
 }
 
-// waitableSetNew implements `canon waitable-set.new` (definitions.py:2351): allocate a waitable set in the
+// waitableSetNew implements `canon waitable-set.new` (definitions.py:2313): allocate a waitable set in the
 // instance table, return its index.
 func waitableSetNew(h *asyncHandles) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
@@ -196,10 +196,10 @@ func waitableSetNew(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// waitableJoin implements `canon waitable.join` (definitions.py:2396): join waitable `wi` to set `si`, or
+// waitableJoin implements `canon waitable.join` (definitions.py:2360): join waitable `wi` to set `si`, or
 // UNJOIN it when si is 0.
 //
-// `si == 0` is `w.join(None)` in the model (def:2402-2403), not an error — and it was refused here as
+// `si == 0` is `w.join(None)` in the model (def:2366-2367), not an error — and it was refused here as
 // "handle 0 is not a waitable set" until #871, whose park is what first drove a guest through it. The
 // deferral was recorded in this comment ("si == 0 (unjoin) is not exercised by the blocking-arm round
 // trip"), so the trigger was named before it fired; what the note could not say was that the trigger would
@@ -230,7 +230,7 @@ func waitableJoin(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// waitableSetWait implements `canon waitable-set.wait` (definitions.py:2359): block the calling agent until
+// waitableSetWait implements `canon waitable-set.wait` (definitions.py:2321): block the calling agent until
 // a member of set `si` has a pending event, store the event payload at `ptr`, return the event code. The
 // park is a real §5 blocking excursion (CanonCaller.Blocking) — the agent is marked blocked throughout, so
 // siblings run and a Stop reaches its safepoint without waking it; the inner select also watches the
@@ -248,7 +248,7 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 			return nil, fmt.Errorf("component: waitable-set.wait: handle %d is not a waitable set", si)
 		}
 
-		// num_waiting (def:769-772): counted for the whole park, so waitable-set.drop traps on a set this
+		// num_waiting (def:787-790): counted for the whole park, so waitable-set.drop traps on a set this
 		// agent is parked on. Decremented however the park ends, including the context-cancelled exit —
 		// a leaked count would make the set permanently undroppable.
 		h.mu.Lock()
@@ -292,18 +292,37 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 			return nil, err
 		}
 		// Store the event payload (p1, p2) as two little-endian u32 at ptr (unpack_event), return the code.
-		var buf [8]byte
-		binary.LittleEndian.PutUint32(buf[0:4], ev.p1)
-		binary.LittleEndian.PutUint32(buf[4:8], ev.p2)
-		if werr := c.Write(uint64(ptr), buf[:]); werr != nil {
-			return nil, fmt.Errorf("component: waitable-set.wait: storing event at ptr: %w", werr)
+		if serr := storeEvent(c, "waitable-set.wait", ptr, ev); serr != nil {
+			return nil, serr
 		}
 		return []interp.Value{interp.I32(int32(ev.code))}, nil
 	}
 }
 
-// waitableSetPoll implements `canon waitable-set.poll` (0x21, definitions.py:2376 → WaitableSet.poll
-// def:775). It is `wait` minus the park: it reads the set's readiness through the SAME pendingEventLocked
+// storeEvent is the pin's `unpack_event` (`definitions.py` @ 2e7895c, upstream #741): it traps unless `ptr` is
+// 4-aligned and the 8-byte event fits in memory, then stores (p1, p2) as two little-endian u32.
+//
+// **The two checks entered the pin when it moved from 2bed77e**, which had neither (#1026). Burroughs stored at any
+// address and reported an out-of-bounds store as a plain error. Read before the fix, with a callback task
+// polling an empty set at ptr 1 (`testdata/poll-misaligned.wat`): wasmtime 49.0.2 traps *"pointer not
+// aligned"*, 10 of 10, and the pin traps. Burroughs returned 100. The aligned control reads 100 on all three.
+func storeEvent(c *interp.CanonCaller, op string, ptr uint32, ev event) error {
+	if ptr%4 != 0 {
+		return &interp.Trap{Reason: fmt.Sprintf("%s: pointer not aligned: the event pointer %d is not a multiple of 4 "+
+			"(the pin's unpack_event)", op, ptr)}
+	}
+	var buf [8]byte
+	binary.LittleEndian.PutUint32(buf[0:4], ev.p1)
+	binary.LittleEndian.PutUint32(buf[4:8], ev.p2)
+	if werr := c.Write(uint64(ptr), buf[:]); werr != nil {
+		return &interp.Trap{Reason: fmt.Sprintf("%s: the 8-byte event at %d is out of bounds (the pin's unpack_event): %v",
+			op, ptr, werr)}
+	}
+	return nil
+}
+
+// waitableSetPoll implements `canon waitable-set.poll` (0x21, definitions.py:2340 → WaitableSet.poll
+// def:793). It is `wait` minus the park: it reads the set's readiness through the SAME pendingEventLocked
 // path wait uses (async_waitset.go's waitableSetWait, the identical `set.pendingEventLocked()` call), and
 // returns a NONE event (code 0, payload 0,0) when nothing is ready rather than blocking — never a second
 // readiness notion. The event-store path (two u32 at ptr, return the code) is identical to wait's, so a
@@ -325,17 +344,14 @@ func waitableSetPoll(h *asyncHandles) interp.CanonFunc {
 		if !ready {
 			ev = event{} // (NONE=0, 0, 0) — nothing ready, and poll does not park
 		}
-		var buf [8]byte
-		binary.LittleEndian.PutUint32(buf[0:4], ev.p1)
-		binary.LittleEndian.PutUint32(buf[4:8], ev.p2)
-		if werr := c.Write(uint64(ptr), buf[:]); werr != nil {
-			return nil, fmt.Errorf("component: waitable-set.poll: storing event at ptr: %w", werr)
+		if serr := storeEvent(c, "waitable-set.poll", ptr, ev); serr != nil {
+			return nil, serr
 		}
 		return []interp.Value{interp.I32(int32(ev.code))}, nil
 	}
 }
 
-// waitableSetDrop implements `canon waitable-set.drop` (0x22, def:2386-2392), **rebuilt on the expiry its
+// waitableSetDrop implements `canon waitable-set.drop` (0x22, def:2350-2356), **rebuilt on the expiry its
 // own deferral named** (#792, Scott's ruling).
 //
 // # The deferral, and the trigger that fired it
@@ -466,7 +482,7 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 		return contextSet(w.async, slot), true
 	case 0x09: // task.return (2nd async guest) — resolve the current async-lift task
 		// The declared result type reaches it now (#903), so it can lift its argument eagerly — the order
-		// the model uses (definitions.py:2336). nil for an export declaring no result.
+		// the model uses (definitions.py:2298). nil for an export declaring no result.
 		return taskReturn(w.async, resultT), true
 	case 0x05: // task.cancel (#864) — traps unless the task was cancelled, which nothing can do yet
 		return taskCancel(w.async), true

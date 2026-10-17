@@ -14,7 +14,8 @@
 # cancel-sync-late    wasm trap: cannot block a synchronous task before returning   (in gm!core)
 # cancel-async-late   20
 #
-# The reference readings, pin and head, are in ../cmthreads/reference/refread.reading and refread-head.reading.
+# The reference readings are in ../cmthreads/reference/refread.reading (the pin, 2e7895c since 2026-10-17)
+# and refread-2bed77e.reading (the previous pin).
 # wasmtime's reason, by symbol: `ComponentInstance::subtask_cancel` (runtime/component/concurrent.rs:4167) yields
 # to a callee Thread in a cancellable wait (`wake_on_cancel`, `DeliverEvent`), then blocks only if the subtask
 # has not returned or cancelled. A sync task that must block traps.

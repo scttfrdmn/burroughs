@@ -6,8 +6,8 @@
 #
 # reader                                                      reading
 # wasmtime 49.0.2, 10 of 10                                   1
-# reference, pin 2bed77e (refread.reading)                    {1, 9002}
-# reference, upstream head 2e7895c (refread-head.reading)     {1, 9002}
+# reference, previous pin 2bed77e (refread-2bed77e.reading)   {1, 9002}
+# reference, pin 2e7895c (refread.reading)                    {1, 9002}
 # Burroughs, 200 of 200 per gate                              1
 #
 # Meaning:     1 is STARTED with no poll seeing the subtask's event, so the provider did not progress while the

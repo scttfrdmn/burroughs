@@ -28,7 +28,7 @@ func TestLoadStringImplementsTheModelsFourTraps(t *testing.T) {
 		copy(h.mem[16:], []byte{0xff, 0xfe, 0x80})
 		_, err := LoadStringFromRange(h, 16, 3)
 		if err == nil {
-			t.Fatal("three invalid UTF-8 bytes lifted successfully; definitions.py:1388 traps on " +
+			t.Fatal("three invalid UTF-8 bytes lifted successfully; definitions.py:1365 traps on " +
 				"UnicodeError, and a Go string that silently is not UTF-8 is worse than an error")
 		}
 		if !strings.Contains(err.Error(), "UTF-8") {
@@ -59,7 +59,7 @@ func TestLoadStringImplementsTheModelsFourTraps(t *testing.T) {
 		// This is the arm that used to be a slice expression. Before #903 it would panic with
 		// index-out-of-range, taking down whatever goroutine the guest's call was running on.
 		if _, err := LoadStringFromRange(h, 60, 32); err == nil {
-			t.Fatal("a range running past the heap lifted successfully; definitions.py:1385 traps")
+			t.Fatal("a range running past the heap lifted successfully; definitions.py:1362 traps")
 		}
 		if _, err := LoadStringFromRange(h, 1<<20, 1); err == nil {
 			t.Fatal("a pointer far past the heap lifted successfully")
@@ -68,7 +68,7 @@ func TestLoadStringImplementsTheModelsFourTraps(t *testing.T) {
 
 	t.Run("a-length-past-the-models-cap-is-refused-before-any-allocation", func(t *testing.T) {
 		h := newHeap(64)
-		// def:1383. The point of checking the cap *before* reading is that the length is a guest's word:
+		// def:1360. The point of checking the cap *before* reading is that the length is a guest's word:
 		// a 4GB length must not become a 4GB read attempt on the way to being refused.
 		if _, err := LoadStringFromRange(h, 0, MaxStringByteLength+1); err == nil {
 			t.Fatalf("a length of %d lifted successfully; the model caps it at %d",
@@ -79,7 +79,7 @@ func TestLoadStringImplementsTheModelsFourTraps(t *testing.T) {
 		}
 	})
 
-	// The alignment trap (def:1384) is vacuous at utf8's alignment of 1 — every pointer satisfies it.
+	// The alignment trap (def:1361) is vacuous at utf8's alignment of 1 — every pointer satisfies it.
 	// Asserted as vacuous rather than omitted, so that whoever adds the utf16 arm finds a statement of
 	// what was true before rather than an absence they have to interpret.
 	t.Run("the-alignment-trap-is-vacuous-at-utf8", func(t *testing.T) {
@@ -150,7 +150,7 @@ func TestLiftFlatScalarRefusesANonScalar(t *testing.T) {
 	// `char` is the one scalar whose lift can fail, and it fails for the model's reason rather than
 	// because it is not a scalar. Checked here so the two refusal causes are not conflated.
 	if _, err := LiftFlatScalar(Type{Kind: KindChar}, 0xD800); err == nil {
-		t.Fatal("a surrogate lifted as a char; definitions.py:1346 traps")
+		t.Fatal("a surrogate lifted as a char; definitions.py:1323 traps")
 	}
 	if _, err := LiftFlatScalar(Type{Kind: KindChar}, 'x'); err != nil {
 		t.Fatalf("an ordinary char was refused: %v", err)
