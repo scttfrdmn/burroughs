@@ -114,7 +114,7 @@ func typeFromSpec(t *testing.T, s typeSpec) Type {
 		return BorrowType(s.Rt)
 	case "tuple":
 		// A tuple's entries are bare types; `TupleType` despecializes them into a record with fields
-		// labelled "0", "1", … exactly as definitions.py:1105 does. The `tuple-u8-u32` and
+		// labelled "0", "1", … exactly as definitions.py:despecialize:"case TupleType(ts) : return RecordType([ FieldType(str(i)," does. The `tuple-u8-u32` and
 		// `record-as-tuple-u8-u32` cases assert the two readings are byte-identical, which is what
 		// licenses the codec having one field-carrying arm.
 		types := make([]Type, len(s.Fields))

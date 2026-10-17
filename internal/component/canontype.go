@@ -146,8 +146,8 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 	case VTuple:
 		// **An empty tuple is refused here, and this is the layer that has to do it.**
 		//
-		// The model gives an empty tuple no size: `elem_size` despecializes (definitions.py:1205) so
-		// `tuple<>` becomes `RecordType([])`, which fails `assert(s > 0)` at def:1233. Asked of the
+		// The model gives an empty tuple no size: `elem_size` despecializes (definitions.py:elem_size:"match despecialize(t):") so
+		// `tuple<>` becomes `RecordType([])`, which fails `assert(s > 0)` at def:elem_size_record:"assert(s > 0)". Asked of the
 		// pinned model directly rather than inferred — `elem_size(TupleType([]))` raises
 		// `AssertionError`. So there is no layout for this engine to match, and the codec panics rather
 		// than inventing one.
@@ -174,7 +174,7 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 			fields[i] = ft
 		}
 		// `canon.TupleType` **despecializes** to a record with fields labelled "0", "1", … exactly as
-		// definitions.py:1105 does, so the codec has one field-carrying arm rather than two. The
+		// definitions.py:despecialize:"case TupleType(ts) : return RecordType([ FieldType(str(i)," does, so the codec has one field-carrying arm rather than two. The
 		// `VTuple`/`VRecord` distinction survives here, in the decoded type, which is where WIT's view
 		// belongs; the ABI's view does not have it.
 		return canon.TupleType(fields...), 0, true
@@ -186,7 +186,7 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		// An empty field set is refused for `VTuple`'s reason, which is the model's: no size exists for
 		// it. The labels come through unchanged, because they are part of the type — `record{x: u32}`
 		// and `record{y: u32}` have an identical layout and are different types, since a value's fields
-		// are matched to the declaration by name (def:1685).
+		// are matched to the declaration by name (def:store_record:"store(cx, v[f.label], f.t, ptr)").
 		if len(vt.Fields) == 0 {
 			return canon.Type{}, VRecord, false
 		}
@@ -216,7 +216,7 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		return canon.VariantType(cases...), 0, true
 
 	case VResult:
-		// The model despecializes `result` to a two-case variant named "ok"/"error" (definitions.py:1108),
+		// The model despecializes `result` to a two-case variant named "ok"/"error" (definitions.py:despecialize),
 		// and `canon.ResultType` is that despecialization. Built through it rather than by hand so the case
 		// names come from one place.
 		var okT, errT *canon.Type

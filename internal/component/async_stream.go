@@ -13,7 +13,7 @@ import (
 // not a parallel one. `stream_copy` is `future_copy` generalized to n elements with PROGRESS, so two things
 // differ from the future read end and must not be inherited from it (#739):
 //
-//  1. The event packs `result | (progress<<4)` (definitions.py:1045), not a bare CopyResult — a consumer
+//  1. The event packs `result | (progress<<4)` (definitions.py:StreamEnd.notify.stream_event:"packed_result = result | (progress << 4)"), not a bare CopyResult — a consumer
 //     that takes fewer elements than offered delivers COMPLETED with partial progress, and a codec reading
 //     only the low bits is right on a full copy and silently wrong on a partial one.
 //  2. A COMPLETED stream write leaves the end IDLE (open for more writes); only DROPPED is DONE. Future's
@@ -73,7 +73,7 @@ func (e *writableStreamEnd) endStateName() string {
 
 // completeWriteLocked ends a pending stream.write: the consumer took `progress` of the offered elements
 // (COMPLETED, end stays IDLE) or the readable end dropped (DROPPED, end goes DONE). Arms the event and wakes
-// the set. Mirrors the model's stream_event (def:1030–1047). The caller holds asyncHandles.mu; may run on
+// the set. Mirrors the model's stream_event (def:StreamEnd.notify.stream_event). The caller holds asyncHandles.mu; may run on
 // the host consumer's goroutine while the writing agent is parked.
 func (e *writableStreamEnd) completeWriteLocked(progress uint32, r copyResult) {
 	e.progress = progress
@@ -87,7 +87,7 @@ func (e *writableStreamEnd) completeWriteLocked(progress uint32, r copyResult) {
 	}
 }
 
-// streamWrite implements `canon stream.write` (0x10, definitions.py:2433) on the async path. Two orderings,
+// streamWrite implements `canon stream.write` (0x10, definitions.py:canon_stream_write) on the async path. Two orderings,
 // pinned by the oracle (fixtures.json stream_writes and stream_hostfirst):
 //
 //   - Guest-first: the writable end's reader has not yet arrived. Register the pending write (src ptr +
@@ -121,7 +121,7 @@ func streamWrite(h *asyncHandles) interp.CanonFunc {
 		e.n = n
 		e.caller = c
 		// Host-first: the paired readable end already has a pending read. Drive the copy now and complete
-		// inline — the write is the second arriver (SharedStreamImpl.write, def:976–981).
+		// inline — the write is the second arriver (SharedStreamImpl.write, def:End.copy:"elif buffer.remain() > 0 or (is_read and").
 		if e.conn != nil && e.conn.hasRead && !e.conn.resolved {
 			progress, err := driveStreamCopyLocked(e.conn, e)
 			if err != nil {
@@ -142,11 +142,11 @@ func streamWrite(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// copyState mirrors definitions.py CopyState (def:934–939): a stream/future end's lifecycle. Only the
+// copyState mirrors definitions.py CopyState (def:End.State): a stream/future end's lifecycle. Only the
 // three a stream end reaches in this slice are named — IDLE (open, no copy in flight), COPYING (a copy is
 // registered, its event not yet consumed), DONE (dropped). The values match the model's so a name maps
 // straight across. The transition COPYING→IDLE/DONE runs when the pending event is CONSUMED (get_pending_
-// event → stream_event, def:1030–1046), not when it is armed — which is why the pending side of a copy
+// event → stream_event, def:StreamEnd.notify.stream_event), not when it is armed — which is why the pending side of a copy
 // stays COPYING with an armed-but-untaken event (fixtures.json stream_hostfirst: ri stays COPYING).
 type copyState uint32
 
@@ -241,7 +241,7 @@ func (e *readableStreamEnd) armLocked(progress uint32, r copyResult) {
 
 // driveStreamCopyLocked copies min(read_n, write_n) elements from the writable end's source buffer into the
 // readable end's destination buffer, returning the count (the shared progress both ends report). This is
-// SharedStreamImpl's copy (def:965–975 / 1000–1005): the second arriver moves the bytes; each side supplies
+// SharedStreamImpl's copy (def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:" / 1000–1005): the second arriver moves the bytes; each side supplies
 // its own buffer at its own ptr in its own memory. Caller holds asyncHandles.mu.
 func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, error) {
 	n := w.n
@@ -305,7 +305,7 @@ func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32)
 	return false, nil
 }
 
-// streamCancelWrite implements `canon stream.cancel-write` (0x12, definitions.py:2467 → cancel_copy) — the
+// streamCancelWrite implements `canon stream.cancel-write` (0x12, definitions.py:canon_stream_cancel_write → cancel_copy) — the
 // symmetric twin of streamCancelRead on the writable end. The end must be mid-copy (a pending write:
 // hasWrite && !resolved) or it traps; if the copy already completed (an event is armed) the cancel delivers
 // that event, otherwise it resolves the write to CANCELLED with the progress made (0 for an undriven pending
@@ -337,10 +337,10 @@ func streamCancelWrite(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// streamDropReadable implements `canon stream.drop-readable` (0x13, definitions.py:2498). Per CopyEnd.drop
-// (def:2516): TRAP if the end is mid-copy (COPYING) — an end with an in-flight or armed-but-unconsumed
+// streamDropReadable implements `canon stream.drop-readable` (0x13, definitions.py:canon_stream_drop_readable). Per CopyEnd.drop
+// (def:drop:"trap_if(end.copying_or_cancelling())"): TRAP if the end is mid-copy (COPYING) — an end with an in-flight or armed-but-unconsumed
 // copy cannot be dropped — then drop the shared stream and remove the handle. Dropping notifies a pending
-// write on the paired writable end with DROPPED (SharedStreamImpl.drop, def:1010–1018): a dropped reader wakes
+// write on the paired writable end with DROPPED (SharedStreamImpl.drop, def:End.drop): a dropped reader wakes
 // a waiting writer with DROPPED rather than orphaning it. The COPYING guard is the end-state audit — a
 // readable end stays COPYING from the read until its event is consumed, so a drop before the host consumer
 // takes the STREAM_READ event traps rather than silently discarding a completed copy.
@@ -367,7 +367,7 @@ func streamDropReadable(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// streamCancelRead implements `canon stream.cancel-read` (0x11, definitions.py:2464 → cancel_copy). It
+// streamCancelRead implements `canon stream.cancel-read` (0x11, definitions.py:canon_stream_cancel_read → cancel_copy). It
 // cancels a pending read: the end must be mid-copy (COPYING) or it traps; if the copy already completed (an
 // event is armed), the cancel delivers that event (the copy won); otherwise it resolves the read to
 // CANCELLED with whatever progress was made (0 for an undriven pending read). Either way the event is
@@ -402,9 +402,9 @@ func streamCancelRead(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// streamDropWritable implements `canon stream.drop-writable` (0x14, definitions.py:2501). Same guard as the
+// streamDropWritable implements `canon stream.drop-writable` (0x14, definitions.py:canon_stream_drop_writable). Same guard as the
 // readable drop (a stream end drops from IDLE or DONE, traps mid-copy) — NOT the writable FUTURE end's rule,
-// which traps unless DONE (def:2517); a writable stream end may be dropped while IDLE. A pending write is the
+// which traps unless DONE (def:drop:"trap_if(isinstance(end, WritableFutureEnd) and end.state !="); a writable stream end may be dropped while IDLE. A pending write is the
 // writable end's COPYING (hasWrite && !resolved). Dropping notifies a pending read on the paired readable
 // end with DROPPED — the anti-hang guarantee in the other direction.
 func streamDropWritable(h *asyncHandles) interp.CanonFunc {
@@ -430,7 +430,7 @@ func streamDropWritable(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// streamNew implements `canon stream.new` (0x0e, definitions.py:2412): mint a readable and a writable end
+// streamNew implements `canon stream.new` (0x0e, definitions.py:canon_stream_new): mint a readable and a writable end
 // over ONE shared stream, connect them (the `conn` back-pointers), and return the packed handle
 // `ri | (wi << 32)` as an i64. The two ends are added in that order (ri before wi), so ri is the lower index
 // — matching the oracle (fixtures.json stream_new: ri=1, wi=2, both IDLE). This is the guest→host inversion:

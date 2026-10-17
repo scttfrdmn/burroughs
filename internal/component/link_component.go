@@ -203,7 +203,7 @@ type liftResult struct {
 	lifted *canon.Value
 }
 
-// invokeAsyncLift runs the stackless (callback) async-lift loop (canon_lift def:2086-2113). Step 1 is the
+// invokeAsyncLift runs the stackless (callback) async-lift loop (canon_lift def:canon_lift.thread_func:"[packed] = call_and_trap_on_throw(callee, flat_args)"). Step 1 is the
 // loop skeleton: create the durable lift task, invoke the callee ONCE with the lifted params, decode the
 // packed return, and on EXIT confirm the task was resolved by task.return. The WAIT/YIELD re-entry and park
 // are step 2. The first-call path is explicit here — a shared helper would blur the callee (params) and the
@@ -246,8 +246,8 @@ func (f *compFunc) newLiftTask(ctx context.Context) *liftTask {
 		// select case never fires, which is exactly the "no cancellation" behaviour wanted.
 		ctx = context.Background()
 	}
-	// Created in `liftInitial`, the model's INITIAL (def:394); `runLiftTask` moves it to `liftStarted`,
-	// the analog of `Task.start()` (def:489-492). The two are kept apart so a cancel arriving in that
+	// Created in `liftInitial`, the model's INITIAL (def:Task.State.INITIAL); `runLiftTask` moves it to `liftStarted`,
+	// the analog of `Task.start()` (def:Task.start). The two are kept apart so a cancel arriving in that
 	// window is refused by name as the before-started case (status 3, no reference reading, #884) rather
 	// than silently taking the started path and claiming a status Burroughs has never measured.
 	task := &liftTask{cb: f.cb, state: liftInitial, cancelWake: make(chan struct{}), ctx: ctx}
@@ -306,7 +306,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 		f.h.handBack(task, true)
 	}()
 
-	// `Task.start()` (def:489-492): INITIAL → STARTED, immediately before the callee is entered. Set
+	// `Task.start()` (def:Task.start): INITIAL → STARTED, immediately before the callee is entered. Set
 	// under the lock for the same reason the EXIT arm reads under it — a cancel request races this.
 	//
 	// **Guarded, because an unconditional assignment here would ERASE a cancellation.** A cross-component
@@ -325,7 +325,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 	//
 	// **The pending lowerings run on THIS entry, not before it** (#902). The model lowers a lift's
 	// parameters inside the callee's task, after `task.start()` and before the core call
-	// (definitions.py:2057-2067) — so the allocation, the write and the call that uses them are one
+	// (definitions.py:canon_lift.thread_func) — so the allocation, the write and the call that uses them are one
 	// exclusive region. Doing the lowering outside the entry would let a sibling call into the instance
 	// between the allocation and the call, and the guest is entitled to reuse anything it likes on an
 	// entry it owns.
@@ -355,7 +355,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 		if uerr != nil {
 			return liftResult{}, uerr
 		}
-		// **Cancellation is delivered IN PLACE OF WAITING** (definitions.py def:2089, ADR 0094), which is
+		// **Cancellation is delivered IN PLACE OF WAITING** (definitions.py def:canon_lift.thread_func, ADR 0094), which is
 		// the placement and not merely the timing: the model's check sits at the top of the loop body,
 		// *before* exclusivity is released, so a task with a pending cancel never parks and never yields —
 		// it goes straight back into the guest carrying TASK_CANCELLED. Putting this inside the WAIT arm
@@ -371,9 +371,9 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 		// The model has three `deliver_pending_cancel` sites on this path, and reading only `canon_lift`
 		// finds two of them:
 		//
-		//   - def:2089, the top of the loop body — this check;
-		//   - def:2098, inside the YIELD arm, after `wait_until(exclusive_thread is None)`;
-		//   - **def:807, inside `WaitableSet.wait_from_callback`** — the WAIT arm's check, which is in the
+		//   - def:canon_lift.thread_func, the top of the loop body — this check;
+		//   - def:canon_lift.thread_func, inside the YIELD arm, after `wait_until(exclusive_thread is None)`;
+		//   - **def:WaitableSet.wait_from_callback:"if thread.task.deliver_pending_cancel():", inside `WaitableSet.wait_from_callback`** — the WAIT arm's check, which is in the
 		//     WAIT rather than beside it, and which `canon_lift` alone does not show.
 		//
 		// The third is in `awaitEvent`, where the model puts it; see that function for why believing it
@@ -449,7 +449,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 				return liftResult{}, &interp.Trap{Reason: "async lift returned EXIT without resolving its task via task.return"}
 			}
 			// **A cancelled task resolves too, and its resolution is not a result.** The model expresses
-			// this as `on_resolve(None)` from `Task.cancel` (def:503); here it is the explicit
+			// this as `on_resolve(None)` from `Task.cancel` (def:Task.cancel:"on_resolve(None)"); here it is the explicit
 			// discriminant, because an empty result slice is what a guest returning nothing legitimately
 			// resolves with (grave #885's artefact). #862's ruling 1 maps it to one sentinel.
 			if cancelledResolution {

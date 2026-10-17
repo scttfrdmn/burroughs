@@ -160,7 +160,7 @@ func TestLoadListFramesTheSpanBeforeReadingAnyElement(t *testing.T) {
 	}
 
 	// **A misaligned pointer is refused, and for a u32 that check is not vacuous** — unlike a string's,
-	// whose alignment is 1. definitions.py:641 traps on it.
+	// whose alignment is 1. definitions.py:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))" traps on it.
 	if _, merr := LoadList(h, 66, 2, u32, func(int) (Value, error) { return Value{}, nil }); merr == nil {
 		t.Error("a list<u32> at an odd-of-4 pointer was accepted; its elements require alignment 4")
 	} else if !strings.Contains(merr.Error(), "aligned") {

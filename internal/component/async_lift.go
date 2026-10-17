@@ -14,20 +14,20 @@ import (
 )
 
 // liftTask is the durable task an async (callback) lift runs on — the analog of the model's Task/Thread
-// (canon_lift def:2056-2115). Its lifetime is the TASK's, not any single core-func call: the callback loop
+// (canon_lift def:canon_lift). Its lifetime is the TASK's, not any single core-func call: the callback loop
 // spans multiple stack-creating invocations (the callee, then each callback re-entry), and the task, its
 // resolution, and its context storage persist across all of them. Teardown keys on RESOLUTION (task.return
 // or cancellation), never on the loop exiting normally — a cancelled task resolves without a normal EXIT
 // (#785 step 1, Scott's caution; the cancellation guest is the case a loop-exit teardown would break).
-// liftState mirrors definitions.py `Task.State` (def:393-398) one-for-one, and it is an enum rather than
+// liftState mirrors definitions.py `Task.State` (def:Task.State) one-for-one, and it is an enum rather than
 // the two booleans it replaces (`resolved`, `cancelled`) because the model's five states include two that
 // a boolean pair can represent twice over. PENDING_CANCEL and CANCEL_DELIVERED are *distinct* — the first
 // is a request nobody has told the guest about, the second is a request the guest has been handed and may
-// now act on — and `task.cancel`'s precondition is the second specifically (def:500).
+// now act on — and `task.cancel`'s precondition is the second specifically (def:Task.cancel).
 //
 // INITIAL is kept separate from STARTED even though Burroughs enters the callee immediately, with no
 // backpressure wait to sit in. The window is small and it is not empty, and the model's two
-// `request_cancellation` arms (def:467-474) diverge on exactly this distinction: INITIAL is the
+// `request_cancellation` arms (def:Task.request_cancellation) diverge on exactly this distinction: INITIAL is the
 // before-started path, the route to status 3, which this slice REFUSES BY NAME because it has no
 // reference reading (#884). A state that cannot be observed cannot be refused by name.
 type liftState uint8
@@ -79,8 +79,8 @@ type liftTask struct {
 	//
 	// # Why eagerly, and why this field rather than lifting at resolution
 	//
-	// The model lifts inside `canon_task_return` (definitions.py:2298) and hands `Task.return_` an
-	// already-lifted value (def:493-498). Burroughs stored the flat words and lifted them after the
+	// The model lifts inside `canon_task_return` (definitions.py:canon_task_return:"result = lift_flat_values(cx, MAX_FLAT_PARAMS,") and hands `Task.return_` an
+	// already-lifted value (def:Task.return_). Burroughs stored the flat words and lifted them after the
 	// callback loop exited, which for a `u32` is identical — the value *is* the word — and wrong for
 	// anything whose payload lives in guest memory: between `task.return` and the loop's exit the guest
 	// **runs again**, and it is free to reuse the buffer its `(ptr, len)` named. The late lift then reads
@@ -91,8 +91,8 @@ type liftTask struct {
 	lifted *canon.Value
 
 	// cancelledResolution distinguishes the two ways a task reaches `liftResolved`, which the model
-	// expresses as the *payload* of `on_resolve`: `return_` passes a result (def:496), `cancel` passes
-	// `None` (def:503). Burroughs cannot read that distinction off `result`, because a guest whose export
+	// expresses as the *payload* of `on_resolve`: `return_` passes a result (def:Task.return_:"assert(result is not None)"), `cancel` passes
+	// `None` (def:Task.cancel:"self.on_resolve(None)"). Burroughs cannot read that distinction off `result`, because a guest whose export
 	// returns nothing resolves with an empty result legitimately — `export go: async func()` is exactly
 	// grave #885's artefact. So the discriminant is explicit rather than inferred from an ambiguous nil.
 	cancelledResolution bool
@@ -197,7 +197,7 @@ func (t *liftTask) context() context.Context {
 	return t.ctx
 }
 
-// taskReturn implements `canon task.return` (0x09, definitions.py canon_task_return def:2291): it resolves
+// taskReturn implements `canon task.return` (0x09, definitions.py canon_task_return def:canon_task_return): it resolves
 // the calling agent's CURRENT lift task with the flat result the guest passes. Bound per-instance over the
 // async handle table, which holds the current lift task (set by the callback loop before it invokes the
 // callee). It traps if there is no current lift task — task.return outside an async lift is a guest error,
@@ -235,7 +235,7 @@ var ErrCancelled = errors.New("component: the async task was cancelled")
 //
 // **The model specifies nothing here, so this is Burroughs' decision** (ADR 0094), and it is a refusal
 // rather than either of the two tempting alternatives. `request_cancellation`'s else arm *asserts*
-// `state == STARTED` (def:473), so a redundant or late request is undefined for an embedder, not allowed.
+// `state == STARTED` (def:Task.request_cancellation:"assert(self.state == Task.State.STARTED)"), so a redundant or late request is undefined for an embedder, not allowed.
 //
 //   - **Not a trap**, because a trap blames the guest. A host that requests cancellation while the task
 //     resolves underneath it has raced a legitimate race, and nothing the guest did is wrong.
@@ -246,10 +246,10 @@ var ErrCancelled = errors.New("component: the async task was cancelled")
 // refused the same way, which matches the model's assertion rather than inventing a laxer contract.
 var ErrCancelNotRunning = errors.New("component: no running async task to cancel")
 
-// requestCancelLocked is definitions.py `Task.request_cancellation` (def:467-474). Caller holds h.mu.
+// requestCancelLocked is definitions.py `Task.request_cancellation` (def:Task.request_cancellation). Caller holds h.mu.
 //
 // The model's two arms diverge on INITIAL versus STARTED. **Both are honoured here, and both set
-// PENDING_CANCEL** — which is what the model's own code does too (def:467-474): its INITIAL arm then
+// PENDING_CANCEL** — which is what the model's own code does too (def:Task.request_cancellation): its INITIAL arm then
 // resumes the thread so the entry path delivers the cancel, while Burroughs' delivery happens at the
 // first check the lift loop or its park reaches. Same state, different carrier.
 //
@@ -260,7 +260,7 @@ var ErrCancelNotRunning = errors.New("component: no running async task to cancel
 // and the difference is one ADR 0095 introduced deliberately:
 //
 //   - In the model, `canon_lift`'s `thread_func` calls `task.start()` — and therefore the lower's
-//     `on_start` — INSIDE the lift (def:2057-2062). So a lift task still INITIAL means `on_start` has not
+//     `on_start` — INSIDE the lift (def:canon_lift.thread_func). So a lift task still INITIAL means `on_start` has not
 //     run, means the parent's subtask is still STARTING, means `on_resolve(None)` picks
 //     CANCELLED_BEFORE_STARTED = 3. The reasoning holds there.
 //   - In Burroughs the cross-component adapter calls `onStart()` **itself, synchronously, before the
@@ -292,7 +292,7 @@ func (t *liftTask) requestCancelLocked() error {
 	}
 }
 
-// deliverPendingCancelLocked is definitions.py `Task.deliver_pending_cancel` (def:481-486): it converts a
+// deliverPendingCancelLocked is definitions.py `Task.deliver_pending_cancel` (def:Task.deliver_pending_cancel): it converts a
 // PENDING_CANCEL into CANCEL_DELIVERED and reports whether it did. Caller holds h.mu.
 //
 // The report is the whole value: the lift loop delivers TASK_CANCELLED **in place of waiting** when this
@@ -381,7 +381,7 @@ func (h *asyncHandles) handBack(task *liftTask, ending bool) {
 	}
 }
 
-// cancelLocked is definitions.py `Task.cancel` (def:500-504): it resolves a task whose cancellation has
+// cancelLocked is definitions.py `Task.cancel` (def:Task.cancel): it resolves a task whose cancellation has
 // been DELIVERED, with no result. Caller holds h.mu.
 //
 // The precondition is CANCEL_DELIVERED specifically, not "cancelled somehow" — a guest that calls
@@ -415,7 +415,7 @@ func (t *liftTask) cancelLocked() error {
 	return nil
 }
 
-// taskCancel implements `canon task.cancel` (0x05, definitions.py canon_task_cancel def:2304).
+// taskCancel implements `canon task.cancel` (0x05, definitions.py canon_task_cancel def:canon_task_cancel).
 //
 // # What changed, and why the previous comment could not stay
 //
@@ -472,7 +472,7 @@ func callerTask(h *asyncHandles, c *interp.CanonCaller) *liftTask {
 func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		// **The lift happens here, before the lock and before `Task.return_`'s equivalent** — the order the
-		// model uses (definitions.py:2298 lifts, then def:2299 calls `task.return_`). It reads guest memory,
+		// model uses (definitions.py:canon_task_return:"result = lift_flat_values(cx, MAX_FLAT_PARAMS," lifts, then def:canon_task_return:"task.return_(result)" calls `task.return_`). It reads guest memory,
 		// so it must not hold `h.mu`: a read can fail, and §4 B-MM-3's rule is that a critical section
 		// holds no operation that can block or reach out of the engine.
 		//
@@ -495,7 +495,7 @@ func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
 		if task == nil {
 			return nil, &interp.Trap{Reason: "task.return called with no async lift task in flight"}
 		}
-		// definitions.py `Task.return_` traps on an already-resolved task (def:493). Burroughs had no such
+		// definitions.py `Task.return_` traps on an already-resolved task (def:Task.return_). Burroughs had no such
 		// check, because with no cancellation a task reached RESOLVED exactly once — through here. A
 		// cancelled task is resolved by `task.cancel`, so a `task.return` after it is now reachable and is
 		// a guest error: the guest was told its task was cancelled and returned a value anyway.
@@ -607,7 +607,7 @@ func liftResultValue(c *interp.CanonCaller, ct canon.Type, words []interp.Value)
 		sv, lerr := canon.LiftFlatScalar(ct, args[0].Bits)
 		if lerr != nil {
 			// A `char` outside the Unicode scalar range is the reachable case, and it is a **guest fault**:
-			// the model traps there (def:1320-1324), so this does too.
+			// the model traps there (def:convert_i32_to_char), so this does too.
 			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf(
 				"task.return's %s result: %v", ct.Kind, lerr)}
 		}
@@ -624,7 +624,7 @@ func liftResultValue(c *interp.CanonCaller, ct canon.Type, words []interp.Value)
 		v, lerr := canon.LoadStringFromRange(guestHeap{c}, ptr, n)
 		if lerr != nil {
 			// A guest's own (ptr, len) failing the model's traps is a guest fault, not an engine error —
-			// it traps, as `load_string_from_range` does (def:1360-1366).
+			// it traps, as `load_string_from_range` does (def:load_string_from_range:"trap_if(byte_length > MAX_STRING_BYTE_LENGTH)").
 			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf("task.return's string result: %v", lerr)}
 		}
 		return v, 2, nil
@@ -657,7 +657,7 @@ func liftResultValue(c *interp.CanonCaller, ct canon.Type, words []interp.Value)
 		})
 		if lerr != nil {
 			// A guest's own `(ptr, count)` failing the model's traps is a guest fault, not an engine
-			// error — it traps, as `load_list`'s alignment and bounds checks do (def:641 and the span
+			// error — it traps, as `load_list`'s alignment and bounds checks do (def:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))" and the span
 			// check), and as the string arm above does for the same class of defect.
 			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf("task.return's %s result: %v", ct, lerr)}
 		}
@@ -748,7 +748,7 @@ func liftResultValue(c *interp.CanonCaller, ct canon.Type, words []interp.Value)
 // decode of the packed i32 the callback returns.
 
 // callbackCode is the async-lift callback's dispatch code — the low nibble of the packed i32 the callback
-// returns (definitions.py `CallbackCode`, def:2127-2131). EXIT means the task resolved; YIELD is a
+// returns (definitions.py `CallbackCode`, def:CallbackCode). EXIT means the task resolved; YIELD is a
 // cooperative yield with no set; WAIT means the task is blocked on the waitable set whose index is packed
 // in the high bits. The code is exactly what distinguishes "done" from "waiting on set si" from "yield" —
 // so it is decoded and range-checked, never masked-and-assumed.
@@ -762,7 +762,7 @@ const (
 )
 
 // unpackCallbackResult decodes the callback's packed i32 return into its dispatch code and waitable-set
-// index (definitions.py `unpack_callback_result`, def:2133-2139): `code = packed & 0xf`, and the
+// index (definitions.py `unpack_callback_result`, def:unpack_callback_result): `code = packed & 0xf`, and the
 // waitable-set index is `packed >> 4`. A code above MAX traps — the guard a dispatch that masks instead of
 // range-checks would skip, and the reason the pin covers out-of-range codes and not only the happy path.
 // Pinned byte-exact against the model: fixtures.json `callback_result`.
@@ -811,7 +811,7 @@ var ErrLiftParkExpired = errors.New("component: async-lift park expired with no 
 // an event delivered through a callback re-entry is byte-for-byte the one a parked `wait` would have got.
 // A second readiness notion is the defect this shares its predicate to avoid.
 //
-// # The park is CANCEL-AWARE, and this is where the model puts that (def:799-810)
+// # The park is CANCEL-AWARE, and this is where the model puts that (def:WaitableSet.wait_from_callback)
 //
 // `wait_from_callback`'s readiness is *"has_pending_event() **or** task.has_pending_cancel()"*, and on
 // waking it prefers the cancel: `if deliver_pending_cancel(): return (TASK_CANCELLED, 0, 0)`. So the WAIT
@@ -834,7 +834,7 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 	defer deadline.Stop()
 
 	// num_waiting, so waitable-set.drop traps on a set this loop is parked on. The model counts in
-	// `wait_from_callback` (def:800-804) exactly as it does in `wait`, so the stackless park is a waiter
+	// `wait_from_callback` (def:WaitableSet.wait_from_callback) exactly as it does in `wait`, so the stackless park is a waiter
 	// too — counting only the blocking excursion would make drop's trap depend on which park the guest
 	// used. Resolved once, outside the loop, so a re-check pass does not double-count.
 	h.mu.Lock()
@@ -876,7 +876,7 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 			return event{}, &interp.Trap{Reason: fmt.Sprintf(
 				"async-lift WAIT named handle %d, which is not a waitable set", si)}
 		}
-		// **Cancel first, event second** — the model's own order (def:807-810): on waking it calls
+		// **Cancel first, event second** — the model's own order (def:WaitableSet.wait_from_callback:"if thread.task.deliver_pending_cancel():"): on waking it calls
 		// `deliver_pending_cancel()` and returns TASK_CANCELLED if it fires, consulting the set only
 		// otherwise. The order is observable whenever both are ready at once, and preferring the event
 		// would strand a delivered cancellation behind a queue of events.

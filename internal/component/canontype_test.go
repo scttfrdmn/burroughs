@@ -82,7 +82,7 @@ var bridgeAccepted = []struct {
 	{"char", ValType{Kind: VChar}, canon.KindChar},
 	{"string", ValType{Kind: VString}, canon.KindString},
 	{"list", ValType{Kind: VList, Elem: &ValType{Kind: VU32}}, canon.KindList},
-	// **KindRecord, not KindTuple** — `canon.TupleType` despecializes (definitions.py:1105), so the
+	// **KindRecord, not KindTuple** — `canon.TupleType` despecializes (definitions.py:despecialize:"case TupleType(ts) : return RecordType([ FieldType(str(i),"), so the
 	// codec has one field-carrying arm. The WIT distinction survives in `ValKind`, which is where it
 	// belongs; the ABI does not have it.
 	{"tuple", ValType{Kind: VTuple, Elems: []ValType{{Kind: VU32}, {Kind: VString}}}, canon.KindRecord},
@@ -101,7 +101,7 @@ var bridgeRefused = []struct {
 	in   ValType
 }{
 	// `record` moved to bridgeAccepted when #904 landed the codec arm. What stays refused is an EMPTY
-	// one: the model gives it no size (definitions.py:1233 asserts elem_size > 0), so there is no
+	// one: the model gives it no size (definitions.py:elem_size_record:"assert(s > 0)" asserts elem_size > 0), so there is no
 	// layout to match. Same for an empty tuple, which despecializes to an empty record.
 	{"empty-record", ValType{Kind: VRecord}},
 	{"empty-tuple", ValType{Kind: VTuple}},
@@ -151,7 +151,7 @@ func TestBridgeMapsEveryCarryableKindToItsCodecKind(t *testing.T) {
 		if err != nil {
 			t.Fatalf("result<u32,string> refused: %v", err)
 		}
-		// definitions.py:1108 despecializes result to a variant with cases "ok"/"error".
+		// definitions.py:despecialize despecializes result to a variant with cases "ok"/"error".
 		if len(got.Cases) != 2 || got.Cases[0].Name != "ok" || got.Cases[1].Name != "error" {
 			t.Fatalf("result bridged to cases %+v, want ok/error", got.Cases)
 		}

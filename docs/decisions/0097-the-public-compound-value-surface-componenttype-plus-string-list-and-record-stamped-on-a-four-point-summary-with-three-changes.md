@@ -76,7 +76,7 @@ constructor imposes — *"duplicate field names and an empty field set are whole
 `ComponentTypeRecord` can see"* — which is true and is not the whole reason.
 
 **The Canonical ABI gives an empty record no size at all.** `elem_size_record` ends with
-`assert(s > 0)` (`definitions.py:1256`), so an empty record is not a type with a zero-byte layout; it is
+`assert(s > 0)` (`definitions.py@2bed77e:elem_size_record:"assert(s > 0)"`), so an empty record is not a type with a zero-byte layout; it is
 a type the model declines to lay out. Asked of the pinned model directly rather than read off the
 source: `elem_size(RecordType([]))` raises `AssertionError`, and so does `elem_size(TupleType([]))`,
 because `elem_size` despecializes first (`:1228`). **Alignment, by contrast, is defined and is 1** —

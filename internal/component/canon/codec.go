@@ -35,7 +35,7 @@ func alignment(t Type) int {
 }
 
 // alignmentRecord is a record's alignment: the max of its fields', floor 1 (`alignment_record`,
-// definitions.py:1170-1174).
+// definitions.py:alignment_record).
 //
 // **An empty field set gives 1 here, and that matches the model** — the loop does not run and `a` stays
 // 1, exactly as the model's does. Unlike `elem_size_record`, there is no assertion: the model is willing
@@ -53,13 +53,13 @@ func alignmentRecord(fields []Field) int {
 
 // sizeTuple is a tuple's size: each field placed at its aligned offset, the whole aligned to the tuple's
 // alignment (CanonicalABI.md `record`/`tuple` layout).
-// sizeRecord is a record's in-memory size (`elem_size_record`, definitions.py:1228-1234).
+// sizeRecord is a record's in-memory size (`elem_size_record`, definitions.py:elem_size_record).
 //
 // # Padding happens TWICE, and only one of them is obvious
 //
 //   - **Per field**: each field starts at `align_to(s, alignment(f))`, so a `u8` followed by a `u32`
-//     leaves three bytes between them (def:1231).
-//   - **Once at the end**: the total is rounded up to the record's own alignment (def:1234), so a `u32`
+//     leaves three bytes between them (def:elem_size_record:"s = align_to(s, alignment(f.t, ptr_type))").
+//   - **Once at the end**: the total is rounded up to the record's own alignment (def:elem_size_record:"return align_to(s, alignment_record(fields, ptr_type))"), so a `u32`
 //     followed by a `u8` is five bytes of content and **eight** of size.
 //
 // A layout implementing only the first is correct for the first shape and wrong for the second, and the
@@ -69,10 +69,10 @@ func alignmentRecord(fields []Field) int {
 //
 // # An empty field set has NO SIZE, and is refused rather than answered
 //
-// The model ends this function with `assert(s > 0)` (def:1233). An empty record reaches it with `s == 0`
+// The model ends this function with `assert(s > 0)` (def:elem_size_record:"assert(s > 0)"). An empty record reaches it with `s == 0`
 // and **fails the assertion** — asked of the pinned model directly, `elem_size(RecordType([]))` raises
 // `AssertionError`, and so does `elem_size(TupleType([]))`, since `elem_size` despecializes first
-// (def:1205). So the model does not define a layout for an empty record, and there is nothing here to
+// (def:elem_size:"match despecialize(t):"). So the model does not define a layout for an empty record, and there is nothing here to
 // match.
 //
 // This used to return **0** for an empty tuple, and that was worse than wrong in one specific way: a
@@ -89,7 +89,7 @@ func alignmentRecord(fields []Field) int {
 func sizeRecord(fields []Field) int {
 	if len(fields) == 0 {
 		panic("canon: size: a record with no fields has no size in the Canonical ABI " +
-			"(definitions.py:1233 asserts elem_size > 0); it must be refused before any layout is " +
+			"(definitions.py:elem_size_record asserts elem_size > 0); it must be refused before any layout is " +
 			"computed, and reaching here means a caller skipped that refusal")
 	}
 	s := 0
@@ -296,7 +296,7 @@ func (h *heap) StoreInt(v uint64, ptr, nbytes int) error {
 }
 
 // The model `*heap` is also a [ReadHeap]. **Its bounds check is not decoration** even though the
-// differential's fixtures are in range: the check is what the string lift delegates its def:1362 trap to,
+// differential's fixtures are in range: the check is what the string lift delegates its def:load_string_from_range:"trap_if(ptr + byte_length > len(cx.opts.memory))" trap to,
 // so a heap that panicked instead would make the trap untestable against this heap — and the traps are
 // tested here, where a byte slice can be set up out of range, rather than only against a live guest.
 func (h *heap) ReadBytes(ptr, n int) ([]byte, error) {
@@ -332,7 +332,7 @@ func (h *heap) CheckRange(ptr, n int) error {
 // lifting a `task.return` value has no business reallocating in the guest.
 type ReadHeap interface {
 	// ReadBytes returns n bytes at ptr, or an error if that range is not readable. **The error is the
-	// bounds check**: the model traps when `ptr + byte_length > len(memory)` (definitions.py:1362), and an
+	// bounds check**: the model traps when `ptr + byte_length > len(memory)` (definitions.py:load_string_from_range:"trap_if(ptr + byte_length > len(cx.opts.memory))"), and an
 	// implementation over a Go slice must not be allowed to panic instead.
 	ReadBytes(ptr, n int) ([]byte, error)
 
@@ -348,22 +348,22 @@ type ReadHeap interface {
 	CheckRange(ptr, n int) error
 }
 
-// MaxStringByteLength is the model's cap on a lifted string's byte length (definitions.py:1337), which it
-// traps past (def:1360). It bounds an allocation this process would otherwise make on a guest's word.
+// MaxStringByteLength is the model's cap on a lifted string's byte length (definitions.py:MAX_STRING_BYTE_LENGTH), which it
+// traps past (def:load_string_from_range:"trap_if(byte_length > MAX_STRING_BYTE_LENGTH)"). It bounds an allocation this process would otherwise make on a guest's word.
 const MaxStringByteLength = (1 << 28) - 1
 
 // LoadStringFromRange lifts a `string` from a (pointer, byte-length) range — the model's
-// `load_string_from_range` for the `utf8` encoding (definitions.py:1340-1366).
+// `load_string_from_range` for the `utf8` encoding (definitions.py:load_string_from_range).
 //
 // **It is the one string lift, and it implements all four of the model's traps**, none of which the
 // codec performed before #903:
 //
-//  1. byte length past [MaxStringByteLength] (def:1360);
-//  2. a misaligned pointer (def:1361) — vacuous at utf8's alignment of 1, and present because the arm
+//  1. byte length past [MaxStringByteLength] (def:load_string_from_range:"trap_if(byte_length > MAX_STRING_BYTE_LENGTH)");
+//  2. a misaligned pointer (def:load_string_from_range:"trap_if(ptr != align_to(ptr, alignment))") — vacuous at utf8's alignment of 1, and present because the arm
 //     that makes it non-vacuous is utf16's, which this engine does not yet carry;
-//  3. the range not within memory (def:1362) — delegated to [ReadHeap.ReadBytes], which is why that
+//  3. the range not within memory (def:load_string_from_range:"trap_if(ptr + byte_length > len(cx.opts.memory))") — delegated to [ReadHeap.ReadBytes], which is why that
 //     method returns an error;
-//  4. bytes that are not valid UTF-8 (def:1363-1366, `except UnicodeError: trap()`).
+//  4. bytes that are not valid UTF-8 (def:load_string_from_range:"s = cx.opts.memory[ptr : ptr+byte_length].decode(encoding)", `except UnicodeError: trap()`).
 //
 // All four were unreachable while the only heap was the differential's, whose fixtures are well-formed
 // by construction. Against guest memory every one is reachable from a guest's own word, and three are
@@ -414,16 +414,16 @@ func LoadStringFromRange(h ReadHeap, ptr, byteLength int) (Value, error) {
 //
 // The conversions, with the model's rules:
 //
-//   - the unsigned integers are `lift_flat_unsigned` (definitions.py:1874-1877): the word modulo the
+//   - the unsigned integers are `lift_flat_unsigned` (definitions.py:lift_flat_unsigned): the word modulo the
 //     target width, which a Go truncating conversion is;
-//   - the signed integers are `lift_flat_signed` (def:1879-1885): the same reduction, then the top bit
+//   - the signed integers are `lift_flat_signed` (def:lift_flat_signed): the same reduction, then the top bit
 //     read as the sign, which a Go conversion through the sized signed type is;
-//   - `bool` is `convert_int_to_bool` (def:1288-1290) — **nonzero is true**, `bool(i)` and not `i == 1`,
+//   - `bool` is `convert_int_to_bool` (def:convert_int_to_bool) — **nonzero is true**, `bool(i)` and not `i == 1`,
 //     so a guest returning 2 for true is returning true;
-//   - `char` is `convert_i32_to_char` (def:1320-1324), which **traps** past the last code point or inside
+//   - `char` is `convert_i32_to_char` (def:convert_i32_to_char), which **traps** past the last code point or inside
 //     the surrogate range — delegated to [Char], which applies exactly those two conditions, so the
 //     refusal is the constructor's and cannot drift from it;
-//   - `f32`/`f64` canonicalize a NaN (def:1296-1318), because a guest may hand over any of the many NaN
+//   - `f32`/`f64` canonicalize a NaN (def:canonicalize_nan32), because a guest may hand over any of the many NaN
 //     bit patterns and the ABI admits one.
 //
 // A non-scalar kind is refused by name: it is not a one-word value and has no business here.
@@ -467,7 +467,7 @@ func LiftFlatScalar(t Type, word uint64) (Value, error) {
 // # Why an overflow check where the model needs none
 //
 // `store_list_into_range` computes `len(v) * elem_size(...)` and asserts the product is at most
-// `REALLOC_I32_MAX` (definitions.py:1671-1673). Python integers do not overflow, so the model's `assert`
+// `REALLOC_I32_MAX` (definitions.py:store_list_into_range). Python integers do not overflow, so the model's `assert`
 // is the whole of its guard. **Go's do**, and the count on the lifting side is a word the **guest**
 // supplies — so the multiplication is attacker-controlled arithmetic and the product must be checked
 // before it is used as a length.
@@ -476,7 +476,7 @@ func LiftFlatScalar(t Type, word uint64) (Value, error) {
 // undefined-adjacent reasoning about wraparound, and on a 64-bit `int` a product can wrap past zero and
 // land on a *plausible small positive*, which is the value a bounds check would then wave through.
 //
-// `ReallocI32Max` is the model's own bound (def:1336), so a list whose bytes cannot be addressed by the
+// `ReallocI32Max` is the model's own bound (def:REALLOC_I32_MAX), so a list whose bytes cannot be addressed by the
 // ABI's 32-bit pointer space is refused here rather than at a realloc that would be asked for a quantity
 // it cannot express.
 func ListByteLength(count, elemSize int) (int, error) {
@@ -491,7 +491,7 @@ func ListByteLength(count, elemSize int) (int, error) {
 		//
 		// This said the zero-size case was "a legitimate shape (an empty tuple's)", which became false
 		// when the empty forms were refused: the model gives an empty record — and so an empty tuple,
-		// which despecializes to one — **no size at all** rather than zero (definitions.py:1233
+		// which despecializes to one — **no size at all** rather than zero (definitions.py:elem_size_record:"assert(s > 0)"
 		// asserts `elem_size > 0`), so `sizeRecord` refuses it and no valid type reaches here with 0.
 		//
 		// The guard stays because the hazard it answers is real and is *not* about empty records: the
@@ -515,7 +515,7 @@ func ListByteLength(count, elemSize int) (int, error) {
 	return count * elemSize, nil
 }
 
-// ReallocI32Max is the model's `REALLOC_I32_MAX` (definitions.py:1336): the largest byte count the ABI's
+// ReallocI32Max is the model's `REALLOC_I32_MAX` (definitions.py:REALLOC_I32_MAX): the largest byte count the ABI's
 // 32-bit pointer space can address.
 //
 // # Typed `uint64`, and why that is not incidental
@@ -564,7 +564,7 @@ func LoadList(h ReadHeap, ptr, count int, elem Type, loadElem func(int) (Value, 
 		return Value{}, fmt.Errorf("canon: list pointer %d is negative", ptr)
 	}
 	if a := alignment(elem); a > 0 && ptr%a != 0 {
-		// definitions.py:641's trap, on the lifting side: a list's data must sit at its element's
+		// definitions.py:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))"'s trap, on the lifting side: a list's data must sit at its element's
 		// alignment. Non-vacuous as soon as the element is wider than a byte, unlike a string's.
 		return Value{}, fmt.Errorf("canon: list pointer %d is not aligned to %d", ptr, a)
 	}
@@ -721,7 +721,7 @@ func LoadListU8(h ReadHeap, ptr, count int) ([]byte, error) {
 }
 
 // LoadString lifts a `string` from the (pointer, length) PAIR stored at ptr — the model's `load_string`
-// (definitions.py:1328-1331), which reads the two words and defers to [LoadStringFromRange]. Separate
+// (definitions.py:load_string), which reads the two words and defers to [LoadStringFromRange]. Separate
 // from that function because the flat lifting gets its two words from the core value iterator rather
 // than from memory, and only the range is common to both.
 func LoadString(h ReadHeap, ptr int) (Value, error) {
@@ -754,7 +754,7 @@ func StoreString(h Heap, s string, ptr int) error {
 }
 
 // StoreStringIntoRange allocates a string's bytes and writes them, returning the `(pointer, byte-length)`
-// pair **without storing it anywhere** — the model's `store_string_into_range` (definitions.py:1540).
+// pair **without storing it anywhere** — the model's `store_string_into_range` (definitions.py:store_string_into_range).
 //
 // # Why this half exists separately
 //
@@ -786,7 +786,7 @@ func StoreStringIntoRange(h Heap, s string) (ptr, byteLen int, err error) {
 
 // StoreListIntoRange allocates a list's backing and stores its elements through `storeElem`, returning
 // the `(pointer, count)` pair **without storing it anywhere** — the model's `store_list_into_range`
-// (definitions.py:1671).
+// (definitions.py:store_list_into_range).
 //
 // It is [StoreStringIntoRange]'s counterpart for the same reason, and it is the **store** side of the
 // injected-element framing whose load side is [LoadList]: the allocation, its alignment, the stride and
@@ -1019,7 +1019,7 @@ func (h *heap) store(v Value, ptr int) error {
 	}
 }
 
-// StoreRecord lowers a `record` (CanonicalABI.md `store_record`, definitions.py:1682-1686): each field
+// StoreRecord lowers a `record` (CanonicalABI.md `store_record`, definitions.py:store_record): each field
 // is stored at `align_to(ptr, alignment(field))` via `storeElem`, advancing by the field's `elem_size`.
 //
 // `storeElem` is injected for [StoreList]'s reason — the model heap can lower any field kind through
@@ -1034,7 +1034,7 @@ func StoreRecord(h Heap, v Value, ptr int, storeElem func(Value, int) error) err
 	fields := v.Type.Fields
 	if len(fields) == 0 {
 		// Refused before any layout is computed, because the model has no size for it
-		// (definitions.py:1233) — see sizeRecord. This is one of the error-returning layers that keeps
+		// (definitions.py:elem_size_record:"assert(s > 0)") — see sizeRecord. This is one of the error-returning layers that keeps
 		// that panic unreachable.
 		return fmt.Errorf("canon: store: a record with no fields has no layout in the Canonical ABI")
 	}
@@ -1055,7 +1055,7 @@ func StoreRecord(h Heap, v Value, ptr int, storeElem func(Value, int) error) err
 	return nil
 }
 
-// LoadRecord lifts a `record` (`load_record`, definitions.py:1397-1403) — [StoreRecord]'s mirror, with
+// LoadRecord lifts a `record` (`load_record`, definitions.py:load_record) — [StoreRecord]'s mirror, with
 // the per-field load injected the same way.
 func LoadRecord(h ReadHeap, t Type, ptr int, loadElem func(Type, int) (Value, error)) (Value, error) {
 	if len(t.Fields) == 0 {
@@ -1089,7 +1089,7 @@ func storeListData(h Heap, v Value, storeElem func(Value, int) error) (int, erro
 	// was not. On the store side the count comes from a host-built value rather than a guest word, so the
 	// overflow is far-fetched here; routing it through the one guard anyway is what makes the claim
 	// checkable instead of merely intended, and it bounds the store side by `REALLOC_I32_MAX` the way
-	// definitions.py:1673 does.
+	// definitions.py:store_list_into_range:"assert(byte_length <= REALLOC_I32_MAX)" does.
 	byteLen, err := ListByteLength(len(v.list), es)
 	if err != nil {
 		return 0, err

@@ -38,7 +38,7 @@
   (type $pt (;2;) (func async (result u32)))
 
   ;; The memory module: memory plus the element backing. Four u32s, little-endian, at a 4-aligned
-  ;; address — 1024 is a multiple of 4, which `load_list`'s alignment trap (definitions.py:641)
+  ;; address — 1024 is a multiple of 4, which `load_list`'s alignment trap (definitions.py:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))")
   ;; requires and which is NOT vacuous for a u32 the way it is for a string's bytes.
   ;;
   ;; 10, 20, 30, 40 = 0x0a, 0x14, 0x1e, 0x28. Distinct, non-zero, and none of them a byte that repeats
@@ -54,7 +54,7 @@
   ;; memory named here.
   (core func $taskret (;0;) (canon task.return (result $lu32) (memory $mem)))
   ;; peek's own task.return: a u32 result, so a separate built-in — a task.return's result type is
-  ;; static and must match the lift it resolves (definitions.py:2295).
+  ;; static and must match the lift it resolves (definitions.py:canon_task_return:"trap_if(result_type != task.ft.result)").
   (core func $taskretu32 (;1;) (canon task.return (result u32)))
   (core instance $ci (;1;)
     (export "taskret" (func $taskret))

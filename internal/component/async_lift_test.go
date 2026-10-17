@@ -18,7 +18,7 @@ import (
 )
 
 // TestUnpackCallbackResultMatchesTheOracle is the differential pin for the stackless async-lift callback
-// ABI's dispatch decode (definitions.py unpack_callback_result, def:2133-2139), fixtures.json
+// ABI's dispatch decode (definitions.py unpack_callback_result, def:unpack_callback_result), fixtures.json
 // `callback_result`. The callback returns a packed i32 the scheduler dispatches on — the return value that
 // tells "done" from "waiting on set si" from "yield". EVERY code is asserted, not just the happy-path EXIT:
 // a success-only pin is green against a dispatch that cannot tell WAIT from EXIT, which is the mis-route
@@ -90,7 +90,7 @@ func TestUnpackCallbackResultMatchesTheOracle(t *testing.T) {
 }
 
 // TestAsyncLiftLoopPinExercisesReentryState guards the loop-behavior differential pin (fixtures.json
-// async_lift_loop), produced by driving the model's real canon_lift callback loop (def:2056-2115) through a
+// async_lift_loop), produced by driving the model's real canon_lift callback loop (def:canon_lift) through a
 // MULTI-CYCLE case: WAIT -> event -> WAIT -> event -> EXIT. The pin's job is to catch a Go loop that loses
 // state between re-entries yet recovers to the right final answer, so this guards that the pin actually
 // exercises re-entry state (Scott's caution): >= 2 cycles, context set in cycle 1 read back in cycle 2, the
@@ -201,7 +201,7 @@ func TestAsyncLiftExitOnlyResolvesViaTaskReturn(t *testing.T) {
 // cost a false trap: ordinary contention expired it and the message blamed self-re-entry.
 //
 // So what is asserted now is the behaviour that remains: contention **waits**, as the model's
-// backpressure does (def:428-434 — no trap, no bound).
+// backpressure does (def:Task.enter_implicit_thread:"if self.ft.async_:" — no trap, no bound).
 func TestAnEntryWaitsForTheExecutionSlot(t *testing.T) {
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	b, err := os.ReadFile("testdata/async-lift-exit-synth.wasm")
@@ -596,7 +596,7 @@ func TestWaitableSetDropRunsOnRealBytes(t *testing.T) {
 }
 
 // TestWaitableSetDropTrapsOnMembersAndOnWaiters pins the two traps #792 deleted an impl for lacking
-// (`WaitableSet.drop`, def:812-814).
+// (`WaitableSet.drop`, def:WaitableSet.drop).
 //
 // # Three arms, and the third is the vacuity check
 //
@@ -672,7 +672,7 @@ func TestWaitableSetDropTrapsOnMembersAndOnWaiters(t *testing.T) {
 }
 
 // TestWaitableJoinLeavesThePreviousSet pins the step of `Waitable.join` this engine never had
-// (def:756-762: `if self.wset: self.wset.elems.remove(self)`).
+// (def:Waitable.join: `if self.wset: self.wset.elems.remove(self)`).
 //
 // Without it a re-joined waitable stayed a member of every set it had ever been in, so its resolution
 // would deliver an event to waiters on a set it had supposedly left — and `waitable-set.drop` would trap

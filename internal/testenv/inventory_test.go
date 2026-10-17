@@ -787,6 +787,17 @@ func TestCIGatesCoverWhatCIInvokes(t *testing.T) {
 		t.Fatal("no `ci:` target found in the Makefile, or it has an empty recipe")
 	}
 	follow("ci", 0)
+	// **And from every gate**, because `ci-gates` runs each one by name from the lists, which no recipe line
+	// spells as `$(MAKE) <gate>`. Without this, a gate's own delegation was invisible: `cite` runs
+	// `$(MAKE) refcite` (the chair's ruling of 2026-10-17), CI runs `make refcite`, and this control
+	// reported `make ci` as not reaching what it reached one level down — the re-pointing above, again.
+	listed := make([]string, 0, len(gates))
+	for g := range gates {
+		listed = append(listed, g)
+	}
+	for _, g := range listed {
+		follow(g, 1)
+	}
 
 	// Every Makefile target and the scripts its recipe invokes, so a script can be mapped back to
 	// the target that runs it.

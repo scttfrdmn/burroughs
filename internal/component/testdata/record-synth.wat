@@ -56,7 +56,7 @@
   (alias core export $memi "mem" (core memory $mem (;0;)))
 
   ;; Two task.return built-ins: a task.return's result type is static and must match the lift it
-  ;; resolves (definitions.py:2295), so a u32 result and a record result cannot share one.
+  ;; resolves (definitions.py:canon_task_return:"trap_if(result_type != task.ft.result)"), so a u32 result and a record result cannot share one.
   (core func $retu32 (;0;) (canon task.return (result u32)))
   (core func $retnamed (;1;) (canon task.return (result $named) (memory $mem)))
   (core instance $ci (;1;)
