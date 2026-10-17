@@ -81,12 +81,17 @@ type cmScheduler struct {
 // giver is a created Thread whose entry returned — its error. **It carries the run slot** (ADR 0101's Option
 // A). `detach` marks a Thread that has begun to WAIT rather than parked in `giveBack`: it is not
 // resumed by a chain, and takes the slot back itself once its event arrives.
+//
+// `yielded` marks a task's implicit Thread whose entry has just returned YIELD (`threadTable.yieldHandoff`).
+// It is the YIELD arm's `wait_until` given as a handoff: the Thread is already registered as waiting at its
+// arm, the scheduler runs the ready queue, and `yielded` receives the reply once the chain has ended.
 type handoff struct {
-	from   *cmThread
-	next   *cmThread
-	exited bool
-	detach bool
-	err    error
+	from    *cmThread
+	next    *cmThread
+	exited  bool
+	detach  bool
+	err     error
+	yielded chan error
 }
 
 // errThreadKilled is what a parked Thread's `giveBack` returns when the wake ends it. It is terminal: the
@@ -199,6 +204,10 @@ func (s *cmScheduler) acquireAndRun(replies []chan error) {
 //   - a Thread that began to wait (`detach`);
 //   - a created Thread whose entry returned (`exited`).
 func (s *cmScheduler) serve(hb handoff) {
+	if hb.yielded != nil {
+		// However the chain ends, the YIELD arm is answered (capacity 1, read at most once).
+		defer func() { hb.yielded <- nil }()
+	}
 	var first *cmThread
 	if hb.exited && hb.err != nil {
 		if s.trap(hb.from, hb.err) {
@@ -425,10 +434,15 @@ func (tt *threadTable) takeReady(t *cmThread) bool {
 	// `exclusive_thread`, which in Burroughs is a free `entrySem`. It is not in the queue, so nothing is
 	// removed; the handoff that follows promotes it (`promoteYielding`).
 	if t.implicit && t.yielding {
-		// `exclusive_thread is None`: `entrySem` free, or held only by this task's own re-entry, which
-		// waits for the slot the promoter holds and so has not, in the reference's terms, left its arm.
-		// Traced: that re-entry taking `entrySem` while T ran was the last window, 1 in 300 under -race.
-		return tt.h != nil && (len(tt.h.entrySem) == 0 || (t.task != nil && t.task.entryHeld.Load()))
+		// `exclusive_thread is None`: `entrySem` free.
+		//
+		// **This also counted `entrySem` held by the task's own pending re-entry, and no longer needs to**
+		// (#1012's E1, removed under the chair's item 4). That re-entry could take `entrySem` while the
+		// promoter ran only because the YIELD arm returned at once, having found the queue empty. Under
+		// `yieldHandoff` the arm waits for its chain's reply, so the re-entry cannot start until the chain
+		// ends. Measured with both sides widened, E1 removed: 17 in 30 of 30 without the handoff, 0 of 30 with
+		// it.
+		return tt.h != nil && len(tt.h.entrySem) == 0
 	}
 	if t.state != threadReady {
 		return false
@@ -438,31 +452,72 @@ func (tt *threadTable) takeReady(t *cmThread) bool {
 	return true
 }
 
-// markYield records that task Thread i's entry has just returned YIELD (#1012), from its packed result: it is
-// now at its YIELD arm, so a promote can switch to it. Called before the entry releases its slots. A stale
-// promote signal is drained first, outside the lock (§4 B-MM-3), and before `yielding` is set, so only a
-// stale one can be drained.
-func (tt *threadTable) markYield(i uint32, res []interp.Value) {
+// yieldHandoff is the YIELD arm as a slot-carrying handoff (the chair's item 4, ADR 0101's detach pattern).
+// It is called by an entry that has released `entrySem` and returned YIELD, in place of freeing the run slot.
+// If the instance has a scheduler with Threads ready, the slot goes straight to the scheduler, with this
+// task's implicit Thread registered as waiting at its YIELD arm (`yielding`) before the handoff is sent.
+// It reports whether the slot was handed over. If it was not, the caller frees it.
+//
+// In the pin, the callback's return, the clearing of `exclusive_thread` and the YIELD arm's wait happen with
+// no other Thread running. Freeing the slot first opened the windows #1012 closed one patch at a time: a
+// kick could run a promoter before this task was waiting. Handed over, the slot is never free between the
+// return and the wait.
+//
+// **The four #1012 patches, re-measured on this, each removed with its window widened:**
+//   - **M1, `markYield`: removed.** It marked the arm before the release. Widened, without the handoff: 17
+//     in 30 of 30; with it: 0 of 30. The marking is this function's, made while the slot is held.
+//   - **O1, `entrySem` released before the run slot: kept.** Reversed and widened: 17 in 30 of 30, because a
+//     promote reads `exclusive_thread`, which must already be clear when the scheduler runs.
+//   - **E1, `entryHeld`: removed.** See `takeReady`.
+//   - **P2, `promotedWait`: kept.** Removed, the fixture reads 0 of 100, because this fixture's stale tick came
+//     from the freed slot, which no longer frees. But any other release with Threads ready still kicks: with
+//     one injected tick while the promoted task re-enters, 17 in 30 of 30 without it, 0 of 30 with it.
+//
+// A stale promote signal is drained before `yielding` is set, outside the lock (§4 B-MM-3), so only a stale
+// one can be drained, as `markYield` did.
+func (tt *threadTable) yieldHandoff(h *asyncHandles, idx uint32, ch *runChain, res []interp.Value) bool {
 	if len(res) != 1 || uint32(res[0].Bits)&0xf != uint32(callbackYield) {
-		return
+		return false
 	}
-	t := tt.get(i)
+	t := tt.get(idx)
 	if t == nil {
-		return
+		return false
 	}
+	tt.mu.Lock()
+	s, n := tt.sched, len(tt.ready)
+	tt.mu.Unlock()
+	if s == nil || n == 0 {
+		return false
+	}
+	h.mu.Lock()
+	if h.runChain != ch || h.runDepth != 1 {
+		h.mu.Unlock()
+		return false // not this entry's own outermost hold: release it the ordinary way
+	}
+	h.runChain, h.runDepth = nil, 0
+	h.schedHolds = true
+	h.mu.Unlock()
+	reply := make(chan error, 1)
 	tt.mu.Lock()
 	if t.promoted == nil {
 		t.promoted = make(chan struct{}, 1)
 	}
-	ch := t.promoted
+	promoted := t.promoted
 	tt.mu.Unlock()
 	select {
-	case <-ch:
+	case <-promoted:
 	default:
 	}
 	tt.mu.Lock()
 	t.yielding = true
+	t.yieldReply = reply
 	tt.mu.Unlock()
+	select {
+	case s.back <- handoff{from: t, yielded: reply}:
+	case <-s.stop:
+		reply <- errThreadKilled
+	}
+	return true
 }
 
 // entering records that task Thread i is starting an entry (#1012): it is no longer at a YIELD arm, and if a
@@ -534,9 +589,34 @@ func (tt *threadTable) unreadyLocked(t *cmThread) {
 // Nothing to do, and no slot taken, when no Thread is ready — including on every instance that has never
 // executed `thread.new-indirect`, which has no scheduler to ask.
 func (tt *threadTable) yieldPoint(task *liftTask) error {
+	// **The entry handed the slot over at YIELD** (`yieldHandoff`): its chain is already running, and the
+	// arm waits for that chain's reply. No request is sent. Checked first, because the queue may already be
+	// empty by now, and the reply is owed either way.
+	self := tt.get(task.threadIdx)
 	tt.mu.Lock()
 	s, n := tt.sched, len(tt.ready)
+	var handed chan error
+	var promotedCh chan struct{}
+	if self != nil {
+		handed, self.yieldReply = self.yieldReply, nil
+		promotedCh = self.promoted
+	}
 	tt.mu.Unlock()
+	if handed != nil {
+		faulted := tt.faultChan(self)
+		select {
+		case err := <-handed:
+			return err
+		case <-s.stop:
+			return errThreadKilled
+		case <-task.context().Done():
+			return nil
+		case <-faulted:
+			return nil
+		case <-promotedCh:
+			return nil // a promote switched to this task: its callback runs now, ahead of the queue
+		}
+	}
 	if s == nil || n == 0 {
 		return nil
 	}
@@ -556,12 +636,10 @@ func (tt *threadTable) yieldPoint(task *liftTask) error {
 	// An abandoned wait leaves `reply` unread, which is safe: it has capacity 1, so the scheduler never
 	// blocks on it.
 	ctxDone := task.context().Done()
-	self := tt.get(task.threadIdx)
 	faulted := tt.faultChan(self)
-	// **Waiting at the YIELD arm is a state a promote can see** (#1012). The entry that returned YIELD
-	// marked it before releasing its slots (`markYield`), so a promote may already have switched to this
-	// task. Its signal is taken first, so the request below is never sent after the switch happened. The
-	// next entry clears the state (`entering`).
+	// **Waiting at the YIELD arm is a state a promote can see** (#1012). On this path the entry did not hand
+	// the slot over (the queue was empty then). A promote's signal is still taken first, so the request
+	// below is never sent after a switch happened. The next entry clears the state (`entering`).
 	var promoted chan struct{}
 	if self != nil {
 		tt.mu.Lock()

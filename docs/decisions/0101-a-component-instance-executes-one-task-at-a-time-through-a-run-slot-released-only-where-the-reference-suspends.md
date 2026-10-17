@@ -945,6 +945,13 @@ submit), i9-9960X, linux/amd64, 12 rounds, every round's load between 2.9 and 3.
 - **The 45.15 µs baseline is darwin's**, from the same fixture on the dev box. janus's absolute figure is
   about 112 µs, so the comparison is base against head on one host, and 45.15 µs is quoted for its scale
   only.
+- **From 2026-10-17, janus's ~112 µs is `switch.wasm`'s baseline, replacing darwin's 45.15 µs** (the chair's
+  ruling of that date). Later A/Bs on this fixture run on janus's `measured` group, base against head, and
+  quote that figure for scale.
+- **The YIELD arm as a slot-carrying handoff** (the chair's item 4, 2026-10-17): `make lab-ab` on janus's
+  `measured` group, task 29, 0 concurrent at submit, 12 rounds, 768745a against 54aba46. sec/op 112.0µ ± 1%
+  against 112.0µ ± 2%, ~ (p=0.443). The null arm reads ~ (p=0.386). B/op +0.73% (p=0.000), the Thread's reply
+  channel, and allocs/op equal at 216. No time cost is detectable.
 
 A second janus run (task 27) put the post-A `main` against the embedding: 113.2µ against 113.4µ (p=1.000),
 and 221 against 216 allocs/op. So the embedding removes A's five allocations at no time cost.

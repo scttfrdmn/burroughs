@@ -838,6 +838,22 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **The YIELD arm is a slot-carrying handoff** (behind `gate:cm-threads`; the chair's item 4).
+  - **Before:** an entry returning YIELD freed the run slot and the task then asked the scheduler to run the
+    ready queue. The gap between was the window #1012 closed one patch at a time.
+  - **Now** (`yieldHandoff`, ADR 0101's detach pattern): the entry registers its implicit Thread as waiting at
+    its arm and hands the slot straight to the scheduler. The arm waits for the chain's reply.
+  - **The four patches, each re-measured with its window widened** and every widening checked against a
+    control without the handoff:
+    - **`markYield` removed:** 0 of 30, against 30 of 30 in the control.
+    - **`entryHeld` removed:** 0 of 30 with both sides widened, against 30 of 30 in the control.
+    - **The release order kept:** reversed, 30 of 30 fail, because a promote reads `exclusive_thread`.
+    - **`promotedWait` kept:** with one injected tick standing in for another release, 30 of 30 fail
+      without it and 0 of 30 with it.
+  - **The promote witness, soaked:** 1,000 of 1,000, and 600 of 600 under `-race`, on macOS.
+  - **Cost, on janus against the ~112 µs baseline** (`make lab-ab`, task 29, 12 rounds): `switch.wasm`
+    112.0µ against 112.0µ, ~ (p=0.443), with the null arm ~ (p=0.386). B/op +0.73%, and allocs/op equal.
+
 - **Default-on defect: a `future.write` to a pending read in the same instance never completed the copy**
   ([#1006](https://github.com/scttfrdmn/burroughs/issues/1006); `gate:async`, on since 2026-09-18, with
   `gate:cm-threads` off).

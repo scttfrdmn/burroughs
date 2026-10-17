@@ -314,7 +314,6 @@ func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask, ok bool) {
 		// Never acquired the slot, so there is nothing to release and `leaveTask` must not run.
 		return nil, false
 	}
-	t.entryHeld.Store(true) // cleared by the entry's release, before `leaveTask` (#1012)
 	h.mu.Lock()
 	prev = h.lift
 	h.lift = t
