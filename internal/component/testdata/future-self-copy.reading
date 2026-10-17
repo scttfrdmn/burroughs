@@ -1,0 +1,13 @@
+# Committed readings for future-self-copy.wasm: #1006 on the DEFAULT path (gate:async on, gate:cm-threads off).
+# Built:       wasm-tools parse future-self-copy.wat -o future-self-copy.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'run()' future-self-copy.wasm
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02), darwin/arm64.
+#
+# reader                                                        reading
+# wasmtime 49.0.2, 10 of 10                                     262151
+# reference, pin 2bed77e (refread.reading, future-self-copy)    value 262151
+# reference, upstream head 2e7895c (Python 3.15)                value 262151
+# Burroughs before #1006's fix                                  no return (the write parked)
+#
+# Meaning:     262151 = 0x40007: the read's event is FUTURE_READ (4), the write returned COMPLETED (0), and the
+#              read buffer holds 7. The write completed the copy into the pending read inline.

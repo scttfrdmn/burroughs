@@ -387,6 +387,34 @@ func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
+// futureElemSize is the byte size of future type `ti`'s element, for the intra-instance copy a `future.write`
+// makes into a pending read (#1006): 0 for a future with no payload, and -1 for an element whose copy is
+// not built. **Only integers are built**, because only for them is the pin's `future_copy`, a lift then a
+// lower, the same as moving the element's bytes. A `bool` lifts any non-zero byte to `true`, a `char` traps
+// on an invalid code point, and a float's lift canonicalises NaN, so a byte copy would be wrong for each.
+func (w *walker) futureElemSize(ti uint32) int {
+	at := w.c.sectionTypeAt()
+	td, ok := at(ti)
+	if !ok || td.Kind != TDVal || td.Val.Kind != VFuture {
+		return -1
+	}
+	if td.Val.Elem == nil {
+		return 0
+	}
+	switch resolveVal(*td.Val.Elem, at, nil).Kind {
+	case VS8, VU8:
+		return 1
+	case VS16, VU16:
+		return 2
+	case VS32, VU32:
+		return 4
+	case VS64, VU64:
+		return 8
+	default: // every non-integer: its copy is not a byte copy, so it is not built
+		return -1
+	}
+}
+
 // asyncBuiltinFunc maps a waitable-set canon built-in opcode to its Go impl over this instance's async
 // handle table. Only the four the blocking-arm round trip needs are bound (gate:async 2a-i-B-2); any other
 // async built-in is refused at bind by gateAsync and never reaches here. waitable-set.wait writes its event
@@ -412,8 +440,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 		return futureDrop(w.async), true
 	case 0x15: // future.new (2nd async guest) — mints a readable+writable future end pair
 		return futureNew(w.async), true
-	case 0x17: // future.write (2nd async guest) — single-value write; parks with no reader
-		return futureWrite(w.async), true
+	case 0x17: // future.write (2nd async guest) — single-value write; parks with no reader, copies to a pending one
+		return futureWrite(w.async, w.futureElemSize(slot)), true
 	case 0x19: // future.cancel-write (2nd async guest) — the future write arm's running CANCELLED
 		return futureCancelWrite(w.async), true
 	case 0x06: // subtask.cancel (gate:async increment 4) — the subtask substrate's cancel path

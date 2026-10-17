@@ -15,9 +15,10 @@ import (
 //   - **`sync-wait-own-thread-control`**: the wait is on the instance's own future, and no Thread writes
 //     it. Both oracles trap the same way. Burroughs hung before #1005.
 //
-// **The admitted twin, `sync-wait-own-thread`** (both oracles: 7), cannot run on Burroughs yet: the
-// intra-instance future copy its Thread performs is not built (#1006). The admit branch of the rule is
-// witnessed by `TestASyncTailCountsAWaiterWhoseEventIsPending` instead.
+// **The admitted twin, `sync-wait-own-thread`** (both oracles: 7), could not run on Burroughs until the
+// intra-instance future copy its Thread performs was built (#1006). It is now witnessed by
+// `TestASyncWaitSatisfiedByItsOwnThreadIsAdmitted`. The unit `TestASyncTailCountsAWaiterWhoseEventIsPending`
+// stands beside it.
 //
 // **Neuter, run:** making `syncTail` return at once (the candidate check removed). The first fixture then
 // returns 5, and the second hangs, failing on its bound.

@@ -65,6 +65,8 @@ var raceWitnessFixtures = []string{
 	"result-store-heap-cb.wasm",
 	// the run slot's own witness (TestASyncEntryWaitsForAnExecutingAsyncTask)
 	"run-slot-sync-entry.wasm",
+	// #1006's default-path witness (TestAFutureWriteCompletesAPendingReadInItsOwnInstance)
+	"future-self-copy.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

@@ -170,8 +170,9 @@ type writableFutureEnd struct {
 	delivered bool         // the FUTURE_WRITE event has been taken by a waitable-set.wait
 	done      bool         // DONE (dropped); a COMPLETED/CANCELLED write leaves it IDLE (open)
 	result    copyResult
-	progress  uint32 // 0 or 1 (a future is one value); packed into the event as progress<<4
-	hasWrite  bool   // a future.write is pending on this end
+	progress  uint32             // 0 or 1 (a future is one value); packed into the event as progress<<4
+	hasWrite  bool               // a future.write is pending on this end
+	peer      *readableFutureEnd // the paired readable end (future.new)
 }
 
 // pendingEventLocked delivers the write's (FUTURE_WRITE, index, result|progress<<4) event once. The caller
@@ -215,7 +216,7 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		re := &readableFutureEnd{}
-		we := &writableFutureEnd{}
+		we := &writableFutureEnd{peer: re} // the pin's one `SharedFutureImpl` behind both ends (#1006)
 		re.index = h.addLocked(re)
 		we.index = h.addLocked(we)
 		packed := uint64(uint32(re.index)) | uint64(uint32(we.index))<<32
@@ -225,15 +226,28 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 
 // futureWrite implements `canon future.write` (0x17, definitions.py:2527) on the async path: a single-value
 // write. With no reader on the paired end (the cancellation guest's shape), the write parks and returns
-// BLOCKED; the guest then cancels it. (A future.write whose read end is already pending — the inline-copy
-// arm — is not exercised by this guest and is not built here; the guest-driven rule keeps it out until a
-// guest reads+writes a future.)
-func futureWrite(h *asyncHandles) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+// BLOCKED; the guest then cancels it.
+//
+// # A write to a pending read copies inline (#1006)
+//
+// The pin's `future_copy` finds the reader on the shared future and completes the copy in the writer's call:
+// the value moves from the write buffer to the read buffer, the reader's end gets its (FUTURE_READ, i,
+// COMPLETED) event, and the write returns COMPLETED. Burroughs left both ends pending forever.
+//
+// Measured before the fix, on the default path (`gate:cm-threads` off), with `future-self-copy.wasm`: one
+// callback task reads its own future (BLOCKED), writes 7, then WAITs. wasmtime 49.0.2, the pin and upstream
+// head all read 262151 (event 4, write status 0, byte 7). Burroughs did not return.
+//
+// `elemSize` is the element's byte size (`futureElemSize`). An element whose copy is not built (-1, any
+// non-integer) is refused by name at the copy, not at bind, so a component that only parks a future still
+// loads. **Only this direction is built**: a READ arriving at a pending write still parks, which no guest has
+// yet driven.
+func futureWrite(h *asyncHandles, elemSize int) interp.CanonFunc {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("component: future.write: got %d args, want (i, ptr)", len(args))
 		}
-		i := uint32(args[0].Bits)
+		i, ptr := uint32(args[0].Bits), uint32(args[1].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		e, ok := handleAt[*writableFutureEnd](h, i)
@@ -242,6 +256,25 @@ func futureWrite(h *asyncHandles) interp.CanonFunc {
 		}
 		if e.done || e.hasWrite || e.resolved {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: end %d is not writable (done, write pending, or resolved)", i)}
+		}
+		if r := e.peer; r != nil && r.hasRead && !r.resolved {
+			if elemSize < 0 {
+				return nil, fmt.Errorf("%w: future.write's copy into a pending read is built for integer elements "+
+					"only; this element's lift and lower are not a byte copy (#1006)", ErrUnsupportedForm)
+			}
+			if elemSize > 0 {
+				buf, rerr := c.Read(uint64(ptr), uint64(elemSize))
+				if rerr != nil {
+					return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: reading the value at %d: %v", ptr, rerr)}
+				}
+				if werr := r.caller.Write(uint64(r.readPtr), buf); werr != nil {
+					return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: storing the value at the read's %d: %v",
+						r.readPtr, werr)}
+				}
+			}
+			r.resolveLocked(copyCompleted)
+			e.done = true // a future is one value: the writable end is DONE after COMPLETED
+			return []interp.Value{interp.I32(int32(copyCompleted))}, nil
 		}
 		e.hasWrite = true
 		bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
