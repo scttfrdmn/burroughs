@@ -838,6 +838,24 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **Default-on defect: a `future.write` to a pending read in the same instance never completed the copy**
+  ([#1006](https://github.com/scttfrdmn/burroughs/issues/1006); `gate:async`, on since 2026-09-18, with
+  `gate:cm-threads` off).
+  - **Read before the fix**, on the default path: in `future-self-copy.wasm` one callback task reads its own
+    future (BLOCKED), writes 7, then WAITs. wasmtime 49.0.2 (10 of 10), the pin and upstream head all read
+    262151: FUTURE_READ, write COMPLETED, byte 7. Burroughs did not return, because `future.write` only parked.
+  - **The fix:** `future.new` links its ends, and a write finding a pending read completes the copy inline, as
+    the pin's `future_copy` does.
+    - The reader gets its (FUTURE_READ, i, COMPLETED) event.
+    - The write returns COMPLETED, and the writable end is DONE.
+    - Built for integer elements, where a byte copy is the pin's lift-then-lower. Any other element is refused
+      by name at the copy.
+    - A read arriving at a pending write still parks: no guest has driven that direction.
+  - **#1005's admit branch now has its own witness:** `sync-wait-own-thread` returns 7, as on both oracles,
+    where it could not run before.
+  - **Neuter, run:** with the inline copy removed, `future-self-copy` fails on its bound in both gate states,
+    and `sync-wait-own-thread` traps at the sync tail.
+
 - **The run slot has its own discriminating witness again** (the chair's ruling of 2026-10-17, item 2).
   - **The gap:** on the callback shapes #1017 moved to, the entry slot and the run slot each keep two
     re-entries apart alone, so removing only the run slot failed nothing.

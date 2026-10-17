@@ -20,3 +20,4 @@ cancel-wat's shape, sync canceller (wasmtime 49.0.2 harness: returned, 1 then 4)
 cancel-wat's shape, async canceller (control; wasmtime 49.0.2: 20): value 20
 cancel, late child, sync canceller (wasmtime 49.0.2: trap): trap go's sync subtask.cancel (the sync tail)
 cancel, late child, async canceller (wasmtime 49.0.2: 20): value 20
+future-self-copy (#1006, default path; wasmtime 49.0.2: 262151): value 262151

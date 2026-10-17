@@ -516,6 +516,43 @@ def cancel_other_instance(canceller_async, late=False):
     return body
 
 
+def future_self_copy():
+    """#1006 on the default path, `future-self-copy.wat`: one async callback task creates a future, reads it
+    (BLOCKED), writes 7 into it itself, and WAITs on the readable end. The callback returns
+    byte + (write status << 8) + (event code << 16). No Threads."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        opts = d.CanonicalOptions(async_=True, memory=mem)
+        ft = d.FutureType(d.U8Type())
+        st = {}
+
+        def run(args):
+            [p] = d.canon_future_new(ft)
+            r, w = p & 0xffffffff, p >> 32
+            [rd] = d.canon_future_read(ft, opts, r, 64)
+            if rd != d.BLOCKED:
+                site["name"] = "the read did not block"
+                d.trap()
+            mem.bytes[80] = 7
+            [st["wr"]] = d.canon_future_write(ft, opts, w, 80)
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(r, s)
+            return [2 | (s << 4)]  # WAIT
+
+        def cb(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [mem.bytes[64] + (st["wr"] << 8) + (args[0] << 16)])
+            return [0]
+
+        rft = d.FuncType([], [d.U32Type()], async_=True)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(async_=True, callback=cb), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
 def promote_implicit(promote_run):
     """Step 4, cmthreads/promote-implicit.wat: T yield-then-promotes its task's implicit Thread, which waits
     at its YIELD arm (promote_run), or a Thread U that was never readied (the control). The value is 16 + the
@@ -586,3 +623,4 @@ if __name__ == "__main__":
     read("cancel-wat's shape, async canceller (control; wasmtime 49.0.2: 20)", cancel_other_instance(True))
     read("cancel, late child, sync canceller (wasmtime 49.0.2: trap)", cancel_other_instance(False, late=True))
     read("cancel, late child, async canceller (wasmtime 49.0.2: 20)", cancel_other_instance(True, late=True))
+    read("future-self-copy (#1006, default path; wasmtime 49.0.2: 262151)", future_self_copy())
