@@ -380,15 +380,27 @@ PYCLS
 body_stale=null
 body_stale_note="unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured"
 if [ -n "${CIWATCH_PR:-}" ]; then
+	# **The body's last change is `lastEditedAt`, or `createdAt` for a body never edited, and NOT `updatedAt`.**
+	# `updatedAt` moves on any change to the PR, a comment included. On #1030 a comment explaining a CI failure
+	# made a never-edited body read as stale, and prmerge refused a green. Both modes parse the same PR record,
+	# so the fixture drives the field choice rather than a precomputed answer.
 	if [ -n "${CIWATCH_FIXTURE:-}" ]; then
-		body_updated=$(cat "$CIWATCH_FIXTURE/body_updated_at" 2>/dev/null || echo "")
+		pr_json=$(cat "$CIWATCH_FIXTURE/pr.json" 2>/dev/null || echo "")
 		run_created=$(cat "$CIWATCH_FIXTURE/$bodyrun.created_at" 2>/dev/null || echo "")
 	else
-		body_updated=$(gh pr view "$CIWATCH_PR" --repo "$repo" --json body,updatedAt --jq .updatedAt 2>/dev/null)
+		pr_json=$(gh api graphql -F n="$CIWATCH_PR" -f o="${repo%%/*}" -f r="${repo#*/}" \
+			-f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){lastEditedAt createdAt updatedAt}}}' \
+			--jq .data.repository.pullRequest 2>/dev/null)
 		run_created=$(gh run view "$bodyrun" --repo "$repo" --json createdAt --jq .createdAt 2>/dev/null)
 	fi
+	body_updated=$(printf '%s' "$pr_json" | python3 -c 'import json,sys
+try:
+    p = json.load(sys.stdin)
+except ValueError:
+    raise SystemExit
+print(p.get("lastEditedAt") or p.get("createdAt") or "")' 2>/dev/null)
 	if [ -z "$body_updated" ] || [ -z "$run_created" ]; then
-		body_stale_note="unchecked: could not read the body's updatedAt or the run's createdAt"
+		body_stale_note="unchecked: could not read the body's last edit (lastEditedAt or createdAt) or the run's createdAt"
 	elif [ "$body_updated" \> "$run_created" ]; then
 		# Lexicographic comparison is correct for ISO-8601 UTC timestamps, which both of these are.
 		body_stale=true

@@ -853,6 +853,13 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **`ciwatch.sh` read a PR comment as a body edit.** It took body currency from the PR's `updatedAt`, which
+  any comment moves. On #1030, a comment explaining a CI failure made a never-edited body read as stale, and
+  `prmerge` refused a green. It now reads the body's `lastEditedAt`, or `createdAt` for a body never edited,
+  through one PR record that both the live and the fixture mode parse. Witness: three new arms in
+  `TestCIWatchTakesEachJobClassFromItsOwnRun`, the first of the body-currency block, which no arm had driven.
+  Neuter, run: reading `updatedAt` fails two of them.
+
 - **A `cabi_realloc` could call any canon built-in or lowered import; the reference traps it**
   ([#990](https://github.com/scttfrdmn/burroughs/issues/990)).
   - **Where the reference sets the flag:** found by searching the pin's `definitions.py`, it sets
