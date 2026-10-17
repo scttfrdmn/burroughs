@@ -85,18 +85,26 @@ fi
 # three commits ago reads exactly like a green from this one.
 #
 # `PRMERGE_VERDICT` is overridable only so the witness can point at a fixture; nothing else sets it.
+#
+# **The verdict read is the one KEYED by this tip, `<verdict>.d/<sha>`, and only that one** (the chair's ruling
+# of 2026-10-17). `.ci-verdict` is one file, so a later gate on another branch overwrote the verdict for the
+# commit about to be merged. That was refused correctly, by the SHA check below, but it cost a re-run of the
+# whole gate. `civerdict.sh` writes a keyed copy beside it, and a keyed file for another SHA is never read.
 verdict=${PRMERGE_VERDICT:-.ci-verdict}
-if [ ! -f "$verdict" ]; then
-	echo "prmerge: FAIL no $verdict — run \`make ci\` on this commit first." >&2
+tip=$(git rev-parse HEAD)
+keyed="$verdict.d/$tip"
+if [ ! -f "$keyed" ]; then
+	echo "prmerge: FAIL no verdict for the local tip ${tip:0:12} ($keyed) — run \`make ci\` on this commit first." >&2
 	echo "         A merge with no local verdict is a merge on a remembered green, and the gate's" >&2
-	echo "         exit code is not something a caller can be trusted to have read." >&2
+	echo "         exit code is not something a caller can be trusted to have read. A verdict for" >&2
+	echo "         another SHA, in $verdict or beside it, is not read." >&2
 	exit 1
 fi
+verdict=$keyed
 v_exit=$(sed -n 's/^exit=//p' "$verdict" | head -1)
 v_sha=$(sed -n 's/^sha=//p' "$verdict" | head -1)
 v_dirty=$(sed -n 's/^dirty=//p' "$verdict" | head -1)
 v_when=$(sed -n 's/^when=//p' "$verdict" | head -1)
-tip=$(git rev-parse HEAD)
 echo "prmerge: $verdict exit=${v_exit:-?} sha=${v_sha:0:12} dirty=${v_dirty:-?} when=${v_when:-?}" >&2
 
 if [ "${v_exit:-1}" != "0" ]; then

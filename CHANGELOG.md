@@ -672,6 +672,14 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Changed
 
+- **The local gate's verdict is keyed by SHA, and `prmerge.sh` reads only the one for the exact tip** (the
+  chair's ruling of 2026-10-17). `.ci-verdict` was one file, so a later `make ci` on another branch
+  overwrote the verdict for a commit about to be merged. The refusal that caused was correct, but it cost a
+  whole re-run of the gate. `civerdict.sh` now also writes `.ci-verdict.d/<sha>`. `prmerge.sh` reads that
+  file and no other, so a verdict for a different SHA is never the one it reads; the unkeyed file stays for
+  a reader. Witness: two new arms in `TestPrmergeRefusesWithoutAGreenLocalVerdictForThisCommit`. Under the
+  neuter (prmerge reading the unkeyed file again), both fail.
+
 - **Proposed: the run slot is held by the Thread executing guest code**
   ([#978](https://github.com/scttfrdmn/burroughs/issues/978); the chair ruled Option A). This is one
   amendment covering ADR 0100 and ADR 0101, written into ADR 0101 and held for the chair's review before
