@@ -403,31 +403,49 @@ func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// futureElemSize is the byte size of future type `ti`'s element, for the intra-instance copy a `future.write`
-// makes into a pending read (#1006): 0 for a future with no payload, and -1 for an element whose copy is
-// not built. **Only integers are built**, because only for them is the pin's `future_copy`, a lift then a
-// lower, the same as moving the element's bytes. A `bool` lifts any non-zero byte to `true`, a `char` traps
-// on an invalid code point, and a float's lift canonicalises NaN, so a byte copy would be wrong for each.
-func (w *walker) futureElemSize(ti uint32) int {
+// futureElem describes future type `ti`'s element for the intra-instance copy a `future.write` makes into a
+// pending read (#1006).
+type futureElem struct {
+	size    int  // bytes moved: 0 for a future with no payload
+	float   int  // 32 or 64 for a float, whose NaN is canonicalized; 0 otherwise
+	numeric bool // the pin's `none_or_number_type`: the copy is allowed within one instance
+	known   bool // the type resolved to a future at all
+}
+
+// futureElemOf classifies future type `ti`'s element as the pin's `End.copy` does (2e7895c):
+//
+//		trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))
+//
+//	  - **No payload, or an integer:** the lift then lower is a byte copy.
+//	  - **A float:** a byte copy with the NaN canonicalized, as the codec's lift does under the deterministic
+//	    profile.
+//	  - **Anything else** (`bool`, `char`, `string`, a list or record, and so on): the copy TRAPS within one
+//	    instance. wasmtime 49.0.2 traps the same, *"cannot read from and write to intra-component future/stream
+//	    with non-numeric payload"*, on `bool` and `char`.
+func (w *walker) futureElemOf(ti uint32) futureElem {
 	at := w.c.sectionTypeAt()
 	td, ok := at(ti)
 	if !ok || td.Kind != TDVal || td.Val.Kind != VFuture {
-		return -1
+		return futureElem{}
 	}
 	if td.Val.Elem == nil {
-		return 0
+		return futureElem{numeric: true, known: true}
 	}
 	switch resolveVal(*td.Val.Elem, at, nil).Kind {
 	case VS8, VU8:
-		return 1
+		return futureElem{size: 1, numeric: true, known: true}
 	case VS16, VU16:
-		return 2
+		return futureElem{size: 2, numeric: true, known: true}
 	case VS32, VU32:
-		return 4
+		return futureElem{size: 4, numeric: true, known: true}
 	case VS64, VU64:
-		return 8
-	default: // every non-integer: its copy is not a byte copy, so it is not built
-		return -1
+		return futureElem{size: 8, numeric: true, known: true}
+	case VF32:
+		return futureElem{size: 4, float: 32, numeric: true, known: true}
+	case VF64:
+		return futureElem{size: 8, float: 64, numeric: true, known: true}
+	default: // not a number: the pin traps the copy within one instance
+		return futureElem{known: true}
 	}
 }
 
@@ -457,7 +475,7 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 	case 0x15: // future.new (2nd async guest) — mints a readable+writable future end pair
 		return futureNew(w.async), true
 	case 0x17: // future.write (2nd async guest) — single-value write; parks with no reader, copies to a pending one
-		return futureWrite(w.async, w.futureElemSize(slot)), true
+		return futureWrite(w.async, w.futureElemOf(slot)), true
 	case 0x19: // future.cancel-write (2nd async guest) — the future write arm's running CANCELLED
 		return futureCancelWrite(w.async), true
 	case 0x06: // subtask.cancel (gate:async increment 4) — the subtask substrate's cancel path

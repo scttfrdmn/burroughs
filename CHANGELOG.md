@@ -846,6 +846,22 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **#1006's other element types follow the pin's rule** (the chair's item 3, read on both oracles first).
+  - **The rule** is the pin's `End.copy`: within one instance only a number type copies, meaning the
+    integers and the floats, and **every other element traps**.
+  - **The readings** (`testdata/future-self-copy-elems.reading`):
+    - **`bool` and `char` trap** on wasmtime 49.0.2 (*"non-numeric payload"*) and on the pin, so they are
+      traps here, not copies;
+    - **`f32` 1.5 copies exactly** on all three readers;
+    - **a NaN copies canonicalized**, the pin's deterministic outcome and the codec's own rule. wasmtime
+      preserves the payload, which is also inside the pin's set.
+  - **What the ruling expected, and what changed:** it called for `bool` and `char` as copies and for a
+    non-scalar to be refused with `ErrUnsupportedForm`. The pin defines all three as a trap, so they trap;
+    an element whose type does not resolve is still refused by name.
+  - **Neuters, run:**
+    - without the trap, `bool` copies;
+    - without the canonicalization, `f32` and `f64` read wasmtime's preserved payloads.
+
 - **The reference pin moves from 2bed77e to upstream head 2e7895c** (the chair's ruling of 2026-10-17).
   Burroughs had been following head on one row and the old pin on every other, with no record of which governed
   where.

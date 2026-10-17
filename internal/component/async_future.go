@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
@@ -235,14 +236,26 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 // COMPLETED) event, and the write returns COMPLETED. Burroughs left both ends pending forever.
 //
 // Measured before the fix, on the default path (`gate:cm-threads` off), with `future-self-copy.wasm`: one
-// callback task reads its own future (BLOCKED), writes 7, then WAITs. wasmtime 49.0.2, the pin and upstream
-// head all read 262151 (event 4, write status 0, byte 7). Burroughs did not return.
+// callback task reads its own future (BLOCKED), writes 7, then WAITs. wasmtime 49.0.2, the previous pin
+// (2bed77e) and the pin (2e7895c) all read 262151 (event 4, write status 0, byte 7). Burroughs did not return.
 //
-// `elemSize` is the element's byte size (`futureElemSize`). An element whose copy is not built (-1, any
-// non-integer) is refused by name at the copy, not at bind, so a component that only parks a future still
-// loads. **Only this direction is built**: a READ arriving at a pending write still parks, which no guest has
-// yet driven.
-func futureWrite(h *asyncHandles, elemSize int) interp.CanonFunc {
+// # Which elements copy, and which trap (the chair's item 3, read on both oracles first)
+//
+// `elem` classifies the element as the pin's `End.copy` does (`futureElemOf`):
+//
+//	element           wasmtime 49.0.2                      pin 2e7895c                  Burroughs
+//	integers          the value                            the value                    byte copy
+//	f32 1.5           1069809664                           1069809664                   byte copy
+//	f32 NaN payload   bits preserved (2143551489)          {canonical, any NaN}         canonical NaN (2143551488)
+//	f64 NaN payload   bits preserved (262145)              {canonical, any NaN}         canonical NaN (262144)
+//	bool, char        trap: non-numeric payload            trap at the copy             trap at the copy
+//
+// The floats take the pin's deterministic-profile outcome, which is the codec's own rule
+// (`canon.CanonicalizeNaN32`/`64`). wasmtime's preserved payload is also inside the pin's set.
+//
+// **Only this direction is built**: a READ arriving at a pending write still parks, which no guest has yet
+// driven.
+func futureWrite(h *asyncHandles, elem futureElem) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("component: future.write: got %d args, want (i, ptr)", len(args))
@@ -258,14 +271,24 @@ func futureWrite(h *asyncHandles, elemSize int) interp.CanonFunc {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: end %d is not writable (done, write pending, or resolved)", i)}
 		}
 		if r := e.peer; r != nil && r.hasRead && !r.resolved {
-			if elemSize < 0 {
-				return nil, fmt.Errorf("%w: future.write's copy into a pending read is built for integer elements "+
-					"only; this element's lift and lower are not a byte copy (#1006)", ErrUnsupportedForm)
+			if !elem.known {
+				return nil, fmt.Errorf("%w: future.write's copy into a pending read: the future's element type "+
+					"did not resolve (#1006)", ErrUnsupportedForm)
 			}
-			if elemSize > 0 {
-				buf, rerr := c.Read(uint64(ptr), uint64(elemSize))
+			if !elem.numeric {
+				return nil, &interp.Trap{Reason: "future.write: cannot read from and write to an intra-instance future " +
+					"with a non-numeric payload (the pin's End.copy: trap_if(... not none_or_number_type))"}
+			}
+			if elem.size > 0 {
+				buf, rerr := c.Read(uint64(ptr), uint64(elem.size))
 				if rerr != nil {
 					return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: reading the value at %d: %v", ptr, rerr)}
+				}
+				switch elem.float {
+				case 32:
+					binary.LittleEndian.PutUint32(buf, canon.CanonicalizeNaN32(binary.LittleEndian.Uint32(buf)))
+				case 64:
+					binary.LittleEndian.PutUint64(buf, canon.CanonicalizeNaN64(binary.LittleEndian.Uint64(buf)))
 				}
 				if werr := r.caller.Write(uint64(r.readPtr), buf); werr != nil {
 					return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: storing the value at the read's %d: %v",

@@ -960,6 +960,13 @@ func canonicalizeNaN64(bits uint64) uint64 {
 	return bits
 }
 
+// CanonicalizeNaN32 and CanonicalizeNaN64 are the codec's own NaN rule for a caller that moves float bits
+// without a Value: the intra-instance future copy (#1006), which is a lift then a lower in the pin.
+func CanonicalizeNaN32(bits uint32) uint32 { return canonicalizeNaN32(bits) }
+
+// CanonicalizeNaN64 is CanonicalizeNaN32 for f64.
+func CanonicalizeNaN64(bits uint64) uint64 { return canonicalizeNaN64(bits) }
+
 // storeInt writes the low nbytes of v little-endian at ptr. A signed value is held in Value.u as its
 // two's-complement bits, so the same low-byte copy serves signed and unsigned.
 func (h *heap) storeInt(v uint64, ptr, nbytes int) {

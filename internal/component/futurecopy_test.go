@@ -55,6 +55,69 @@ func TestAFutureWriteCompletesAPendingReadInItsOwnInstance(t *testing.T) {
 	}
 }
 
+// TestAFutureCopyWithinAnInstanceFollowsThePinsElementRule is #1006's element types (the chair's item 3),
+// read on both oracles first (`future-self-copy-*.wasm`; the value is event code << 16 + the read buffer's
+// word):
+//
+//	fixture   wasmtime 49.0.2                         pin 2e7895c                   asserted
+//	bool      trap, non-numeric payload               trap at the copy              trap
+//	char      trap, non-numeric payload               trap at the copy              trap
+//	f32one    1069809664 (1.5)                        1069809664                    1069809664
+//	f32       2143551489 (NaN payload preserved)      {2143551488, any NaN}          2143551488 (canonical)
+//	f64       262145 (NaN payload preserved)          {262144, any NaN}              262144 (canonical)
+//
+// The floats take the pin's deterministic-profile outcome, the codec's own NaN rule.
+//
+// **Neuters, run:**
+//   - without the non-numeric trap, `bool` copies and reads its byte;
+//   - without the NaN canonicalization, `f32` reads 2143551489.
+func TestAFutureCopyWithinAnInstanceFollowsThePinsElementRule(t *testing.T) {
+	for _, gate := range []string{"0", "1"} {
+		for _, tc := range []struct {
+			fixture string
+			want    uint32 // 0: the trap
+		}{
+			{"bool", 0}, {"char", 0}, {"f32one", 1069809664}, {"f32", 2143551488}, {"f64", 262144},
+		} {
+			t.Run(tc.fixture+"/gate="+gate, func(t *testing.T) {
+				t.Setenv(asyncGateEnv, "1")
+				t.Setenv(cmThreadsGateEnv, gate)
+				b, err := os.ReadFile("testdata/future-self-copy-" + tc.fixture + ".wasm")
+				if err != nil {
+					t.Fatalf("the committed fixture is missing: %v", err)
+				}
+				in, err := Instantiate(b)
+				if err != nil {
+					t.Fatalf("instantiate: %v", err)
+				}
+				t.Cleanup(in.Close)
+				type out struct {
+					res []canon.Value
+					err error
+				}
+				ch := make(chan out, 1)
+				go func() { r, e := in.CallValues("run"); ch <- out{r, e} }()
+				var o out
+				select {
+				case o = <-ch:
+				case <-time.After(10 * time.Second):
+					t.Fatal("run() did not return within 10s")
+				}
+				if tc.want == 0 {
+					wantTrapContaining(t, tc.fixture, o.err, "non-numeric payload")
+					return
+				}
+				if o.err != nil {
+					t.Fatalf("run(): %v", o.err)
+				}
+				if v, ok := o.res[0].U32(); !ok || v != tc.want {
+					t.Fatalf("run() = %v, want %d", o.res, tc.want)
+				}
+			})
+		}
+	}
+}
+
 // TestASyncWaitSatisfiedByItsOwnThreadIsAdmitted is #1005's admit branch, witnessed by its own fixture at
 // last. A sync lift waits on a future that a Thread of its own instance writes, so the sync tail has a
 // candidate.
