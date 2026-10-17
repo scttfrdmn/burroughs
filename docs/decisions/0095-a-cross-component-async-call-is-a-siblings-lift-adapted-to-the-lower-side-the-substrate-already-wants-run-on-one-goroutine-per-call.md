@@ -78,3 +78,51 @@ That copy is real work with its own witnesses and it is not what #888 registered
 - **A sync lift's results stop being discarded.** `invokeWith` returned `nil` for the sync arm, with a comment saying sync lifts move no values through that path — true of the callers that existed, false of the path. It surfaced twice here from opposite directions: `CallValues` on a sync export declaring a result refused with *"the guest returned 0 flat value(s)"* when the guest had returned one, and the **sync cross-component arm** would have silently produced no result. The second is the worse one: a wrong value reported as success.
 - A composed artefact that **completes** exists for the first time (`testdata/asynclift/call-wat-parent/`). Every prior one cancelled, which is why the capability had no end-to-end arm.
 - The inline arm of the parent's dispatch (`RETURNED` from the lower, result already at the retptr) is **correct code and unwitnessed**, because it is unreachable through a `wit-bindgen` child: such a child's lift always returns WAIT. A first draft of the fixture's prose claimed a fast host would reach it; measuring showed both hosts take the park arm, because the inline arm is a property of the *callee's* ABI and not of the host's latency. Said in the fixture rather than left to a coverage report.
+
+## Amendment, proposed 2026-10-17 and held for chair review: outcomes the reference's single runner forbids
+
+**Status: proposed. No engine code implements it.** The chair ordered (ruling of 2026-10-17, item 2) that #1020 be characterized with fixtures, and the design written here, before any engine change. This section records both, and it is held for review as ADR 0101's Option A was.
+
+### The class
+
+This ADR runs a cross-component callee on its own goroutine, concurrently with its caller. The reference has one runner: a callee advances only when its caller suspends, yields or returns, and a host event is delivered only on a later `Store.tick`. So **some outcomes the reference forbids are reachable here.** #1020 is one of them: `cancel-suspended` read RETURNED (2) once on ubuntu under `-race`, where every oracle reads 4.
+
+### Measured scope: the class reaches the default path, by two mechanisms
+
+Every reading below was taken with `gate:cm-threads` off, no Threads, and the gate-on run alongside. Each reference reading is calibrated on `wait-runs-ready` first, and agrees on the pin (2bed77e) and on head (2e7895c).
+
+**(a) A callee's result store lands inside the caller's `inHost` window.** While a caller's async lower is inside its impl, the cross-component adapter, a resolution is queued and applied at `leaveHost`, before the lower returns. A callee that resolves inside that window makes the lower return RETURNED.
+
+| fixture | reference | Burroughs, natural | Burroughs, window widened 2 ms |
+|---|---|---|---|
+| `call-wat-parent`, host `tick` resolving on a goroutine with no delay | **{STARTED}**: the host event arrives only on a later tick | STARTED, 300 of 300 per gate; 100 of 100 under `-race` | **RETURNED, 30 of 30** |
+
+The host is modelled in the reference as head's own `mk_host_func` does: a host Thread waiting on a flag the embedder sets once it begins ticking. wasmtime's CLI cannot supply a host whose event arrives later, so the reference is the oracle here.
+
+**(b) A cancel is judged against the callee's live task state.** While the caller runs, the callee's own task can complete. Its result store is fenced by the caller's run slot (#983), but `subtask.cancel` asks the callee's task directly, finds it resolved, and arms no hand-back.
+
+| fixture | reference (head) | Burroughs, natural | Burroughs, cancel widened 2 ms |
+|---|---|---|---|
+| `cancel-wat-parent` (sync `go`), host `tick` resolving on a goroutine with no delay | **{20}**: STARTED, then CANCELLED_BEFORE_RETURNED | 20, 200 of 200 per gate | **trap at the sync tail, 30 of 30** (gate off) |
+| `cmthreads/cancel-suspended` (#1020, async canceller, Threads) | {4} | 4, 0 failures in 1,000 on darwin; 2 once on ubuntu under `-race` | **2 (RETURNED), 30 of 30** |
+
+In the first row the parent's store is still waiting for the slot the canceller holds, so the judged wait finds no candidate and traps. Before #1018 that wait was unjudged with the gate off, and it would have read RETURNED. Either way the outcome is one the reference forbids. The pin traps this row too, but that is the sync-cancel row it is stale on (#726).
+
+**Not in the class, measured:** `poll-before-suspend`, a caller polling a provider's subtask without suspending. Burroughs reads 1 (STARTED, no event seen), 200 of 200 per gate, matching wasmtime (1, 10 of 10) and the reference ({1, 9002}). The result store is fenced by the caller's slot, so the caller never observes the event early. The YIELDing provider can legitimately resolve inline (9002), so the window of (a) cannot produce a forbidden outcome there.
+
+### The rule this proposes
+
+**A callee's progress, and every observation of it, is ordered as the reference orders it: after the caller's last suspension point.** It has two parts, one per mechanism:
+
+1. **No result store inside a caller's call.** A store arriving while the caller is in host code inside the lower (`inHost`) is still queued, but it is applied at the caller's next suspension, not at `leaveHost`. So a lower returns STARTED unless the callee resolved before the lower began running it. **This removes (a).** It keeps #983's ordering (the store lands before any later guest code of the instance runs) and only moves the point.
+2. **A cancel is judged against the state the caller could have observed.** If a callee's task resolved after the caller's last suspension point, the caller's `subtask.cancel` is judged as the reference would judge it, with the callee still STARTED. The cancel is delivered to the callee, whose callback receives TASK_CANCELLED. **That cannot be done after the fact, because the callee has already run.** So part 2 needs the callee held, not the caller's view rewritten:
+   - **2a, the candidate taken:** a cross-component callee's continuation past its first suspension (its next entry, or a Thread readied in its instance) waits until its caller next suspends, yields or returns. The callee runs in parallel only while the caller is suspended. That is where the reference lets it run at all.
+   - **2b, rejected:** rewriting the caller's observation, reporting CANCELLED_BEFORE_RETURNED for a callee that in fact returned. It is not an outcome the reference allows. The callee's side effects (for example `receipt`'s note) would say it returned, while its status said it was cancelled.
+
+**What 2a keeps of the parallelism:** a callee still runs on its own goroutine, concurrently with everything that is not its caller, and concurrently with its caller whenever that caller is suspended. What it gives up is a callee racing a caller that is executing, which is precisely the interleaving the reference does not have.
+
+**Its cost, to be measured before the build:** one more wait per cross-component callee entry, released by the caller's suspension. The A/B is `switch.wasm` and the `asynclift` composed fixtures on janus.
+
+### What the flip list carries
+
+#1020's scope as measured above: **the class reaches the default path, gate off, by mechanism (a) with a host event, and by (b) with a cancel.** Both rates are natural-rate rare and widened-deterministic. The fix is this amendment's build, which is not required before the flip. Its scope is stated so the flip is not decided on a flake.
