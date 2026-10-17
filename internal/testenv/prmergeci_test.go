@@ -92,10 +92,7 @@ func TestPrmergeRefusesUnlessCIItselfIsGreen(t *testing.T) {
 		side := t.TempDir()
 		// A green LOCAL verdict for this exact commit, so step 3 passes.
 		local := filepath.Join(side, "local.verdict")
-		if err := os.WriteFile(local,
-			[]byte("exit=0\nsha="+sha+"\ndirty=no\nwhen=now\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeLocalVerdict(t, local, sha, "exit=0\nsha="+sha+"\ndirty=no\nwhen=now\n")
 		ciPath := filepath.Join(side, "ci.verdict")
 		if ciVerdict != "" {
 			body := strings.ReplaceAll(ciVerdict, "HEADSHA", sha)

@@ -212,6 +212,21 @@ func TestCIVerdictRecordsTheTreeItActuallyRanOn(t *testing.T) {
 	})
 }
 
+// writeLocalVerdict writes a local gate verdict the way `civerdict.sh` does: the unkeyed file at `path`, and
+// the copy keyed by `sha` beside it (`<path>.d/<sha>`), which is the only one `prmerge.sh` reads.
+func writeLocalVerdict(t *testing.T, path, sha, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(path+".d", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path+".d", sha), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestPrmergeRefusesWithoutAGreenLocalVerdictForThisCommit witnesses the gate-verdict check in
 // `scripts/prmerge.sh`.
 //
@@ -287,13 +302,25 @@ fi
 		t.Fatal(err)
 	}
 
-	run := func(t *testing.T, verdict string) (int, string) {
+	// runFiles writes `unkeyed` as the verdict file and each of `keyed` as `<verdict>.d/<sha>`, which is
+	// what `civerdict.sh` writes, then runs prmerge against them.
+	runFiles := func(t *testing.T, unkeyed string, keyed map[string]string) (int, string) {
 		t.Helper()
 		dir := t.TempDir()
 		path := filepath.Join(dir, "verdict")
-		if verdict != "" {
-			if err := os.WriteFile(path, []byte(verdict), 0o600); err != nil {
+		if unkeyed != "" {
+			if err := os.WriteFile(path, []byte(unkeyed), 0o600); err != nil {
 				t.Fatal(err)
+			}
+		}
+		if len(keyed) > 0 {
+			if err := os.MkdirAll(path+".d", 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for sha, body := range keyed {
+				if err := os.WriteFile(filepath.Join(path+".d", sha), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		cmd := exec.Command("bash", script, "99999")
@@ -314,6 +341,17 @@ fi
 			code = ee.ExitCode()
 		}
 		return code, out.String()
+	}
+	// run writes `verdict` as `civerdict.sh` would: the unkeyed file, and a keyed copy under the SHA it names.
+	run := func(t *testing.T, verdict string) (int, string) {
+		t.Helper()
+		keyed := map[string]string{}
+		for _, line := range strings.Split(verdict, "\n") {
+			if sha, ok := strings.CutPrefix(line, "sha="); ok && sha != "" {
+				keyed[sha] = verdict
+			}
+		}
+		return runFiles(t, verdict, keyed)
 	}
 
 	for _, a := range []struct {
@@ -368,6 +406,26 @@ fi
 			}
 		})
 	}
+
+	// **Keyed by SHA** (the chair's ruling of 2026-10-17). A later gate on another branch overwrote the one
+	// `.ci-verdict`. The keyed copy for this commit survives that, and the unkeyed file is not read at all.
+	green := func(sha string) string {
+		return "exit=0\nsha=" + sha + "\ndirty=no\nwhen=2026-10-01T00:00:00Z\n"
+	}
+	other := "1111111111111111111111111111111111111111"
+	t.Run("another_branchs_later_run_does_not_hide_this_commits_verdict", func(t *testing.T) {
+		_, out := runFiles(t, green(other), map[string]string{head: green(head), other: green(other)})
+		if !strings.Contains(out, "the local gate is green on this exact commit") {
+			t.Errorf("this commit's keyed green was not read, so a later run for another SHA still hides "+
+				"it:\n%s", out)
+		}
+	})
+	t.Run("an_unkeyed_green_for_this_tip_is_not_read_without_its_keyed_copy", func(t *testing.T) {
+		code, out := runFiles(t, green(head), nil)
+		if code == 0 || !strings.Contains(out, "no verdict for the local tip") {
+			t.Errorf("prmerge read the unkeyed file, which another SHA's run can overwrite:\n%s", out)
+		}
+	})
 
 	// The complement, without which every arm above could be satisfied by a script that refuses
 	// everything: a green verdict naming this exact commit must get PAST the verdict block. It is

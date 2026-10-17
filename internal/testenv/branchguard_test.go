@@ -200,10 +200,7 @@ func TestPrmergeDeletesTheLocalBranch(t *testing.T) {
 
 	// A green verdict for the topic head, so the gate check passes and execution reaches the merge.
 	verdict := filepath.Join(t.TempDir(), "v")
-	if wErr := os.WriteFile(verdict,
-		[]byte("exit=0\nsha="+topicHead+"\ndirty=no\nwhen=2026-10-02T00:00:00Z\n"), 0o600); wErr != nil {
-		t.Fatal(wErr)
-	}
+	writeLocalVerdict(t, verdict, topicHead, "exit=0\nsha="+topicHead+"\ndirty=no\nwhen=2026-10-02T00:00:00Z\n")
 
 	// A green CI verdict too, since #867 made CI's own result a precondition of the merge. Without it this
 	// arm stops at the new step 4 and never reaches the branch deletion it exists to witness — the claim is
@@ -265,10 +262,7 @@ func TestPrmergeDeletesTheLocalBranch(t *testing.T) {
 			t.Fatal(wErr)
 		}
 		v2 := filepath.Join(t.TempDir(), "v")
-		if wErr := os.WriteFile(v2,
-			[]byte("exit=0\nsha="+t2+"\ndirty=no\nwhen=2026-10-02T00:00:00Z\n"), 0o600); wErr != nil {
-			t.Fatal(wErr)
-		}
+		writeLocalVerdict(t, v2, t2, "exit=0\nsha="+t2+"\ndirty=no\nwhen=2026-10-02T00:00:00Z\n")
 
 		// The #867 precondition, as above: this arm must reach the post-merge SHA re-check.
 		ciw2 := filepath.Join(filepath.Dir(v2), "ci")

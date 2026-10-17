@@ -263,7 +263,7 @@ ci:
 	trap 'scripts/cilock.sh release $(CI_LOCK) '"$$me"'; exit 130' INT; \
 	trap 'scripts/cilock.sh release $(CI_LOCK) '"$$me"'; exit 143' TERM; \
 	trap 'scripts/cilock.sh release $(CI_LOCK) '"$$me" EXIT; \
-	rm -f $(CI_VERDICT); \
+	rm -f $(CI_VERDICT) $(CI_VERDICT).d/$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
 	start=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
 	$(MAKE) --no-print-directory ci-gates || rc=$$?; \
 	scripts/civerdict.sh $$rc $(CI_VERDICT) $$start $(CI_LOCK) $$me; \

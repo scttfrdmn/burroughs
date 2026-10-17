@@ -124,4 +124,12 @@ fi
 	echo "when=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$out"
 
-echo "civerdict: $out exit=$rc sha=${sha:0:12} dirty=$dirty" >&2
+# --- and a copy KEYED by the gated SHA, which is the one `prmerge.sh` reads --------------------------------
+#
+# `$out` is one file, so a later gate on another branch overwrote the verdict for a commit about to be merged
+# (the chair's ruling of 2026-10-17). The keyed copy is not overwritten by any other SHA's run. `prmerge.sh`
+# reads `<out>.d/<tip>` and nothing else, so a verdict for another SHA is never the one it reads.
+mkdir -p "$out.d"
+cp "$out" "$out.d/$sha"
+
+echo "civerdict: $out exit=$rc sha=${sha:0:12} dirty=$dirty (keyed: $out.d/${sha:0:12}…)" >&2
