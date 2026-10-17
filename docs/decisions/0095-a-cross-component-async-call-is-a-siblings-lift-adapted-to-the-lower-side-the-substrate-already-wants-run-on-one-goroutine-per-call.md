@@ -83,11 +83,13 @@ That copy is real work with its own witnesses and it is not what #888 registered
 
 **Status: proposed. No engine code implements it.** The chair ordered (ruling of 2026-10-17, item 2) that #1020 be characterized with fixtures, and the design written here, before any engine change. This section records both, and it is held for review as ADR 0101's Option A was.
 
+**Revised after the chair's review of the first draft** (ruling of 2026-10-17 on #1025). The review corrected part 1's boundary and asked for one fence to be evaluated against the two-part rule. Taking the corrected boundary seriously found a third mechanism, (c), which is the common case rather than a race. The rule section below replaces the first draft's. Citations into the reference name the pin they read, 2e7895c, by symbol.
+
 ### The class
 
 This ADR runs a cross-component callee on its own goroutine, concurrently with its caller. The reference has one runner: a callee advances only when its caller suspends, yields or returns, and a host event is delivered only on a later `Store.tick`. So **some outcomes the reference forbids are reachable here.** #1020 is one of them: `cancel-suspended` read RETURNED (2) once on ubuntu under `-race`, where every oracle reads 4.
 
-### Measured scope: the class reaches the default path, by two mechanisms
+### Measured scope: the class reaches the default path, by three mechanisms
 
 Every reading below was taken with `gate:cm-threads` off, no Threads, and the gate-on run alongside. Each reference reading is calibrated on `wait-runs-ready` first, and agrees on the pin (2bed77e) and on head (2e7895c).
 
@@ -108,21 +110,111 @@ The host is modelled in the reference as head's own `mk_host_func` does: a host 
 
 In the first row the parent's store is still waiting for the slot the canceller holds, so the judged wait finds no candidate and traps. Before #1018 that wait was unjudged with the gate off, and it would have read RETURNED. Either way the outcome is one the reference forbids. The pin traps this row too, but that is the sync-cancel row it is stale on (#726).
 
+**(c) A callee's first segment does not run inside the lower.** The reference's async lower runs the callee itself until it first blocks. `canon_lower` calls the callee (def@2e7895c:canon_lower:"subtask.on_cancel = callee(on_start, on_resolve)"), and `canon_lift` runs the new Thread until it first suspends or exits (def@2e7895c:canon_lift:"thread.resume()") before control returns. A callee that resolves inside that segment makes the lower return RETURNED inline (def@2e7895c:canon_lower:"return [Subtask.State.RETURNED]").
+
+Burroughs' adapter, `liftAsAsyncImpl`, starts the callee on a goroutine and returns at once. So `asyncLowerFunc`'s re-check of `st.resolved` runs before the callee's first segment ends, and the lower returns STARTED.
+
+| fixture | wasmtime 49.0.3 | reference | Burroughs, natural |
+|---|---|---|---|
+| `first-segment-return` (new: the child calls `task.return` and EXITs in its first core call) | **2**, 10 of 10 | **{2}** | **1 (STARTED), 200 of 200 per gate** |
+| `call-wat-parent`, host `tick` resolving inline (`crossCallHost`'s `deferTick=false`) | no CLI host | **{2}** (`host-event-inline`) | **STARTED, 200 of 200 per gate** |
+
+A probe confirmed that the receipt child's first core call returns EXIT on the inline `tick`, so the child did resolve inside its first segment. **No widened window is needed: this is the natural rate.** It went unseen because `TestACrossComponentAsyncCallCarriesParamsAndResult` accepts both arms, on the premise in its own comment that *"which arm is taken is a scheduling fact, not a property of the callee's ABI"*. For a callee that resolves in its first segment, the reference says it is a property: RETURNED. (wasmtime 49.0.3 is the CLI installed now; every earlier reading names 49.0.2.)
+
 **Not in the class, measured:** `poll-before-suspend`, a caller polling a provider's subtask without suspending. Burroughs reads 1 (STARTED, no event seen), 200 of 200 per gate, matching wasmtime (1, 10 of 10) and the reference ({1, 9002}). The result store is fenced by the caller's slot, so the caller never observes the event early. The YIELDing provider can legitimately resolve inline (9002), so the window of (a) cannot produce a forbidden outcome there.
 
-### The rule this proposes
+### The boundary is the callee's first suspension
 
-**A callee's progress, and every observation of it, is ordered as the reference orders it: after the caller's last suspension point.** It has two parts, one per mechanism:
+The first draft's part 1 said *"a lower returns STARTED unless the callee resolved before the lower began running it"*. **That is not the reference**, and the chair corrected it. The reference's async lower runs the callee itself until the callee first blocks, so a resolution inside that first segment is RETURNED, inline. What the reference forbids is progress **after the callee's first suspension** while its caller has not suspended. A blocked callee is resumed only by `Store.tick`, which runs at nesting depth zero (def@2e7895c:Store.tick:"assert(self.nesting_depth == 0)"), so only once the whole running chain, its caller included, has given control back.
 
-1. **No result store inside a caller's call.** A store arriving while the caller is in host code inside the lower (`inHost`) is still queued, but it is applied at the caller's next suspension, not at `leaveHost`. So a lower returns STARTED unless the callee resolved before the lower began running it. **This removes (a).** It keeps #983's ordering (the store lands before any later guest code of the instance runs) and only moves the point.
-2. **A cancel is judged against the state the caller could have observed.** If a callee's task resolved after the caller's last suspension point, the caller's `subtask.cancel` is judged as the reference would judge it, with the callee still STARTED. The cancel is delivered to the callee, whose callback receives TASK_CANCELLED. **That cannot be done after the fact, because the callee has already run.** So part 2 needs the callee held, not the caller's view rewritten:
-   - **2a, the candidate taken:** a cross-component callee's continuation past its first suspension (its next entry, or a Thread readied in its instance) waits until its caller next suspends, yields or returns. The callee runs in parallel only while the caller is suspended. That is where the reference lets it run at all.
-   - **2b, rejected:** rewriting the caller's observation, reporting CANCELLED_BEFORE_RETURNED for a callee that in fact returned. It is not an outcome the reference allows. The callee's side effects (for example `receipt`'s note) would say it returned, while its status said it was cancelled.
+**In the adapter, the boundary is where `liftAsAsyncImpl` returns to `asyncLowerFunc`.** The reference returns there when the callee's first segment ends: `canon_lift`'s `thread.resume()` returns. Burroughs returns when the goroutine starts. That gap is (c).
 
-**What 2a keeps of the parallelism:** a callee still runs on its own goroutine, concurrently with everything that is not its caller, and concurrently with its caller whenever that caller is suspended. What it gives up is a callee racing a caller that is executing, which is precisely the interleaving the reference does not have.
+### Two designs, evaluated
 
-**Its cost, to be measured before the build:** one more wait per cross-component callee entry, released by the caller's suspension. The A/B is `switch.wasm` and the `asynclift` composed fixtures on janus.
+**The two-part rule** (the first draft, with its boundary corrected):
+
+1. the lower waits for the callee's first segment; a store arriving after the callee's first suspension, while the caller is still in its lower, is applied at the caller's next suspension;
+2. (2a) a callee's continuation past its first suspension waits until its caller next suspends, yields or returns.
+
+**The single fence** (the chair's): a callee can run past its first suspension only after its caller has suspended since the call, which is a fence on each subtask edge.
+
+What the evaluation found:
+
+- **Given 2a, part 1's store deferral never fires.** A store from past the callee's first suspension cannot arrive while the caller is in its call, because 2a holds the callee until the caller suspends. So part 1's deferral is a consequence of the fence, as the chair said. Keeping it would mean a second mechanism, with its own neuter, guarding an empty case.
+- **Part 1's other half is not a fence, and neither design removes (c) without it.** Waiting for the callee's first segment is the adapter's call shape: the reference's `thread.resume()` inside `canon_lift`. It is adopted on its own as F0 below, not as part of either design.
+- **"Has suspended since the call" is not enough, and neither is 2a's "waits until its caller next suspends".** Both open the gate at a suspension and say nothing about the caller's resumption. A callee segment that began while the caller was suspended can still be running when the caller resumes. Then (b) recurs: the caller's `subtask.cancel` reads a callee task that is resolving underneath it. In the reference no callee is mid-segment when its caller resumes, because one thread runs. **So the fence has to be symmetric.**
+
+### The rule adopted: F0 and a symmetric fence
+
+- **F0, the boundary rule.** `liftAsAsyncImpl` returns when the callee's first segment ends, not when its goroutine starts. The segment ends at the callee's first suspension (a WAIT or YIELD park, a backpressure wait, a Thread suspension, a synchronous wait) or at the end of its task. A resolution inside the segment arrives while the caller is in host code, so the existing #983 queue applies it at `leaveHost`, and the lower returns RETURNED. **This removes (c).**
+- **F1, the fence.** On each subtask edge, the callee's segments past its first suspension and the caller instance's guest execution exclude each other:
+  - a callee segment starts only while no guest code of the caller's instance is executing, except on the callee's own call chain;
+  - the caller instance's next guest execution waits until the edge's in-flight segments have reached their next suspension.
+
+  **This removes (a) and (b).**
+- **The callee's result store is inside its segment.** So it is atomic with the callee's task resolution, as the caller instance observes it. That is the property (b) is missing today: the store waits for the caller's run slot while the callee's task already reads as resolved.
+- **The caller *instance*, not the caller task.** A subtask's handle lives in the caller instance's table, so any task of that instance can wait on it or cancel it. One task per instance executes at a time (the run slot, ADR 0101), so "no guest code of the caller's instance executing" is the run slot not being held by guest code.
+- **2b, rejected as before:** rewriting the caller's observation, reporting CANCELLED_BEFORE_RETURNED for a callee that in fact returned, is not an outcome the reference allows.
+
+### The four questions
+
+1. **Nested chains, A → B → C.** The fence is per edge, and the edges compose:
+   - C runs past its first suspension only while B's instance executes no guest code, and B only while A's does not.
+   - C may run while A executes, when B is suspended. A cannot observe that through the chain: A sees C only through B, and B does not run while A executes.
+   - The first segments nest exactly as in the reference: A's lower waits for B's first segment, which includes B's lower waiting for C's.
+2. **A callee with several callers over its lifetime.** The fence is keyed by the call (the subtask edge), not by the callee instance:
+   - B serving A1 and A2 has two tasks, each fenced by its own caller's instance. Inside B they still exclude each other through B's run slot.
+   - Threads that a callee task creates belong to that task (ADR 0100), so the same edge fences them.
+3. **Host events while every caller is suspended still progress in parallel.** In `fanout`'s `after` mode the caller WAITs, so all four callees continue at once, each in its own instance. The fence costs the caller one wait at resumption, for any callee segment still in flight. What it gives up is a callee continuing while its caller executes, which the reference never does.
+4. **The run slot.** The fence is a second relation beside the slot, not a change to it. The slot orders tasks within an instance; the fence orders a callee's segments against its caller's instance. Two rules keep them from deadlocking:
+   - **The fence is taken before the slot**, on both sides. A caller that took its slot and then waited on the fence would hold the slot its callee's result store needs, while the callee waits for that slot inside the segment the caller is waiting on. A callee's store runs under the fence it already holds.
+   - **Re-entry is recognised by chain**, as the slot's is (#976). A callee that synchronously calls back into its caller's instance is on its own chain, so its entry does not wait for itself.
+
+### What each design leaves unhandled
+
+- **The two-part rule** leaves (b) open after the caller resumes with a callee segment in flight. It also keeps a deferral queue for a case 2a makes empty.
+- **The adopted rule** leaves communication that does not follow a subtask edge, **stated as unmeasured, not as handled**:
+  - a stream or future end passed to a component that is not its holder's caller or callee;
+  - host state shared by two instances.
+
+  Segments in different instances still run in parallel. Where two of them share such a channel, their interleaving need not be one the single runner allows; for example, two polls in one segment can see a write land between them. None of the class's fixtures has that shape, and it needs its own characterization before any claim is made about it.
+- **Both** give up callee–caller overlap. F0 also gives up overlap between a callee's first segment and its caller, which the reference itself serializes.
+
+### The cost, forecast before the build
+
+`BenchmarkFanOut` (`testdata/fanout/`) has one caller, four callee instances, k = 1 or 4, and the work either in the first segment or past a YIELD. On main's engine, on janus:
+
+| row | main, sec/op (n = 10) | overlap |
+|---|---|---|
+| `work=first/k=1` | 12.84m ± 0% | — |
+| `work=first/k=4` | 14.21m ± 2% | four callees in 1.11× one |
+| `work=after/k=1` | 14.23m ± 0% | — |
+| `work=after/k=4` | 15.68m ± 0% | four callees in 1.10× one |
+
+Taken on janus.local (i9-9960X, linux/amd64) in its `measured` group, as pueue task 32, with 0 concurrent tasks at submit, at 8197a3d (main's engine with the benchmark added). The summary is from `benchstat` over the task's full log.
+
+The forecast for the build, against those figures:
+
+- **`work=first/k=4` becomes about 4 × `work=first/k=1`**, about 51.4m (4 × 12.84m), against main's 14.21m: a 3.6× slowdown. F0 serializes the four first segments, as the reference does, so this is the parallelism the fix for (c) gives up.
+- **`work=after/k=4` stays within 5% of main's 15.68m.** The work runs while the caller WAITs, which F1 leaves parallel.
+- **`switch.wasm` is unchanged.** It has no cross-component edge.
+
+The build measures all three under `make lab-ab`.
+
+### Owed by the build
+
+- `host-event-later` and `cancel-suspended` read in the reference set at their widened windows, 30 of 30. Since the build moves Burroughs into the reference set, the widened windows become the witness.
+- `first-segment-return` and the inline `call-wat-parent` arm read RETURNED, 200 of 200 per gate. `TestACrossComponentAsyncCallCarriesParamsAndResult`'s inline case then asserts the arm instead of accepting either.
+- A neuter for each mechanism:
+  - F0 returning at goroutine start brings back (c);
+  - a callee segment that does not take the fence brings back (a);
+  - a caller resumption that does not wait for in-flight segments brings back (b).
 
 ### What the flip list carries
 
-#1020's scope as measured above: **the class reaches the default path, gate off, by mechanism (a) with a host event, and by (b) with a cancel.** Both rates are natural-rate rare and widened-deterministic. The fix is this amendment's build, which is not required before the flip. Its scope is stated so the flip is not decided on a flake.
+#1020's scope as measured above: **the class reaches the default path, gate off, by three mechanisms:**
+- (a), with a host event;
+- (b), with a cancel;
+- (c), with a callee that resolves in its first segment.
+
+(a) and (b) are rare at the natural rate and deterministic when widened. **(c) is the natural rate, 200 of 200.** The fix is this amendment's build, which is not required before the flip, because all three read the same in both gate states. The scope is stated so the flip is not decided on a flake.

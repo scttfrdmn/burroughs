@@ -25,3 +25,4 @@ poll-before-suspend (#1020, outside the class; wasmtime 49.0.2: 1): value 1 | va
 host-event-later (#1020 mechanism (a): the lower's state): value 1
 host-event-later, sync cancel (#1020 mechanism (b)): value 20
 first-segment-return (#1020 mechanism (c); wasmtime 49.0.3: 2): value 2
+host-event-inline (#1020 mechanism (c): call-wat-parent's inline arm): value 2

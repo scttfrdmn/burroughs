@@ -761,6 +761,59 @@ def promote_implicit(promote_run):
     return body
 
 
+def host_event_inline():
+    """`host_event_later`'s shape with the host `tick` resolving INLINE (`crossCallHost`'s deferTick=false). The
+    child sees `tick` RETURNED, calls task.return, and EXITs inside its first segment, so the parent's lower
+    returns RETURNED (2): `call-wat-parent`'s inline arm, mechanism (c)."""
+    tft = d.FuncType([], [d.U32Type()], async_=True)
+
+    def tick_inst(on_start, on_resolve):
+        on_start()
+        on_resolve([49])
+        return lambda: None
+
+    def body(out, site):
+        store = d.Store()
+        child = d.ComponentInstance(store)
+        cmem = d.MemInst(bytearray(65536), "i32")
+        ticklow = store.lower(tick_inst, tft, d.CanonicalOptions(async_=True, memory=cmem), child)
+
+        def crun(args):
+            [p] = ticklow([0])
+            if p & 0xf == 2:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(cmem, 0)])
+                return [0]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(p >> 4, s)
+            return [2 | (s << 4)]  # WAIT
+
+        def ccb(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(cmem, 0)])
+            return [0]
+
+        cft = d.FuncType([d.U32Type()], [d.U32Type()], async_=True)
+        crun_fi = store.lift(crun, cft, d.CanonicalOptions(async_=True, callback=ccb), child)
+        parent = d.ComponentInstance(store)
+        pmem = d.MemInst(bytearray(65536), "i32")
+        clow = store.lower(crun_fi, cft, d.CanonicalOptions(async_=True, memory=pmem), parent)
+
+        def prun(args):
+            [p] = clow([7, 0])
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [p & 0xf])
+            return [0]
+
+        go_fi = store.lift(prun, d.FuncType([], [d.U32Type()], async_=True),
+                           d.CanonicalOptions(async_=True, callback=lambda a: [0]), parent)
+        got = []
+        host_invoke(store, go_fi, lambda res: got.append(res))
+        while not got:
+            store.tick()
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
 def first_segment_return():
     """#1020's class, mechanism (c): `first-segment-return.wat`. A child's callback lift calls task.return and
     EXITs inside its first core call, so it resolves before its first suspension. canon_lift's
@@ -822,6 +875,7 @@ def battery():
     read("host-event-later (#1020 mechanism (a): the lower's state)", host_event_later(False))
     read("host-event-later, sync cancel (#1020 mechanism (b))", host_event_later(True))
     read("first-segment-return (#1020 mechanism (c); wasmtime 49.0.3: 2)", first_segment_return())
+    read("host-event-inline (#1020 mechanism (c): call-wat-parent's inline arm)", host_event_inline())
 
 
 if __name__ == "__main__":
