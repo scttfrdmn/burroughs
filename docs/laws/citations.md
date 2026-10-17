@@ -59,6 +59,37 @@ reach is a law out of context.
   searching for its existing instrument is this family's own defect one level
   up**, and the correction is on the issue rather than folded silently into it.
 
+### A citation into a pinned reference names a symbol, because a line number rots on every pin move.
+
+- **Cite `definitions.py` by symbol, and quote the line where the exact statement matters**
+  (`def:canon_lift:"trap_if(not candidates)"`). This is standing protocol, by the chair's ruling of
+  2026-10-17. The specimen is the 2bed77e→2e7895c move. Line alignment remapped 269 citations and
+  three of five spot checks were wrong. The remap was not careless; **a line number names a
+  position, and a pin move changes what the position holds.** Every wrong one still resolved,
+  which is this family's first law again.
+
+  `make refcite` (`scripts/refcite.py`) resolves every citation in the **whole tree**, not only
+  the diff, because a pin move breaks citations on lines it does not touch. A quote must appear
+  inside the named symbol. A record — an accepted ADR, a released CHANGELOG entry — names the pin
+  it read (`def@2bed77e:…`), since what it states was true at that pin and the symbol may since
+  have been renamed. Live code cites unqualified, so the next pin move re-asks all of it. Resolving
+  the tree against 2bed77e as though it were the pin flags 21 live sites: renamed symbols and
+  changed statements, which are the ones such a move needs re-read.
+
+  **Converting is not transliterating.** The remapped numbers were not the source for the
+  conversion. Each citation's original number was read at the pin it was written against, and
+  where the two readings named different symbols, the prose decided. That reading found a comment
+  whose claim had expired (#892 fixed, the comment still in the present tense) and one whose
+  citation had drifted onto `return False`. A repaired pointer gets its sentence read.
+
+  **And a resolving check is not a reading.** The first converted tree passed `make refcite`
+  with 0 failures and still held twelve wrong citations. Four were line numbers left glued to a
+  converted citation (`…/2137`); the check now refuses that shape. Eight named a real symbol that
+  was the wrong one: a neighbouring definition one line away (`OnResolve` for `OnCancel`), or the
+  store side for a load-side trap. A symbol check cannot see those. What found them was a sweep
+  asking whether the prose's own backticked names belong to the cited symbol. **The prose is the
+  second oracle**, because whoever wrote the citation also wrote down what they meant.
+
 ### A stale citation is a cheap tell for an expired claim, so a repaired pointer gets its sentence read.
 
 - **A stale citation is a cheap tell for an expired claim.** `internal/interp/value.go` said

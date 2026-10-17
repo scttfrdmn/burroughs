@@ -15,13 +15,13 @@ import (
 // the per-instance async handle table.
 //
 // When an async-lowered import's callee does not resolve inline, `canon_lower` registers a subtask in the
-// instance handle table and returns `[state | (subtaski<<4)]` (definitions.py:2197–2213). The guest then
+// instance handle table and returns `[state | (subtaski<<4)]` (definitions.py:canon_lower). The guest then
 // creates a waitable set (`waitable-set.new`), joins the subtask to it (`waitable.join`), and blocks on
 // `waitable-set.wait` until the subtask resolves and delivers a `(SUBTASK, subtaski, state)` event
 // (async_waitset.go, increment 2a-i-B-2). Subtasks and waitable-sets share ONE index space per instance —
 // the model's `inst.handles` — so a `subtaski` and an `si` never collide.
 
-// subtaskState mirrors definitions.py Subtask.State (def:819–824). STARTING/STARTED/RETURNED are the
+// subtaskState mirrors definitions.py Subtask.State (def:Subtask.State). STARTING/STARTED/RETURNED are the
 // non-cancel lifecycle; the two CANCELLED states (3, 4) land with subtask.cancel (increment 4). Which
 // CANCELLED state a cancel produces is chosen by the subtask's state at the time it resolves: STARTING ->
 // CANCELLED_BEFORE_STARTED, STARTED -> CANCELLED_BEFORE_RETURNED (async_lower.go's onResolve).
@@ -54,13 +54,13 @@ type subtask struct {
 	// before the lower returns, and read only after onCancel.
 	cancelTransfer func() *cancelTransfer
 	// resolveWake is closed by `onResolve` when this subtask resolves, so a **sync** `subtask.cancel`
-	// can wait for the resolution the model makes it wait for (grave #892, `definitions.py` def:2391:
+	// can wait for the resolution the model makes it wait for (grave #892, `definitions.py` def:canon_subtask_cancel:"thread.wait_until(subtask.resolved)":
 	// `thread.wait_until(subtask.resolved)`).
 	//
 	// # Why the subtask needs its own channel rather than the set's
 	//
 	// The waitable set's `wake` is the obvious candidate and is unavailable here by construction:
-	// `subtask.cancel` **traps** if the subtask is joined to a set (def:2385, and the trap is already
+	// `subtask.cancel` **traps** if the subtask is joined to a set (def:canon_subtask_cancel:"trap_if(subtask.in_waitable_set())", and the trap is already
 	// implemented), so on this path there is no set to signal through. A subtask being cancelled is
 	// exactly a subtask with no set.
 	//
@@ -169,7 +169,7 @@ type asyncHandles struct {
 // # Why this is unexported, and what it implements
 //
 // The model's host entry point is a per-call `OnCancel` handed back by the lift — `Store.invoke` returns
-// it (def:524-534). **Burroughs cannot copy that shape**: `Invoke` blocks until the task resolves, so a
+// it (def:Store.invoke). **Burroughs cannot copy that shape**: `Invoke` blocks until the task resolves, so a
 // trigger it returned would arrive when there is nothing left to cancel. Go's inward form is a
 // `context.Context` passed in.
 //
@@ -235,15 +235,16 @@ func (h *asyncHandles) requestCancelAllLocked() error {
 //
 // So an entry **waits** for the slot, unconditionally and with no bound. The semaphore is held across the
 // whole entry — set the slot, invoke, clear, release — and it is released around the **park**, which is
-// the model's own `wait_from_callback` (def:799-810, where readiness requires `exclusive_thread is None`)
+// the model's own `wait_from_callback` (def:WaitableSet.wait_from_callback, where readiness requires `exclusive_thread is None`)
 // and what makes two tasks able to interleave at all.
 //
 // # It is held across a blocking host call too, and that is a GUEST-INVARIANT guarantee
 //
 // An earlier version released it for the duration of a §5 excursion, on the ground that the engine thread
 // is free there so a sibling may as well run. **Reverted** (chair's review of #882): the model holds
-// `exclusive_thread` across a callback-lifted task's whole entry (`needs_exclusive`, def:421; taken in
-// `enter_implicit_thread`, def:438-441; released only in `exit_implicit_thread` or around the park), and
+// `exclusive_thread` across a callback-lifted task's whole entry (`needs_exclusive`, def:Task.needs_exclusive; taken in
+// `enter_implicit_thread`, def:Task.enter_implicit_thread:"self.inst.exclusive_thread = self.implicit_thread";
+// released only in `exit_implicit_thread` or around the park), and
 // that is not merely a scheduling choice — **it is the guarantee that no other task's guest code runs in
 // the instance while this task's guest frame is live.**
 //
@@ -262,7 +263,7 @@ func (h *asyncHandles) requestCancelAllLocked() error {
 // cannot occur is a mechanism with no consumer, and it cost a false trap: ordinary contention expired it
 // and the message blamed self-re-entry.
 //
-// So contention waits, as the model's backpressure does (def:428-434: no trap, no bound). The wait
+// So contention waits, as the model's backpressure does (def:Task.enter_implicit_thread:"if self.ft.async_:": no trap, no bound). The wait
 // terminates because it is bounded by the holder's own progress, and the holder's park is bounded. The
 // one case it does not cover is a holder blocked forever in a host import — which is the limitation
 // `interp` already documents for H-3 (*"a source that never returns holds Close until it does"*), so this
@@ -335,7 +336,7 @@ func (h *asyncHandles) leaveTask(prev *liftTask) {
 }
 
 // pendingEventLocked delivers a resolved subtask's (SUBTASK, subtaski, state) event once, mirroring the
-// model's subtask_event closure (def:2205–2208) — the event carries the subtask's live index and state.
+// model's subtask_event closure (def:canon_lower) — the event carries the subtask's live index and state.
 // subtask satisfies the waitable interface (async_waitset.go). The caller holds asyncHandles.mu.
 func (st *subtask) pendingEventLocked() (event, bool) {
 	if st.resolved && !st.delivered {
@@ -396,7 +397,7 @@ func (h *asyncHandles) addLocked(v any) int {
 	return len(h.entries) - 1
 }
 
-// removeLocked clears the entry at index i, mirroring the model's `HandleTable.remove` (def:683-687). The
+// removeLocked clears the entry at index i, mirroring the model's `HandleTable.remove` (def:Table.remove). The
 // caller holds mu.
 //
 // The slot is **nil'd in place and not spliced out**, because every live handle the guest holds is an index
@@ -411,13 +412,13 @@ func (h *asyncHandles) removeLocked(i uint32) {
 	h.entries[i] = nil
 }
 
-// packSubtaskWait encodes `canon_lower`'s blocking return `[state | (subtaski<<4)]` (def:2213). The model
+// packSubtaskWait encodes `canon_lower`'s blocking return `[state | (subtaski<<4)]` (def:canon_lower:"return [subtask.state | (subtaski << 4)]"). The model
 // asserts 0 <= state < 2^4 and 0 < subtaski < 2^28, so the two fields never overlap.
 func packSubtaskWait(state subtaskState, subtaski int) int32 {
 	return int32(uint32(state) | uint32(subtaski)<<4)
 }
 
-// subtaskCancel implements `canon subtask.cancel` (0x06, definitions.py:2378). It requests cancellation of a
+// subtaskCancel implements `canon subtask.cancel` (0x06, definitions.py:canon_subtask_cancel). It requests cancellation of a
 // not-yet-resolved subtask and invokes the impl's cancel handler (the onCancel captured at lower, inert
 // since 2a-i-B-1 until this increment). If the callee resolves during the cancel, the subtask reaches a
 // CANCELLED state — CANCELLED_BEFORE_STARTED if it had not started, CANCELLED_BEFORE_RETURNED if it had —
@@ -431,7 +432,7 @@ func packSubtaskWait(state subtaskState, subtaski int) int32 {
 // subtask (a substrate mapping like per-caller context, ADR 0050, not a transliteration)."*
 //
 // **It described the model's ASYNC arm and applied it to both forms.** `canon_subtask_cancel(async_, i)`
-// takes the flag, and def:2386-2394 branches on it: the sync form **waits**
+// takes the flag, and def:canon_subtask_cancel branches on it: the sync form **waits**
 // (`thread.wait_until(subtask.resolved)`) and only the async form may return BLOCKED (at the previous pin,
 // 2bed77e, the async form also yielded once first; upstream #726 removed that). The
 // substrate-mapping argument was sound for the arm it described and was never checked against the other,
@@ -473,7 +474,7 @@ func (h *asyncHandles) beginSubtaskCancel(i uint32, asyncForm bool) (
 	if !ok {
 		return nil, nil, nil, nil, fmt.Errorf("component: subtask.cancel: handle %d is not a subtask", i)
 	}
-	// The model's three traps, in its order (def:2383-2385).
+	// The model's three traps, in its order (def:canon_subtask_cancel:"trap_if(subtask.resolve_delivered())").
 	switch {
 	case st.delivered:
 		return nil, nil, nil, nil, &interp.Trap{
@@ -593,7 +594,7 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 		// So the code was restructured to make the premise visibly hold, rather than exempted. It is also
 		// simpler — one read, one wait, one re-lock, instead of a lock/unlock/lock dance.
 		if !resolvedNow && !asyncForm {
-			// **The SYNC form waits** (grave #892, `definitions.py` def:2386-2391, as at pin 2e7895c):
+			// **The SYNC form waits** (grave #892, `definitions.py` def:canon_subtask_cancel, as at pin 2e7895c):
 			//
 			//	if not subtask.resolved():
 			//	  ...
@@ -685,7 +686,7 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 
 		if blocked {
 			// Reachable on the **async** form only: the model's async arm returns BLOCKED if the subtask
-			// still has not resolved (def:2393-2394; the previous pin, 2bed77e, yielded once first). The guest
+			// still has not resolved (def:canon_subtask_cancel; the previous pin, 2bed77e, yielded once first). The guest
 			// awaits the event.
 			// On the sync form the wait above either saw the resolution or returned the named expiry.
 			bits := uint32(asyncBlocked)
@@ -712,7 +713,7 @@ var subtaskCancelBound = 30 * time.Second
 // the ASYNC form's answer and reusing it is exactly the conflation grave #892 is about.
 var ErrSubtaskCancelExpired = errors.New("component: subtask.cancel (sync) timed out waiting for the cancellation to resolve")
 
-// subtaskDrop implements `canon subtask.drop` (0x0d, definitions.py:2402 -> Subtask.drop def:872). It traps
+// subtaskDrop implements `canon subtask.drop` (0x0d, definitions.py:canon_subtask_drop -> Subtask.drop def:Subtask.drop). It traps
 // unless the subtask is resolve-delivered (Burroughs: `delivered`, set when a wait consumed the SUBTASK
 // event or subtask.cancel returned the state inline), then removes it from the table. The trap is the
 // scheduler-side mirror of the stream drop-mid-copy trap: dropping an undelivered resolution would leave the

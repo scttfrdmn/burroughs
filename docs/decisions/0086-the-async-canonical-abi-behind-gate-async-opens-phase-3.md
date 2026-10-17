@@ -35,7 +35,7 @@ value-type text, so the pin matters more, not less.
 - **The guest's `run` export is a *sync-ABI lift of an async functype*, not a stackful async lift.** The one
   `canon lift` in the component carries no `async` canonopt (`opts.async_ = False`) though its functype is
   `func async` (`ft.async_ = True`) — so the host runs the core body to completion and calls `task.return_`
-  itself (which is why the guest emits no `task.return`; `canon_lift` sync arm, def:2107–2118). What is async
+  itself (which is why the guest emits no `task.return`; `canon_lift` sync arm, def@2bed77e:canon_lift.thread_func:"if not opts.async_:"). What is async
   is the **import side**: 12 `[async-lower]` `canon lower`s (`opts.async_ = True`), whose subtasks the `run`
   task awaits by blocking on `waitable-set.wait` — so even this hello binds ~16 async built-ins centered on
   the waitable-set event loop, streams, and futures.

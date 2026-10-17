@@ -16,8 +16,8 @@ import (
 // # Why this is an adapter and not new subtask machinery
 //
 // The model's `canon_lower` ends `subtask.on_cancel = callee(on_start, on_resolve)` (definitions.py
-// def:2188), where the callee is a **`FuncInst = Callable[[OnStart, OnResolve], OnCancel]`** (def:389) —
-// and `Store.lift` produces exactly that from a core func (def:538-544). So the model has this same seam,
+// def:canon_lower:"subtask.on_cancel = callee(on_start, on_resolve)"), where the callee is a **`FuncInst = Callable[[OnStart, OnResolve], OnCancel]`** (def:FuncInst) —
+// and `Store.lift` produces exactly that from a core func (def:Store.lift). So the model has this same seam,
 // and the lift side of it is already a function of the lower's two callbacks.
 //
 // **Burroughs' `asyncLowerImpl` is already that type**, with a caller threaded through. Everything
@@ -57,7 +57,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		// goroutine and no subtask. `invokeWith` dispatches on the callee's own `async` flag, so a sync
 		// lower of an ASYNC lift still runs the callback loop to completion — which is the correct
 		// reading of a sync lower (the model's `canon_lower` with `async_` false asserts the subtask
-		// reached RETURNED before returning, def:2189).
+		// reached RETURNED before returning, def:canon_lower:"assert(ft.async_ or subtask.state == Subtask.State.RETURNED)").
 		// # A sync lower of an ASYNC lift is refused by name, and there is deliberately no excursion here
 		//
 		// The transitive half of the `c.Blocking` audit (§5 H-1, grave #892's slice) flagged this arm: a
@@ -167,7 +167,7 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 	return func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 		// `onStart` lifts the caller's flat params and moves the subtask STARTING→STARTED. It must run
 		// **before** the goroutine, synchronously, because the model's `on_start` reads the caller's flat
-		// args (`CoreValueIter(flat_args)`, def:2155/2210) and those belong to the calling frame — reading
+		// args (`CoreValueIter(flat_args)`, def:canon_lower:"CoreValueIter(flat_args)" and def:canon_lower.on_start) and those belong to the calling frame — reading
 		// them from another goroutine would be a race against the caller's own continuation, and the
 		// retptr is in the same argument list.
 		params := onStart()
@@ -220,7 +220,7 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 			//
 			// # The refusal has nowhere to go here, and its channel is elsewhere
 			//
-			// The model gives `on_cancel` no return value (`OnCancel = Callable[[], None]`, def:388), so
+			// The model gives `on_cancel` no return value (`OnCancel = Callable[[], None]`, def:OnCancel), so
 			// this signature has no slot for one. **That is not the same as the refusal being invisible**:
 			// `subtaskCancel` re-checks `st.resolved` after invoking this and returns BLOCKED when the
 			// subtask has not resolved, so the parent learns "not cancelled (yet)" whatever the reason
@@ -252,7 +252,7 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 			// take the delivery between them and leave the canceller with nothing to wait for.
 			callee.h.mu.Lock()
 			//nolint:errcheck // No slot in the model's OnCancel signature (`OnCancel = Callable[[], None]`,
-			// def:388). The only refusal left is ErrCancelNotRunning — a task already past running, whose
+			// def:OnCancel). The only refusal left is ErrCancelNotRunning — a task already past running, whose
 			// resolved status the parent reads anyway — so there is nothing here a caller could act on.
 			_ = callee.h.requestCancelAllLocked()
 			armed = task.armTransferLocked()
@@ -272,7 +272,7 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 // host caller. A sibling guest must not be handed the stale words when the host would not be.
 func crossComponentResolve(onResolve func(canon.Value), sig *FuncType, res liftResult, callErr error) {
 	if callErr != nil {
-		// The model's `on_resolve(None)` (def:2176) — no result. Burroughs' `onResolve` reads
+		// The model's `on_resolve(None)` (def:canon_lower.on_resolve:"if result is None:") — no result. Burroughs' `onResolve` reads
 		// `cancellationRequested` to choose the terminal state, so this is the cancel arm when the parent
 		// asked. When it did not ask, this is a RETURNED carrying nothing, which is **not ideal and not
 		// this slice's to invent**: there is no ABI status for "the callee trapped", the model traps the

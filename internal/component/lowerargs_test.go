@@ -184,7 +184,7 @@ func TestALiftWithNoReallocRefusesAStringArgumentByName(t *testing.T) {
 // # It is stricter than the model, on purpose
 //
 // The model's **store** side only asserts `dst_byte_length <= REALLOC_I32_MAX` (2³²−1,
-// definitions.py:1577). The 2²⁸−1 cap is the **load** side's trap (def:1360). So this refuses a string
+// definitions.py:store_string_copy:"dst_byte_length <= REALLOC_I32_MAX"). The 2²⁸−1 cap is the **load** side's trap (def:load_string_from_range:"trap_if(byte_length > MAX_STRING_BYTE_LENGTH)"). So this refuses a string
 // the model would store — deliberately, because such a string could never be read back as one: any
 // `load_string` of it traps. It is unusable in both directions, and asking a guest to grow by a quarter
 // of a gigabyte to satisfy a request about to be rejected is worse than declining first.
@@ -262,7 +262,7 @@ func TestALoweredPayloadPastTheStringCapIsRefusedBeforeTheRealloc(t *testing.T) 
 	}
 }
 
-// TestAMisalignedReallocResultIsRefused covers definitions.py:641's trap with a pointer the ABI can
+// TestAMisalignedReallocResultIsRefused covers definitions.py:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))"'s trap with a pointer the ABI can
 // actually produce.
 //
 // # Why the fixture grew a third realloc
@@ -302,11 +302,11 @@ func TestAMisalignedReallocResultIsRefused(t *testing.T) {
 		}
 	}
 
-	// **Alignment 4 is not** — a `list<u32>`'s demand, and definitions.py:641's trap.
+	// **Alignment 4 is not** — a `list<u32>`'s demand, and definitions.py:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))"'s trap.
 	_, err := bad.guestAlloc(allocRequest{param: "xs", kind: canon.KindList, byteLen: 4, align: 4})
 	if err == nil {
 		t.Fatal("a pointer at page+2 was accepted for an alignment-4 payload; that is a list<u32>'s " +
-			"alignment and the model traps on it (definitions.py:641)")
+			"alignment and the model traps on it (definitions.py:LiftLowerContext.reallocate)")
 	}
 	if !errors.Is(err, ErrUnsupportedForm) {
 		t.Errorf("the refusal is not ErrUnsupportedForm: %v", err)
@@ -446,7 +446,7 @@ func TestAListArgumentThroughAMisalignedReallocIsRefused(t *testing.T) {
 	_, err = in.CallValues("sum-list-misaligned", lst)
 	if err == nil {
 		t.Fatal("a list<u32> was lowered through a realloc returning page+2; its elements require " +
-			"alignment 4 and the model traps on a misaligned pointer (definitions.py:641)")
+			"alignment 4 and the model traps on a misaligned pointer (definitions.py:LiftLowerContext.reallocate)")
 	}
 	if !strings.Contains(err.Error(), "aligned") {
 		t.Errorf("the refusal %q does not name the alignment", err)

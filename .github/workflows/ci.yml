@@ -499,6 +499,16 @@ jobs:
             echo "citecheck: push event, no PR body to scan (the diff half above ran)."
           fi
 
+      - name: reference citations resolve by symbol
+        # Every citation into the Canonical ABI reference names a symbol at its pin (the chair's ruling of
+        # 2026-10-17; `scripts/refcite.py`). The WHOLE tree rather than the diff, because a pin move breaks
+        # citations on lines it does not touch. `make refcite` vendors the pins it needs, and an absent one
+        # is a failure, never a skip. The runner's own python3, because the check needs only `ast`; the
+        # version is printed so a reading names its interpreter.
+        run: |
+          python3 --version
+          make refcite REFCITE_PY='python3 -I'
+
       # A double space between two word characters is refused, because it is the signature of a
       # backtick executed away by an unquoted shell string: the shell runs the backticked word,
       # the command fails, and the span is replaced with NOTHING. Three losses in one session,

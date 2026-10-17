@@ -35,7 +35,7 @@ func (g guestHeap) StoreInt(v uint64, ptr, nbytes int) error {
 
 // ReadBytes makes a guestHeap a [canon.ReadHeap] too, so the codec's **lifting** arms reach guest memory
 // the way its lowering arms already did (#903). `CanonCaller.Read` performs the bounds check against the
-// instance's memory, which is the error the codec's string lift delegates its def:1362 trap to.
+// instance's memory, which is the error the codec's string lift delegates its def:load_string_from_range:"trap_if(ptr + byte_length > len(cx.opts.memory))" trap to.
 //
 // A negative offset cannot reach a guest pointer — the two words a string's flat form carries are
 // unsigned i32s — but it is refused rather than converted, because `int` is the codec's offset type and

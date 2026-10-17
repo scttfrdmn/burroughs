@@ -113,7 +113,7 @@ def build_type(spec):
         case "string": return StringType()
         case "list": return ListType(build_type(spec["elem"]))
         case "tuple": return TupleType([build_type(f) for f in spec["fields"]])
-        # `record` is the BASE form and `tuple` despecializes to it (definitions.py:1105 maps
+        # `record` is the BASE form and `tuple` despecializes to it (definitions.py:despecialize:"case TupleType(ts) : return RecordType([ FieldType(str(i)," maps
         # TupleType(ts) -> RecordType([FieldType(str(i), t) ...])), so a tuple case and a record case with
         # fields named "0", "1", ... must produce byte-identical readings. That equality is the point of
         # generating both rather than only the one the codec implements first.
@@ -153,7 +153,7 @@ def build_value(spec, value):
         return [build_value(spec["elem"], e) for e in value]
     if k in ("record", "tuple"):
         # The model's record value is a plain dict keyed by field LABEL — `store_record` reads
-        # `v[f.label]` (definitions.py:1685). A tuple's labels are its indices as strings, which is what
+        # `v[f.label]` (definitions.py:store_record:"v[f.label]"). A tuple's labels are its indices as strings, which is what
         # despecialize produces, so the two share this arm and a tuple's JSON value stays a list.
         #
         # **Built by iterating the TYPE's fields, not the value's keys**, so field order comes from the
@@ -287,7 +287,7 @@ def emit_shapes():
 # Async-lower cases (gate:async slice-1 2a-i-A): the async `canon lower`'s SYNC-RESOLVING arm. The oracle
 # for the async-lower ABI — flat signature (params + a retptr), the packed return `[RETURNED]` when the
 # callee resolves inline, and the result lowered to the retptr. Driven **model-faithfully**: the ambient
-# `current_thread`/`current_instance` `canon_lower` requires (definitions.py:2150) is established by the
+# `current_thread`/`current_instance` `canon_lower` requires (definitions.py:canon_lower:"thread = current_thread()") is established by the
 # model's OWN construction — a sync outer export lifted through `Store.lift`/`invoke` (which builds the
 # Task+Thread and resumes it), whose body drives the lower — never a stub that satisfies the lookup
 # (#728's model-produced-state-only rule, first biting in the async tier). Bounded: one thread, no `tick`
@@ -372,7 +372,7 @@ def emit_async_lower(case):
 #
 # DELIBERATE OMISSION, load-bearing — do NOT add an "unsatisfiable wait" / deadlock case here. Every case
 # below pins the resolve-and-wake path, and the guest-caused-deadlock outcome is intentionally absent. The
-# model's sync-lift driver answers that condition with `trap_if(not candidates)` (definitions.py:2123)
+# model's sync-lift driver answers that condition with `trap_if(not candidates)` (definitions.py:canon_lift:"trap_if(not candidates)")
 # because an executable driver must terminate; contract H-4 deliberately DECLINES to arbitrate the same
 # condition, making it a guest property with `Close`/fault as the only exits (Burroughs parks-and-hangs,
 # does not trap — the "first hang" H-4 names; #739). The two answer different questions and neither is
@@ -471,7 +471,7 @@ def emit_async_lower_blocking(case):
 # Future.read cases (gate:async slice-1 increment 3, first slice — `future<T>` is the degenerate `stream<T>`
 # in the CABI, so the shared copy substrate lands here on the single-value case). The oracle for the async
 # `future.read` path: the read returns BLOCKED, the outcome is delivered as a `(FUTURE_READ, i, payload)`
-# where the payload is the `CopyResult` the guest branches on (definitions.py:1023 COMPLETED=0/DROPPED=1/
+# where the payload is the `CopyResult` the guest branches on (definitions.py:CopyResult COMPLETED=0/DROPPED=1/
 # CANCELLED=2), and the readable end's STATE after differs by outcome. Driven model-faithfully with the same
 # sync outer + waitable-set loop as the blocking-arm oracle: read async -> BLOCKED (pending), then the
 # producer/cancel fires on the same task, then the event is retrieved.
@@ -497,7 +497,7 @@ FUTURE_READ_CASES = [
 
 # Context.get/set (gate:async increment 4, the first op the real guest hits — #739). Per-thread (per-agent)
 # i32 storage of a fixed number of slots (definitions.py: thread.storage = [0,0], canon_context_get/set at
-# def:2255/2303), get returning 0 for an unset slot and the stored value after a set, bounds i < len. No
+# def:canon_context_get and def:canon_context_set), get returning 0 for an unset slot and the stored value after a set, bounds i < len. No
 # byte encoding — it is slot storage — so the pin is behavioral (roundtrip, unset-zero, slot count); it is
 # pinned anyway, per the discipline that a fast iterate-to-green loop does not skip an op's model pin.
 def emit_context_ops():
@@ -541,11 +541,11 @@ def emit_context_ops():
 
 
 # Stream.new (gate:async increment 4). The first op that creates BOTH ends of a stream inside the guest —
-# inverting every prior slice's host-provided end. definitions.py:2412: it adds a ReadableStreamEnd and a
+# inverting every prior slice's host-provided end. definitions.py:canon_stream_new: it adds a ReadableStreamEnd and a
 # WritableStreamEnd over one SharedStreamImpl and returns `ri | (wi<<32)`, both ends IDLE. In the real guest
 # (p3async-hello) the guest keeps the writable end (stream.write) and hands the READABLE end to the host via
 # a lowered write-via-stream(ri): the host reads ri, which — whichever side arrives second in the shared
-# impl drives on_copy_done (def:958) — drives the guest's write completion. So this is the first guest->host
+# impl drives on_copy_done (def:End.copy) — drives the guest's write completion. So this is the first guest->host
 # copy flow, and the write's on_copy_done is driven by the host's READ, not a direct completion (#739 note).
 def emit_stream_new():
     from definitions import (  # noqa: E402
@@ -655,7 +655,7 @@ def emit_future_read(case):
 
 
 # Stream.write cases (gate:async increment 3, stream write-side slice). `stream_copy` is `future_copy`
-# generalized to n elements with PROGRESS: the write event packs `result | (progress<<4)` (def:1045), not a
+# generalized to n elements with PROGRESS: the write event packs `result | (progress<<4)` (def:StreamEnd.notify.stream_event:"packed_result = result | (progress << 4)"), not a
 # bare CopyResult. That is the hazard stream adds — a guest reading only the low bits is right on a full copy
 # and WRONG on a partial one — so a partial case (a consumer taking fewer elements than offered) is pinned
 # beside the full one, the same class as the empty-list realloc and the variant discriminant. DROPPED lands
@@ -839,7 +839,7 @@ def emit_waitable_set_poll():
     cap = {}
 
     def outer_core(_flat):
-        # poll is wait minus the park (WaitableSet.poll, def:793-797): an empty set returns (NONE, 0, 0)
+        # poll is wait minus the park (WaitableSet.poll, def:WaitableSet.poll): an empty set returns (NONE, 0, 0)
         # WITHOUT blocking, through the SAME has_pending_event/get_pending_event path wait uses (no second
         # readiness notion). The ready case — poll delivering the same event a wait would — is covered by the
         # mixed-kind witness across all four kinds (Go), whose resolved waitables genuinely arm the event; a
@@ -862,9 +862,9 @@ def emit_waitable_set_poll():
 
 def emit_callback_result():
     from definitions import CallbackCode, unpack_callback_result, Trap  # noqa: E402
-    # The stackless async-lift callback ABI (canon_lift def:2086-2113): after the initial callee call and on
+    # The stackless async-lift callback ABI (canon_lift def:canon_lift.thread_func:"[packed] = call_and_trap_on_throw(callee, flat_args)"): after the initial callee call and on
     # every re-entry, the callback returns a PACKED i32 the scheduler dispatches on — code = packed & 0xf,
-    # waitable_set_index = packed >> 4 (unpack_callback_result def:2133-2139), and code > MAX traps. EVERY code
+    # waitable_set_index = packed >> 4 (unpack_callback_result def:unpack_callback_result), and code > MAX traps. EVERY code
     # is pinned, not just the happy-path EXIT, because the code is exactly what distinguishes "done" from
     # "waiting on set si" from "yield": a success-only pin is green against a scheduler that cannot tell them
     # apart, which is the mis-route shape this tier has caught three times. The trap on an out-of-range code is
@@ -897,7 +897,7 @@ def emit_callback_result():
 
 
 def emit_async_lift_loop():
-    # Re-entry-state pin for the stackless async-lift callback loop (canon_lift def:2056-2115). Drives the REAL
+    # Re-entry-state pin for the stackless async-lift callback loop (canon_lift def:canon_lift). Drives the REAL
     # model loop through TWO WAIT cycles (WAIT -> event -> WAIT -> event -> EXIT), not a single
     # park-and-finish, so it catches a loop that loses state between re-entries and recovers to the right final
     # answer (Scott's caution). The pinned invariants are SCHEDULE-INDEPENDENT: event ORDER over a two-member
@@ -907,7 +907,7 @@ def emit_async_lift_loop():
     # count, and the resolved result. random is seeded only to make the model run reproducible.
     #
     # DELIBERATE OMISSION (do not "tighten"): the event ORDER is not pinned, and adding an order assertion
-    # here would be adding a defect, not tightening the test. `random.shuffle` over a set's members (def:781)
+    # here would be adding a defect, not tightening the test. `random.shuffle` over a set's members (def:WaitableSet.get_pending_event:"random.shuffle(self.elems)")
     # means order is a property of the model's RNG, not of either implementation, so an order pin would encode
     # that RNG as a requirement and fail a goroutine-scheduled engine that delivers the same events in a
     # different order. The non-vacuity guard (TestAsyncLiftLoopPinExercisesReentryState) is what keeps
@@ -989,7 +989,7 @@ def emit_subtask_drop():
     from definitions import Subtask, Trap  # noqa: E402
     S = Subtask.State
 
-    # Subtask.drop traps unless the subtask is resolve-delivered (def:872–874). Driven by calling the model's
+    # Subtask.drop traps unless the subtask is resolve-delivered (def:Subtask.drop). Driven by calling the model's
     # drop() directly across (state, delivered) — resolve_delivered() == (lenders is None), which
     # deliver_resolve sets. The two CANCELLED terminal states (new since subtask.cancel landed) are included
     # as inputs to confirm they behave exactly as RETURNED: drop OK once delivered, trap while undelivered.
@@ -1019,7 +1019,7 @@ def emit_subtask_cancel():
     )
 
     # `cancel_async` is `canon_subtask_cancel`'s FIRST argument, and it was hard-coded True until grave
-    # #892. That mattered because the model branches on it (def:2386-2394): the sync form WAITS for the
+    # #892. That mattered because the model branches on it (def:canon_subtask_cancel): the sync form WAITS for the
     # cancellation to resolve and only the async form yields and may return BLOCKED. So every row this
     # generator produced was the async arm, and **the oracle had the same blind spot as the engine** --
     # which is why no fixture comparison could ever have caught the conflation. Parameterised here so
@@ -1084,7 +1084,7 @@ def emit_subtask_cancel():
     return {
         # subtask.cancel returns the terminal state (Subtask.State), chosen by whether the subtask had
         # STARTED. BLOCKED is the ASYNC form's answer when the callee did not resolve during the cancel;
-        # the sync form waits instead (def:2386-2394), which is the distinction grave #892 is about.
+        # the sync form waits instead (def:canon_subtask_cancel), which is the distinction grave #892 is about.
         #
         # The `async_cancel_ret` name predates that finding and is kept: it was accurate about which arm
         # it recorded, and renaming a committed fixture key would break the comparison it exists for.
@@ -1191,7 +1191,7 @@ def emit_stream_cancel_write():
 def emit_future_cancel_write():
     # The FUTURE write arm's running CANCELLED (2nd async guest, #785 — the cancellation witness). This is the
     # future analog of emit_stream_cancel_write, through the SAME cancel_copy substrate (definitions.py
-    # canon_future_cancel_write def:2473 -> cancel_copy). ARM PRECISION (Scott, #752/#785): this pins the
+    # canon_future_cancel_write def:canon_future_cancel_write -> cancel_copy). ARM PRECISION (Scott, #752/#785): this pins the
     # future *write* arm's running CANCELLED; the future *read* arm's CANCELLED stays synthetic (no running
     # producer yet), so "future CANCELLED is produced" is true only on the write side. future.write is a
     # single value (no count).
@@ -1270,7 +1270,7 @@ def emit_stream_drops():
     }
 
     # Notify flow: dropping the IDLE counterpart while the other end has a pending copy notifies that end
-    # with DROPPED (SharedStreamImpl.drop -> reset_and_notify_pending(DROPPED), def:1010-1018). The pending
+    # with DROPPED (SharedStreamImpl.drop -> reset_and_notify_pending(DROPPED), def:End.drop). The pending
     # reader's STREAM_READ event carries result=DROPPED, progress=0, and the end goes DONE on consume — the
     # anti-hang guarantee: a dropped writer wakes a waiting reader rather than orphaning it.
     heap = TracingHeap(128)

@@ -320,7 +320,7 @@ func TestAnEmptyRecordIsRefusedAtEveryLayerThatCanSayNo(t *testing.T) {
 	}
 
 	// Alignment is answerable and is 1, matching the model: `alignment_record` has no assertion and its
-	// loop simply does not run (definitions.py:1170-1174). The asymmetry — alignment defined, size not —
+	// loop simply does not run (definitions.py:alignment_record). The asymmetry — alignment defined, size not —
 	// is the model's, and reproducing it rather than smoothing it over is the point.
 	if a := alignment(empty); a != 1 {
 		t.Errorf("alignment(record{}) = %d, want 1 — the model gives an empty record alignment 1", a)

@@ -213,18 +213,18 @@ type Canon struct {
 	// **The byte was read and thrown away** until grave #892: the decoder's `readAsyncQ` was
 	// `func() error { _, err := r.byte(); return err }`. The two forms are semantically different — the
 	// model's `canon_subtask_cancel(async_, i)` **waits** for resolution on the sync form and returns
-	// BLOCKED only on the async one (def:2386-2394) — so discarding it collapsed a distinction the ABI
+	// BLOCKED only on the async one (def:canon_subtask_cancel) — so discarding it collapsed a distinction the ABI
 	// draws, and Burroughs took the async branch for both. A conforming guest's synchronous drop glue
 	// then met a BLOCKED it cannot handle and panicked.
 	AsyncForm bool
 	// Result is the value type a `canon task.return` (0x09) declares it returns, or nil for the empty
 	// form. It is NOT the lift's result type — the two must agree, and the model checks exactly that
-	// (`trap_if(result_type != task.ft.result)`, definitions.py:2295).
+	// (`trap_if(result_type != task.ft.result)`, definitions.py:canon_task_return:"trap_if(result_type != task.ft.result)").
 	//
 	// **It was decoded and thrown away** until #903: `if _, err := r.resultList(); err != nil`. Harmless
 	// while every result was a `u32`, because a u32's whole value is its flat word and the loop could lift
 	// it later from the flat args alone. It is not harmless for anything else — the model lifts *inside*
-	// `canon_task_return` (def:2298) precisely because the payload of a non-scalar lives in guest memory
+	// `canon_task_return` (def:canon_task_return:"result = lift_flat_values(cx, MAX_FLAT_PARAMS,") precisely because the payload of a non-scalar lives in guest memory
 	// behind a pointer the guest may reuse the moment it resumes. Lifting eagerly needs the type, so the
 	// type has to survive the decode.
 	//

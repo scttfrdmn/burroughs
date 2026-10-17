@@ -238,7 +238,7 @@ func (in *Instantiated) ValueExportNames() []string {
 // caller error that must be named, and lowering whatever arrived would hand the guest a short frame.
 // A `string` parameter yields **two placeholder slots and a `pendingLower`**, because its bytes cannot be
 // placed here: the model lowers a lift's parameters inside the callee's task, on the entry the callee then
-// runs on (definitions.py:2057-2067), and nothing holds that entry at this point. See `lowerargs.go`.
+// runs on (definitions.py:canon_lift.thread_func), and nothing holds that entry at this point. See `lowerargs.go`.
 func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Value, []pendingLower, error) {
 	if len(args) != len(sig.Params) {
 		return nil, nil, fmt.Errorf("%w: export %q takes %d parameter(s), got %d",
@@ -381,12 +381,12 @@ func liftFlatCoreResult(name string, sig *FuncType, res []interp.Value) ([]canon
 	// one:
 	//
 	//  1. **It does not arrive in flat words at all.** The sync path lifts with `MAX_FLAT_RESULTS`, which
-	//     is **1** (definitions.py:2069, and the constant at def:1747), so anything flattening wider than
+	//     is **1** (definitions.py:canon_lift.thread_func:"assert(types_match_values(flat_ft.results, flat_results))", and the constant at def:MAX_FLAT_RESULTS), so anything flattening wider than
 	//     one word — a string is two — **spills to a return pointer**: the caller passes a pointer and the
 	//     callee writes the `(ptr, len)` pair there. The async path lifts with `MAX_FLAT_PARAMS` (16,
-	//     def:2298), which is why a string crosses `task.return` flat and crosses here not at all.
+	//     def:canon_task_return:"result = lift_flat_values(cx, MAX_FLAT_PARAMS,"), which is why a string crosses `task.return` flat and crosses here not at all.
 	//  2. **`post-return`.** The guest allocated the buffer and nothing has freed it; the ABI's answer is
-	//     the lift's `post-return`, called **after** the lift (def:2071-2076, confirmed at the model rather
+	//     the lift's `post-return`, called **after** the lift (def:canon_lift.thread_func:"task.return_(result)", confirmed at the model rather
 	//     than assumed). This engine neither captures that canonopt for a lift nor calls it, so lifting
 	//     the bytes without it would leak the guest's allocation on every call.
 	//

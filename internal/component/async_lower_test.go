@@ -366,7 +366,8 @@ func TestSynthAsyncLowerBindsAndReachesTheWrapper(t *testing.T) {
 // # Both forms are driven, which they were not before grave #892
 //
 // `canon_subtask_cancel(async_, i)` takes the flag and branches on it: the sync form **waits** for the
-// resolution and only the async form yields and may return BLOCKED (def:2386-2394). This test used to call
+// resolution and only the async form may return BLOCKED (def:canon_subtask_cancel:"return [BLOCKED]"; at
+// 2bed77e the async form also yielded first, and upstream #726 removed that). This test used to call
 // `subtaskCancel(h)` with no form at all — because the engine had none — and the fixture it compares
 // against was generated with `canon_subtask_cancel(True, …)` hard-coded. **So the oracle had the same
 // blind spot as the engine**, and every row that existed was either one the two forms agree on or one the
@@ -535,7 +536,7 @@ func TestSyncSubtaskCancelWaitsForALaterResolution(t *testing.T) {
 	got := uint32(ret[0].Int32())
 	if got == uint32(asyncBlocked) {
 		t.Fatalf("sync subtask.cancel returned BLOCKED (%#x). The model waits here "+
-			"(definitions.py def:2391, `thread.wait_until(subtask.resolved)`) and only the ASYNC form "+
+			"(definitions.py def:canon_subtask_cancel, `thread.wait_until(subtask.resolved)`) and only the ASYNC form "+
 			"may return BLOCKED. A wit-bindgen guest's drop glue is synchronous, cannot await, and "+
 			"panics on this value — grave #892 returning", got)
 	}

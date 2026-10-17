@@ -18,7 +18,7 @@
 ;;
 ;; ## Why the Canonical ABI makes this the right place to refuse
 ;;
-;; `elem_size_record` ends with `assert(s > 0)` (definitions.py:1233), so an empty record has **no
+;; `elem_size_record` ends with `assert(s > 0)` (definitions.py:elem_size_record:"assert(s > 0)"), so an empty record has **no
 ;; layout** — asked of the pinned model directly, `elem_size(RecordType([]))` raises `AssertionError`,
 ;; and `alignment(RecordType([]))` answers 1. A type the ABI declines to lay out cannot carry a value,
 ;; so accepting it at load would mean accepting a type nothing can ever do anything with.

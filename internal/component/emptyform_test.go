@@ -18,7 +18,7 @@ import (
 // engine has to be careful about: manufacturing a malformedness the reference does not report).
 //
 // The Canonical ABI is why the reference draws the line: `elem_size_record` asserts `s > 0`
-// (definitions.py:1233), so an empty record has no layout — `elem_size(RecordType([]))` raises
+// (definitions.py:elem_size_record:"assert(s > 0)"), so an empty record has no layout — `elem_size(RecordType([]))` raises
 // `AssertionError`, asked of the pinned model directly. A tuple despecializes to a record (:1133), so
 // `tuple<>` is the same condition reached the other way.
 //

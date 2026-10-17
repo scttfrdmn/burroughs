@@ -406,12 +406,12 @@ err arm and aborts, which Burroughs matches behaviorally (its own error text). B
 (#887, [ADR 0094](../../../docs/decisions/0094-host-cancellation-reaches-a-lift-task-through-an-internal-trigger-this-slice-because-the-model-hands-the-embedder-a-per-call-oncancel-and-invoke-blocks.md)),
 and it exists because that check **had no witness and the suite was green without it** — found by
 neutering, not by reading. The end-to-end cancellation witness drives a `wit-bindgen` guest, which awaits
-an import and therefore returns **WAIT**, so the park's own check (`definitions.py` def:807, inside
+an import and therefore returns **WAIT**, so the park's own check (`definitions.py` def:WaitableSet.wait_from_callback:"if thread.task.deliver_pending_cancel():", inside
 `awaitEvent`) is always what delivers the cancellation there. Two call sites, one witness: grave #885's
 shape one level up.
 
 What only this fixture reaches is a guest that **yields repeatedly and never parks**. The YIELD arm
-re-enters the callback immediately, so `awaitEvent` is never entered and the top-of-loop check (def:2089)
+re-enters the callback immediately, so `awaitEvent` is never entered and the top-of-loop check (def:canon_lift.thread_func)
 is the only path a host cancellation has. That is the honest case rather than a contrived one: a guest
 doing CPU work with cooperative yields is exactly the guest a host most wants to cancel. `wit-bindgen`
 cannot produce it — nothing in its surface emits a cooperative yield, the same reason

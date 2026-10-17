@@ -35,7 +35,7 @@ The original text of the status line and the options section is left below and s
 
 | | when is the lower's subtask STARTED? | so a lift task in INITIAL implies |
 |---|---|---|
-| **the model** | `canon_lift`'s `thread_func` calls `task.start()` → the lower's `on_start`, **inside** the lift (def:2097-2102) | subtask STARTING → `on_resolve(None)` picks **status 3** |
+| **the model** | `canon_lift`'s `thread_func` calls `task.start()` → the lower's `on_start`, **inside** the lift (def@2bed77e:canon_lift.thread_func) | subtask STARTING → `on_resolve(None)` picks **status 3** |
 | **Burroughs** | the cross-component adapter calls `onStart()` **itself, synchronously, before the child's lift task exists** — it must, because `on_start` reads the caller's flat args and those belong to the caller's frame ([ADR 0095](0095-a-cross-component-async-call-is-a-siblings-lift-adapted-to-the-lower-side-the-substrate-already-wants-run-on-one-goroutine-per-call.md)) | subtask already STARTED → **status 4**, whatever the lift task's state |
 
 So status 3 is unreachable from this path, and the refusal was protecting against a consequence Burroughs' own ordering had already removed. **The divergence is one ADR 0095 introduced deliberately and for a stated reason**, which is why this is a correction to the inference and not to either ADR's mechanism.
@@ -50,7 +50,7 @@ This ADR reasoned that a dropped refusal was acceptable because the parent would
 
 ### What changed, concretely
 
-- `requestCancelLocked` honours INITIAL and STARTED alike, both setting PENDING_CANCEL — **which is what the model's own code does** (def:463-470); only the delivery carrier differs.
+- `requestCancelLocked` honours INITIAL and STARTED alike, both setting PENDING_CANCEL — **which is what the model's own code does** (def@2bed77e:Task.request_cancellation); only the delivery carrier differs.
 - `runLiftTask`'s INITIAL→STARTED transition is **guarded**, because an unconditional write would erase a cancellation recorded before it ran — the same hang one step later.
 - `ErrTaskCancelUnbuilt` is **deleted**. This arm was its last producer, and a sentinel nothing returns is the defect ADR 0094 was itself cleaning up. Never public surface: `internal/component`.
 - **#884 keeps its subject and loses this consumer.** Status 3 still has no reference reading and the mapping's first row is still asserted rather than observed. What it no longer blocks is the before-started cancel path.
@@ -71,13 +71,13 @@ Fetched and read rather than recalled, because an accept-direction fact needs th
 
 | piece | site |
 |---|---|
-| `Task.State`: INITIAL, STARTED, **PENDING_CANCEL**, **CANCEL_DELIVERED**, RESOLVED | `def:389-394` |
-| `request_cancellation()` | `def:463-470` |
-| `has_pending_cancel()` / `deliver_pending_cancel()` | `def:472-480` |
-| `Task.cancel()` — traps unless CANCEL_DELIVERED, then resolves with `None` | `def:494-498` |
-| `EventCode.TASK_CANCELLED = 6` | `def:703` |
-| the callback lift loop | `def:2126-2151` (the two cancel checks at `def:2129` and `def:2137`) |
-| `Store.invoke` → `OnCancel` | `def:510-518` |
+| `Task.State`: INITIAL, STARTED, **PENDING_CANCEL**, **CANCEL_DELIVERED**, RESOLVED | `def@2bed77e:Task.State` |
+| `request_cancellation()` | `def@2bed77e:Task.request_cancellation` |
+| `has_pending_cancel()` / `deliver_pending_cancel()` | `def@2bed77e:Task.has_pending_cancel` |
+| `Task.cancel()` — traps unless CANCEL_DELIVERED, then resolves with `None` | `def@2bed77e:Task.cancel` |
+| `EventCode.TASK_CANCELLED = 6` | `def@2bed77e:EventCode.TASK_CANCELLED` |
+| the callback lift loop | `def@2bed77e:canon_lift.thread_func:"[packed] = call_and_trap_on_throw(callee, flat_args)"` (the two cancel checks at `def@2bed77e:canon_lift.thread_func` and `def@2bed77e:canon_lift.thread_func`) |
+| `Store.invoke` → `OnCancel` | `def@2bed77e:Store.invoke` |
 
 ### Two findings the registration's summary did not carry
 
@@ -85,14 +85,14 @@ Fetched and read rather than recalled, because an accept-direction fact needs th
 
 ```python
 while code != CallbackCode.EXIT:
-  if thread.task.deliver_pending_cancel():          # def:2129 — before exclusivity is released
+  if thread.task.deliver_pending_cancel():          # def@2bed77e:canon_lift.thread_func — before exclusivity is released
     event = (EventCode.TASK_CANCELLED, 0, 0)
   else:
     inst.exclusive_thread = None
     match code:
       case CallbackCode.YIELD:
         thread.wait_until(lambda: inst.exclusive_thread is None)
-        if thread.task.deliver_pending_cancel():    # def:2137 — after the yield's wait
+        if thread.task.deliver_pending_cancel():    # def@2bed77e:canon_lift.thread_func — after the yield's wait
           event = (EventCode.TASK_CANCELLED, 0, 0)
         else:
           event = (EventCode.NONE, 0, 0)
@@ -108,7 +108,7 @@ The first check is **in place of waiting**: a cancel pending when the guest retu
 
 > **The WAIT arm has no second check**, so a cancel arriving while the guest is parked on a waitable set is not delivered by this loop at all; it is delivered on the next iteration's first check, after the set produces some event. That asymmetry is a property to reproduce, not a gap to improve on.
 
-There is a third `deliver_pending_cancel`, and it is **inside the wait**: `WaitableSet.wait_from_callback` (def:781-792) has readiness *"has_pending_event() **or** task.has_pending_cancel()"* and, on waking, prefers the cancel —
+There is a third `deliver_pending_cancel`, and it is **inside the wait**: `WaitableSet.wait_from_callback` (def@2bed77e:WaitableSet.wait_from_callback) has readiness *"has_pending_event() **or** task.has_pending_cancel()"* and, on waking, prefers the cancel —
 
 ```python
 def wait_from_callback(self) -> EventTuple:
@@ -149,7 +149,7 @@ def request_cancellation(self):
       self.state = Task.State.PENDING_CANCEL
 ```
 
-Two things worth stating because a summary loses both. **Both arms set PENDING_CANCEL** — "INITIAL resolves immediately" is the arm's *outcome*, reached by resuming the thread so that `enter_implicit_thread`'s backpressure path (`def:432`) delivers the cancel and calls `cancel()`. And the else arm **asserts** `state == STARTED`: requesting cancellation of a task that is RESOLVED, already PENDING_CANCEL, or CANCEL_DELIVERED is an assertion failure. The model therefore specifies **no behaviour** for a redundant or late request — it is the embedder's job not to make one.
+Two things worth stating because a summary loses both. **Both arms set PENDING_CANCEL** — "INITIAL resolves immediately" is the arm's *outcome*, reached by resuming the thread so that `enter_implicit_thread`'s backpressure path (`def@2bed77e:Task.enter_implicit_thread:"if self.deliver_pending_cancel():"`) delivers the cancel and calls `cancel()`. And the else arm **asserts** `state == STARTED`: requesting cancellation of a task that is RESOLVED, already PENDING_CANCEL, or CANCEL_DELIVERED is an assertion failure. The model therefore specifies **no behaviour** for a redundant or late request — it is the embedder's job not to make one.
 
 ## The structural mismatch: the model's shape cannot be copied
 
@@ -199,7 +199,7 @@ The surface's implementation lands with ADR 0085's surface, which amendment 1's 
 - `liftTask` gains a pending-cancel state, so `cancelled` stops being a field nothing writes — and #864's comment saying nothing writes it is **repaired rather than left standing**, since it is the foreclosing-words shape.
 - `task.cancel`'s cancelled branch stops returning `ErrTaskCancelUnbuilt` and resolves the task, so `ErrTaskCancelUnbuilt` loses its only producer on the delivered path. It stays for the paths still unbuilt.
 - The caller of a cancelled lift gets `ErrCancelled`, per #862's ruling-1 mapping for status 4.
-- **Two checks, with a witness each, because one of them had none.** `awaitEvent` carries the park's check (def:789) and the dispatch loop carries the top-of-loop one (def:2129). Neutering the loop check left the **whole component suite green**, including this slice's own end-to-end witness — which drives a `wit-bindgen` guest, and a `wit-bindgen` guest awaits an import and therefore returns WAIT, so the park's check is always what delivers. That is grave #885's shape one level up (two call sites, one witness), found by falsifying rather than reading, and the repair is a hand-authored fixture that **yields repeatedly and never parks** (`testdata/lift-cancel-yield-synth.wat`) so the loop check is the only path a cancellation has. Each neuter now fails exactly one witness.
-- **The YIELD arm's second check (def:2137) is the one genuine divergence.** Burroughs' analog of its `wait_until` is `enterTask`'s semaphore acquire, and the loop does not re-check after it; such a cancel is delivered one callback entry later. That consequence really is latency rather than outcome, which is what the WAIT claim was wrongly asserted to be.
-- **A host async impl's `onCancel` must resolve its subtask, or a conforming guest panics** — and this is a separate, filed gap rather than a property of this slice. The model's `canon_subtask_cancel` **waits** for resolution when the cancel is sync-lowered (`thread.wait_until(subtask.resolved)`, def:2427-2428) and returns BLOCKED only on the async form; Burroughs returns BLOCKED unconditionally. `wit-bindgen`'s drop glue is synchronous, cannot await, and meets BLOCKED in `in_progress_update`'s `other => panic!("unknown code {other:#x}")`. Measured as a bare `unreachable` with no receipt on this slice's first run. It is `subtask.cancel`'s arm — the parent's path — so it is out of scope here and filed with the citation.
+- **Two checks, with a witness each, because one of them had none.** `awaitEvent` carries the park's check (def@2bed77e:WaitableSet.wait_from_callback:"if thread.task.deliver_pending_cancel():") and the dispatch loop carries the top-of-loop one (def@2bed77e:canon_lift.thread_func). Neutering the loop check left the **whole component suite green**, including this slice's own end-to-end witness — which drives a `wit-bindgen` guest, and a `wit-bindgen` guest awaits an import and therefore returns WAIT, so the park's check is always what delivers. That is grave #885's shape one level up (two call sites, one witness), found by falsifying rather than reading, and the repair is a hand-authored fixture that **yields repeatedly and never parks** (`testdata/lift-cancel-yield-synth.wat`) so the loop check is the only path a cancellation has. Each neuter now fails exactly one witness.
+- **The YIELD arm's second check (def@2bed77e:canon_lift.thread_func) is the one genuine divergence.** Burroughs' analog of its `wait_until` is `enterTask`'s semaphore acquire, and the loop does not re-check after it; such a cancel is delivered one callback entry later. That consequence really is latency rather than outcome, which is what the WAIT claim was wrongly asserted to be.
+- **A host async impl's `onCancel` must resolve its subtask, or a conforming guest panics** — and this is a separate, filed gap rather than a property of this slice. The model's `canon_subtask_cancel` **waits** for resolution when the cancel is sync-lowered (`thread.wait_until(subtask.resolved)`, def@2bed77e:canon_subtask_cancel:"thread.wait_until(subtask.resolved)") and returns BLOCKED only on the async form; Burroughs returns BLOCKED unconditionally. `wit-bindgen`'s drop glue is synchronous, cannot await, and meets BLOCKED in `in_progress_update`'s `other => panic!("unknown code {other:#x}")`. Measured as a bare `unreachable` with no receipt on this slice's first run. It is `subtask.cancel`'s arm — the parent's path — so it is out of scope here and filed with the citation.
 - `gate:async` cancellation is **not embedder-reachable** when this lands. Said in the slice's report rather than implied — and the reason is that the decided surface (`Component.Call(ctx, …)`, ADR 0085 amendment 1) is **unimplemented**, which is a sequencing fact rather than an open design question. [#858](https://github.com/scttfrdmn/burroughs/issues/858) is where it becomes reachable.

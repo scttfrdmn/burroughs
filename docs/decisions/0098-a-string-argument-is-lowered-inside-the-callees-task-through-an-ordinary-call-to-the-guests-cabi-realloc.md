@@ -18,7 +18,7 @@ And it lands on a constraint already decided: [ADR 0073](0073-grow-refuses-to-re
 
 ### 1. The lowering happens inside the callee's task, on the entry the callee runs on
 
-The model lowers a lift's parameters inside `canon_lift`'s thread body: `enter_implicit_thread()`, then `task.start()`, then `lower_flat_values(...)`, and only then the core call (`definitions.py:2097-2107`, read at the pin). The lowering is inside the callee's exclusive context, not before it.
+The model lowers a lift's parameters inside `canon_lift`'s thread body: `enter_implicit_thread()`, then `task.start()`, then `lower_flat_values(...)`, and only then the core call (`definitions.py@2bed77e:canon_lift.thread_func`, read at the pin). The lowering is inside the callee's exclusive context, not before it.
 
 Burroughs' analogue of that context is the instance's **entry slot** (`asyncHandles.entrySem`), so the allocation, the write and the first callee call share **one** acquisition. Doing the lowering outside it would let a sibling call into the instance between the allocation and the call that uses it — and a guest is entitled to reuse anything it likes on an entry it owns.
 
@@ -50,12 +50,12 @@ So this engine allocates, writes, and **does not touch the allocation again** �
 
 **Recorded here and not only in a code comment**, because it is a place this engine is *stricter* than the reference, and a divergence that lives only next to the code is one a future reader will take for an oversight and "fix".
 
-The model's **store** side has no `MAX_STRING_BYTE_LENGTH` trap. It asserts `dst_byte_length <= REALLOC_I32_MAX` — 2³²−1 — at `definitions.py:1597`, and an `assert` is not a `trap_if`. The 2²⁸−1 cap is the **load** side's trap, at def:1383, and this engine already applies it in `canon.LoadStringFromRange`.
+The model's **store** side has no `MAX_STRING_BYTE_LENGTH` trap. It asserts `dst_byte_length <= REALLOC_I32_MAX` — 2³²−1 — at `definitions.py@2bed77e:store_string_copy:"dst_byte_length <= REALLOC_I32_MAX"`, and an `assert` is not a `trap_if`. The 2²⁸−1 cap is the **load** side's trap, at def@2bed77e:load_string_from_range:"trap_if(byte_length > MAX_STRING_BYTE_LENGTH)", and this engine already applies it in `canon.LoadStringFromRange`.
 
 So `checkLowerSize` refuses, before calling the guest's realloc, a string the model would have stored. The grounds:
 
 - **It could never be read back.** Any `load_string` of a string past that cap traps, so the value is unusable in both directions — the guest cannot receive it as a `string` by any path.
-- **The model's own constants say the bounds are meant to sit in that relation**: `assert(REALLOC_I32_MAX > 2 * MAX_STRING_BYTE_LENGTH)` (def:1361).
+- **The model's own constants say the bounds are meant to sit in that relation**: `def@2bed77e:"assert(REALLOC_I32_MAX > 2 * MAX_STRING_BYTE_LENGTH)"`, at module scope.
 - **The alternative is worse than a refusal.** Without the check the engine asks a guest to grow by up to a quarter of a gigabyte to satisfy a request it will then decline.
 
 **The check runs before the realloc**, which is the whole point of its position rather than its existence, and it is factored to take a **length** so it is testable without allocating 256 MiB.

@@ -672,6 +672,34 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Changed
 
+- **Citations into `definitions.py` name a symbol, not a line, and `make cite` checks each one at its pin**
+  (the chair's ruling of 2026-10-17, item 1). Three of five spot checks of #1027's line remap were wrong.
+  - **The grammar:** `def:<symbol>`; with a quote, `def:<symbol>:<quoted>`; a module statement,
+    `def:<quoted>`; and for a record, `def@<pin>:…`, where `<quoted>` is the line's text in double quotes.
+    The quote must appear inside the symbol.
+  - **The conversion:** all 302 line citations, 133 of them now quoted. Each original number was read at the
+    pin it was written against, and the prose decided where the readings disagreed. Accepted ADRs and released
+    entries name 2bed77e, the pin they read.
+  - **What the reading found:**
+    - a comment still saying #892's gap was open;
+    - `async_subtask.go`'s exclusivity citation, drifted onto `return False`;
+    - `async_lower_test.go` describing the async cancel's yield, which upstream #726 removed.
+  - **What a second, read-only sweep found** after the first commit resolved cleanly:
+    - four line numbers left glued to a converted citation (`…/2137`, `… and :1715`);
+    - two `OnResolve` citations for prose about `OnCancel`;
+    - two `FuncInst` citations that pointed one line early, at `OnCancel`, already wrong at 2bed77e;
+    - four load-side alignment citations that #1027's hand remap had sent to the store side's
+      `LiftLowerContext.reallocate`, now `load_list_from_range`.
+
+    All are repaired. The check now refuses a glued number, and run against the first commit's tree it
+    reports all four.
+  - **The check:** `scripts/refcite.py`, run by `make refcite`, from `make cite` and CI's `citations` job, over
+    the whole tree. `make canon-ref` vendors each pin by SHA, and an absent pin is a failure. A line-number
+    citation is refused. Witness: `TestRefciteResolvesEachCitationAtItsPin`. Both checker neuters were run,
+    and so was the ruling's on the tree: a citation to `Task.enter_implicit_threads` fails `make refcite`.
+  - **`TestCIGatesCoverWhatCIInvokes` follows each gate's own `$(MAKE)` lines.** `cite` delegates to
+    `refcite`, which the control could not see. Its neuter, `cite` not delegating, fails it.
+
 - **The local gate's verdict is keyed by SHA, and `prmerge.sh` reads only the one for the exact tip** (the
   chair's ruling of 2026-10-17). `.ci-verdict` was one file, so a later `make ci` on another branch
   overwrote the verdict for a commit about to be merged. The refusal that caused was correct, but it cost a
@@ -824,6 +852,13 @@ from the three obviously-wrong `#534` trailers to all eleven.
   diagnose, not a bound to raise.
 
 ### Fixed
+
+- **`ciwatch.sh` read a PR comment as a body edit.** It took body currency from the PR's `updatedAt`, which
+  any comment moves. On #1030, a comment explaining a CI failure made a never-edited body read as stale, and
+  `prmerge` refused a green. It now reads the body's `lastEditedAt`, or `createdAt` for a body never edited,
+  through one PR record that both the live and the fixture mode parse. Witness: three new arms in
+  `TestCIWatchTakesEachJobClassFromItsOwnRun`, the first of the body-currency block, which no arm had driven.
+  Neuter, run: reading `updatedAt` fails two of them.
 
 - **A `cabi_realloc` could call any canon built-in or lowered import; the reference traps it**
   ([#990](https://github.com/scttfrdmn/burroughs/issues/990)).
@@ -2033,7 +2068,7 @@ in the block's prose where a reader meets it before the groups rather than after
   `canon.Value.Field`, `canon.StoreRecord`/`canon.LoadRecord`, and record arms in `store`, `load`,
   `StoreVia`, `LoadVia`, `flattenType`, `lowerFlat` and `liftFlat`. `canon.TupleType` now returns a
   **record** with fields labelled `"0"`, `"1"`, … exactly as `despecialize` does
-  (`definitions.py:1133`), so there is **one** field-carrying arm rather than two to keep in step. The
+  (`definitions.py@2bed77e:despecialize:"case TupleType(ts) : return RecordType([ FieldType(str(i),"`), so there is **one** field-carrying arm rather than two to keep in step. The
   licence for that is measured, not assumed: `tuple-u8-u32` and `record-as-tuple-u8-u32` produce
   **byte-identical** store images, realloc traces and flat lowerings.
   `Type.Fields` carries **labels** now (`canon.Field{Name, Type}`), because a label is load-bearing
@@ -2147,7 +2182,7 @@ in the block's prose where a reader meets it before the groups rather than after
   [ADR 0098](docs/decisions/0098-a-string-argument-is-lowered-inside-the-callees-task-through-an-ordinary-call-to-the-guests-cabi-realloc.md)).
   A string now crosses the embedder's boundary **both ways**. Three mechanism choices, each following the
   model or an existing decision rather than being invented: the lowering happens **inside the callee's
-  task**, on the same entry slot as the first callee call (`definitions.py:2097-2107` lowers after
+  task**, on the same entry slot as the first callee call (`definitions.py@2bed77e:canon_lift.thread_func` lowers after
   `task.start()` and before the core call) — so the allocation, the write and the call that uses them are
   one exclusive region, and a sibling cannot enter the instance between them; the realloc is called as an
   **ordinary guest call** through `Invoke`, which gets the thread, stack and safepoint handling and stays
@@ -2179,7 +2214,7 @@ in the block's prose where a reader meets it before the groups rather than after
 - **A `list<u32>` argument crosses into a component call, through the codec's own framing**
   ([#902](https://github.com/scttfrdmn/burroughs/issues/902)). The argument lowering no longer serialises
   bytes by hand: `canon.StoreStringIntoRange` and `canon.StoreListIntoRange` are the model's
-  `*_into_range` forms (`definitions.py:1560`, `:1711`), extracted out of `StoreString`/`StoreList` so
+  `*_into_range` forms (`definitions.py@2bed77e:store_string_into_range`, `:1711`), extracted out of `StoreString`/`StoreList` so
   there is **one** lowering of each — those two are now the extracted half plus a header write, and the
   differential's string and list fixtures verify both through it. The list's element store is **injected**
   and is `StoreVia`, the same composable store the WASI lowerings use, so `list<string>` and later
@@ -2207,7 +2242,7 @@ in the block's prose where a reader meets it before the groups rather than after
   was refused for a reason belonging to strings. Only a **string** carries the load-side 2²⁸−1 cap — ADR
   0098's recorded divergence from the model's store side, because a longer one could be stored and never
   read back. Everything else is bounded by `REALLOC_I32_MAX`, the model's own bound on a store
-  (`definitions.py:1713`), rather than by a limit this engine invented. Found in the same review, which
+  (`definitions.py@2bed77e:store_list_into_range:"assert(byte_length <= REALLOC_I32_MAX)"`), rather than by a limit this engine invented. Found in the same review, which
   also found that **`storeListData` computed its byte length with a bare multiplication**: the claim that
   `canon.ListByteLength` is the one place `count × elem_size` happens was **false in the code** until it
   was asked about.
@@ -2217,14 +2252,14 @@ in the block's prose where a reader meets it before the groups rather than after
   reason: the framing — stride, span, header — is shared while the element handling is not, which is what
   lets `list<string>` and later `list<record>` reuse one framing instead of each growing a loop.
   `ListByteLength` is `count × elem_size` **computed so it cannot overflow**. The model computes that
-  product and asserts it against `REALLOC_I32_MAX` (`definitions.py:1711-1713`) — Python integers do not
+  product and asserts it against `REALLOC_I32_MAX` (`definitions.py@2bed77e:store_list_into_range`) — Python integers do not
   overflow, Go's do, and on the lifting side the count is a word the **guest** supplies. The division
   form is used rather than multiply-then-check: with the naive form, a count of 2⁶² times an 8-byte
   element returns **0 with no error** — a wrapped product landing on "nothing to read" — and the largest
   `int` returns **−8**. Both measured by neutering. The span is also bounds-checked **once, before any
   element is read**, so a list running off the end is refused rather than discovered partway through a
   loop that has already handed back partial data; and a misaligned list pointer is refused
-  (def:1715), which unlike a string's is **not** vacuous once the element is wider than a byte.
+  (def@2bed77e:store_list_into_range:"trap_if(ptr != align_to(ptr, alignment(elem_type,"), which unlike a string's is **not** vacuous once the element is wider than a byte.
 - **The codec's lifting side: `canon.ReadHeap`, `LoadString`, `LoadStringFromRange`, `LoadListU8` and
   `canon.Value.Str()`** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). Every prior use of
   the codec **lowered** — the host answers a guest through `StoreString`/`StoreVia` against guest memory,
@@ -2420,7 +2455,7 @@ in the block's prose where a reader meets it before the groups rather than after
   refusal is asserted rather than left to prose.
   **ADR 0094's first draft misread the model and the amendment is in the ADR.** It claimed the WAIT arm
   had no cancellation check — inferred from `canon_lift` alone, which does not show
-  `WaitableSet.wait_from_callback`'s (def:789). The consequence was not the latency difference the draft
+  `WaitableSet.wait_from_callback`'s (def@2bed77e:WaitableSet.wait_from_callback:"if thread.task.deliver_pending_cancel():"). The consequence was not the latency difference the draft
   priced but a **hang**: the task a host cancels is characteristically parked on something nothing will
   resolve, so there is no next iteration. Measured as that hang on the first run.
   **One check had no witness, and that was found by falsifying rather than reading.** Neutering the
@@ -3194,7 +3229,7 @@ in the block's prose where a reader meets it before the groups rather than after
   loads the component again, with the test naming what the reference said.
 - **An empty record and an empty tuple were sized 0, where the model gives them no size at all**
   ([#904](https://github.com/scttfrdmn/burroughs/issues/904)). `elem_size_record` ends with
-  `assert(s > 0)` (`definitions.py:1256`), so an empty record is not a type with a zero-byte layout but
+  `assert(s > 0)` (`definitions.py@2bed77e:elem_size_record:"assert(s > 0)"`), so an empty record is not a type with a zero-byte layout but
   one the model declines to lay out — asked of the pinned model directly rather than read off the
   source: `elem_size(RecordType([]))` raises `AssertionError`, and so does `elem_size(TupleType([]))`,
   since `elem_size` despecializes first. **Alignment is defined and is 1**, because
@@ -3312,9 +3347,9 @@ in the block's prose where a reader meets it before the groups rather than after
   obstacle** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). The refusal said *"this slice
   carries u32 only"*, true of both paths when written and now true only of the sync one. It already
   refused rather than falling through — which matters, because a sync result flattening wider than one
-  word comes back through a return **pointer** (`MAX_FLAT_RESULTS` is 1, `definitions.py:2109`), so the
+  word comes back through a return **pointer** (`MAX_FLAT_RESULTS` is 1, `definitions.py@2bed77e:canon_lift.thread_func:"assert(types_match_values(flat_ft.results, flat_results))"`), so the
   `u32` path would have read an address as data. The message now names both obstacles: the return pointer,
-  and the lift's `post-return` — called *after* the lift (def:2111-2116, checked at the model) — which
+  and the lift's `post-return` — called *after* the lift (def@2bed77e:canon_lift.thread_func:"task.return_(result)", checked at the model) — which
   this engine neither captures nor calls, so lifting without it would leak the guest's buffer. An earlier
   draft of the message claimed an async export returning the same kind works; that is true of `string`
   and **false of `list` and `record`**, and a test now forbids the misdirection.
@@ -3334,8 +3369,8 @@ in the block's prose where a reader meets it before the groups rather than after
   describes what actually remains.
 - **`task.return` lifted its result after the callback loop, by which time the guest may have reused the
   buffer** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). The model lifts **inside**
-  `canon_task_return` (`definitions.py:2336`) and hands `Task.return_` an already-lifted value
-  (def:487-492); Burroughs stored the flat words and lifted them at resolution. For a `u32` the two are
+  `canon_task_return` (`definitions.py@2bed77e:canon_task_return:"result = lift_flat_values(cx, MAX_FLAT_PARAMS,"`) and hands `Task.return_` an already-lifted value
+  (def@2bed77e:Task.return_); Burroughs stored the flat words and lifted them at resolution. For a `u32` the two are
   identical — the value *is* the word — which is exactly why it survived: no committed guest returned
   anything else, so no fixture could tell the orders apart. For a `string` the words are a `(ptr, len)`
   into guest memory, and between `task.return` and the loop's exit the guest **runs again**. The lift is
@@ -3357,8 +3392,8 @@ in the block's prose where a reader meets it before the groups rather than after
 - **The codec's string lift implemented none of the model's four traps, and an out-of-range one
   panicked** ([#903](https://github.com/scttfrdmn/burroughs/issues/903)). `load` and `liftFlat` sliced the
   differential heap's backing array directly — `h.mem[begin : begin+n]` — so a byte length past the
-  model's cap (`definitions.py:1383`), a range past the end of memory (def:1385) and bytes that are not
-  valid UTF-8 (def:1386-1389) all passed. Unreachable while the only heap was the differential's, whose
+  model's cap (`definitions.py@2bed77e:load_string_from_range:"trap_if(byte_length > MAX_STRING_BYTE_LENGTH)"`), a range past the end of memory (def@2bed77e:load_string_from_range:"trap_if(ptr + byte_length > len(cx.opts.memory))") and bytes that are not
+  valid UTF-8 (def@2bed77e:load_string_from_range:"s = cx.opts.memory[ptr : ptr+byte_length].decode(encoding)") all passed. Unreachable while the only heap was the differential's, whose
   fixtures the model emits and are therefore well-formed by construction; **every one is reachable from a
   guest's own word**, since the two words a string's flat form carries come from the guest. Two were worse
   than a wrong answer: an out-of-range slice panicked, and invalid bytes produced a Go string that
@@ -3417,7 +3452,7 @@ in the block's prose where a reader meets it before the groups rather than after
 - **`subtask.cancel` returned BLOCKED where the model waits, and crashed conforming guests**
   ([grave #892](https://github.com/scttfrdmn/burroughs/issues/892)). `canon_subtask_cancel(async_, i)`
   branches on its flag: the **sync** form waits for the cancellation to resolve
-  (`thread.wait_until(subtask.resolved)`, def:2426-2428) and only the **async** form yields and may answer
+  (`thread.wait_until(subtask.resolved)`, def@2bed77e:canon_subtask_cancel:"thread.wait_until(subtask.resolved)") and only the **async** form yields and may answer
   BLOCKED. Burroughs answered BLOCKED for both.
   **The `async?` operand was decoded and thrown away** — the decoder's helper was
   `func() error { _, err := r.byte(); return err }`. The information was in the bytes, read, and dropped,
@@ -3774,7 +3809,7 @@ fork-driven changes.
   name. The **stackful** (no-callback) async lift stays deferred and still refuses by name (ADR 0086's
   guest-driven choice). The WAIT/YIELD park and re-entry are step 2.
 - **The stackless async-lift callback loop's re-entry state, differential-pinned multi-cycle (#785).**
-  fixtures.json `async_lift_loop`: driving the model's real `canon_lift` callback loop (def:2096-2153)
+  fixtures.json `async_lift_loop`: driving the model's real `canon_lift` callback loop (def@2bed77e:canon_lift)
   through **WAIT → event → WAIT → event → EXIT** — two cycles, not a single park-and-finish — and recording
   the re-entry state a loop can get subtly wrong while still reaching the right final answer: **context set in
   cycle 1 is read back in cycle 2** (survives re-entry), the **same waitable set** is used every cycle,

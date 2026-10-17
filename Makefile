@@ -61,7 +61,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: ci ci-gates watref all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures
+.PHONY: ci ci-gates watref all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures refcite canon-ref
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -963,6 +963,35 @@ SPACE_BASE ?= origin/main
 CITE ?= --worktree main
 cite:
 	@./scripts/citecheck.sh $(CITE)
+	@$(MAKE) --no-print-directory refcite
+
+# refcite — every citation into the Canonical ABI reference names a symbol that exists at its pin (the chair's
+# ruling of 2026-10-17). Line numbers rot on every pin move: three of five spot checks of the 2bed77e→2e7895c
+# remap were wrong. Its domain is the WHOLE tree rather than a diff, because a pin move breaks citations on
+# lines nobody touched — the Makefile's CANON_PIN line is the only line that changes. A live citation resolves
+# at CANON_PIN; a record (an ADR, a released CHANGELOG entry) names the pin it read, from CANON_RECORD_PINS.
+#
+# The interpreter is uv's exact CANON_PYTHON here. CI has no uv and sets REFCITE_PY to the runner's
+# `python3 -I`: the check needs only `ast`, and the vendored head parses on 3.12, 3.13 and 3.14 (measured).
+CANON_VENDOR := internal/component/canon/gen/vendor
+CANON_RECORD_PINS := 2bed77e4228841c1d2721996d3ecc169ff96b158
+REFCITE_PY ?= uv run --no-project --managed-python --python $(CANON_PYTHON) python3 -I
+refcite:
+	@$(MAKE) --no-print-directory canon-ref
+	@$(REFCITE_PY) scripts/refcite.py --pin $(CANON_PIN) $(foreach p,$(CANON_RECORD_PINS),--record-pin $(p)) \
+		--vendor $(CANON_VENDOR)
+
+# canon-ref — vendor `definitions.py` at CANON_PIN and at each record pin, named by SHA so a file can never be
+# read as another pin's. Fetched once per SHA: a commit's raw file is immutable. Into a temp name first, so a
+# failed fetch leaves nothing a later run would accept.
+canon-ref:
+	@mkdir -p $(CANON_VENDOR)
+	@for sha in $(CANON_PIN) $(CANON_RECORD_PINS); do \
+		f=$(CANON_VENDOR)/definitions-$$sha.py; \
+		test -s $$f && continue; \
+		curl -fsSL "https://raw.githubusercontent.com/WebAssembly/component-model/$$sha/design/mvp/canonical-abi/definitions.py" \
+			-o $$f.part && mv $$f.part $$f || { rm -f $$f.part; echo "canon-ref: FAIL fetching $$sha" >&2; exit 1; }; \
+	done
 
 # spacecheck — a double space between two word characters is refused, because it is the signature of a
 # backtick executed away by an unquoted shell string. Three losses in one session earned a mechanism rather

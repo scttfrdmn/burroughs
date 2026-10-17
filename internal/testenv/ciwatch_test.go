@@ -154,6 +154,54 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		}
 	})
 
+	// **Body currency is read from the body's last edit, not from the PR's `updatedAt`.** A comment moves
+	// `updatedAt`. On #1030 one did, a never-edited body read as stale, and prmerge refused a green. The run
+	// that answered for the body (run 2) was created at T1. Each arm gives the PR record the fixture's live
+	// mode would fetch, so the arm drives the script's field choice.
+	//
+	// Neuter, run: reading `updatedAt` fails the first and third arms.
+	bodyArm := func(t *testing.T, pr string) map[string]any {
+		t.Helper()
+		dir := t.TempDir()
+		write(dir, "runs.json", runsJSON)
+		write(dir, "1.json", pushRun)
+		write(dir, "2.json", editRun)
+		write(dir, "2.created_at", "2026-10-17T16:47:27Z")
+		write(dir, "pr.json", pr)
+		if code, out := run(t, dir, "CIWATCH_PR=1"); code != 0 {
+			t.Fatalf("exit %d, want 0 (both classes green):\n%s", code, out)
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "out.verdict"))
+		if err != nil {
+			t.Fatalf("no verdict file was written: %v", err)
+		}
+		var v map[string]any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			t.Fatalf("the verdict file is not JSON: %v\n%s", err, raw)
+		}
+		return v
+	}
+	t.Run("a_comment_after_the_run_does_not_make_an_unedited_body_stale", func(t *testing.T) {
+		v := bodyArm(t, `{"lastEditedAt":null,"createdAt":"2026-10-17T16:47:24Z","updatedAt":"2026-10-17T17:15:13Z"}`)
+		if v["body_stale"] != false {
+			t.Errorf("body_stale = %v, want false: the body was never edited, and only a comment moved "+
+				"updatedAt (%v)", v["body_stale"], v["body_stale_note"])
+		}
+	})
+	t.Run("an_edit_after_the_run_is_stale", func(t *testing.T) {
+		v := bodyArm(t, `{"lastEditedAt":"2026-10-17T17:00:00Z","createdAt":"2026-10-17T16:47:24Z","updatedAt":"2026-10-17T17:00:00Z"}`)
+		if v["body_stale"] != true {
+			t.Errorf("body_stale = %v, want true: the body was edited after the run that answered for it "+
+				"(%v)", v["body_stale"], v["body_stale_note"])
+		}
+	})
+	t.Run("an_edit_before_the_run_is_current", func(t *testing.T) {
+		v := bodyArm(t, `{"lastEditedAt":"2026-10-17T16:47:26Z","createdAt":"2026-10-17T16:47:24Z","updatedAt":"2026-10-17T17:15:13Z"}`)
+		if v["body_stale"] != false {
+			t.Errorf("body_stale = %v, want false (%v)", v["body_stale"], v["body_stale_note"])
+		}
+	})
+
 	t.Run("no_run_ran_the_tree_jobs_is_a_failure_not_a_pass", func(t *testing.T) {
 		// Only the edit run exists. There is no run that can answer for the tree, and silence is not a pass.
 		dir := t.TempDir()
