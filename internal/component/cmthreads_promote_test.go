@@ -33,6 +33,18 @@ import "testing"
 // macOS runs they showed 0 failures, so they were removed. Windows CI then read 17. Zero failures in N runs
 // on one host's scheduling bounds the rate on that host; it does not show the window is absent. Each is now
 // shown by widening its window until its absence fails deterministically.
+//
+// **Re-measured under the YIELD handoff (`yieldHandoff`, the chair's item 4)**, each removed with its window
+// widened, and each widening checked against a control without the handoff:
+//
+//	patch   with the handoff                     control (no handoff)   verdict
+//	M1      0 of 30                              17 in 30 of 30         removed
+//	O1      17 in 30 of 30                       —                      kept
+//	E1      0 of 30 (both sides widened)         17 in 30 of 30         removed
+//	P2      17 in 30 of 30 with one injected     17 in 11 of 30         kept
+//	        tick; 0 of 30 with P2
+//
+// P1 is the promote itself and is not a patch.
 func TestAPromoteSwitchesToAnImplicitThreadWaitingAtItsYield(t *testing.T) {
 	_, res, err := callBounded(t, "promote-implicit", "run")
 	wantU32(t, "promote-implicit", res, err, 16)

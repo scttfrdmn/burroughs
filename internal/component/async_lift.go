@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -58,13 +57,6 @@ func (s liftState) String() string {
 }
 
 type liftTask struct {
-	// entryHeld reports that one of this task's entries holds `entrySem` (#1012). Atomic, because the
-	// promote test (`takeReady`) reads it under `threadTable.mu`, which must not nest `asyncHandles.mu`.
-	// A task whose re-entry holds `entrySem` but waits for the run slot is still, in the reference's terms,
-	// at its YIELD arm: one Thread runs at a time, so it could not have taken `exclusive_thread` while
-	// another Thread executes.
-	entryHeld atomic.Bool
-
 	state   liftState      // mirrors Task.State; resolution (however reached) is the teardown key
 	result  []interp.Value // the flat result task.return received; read at resolution
 	storage [2]uint32      // the task's context (context.get/set), NOT the per-call stack's — see below
