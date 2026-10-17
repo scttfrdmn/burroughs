@@ -56,20 +56,23 @@ func (h *asyncHandles) writerAdmittedLocked(ch *runChain) bool {
 // fenceWriterEnter waits until a writer on chain ch is admitted, then counts it. False, and nothing counted,
 // when abort fires first. A nil abort never fires.
 func (h *asyncHandles) fenceWriterEnter(ch *runChain, abort <-chan struct{}) bool {
-	h.mu.Lock()
-	for !h.writerAdmittedLocked(ch) {
+	for {
+		h.mu.Lock()
+		if h.writerAdmittedLocked(ch) {
+			h.fence.writers++
+			h.mu.Unlock()
+			return true
+		}
 		w := h.fenceWakeLocked()
 		h.mu.Unlock()
+		// Waited on with no lock held (§4 B-MM-3): each pass locks, checks and unlocks before any channel
+		// operation.
 		select {
 		case <-w:
 		case <-abort:
 			return false
 		}
-		h.mu.Lock()
 	}
-	h.fence.writers++
-	h.mu.Unlock()
-	return true
 }
 
 // fenceWriterTry counts a writer on chain ch if it is admitted now. When it is not, it returns the channel
