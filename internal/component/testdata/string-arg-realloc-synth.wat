@@ -101,7 +101,9 @@
     ;;
     ;; Two is the realistic offence and the reason this is not just "an odd address". It is a multiple of
     ;; 2 and not of 4, so it satisfies a `string`'s alignment of 1 and a `u16`'s of 2 while violating a
-    ;; `u32`'s of 4 — which is exactly the case definitions.py:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))" and :1715 trap on, and exactly the
+    ;; `u32`'s of 4 — which is exactly the case
+    ;; definitions.py:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))" traps on (for a
+    ;; string's copy and a list's store alike, since the pin checks both there), and exactly the
     ;; case a guest allocator with a 2-byte bump could produce by accident. A non-power-of-two demand
     ;; shows the engine's check runs; this shows it catches something the ABI can actually hand it.
     (func $reallocMisaligned (;3;) (type $reallocT) (param i32 i32 i32 i32) (result i32)

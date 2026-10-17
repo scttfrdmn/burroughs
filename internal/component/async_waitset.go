@@ -44,7 +44,7 @@ const (
 	eventFutureWrite eventCode = 5 // definitions.py EventCode.FUTURE_WRITE (def:EventCode.FUTURE_WRITE)
 
 	// eventTaskCancelled is delivered to the LIFT's callback, not by a waitable set — the lift loop
-	// synthesises it from the task's own state (def:canon_lift.thread_func/2137) rather than receiving it from a member.
+	// synthesises it from the task's own state (def:canon_lift.thread_func, both of its `deliver_pending_cancel` checks) rather than receiving it from a member.
 	// It lives in this enum anyway because the enum is the ABI's, and a code the guest can see must be
 	// named where a reader looks the codes up.
 	eventTaskCancelled eventCode = 6 // definitions.py EventCode.TASK_CANCELLED (def:EventCode.TASK_CANCELLED)

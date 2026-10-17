@@ -657,7 +657,8 @@ func liftResultValue(c *interp.CanonCaller, ct canon.Type, words []interp.Value)
 		})
 		if lerr != nil {
 			// A guest's own `(ptr, count)` failing the model's traps is a guest fault, not an engine
-			// error — it traps, as `load_list`'s alignment and bounds checks do (def:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))" and the span
+			// error — it traps, as `load_list`'s alignment and bounds checks do
+			// (def:load_list_from_range:"trap_if(ptr != align_to(ptr, alignment(elem_type," and the span
 			// check), and as the string arm above does for the same class of defect.
 			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf("task.return's %s result: %v", ct, lerr)}
 		}

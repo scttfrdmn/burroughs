@@ -16,7 +16,7 @@ import (
 // # Why this is an adapter and not new subtask machinery
 //
 // The model's `canon_lower` ends `subtask.on_cancel = callee(on_start, on_resolve)` (definitions.py
-// def:canon_lower:"subtask.on_cancel = callee(on_start, on_resolve)"), where the callee is a **`FuncInst = Callable[[OnStart, OnResolve], OnCancel]`** (def:OnCancel) —
+// def:canon_lower:"subtask.on_cancel = callee(on_start, on_resolve)"), where the callee is a **`FuncInst = Callable[[OnStart, OnResolve], OnCancel]`** (def:FuncInst) —
 // and `Store.lift` produces exactly that from a core func (def:Store.lift). So the model has this same seam,
 // and the lift side of it is already a function of the lower's two callbacks.
 //
@@ -167,7 +167,7 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 	return func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 		// `onStart` lifts the caller's flat params and moves the subtask STARTING→STARTED. It must run
 		// **before** the goroutine, synchronously, because the model's `on_start` reads the caller's flat
-		// args (`CoreValueIter(flat_args)`, def:canon_lower:"CoreValueIter(flat_args)"/2210) and those belong to the calling frame — reading
+		// args (`CoreValueIter(flat_args)`, def:canon_lower:"CoreValueIter(flat_args)" and def:canon_lower.on_start) and those belong to the calling frame — reading
 		// them from another goroutine would be a race against the caller's own continuation, and the
 		// retptr is in the same argument list.
 		params := onStart()
@@ -220,7 +220,7 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 			//
 			// # The refusal has nowhere to go here, and its channel is elsewhere
 			//
-			// The model gives `on_cancel` no return value (`OnCancel = Callable[[], None]`, def:OnResolve), so
+			// The model gives `on_cancel` no return value (`OnCancel = Callable[[], None]`, def:OnCancel), so
 			// this signature has no slot for one. **That is not the same as the refusal being invisible**:
 			// `subtaskCancel` re-checks `st.resolved` after invoking this and returns BLOCKED when the
 			// subtask has not resolved, so the parent learns "not cancelled (yet)" whatever the reason
@@ -252,7 +252,7 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 			// take the delivery between them and leave the canceller with nothing to wait for.
 			callee.h.mu.Lock()
 			//nolint:errcheck // No slot in the model's OnCancel signature (`OnCancel = Callable[[], None]`,
-			// def:OnResolve). The only refusal left is ErrCancelNotRunning — a task already past running, whose
+			// def:OnCancel). The only refusal left is ErrCancelNotRunning — a task already past running, whose
 			// resolved status the parent reads anyway — so there is nothing here a caller could act on.
 			_ = callee.h.requestCancelAllLocked()
 			armed = task.armTransferLocked()

@@ -564,8 +564,8 @@ func LoadList(h ReadHeap, ptr, count int, elem Type, loadElem func(int) (Value, 
 		return Value{}, fmt.Errorf("canon: list pointer %d is negative", ptr)
 	}
 	if a := alignment(elem); a > 0 && ptr%a != 0 {
-		// definitions.py:LiftLowerContext.reallocate:"trap_if(ptr != align_to(ptr, alignment))"'s trap, on the lifting side: a list's data must sit at its element's
-		// alignment. Non-vacuous as soon as the element is wider than a byte, unlike a string's.
+		// The trap in definitions.py:load_list_from_range:"trap_if(ptr != align_to(ptr, alignment(elem_type,",
+		// on the lifting side: a list's data must sit at its element's alignment. Non-vacuous as soon as the element is wider than a byte, unlike a string's.
 		return Value{}, fmt.Errorf("canon: list pointer %d is not aligned to %d", ptr, a)
 	}
 	// **Bounds-checked once over the whole span, and WITHOUT copying it**, before any element is read.

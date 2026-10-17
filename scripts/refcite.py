@@ -30,6 +30,8 @@ names that pin. Live code and tests cite unqualified, so a pin move re-asks ever
 What it refuses
 ---------------
 * a line-number citation: the prefix, a colon or a pin, and then a digit;
+* a line number glued to a symbol citation (a slash and a number, or an ``and :`` and a number, straight
+  after it), which the conversion from line numbers left three times and which resolves on its own;
 * a symbol that does not exist at its pin;
 * a quote that does not appear inside the named symbol;
 * a pin that is not vendored, and a vendored reference that is absent. **An absent reference is a failure
@@ -60,6 +62,9 @@ CITE = re.compile(
     r"(?:(?P<sym>" + IDENT + r"(?:\." + IDENT + r")*)(?::\"(?P<q1>[^\"\n]+)\")?"
     r"|\"(?P<q2>[^\"\n]+)\")"
 )
+# A line number left glued to a symbol citation: `<citation>/<n>`, or `<citation> and :<n>`. The conversion
+# from line numbers produced both, and both resolve, because the citation before the residue is well-formed.
+GLUED = re.compile(r"(?:/|\s+(?:and|or)\s+:)[0-9]{2,4}\b")
 LINE_FORM = re.compile(r"(?<![A-Za-z0-9_])(?:def|definitions\.py)(?:@[0-9a-f]{7,40})?:[0-9]+(?:\s*[-–]\s*[0-9]+)?")
 
 
@@ -142,6 +147,11 @@ def main(argv):
             for m in CITE.finditer(ln):
                 hit = True
                 n += 1
+                g = GLUED.match(ln, m.end())
+                if g:
+                    fails.append(f"{rel}:{i}: {m.group(0)}{g.group(0)}: a line number glued to a symbol "
+                                 "citation: cite the second statement as its own symbol or quote")
+                    continue
                 sha = a.pin
                 if m.group("pin"):
                     sha = pin_for(m.group("pin"))

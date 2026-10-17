@@ -82,6 +82,14 @@ reach is a law out of context.
   whose claim had expired (#892 fixed, the comment still in the present tense) and one whose
   citation had drifted onto `return False`. A repaired pointer gets its sentence read.
 
+  **And a resolving check is not a reading.** The first converted tree passed `make refcite`
+  with 0 failures and still held twelve wrong citations. Four were line numbers left glued to a
+  converted citation (`…/2137`); the check now refuses that shape. Eight named a real symbol that
+  was the wrong one: a neighbouring definition one line away (`OnResolve` for `OnCancel`), or the
+  store side for a load-side trap. A symbol check cannot see those. What found them was a sweep
+  asking whether the prose's own backticked names belong to the cited symbol. **The prose is the
+  second oracle**, because whoever wrote the citation also wrote down what they meant.
+
 ### A stale citation is a cheap tell for an expired claim, so a repaired pointer gets its sentence read.
 
 - **A stale citation is a cheap tell for an expired claim.** `internal/interp/value.go` said

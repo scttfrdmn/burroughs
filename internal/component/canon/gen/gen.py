@@ -497,7 +497,7 @@ FUTURE_READ_CASES = [
 
 # Context.get/set (gate:async increment 4, the first op the real guest hits — #739). Per-thread (per-agent)
 # i32 storage of a fixed number of slots (definitions.py: thread.storage = [0,0], canon_context_get/set at
-# def:canon_context_get/2303), get returning 0 for an unset slot and the stored value after a set, bounds i < len. No
+# def:canon_context_get and def:canon_context_set), get returning 0 for an unset slot and the stored value after a set, bounds i < len. No
 # byte encoding — it is slot storage — so the pin is behavioral (roundtrip, unset-zero, slot count); it is
 # pinned anyway, per the discipline that a fast iterate-to-green loop does not skip an op's model pin.
 def emit_context_ops():

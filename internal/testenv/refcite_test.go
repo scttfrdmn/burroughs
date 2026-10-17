@@ -119,6 +119,10 @@ func TestRefciteResolvesEachCitationAtItsPin(t *testing.T) {
 			"the quote does not appear in the module",
 		},
 		{"a_line_number_is_refused", "// see DEF:1234-1240\n", "1234-1240): cite a symbol"},
+		{
+			"a_line_number_glued_to_a_symbol_is_refused", "// DEF:canon_lift/2137 and DEF:Task.cancel and :1715\n",
+			"a line number glued to a symbol citation",
+		},
 		{"a_dropped_symbol_cited_unqualified_is_refused", "// DEF:stream_copy\n", "no symbol 'stream_copy'"},
 		{"an_unvendored_pin_is_refused", "// DEF@abcdef0:canon_lift\n", "is not a vendored record pin"},
 	} {

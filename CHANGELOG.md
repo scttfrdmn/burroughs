@@ -680,9 +680,19 @@ from the three obviously-wrong `#534` trailers to all eleven.
   - **The conversion:** all 302 line citations, 133 of them now quoted. Each original number was read at the
     pin it was written against, and the prose decided where the readings disagreed. Accepted ADRs and released
     entries name 2bed77e, the pin they read.
-  - **What the reading found:** a comment still saying #892's gap was open, `async_subtask.go`'s exclusivity
-    citation drifted onto `return False`, and `async_lower_test.go` describing the async cancel's yield,
-    which upstream #726 removed. All three are repaired.
+  - **What the reading found:**
+    - a comment still saying #892's gap was open;
+    - `async_subtask.go`'s exclusivity citation, drifted onto `return False`;
+    - `async_lower_test.go` describing the async cancel's yield, which upstream #726 removed.
+  - **What a second, read-only sweep found** after the first commit resolved cleanly:
+    - four line numbers left glued to a converted citation (`…/2137`, `… and :1715`);
+    - two `OnResolve` citations for prose about `OnCancel`;
+    - two `FuncInst` citations that pointed one line early, at `OnCancel`, already wrong at 2bed77e;
+    - four load-side alignment citations that #1027's hand remap had sent to the store side's
+      `LiftLowerContext.reallocate`, now `load_list_from_range`.
+
+    All are repaired. The check now refuses a glued number, and run against the first commit's tree it
+    reports all four.
   - **The check:** `scripts/refcite.py`, run by `make refcite`, from `make cite` and CI's `citations` job, over
     the whole tree. `make canon-ref` vendors each pin by SHA, and an absent pin is a failure. A line-number
     citation is refused. Witness: `TestRefciteResolvesEachCitationAtItsPin`. Both checker neuters were run,
