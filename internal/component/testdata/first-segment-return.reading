@@ -1,0 +1,16 @@
+# Committed readings for first-segment-return.wasm (#1020's class, mechanism (c); the chair's ruling of 2026-10-17
+# on ADR 0095's amendment). Default path: gate:async on, no host, no Threads.
+# Built:       wasm-tools parse first-segment-return.wat -o first-segment-return.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'go()' first-segment-return.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                                      reading
+# wasmtime 49.0.3, 10 of 10                                   2
+# reference, pin 2e7895c (refread.reading)                    {2}
+# Burroughs, gate:cm-threads off and on, 200 of 200 each      1
+#
+# Meaning:     go returns its async lower's state. 2 is RETURNED: the child called task.return and EXITed inside
+#              its first core call, and the reference runs that first segment inside the lower (canon_lift's
+#              thread.resume), so the lower sees it resolved. 1 is STARTED, which Burroughs returns because its
+#              adapter (liftAsAsyncImpl) starts the child on a goroutine and returns before that segment ends.
+#              The reference forbids 1 here. No widened window is needed.

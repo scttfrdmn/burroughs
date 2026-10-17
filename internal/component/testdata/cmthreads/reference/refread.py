@@ -761,6 +761,42 @@ def promote_implicit(promote_run):
     return body
 
 
+def first_segment_return():
+    """#1020's class, mechanism (c): `first-segment-return.wat`. A child's callback lift calls task.return and
+    EXITs inside its first core call, so it resolves before its first suspension. canon_lift's
+    `thread.resume()` runs that segment inside the parent's lower, which therefore returns RETURNED (2)."""
+
+    def body(out, site):
+        store = d.Store()
+        child = d.ComponentInstance(store)
+
+        def crun(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [7])
+            return [0]  # EXIT
+
+        cft = d.FuncType([d.U32Type()], [d.U32Type()], async_=True)
+        crun_fi = store.lift(crun, cft, d.CanonicalOptions(async_=True, callback=lambda a: [0]), child)
+        parent = d.ComponentInstance(store)
+        pmem = d.MemInst(bytearray(65536), "i32")
+        clow = store.lower(crun_fi, cft, d.CanonicalOptions(async_=True, memory=pmem), parent)
+
+        def prun(args):
+            [p] = clow([1, 0])
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [p & 0xf])
+            return [0]
+
+        go_fi = store.lift(prun, d.FuncType([], [d.U32Type()], async_=True),
+                           d.CanonicalOptions(async_=True, callback=lambda a: [0]), parent)
+        got = []
+        host_invoke(store, go_fi, lambda res: got.append(res))
+        while not got:
+            store.tick()
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -785,6 +821,7 @@ def battery():
     read("poll-before-suspend (#1020, outside the class; wasmtime 49.0.2: 1)", poll_before_suspend(2000))
     read("host-event-later (#1020 mechanism (a): the lower's state)", host_event_later(False))
     read("host-event-later, sync cancel (#1020 mechanism (b))", host_event_later(True))
+    read("first-segment-return (#1020 mechanism (c); wasmtime 49.0.3: 2)", first_segment_return())
 
 
 if __name__ == "__main__":
