@@ -838,6 +838,23 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **The reference harness reads upstream head without a harness error, and every committed scenario is read
+  against head** (the chair's ruling of 2026-10-17, the first part of moving the pin).
+  - **What was wrong:** `refread-head.reading` carried an `ERROR AttributeError` line. Head's `trap()` calls
+    `current_instance().store.lock_down()`, and the embedder's thread has no current Thread, so a sync-tail
+    trap raised there failed inside `trap()` rather than trapping.
+  - **The fix:** every export is invoked from inside a host Thread (`host_invoke`), as upstream's own
+    `mk_host_func` drives host-side work. Head's Thread functions return the Thread to switch to, so the
+    host Thread's body returns `None`. The pin reads byte-identically through it.
+  - **Head against the pin, every scenario:** calibration first, and then **every line agrees except the two
+    sync-cancel arms** that upstream #726 changed, which #1018 already follows. Head's reading has no
+    `ERROR` line: each line is a value, a trap with its site, or HANG.
+  - **The interpreter, corrected:** the first head reading's header said *"Python 3.15.0 (uv-managed)"*,
+    and it was a Homebrew 3.15.0 that `--python 3.14` had resolved to. Head is now read on uv-managed
+    CPython **3.14.8** (`--managed-python --python 3.14.8`), and the body is identical.
+  - `refread.py` reads another `definitions.py` through `REFREAD_DEFINITIONS`, which replaces
+    `refread_head.py`.
+
 - **The YIELD arm is a slot-carrying handoff** (behind `gate:cm-threads`; the chair's item 4).
   - **Before:** an entry returning YIELD freed the run slot and the task then asked the scheduler to run the
     ready queue. The gap between was the window #1012 closed one patch at a time.
