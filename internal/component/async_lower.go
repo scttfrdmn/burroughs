@@ -193,7 +193,12 @@ func asyncLowerFuncFor(implFor func(*subtask) asyncLowerImpl, hasResult bool, h 
 				return
 			}
 			h.mu.Unlock()
-			ch := &runChain{}
+			// A cross-component callee's store runs on its last segment's chain, so the fence that segment
+			// holds admits it (ADR 0095's amendment, F1); every other store starts a chain of its own.
+			ch := st.storeChain
+			if ch == nil {
+				ch = &runChain{}
+			}
 			h.acquireRun(ch, nil, nil)
 			defer h.releaseRunFor(ch)
 			apply(v) // takes h.mu for its bookkeeping only, never across its guest-memory work

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -72,6 +73,19 @@ type liftTask struct {
 	// `thread.new-indirect` adds Threads that run while this task is parked, and it owes a re-reading of
 	// that argument rather than an inheritance of it.
 	threadIdx uint32
+
+	// firstSeg is closed when this task's first segment ends, for a cross-component caller waiting in its
+	// lower (ADR 0095's amendment, F0). nil for every other task, which has no caller waiting on it.
+	// firstChain is the caller's run chain, which the first entry runs on (F0's corollary), and is
+	// cleared once that entry has taken it. Both are set before the task's goroutine starts.
+	firstSeg   chan struct{}
+	firstOnce  sync.Once
+	firstChain *runChain
+	// fenceCaller is the caller instance whose fence this task's segments past the first are readers of
+	// (F1); nil for a task no cross-component caller started. fenced turns true when the first segment ends,
+	// and from then on every execution of the task's Threads holds a reader (fence.go).
+	fenceCaller *asyncHandles
+	fenced      atomic.Bool
 
 	// lifted is the result `task.return` lifted **eagerly**, when its canonopts gave it a result type to
 	// lift against. nil when the export declares no result, or when the type is one the flat lift cannot
@@ -187,6 +201,126 @@ type liftTask struct {
 
 // markEntered records that this task has entered the guest at least once. Caller holds h.mu.
 func (t *liftTask) markEntered() { t.everEntered = true }
+
+// endFirstSegment releases a cross-component caller waiting for this task's first segment (F0). It is
+// idempotent, and a no-op for a task no caller waits on. Called at each place the reference's first
+// `thread.resume()` would return: the first entry returning WAIT or YIELD, the task's Thread suspending or
+// waiting, an entry that must wait, and the task's end once its result store is queued.
+func (t *liftTask) endFirstSegment() {
+	if t == nil || t.firstSeg == nil {
+		return
+	}
+	t.firstOnce.Do(func() {
+		if t.fenceCaller != nil {
+			t.fenced.Store(true) // before the release, so nothing the caller does next sees it unfenced
+		}
+		close(t.firstSeg)
+	})
+}
+
+// firstSegEnded reports whether endFirstSegment has run, or no caller waits on a first segment.
+func (t *liftTask) firstSegEnded() bool {
+	if t.firstSeg == nil {
+		return true
+	}
+	select {
+	case <-t.firstSeg:
+		return true
+	default:
+		return false
+	}
+}
+
+// fenceOf is the caller instance whose fence an execution of this task's Threads must hold a reader of now:
+// nil before the first segment ends, and for a task no cross-component caller started.
+func (t *liftTask) fenceOf() *asyncHandles {
+	if t == nil || !t.fenced.Load() {
+		return nil
+	}
+	return t.fenceCaller
+}
+
+// inHandBackLocked reports whether the task is inside upstream #726's hand-back window: a caller's
+// `subtask.cancel` armed a transfer and is waiting for it. **An execution there is exempt from the fence**,
+// as a first segment is. In the reference the cancel resumes the callee synchronously, on the caller's own
+// thread, so the callee runs inside the caller's call, and waiting on that caller's fence would wait on the
+// call itself. The caller holds h.mu of the TASK's instance.
+func (t *liftTask) inHandBackLocked() bool {
+	return t.transfer != nil && !t.transfer.handed
+}
+
+// fenceAcquire takes a reader for Thread th's execution on chain ch, if its task is fenced, and records it
+// on th so the release finds it. A no-op for an unfenced task, for a Thread that already holds one, and in
+// the hand-back window. `own` is the task's own instance, whose lock guards the window.
+func fenceAcquire(own *asyncHandles, th *cmThread, ch *runChain) {
+	t := liftTaskOf(th)
+	a := t.fenceOf()
+	if a == nil || th.fenceKey != nil {
+		return
+	}
+	inHandBack := func() bool {
+		own.mu.Lock()
+		defer own.mu.Unlock()
+		return t.inHandBackLocked()
+	}
+	if inHandBack() {
+		return
+	}
+	if a.fenceReaderEnter(ch, inHandBack) {
+		th.fenceKey = ch
+	}
+}
+
+// fenceEntryEnd ends an entry's reader only when the entry failed. **A callback task's segment does not end
+// when its callback returns**: in the reference it runs on through the loop's cancel check and the arm's
+// decision to the arm's `wait_until`, so the reader is held until `awaitEvent` or the YIELD arm actually
+// waits. After an EXIT it is held until the cross-component adapter has applied the result store
+// (`liftAsAsyncImpl`). That keeps the callee's resolution and its store one step as the caller instance
+// observes them, which is what #1020's mechanism (b) lacked: a caller resuming between the two judged a
+// cancel against a callee its subtask did not yet show resolved.
+func fenceEntryEnd(th *cmThread, _ []interp.Value, err error) {
+	if err != nil {
+		fenceRelease(th)
+	}
+}
+
+// fenceRelease drops the reader Thread th's execution holds, if any. It returns the chain it was held on, so
+// a wait can take the same one back.
+func fenceRelease(th *cmThread) *runChain {
+	if th == nil || th.fenceKey == nil {
+		return nil
+	}
+	ch := th.fenceKey
+	th.fenceKey = nil
+	liftTaskOf(th).fenceCaller.fenceReaderLeave(ch)
+	return ch
+}
+
+// takeFirstChain is the run chain for this task's next entry: the caller's for a cross-component callee's
+// first entry (F0's corollary), consumed by that entry, and a fresh one for every other. Read only by the
+// task's own goroutine, after `liftAsAsyncImpl` set it before starting that goroutine.
+func (t *liftTask) takeFirstChain() *runChain {
+	if ch := t.firstChain; ch != nil {
+		t.firstChain = nil
+		return ch
+	}
+	return &runChain{}
+}
+
+// liftTaskOf is the lift task a Thread belongs to: its own for an implicit Thread, its owner's for one the
+// task created. nil for a sync lift's implicit Thread.
+func liftTaskOf(t *cmThread) *liftTask {
+	if t == nil {
+		return nil
+	}
+	if t.task != nil {
+		return t.task
+	}
+	if t.owner != nil && t.owner != t {
+		return t.owner.task
+	}
+	return nil
+}
 
 // context returns the call's context, substituting `context.Background()` for a task built by a struct
 // literal. See the `ctx` field for why this is the only read path.
@@ -371,6 +505,12 @@ func (h *asyncHandles) handBack(task *liftTask, ending bool) {
 	x.handed = true
 	x.resolved = ending || task.state == liftResolved
 	h.mu.Unlock()
+	// **Control goes back to the canceller, so the callee's segment ends here** (F1), in #726's words *"as
+	// soon as the callback exits or blocks"*. Its reader is dropped before the canceller is released: the
+	// canceller's resumption waits on its fence, and this function then waits for the canceller.
+	if h.threads != nil {
+		fenceRelease(h.threads.get(task.threadIdx))
+	}
 	close(x.done)
 	if ending {
 		return
@@ -881,6 +1021,18 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 		// `deliver_pending_cancel()` and returns TASK_CANCELLED if it fires, consulting the set only
 		// otherwise. The order is observable whenever both are ready at once, and preferring the event
 		// would strand a delivered cancellation behind a queue of events.
+		//
+		// **That choice belongs to the next segment** (ADR 0095's amendment, F1). In the reference the
+		// resumed Thread makes it, in `wait_from_callback`, so for a fenced task it is made only while holding
+		// the caller's fence: readiness is seen without taking anything, the reader is taken, and the loop
+		// re-checks. A choice made before the reader was #1020's mechanism (b) again: `cancel-wat-parent`,
+		// widened, took the event while the parent executed and read RETURNED where the reference reads 20.
+		fenced := owner != nil && task.fenceOf() != nil && !task.inHandBackLocked()
+		if fenced && owner.fenceKey == nil && (task.state == liftPendingCancel || set.hasPendingEventLocked()) {
+			h.mu.Unlock()
+			fenceAcquire(h, owner, &runChain{})
+			continue
+		}
 		if task.deliverPendingCancelLocked() {
 			h.mu.Unlock()
 			return event{code: eventTaskCancelled}, nil
@@ -888,6 +1040,18 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 		if e, ready := set.pendingEventLocked(); ready {
 			h.mu.Unlock()
 			return e, nil
+		}
+		// Nothing to deliver, so the task waits: the arm's `wait_until`, which ends a segment (F0 for the
+		// first, F1 for any later one). No reader is held across a wait.
+		if fenced && owner.fenceKey != nil {
+			h.mu.Unlock()
+			fenceRelease(owner)
+			continue
+		}
+		if !task.firstSegEnded() {
+			h.mu.Unlock()
+			task.endFirstSegment()
+			continue
 		}
 		// The wake channel is re-read under the lock each pass: signalLocked CLOSES and REPLACES it, so a
 		// channel captured once would be the stale, already-closed one and this would spin.

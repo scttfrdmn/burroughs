@@ -45,6 +45,22 @@ func withRunChain(ctx context.Context, ch *runChain) context.Context {
 	return context.WithValue(ctx, runChainKey{}, ch)
 }
 
+// chainOf is the run chain the caller's Thread executes under, or nil when the caller has no Thread record
+// or no chain: the chain a cross-component callee's first segment runs on (ADR 0095's amendment, F0's
+// corollary), read the way the synchronous arm reads it for `withRunChain`.
+func (h *asyncHandles) chainOf(c *interp.CanonCaller) *runChain {
+	if h == nil || h.threads == nil {
+		return nil
+	}
+	rec := h.threads.current(c)
+	if rec == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return rec.chain
+}
+
 // runChainFrom is the chain ctx carries, or a new one: an entry that arrives without a chain starts one.
 func runChainFrom(ctx context.Context) *runChain {
 	if ch, ok := ctx.Value(runChainKey{}).(*runChain); ok && ch != nil {
@@ -68,9 +84,15 @@ func (h *asyncHandles) acquireRun(ch *runChain, rec *cmThread, abort <-chan stru
 		return true
 	}
 	h.mu.Unlock()
+	// The fence first, then the slot (ADR 0095's amendment, F1): a take of this instance's slot is its own
+	// guest execution, so it waits for its callees' in-flight segments, unless ch is one of theirs.
+	if !h.fenceWriterEnter(ch, abort) {
+		return false
+	}
 	select {
 	case h.runSlot <- struct{}{}:
 	case <-abort:
+		h.fenceWriterLeave()
 		return false
 	}
 	h.mu.Lock()
@@ -137,6 +159,7 @@ func (h *asyncHandles) releaseRunFor(ch *runChain) {
 	h.runChain = nil
 	h.mu.Unlock()
 	<-h.runSlot
+	h.fenceWriterLeave()
 	h.kick()
 }
 
@@ -211,6 +234,8 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, judg
 		rec = tt.current(c)
 	}
 	return func() error {
+		// The wait is a `block()` in the reference, so it ends this task's first segment (F0).
+		liftTaskOf(rec).endFirstSegment()
 		h.mu.Lock()
 		held := rec != nil && rec.chain != nil && h.runChain == rec.chain
 		if held {
@@ -251,6 +276,9 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, judg
 				return terr
 			}
 		}
+		// A fenced task's Thread stops executing here, so its reader on the caller's fence is dropped and
+		// taken back before the slot is (F1: the fence first, then the slot).
+		fenceKey := fenceRelease(rec)
 		if s != nil {
 			h.mu.Lock()
 			h.schedHolds = true
@@ -261,6 +289,7 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, judg
 			}
 		} else {
 			<-h.runSlot
+			h.fenceWriterLeave()
 		}
 		err := fn(abort)
 		tt.mu.Lock()
@@ -275,7 +304,12 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, judg
 			// its entry's `releaseRunFor` finds another holder and releases nothing.
 			return abortErr
 		}
-		// Taken back by contention, as the reference's waiting Thread is picked by a later `tick`.
+		// Taken back by contention, as the reference's waiting Thread is picked by a later `tick`: the reader
+		// first, then the writer's fence, then the slot.
+		if fenceKey != nil {
+			fenceAcquire(h, rec, fenceKey)
+		}
+		h.fenceWriterEnter(rec.saved.chain, nil)
 		h.runSlot <- struct{}{}
 		h.mu.Lock()
 		h.runChain, h.runDepth, h.lift = rec.saved.chain, rec.saved.depth, rec.saved.lift

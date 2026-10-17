@@ -131,7 +131,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 	hasResult := callee.sig != nil && callee.sig.Result != nil
 	aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
 	return interp.CanonLowerExtern(aft, mayLeaveGuard("cross-component async lower",
-		asyncLowerFuncFor(func(st *subtask) asyncLowerImpl { return liftAsAsyncImpl(callee, st) }, hasResult,
+		asyncLowerFuncFor(func(st *subtask) asyncLowerImpl { return liftAsAsyncImpl(callee, st, w.async) }, hasResult,
 			w.async)), opts), true
 }
 
@@ -163,7 +163,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 //
 // `st` is the parent's subtask for this call, given its `cancelTransfer`: after `onCancel`, the child task's
 // #726 hand-back, if the request armed one.
-func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
+func liftAsAsyncImpl(callee *compFunc, st *subtask, caller *asyncHandles) asyncLowerImpl {
 	return func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 		// `onStart` lifts the caller's flat params and moves the subtask STARTING→STARTED. It must run
 		// **before** the goroutine, synchronously, because the model's `on_start` reads the caller's flat
@@ -193,11 +193,39 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 		var armed *cancelTransfer
 		st.cancelTransfer = func() *cancelTransfer { return armed }
 
+		// **F0: this lower returns when the callee's first segment ends, not when its goroutine starts**
+		// (ADR 0095's amendment, #1020's mechanism (c)). The reference's `canon_lower` calls the callee, and
+		// `canon_lift` runs it until it first suspends or exits (def:canon_lift:"thread.resume()"), so a callee
+		// that resolves in that segment makes the lower return RETURNED. Returning at goroutine start read
+		// STARTED there, 200 of 200 on `first-segment-return.wasm`, where wasmtime 49.0.3 and the pin read 2.
+		//
+		// The first segment runs on the caller's chain (F0's corollary), as it runs on the caller's thread in
+		// the reference, so a call back into the caller's instance from it re-enters the slot the chain holds.
+		// A resolution inside it arrives while this caller is in host code, so it is queued and applied at
+		// `leaveHost`, before `asyncLowerFunc` re-checks `st.resolved`.
+		//
+		// NEUTER THIS by returning without the wait, and `TestACalleeResolvedInItsFirstSegmentIsReturnedInline`
+		// reads STARTED.
+		task.firstSeg = make(chan struct{})
+		task.firstChain = caller.chainOf(c)
+		// F1: the task's segments past its first are readers of the caller instance's fence (fence.go).
+		task.fenceCaller = caller
+		implicit := callee.threads.get(task.threadIdx)
+
 		go func() {
+			// However the task ends, its first segment has ended by now. The deferral runs after
+			// `crossComponentResolve`, so a resolution in the first segment is queued before the lower wakes.
+			defer task.endFirstSegment()
+			// **The result store is the last step of the callee's last segment** (F1). An entry that returned
+			// EXIT kept its reader (`fenceEntryEnd`), so the store below runs under it, on the segment's
+			// chain, which the fence admits as a writer on the caller's slot; the reader is dropped after it.
+			defer fenceRelease(implicit)
 			// No pending lowerings: a guest-to-guest call's arguments arrive already flat, lowered by the
 			// caller's own `canon lower` into the caller's memory and read across by the adapter. Nothing
 			// on this path builds a value the host must place in the callee's memory.
 			res, err := callee.runLiftTask(task, params, nil)
+			// The store's chain is the held reader's, so the caller's fence admits it (nil when unfenced).
+			st.storeChain = implicit.fenceKey
 			if err != nil {
 				// A child that trapped or was cancelled resolves the parent's subtask as a cancellation
 				// rather than a result. **The parent gets a terminal state either way**: leaving the
@@ -212,6 +240,18 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 			}
 			crossComponentResolve(onResolve, callee.sig, res, nil)
 		}()
+
+		// The wait is a blocking excursion, counted as at a safepoint, and it ends with the instance's close.
+		if werr := c.Blocking(func() error {
+			select {
+			case <-task.firstSeg:
+				return nil
+			case <-c.Context().Done():
+				return c.Context().Err()
+			}
+		}); werr != nil {
+			return nil, werr
+		}
 
 		return func() {
 			// The parent's `subtask.cancel` reaching the child's lift task: ADR 0094's mechanism, through
@@ -257,6 +297,11 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 			_ = callee.h.requestCancelAllLocked()
 			armed = task.armTransferLocked()
 			callee.h.mu.Unlock()
+			// A hand-back window opening exempts the callee from this caller's fence (F1), so a callee
+			// reader waiting on it re-checks, and a callee scheduler that skipped its Thread on the fence
+			// runs it now.
+			caller.fenceSignal()
+			callee.h.kick()
 		}, nil
 	}
 }

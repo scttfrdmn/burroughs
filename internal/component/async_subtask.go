@@ -48,7 +48,11 @@ type subtask struct {
 	delivered             bool         // set when the SUBTASK event has been taken by a waitable-set.wait
 	set                   *waitableSet // the set it is joined to, if any (nil until waitable.join)
 	cancellationRequested bool         // set by subtask.cancel before it invokes onCancel
-	onCancel              func()       // the impl's request_cancellation, captured at lower (async_lower.go)
+	// storeChain is the chain a cross-component callee's result store runs on: its last segment's, whose
+	// reader the fence admits as a writer (F1). nil for any other store. Written and read on the callee's
+	// goroutine, before and inside `onResolve`.
+	storeChain *runChain
+	onCancel   func() // the impl's request_cancellation, captured at lower (async_lower.go)
 	// cancelTransfer returns the callee's #726 hand-back after onCancel has run, or nil when there is none:
 	// a host impl, or a callee executing when the request landed. Set by the cross-component adapter
 	// before the lower returns, and read only after onCancel.
@@ -144,6 +148,9 @@ type asyncHandles struct {
 	// resolves task A's subtask from inside B's own impl call, and A's flag was clear, so A's store waited
 	// for the slot B's goroutine held. Three liftpark tests deadlocked that way.
 	inHost int
+	// fence orders this instance's guest execution against its cross-component callees' segments (ADR
+	// 0095's amendment, F1; fence.go). Guarded by mu.
+	fence fence
 	// hostStores are result stores that arrived while inHost was raised, queued for the holder to apply as
 	// it leaves host code, on its own goroutine, before its guest resumes. Guarded by mu. Writing them at
 	// once let a store from another goroutine land under the holder's own host code (ADR 0101's
@@ -311,9 +318,18 @@ func (h *asyncHandles) enterTask(t *liftTask) (prev *liftTask, ok bool) {
 	}
 	select {
 	case h.entrySem <- struct{}{}:
-	case <-ctxDone:
-		// Never acquired the slot, so there is nothing to release and `leaveTask` must not run.
-		return nil, false
+	default:
+		// **An entry that must wait ends the first segment** (ADR 0095's amendment, F0). The reference's
+		// `enter_implicit_thread` waits under backpressure, which is a `block()`, so control returns to the
+		// caller's lower there. A cross-component caller waiting in F0 is released now, not when this entry
+		// is admitted.
+		t.endFirstSegment()
+		select {
+		case h.entrySem <- struct{}{}:
+		case <-ctxDone:
+			// Never acquired the slot, so there is nothing to release and `leaveTask` must not run.
+			return nil, false
+		}
 	}
 	h.mu.Lock()
 	prev = h.lift
