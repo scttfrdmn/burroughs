@@ -63,6 +63,8 @@ var raceWitnessFixtures = []string{
 	// the callback-lift twins the run-slot and result-store witnesses moved to (ADR 0102's sync-wait row)
 	"run-slot-cb.wasm",
 	"result-store-heap-cb.wasm",
+	// the run slot's own witness (TestASyncEntryWaitsForAnExecutingAsyncTask)
+	"run-slot-sync-entry.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,
