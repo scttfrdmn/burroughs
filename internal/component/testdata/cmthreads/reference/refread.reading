@@ -1,5 +1,5 @@
 # REFERENCE READING — definitions.py @ 2bed77e4228841c1d2721996d3ecc169ff96b158, not a wasmtime reading.
-# vendored file sha256 a23cc41e4b3ce198003f22d524b16e52bef84d9930a5d4a0422327ecc0458180
+# definitions.py sha256 a23cc41e4b3ce198003f22d524b16e52bef84d9930a5d4a0422327ecc0458180; Python 3.13.15 (uv-managed).
 # Each line is the set of outcomes over DETERMINISTIC_PROFILE in {False, True} x seeds [0, 1, 2, 3, 4, 5, 6, 7].
 # HANG means no result and no trap within 5s.
 wait-runs-ready (calibration; wasmtime 49.0.2: 5): value 5
@@ -21,3 +21,6 @@ cancel-wat's shape, async canceller (control; wasmtime 49.0.2: 20): value 20
 cancel, late child, sync canceller (wasmtime 49.0.2: trap): trap go's sync subtask.cancel (the sync tail)
 cancel, late child, async canceller (wasmtime 49.0.2: 20): value 20
 future-self-copy (#1006, default path; wasmtime 49.0.2: 262151): value 262151
+poll-before-suspend (#1020, outside the class; wasmtime 49.0.2: 1): value 1 | value 9002
+host-event-later (#1020 mechanism (a): the lower's state): value 1
+host-event-later, sync cancel (#1020 mechanism (b)): trap go's sync subtask.cancel (the sync tail)
