@@ -40,6 +40,7 @@ MARKERS = {
     "\U0001f4dd": "error-context",
     "\U0001f9f5②": "threads-phase2",  # must precede the bare thread marker: it is a prefix of this
     "\U0001f9f5": "threads",
+    "➡": "forward",  # ➡️ {stream,future}.forward (upstream #717), new at 2e7895c
 }
 
 
@@ -73,6 +74,12 @@ def productions(text: str) -> list[tuple[str, str, str]]:
             if glyph in tail:
                 marker = slug
                 break
+        # **A glyph this table does not know is a failure, not an empty marker.** Moving the pin to 2e7895c
+        # added ➡️, and before it was mapped the two forward built-ins came out unmarked, which reads exactly
+        # like `lift`/`lower`, the productions that carry no glyph at all.
+        if not marker and any(ord(ch) > 127 for ch in tail):
+            sys.exit(f"gen-canon-builtins: production {m.group(1)!r} carries a marker glyph not in MARKERS: "
+                     f"{tail.strip()!r}")
         rows.append((" ".join(ops), m.group(1), marker))
 
     if not rows:

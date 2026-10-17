@@ -15,7 +15,7 @@
 ;;   3. it then **overwrites those nine bytes with 'X'**;
 ;;   4. it returns EXIT.
 ;;
-;; An engine that lifts inside `task.return` (definitions.py:2336, the order the model uses) returns
+;; An engine that lifts inside `task.return` (definitions.py:2298, the order the model uses) returns
 ;; "burroughs". An engine that lifts after the loop returns "XXXXXXXXX". Both are nine bytes of valid
 ;; UTF-8, so the failure is a **wrong value and not a decode error** — which is the stronger witness: an
 ;; engine could pass a UTF-8 check and still be reading the guest's scratch.
@@ -45,7 +45,7 @@
 ;;
 ;; # Opts on BOTH the lift and the task.return
 ;;
-;; The model requires them equal (`LiftOptions.equal(opts, task.opts)`, definitions.py:2334), so both
+;; The model requires them equal (`LiftOptions.equal(opts, task.opts)`, definitions.py:2296), so both
 ;; carry the same `(memory …)`. Burroughs does not yet check that equality; the fixture is written to the
 ;; model rather than to the engine, so it stays a valid specimen when the check lands.
 ;;
@@ -76,7 +76,7 @@
   ;; the memory named here.
   (core func $taskret (;0;) (canon task.return (result string) (memory $mem)))
   ;; `peek`'s own task.return: a u32 result, so a separate built-in — a task.return's result type is
-  ;; static and must match the lift it resolves (definitions.py:2333).
+  ;; static and must match the lift it resolves (definitions.py:2295).
   (core func $taskretu32 (;1;) (canon task.return (result u32)))
   (core instance $ci (;1;)
     (export "taskret" (func $taskret))

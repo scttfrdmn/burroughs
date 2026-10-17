@@ -1044,12 +1044,16 @@ threads-ref:
 # Run offline when the cases or the pin change; the output (testdata/fixtures.json) is committed and CI
 # compares to it with no Python in the loop — the wabt precedent (`spec-images`), so BURROUGHS_NO_SKIP=1
 # passes with no interpreter present.
-CANON_PIN := 2bed77e4228841c1d2721996d3ecc169ff96b158
+# Moved to upstream head 2e7895c from 2bed77e on 2026-10-17 (the chair's ruling of that date). That pin
+# predated upstream #726, which Burroughs already followed on the sync-cancel row. It needs Python >= 3.14,
+# because it uses deferred annotations, so the interpreter is named exactly: CANON_PYTHON.
+CANON_PIN := 2e7895c76905cd3fb7e6be4ac632258972b1f688
+CANON_PYTHON := 3.14.8
 canon-fixtures:
 	@mkdir -p internal/component/canon/gen/vendor
 	curl -fsSL "https://raw.githubusercontent.com/WebAssembly/component-model/$(CANON_PIN)/design/mvp/canonical-abi/definitions.py" \
 		-o internal/component/canon/gen/vendor/definitions.py
-	cd internal/component/canon/gen && uv run --no-project python3 gen.py > ../testdata/fixtures.json
+	cd internal/component/canon/gen && uv run --no-project --managed-python --python $(CANON_PYTHON) python3 gen.py > ../testdata/fixtures.json
 	@echo "regenerated internal/component/canon/testdata/fixtures.json from definitions.py @ $(CANON_PIN)"
 
 # Regenerate the canon built-in table from `Binary.md` at the SAME pin (#771, ADR 0092). Spec facts only —

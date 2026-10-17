@@ -54,7 +54,8 @@ the record did not say why:
     `result-store-heap-cb`. Both read 7 on wasmtime. `call-wat-parent`'s `go` became a callback lift: its
     sync form trapped on wasmtime and its callback form reads 49.
   - **A sync `subtask.cancel` of another instance's subtask is a separate row, and there the oracles split.**
-    - The reference traps at the tail (`refread.reading`, `cancel-wat's shape`). Its async-canceller
+    - The reference traps at the tail (`refread-2bed77e.reading`, `cancel-wat's shape`; that file was
+      `refread.reading` until the pin moved). Its async-canceller
       control reads state 1 then status 4.
     - wasmtime 49.0.2 returns status 4 (`asynclift/cancel-wat.reading`).
 
@@ -77,9 +78,23 @@ the record did not say why:
   - a callee that does not is judged by the sync tail and traps, as both oracles do.
 
   This is a measured divergence **from the pin**, which predates #726. It is recorded with both readings
-  (`refread.reading`, `refread-head.reading`), and the rule's own text, *"the pinned reference defines the
-  semantics"*, is not changed by it: re-pinning is the move that would reconcile the two, and it is its own
-  slice. Scott may object on #999.
+  (`refread-2bed77e.reading` for that pin, and `refread.reading`, then `refread-head.reading`, for head), and
+  the rule's own text, *"the pinned reference defines the semantics"*, is not changed by it: re-pinning is the
+  move that would reconcile the two, and it is its own slice. Scott may object on #999.
+
+  **The pin moved to 2e7895c on 2026-10-17** (the chair's ruling of that date), **so this row is no longer a
+  divergence.** Burroughs follows the pin here as on every other row:
+  - **The harness first:** every export is driven from inside a host Thread, as upstream's own
+    `mk_host_func` drives host work, because the new pin's `trap()` needs a current instance. The old pin
+    reads byte-identically through it.
+  - **Every committed reference scenario** was then read on both pins, calibrated on `wait-runs-ready`
+    first. Every line agrees **except the two sync-cancel arms**, which are this row.
+  - **The codec fixtures** regenerate byte-identically but for their `pin` field. That is all 19 of
+    `gen.py`'s sections, three of them ported to the new pin's API.
+  - **The built-in table** adds the ➡️ `{stream,future}.forward` pair, refused by name at decode, since no
+    toolchain emits it (wasm-tools 1.258.0 rejects the opcode).
+  - The interpreter is uv-managed CPython 3.14.8 (`CANON_PYTHON`), because the pin needs ≥ 3.14.
+  - The previous pin's reading is kept as `refread-2bed77e.reading`.
 
 ## What the contract says, and where it is silent
 

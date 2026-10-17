@@ -7,7 +7,7 @@
 ;;     `sync_wait_own_thread`). The pin's sync tail has a candidate, T, so the wait is admitted.
 ;;   - the control (sync-wait-own-thread-control.wat, T does not write): wasmtime "cannot block a synchronous
 ;;     task before returning"; the reference traps at the sync tail, `trap_if(not candidates)`, traced to
-;;     canon_lift:2161.
+;;     canon_lift:2123.
 ;; wasmtime reads this intra-instance future copy, unlike trap-while-waiting's first shape, whose copy it
 ;; refused with "resource not present" when the two ends were driven from two created Threads.
 (component

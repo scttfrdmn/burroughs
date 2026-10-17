@@ -7,7 +7,7 @@ import "fmt"
 // Component-type decoding (PR C / C.1, ADR 0084 §6). The loader framed the type section and B.1 read
 // types only to canon's depth; the value-marshaling path (C.2) needs function types resolved to their
 // parameter and result value types, so the type section now parses — to the guest-driven depth of the
-// ten import signatures and the types they reach, per `Binary.md` @ 2bed77e. A type form beyond that
+// ten import signatures and the types they reach, per `Binary.md` @ 2e7895c. A type form beyond that
 // (async func, nested component type, map/stream/future, fixed-length list) refuses at parse by name,
 // and the section is consumed exactly, as elsewhere.
 
@@ -583,7 +583,7 @@ func valTypeFromOpcode(r *reader, op byte) (ValType, error) {
 		// 0xb)"*. So this is a conformance fix and not this engine inventing a restriction.
 		//
 		// The Canonical ABI is the reason the reference draws the line there: `elem_size_record` ends
-		// with `assert(s > 0)` (definitions.py:1256), so an empty record has no layout at all — asked of
+		// with `assert(s > 0)` (definitions.py:1233), so an empty record has no layout at all — asked of
 		// the pinned model directly, `elem_size(RecordType([]))` raises `AssertionError`. A type with no
 		// layout cannot carry a value, so refusing it at load is strictly better than accepting a type
 		// nothing can do anything with.
@@ -605,7 +605,7 @@ func valTypeFromOpcode(r *reader, op byte) (ValType, error) {
 		}
 		// The same rule, the same source: `wasm-tools validate` refuses `(tuple)` with *"tuple type must
 		// have at least one type (at offset 0xb)"*. A tuple despecializes to a record
-		// (definitions.py:1133), so an empty one is an empty record and has no layout either — which is
+		// (definitions.py:1105), so an empty one is an empty record and has no layout either — which is
 		// why these two arms refuse together rather than one of them being the general case.
 		if n == 0 {
 			return ValType{}, fmt.Errorf("tuple type must have at least one type")
@@ -745,7 +745,7 @@ func unmodeledValKind(vt ValType, depth int) (ValKind, bool) {
 		//
 		// The loop below finds nothing to refuse in zero elements, so `tuple<>` used to pass here while
 		// the bridge refused it — the ABI gives an empty tuple no size, since it despecializes to an
-		// empty record and `elem_size_record` asserts `s > 0` (definitions.py:1256). That disagreement
+		// empty record and `elem_size_record` asserts `s > 0` (definitions.py:1233). That disagreement
 		// was declared in `TestTheBridgeAndTheUnmodeledPredicateAgree` rather than hidden, and it is
 		// closed here rather than left declared, because a divergence nobody needs is a divergence that
 		// will be read as intentional.

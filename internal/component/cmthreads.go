@@ -462,12 +462,13 @@ const errSyncTail = "cannot block a synchronous task before returning: it waits 
 // so the only call site is the wait itself (`suspending`, no scheduler). Each row was read on both oracles:
 //   - **A sync `waitable-set.wait`** on another instance's event traps on both. wasmtime 49.0.2 does so 10 of
 //     10 on `async-waitset-synth`, `run-slot` and `result-store-heap` with a YIELDing provider, and the
-//     reference traps at `canon_lift:2161` in every run that reaches the wait (#1016).
+//     reference traps at `canon_lift:2123` in every run that reaches the wait (#1016; `canon_lift:2161` at the
+//     previous pin, 2bed77e).
 //   - **A sync `subtask.cancel`'s wait**, after the callee's #726 hand-back (`cancelTransfer`), when the callee
-//     is a guest that is still unresolved. Both wasmtime 49.0.2 and upstream head trap a callee that YIELDs
-//     on TASK_CANCELLED (`refread-head.reading`). The pin traps every sync canceller, because it predates
-//     #726's synchronous delivery. A callee that resolves on delivery is never judged, because nothing
-//     waits; both read 20.
+//     is a guest that is still unresolved. Both wasmtime 49.0.2 and the pin (2e7895c since 2026-10-17) trap a
+//     callee that YIELDs on TASK_CANCELLED (`refread.reading`). The previous pin trapped every sync canceller,
+//     because it predated #726's synchronous delivery (`refread-2bed77e.reading`). A callee that resolves on
+//     delivery is never judged, because nothing waits; both read 20.
 //
 // The cancel wait was judged with the gate on and admitted with it off until the #726 slice. That gate
 // dependence was the defect the chair's ruling of 2026-10-17 names.

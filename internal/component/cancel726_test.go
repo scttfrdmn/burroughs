@@ -18,16 +18,18 @@ import (
 // then cancels it. The child answers TASK_CANCELLED with `task.cancel` and EXIT, or, in `-late`, with YIELD,
 // resolving only on its next event. The value is lower-state × 16 + cancel status.
 //
-//	fixture             pin 2bed77e   head 2e7895c   wasmtime 49.0.2   Burroughs before (gate off / on)
-//	cancel-sync         trap          20             20                admits / trap
-//	cancel-async        20            20             20                20
-//	cancel-sync-late    trap          trap           trap              admits / trap
-//	cancel-async-late   20            20             20                20
+//	fixture             old pin 2bed77e   pin 2e7895c   wasmtime 49.0.2   Burroughs before (gate off / on)
+//	cancel-sync         trap              20            20                admits / trap
+//	cancel-async        20                20            20                20
+//	cancel-sync-late    trap              trap          trap              admits / trap
+//	cancel-async-late   20                20            20                20
 //
-// Head is upstream #726 (2f1e56f56), which the pin predates: a cancellable, ready implicit callback Thread is
+// 2e7895c has been the pin since 2026-10-17; it was "head" when this was written. It is upstream #726
+// (2f1e56f56), which the old pin predates: a cancellable, ready implicit callback Thread is
 // resumed synchronously, and *"control flow deterministically transfers back as soon as the `callback`
 // exits or blocks"*. wasmtime 49.0.2's `subtask_cancel` yields to it the same way. Head's late arm traps at
-// `canon_lift:2123` in all 8 deterministic seeds (`refread-head.reading`).
+// `canon_lift:2123` in all 8 deterministic seeds (`refread.reading`, the pin since 2026-10-17; the previous
+// pin's reading is `refread-2bed77e.reading`).
 //
 // **Neuters, run:**
 //   - no hand-back (`armTransferLocked` returns nil): `cancel-sync` traps in both gate states;
@@ -73,7 +75,7 @@ func TestASyncCancelFollowsUpstream726InBothGateStates(t *testing.T) {
 					return
 				}
 				if o.err != nil {
-					t.Fatalf("go() = %v, want %d (STARTED, then CANCELLED_BEFORE_RETURNED) — head and wasmtime "+
+					t.Fatalf("go() = %v, want %d (STARTED, then CANCELLED_BEFORE_RETURNED) — the pin and wasmtime "+
 						"both read %d", o.err, tc.want, tc.want)
 				}
 				if v, ok := o.res[0].U32(); !ok || v != tc.want {

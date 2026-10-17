@@ -19,7 +19,7 @@ import (
 // is a second `waitable` kind, not a parallel wait mechanism (#739). The copy protocol's completion states
 // are pinned in the oracle (fixtures.json future_reads) with their differing end state.
 
-// copyResult mirrors definitions.py CopyResult (def:919–922): how a copy ended, the value the guest
+// copyResult mirrors definitions.py CopyResult (def:1023–1026): how a copy ended, the value the guest
 // branches on. A future READ is only ever COMPLETED or CANCELLED — DROPPED is a future.write outcome (a
 // read can never be dropped). DROPPED is pinned in the oracle (fixture-only, category 3); future.write is
 // now built (#785) and CANCELLED has a running producer (the cancellation guest), but **DROPPED still has
@@ -34,13 +34,13 @@ const (
 )
 
 // asyncBlocked is the packed return of an async copy that did not resolve inline (definitions.py BLOCKED =
-// 0xffff_ffff, def:2412): future.read returns it and the guest awaits the (FUTURE_READ, …) event via
+// 0xffff_ffff, def:2376): future.read returns it and the guest awaits the (FUTURE_READ, …) event via
 // waitable-set.wait.
 const asyncBlocked = 0xffffffff
 
 // readableFutureEnd is the readable half of a future<T>: a waitable whose copy, once resolved, has a
 // (FUTURE_READ, index, result) pending event. Its end state after resolution differs by outcome — DONE for
-// COMPLETED, IDLE for CANCELLED (definitions.py future_event, def:2531+) — which the next operation's
+// COMPLETED, IDLE for CANCELLED (definitions.py future_event, def:1052+, in `FutureEnd.notify`) — which the next operation's
 // trap-legality reads, so it is tracked here, not derived at delivery. `value` is the payload the host will
 // deliver; `readPtr`/`caller` are captured by a pending future.read so the completion can copy `value`
 // into guest memory (the copy runs where the host resolves, possibly another goroutine — synchronized by
@@ -107,7 +107,7 @@ func (e *readableFutureEnd) completeLocked(r copyResult) error {
 	return nil
 }
 
-// futureRead implements `canon future.read` (definitions.py:2523) on the async path: register the pending
+// futureRead implements `canon future.read` (definitions.py:2436) on the async path: register the pending
 // read (the dst ptr + the reading agent's caller) and return BLOCKED. The value is not present yet; the
 // host completes the future later (completeLocked), which arms the (FUTURE_READ, index, result) event that
 // the existing waitable-set.wait delivers — no second wait mechanism. A read of an already-resolved end
@@ -136,7 +136,7 @@ func futureRead(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// futureDrop implements `canon future.drop-readable` (definitions.py:2611): remove the readable end from the
+// futureDrop implements `canon future.drop-readable` (definitions.py:2504): remove the readable end from the
 // table. The guest drops after its read has delivered; slice-1 removes the entry (the end's lifetime is the
 // instance's, freed at Close) without the model's writable-side DONE trap, which is a future.write concern.
 func futureDrop(h *asyncHandles) interp.CanonFunc {
@@ -208,7 +208,7 @@ func (e *writableFutureEnd) completeWriteLocked(progress uint32, r copyResult) {
 	}
 }
 
-// futureNew implements `canon future.new` (0x15, definitions.py:2459): mint a connected readable+writable
+// futureNew implements `canon future.new` (0x15, definitions.py:2420): mint a connected readable+writable
 // future end pair, return `ri | (wi<<32)` — the same packed shape as stream.new. The cancellation path uses
 // the writable end (write then cancel); the readable end is the pair the model always mints.
 func futureNew(h *asyncHandles) interp.CanonFunc {
@@ -224,7 +224,7 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// futureWrite implements `canon future.write` (0x17, definitions.py:2527) on the async path: a single-value
+// futureWrite implements `canon future.write` (0x17, definitions.py:2439) on the async path: a single-value
 // write. With no reader on the paired end (the cancellation guest's shape), the write parks and returns
 // BLOCKED; the guest then cancels it.
 //
@@ -282,7 +282,7 @@ func futureWrite(h *asyncHandles, elemSize int) interp.CanonFunc {
 	}
 }
 
-// futureCancelWrite implements `canon future.cancel-write` (0x19, definitions.py:2580 -> cancel_copy): cancel
+// futureCancelWrite implements `canon future.cancel-write` (0x19, definitions.py:2473 -> cancel_copy): cancel
 // a write in flight, resolving it to CANCELLED inline and returning the packed `result|progress<<4`. The
 // future analog of stream.cancel-write, through the same cancel_copy substrate. Pinned by fixtures.json
 // future_cancel_write (the future WRITE arm's running CANCELLED; progress 0; the end left IDLE).

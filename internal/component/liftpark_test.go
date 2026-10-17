@@ -499,7 +499,7 @@ func TestConcurrentLiftsDoNotShareMutableStateOnTheCompFunc(t *testing.T) {
 //
 // (2) is the guarantee the excursion release broke, and it is why this arm records an ORDER rather than
 // just two successes. The model holds `exclusive_thread` across a callback-lifted task's whole entry
-// (`needs_exclusive`, def:417), and that is not a scheduling preference: it is the promise that no other
+// (`needs_exclusive`, def:421), and that is not a scheduling preference: it is the promise that no other
 // task's guest code runs in the instance while this task's guest frame is live. **A correct guest may
 // depend on it** — a Rust guest holding a `RefCell` borrow, or its executor's state, across a blocking
 // import must not have another task's callback interleave. Releasing during the excursion permits exactly

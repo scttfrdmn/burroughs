@@ -128,7 +128,7 @@ func TestHostCancelsAStartedLiftTask(t *testing.T) {
 			//
 			// **A host that resolves LATER is a separate, real gap**, filed rather than hidden behind this
 			// line: the model's `canon_subtask_cancel` *waits* for resolution on a sync-lowered cancel
-			// (`thread.wait_until(subtask.resolved)`, def:2427-2428) and returns BLOCKED only on the async
+			// (`thread.wait_until(subtask.resolved)`, def:2390-2391) and returns BLOCKED only on the async
 			// form. Burroughs returns BLOCKED unconditionally, so a host resolving asynchronously makes a
 			// conforming guest panic. Not in this slice's scope — it is `subtask.cancel`'s arm, the
 			// parent's path — and not this witness's subject either. **Filed as #892 with the model
@@ -221,7 +221,7 @@ func TestHostCancelsAStartedLiftTask(t *testing.T) {
 	}
 	if len(got.res) != 0 {
 		t.Errorf("a cancelled call returned %d value(s); a cancelled task resolves with no result "+
-			"(def:497 passes None)", len(got.res))
+			"(def:503 passes None)", len(got.res))
 	}
 
 	events := log.snapshot()
@@ -258,13 +258,13 @@ func TestHostCancelsAStartedLiftTask(t *testing.T) {
 }
 
 // TestHostCancelsAYieldingLiftTask is the witness for the lift loop's **top-of-loop** cancellation check
-// (definitions.py def:2129), and it exists because neutering that check left the whole component suite
+// (definitions.py def:2089), and it exists because neutering that check left the whole component suite
 // green — including `TestHostCancelsAStartedLiftTask` above.
 //
 // # Why the end-to-end witness could not speak for it
 //
 // That witness drives a `wit-bindgen` guest, which awaits an import and therefore returns **WAIT**. A
-// WAIT's cancellation is delivered by the park's own check (def:789, inside `awaitEvent`), so the
+// WAIT's cancellation is delivered by the park's own check (def:807, inside `awaitEvent`), so the
 // top-of-loop check is never the thing that delivers it. The engine had a check nothing covered — grave
 // #885's shape one level up, and found the same way: by falsifying rather than by reading.
 //

@@ -838,6 +838,32 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **The reference pin moves from 2bed77e to upstream head 2e7895c** (the chair's ruling of 2026-10-17).
+  Burroughs had been following head on one row and the old pin on every other, with no record of which governed
+  where.
+  - **Every committed reference scenario was read on both pins**, calibrated on `wait-runs-ready`.
+    - **The battery:** every line agrees except the two sync-cancel arms, which #1018 already follows.
+      `refread.reading` is now the pin's, and the old pin's is kept as `refread-2bed77e.reading`.
+    - **The codec fixtures:** all 19 of `gen.py`'s sections regenerate byte-identically but for their `pin`
+      field. Three sections were ported to the new pin's API: `stream_drops`, `subtask_drop` and
+      `callback_result`.
+    - **The built-in table** adds the ➡️ `{stream,future}.forward` pair (upstream #717).
+  - **New in the pin, and handled:**
+    - **Default-path defect ([#1026](https://github.com/scttfrdmn/burroughs/issues/1026)):**
+      `waitable-set.wait` and `.poll` now trap on a misaligned or out-of-bounds event pointer (upstream #741).
+      wasmtime 49.0.2 and the pin trap; Burroughs returned 100. The neuter was run.
+    - **The forward pair is refused by name at decode** (`ErrUnsupportedForm`, status `forward`). No toolchain
+      emits it: wasm-tools 1.258.0 rejects the opcode. `gen-canon-builtins.py` now fails on a marker glyph it
+      does not know, where it had silently emitted an empty marker. Neuters were run for both.
+  - **New in the pin, and not reaching Burroughs:**
+    - the Latin-1 shrink's realloc alignment (#734), since `latin1+utf16` is refused at the canonopt;
+    - the `core:moduledecl` rectype encoding, since core module types are opaque here;
+    - `error-context.debug-message`'s pointer check (#740), since 📝 is unmodelled;
+    - the 📡 `[get]`/`[set]` name annotations, which are unmodelled.
+  - **Citations:** 230 line citations into `definitions.py` map to the new pin by line alignment. The 39 into
+    changed lines were mapped by hand to their equivalents.
+  - **The interpreter is named exactly** (`CANON_PYTHON := 3.14.8`, uv-managed): the pin needs ≥ 3.14.
+
 - **#1020 is characterized: the class it belongs to reaches the default path** (the chair's ruling of
   2026-10-17, item 2). The design is a separate ADR 0095 amendment, held for chair review, with no engine
   change.

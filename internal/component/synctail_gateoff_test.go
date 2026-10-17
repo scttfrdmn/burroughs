@@ -23,7 +23,7 @@ import (
 //     *"cannot block a synchronous task before returning"*. The provider resolving eagerly instead, so the
 //     wait is never reached, reads 7. That is this test's control arm.
 //   - **The reference** (`definitions.py` @ CANON_PIN, the fixtures' shared prefix modelled as a scenario):
-//     every run that reaches the wait traps at `canon_lift:2161`. That is all 8 seeds under
+//     every run that reaches the wait traps at `canon_lift:2123`. That is all 8 seeds under
 //     DETERMINISTIC_PROFILE, and 5 of 8 without it. The other 3 never reach the wait, because the early
 //     return of `wait_until` lets `op` RETURN inside the lower.
 //
