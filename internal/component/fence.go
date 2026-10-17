@@ -74,7 +74,7 @@ func (h *asyncHandles) fenceWriterEnter(ch *runChain, abort <-chan struct{}) boo
 
 // fenceWriterTry counts a writer on chain ch if it is admitted now. When it is not, it returns the channel
 // to wait on for the next change, for a caller that waits inside a `select`.
-func (h *asyncHandles) fenceWriterTry(ch *runChain) (bool, <-chan struct{}) {
+func (h *asyncHandles) fenceWriterTry(ch *runChain) (admitted bool, wake <-chan struct{}) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.writerAdmittedLocked(ch) {
@@ -157,7 +157,8 @@ func (h *asyncHandles) readerCountLocked(ch *runChain) {
 func (h *asyncHandles) fenceReaderLeave(ch *runChain) {
 	h.mu.Lock()
 	h.fence.segs--
-	if h.fence.chains[ch]--; h.fence.chains[ch] <= 0 {
+	h.fence.chains[ch]--
+	if h.fence.chains[ch] <= 0 {
 		delete(h.fence.chains, ch)
 	}
 	if h.fence.segs == 0 {

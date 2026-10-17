@@ -593,7 +593,9 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 
 	// Allocate and write, then call — all three inside the one acquisition above. `lowerPending` does not
 	// take the entry itself, precisely so it cannot be called from somewhere that does not hold it.
-	if err = f.lowerPending(pend, args); err != nil {
+	// Assigned to the named `err`, not shadowed: the deferred `fenceEntryEnd` reads it.
+	if lerr := f.lowerPending(pend, args); lerr != nil {
+		err = lerr
 		return nil, err
 	}
 	// **With the Thread index**, as `enterAndInvoke` passes it (ADR 0101 point 5). This was a plain `Invoke`,

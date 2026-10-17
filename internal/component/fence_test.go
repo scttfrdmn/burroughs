@@ -19,7 +19,7 @@ func readGo(t *testing.T, fixture, export, gate string, n int) map[uint32]int {
 		t.Fatalf("the committed fixture is missing: %v", err)
 	}
 	counts := map[uint32]int{}
-	for i := 0; i < n; i++ {
+	for range n {
 		in, err := Instantiate(b)
 		if err != nil {
 			t.Fatalf("Instantiate %s: %v", fixture, err)
