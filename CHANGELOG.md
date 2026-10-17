@@ -838,6 +838,19 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **The run slot has its own discriminating witness again** (the chair's ruling of 2026-10-17, item 2).
+  - **The gap:** on the callback shapes #1017 moved to, the entry slot and the run slot each keep two
+    re-entries apart alone, so removing only the run slot failed nothing.
+  - **The witness**, `TestASyncEntryWaitsForAnExecutingAsyncTask` on `run-slot-sync-entry.wasm`: an async
+    task's entry runs a long loop while a **sync** export of the same instance is entered. A sync entry
+    takes no `entrySem`, so only the run slot keeps them apart. wasmtime 49.0.2 reads no overlap (2007,
+    10 of 10).
+  - **Neuters, run:** the run slot removed from the sync entry fails it 20 of 20, and so does removing it
+    from the async entries. The old exclusivity witness passes under both.
+  - **50 of 50 under `-race`, and that clean run is stated for what it is:** ADR 0054 makes aligned guest
+    word accesses atomic, so the detector cannot see a guest-against-guest overlap, and it reports nothing
+    under the neuter either. The guest's value is the oracle.
+
 - **A sync `subtask.cancel` now gives the same answer in both `gate:cm-threads` states, and it is upstream
   #726's** (the chair's ruling of 2026-10-17; decided on #999, unless Scott objects).
   - **Before:** with the gate off, Burroughs admitted every sync cancel of another instance's subtask. With

@@ -53,7 +53,8 @@ import (
 //   - widening `entrySem` to 8 passes, 5 of 5;
 //   - removing both fails on the overlap assertion, 5 of 5.
 //
-// So this now witnesses that a re-entry is exclusive, not which slot makes it so. The two neuters it was
+// So this now witnesses that a re-entry is exclusive, not which slot makes it so. The run slot's own
+// witness is `TestASyncEntryWaitsForAnExecutingAsyncTask`, a shape where `entrySem` does not exclude. The two neuters it was
 // built on are the sync path's. Removing `invokeWith`'s acquisition failed on the overlap, 3 of 3.
 // `suspending` keeping the slot across the wait failed on "only 1 of 2 callers parked". They have no subject
 // on this shape, and the sync shape they had is a trap.

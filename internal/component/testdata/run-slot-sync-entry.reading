@@ -1,0 +1,16 @@
+# Committed wasmtime reading for run-slot-sync-entry.wasm (the chair's ruling of 2026-10-17, item 2).
+# Built:       wasm-tools parse run-slot-sync-entry.wat -o run-slot-sync-entry.wasm   (wasm-tools 1.258.0)
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02), darwin/arm64. Runs: 10 of 10.
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'run()' <wrapper>.wasm
+#
+# wasmtime cannot supply `note` or drive two calls, so the fixture, printed by `wasm-tools print` and
+# unchanged, is nested in a wrapper:
+#   - a provider component exports a no-op sync `note`;
+#   - an async callback `run` async-lowers the fixture's `spin` (retptr 0), then sync-calls `poke`, and
+#     returns `lower-state * 1000 + mem[0] + poke()`.
+#
+# Output:      2007
+# Meaning:     `spin` RETURNED inside the lower (2 * 1000), saw no change to word 4 (0), and `poke` returned
+#              7. In the reference's single-threaded model the sync entry cannot run while the async task
+#              executes. Burroughs runs the two calls concurrently from the host, so only the run slot
+#              keeps them apart; the witness asserts spin == 0.
