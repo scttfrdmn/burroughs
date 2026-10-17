@@ -853,6 +853,31 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **The fixture scripts assert their oracle's exact version before they read anything** (the chair's ruling of
+  2026-10-17). wasmtime moved from 49.0.2 to 49.0.3 underneath every committed reading, and rustup's stable
+  rustc from 1.91.1 to 1.99.1, and the scripts only printed versions.
+  - **What each script now asserts:** `cmthreads/build.sh` asserts `wasmtime 49.0.3` and `wasm-tools 1.258.0`.
+    `asynclift/build.sh` asserts those two, `rustc 1.91.1` for the guests (the version every committed guest's
+    `producers` section names) and `wac-cli 0.12.0`. A drifted tool stops either script before it builds or
+    reads anything. Neuters run: an expectation of 49.0.2 refuses on 49.0.3, and the stable rustc refuses.
+  - **Every `build.sh` reading was re-taken on 49.0.3, and none moved.**
+    - In `cmthreads`: `switch`, `index-call`, `spawn`, `suspend-partway`, `suspend-parked`, `sync-spawn`,
+      `sync-trap`, `thread-wait-callback`, `sync-enters-past-suspended`, `wait-runs-ready`,
+      `trap-while-waiting` and its control, `yield-admits-entry`, `nested-sync-unwind` and its control,
+      `residual`, `sync-wait-own-thread` and its control, `cancel-suspended` and its two controls,
+      `promote-implicit` and its control, `thread-context`, and the bug repro.
+    - In `asynclift`: every reading, and every guest byte-identical once rebuilt with rustc 1.91.1.
+
+    Each `cmthreads` reading file gains a dated re-take line; its original line stays, because "10 of 10 on
+    49.0.2" is still true. `compute.reading` names 49.0.3, its only change. The harness readings name the
+    wasmtime crate that `harness/Cargo.lock` pins (49.0.2), not the CLI, and `starting.reading`'s provenance
+    block is now written by the script, not by hand.
+  - **Rebuilt with rustup's stable 1.99.1, every Rust guest came out different** (v0 symbol mangling). They
+    were not committed: that would have swapped the inputs of every test loading them, unannounced.
+  - **The flip's hand-taken rows were re-read too**, 3 runs each on 49.0.3, and all match:
+    `context-clobber`, the four `cancel726` fixtures, `future-self-copy`, `poll-before-suspend`, and
+    `poll-misaligned` with `poll-aligned`. Not re-read: wrapper-built rows such as `run-slot-sync-entry`.
+
 - **`ciwatch.sh` read a PR comment as a body edit.** It took body currency from the PR's `updatedAt`, which
   any comment moves. On #1030, a comment explaining a CI failure made a never-edited body read as stale, and
   `prmerge` refused a green. It now reads the body's `lastEditedAt`, or `createdAt` for a body never edited,
