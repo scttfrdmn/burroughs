@@ -81,7 +81,7 @@ That copy is real work with its own witnesses and it is not what #888 registered
 
 ## Amendment, 2026-10-17, accepted: outcomes the reference's single runner forbids
 
-**Status: accepted** (the chair's ruling of 2026-10-17 on this amendment's revision, relayed by Scott): F0 and F1 adopted in design, with the re-entry rule below added on that ruling. **Not yet built**; the build owes the list at the end. The chair ordered (ruling of 2026-10-17, item 2) that #1020 be characterized with fixtures, and the design written here, before any engine change. This section records both, and it is held for review as ADR 0101's Option A was.
+**Status: accepted** (the chair's ruling of 2026-10-17 on this amendment's revision, relayed by Scott): F0 and F1 adopted in design, with the re-entry rule below added on that ruling. **Built**: what the build measured, and the three places it departs from this text, are in *As built* at the end. The chair ordered (ruling of 2026-10-17, item 2) that #1020 be characterized with fixtures, and the design written here, before any engine change. This section records both, and it is held for review as ADR 0101's Option A was.
 
 **Revised after the chair's review of the first draft** (ruling of 2026-10-17 on #1025). The review corrected part 1's boundary and asked for one fence to be evaluated against the two-part rule. Taking the corrected boundary seriously found a third mechanism, (c), which is the common case rather than a race. The rule section below replaces the first draft's. Citations into the reference name the pin they read, 2e7895c, by symbol.
 
@@ -251,3 +251,50 @@ The build measures all three under `make lab-ab`.
 - (c), with a callee that resolves in its first segment.
 
 (a) and (b) are rare at the natural rate and deterministic when widened. **(c) is the natural rate, 200 of 200.** The fix is this amendment's build, which is not required before the flip, because all three read the same in both gate states. The scope is stated so the flip is not decided on a flake.
+
+### As built (2026-10-17)
+
+The build is `fence.go` and the F0 points in `liftAsAsyncImpl`, `runLiftTask`, `awaitEvent`, `enterTask`, `park` and `suspending`. What it measured against the owed list, and where it departs from the text above:
+
+**The readings, in the reference set:**
+
+| reading | before | as built | under the neuter |
+|---|---|---|---|
+| (c) `first-segment-return`, per gate | 1, 200 of 200 | **2, 200 of 200** | 1, 200 of 200 (F0 returning at goroutine start) |
+| (c) `call-wat-parent`, inline `tick` | STARTED, 200 of 200 | **RETURNED**, asserted | parks (F0's neuter) |
+| (a) `call-wat-parent`, widened 2 ms | RETURNED, 30 of 30 | **STARTED, 30 of 30** | RETURNED, 30 of 30 (no readers) |
+| (b) `cancel-wat-parent`, cancel widened 2 ms | trap, 30 of 30 | **20, 30 of 30** | trap, 30 of 30 (no readers) |
+| (b) `cmthreads/cancel-suspended`, cancel widened 2 ms | 2, 30 of 30 | **4, 30 of 30** | 2, 30 of 30 (no readers) |
+| `cancel-suspended`, natural, `-race` | 0 of 200 failing; **8 of 200** with F0 alone | **0 of 200** | — |
+
+The widening was a temporary probe, removed with the tree checked clean: a 2 ms sleep after the cross-component lower's first-segment wait for (a), and at the head of `subtask.cancel` for (b), with a host `tick` resolving on a goroutine after 1 ms.
+
+**The re-entry table, read:** every row reads 8 as built. **The neuter section above predicted all four rows hang, and two do.** Each row has a discriminating neuter, but not the same one:
+
+| row | fence ignoring chains | first segment on a fresh chain |
+|---|---|---|
+| `reenter` | 8 | 8 (all-sync: #984's existing chain rule, neither F0 nor F1) |
+| `thread-wait-callback` | 8 | **hangs** (F0's corollary) |
+| `residual` | **hangs** | **hangs** |
+| `reenter-after-suspend` | **hangs** (F1's rule) | 8 |
+
+**Three departures from the text, each found by a reading:**
+1. **A segment begins with its decision, not its entry.** The text put F1's reader at each entry. `cancel-wat-parent` then read RETURNED: `awaitEvent` chose the event over the cancel while the parent executed. In the reference the resumed Thread makes that choice in `wait_from_callback`. So the reader is taken before the choice, and `awaitEvent` sees readiness without consuming anything, takes the reader, then chooses. The YIELD arm's check is the same. A segment holds its reader until the arm's wait, not just to its entry's end.
+2. **The WAIT arm always ends a segment**, as the reference's deterministic profile does (`wait_until` blocks even when ready). Continuing the first segment on an already-pending event let a host goroutine's early resolution make the lower RETURNED, where a reference host's event can only arrive on a later tick.
+3. **Upstream #726's hand-back window is exempt, and `handBack` ends the segment.** The callee's TASK_CANCELLED entry runs inside its caller's `subtask.cancel`, on the caller's thread in the reference, so waiting on that caller's fence waited on the call itself. Three cancellation tests hung until this was in. A reader still waiting when a window opens gives up: arming the transfer signals the caller's fence and kicks the callee's scheduler.
+
+**A decision the build took, outside the text:** a host impl that calls `onResolve` from another goroutine before its own call returns can land in the caller's host-code window and read as inline. The reference has no goroutines, so that host is neither of its two kinds, a synchronous one (inline) or a host Thread (later). The embedder rule taken is *inline means resolved before the impl returns*. A host racing its own return gets either arm, by its own construction.
+
+**The cost, against the forecast** (janus.local, `measured` group, pueue task 33, `make lab-ab`, n = 10 per row):
+
+| row | main | as built | forecast |
+|---|---|---|---|
+| `work=first/k=4` | 14.19m | **51.77m**, +264.9% (p = 0.000) | about 51.4m: **met** |
+| `work=after/k=4` | 15.69m | **14.26m**, −9.1% (p = 0.000) | within 5%: **missed, faster** |
+| `work=after/k=1` | 14.25m | 12.86m, −9.7% (p = 0.000) | — |
+| `work=first/k=1` | 12.87m | 12.98m, +0.8% (p = 0.001) | — |
+| `switch.wasm` | 113.3µ | 112.5µ, ~ (p = 0.247) | unchanged: **met** |
+
+The `after` rows' 9% gain is outside the forecast band, in the favourable direction, and not explained by a measurement. The likely cause is caller and callee no longer contending for entry and slot paths while the first segment runs. That is a hypothesis.
+
+**The concurrency witnesses, 50 times under `-race`:** the whole `internal/component` package, which holds every cancellation, Threads and cross-call witness, ran 50 times on darwin/arm64 (1,226 s), with 0 failures and no data race reported.

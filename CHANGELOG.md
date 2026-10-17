@@ -870,6 +870,28 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Fixed
 
+- **A cross-component callee's outcomes are now ones the reference's single runner allows**
+  ([#1020](https://github.com/scttfrdmn/burroughs/issues/1020); ADR 0095's amendment, as built). This is the
+  default path, in both gate states.
+  - **F0:** the async lower returns when the callee's first segment ends, not when its goroutine starts. That
+    segment runs on the caller's chain. (c), a callee resolving in its first segment, now reads RETURNED,
+    200 of 200 per gate, where it read STARTED 200 of 200.
+  - **F1** (`fence.go`): a callee's segments past the first, and its caller instance's guest execution,
+    exclude each other.
+    - A segment holds its reader from the decision that begins it to the wait that ends it, and through
+      its result store.
+    - A call back into the caller's instance on the segment's chain is admitted.
+    - The callee's Thread scheduler tries the reader and requeues a Thread it cannot run yet.
+  - **Widened 2 ms, 30 of 30 each, all in the reference set:** (a) STARTED, `cancel-wat-parent` 20,
+    `cancel-suspended` 4. Under the neuter (no readers) they read RETURNED, trap and 2.
+  - **Witnesses:** `TestACalleeResolvedInItsFirstSegmentIsReturnedInline` and
+    `TestACalleePastItsFirstSuspensionReentersItsCaller`, and `TestACrossComponentAsyncCallCarriesParamsAndResult`
+    now asserts the arm. Neuters run: F0 without its wait fails the first and the inline arm; a fence
+    ignoring chains fails the second on its bound.
+  - **The cost** (janus, `make lab-ab`): four first-segment callees take 51.77m against 14.19m, as forecast;
+    work after a YIELD is 9% faster, outside the forecast's 5% band in the favourable direction, and
+    unexplained; `switch.wasm` is unchanged (p = 0.247).
+
 - **The fixture scripts assert their oracle's exact version before they read anything** (the chair's ruling of
   2026-10-17). wasmtime moved from 49.0.2 to 49.0.3 underneath every committed reading, and rustup's stable
   rustc from 1.91.1 to 1.99.1, and the scripts only printed versions.
