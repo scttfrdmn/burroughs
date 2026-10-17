@@ -838,6 +838,28 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **#1020 is characterized: the class it belongs to reaches the default path** (the chair's ruling of
+  2026-10-17, item 2). The design is a separate ADR 0095 amendment, held for chair review, with no engine
+  change.
+  - **The class:** outcomes the reference's single runner forbids, reachable because a cross-component callee
+    runs concurrently with its caller (ADR 0095).
+  - **Mechanism (a), a result store inside the caller's `inHost` window:** a callee waiting on a later host
+    event.
+    - The reference reads the lower as STARTED only (`host-event-later`, pin and head).
+    - Burroughs reads STARTED 300 of 300 per gate. With the adapter's window widened 2 ms, it reads
+      **RETURNED, 30 of 30**, with the gate off.
+  - **Mechanism (b), a cancel judged against the callee's live state:** `cancel-wat`'s shape with the same
+    host.
+    - Head reads 20.
+    - Burroughs reads 20 at the natural rate, and with the cancel widened it **traps at the sync tail, 30 of
+      30**. #1020 itself reads 2 30 of 30 when widened.
+  - **Outside the class, witnessed:** `poll-before-suspend`. A caller polling its callee without suspending
+    reads 1 on wasmtime, Burroughs and the reference, because the slot fences the store.
+    `TestACallerPollingWithoutSuspendingSeesNoEventFromItsCallee`'s neuter, a store applied without the
+    slot, reads 101 20 of 20.
+  - The three scenarios join `refread.py`'s battery. The pin reading is now taken on an exact interpreter,
+    uv-managed 3.13.15: the unpinned `python3` had resolved to 3.12.2, with an identical body.
+
 - **The reference harness reads upstream head without a harness error, and every committed scenario is read
   against head** (the chair's ruling of 2026-10-17, the first part of moving the pin).
   - **What was wrong:** `refread-head.reading` carried an `ERROR AttributeError` line. Head's `trap()` calls

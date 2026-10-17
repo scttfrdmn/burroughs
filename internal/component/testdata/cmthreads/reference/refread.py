@@ -581,6 +581,139 @@ def future_self_copy():
     return body
 
 
+def poll_before_suspend(polls):
+    """#1020's class, a shape OUTSIDE it (`poll-before-suspend.wat`): a parent's async callback `run`
+    async-lowers a provider's `op` (YIELD once, then return x), joins the subtask to a set, and polls it `polls`
+    times without suspending. The value is seen * 100 + lower-state; 9000 + state if the lower did not START."""
+
+    def body(out, site):
+        store = d.Store()
+        prov = d.ComponentInstance(store)
+        opft = d.FuncType([d.U32Type()], [d.U32Type()], async_=True)
+        held = {}
+
+        def op(args):
+            held["x"] = args[0]
+            return [1]  # YIELD
+
+        def op_cb(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [held["x"]])
+            return [0]
+
+        op_fi = store.lift(op, opft, d.CanonicalOptions(async_=True, callback=op_cb), prov)
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        oplow = store.lower(op_fi, opft, d.CanonicalOptions(async_=True, memory=mem), inst)
+
+        def run(args):
+            [p] = oplow([7, 0])
+            if p & 0xf != 1:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [9000 + (p & 0xf)])
+                return [0]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(p >> 4, s)
+            seen = 0
+            for _ in range(polls):
+                [code] = d.canon_waitable_set_poll(mem, s, 8)
+                if code != 0:
+                    seen = 1
+                    break
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [seen * 100 + (p & 0xf)])
+            return [0]
+
+        rft = d.FuncType([], [d.U32Type()], async_=True)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(async_=True, callback=lambda a: [0]), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
+def later_host_tick(store, flag):
+    """A HOST async import whose event arrives later: a host Thread, as head's own `mk_host_func` builds one,
+    waiting on a flag the embedder sets once it starts ticking. It resolves with 49."""
+    tft = d.FuncType([], [d.U32Type()], async_=True)
+
+    def tick_inst(on_start, on_resolve):
+        hinst = d.ComponentInstance(store)
+        task = d.Task(tft, d.CanonicalOptions(), hinst, on_start, on_resolve)
+
+        def thread_func():
+            on_start()
+            h.wait_until(lambda: flag["go"])
+            on_resolve([49])
+            return None
+
+        h = d.Thread(task, thread_func)
+        h.resume()
+        return lambda: None
+
+    return tick_inst, tft
+
+
+def host_event_later(cancel):
+    """#1020's class on the default path, no Threads. A parent async-lowers a child's callback-lifted `run`,
+    which async-lowers a HOST `tick` whose event arrives later (`later_host_tick`) and WAITs for it.
+      - cancel=False, mechanism (a): an async parent returns its lower's state (1 STARTED, 2 RETURNED).
+      - cancel=True, mechanism (b): `cancel-wat`'s shape. A SYNC `go` cancels at once, the child answers
+        TASK_CANCELLED with `task.cancel`, and the value is lower-state * 16 + cancel status."""
+
+    def body(out, site):
+        store = d.Store()
+        flag = {"go": False}
+        tick_inst, tft = later_host_tick(store, flag)
+        child = d.ComponentInstance(store)
+        cmem = d.MemInst(bytearray(65536), "i32")
+        ticklow = store.lower(tick_inst, tft, d.CanonicalOptions(async_=True, memory=cmem), child)
+
+        def crun(args):
+            [p] = ticklow([0])
+            if p & 0xf == 2:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(cmem, 0)])
+                return [0]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(p >> 4, s)
+            return [2 | (s << 4)]  # WAIT
+
+        def ccb(args):
+            if args[0] == 6:  # TASK_CANCELLED
+                d.canon_task_cancel()
+                return [0]
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(cmem, 0)])
+            return [0]
+
+        cft = d.FuncType([d.U32Type()], [d.U32Type()], async_=True)
+        crun_fi = store.lift(crun, cft, d.CanonicalOptions(async_=True, callback=ccb), child)
+        parent = d.ComponentInstance(store)
+        pmem = d.MemInst(bytearray(65536), "i32")
+        clow = store.lower(crun_fi, cft, d.CanonicalOptions(async_=True, memory=pmem), parent)
+
+        if cancel:
+            def go(args):
+                [p] = clow([1, 0])
+                site["name"] = "go's sync subtask.cancel (the sync tail)"
+                [status] = d.canon_subtask_cancel(False, p >> 4)
+                return [(p & 0xf) * 16 + status]
+
+            go_fi = store.lift(go, d.FuncType([], [d.U32Type()]), d.CanonicalOptions(), parent)
+        else:
+            def prun(args):
+                [p] = clow([7, 0])
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [p & 0xf])
+                return [0]
+
+            go_fi = store.lift(prun, d.FuncType([], [d.U32Type()], async_=True),
+                               d.CanonicalOptions(async_=True, callback=lambda a: [0]), parent)
+        got = []
+        host_invoke(store, go_fi, lambda res: got.append(res))
+        flag["go"] = True  # the host's event arrives only now, after the parent's call gave control back
+        while not got:
+            store.tick()
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
 def promote_implicit(promote_run):
     """Step 4, cmthreads/promote-implicit.wat: T yield-then-promotes its task's implicit Thread, which waits
     at its YIELD arm (promote_run), or a Thread U that was never readied (the control). The value is 16 + the
@@ -645,6 +778,9 @@ def battery():
     read("cancel, late child, sync canceller (wasmtime 49.0.2: trap)", cancel_other_instance(False, late=True))
     read("cancel, late child, async canceller (wasmtime 49.0.2: 20)", cancel_other_instance(True, late=True))
     read("future-self-copy (#1006, default path; wasmtime 49.0.2: 262151)", future_self_copy())
+    read("poll-before-suspend (#1020, outside the class; wasmtime 49.0.2: 1)", poll_before_suspend(2000))
+    read("host-event-later (#1020 mechanism (a): the lower's state)", host_event_later(False))
+    read("host-event-later, sync cancel (#1020 mechanism (b))", host_event_later(True))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,16 @@
+# Committed readings for poll-before-suspend.wasm (#1020's class, a shape outside it; the chair's ruling of
+# 2026-10-17, item 2). Default path: gate:async on, gate:cm-threads off, no Threads, no host.
+# Built:       wasm-tools parse poll-before-suspend.wat -o poll-before-suspend.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'run()' poll-before-suspend.wasm
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02), darwin/arm64.
+#
+# reader                                                      reading
+# wasmtime 49.0.2, 10 of 10                                   1
+# reference, pin 2bed77e (refread.reading)                    {1, 9002}
+# reference, upstream head 2e7895c (refread-head.reading)     {1, 9002}
+# Burroughs, 200 of 200 per gate                              1
+#
+# Meaning:     1 is STARTED with no poll seeing the subtask's event, so the provider did not progress while the
+#              parent was executing. 9002 is the provider's lower RETURNING inline, which the reference allows
+#              when its YIELD wait_until returns early. 101, a poll seeing the event while STARTED, is the
+#              outcome the reference forbids, and no reader produced it.
