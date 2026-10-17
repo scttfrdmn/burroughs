@@ -17,4 +17,6 @@ promote-implicit control (a never-readied U; wasmtime 49.0.2: 16): value 16 | va
 sync-wait-host-import (ADR 0102's gate-off row; wasmtime 49.0.2: trap): trap run's wait (the sync tail) | value 7
 sync-wait-host-import, eager control (wasmtime 49.0.2: 7): value 7
 cancel-wat's shape, sync canceller (wasmtime 49.0.2 harness: returned, 1 then 4): trap go's sync subtask.cancel (the sync tail)
-cancel-wat's shape, async canceller (control): value 20
+cancel-wat's shape, async canceller (control; wasmtime 49.0.2: 20): value 20
+cancel, late child, sync canceller (wasmtime 49.0.2: trap): trap go's sync subtask.cancel (the sync tail)
+cancel, late child, async canceller (wasmtime 49.0.2: 20): value 20

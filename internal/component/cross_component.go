@@ -131,7 +131,8 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 	hasResult := callee.sig != nil && callee.sig.Result != nil
 	aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
 	return interp.CanonLowerExtern(aft, mayLeaveGuard("cross-component async lower",
-		asyncLowerFunc(liftAsAsyncImpl(callee), hasResult, w.async)), opts), true
+		asyncLowerFuncFor(func(st *subtask) asyncLowerImpl { return liftAsAsyncImpl(callee, st) }, hasResult,
+			w.async)), opts), true
 }
 
 // liftAsAsyncImpl adapts a component func whose definition is an async (callback) lift into the
@@ -159,7 +160,10 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 // The adapter owes an `onCancel`, and the model's is `task.request_cancellation` — which #887 built as
 // `liftTask.requestCancelLocked`, with the cancel-aware park and the top-of-loop delivery behind it. So
 // the returned closure requests the child's lift-task cancellation through the child's own handle table.
-func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
+//
+// `st` is the parent's subtask for this call, given its `cancelTransfer`: after `onCancel`, the child task's
+// #726 hand-back, if the request armed one.
+func liftAsAsyncImpl(callee *compFunc, st *subtask) asyncLowerImpl {
 	return func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 		// `onStart` lifts the caller's flat params and moves the subtask STARTING→STARTED. It must run
 		// **before** the goroutine, synchronously, because the model's `on_start` reads the caller's flat
@@ -185,6 +189,9 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 		// `onCancel` below, which requests this task's cancellation. That is one route and it is
 		// witnessed by effect (`TestCancellingTheOuterCallReachesTheComposedChild`).
 		task := callee.newLiftTask(context.Background())
+		// Read only after onCancel, which arms the transfer (#726).
+		var armed *cancelTransfer
+		st.cancelTransfer = func() *cancelTransfer { return armed }
 
 		go func() {
 			// No pending lowerings: a guest-to-guest call's arguments arrive already flat, lowered by the
@@ -241,10 +248,15 @@ func liftAsAsyncImpl(callee *compFunc) asyncLowerImpl {
 			// `ErrCancelNotRunning` names and which genuinely is the lost race: the subtask has resolved
 			// and the parent will read its real status.
 			//
+			// **The request and the #726 hand-back are armed in one critical section**, so the child cannot
+			// take the delivery between them and leave the canceller with nothing to wait for.
+			callee.h.mu.Lock()
 			//nolint:errcheck // No slot in the model's OnCancel signature (`OnCancel = Callable[[], None]`,
 			// def:384). The only refusal left is ErrCancelNotRunning — a task already past running, whose
 			// resolved status the parent reads anyway — so there is nothing here a caller could act on.
-			_ = callee.h.requestCancelAll()
+			_ = callee.h.requestCancelAllLocked()
+			armed = task.armTransferLocked()
+			callee.h.mu.Unlock()
 		}, nil
 	}
 }

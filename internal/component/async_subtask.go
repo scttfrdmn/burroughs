@@ -49,6 +49,10 @@ type subtask struct {
 	set                   *waitableSet // the set it is joined to, if any (nil until waitable.join)
 	cancellationRequested bool         // set by subtask.cancel before it invokes onCancel
 	onCancel              func()       // the impl's request_cancellation, captured at lower (async_lower.go)
+	// cancelTransfer returns the callee's #726 hand-back after onCancel has run, or nil when there is none:
+	// a host impl, or a callee executing when the request landed. Set by the cross-component adapter
+	// before the lower returns, and read only after onCancel.
+	cancelTransfer func() *cancelTransfer
 	// resolveWake is closed by `onResolve` when this subtask resolves, so a **sync** `subtask.cancel`
 	// can wait for the resolution the model makes it wait for (grave #892, `definitions.py` def:2428:
 	// `thread.wait_until(subtask.resolved)`).
@@ -191,6 +195,11 @@ type asyncHandles struct {
 func (h *asyncHandles) requestCancelAll() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.requestCancelAllLocked()
+}
+
+// requestCancelAllLocked is requestCancelAll with h.mu held by the caller.
+func (h *asyncHandles) requestCancelAllLocked() error {
 	if len(h.cancellable) == 0 {
 		return fmt.Errorf("%w: this instance hosts no lift task", ErrCancelNotRunning)
 	}
@@ -518,9 +527,56 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			h.leaveHost()
 		}
 
+		// **Upstream #726's hand-back, for a guest callee** (`cancelTransfer`). A callee waiting in its event
+		// loop was handed TASK_CANCELLED by onCancel, and the SYNC canceller waits for that callback to exit
+		// or block before deciding anything, as the head's `request_cancellation` resumes it synchronously.
+		// That wait is not a sync-tail wait (`false`): in the head it is the callee running, not the
+		// canceller waiting. The callee then holds until `release`, which comes after the judgement.
+		//
+		// **The async form does not wait for it**, and releases it at once. That is Burroughs' behaviour
+		// before #726 and differs from the head, where the async form is resumed synchronously too. It is
+		// the same in both gate states, and it is recorded on #999 rather than changed here.
+		guest := st.cancelTransfer != nil
+		var x *cancelTransfer
+		if guest {
+			x = st.cancelTransfer()
+		}
+		if x != nil && asyncForm {
+			x.release()
+			x = nil
+		}
+		if x != nil {
+			delivered := func() bool { return true }
+			if werr := c.Blocking(h.suspending(c, delivered, false, func(abort <-chan struct{}) error {
+				select {
+				case <-x.done:
+					return nil
+				case <-abort:
+					return nil // `suspending` returns the abort's error
+				case <-time.After(subtaskCancelBound):
+					return fmt.Errorf("%w: subtask %d's callee did not hand back within %s of its "+
+						"cancellation", ErrSubtaskCancelExpired, i, subtaskCancelBound)
+				}
+			})); werr != nil {
+				x.release()
+				return nil, werr
+			}
+			if x.resolved {
+				// Resolved by the delivery: what remains is the result store landing, which is certain, so
+				// the wait below is not judged.
+				x.release()
+				x = nil
+				guest = false
+			}
+		}
+
 		h.mu.Lock()
 		resolvedNow := st.resolved
 		h.mu.Unlock()
+		if resolvedNow && x != nil {
+			x.release()
+			x = nil
+		}
 
 		// **The wait happens with NO lock held, and the shape is not a style choice.**
 		//
@@ -575,8 +631,20 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			// suspension — so another task of the instance may execute meanwhile (ADR 0101).
 			// `ready` is `wait_until(subtask.resolved)`'s predicate, read under h.mu by the sync tail (#1005).
 			ready := func() bool { return st.resolved }
-			// `false`: the oracles split on this wait with the gate off, so the tail does not judge it (syncTail).
-			if werr := c.Blocking(h.suspending(c, ready, false, func(abort <-chan struct{}) error {
+			// **Judged for a guest callee still unresolved after its hand-back, or never handed one**: the
+			// head's `wait_until(subtask.resolved)` meets the sync tail, and both oracles trap a callee that
+			// does not resolve on TASK_CANCELLED (`refread.reading`, `cancel, late child`). Not judged for a
+			// HOST impl, which the pin does not model. wasmtime blocks on it: `subtask_cancel`'s host branch
+			// *"falls through to block waiting for the host task to actually finish"* (concurrent.rs).
+			// Either way the answer does not depend on `gate:cm-threads`.
+			//
+			// The callee is released (`x.release`) only once `fn` runs, which is after the judgement. With
+			// no scheduler the tail runs before `fn`; with one, the scheduler holds the slot until it has
+			// judged, so the callee's result store cannot land first.
+			if werr := c.Blocking(h.suspending(c, ready, guest, func(abort <-chan struct{}) error {
+				if x != nil {
+					x.release()
+				}
 				select {
 				case <-wake:
 					return nil
@@ -588,8 +656,14 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 						subtaskCancelBound)
 				}
 			})); werr != nil {
+				if x != nil {
+					x.release() // the tail trapped this canceller before fn ran
+				}
 				return nil, werr
 			}
+		}
+		if x != nil {
+			x.release() // reached only if the wait above was skipped
 		}
 		// **No `defer` in this function, and that is the control's requirement rather than a preference.**
 		// `TestNoEngineLockIsHeldAcrossAChannelOperation` says so in its own words: *"A deferred `Unlock`

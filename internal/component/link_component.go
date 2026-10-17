@@ -301,6 +301,9 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 		// the count for the same reason: however this exits, by EXIT, a trap, a park's bound or a
 		// cancellation resolving, the Thread is unregistered and its index returns to the free list.
 		f.threads.remove(task.threadIdx)
+		// A transfer never handed back (the task ended first) is handed back now, as resolved: the adapter
+		// resolves the parent's subtask however the task ended (`crossComponentResolve`).
+		f.h.handBack(task, true)
 	}()
 
 	// `Task.start()` (def:483-486): INITIAL → STARTED, immediately before the callee is entered. Set
@@ -415,6 +418,7 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 			if delivered {
 				task.waitSet = 0
 				res, err = f.enterAndInvoke(task, task.cb, eventArgs(event{code: eventTaskCancelled}))
+				f.h.handBack(task, err != nil) // the callback exited or blocked: control goes back (#726)
 				if err != nil {
 					return liftResult{}, err
 				}
@@ -485,6 +489,9 @@ func (f *compFunc) runLiftTask(task *liftTask, params []interp.Value, pend []pen
 				return liftResult{}, aerr
 			}
 			res, err = f.enterAndInvoke(task, task.cb, eventArgs(ev))
+			if ev.code == eventTaskCancelled {
+				f.h.handBack(task, err != nil) // the callback exited or blocked: control goes back (#726)
+			}
 			if err != nil {
 				return liftResult{}, err
 			}

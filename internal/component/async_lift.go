@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -166,6 +167,12 @@ type liftTask struct {
 	// since the pass before it checks `deliverPendingCancelLocked` first.
 	cancelWake chan struct{}
 
+	// transfer is the cancellation hand-back upstream #726 defines, armed by `requestCancelLocked` when the
+	// request finds this task between entries — its implicit Thread waiting in its event loop, the head's
+	// `cancellable and ready` — and nil otherwise. Kept once armed. Guarded by asyncHandles.mu. See
+	// cancelTransfer.
+	transfer *cancelTransfer
+
 	// everEntered records whether this task has entered the guest at least once, and it exists for
 	// exactly one decision: **whether a cancelled context may ABORT an entry.**
 	//
@@ -305,6 +312,81 @@ func (t *liftTask) deliverPendingCancelLocked() bool {
 	}
 	t.state = liftCancelDelivered
 	return true
+}
+
+// cancelTransfer is upstream #726's hand-back of control from a cancelled callee to its canceller.
+//
+// In the head (`2e7895c`, after #726), `request_cancellation` resumes a cancellable, ready implicit callback
+// Thread synchronously. In #726's words, *"control flow deterministically transfers back as soon as the
+// `callback` exits or blocks"*. wasmtime 49.0.2 does the same: `subtask_cancel` queues a `DeliverEvent` to a
+// Thread in a cancellable wait and yields to it. A sync canceller then waits only if the subtask is still
+// unresolved, and that wait is judged by the sync tail.
+//
+// Burroughs runs the callee on its own goroutine, so both halves of "transfers back" are explicit:
+//   - **done** is closed when the callback that received TASK_CANCELLED returns, or when the task ends,
+//     with `resolved` saying whether the task resolved by then;
+//   - **ack** is closed by the canceller once it has judged. Until then, the callee's loop does not take
+//     another step, as in the head, where nothing resumes it during a sync canceller's tail.
+//
+// Without the ack, a callee that YIELDs on TASK_CANCELLED and resolves on its next event would race the
+// judgement. Both oracles trap that case deterministically (`refread.reading`, `cancel, late child`).
+//
+// The transfer stays on the task once armed, and `handed` makes the hand-back one-shot. A canceller that
+// reads it after the callee already handed back finds done closed, rather than finding nothing and never
+// releasing a callee that waits for its ack.
+type cancelTransfer struct {
+	done     chan struct{}
+	ack      chan struct{}
+	handed   bool // guarded by asyncHandles.mu
+	resolved bool // written before done is closed, read after
+	ackOnce  sync.Once
+}
+
+// armTransferLocked arms t's hand-back for a `subtask.cancel` that has just requested its cancellation, in
+// the same critical section, so no delivery can fall between the two. Caller holds h.mu.
+//
+// The head's `request_cancellation` resumes a cancellable, ready implicit callback Thread at once, and control
+// returns to the canceller when that callback exits or blocks. **It is armed whether or not the callee is
+// between entries**, and the callee hands back at its next delivery point. In the head a STARTED callee is
+// always parked when its caller runs, because the lower ran it until it blocked. Here the callee runs on its
+// own goroutine and may still be finishing that first entry. Arming only between entries made `cancel-sync`
+// trap in 1 of 20 runs, measured.
+//
+// The cost, stated: a callee blocked INSIDE a callback, which the head would not resume, makes a sync
+// canceller wait for that callback, bounded by subtaskCancelBound, where the head goes straight to the sync
+// tail. Other requesters (an embedder's context, ADR 0094's instance-wide request) never arm one: nothing
+// would release the callee.
+func (t *liftTask) armTransferLocked() *cancelTransfer {
+	if t.transfer == nil && t.state == liftPendingCancel {
+		t.transfer = &cancelTransfer{done: make(chan struct{}), ack: make(chan struct{})}
+	}
+	return t.transfer
+}
+
+// release lets the callee's loop continue. Idempotent, so every exit path of the canceller may call it.
+func (x *cancelTransfer) release() { x.ackOnce.Do(func() { close(x.ack) }) }
+
+// handBack is the callee's half: after a TASK_CANCELLED callback returned (or the task ends, when ending
+// is true), report whether the task resolved and, unless ending, wait for the canceller's judgement.
+// Bounded by subtaskCancelBound, so a canceller that never judges cannot hold the callee forever.
+func (h *asyncHandles) handBack(task *liftTask, ending bool) {
+	h.mu.Lock()
+	x := task.transfer
+	if x == nil || x.handed {
+		h.mu.Unlock()
+		return
+	}
+	x.handed = true
+	x.resolved = ending || task.state == liftResolved
+	h.mu.Unlock()
+	close(x.done)
+	if ending {
+		return
+	}
+	select {
+	case <-x.ack:
+	case <-time.After(subtaskCancelBound):
+	}
 }
 
 // cancelLocked is definitions.py `Task.cancel` (def:494-498): it resolves a task whose cancellation has

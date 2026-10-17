@@ -838,6 +838,36 @@ from the three obviously-wrong `#534` trailers to all eleven.
     cross-component store drops its error ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
     Building it also found [#995](https://github.com/scttfrdmn/burroughs/issues/995).
 
+- **A sync `subtask.cancel` now gives the same answer in both `gate:cm-threads` states, and it is upstream
+  #726's** (the chair's ruling of 2026-10-17; decided on #999, unless Scott objects).
+  - **Before:** with the gate off, Burroughs admitted every sync cancel of another instance's subtask. With
+    it on, the sync tail trapped every one. So flipping the gate would have changed this answer silently.
+  - **The facts, established first:**
+    - the async-canceller control reads 20 on wasmtime 49.0.2 and on the reference;
+    - the sync-lift canceller is hand-written WAT, because wit-bindgen-rt 0.44.0 issues `[subtask-cancel]`
+      only from an async export's `Drop`;
+    - the pin (2bed77e) predates upstream #726 (2f1e56f56), which resumes a cancellable callback callee
+      synchronously, and upstream head (2e7895c) reads 20 where the pin traps;
+    - wasmtime's `subtask_cancel` yields to the callee the same way.
+  - **Now:** a sync canceller waits for the callee's TASK_CANCELLED callback to exit or block, through a
+    hand-back (`cancelTransfer`), with an ack that holds the callee until the canceller has judged. If the
+    callee resolved, the cancel returns its status. If not, the sync tail judges the wait.
+
+    | arm (`testdata/cancel726/`) | head and wasmtime | Burroughs before, gate off / on | now, both gates |
+    |---|---|---|---|
+    | `cancel-sync` | 20 | admits / trap | 20 |
+    | `cancel-sync-late` | trap | admits / trap | trap |
+    | `cancel-async`, `cancel-async-late` | 20 | 20 | 20 |
+
+  - **A measured divergence from the pin**, which traps every sync canceller. It is recorded in ADR 0102
+    with both readings (`refread.reading`, `refread-head.reading`).
+  - **Neuters, run:**
+    - no hand-back: `cancel-sync` traps, 5 of 5;
+    - no ack: `cancel-sync-late` reads 20 in 397 of 400 runs;
+    - the wait unjudged: `cancel-sync-late` returns, 5 of 5.
+  - **Not changed:** the async form still does not wait for the hand-back, where head resumes the callee
+    for it too. It is the same in both gate states and is recorded on #999.
+
 - **Default-path conformance defect: a sync lift could block in `waitable-set.wait` on another instance's
   event** ([#1016](https://github.com/scttfrdmn/burroughs/issues/1016); ADR 0102's sync-wait row, measured
   before the `gate:cm-threads` flip; `gate:async`, on since 2026-09-18, with `gate:cm-threads` off).
