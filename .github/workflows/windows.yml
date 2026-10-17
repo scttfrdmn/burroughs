@@ -161,13 +161,6 @@ jobs:
           make spec-ref
           make threads-ref
 
-      # TEMPORARY (the chair's item 4, 2026-10-17): the promote witness soaked on Windows, 1,000 runs and
-      # 600 under -race. Reverted by the next commit of the same PR, so it never lands on main.
-      - name: TEMPORARY soak, the promote witness 1000x and 600x under -race
-        run: |
-          go test -timeout 30m -count=1000 -run 'TestAPromoteSwitchesToAnImplicitThreadWaitingAtItsYield$' ./internal/component/
-          go test -race -timeout 30m -count=600 -run 'TestAPromoteSwitchesToAnImplicitThreadWaitingAtItsYield$' ./internal/component/
-
       - name: go test -race
         # `-race` needs cgo, and whether `windows-latest` ships a usable C compiler is a question for
         # this run to answer rather than for this comment to assume. On `black3.local` it did not, and
