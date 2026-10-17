@@ -28,8 +28,12 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-: "${RUSTUP_CARGO:=$HOME/.cargo/bin/cargo}"   # has the wasm targets
-: "${RUSTUP_RUSTC:=$HOME/.cargo/bin/rustc}"   # must be pinned WITH it — see below
+# The guests' toolchain is rustup's exact 1.91.1, which every committed guest's `producers` section names.
+# `~/.cargo/bin` follows rustup's stable channel, which moved to 1.99.1 and rebuilt every guest differently
+# (2026-10-17): its v0 symbol mangling changes the bytes, and the fixtures with them.
+: "${GUEST_TOOLCHAIN:=1.91.1}"
+: "${RUSTUP_CARGO:=$(rustup which --toolchain "$GUEST_TOOLCHAIN" cargo 2>/dev/null || echo "$HOME/.cargo/bin/cargo")}"
+: "${RUSTUP_RUSTC:=$(rustup which --toolchain "$GUEST_TOOLCHAIN" rustc 2>/dev/null || echo "$HOME/.cargo/bin/rustc")}"
 : "${HOST_CARGO:=/opt/homebrew/bin/cargo}"    # new enough for the wasmtime crate
 : "${HOST_RUSTC:=/opt/homebrew/bin/rustc}"    # pinned for the same reason, in the other direction
 : "${WASM_TOOLS:=wasm-tools}"
@@ -55,6 +59,31 @@ here=$(cd "$(dirname "$0")" && pwd)
 for t in "$RUSTUP_CARGO" "$RUSTUP_RUSTC" "$HOST_CARGO" "$HOST_RUSTC"; do
 	[ -x "$t" ] || { echo "build.sh: $t is not executable — see the toolchain note above" >&2; exit 2; }
 done
+
+# **Every producer of a committed byte, and the CLI oracle, at its exact version** (the chair's ruling of
+# 2026-10-17). The CLI moved from 49.0.2 to 49.0.3 and rustup's stable from 1.91.1 to 1.99.1, both underneath
+# the committed artefacts, and this script only printed versions. A drifted tool now stops it before it builds
+# or reads anything. The harness's wasmtime is the crate `harness/Cargo.lock` pins (49.0.2), which is why the
+# harness readings name 49.0.2 while `compute.reading` names the CLI's version. The host rustc that builds the
+# harness produces no committed byte, so it is printed and not pinned.
+: "${EXPECT_WASMTIME:=wasmtime 49.0.3}"
+: "${EXPECT_WASM_TOOLS:=wasm-tools 1.258.0}"
+: "${EXPECT_GUEST_RUSTC:=rustc 1.91.1}"
+: "${EXPECT_WAC:=wac-cli 0.12.0}"
+expect_version() { # expect_version <tool> <"name version">: the first two fields of `<tool> --version`
+	got=$("$1" --version | awk 'NR == 1 {print $1, $2}')
+	[ "$got" = "$2" ] || {
+		echo "build.sh: $1 is '$got', and the committed artefacts were built and read with '$2'." >&2
+		echo "          Rebuild and re-take on the new version, and move the expectation in the same commit." >&2
+		exit 2
+	}
+}
+expect_version "$WASMTIME" "$EXPECT_WASMTIME"
+expect_version "$WASM_TOOLS" "$EXPECT_WASM_TOOLS"
+expect_version "$RUSTUP_RUSTC" "$EXPECT_GUEST_RUSTC"
+: "${WAC:=wac}"
+command -v "$WAC" >/dev/null || { echo "build.sh: $WAC not found — 'cargo install wac-cli --locked'" >&2; exit 2; }
+expect_version "$WAC" "$EXPECT_WAC"
 
 echo "== provenance ==" >&2
 "$RUSTUP_CARGO" --version >&2
@@ -244,6 +273,21 @@ echo "== status 3 (#884) ==" >&2
 "$WAC" plug "$here/starting-wat-parent/parent.wasm" \
 	--plug "$here/starting-wat-child/child.wasm" -o "$here/starting-wat-parent/composed.wasm"
 "$bin" cancel-starting "$here/starting-wat-parent/composed.wasm" > "$here/starting.reading" 2>&1 || true
+# The provenance block is written here, not by hand. The committed one was hand-appended, so regeneration
+# dropped it, and it named the CLI's version for a reading the harness CRATE takes; the two only agreed by
+# coincidence until the CLI moved to 49.0.3. No timestamp, so an unchanged toolchain rewrites it byte for byte.
+{
+	echo
+	echo "PROVENANCE"
+	echo "  wasmtime   crate $(awk '/^name = "wasmtime"$/ {getline; gsub(/"/, "", $3); print $3; exit}' \
+		"$here/harness/Cargo.lock") (harness/Cargo.lock; the CLI does not take this reading)"
+	echo "  wasm-tools $("$WASM_TOOLS" --version)"
+	echo "  wac        $("$WAC" --version)"
+	echo "  harness    $("$HOST_RUSTC" --version | awk '{print $1, $2}') (host toolchain; no wasm target needed)"
+	echo "  child      starting-wat-child/child.wat -> child.wasm, hand-authored WAT, no Rust toolchain"
+	echo "  parent     starting-wat-parent/parent.wat -> parent.wasm, hand-authored WAT"
+	echo "  composed   wac plug parent.wasm --plug child.wasm -o composed.wasm"
+} >> "$here/starting.reading"
 
 # **The negative control, derived from the SAME child by one substitution.** Keeping one child source
 # is the point: a separately written control could differ in a second way and the contrast would not be

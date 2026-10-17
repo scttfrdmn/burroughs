@@ -45,6 +45,23 @@ for t in "$WASM_TOOLS" "$WASMTIME"; do
 	command -v "$t" >/dev/null || { echo "build.sh: $t not found" >&2; exit 2; }
 done
 
+# **The oracle's exact versions, asserted before anything is read** (the chair's ruling of 2026-10-17). The
+# installed wasmtime moved from 49.0.2 to 49.0.3 underneath every committed reading, and nothing noticed: this
+# script only printed the version. A drifted tool now stops the script before it reads anything, and moving a
+# version means re-taking these readings on the new one, in the commit that moves it.
+: "${EXPECT_WASMTIME:=wasmtime 49.0.3}"
+: "${EXPECT_WASM_TOOLS:=wasm-tools 1.258.0}"
+expect_version() { # expect_version <tool> <"name version">: the first two fields of `<tool> --version`
+	got=$("$1" --version | awk 'NR == 1 {print $1, $2}')
+	[ "$got" = "$2" ] || {
+		echo "build.sh: $1 is '$got', and the committed readings were taken on '$2'." >&2
+		echo "          Re-take them on the new version and move the expectation in the same commit." >&2
+		exit 2
+	}
+}
+expect_version "$WASMTIME" "$EXPECT_WASMTIME"
+expect_version "$WASM_TOOLS" "$EXPECT_WASM_TOOLS"
+
 echo "== provenance ==" >&2
 "$WASM_TOOLS" --version >&2
 "$WASMTIME" --version >&2
@@ -291,7 +308,8 @@ opta thread-context 0
 # orphan-trap has no wasmtime reading: its trap lands after its call returned (ADR 0100). Parsed only.
 "$WASM_TOOLS" parse "$here/orphan-trap.wat" -o "$here/orphan-trap.wasm"
 
-# A recorded LIMIT of the oracle (#999): wasmtime 49.0.2's "BUG: delivering non-present event". Asserted, so
+# A recorded LIMIT of the oracle (#999): wasmtime's "BUG: delivering non-present event", on 49.0.2 and still on
+# 49.0.3 (concurrent.rs:948). Asserted, so
 # a wasmtime that fixes it fails here and the fixtures that route around it are re-read. Parsed to a temp
 # file: the repro is not a fixture, so no .wasm is committed for it.
 bug_wasm=$(mktemp -t wasmtime-bug-repro.XXXXXX)

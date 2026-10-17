@@ -15,6 +15,7 @@ MASK      0b010
 PROVENANCE
   taken      2026-10-11T23:38:58Z
   host       Darwin arm64
+  re-taken   wasmtime 49.0.3 (f96eabaa1 2026-10-14), by build.sh on 2026-10-17, one run: unchanged
   wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)  (-W component-model-threading=y -W component-model-async=y, --invoke 'run(0)')
   wasm-tools wasm-tools 1.258.0
   source     suspend-parked.wat -> suspend-parked.wasm, hand-authored WAT

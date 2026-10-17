@@ -8,11 +8,10 @@ LOWERSTATE  0 (STARTING)
 STATUS  3 (CANCELLED_BEFORE_STARTED)
 
 PROVENANCE
-  taken      2026-10-10T21:11:12Z
-  wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)
+  wasmtime   crate 49.0.2 (harness/Cargo.lock; the CLI does not take this reading)
   wasm-tools wasm-tools 1.258.0
   wac        wac-cli 0.12.0
-  harness    rustc 1.99.0 (host toolchain; no wasm target needed)
+  harness    rustc 1.99.1 (host toolchain; no wasm target needed)
   child      starting-wat-child/child.wat -> child.wasm, hand-authored WAT, no Rust toolchain
   parent     starting-wat-parent/parent.wat -> parent.wasm, hand-authored WAT
   composed   wac plug parent.wasm --plug child.wasm -o composed.wasm

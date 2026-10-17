@@ -18,6 +18,7 @@ BURROUGHS, after #977
 PROVENANCE
   taken      2026-10-13T05:50:36Z
   host       Darwin arm64
+  re-taken   wasmtime 49.0.3 (f96eabaa1 2026-10-14), by build.sh on 2026-10-17, one run: unchanged
   wasmtime   wasmtime 49.0.2 (3c8a3e79a 2026-10-02)  (-W component-model-threading=y -W component-model-async=y, --invoke 'run()')
   wasm-tools wasm-tools 1.258.0
   source     thread-wait-callback.wat -> thread-wait-callback.wasm, hand-authored WAT
