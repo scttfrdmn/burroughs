@@ -761,6 +761,143 @@ def promote_implicit(promote_run):
     return body
 
 
+def host_event_inline():
+    """`host_event_later`'s shape with the host `tick` resolving INLINE (`crossCallHost`'s deferTick=false). The
+    child sees `tick` RETURNED, calls task.return, and EXITs inside its first segment, so the parent's lower
+    returns RETURNED (2): `call-wat-parent`'s inline arm, mechanism (c)."""
+    tft = d.FuncType([], [d.U32Type()], async_=True)
+
+    def tick_inst(on_start, on_resolve):
+        on_start()
+        on_resolve([49])
+        return lambda: None
+
+    def body(out, site):
+        store = d.Store()
+        child = d.ComponentInstance(store)
+        cmem = d.MemInst(bytearray(65536), "i32")
+        ticklow = store.lower(tick_inst, tft, d.CanonicalOptions(async_=True, memory=cmem), child)
+
+        def crun(args):
+            [p] = ticklow([0])
+            if p & 0xf == 2:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(cmem, 0)])
+                return [0]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(p >> 4, s)
+            return [2 | (s << 4)]  # WAIT
+
+        def ccb(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(cmem, 0)])
+            return [0]
+
+        cft = d.FuncType([d.U32Type()], [d.U32Type()], async_=True)
+        crun_fi = store.lift(crun, cft, d.CanonicalOptions(async_=True, callback=ccb), child)
+        parent = d.ComponentInstance(store)
+        pmem = d.MemInst(bytearray(65536), "i32")
+        clow = store.lower(crun_fi, cft, d.CanonicalOptions(async_=True, memory=pmem), parent)
+
+        def prun(args):
+            [p] = clow([7, 0])
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [p & 0xf])
+            return [0]
+
+        go_fi = store.lift(prun, d.FuncType([], [d.U32Type()], async_=True),
+                           d.CanonicalOptions(async_=True, callback=lambda a: [0]), parent)
+        got = []
+        host_invoke(store, go_fi, lambda res: got.append(res))
+        while not got:
+            store.tick()
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
+def first_segment_return():
+    """#1020's class, mechanism (c): `first-segment-return.wat`. A child's callback lift calls task.return and
+    EXITs inside its first core call, so it resolves before its first suspension. canon_lift's
+    `thread.resume()` runs that segment inside the parent's lower, which therefore returns RETURNED (2)."""
+
+    def body(out, site):
+        store = d.Store()
+        child = d.ComponentInstance(store)
+
+        def crun(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [7])
+            return [0]  # EXIT
+
+        cft = d.FuncType([d.U32Type()], [d.U32Type()], async_=True)
+        crun_fi = store.lift(crun, cft, d.CanonicalOptions(async_=True, callback=lambda a: [0]), child)
+        parent = d.ComponentInstance(store)
+        pmem = d.MemInst(bytearray(65536), "i32")
+        clow = store.lower(crun_fi, cft, d.CanonicalOptions(async_=True, memory=pmem), parent)
+
+        def prun(args):
+            [p] = clow([1, 0])
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [p & 0xf])
+            return [0]
+
+        go_fi = store.lift(prun, d.FuncType([], [d.U32Type()], async_=True),
+                           d.CanonicalOptions(async_=True, callback=lambda a: [0]), parent)
+        got = []
+        host_invoke(store, go_fi, lambda res: got.append(res))
+        while not got:
+            store.tick()
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
+def reenter_after_suspend():
+    """`reenter-after-suspend.wat`: a callee past its first suspension re-enters its caller's instance. The
+    parent's async `go` lowers the child's async `g`; `g` YIELDs, then from its callback calls the parent's SYNC
+    `f` (7) and returns f() + 1. The fence's re-entry case (ADR 0095's amendment)."""
+
+    def body(out, site):
+        store = d.Store()
+        parent = d.ComponentInstance(store)
+        fft = d.FuncType([], [d.U32Type()])
+        f_fi = store.lift(lambda args: [7], fft, d.CanonicalOptions(), parent)
+        child = d.ComponentInstance(store)
+        flow = store.lower(f_fi, fft, d.CanonicalOptions(), child)
+
+        def gcb(args):
+            [v] = flow([])
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [v + 1])
+            return [0]  # EXIT
+
+        gft = d.FuncType([], [d.U32Type()], async_=True)
+        g_fi = store.lift(lambda args: [1], gft, d.CanonicalOptions(async_=True, callback=gcb), child)  # YIELD
+        pmem = d.MemInst(bytearray(65536), "i32")
+        glow = store.lower(g_fi, gft, d.CanonicalOptions(async_=True, memory=pmem), parent)
+
+        def prun(args):
+            [p] = glow([0])
+            if p & 0xf == 2:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(pmem, 0)])
+                return [0]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(p >> 4, s)
+            return [2 | (s << 4)]  # WAIT
+
+        def pcb(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(pmem, 0)])
+            return [0]
+
+        go_fi = store.lift(prun, d.FuncType([], [d.U32Type()], async_=True),
+                           d.CanonicalOptions(async_=True, callback=pcb), parent)
+        got = []
+        host_invoke(store, go_fi, lambda res: got.append(res))
+        while not got:
+            store.tick()
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -785,6 +922,9 @@ def battery():
     read("poll-before-suspend (#1020, outside the class; wasmtime 49.0.2: 1)", poll_before_suspend(2000))
     read("host-event-later (#1020 mechanism (a): the lower's state)", host_event_later(False))
     read("host-event-later, sync cancel (#1020 mechanism (b))", host_event_later(True))
+    read("first-segment-return (#1020 mechanism (c); wasmtime 49.0.3: 2)", first_segment_return())
+    read("host-event-inline (#1020 mechanism (c): call-wat-parent's inline arm)", host_event_inline())
+    read("reenter-after-suspend (the fence's re-entry; wasmtime 49.0.3: 8)", reenter_after_suspend())
 
 
 if __name__ == "__main__":

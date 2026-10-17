@@ -672,6 +672,23 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Changed
 
+- **Accepted, not yet built: ADR 0095's amendment for #1020's class** (the chair's ruling of 2026-10-17). No
+  engine behaviour changes in this entry.
+  - **The class** has three mechanisms, all on the default path:
+    - (a) a result store landing inside the caller's call;
+    - (b) a cancel judged against the callee's live state;
+    - (c) a callee's first segment running outside the lower. A callee that resolves there reads RETURNED on
+      wasmtime 49.0.3 and the pin, and STARTED on Burroughs, 200 of 200 per gate.
+  - **The rule:**
+    - F0: the adapter returns when the callee's first segment ends, and that segment runs on the caller's
+      chain.
+    - F1: a symmetric fence per subtask edge, keyed by the caller instance and taken before the run slot.
+    - Re-entry: a call back into the caller's instance on the callee's own chain (`runChain`) is admitted.
+  - **New readings:** `first-segment-return`, `reenter-after-suspend` (8 on wasmtime, the pin and Burroughs),
+    and `fanout` with `BenchmarkFanOut`. Measured on janus before the build: `work=first/k=4` is 14.21m and
+    forecast at about 51.4m under F0; `work=after/k=4` is forecast within 5%. Scott accepted that cost on #999
+    as conformance by default.
+
 - **Citations into `definitions.py` name a symbol, not a line, and `make cite` checks each one at its pin**
   (the chair's ruling of 2026-10-17, item 1). Three of five spot checks of #1027's line remap were wrong.
   - **The grammar:** `def:<symbol>`; with a quote, `def:<symbol>:<quoted>`; a module statement,
