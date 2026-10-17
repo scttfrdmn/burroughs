@@ -860,6 +860,18 @@ from the three obviously-wrong `#534` trailers to all eleven.
   `TestCIWatchTakesEachJobClassFromItsOwnRun`, the first of the body-currency block, which no arm had driven.
   Neuter, run: reading `updatedAt` fails two of them.
 
+- **A sync `waitable-set.wait` that had taken its event could be killed by the sync tail**
+  ([#1031](https://github.com/scttfrdmn/burroughs/issues/1031), `gate:cm-threads`).
+  - **What happened:** the wait took its event under one lock and left the waiting state only afterwards,
+    under another. A Thread chain ending in between judged the waiter by the set's readiness, which the
+    taking had made false. It found no candidate and trapped a waiter that held its event.
+  - **Measured:** 17 in 2,000 on `sync-wait-own-thread` under `-race -cpu 2`, and 9 in 2,000 at `-cpu 4`,
+    where both oracles return 7. Found on #1030's CI on ubuntu-arm.
+  - **The repair:** the wait's readiness (`waitTake`) also counts the event it has taken. After the repair,
+    0 in 4,000 at each CPU count.
+  - **Witness:** `TestASyncTailCountsAWaiterThatHasTakenItsEvent` builds the state directly. Neuter, run:
+    the old readiness fails it, and the stress reads 12 in 2,000.
+
 - **A `cabi_realloc` could call any canon built-in or lowered import; the reference traps it**
   ([#990](https://github.com/scttfrdmn/burroughs/issues/990)).
   - **Where the reference sets the flag:** found by searching the pin's `definitions.py`, it sets
