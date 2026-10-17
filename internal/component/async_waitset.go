@@ -268,7 +268,8 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 		// `ready` is the wait's `ready_func`, `has_pending_event`, which the sync tail's candidate test reads
 		// (#1005). It is evaluated under h.mu.
 		ready := func() bool { return set.hasPendingEventLocked() }
-		err := c.Blocking(h.suspending(c, ready, func(abort <-chan struct{}) error {
+		// `true`: both oracles trap this wait at the sync tail with no candidate, gate on or off (syncTail).
+		err := c.Blocking(h.suspending(c, ready, true, func(abort <-chan struct{}) error {
 			for {
 				h.mu.Lock()
 				if e, ready := set.pendingEventLocked(); ready {

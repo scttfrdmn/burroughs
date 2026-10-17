@@ -1,0 +1,51 @@
+# Committed wasmtime readings for ADR 0102's sync-wait row with gate:cm-threads OFF (2026-10-16).
+# Engine:      wasmtime 49.0.2 (3c8a3e79a 2026-10-02), wasm-tools 1.258.0, darwin/arm64.
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'run()' <wrapper>.wasm   (go() for call-wat)
+# Runs:        10 of 10 per line.
+#
+# wasmtime cannot supply `test:async/ops` (or call-wat's `run`/`report`) itself, so each fixture is nested,
+# printed by `wasm-tools print` and unchanged, inside a wrapper whose provider component supplies them:
+#
+#   (component
+#     (component $prov
+#       (core module $pmem (memory (export "m") 1 1))
+#       (core instance $pmemi (instantiate $pmem))
+#       (alias core export $pmemi "m" (core memory $pm))
+#       (core func $ret (canon task.return (result u32)))
+#       (core module $pm2
+#         (import "" "ret" (func $ret (param i32)))
+#         (import "" "mem" (memory 1 1))
+#         ;; op(x): YIELD once, then task.return(x) from the callback
+#         (func (export "op") (param i32) (result i32) (i32.store (i32.const 0) (local.get 0)) (i32.const 1))
+#         (func (export "cb") (param i32 i32 i32) (result i32)
+#           (call $ret (i32.load (i32.const 0))) (i32.const 0)))
+#       (core instance $pi (instantiate $pm2 (with "" (instance (export "ret" (func $ret)) (export "mem" (memory $pm))))))
+#       (alias core export $pi "op" (core func $opf))
+#       (alias core export $pi "cb" (core func $cbf))
+#       (type $opt (func async (param "x" u32) (result u32)))
+#       (func $op (type $opt) (canon lift (core func $opf) async (callback $cbf)))
+#       (instance $ops (export "op" (func $op)))
+#       (export "ops" (instance $ops)))
+#     (instance $p (instantiate $prov))
+#     (alias export $p "ops" (instance $OPS))
+#     (component $fx <the fixture's printed body>)
+#     (instance $x (instantiate $fx (with "test:async/ops" (instance $OPS))))
+#     (alias export $x "run" (func $R))
+#     (export "run" (func $R)))
+#
+# The EAGER control replaces op's body with `(call $ret (local.get 0)) (i32.const 0)`: RETURNED inside the
+# lower, so the fixture's early return runs and the wait is never reached. For call-wat-parent the provider
+# exports `run` (YIELD once, then return id * 7) and a no-op sync `report`, and `go` is invoked.
+#
+# fixture                              reading
+# async-waitset-synth                  wasm trap: cannot block a synchronous task before returning
+# run-slot                             wasm trap: cannot block a synchronous task before returning
+# result-store-heap                    wasm trap: cannot block a synchronous task before returning
+# async-waitset-synth, eager control   7
+# run-slot-cb (callback twin)          7
+# result-store-heap-cb (callback twin) 7
+# call-wat-parent, sync go (before)    wasm trap: cannot block a synchronous task before returning
+# call-wat-parent, callback go (after) 49
+#
+# The reference reading of the same shape is in cmthreads/reference/refread.reading ("sync-wait-host-import"):
+# every run that reaches the wait traps at the sync tail.

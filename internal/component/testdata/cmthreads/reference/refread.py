@@ -412,6 +412,108 @@ def sync_wait_own_thread(t_writes):
     return body
 
 
+def sync_wait_host_import(eager):
+    """ADR 0102's sync-wait row with gate:cm-threads off: `async-waitset-synth`, `run-slot` and
+    `result-store-heap` share this prefix. A SYNC lift `run` async-lowers an imported `op(7)` into retptr 0,
+    returns mem[0] at once if it RETURNED, else joins the subtask to a set and waits. `op` is a provider
+    instance's callback lift that YIELDs once and then returns x (eager: returns x on entry, so the wait is
+    never reached). A run that reaches the wait and is admitted reads 1000 + mem[0], so it cannot pass for
+    the early return's 7."""
+
+    def body(out, site):
+        store = d.Store()
+        prov = d.ComponentInstance(store)
+        opft = d.FuncType([d.U32Type()], [d.U32Type()], async_=True)
+        held = {}
+
+        def op(args):
+            if eager:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [args[0]])
+                return [0]  # EXIT
+            held["x"] = args[0]
+            return [1]  # YIELD
+
+        def op_cb(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [held["x"]])
+            return [0]
+
+        op_fi = store.lift(op, opft, d.CanonicalOptions(async_=True, callback=op_cb), prov)
+
+        f = d.ComponentInstance(store)
+        cmem = d.MemInst(bytearray(65536), "i32")
+        oplow = store.lower(op_fi, opft, d.CanonicalOptions(async_=True, memory=cmem), f)
+
+        def run(args):
+            [p] = oplow([7, 0])
+            if p == 2:  # RETURNED
+                return [u32(cmem, 0)]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(p >> 4, s)
+            site["name"] = "run's wait (the sync tail)"
+            d.canon_waitable_set_wait(cmem, s, 8)
+            return [1000 + u32(cmem, 0)]
+
+        rft = d.FuncType([], [d.U32Type()])
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), f)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
+def cancel_other_instance(canceller_async):
+    """`asynclift/cancel-wat`'s shape, where the oracles split: a parent's `go` async-lowers a child's
+    callback-lifted `run`, which WAITs (the receipt child WAITs on a host `tick`), then calls `subtask.cancel`
+    SYNCHRONOUSLY. The child answers TASK_CANCELLED with `task.cancel` and EXIT. canceller_async=False: `go`
+    is a sync lift, as in the fixture. True: an async callback lift, the control. The value is
+    lower-state * 16 + cancel-status."""
+
+    def body(out, site):
+        store = d.Store()
+        c = d.ComponentInstance(store)
+        rft = d.FuncType([d.U32Type()], [d.U32Type()], async_=True)
+
+        def run(args):
+            [s] = d.canon_waitable_set_new()
+            return [2 | (s << 4)]  # WAIT on s
+
+        def run_cb(args):
+            if args[0] == 6:  # TASK_CANCELLED
+                site["name"] = "child's task.cancel"
+                d.canon_task_cancel()
+                return [0]  # EXIT
+            site["name"] = "child got event %d" % args[0]
+            d.trap()
+
+        run_fi = store.lift(run, rft, d.CanonicalOptions(async_=True, callback=run_cb), c)
+
+        p = d.ComponentInstance(store)
+        pmem = d.MemInst(bytearray(65536), "i32")
+        runlow = store.lower(run_fi, rft, d.CanonicalOptions(async_=True, memory=pmem), p)
+
+        def go_core():
+            [packed] = runlow([1, 0])
+            site["name"] = "go's sync subtask.cancel (the sync tail)"
+            [status] = d.canon_subtask_cancel(False, packed >> 4)
+            return (packed & 0xf) * 16 + status
+
+        if canceller_async:
+            def go(args):
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [go_core()])
+                return [0]
+
+            gft = d.FuncType([], [d.U32Type()], async_=True)
+            go_fi = store.lift(go, gft, d.CanonicalOptions(async_=True, callback=lambda a: [0]), p)
+        else:
+            def go(args):
+                return [go_core()]
+
+            gft = d.FuncType([], [d.U32Type()])
+            go_fi = store.lift(go, gft, d.CanonicalOptions(), p)
+        run_to_resolution(store, go_fi, out)
+
+    return body
+
+
 def promote_implicit(promote_run):
     """Step 4, cmthreads/promote-implicit.wat: T yield-then-promotes its task's implicit Thread, which waits
     at its YIELD arm (promote_run), or a Thread U that was never readied (the control). The value is 16 + the
@@ -476,3 +578,7 @@ if __name__ == "__main__":
     read("sync-wait-own-thread control (T does not write)", sync_wait_own_thread(False))
     read("promote-implicit (#1012; wasmtime 49.0.2: 16)", promote_implicit(True))
     read("promote-implicit control (a never-readied U; wasmtime 49.0.2: 16)", promote_implicit(False))
+    read("sync-wait-host-import (ADR 0102's gate-off row; wasmtime 49.0.2: trap)", sync_wait_host_import(False))
+    read("sync-wait-host-import, eager control (wasmtime 49.0.2: 7)", sync_wait_host_import(True))
+    read("cancel-wat's shape, sync canceller (wasmtime 49.0.2 harness: returned, 1 then 4)", cancel_other_instance(False))
+    read("cancel-wat's shape, async canceller (control)", cancel_other_instance(True))

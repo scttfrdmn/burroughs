@@ -575,7 +575,8 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			// suspension — so another task of the instance may execute meanwhile (ADR 0101).
 			// `ready` is `wait_until(subtask.resolved)`'s predicate, read under h.mu by the sync tail (#1005).
 			ready := func() bool { return st.resolved }
-			if werr := c.Blocking(h.suspending(c, ready, func(abort <-chan struct{}) error {
+			// `false`: the oracles split on this wait with the gate off, so the tail does not judge it (syncTail).
+			if werr := c.Blocking(h.suspending(c, ready, false, func(abort <-chan struct{}) error {
 				select {
 				case <-wake:
 					return nil

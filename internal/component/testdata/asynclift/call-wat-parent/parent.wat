@@ -13,6 +13,15 @@
 ;; This parent is the completing path: start the child, park on its subtask, read the result the lower
 ;; lowered to the retptr, report it.
 ;;
+;; # `go` is an async CALLBACK lift, and was a sync one until 2026-10-16
+;;
+;; It was a sync lift that parked in `waitable-set.wait`. Both oracles trap that shape: a sync task may not
+;; block on an event only another instance can produce. wasmtime 49.0.2 traps *"cannot block a synchronous
+;; task before returning"*, and the pinned reference traps at `canon_lift`'s sync tail. Burroughs admitted
+;; it with `gate:cm-threads` off until the tail applied there too (ADR 0102's sync-wait row). So `go`
+;; parks the admitted way, by returning WAIT from its callback, and its result leaves through
+;; `task.return`. What it reports is unchanged.
+;;
 ;; # What it reports
 ;;
 ;;	kind 1  the async lower's returned STATE (packed & 0xf) -- WHICH arm the reading is of
@@ -80,7 +89,7 @@
 
   (core func $wsnew (;2;) (canon waitable-set.new))
   (core func $wsjoin (;3;) (canon waitable.join))
-  (core func $wswait (;4;) (canon waitable-set.wait (memory $cm)))
+  (core func $ret (;4;) (canon task.return (result u32)))
   (core func $stdrop (;5;) (canon subtask.drop))
 
   (core module $m
@@ -88,17 +97,20 @@
     (type $repty (;1;) (func (param i32 i32)))
     (type $newty (;2;) (func (result i32)))
     (type $jointy (;3;) (func (param i32 i32)))
-    (type $waitty (;4;) (func (param i32 i32) (result i32)))
+    (type $retty (;4;) (func (param i32)))
     (type $dropty (;5;) (func (param i32)))
     (type $goty (;6;) (func (result i32)))
+    (type $cbty (;7;) (func (param i32 i32 i32) (result i32)))
     (import "" "mem" (memory (;0;) 1))
     (import "" "run" (func $run (;0;) (type $runty)))
     (import "" "report" (func $rep (;1;) (type $repty)))
     (import "" "wsnew" (func $wsnew (;2;) (type $newty)))
     (import "" "wsjoin" (func $wsjoin (;3;) (type $jointy)))
-    (import "" "wswait" (func $wswait (;4;) (type $waitty)))
+    (import "" "ret" (func $ret (;4;) (type $retty)))
     (import "" "stdrop" (func $drop (;5;) (type $dropty)))
 
+    ;; go returns a callback code: EXIT (0) once task.return has run, else WAIT (2) on the set it stores
+    ;; at 20 (the subtask handle at 16), as `WAIT | si << 4`.
     (func $go (;6;) (type $goty) (result i32)
       (local $packed i32)
       (local $state i32)
@@ -134,10 +146,12 @@
         call $rep
         i32.const 0
         i32.load
+        call $ret
+        i32.const 0 ;; EXIT
         return
       end
 
-      ;; STARTED: park on the subtask, then read the result the resolution lowered.
+      ;; STARTED: park on the subtask by returning WAIT; the callback reads the result the resolution lowered.
       local.get $packed
       i32.const 4
       i32.shr_u
@@ -148,26 +162,57 @@
       local.get $sub
       local.get $si
       call $wsjoin
-      local.get $si
-      i32.const 8
-      call $wswait
-      drop
-
-      ;; kind 3: the value after the park.
-      i32.const 3
-      i32.const 0
-      i32.load
-      call $rep
-
-      ;; The wait delivered the resolution, so the handle is resolve-delivered and dropping it is legal.
-      ;; Leaving it would be a handle leak the engine may legitimately refuse.
+      i32.const 16
       local.get $sub
-      call $drop
-
-      i32.const 0
-      i32.load
+      i32.store
+      i32.const 20
+      local.get $si
+      i32.store
+      local.get $si
+      i32.const 4
+      i32.shl
+      i32.const 2 ;; WAIT
+      i32.or
     )
     (export "go" (func $go))
+
+    ;; cb(event, p1, p2): on the subtask's SUBTASK event (1) with state RETURNED (2), report and return;
+    ;; anything else waits again.
+    (func $cb (;7;) (type $cbty) (param $ev i32) (param $p1 i32) (param $p2 i32) (result i32)
+      local.get $ev
+      i32.const 1
+      i32.eq
+      local.get $p2
+      i32.const 2
+      i32.eq
+      i32.and
+      if
+        ;; kind 3: the value after the park.
+        i32.const 3
+        i32.const 0
+        i32.load
+        call $rep
+
+        ;; The event delivered the resolution, so the handle is resolve-delivered and dropping it is
+        ;; legal. Leaving it would be a handle leak the engine may legitimately refuse.
+        i32.const 16
+        i32.load
+        call $drop
+
+        i32.const 0
+        i32.load
+        call $ret
+        i32.const 0 ;; EXIT
+        return
+      end
+      i32.const 20
+      i32.load
+      i32.const 4
+      i32.shl
+      i32.const 2 ;; WAIT
+      i32.or
+    )
+    (export "cb" (func $cb))
   )
 
   (core instance $deps (;1;)
@@ -176,7 +221,7 @@
     (export "report" (func $replow))
     (export "wsnew" (func $wsnew))
     (export "wsjoin" (func $wsjoin))
-    (export "wswait" (func $wswait))
+    (export "ret" (func $ret))
     (export "stdrop" (func $stdrop))
   )
   (core instance $i (;2;) (instantiate $m
@@ -184,7 +229,8 @@
     )
   )
   (alias core export $i "go" (core func $g (;6;)))
-  (type $goct (;2;) (func (result u32)))
-  (func (;2;) (type $goct) (canon lift (core func $g)))
+  (alias core export $i "cb" (core func $gcb (;7;)))
+  (type $goct (;2;) (func async (result u32)))
+  (func (;2;) (type $goct) (canon lift (core func $g) async (callback $gcb)))
   (export (;3;) "go" (func 2))
 )

@@ -32,26 +32,34 @@ import (
 //
 // # The witness
 //
-// `run-slot.wasm`'s `run` waits on a subtask, then calls the same import again as a PROBE, which the impl
+// `run-slot-cb.wasm`'s `run` waits on a subtask, then calls the same import again as a PROBE, which the impl
 // below resolves before returning — so the probe executes inline in the caller's canon call, while that
 // caller is executing. The first caller to reach the probe is held there for `parksGrace`, watching for
 // the second. Under the reference's model the second cannot arrive: it is woken, but it cannot execute
 // until the first suspends or returns. The bound is a TRUE NEGATIVE's bound — under the fix nothing can
 // make the second arrive — so the test does not depend on the machine's speed in its passing direction.
 //
-// **No wasmtime reading**: wasmtime cannot supply `test:async/ops`. The oracle is the reference's execution
-// model, cited above by symbol.
+// # It drove a sync lift until 2026-10-16, and now drives a callback lift
 //
-// **Two neuters, both run, one per half of the design:**
+// `run-slot.wasm`'s `run` is a SYNC lift parked in `waitable-set.wait` on the host's event. Both oracles
+// trap that shape (`TestASyncWaitOnAnotherInstancesEventTraps`), so two of its callers can no longer be
+// parked at once. `run-slot-cb.wasm` is the same `run` as an async callback lift that parks by returning
+// WAIT, read on wasmtime 49.0.2 as 7, 10 of 10, with a YIELDing provider.
 //
-//   - removing the slot's acquisition from `invokeWith` lets the second caller reach the probe while the
-//     first is inside it — this fails on the overlap assertion, 3 of 3;
-//   - making `asyncHandles.suspending` keep the slot across the wait (returning `fn` as is) serializes too much: the
-//     second caller cannot even park, and this fails on "only 1 of 2 callers parked". The reference lets
-//     both be parked at once, so a slot held across a suspension is the wrong fix, not a stricter one.
+// **The neuters were re-run on the new shape, and the subject narrowed.** Two exclusions guard a callback
+// re-entry, the entry slot (`enterTask`, the reference's `exclusive_thread`) and the run slot, and either one
+// alone keeps the callers apart:
+//   - removing the run slot's acquisition from `enterAndInvoke` passes, 5 of 5;
+//   - widening `entrySem` to 8 passes, 5 of 5;
+//   - removing both fails on the overlap assertion, 5 of 5.
+//
+// So this now witnesses that a re-entry is exclusive, not which slot makes it so. The two neuters it was
+// built on are the sync path's. Removing `invokeWith`'s acquisition failed on the overlap, 3 of 3.
+// `suspending` keeping the slot across the wait failed on "only 1 of 2 callers parked". They have no subject
+// on this shape, and the sync shape they had is a trap.
 func TestTwoCallsIntoOneInstanceNeverExecuteAtOnce(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
-	b, err := os.ReadFile("testdata/run-slot.wasm")
+	b, err := os.ReadFile("testdata/run-slot-cb.wasm")
 	if err != nil {
 		t.Fatalf("the committed fixture is missing: %v", err)
 	}
@@ -99,7 +107,7 @@ func TestTwoCallsIntoOneInstanceNeverExecuteAtOnce(t *testing.T) {
 	for range 2 {
 		go func() { _, e := in.CallValues("run"); done <- e }()
 	}
-	// Both callers must be parked in `waitable-set.wait` before either is woken, or the pair is not
+	// Both callers must be parked on their sets (a callback WAIT) before either is woken, or the pair is not
 	// concurrent in the sense that matters. Two parked at once is the reference's own interleaving.
 	var rs []func(canon.Value)
 	for len(rs) < 2 {
@@ -107,7 +115,7 @@ func TestTwoCallsIntoOneInstanceNeverExecuteAtOnce(t *testing.T) {
 		case r := <-resolvers:
 			rs = append(rs, r)
 		case <-time.After(10 * time.Second):
-			t.Fatalf("only %d of 2 callers parked in waitable-set.wait — two calls into one instance "+
+			t.Fatalf("only %d of 2 callers reached the import — two calls into one instance "+
 				"must both be able to be in flight; a slot held across the wait would serialize them here", len(rs))
 		}
 	}
@@ -119,7 +127,7 @@ func TestTwoCallsIntoOneInstanceNeverExecuteAtOnce(t *testing.T) {
 	parkedBy := time.Now().Add(10 * time.Second)
 	for parkedWaiters(in.w.async) < 2 {
 		if time.Now().After(parkedBy) {
-			t.Fatalf("%d of 2 callers parked in waitable-set.wait within 10s", parkedWaiters(in.w.async))
+			t.Fatalf("%d of 2 callers parked on a waitable set within 10s", parkedWaiters(in.w.async))
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -148,7 +156,8 @@ func TestTwoCallsIntoOneInstanceNeverExecuteAtOnce(t *testing.T) {
 	}
 }
 
-// parkedWaiters counts the agents parked in `waitable-set.wait` across the instance's sets — each set's
+// parkedWaiters counts the agents parked on the instance's sets, in `waitable-set.wait` or a callback WAIT
+// (`awaitEvent` counts too) — each set's
 // `waiting`, read under `asyncHandles.mu` as the engine writes it.
 func parkedWaiters(h *asyncHandles) int {
 	h.mu.Lock()

@@ -16,8 +16,11 @@ import (
 //
 // # What it constructs
 //
-// `result-store-heap.wasm`'s `run` async-lowers an import into retptr 0, waits on the subtask, then runs a
-// long loop watching retptr 0 for a change, and returns `(changed << 16) | mem[0]`. Two callers X and Y
+// `result-store-heap-cb.wasm`'s `run` async-lowers an import into retptr 0, waits on the subtask, then runs a
+// long loop watching retptr 0 for a change, and returns `(changed << 16) | mem[0]`. It is an async callback
+// lift, which parks by returning WAIT. Until 2026-10-16 this drove `result-store-heap.wasm`, a sync lift
+// parked in `waitable-set.wait`, which both oracles trap (`TestASyncWaitOnAnotherInstancesEventTraps`).
+// The neuter below was re-run on the callback shape. Two callers X and Y
 // park in the wait, and both lowered into the same word. X alone is resolved, with 1. The test then waits
 // until X has left the wait AND the slot is held again, i.e. X is executing its loop, and only then
 // resolves Y, with 2, from this goroutine. Y's result store writes the word X is watching.
@@ -36,10 +39,11 @@ import (
 // `9f11079`.
 //
 // **Neuter, run:** skipping the acquisition in `asyncLowerFunc`'s `onResolve` lets the store land while X
-// executes, and this fails on X's value. Under `-race` it also reports the race.
+// executes, and this fails on X's value. Under `-race` it also reports the race. On the callback shape it
+// failed 5 of 5 with `0x10002`, and the race was reported under `-race`.
 func TestAResultStoreWaitsForTheExecutingTask(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
-	b, err := os.ReadFile("testdata/result-store-heap.wasm")
+	b, err := os.ReadFile("testdata/result-store-heap-cb.wasm")
 	if err != nil {
 		t.Fatalf("the committed fixture is missing: %v", err)
 	}

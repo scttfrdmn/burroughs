@@ -39,6 +39,28 @@ the record did not say why:
     Threads at all) still admits, and whether it should follow is recorded on #1005, undecided.
   - This changes text Scott has under review. Its substance stands unless he objects (noted on #999).
 
+  **Measured with the gate off, 2026-10-16** (the chair's item 2 before the `gate:cm-threads` flip, oracle
+  first; the *"undecided"* above is kept so this change stays visible):
+  - **Both oracles trap the gate-off witnesses' shape.** Each fixture was nested in a provider whose async
+    `op` YIELDs once (`internal/component/testdata/sync-wait-gate-off.reading`).
+    - wasmtime 49.0.2 traps *"cannot block a synchronous task before returning"*, 10 of 10, on
+      `async-waitset-synth`, `run-slot` and `result-store-heap`. An eager provider reads 7.
+    - The reference (`refread.reading`, `sync-wait-host-import`) traps at the sync tail in every run that
+      reaches the wait.
+  - **So it was a default-path conformance defect (#1016), and is fixed as #1005 was, without the gate
+    condition.**
+    The tail judges a sync `waitable-set.wait` with the gate off.
+  - **The witnesses that needed two parked callers moved to callback-lift twins**, `run-slot-cb` and
+    `result-store-heap-cb`. Both read 7 on wasmtime. `call-wat-parent`'s `go` became a callback lift: its
+    sync form trapped on wasmtime and its callback form reads 49.
+  - **A sync `subtask.cancel` of another instance's subtask is a separate row, and there the oracles split.**
+    - The reference traps at the tail (`refread.reading`, `cancel-wat's shape`). Its async-canceller
+      control reads state 1 then status 4.
+    - wasmtime 49.0.2 returns status 4 (`asynclift/cancel-wat.reading`).
+
+    That row is left as it was, admitting with the gate off and judged by the tail with it on, and the
+    split is recorded on #999.
+
 ## What the contract says, and where it is silent
 
 - **It names the suites.** G-1 and G-4: a gate's acceptance is its upstream spec test suite, and the
@@ -74,7 +96,7 @@ input is invalid. The pin says the input is valid.
 | case | the pin | the toolchain | modelled and witnessed? | Burroughs |
 |---|---|---|---|---|
 | #969: `(i64) -> ()` `ft` | admits; traps on a mismatch | wasm-tools and wasmtime 49.0.2 reject at validation | **no**: the memory64 Thread entry is not modelled | **refuses**, `ErrUnsupportedForm`, quoting the toolchains' constraint |
-| sync `waitable-set.wait` | admits where a Thread of the waiting instance can satisfy it, else traps at the sync tail (corrected, #1005) | wasmtime 49.0.2 traps where it would block | **yes**: `async-waitset-synth`, `run-slot`, `result-store-heap` and their witnesses | **admits** with `gate:cm-threads` off; **traps** without a candidate under it (#1005) |
+| sync `waitable-set.wait` | admits where a Thread of the waiting instance can satisfy it, else traps at the sync tail (corrected, #1005) | wasmtime 49.0.2 traps where it would block | **yes**: `async-waitset-synth`, `run-slot`, `result-store-heap` and their witnesses | **admits** with `gate:cm-threads` off; **traps** without a candidate under it (#1005). **Since 2026-10-16, traps without a candidate with the gate off too** (amendment below) |
 
 Both decisions stand, and are now consistent under one rule. #969's refusal message already names the
 toolchains' constraint; its reason under this rule is *not modelled*, and that is recorded here rather than

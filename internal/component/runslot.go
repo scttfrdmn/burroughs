@@ -202,7 +202,9 @@ func (h *asyncHandles) kick() {
 // said the slot is taken back "whatever fn returned". Under A that would have the ended Thread contend for
 // a slot it will not use, and at `Close` wait on a Thread the close has not yet ended. The build amends the
 // sentence.
-func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, fn func(abort <-chan struct{}) error) func() error {
+//
+// `ungated` is the wait's `waitUngated`: whether the sync tail judges it with `gate:cm-threads` off.
+func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, ungated bool, fn func(abort <-chan struct{}) error) func() error {
 	var rec *cmThread
 	tt := h.threads
 	if tt != nil {
@@ -227,6 +229,7 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, fn f
 		rec.waitAbort = make(chan struct{})
 		rec.abortErr = nil
 		rec.waitReady = ready
+		rec.waitUngated = ungated
 		abort, s := rec.waitAbort, tt.sched
 		tt.mu.Unlock()
 		// **The sync tail with no scheduler (#1005):** no Thread exists, so nothing can be a candidate except

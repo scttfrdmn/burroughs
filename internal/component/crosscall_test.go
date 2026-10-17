@@ -100,7 +100,7 @@ func crossCallHost(t *testing.T, r *crossCallReports, deferTick bool, tickValue 
 // # What it establishes, and why the value matters more than the success
 //
 // The value crosses **two** boundaries: the host's `tick` resolves the child's import, the child's
-// `task.return` resolves the parent's subtask, and the parent's own sync lift returns it to the host. So
+// `task.return` resolves the parent's subtask, and the parent's own `task.return` returns it to the host. So
 // `go() == tickValue` is a claim about the whole chain.
 //
 // It is deliberately **not** 0, not the `id` the parent passes, and not 1. The one piece of this slice
@@ -251,25 +251,26 @@ func TestACrossComponentAsyncCallCarriesParamsAndResult(t *testing.T) {
 // cross-component arm hands its caller whatever `invokeWith` returns, so a sync guest-to-guest call would
 // have silently produced no result — a wrong value reported as success, which is the worse of the two.
 //
-// The witness is `call-wat-parent`'s own `go`, which is a **sync** lift returning `u32`: the assertion
-// above that `go() == 49` is exactly this repair, and this test states it separately so the fact has a
-// name rather than riding inside a cross-component claim.
+// The witness was `call-wat-parent`'s `go`, a **sync** lift returning `u32`, until that `go` parked in
+// `waitable-set.wait` on another instance's event, which both oracles trap. `go` is now an async callback
+// lift (see its header), so it no longer exercises this arm. The witness is `async-waitset-synth`'s
+// `sibling`: a sync lift that returns `u32` 42 without blocking.
 func TestASyncLiftsResultsReachItsCaller(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
-	b, err := os.ReadFile("testdata/asynclift/call-wat-parent/composed.wasm")
+	b, err := os.ReadFile("testdata/async-waitset-synth.wasm")
 	if err != nil {
-		t.Fatalf("the committed composed artefact is missing: %v", err)
+		t.Fatalf("the committed fixture is missing: %v", err)
 	}
-	r := &crossCallReports{}
-	in, err := InstantiateWithHost(b, crossCallHost(t, r, false, 49))
+	h, _, _ := waitsetSynthHost()
+	in, err := InstantiateWithHost(b, h)
 	if err != nil {
 		t.Fatalf("instantiate: %v", err)
 	}
 	defer in.Close()
 
-	res, err := in.CallValues("go")
+	res, err := in.CallValues("sibling")
 	if err != nil {
-		t.Fatalf("go(): %v", err)
+		t.Fatalf("sibling(): %v", err)
 	}
 	// The export's declared result is what `CallValues` checks against, so a discarded result surfaces as
 	// an arity complaint about the guest rather than as a missing value — which is why the pre-repair
@@ -277,6 +278,9 @@ func TestASyncLiftsResultsReachItsCaller(t *testing.T) {
 	if len(res) != 1 {
 		t.Fatalf("a sync lift declaring a u32 result returned %d values; its results were discarded "+
 			"between the core func and the caller", len(res))
+	}
+	if got, ok := res[0].U32(); !ok || got != 42 {
+		t.Errorf("sibling() = %v, want u32 42, the value its core func returned", res[0])
 	}
 }
 
