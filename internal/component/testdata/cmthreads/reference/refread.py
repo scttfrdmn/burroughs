@@ -850,6 +850,54 @@ def first_segment_return():
     return body
 
 
+def reenter_after_suspend():
+    """`reenter-after-suspend.wat`: a callee past its first suspension re-enters its caller's instance. The
+    parent's async `go` lowers the child's async `g`; `g` YIELDs, then from its callback calls the parent's SYNC
+    `f` (7) and returns f() + 1. The fence's re-entry case (ADR 0095's amendment)."""
+
+    def body(out, site):
+        store = d.Store()
+        parent = d.ComponentInstance(store)
+        fft = d.FuncType([], [d.U32Type()])
+        f_fi = store.lift(lambda args: [7], fft, d.CanonicalOptions(), parent)
+        child = d.ComponentInstance(store)
+        flow = store.lower(f_fi, fft, d.CanonicalOptions(), child)
+
+        def gcb(args):
+            [v] = flow([])
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [v + 1])
+            return [0]  # EXIT
+
+        gft = d.FuncType([], [d.U32Type()], async_=True)
+        g_fi = store.lift(lambda args: [1], gft, d.CanonicalOptions(async_=True, callback=gcb), child)  # YIELD
+        pmem = d.MemInst(bytearray(65536), "i32")
+        glow = store.lower(g_fi, gft, d.CanonicalOptions(async_=True, memory=pmem), parent)
+
+        def prun(args):
+            [p] = glow([0])
+            if p & 0xf == 2:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(pmem, 0)])
+                return [0]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(p >> 4, s)
+            return [2 | (s << 4)]  # WAIT
+
+        def pcb(args):
+            d.canon_task_return([d.U32Type()], d.LiftOptions(), [u32(pmem, 0)])
+            return [0]
+
+        go_fi = store.lift(prun, d.FuncType([], [d.U32Type()], async_=True),
+                           d.CanonicalOptions(async_=True, callback=pcb), parent)
+        got = []
+        host_invoke(store, go_fi, lambda res: got.append(res))
+        while not got:
+            store.tick()
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -876,6 +924,7 @@ def battery():
     read("host-event-later, sync cancel (#1020 mechanism (b))", host_event_later(True))
     read("first-segment-return (#1020 mechanism (c); wasmtime 49.0.3: 2)", first_segment_return())
     read("host-event-inline (#1020 mechanism (c): call-wat-parent's inline arm)", host_event_inline())
+    read("reenter-after-suspend (the fence's re-entry; wasmtime 49.0.3: 8)", reenter_after_suspend())
 
 
 if __name__ == "__main__":

@@ -79,9 +79,9 @@ That copy is real work with its own witnesses and it is not what #888 registered
 - A composed artefact that **completes** exists for the first time (`testdata/asynclift/call-wat-parent/`). Every prior one cancelled, which is why the capability had no end-to-end arm.
 - The inline arm of the parent's dispatch (`RETURNED` from the lower, result already at the retptr) is **correct code and unwitnessed**, because it is unreachable through a `wit-bindgen` child: such a child's lift always returns WAIT. A first draft of the fixture's prose claimed a fast host would reach it; measuring showed both hosts take the park arm, because the inline arm is a property of the *callee's* ABI and not of the host's latency. Said in the fixture rather than left to a coverage report.
 
-## Amendment, proposed 2026-10-17 and held for chair review: outcomes the reference's single runner forbids
+## Amendment, 2026-10-17, accepted: outcomes the reference's single runner forbids
 
-**Status: proposed. No engine code implements it.** The chair ordered (ruling of 2026-10-17, item 2) that #1020 be characterized with fixtures, and the design written here, before any engine change. This section records both, and it is held for review as ADR 0101's Option A was.
+**Status: accepted** (the chair's ruling of 2026-10-17 on this amendment's revision, relayed by Scott): F0 and F1 adopted in design, with the re-entry rule below added on that ruling. **Not yet built**; the build owes the list at the end. The chair ordered (ruling of 2026-10-17, item 2) that #1020 be characterized with fixtures, and the design written here, before any engine change. This section records both, and it is held for review as ADR 0101's Option A was.
 
 **Revised after the chair's review of the first draft** (ruling of 2026-10-17 on #1025). The review corrected part 1's boundary and asked for one fence to be evaluated against the two-part rule. Taking the corrected boundary seriously found a third mechanism, (c), which is the common case rather than a race. The rule section below replaces the first draft's. Citations into the reference name the pin they read, 2e7895c, by symbol.
 
@@ -168,7 +168,36 @@ What the evaluation found:
 3. **Host events while every caller is suspended still progress in parallel.** In `fanout`'s `after` mode the caller WAITs, so all four callees continue at once, each in its own instance. The fence costs the caller one wait at resumption, for any callee segment still in flight. What it gives up is a callee continuing while its caller executes, which the reference never does.
 4. **The run slot.** The fence is a second relation beside the slot, not a change to it. The slot orders tasks within an instance; the fence orders a callee's segments against its caller's instance. Two rules keep them from deadlocking:
    - **The fence is taken before the slot**, on both sides. A caller that took its slot and then waited on the fence would hold the slot its callee's result store needs, while the callee waits for that slot inside the segment the caller is waiting on. A callee's store runs under the fence it already holds.
-   - **Re-entry is recognised by chain**, as the slot's is (#976). A callee that synchronously calls back into its caller's instance is on its own chain, so its entry does not wait for itself.
+   - **Re-entry is recognised by chain**, as the slot's is (#976), which the next section states as a rule.
+
+### Re-entry across the fence (added on the chair's ruling of 2026-10-17)
+
+A callee segment that holds F1 and calls synchronously back into its caller's instance needs that instance's guest execution, which F1 excludes. Without a rule the call waits on a fence its own chain holds. The shape is real: `reenter.wasm`, #977's `thread-wait-callback`, `residual`, and the new `reenter-after-suspend` all have it.
+
+**The rule: a re-entry joins the callee's chain and is admitted.** The key is the chain identity the sync arm already carries for the run slot (#976, #984):
+- `bindCrossComponent`'s sync arm passes the caller's `runChain` into the callee's context with `withRunChain`;
+- the callee's entry reads it with `runChainFrom`, and `acquireRun` re-enters a slot that chain already holds.
+
+F1 uses the same key. An entry into an instance waits for the in-flight callee segments on that instance's edges, **unless its chain is one of those segments' chains**. In that case it is the segment calling back, as one thread does in the reference, and it is admitted.
+
+**F0's corollary: the first segment runs on the caller's chain.** In the reference, a callee's first segment runs on its caller's thread, inside `canon_lift`'s `thread.resume()`. So `liftAsAsyncImpl` gives the first segment the caller's `runChain`, as the sync arm does. A re-entry made inside a first segment is then admitted by the same rule. That is `residual`'s shape: `g`'s lower runs the parent's `h2`, whose first segment executes in the parent's instance while `g`'s segment holds the fence. Without the corollary, F0 and F1 would deadlock there, `g` waiting for `h2`'s first segment and `h2` waiting for `g`'s fence. The callee's segments after its first suspension run on its own task's chain, which is what F1 fences.
+
+**The prediction table, for the build:**
+
+| fixture | shape | wasmtime | reference | Burroughs now | after the build |
+|---|---|---|---|---|---|
+| `reenter.wasm` | sync parent → child → parent, through a lift the parent passes its child | 8 | — | 8, 50 of 50 per gate | 8 |
+| `cmthreads/thread-wait-callback` (#977) | a Thread waits on a child whose async `g` calls the parent's sync `f` inside its first segment | 8 | — | 8, 50 of 50 | 8 |
+| `cmthreads/residual` | `g` async-lowers the parent's async `h2`, a re-entry inside a first segment | BUG | 8 | 8, 50 of 50 | 8 |
+| `reenter-after-suspend` (new) | `g` YIELDs, then calls the parent's sync `f` from its callback: past its first suspension | **8**, 10 of 10 (49.0.3) | **{8}** | 8, 200 of 200 per gate | 8 |
+
+Two of these differ from the ruling's description, and the table follows the fixtures:
+- **`residual` is not "`g` calls the parent's sync `f`".** That was its first shape, which its header records as replaced because it did not discriminate a neuter. Its committed shape re-enters through an async lower, so it exercises F0's corollary rather than the sync arm.
+- **#977's fixture is `thread-wait-callback`.** Its `g` calls `f` inside its first segment.
+
+`reenter-after-suspend` is the row that exercises F1's rule itself.
+
+**Neuter:** the fence ignoring chain identity. All four rows then hang, and the witnesses fail on their bounds rather than waiting forever.
 
 ### What each design leaves unhandled
 
@@ -208,7 +237,11 @@ The build measures all three under `make lab-ab`.
 - A neuter for each mechanism:
   - F0 returning at goroutine start brings back (c);
   - a callee segment that does not take the fence brings back (a);
-  - a caller resumption that does not wait for in-flight segments brings back (b).
+  - a caller resumption that does not wait for in-flight segments brings back (b);
+  - the fence ignoring chain identity hangs the re-entry rows, on their bounds.
+- The re-entry prediction table above, read after the build: every row 8.
+- `BenchmarkFanOut` and `switch.wasm` under `make lab-ab` against the forecast, quoted with p-values.
+- The concurrency witnesses run 50 times under `-race`.
 
 ### What the flip list carries
 

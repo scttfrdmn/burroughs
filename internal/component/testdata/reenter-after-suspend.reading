@@ -1,0 +1,15 @@
+# Committed readings for reenter-after-suspend.wasm: a callee past its first suspension re-enters its caller's
+# instance (the chair's ruling of 2026-10-17 on ADR 0095's amendment, re-entry across the fence). Default path.
+# Built:       wasm-tools parse reenter-after-suspend.wat -o reenter-after-suspend.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'go()' reenter-after-suspend.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                                        reading
+# wasmtime 49.0.3, 10 of 10                                     8
+# reference, pin 2e7895c (refread.reading)                      {8}
+# Burroughs before the fence, gate:cm-threads off and on        8, 200 of 200 each
+#
+# Meaning:     8 is the parent's f (7) + 1, read by g in its callback, after its first suspension. After the
+#              amendment's build this must still read 8: the call into f re-enters the parent's instance on
+#              g's own chain, so the fence g holds admits it. A fence that ignored chain identity would make
+#              the call wait on g's own fence, and hang.
