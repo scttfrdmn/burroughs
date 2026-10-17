@@ -37,9 +37,19 @@ import threading
 
 PIN = "2bed77e4228841c1d2721996d3ecc169ff96b158"  # the Makefile's CANON_PIN
 VENDOR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "canon", "gen", "vendor")
-sys.path.insert(0, VENDOR)
+# REFREAD_DEFINITIONS reads a definitions.py other than the vendored pin, to compare a candidate pin against
+# the current one row by row. Unset, the vendored pin is read.
+DEFINITIONS = os.environ.get("REFREAD_DEFINITIONS") or os.path.join(VENDOR, "definitions.py")
+if os.environ.get("REFREAD_DEFINITIONS"):
+    import importlib.util
 
-import definitions as d  # noqa: E402
+    _spec = importlib.util.spec_from_file_location("definitions", DEFINITIONS)
+    d = importlib.util.module_from_spec(_spec)
+    sys.modules["definitions"] = d
+    _spec.loader.exec_module(d)
+else:
+    sys.path.insert(0, VENDOR)
+    import definitions as d  # noqa: E402
 
 SEEDS = range(8)
 BOUND_S = 5.0
@@ -87,10 +97,28 @@ def u32(mem, p):
     return int.from_bytes(mem.bytes[p:p + 4], "little")
 
 
+def host_invoke(store, fi, on_resolve):
+    """Invoke fi from inside a HOST Thread, as upstream's own `mk_host_func` drives host-side work.
+
+    The embedder's Python thread has no current Thread. The pin never asked for one, but head's `trap()`
+    does (`current_instance().store.lock_down()`, upstream a25fc0b37), so a sync-tail trap raised there was
+    an AttributeError from inside `trap()` rather than a trap. Inside a host Thread, `current_instance()`
+    is the host's, the store locks down, and the Trap propagates out to the watch as one. The pin reads
+    identically either way: the calibration line and every committed reading were re-taken through this."""
+    host = d.ComponentInstance(store)
+    task = d.Task(d.FuncType([], []), d.CanonicalOptions(), host, lambda: [], lambda _: None)
+
+    def body():
+        store.invoke(fi, lambda: [], on_resolve)
+        return None  # head reads a Thread function's result as the Thread to switch to; there is none
+
+    d.Thread(task, body).resume()
+
+
 def run_to_resolution(store, fi, out):
-    """The embedder: invoke fi and tick the store until it resolves."""
+    """The embedder: invoke fi (from a host Thread, see host_invoke) and tick the store until it resolves."""
     got = []
-    store.invoke(fi, lambda: [], lambda r: got.append(r))
+    host_invoke(store, fi, lambda r: got.append(r))
     while not got:
         store.tick()
     out.value = "value %d" % got[0][0]
@@ -405,7 +433,7 @@ def sync_wait_own_thread(t_writes):
         hft = d.FuncType([], [d.U32Type()])
         h_fi = store.lift(h, hft, d.CanonicalOptions(), inst)
         got = []
-        store.invoke(h_fi, lambda: [], lambda r: got.append(r))
+        host_invoke(store, h_fi, lambda r: got.append(r))
         out.value = "value %d" % got[0][0]
         out.done.set()
 
@@ -596,15 +624,8 @@ def promote_implicit(promote_run):
     return body
 
 
-if __name__ == "__main__":
-    import hashlib
-
-    with open(os.path.join(VENDOR, "definitions.py"), "rb") as fh:
-        digest = hashlib.sha256(fh.read()).hexdigest()
-    print("# REFERENCE READING — definitions.py @ %s, not a wasmtime reading." % PIN)
-    print("# vendored file sha256 %s" % digest)
-    print("# Each line is the set of outcomes over DETERMINISTIC_PROFILE in {False, True} x seeds %s." % list(SEEDS))
-    print("# HANG means no result and no trap within %.0fs." % BOUND_S)
+def battery():
+    """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
     read("wait-runs-ready control (T never readied)", wait_runs_ready_control)
     read("trap-while-waiting (wasmtime 49.0.2: trap in t2)", trap_while_waiting(True))
@@ -624,3 +645,17 @@ if __name__ == "__main__":
     read("cancel, late child, sync canceller (wasmtime 49.0.2: trap)", cancel_other_instance(False, late=True))
     read("cancel, late child, async canceller (wasmtime 49.0.2: 20)", cancel_other_instance(True, late=True))
     read("future-self-copy (#1006, default path; wasmtime 49.0.2: 262151)", future_self_copy())
+
+
+if __name__ == "__main__":
+    import hashlib
+    import platform
+
+    with open(DEFINITIONS, "rb") as fh:
+        digest = hashlib.sha256(fh.read()).hexdigest()
+    label = os.environ.get("REFREAD_LABEL") or PIN
+    print("# REFERENCE READING — definitions.py @ %s, not a wasmtime reading." % label)
+    print("# definitions.py sha256 %s; Python %s (uv-managed)." % (digest, platform.python_version()))
+    print("# Each line is the set of outcomes over DETERMINISTIC_PROFILE in {False, True} x seeds %s." % list(SEEDS))
+    print("# HANG means no result and no trap within %.0fs." % BOUND_S)
+    battery()
