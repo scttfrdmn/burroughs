@@ -517,6 +517,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: make triagecheck
 
+      - name: the PR body's quoted ratio is the computed one
+        # The Board's `- Ratio:` line must equal `scripts/ratio.sh` over the PR's merge base..head (the chair's
+        # ruling of 2026-10-17, after #1039's body carried #1038's figure). A body-subject step, so it runs on
+        # `edited` too: an edit is how a figure gets into the body. On a push there is no PR body to check.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELF: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
+        run: |
+          if [ -n "$SELF" ]; then
+            make ratiocheck PR="$SELF"
+          else
+            echo "ratiocheck: push event, no PR body to check."
+          fi
+
       # A double space between two word characters is refused, because it is the signature of a
       # backtick executed away by an unquoted shell string: the shell runs the backticked word,
       # the command fails, and the span is replaced with NOTHING. Three losses in one session,
