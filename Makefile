@@ -61,7 +61,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: ci ci-gates watref all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures refcite canon-ref
+.PHONY: ci ci-gates watref all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures refcite canon-ref triagecheck
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -964,6 +964,13 @@ CITE ?= --worktree main
 cite:
 	@./scripts/citecheck.sh $(CITE)
 	@$(MAKE) --no-print-directory refcite
+	@$(MAKE) --no-print-directory triagecheck
+
+# triagecheck — every issue in the Windows triage map (`.github/windows-triage.tsv`) is still open (the
+# chair's order of 2026-10-17, which moved the map into the tree as data). A closed issue means a row is
+# stale; a fetch that fails is a failure, never a pass. Reading the map from `ciwatch.sh` is #1037, parked.
+triagecheck:
+	@./scripts/triagecheck.sh
 
 # refcite — every citation into the Canonical ABI reference names a symbol that exists at its pin (the chair's
 # ruling of 2026-10-17). Line numbers rot on every pin move: three of five spot checks of the 2bed77e→2e7895c

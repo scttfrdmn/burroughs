@@ -509,6 +509,14 @@ jobs:
           python3 --version
           make refcite REFCITE_PY='python3 -I'
 
+      - name: the Windows triage map names only open issues
+        # Every row of `.github/windows-triage.tsv` maps a recurring Windows failure to an issue, and a closed
+        # issue means the row is stale (the chair's order of 2026-10-17). In this job for the token: the check
+        # asks the tracker, and a fetch that fails is a failure, never a pass.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make triagecheck
+
       # A double space between two word characters is refused, because it is the signature of a
       # backtick executed away by an unquoted shell string: the shell runs the backticked word,
       # the command fails, and the span is replaced with NOTHING. Three losses in one session,
