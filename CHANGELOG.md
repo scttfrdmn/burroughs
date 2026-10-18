@@ -26,6 +26,33 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`Stop`'s arrival no longer scales with a bulk memory instruction's operand** (contract §3 SP-1, reading (a)'s
+  first half; [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md),
+  accepted with three rulings on 2026-10-18).
+  - **The change:** `memory.fill`, `memory.copy` and `memory.init` poll between 64 KiB chunks. A bulk
+    instruction had no poll inside it, so a stop waited for the whole instruction.
+  - **The forecast was registered on #515 before building, and it was met** (janus `measured`, tasks 43 and
+    44):
+
+    | class | before | after |
+    |---|---|---|
+    | `memory.fill`, 64 MiB | p99 16.7ms, max 17ms | **p99 ≤ 30µs, max ≤ 39µs** |
+    | `memory.copy`, 32 MiB | p99 4.2ms, max 4.3ms | **p99 ≤ 28µs, max ≤ 31µs** |
+    | tight loop | p99 ≤ 9µs | unchanged |
+    | straight line | p99 0.6ms | unchanged |
+
+  - **The cost is inside ADR 0059's bar:** `loopbench` ~ (geomean +0.15%) and `membench` ~ (geomean +0.84%),
+    with no row significant.
+  - **Each executor still loads its image once** (decision 0058). A park mid-instruction holds the slice
+    safely, because ADR 0073's relocation predicate refuses to move the image under an agent inside a call.
+    `memory.copy` keeps memmove semantics across chunks.
+  - **The instrument:** `BenchmarkSP1Arrival`, which reports arrival p50, p99 and max by instruction class.
+  - **Witnesses:** a tight loop with no calls, a 128 MiB fill, and SP-1's litmus case built standalone (N = 8
+    agents, counters frozen after `Stop`). The §4 battery stays parked under #10.
+  - **Neuters, run:** with the back-edge poll removed the tight loop misses its deadline, and with the chunk
+    poll removed the fill misses its bound. Each fails rather than hanging.
+  - **Still owed by reading (a):** poll points in the sync adapter's copies (ADR 0103), the next slice.
+
 - **`v0.8.0`'s first known limit is lifted: a sync cross-component call carries strings, lists and records**
   ([#995](https://github.com/scttfrdmn/burroughs/issues/995);
   [ADR 0103](docs/decisions/0103-a-sync-cross-component-call-crosses-as-component-values-lifted-from-one-memory-and-lowered-into-the-other.md),

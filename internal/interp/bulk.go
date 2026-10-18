@@ -117,14 +117,38 @@ func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 	if n == 0 {
 		return nil
 	}
-	// `clear`-then-set would be two passes; the range form is one and is what the compiler
-	// recognizes as a memset.
-	dst := bs[i : i+n]
-	for j := range dst {
-		dst[j] = k
+	// **Chunked, with a safepoint poll between chunks** (contract §3 SP-1, ADR 0104's ruling 1). A bulk
+	// instruction had no poll inside it, so `Stop`'s arrival scaled with the operand: 17ms for a 64 MiB fill
+	// on janus (`BenchmarkSP1Arrival`, the baseline on #515). The bound is now one chunk.
+	//
+	// **The one image loaded above is held across the polls, and that is safe by ADR 0073's predicate**, not
+	// by luck. A park mid-fill could otherwise leave this slice naming an array a grow had abandoned: #586's
+	// lost write by a new route. But `soleAgentLocked` refuses a relocating grow while any other live thread
+	// has `callers > 0`, and an agent parked inside this instruction is inside a call. So no grow can relocate
+	// the image out from under it. A first draft re-loaded the view after each poll. That guarded nothing, and
+	// it broke decision 0058's one-load rule, which `TestEveryOperationLoadsAPublishedImageAtMostOnce` caught.
+	//
+	// NEUTER THIS by skipping the poll, and `TestABulkFillReachesASafepointWithinOneChunk` misses its bound.
+	//
+	// The range form inside a chunk is one pass, and is what the compiler recognizes as a memset.
+	for off := uint64(0); off < n; {
+		end := min(off+bulkChunk, n)
+		dst := bs[i+off : i+end]
+		for j := range dst {
+			dst[j] = k
+		}
+		off = end
+		if off < n {
+			st.t.poll()
+		}
 	}
 	return nil
 }
+
+// bulkChunk is the most a bulk instruction does between two safepoint polls (contract §3 SP-1, ADR 0104).
+// 64 KiB is the forecast registered on #515: about 16µs of `memory.fill` and 8µs of `memory.copy` at the
+// baseline's rates on janus, against a 17ms and 4.3ms unpolled stretch for 64 MiB and 32 MiB.
+const bulkChunk = 64 << 10
 
 // execMemoryCopy is `fc 0a` — `memory.copy x y`, `eval.ml:567`.
 //
@@ -173,7 +197,29 @@ func (in *Instance) execMemoryCopy(ins binary.Instr, st *stack) error {
 	if n == 0 {
 		return nil
 	}
-	copy(dstBs[d:d+n], srcBs[s:s+n])
+	// **Chunked, with a poll between chunks, as `memory.fill` is** (SP-1, ADR 0104), with both images loaded
+	// once and held across the polls, safe for `memory.fill`'s reason (ADR 0073's relocation predicate).
+	//
+	// **The chunk order keeps `copy`'s overlap semantics** (memmove: the destination reads as if the source
+	// were copied out first). A destination at or below its source, or in another memory, or not overlapping,
+	// is copied forward: an earlier chunk's write never lands on a later chunk's source. A destination above
+	// an overlapping source is copied backward, from the end, for the same reason the other way round. Within
+	// a chunk, Go's `copy` is already memmove.
+	backward := dstMem == srcMem && d > s && d < s+n
+	for done := uint64(0); done < n; {
+		size := min(bulkChunk, n-done)
+		var at uint64 // the chunk's offset within the n bytes
+		if backward {
+			at = n - done - size
+		} else {
+			at = done
+		}
+		copy(dstBs[d+at:d+at+size], srcBs[s+at:s+at+size])
+		done += size
+		if done < n {
+			st.t.poll()
+		}
+	}
 	return nil
 }
 
@@ -320,7 +366,19 @@ func (in *Instance) execMemoryInit(ins binary.Instr, st *stack) error {
 	if n == 0 {
 		return nil
 	}
-	copy(bs[d:d+n], segBs[s:s+n])
+	// **Chunked, with a poll between chunks, as `memory.fill` is** (SP-1, ADR 0104). Both images are loaded once
+	// and held across the polls. The memory is safe for `memory.fill`'s reason (ADR 0073's relocation
+	// predicate). The segment is safe because only `data.drop` replaces its image (decision 0065), and the old
+	// image stays valid under Go's collector. So an `init` that began before a drop finishes from the segment
+	// it began with, which is the sequential answer.
+	for off := uint64(0); off < n; {
+		end := min(off+bulkChunk, n)
+		copy(bs[d+off:d+end], segBs[s+off:s+end])
+		off = end
+		if off < n {
+			st.t.poll()
+		}
+	}
 	return nil
 }
 
