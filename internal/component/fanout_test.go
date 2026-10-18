@@ -62,9 +62,19 @@ func BenchmarkFanOut(b *testing.B) {
 	}{{"first", 0}, {"after", 1}} {
 		for _, k := range []uint32{1, 4} {
 			b.Run(fmt.Sprintf("work=%s/k=%d", mode.name, k), func(b *testing.B) {
+				// **Every iteration's sum is checked, not only the witness's** (the chair's ruling of
+				// 2026-10-17 on the `after` rows' gain). The sum is k*iters only if every callee ran its
+				// countdown and its result was stored, so an iteration that skipped work fails here rather
+				// than timing as a faster one.
+				want := k * fanoutIters
 				for b.Loop() {
-					if _, err := in.CallValues("go", canon.U32(k), canon.U32(mode.v), canon.U32(fanoutIters)); err != nil {
+					res, err := in.CallValues("go", canon.U32(k), canon.U32(mode.v), canon.U32(fanoutIters))
+					if err != nil {
 						b.Fatalf("go: %v", err)
+					}
+					if v, ok := res[0].U32(); !ok || v != want {
+						b.Fatalf("go(%d, %d, %d) = %v, want u32 %d: a callee's work or its store was skipped",
+							k, mode.v, fanoutIters, res, want)
 					}
 				}
 			})
