@@ -139,10 +139,21 @@ fill)
 	;;
 '')
 	headsha=$(git rev-parse HEAD)
-	if ! prs=$(gh api "repos/{owner}/{repo}/commits/$headsha/pulls" --jq '.[] | select(.state == "open" and .head.sha == "'"$headsha"'") | .number' 2>&1); then
-		echo "FAIL  could not ask the tracker which PR has HEAD ($headsha) as its head: $(printf '%s' "$prs" | cut -c1-200)"
+	err=$(mktemp)
+	if ! prs=$(gh api "repos/{owner}/{repo}/commits/$headsha/pulls" --jq '.[] | select(.state == "open" and .head.sha == "'"$headsha"'") | .number' 2>"$err"); then
+		# **An unpushed HEAD is an answer, not a failed question.** GitHub says "No commit found for SHA" for a
+		# commit it has never seen, and no PR can have such a commit as its head. `make ci` runs before the
+		# push, so treating this as a transport failure made the gate red on every unpushed commit (its first run).
+		if grep -q 'No commit found for SHA' "$err"; then
+			rm -f "$err"
+			echo "ratiocheck: HEAD ($(git rev-parse --short HEAD)) is not on the remote, so no PR has it as its head"
+			exit 0
+		fi
+		echo "FAIL  could not ask the tracker which PR has HEAD ($headsha) as its head: $(tr '\n' ' ' <"$err" | cut -c1-200)"
+		rm -f "$err"
 		exit 1
 	fi
+	rm -f "$err"
 	if [ -z "$prs" ]; then
 		echo "ratiocheck: no open PR has HEAD ($(git rev-parse --short HEAD)) as its head, so no body to check"
 		exit 0

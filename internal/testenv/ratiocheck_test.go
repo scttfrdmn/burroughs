@@ -163,6 +163,34 @@ func TestRatioCheckRefusesAFigureCarriedFromAnotherPR(t *testing.T) {
 		})
 	}
 
+	// The no-argument mode, which `make ci` runs. Its first run went red on an unpushed HEAD: GitHub's
+	// "No commit found for SHA" is an answer (no PR can have that head), and it was scored as a failed fetch.
+	t.Run("no_args_an_unpushed_head_has_no_pr", func(t *testing.T) {
+		const unpushed = "#!/bin/sh\necho 'gh: No commit found for SHA: abc (HTTP 422)' >&2\nexit 1\n"
+		out, code := run(t, unpushed, nil)
+		if code != 0 || !strings.Contains(out, "is not on the remote") {
+			t.Fatalf("exit %d; want 0, saying HEAD is not on the remote:\n%s", code, out)
+		}
+	})
+	t.Run("no_args_a_failed_lookup_is_not_a_pass", func(t *testing.T) {
+		if out, code := run(t, failShim, nil); code == 0 || !strings.Contains(out, "could not ask the tracker") {
+			t.Fatalf("exit %d; want non-zero, saying the tracker could not be asked:\n%s", code, out)
+		}
+	})
+	t.Run("no_args_finds_and_checks_the_open_pr", func(t *testing.T) {
+		// The lookup answers PR 1, then the PR queries answer a body carrying another PR's figure, so a
+		// found PR is checked rather than merely found.
+		shim := "#!/bin/sh\ncase \"$*\" in *commits/*) echo 1;; *base.sha*) printf '%s\\n%s\\n' \"$SHIM_BASE\" \"$SHIM_HEAD\";; " +
+			"*body*) cat \"$SHIM_BODY\";; *) exit 1;; esac\n"
+		out, code := run(t, shim, []string{
+			"SHIM_BASE=" + base, "SHIM_HEAD=" + head,
+			"SHIM_BODY=" + bodyFile(t, "- Ratio: engine 0 / instrument 132 (other 131)\n"),
+		})
+		if code == 0 || !strings.Contains(out, "gives 5/3/2") {
+			t.Fatalf("exit %d; want the found PR checked and failed on another PR's figure:\n%s", code, out)
+		}
+	})
+
 	t.Run("a_failed_fetch_is_not_a_pass", func(t *testing.T) {
 		out, code := run(t, failShim, nil, "--pr", "1")
 		if code == 0 || !strings.Contains(out, "could not be fetched") || strings.Contains(out, "equals") {
