@@ -143,7 +143,8 @@ func TestAsyncLiftLoopPinExercisesReentryState(t *testing.T) {
 // end-to-end on the minimal EXIT-only guest (async-lift-exit-synth.wasm — callee calls task.return(42) then
 // returns EXIT, no park). The durable lift task is created, the callee runs on it, task.return resolves it,
 // and EXIT confirms resolution. The resolved value (42) matches the committed wasmtime reading (run()->42);
-// a lift that returned EXIT without task.return traps. gate:async on (the mechanism is off by default).
+// a lift that returned EXIT without task.return traps. gate:async set on explicitly, which has also been its
+// default since the 2026-09-18 flip.
 func TestAsyncLiftExitOnlyResolvesViaTaskReturn(t *testing.T) {
 	t.Setenv("BURROUGHS_ASYNC", "1")
 	b, err := os.ReadFile("testdata/async-lift-exit-synth.wasm")
