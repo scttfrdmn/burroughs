@@ -161,6 +161,18 @@ jobs:
           make spec-ref
           make threads-ref
 
+      # TEMPORARY (the chair's ruling of 2026-10-17, item 1): the merged fence soaked on Windows, 200 readings
+      # of each subtest under -race. Reverted by the next commit of the same PR, so it never lands on main.
+      - name: TEMPORARY soak, the fence's readings 200x under -race
+        shell: bash
+        run: |
+          set +e
+          go test -race -timeout 60m -count=200 -run '^TestZZSoakFence$' -v ./internal/component/ > soak.log 2>&1
+          rc=$?
+          grep -E -- '--- (PASS|FAIL): TestZZSoakFence/' soak.log | sed 's/ (.*//' | sort | uniq -c
+          grep -E -- 'DATA RACE|panic:' soak.log | sort | uniq -c
+          exit $rc
+
       - name: go test -race
         # `-race` needs cgo, and whether `windows-latest` ships a usable C compiler is a question for
         # this run to answer rather than for this comment to assume. On `black3.local` it did not, and

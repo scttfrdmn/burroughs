@@ -333,6 +333,18 @@ jobs:
         # want a copy.
         run: make race
 
+      # TEMPORARY (the chair's ruling of 2026-10-17, item 1): the merged fence soaked, 200 readings of each
+      # subtest under -race on both ubuntu runners. Reverted by the next commit of the same PR, so it never
+      # lands on main. The tally is printed whatever the result, then the test's own exit status is returned.
+      - name: TEMPORARY soak, the fence's readings 200x under -race
+        run: |
+          set +e
+          go test -race -timeout 60m -count=200 -run '^TestZZSoakFence$' -v ./internal/component/ > soak.log 2>&1
+          rc=$?
+          grep -E -- '--- (PASS|FAIL): TestZZSoakFence/' soak.log | sed 's/ (.*//' | sort | uniq -c
+          grep -E -- 'DATA RACE|panic:' soak.log | sort | uniq -c
+          exit $rc
+
       - name: no test declined to answer
         # Suspenders to the harness's belt. The flag makes a skip impossible from
         # inside; this makes it visible from outside, so the two would have to fail
