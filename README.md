@@ -86,14 +86,17 @@ it.
   a guest with no `Preopen` reaches no filesystem, and nothing is visible unless
   named (decision 0083).
 - **The component model is on by default, and its value surface is narrower than
-  its mechanism.** `gate:components` flipped on 2026-09-11 and `gate:async` on
-  2026-09-18, each its own stamped event, and each keeps an env-var rollback
-  (`BURROUGHS_COMPONENTS=0`, `BURROUGHS_ASYNC=0`). `LoadComponent`,
-  `Component.Call` and `Component.Close` are public. What crosses that boundary
-  as a **value** is less: `u32` and `string` today, in both directions;
-  `list<u32>` crosses the engine's own call path with its public constructor
-  landing next; `record` is not in the codec yet. A kind that cannot cross is
-  refused **by name**, never marshalled approximately.
+  its mechanism.** `gate:components` flipped on 2026-09-11, `gate:async` on
+  2026-09-18, and `gate:cm-threads` (phase 1 of the component-model threads
+  proposal) on 2026-10-17. Each was its own stamped event, and each keeps an
+  env-var rollback (`BURROUGHS_COMPONENTS=0`, `BURROUGHS_ASYNC=0`,
+  `BURROUGHS_CM_THREADS=0`). `LoadComponent`, `Component.Call` and
+  `Component.Close` are public. What crosses that boundary as a **value** is
+  less: `u32`, `string`, `list` and `record`, in both directions, since
+  `v0.7.0`; `variant`, `flags` and resource handles do not. A kind that cannot
+  cross is refused **by name**, never marshalled approximately. The open
+  defects on these default-on paths are listed in `CHANGELOG.md`'s `v0.8.0`
+  block.
 - **Threads: the mechanism is on main, the gate is not flipped.** `thread.spawn`,
   futex wait/notify, the safepoint poll, and thread exit/join/detach are
   implemented. `gate:threads` stays off by default, and contract §4's litmus
