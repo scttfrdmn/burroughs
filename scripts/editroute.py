@@ -172,6 +172,7 @@ RULES: tuple[tuple[str, str], ...] = (
     ("replace-all", "`replace_all: true`"),
     ("subst1-discarded", "landing display"),
     ("subst1-chained", "runs whatever its exit status was"),
+    ("publish-chained", "whatever the last one's exit status was"),
     ("sleep-as-wait", "a duration is not a signal"),
     ("inline-write", "an inline interpreter opens"),
     ("in-place-edit", "in place"),
@@ -777,6 +778,66 @@ def dirty_paths(root: str, cwd: str, paths: list[str]) -> list[str]:
     return sorted(set(hits))
 
 
+# --- route 7: a publishing step past a separator that ignores what came before ----------------------------
+#
+# The chair's ruling of 2026-10-17, on the second recurrence after the standing `&&` rule. A refused fill
+# was followed by `… ; gh pr create`, so the PR opened with an unfilled placeholder in its body. Route 6
+# closes this for `subst1.py` only, and the fill was a different script, which is the shape of a rule
+# scoped to its first specimen.
+#
+# The subject is the step that publishes: `git commit`, `git push`, `gh pr create`, `gh pr edit`. Each
+# one makes what came before it durable or public, so **every command before it must have succeeded**.
+# Any `;`, newline (normalised to `;`), `||` or `&` earlier in the command breaks that, wherever it sits:
+# `a ; b && git commit` commits after a failed `a`. `&&` and `|` are not refused. A pipe's status is
+# its own question, and the ruling named `;`.
+PUBLISHING = {("git", "commit"), ("git", "push"), ("gh", "pr create"), ("gh", "pr edit")}
+# `GH_TOKEN=x gh pr edit …`: an assignment prefix is not the command word.
+ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+UNCHECKED_SEPARATORS = (";", "||", "&")
+
+
+def publishing_step(cmdv: list[str]) -> str | None:
+    """`git commit` / `git push` / `gh pr create` / `gh pr edit` if this simple command is one, else None."""
+    head = 0
+    while head < len(cmdv) and (cmdv[head] in SHELL_KEYWORDS or ENV_ASSIGNMENT.match(cmdv[head])):
+        head += 1
+    if head >= len(cmdv):
+        return None
+    word = basename(cmdv[head])
+    a = cmdv[head + 1 :]
+    if word == "git":
+        # Global options precede the subcommand, as in `git_discard_subject`.
+        while a:
+            if a[0] in ("-C", "-c") and len(a) >= 2:
+                a = a[2:]
+            elif a[0].startswith("-"):
+                a = a[1:]
+            else:
+                break
+        if a and ("git", a[0]) in PUBLISHING:
+            return f"git {a[0]}"
+    if word == "gh" and len(a) >= 2 and ("gh", f"{a[0]} {a[1]}") in PUBLISHING:
+        return f"gh {a[0]} {a[1]}"
+    return None
+
+
+def publish_past_unchecked(tokens: list[str]) -> str | None:
+    """The refusal for a publishing step that follows an unchecked separator, or None."""
+    seen: str | None = None
+    for cmdv, sep in simple_commands_with_sep(tokens):
+        step = publishing_step(cmdv)
+        if step is not None and seen is not None:
+            return (
+                f"`{step}` comes after `{seen}`, which runs the next command whatever the last one's exit "
+                "status was — so a refused or failed step before it is published anyway. Chain every step "
+                "before a commit, push or PR edit with `&&`"
+            )
+        if sep in UNCHECKED_SEPARATORS and seen is None:
+            # A newline arrives here as `;` (separate_commands), so the message names both.
+            seen = "; (or a newline)" if sep == ";" else sep
+    return None
+
+
 def findings(cmd: str, root: str, cwd: str) -> list[str]:
     """Every reason this command must not run, as sentences. Empty means allow."""
     text, bodies = lift_heredocs(cmd)
@@ -814,6 +875,10 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     # because every judgement below depends on it — and because the version that skipped this step refused a
     # `cd /tmp/mfprobe && printf … > Makefile` as overwriting the tracked root `Makefile`.
     bases, moved = cd_base(tokens, cwd)
+
+    # Route 7 is judged before the subst1.py block, because that block returns early. Its reason is added
+    # on that path only when route 6 has not already refused the same separator, so one slip is one reason.
+    published = publish_past_unchecked(tokens)
 
     # subst1.py's own invocation is the one explicit exemption: it IS a permitted route, and it
     # writes its target by design. But the exemption is conditional on the route still being the route.
@@ -878,7 +943,12 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
                     "happens only if the edit did"
                 )
                 break
+        if published is not None and not any("runs whatever its exit status was" in r for r in reasons):
+            reasons.append(published)
         return reasons
+
+    if published is not None:
+        reasons.append(published)
 
     # --- route 1: redirection into a tracked path, including `tee` -----------------------------
     for i, t in enumerate(tokens):
@@ -1124,7 +1194,9 @@ def main() -> int:
         for r in reasons
         if "would DISCARD uncommitted changes" in r or "could not be checked" in r
     ]
-    editing = [r for r in reasons if r not in sleeping and r not in discarding]
+    # Route 7 is about sequencing, not editing, so it gets its own guidance too.
+    publishing = [r for r in reasons if "whatever the last one's exit status was" in r]
+    editing = [r for r in reasons if r not in sleeping and r not in discarding and r not in publishing]
 
     msg = "editroute: REFUSED.\n\n" + "".join(f"  * {r}\n" for r in reasons) + "\n"
     if editing:
@@ -1153,6 +1225,14 @@ def main() -> int:
             "      LOGGED, so a deliberate discard leaves a trace rather than being invisible.\n\n"
             "  Coverage is a LIMIT, not a guarantee: this matches command text, so it sees a direct\n"
             "  invocation and not a script that runs git internally, a shell function, or an alias.\n\n"
+        )
+    if publishing:
+        msg += (
+            "  A commit, push or PR edit publishes what came before it, so it must run only if every\n"
+            "  earlier step succeeded. Twice a refused fill was followed by `… ; gh pr create`, and the\n"
+            "  PR opened with the placeholder still in its body (the chair's ruling of 2026-10-17).\n\n"
+            "  Re-issue the WHOLE command with `&&` between every step. A refusal here ran nothing, so\n"
+            "  re-running only its tail would skip the steps it was meant to follow.\n\n"
         )
     if sleeping:
         msg += (

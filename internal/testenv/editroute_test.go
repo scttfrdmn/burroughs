@@ -351,6 +351,66 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			cmd:  "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n && git commit -q -m x",
 			deny: false,
 		},
+		// Route 7 (the chair's ruling of 2026-10-17): a publishing step after `;`, a newline, `||` or `&`.
+		// The specimen is verbatim: a refused fill, then `; gh pr create`, and the PR opened unfilled.
+		// **Neuter, run:** `publish_past_unchecked` returning None fails the five deny arms below, plus
+		// `TestEveryRefusalReasonHasARule/publish_chained`, and nothing else.
+		{
+			name:   "gh_pr_create_after_a_semicolon_is_refused",
+			cmd:    "scripts/ratiocheck.sh fill /tmp/b.md ; gh pr create --body-file /tmp/b.md",
+			deny:   true,
+			want:   "`gh pr create` comes after `; (or a newline)`",
+			routes: []string{"&&", "WHOLE command"},
+		},
+		{
+			// The `;` need not be the separator just before the step: `b` runs and then the commit, after
+			// a failed `a`. This is also the gap route 6 left, which stops reading at subst1's first `&&`.
+			name:   "a_commit_after_an_earlier_semicolon_is_refused",
+			cmd:    "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n && make fmt ; git commit -q -m x",
+			deny:   true,
+			want:   "`git commit` comes after",
+			routes: []string{"&&"},
+		},
+		{
+			name:   "a_push_on_the_next_line_is_refused",
+			cmd:    "make fmt\ngit -C . push -q origin x",
+			deny:   true,
+			want:   "`git push` comes after",
+			routes: []string{"&&"},
+		},
+		{
+			name:   "gh_pr_edit_past_or_with_an_env_prefix_is_refused",
+			cmd:    "make fmt || true && GH_TOKEN=x gh pr edit 1 --body-file /tmp/b.md",
+			deny:   true,
+			want:   "`gh pr edit` comes after `||`",
+			routes: []string{"&&"},
+		},
+		{
+			name:   "a_commit_after_a_backgrounded_step_is_refused",
+			cmd:    "make fmt & git -c a=b commit -q -m x",
+			deny:   true,
+			want:   "`git commit` comes after `&`",
+			routes: []string{"&&"},
+		},
+		{
+			// The allow arms. `&&` throughout, including after a pipe, is what the rule asks for.
+			name: "publishing_steps_chained_with_and_are_permitted",
+			cmd:  "make fmt && git commit -q -m x && git push 2>&1 | tail -1 && gh pr create -t t",
+			deny: false,
+		},
+		{
+			// A `;` AFTER the publishing step, or around steps that publish nothing, is not the subject.
+			name: "a_semicolon_after_the_commit_or_around_non_publishing_steps_is_permitted",
+			cmd:  "git commit -q -m x ; echo done ; gh pr view 1 ; gh pr checks 1",
+			deny: false,
+		},
+		{
+			// A heredoc's body is content: the `;` in the message and the newlines around it separate nothing.
+			name: "a_heredoc_commit_message_with_a_semicolon_is_permitted",
+			cmd: "git add -A && git commit -q -F - <<'EOF' && git log --oneline -1\n" +
+				"subject; with a semicolon\n\nbody\nEOF",
+			deny: false,
+		},
 		{
 			// A LINE CONTINUATION is one command, and the newline-to-`;` normalisation nearly broke exactly
 			// the check it was added beside. Blanket-replacing the newline gives `sed -i '' s/a/b/ \ ; CHANGELOG.md`

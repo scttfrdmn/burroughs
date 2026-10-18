@@ -132,6 +132,19 @@ from the three obviously-wrong `#534` trailers to all eleven.
     `"0"`.
   - **No mechanism rides the flip.**
 
+- **The edit-route hook refuses a commit, push or PR edit that follows `;`, a newline, `||` or `&`** (the
+  chair's ruling of 2026-10-17). This was the second recurrence after the standing `&&` rule: a refused fill
+  was followed by `… ; gh pr create`, and the PR opened with its placeholder unfilled.
+  - **The rule:** route 7 of `scripts/editroute.py` covers `git commit`, `git push`, `gh pr create` and
+    `gh pr edit`. It refuses any of them when one of those separators appears anywhere earlier in the
+    command, because the steps before it then run whatever their exit status. The refusal says to re-issue
+    the whole command with `&&`, and it logs as `publish-chained`.
+  - **What it closes beyond the specimen:** route 6 covered only `subst1.py`, and it stopped reading at
+    its first `&&`. So `subst1.py … && make fmt ; git commit` passed, and is now refused.
+  - **Not refused:** `&&`, a pipe, a `;` after the publishing step, and a heredoc message containing `;`.
+  - **Neuter, run:** the route returning nothing fails its five deny arms and its rule-slug arm, and
+    nothing else.
+
 - **A PR body's quoted ratio is computed in one step and checked by the body sweep** (the chair's ruling
   of 2026-10-17). This is the third ratio slip in one cycle: #1039's body carried #1038's figure, because
   a blocked command left an old substitution file for the next run to read.
