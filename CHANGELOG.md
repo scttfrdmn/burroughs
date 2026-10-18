@@ -118,6 +118,19 @@ from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
 
+- **The Windows triage map is in the tree as data, and a control flags any row whose issue has closed**
+  (the chair's order of 2026-10-17).
+  - **The map:** `.github/windows-triage.tsv` has one row per recurring failure of the `windows`
+    workflow, giving the bare test name and its issue. Its eight rows came from the actor's session
+    memory, where no control could see them.
+  - **The control:** `scripts/triagecheck.sh` (`make triagecheck`, run inside `make cite` and by CI's
+    `citations` job) asks the tracker for each issue's state. It fails on any closed or unresolved issue,
+    on a fetch that fails, on a malformed or repeated row, and on an empty map.
+  - **The witness:** `TestTriageCheckFlagsAMapRowWhoseIssueHasClosed` drives it with a `gh` shim, and
+    parses the committed map on every `make test`. **Neuter, run:** skipping the `open` comparison fails
+    the closed-issue arm alone.
+  - **Not in this entry:** making `ciwatch.sh` read the map is #1037, which stays parked.
+
 - **#978's oracle, committed before any engine change** (behind `gate:cm-threads`).
   - **The fixture:** `cmthreads/sync-enters-past-suspended.wasm`. An async task's implicit Thread suspends
     mid-callee holding `exclusive_thread`, and a sync-typed call, the parent's `f` called back by a nested

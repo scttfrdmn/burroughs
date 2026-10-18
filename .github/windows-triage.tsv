@@ -1,0 +1,19 @@
+# The Windows triage map: each recurring failure of the `windows` workflow's test job, and the issue it is.
+#
+# The chair's rule: every recurring Windows failure maps to an issue. A failing name that is not in this
+# file is new, and it gets classified and filed before a merge. The map is read by hand for now. Making
+# `ciwatch.sh` read it is #1037, which is parked. `scripts/triagecheck.sh` (`make triagecheck`, run inside
+# `make cite` and by CI's `citations` job) fails when any issue below has closed. A closed issue means the
+# failure is either fixed, so its row should go, or still recurring with nothing tracking it.
+#
+# One row per test name, tab-separated: the bare test name as `--- FAIL:` prints it, the issue numbers
+# (comma-separated, without a hash), and a note. A row whose issues are all open is current.
+# Moved here from the actor's session memory, where no control could see it (the chair's order of 2026-10-17).
+TestCILockAllowsOneGateAtATime	1000	no pgid on Windows: a test premise
+TestCIWatchTakesEachJobClassFromItsOwnRun	947	unescaped paths in the verdict JSON
+TestEditRouteHookRefusesBashEditsOfTrackedFiles	1001	mode 0o000 is readable: a test premise
+TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork	1002	the guard allows discards: a real failure, not a premise
+TestPreCommitRefusesCommitsOnTheDefaultBranch	944	POSIX exec and permission semantics
+TestShellAndGoAgreeOnTheSuitePopulation	944	POSIX exec and permission semantics
+TestStopBringsATailCallLoopToASafepoint	946,896	the 30s wait after Resume; also times out under race on amd64
+TestClause3GCAcrossTwoAgents	982	unaligned writeNum against atomicCell.load; intermittent
