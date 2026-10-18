@@ -1,0 +1,53 @@
+# 0103 — A sync cross-component call crosses as component values, lifted from one memory and lowered into the other
+
+Date: 2026-10-18 · Status: **proposed — held for chair review** (the chair's ruling of 2026-10-18, item 4: *"The conformant fix is the full adapter … Write that as an ADR draft held for chair review"*). Nothing below is built. The interim named refusal, `syncSpill` in `internal/component/cross_component.go`, lands in #995's interim PR ahead of this draft, and stays until this is accepted and built.
+
+## Context
+
+A sync `canon lower` whose callee is a sibling's sync `canon lift` is bound by `bindCrossComponent`'s sync arm (`internal/component/cross_component.go`). The arm hands the lower's flat core words to the callee's core func and returns the callee's flat results. That is correct only when every value is a scalar or a handle and nothing spills. Two failures follow, both measured:
+
+| fixture | shape | wasmtime 49.0.3 | Burroughs before the interim | face |
+|---|---|---|---|---|
+| `sync-spill-string.wasm` | `get: func() -> string` | 3, 10 of 10 | `interp: "get" takes 0 arguments, got 1` | loud: the result spills |
+| `sync-string-param.wasm` | `first: func(s: string) -> u32` | 97, 10 of 10 | **120** | **silent**: the string's words point into the caller's memory, and the callee read its own |
+
+**The second row was not in #995.** It was found writing this ADR. A `string` is two flat words, so it does not spill, but it carries a pointer, and no pointer means the same thing in two memories. The interim refusal was widened to cover it, and the case is recorded on #995.
+
+**The reference does this at the value level** (pin 2e7895c), and the two halves are separate functions:
+
+- `def:canon_lower`'s `on_start` lifts the caller's arguments with `def:lift_flat_values`, from the caller's flat args, or from the caller's memory when they exceed `def:MAX_FLAT_PARAMS`.
+- `def:canon_lift` lowers them into the callee with `def:lower_flat_values` through the callee's options: its memory, and its realloc for any string or list. After the core call it lifts the results with `def:lift_flat_values` against `def:MAX_FLAT_RESULTS`, then calls `post_return` if the lift has one.
+- `def:canon_lower`'s `on_resolve` lowers the results into the caller with `def:lower_flat_values`, through the caller's realloc, at the caller's retptr when they spill.
+
+So a component value is the only thing that crosses. Nothing in either memory is addressed from the other side.
+
+## Options
+
+**A. A value-level adapter, built from the codec Burroughs already has.** The sync arm lifts the caller's arguments to `canon.Value`s with the lower's options, and lowers them into the callee with the lift's options. Strings and lists go through the callee's realloc, which is the path #902 built for a host `Call` with a string argument (`pendingLower`, run on the callee's entry). After the core call, the arm lifts the results from the callee's memory (`canon.LoadVia` for a spilled result), and lowers them into the caller's memory through the caller's realloc at the retptr (`canon.StoreVia`, as the async lower's `apply` does). This mirrors the reference function for function.
+
+**B. A byte-level copy.** Copy the bytes a value reaches from one memory to the other, rewriting pointers as it goes. It needs the same type walk as A to find the pointers, so it saves nothing structural. It also skips the codec's validation, such as a string's UTF-8 check and a char's range, which the reference performs on lift. **Rejected:** it is A without its checks.
+
+**C. Keep the named refusal.** This is honest, but it is a limit on a default-on path (`gate:components`). wasmtime runs both fixtures, and real toolchains emit sync string calls between composed components. **Rejected as the end state.** It stays as the interim until A lands.
+
+## Choice
+
+**A**, with these constraints.
+
+1. **`post-return`.** Burroughs refuses a lift carrying `post-return` at load, and that refusal stands. So a sync callee lifted with `post-return` still does not load, and A frees nothing. A callee with no `post-return` leaves its result buffer allocated, as the reference does. Carrying `post-return` is its own decision, out of scope here.
+2. **The order of the reallocs matches the reference.**
+   - The callee's realloc runs for the arguments, **on the callee's entry**, as #902 does, so the allocation and the call are one exclusive region.
+   - The caller's realloc runs for the result, **inside the lower, before it returns**, under the caller's run slot. That is the async `apply`'s discipline, with no engine lock held across guest code (B-MM-3).
+3. **may_leave.** Both reallocs run with `may_leave = False` (`def:LiftLowerContext.reallocate`), and #990 already marks that site.
+4. **A trap in either side's realloc, or in the callee, is the lower's trap.** It traps the caller's task, the subset of the reference's whole-store trap that #1040 records.
+5. **The refusal is deleted as A lands, shape by shape.** For each shape A carries, `syncSpill` stops refusing it, and its fixture's row moves from refused to a value equal to wasmtime's. A shape A does not yet carry, such as resources crossing as handles, stays refused by name.
+
+## Consequences
+
+- **Witnesses owed**, each with its neuter:
+  - `sync-spill-string.wasm` reads 3, and `sync-string-param.wasm` reads 97.
+  - A spilled-parameter fixture, with more than 16 flat values.
+  - A record with a string field, in both directions.
+  - A `list<string>` result, which needs a realloc call per element in the caller.
+  - A realloc that traps in each direction, read on wasmtime first.
+- **The forecast, to be registered before building:** the whole tree stays green (28 packages), and `switch.wasm` and `BenchmarkFanOut` are unchanged under `make lab-ab`, because neither crosses a sync string.
+- **What it does not decide:** resources across the boundary, `post-return`, and the async lower of a sync lift returning a string. That last one currently refuses through `crossComponentValue`'s scalar arm after #1050, and it is the same adapter's other caller, so it is named here to be built with A.
