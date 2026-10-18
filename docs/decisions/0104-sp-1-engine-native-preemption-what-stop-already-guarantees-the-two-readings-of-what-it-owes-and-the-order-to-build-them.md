@@ -1,6 +1,6 @@
 # 0104 — SP-1, engine-native preemption: what `Stop` already guarantees, the two readings of what it owes, and the order to build them
 
-Date: 2026-10-18 · Status: **proposed — held for chair review** (the chair's ruling of 2026-10-18, item 5: *"the SP-1 recon as an ADR draft held for review"*). **A recon: no engine code.** Every figure below is either a record cited by date or marked **unmeasured**. The facts were gathered read-only at Burroughs 82d722a and fork `wasmpreempt/phase4` d147ddc568.
+Date: 2026-10-18 · Status: **accepted, with three rulings**: the chair's ruling, in session, 2026-10-18 (the second of the day): *"ADR 0104, the SP-1 recon: accepted, with three rulings … Merge … as accepted, with these three rulings appended to the ADR."* The rulings are in the section at the end, and they answer *Decisions this draft needs*. Drafted under the first ruling of that day, item 5: *"the SP-1 recon as an ADR draft held for review"*. **A recon: no engine code.** Every figure below is either a record cited by date or marked **unmeasured**. The facts were gathered read-only at Burroughs 82d722a and fork `wasmpreempt/phase4` d147ddc568.
 
 ## Context
 
@@ -83,3 +83,24 @@ Date: 2026-10-18 · Status: **proposed — held for chair review** (the chair's 
 - **The chair's:** whether the SP-1 litmus case may be written under this slice while #10 stays unscheduled. By Scott's #670 ruling the battery is unscheduled, and SP-1's witness is one of its cases. So building A with its witness schedules one case of a parked battery. **That ruling is Scott's to vary, so it is named here rather than assumed.**
 - **The chair's:** whether ADR 0087's *"GC-STW trigger → `Stop`"* is corrected by amendment.
 - **Scott's, if reading (b) is ever wanted:** the guest-entry API.
+
+## Accepted, 2026-10-18, with three rulings
+
+**The chair's ruling, in session, 2026-10-18, accepted this recon with three rulings.** They are carried here verbatim in substance, and they answer *Decisions this draft needs* above.
+
+1. **Reading (a), the host stopping wasm threads, is SP-1 as the contract writes it. Build it.**
+   - **The forecast:** a numeric arrival bound, under a configurable deadline, with the worst case measured by instruction class.
+   - **The polls:** inside the unbounded loops that have none, meaning the bulk memory ops and the adapter copies, including ADR 0103's.
+   - **The witness:** a tight loop that makes no calls must reach a safepoint within the bound.
+   - **The neuter:** removing the back-edge poll must make it miss the bound and fail, not hang.
+   - **The cost:** poll overhead measured with `make lab-ab` against the janus baseline.
+2. **The witness conflict resolves without the battery.** SP-1's own litmus case can be a standalone witness now. Scheduling the §4 battery as a whole stays parked under #10, and building one case does not schedule it.
+3. **Reading (b), the Go guest's GC stop-the-world, is a contract gap: recorded here as unmet.**
+   - Today the fork does exactly what SP-1 says a guest must not need: it self-instruments with the `resched` checks on its `wasmSafepoint` word.
+   - Closing the gap means a guest-facing import, a stop request modelled on `burroughs spawn`. That is contract surface, so it is Scott's.
+   - After (a) lands, Scott gets one concrete proposal, decided unless he objects: the import's shape, the contract amendment text, and the fork-side change.
+   - **None of (b) is built before he has seen it.**
+
+**On ADR 0087:** its *"GC-STW trigger → `Stop`"* binding exists in neither tree. A dated correction is appended to 0087, citing this recon's search, with 0087's body unedited.
+
+**The order the ruling sets:** ADR 0103's adapter, a default-path defect, is built first, then reading (a).
