@@ -63,3 +63,26 @@ A `GEOEXPERIMENT`-gated real-threads experiment over a p3-async base, in the for
 - **No `gate:threads`/`gate:async` flip rides this ADR** — the flips are Scott's stamp-tier events with pre-registered forecasts; `gate:threads`'s flip is unscheduled (#670). This charter opens the tier; it does not flip a gate.
 - **No engine code lands on this ADR alone.** Its stamp, and `GEOEXPERIMENT`'s creation, are Scott's.
 - **What must not start:** a real-threads slice before the single-threaded component slice is green; any claim that the battery certifies the threaded memory model; any dependency on an upstream wasip3 base landing.
+
+## Correction, 2026-10-18: the GC stop-the-world → `Stop` binding exists in neither tree
+
+Appended by the chair's ruling of 2026-10-18, on ADR 0104: *"It's an accepted record, so append a dated correction to it, citing the 0104 recon's search. Don't edit its body."* The body above stands as the record of what was chartered. This section records what is true.
+
+**This ADR states, in five places, that the fork's GC stop-the-world binds to the engine's `Stop`:**
+- *Is* (*"GC stop-the-world → an engine `Stop`"*);
+- the threaded-tier claim (*"its GC stops the world via `Stop`"*);
+- the entry conditions (*"`Stop`/`Resume` (SP-1)"* as a bound mechanism);
+- the exit conditions (*"the guest's GC completing a stop-the-world through host safepoints (`Stop`/`Resume`, §3)"*);
+- *Where it lives* (*"GC-STW trigger → `Stop`"*).
+
+**No such binding exists, in either tree.** [ADR 0104](0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)'s recon searched for it:
+- **No non-test Burroughs code calls `Instance.Stop`.** The search was every `.Stop(` call outside `_test.go`, excluding timers.
+- **The fork's only engine import is `burroughs spawn`.** Nothing in `wasmpreempt/phase4` calls into the engine to stop the world.
+- **`TestClause3GCAcrossTwoAgents` does not call `Stop`.**
+
+**What the fork does instead:** the Go runtime stops the world among its own threads, through the compiler-inserted back-edge poll on its `wasmSafepoint` word (the `insert resched checks` pass, enabled by `GOEXPERIMENT=burroughsspawn`). This is cooperative end to end. Its runtime's `preemptM` is empty and `preemptMSupported` is `false`, so the engine's safepoints take no part. The correction is also recorded on #781 (comment of 2026-10-18).
+
+**Consequences for the record above:**
+- **Exit condition 3 is met as observed, not as described.** The guest's GC does complete a stop-the-world across two agents, which is what `TestClause3GCAcrossTwoAgents` witnesses, but through its own polls and not through host safepoints. The exit condition's parenthesis, *"(`Stop`/`Resume`, §3)"*, describes a mechanism that is not the one in use.
+- **This is a contract gap, recorded in ADR 0104 as unmet.** SP-1's last sentence says *"the guest runtime MUST NOT need to self-instrument its own code generation to be stoppable"*, and the fork self-instruments. Closing it needs a guest-facing stop-request import, which is contract surface and so Scott's. ADR 0104 records the proposal's order: it comes after SP-1's host half lands, and none of it is built before Scott has seen it.
+- **The bound recorded on #781 holds:** clause 3 is a claim about cooperative preemption.
