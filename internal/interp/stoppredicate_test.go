@@ -3,6 +3,7 @@
 package interp
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -87,8 +88,14 @@ const (
 	stopTailFills = 60
 )
 
-// unpollableTail is `stopTailFills` copies of one `memory.fill` over most of a 64-page memory: straight
-// line, no branch, no call, no tail call, so `poll` is unreachable from the first byte of it to the last.
+// unpollableTail is straight line, no branch, no call and no tail call, with no bulk instruction larger than
+// one chunk, so `poll` is unreachable from the first byte of it to the last.
+//
+// **Each fill is exactly one `bulkChunk`, and that is now load-bearing.** This was `stopTailFills` fills of
+// 4,128,768 bytes each, written when a bulk instruction had no poll inside it. SP-1's build (ADR 0104) gave
+// every fill a poll between 64 KiB chunks, so those fills became pollable and this tail stopped being a
+// written window. The same bytes in fills of one chunk each (63 per original fill) keep it unpollable,
+// because a fill of `n <= bulkChunk` finishes before its first poll would run.
 //
 // **It is a written window and not a timed one, which is the property the whole file rests on.** A loop
 // long enough to take the same wall-clock time would reach a back-edge every iteration, so the guest would
@@ -96,8 +103,8 @@ const (
 // The measured extent on the dev box is a few hundred milliseconds per witness; nothing asserts that
 // figure, and nothing needs to — what is asserted is that a poll cannot happen, which is structural.
 func unpollableTail() string {
-	return strings.Repeat(
-		"(memory.fill (i32.const 65536) (i32.const 7) (i32.const 4128768))\n", stopTailFills)
+	return strings.Repeat(fmt.Sprintf("(memory.fill (i32.const 65536) (i32.const 7) (i32.const %d))\n", bulkChunk),
+		stopTailFills*(4128768/bulkChunk))
 }
 
 // stopPlainTailModule is C2's guest and needs **no gate at all**: unshared memory, no atomics, no spawn.
