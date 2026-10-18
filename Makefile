@@ -61,7 +61,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: ci ci-gates watref all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures refcite canon-ref triagecheck
+.PHONY: ci ci-gates watref all build test race witnesses vet space hooks test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ab lab-ab lab-test ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus canon-fixtures refcite canon-ref triagecheck ratiocheck
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -965,7 +965,15 @@ cite:
 	@./scripts/citecheck.sh $(CITE)
 	@$(MAKE) --no-print-directory refcite
 	@$(MAKE) --no-print-directory triagecheck
+	@$(MAKE) --no-print-directory ratiocheck
 
+# ratiocheck — a PR body's quoted ratio equals what `scripts/ratio.sh` prints for the PR's merge base..head
+# (the chair's ruling of 2026-10-17, after a stale substitution file carried #1038's figure into #1039's
+# body). `make ratiocheck PR=<n>` checks PR n; with no PR it checks an open PR whose head is HEAD, and says
+# so when there is none. Fill a draft with `scripts/ratiocheck.sh fill <body-file>`, which computes and
+# substitutes in one step.
+ratiocheck:
+	@./scripts/ratiocheck.sh $(if $(PR),--pr $(PR))
 # triagecheck — every issue in the Windows triage map (`.github/windows-triage.tsv`) is still open (the
 # chair's order of 2026-10-17, which moved the map into the tree as data). A closed issue means a row is
 # stale; a fetch that fails is a failure, never a pass. Reading the map from `ciwatch.sh` is #1037, parked.

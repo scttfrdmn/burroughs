@@ -26,7 +26,7 @@ says what it now requires and what it gives up.
 
 **ADR 0100 is accepted and nothing is built yet.** Phase 1 of the shared-everything-threads (🧵) family —
 the eight forms `0x26`–`0x2d` — will be modelled behind a new gate `gate:cm-threads`
-(`BURROUGHS_CM_THREADS`), default off (flipped on 2026-10-17; see Changed), requiring `gate:async`; phase 2 (`0x40`–`0x42`) stays refused by
+(`BURROUGHS_CM_THREADS`), default off (flipped on 2026-10-17; see Added), requiring `gate:async`; phase 2 (`0x40`–`0x42`) stays refused by
 name. Each form lands only once it has a wasmtime reading committed under `testdata`. Chair's ruling, in
 session, 2026-10-11, under Scott's stated deferral. Not a Keep a Changelog group for the same reason the
 record correction below is not one — the spec has six and "a decision was taken" is none of them — and
@@ -117,6 +117,36 @@ approved and when. Found on the chair's #938 review, which also ordered the swee
 from the three obviously-wrong `#534` trailers to all eleven.
 
 ### Added
+
+- **`gate:cm-threads` is ON by default: the flip** (ADR 0100's 2026-10-17 amendment; Scott's stamp,
+  forecast and rollback are on [#999](https://github.com/scttfrdmn/burroughs/issues/999)). A component
+  that uses the eight phase-1 🧵 built-ins (`0x26`–`0x2d`) is now admitted without opting in. It still
+  needs `gate:async`, which is also default-on. **To turn it off, set `BURROUGHS_CM_THREADS=0`.** A
+  component using a modelled 🧵 built-in is then refused by name with `ErrCMThreadsGated` (CLI exit 6),
+  and the refusal now says to unset the variable rather than set it to `1`. A component that uses no 🧵
+  built-in is unaffected. Phase 2 (`0x40`–`0x42`) stays refused by name.
+  - **The forecast, re-taken on the merged tree:** the whole test tree with neither variable set, 28
+    packages ok and 0 failing.
+  - **The rollback:** revert the one flip commit. `TestTheGateMatrixSaysWhichGateIsMissing` witnesses both
+    halves (unset admits, `=0` refuses by name). Three tests that used `""` as gate-off are re-pointed to
+    `"0"`.
+  - **No mechanism rides the flip.**
+
+- **A PR body's quoted ratio is computed in one step and checked by the body sweep** (the chair's ruling
+  of 2026-10-17). This is the third ratio slip in one cycle: #1039's body carried #1038's figure, because
+  a blocked command left an old substitution file for the next run to read.
+  - **The fill:** `scripts/ratiocheck.sh fill <body-file>` runs `ratio.sh` and substitutes the body's one
+    `RATIO` token in the same step, with no intermediate file, and prints the line it landed.
+  - **The check:** `make ratiocheck PR=<n>`, run inside `make cite` and by CI's `citations` job on every
+    PR event, including an edit. It fails unless the Board's single `- Ratio:` line quotes the engine,
+    instrument and other counts that `ratio.sh` prints over the PR's merge base..head. It also fails on a
+    missing or repeated Ratio line, and on a fetch that fails.
+  - **The range is the merge base**, because `ratio.sh <base> <head>` diffs its endpoints, so
+    `origin/main HEAD` would count main's later lines against a PR once main moves.
+  - **The witness:** `TestRatioCheckRefusesAFigureCarriedFromAnotherPR`, over a two-commit repository it
+    builds. **Neuter, run:** a comparison that always matches fails the arm where a body carries another
+    PR's figure, and nothing else. On the tree, #1038's body checks clean (12/25/53), and so does #1039's
+    corrected body (0/132/131).
 
 - **The Windows triage map is in the tree as data, and a control flags any row whose issue has closed**
   (the chair's order of 2026-10-17).
@@ -684,22 +714,6 @@ from the three obviously-wrong `#534` trailers to all eleven.
   undocumented behaviour something depends on is one refactor away from being removed as dead.
 
 ### Changed
-
-- **`gate:cm-threads` is ON by default: the flip** (ADR 0100's 2026-10-17 amendment; Scott's stamp,
-  forecast and rollback are on [#999](https://github.com/scttfrdmn/burroughs/issues/999)). A component
-  that uses the eight phase-1 🧵 built-ins (`0x26`–`0x2d`) is now admitted without opting in. It still
-  needs `gate:async`, which is also default-on. **To turn it off, set `BURROUGHS_CM_THREADS=0`.** A
-  component using a modelled 🧵 built-in is then refused by name with `ErrCMThreadsGated` (CLI exit 6),
-  and the refusal now says to unset the variable rather than set it to `1`. A component that uses no 🧵
-  built-in is unaffected. Phase 2 (`0x40`–`0x42`) stays refused by name.
-  - **The forecast, re-taken on the merged tree:** the whole test tree with neither variable set, 28
-    packages ok and 0 failing.
-  - **The rollback:** revert the one flip commit. `TestTheGateMatrixSaysWhichGateIsMissing` witnesses both
-    halves (unset admits, `=0` refuses by name). Three tests that used `""` as gate-off are re-pointed to
-    `"0"`.
-  - **No mechanism rides the flip.**
-  - **Filed under Changed rather than Added**, by the chair's order for this flip, although the convention
-    on this page puts gate flips under Added.
 
 - **Accepted, not yet built: ADR 0095's amendment for #1020's class** (the chair's ruling of 2026-10-17). No
   engine behaviour changes in this entry.
