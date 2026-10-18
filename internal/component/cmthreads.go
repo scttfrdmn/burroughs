@@ -33,11 +33,13 @@ import (
 // policies, so two tables rather than one with a flag.
 const cmThreadsGateEnv = "BURROUGHS_CM_THREADS"
 
-// cmThreadsEnabled reports whether `gate:cm-threads` is on. **Off is the default**, which is the opposite
-// of `componentsEnabled` and `asyncEnabled`: both of those read `!= "0"` because their flips happened
-// (2026-09-11 and 2026-09-18). This one has not flipped and will not until each modelled form has a
-// committed oracle, so it reads `== "1"` — an explicit opt-in.
-func cmThreadsEnabled() bool { return os.Getenv(cmThreadsGateEnv) == "1" }
+// cmThreadsEnabled reports whether `gate:cm-threads` is on. **On is the default since the flip** (Scott's
+// stamp, recorded on #999, 2026-10-17), so it reads `!= "0"`, as `componentsEnabled` and `asyncEnabled` do
+// since theirs (2026-09-11 and 2026-09-18). `BURROUGHS_CM_THREADS=0` turns it off, and that is the
+// rollback short of reverting the flip: a component using a modelled 🧵 built-in is then refused by name.
+// It read `== "1"`, an explicit opt-in, until every modelled form had a committed oracle and #999 had no
+// open conformance item.
+func cmThreadsEnabled() bool { return os.Getenv(cmThreadsGateEnv) != "0" }
 
 // ErrCMThreadsGated is returned at bind when a component uses a modelled 🧵 built-in and
 // `gate:cm-threads` is off. `ComponentConfig.Run` wraps it as `burroughs.ErrGated`, so the CLI
@@ -585,12 +587,14 @@ func gateCMThreads(c *Component) error {
 		// draft said *"unset BURROUGHS_ASYNC or set BURROUGHS_CM_THREADS=1"*, which told an operator who
 		// had just set `BURROUGHS_CM_THREADS=1` to set it again — advice that cannot be followed,
 		// reached by copying the gated arm's wording into a different condition.
-		return fmt.Errorf("%w: this component uses %s. Either unset %s (its default is on) or unset %s",
+		// Both defaults are on since the cm-threads flip, so "unset" is a way out for either variable; the
+		// second remedy names `=0` because unsetting cm-threads now turns it ON.
+		return fmt.Errorf("%w: this component uses %s. Either unset %s (its default is on) or set %s=0",
 			ErrCMThreadsNeedsAsync, what, asyncGateEnv, cmThreadsGateEnv)
 	}
 	if !cmThreadsEnabled() {
-		return fmt.Errorf("%w: this component uses %s; set %s=1 to run it (phase 1 of the "+
-			"shared-everything-threads proposal, ADR 0100)", ErrCMThreadsGated, what, cmThreadsGateEnv)
+		return fmt.Errorf("%w: this component uses %s; unset %s (its default is on) to run it (phase 1 of "+
+			"the shared-everything-threads proposal, ADR 0100)", ErrCMThreadsGated, what, cmThreadsGateEnv)
 	}
 	return nil
 }

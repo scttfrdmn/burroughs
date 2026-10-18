@@ -501,7 +501,8 @@ Chair's ruling, in session, 2026-10-11, under Scott's stated deferral. Five poin
    and an ungated suspension path. The proposal names Go green threads as a goal (`Concurrency.md`
    § Goals). Phase 2 stays refused by name: two of its three forms are not defined in the reference at the
    pin and the 🧵② marker is ambiguous, so it needs nothing further until the pin moves.
-2. **Behind a new gate, `gate:cm-threads`, default off, which requires `gate:async` to be on.** Threads
+2. **Behind a new gate, `gate:cm-threads`, default off, which requires `gate:async` to be on.** (Default
+   on since the 2026-10-17 amendment at the end of this record, which carries Scott's stamp.) Threads
    live inside tasks, so the dependency is real. **`gate:async` is already default-on** — its
    `asyncEnabled` reads `os.Getenv(asyncGateEnv) != "0"`, on since the 2026-09-18 flip (ADR 0086's
    amendment, #792), measured here with the variable unset — so a shared gate would put 🧵 semantics on by
@@ -900,3 +901,37 @@ the window is absent. The fourth row was found by tracing a `-race` failure: it 
 decision, and in the failing run `yieldPoint` saw an empty queue and let the re-entry take `entrySem`.
 **Each row is now shown by a widened window or a trace**, not by an absence of failures. One change, a
 requester-aware YIELD request, never had a window shown for it, and it stays removed.
+
+## Amendment, 2026-10-17: `gate:cm-threads` flips on by default
+
+**Stamped by Scott on [#999](https://github.com/scttfrdmn/burroughs/issues/999)** (relayed in session,
+2026-10-17, his words *"Stamp my approval in the response."*; recorded on the issue), against the forecast
+pre-registered there before the numbers existed. This amends point 2 of the decision above: `gate:cm-threads`
+is **on by default** as of this date, and still requires `gate:async`, which is itself default-on. The
+gate stays present as the rollback. `BURROUGHS_CM_THREADS=0` refuses a component that uses a modelled 🧵
+built-in by name with `ErrCMThreadsGated`, through the same path. Only the default differs, in the form
+`gate:async` took in ADR 0086's amendment. Behaviour 4 is satisfied: the flip is its own stamp-tier event,
+and **no mechanism rides it**.
+
+**What the flip claims.** These are the forecast's claims, re-taken on the tree being merged:
+
+- **The whole test tree with the default on:** 28 packages ok, 0 failing. The forecast took this with
+  `BURROUGHS_CM_THREADS=1`. The re-take sets neither variable.
+- **A component that uses no 🧵 built-in: nothing changes.** `gateCMThreads` speaks only when
+  `cmThreadSurface` finds a modelled form. Every row on #999 reads the same in both gate states, and the
+  scheduler is created lazily on the first `thread.new-indirect`.
+- **A component that uses one:** the eight phase-1 forms are admitted instead of refused, at the evidence
+  this ADR's readings carry (`testdata/cmthreads/`). Phase 2 (`0x40`–`0x42`) stays refused by name, at
+  decode.
+
+**What it does not claim.** These are #999's items, which stay open. They are not conformance items:
+
+- a trap ends only its owner task's call, where the pin ends the whole store (unmeasured, no fixture);
+- an orphaned trap is recorded internally only (`orphanTraps`);
+- the wasmtime bug report is Scott's to file or not.
+
+**Rollback:** revert the flip's one commit. `TestTheGateMatrixSaysWhichGateIsMissing` witnesses it ahead of
+need: both variables unset admits `index-call.wasm`, and `BURROUGHS_CM_THREADS=0` with `gate:async` at its
+default refuses it by name. **Neuter, run:** a predicate that ignores `=0` fails both `=0` cells. Two
+`fence_test.go` loops and the fan-out fixture used `""` as gate-off. After the flip `""` means on, so they are
+re-pointed to `"0"`.

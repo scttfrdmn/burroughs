@@ -16,9 +16,10 @@ const fanoutIters = 200_000
 
 func instantiateFanOut(tb testing.TB) *Instantiated {
 	tb.Helper()
-	// The default path: gate:async on, gate:cm-threads off, and no Threads in the fixture.
+	// gate:async on and gate:cm-threads explicitly off, as every published fan-out figure was taken before
+	// the cm-threads flip made it default-on; the fixture uses no Threads, so the gate does not change its path.
 	tb.Setenv(asyncGateEnv, "1")
-	tb.Setenv(cmThreadsGateEnv, "")
+	tb.Setenv(cmThreadsGateEnv, "0")
 	wasm, err := os.ReadFile("testdata/fanout/fanout.wasm")
 	if err != nil {
 		tb.Fatalf("the committed fixture is missing: %v", err)
