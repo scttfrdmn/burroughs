@@ -69,3 +69,21 @@ So a component value is the only thing that crosses. Nothing in either memory is
   - with no lower, the wrong memory returns (120).
 - **The encodings and kinds the codec does not model stay refused by name**, listed in this ADR as the build finds them.
 - **A cost reading** on a string round-trip, as an A/B on janus (`make lab-ab`).
+
+## As built, 2026-10-18
+
+**Where each step lives:**
+- **The caller's half** is `syncAdapter` (`internal/component/cross_component.go`), reached when `syncNeedsAdapter` finds a pointer-carrying parameter or result, or a result past `MAX_FLAT_RESULTS`. Every other sync call keeps the flat passthrough, whose words mean the same in both memories.
+  - It lifts the arguments with `liftFlatValue` over the caller's heap. That is `task.return`'s lift, generalised to take a heap and a label: it was `liftResultValue(c, …)`.
+  - It lowers them with `lowerFlatArgs`, then lowers a spilled result into the caller's retptr with `canon.StoreVia` through the caller's realloc.
+- **The callee's half** is `invokeSync` (`internal/component/link_component.go`). Inside the run slot it runs `lowerPending` through the callee's realloc, then the core func, then `liftSpilledResult` from the callee's memory (`interp.ReadBoundaryMemory`, new beside `WriteBoundaryMemory`, with the same growth-lock discipline), then `post-return` under `InvokeMayNotLeave`.
+- **A sync export called by an embedder gains two things.** A `string` argument is now lowered rather than refused (`TestASyncLiftLowersAStringArgumentInsideItsRunSlot`, 97 on wasmtime). A result that spills is now lifted from memory and returned.
+
+**Readings, as forecast on #995:** `sync-spill-string` reads 3, `sync-string-param` 97, and `post-return-runs` (#1058) 101. All three equal wasmtime 49.0.3.
+
+**Still refused by name, as the build found them:**
+- **Parameters past `MAX_FLAT_PARAMS`** (`paramSpill`). They cross as one pointer to a tuple in the caller's memory, and `lowerFlatArgs` has no spilled-parameter lowering.
+- **A kind the caller-side lift has no arm for.** `liftFlatValue` lifts the scalars, `char`, `string`, `list` and `record`. A variant, `option`, `result`, `enum`, `flags` or handle inside a pointer-carrying signature is refused, naming the kind.
+- **A kind the callee-side lowering has no arm for.** `lowerOneArg` lowers `u32`, `string`, `list` and `record`. Any other scalar inside a pointer-carrying signature, such as a `bool` beside a `string`, is refused by name. This is narrower than the lift, and it is the next obvious widening.
+- **A spilled result `canon.LoadVia` cannot load.** That refusal is the codec's own.
+- **A one-word sync result other than `u32` returned to an embedder** (`liftFlatCoreResult`). It is not a pointer and not a spill, so ADR 0103 does not reach it. The refusal's text, which named `post-return` and a return pointer as the missing pieces, is corrected to say what remains.

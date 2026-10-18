@@ -97,6 +97,25 @@ func (a argHeap) StoreInt(v uint64, ptr, nbytes int) error {
 	return interp.WriteBoundaryMemory(a.f.mem, uint64(ptr), buf)
 }
 
+// liftHeap is the read side of a lift's own memory, for a sync callee's spilled result (ADR 0103). The
+// callee has returned by the time its result is lifted, so there is no `CanonCaller` to read through.
+// The boundary accessors take ADR 0073's growth lock and copy, as `argHeap`'s writes do.
+type liftHeap struct{ f *compFunc }
+
+func (l liftHeap) ReadBytes(ptr, n int) ([]byte, error) {
+	if ptr < 0 || n < 0 {
+		return nil, fmt.Errorf("component: lift read of %d byte(s) at %d: a negative offset is not an address", n, ptr)
+	}
+	return interp.ReadBoundaryMemory(l.f.mem, uint64(uint32(ptr)), uint64(uint32(n)))
+}
+
+func (l liftHeap) CheckRange(ptr, n int) error {
+	if ptr < 0 || n < 0 {
+		return fmt.Errorf("component: lift range of %d byte(s) at %d: a negative offset is not an address", n, ptr)
+	}
+	return interp.CheckBoundaryRange(l.f.mem, uint64(uint32(ptr)), uint64(uint32(n)))
+}
+
 // pendingLower is one argument whose payload must be placed in guest memory before the callee runs.
 //
 // It carries the **value** and the flat slots to patch, rather than pre-serialised bytes: the codec is
@@ -112,10 +131,13 @@ type pendingLower struct {
 
 // lowerPending performs the pending lowerings and patches `flat` in place.
 //
-// It must be called **holding the instance's entry slot** and before the callee is invoked. The caller
-// is `runLiftTask`, which holds exactly that; this function does not acquire it, because acquiring it
-// here would mean releasing it between the allocation and the call — the thing the entry exists to
-// prevent.
+// It must be called **holding the instance's exclusive region** and before the callee is invoked. There
+// are two callers, each holding it:
+//   - `runLiftTask` for an async lift, holding its entry;
+//   - `invokeSync` for a sync lift, holding the run slot (ADR 0103).
+//
+// This function does not acquire the region, because acquiring it here would mean releasing it between the
+// allocation and the call, the thing the region exists to prevent.
 func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error {
 	for i := range pend {
 		p := &pend[i]

@@ -26,31 +26,58 @@ says what it now requires and what it gives up.
 
 ### Changed
 
-- **`v0.8.0`'s first known limit now refuses by name** ([#995](https://github.com/scttfrdmn/burroughs/issues/995);
-  the chair's interim ruling of 2026-10-18). The limit stands, and it now reads as follows. **A sync
-  cross-component call is refused with `ErrUnsupportedForm`, naming the form, when its values cannot cross
-  as flat words.** That is any parameter or result that carries a pointer (a `string` or `list`, anywhere
-  inside it), a result past one flat value, or parameters past 16. A callee lifted async with a callback
-  returns such a value through `task.return`, which does carry it.
-  - **Before:** the sync arm passed the flat words through, and that failed in two ways:
-    - **Loud, on a spilled result:** a `string` result failed on arity, *"interp: "get" takes 0 arguments,
-      got 1"*, which names no cause.
-    - **Silent, on a pointer that does not spill:** a `string` parameter's two words point into the
-      caller's memory, and the callee read its own memory at that address. `sync-string-param.wasm` reads
-      97 on wasmtime and read **120** on Burroughs, a plausible wrong value with no error. This face was
-      not in #995. It was found writing the adapter's ADR, and the ruling's "spilled or multi-value
-      result" would not have caught it, so the refusal covers it too.
-  - **The oracle:** `sync-spill-string.wasm`. wasmtime 49.0.3 copies the string across and reads 3, 10 of
-    10 (`sync-spill-string.reading`). So this is a limit stated, not a defect fixed. The conformant fix is
-    the reference's memory-to-memory adapter, through the parent's realloc, which is an ADR draft held for
-    chair review.
-  - **The count** is `flatWords`, held to `flatten_type`'s lengths by `TestFlatWordsCountsTheCanonicalABIsFlattening`.
-    A type it cannot count keeps the passthrough, so the refusal cannot regress a call that works. The
-    whole tree is green with it, 28 packages.
-  - **Witness:** `TestASyncCrossComponentSpillIsRefusedByName`, on both fixtures. **Neuter, run:** skipping
-    the refusal reads the arity error on the spill and 120 on the parameter.
+- **`v0.8.0`'s first known limit is lifted: a sync cross-component call carries strings, lists and records**
+  ([#995](https://github.com/scttfrdmn/burroughs/issues/995);
+  [ADR 0103](docs/decisions/0103-a-sync-cross-component-call-crosses-as-component-values-lifted-from-one-memory-and-lowered-into-the-other.md),
+  accepted in design by the chair's ruling of 2026-10-18). It now crosses as component values, as the
+  reference's sync lower and lift do. Before the interim refusal it failed in two ways:
+  - **Loud, on a spilled result:** a `string` result failed on arity, *"interp: "get" takes 0 arguments, got
+    1"*.
+  - **Silent, on a pointer that does not spill:** a `string` parameter's two words point into the caller's
+    memory, and the callee read its own memory at that address. The interim refusal, which landed earlier
+    in this block, caught this face too.
+
+  | fixture | wasmtime 49.0.3 | Burroughs before | now |
+  |---|---|---|---|
+  | `sync-spill-string.wasm` | 3 | arity error, then refused by name | **3** |
+  | `sync-string-param.wasm` | 97 | **120**, then refused by name | **97** |
+
+  - **How it crosses:**
+    - **The caller's half** (`syncAdapter`) lifts the arguments from the caller's flat words and memory, and
+      lowers a spilled result into the caller's retptr through the caller's realloc.
+    - **The callee's half** (`invokeSync`) lowers the arguments through the callee's realloc inside its run
+      slot, and lifts a spilled result from the callee's memory before its `post-return` runs.
+    - **Untouched:** a sync call whose values are scalars or handles keeps the flat passthrough.
+  - **An embedder's sync export gains the same:** a `string` argument is lowered, where it was refused, and
+    a spilled result is returned. `sync-string-arg-export.wasm`'s `first("abc")` reads 97 on both engines.
+  - **Still refused by name**, as ADR 0103's *As built* lists:
+    - parameters past 16 flat values;
+    - a kind the caller-side lift or the callee-side lowering has no arm for, inside a pointer-carrying
+      signature (for example a `bool` beside a `string`);
+    - a one-word sync result other than `u32` returned to an embedder.
+  - **Witnesses:** `TestASyncCrossComponentCallCrossesAsValues`, which was the interim's refusal witness,
+    converted to assert values; `TestASyncLiftLowersAStringArgumentInsideItsRunSlot`, which replaces a test
+    that pinned the old refusal; and `TestASpilledParameterListStaysRefusedByName`.
+  - **Neuters, run:**
+    - **no lift** (the callee's flat words returned): `sync-spill-string` fails on arity again;
+    - **no lower** (the caller's words handed to the callee): `sync-string-param` reads 120 again.
+
+    Each fails its own fixture only.
 
 ### Fixed
+
+- **Default-path defect: a lift's `post-return` was decoded and never run**
+  ([#1058](https://github.com/scttfrdmn/burroughs/issues/1058), found reading for ADR 0103's build).
+  - **The cause:** the canonopt was recorded in `opts.PostReturn` and no code read it. So a guest that freed
+    its result buffer, or did any other work, in `post-return` saw it skipped, on a cross-component call
+    and on an embedder's `Component.Call` alike.
+  - **False records:** two said otherwise. `mayleave.go` claimed *"Burroughs refuses `post-return` at
+    load"*, and ADR 0103's draft copied it. Both are corrected.
+  - **The oracle:** `post-return-runs.wasm` reads 101 on wasmtime 49.0.3, 10 of 10: the value right and
+    `post-return` run once. Burroughs read 100 (`post-return-runs.reading`).
+  - **The fix:** `invokeSync` runs `post-return` after the result is lifted, under `may_leave = False`, as
+    the reference's `canon_lift` does.
+  - **Witness:** `TestASyncLiftsPostReturnRunsAfterItsResult`. **Neuter, run:** skipping the call reads 100.
 
 - **Four comments said a default that the tree no longer has** (the chair's ruling of 2026-10-18, item 3,
   from #1046's reading).
