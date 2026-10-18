@@ -18,11 +18,15 @@ import (
 // The readings are wasmtime 49.0.2's (`testdata/realloc-wait.reading`): `arg("hi")` and `res()` trap with
 // *"cannot leave component instance"*, and `ctl("hi")` returns 2.
 //
-// **`res()` is not asserted, and the reason is #994, not may_leave.** Its realloc is the lower's, run by
-// `interp.CanonCaller.Realloc`, and the guard fires there (`interp.TestMayLeaveIsFalseExactlyInsideARealloc`
-// witnesses that site). But the cross-component result store runs after the lower has returned, and a
-// late store's error has no reader, so Burroughs returns 0 where wasmtime traps. The row joins this test
-// when #994 gives the trap a channel.
+// **`res()` is asserted now, and the note that kept it out was falsified twice.** Its realloc is the lower's,
+// run by `interp.CanonCaller.Realloc` (`interp.TestMayLeaveIsFalseExactlyInsideARealloc` witnesses that site).
+// The note said its store runs after the lower returned, so the store's error had no reader and Burroughs
+// returned 0 (#994).
+//   - **#1034's F0** made this child's store run inside the lower, because the child resolves in its first
+//     segment. So the store's trap became the lower's, and `res()` trapped from then on, measured on the #994
+//     work. The note went on saying it returned 0.
+//   - **#994's fix** gave a store that does run late a channel. That case is `realloc-wait-late.wasm`, in
+//     `TestALateResultStoreThatFailsTrapsItsCaller`.
 //
 // **The trap is asserted by reason, not by the fact of a trap**, because the realloc's wait names set 0,
 // which is no set: without the check the call still fails, on the bad handle, and a test that asserted only
@@ -46,6 +50,12 @@ func TestAReallocThatCallsABuiltInTraps(t *testing.T) {
 	var trap *interp.Trap
 	if !errors.As(err, &trap) || !strings.Contains(trap.Reason, "may not leave") {
 		t.Errorf("arg: got %v; want the may_leave trap from waitable-set.wait inside cabi_realloc "+
+			"(wasmtime: \"cannot leave component instance\")", err)
+	}
+
+	_, err = in.CallValues("res") // the lower's realloc, lowering the child's string result
+	if !errors.As(err, &trap) || !strings.Contains(trap.Reason, "may not leave") {
+		t.Errorf("res: got %v; want the may_leave trap from waitable-set.wait inside the lower's realloc "+
 			"(wasmtime: \"cannot leave component instance\")", err)
 	}
 

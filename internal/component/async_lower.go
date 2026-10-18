@@ -66,6 +66,19 @@ func asyncLowerFuncFor(implFor func(*subtask) asyncLowerImpl, hasResult bool, h 
 			return params
 		}
 		var resolveErr error
+		// lowered is set, under `h.mu`, once this lower has read `resolveErr` and is returning to its guest. A
+		// store failing after that has nobody reading `resolveErr`, so it is routed as a trap instead (#994).
+		lowered := false
+		// owner is the task this lower belongs to: the calling Thread's owner (ADR 0101's Option A). A result
+		// store is work owned by the caller's task, the one holding the subtask, so a late store's failure is
+		// that task's trap (the chair's ruling of 2026-10-18 on #994). Nil only for a handle table built
+		// without a Thread table, which the walker never does.
+		var owner *cmThread
+		if h.threads != nil {
+			if rec := h.threads.current(c); rec != nil {
+				owner = rec.owner
+			}
+		}
 		// apply is the store itself — lower the result, then resolve — run under the run slot, or on the slot
 		// holder's goroutine as it leaves host code (see `onResolve` below). It takes `h.mu` only for its
 		// bookkeeping, and **never across the guest-memory work**.
@@ -155,12 +168,31 @@ func asyncLowerFuncFor(implFor func(*subtask) asyncLowerImpl, hasResult bool, h 
 			}
 
 			h.mu.Lock()
-			defer h.mu.Unlock()
-			if err != nil {
-				resolveErr = err
+			if err == nil {
+				st.resolveLocked(subtaskReturned)
+				h.mu.Unlock()
 				return
 			}
-			st.resolveLocked(subtaskReturned)
+			if !lowered {
+				// The lower has not read `resolveErr` yet, so it returns this as its own trap.
+				resolveErr = err
+				h.mu.Unlock()
+				return
+			}
+			h.mu.Unlock()
+			// **A store that fails after the lower returned is the caller's task's trap** (#994). It used to
+			// set `resolveErr` here, which nothing reads once the lower has returned, so the error was lost
+			// and the subtask never resolved. A parent WAITing on it waited out the park's bound and was
+			// told the set "produced nothing". The reference traps the whole store (#1040 records the
+			// difference). Owner routing ends the task that owns the failing work, which is ADR 0101's
+			// point 7: `routeFault` aborts that task's wait, or its callback loop finds the trap at its next
+			// pass. Called after `h.mu` is released, because `routeFault` takes the Thread table's lock.
+			//
+			// NEUTER THIS by restoring `resolveErr = err` here, and `TestALateResultStoreThatFailsTrapsItsCaller`
+			// waits out the park's bound again.
+			if h.threads != nil {
+				h.threads.routeFault(owner, err)
+			}
 		}
 
 		// onResolve is the resolution the impl is handed. It applies the store under the right ordering.
@@ -221,6 +253,7 @@ func asyncLowerFuncFor(implFor func(*subtask) asyncLowerImpl, hasResult bool, h 
 
 		h.mu.Lock()
 		rerr := resolveErr
+		lowered = true // a store failing from here on is routed as a trap (see `apply`)
 		resolved := st.resolved
 		var packed int32
 		if !resolved {

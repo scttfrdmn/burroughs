@@ -1,0 +1,26 @@
+# Committed readings for realloc-wait-late.wasm and its control realloc-wait-late-ctl.wasm (#994; the chair's
+# ruling of 2026-10-18, item 4). Default path: gate:async on, no host, no Threads.
+# Built:       wasm-tools parse <name>.wat -o <name>.wasm   (wasm-tools 1.258.0; both validate with --features all)
+# Invocation:  wasmtime run -W component-model-threading=y -W component-model-async=y --invoke 'res()' <name>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                      realloc-wait-late                        realloc-wait-late-ctl
+# wasmtime 49.0.3, 10 of 10 each              trap: cannot leave component instance    3
+# Burroughs at fc0bd9b, 3 of 3                waits out the park's 30s bound           3
+# Burroughs with #994's fix, 3 of 3           trap: wswait … may not leave (immediate)  3
+#
+# Meaning:     the child YIELDs before task.return, so the parent's async lower returns STARTED and the result
+#              store runs later, when the child resolves. The store lowers a string through the parent's
+#              realloc, which calls waitable-set.wait. A realloc runs with may_leave = False
+#              (LiftLowerContext.reallocate), so the reference traps inside the store. The control's realloc
+#              does not wait, so its late store succeeds and res() returns the string's length.
+#
+#              Before the fix the store's failure set a variable nothing read once the lower had returned, so
+#              the subtask never resolved and the parent's WAIT expired with "waitable set 2 produced nothing
+#              in 30s". The fix routes it as a trap to the caller's task, which owns the subtask (ADR 0101's
+#              Option A, point 7). The reference ends the whole store; ending the caller's task is the subset
+#              owner routing gives, and #1040 records the remaining difference.
+#
+#              realloc-wait.wasm's res() is the same shape with a child that resolves in its first segment.
+#              Since #1034's F0 that store runs inside the lower, so its failure was already the lower's trap,
+#              and it no longer reached #994.
