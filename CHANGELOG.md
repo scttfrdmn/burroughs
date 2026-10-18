@@ -22,7 +22,42 @@ platform"*) was satisfiable as written while misleading as read, and the amendme
 says what it now requires and what it gives up.
 
 ## [Unreleased]
+
+## [0.8.0] - 2026-10-18
 *Implements contract v0.1.*
+
+**What changes by default, first.** Each item below changes what a component that does not opt in to anything observes. Where a gate allows restoring the old behaviour, the item says how. Most of these were conformance defects, and no gate restores them.
+
+- **`gate:cm-threads` is on.** A component that uses the eight phase-1 🧵 built-ins (`0x26`–`0x2d`) is admitted rather than refused (ADR 0100's 2026-10-17 amendment; Scott's stamp on [#999](https://github.com/scttfrdmn/burroughs/issues/999)). **To restore the old behaviour, set `BURROUGHS_CM_THREADS=0`.** A component using a 🧵 built-in is then refused by name with `ErrCMThreadsGated` (CLI exit 6). Phase 2 (`0x40`–`0x42`) stays refused by name.
+- **A sync lift's blocking `waitable-set.wait` on another instance's event now traps**, as the reference does ([#1016](https://github.com/scttfrdmn/burroughs/issues/1016)). No gate restores the old behaviour.
+- **`context.get`/`context.set` and `task.return` now act on the calling Thread's own task** ([#1013](https://github.com/scttfrdmn/burroughs/issues/1013)). Before this, a task could read another task's context or resolve another task. No gate restores it.
+- **A future copy within one instance completes for a number type, and every other element type traps** ([#1006](https://github.com/scttfrdmn/burroughs/issues/1006)). Before this, the copy never completed. No gate restores it.
+- **`waitable-set.wait` and `.poll` trap on a misaligned or out-of-bounds event pointer** ([#1026](https://github.com/scttfrdmn/burroughs/issues/1026), upstream #741). No gate restores it.
+- **A callee that returns a value after its cancellation was requested resolves RETURNED with the value** ([#1009](https://github.com/scttfrdmn/burroughs/issues/1009)). Before this, it resolved CANCELLED_BEFORE_RETURNED and the value was lost. No gate restores it.
+- **A cross-component callee's outcomes are now inside the set the reference's single runner allows** ([#1020](https://github.com/scttfrdmn/burroughs/issues/1020), fixed by [#1034](https://github.com/scttfrdmn/burroughs/issues/1034); ADR 0095's amendment). **This has a cost, recorded in ADR 0095.** A callee whose work happens in its first segment now runs inside the caller's lower rather than beside it. On janus, four such callees took 51.77 ms against 14.19 ms before the fence; work done after the first yield costs about nothing. No gate restores the old behaviour. An embedder that wants callees running in parallel uses separate `Component`s.
+- **Concurrent `Component.Call`s on one `Component` execute one at a time** ([ADR 0101](docs/decisions/0101-a-component-instance-executes-one-task-at-a-time-through-a-run-slot-released-only-where-the-reference-suspends.md), [#975](https://github.com/scttfrdmn/burroughs/issues/975)). Several calls may be in flight, but only one executes guest code until it suspends. Before this, two calls to a sync-lifted export executed in parallel over one unshared memory. No gate restores it; use one `Component` per goroutine that needs parallel guest code.
+- **A `cabi_realloc` that calls a canon built-in or a lowered import now traps**, as the reference's `may_leave` does ([#990](https://github.com/scttfrdmn/burroughs/issues/990)). No gate restores it.
+
+The last two were not in the list the chair ordered. They are here because each changes default behaviour, and the instruction was to list every such change.
+
+**Then the fixes and instruments**, which are under Fixed, Changed and Added below. The race and deadlock fixes in the run slot are #975, #977, #983 and #984. Each instrument entry names the control it adds and the neuter that was run against it.
+
+**Platforms.** 64-bit Linux and macOS are built and tested. **Windows support remains undecided**, per Scott's ruling of 2026-10-08, because the Windows job is not green. It runs the suite as a measurement, not a gate (`windows.yml`). Its failures are each mapped to an open issue in `.github/windows-triage.tsv`, and `make triagecheck` fails if any of those issues closes. 32-bit is not a target.
+
+**What `v0.8.0` claims, since the digit does not say it** (ADR 0004's 2026-08-28 amendment). This release completes phase 1 of the component-model threads proposal behind a default-on gate, and brings the async Canonical ABI's default path inside the reference's outcomes on every row measured this cycle. It is not a `v1.0.0` claim, and not a claim that v1's threads are finished. The §4 litmus battery is unscheduled ([#10](https://github.com/scttfrdmn/burroughs/issues/10)), and ADR 0099 records that the project is *in* the threads phase.
+
+**Conformance, measured at the cut** (`make conformance` on the release tree, re-run on the tagged SHA): the spec board over 256 files reads **60957 pass, 0 fail, 0 unsupported, 4187 gated, 0 unimplemented**. So ADR 0004's guard 4, no minor cut while the `unimplemented` count is nonzero, holds at 0. `TestAllGatesOnLeavesNothingGated` passes, so the 4187 gated vectors are answered once their gates are on.
+
+**Known limits, stated because a release that implies otherwise is the more expensive kind of wrong.** These are open defects on default-on paths, each with its issue:
+
+- **A sync cross-component call with a string, list or multi-value result fails on arity** ([#995](https://github.com/scttfrdmn/burroughs/issues/995)). The sync arm passes flat arguments through, which is correct only when neither side spills. The async arms are not affected.
+- **A cross-component result store that fails after the lower has returned loses its error, and the subtask never resolves**, so a parent waiting on it waits forever ([#994](https://github.com/scttfrdmn/burroughs/issues/994)).
+- **A func type that is an outer-aliased placeholder gives a nil signature**, so an async lower's result is silently never lowered ([#756](https://github.com/scttfrdmn/burroughs/issues/756)).
+- **A trap ends only its owner task's call, where the reference ends the whole store** ([#1040](https://github.com/scttfrdmn/burroughs/issues/1040)). This is unmeasured, with no fixture yet. It became default behaviour with the `gate:cm-threads` flip.
+- **`burroughs run` forwards the host's environment to the guest**, and the leaked `PWD` breaks relative path resolution ([#830](https://github.com/scttfrdmn/burroughs/issues/830)). This is held for Scott's decision.
+- **`Close` with a zero bound returns `nil` on Windows** ([#945](https://github.com/scttfrdmn/burroughs/issues/945)), carried from `v0.7.0`. The `v0.7.0` block's other limits are not re-measured here; read them there.
+
+*The paragraph below was written on 2026-10-11, when ADR 0100 was accepted. Everything it calls unbuilt was built in this release (see Added), and the gate flipped on 2026-10-17. It is kept as written because it is the record of that day.*
 
 **ADR 0100 is accepted and nothing is built yet.** Phase 1 of the shared-everything-threads (🧵) family —
 the eight forms `0x26`–`0x2d` — will be modelled behind a new gate `gate:cm-threads`
@@ -18639,6 +18674,8 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/scttfrdmn/burroughs/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/scttfrdmn/burroughs/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/scttfrdmn/burroughs/compare/v0.5.0...v0.6.0
 [0.0.1]: https://github.com/scttfrdmn/burroughs/releases/tag/v0.0.1
