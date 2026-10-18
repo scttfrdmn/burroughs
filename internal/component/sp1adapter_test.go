@@ -110,3 +110,68 @@ func TestAnAdapterCopyCrossesItsString(t *testing.T) {
 		t.Logf("run-sync of %d bytes: %s", n, time.Since(t0))
 	}
 }
+
+// TestAStopDuringAnAdapterCopyArrivesWithinTheBound is SP-1's adapter-copy witness (contract §3, ADR 0104):
+// an agent inside ADR 0103's sync adapter, copying a 24 MiB string, reaches a safepoint within `bound` of a
+// `Stop`, not after the copy.
+//
+// **The guest's loop is the adapter and almost nothing else.** It invokes `run-sync`'s core function
+// directly, over a string placed once in the parent's memory, rather than calling the export: an export call
+// lowers its argument on the embedder's goroutine, outside any agent, and a stop landing there arrives at
+// once. That diluted the instrument's low percentiles, and it would let a neuter pass by luck here. The
+// string is placed at 1024, where the fixture's bump allocator starts. Each echo is the same bytes, so the
+// allocator's wrap over that region rewrites what is already there.
+//
+// **The bound is 2ms, and it is set by the neuter.** Locally (darwin/arm64) one unpolled 24 MiB copy is
+// about 4ms, so a 10ms bound passed under the neuter: run, and it passed 3 of 3. The polled arrivals'
+// slowest was about 0.07ms in 20 runs. Under `-race` the bound scales by `raceSlowdown`.
+//
+// **Neuter, run:** removing the two `p.poll()` calls in `pacedRead` and `pacedWrite`. A stop then waits for
+// the copy in progress to end, and the stop misses its 2ms deadline and fails, on trial 0 or 1 in 5 of 5
+// runs. `Close` ends the guest at its next frame entry.
+func TestAStopDuringAnAdapterCopyArrivesWithinTheBound(t *testing.T) {
+	const n = 24 << 20
+	in, core := instantiateAdapterCopy(t)
+	defer in.Close()
+	if res, err := in.CallValues("run-sync", canon.Str(strings.Repeat("a", n))); err != nil {
+		t.Fatalf("placing the string: %v", err)
+	} else if v, ok := res[0].U32(); !ok || v != n {
+		t.Fatalf("placing the string: run-sync = %v, want u32 %d", res, n)
+	}
+	name := in.export.exports["run-sync"].fn.core.name
+	go func() {
+		for {
+			if _, err := core.Invoke(name, interp.I32(1024), interp.I32(n)); err != nil {
+				return
+			}
+		}
+	}()
+	if err := core.Stop(30 * time.Second); err != nil {
+		t.Fatalf("the first Stop: %v", err)
+	}
+	core.Resume()
+
+	const (
+		bound  = 2 * time.Millisecond * raceSlowdown
+		trials = 20
+	)
+	rng := rand.New(rand.NewPCG(1, 4))
+	var worst time.Duration
+	for i := range trials {
+		// The host's clock, spun: a point in the guest's run, not a wait for a signal.
+		until := time.Now().Add(time.Duration(rng.Int64N(int64(40 * time.Millisecond))))
+		for time.Now().Before(until) {
+		}
+		t0 := time.Now()
+		err := core.Stop(bound)
+		d := time.Since(t0)
+		core.Resume()
+		if err != nil {
+			t.Fatalf("trial %d: Stop(%s) on an agent inside a sync adapter copy returned %v after %s; the "+
+				"adapter's heaps poll between %d-byte chunks, so a miss means a copy ran unpolled",
+				i, bound, err, d, canon.StringChunk)
+		}
+		worst = max(worst, d)
+	}
+	t.Logf("the slowest of %d arrivals: %s", trials, worst)
+}

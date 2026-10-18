@@ -184,9 +184,11 @@ func (f *compFunc) invokeSync(ctx context.Context, params []interp.Value, pend [
 	}
 	defer f.h.releaseRunFor(ch)
 	// The arguments whose bytes belong in this lift's memory are lowered here, inside the slot, through the
-	// lift's realloc: `def:canon_lift`'s `lower_flat_values` with the callee's options (ADR 0103).
+	// lift's realloc: `def:canon_lift`'s `lower_flat_values` with the callee's options (ADR 0103). A sync
+	// cross-component caller's agent waits on this lowering and on the result's lift, so both poll it (ADR 0104).
+	poll := callerPollFrom(ctx)
 	if len(pend) > 0 {
-		if err := f.lowerPending(pend, params); err != nil {
+		if err := f.lowerPending(pend, params, poll); err != nil {
 			return liftResult{}, err
 		}
 	}
@@ -200,7 +202,7 @@ func (f *compFunc) invokeSync(ctx context.Context, params []interp.Value, pend [
 	var lifted *canon.Value
 	if f.sig != nil && f.sig.Result != nil {
 		if n, ok := flatWords(*f.sig.Result); ok && n > maxFlatResults {
-			v, lerr := f.liftSpilledResult(flat)
+			v, lerr := f.liftSpilledResult(flat, poll)
 			if lerr != nil {
 				return liftResult{}, lerr
 			}
@@ -226,8 +228,9 @@ func (f *compFunc) invokeSync(ctx context.Context, params []interp.Value, pend [
 
 // liftSpilledResult lifts a sync lift's result that spilled past MAX_FLAT_RESULTS: the core func returned
 // one pointer, and the value is stored there in the lift's own memory (`def:lift_flat_values`, the `load`
-// arm). A guest whose pointer is misaligned or out of bounds faults, as the reference traps.
-func (f *compFunc) liftSpilledResult(flat []interp.Value) (canon.Value, error) {
+// arm). A guest whose pointer is misaligned or out of bounds faults, as the reference traps. `poll` is the
+// waiting caller agent's safepoint poll, or nil (`lowerPending`'s).
+func (f *compFunc) liftSpilledResult(flat []interp.Value, poll func()) (canon.Value, error) {
 	if len(flat) != 1 {
 		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
 			"a sync lift whose result spills returned %d core values, want 1 (the pointer)", len(flat))}
@@ -241,7 +244,11 @@ func (f *compFunc) liftSpilledResult(flat []interp.Value) (canon.Value, error) {
 		return canon.Value{}, fmt.Errorf("%w: a sync lift's %s result spills to memory, and the lift names no "+
 			"(memory) canonopt", ErrUnsupportedForm, valKindName(f.sig.Result.Kind))
 	}
-	v, err := canon.LoadVia(liftHeap{f}, ct, int(uint32(flat[0].Bits)))
+	var h canon.ReadHeap = liftHeap{f}
+	if poll != nil {
+		h = pacedRead{h, poll}
+	}
+	v, err := canon.LoadVia(h, ct, int(uint32(flat[0].Bits)))
 	if err != nil {
 		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf("a sync lift's %s result: %v", ct, err)}
 	}
@@ -661,7 +668,7 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// Allocate and write, then call — all three inside the one acquisition above. `lowerPending` does not
 	// take the entry itself, precisely so it cannot be called from somewhere that does not hold it.
 	// Assigned to the named `err`, not shadowed: the deferred `fenceEntryEnd` reads it.
-	if lerr := f.lowerPending(pend, args); lerr != nil {
+	if lerr := f.lowerPending(pend, args, nil); lerr != nil {
 		err = lerr
 		return nil, err
 	}

@@ -3,6 +3,7 @@
 package component
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -116,6 +117,64 @@ func (l liftHeap) CheckRange(ptr, n int) error {
 	return interp.CheckBoundaryRange(l.f.mem, uint64(uint32(ptr)), uint64(uint32(n)))
 }
 
+// pacedRead and pacedWrite are a heap whose every read and write polls the calling agent's safepoint
+// first: ADR 0103's sync adapter copies, which run in host code on the caller's agent (contract §3 SP-1,
+// ADR 0104). A copy through one is never more than one heap call from a poll, because the codec bounds a
+// call's size (`canon.StringChunk`) and a list moves element by element.
+//
+// **`Realloc` does not poll here**, because the realloc it reaches is a guest frame and polls at its entry.
+//
+// **Only the sync adapter wraps its heaps**, and not every user of `guestHeap`. An async lower's result store
+// can run on the goroutine of whichever agent holds the run slot (`apply`, async_lower.go), and a poll there
+// would park the CALLER's thread from another agent's goroutine, possibly while that caller holds a blocked
+// mark. That counts one caller twice in `atSafepointLocked`.
+//
+// NEUTER BOTH POLLS and `TestAStopDuringAnAdapterCopyArrivesWithinTheBound` misses its bound.
+type pacedRead struct {
+	h    canon.ReadHeap
+	poll func()
+}
+
+func (p pacedRead) ReadBytes(ptr, n int) ([]byte, error) {
+	p.poll()
+	return p.h.ReadBytes(ptr, n)
+}
+
+func (p pacedRead) CheckRange(ptr, n int) error { return p.h.CheckRange(ptr, n) }
+
+type pacedWrite struct {
+	h    canon.Heap
+	poll func()
+}
+
+func (p pacedWrite) Realloc(origPtr, origSize, align, newSize int) (int, error) {
+	return p.h.Realloc(origPtr, origSize, align, newSize)
+}
+
+func (p pacedWrite) WriteBytes(ptr int, data []byte) error {
+	p.poll()
+	return p.h.WriteBytes(ptr, data)
+}
+
+func (p pacedWrite) StoreInt(v uint64, ptr, nbytes int) error {
+	p.poll()
+	return p.h.StoreInt(v, ptr, nbytes)
+}
+
+// callerPollKey carries a sync cross-component caller's safepoint poll into the callee's `invokeSync`, whose
+// argument lowering and result lift run on the caller's agent (ADR 0104).
+type callerPollKey struct{}
+
+func withCallerPoll(ctx context.Context, poll func()) context.Context {
+	return context.WithValue(ctx, callerPollKey{}, poll)
+}
+
+// callerPollFrom is the poll ctx carries, or nil when the call has no waiting caller agent.
+func callerPollFrom(ctx context.Context) func() {
+	poll, _ := ctx.Value(callerPollKey{}).(func())
+	return poll
+}
+
 // pendingLower is one argument whose payload must be placed in guest memory before the callee runs.
 //
 // It carries the **value** and the flat slots to patch, rather than pre-serialised bytes: the codec is
@@ -138,13 +197,19 @@ type pendingLower struct {
 //
 // This function does not acquire the region, because acquiring it here would mean releasing it between the
 // allocation and the call, the thing the region exists to prevent.
-func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value) error {
+//
+// `poll` is the calling agent's safepoint poll when a caller's agent is waiting on this lowering, and nil
+// when none is: `invokeSync` passes the sync adapter's (ADR 0104), and an async lift's entry passes nil.
+func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value, poll func()) error {
 	for i := range pend {
 		p := &pend[i]
 		// The heap carries the ARGUMENT's kind, so every allocation the codec makes while lowering it —
 		// including a `list<string>`'s per-element string allocations — is capped by the rule that
 		// belongs to the argument rather than by one guessed per realloc.
-		h := argHeap{f: f, param: p.param, kind: p.val.Type.Kind}
+		var h canon.Heap = argHeap{f: f, param: p.param, kind: p.val.Type.Kind}
+		if poll != nil {
+			h = pacedWrite{h, poll}
+		}
 
 		// **The codec does the lowering.** Both arms are the model's `*_into_range` forms: they allocate
 		// through the guest's realloc, write through the boundary accessor (which takes ADR 0073's growth

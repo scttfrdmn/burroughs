@@ -5,6 +5,7 @@ package canon
 import (
 	"fmt"
 	"math"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -386,15 +387,85 @@ func LoadStringFromRange(h ReadHeap, ptr, byteLength int) (Value, error) {
 	if ptr != alignTo(ptr, alignment) {
 		return Value{}, fmt.Errorf("canon: string pointer %d is not aligned to %d", ptr, alignment)
 	}
-	data, err := h.ReadBytes(ptr, byteLength)
-	if err != nil {
+	// The model's range trap comes before its decode, so the whole range is checked before any byte is read:
+	// an invalid first chunk of an out-of-range string reports the range, as one whole read did.
+	if err := h.CheckRange(ptr, byteLength); err != nil {
 		return Value{}, fmt.Errorf("canon: reading a %d-byte string at %d: %w", byteLength, ptr, err)
 	}
-	if !utf8.Valid(data) {
-		return Value{}, fmt.Errorf("canon: the %d bytes at %d are not valid UTF-8", byteLength, ptr)
+	// **Streamed in chunks, not read, validated and converted whole** (contract §3 SP-1, ADR 0104). A guest
+	// heap polls the calling agent's safepoint on each method call, and a whole-value `utf8.Valid` or
+	// `string(data)` is a pass no poll can interrupt (#515's adapter-copy baseline). So each chunk is read,
+	// validated and appended before the next read polls, and the builder's `String` is the one copy's result
+	// rather than a second copy.
+	var b strings.Builder
+	b.Grow(byteLength)
+	var join utf8Join
+	for off := 0; off < byteLength; {
+		n := min(StringChunk, byteLength-off)
+		data, err := h.ReadBytes(ptr+off, n)
+		if err != nil {
+			return Value{}, fmt.Errorf("canon: reading a %d-byte string at %d: %w", byteLength, ptr, err)
+		}
+		b.Write(data)
+		if !join.valid(data, off+n == byteLength) {
+			return Value{}, fmt.Errorf("canon: the %d bytes at %d are not valid UTF-8", byteLength, ptr)
+		}
+		off += n
 	}
-	return Str(string(data)), nil
+	return Str(b.String()), nil
 }
+
+// utf8Join validates UTF-8 delivered in pieces, carrying a piece's incomplete trailing rune into the next.
+//
+// **A split at a rune start preserves validity in both directions**, because a valid encoding's runes begin
+// exactly at its non-continuation bytes. So `valid` splits each piece at its last rune start within the final
+// `UTFMax-1` bytes and holds the tail back. The next piece's leading continuation bytes complete it, and that
+// join, at most six bytes, is validated on its own. The pieces are then all valid exactly when the whole is.
+type utf8Join struct {
+	tail  [utf8.UTFMax - 1]byte
+	ntail int
+}
+
+// valid reports whether everything delivered so far, including `p`, is valid UTF-8 up to the held-back tail.
+// When `last` is set nothing is held back, so the answer is about the whole.
+func (j *utf8Join) valid(p []byte, last bool) bool {
+	// The join: the held tail, plus the continuation bytes that begin p.
+	lead := 0
+	for lead < len(p) && lead < utf8.UTFMax-1 && !utf8.RuneStart(p[lead]) {
+		lead++
+	}
+	if j.ntail > 0 || lead > 0 {
+		var buf [2 * (utf8.UTFMax - 1)]byte
+		k := copy(buf[:], j.tail[:j.ntail])
+		k += copy(buf[k:], p[:lead])
+		// A piece made only of the rune's continuation bytes may still leave it unfinished, so the join is
+		// held back again rather than judged. A join that cannot be completed reads as a full (error) rune.
+		if lead == len(p) && !last && !utf8.FullRune(buf[:k]) {
+			j.ntail = copy(j.tail[:], buf[:k])
+			return true
+		}
+		if !utf8.Valid(buf[:k]) {
+			return false
+		}
+	}
+	p = p[lead:]
+	cut := len(p)
+	if !last {
+		for i := len(p) - 1; i >= max(0, len(p)-(utf8.UTFMax-1)); i-- {
+			if utf8.RuneStart(p[i]) {
+				cut = i
+				break
+			}
+		}
+	}
+	j.ntail = copy(j.tail[:], p[cut:])
+	return utf8.Valid(p[:cut])
+}
+
+// StringChunk is the most a string lift or lower moves in one heap call, so a guest heap's per-call
+// safepoint poll is never more than one chunk away (contract §3 SP-1, ADR 0104). It is 64 KiB, the figure
+// interp's bulk instructions poll at, chosen on the same reading (#515) and not derived from it.
+const StringChunk = 64 << 10
 
 // LiftFlatScalar lifts a scalar, `bool` or `char` value of type t from the single core word it occupies.
 //
@@ -768,20 +839,30 @@ func StoreString(h Heap, s string, ptr int) error {
 //
 // The allocation is at **alignment 1**, which is the model's for utf-8 string data.
 func StoreStringIntoRange(h Heap, s string) (ptr, byteLen int, err error) {
-	data := []byte(s)
-	p, err := h.Realloc(0, 0, 1, len(data))
+	p, err := h.Realloc(0, 0, 1, len(s))
 	if err != nil {
 		return 0, 0, err
 	}
 	// A zero-length string still calls realloc — the model's `allocate` is unconditional — and writes
 	// nothing. Skipping the write rather than calling `WriteBytes` with an empty slice keeps a heap
 	// implementation from having to special-case it.
-	if len(data) > 0 {
-		if werr := h.WriteBytes(p, data); werr != nil {
+	//
+	// **Written in chunks through one buffer, not converted whole**, for [LoadStringFromRange]'s reason:
+	// a `[]byte(s)` of the whole string is a copy no poll can interrupt. `WriteBytes` copies what it is
+	// given, so the buffer is reused.
+	var buf []byte
+	for off := 0; off < len(s); {
+		n := min(StringChunk, len(s)-off)
+		if buf == nil {
+			buf = make([]byte, n)
+		}
+		copy(buf, s[off:off+n])
+		if werr := h.WriteBytes(p+off, buf[:n]); werr != nil {
 			return 0, 0, werr
 		}
+		off += n
 	}
-	return p, len(data), nil
+	return p, len(s), nil
 }
 
 // StoreListIntoRange allocates a list's backing and stores its elements through `storeElem`, returning

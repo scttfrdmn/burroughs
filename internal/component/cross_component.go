@@ -266,6 +266,11 @@ func paramSpill(sig *FuncType) (string, bool) {
 // So nothing in either memory is addressed from the other side, which is the property the passthrough
 // broke.
 //
+// **Every copy polls the caller's agent** (contract §3 SP-1, ADR 0104): all four run in host code on that
+// agent, so each heap is a `pacedRead` or `pacedWrite` over `c.Poll`. While the callee itself executes, the
+// caller's agent holds no blocked mark, so a `Stop` of the caller's instance waits for the callee to return.
+// The callee polls its own instance's agent, which is another world (#515's instance-scoped `Stop`).
+//
 // NEUTER EITHER HALF to bring #995 back (both run, `TestASyncCrossComponentCallCrossesAsValues`):
 //   - **no lift**: return the callee's flat words instead of storing its lifted result, and
 //     `sync-spill-string.wasm` fails on arity (*"declares 0 result(s) and returned 1"*);
@@ -298,7 +303,7 @@ func (w *walker) syncAdapter(callee *compFunc) interp.CanonFunc {
 				return nil, fmt.Errorf("%w: a sync cross-component call's parameter %q: %w",
 					ErrUnsupportedForm, p.Name, err)
 			}
-			v, used, err := liftFlatValue(guestHeap{c}, "a sync cross-component argument", ct, words)
+			v, used, err := liftFlatValue(pacedRead{guestHeap{c}, c.Poll}, "a sync cross-component argument", ct, words)
 			if err != nil {
 				return nil, err
 			}
@@ -313,7 +318,8 @@ func (w *walker) syncAdapter(callee *compFunc) interp.CanonFunc {
 		if err != nil {
 			return nil, err
 		}
-		res, err := callee.invokeWithPending(w.callerChainContext(c), flat, pend)
+		// The callee's lowering and lift run on this agent too, so they poll it (`callerPollFrom`).
+		res, err := callee.invokeWithPending(withCallerPoll(w.callerChainContext(c), c.Poll), flat, pend)
 		if err != nil {
 			return nil, err
 		}
@@ -323,7 +329,7 @@ func (w *walker) syncAdapter(callee *compFunc) interp.CanonFunc {
 		if res.lifted == nil {
 			return nil, &interp.Trap{Reason: "a sync callee's spilled result was not lifted"}
 		}
-		if err := canon.StoreVia(guestHeap{c}, *res.lifted, retptr); err != nil {
+		if err := canon.StoreVia(pacedWrite{guestHeap{c}, c.Poll}, *res.lifted, retptr); err != nil {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("lowering a sync cross-component result into the "+
 				"caller: %v", err)}
 		}

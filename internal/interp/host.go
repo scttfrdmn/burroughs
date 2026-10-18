@@ -842,6 +842,16 @@ func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32,
 	return uint32(c.st.popNum()), nil
 }
 
+// Poll is the calling agent's safepoint poll, for host code that runs on the agent's thread for as long as
+// its data takes: ADR 0103's sync adapter copies (contract §3 SP-1, ADR 0104). It is the poll a back-edge
+// takes, so a `Stop` parks the agent here and a `Close` terminates it here, by the same sentinel unwind a
+// guest frame's poll raises.
+//
+// **It must not be called inside `Blocking`'s fn.** A blocking agent already holds a blocked mark, so parking
+// it too would count one caller twice in `atSafepointLocked`. The adapter copies before `Blocking` and after
+// it, never inside. A caller with no thread (a test harness's) has nothing to poll.
+func (c *CanonCaller) Poll() { c.t.poll() }
+
 // MayLeave reports the reference's `may_leave` for this call (#990): false while the call is nested inside
 // a `cabi_realloc`, where the reference traps every canon built-in but five and every `canon_lower`. The
 // component package checks it at each of those. A caller with no stack (a test harness's) may leave.
