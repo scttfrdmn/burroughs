@@ -28,12 +28,18 @@ says what it now requires and what it gives up.
 
 - **`v0.8.0`'s first known limit now refuses by name** ([#995](https://github.com/scttfrdmn/burroughs/issues/995);
   the chair's interim ruling of 2026-10-18). The limit stands, and it now reads as follows. **A sync
-  cross-component call whose result spills past one flat value (a `string`, a `list`, or a multi-word
-  record, tuple or variant), or whose parameters spill past 16, is refused with `ErrUnsupportedForm`,
-  naming the form.** A callee lifted async with a callback returns such a value through `task.return`,
-  which does carry it.
-  - **Before:** the sync arm passed the flat words through, and the call failed on arity, *"interp: "get"
-    takes 0 arguments, got 1"*, which names no cause.
+  cross-component call is refused with `ErrUnsupportedForm`, naming the form, when its values cannot cross
+  as flat words.** That is any parameter or result that carries a pointer (a `string` or `list`, anywhere
+  inside it), a result past one flat value, or parameters past 16. A callee lifted async with a callback
+  returns such a value through `task.return`, which does carry it.
+  - **Before:** the sync arm passed the flat words through, and that failed in two ways:
+    - **Loud, on a spilled result:** a `string` result failed on arity, *"interp: "get" takes 0 arguments,
+      got 1"*, which names no cause.
+    - **Silent, on a pointer that does not spill:** a `string` parameter's two words point into the
+      caller's memory, and the callee read its own memory at that address. `sync-string-param.wasm` reads
+      97 on wasmtime and read **120** on Burroughs, a plausible wrong value with no error. This face was
+      not in #995. It was found writing the adapter's ADR, and the ruling's "spilled or multi-value
+      result" would not have caught it, so the refusal covers it too.
   - **The oracle:** `sync-spill-string.wasm`. wasmtime 49.0.3 copies the string across and reads 3, 10 of
     10 (`sync-spill-string.reading`). So this is a limit stated, not a defect fixed. The conformant fix is
     the reference's memory-to-memory adapter, through the parent's realloc, which is an ADR draft held for
@@ -41,8 +47,8 @@ says what it now requires and what it gives up.
   - **The count** is `flatWords`, held to `flatten_type`'s lengths by `TestFlatWordsCountsTheCanonicalABIsFlattening`.
     A type it cannot count keeps the passthrough, so the refusal cannot regress a call that works. The
     whole tree is green with it, 28 packages.
-  - **Witness:** `TestASyncCrossComponentSpillIsRefusedByName`. **Neuter, run:** skipping the refusal
-    reads the arity error again.
+  - **Witness:** `TestASyncCrossComponentSpillIsRefusedByName`, on both fixtures. **Neuter, run:** skipping
+    the refusal reads the arity error on the spill and 120 on the parameter.
 
 ### Fixed
 

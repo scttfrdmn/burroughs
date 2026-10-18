@@ -93,10 +93,10 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		// arity error again.
 		if form, spills := syncSpill(callee.sig); spills {
 			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
-				return nil, fmt.Errorf("%w: a sync cross-component call whose %s does not fit in flat values "+
-					"is not carried yet: it crosses through a pointer into the callee's memory, and copying it "+
-					"into the caller's needs the memory-to-memory adapter (#995). A callee lifted async, with "+
-					"a callback, returns it through task.return, which does carry it", ErrUnsupportedForm, form)
+				return nil, fmt.Errorf("%w: a sync cross-component call with this %s is not carried yet: its "+
+					"flat words point into one component's memory, and carrying it to the other needs the "+
+					"memory-to-memory adapter (#995). Passing the words through would have the other side read "+
+					"its own memory at that address", ErrUnsupportedForm, form)
 			}, opts), true
 		}
 		if callee.async {
@@ -198,12 +198,31 @@ const (
 	maxFlatResults = 1
 )
 
-// syncSpill reports whether a sync call with this signature spills, and which part does, as a phrase for
-// the refusal. A signature whose width cannot be counted (an unresolved reference) is reported as not
-// spilling. That keeps the passthrough it had, so the refusal cannot regress a call that works.
+// syncSpill reports whether a sync call with this signature cannot cross as flat words, and which part
+// cannot, as a phrase for the refusal. Two things stop it:
+//
+//   - **a value that carries a pointer**, a `string` or a `list` anywhere in a parameter or the result. Its
+//     words point into the side's own memory, so passing them through has the callee read its memory at the
+//     caller's address. **This one is silent.** Measured on `sync-string-param.wasm`, where the callee returns
+//     its string argument's first byte: wasmtime reads 97 ('a', the caller's string) and Burroughs read 120
+//     ('x', the byte at that address in the child's memory). No spill is needed for it: a string is two words.
+//   - **a spill**: a result past MAX_FLAT_RESULTS, or parameters past MAX_FLAT_PARAMS, which crosses through
+//     a pointer whatever its types.
+//
+// A signature whose width cannot be counted (an unresolved reference) is reported as crossing. That keeps the
+// passthrough it had, so the refusal cannot regress a call that works.
 func syncSpill(sig *FuncType) (string, bool) {
 	if sig == nil {
 		return "", false
+	}
+	for _, p := range sig.Params {
+		if carriesPointer(p.Type) {
+			return fmt.Sprintf("parameter %q (a %s, which carries a pointer into the caller's memory)",
+				p.Name, valKindName(p.Type.Kind)), true
+		}
+	}
+	if sig.Result != nil && carriesPointer(*sig.Result) {
+		return valKindName(sig.Result.Kind) + " result (which carries a pointer into the callee's memory)", true
 	}
 	if sig.Result != nil {
 		if n, ok := flatWords(*sig.Result); ok && n > maxFlatResults {
@@ -223,6 +242,44 @@ func syncSpill(sig *FuncType) (string, bool) {
 		return fmt.Sprintf("parameter list (%d flat values, past MAX_FLAT_PARAMS %d)", total, maxFlatParams), true
 	}
 	return "", false
+}
+
+// carriesPointer reports whether a value of this type flattens to words that include a pointer into linear
+// memory: a `string` or a `list`, anywhere inside it. Handles (own, borrow, stream, future, error-context) are
+// table indices, not pointers, so they are not counted here.
+func carriesPointer(vt ValType) bool {
+	switch vt.Kind {
+	case VString, VList:
+		return true
+	case VRecord:
+		for _, f := range vt.Fields {
+			if carriesPointer(f.Type) {
+				return true
+			}
+		}
+	case VTuple:
+		for _, e := range vt.Elems {
+			if carriesPointer(e) {
+				return true
+			}
+		}
+	case VOption:
+		return vt.Elem != nil && carriesPointer(*vt.Elem)
+	case VResult:
+		return (vt.Ok != nil && carriesPointer(*vt.Ok)) || (vt.Err != nil && carriesPointer(*vt.Err))
+	case VVariant:
+		for _, c := range vt.Cases {
+			if c.Type != nil && carriesPointer(*c.Type) {
+				return true
+			}
+		}
+	case VBool, VS8, VU8, VS16, VU16, VS32, VU32, VS64, VU64, VF32, VF64, VChar, VErrorContext, VFlags, VEnum,
+		VOwn, VBorrow, VStream, VFuture:
+		// Scalars, and handles, which are table indices rather than pointers.
+	case VRef, VUnresolvedAlias:
+		// Uncounted, so syncSpill keeps the passthrough these had.
+	}
+	return false
 }
 
 // flatWords is how many flat core values a value type flattens to: the length of the Canonical ABI's
