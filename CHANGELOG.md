@@ -22,6 +22,20 @@ platform"*) was satisfiable as written while misleading as read, and the amendme
 says what it now requires and what it gives up.
 
 ## [Unreleased]
+*Implements contract v0.1.*
+
+### Fixed
+
+- **Four comments said a default that the tree no longer has** (the chair's ruling of 2026-10-18, item 3,
+  from #1046's reading).
+  - `asyncGateEnv`'s doc comment (`internal/component/link_component.go`) said `gate:async` is *"Off by
+    default — set to "1" to opt in"*. It has been on since the 2026-09-18 flip (7442ec1), and
+    `asyncEnabled`'s own comment, three lines below, says so. The reading found the two contradicting
+    each other.
+  - The same sweep found three siblings: `async_lift_test.go` (*"the mechanism is off by default"*), and
+    `callertask_test.go` and `async_future.go`, which called `gate:cm-threads` off "the default path".
+    That has not been true since the 2026-10-17 flip. Each now states the date it changed.
+  - No code changed.
 
 ## [0.8.0] - 2026-10-18
 *Implements contract v0.1.*

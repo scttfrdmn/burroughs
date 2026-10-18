@@ -6,7 +6,8 @@ import (
 	"testing"
 )
 
-// TestASyncTaskDoesNotSeeAWaitingAsyncTasksContext is #1013 on the DEFAULT path (`gate:cm-threads` off).
+// TestASyncTaskDoesNotSeeAWaitingAsyncTasksContext is #1013 with `gate:cm-threads` off, which was the default
+// path when #1013 was found and has not been since the 2026-10-17 flip.
 // The parent's async `run` sets its context to 5 and waits on a child's `g`, and `g` calls back into the
 // parent's sync `peek`, which returns `context.get(0)`. In the pin, context is per Thread, and `peek`'s is a
 // new Thread's, so it reads 0. wasmtime 49.0.2 reads 0, 10 of 10.

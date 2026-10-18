@@ -1037,10 +1037,10 @@ type Instantiated struct {
 	export *compInstance
 }
 
-// asyncGateEnv is the config gate for the async component-model ABI (`gate:async`, ADR 0086). Off by
-// default — set to "1" to opt in — the second of the two component gates (`gate:components` on by default
-// is the first). The async tier's mechanism is slice 1's; this shell only recognizes the async surface at
-// decode and refuses it by name at bind while the gate is off.
+// asyncGateEnv is the config gate for the async component-model ABI (`gate:async`, ADR 0086). **On by
+// default since the 2026-09-18 flip** (7442ec1, #794); `BURROUGHS_ASYNC=0` turns it off, and the async
+// surface is then refused by name at bind. It read "Off by default — set to "1" to opt in" until #1046's
+// reading found it contradicting `asyncEnabled` below, which had said otherwise since the flip.
 const asyncGateEnv = "BURROUGHS_ASYNC"
 
 // asyncEnabled reports whether `gate:async` is on. **On is the default as of the 2026-09-18 flip** (ADR

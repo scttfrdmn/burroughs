@@ -235,7 +235,8 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 // the value moves from the write buffer to the read buffer, the reader's end gets its (FUTURE_READ, i,
 // COMPLETED) event, and the write returns COMPLETED. Burroughs left both ends pending forever.
 //
-// Measured before the fix, on the default path (`gate:cm-threads` off), with `future-self-copy.wasm`: one
+// Measured before the fix, on what was then the default path (`gate:cm-threads` off, the default until the
+// 2026-10-17 flip), with `future-self-copy.wasm`: one
 // callback task reads its own future (BLOCKED), writes 7, then WAITs. wasmtime 49.0.2, the previous pin
 // (2bed77e) and the pin (2e7895c) all read 262151 (event 4, write status 0, byte 7). Burroughs did not return.
 //
