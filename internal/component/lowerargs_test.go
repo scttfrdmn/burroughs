@@ -3,7 +3,6 @@
 package component
 
 import (
-	"context"
 	"errors"
 	"io"
 	"math"
@@ -486,27 +485,33 @@ func TestAStringStillCrossesAMisalignedRealloc(t *testing.T) {
 	}
 }
 
-// TestASyncLiftRefusesAStringArgument pins the one structural refusal the entry discipline forces.
+// TestASyncLiftLowersAStringArgumentInsideItsRunSlot replaces the test that pinned the opposite (ADR 0103).
 //
-// The lowering must happen inside the callee's task, on the entry the callee runs on — that is the
-// model's ordering and the reason the allocation cannot be made in `CallValuesCtx`. A **sync** lift has
-// no task and no entry slot, so there is nowhere to do it, and the refusal says so rather than lowering
-// outside the entry and hoping no sibling calls in.
-func TestASyncLiftRefusesAStringArgument(t *testing.T) {
-	f := &compFunc{async: false}
-	// `context.Background()` rather than nil: the refusal happens before the context is read, which is
-	// the property being relied on, but a nil Context is a thing to pass nowhere on principle.
-	_, err := f.invokeWithPending(context.Background(), nil,
-		[]pendingLower{{param: "s", val: canon.Str("x")}})
-	if err == nil {
-		t.Fatal("a sync lift accepted a pending argument lowering")
+// The test it replaces asserted that a sync lift refuses a string argument, and pinned that as *"the one
+// structural refusal the entry discipline forces"*: a sync lift had *"no task and no entry slot, so there
+// is nowhere to do it"*. The ordering it
+// protects still holds: the lowering happens inside the callee's exclusive region, and the allocation and
+// the call it feeds are one. But **ADR 0101 gave the sync path that region**, its run slot, and `invokeSync`
+// now lowers there. So the refusal's premise was gone, and the test asserted a limit the engine no longer has.
+//
+// `sync-string-arg-export.wasm`'s sync `first(s: string) -> u32` returns its argument's first byte. wasmtime
+// 49.0.3 reads 97 for `first("abc")`, 5 of 5.
+func TestASyncLiftLowersAStringArgumentInsideItsRunSlot(t *testing.T) {
+	b, err := os.ReadFile("testdata/sync-string-arg-export.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
 	}
-	if !errors.Is(err, ErrUnsupportedForm) {
-		t.Errorf("the refusal is not ErrUnsupportedForm: %v", err)
+	in, err := Instantiate(b)
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
 	}
-	for _, want := range []string{"sync lift", "task"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal %q does not mention %q", err, want)
-		}
+	defer in.Close()
+	res, err := in.CallValues("first", canon.Str("abc"))
+	if err != nil {
+		t.Fatalf("first(\"abc\"): %v; want 97, wasmtime's reading", err)
+	}
+	if v, ok := res[0].U32(); len(res) != 1 || !ok || v != 97 {
+		t.Fatalf("first(\"abc\") = %v, want u32 97 ('a'): the string was lowered into the lift's memory and "+
+			"read from it", res)
 	}
 }

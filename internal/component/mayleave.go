@@ -11,9 +11,14 @@ import (
 //
 // **Where the reference clears may_leave, found by search of the pin's `definitions.py`**: two sites.
 // `LiftLowerContext.reallocate` sets `inst.may_leave = False` around the realloc call, and `canon_lift`
-// sets it around `post_return`. Burroughs refuses `post-return` at load (callvalues.go), so the realloc is
-// the one site, and `interp.CanonCaller.Realloc` / `interp.Instance.InvokeMayNotLeave` are where it is
-// cleared.
+// sets it around `post_return`. Both are sites here. The realloc clears it in `interp.CanonCaller.Realloc`
+// and `interp.Instance.InvokeMayNotLeave`, and a sync lift's `post-return` runs through `InvokeMayNotLeave`
+// too (`invokeSync`, ADR 0103).
+//
+// **This said "Burroughs refuses `post-return` at load (callvalues.go), so the realloc is the one site".
+// That was false:** nothing refused it. The canonopt was decoded into `opts.PostReturn`, nothing read it,
+// and a lift's `post-return` silently never ran (#1058: 100 where wasmtime reads 101). Found reading for
+// ADR 0103's build.
 //
 // **Where the reference traps on it**: `canon_lower`'s adapter, and every built-in except five —
 // `resource.rep`, `context.get`, `context.set`, `backpressure.inc` and `backpressure.dec`, which carry no

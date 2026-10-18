@@ -370,39 +370,33 @@ func liftFlatCoreResult(name string, sig *FuncType, res []interp.Value) ([]canon
 		}
 		return nil, nil
 	}
-	// **A SYNC lift carries `u32` only, and the reason is `post-return` rather than the lift.**
+	// **A sync lift's one-word result other than `u32` is refused by name** — what remains of a longer refusal.
 	//
-	// The message here said *"this slice carries u32 only (#864)"*, which was true of both paths when it
-	// was written and is now true of only this one — the async path lifts a `string` eagerly inside
-	// `task.return` (#903). A refusal that describes the engine as narrower than it is sends a reader
-	// looking for a limit in the wrong place.
-	//
-	// A sync `string` result needs **two** things this engine does not have, and the first is the sharper
-	// one:
-	//
-	//  1. **It does not arrive in flat words at all.** The sync path lifts with `MAX_FLAT_RESULTS`, which
-	//     is **1** (definitions.py:canon_lift.thread_func:"assert(types_match_values(flat_ft.results, flat_results))", and the constant at def:MAX_FLAT_RESULTS), so anything flattening wider than
-	//     one word — a string is two — **spills to a return pointer**: the caller passes a pointer and the
-	//     callee writes the `(ptr, len)` pair there. The async path lifts with `MAX_FLAT_PARAMS` (16,
-	//     def:canon_task_return:"result = lift_flat_values(cx, MAX_FLAT_PARAMS,"), which is why a string crosses `task.return` flat and crosses here not at all.
-	//  2. **`post-return`.** The guest allocated the buffer and nothing has freed it; the ABI's answer is
-	//     the lift's `post-return`, called **after** the lift (def:canon_lift.thread_func:"task.return_(result)", confirmed at the model rather
-	//     than assumed). This engine neither captures that canonopt for a lift nor calls it, so lifting
-	//     the bytes without it would leak the guest's allocation on every call.
-	//
-	// So this is a refusal **by name** and not a fallthrough. Reaching the flat-word path below with a
-	// string result would read the **return pointer** as though it were the number — a plausible wrong
-	// value rather than an error, which is the outcome the refusal exists to prevent.
+	// This said *"A SYNC lift carries `u32` only, and the reason is `post-return` rather than the lift"*, and
+	// named two missing things for a sync `string` result: it spills to a return pointer, and freeing the
+	// guest's buffer needs the lift's `post-return`, which *"this engine neither captures … nor calls"*. **ADR
+	// 0103 supplied both.** `invokeSync` lifts a result that spills past `def:MAX_FLAT_RESULTS` from the lift's
+	// own memory, inside its run slot, and then runs `post-return` (#1058). Such a result arrives here as
+	// `res.lifted` and is returned above. So this branch is reached only by a result that does NOT spill: one
+	// flat word whose kind is not `u32` (a `bool`, a narrower or signed integer, a float, a `char`, an `enum`,
+	// a handle). Carrying those is a scalar lift this path has not been given. That is a smaller limit than the
+	// one this used to state, and stating the old one would send a reader to a mechanism that now exists.
 	if sig.Result.Kind != VU32 {
-		// The closing hint names what DOES work without claiming it for the kind in hand. An earlier
-		// draft said "an async export returning %s works", which is true for `string` and **false for
-		// `list` and `record`** — the eager lift refuses those too. A refusal that misdirects is worse
-		// than one that only declines.
-		return nil, fmt.Errorf("%w: export %q is a sync lift returning %s; a sync lift carries u32 only. "+
-			"A result flattening wider than one word returns through a return pointer rather than in flat "+
-			"values, and freeing the guest's buffer needs the lift's post-return — this engine does "+
-			"neither. A string result does cross from an async export, through task.return",
-			ErrUnsupportedForm, name, valKindName(sig.Result.Kind))
+		// **A result that spills and arrived unlifted is refused for the old reason, which still holds HERE.**
+		// The public path cannot reach this, because `invokeSync` lifts a spilled result before returning. But
+		// this helper is the flat-word path, and a spilled result's one flat word is a return POINTER.
+		// Reading it as the value would be the plausible wrong answer this refusal has always existed to
+		// prevent.
+		if n, ok := flatWords(*sig.Result); !ok || n != 1 {
+			return nil, fmt.Errorf("%w: export %q is a sync lift returning %s, which does not fit one flat "+
+				"word: a result that spills returns a pointer, and this flat-word path would read the pointer "+
+				"as the value. A spilled result is lifted from the lift's memory before post-return runs "+
+				"(invokeSync, ADR 0103) and arrives lifted, not as flat words",
+				ErrUnsupportedForm, name, valKindName(sig.Result.Kind))
+		}
+		return nil, fmt.Errorf("%w: export %q is a sync lift returning a one-word %s; this path lifts a sync "+
+			"lift's u32 result, and a result that spills (a string, list or record) from the lift's memory, "+
+			"but not other one-word kinds yet", ErrUnsupportedForm, name, valKindName(sig.Result.Kind))
 	}
 	// A declared result the guest never produced is a distinct failure from a wrong value, and is named as
 	// one: the async lift leaves `result` empty when `task.return` was never reached.

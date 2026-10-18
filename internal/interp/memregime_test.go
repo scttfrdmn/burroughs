@@ -90,7 +90,12 @@ var guestMemoryRegimes = map[string]memRegime{
 	// exactly the case it was made for. What the embedder gets instead is §4 B-MM-1's edge on each
 	// access, which is what the message-passing row needs and is strictly stronger than per-access
 	// atomicity for that purpose.
-	"host.go:Caller.Read": regimePlain,
+	//
+	// **`readUnderGrowthLock` and NOT `Caller.Read`, since ADR 0103 factored the locked read out of it**,
+	// as #902 did for the write below: `Caller.Read` resolves the memory and delegates, and
+	// `ReadBoundaryMemory` (a sync callee's spilled result, read after the callee returned) reaches the same
+	// lines. One site, two entry points, with the regime and its argument unchanged.
+	"host.go:readUnderGrowthLock": regimePlain,
 
 	// `CheckRange` reaches the image to *validate* a span and returns none of it (#902's list framing).
 	// The regime is `Caller.Read`'s because the access is the same one — `read` under the growth lock —
@@ -103,7 +108,10 @@ var guestMemoryRegimes = map[string]memRegime{
 	// no data. The lock is uniformity with the other boundary accessors, measured as unnecessary for
 	// correctness — see `Caller.CheckRange`, which records the measurement and the two wrong reasons that
 	// preceded it.
-	"host.go:Caller.CheckRange": regimePlain,
+	//
+	// `checkRangeUnderGrowthLock` since ADR 0103 factored it out of `Caller.CheckRange`, for
+	// `CheckBoundaryRange`'s sake; the regime and its argument are unchanged.
+	"host.go:checkRangeUnderGrowthLock": regimePlain,
 
 	// `writeUnderGrowthLock` and NOT `Caller.Write`, since #902 factored the locked write out of it:
 	// `Caller.Write` now resolves the memory and delegates, so it reaches no guest byte itself and

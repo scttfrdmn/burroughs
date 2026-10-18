@@ -1,0 +1,17 @@
+# Committed readings for post-return-runs.wasm (#1058; ADR 0103's build, the chair's ruling of 2026-10-18).
+# Default path: gate:components on, no host, no Threads.
+# Built:       wasm-tools parse post-return-runs.wat -o post-return-runs.wasm   (wasm-tools 1.258.0; validates with
+#              --features all)
+# Invocation:  wasmtime run --invoke 'run()' post-return-runs.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                      reading
+# wasmtime 49.0.3, 10 of 10                   101
+# Burroughs at ace9cea, 3 of 3                100
+# Burroughs with ADR 0103's build             101
+#
+# Meaning:     run returns 100 if the child's sync get() returned 42, plus how many times get's post-return
+#              ran. 101 is the value right and post-return run once, after the call, as the reference's
+#              canon_lift runs it (under may_leave = False). Burroughs decoded the canonopt
+#              (opts.PostReturn) and no code read it, so it never ran: 100. The 100 was read on a
+#              byte-identical copy of the committed file.

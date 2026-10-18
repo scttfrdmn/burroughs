@@ -163,6 +163,13 @@ func (c *Caller) Read(offset, n uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readUnderGrowthLock(mem, offset, n)
+}
+
+// readUnderGrowthLock is `Caller.Read`'s access, factored out so `ReadBoundaryMemory` reaches the same lines
+// rather than a second transcription of them: the write side's `writeUnderGrowthLock` split, for the same
+// reason (one site, two entry points).
+func readUnderGrowthLock(mem *memory, offset, n uint64) ([]byte, error) {
 	// §4 B-MM-1, at the third site that runs no guest code: this reads guest storage directly, and a
 	// stale read is what the acquire edge forbids — `Global`'s reason, one type over.
 	enterGuest()
@@ -263,14 +270,29 @@ func (c *Caller) CheckRange(offset, n uint64) error {
 	if err != nil {
 		return err
 	}
+	return checkRangeUnderGrowthLock(mem, offset, n)
+}
+
+// checkRangeUnderGrowthLock is `Caller.CheckRange`'s access, factored out so `CheckBoundaryRange` reaches the
+// same lines (ADR 0103), as `readUnderGrowthLock` is for the read.
+func checkRangeUnderGrowthLock(mem *memory, offset, n uint64) error {
 	enterGuest()
 	defer leaveGuest()
 
 	mem.growMu.RLock()
 	defer mem.growMu.RUnlock()
 
-	_, err = mem.read(offset, 0, n)
+	_, err := mem.read(offset, 0, n)
 	return err
+}
+
+// CheckBoundaryRange is `ReadBoundaryMemory`'s span check: it validates `[offset, offset+n)` in the memory
+// `mem` names without copying it, for a list's framing (ADR 0103).
+func CheckBoundaryRange(mem *Extern, offset, n uint64) error {
+	if mem == nil || mem.mem == nil {
+		return fmt.Errorf("%w: a boundary range check names no memory", ErrNotValidated)
+	}
+	return checkRangeUnderGrowthLock(mem.mem, offset, n)
 }
 
 // writeUnderGrowthLock is the one locked boundary write, shared by [Caller.Write] and
@@ -317,6 +339,19 @@ func WriteBoundaryMemory(mem *Extern, offset uint64, buf []byte) error {
 		return fmt.Errorf("%w: a boundary write names no memory", ErrNotValidated)
 	}
 	return writeUnderGrowthLock(mem.mem, offset, buf)
+}
+
+// ReadBoundaryMemory is `WriteBoundaryMemory`'s read: n bytes at offset in the memory `mem` names, copied,
+// for a host that must read guest memory **outside** a guest call (ADR 0103). A sync callee's spilled
+// result points into its own memory, and the callee has returned by the time the adapter lifts it, so
+// there is no `Caller` in hand. The access is `Caller.Read`'s (`readUnderGrowthLock`): B-MM-1's edge, the
+// growth lock read-shared, and a copy, so no window onto the live image is handed out. An out-of-bounds
+// read returns the guest's own trap.
+func ReadBoundaryMemory(mem *Extern, offset, n uint64) ([]byte, error) {
+	if mem == nil || mem.mem == nil {
+		return nil, fmt.Errorf("%w: a boundary read names no memory", ErrNotValidated)
+	}
+	return readUnderGrowthLock(mem.mem, offset, n)
 }
 
 // hostMemory resolves the memory a `Caller`'s accessors reach, keeping `memoryFor`'s three distinct

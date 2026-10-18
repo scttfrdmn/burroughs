@@ -81,30 +81,30 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		// strictly more honest: it says the component is ill-formed rather than running a loop on a
 		// goroutine that must not park. Refused at call rather than at bind because the resolver has no
 		// error channel — the same shape `refuse` uses.
-		// **A spilled signature is refused by name** (#995, the chair's interim ruling of 2026-10-18). This arm
-		// hands the lower's flat core words to the callee and returns the callee's, which is right only when
-		// neither side spills. A result past MAX_FLAT_RESULTS (one word) or parameters past MAX_FLAT_PARAMS
-		// (16) cross through a pointer into the side's OWN memory. Copying one needs the reference's
-		// memory-to-memory adapter, held in an ADR draft for chair review. Without it the call failed on arity
-		// (*"interp: "get" takes 0 arguments, got 1"*), which names no cause. Refused at call rather than at
-		// bind, because the resolver has no error channel; the same shape as the async-callee refusal below.
-		//
-		// NEUTER THIS by skipping the refusal, and `TestASyncCrossComponentSpillIsRefusedByName` reads the
-		// arity error again.
-		if form, spills := syncSpill(callee.sig); spills {
-			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
-				return nil, fmt.Errorf("%w: a sync cross-component call with this %s is not carried yet: its "+
-					"flat words point into one component's memory, and carrying it to the other needs the "+
-					"memory-to-memory adapter (#995). Passing the words through would have the other side read "+
-					"its own memory at that address", ErrUnsupportedForm, form)
-			}, opts), true
-		}
 		if callee.async {
 			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
 				return nil, fmt.Errorf("%w: a sync canon lower cannot target an async lift — the lower "+
 					"must match its import's asyncness, and running the callee's callback loop here "+
 					"would park an agent that is inside guest execution (§5 H-1)", ErrUnsupportedForm)
 			}, opts), true
+		}
+		// **A parameter list past MAX_FLAT_PARAMS stays refused by name** (ADR 0103's unmodelled list). It
+		// crosses as one pointer to a tuple in the caller's memory, and lowering it into the callee needs a
+		// spilled-parameter lowering `lowerFlatArgs` does not have.
+		if form, spills := paramSpill(callee.sig); spills {
+			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+				return nil, fmt.Errorf("%w: a sync cross-component call whose %s is not carried yet: it crosses "+
+					"through a pointer into the caller's memory, and lowering it into the callee needs a "+
+					"spilled-parameter lowering (ADR 0103)", ErrUnsupportedForm, form)
+			}, opts), true
+		}
+		// **A value that carries a pointer, or a result that spills, crosses through the adapter** (ADR 0103,
+		// #995). Its words point into one component's memory, so passing them through had the other side read
+		// its own memory at that address: 120 where wasmtime reads 97 (`sync-string-param.wasm`), or an
+		// arity error on a spilled result (`sync-spill-string.wasm`). Everything else keeps the passthrough
+		// below, whose words mean the same in both memories.
+		if syncNeedsAdapter(callee.sig) {
+			return interp.CanonLowerExtern(ft, mayLeaveGuard("cross-component lower (adapter)", w.syncAdapter(callee)), opts), true
 		}
 		return interp.CanonLowerExtern(ft, mayLeaveGuard("cross-component lower", func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 			// A sync callee: `invokeWith` reaches `inst.Invoke` directly, with no loop and no park. This
@@ -198,37 +198,43 @@ const (
 	maxFlatResults = 1
 )
 
-// syncSpill reports whether a sync call with this signature cannot cross as flat words, and which part
-// cannot, as a phrase for the refusal. Two things stop it:
+// syncNeedsAdapter reports whether a sync call with this signature cannot cross as flat words, so it goes
+// through `syncAdapter` (ADR 0103). Two things stop the passthrough:
 //
 //   - **a value that carries a pointer**, a `string` or a `list` anywhere in a parameter or the result. Its
-//     words point into the side's own memory, so passing them through has the callee read its memory at the
-//     caller's address. **This one is silent.** Measured on `sync-string-param.wasm`, where the callee returns
+//     words point into the side's own memory, so passing them through had the callee read its memory at the
+//     caller's address. **That one was silent.** Measured on `sync-string-param.wasm`, where the callee returns
 //     its string argument's first byte: wasmtime reads 97 ('a', the caller's string) and Burroughs read 120
 //     ('x', the byte at that address in the child's memory). No spill is needed for it: a string is two words.
-//   - **a spill**: a result past MAX_FLAT_RESULTS, or parameters past MAX_FLAT_PARAMS, which crosses through
-//     a pointer whatever its types.
+//   - **a result past MAX_FLAT_RESULTS**, which crosses through a pointer whatever its types.
 //
-// A signature whose width cannot be counted (an unresolved reference) is reported as crossing. That keeps the
-// passthrough it had, so the refusal cannot regress a call that works.
-func syncSpill(sig *FuncType) (string, bool) {
+// Parameters past MAX_FLAT_PARAMS are `paramSpill`'s, and stay refused. This was `syncSpill`, which refused
+// all three by name as #995's interim.
+func syncNeedsAdapter(sig *FuncType) bool {
 	if sig == nil {
-		return "", false
+		return false
 	}
 	for _, p := range sig.Params {
 		if carriesPointer(p.Type) {
-			return fmt.Sprintf("parameter %q (a %s, which carries a pointer into the caller's memory)",
-				p.Name, valKindName(p.Type.Kind)), true
+			return true
 		}
 	}
-	if sig.Result != nil && carriesPointer(*sig.Result) {
-		return valKindName(sig.Result.Kind) + " result (which carries a pointer into the callee's memory)", true
+	if sig.Result == nil {
+		return false
 	}
-	if sig.Result != nil {
-		if n, ok := flatWords(*sig.Result); ok && n > maxFlatResults {
-			return fmt.Sprintf("%s result (%d flat values, past MAX_FLAT_RESULTS %d)",
-				valKindName(sig.Result.Kind), n, maxFlatResults), true
-		}
+	if carriesPointer(*sig.Result) {
+		return true
+	}
+	n, ok := flatWords(*sig.Result)
+	return ok && n > maxFlatResults
+}
+
+// paramSpill reports whether a sync call's parameters spill past MAX_FLAT_PARAMS, and names the list for the
+// refusal. A signature whose width cannot be counted (an unresolved reference) is reported as not spilling.
+// That keeps the passthrough it had, so the refusal cannot regress a call that works.
+func paramSpill(sig *FuncType) (string, bool) {
+	if sig == nil {
+		return "", false
 	}
 	total := 0
 	for _, p := range sig.Params {
@@ -242,6 +248,87 @@ func syncSpill(sig *FuncType) (string, bool) {
 		return fmt.Sprintf("parameter list (%d flat values, past MAX_FLAT_PARAMS %d)", total, maxFlatParams), true
 	}
 	return "", false
+}
+
+// syncAdapter is a sync cross-component call that crosses as component values: the reference's
+// `def:canon_lower` and `def:canon_lift` for a sync callee, end to end (ADR 0103).
+//
+//  1. **Lift the arguments from the caller.** Its flat words, plus the bytes they point at in its memory,
+//     become component values (`liftFlatValue` over the caller's heap): `canon_lower`'s `on_start`.
+//  2. **Lower them into the callee.** `lowerFlatArgs` makes the callee's flat words, with a pending
+//     lowering for each string or list, and `invokeWithPending` performs those through the callee's realloc
+//     inside the callee's run slot, then runs it: `canon_lift`'s `lower_flat_values`.
+//  3. **The callee's result.** A spilled one is lifted from the callee's memory inside that slot, before its
+//     `post-return` runs (`invokeSync`).
+//  4. **Lower the result into the caller**, through the caller's realloc, at the caller's retptr:
+//     `canon_lower`'s `on_resolve`.
+//
+// So nothing in either memory is addressed from the other side, which is the property the passthrough
+// broke.
+//
+// NEUTER EITHER HALF to bring #995 back (both run, `TestASyncCrossComponentCallCrossesAsValues`):
+//   - **no lift**: return the callee's flat words instead of storing its lifted result, and
+//     `sync-spill-string.wasm` fails on arity (*"declares 0 result(s) and returned 1"*);
+//   - **no lower**: hand the callee the caller's words instead of lowering the values into its memory, and
+//     `sync-string-param.wasm` reads 120, the wrong memory.
+//
+// Each fails its own fixture only.
+func (w *walker) syncAdapter(callee *compFunc) interp.CanonFunc {
+	sig := callee.sig
+	resultSpills := false
+	if sig.Result != nil {
+		if n, ok := flatWords(*sig.Result); ok && n > maxFlatResults {
+			resultSpills = true
+		}
+	}
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		words := args
+		var retptr int
+		if resultSpills {
+			if len(words) == 0 {
+				return nil, &interp.Trap{Reason: "a sync lower whose result spills was called with no retptr"}
+			}
+			retptr = int(uint32(words[len(words)-1].Bits))
+			words = words[:len(words)-1]
+		}
+		vals := make([]canon.Value, len(sig.Params))
+		for i, p := range sig.Params {
+			ct, err := canonTypeOf(p.Type)
+			if err != nil {
+				return nil, fmt.Errorf("%w: a sync cross-component call's parameter %q: %w",
+					ErrUnsupportedForm, p.Name, err)
+			}
+			v, used, err := liftFlatValue(guestHeap{c}, "a sync cross-component argument", ct, words)
+			if err != nil {
+				return nil, err
+			}
+			vals[i] = v
+			words = words[used:]
+		}
+		if len(words) != 0 {
+			return nil, &interp.Trap{Reason: fmt.Sprintf(
+				"a sync cross-component call's arguments left %d flat value(s) unconsumed", len(words))}
+		}
+		flat, pend, err := lowerFlatArgs("the sync cross-component callee", sig, vals)
+		if err != nil {
+			return nil, err
+		}
+		res, err := callee.invokeWithPending(w.callerChainContext(c), flat, pend)
+		if err != nil {
+			return nil, err
+		}
+		if !resultSpills {
+			return res.flat, nil // one word or none, which means the same in both memories
+		}
+		if res.lifted == nil {
+			return nil, &interp.Trap{Reason: "a sync callee's spilled result was not lifted"}
+		}
+		if err := canon.StoreVia(guestHeap{c}, *res.lifted, retptr); err != nil {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("lowering a sync cross-component result into the "+
+				"caller: %v", err)}
+		}
+		return nil, nil
+	}
 }
 
 // carriesPointer reports whether a value of this type flattens to words that include a pointer into linear

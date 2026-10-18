@@ -55,6 +55,9 @@ type compFunc struct {
 	// because `cabi_realloc` can grow the memory on its way to returning the pointer.
 	mem         *interp.Extern
 	reallocCore coreDef
+	// postReturnCore is the lift's `(post-return $f)` canonopt, run after a sync lift's result is lifted
+	// (`def:canon_lift`, #1058). Zero when the lift has none.
+	postReturnCore coreDef
 
 	// There is deliberately NO `result` field here (#869). It held the async lift's last resolution, and
 	// a `compFunc` is **shared by every concurrent caller of its export** — so with several lift tasks
@@ -89,18 +92,16 @@ func (f *compFunc) invoke() error {
 // the callee runs (#902). `invokeWith` is this with none, which is what every caller but `CallValuesCtx`
 // wants — a second name rather than a nil argument at sixteen call sites whose subject is the lift loop.
 //
-// A pending lowering on a **sync** lift is refused rather than performed: the sync path has no task and
-// no entry slot, so there is nowhere to do the work that satisfies the model's ordering.
+// **A pending lowering on a sync lift is performed inside its run slot** (ADR 0103). This refused it until
+// the adapter, on the ground that *"the sync path has no task and no entry slot"*. The task half stays
+// true, but ADR 0101 gave the sync path its slot: `invokeWith` holds the instance's run slot from before
+// the callee runs until after `post-return`. That is the exclusive region the model's ordering needs, the
+// allocation and the call it feeds being one.
 func (f *compFunc) invokeWithPending(ctx context.Context, params []interp.Value, pend []pendingLower) (liftResult, error) {
-	if len(pend) > 0 && !f.async {
-		return liftResult{}, fmt.Errorf("%w: this export is a sync lift and one of its arguments must be "+
-			"placed in guest memory; the model lowers a lift's parameters inside the callee's task, and a "+
-			"sync lift has no task to do it on", ErrUnsupportedForm)
-	}
 	if f.async {
 		return f.runLiftTask(f.newLiftTask(ctx), params, pend)
 	}
-	return f.invokeWith(ctx, params)
+	return f.invokeSync(ctx, params, pend)
 }
 
 func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftResult, error) {
@@ -112,6 +113,19 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 	}
 	if f.async {
 		return f.invokeAsyncLiftWith(ctx, params)
+	}
+	return f.invokeSync(ctx, params, nil)
+}
+
+// invokeSync runs a sync lift: the reference's `def:canon_lift` for a sync callee. Inside the instance's run
+// slot it lowers any pending arguments through the lift's realloc, calls the core func, lifts a spilled
+// result from the lift's memory, and calls `post-return`. That order is the reference's (ADR 0103).
+func (f *compFunc) invokeSync(ctx context.Context, params []interp.Value, pend []pendingLower) (liftResult, error) {
+	if f.stubName != "" {
+		return liftResult{}, fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
+	}
+	if f.core.inst == nil {
+		return liftResult{}, fmt.Errorf("%w: component func has no invocable core func (lift target unresolved)", ErrUnsupportedForm)
 	}
 	// **A sync lift's results travel back too, and they used to be dropped here.** This was
 	// `_, err := ...; return nil, err`, with the doc comment above saying "nil for a sync lift, which
@@ -169,16 +183,69 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 			"finish executing another task", ErrCancelled)
 	}
 	defer f.h.releaseRunFor(ch)
+	// The arguments whose bytes belong in this lift's memory are lowered here, inside the slot, through the
+	// lift's realloc: `def:canon_lift`'s `lower_flat_values` with the callee's options (ADR 0103).
+	if len(pend) > 0 {
+		if err := f.lowerPending(pend, params); err != nil {
+			return liftResult{}, err
+		}
+	}
 	flat, err := f.core.inst.InvokeCMThread(f.core.name, tid, params...)
 	if err != nil {
 		return liftResult{}, err
+	}
+	// **A spilled result is lifted from this lift's memory now**, before `post-return` may free it
+	// (`def:lift_flat_values` past `def:MAX_FLAT_RESULTS`): the core func returned a pointer to it. Lifting
+	// it later, after the slot is released, would read a buffer the guest is entitled to reuse.
+	var lifted *canon.Value
+	if f.sig != nil && f.sig.Result != nil {
+		if n, ok := flatWords(*f.sig.Result); ok && n > maxFlatResults {
+			v, lerr := f.liftSpilledResult(flat)
+			if lerr != nil {
+				return liftResult{}, lerr
+			}
+			lifted = &v
+		}
+	}
+	// **`post-return`, after the lift** (`def:canon_lift`, #1058), with the core func's own flat results, and
+	// with `may_leave = False`, as the reference clears it around the call. It was decoded and never run.
+	//
+	// NEUTER THIS by skipping the call, and `TestASyncLiftsPostReturnRunsAfterItsResult` reads 100 again.
+	if f.postReturnCore.inst != nil {
+		if _, perr := f.postReturnCore.inst.InvokeMayNotLeave(f.postReturnCore.name, flat...); perr != nil {
+			return liftResult{}, perr
+		}
 	}
 	// **A trap in one of this lift's Threads is this call's trap** (ADR 0101's Option A, point 7), even
 	// when the lift returned normally after it: the reference's trap ends the computation.
 	if ferr := f.threads.finish(implicit); ferr != nil {
 		return liftResult{}, ferr
 	}
-	return liftResult{flat: flat}, nil
+	return liftResult{flat: flat, lifted: lifted}, nil
+}
+
+// liftSpilledResult lifts a sync lift's result that spilled past MAX_FLAT_RESULTS: the core func returned
+// one pointer, and the value is stored there in the lift's own memory (`def:lift_flat_values`, the `load`
+// arm). A guest whose pointer is misaligned or out of bounds faults, as the reference traps.
+func (f *compFunc) liftSpilledResult(flat []interp.Value) (canon.Value, error) {
+	if len(flat) != 1 {
+		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
+			"a sync lift whose result spills returned %d core values, want 1 (the pointer)", len(flat))}
+	}
+	ct, err := canonTypeOf(*f.sig.Result)
+	if err != nil {
+		return canon.Value{}, fmt.Errorf("%w: a sync lift's spilled %s result: %w",
+			ErrUnsupportedForm, valKindName(f.sig.Result.Kind), err)
+	}
+	if f.mem == nil {
+		return canon.Value{}, fmt.Errorf("%w: a sync lift's %s result spills to memory, and the lift names no "+
+			"(memory) canonopt", ErrUnsupportedForm, valKindName(f.sig.Result.Kind))
+	}
+	v, err := canon.LoadVia(liftHeap{f}, ct, int(uint32(flat[0].Bits)))
+	if err != nil {
+		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf("a sync lift's %s result: %v", ct, err)}
+	}
+	return v, nil
 }
 
 // liftResult is what one invocation resolved to.
@@ -803,6 +870,11 @@ func (w *walker) funcStep(d Def) error {
 		lf.mem = w.lowerMemory(cn)
 		if cn.Opts.Realloc != nil && int(*cn.Opts.Realloc) < len(w.coreSpace[SpaceCoreFunc]) {
 			lf.reallocCore = w.coreSpace[SpaceCoreFunc][*cn.Opts.Realloc]
+		}
+		// The lift's `post-return` (#1058): decoded since the canonopts were, and read by nothing until now,
+		// so it never ran. A sync lift calls it after its result is lifted (`invokeWith`).
+		if cn.Opts.PostReturn != nil && int(*cn.Opts.PostReturn) < len(w.coreSpace[SpaceCoreFunc]) {
+			lf.postReturnCore = w.coreSpace[SpaceCoreFunc][*cn.Opts.PostReturn]
 		}
 		if cn.Opts.Async && cn.Kind == CanonLift && cn.Opts.Callback != nil {
 			// Stackless (callback) async lift: invoke() runs the loop over the durable lift task. A

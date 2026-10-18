@@ -548,6 +548,13 @@ func TestTaskReturnChecksItsFlatArity(t *testing.T) {
 //
 // Asserted on the lift helper directly: no committed guest is a sync lift declaring a string result, and
 // *a negative claim buys a branch an exemption only if something checks the exemption.*
+//
+// **Since ADR 0103 the answer to the chair's question changed, and this test's subject narrowed with it.** A
+// sync lift returning a `string` now returns it: `invokeSync` lifts a spilled result from the lift's memory
+// before `post-return` and hands it back lifted (`TestASyncCrossComponentCallCrossesAsValues`). What this
+// still pins is the flat-word helper: handed a spilled kind with only its flat word, the return pointer, it
+// must refuse rather than read the pointer as data. It no longer requires the old message's hint that a
+// string crosses through `task.return`, because that hint pointed away from a sync path that now carries it.
 func TestASyncLiftRefusesANonScalarResultRatherThanReadingItsReturnPointer(t *testing.T) {
 	// One flat word, as a sync lift with a spilled result really does return — an address, here a
 	// plausible-looking one.
@@ -568,7 +575,7 @@ func TestASyncLiftRefusesANonScalarResultRatherThanReadingItsReturnPointer(t *te
 		// sentence this replaced — it described the engine as narrower than it is now that the async path
 		// carries a string.
 		msg := strings.ToLower(err.Error())
-		for _, want := range []string{valKindName(vt), "pointer", "post-return", "task.return"} {
+		for _, want := range []string{valKindName(vt), "pointer", "post-return"} {
 			if !strings.Contains(msg, strings.ToLower(want)) {
 				t.Errorf("%s: the refusal %q does not mention %q", valKindName(vt), err, want)
 			}
