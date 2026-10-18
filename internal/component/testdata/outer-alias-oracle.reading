@@ -1,0 +1,21 @@
+# Committed readings for outer-alias-oracle.wasm and outer-alias-oracle-inline.wasm (#756; the chair's ruling of
+# 2026-10-18, item 4). Default path: gate:async on, no host, no Threads.
+# Built:       wasm-tools parse <name>.wat -o <name>.wasm   (wasm-tools 1.258.0; both validate with --features all)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'run()' <name>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                                      aliased   inline
+# wasmtime 49.0.3, 10 of 10 each                              242       242
+# Burroughs, before and after #756's fix, 10 of 10 each       242       242
+#
+# Meaning:     run returns its async lower's status*100 + the result stored at the retptr. 242 is RETURNED (2)
+#              with 42 stored. The aliased form declares op's func type at the inner component's level and
+#              reaches it through `alias outer` inside the imported instance type; the inline form declares it
+#              inside the instance type. wasmtime reading both alike is the oracle that the alias is only a
+#              spelling of the type.
+#
+#              Burroughs reads 242 here even before the fix, because a cross-component lower takes its
+#              signature from the callee's own lift and never reads the import's instance type. #756 reaches
+#              only a host-impl lower, through lowerSignature, and that path has no wasmtime reading, since
+#              wasmtime cannot supply a test host import. Its witness is TestAnOuterAliasedFuncTypeLowersItsResult,
+#              on outer-alias-lower.wasm and its inline twin, which carry this pair's shape at top level.
