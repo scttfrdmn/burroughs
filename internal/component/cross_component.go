@@ -114,14 +114,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 			// reads it from the context (`runChainFrom`), so a call back into an instance this chain already
 			// holds re-enters its run slot. Without it, parent → child → parent through a lift the parent
 			// passed its child self-deadlocked after #976 (`reenter.wasm`; wasmtime returns 8).
-			ctx := context.Background()
-			if rec := w.threads.current(c); rec != nil {
-				w.async.mu.Lock()
-				ch := rec.chain
-				w.async.mu.Unlock()
-				ctx = withRunChain(ctx, ch)
-			}
-			res, cerr := callee.invokeWith(ctx, args)
+			res, cerr := callee.invokeWith(w.callerChainContext(c), args)
 			return res.flat, cerr
 		}), opts), true
 	}
@@ -130,9 +123,54 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 	// host-impl async arm builds it, and the subtask protocol is reused whole.
 	hasResult := callee.sig != nil && callee.sig.Result != nil
 	aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
+	if !callee.async {
+		// **An async lower of a SYNC lift runs the callee inline** (#1050). `liftAsAsyncImpl` drives a callback
+		// lift's loop, and it read a sync callee's return value as a packed callback code: 42 decoded to
+		// code 10, a trap, and the adapter resolved the subtask with nothing, so the lower returned RETURNED
+		// with no result stored. Measured: 200 where wasmtime 49.0.3 reads 242
+		// (`sync-callee-async-lower.reading`).
+		//
+		// The reference's `canon_lift` runs a sync callee to completion inside `thread.resume()`, calling
+		// `on_resolve` with its lifted results before the lower returns. So this impl calls it here, on the
+		// caller's chain as the sync arm does, and the resolution is queued for `leaveHost` like any other
+		// first-segment one. A callee that fails makes the LOWER trap, which is the reference's trap at the
+		// same point, rather than resolving with no value.
+		//
+		// NEUTER THIS by dropping the `!callee.async` arm, and `TestAnAsyncLowerOfASyncLiftStoresItsResult`
+		// reads 200.
+		return interp.CanonLowerExtern(aft, mayLeaveGuard("cross-component async lower of a sync lift",
+			asyncLowerFunc(func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+				params := onStart()
+				res, cerr := callee.invokeWith(w.callerChainContext(c), params)
+				if cerr != nil {
+					return nil, cerr
+				}
+				v, verr := crossComponentValue(callee.sig, res)
+				if verr != nil {
+					return nil, verr
+				}
+				onResolve(v)
+				return func() {}, nil // resolved before the lower returns, so nothing is left to cancel
+			}, hasResult, w.async)), opts), true
+	}
 	return interp.CanonLowerExtern(aft, mayLeaveGuard("cross-component async lower",
 		asyncLowerFuncFor(func(st *subtask) asyncLowerImpl { return liftAsAsyncImpl(callee, st, w.async) }, hasResult,
 			w.async)), opts), true
+}
+
+// callerChainContext is the context a guest-to-guest call made inline carries to its callee: the calling
+// Thread's run chain, so a call back into an instance the chain already holds re-enters its run slot
+// rather than waiting for it (`runChainFrom`). It carries no cancellation, for the reason the sync arm's
+// comment gives.
+func (w *walker) callerChainContext(c *interp.CanonCaller) context.Context {
+	ctx := context.Background()
+	if rec := w.threads.current(c); rec != nil {
+		w.async.mu.Lock()
+		ch := rec.chain
+		w.async.mu.Unlock()
+		ctx = withRunChain(ctx, ch)
+	}
+	return ctx
 }
 
 // liftAsAsyncImpl adapts a component func whose definition is an async (callback) lift into the

@@ -1,0 +1,21 @@
+# Committed readings for sync-callee-async-lower.wasm (#1050; found building #756's oracle on the chair's ruling of
+# 2026-10-18). Default path: gate:async on, no host, no Threads.
+# Built:       wasm-tools parse sync-callee-async-lower.wat -o sync-callee-async-lower.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y --invoke 'run()' sync-callee-async-lower.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                      reading
+# wasmtime 49.0.3, 10 of 10                   242
+# Burroughs at fc0bd9b, 3 of 3                200
+# Burroughs with #1050's fix, 10 of 10        242
+#
+# Meaning:     run returns its async lower's status*100 + the result stored at the retptr. 242 is RETURNED (2)
+#              with 42 stored. 200 is RETURNED with nothing stored. The callee is a SYNC lift (no async canon
+#              option, no callback), so the reference's canon_lift runs it to completion inside the lower and
+#              the lower sees it resolved. Burroughs drove it through the callback loop (liftAsAsyncImpl), which
+#              read its return value, 42, as a packed callback code: code 10, a trap. The adapter then resolved
+#              the subtask with no value.
+#
+#              The same component with a callback-lifted callee read 242 on Burroughs before the fix (#1050's
+#              readings table), so the defect follows the callee's lift kind. The 200 was read on a
+#              byte-identical copy of this file before it was committed.
