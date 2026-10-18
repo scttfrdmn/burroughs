@@ -18,5 +18,7 @@
 # Meaning:     a realloc runs with may_leave = False (definitions.py LiftLowerContext.reallocate), so the
 #              checked built-in waitable-set.wait traps whether the realloc lowers an argument (arg) or a
 #              cross-component result (res), and the unchecked context.set does not (ctl).
-# Burroughs:   arg and ctl match (TestAReallocThatCallsABuiltInTraps). res returns 0 rather than trapping:
-#              the guard fires, but a late cross-component store's error has no reader (#994).
+# Burroughs:   all three match (TestAReallocThatCallsABuiltInTraps), and res traps on the may_leave reason.
+#              Until 2026-10-18 this line said res returns 0 because a late store's error had no reader (#994).
+#              That stopped being true at #1034: its F0 runs this child's store inside the lower, because the
+#              child resolves in its first segment. A store that does run late is realloc-wait-late.wasm.

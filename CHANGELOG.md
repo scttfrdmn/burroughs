@@ -61,6 +61,26 @@ says what it now requires and what it gives up.
   - **Neuter, run (the pre-fix code):** the aliased arm reads 200 and the sibling test fails. The inline
     arm still reads 242.
 
+- **A cross-component result store that fails after the lower returned now traps the caller's task**
+  ([#994](https://github.com/scttfrdmn/burroughs/issues/994); listed in `v0.8.0`'s known limits).
+  - **Before:** the store's failure set a variable nothing read once the lower had returned. The subtask
+    never resolved, and a parent WAITing on it waited out the park's 30s bound. It was then told the set
+    *"produced nothing"*, which blamed the wrong party.
+  - **The oracle:** `realloc-wait-late.wasm`, where the child YIELDs before `task.return` so its store runs
+    late, through a realloc that calls `waitable-set.wait`. wasmtime 49.0.3 traps (*"cannot leave component
+    instance"*), 10 of 10. Its control, whose realloc does not wait, returns 3 on both engines
+    (`realloc-wait-late.reading`).
+  - **The fix, by the chair's ruling of 2026-10-18:** the error is routed as a trap to the task that owns
+    the failing work. That is the caller's task, the one holding the subtask (ADR 0101's Option A,
+    point 7). `routeFault` aborts its wait, or its callback loop finds the trap at the next pass. A store
+    that fails before the lower returns is still the lower's own trap. The reference ends the whole store;
+    #1040 records that difference.
+  - **Witness:** `TestALateResultStoreThatFailsTrapsItsCaller`, with the control. **Neuter, run:**
+    restoring the old assignment makes the subject's park expire and fail; the control passes.
+  - **Two stale records corrected:** `realloc-wait.wasm`'s `res()` already trapped. Since #1034's F0, that
+    child's store runs inside the lower. Yet `realloc-wait.reading` and `TestAReallocThatCallsABuiltInTraps`
+    still said it returned 0. The reading is corrected, and the test now asserts `res()`'s trap.
+
 ## [0.8.0] - 2026-10-18
 *Implements contract v0.1.*
 
