@@ -888,9 +888,12 @@ from the three obviously-wrong `#534` trailers to all eleven.
     `TestACalleePastItsFirstSuspensionReentersItsCaller`, and `TestACrossComponentAsyncCallCarriesParamsAndResult`
     now asserts the arm. Neuters run: F0 without its wait fails the first and the inline arm; a fence
     ignoring chains fails the second on its bound.
-  - **The cost** (janus, `make lab-ab`): four first-segment callees take 51.77m against 14.19m, as forecast;
-    work after a YIELD is 9% faster, outside the forecast's 5% band in the favourable direction, and
-    unexplained; `switch.wasm` is unchanged (p = 0.247).
+  - **The cost** (janus, `make lab-ab`):
+    - four first-segment callees take 51.77m against 14.19m, as forecast;
+    - work after a YIELD reads 9% faster, which is a layout penalty the pre-fence arm paid on janus's x86
+      and not a gain from the fence. Moving the base arm's callback entry one frame deeper erases it. The
+      readings are in the ADR's *As built*;
+    - `switch.wasm` is unchanged (p = 0.247).
 
 - **The fixture scripts assert their oracle's exact version before they read anything** (the chair's ruling of
   2026-10-17). wasmtime moved from 49.0.2 to 49.0.3 underneath every committed reading, and rustup's stable
