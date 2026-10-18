@@ -81,6 +81,23 @@ says what it now requires and what it gives up.
     child's store runs inside the lower. Yet `realloc-wait.reading` and `TestAReallocThatCallsABuiltInTraps`
     still said it returned 0. The reading is corrected, and the test now asserts `res()`'s trap.
 
+- **Default-path defect: an async lower of a SYNC-lifted sibling returned RETURNED with its result never
+  stored** ([#1050](https://github.com/scttfrdmn/burroughs/issues/1050), found while building #756's oracle).
+  - **The cause:** `bindCrossComponent`'s async arm always drove the callee through `liftAsAsyncImpl`, the
+    callback loop. A sync callee's return value was then read as a packed callback code: 42 decoded to
+    code 10, which is a trap. The adapter resolved the subtask with no value, so the parent saw RETURNED
+    and an empty retptr. The answer depended on the value returned, since a value that decodes to a valid
+    code fails differently.
+  - **The oracle:** `sync-callee-async-lower.wasm`'s `run()` returns status*100 + the stored result.
+    wasmtime 49.0.3 reads 242, 10 of 10, and Burroughs read 200 (`sync-callee-async-lower.reading`). The
+    same component with a callback-lifted callee read 242 on both engines.
+  - **The fix:** a sync callee runs inline in the lower, on the caller's run chain as the sync arm does,
+    which is the reference's `canon_lift` running a sync lift to completion inside `thread.resume()`. Its
+    resolution is queued for `leaveHost` like any first-segment one, and a callee that fails makes the lower
+    trap rather than resolve with nothing. The two arms now share `callerChainContext`.
+  - **Witness:** `TestAnAsyncLowerOfASyncLiftStoresItsResult`, over 20 runs. **Neuter, run:** dropping the
+    arm reads 200.
+
 ## [0.8.0] - 2026-10-18
 *Implements contract v0.1.*
 
