@@ -285,6 +285,13 @@ The widening was a temporary probe, removed with the tree checked clean: a 2 ms 
 
 **A decision the build took, outside the text:** a host impl that calls `onResolve` from another goroutine before its own call returns can land in the caller's host-code window and read as inline. The reference has no goroutines, so that host is neither of its two kinds, a synchronous one (inline) or a host Thread (later). The embedder rule taken is *inline means resolved before the impl returns*. A host racing its own return gets either arm, by its own construction.
 
+**The rule binds no public API, so it is recorded here and not put to Scott** (the chair's ruling of 2026-10-17, item 3):
+- the public component API (`LoadComponent`, `Call`, `Exports`, `Close`, `Run`) registers no host import;
+- `ComponentConfig` carries WASI stdio, arguments and features only;
+- `Host.asyncImpls` is assigned nowhere outside tests, so the WASI host has no async impl either.
+
+If an embedder API for async host imports is ever added, this rule becomes part of its contract, and documenting it there is that API's business.
+
 **The cost, against the forecast** (janus.local, `measured` group, pueue task 33, `make lab-ab`, n = 10 per row):
 
 | row | main | as built | forecast |
@@ -295,6 +302,20 @@ The widening was a temporary probe, removed with the tree checked clean: a 2 ms 
 | `work=first/k=1` | 12.87m | 12.98m, +0.8% (p = 0.001) | — |
 | `switch.wasm` | 113.3µ | 112.5µ, ~ (p = 0.247) | unchanged: **met** |
 
-The `after` rows' 9% gain is outside the forecast band, in the favourable direction, and not explained by a measurement. The likely cause is caller and callee no longer contending for entry and slot paths while the first segment runs. That is a hypothesis.
+**The `after` rows' 9% gain is a layout penalty the pre-fence arm paid, not something the fence does** (explained on the chair's ruling of 2026-10-17; janus tasks 34–38). The first hypothesis written here, that caller and callee stopped contending for the entry and slot paths, was **refuted** by the profiles. The readings that name the cause:
+
+| reading | result |
+|---|---|
+| `BenchmarkFanOut`, now checking every iteration's sum, re-taken (task 34) | the gain persists: `after/k=1` −9.71%, `after/k=4` −9.25% (p = 0.000), so no work is skipped |
+| CPU profiles, `after/k=4`, both arms (task 35) | the whole difference is in `interp.(*Instance).branch`: 2.93 s against 0.97 s, of 1.72 s total. The block profiles have the same shape, so nothing is waiting less |
+| `branch` by line | two plain memory accesses: the label load (1.50 s against 0.34 s) and the stack's slice-header store (0.87 s against 0.12 s). Stack tracking costs 20 ms on both arms |
+| allocations per op | equal (112, and 348 against 349), so not GC or write barriers |
+| `GOGC=off`, `GOMAXPROCS` 4 and 2 (task 36) | the gap holds under each, so not scheduling |
+| hot function addresses | identical on both arms, so not code alignment |
+| darwin/arm64 | no gap (8.03 against 7.91 ms), so it is specific to the x86 box |
+| base arm with heap padding per entry, 16–2,032 B (task 37) | stays slow, 14.25–14.41 ms |
+| base arm with the callback's call into the interpreter one wrapper frame deeper, plus 0–2,048 B of stack (task 38) | **fast: 13.16–13.60 ms at every size**, against the fence arm's 12.88–13.44 ms |
+
+So the pre-fence arm's callback entry ran with a goroutine-stack placement that made `branch`'s load-after-store pair slow on this Intel part, and almost any change to the frames above it escapes that. The fence arm's larger `runLiftTask` frame is such a change. The likely hardware event is 4K aliasing between the stack and the heap, but janus has no `perf`, so that is not measured. The fence's own cost on the `after` rows is therefore about nil, not a 9% gain.
 
 **The concurrency witnesses, 50 times under `-race`:** the whole `internal/component` package, which holds every cancellation, Threads and cross-call witness, ran 50 times on darwin/arm64 (1,226 s), with 0 failures and no data race reported.
