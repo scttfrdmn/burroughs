@@ -1,6 +1,6 @@
 # 0103 — A sync cross-component call crosses as component values, lifted from one memory and lowered into the other
 
-Date: 2026-10-18 · Status: **proposed — held for chair review** (the chair's ruling of 2026-10-18, item 4: *"The conformant fix is the full adapter … Write that as an ADR draft held for chair review"*). Nothing below is built. The interim named refusal, `syncSpill` in `internal/component/cross_component.go`, lands in #995's interim PR ahead of this draft, and stays until this is accepted and built.
+Date: 2026-10-18 · Status: **accepted in design** — the chair's ruling, in session, 2026-10-18 (second ruling of the day): *"ADR 0103, the sync adapter: accepted in design … mirrors the reference's sync lift and lower."* Drafted under the first ruling of that day, item 4: *"The conformant fix is the full adapter … Write that as an ADR draft held for chair review."* **Not yet built**; it is built next, before SP-1, because it is a default-path defect. The interim named refusal (`syncSpill` in `internal/component/cross_component.go`) stays until the build removes it. The acceptance changed one constraint, `post-return`, and set the build's obligations. Both are in the section at the end, which governs where it differs from the text above.
 
 ## Context
 
@@ -51,3 +51,21 @@ So a component value is the only thing that crosses. Nothing in either memory is
   - A realloc that traps in each direction, read on wasmtime first.
 - **The forecast, to be registered before building:** the whole tree stays green (28 packages), and `switch.wasm` and `BenchmarkFanOut` are unchanged under `make lab-ab`, because neither crosses a sync string.
 - **What it does not decide:** resources across the boundary, `post-return`, and the async lower of a sync lift returning a string. That last one currently refuses through `crossComponentValue`'s scalar arm after #1050, and it is the same adapter's other caller, so it is named here to be built with A.
+
+## Accepted, 2026-10-18: the build's obligations, and one constraint corrected
+
+**The chair's ruling, in session, 2026-10-18, accepted this in design.** Where this section differs from the text above, it governs.
+
+**Constraint 1 is corrected, in its premise and its conclusion.**
+- **The premise was false.** *"Burroughs refuses a lift carrying `post-return` at load"* is not true. The decoder records the option (`opts.PostReturn` in `internal/component/instantiate.go`), and **no code reads it**. So a lift with `post-return` loads, and its `post-return` is silently never run. `mayleave.go`'s comment made the same claim, and this draft copied it. Found on reading for the build.
+- **The conclusion is overruled.** The ruling requires `post_return` to run on the callee after the copy, as `def:canon_lift` does. So the build runs it, and the "out of scope" decision above no longer stands.
+
+**What the build owes**, from the ruling:
+- **Both measured faces read the oracle's values:** `sync-spill-string.wasm` reads 3 and `sync-string-param.wasm` reads 97.
+- **`post_return` runs on the callee after the copy**, under `may_leave = False` (`def:canon_lift`), measured on wasmtime first with a fixture whose `post-return` has an observable effect.
+- **The interim `syncSpill` refusal is removed**, and its witness is converted to assert values.
+- **A neuter for each half:**
+  - with no lift, the arity error returns;
+  - with no lower, the wrong memory returns (120).
+- **The encodings and kinds the codec does not model stay refused by name**, listed in this ADR as the build finds them.
+- **A cost reading** on a string round-trip, as an A/B on janus (`make lab-ab`).
