@@ -197,4 +197,38 @@ func TestRatioCheckRefusesAFigureCarriedFromAnotherPR(t *testing.T) {
 			t.Fatalf("exit %d; want non-zero, saying the body could not be fetched:\n%s", code, out)
 		}
 	})
+
+	// The class the fill writes, last because these arms move the subject's HEAD. **A carried commit that
+	// rewrites an earlier commit's line is still all carried.** The provenance rows count per-commit added
+	// lines and the total counts the range diff, so they differ. The first draft compared them, and this
+	// script's own PR body read "provenance split" over two carried commits. **Neuter, run:** that first
+	// draft fails both arms below. The second failure is a coincidence of counts the draft could not see:
+	// two carried commits adding 2 + 1 lines against a range diff of 3, so an untrailered third commit read
+	// as all carried.
+	fillClass := func(t *testing.T) string {
+		t.Helper()
+		p := bodyFile(t, "- Ratio: RATIO\n")
+		if out, code := run(t, failShim, nil, "fill", p); code != 0 {
+			t.Fatalf("fill exited %d:\n%s", code, out)
+		}
+		got, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(got)
+	}
+	t.Run("a_carried_rewrite_is_still_all_carried", func(t *testing.T) {
+		write("doc.txt", "one\nTWO\n")
+		git("commit", "-q", "-am", "rewrite\n\nRatio-Class: carried")
+		if got := fillClass(t); !strings.Contains(got, "all `Ratio-Class: carried`") {
+			t.Errorf("two carried commits, one rewriting the other, filled as:\n%s", got)
+		}
+	})
+	t.Run("an_unattributed_commit_is_a_split", func(t *testing.T) {
+		write("doc.txt", "one\nTWO\nthree\n")
+		git("commit", "-q", "-am", "no trailer")
+		if got := fillClass(t); strings.Contains(got, "all `Ratio-Class: carried`") {
+			t.Errorf("a commit with no Ratio-Class trailer filled as all carried:\n%s", got)
+		}
+	})
 }

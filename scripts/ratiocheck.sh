@@ -42,8 +42,12 @@ figure() {
 		echo "ratiocheck: could not parse ratio.sh's first line: $first" >&2
 		return 1
 	fi
-	carried=$(printf '%s\n' "$out" | sed -n 's/^ *carried by the work *engine *\([0-9]*\) \/ instrument *\([0-9]*\) *(other \([0-9]*\))$/\1 \2 \3/p')
-	if [ "$carried" = "$e $i $o" ]; then
+	# **All carried means the other two rows are empty**, not that the carried row equals the total. The
+	# provenance rows count per-commit added lines, and the total counts the range diff, so a later commit
+	# rewriting an earlier one's lines makes them differ (225 against 223 on this script's own PR).
+	# `-E` for the alternation: BSD sed's basic regex has no `\|`, so a BRE here matched nothing on macOS.
+	others=$(printf '%s\n' "$out" | sed -En 's/^ *(ordered in review|unattributed) +engine +([0-9]+) \/ instrument +([0-9]+) +\(other ([0-9]+)\)$/\2 \3 \4/p' | tr '\n' ' ')
+	if [ "$others" = "0 0 0 0 0 0 " ]; then
 		classes=carried
 	else
 		classes=split
