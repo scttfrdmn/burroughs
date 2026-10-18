@@ -37,6 +37,30 @@ says what it now requires and what it gives up.
     That has not been true since the 2026-10-17 flip. Each now states the date it changed.
   - No code changed.
 
+- **An outer-aliased func type now lowers its result** ([#756](https://github.com/scttfrdmn/burroughs/issues/756);
+  listed in `v0.8.0`'s known limits). When an imported instance's exported func had an outer type alias as
+  its TYPE, the decoder gave it a nil signature. A host impl's async lower of it then never stored its
+  result. `run()` read 200 (RETURNED, nothing at the retptr) where the inline-typed form reads 242.
+  - **The oracle:** wasmtime 49.0.3 reads the composed aliased and inline forms alike, 242, 10 of 10
+    each (`testdata/outer-alias-oracle.reading`).
+  - **The scope it reached:** only an import filled by a host impl, which reads the import's instance
+    type through `lowerSignature`. A cross-component lower takes its signature from the callee's own lift,
+    so Burroughs already read 242 on the composed pair. Host async impls are internal, so no public
+    embedder reached this.
+  - **The fix:** the reader carries the enclosing type scopes, and `instanceAlias` resolves
+    `alias outer ct idx` against the scope `ct` levels out. The aliased type is inlined against its own
+    scope before it enters the instance's, because a type's references are ordinals into the scope it was
+    defined in. An alias that names no resolvable type keeps the `VUnresolvedAlias` placeholder, refused
+    by name where it would be marshaled.
+  - **Witnesses:**
+    - `TestAnOuterAliasedFuncTypeLowersItsResult` covers the host path, on `outer-alias-lower.wasm` and its
+      inline twin.
+    - `TestAnOuterAliasedTypeResolvesToItsInlineSibling` replaces #753's refuse-by-name witness, whose
+      premise this removes: `future-read-outer-alias.wasm` must now decode to its inline sibling's
+      signature.
+  - **Neuter, run (the pre-fix code):** the aliased arm reads 200 and the sibling test fails. The inline
+    arm still reads 242.
+
 ## [0.8.0] - 2026-10-18
 *Implements contract v0.1.*
 

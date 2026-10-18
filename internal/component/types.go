@@ -42,12 +42,13 @@ const (
 	VRef    // a typeidx reference to a defined type
 	VStream // (stream t?) — async surface, recognized not modeled (gate:async, ADR 0086)
 	VFuture // (future t?) — async surface, recognized not modeled
-	// VUnresolvedAlias marks an outer type alias inside an instance type that this engine does not resolve
-	// (skipInstanceAlias). It is DISTINCT from VRef so it cannot be mistaken for a legitimate type reference
-	// and so a func signature carrying it refuses by name rather than crashing (the old placeholder was a
-	// self-referential VRef{0} that overflowed resolveVal, #753) or silently mis-lowering. resolveVal also
-	// returns it when it detects a VRef cycle. The proper outer-alias resolution replaces it with the real
-	// type; until then it is refused where a value of it would be marshaled.
+	// VUnresolvedAlias marks an outer type alias inside an instance type that names no type this reader can
+	// resolve (instanceAlias): a scope it was not given, or an ordinal naming an import or alias rather than
+	// a parsed type. Since #756 a resolvable alias is inlined instead, so this marks only what is left. It
+	// is DISTINCT from VRef so it cannot be mistaken for a legitimate type reference, and so a func signature
+	// carrying it refuses by name rather than crashing (the old placeholder was a self-referential VRef{0}
+	// that overflowed resolveVal, #753) or silently mis-lowering. resolveVal also returns it when it detects
+	// a VRef cycle. It is refused where a value of it would be marshaled.
 	VUnresolvedAlias
 )
 
@@ -121,7 +122,10 @@ type TypeDef struct {
 // parseTypes decodes the component type section into c.Types, appending in stream order. Each entry is
 // dispatched on its opcode: a function type, an instance type, a resource type, or a value type.
 func (c *Component) parseTypes(body []byte) error {
-	r := &reader{b: body}
+	// The component's own type space is the scope an instance type's `alias outer 1` names (#756). It is
+	// read live, so an alias resolves against every type defined before it, which is all an outer alias
+	// may name.
+	r := &reader{b: body, outer: []typeAt{c.sectionTypeAt()}}
 	n, err := r.u32()
 	if err != nil {
 		return fmt.Errorf("component: type count: %w", err)
@@ -260,13 +264,16 @@ func (r *reader) instanceType() (*InstanceType, error) {
 		case 0x00: // core:type — one core type opcode; skip its body to canon's depth is not needed here
 			return nil, fmt.Errorf("instancedecl core:type (0x00) not modeled this slice")
 		case 0x01: // type
+			// A type declared inside this instance type sees this instance's local space as its `outer 1`.
+			r.outer = append(r.outer, sliceTypeAt(local))
 			td, err := r.typeDef()
+			r.outer = r.outer[:len(r.outer)-1]
 			if err != nil {
 				return nil, err
 			}
 			local = append(local, td)
 		case 0x02: // alias — an outer/export type alias within the instance type
-			if err := r.skipInstanceAlias(&local); err != nil {
+			if err := r.instanceAlias(&local); err != nil {
 				return nil, err
 			}
 		case 0x04: // exportdecl: nameattributes + externtype
@@ -420,10 +427,26 @@ func resolveVal(vt ValType, at typeAt, seen map[uint32]bool) ValType {
 	}
 }
 
-// skipInstanceAlias handles an `alias` inside an instance type. The only form reached here is an
-// outer type alias (kind type, an earlier type pulled into this space); it is recorded as a reference
-// so the instance-local index space stays aligned.
-func (r *reader) skipInstanceAlias(local *[]TypeDef) error {
+// instanceAlias handles an `alias` inside an instance type. The only form reached here is an outer type
+// alias: `alias outer ct idx (type)`, which pulls type `idx` of the scope `ct` levels out into this
+// instance's local space.
+//
+// # It resolves the alias, where it used to record a placeholder (#756)
+//
+// It read the count and index and appended a placeholder, so a func whose TYPE was the alias got a nil
+// signature in `exportDecl`, and an async lower of it never lowered its result. Measured before the fix:
+// with `async-lower-synth.wasm`'s shape, an impl's result was not stored at the retptr. wasmtime 49.0.3
+// reads the aliased and the inline-typed forms alike (`outer-alias-oracle.reading`).
+//
+// **The aliased type is inlined against the scope it came from before it enters this one.** A type's
+// `VRef`s are ordinals into its own scope, so copying one across unresolved would make it name whatever
+// sits at the same ordinal here. That is the wrong-type-that-exists failure `typeAt`'s comment describes.
+//
+// An alias that names no resolvable type keeps the placeholder: a scope this reader was not given, or an
+// ordinal naming an import or alias rather than a parsed type. It is still refused by name where a value
+// of it would be marshaled. **A placeholder rather than a decode error**, because a component that never
+// marshals the type is still well formed.
+func (r *reader) instanceAlias(local *[]TypeDef) error {
 	sort, _, err := r.sort()
 	if err != nil {
 		return err
@@ -435,17 +458,51 @@ func (r *reader) skipInstanceAlias(local *[]TypeDef) error {
 	if sort != SortType || disc != 0x02 { // outer type alias
 		return fmt.Errorf("instance-type alias (sort %s, form %#x) not modeled this slice", sort, disc)
 	}
-	if _, err := r.u32(); err != nil { // count
+	ct, err := r.u32()
+	if err != nil {
 		return err
 	}
-	if _, err := r.u32(); err != nil { // index
+	idx, err := r.u32()
+	if err != nil {
 		return err
+	}
+	// ct 0 is this instance's own space; ct n is n scopes out. r.outer holds the enclosing scopes, innermost
+	// last.
+	var at typeAt
+	switch {
+	case ct == 0:
+		at = sliceTypeAt(*local)
+	case int(ct) <= len(r.outer):
+		at = r.outer[len(r.outer)-int(ct)]
+	}
+	if at != nil {
+		if td, ok := at(idx); ok {
+			*local = append(*local, inlineTypeDef(td, at))
+			return nil
+		}
 	}
 	// A DISTINCT unresolved-alias marker, not a VRef{0}: the old VRef{0} placeholder pointed at local[0]
 	// (often itself), and resolveVal recursed on it forever (#753). VUnresolvedAlias resolves to itself and
-	// is refused by name where a value of it would be marshaled — the outer type alias is not modeled.
+	// is refused by name where a value of it would be marshaled.
 	*local = append(*local, TypeDef{Kind: TDVal, Val: ValType{Kind: VUnresolvedAlias}}) // keeps indices aligned
 	return nil
+}
+
+// inlineTypeDef resolves a type definition's references against the scope it was defined in, so it can be
+// copied into another scope without its ordinals changing meaning. An instance type is already resolved
+// when it is read, and a resource carries no references.
+func inlineTypeDef(td TypeDef, at typeAt) TypeDef {
+	switch td.Kind {
+	case TDFunc:
+		if td.Func != nil {
+			td.Func = resolveFunc(td.Func, at)
+		}
+	case TDVal:
+		td.Val = resolveVal(td.Val, at, nil)
+	case TDInstance, TDResource:
+		// Already resolved when read, and carrying no references, respectively.
+	}
+	return td
 }
 
 // exportDecl reads an exportdecl's externtype and, for a function export, resolves its type from the

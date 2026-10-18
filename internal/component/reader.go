@@ -10,11 +10,17 @@ import (
 // errShort is returned when a read runs past the end of its buffer.
 var errShort = errors.New("unexpected end of section")
 
-// reader is a forward byte cursor over a section (or the whole file). It carries no feature or type
-// state — this slice reads structure, not semantics.
+// reader is a forward byte cursor over a section (or the whole file). It carries no feature state.
+//
+// **`outer` is the one piece of type state it carries: the enclosing type scopes, innermost last** (#756).
+// An `alias outer ct idx` inside an instance type names type `idx` of the scope `ct` levels out, so
+// resolving one needs those scopes while the instance type is being read. `parseTypes` seeds it with the
+// component's own type space, and `instanceType` pushes its local space while it reads a nested type. A
+// reader with no scopes resolves no outer alias, which is the placeholder behaviour from before #756.
 type reader struct {
-	b   []byte
-	pos int
+	b     []byte
+	pos   int
+	outer []typeAt
 }
 
 func (r *reader) byte() (byte, error) {
