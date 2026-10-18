@@ -45,7 +45,14 @@ func TestTheGateMatrixSaysWhichGateIsMissing(t *testing.T) {
 		{
 			name: "both_gates_off", cmThreads: "0", async: "0",
 			wantErr:    ErrCMThreadsGated,
-			wantPhrase: "set BURROUGHS_CM_THREADS=1",
+			wantPhrase: "unset BURROUGHS_CM_THREADS (its default is on)",
+		},
+		{
+			// The flip's rollback short of a revert (Scott's stamp on #999, 2026-10-17): with gate:async at
+			// its default, `=0` alone must refuse by name, and from the gated arm rather than the dependency.
+			name: "cm_threads_rolled_back_async_default", cmThreads: "0", async: "",
+			wantErr:    ErrCMThreadsGated,
+			wantPhrase: "unset BURROUGHS_CM_THREADS (its default is on)",
 		},
 		{
 			name: "cm_threads_on_async_off", cmThreads: "1", async: "0",
@@ -80,6 +87,18 @@ func TestTheGateMatrixSaysWhichGateIsMissing(t *testing.T) {
 		in, err := Instantiate(wasm)
 		if err != nil {
 			t.Fatalf("with both gates on the component must bind: %v", err)
+		}
+		in.Close()
+	})
+
+	// The flip itself: with neither variable set, both gates are at their default and the component binds.
+	// Before the flip this cell was the gated refusal.
+	t.Run("both_unset_admits_it", func(t *testing.T) {
+		t.Setenv(cmThreadsGateEnv, "")
+		t.Setenv(asyncGateEnv, "")
+		in, err := Instantiate(wasm)
+		if err != nil {
+			t.Fatalf("with both gates at their default the component must bind: %v", err)
 		}
 		in.Close()
 	})

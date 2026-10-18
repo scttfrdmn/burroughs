@@ -63,7 +63,7 @@ func readGo(t *testing.T, fixture, export, gate string, n int) map[uint32]int {
 // Before F0 the adapter returned when the callee's goroutine started, and this read 1 (STARTED), 200 of 200
 // in each gate state. **Neuter, run:** returning without the first-segment wait reads 1, 200 of 200 per gate.
 func TestACalleeResolvedInItsFirstSegmentIsReturnedInline(t *testing.T) {
-	for _, gate := range []string{"", "1"} {
+	for _, gate := range []string{"0", "1"} {
 		got := readGo(t, "testdata/first-segment-return.wasm", "go", gate, 50)
 		if got[2] != 50 {
 			t.Errorf("gate=%q: lower states %v, want RETURNED (2) every time: the callee resolved in its first "+
@@ -82,7 +82,7 @@ func TestACalleeResolvedInItsFirstSegmentIsReturnedInline(t *testing.T) {
 // its bound in both gate states. `residual` hangs under that neuter too, and `thread-wait-callback` does not:
 // its re-entry is inside a first segment, which F0's corollary (the caller's chain) admits.
 func TestACalleePastItsFirstSuspensionReentersItsCaller(t *testing.T) {
-	for _, gate := range []string{"", "1"} {
+	for _, gate := range []string{"0", "1"} {
 		got := readGo(t, "testdata/reenter-after-suspend.wasm", "go", gate, 20)
 		if got[8] != 20 {
 			t.Errorf("gate=%q: results %v, want 8 every time", gate, got)
