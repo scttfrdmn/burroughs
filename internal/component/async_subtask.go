@@ -527,7 +527,6 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			return nil, fmt.Errorf("component: subtask.cancel: got %d args, want (i)", len(args))
 		}
 		i := uint32(args[0].Bits)
-		soakSleep(soakWidenCancel) // TEMPORARY soak widening point (b)
 		st, inlineState, wake, onCancel, err := h.beginSubtaskCancel(i, asyncForm)
 		if err != nil {
 			return nil, err

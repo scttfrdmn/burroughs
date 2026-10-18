@@ -252,7 +252,6 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask, caller *asyncHandles) asyncL
 		}); werr != nil {
 			return nil, werr
 		}
-		soakSleep(soakWidenHost) // TEMPORARY soak widening point (a)
 
 		return func() {
 			// The parent's `subtask.cancel` reaching the child's lift task: ADR 0094's mechanism, through
