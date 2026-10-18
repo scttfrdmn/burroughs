@@ -81,6 +81,24 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		// strictly more honest: it says the component is ill-formed rather than running a loop on a
 		// goroutine that must not park. Refused at call rather than at bind because the resolver has no
 		// error channel — the same shape `refuse` uses.
+		// **A spilled signature is refused by name** (#995, the chair's interim ruling of 2026-10-18). This arm
+		// hands the lower's flat core words to the callee and returns the callee's, which is right only when
+		// neither side spills. A result past MAX_FLAT_RESULTS (one word) or parameters past MAX_FLAT_PARAMS
+		// (16) cross through a pointer into the side's OWN memory. Copying one needs the reference's
+		// memory-to-memory adapter, held in an ADR draft for chair review. Without it the call failed on arity
+		// (*"interp: "get" takes 0 arguments, got 1"*), which names no cause. Refused at call rather than at
+		// bind, because the resolver has no error channel; the same shape as the async-callee refusal below.
+		//
+		// NEUTER THIS by skipping the refusal, and `TestASyncCrossComponentSpillIsRefusedByName` reads the
+		// arity error again.
+		if form, spills := syncSpill(callee.sig); spills {
+			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+				return nil, fmt.Errorf("%w: a sync cross-component call with this %s is not carried yet: its "+
+					"flat words point into one component's memory, and carrying it to the other needs the "+
+					"memory-to-memory adapter (#995). Passing the words through would have the other side read "+
+					"its own memory at that address", ErrUnsupportedForm, form)
+			}, opts), true
+		}
 		if callee.async {
 			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
 				return nil, fmt.Errorf("%w: a sync canon lower cannot target an async lift — the lower "+
@@ -171,6 +189,167 @@ func (w *walker) callerChainContext(c *interp.CanonCaller) context.Context {
 		ctx = withRunChain(ctx, ch)
 	}
 	return ctx
+}
+
+// The Canonical ABI's flat limits (def:MAX_FLAT_PARAMS, def:MAX_FLAT_RESULTS): past them a signature's
+// values cross through a pointer into memory rather than in flat words.
+const (
+	maxFlatParams  = 16
+	maxFlatResults = 1
+)
+
+// syncSpill reports whether a sync call with this signature cannot cross as flat words, and which part
+// cannot, as a phrase for the refusal. Two things stop it:
+//
+//   - **a value that carries a pointer**, a `string` or a `list` anywhere in a parameter or the result. Its
+//     words point into the side's own memory, so passing them through has the callee read its memory at the
+//     caller's address. **This one is silent.** Measured on `sync-string-param.wasm`, where the callee returns
+//     its string argument's first byte: wasmtime reads 97 ('a', the caller's string) and Burroughs read 120
+//     ('x', the byte at that address in the child's memory). No spill is needed for it: a string is two words.
+//   - **a spill**: a result past MAX_FLAT_RESULTS, or parameters past MAX_FLAT_PARAMS, which crosses through
+//     a pointer whatever its types.
+//
+// A signature whose width cannot be counted (an unresolved reference) is reported as crossing. That keeps the
+// passthrough it had, so the refusal cannot regress a call that works.
+func syncSpill(sig *FuncType) (string, bool) {
+	if sig == nil {
+		return "", false
+	}
+	for _, p := range sig.Params {
+		if carriesPointer(p.Type) {
+			return fmt.Sprintf("parameter %q (a %s, which carries a pointer into the caller's memory)",
+				p.Name, valKindName(p.Type.Kind)), true
+		}
+	}
+	if sig.Result != nil && carriesPointer(*sig.Result) {
+		return valKindName(sig.Result.Kind) + " result (which carries a pointer into the callee's memory)", true
+	}
+	if sig.Result != nil {
+		if n, ok := flatWords(*sig.Result); ok && n > maxFlatResults {
+			return fmt.Sprintf("%s result (%d flat values, past MAX_FLAT_RESULTS %d)",
+				valKindName(sig.Result.Kind), n, maxFlatResults), true
+		}
+	}
+	total := 0
+	for _, p := range sig.Params {
+		n, ok := flatWords(p.Type)
+		if !ok {
+			return "", false
+		}
+		total += n
+	}
+	if total > maxFlatParams {
+		return fmt.Sprintf("parameter list (%d flat values, past MAX_FLAT_PARAMS %d)", total, maxFlatParams), true
+	}
+	return "", false
+}
+
+// carriesPointer reports whether a value of this type flattens to words that include a pointer into linear
+// memory: a `string` or a `list`, anywhere inside it. Handles (own, borrow, stream, future, error-context) are
+// table indices, not pointers, so they are not counted here.
+func carriesPointer(vt ValType) bool {
+	switch vt.Kind {
+	case VString, VList:
+		return true
+	case VRecord:
+		for _, f := range vt.Fields {
+			if carriesPointer(f.Type) {
+				return true
+			}
+		}
+	case VTuple:
+		for _, e := range vt.Elems {
+			if carriesPointer(e) {
+				return true
+			}
+		}
+	case VOption:
+		return vt.Elem != nil && carriesPointer(*vt.Elem)
+	case VResult:
+		return (vt.Ok != nil && carriesPointer(*vt.Ok)) || (vt.Err != nil && carriesPointer(*vt.Err))
+	case VVariant:
+		for _, c := range vt.Cases {
+			if c.Type != nil && carriesPointer(*c.Type) {
+				return true
+			}
+		}
+	case VBool, VS8, VU8, VS16, VU16, VS32, VU32, VS64, VU64, VF32, VF64, VChar, VErrorContext, VFlags, VEnum,
+		VOwn, VBorrow, VStream, VFuture:
+		// Scalars, and handles, which are table indices rather than pointers.
+	case VRef, VUnresolvedAlias:
+		// Uncounted, so syncSpill keeps the passthrough these had.
+	}
+	return false
+}
+
+// flatWords is how many flat core values a value type flattens to: the length of the Canonical ABI's
+// `flatten_type` (def:flatten_type). A variant-like type is one discriminant plus its widest case, because
+// `flatten_variant` joins the cases' flat types position by position. It reports false for a type it
+// cannot count.
+func flatWords(vt ValType) (int, bool) {
+	switch vt.Kind {
+	case VBool, VS8, VU8, VS16, VU16, VS32, VU32, VS64, VU64, VF32, VF64, VChar,
+		VOwn, VBorrow, VErrorContext, VStream, VFuture, VEnum:
+		return 1, true
+	case VString, VList:
+		return 2, true
+	case VFlags:
+		return (len(vt.Labels) + 31) / 32, true
+	case VRecord:
+		n := 0
+		for _, f := range vt.Fields {
+			w, ok := flatWords(f.Type)
+			if !ok {
+				return 0, false
+			}
+			n += w
+		}
+		return n, true
+	case VTuple:
+		n := 0
+		for _, e := range vt.Elems {
+			w, ok := flatWords(e)
+			if !ok {
+				return 0, false
+			}
+			n += w
+		}
+		return n, true
+	case VOption:
+		if vt.Elem == nil {
+			return 1, true
+		}
+		w, ok := flatWords(*vt.Elem)
+		return 1 + w, ok
+	case VResult:
+		widest := 0
+		for _, p := range []*ValType{vt.Ok, vt.Err} {
+			if p == nil {
+				continue
+			}
+			w, ok := flatWords(*p)
+			if !ok {
+				return 0, false
+			}
+			widest = max(widest, w)
+		}
+		return 1 + widest, true
+	case VVariant:
+		widest := 0
+		for _, c := range vt.Cases {
+			if c.Type == nil {
+				continue
+			}
+			w, ok := flatWords(*c.Type)
+			if !ok {
+				return 0, false
+			}
+			widest = max(widest, w)
+		}
+		return 1 + widest, true
+	default:
+		return 0, false
+	}
 }
 
 // liftAsAsyncImpl adapts a component func whose definition is an async (callback) lift into the

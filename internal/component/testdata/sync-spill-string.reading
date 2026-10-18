@@ -1,0 +1,35 @@
+# Committed readings for sync-spill-string.wasm (#995; the chair's interim ruling of 2026-10-18).
+# Default path: gate:components on, no host, no Threads.
+# Built:       wasm-tools parse sync-spill-string.wat -o sync-spill-string.wasm   (wasm-tools 1.258.0; validates
+#              with --features all)
+# Invocation:  wasmtime run --invoke 'run()' sync-spill-string.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                      reading
+# wasmtime 49.0.3, 10 of 10                   3
+# Burroughs at fc0bd9b, 3 of 3                error: interp: "get" takes 0 arguments, got 1
+# Burroughs with the interim refusal          error: ErrUnsupportedForm, "a sync cross-component call whose string
+#                                             result (2 flat values, past MAX_FLAT_RESULTS 1) …"
+#
+# Meaning:     run sync-lowers a sibling's sync `get: func() -> string` and returns the length stored at its
+#              retptr. A string flattens to two words, so the result spills. The child returns a pointer to
+#              (ptr, len) in its own memory, and the parent's lowered func takes a retptr and returns nothing.
+#              wasmtime copies the string across through the parent's realloc and reads 3. Burroughs passed the
+#              flat words through, so the call failed on arity. The interim refusal names the form instead.
+#              That is a stated limit, not conformance. The conformant fix is the memory-to-memory adapter,
+#              held in an ADR draft for chair review.
+#
+# sync-string-param.wasm, the SILENT face, found writing that ADR:
+# Invocation:  wasmtime run --invoke 'run()' sync-string-param.wasm
+#
+# reader                                      reading
+# wasmtime 49.0.3, 10 of 10                   97   ('a', the first byte of the caller's "abc")
+# Burroughs at fc0bd9b, 3 of 3                120  ('x', the byte at the same address in the child's memory)
+# Burroughs with the interim refusal          error: ErrUnsupportedForm, "… parameter "s" (a string, which
+#                                             carries a pointer into the caller's memory)"
+#
+# Meaning:     a string parameter is two flat words, so nothing spills, but the words point into the caller's
+#              memory. The reference lowers the string into the callee's memory through the callee's realloc.
+#              Burroughs passed the words through, so the callee read its own memory at the caller's address
+#              and returned a plausible wrong value, with no error. The 120 was read on a byte-identical copy
+#              of the committed file.
