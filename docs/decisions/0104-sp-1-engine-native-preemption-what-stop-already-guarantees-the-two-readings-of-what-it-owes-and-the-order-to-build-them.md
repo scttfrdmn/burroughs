@@ -104,3 +104,28 @@ Date: 2026-10-18 · Status: **accepted, with three rulings**: the chair's ruling
 **On ADR 0087:** its *"GC-STW trigger → `Stop`"* binding exists in neither tree. A dated correction is appended to 0087, citing this recon's search, with 0087's body unedited.
 
 **The order the ruling sets:** ADR 0103's adapter, a default-path defect, is built first, then reading (a).
+
+## As built, 2026-10-18: reading (a), first half
+
+**The bound, as registered on #515 before building:** B = (the longest straight-line stretch in the module) +
+one bulk chunk + scheduling noise. So arrival no longer scales with any bulk operand.
+
+- **Built:** `memory.fill`, `memory.copy` and `memory.init` poll between 64 KiB chunks (`bulkChunk`,
+  `internal/interp/bulk.go`). Each executor still loads its image once. Holding the slice across a park is safe
+  because `soleAgentLocked` refuses a relocating grow while any other live thread has a caller, and a parked
+  agent is inside a call. A first draft re-loaded the view after each poll, which guarded nothing and broke
+  decision 0058's one-load rule (`TestEveryOperationLoadsAPublishedImageAtMostOnce` caught it).
+- **The forecast is met.** The table, with janus tasks 43 (before) and 44 (after), is on #515 and in the
+  CHANGELOG. The 64 MiB fill went from p99 16.7ms to p99 30µs or less, and the 32 MiB copy from 4.2ms to 28µs or
+  less. The tight loop and the straight line are unchanged.
+- **The cost is inside ADR 0059's bar:** `loopbench` and `membench` show no significant row.
+- **Witnesses:** `TestATightLoopReachesASafepointWithinTheBound`, `TestABulkFillReachesASafepointWithinOneChunk`,
+  and `TestSP1StopBringsEveryAgentToASafepointByTheDeadline`, the litmus case standalone. Each neuter fails
+  rather than hanging.
+- **Still owed by reading (a):** poll points in the sync adapter's copies (ADR 0103). They run in host Go code on
+  the caller's thread inside `callAdapter`, and they need an exported poll on `CanonCaller` and chunked heaps. A
+  blocked mark is not the alternative: the adapter writes guest memory, and SP-2 forbids a stopped agent to.
+- **Not reached by this half:** the table and array bulk instructions (`table.fill`, `table.copy`,
+  `table.init`, and the GC array ops). Their operands are element counts, typically far smaller than a
+  memory's, and they remain unpolled. That is unmeasured, and it is named here so the bound's scope is not
+  read as wider than it is.
