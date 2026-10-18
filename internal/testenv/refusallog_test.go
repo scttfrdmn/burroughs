@@ -191,6 +191,7 @@ func TestEveryRefusalReasonHasARule(t *testing.T) {
 		{"bare_sleep", "sleep 240", "sleep-as-wait"},
 		{"subst1_discarded", "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n > /dev/null", "subst1-discarded"},
 		{"subst1_chained", "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n ; git commit", "subst1-chained"},
+		{"publish_chained", "make fmt ; gh pr create -t t", "publish-chained"},
 	} {
 		t.Run(a.name, func(t *testing.T) {
 			_ = os.Remove(logPath)
