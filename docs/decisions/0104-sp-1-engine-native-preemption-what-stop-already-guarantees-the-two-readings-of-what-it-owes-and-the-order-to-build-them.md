@@ -217,3 +217,45 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
 - **Measured and set aside:** an arrival witness for the segmentation. Under the one-allocation neuter it failed
   4 of 5 runs at 512 Ki elements and 0 of 10 at 1 Mi, because one large allocation's cost varies run to run.
   The structural witness replaces it.
+
+## Amendment, 2026-10-18: the callee-execution gap (the chair's third ruling of that day, item 3)
+
+**The problem.** While a sync cross-component callee executes, the caller's agent is inside ADR 0103's adapter
+and holds no blocked mark. A `Stop` of the caller's instance therefore waits for the callee to return. The
+callee's frames poll the callee's own instance, which is another world, so for a composition of components
+**the bound is unbounded**: any callee that loops holds the caller's `Stop` for as long as it loops.
+
+**The design, as the ruling sets it:**
+
+1. **The blocked mark.** For the span of a sync cross-component callee's execution, the caller's agent holds a
+   blocked mark, as it does across a wait (`CanonCaller.Blocking`). The span is the callee's core invocation
+   and its `post-return`. It is *not* the adapter's copies, which run on the caller's agent and keep their
+   polls.
+   - **Why #1062's objection does not apply.** #1062 refused a blocked mark across the copies, because the
+     adapter writes guest memory there and SP-2 forbids a stopped agent to. Across the callee's execution,
+     nothing writes the caller's memory: the callee has its own memory, so the caller's instance is not
+     executing.
+2. **The entry rule.** Every re-entry into the caller's instance during or after the span polls the caller's
+   stop request before it runs. That covers three re-entries:
+   - **the adapter's result lowering**, after the span: `leaveBlocked` unmarks and then polls, before #1062's
+     per-call polls;
+   - **the caller's realloc**, a guest frame, which polls at entry;
+   - **a callback into the caller's exports**, a new entry into the caller's instance, whose first frame polls
+     before its first instruction.
+
+   So a stopped caller is never written while it is counted as stopped, which keeps SP-2.
+
+**The alternative, rejected:** making the callee's frames poll every stop word on the thread's call chain. That
+costs a poll per back-edge per chain depth, on every callee, for what the blocked mark gets at no cost on the
+poll path.
+
+**Witnesses owed:**
+- **A stop of the caller while the callee tight-loops** arrives within the tight-loop witness's bound, and the
+  caller's memory is unchanged until `Resume`, including after the callee returns. Neuter: no blocked mark, and
+  the stop misses its bound.
+- **A stop of the caller while the callee calls back into it** parks the agent before any of the caller's code
+  runs: a write counter in the caller's memory does not move while stopped. Neuter: no entry poll, so the
+  caller's code runs while stopped and the counter moves.
+
+**`Stop`'s documented behaviour.** If `Stop`'s API doc text would change, and not only its internals, that
+sentence goes to Scott before merging. `Stop` lives in `internal/interp`, and the root package exposes none.
