@@ -122,10 +122,45 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
 - **Witnesses:** `TestATightLoopReachesASafepointWithinTheBound`, `TestABulkFillReachesASafepointWithinOneChunk`,
   and `TestSP1StopBringsEveryAgentToASafepointByTheDeadline`, the litmus case standalone. Each neuter fails
   rather than hanging.
-- **Still owed by reading (a):** poll points in the sync adapter's copies (ADR 0103). They run in host Go code on
-  the caller's thread inside `callAdapter`, and they need an exported poll on `CanonCaller` and chunked heaps. A
-  blocked mark is not the alternative: the adapter writes guest memory, and SP-2 forbids a stopped agent to.
+- **Owed by reading (a) when this half landed, and built in the second half below:** poll points in the sync
+  adapter's copies (ADR 0103). They run in host Go code on the caller's thread inside `callAdapter`, and they
+  need an exported poll on `CanonCaller` and chunked heaps. A blocked mark is not the alternative: the adapter
+  writes guest memory, and SP-2 forbids a stopped agent to.
 - **Not reached by this half:** the table and array bulk instructions (`table.fill`, `table.copy`,
   `table.init`, and the GC array ops). Their operands are element counts, typically far smaller than a
   memory's, and they remain unpolled. That is unmeasured, and it is named here so the bound's scope is not
   read as wider than it is.
+
+## As built, 2026-10-18: reading (a), second half
+
+- **Built:** ADR 0103's four adapter copies poll the caller's agent. `CanonCaller.Poll` is the back-edge's poll,
+  and every read and write the copies make calls it first:
+  - the caller-side heap (`adapterHeap`);
+  - the callee-side `argHeap` and `liftHeap`, with the caller passed through `invokeWithPending`.
+
+  The codec's string lift and lower stream in 64 KiB chunks (`canon.StringChunk`) with incremental UTF-8
+  validation. Without that, a whole-value `[]byte(s)`, `utf8.Valid` or `string(b)` would sit between two
+  polls. A list moves element by element, so it is already one heap call per element.
+- **Only the sync adapter polls.** An async lower's result store can run on another agent's goroutine, and a
+  poll there would park the caller's thread from the wrong goroutine, possibly while the caller holds a blocked
+  mark.
+- **The forecast is met.** The table, with janus tasks 47 (before) and 52 (after), is on #515. A 16 MiB string
+  went from p99 23–25ms to p99 59µs or less, and its max to 134µs or less.
+- **The cost is inside ADR 0059's bar**, but only at the second draft.
+  - The first draft (task 50) read +8.46% on ADR 0103's sync string round trip and +2.23% on the async one.
+    The causes were eight allocations per call, from a poll closure, a context value and boxed wrappers, plus
+    the streamed form's overhead on a short string.
+  - The repair: the caller is a parameter, the caller-side heap is one pointer, and a string of at most one
+    chunk keeps the whole-value form. It reads +0.99% and ~, with a geomean of −0.01% (task 51).
+- **Witnesses:**
+  - `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`: 2ms over 20 trials. Its neuter, `pollCaller` returning
+    at once, fails. The bound was 10ms as registered, and that passed under the neuter on darwin/arm64, so it
+    was tightened.
+  - `TestUTF8JoinAgreesWithWholeValidation`, which caught the joiner's first draft.
+- **Not reached, and named:** while the callee itself executes, the caller's agent holds no blocked mark. A
+  `Stop` of the caller's instance therefore waits for the callee to return. The callee's frames poll the
+  callee's own instance, which is another world. This is #515's instance-scoped `Stop`, and this ADR does not
+  repair it.
+- **Reading (a) is complete** in what ruling 1 named: the bound, polls in the bulk memory ops and the adapter
+  copies, the tight-loop witness, the cost, and the litmus case. Reading (b)'s proposal goes to Scott next, and
+  per ruling 3 none of (b) is built before he has seen it.
