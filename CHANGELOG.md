@@ -26,6 +26,26 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`Stop`'s arrival no longer scales with a value crossing a sync cross-component call** (contract §3 SP-1,
+  reading (a)'s second half;
+  [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
+  - **The change:** ADR 0103's adapter copies poll the caller's agent before each heap read and write, through
+    a new `CanonCaller.Poll`. The codec's string lift and lower stream in 64 KiB chunks (`canon.StringChunk`)
+    with incremental UTF-8 validation. A string of one chunk or less takes the whole-value path it always
+    did.
+  - **The forecast was registered on #515 before building, and it was met** (janus `measured`, tasks 47 and
+    52). A 16 MiB string went from p99 23–25ms and max 27–29ms to **p99 ≤ 59µs and max ≤ 134µs**.
+  - **The cost is inside ADR 0059's bar:** ADR 0103's string round trip reads sync +0.99% and async ~, with a
+    geomean of −0.01%. That is the second draft. The first read +8.46%, from eight allocations per call, and
+    was repaired before landing.
+  - **Witness:** `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`, a 2ms bound over 40 trials that fails at
+    6 misses. Its neuter, every adapter poll removed, missed 15 to 24 of 40 and failed every run.
+  - **Not reached:**
+    - a `Stop` of the caller's instance still waits for the callee's own execution, which polls the callee's
+      instance (#515's instance-scoped `Stop`);
+    - a list's lift allocates its element slice in one unpollable piece. Locally, 512 Ki elements reached 9ms.
+  - **Reading (a) is complete.** Reading (b)'s proposal goes to Scott next.
+
 - **`Stop`'s arrival no longer scales with a bulk memory instruction's operand** (contract §3 SP-1, reading (a)'s
   first half; [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md),
   accepted with three rulings on 2026-10-18).
@@ -51,7 +71,8 @@ says what it now requires and what it gives up.
     agents, counters frozen after `Stop`). The §4 battery stays parked under #10.
   - **Neuters, run:** with the back-edge poll removed the tight loop misses its deadline, and with the chunk
     poll removed the fill misses its bound. Each fails rather than hanging.
-  - **Still owed by reading (a):** poll points in the sync adapter's copies (ADR 0103), the next slice.
+  - **Owed by reading (a) when this landed:** poll points in the sync adapter's copies (ADR 0103). They are
+    the entry above.
 
 - **`v0.8.0`'s first known limit is lifted: a sync cross-component call carries strings, lists and records**
   ([#995](https://github.com/scttfrdmn/burroughs/issues/995);

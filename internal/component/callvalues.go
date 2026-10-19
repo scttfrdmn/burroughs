@@ -103,7 +103,7 @@ func (in *Instantiated) CallValuesCtx(ctx context.Context, name string, args ...
 	// **The resolution comes back as a return value, not from a field on `fn`** (#869). `fn` is shared by
 	// every concurrent caller of this export, so reading a resolution off it handed two callers one slot —
 	// a data race `-race` reported on the concurrent acceptance arm, which passed without it.
-	resolved, err := fn.invokeWithPending(ctx, flat, pend)
+	resolved, err := fn.invokeWithPending(ctx, flat, pend, nil) // an embedder's call: no caller agent waits
 	if err != nil {
 		return nil, err
 	}
