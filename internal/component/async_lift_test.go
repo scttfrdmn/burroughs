@@ -168,7 +168,7 @@ func TestAsyncLiftExitOnlyResolvesViaTaskReturn(t *testing.T) {
 	// (#869); `invoke()` is the discarding wrapper, so a test that needs the result asks for it.
 	// `.flat` since #903: the resolution carries the flat words *and* any eagerly-lifted value, and this
 	// assertion is about the words.
-	res0, err := cd.fn.invokeWith(context.Background(), nil)
+	res0, err := cd.fn.invokeWith(context.Background())
 	resolved := res0.flat
 	if err != nil {
 		t.Fatalf("invoke run (the async-lift loop skeleton): %v", err)
@@ -479,8 +479,8 @@ func TestAsyncFutureCancelWriteRunningProducer(t *testing.T) {
 	}
 	defer in.Close()
 	cd := in.export.exports["run"]
-	res0, err := cd.fn.invokeWith(context.Background(), nil) // the resolution is a return value now (#869)
-	resolved := res0.flat                                    // .flat since #903 — see the note at the first such site
+	res0, err := cd.fn.invokeWith(context.Background()) // the resolution is a return value now (#869)
+	resolved := res0.flat                               // .flat since #903 — see the note at the first such site
 	if err != nil {
 		t.Fatalf("invoke run (the cancellation guest): %v", err)
 	}
@@ -521,8 +521,8 @@ func TestFutureWriteDroppedStaysFixtureOnly(t *testing.T) {
 	}
 	defer in.Close()
 	cd := in.export.exports["run"]
-	res0, err := cd.fn.invokeWith(context.Background(), nil) // the resolution is a return value now (#869)
-	resolved := res0.flat                                    // .flat since #903 — see the note at the first such site
+	res0, err := cd.fn.invokeWith(context.Background()) // the resolution is a return value now (#869)
+	resolved := res0.flat                               // .flat since #903 — see the note at the first such site
 	if err != nil {
 		t.Fatalf("invoke: %v", err)
 	}

@@ -72,7 +72,7 @@ type compFunc struct {
 
 // invoke runs the func and discards any resolution — for callers whose export returns nothing (`run()`).
 func (f *compFunc) invoke() error {
-	_, err := f.invokeWith(context.Background(), nil)
+	_, err := f.invokeWith(context.Background())
 	return err
 }
 
@@ -89,8 +89,10 @@ func (f *compFunc) invoke() error {
 // wait — the park and the entry semaphore — by being stored on the task, so no intermediate signature
 // needs it. A sync lift ignores it: it does not wait.
 // invokeWithPending is `invokeWith` carrying arguments whose bytes must be placed in guest memory before
-// the callee runs (#902). `invokeWith` is this with none, which is what every caller but `CallValuesCtx`
-// wants — a second name rather than a nil argument at sixteen call sites whose subject is the lift loop.
+// the callee runs (#902). `invokeWith` is this with no arguments at all: `invoke` and the lift-loop tests,
+// whose exports take none. `invokeWithCaller` is this with flat arguments and a waiting caller. The
+// "sixteen call sites" this paragraph once counted had become the two cross-component arms, which moved to
+// `invokeWithCaller` with ADR 0104's amendment, and `invokeWith` lost its parameter list with them.
 //
 // **A pending lowering on a sync lift is performed inside its run slot** (ADR 0103). This refused it until
 // the adapter, on the ground that *"the sync path has no task and no entry slot"*. The task half stays
@@ -109,8 +111,8 @@ func (f *compFunc) invokeWithPending(ctx context.Context, params []interp.Value,
 	return f.invokeSync(ctx, params, pend, caller)
 }
 
-func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftResult, error) {
-	return f.invokeWithCaller(ctx, params, nil)
+func (f *compFunc) invokeWith(ctx context.Context) (liftResult, error) {
+	return f.invokeWithCaller(ctx, nil, nil)
 }
 
 // invokeWithCaller is `invokeWith` for a sync cross-component call whose caller's agent waits on it: `caller`
