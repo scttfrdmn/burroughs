@@ -710,7 +710,7 @@ func LoadList(h ReadHeap, ptr, count int, elem Type, loadElem func(int) (Value, 
 // a packed list materialises (`elems`) to exactly the plain lift's elements.
 //
 // NEUTER: read the whole span in one `ReadBytes` (one chunk), and
-// `TestAStopDuringAListAdapterCopyArrivesWithinTheBound`'s `list<u8>` case misses its bound.
+// `TestAPackedListCrossesTheHeapInChunks` fails its read bound.
 func loadPackedList(h ReadHeap, ptr, byteLen int, elem Type) (Value, error) {
 	es := intBytes(elem.Kind)
 	step := max(es, StringChunk/es*es) // whole elements per chunk

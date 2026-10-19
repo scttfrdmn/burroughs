@@ -148,6 +148,66 @@ func TestALongListLiftsInBoundedPieces(t *testing.T) {
 	}
 }
 
+// chunkHeap wraps the model heap and records the largest single read and write, so a witness can assert the
+// codec never hands a heap more than one chunk at once. That bound is what keeps a guest heap's per-call
+// poll one chunk away (contract §3 SP-1).
+type chunkHeap struct {
+	*heap
+	maxRead, maxWrite, reads, writes int
+}
+
+func (c *chunkHeap) ReadBytes(ptr, n int) ([]byte, error) {
+	c.reads++
+	c.maxRead = max(c.maxRead, n)
+	return c.heap.ReadBytes(ptr, n)
+}
+
+func (c *chunkHeap) WriteBytes(ptr int, data []byte) error {
+	c.writes++
+	c.maxWrite = max(c.maxWrite, len(data))
+	return c.heap.WriteBytes(ptr, data)
+}
+
+// TestAPackedListCrossesTheHeapInChunks: a packed list and a string longer than several chunks are each
+// lifted and lowered with no heap call larger than `StringChunk`. This is the deterministic witness for the
+// lift side, which `TestAStopLandsInsideAnAdapterCopy` cannot see: a read leaves no memory state behind.
+//
+// NEUTERS (run): `loadPackedList` reading the whole span in one `ReadBytes` fails the list's read bound;
+// `storeListData`'s packed arm writing it in one `WriteBytes` fails its write bound.
+func TestAPackedListCrossesTheHeapInChunks(t *testing.T) {
+	const n = 3*StringChunk + 17
+	c := &chunkHeap{heap: newHeap(4*n + 64)}
+	elem := Type{Kind: KindU8}
+	v, err := LoadList(c, 16, n, elem, func(at int) (Value, error) { return LoadVia(c, elem, at) })
+	if err != nil {
+		t.Fatalf("LoadList: %v", err)
+	}
+	if c.reads < 4 || c.maxRead > StringChunk {
+		t.Errorf("a %d-byte packed list was read in %d call(s), the largest %d bytes; want at least 4 calls of "+
+			"at most %d", n, c.reads, c.maxRead, StringChunk)
+	}
+	if _, _, err := StoreListIntoRange(c, v, func(e Value, at int) error { return StoreVia(c, e, at) }); err != nil {
+		t.Fatalf("StoreListIntoRange: %v", err)
+	}
+	if c.writes < 4 || c.maxWrite > StringChunk {
+		t.Errorf("a %d-byte packed list was written in %d call(s), the largest %d bytes; want at least 4 calls "+
+			"of at most %d", n, c.writes, c.maxWrite, StringChunk)
+	}
+
+	s := &chunkHeap{heap: newHeap(4*n + 64)}
+	p, ln, err := StoreStringIntoRange(s, strings.Repeat("x", n))
+	if err != nil {
+		t.Fatalf("StoreStringIntoRange: %v", err)
+	}
+	if _, err := LoadStringFromRange(s, p, ln); err != nil {
+		t.Fatalf("LoadStringFromRange: %v", err)
+	}
+	if s.maxRead > StringChunk || s.maxWrite > StringChunk || s.reads < 4 || s.writes < 4 {
+		t.Errorf("a %d-byte string crossed in %d read(s) of at most %d and %d write(s) of at most %d bytes; "+
+			"want at least 4 of each, none past %d", n, s.reads, s.maxRead, s.writes, s.maxWrite, StringChunk)
+	}
+}
+
 // itoa avoids importing strconv for one message.
 func itoa(n int) string {
 	if n == 0 {

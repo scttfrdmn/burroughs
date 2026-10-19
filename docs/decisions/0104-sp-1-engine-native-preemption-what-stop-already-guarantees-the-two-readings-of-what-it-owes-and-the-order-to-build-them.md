@@ -153,13 +153,13 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
   - The repair: the caller is a parameter, the caller-side heap is one pointer, and a string of at most one
     chunk keeps the whole-value form. It reads +0.99% and ~, with a geomean of −0.01% (task 51).
 - **Witnesses:**
-  - `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`: a 2ms bound over 40 trials, failing at 6 or more
-    misses. Locally, under a whole-tree test load, the polled form missed 0 of 40 in 20 runs. Its neuter,
-    `pollCaller` returning at once, missed 15 to 24 of 40 and failed 20 of 20.
-    - **The bound was 10ms as registered.** That passed under the neuter on darwin/arm64, where a 24 MiB copy is
-      about 4ms.
-    - **The criterion is a count.** A single miss failed once under `make ci`'s load with the polls in place,
-      because 2ms is inside scheduling noise.
+  - `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`, as landed: a 2ms bound over 40 trials, failing at 6 or
+    more misses. Locally, under a whole-tree test load, the polled form missed 0 of 40 in 20 runs, and its
+    neuter missed 15 to 24 and failed 20 of 20. The bound had been 10ms as registered, which passed under the
+    neuter on darwin/arm64, and the count replaced a single-miss criterion that failed once under `make ci`.
+    - **CI falsified the separation, and the witness is replaced** (the list-lift section below). On #1066's
+      run, CI amd64 missed 11 of 40 with the polls in place. A wall-clock bound tight enough for a neuter to
+      miss on a fast machine sits inside a loaded runner's noise.
   - `TestUTF8JoinAgreesWithWholeValidation`, which caught the joiner's first draft.
 - **Not reached, and named:**
   - **The callee's own execution.** While the callee executes, the caller's agent holds no blocked mark, so a

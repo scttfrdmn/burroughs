@@ -142,8 +142,8 @@ func (l liftHeap) CheckRange(ptr, n int) error {
 // CALLER's thread from another agent's goroutine, possibly while that caller holds a blocked mark, and that
 // counts one caller twice in `atSafepointLocked`.
 //
-// NEUTER `pollCaller` (make it return at once) and `TestAStopDuringAnAdapterCopyArrivesWithinTheBound` misses
-// its bound.
+// NEUTER `pollCaller` (make it return at once) and `TestAStopLandsInsideAnAdapterCopy` finds no stop inside a
+// copy (run: 0 of 200 in every run).
 type adapterHeap struct{ c *interp.CanonCaller }
 
 func (a adapterHeap) Realloc(origPtr, origSize, align, newSize int) (int, error) {
