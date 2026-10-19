@@ -864,7 +864,7 @@ func StoreStringIntoRange(h Heap, s string) (ptr, byteLen int, err error) {
 	// a `[]byte(s)` of the whole string is a copy no poll can interrupt. `WriteBytes` copies what it is
 	// given, so the buffer is reused. One chunk or less keeps the whole-value form, as the lift does.
 	if len(s) <= StringChunk {
-		if len(s) > 0 {
+		if s != "" {
 			if werr := h.WriteBytes(p, []byte(s)); werr != nil {
 				return 0, 0, werr
 			}
