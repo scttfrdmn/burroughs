@@ -387,6 +387,19 @@ func LoadStringFromRange(h ReadHeap, ptr, byteLength int) (Value, error) {
 	if ptr != alignTo(ptr, alignment) {
 		return Value{}, fmt.Errorf("canon: string pointer %d is not aligned to %d", ptr, alignment)
 	}
+	// **One chunk or less is the whole-value form**, which is the only form most strings ever take. The cost
+	// A/B on #515 read the streamed form at +2.2% on ADR 0103's async round trip of an 82-byte string, which
+	// pays an extra range check and a builder for nothing at that size.
+	if byteLength <= StringChunk {
+		data, err := h.ReadBytes(ptr, byteLength)
+		if err != nil {
+			return Value{}, fmt.Errorf("canon: reading a %d-byte string at %d: %w", byteLength, ptr, err)
+		}
+		if !utf8.Valid(data) {
+			return Value{}, fmt.Errorf("canon: the %d bytes at %d are not valid UTF-8", byteLength, ptr)
+		}
+		return Str(string(data)), nil
+	}
 	// The model's range trap comes before its decode, so the whole range is checked before any byte is read:
 	// an invalid first chunk of an out-of-range string reports the range, as one whole read did.
 	if err := h.CheckRange(ptr, byteLength); err != nil {
@@ -849,7 +862,15 @@ func StoreStringIntoRange(h Heap, s string) (ptr, byteLen int, err error) {
 	//
 	// **Written in chunks through one buffer, not converted whole**, for [LoadStringFromRange]'s reason:
 	// a `[]byte(s)` of the whole string is a copy no poll can interrupt. `WriteBytes` copies what it is
-	// given, so the buffer is reused.
+	// given, so the buffer is reused. One chunk or less keeps the whole-value form, as the lift does.
+	if len(s) <= StringChunk {
+		if len(s) > 0 {
+			if werr := h.WriteBytes(p, []byte(s)); werr != nil {
+				return 0, 0, werr
+			}
+		}
+		return p, len(s), nil
+	}
 	var buf []byte
 	for off := 0; off < len(s); {
 		n := min(StringChunk, len(s)-off)

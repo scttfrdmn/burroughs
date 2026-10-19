@@ -126,8 +126,8 @@ func TestAnAdapterCopyCrossesItsString(t *testing.T) {
 // about 4ms, so a 10ms bound passed under the neuter: run, and it passed 3 of 3. The polled arrivals'
 // slowest was about 0.07ms in 20 runs. Under `-race` the bound scales by `raceSlowdown`.
 //
-// **Neuter, run:** removing the two `p.poll()` calls in `pacedRead` and `pacedWrite`. A stop then waits for
-// the copy in progress to end, and the stop misses its 2ms deadline and fails, on trial 0 or 1 in 5 of 5
+// **Neuter, run:** `pollCaller` returning at once, which removes every poll the adapter's heaps make. A stop
+// then waits for the copy in progress to end, and misses its 2ms deadline and fails, by trial 4 in 5 of 5
 // runs. `Close` ends the guest at its next frame entry.
 func TestAStopDuringAnAdapterCopyArrivesWithinTheBound(t *testing.T) {
 	const n = 24 << 20

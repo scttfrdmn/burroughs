@@ -3,7 +3,6 @@
 package component
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -65,6 +64,9 @@ type argHeap struct {
 	// being lowered rather than of each realloc it makes: a string's cap is the load side's 2²⁸−1 (ADR
 	// 0098's recorded divergence), and anything else is bounded only by `REALLOC_I32_MAX`.
 	kind canon.Kind
+	// caller is the sync cross-component caller whose agent waits on this lowering, or nil (`lowerPending`).
+	// Each write polls it, as `adapterHeap`'s do.
+	caller *interp.CanonCaller
 }
 
 // allocRequest is one `cabi_realloc` call's worth of intent.
@@ -87,10 +89,12 @@ func (a argHeap) Realloc(_, _, align, newSize int) (int, error) {
 }
 
 func (a argHeap) WriteBytes(ptr int, data []byte) error {
+	pollCaller(a.caller)
 	return interp.WriteBoundaryMemory(a.f.mem, uint64(ptr), data)
 }
 
 func (a argHeap) StoreInt(v uint64, ptr, nbytes int) error {
+	pollCaller(a.caller)
 	buf := make([]byte, nbytes)
 	for i := range nbytes {
 		buf[i] = byte(v >> (8 * i))
@@ -100,13 +104,18 @@ func (a argHeap) StoreInt(v uint64, ptr, nbytes int) error {
 
 // liftHeap is the read side of a lift's own memory, for a sync callee's spilled result (ADR 0103). The
 // callee has returned by the time its result is lifted, so there is no `CanonCaller` to read through.
-// The boundary accessors take ADR 0073's growth lock and copy, as `argHeap`'s writes do.
-type liftHeap struct{ f *compFunc }
+// The boundary accessors take ADR 0073's growth lock and copy, as `argHeap`'s writes do. Each read polls
+// `caller`, the sync cross-component caller whose agent waits on the lift, when there is one.
+type liftHeap struct {
+	f      *compFunc
+	caller *interp.CanonCaller
+}
 
 func (l liftHeap) ReadBytes(ptr, n int) ([]byte, error) {
 	if ptr < 0 || n < 0 {
 		return nil, fmt.Errorf("component: lift read of %d byte(s) at %d: a negative offset is not an address", n, ptr)
 	}
+	pollCaller(l.caller)
 	return interp.ReadBoundaryMemory(l.f.mem, uint64(uint32(ptr)), uint64(uint32(n)))
 }
 
@@ -117,62 +126,52 @@ func (l liftHeap) CheckRange(ptr, n int) error {
 	return interp.CheckBoundaryRange(l.f.mem, uint64(uint32(ptr)), uint64(uint32(n)))
 }
 
-// pacedRead and pacedWrite are a heap whose every read and write polls the calling agent's safepoint
-// first: ADR 0103's sync adapter copies, which run in host code on the caller's agent (contract §3 SP-1,
-// ADR 0104). A copy through one is never more than one heap call from a poll, because the codec bounds a
-// call's size (`canon.StringChunk`) and a list moves element by element.
+// adapterHeap is the caller's side of ADR 0103's sync adapter: `guestHeap`, with every read and write polling
+// the calling agent's safepoint first (contract §3 SP-1, ADR 0104). The adapter's four copies run in host
+// code on the caller's agent. Two go through this heap, and the callee's two through `argHeap` and `liftHeap`
+// with their `caller` set. So a copy is never more than one heap call from a poll: the codec bounds a call's
+// size (`canon.StringChunk`), and a list moves element by element.
 //
 // **`Realloc` does not poll here**, because the realloc it reaches is a guest frame and polls at its entry.
+// **One pointer, so that it converts to an interface without an allocation.** The cost A/B on #515 read the
+// first draft, a heap plus a poll closure, at +8.5% on ADR 0103's string round trip, with eight more
+// allocations per call.
 //
-// **Only the sync adapter wraps its heaps**, and not every user of `guestHeap`. An async lower's result store
-// can run on the goroutine of whichever agent holds the run slot (`apply`, async_lower.go), and a poll there
-// would park the CALLER's thread from another agent's goroutine, possibly while that caller holds a blocked
-// mark. That counts one caller twice in `atSafepointLocked`.
+// **Only the sync adapter polls**, and not every user of `guestHeap`. An async lower's result store can run on
+// the goroutine of whichever agent holds the run slot (`apply`, async_lower.go). A poll there would park the
+// CALLER's thread from another agent's goroutine, possibly while that caller holds a blocked mark, and that
+// counts one caller twice in `atSafepointLocked`.
 //
-// NEUTER BOTH POLLS and `TestAStopDuringAnAdapterCopyArrivesWithinTheBound` misses its bound.
-type pacedRead struct {
-	h    canon.ReadHeap
-	poll func()
+// NEUTER `pollCaller` (make it return at once) and `TestAStopDuringAnAdapterCopyArrivesWithinTheBound` misses
+// its bound.
+type adapterHeap struct{ c *interp.CanonCaller }
+
+func (a adapterHeap) Realloc(origPtr, origSize, align, newSize int) (int, error) {
+	return guestHeap(a).Realloc(origPtr, origSize, align, newSize)
 }
 
-func (p pacedRead) ReadBytes(ptr, n int) ([]byte, error) {
-	p.poll()
-	return p.h.ReadBytes(ptr, n)
+func (a adapterHeap) WriteBytes(ptr int, data []byte) error {
+	pollCaller(a.c)
+	return guestHeap(a).WriteBytes(ptr, data)
 }
 
-func (p pacedRead) CheckRange(ptr, n int) error { return p.h.CheckRange(ptr, n) }
-
-type pacedWrite struct {
-	h    canon.Heap
-	poll func()
+func (a adapterHeap) StoreInt(v uint64, ptr, nbytes int) error {
+	pollCaller(a.c)
+	return guestHeap(a).StoreInt(v, ptr, nbytes)
 }
 
-func (p pacedWrite) Realloc(origPtr, origSize, align, newSize int) (int, error) {
-	return p.h.Realloc(origPtr, origSize, align, newSize)
+func (a adapterHeap) ReadBytes(ptr, n int) ([]byte, error) {
+	pollCaller(a.c)
+	return guestHeap(a).ReadBytes(ptr, n)
 }
 
-func (p pacedWrite) WriteBytes(ptr int, data []byte) error {
-	p.poll()
-	return p.h.WriteBytes(ptr, data)
-}
+func (a adapterHeap) CheckRange(ptr, n int) error { return guestHeap(a).CheckRange(ptr, n) }
 
-func (p pacedWrite) StoreInt(v uint64, ptr, nbytes int) error {
-	p.poll()
-	return p.h.StoreInt(v, ptr, nbytes)
-}
-
-// callerPollKey carries a sync cross-component caller's safepoint poll into the callee's `invokeSync`, whose
-// argument lowering and result lift run on the caller's agent (ADR 0104).
-type callerPollKey struct{}
-
-func withCallerPoll(ctx context.Context, poll func()) context.Context {
-	return context.WithValue(ctx, callerPollKey{}, poll)
-}
-
-// callerPollFrom is the poll ctx carries, or nil when the call has no waiting caller agent.
-func callerPollFrom(ctx context.Context) func() {
-	poll, _ := ctx.Value(callerPollKey{}).(func())
-	return poll
+// pollCaller is the adapter's safepoint poll on the caller's agent, and nothing when there is no caller.
+func pollCaller(c *interp.CanonCaller) {
+	if c != nil {
+		c.Poll()
+	}
 }
 
 // pendingLower is one argument whose payload must be placed in guest memory before the callee runs.
@@ -198,18 +197,15 @@ type pendingLower struct {
 // This function does not acquire the region, because acquiring it here would mean releasing it between the
 // allocation and the call, the thing the region exists to prevent.
 //
-// `poll` is the calling agent's safepoint poll when a caller's agent is waiting on this lowering, and nil
-// when none is: `invokeSync` passes the sync adapter's (ADR 0104), and an async lift's entry passes nil.
-func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value, poll func()) error {
+// `caller` is the sync cross-component caller whose agent waits on this lowering, and nil when none does:
+// `invokeSync` passes the sync adapter's (ADR 0104), and an async lift's entry passes nil.
+func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value, caller *interp.CanonCaller) error {
 	for i := range pend {
 		p := &pend[i]
 		// The heap carries the ARGUMENT's kind, so every allocation the codec makes while lowering it —
 		// including a `list<string>`'s per-element string allocations — is capped by the rule that
 		// belongs to the argument rather than by one guessed per realloc.
-		var h canon.Heap = argHeap{f: f, param: p.param, kind: p.val.Type.Kind}
-		if poll != nil {
-			h = pacedWrite{h, poll}
-		}
+		h := argHeap{f: f, param: p.param, kind: p.val.Type.Kind, caller: caller}
 
 		// **The codec does the lowering.** Both arms are the model's `*_into_range` forms: they allocate
 		// through the guest's realloc, write through the boundary accessor (which takes ADR 0073's growth
