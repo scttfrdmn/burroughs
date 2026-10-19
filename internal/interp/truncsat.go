@@ -118,7 +118,7 @@ func (in *Instance) execFC(ins binary.Instr, st *stack) error {
 		n := tableAddr(tab, st.popNum())
 		r := st.popRef()
 		i := tableAddr(tab, st.popNum())
-		return tab.fill(i, n, r)
+		return tab.fill(i, n, r, st.t)
 
 	default:
 		return unsupported(ins)

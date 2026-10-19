@@ -719,15 +719,18 @@ var tableReserveSlots uint64 = 1024
 // directly rather than filling and catching an overrun mid-loop. `TableFill`'s reference
 // (`eval.ml:375-392`) is a recursive store-then-recurse; a loop over the reference's own bound
 // check is the same effect without staging n synthetic instructions to re-enter this opcode.
-func (t *table) fill(i, n uint64, r ref) error {
+func (t *table) fill(i, n uint64, r ref, th *thread) error {
 	slots := t.view()
 	end := i + n
 	if end < i || end > uint64(len(slots)) { // `lt_u (add i n) i || gt_u (add i n) j`
 		return trapOOBTable
 	}
-	for k := i; k < end; k++ {
-		slots[k] = r
-	}
+	// In `elemChunk` pieces with a poll between them (contract §3 SP-1; `eachPiece`).
+	eachPiece(th, n, false, func(lo, hi uint64) {
+		for k := i + lo; k < i+hi; k++ {
+			slots[k] = r
+		}
+	})
 	return nil
 }
 

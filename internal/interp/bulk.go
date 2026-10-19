@@ -150,6 +150,40 @@ func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 // baseline's rates on janus, against a 17ms and 4.3ms unpolled stretch for 64 MiB and 32 MiB.
 const bulkChunk = 64 << 10
 
+// elemChunk is the most a table or GC-array bulk instruction does between two safepoint polls, in elements
+// (contract §3 SP-1, ADR 0104; the chair's ruling of 2026-10-19, item 3). A table slot is one `ref` and an
+// array element one `gcField`, tens of bytes each, so 4096 of them is the same order of work as one
+// `bulkChunk` of bytes.
+const elemChunk = 4096
+
+// eachPiece runs body over [0, n) in `elemChunk` pieces, polling the agent between two pieces, for the table
+// and array bulk instructions. **backward** runs the pieces from the end, which is what a copy whose destination
+// lies above an overlapping source needs, for `memory.copy`'s reason. Within a piece, body runs in whatever
+// order it likes.
+//
+// **The caller loads its images once, before the first piece**, which is decision 0065's rule, and holds them
+// across the polls. That is safe for a table because `table.grow` refuses to relocate while another agent has a
+// caller (`soleAgentLocked`), and a parked agent is inside a call. An array is a heap object, which never moves.
+// A segment's image is held for `memory.init`'s reason: an `init` that began before a `drop` finishes from the
+// segment it began with.
+//
+// NEUTER THIS by stepping `elemChunk*64` (the poll interval ×64), and the boundary witnesses in
+// `sp1bulk_test.go` fail their interval check.
+func eachPiece(t *thread, n uint64, backward bool, body func(lo, hi uint64)) {
+	for done := uint64(0); done < n; {
+		size := min(elemChunk, n-done)
+		lo := done
+		if backward {
+			lo = n - done - size
+		}
+		body(lo, lo+size)
+		done += size
+		if done < n {
+			t.poll()
+		}
+	}
+}
+
 // execMemoryCopy is `fc 0a` — `memory.copy x y`, `eval.ml:567`.
 //
 // **Two memories, two indices, and `x` is the destination.** `decode.ml:671` is
@@ -261,7 +295,12 @@ func (in *Instance) execTableCopy(ins binary.Instr, st *stack) error {
 	if n == 0 {
 		return nil
 	}
-	copy(dstSlots[d:d+n], srcSlots[s:s+n])
+	// In `elemChunk` pieces, keeping `memory.copy`'s direction across them: backward when the destination lies
+	// above an overlapping source in the same table, so no piece's write lands on a later piece's source.
+	backward := dstTab == srcTab && d > s && d < s+n
+	eachPiece(st.t, n, backward, func(lo, hi uint64) {
+		copy(dstSlots[d+lo:d+hi], srcSlots[s+lo:s+hi])
+	})
 	return nil
 }
 
@@ -325,7 +364,9 @@ func (in *Instance) execTableInit(ins binary.Instr, st *stack) error {
 	if n == 0 {
 		return nil
 	}
-	copy(slots[d:d+n], refs[s:s+n])
+	eachPiece(st.t, n, false, func(lo, hi uint64) { // `elemChunk` pieces, polled between (SP-1)
+		copy(slots[d+lo:d+hi], refs[s+lo:s+hi])
+	})
 	return nil
 }
 

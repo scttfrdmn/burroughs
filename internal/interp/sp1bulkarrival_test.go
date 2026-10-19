@@ -11,6 +11,7 @@ import (
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/text"
+	"github.com/scttfrdmn/burroughs/internal/validate"
 )
 
 // The element counts of the table and array arrival readings. A table slot and an array element are one `ref`
@@ -92,6 +93,9 @@ func sp1BulkModule(tb testing.TB) *binary.Module {
 	m, err := (&binary.Decoder{Features: binary.Features{GC: true}}).DecodeModule(img)
 	if err != nil {
 		tb.Fatalf("decoding the measurement module: %v", err)
+	}
+	if _, err := validate.Module(m); err != nil { // `mustInst` does not validate; see `gcInst`
+		tb.Fatalf("the measurement module does not validate: %v", err)
 	}
 	return m
 }

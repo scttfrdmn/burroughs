@@ -27,7 +27,8 @@ func wordStopPoint(t *testing.T, in *Instance, base, size int) uint64 {
 }
 
 // checkBulkPollLattice asserts that every stop point is a multiple of `chunk` (no poll off the lattice), and
-// that some point is not a multiple of 2·chunk (a poll at every chunk, not at every k-th). A copy polling every
+// that some point is not a multiple of 2·chunk (a poll at every chunk, not at every k-th). The unit is the
+// instruction's own: bytes for the memory bulk ops, elements for the table and array ones. A copy polling every
 // k·chunk, k ≥ 2, fails the second check, which is what the chunk-×64 neuter tests. It needs at least ten
 // points, so that a correct copy's false failure, 2⁻ⁿ, is one in a thousand or less.
 func checkBulkPollLattice(t *testing.T, points []uint64, chunk uint64, what string) {
@@ -40,14 +41,14 @@ func checkBulkPollLattice(t *testing.T, points []uint64, chunk uint64, what stri
 	offCoarse := 0
 	for _, k := range points {
 		if k%chunk != 0 {
-			t.Fatalf("a stop parked inside %s at byte %d, not a multiple of the %d-byte chunk: a poll sits off "+
+			t.Fatalf("a stop parked inside %s at unit %d, not a multiple of the %d-unit chunk: a poll sits off "+
 				"the chunk lattice", what, k, chunk)
 		}
 		if k%(2*chunk) != 0 {
 			offCoarse++
 		}
 	}
-	t.Logf("%d stop point(s) inside %s, all on the %d-byte lattice; %d off the 2×%d lattice",
+	t.Logf("%d stop point(s) inside %s, all on the %d-unit lattice; %d off the 2×%d lattice",
 		len(points), what, chunk, offCoarse, chunk)
 	if offCoarse == 0 {
 		t.Fatalf("all %d stop points inside %s are multiples of %d, twice the chunk: the instruction polls every "+
