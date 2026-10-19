@@ -664,15 +664,88 @@ func LoadList(h ReadHeap, ptr, count int, elem Type, loadElem func(int) (Value, 
 		return Value{}, fmt.Errorf("canon: a %d-element list at %d spans %d bytes: %w",
 			count, ptr, byteLen, rerr)
 	}
-	vals := make([]Value, count)
-	for i := range count {
-		v, lerr := loadElem(ptr + i*es)
-		if lerr != nil {
-			return Value{}, fmt.Errorf("canon: list element %d at %d: %w", i, ptr+i*es, lerr)
-		}
-		vals[i] = v
+	// **Never one allocation proportional to the count** (contract §3 SP-1, ADR 0104; the chair's third ruling
+	// of 2026-10-18). A guest heap polls the calling agent on each call, so the work between two heap calls is
+	// what bounds a `Stop`'s arrival. The `make([]Value, count)` this replaces was one zeroed allocation, with
+	// no heap call inside it, and it reached 9ms at 512 Ki elements.
+	if packable(elem.Kind) {
+		return loadPackedList(h, ptr, byteLen, elem)
 	}
-	return List(elem, vals...)
+	if count <= listSegment {
+		vals := make([]Value, count)
+		for i := range count {
+			v, lerr := loadElem(ptr + i*es)
+			if lerr != nil {
+				return Value{}, fmt.Errorf("canon: list element %d at %d: %w", i, ptr+i*es, lerr)
+			}
+			vals[i] = v
+		}
+		return List(elem, vals...)
+	}
+	// NEUTER: build this as one `make([]Value, count)`, and `TestALongListLiftsInBoundedPieces` fails. The
+	// arrival witness's `list<string>` case does not reliably catch it: run, it failed 4 of 5 at 512 Ki elements
+	// and 0 of 10 at 1 Mi, because one large allocation's cost varies from run to run.
+	segs := make([]Value, 0, (count+listSegment-1)/listSegment)
+	for start := 0; start < count; start += listSegment {
+		seg := make([]Value, min(listSegment, count-start))
+		for j := range seg {
+			i := start + j
+			v, lerr := loadElem(ptr + i*es)
+			if lerr != nil {
+				return Value{}, fmt.Errorf("canon: list element %d at %d: %w", i, ptr+i*es, lerr)
+			}
+			if !typeEqual(v.Type, elem) {
+				return Value{}, fmt.Errorf("canon: list element %d is %s, want %s", i, v.Type, elem)
+			}
+			seg[j] = v
+		}
+		segs = append(segs, Value{list: seg})
+	}
+	return Value{Type: Type{Kind: KindList, Elem: &elem}, u: listSegmented, list: segs}, nil
+}
+
+// loadPackedList lifts a list of a `packable` scalar kind as its canonical bytes, `StringChunk` at a time,
+// with no `[]Value` (see [Value]). Each element is the value `LoadVia` would lift: bool is normalised to 0 or
+// 1 (nonzero is true), and char goes through `LiftFlatScalar`'s two traps. The integers are their bytes. So
+// a packed list materialises (`elems`) to exactly the plain lift's elements.
+//
+// NEUTER: read the whole span in one `ReadBytes` (one chunk), and
+// `TestAPackedListCrossesTheHeapInChunks` fails its read bound.
+func loadPackedList(h ReadHeap, ptr, byteLen int, elem Type) (Value, error) {
+	es := intBytes(elem.Kind)
+	step := max(es, StringChunk/es*es) // whole elements per chunk
+	var b strings.Builder
+	b.Grow(byteLen)
+	var scratch []byte
+	for off := 0; off < byteLen; off += step {
+		n := min(step, byteLen-off)
+		data, err := h.ReadBytes(ptr+off, n)
+		if err != nil {
+			return Value{}, fmt.Errorf("canon: reading list elements at %d: %w", ptr+off, err)
+		}
+		switch elem.Kind {
+		case KindBool:
+			scratch = append(scratch[:0], data...)
+			for i, c := range scratch {
+				if c != 0 {
+					scratch[i] = 1
+				}
+			}
+			data = scratch
+		case KindChar:
+			for i := 0; i < n; i += 4 {
+				word := uint64(data[i]) | uint64(data[i+1])<<8 | uint64(data[i+2])<<16 | uint64(data[i+3])<<24
+				if _, err := LiftFlatScalar(elem, word); err != nil {
+					at := ptr + off + i
+					return Value{}, fmt.Errorf("canon: list element %d at %d: %w", (off+i)/es, at, err)
+				}
+			}
+		default:
+			// The integers: their canonical bytes are their values.
+		}
+		b.Write(data)
+	}
+	return Value{Type: Type{Kind: KindList, Elem: &elem}, u: listPacked, s: b.String()}, nil
 }
 
 // LoadListAt lifts a `list<T>` whose **(pointer, count) header** sits at ptr — `load_list`'s framing, and
@@ -899,7 +972,7 @@ func StoreListIntoRange(h Heap, v Value, storeElem func(Value, int) error) (ptr,
 	if err != nil {
 		return 0, 0, err
 	}
-	return p, len(v.list), nil
+	return p, v.listLen(), nil
 }
 
 // StoreList lowers a `list<T>` (CanonicalABI.md `store_list`): the element backing is allocated through
@@ -919,7 +992,7 @@ func StoreList(h Heap, v Value, ptr int, storeElem func(Value, int) error) error
 	if err := h.StoreInt(uint64(p), ptr, ptrSize); err != nil {
 		return err
 	}
-	return h.StoreInt(uint64(len(v.list)), ptr+ptrSize, ptrSize)
+	return h.StoreInt(uint64(v.listLen()), ptr+ptrSize, ptrSize)
 }
 
 // StoreVia lowers a value through a [Heap] for the kinds a guest lowering composes — integers, `string`,
@@ -1192,7 +1265,7 @@ func storeListData(h Heap, v Value, storeElem func(Value, int) error) (int, erro
 	// overflow is far-fetched here; routing it through the one guard anyway is what makes the claim
 	// checkable instead of merely intended, and it bounds the store side by `REALLOC_I32_MAX` the way
 	// definitions.py:store_list_into_range:"assert(byte_length <= REALLOC_I32_MAX)" does.
-	byteLen, err := ListByteLength(len(v.list), es)
+	byteLen, err := ListByteLength(v.listLen(), es)
 	if err != nil {
 		return 0, err
 	}
@@ -1200,9 +1273,37 @@ func storeListData(h Heap, v Value, storeElem func(Value, int) error) (int, erro
 	if err != nil {
 		return 0, err
 	}
-	for i, e := range v.list {
-		if err := storeElem(e, p+i*es); err != nil {
-			return 0, err
+	switch v.u {
+	case listPacked:
+		// The packed bytes are already each element's canonical store, so they are written `StringChunk` at
+		// a time through one buffer, as a string is (contract §3 SP-1).
+		var buf []byte
+		for off := 0; off < len(v.s); {
+			n := min(StringChunk, len(v.s)-off)
+			if buf == nil {
+				buf = make([]byte, n)
+			}
+			copy(buf, v.s[off:off+n])
+			if err := h.WriteBytes(p+off, buf[:n]); err != nil {
+				return 0, err
+			}
+			off += n
+		}
+	case listSegmented:
+		i := 0
+		for _, seg := range v.list {
+			for _, e := range seg.list {
+				if err := storeElem(e, p+i*es); err != nil {
+					return 0, err
+				}
+				i++
+			}
+		}
+	default:
+		for i, e := range v.list {
+			if err := storeElem(e, p+i*es); err != nil {
+				return 0, err
+			}
 		}
 	}
 	return p, nil
@@ -1241,7 +1342,7 @@ func (h *heap) lowerFlat(v Value) ([]flatVal, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []flatVal{{"i32", uint64(p)}, {"i32", uint64(len(v.list))}}, nil
+		return []flatVal{{"i32", uint64(p)}, {"i32", uint64(v.listLen())}}, nil
 	case KindVariant:
 		return h.lowerFlatVariant(v)
 	case KindRecord:

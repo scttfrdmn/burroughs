@@ -119,7 +119,8 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
   CHANGELOG. The 64 MiB fill went from p99 16.7ms to p99 30µs or less, and the 32 MiB copy from 4.2ms to 28µs or
   less. The tight loop and the straight line are unchanged.
 - **The cost is inside ADR 0059's bar:** `loopbench` and `membench` show no significant row.
-- **Witnesses:** `TestATightLoopReachesASafepointWithinTheBound`, `TestABulkFillReachesASafepointWithinOneChunk`,
+- **Witnesses:** `TestATightLoopReachesASafepointWithinTheBound`, the bulk-fill witness (landed with a 10ms bound,
+  replaced since by `TestAStopLandsInsideABulkFill` for the timing reason given in the list-lift section),
   and `TestSP1StopBringsEveryAgentToASafepointByTheDeadline`, the litmus case standalone. Each neuter fails
   rather than hanging.
 - **Owed by reading (a) when this half landed, and built in the second half below:** poll points in the sync
@@ -153,22 +154,22 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
   - The repair: the caller is a parameter, the caller-side heap is one pointer, and a string of at most one
     chunk keeps the whole-value form. It reads +0.99% and ~, with a geomean of −0.01% (task 51).
 - **Witnesses:**
-  - `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`: a 2ms bound over 40 trials, failing at 6 or more
-    misses. Locally, under a whole-tree test load, the polled form missed 0 of 40 in 20 runs. Its neuter,
-    `pollCaller` returning at once, missed 15 to 24 of 40 and failed 20 of 20.
-    - **The bound was 10ms as registered.** That passed under the neuter on darwin/arm64, where a 24 MiB copy is
-      about 4ms.
-    - **The criterion is a count.** A single miss failed once under `make ci`'s load with the polls in place,
-      because 2ms is inside scheduling noise.
+  - `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`, as landed: a 2ms bound over 40 trials, failing at 6 or
+    more misses. Locally, under a whole-tree test load, the polled form missed 0 of 40 in 20 runs, and its
+    neuter missed 15 to 24 and failed 20 of 20. The bound had been 10ms as registered, which passed under the
+    neuter on darwin/arm64, and the count replaced a single-miss criterion that failed once under `make ci`.
+    - **CI falsified the separation, and the witness is replaced** (the list-lift section below). On #1066's
+      run, CI amd64 missed 11 of 40 with the polls in place. A wall-clock bound tight enough for a neuter to
+      miss on a fast machine sits inside a loaded runner's noise.
   - `TestUTF8JoinAgreesWithWholeValidation`, which caught the joiner's first draft.
 - **Not reached, and named:**
   - **The callee's own execution.** While the callee executes, the caller's agent holds no blocked mark, so a
     `Stop` of the caller's instance waits for the callee to return. The callee's frames poll the callee's own
     instance, which is another world. This is #515's instance-scoped `Stop`, and this ADR does not repair it.
-  - **A list's lifted value is one zeroed Go allocation** (`canon.LoadList`'s `make([]Value, count)`). That is
-    runtime work proportional to the element count, and no poll can interrupt it. Locally, a 512 Ki-element
-    `list<u8>` crossing the adapter, with every poll in place, reached 9ms arrivals and missed a 10ms deadline.
-    The copies poll per element; the allocation is the stretch left. This is unmeasured on janus.
+  - **A list's lifted value was one zeroed Go allocation** (`canon.LoadList`'s `make([]Value, count)`): runtime
+    work proportional to the element count, which no poll could interrupt. Locally, a 512 Ki-element
+    `list<u8>` crossing the adapter, with every poll in place, reached 9ms arrivals. **Built since: the
+    list-lift section below.**
 - **Reading (a) is not complete.** This line said it was until the chair's third ruling of 2026-10-18, which
   corrected it: the forecast's max is 1ms, and the list lift's 9ms stretch is inside ADR 0103's adapter, which
   ruling 1 named.
@@ -177,8 +178,42 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
     - polls in the bulk memory ops and in the adapter's string copies, each meeting its forecast on janus;
     - the tight-loop witness, the cost, and the litmus case.
   - **Owed, both ordered by that ruling:**
-    - **The list lift.** Scalar elements cross memory to memory in `StringChunk` pieces with polls and no
-      `[]Value`; other elements build their slice in bounded pieces.
+    - **The list lift**, built since (the section below).
     - **The callee's execution.** The caller's agent holds a blocked mark across a sync callee's run, and every
       re-entry into the caller polls first. This comes as a dated amendment here, then the build.
   - Reading (b)'s proposal is #1064, and per ruling 3 none of (b) is built before Scott has seen it.
+
+## As built, 2026-10-18: the list lift (the chair's third ruling, item 2)
+
+- **Built:** a list lift is never one allocation proportional to its count.
+  - **Packed scalars.** A list of a packable scalar kind (bool, the integers, char: what the heaps carry) is
+    lifted as its canonical bytes, `StringChunk` at a time, with no `[]Value`. bool is normalised to 0/1 and
+    char is validated per element through `LiftFlatScalar`. It is stored the same way.
+  - **Segments.** Other lists longer than 4096 elements are built in 4096-element segments.
+  - **The representation.** `canon.Value` marks both forms in `u`, which a list did not use. `List()`
+    materialises, and `elems`/`listLen` read every form.
+  - **f32 and f64 lists stay refused, as they were.** No heap carries floats today, so packing them would widen
+    what crosses.
+- **The forecast is met** (janus `measured`; before task 53, after task 54; tables on #515):
+  - `list<u8>`, 512 Ki: p99 20–22ms → 35–45µs, max 83–94ms → 61–111µs;
+  - `list<string>`, 512 Ki: p99 11–27ms → 13–17µs, max 87–92ms → 15–32µs.
+- **The cost is inside ADR 0059's bar** (task 55): `ListRoundTrip` `list-u8` −70.19%, `list-string` ~.
+- **The witnesses, and a replaced one.** The two timing witnesses (#1062's string case, and this slice's
+  first list cases) are replaced by `TestAStopLandsInsideAnAdapterCopy`, which asserts a place and not a time.
+  - **How it works.** After each stop, the parent's result regions are read
+    (`testdata/adapter-copy-flip.wat`). A region holding two fill bytes is a write stopped part-way, which only
+    a poll inside the copy can produce.
+  - **The readings.** Polled, 15 to 26 of 200 stops land inside a copy. Neutered (`pollCaller`, or the packed
+    store in one write), 0 of 200, every run.
+  - **What covers what is out of its reach.** The lift side's chunking, a read no memory records, is
+    `canon`'s `TestAPackedListCrossesTheHeapInChunks`. The segmentation is `TestALongListLiftsInBoundedPieces`.
+    The packed form's equivalence to the plain lift is `TestAPackedListLiftsToThePlainElements` and
+    `TestAPackedListStoresItsCanonicalBytes`.
+  - **The bound is carried by the janus readings**, as the chair's ruling put it.
+  - **The bulk-fill witness got the same repair**, because the same defect surfaced. Its 10ms single-miss bound
+    missed on trial 0 under `make ci`'s `strict` gate, with the poll in place. It became
+    `TestAStopLandsInsideABulkFill`: the fill byte alternates per pass, and a mid-fill park leaves the region's
+    two ends disagreeing. Polled, 40 of 40 trials park mid-fill; with the per-chunk poll removed, 0 of 40.
+- **Measured and set aside:** an arrival witness for the segmentation. Under the one-allocation neuter it failed
+  4 of 5 runs at 512 Ki elements and 0 of 10 at 1 Mi, because one large allocation's cost varies run to run.
+  The structural witness replaces it.

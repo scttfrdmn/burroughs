@@ -316,6 +316,19 @@ func TupleType(ts ...Type) Type {
 // Value is one component value. Exactly one payload field is meaningful per Type.Kind: u holds the raw
 // bits of bool/ints/char (a signed integer is held as its two's-complement bits, so a fixed-width store
 // is a low-byte copy); s holds a string; list holds a list's elements.
+//
+// **A lifted list has two more forms, both marked in u, which a list does not otherwise use** (contract §3
+// SP-1, ADR 0104; the chair's third ruling of 2026-10-18). Both exist so that a list crossing the canon
+// adapter is never one unpollable stretch proportional to its count. The lift's one `make([]Value, count)`
+// reached 9ms with every poll in place.
+//   - **listPacked:** a list of a `packable` scalar kind holds its elements as their canonical memory bytes in
+//     s, with no `[]Value` at all. `LoadList` builds it chunk by chunk, and `storeListData` writes it the same
+//     way.
+//   - **listSegmented:** a longer list of any other kind holds `listSegment`-element pieces, each a Value whose
+//     `list` is one piece. So no single allocation scales with the count.
+//
+// Readers go through `elems` and `listLen`, which see every form. `List` is the only door out, and it
+// materialises. Nothing else reads `list` for a KindList.
 type Value struct {
 	Type    Type
 	u       uint64 // bool/ints/char bits; a variant's case index
@@ -407,7 +420,89 @@ func (v Value) List() ([]Value, bool) {
 	if v.Type.Kind != KindList {
 		return nil, false
 	}
-	return append([]Value(nil), v.list...), true
+	if v.u == listPlain {
+		return append([]Value(nil), v.list...), true
+	}
+	return v.elems(), true // a fresh slice already
+}
+
+// The forms a KindList value's u marks (see [Value]).
+const (
+	listPlain     = 0
+	listPacked    = 1
+	listSegmented = 2
+)
+
+// listSegment is the element count of one piece of a segmented list. At about 80 bytes a Value, a piece is
+// a few hundred KiB, which zeroes in tens of microseconds. That is inside SP-1's per-chunk bound.
+const listSegment = 4096
+
+// packable reports whether a list of kind k may be held packed: the scalar kinds whose canonical memory form
+// is `intBytes` wide, and which the heaps carry (`LoadVia`/`StoreVia`). f32 and f64 are scalars too, but no
+// heap path carries them today, so packing them would widen what crosses rather than speed it.
+func packable(k Kind) bool { return intBytes(k) > 0 }
+
+// listLen is a KindList value's element count in any form.
+func (v Value) listLen() int {
+	switch v.u {
+	case listPacked:
+		return len(v.s) / intBytes(v.Type.Elem.Kind)
+	case listSegmented:
+		n := 0
+		for _, seg := range v.list {
+			n += len(seg.list)
+		}
+		return n
+	default:
+		return len(v.list)
+	}
+}
+
+// elems is a KindList value's elements in any form. It returns the backing slice for a plain list, which a
+// caller must not modify (`List` copies), and a fresh slice otherwise. A packed list decodes through
+// `LoadVia`, the one scalar lift, so its elements are the values a plain lift would have produced.
+func (v Value) elems() []Value {
+	switch v.u {
+	case listPacked:
+		es := intBytes(v.Type.Elem.Kind)
+		out := make([]Value, len(v.s)/es)
+		h := packedHeap(v.s)
+		for i := range out {
+			// The bytes were validated when packed, so a decode error is a broken invariant, not a guest
+			// fault. It is carried as a zero element rather than panicking inside an embedder's read.
+			e, err := LoadVia(h, *v.Type.Elem, i*es)
+			if err != nil {
+				e = Value{Type: *v.Type.Elem}
+			}
+			out[i] = e
+		}
+		return out
+	case listSegmented:
+		out := make([]Value, 0, v.listLen())
+		for _, seg := range v.list {
+			out = append(out, seg.list...)
+		}
+		return out
+	default:
+		return v.list
+	}
+}
+
+// packedHeap reads a packed list's bytes as a [ReadHeap], so `elems` decodes through `LoadVia`.
+type packedHeap string
+
+func (p packedHeap) ReadBytes(ptr, n int) ([]byte, error) {
+	if err := p.CheckRange(ptr, n); err != nil {
+		return nil, err
+	}
+	return []byte(p[ptr : ptr+n]), nil
+}
+
+func (p packedHeap) CheckRange(ptr, n int) error {
+	if ptr < 0 || n < 0 || ptr+n > len(p) {
+		return fmt.Errorf("canon: read of %d byte(s) at %d is outside a %d-byte packed list", n, ptr, len(p))
+	}
+	return nil
 }
 
 // Stream builds a stream<T> result the host returns to a guest to write to. Carries no payload; the
