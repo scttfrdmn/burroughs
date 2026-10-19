@@ -133,16 +133,21 @@ func TestListByteLengthCannotOverflow(t *testing.T) {
 func TestLoadListFramesTheSpanBeforeReadingAnyElement(t *testing.T) {
 	h := newHeap(1 << 12)
 	u32 := Type{Kind: KindU32}
+	// **The framing checks below use an `own` element, not a u32.** A u32 list is `packable`, so it is lifted
+	// as bytes and never calls the injected loader (`loadPackedList`, the chair's third ruling of 2026-10-18).
+	// A handle is 4 bytes at alignment 4 like a u32, and it is not packable, so its elements are what the
+	// injected loader reads. This test used u32 for both until the packed form landed.
+	own := OwnType(0)
 
-	// A happy path first, so the refusals below are not the only thing exercised. Four u32s at an
-	// aligned offset, each element read by the injected loader.
+	// A happy path first, so the refusals below are not the only thing exercised. Four elements at an
+	// aligned offset, each read by the injected loader.
 	for i, v := range []uint32{1, 2, 3, 4} {
 		h.storeInt(uint64(v), 64+i*4, 4)
 	}
 	loads := 0
-	got, err := LoadList(h, 64, 4, u32, func(at int) (Value, error) {
+	got, err := LoadList(h, 64, 4, own, func(at int) (Value, error) {
 		loads++
-		return Value{Type: u32, u: h.loadInt(at, 4)}, nil
+		return Value{Type: own, u: h.loadInt(at, 4)}, nil
 	})
 	if err != nil {
 		t.Fatalf("LoadList: %v", err)
@@ -154,8 +159,26 @@ func TestLoadListFramesTheSpanBeforeReadingAnyElement(t *testing.T) {
 		t.Fatalf("lifted %d element(s), want 4", n)
 	}
 	for i, want := range []uint64{1, 2, 3, 4} {
-		if u, ok := got.list[i].U32(); !ok || uint64(u) != want {
-			t.Errorf("element %d = %d (ok=%v), want %d", i, u, ok, want)
+		if u := got.list[i].u; u != want {
+			t.Errorf("element %d = %d, want %d", i, u, want)
+		}
+	}
+
+	// The same four words as a list<u32> lift packed, without the loader, to the same values.
+	packed, err := LoadList(h, 64, 4, u32, func(int) (Value, error) {
+		t.Error("the injected loader ran for a packable list<u32>")
+		return Value{}, nil
+	})
+	if err != nil {
+		t.Fatalf("LoadList of a packable list<u32>: %v", err)
+	}
+	elems, _ := packed.List()
+	if len(elems) != 4 {
+		t.Fatalf("the packed list<u32> materialised %d element(s), want 4", len(elems))
+	}
+	for i, want := range []uint32{1, 2, 3, 4} {
+		if u, ok := elems[i].U32(); !ok || u != want {
+			t.Errorf("packed element %d = %d (ok=%v), want %d", i, u, ok, want)
 		}
 	}
 
@@ -191,8 +214,8 @@ func TestLoadListFramesTheSpanBeforeReadingAnyElement(t *testing.T) {
 	// single element was read. The element loader is injected, so any `ReadBytes` seen here is the
 	// framing's.
 	counting := &countingReadHeap{inner: h}
-	if _, cerr := LoadList(counting, 64, 4, u32, func(at int) (Value, error) {
-		return Value{Type: u32, u: h.loadInt(at, 4)}, nil
+	if _, cerr := LoadList(counting, 64, 4, own, func(at int) (Value, error) {
+		return Value{Type: own, u: h.loadInt(at, 4)}, nil
 	}); cerr != nil {
 		t.Fatalf("LoadList over the counting heap: %v", cerr)
 	}

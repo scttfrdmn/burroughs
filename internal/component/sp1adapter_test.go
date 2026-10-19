@@ -103,6 +103,9 @@ const adapterListLen = 512 << 10
 // allocation). It returns the instance and a function that crosses that placed list through the adapter by
 // invoking the export's core function directly. The core instance is what a `Stop` must wait for. An export
 // call would lower its argument on the embedder's goroutine, outside any agent, which dilutes a reading.
+//
+// A zero `arg` places nothing. A `list<u8>` is valid over any bytes, so a crossing can read whatever the
+// parent's memory holds at 1024, which saves building a host-side list of millions of elements.
 func placeAdapterList(tb testing.TB, export string, arg canon.Value, n int) (*Instantiated, *interp.Instance, func() error) {
 	tb.Helper()
 	b, err := os.ReadFile("testdata/adapter-copy-list.wasm")
@@ -117,10 +120,12 @@ func placeAdapterList(tb testing.TB, export string, arg canon.Value, n int) (*In
 	if !ok || cd.fn == nil || cd.fn.core.inst == nil {
 		tb.Fatalf("the fixture's %q export resolves to no core instance", export)
 	}
-	if res, err := in.CallValues(export, arg); err != nil {
-		tb.Fatalf("placing the list: %v", err)
-	} else if v, ok := res[0].U32(); !ok || v != uint32(n) {
-		tb.Fatalf("placing the list: %s = %v, want u32 %d", export, res, n)
+	if arg.Type.Kind == canon.KindList {
+		if res, err := in.CallValues(export, arg); err != nil {
+			tb.Fatalf("placing the list: %v", err)
+		} else if v, ok := res[0].U32(); !ok || v != uint32(n) {
+			tb.Fatalf("placing the list: %s = %v, want u32 %d", export, res, n)
+		}
 	}
 	core, name := cd.fn.core.inst, cd.fn.core.name
 	return in, core, func() error {
@@ -277,6 +282,16 @@ func TestAStopDuringAnAdapterCopyArrivesWithinTheBound(t *testing.T) {
 			}
 		}
 	}()
+	stopTrialsWithinTheBound(t, core, "a sync adapter's string copy")
+}
+
+// stopTrialsWithinTheBound is the adapter witnesses' shared criterion (see
+// `TestAStopDuringAnAdapterCopyArrivesWithinTheBound` for its measurement). It makes 40 stops at random
+// points, each with a 2ms deadline (scaled by `raceSlowdown`), and fails at 6 or more misses. The criterion is
+// a regression guard; the janus reading on #515 carries the bound itself (the chair's third ruling of
+// 2026-10-18).
+func stopTrialsWithinTheBound(t *testing.T, core *interp.Instance, what string) {
+	t.Helper()
 	if err := core.Stop(30 * time.Second); err != nil {
 		t.Fatalf("the first Stop: %v", err)
 	}
@@ -307,8 +322,72 @@ func TestAStopDuringAnAdapterCopyArrivesWithinTheBound(t *testing.T) {
 	}
 	t.Logf("the slowest of %d arrivals: %s; %d missed", trials, worst, len(misses))
 	if len(misses) >= maxMisses {
-		t.Fatalf("Stop(%s) on an agent inside a sync adapter copy missed its deadline in %d of %d trials %v, "+
-			"at or past %d; the adapter's heaps poll between %d-byte chunks, so misses at that rate mean a copy "+
-			"ran unpolled", bound, len(misses), trials, misses, maxMisses, canon.StringChunk)
+		t.Fatalf("Stop(%s) on an agent inside %s missed its deadline in %d of %d trials %v, at or past %d; "+
+			"the adapter's heaps poll on every call and the codec bounds a call's work, so misses at that rate "+
+			"mean a stretch ran unpolled", bound, what, len(misses), trials, misses, maxMisses)
+	}
+}
+
+// TestAStopDuringAListAdapterCopyArrivesWithinTheBound is SP-1's list-lift witness (the chair's third ruling
+// of 2026-10-18, item 2): an agent inside ADR 0103's adapter while a 512 Ki-element list crosses reaches a
+// safepoint within the bound, under `stopTrialsWithinTheBound`'s criterion. Both lists are read against
+// wasmtime 49.0.3 first, and every crossing in the loop checks its length.
+//
+// **The `list<u8>` case crosses 24 Mi elements, not the instrument's 512 Ki, and the neuter set that.** Once
+// packed, 512 KiB of bytes is one read of about 50µs. So its neuter (the whole span read in one `ReadBytes`)
+// passed 5 of 5 at 512 Ki: it was run, and it could not fail. At 24 Mi elements the span is the string
+// witness's 24 MiB, and an unchunked read of it misses 2ms. Nothing is placed for it, because any bytes are a
+// valid `list<u8>` (`placeAdapterList`).
+//
+// **Neuters, run, one per class:**
+//   - `list<u8>`: `loadPackedList` reading the whole span in one `ReadBytes`, so no poll between chunks;
+//   - `list<string>`: `LoadList`'s segmented build reverted to one `make([]Value, count)`. **This neuter is
+//     weak here, and that was measured:** it failed 4 of 5 runs at 512 Ki elements and 0 of 10 at 1 Mi,
+//     because one large allocation's cost varies run to run. The segmentation's deterministic witness is
+//     canon's `TestALongListLiftsInBoundedPieces`. This case stays as the arrival reading for non-scalar
+//     lists.
+//
+// The `list<u8>` neuter fails 5 of 5 at 24 Mi elements.
+func TestAStopDuringAListAdapterCopyArrivesWithinTheBound(t *testing.T) {
+	for _, c := range []struct {
+		class, export string
+		small         canon.Value
+		smallLen      uint32
+		n             int
+		place         bool
+	}{
+		{"list<u8>", "run-list", adapterListArg(t, "run-list", 5), 5, 24 << 20, false},
+		{"list<string>", "run-strs", adapterListArg(t, "run-strs", 2), 2, adapterListLen, true},
+	} {
+		t.Run(c.class, func(t *testing.T) {
+			var arg canon.Value
+			if c.place {
+				arg = adapterListArg(t, c.export, c.n)
+			}
+			in, core, cross := placeAdapterList(t, c.export, arg, c.n)
+			defer in.Close()
+			// The oracle reading: wasmtime 49.0.3 reads `run-list([1, 2, 3, 4, 5])` = 5 and
+			// `run-strs(["a", "bc"])` = 2 (testdata/adapter-copy-list.wat).
+			if res, err := in.CallValues(c.export, c.small); err != nil {
+				t.Fatalf("%s of %d elements: %v", c.export, c.smallLen, err)
+			} else if v, ok := res[0].U32(); !ok || v != c.smallLen {
+				t.Fatalf("%s of %d elements = %v, want u32 %d, wasmtime's reading", c.export, c.smallLen, res, c.smallLen)
+			}
+			crossErr := make(chan error, 1)
+			go func() {
+				for {
+					if err := cross(); err != nil {
+						crossErr <- err
+						return
+					}
+				}
+			}()
+			stopTrialsWithinTheBound(t, core, "a sync adapter's "+c.class+" copy")
+			select {
+			case err := <-crossErr:
+				t.Fatalf("a crossing failed while the trials ran: %v", err)
+			default:
+			}
+		})
 	}
 }
