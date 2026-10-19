@@ -38,10 +38,12 @@ says what it now requires and what it gives up.
   - **The cost is inside ADR 0059's bar:** ADR 0103's string round trip reads sync +0.99% and async ~, with a
     geomean of −0.01%. That is the second draft. The first read +8.46%, from eight allocations per call, and
     was repaired before landing.
-  - **Witness:** `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`. Its neuter, every adapter poll removed,
-    misses the 2ms bound and fails.
-  - **Not reached:** a `Stop` of the caller's instance still waits for the callee's own execution, which polls
-    the callee's instance (#515's instance-scoped `Stop`).
+  - **Witness:** `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`, a 2ms bound over 40 trials that fails at
+    6 misses. Its neuter, every adapter poll removed, missed 15 to 24 of 40 and failed every run.
+  - **Not reached:**
+    - a `Stop` of the caller's instance still waits for the callee's own execution, which polls the callee's
+      instance (#515's instance-scoped `Stop`);
+    - a list's lift allocates its element slice in one unpollable piece. Locally, 512 Ki elements reached 9ms.
   - **Reading (a) is complete.** Reading (b)'s proposal goes to Scott next.
 
 - **`Stop`'s arrival no longer scales with a bulk memory instruction's operand** (contract §3 SP-1, reading (a)'s

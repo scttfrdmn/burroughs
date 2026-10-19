@@ -153,14 +153,22 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
   - The repair: the caller is a parameter, the caller-side heap is one pointer, and a string of at most one
     chunk keeps the whole-value form. It reads +0.99% and ~, with a geomean of −0.01% (task 51).
 - **Witnesses:**
-  - `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`: 2ms over 20 trials. Its neuter, `pollCaller` returning
-    at once, fails. The bound was 10ms as registered, and that passed under the neuter on darwin/arm64, so it
-    was tightened.
+  - `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`: a 2ms bound over 40 trials, failing at 6 or more
+    misses. Locally, under a whole-tree test load, the polled form missed 0 of 40 in 20 runs. Its neuter,
+    `pollCaller` returning at once, missed 15 to 24 of 40 and failed 20 of 20.
+    - **The bound was 10ms as registered.** That passed under the neuter on darwin/arm64, where a 24 MiB copy is
+      about 4ms.
+    - **The criterion is a count.** A single miss failed once under `make ci`'s load with the polls in place,
+      because 2ms is inside scheduling noise.
   - `TestUTF8JoinAgreesWithWholeValidation`, which caught the joiner's first draft.
-- **Not reached, and named:** while the callee itself executes, the caller's agent holds no blocked mark. A
-  `Stop` of the caller's instance therefore waits for the callee to return. The callee's frames poll the
-  callee's own instance, which is another world. This is #515's instance-scoped `Stop`, and this ADR does not
-  repair it.
+- **Not reached, and named:**
+  - **The callee's own execution.** While the callee executes, the caller's agent holds no blocked mark, so a
+    `Stop` of the caller's instance waits for the callee to return. The callee's frames poll the callee's own
+    instance, which is another world. This is #515's instance-scoped `Stop`, and this ADR does not repair it.
+  - **A list's lifted value is one zeroed Go allocation** (`canon.LoadList`'s `make([]Value, count)`). That is
+    runtime work proportional to the element count, and no poll can interrupt it. Locally, a 512 Ki-element
+    `list<u8>` crossing the adapter, with every poll in place, reached 9ms arrivals and missed a 10ms deadline.
+    The copies poll per element; the allocation is the stretch left. This is unmeasured on janus.
 - **Reading (a) is complete** in what ruling 1 named: the bound, polls in the bulk memory ops and the adapter
   copies, the tight-loop witness, the cost, and the litmus case. Reading (b)'s proposal goes to Scott next, and
   per ruling 3 none of (b) is built before he has seen it.

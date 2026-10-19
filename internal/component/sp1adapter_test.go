@@ -115,20 +115,34 @@ func TestAnAdapterCopyCrossesItsString(t *testing.T) {
 // an agent inside ADR 0103's sync adapter, copying a 24 MiB string, reaches a safepoint within `bound` of a
 // `Stop`, not after the copy.
 //
-// **The guest's loop is the adapter and almost nothing else.** It invokes `run-sync`'s core function
-// directly, over a string placed once in the parent's memory, rather than calling the export: an export call
-// lowers its argument on the embedder's goroutine, outside any agent, and a stop landing there arrives at
-// once. That diluted the instrument's low percentiles, and it would let a neuter pass by luck here. The
-// string is placed at 1024, where the fixture's bump allocator starts. Each echo is the same bytes, so the
-// allocator's wrap over that region rewrites what is already there.
+// **The guest's loop is the adapter and almost nothing else.** It invokes `run-sync`'s core function directly,
+// over a string placed once in the parent's memory, rather than calling the export. An export call lowers its
+// argument on the embedder's goroutine, outside any agent, and a stop landing there arrives at once, which would
+// let the neuter pass by luck. The string is placed at 1024, where the fixture's bump allocator starts. Each
+// echo is the same bytes, so the allocator's wrap over that region rewrites what is already there.
 //
-// **The bound is 2ms, and it is set by the neuter.** Locally (darwin/arm64) one unpolled 24 MiB copy is
-// about 4ms, so a 10ms bound passed under the neuter: run, and it passed 3 of 3. The polled arrivals'
-// slowest was about 0.07ms in 20 runs. Under `-race` the bound scales by `raceSlowdown`.
+// # Why the criterion is a miss count and not "no miss"
+//
+// **The bound is 2ms, and the neuter sets it.** On darwin/arm64 one unpolled 24 MiB copy is about 4ms, so the
+// 10ms registered on #515 passed under the neuter (run: 3 of 3). The polled arrivals' slowest was about 0.07ms.
+//
+// **But 2ms is inside a loaded machine's scheduling noise.** The first draft failed on a single miss, and it
+// missed once under `make ci`'s parallel test load with its polls in place. A descheduled agent misses at
+// random, while an unpolled copy misses whenever a stop lands with more than 2ms of it left, so the two
+// separate by rate. Measured locally, alongside a whole-tree test run:
+//   - in 20 trials, the polled form missed 0 to 2 times in about 30 runs;
+//   - in 40 trials, the polled form missed 0 times in 20 runs, and the neuter missed 15 to 24 times in 20 runs.
+//
+// So the witness fails at `maxMisses` (6) or more of 40, and a miss is logged either way.
+//
+// A larger string would separate the two by length instead, but 24 MiB is what the fixture's 64 MiB memories
+// hold. A `list<u8>` crosses element by element and is far slower, but it was tried and refused: its lift is
+// one zeroed Go allocation per list, unpolled and proportional to the count. That stretch reached 9ms for
+// 512 Ki elements with every poll in place, and it is named in ADR 0104's as-built section.
 //
 // **Neuter, run:** `pollCaller` returning at once, which removes every poll the adapter's heaps make. A stop
-// then waits for the copy in progress to end, and misses its 2ms deadline and fails, by trial 4 in 5 of 5
-// runs. `Close` ends the guest at its next frame entry.
+// then waits for the copy in progress to end, and misses whenever it lands with more than the bound left. It
+// failed 20 of 20 runs. `Close` ends the guest at its next frame entry.
 func TestAStopDuringAnAdapterCopyArrivesWithinTheBound(t *testing.T) {
 	const n = 24 << 20
 	in, core := instantiateAdapterCopy(t)
@@ -152,11 +166,13 @@ func TestAStopDuringAnAdapterCopyArrivesWithinTheBound(t *testing.T) {
 	core.Resume()
 
 	const (
-		bound  = 2 * time.Millisecond * raceSlowdown
-		trials = 20
+		bound     = 2 * time.Millisecond * raceSlowdown
+		trials    = 40
+		maxMisses = 6
 	)
 	rng := rand.New(rand.NewPCG(1, 4))
 	var worst time.Duration
+	var misses []int
 	for i := range trials {
 		// The host's clock, spun: a point in the guest's run, not a wait for a signal.
 		until := time.Now().Add(time.Duration(rng.Int64N(int64(40 * time.Millisecond))))
@@ -167,11 +183,15 @@ func TestAStopDuringAnAdapterCopyArrivesWithinTheBound(t *testing.T) {
 		d := time.Since(t0)
 		core.Resume()
 		if err != nil {
-			t.Fatalf("trial %d: Stop(%s) on an agent inside a sync adapter copy returned %v after %s; the "+
-				"adapter's heaps poll between %d-byte chunks, so a miss means a copy ran unpolled",
-				i, bound, err, d, canon.StringChunk)
+			misses = append(misses, i)
+			t.Logf("trial %d: Stop(%s) missed after %s: %v", i, bound, d, err)
 		}
 		worst = max(worst, d)
 	}
-	t.Logf("the slowest of %d arrivals: %s", trials, worst)
+	t.Logf("the slowest of %d arrivals: %s; %d missed", trials, worst, len(misses))
+	if len(misses) >= maxMisses {
+		t.Fatalf("Stop(%s) on an agent inside a sync adapter copy missed its deadline in %d of %d trials %v, "+
+			"at or past %d; the adapter's heaps poll between %d-byte chunks, so misses at that rate mean a copy "+
+			"ran unpolled", bound, len(misses), trials, misses, maxMisses, canon.StringChunk)
+	}
 }
