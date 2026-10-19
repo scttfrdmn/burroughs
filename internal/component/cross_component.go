@@ -132,7 +132,11 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 			// reads it from the context (`runChainFrom`), so a call back into an instance this chain already
 			// holds re-enters its run slot. Without it, parent → child → parent through a lift the parent
 			// passed its child self-deadlocked after #976 (`reenter.wasm`; wasmtime returns 8).
-			res, cerr := callee.invokeWith(w.callerChainContext(c), args)
+			//
+			// **And the caller's agent is passed, so the callee runs under its blocked mark** (ADR 0104's
+			// amendment of 2026-10-18). This arm said "there is nothing to mark", and for SP-1 that was false:
+			// unmarked, a `Stop` of the caller waited for the callee to return.
+			res, cerr := callee.invokeWithCaller(w.callerChainContext(c), args, c)
 			return res.flat, cerr
 		}), opts), true
 	}
@@ -159,7 +163,8 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		return interp.CanonLowerExtern(aft, mayLeaveGuard("cross-component async lower of a sync lift",
 			asyncLowerFunc(func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 				params := onStart()
-				res, cerr := callee.invokeWith(w.callerChainContext(c), params)
+				// Under the caller's blocked mark, as the sync arm runs its callee (ADR 0104's amendment).
+				res, cerr := callee.invokeWithCaller(w.callerChainContext(c), params, c)
 				if cerr != nil {
 					return nil, cerr
 				}
@@ -267,9 +272,10 @@ func paramSpill(sig *FuncType) (string, bool) {
 // broke.
 //
 // **Every copy polls the caller's agent** (contract §3 SP-1, ADR 0104): all four run in host code on that
-// agent, so each heap polls `c` (`adapterHeap`, and the callee's `argHeap` and `liftHeap`). While the callee itself executes, the
-// caller's agent holds no blocked mark, so a `Stop` of the caller's instance waits for the callee to return.
-// The callee polls its own instance's agent, which is another world (#515's instance-scoped `Stop`).
+// agent, so each heap polls `c` (`adapterHeap`, and the callee's `argHeap` and `liftHeap`). **While the callee
+// itself executes, the caller's agent holds a blocked mark** (`underCallerMark`, ADR 0104's amendment). Before
+// that, a `Stop` of the caller's instance waited for the callee to return, because the callee polls only its own
+// instance's world.
 //
 // NEUTER EITHER HALF to bring #995 back (both run, `TestASyncCrossComponentCallCrossesAsValues`):
 //   - **no lift**: return the callee's flat words instead of storing its lifted result, and

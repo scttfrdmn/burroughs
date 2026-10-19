@@ -72,7 +72,7 @@ type compFunc struct {
 
 // invoke runs the func and discards any resolution — for callers whose export returns nothing (`run()`).
 func (f *compFunc) invoke() error {
-	_, err := f.invokeWith(context.Background(), nil)
+	_, err := f.invokeWith(context.Background())
 	return err
 }
 
@@ -89,8 +89,10 @@ func (f *compFunc) invoke() error {
 // wait — the park and the entry semaphore — by being stored on the task, so no intermediate signature
 // needs it. A sync lift ignores it: it does not wait.
 // invokeWithPending is `invokeWith` carrying arguments whose bytes must be placed in guest memory before
-// the callee runs (#902). `invokeWith` is this with none, which is what every caller but `CallValuesCtx`
-// wants — a second name rather than a nil argument at sixteen call sites whose subject is the lift loop.
+// the callee runs (#902). `invokeWith` is this with no arguments at all: `invoke` and the lift-loop tests,
+// whose exports take none. `invokeWithCaller` is this with flat arguments and a waiting caller. The
+// "sixteen call sites" this paragraph once counted had become the two cross-component arms, which moved to
+// `invokeWithCaller` with ADR 0104's amendment, and `invokeWith` lost its parameter list with them.
 //
 // **A pending lowering on a sync lift is performed inside its run slot** (ADR 0103). This refused it until
 // the adapter, on the ground that *"the sync path has no task and no entry slot"*. The task half stays
@@ -109,7 +111,15 @@ func (f *compFunc) invokeWithPending(ctx context.Context, params []interp.Value,
 	return f.invokeSync(ctx, params, pend, caller)
 }
 
-func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftResult, error) {
+func (f *compFunc) invokeWith(ctx context.Context) (liftResult, error) {
+	return f.invokeWithCaller(ctx, nil, nil)
+}
+
+// invokeWithCaller is `invokeWith` for a sync cross-component call whose caller's agent waits on it: `caller`
+// is that agent's `CanonCaller`. A sync callee then runs under the caller's blocked mark (`invokeSync`, ADR
+// 0104's amendment of 2026-10-18). There are two such callers that need no adapter: the flat-word
+// passthrough, and an async lower of a sync lift (#1050).
+func (f *compFunc) invokeWithCaller(ctx context.Context, params []interp.Value, caller *interp.CanonCaller) (liftResult, error) {
 	if f.stubName != "" {
 		return liftResult{}, fmt.Errorf("%w: %s (stub host)", ErrLinkRefused, f.stubName)
 	}
@@ -119,7 +129,7 @@ func (f *compFunc) invokeWith(ctx context.Context, params []interp.Value) (liftR
 	if f.async {
 		return f.invokeAsyncLiftWith(ctx, params)
 	}
-	return f.invokeSync(ctx, params, nil, nil)
+	return f.invokeSync(ctx, params, nil, caller)
 }
 
 // invokeSync runs a sync lift: the reference's `def:canon_lift` for a sync callee. Inside the instance's run
@@ -198,7 +208,18 @@ func (f *compFunc) invokeSync(ctx context.Context, params []interp.Value, pend [
 			return liftResult{}, err
 		}
 	}
-	flat, err := f.core.inst.InvokeCMThread(f.core.name, tid, params...)
+	// **The callee executes under the caller's blocked mark** (contract §3 SP-1; ADR 0104's amendment of
+	// 2026-10-18). A sync cross-component caller's agent waits here while this lift's instance, another world,
+	// runs. Without the mark, a `Stop` of the caller waited for the callee to return, which for a callee that
+	// loops is unbounded. Nothing writes the caller's memory in the span, because the callee has its own. A
+	// re-entry into the caller (a callback) is a new entry, which polls at its first frame. The span ends in
+	// `leaveBlocked`, which polls before the adapter touches the caller's memory again. That is the entry rule.
+	//
+	// NEUTER THIS by invoking without the mark, and `TestAStopOfTheCallerDoesNotWaitForItsCallee` misses its
+	// bound.
+	flat, err := underCallerMark(caller, func() ([]interp.Value, error) {
+		return f.core.inst.InvokeCMThread(f.core.name, tid, params...)
+	})
 	if err != nil {
 		return liftResult{}, err
 	}
@@ -220,7 +241,10 @@ func (f *compFunc) invokeSync(ctx context.Context, params []interp.Value, pend [
 	//
 	// NEUTER THIS by skipping the call, and `TestASyncLiftsPostReturnRunsAfterItsResult` reads 100 again.
 	if f.postReturnCore.inst != nil {
-		if _, perr := f.postReturnCore.inst.InvokeMayNotLeave(f.postReturnCore.name, flat...); perr != nil {
+		// The callee's own code again, so under the caller's mark again (ADR 0104's amendment).
+		if _, perr := underCallerMark(caller, func() ([]interp.Value, error) {
+			return f.postReturnCore.inst.InvokeMayNotLeave(f.postReturnCore.name, flat...)
+		}); perr != nil {
 			return liftResult{}, perr
 		}
 	}

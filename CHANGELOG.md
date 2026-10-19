@@ -26,6 +26,19 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A `Stop` of a caller no longer waits for its sync cross-component callee to return** (contract §3 SP-1, the
+  chair's third ruling of 2026-10-18, item 3;
+  [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)'s
+  amendment). A callee is another instance, which polls only its own world, so for a looping callee the wait
+  was unbounded.
+  - **The change:** the caller's agent holds a blocked mark across the callee's execution and its
+    `post-return`, on all three sync paths (adapter, passthrough, async lower of a sync lift). The span ends in a
+    poll, and a callback into the caller polls at its first frame.
+  - **Readings** (janus): stops of a caller whose callee spins about 300ms arrived in **259ns to 2.9µs**, and the
+    cost is ~ on every row (geomean −0.12%).
+  - **Witnesses:** `TestAStopOfTheCallerDoesNotWaitForItsCallee` and `TestAStopOfTheCallerParksACallbackBeforeItRuns`.
+    The no-mark neuter and the no-entry-poll neuter were each run, and each fails.
+
 - **A list crossing a sync cross-component call is never one allocation proportional to its count** (contract
   §3 SP-1, the chair's third ruling of 2026-10-18, item 2;
   [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
@@ -60,12 +73,11 @@ says what it now requires and what it gives up.
   - **Witness:** landed as `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`, a 2ms bound with a miss count.
     That witness has since been replaced: CI amd64 missed 11 of 40 with the polls in place (the entry above).
   - **Not reached:**
-    - a `Stop` of the caller's instance still waits for the callee's own execution, which polls the callee's
-      instance (#515's instance-scoped `Stop`);
+    - a `Stop` of the caller's instance waited for the callee's own execution; the first entry above repairs it;
     - a list's lift allocated its element slice in one unpollable piece; the entry above repairs it.
   - **Reading (a) is not complete.** This line said it was until the chair's third ruling of 2026-10-18. Two
-    stretches were owed: the list lift, now built (above), and the callee's own execution. Reading (b)'s
-    proposal is #1064.
+    stretches were owed, the list lift and the callee's own execution, and both are now built (above). What is
+    still named as not reached is in ADR 0104. Reading (b)'s proposal is #1064.
 
 - **`Stop`'s arrival no longer scales with a bulk memory instruction's operand** (contract §3 SP-1, reading (a)'s
   first half; [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md),
