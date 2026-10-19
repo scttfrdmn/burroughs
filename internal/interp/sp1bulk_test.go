@@ -64,6 +64,7 @@ func arrayGlobal(t *testing.T, in *Instance) *gcObj {
 }
 
 func bulkWitnesses(t *testing.T) []bulkWitness {
+	t.Helper()
 	n := itoa(bulkWitnessLen)
 	seg0 := strings.Repeat(" $f0", bulkWitnessLen)
 	seg1 := strings.Repeat(" $f1", bulkWitnessLen)
