@@ -728,8 +728,12 @@ func (t *table) fill(i, n uint64, r ref, th *thread) error {
 	// In `elemChunk` pieces with a poll between them (contract §3 SP-1; the piece loop, see `elemChunk`).
 	for lo := uint64(0); lo < n; {
 		hi := min(lo+elemChunk, n)
-		for k := i + lo; k < i+hi; k++ {
-			slots[k] = r
+		// The piece as a sub-slice, so its bounds are checked once and not per element: indexing `slots[k]`
+		// with k < i+hi proves nothing about `len(slots)`, and that per-element check measured +5.2% on a
+		// one-piece fill.
+		piece := slots[i+lo : i+hi]
+		for k := range piece {
+			piece[k] = r
 		}
 		lo = hi
 		if lo < n {

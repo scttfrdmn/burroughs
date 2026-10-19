@@ -123,8 +123,10 @@ func (in *Instance) execArrayNew(ins binary.Instr, st *stack) error {
 	fields := make([]gcField, n)
 	for lo := uint64(0); lo < n; {
 		hi := min(lo+elemChunk, n)
-		for i := lo; i < hi; i++ {
-			fields[i] = f
+		// Each piece as a sub-slice, so its bounds are checked once and not per element (as `table.fill`'s).
+		piece := fields[lo:hi]
+		for i := range piece {
+			piece[i] = f
 		}
 		lo = hi
 		if lo < n {
@@ -156,8 +158,9 @@ func (in *Instance) execArrayNewDefault(ins binary.Instr, st *stack) error {
 	fields := make([]gcField, n)   // one piece; see execArrayNew
 	for lo := uint64(0); lo < n; { // the piece loop (see `elemChunk`)
 		hi := min(lo+elemChunk, n)
-		for i := lo; i < hi; i++ {
-			fields[i] = f
+		piece := fields[lo:hi]
+		for i := range piece {
+			piece[i] = f
 		}
 		lo = hi
 		if lo < n {
@@ -270,8 +273,9 @@ func (in *Instance) execArrayNewElem(ins binary.Instr, st *stack) error {
 	fields := make([]gcField, n)   // one piece; see execArrayNew
 	for lo := uint64(0); lo < n; { // the piece loop (see `elemChunk`)
 		hi := min(lo+elemChunk, n)
-		for i := lo; i < hi; i++ {
-			fields[i] = gcField{r: refs[src+i]}
+		piece, rs := fields[lo:hi], refs[src+lo:src+hi]
+		for i := range piece {
+			piece[i] = gcField{r: rs[i]}
 		}
 		lo = hi
 		if lo < n {
@@ -433,8 +437,9 @@ func (in *Instance) execArrayFill(ins binary.Instr, st *stack) error {
 	}
 	for lo := uint64(0); lo < n; { // the piece loop, polled between pieces (SP-1; see `elemChunk`)
 		hi := min(lo+elemChunk, n)
-		for j := i + lo; j < i+hi; j++ {
-			obj.fields[j] = f
+		piece := obj.fields[i+lo : i+hi]
+		for j := range piece {
+			piece[j] = f
 		}
 		lo = hi
 		if lo < n {
@@ -514,23 +519,24 @@ func (in *Instance) execArrayCopy(ins binary.Instr, st *stack) error {
 	// Asserted rather than assumed: TestArrayCopyHandlesOverlapInBothDirections, and the overlap rows of
 	// `TestABulkPieceCopyKeepsItsDirection`.
 	backward := dst == src && dstIdx > srcIdx && dstIdx < srcIdx+n
+	packed := dstFT.Storage.Packed     // decided once, not per piece: the cost A/B on #515 read the per-piece switch
 	for done := uint64(0); done < n; { // the piece loop (see `elemChunk`)
 		size := min(elemChunk, n-done)
 		lo := done
 		if backward {
 			lo = n - done - size
 		}
-		hi := lo + size
+		d, s := dst.fields[dstIdx+lo:dstIdx+lo+size], src.fields[srcIdx+lo:srcIdx+lo+size]
 		switch {
-		case !dstFT.Storage.Packed:
-			copy(dst.fields[dstIdx+lo:dstIdx+hi], src.fields[srcIdx+lo:srcIdx+hi])
+		case !packed:
+			copy(d, s)
 		case !backward:
-			for j := lo; j < hi; j++ {
-				dst.fields[dstIdx+j] = copyElem(dstFT, src.fields[srcIdx+j])
+			for j := range d {
+				d[j] = copyElem(dstFT, s[j])
 			}
 		default:
-			for j := hi; j > lo; j-- {
-				dst.fields[dstIdx+j-1] = copyElem(dstFT, src.fields[srcIdx+j-1])
+			for j := len(d) - 1; j >= 0; j-- {
+				d[j] = copyElem(dstFT, s[j])
 			}
 		}
 		done += size
@@ -648,8 +654,9 @@ func (in *Instance) execArrayInitElem(ins binary.Instr, st *stack) error {
 	}
 	for lo := uint64(0); lo < n; { // the piece loop, polled between pieces (SP-1; see `elemChunk`)
 		hi := min(lo+elemChunk, n)
-		for j := lo; j < hi; j++ {
-			obj.fields[dstIdx+j] = gcField{r: refs[src+j]}
+		piece, rs := obj.fields[dstIdx+lo:dstIdx+hi], refs[src+lo:src+hi]
+		for j := range piece {
+			piece[j] = gcField{r: rs[j]}
 		}
 		lo = hi
 		if lo < n {
