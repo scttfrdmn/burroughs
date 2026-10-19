@@ -167,6 +167,24 @@ func (a adapterHeap) ReadBytes(ptr, n int) ([]byte, error) {
 
 func (a adapterHeap) CheckRange(ptr, n int) error { return guestHeap(a).CheckRange(ptr, n) }
 
+// underCallerMark runs a sync callee's own code (its core invocation, or its `post-return`) with the waiting
+// caller's agent marked blocked, through `CanonCaller.Blocking`, and runs it plainly when there is no caller
+// (ADR 0104's amendment of 2026-10-18). The callee is another instance, so the span writes nothing of the
+// caller's. `Blocking` ends in `leaveBlocked`, which polls, so the caller parks there if it was stopped
+// meanwhile, before the adapter's result copy touches its memory.
+func underCallerMark(caller *interp.CanonCaller, run func() ([]interp.Value, error)) ([]interp.Value, error) {
+	if caller == nil {
+		return run()
+	}
+	var out []interp.Value
+	err := caller.Blocking(func() error {
+		var rerr error
+		out, rerr = run()
+		return rerr
+	})
+	return out, err
+}
+
 // pollCaller is the adapter's safepoint poll on the caller's agent, and nothing when there is no caller.
 func pollCaller(c *interp.CanonCaller) {
 	if c != nil {

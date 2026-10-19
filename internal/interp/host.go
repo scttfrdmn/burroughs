@@ -872,9 +872,13 @@ func (c *CanonCaller) MayLeave() bool { return c.st == nil || c.st.mayNotLeave =
 // its own decision doc. So H-1 holds unconditionally; H-3 holds at the wake for a returning read, on the
 // same terms as p1.
 //
-// **realloc/post-return must not run inside fn.** The adapter lifts before Blocking and lowers after it
-// returns; guest allocation while the agent is in the blocked state is the reentrancy-while-blocked
-// hazard the Model-2 adapter avoids by never blocking during the lower (#694/#715 registered assertion).
+// **The calling agent's own realloc and post-return must not run inside fn.** The adapter lifts before
+// Blocking and lowers after it returns; guest allocation *in the caller's instance* while the agent is in the
+// blocked state is the reentrancy-while-blocked hazard the Model-2 adapter avoids by never blocking during the
+// lower (#694/#715 registered assertion). **Another instance's code may run inside fn**: a sync
+// cross-component callee and its `post-return` do (ADR 0104's amendment of 2026-10-18). The callee has its own
+// memory, so nothing in the span writes the caller's, and a callback into the caller is a new entry that polls
+// at its first frame.
 // The crossing/blocked pair here is balanced (leaveGuest+enterBlocked … enterGuest+leaveBlocked), the
 // same order `callHost` uses, so `callAdapter`'s own accounting is untouched.
 func (c *CanonCaller) Blocking(fn func() error) error {
