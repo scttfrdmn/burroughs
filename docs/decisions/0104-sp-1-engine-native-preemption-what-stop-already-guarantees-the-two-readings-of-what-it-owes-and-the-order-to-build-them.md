@@ -311,3 +311,50 @@ sentence goes to Scott before merging. `Stop` lives in `internal/interp`, and th
     (`haveSysmon = GOARCH != "wasm"`), and (b) does not add one. So the case is **predicted to fail**, with the
     loop checks on and with the import alike.
   - It is recorded when (b)'s build runs it. It gates nothing.
+
+## As built, 2026-10-19: the table and GC-array bulk instructions (item 3), and straight-line code (item 4)
+
+- **Item 3, built.** `table.fill`, `table.copy`, `table.init`, `array.fill`, `array.copy`, `array.init_data`,
+  `array.init_elem`, and the element loops of `array.new`, `array.new_default`, `array.new_data` and
+  `array.new_elem` run in `elemChunk` pieces (4096 elements) with a poll between them.
+  - **Direction.** `table.copy` and `array.copy` keep their direction across pieces.
+  - **Images.** Each operation loads its images once. That is #1061 as built and decision 0065's rule, safe
+    across a park because `table.grow` refuses to relocate under `soleAgentLocked`.
+  - **Where this differs from the ruling.** The ruling's *"view reloaded after each poll"* is not what #1061
+    did; #1061's reload draft broke decision 0058's one-load control.
+- **Item 3, readings** (janus, before task 58, after task 63; tables on #515):
+  - **The fill, copy and init classes meet the forecast:** p99 15–66µs and max 17–120µs, from 0.2–12ms.
+  - **The `array.new*` classes stay above 1ms, as forecast.** `array.new` and `new_default` read p99 6.4–7.1ms
+    and max about 7.3ms; `new_data` about 3.9ms; `new_elem` (64 Ki) is under 1ms. The remaining stretch is the
+    backing allocation: one contiguous `[]gcField` the runtime zeroes as one piece, 112 MiB at 2 Mi elements.
+    **Named, not repaired:** repairing it means a segmented array representation, which is its own decision.
+- **Item 3, cost:** inside ADR 0059's bar at the third draft (task 62), with geomean −0.16% and worst row
+  +1.58%.
+  - **Draft 1** was a shared `eachPiece(body func)` and missed, at +6.66% and geomean +4.12% (task 60): the
+    closure call on every instruction.
+  - **Draft 2** wrote the loops out and still missed, at +5.21% and geomean +2.38% (task 61): a per-element
+    bounds check the original's `k < end` had let the compiler drop.
+  - **The fix:** each piece is a sub-slice.
+- **Item 3, witnesses:**
+  - **The seven readable classes** meet item 1's boundary rule, in `TestAStopLandsInsideATableOrArrayBulkInstruction`.
+  - **The four `array.new*` classes** cannot show where a stop landed, because the array is unpublished until
+    built. So `TestAStopLandsInsideAnArrayNew` counts parks inside one instruction instead. It is coarser than
+    the lattice rule, and it is what an unpublished array allows.
+  - **Its first draft passed with the poll removed.** Its stops landed before the guest had entered, where every
+    `Stop` is satisfied at once. It is now floored on the guest being inside its loop.
+  - **Direction:** `TestABulkPieceCopyKeepsItsDirection`.
+  - **Neuters, run:** no poll, the step ×64, and a forward-only copy. Every class failed the first two. The ×64
+    neuter was re-run on the final loops at four sites.
+  - **The witness modules are now validated.** `mustInst` does not validate, and the validator caught two
+    invalid drafts.
+- **Item 4, read.** The longest poll-free stretch, computed statically (`BenchmarkSP1StraightLine`, a longest
+  path over each body's forward control flow), is:
+  - **525–532 instructions** in the Go guest corpus (clauses 1 to 3);
+  - **592–701** in the Rust fixtures (the four p3 components and `cancel-rust-parent`).
+
+  A straight-line body of that length arrives on janus at **p99 9–37µs and max ≤ 127µs**. **Neither exceeds the
+  forecast's max of 1ms**, so the ruling's report-before-building condition is not met.
+  - **Why the Go stretches are short:** the Go backend lowers every jump to a `br` to the function's entry
+    loop, so every Go basic block ends in a back-edge.
+  - **What the reading does not model:** `br_on_cast*` and `try_table` edges, and a test checks the corpora
+    contain neither.

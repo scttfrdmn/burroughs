@@ -26,6 +26,24 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The table and GC-array bulk instructions poll every 4096 elements** (contract §3 SP-1, the chair's ruling of
+  2026-10-19, item 3;
+  [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
+  - **What changed:** `table.fill`/`copy`/`init`, `array.fill`/`copy`/`init_data`/`init_elem`, and the
+    `array.new*` element loops run in pieces with a poll between them. Copies keep their direction.
+  - **Janus, the fill, copy and init classes:** from 0.2–12ms to **p99 ≤ 66µs, max ≤ 120µs**.
+  - **Janus, `array.new*`:** these stay above 1ms, at about 7ms for 2 Mi elements. The cause is the one-piece
+    backing allocation, which is named and not repaired.
+  - **Cost:** inside ADR 0059's bar at the third draft, with geomean −0.16%. Two earlier drafts missed: a
+    closure on every instruction, then a per-element bounds check.
+  - **Witnesses:**
+    - item 1's boundary rule for the readable classes;
+    - a park count for `array.new*`, whose array is unpublished;
+    - direction rows for both copies.
+    - Every neuter was run.
+- **SP-1's straight-line reading** (item 4): the longest poll-free stretch is 525–532 instructions in the Go guest
+  corpus and 592–701 in the Rust fixtures. It arrives on janus at p99 ≤ 37µs, inside the forecast's 1ms.
+
 - **The SP-1 structural witnesses pin the poll interval, not only that a stop landed mid-copy** (the chair's
   ruling of 2026-10-19, item 1;
   [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
