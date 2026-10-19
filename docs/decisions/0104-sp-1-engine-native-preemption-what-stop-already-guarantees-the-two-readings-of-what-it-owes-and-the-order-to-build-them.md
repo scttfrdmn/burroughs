@@ -119,7 +119,8 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
   CHANGELOG. The 64 MiB fill went from p99 16.7ms to p99 30µs or less, and the 32 MiB copy from 4.2ms to 28µs or
   less. The tight loop and the straight line are unchanged.
 - **The cost is inside ADR 0059's bar:** `loopbench` and `membench` show no significant row.
-- **Witnesses:** `TestATightLoopReachesASafepointWithinTheBound`, `TestABulkFillReachesASafepointWithinOneChunk`,
+- **Witnesses:** `TestATightLoopReachesASafepointWithinTheBound`, the bulk-fill witness (landed with a 10ms bound,
+  replaced since by `TestAStopLandsInsideABulkFill` for the timing reason given in the list-lift section),
   and `TestSP1StopBringsEveryAgentToASafepointByTheDeadline`, the litmus case standalone. Each neuter fails
   rather than hanging.
 - **Owed by reading (a) when this half landed, and built in the second half below:** poll points in the sync
@@ -209,6 +210,10 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
     The packed form's equivalence to the plain lift is `TestAPackedListLiftsToThePlainElements` and
     `TestAPackedListStoresItsCanonicalBytes`.
   - **The bound is carried by the janus readings**, as the chair's ruling put it.
+  - **The bulk-fill witness got the same repair**, because the same defect surfaced. Its 10ms single-miss bound
+    missed on trial 0 under `make ci`'s `strict` gate, with the poll in place. It became
+    `TestAStopLandsInsideABulkFill`: the fill byte alternates per pass, and a mid-fill park leaves the region's
+    two ends disagreeing. Polled, 40 of 40 trials park mid-fill; with the per-chunk poll removed, 0 of 40.
 - **Measured and set aside:** an arrival witness for the segmentation. Under the one-allocation neuter it failed
   4 of 5 runs at 512 Ki elements and 0 of 10 at 1 Mi, because one large allocation's cost varies run to run.
   The structural witness replaces it.

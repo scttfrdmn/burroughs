@@ -128,7 +128,7 @@ func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 	// the image out from under it. A first draft re-loaded the view after each poll. That guarded nothing, and
 	// it broke decision 0058's one-load rule, which `TestEveryOperationLoadsAPublishedImageAtMostOnce` caught.
 	//
-	// NEUTER THIS by skipping the poll, and `TestABulkFillReachesASafepointWithinOneChunk` misses its bound.
+	// NEUTER THIS by skipping the poll, and `TestAStopLandsInsideABulkFill` finds no stop inside a fill.
 	//
 	// The range form inside a chunk is one pass, and is what the compiler recognizes as a memset.
 	for off := uint64(0); off < n; {

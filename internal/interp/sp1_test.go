@@ -56,19 +56,31 @@ func TestATightLoopReachesASafepointWithinTheBound(t *testing.T) {
 	}
 }
 
-// TestABulkFillReachesASafepointWithinOneChunk: an agent inside one large `memory.fill` reaches a safepoint
-// within a chunk of it, not after the whole fill (SP-1, ADR 0104). The baseline on #515 was the whole
-// instruction: 17ms for 64 MiB on janus. The forecast is a p99 of at most 100µs.
+// TestAStopLandsInsideABulkFill: a `Stop` can park an agent **inside** one large `memory.fill`, which only the
+// per-chunk poll can do (SP-1, ADR 0104). The baseline on #515 was the whole instruction: 17ms for 64 MiB on
+// janus. The forecast, a p99 of at most 100µs, is carried by janus's reading (`BenchmarkSP1Arrival`).
 //
-// The guest fills 128 MiB per instruction, in a loop. Each of 10 trials stops it at a random point and must
-// arrive within `bound`. **Neuter, run:** skipping the per-chunk poll in `execMemoryFill`. A stop then waits
-// for the fill to end, tens of milliseconds, so ten trials all arriving within `bound` cannot happen. The
-// stop misses and fails, and `Close` ends the guest at its next back-edge.
-func TestABulkFillReachesASafepointWithinOneChunk(t *testing.T) {
+// # Why it asserts a place and not a time
+//
+// This witness asserted a 10ms arrival bound until a `make ci` run under parallel load missed it on trial 0,
+// with the poll in place. It is the defect #1062's adapter witness showed on CI amd64: a wall-clock bound a
+// neuter can miss sits inside a loaded machine's noise. So this witness asserts a fact noise cannot produce.
+//
+// The guest fills 128 MiB per instruction, in a loop, alternating the fill byte (7, then 8) between passes.
+// A fill runs forward, chunk by chunk. So a stop that parks the agent mid-fill leaves the region's first
+// byte from this pass and its last byte from the previous one. Each `Stop` has a long deadline, so it always
+// returns with the agent parked. **With the per-chunk poll, some of 40 trials park mid-fill. Without it,
+// none can**, because the loop's only other safepoint is its back-edge, between two whole fills.
+//
+// **Neuter, run:** skipping the per-chunk poll in `execMemoryFill`, and no trial parks mid-fill. `Close` ends
+// the guest at its next back-edge.
+func TestAStopLandsInsideABulkFill(t *testing.T) {
+	const size = 134217728
 	const src = `(module
 		(memory 2048 2048)
 		(func (export "fills") (param i32) (result i32)
-			(loop (memory.fill (i32.const 0) (i32.const 7) (i32.const 134217728))
+			(loop (memory.fill (i32.const 0) (i32.add (i32.const 7) (i32.and (local.get 0) (i32.const 1)))
+					(i32.const 134217728))
 				(local.set 0 (i32.sub (local.get 0) (i32.const 1))) (br_if 0 (local.get 0)))
 			(i32.const 0)))`
 	img, err := text.EncodeModule([]byte(src))
@@ -85,27 +97,38 @@ func TestABulkFillReachesASafepointWithinOneChunk(t *testing.T) {
 	}
 	go func() { _, _ = in.Invoke("fills", I32(1_000_000)) }()
 	defer func() { _ = in.Close() }()
-	if err := in.Stop(30 * time.Second); err != nil {
-		t.Fatalf("the first Stop: %v", err)
+	// Two passes before any trial, so both ends of the region hold a fill byte rather than the zero memory
+	// started with.
+	for primed := false; !primed; {
+		if err := in.Stop(30 * time.Second); err != nil {
+			t.Fatalf("waiting for the first fills: %v", err)
+		}
+		primed = stopWord(t, in, size-4) != 0 // read while parked, as every read here is
+		in.Resume()
 	}
-	in.Resume()
 
-	const bound = 10 * time.Millisecond
+	const trials = 40
 	rng := rand.New(rand.NewPCG(1, 2))
-	for i := range 10 {
+	inside := 0
+	for range trials {
 		// Let the guest run to an arbitrary point of a fill before the request: the host's clock, spun.
 		until := time.Now().Add(time.Duration(rng.Int64N(int64(40 * time.Millisecond))))
 		for time.Now().Before(until) {
 		}
-		t0 := time.Now()
-		err := in.Stop(bound)
-		d := time.Since(t0)
-		in.Resume()
-		if err != nil {
-			t.Fatalf("trial %d: Stop(%s) on an agent inside a 128 MiB memory.fill returned %v after %s; a bulk "+
-				"instruction polls between %d-byte chunks, so a miss means the fill ran to its end unpolled",
-				i, bound, err, d, bulkChunk)
+		if err := in.Stop(30 * time.Second); err != nil {
+			t.Fatalf("Stop: %v", err)
 		}
+		// Read only while the agent is parked: `Stop` returning orders its writes before these reads (SP-6).
+		if stopWord(t, in, 0) != stopWord(t, in, size-4) {
+			inside++
+		}
+		in.Resume()
+	}
+	t.Logf("%d of %d stops parked the agent inside a memory.fill", inside, trials)
+	if inside == 0 {
+		t.Fatalf("no stop of %d parked the agent inside a 128 MiB memory.fill: the region's two ends always "+
+			"agreed. A bulk instruction polls between %d-byte chunks, and only that poll can park the agent "+
+			"mid-fill, so the fill ran unpolled", trials, bulkChunk)
 	}
 }
 
