@@ -44,7 +44,8 @@ says what it now requires and what it gives up.
     - a `Stop` of the caller's instance still waits for the callee's own execution, which polls the callee's
       instance (#515's instance-scoped `Stop`);
     - a list's lift allocates its element slice in one unpollable piece. Locally, 512 Ki elements reached 9ms.
-  - **Reading (a) is complete.** Reading (b)'s proposal goes to Scott next.
+  - **Reading (a) is not complete.** This line said it was until the chair's third ruling of 2026-10-18. Two
+    stretches are owed: the list lift above, and the callee's own execution. Reading (b)'s proposal is #1064.
 
 - **`Stop`'s arrival no longer scales with a bulk memory instruction's operand** (contract §3 SP-1, reading (a)'s
   first half; [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md),

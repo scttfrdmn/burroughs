@@ -169,6 +169,16 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
     runtime work proportional to the element count, and no poll can interrupt it. Locally, a 512 Ki-element
     `list<u8>` crossing the adapter, with every poll in place, reached 9ms arrivals and missed a 10ms deadline.
     The copies poll per element; the allocation is the stretch left. This is unmeasured on janus.
-- **Reading (a) is complete** in what ruling 1 named: the bound, polls in the bulk memory ops and the adapter
-  copies, the tight-loop witness, the cost, and the litmus case. Reading (b)'s proposal goes to Scott next, and
-  per ruling 3 none of (b) is built before he has seen it.
+- **Reading (a) is not complete.** This line said it was until the chair's third ruling of 2026-10-18, which
+  corrected it: the forecast's max is 1ms, and the list lift's 9ms stretch is inside ADR 0103's adapter, which
+  ruling 1 named.
+  - **Reached:**
+    - the bound, registered and measured by instruction class;
+    - polls in the bulk memory ops and in the adapter's string copies, each meeting its forecast on janus;
+    - the tight-loop witness, the cost, and the litmus case.
+  - **Owed, both ordered by that ruling:**
+    - **The list lift.** Scalar elements cross memory to memory in `StringChunk` pieces with polls and no
+      `[]Value`; other elements build their slice in bounded pieces.
+    - **The callee's execution.** The caller's agent holds a blocked mark across a sync callee's run, and every
+      re-entry into the caller polls first. This comes as a dated amendment here, then the build.
+  - Reading (b)'s proposal is #1064, and per ruling 3 none of (b) is built before Scott has seen it.
