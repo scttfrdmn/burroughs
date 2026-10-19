@@ -272,9 +272,10 @@ func paramSpill(sig *FuncType) (string, bool) {
 // broke.
 //
 // **Every copy polls the caller's agent** (contract §3 SP-1, ADR 0104): all four run in host code on that
-// agent, so each heap polls `c` (`adapterHeap`, and the callee's `argHeap` and `liftHeap`). While the callee itself executes, the
-// caller's agent holds no blocked mark, so a `Stop` of the caller's instance waits for the callee to return.
-// The callee polls its own instance's agent, which is another world (#515's instance-scoped `Stop`).
+// agent, so each heap polls `c` (`adapterHeap`, and the callee's `argHeap` and `liftHeap`). **While the callee
+// itself executes, the caller's agent holds a blocked mark** (`underCallerMark`, ADR 0104's amendment). Before
+// that, a `Stop` of the caller's instance waited for the callee to return, because the callee polls only its own
+// instance's world.
 //
 // NEUTER EITHER HALF to bring #995 back (both run, `TestASyncCrossComponentCallCrossesAsValues`):
 //   - **no lift**: return the callee's flat words instead of storing its lifted result, and

@@ -339,7 +339,7 @@ func TestAStopLandsInsideAnAdapterCopy(t *testing.T) {
 			}
 
 			// 200 trials, because about 1 in 10 lands inside a copy. The rest land in the adapter's other
-			// stretches, or in the callee's own fill, which the caller's stop waits for (#515's callee gap).
+			// stretches, or in the callee's own fill, which runs under the caller's blocked mark.
 			const trials = 200
 			rng := rand.New(rand.NewPCG(1, 6))
 			inside := 0

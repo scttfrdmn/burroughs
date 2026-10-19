@@ -163,9 +163,10 @@ one bulk chunk + scheduling noise. So arrival no longer scales with any bulk ope
       miss on a fast machine sits inside a loaded runner's noise.
   - `TestUTF8JoinAgreesWithWholeValidation`, which caught the joiner's first draft.
 - **Not reached, and named:**
-  - **The callee's own execution.** While the callee executes, the caller's agent holds no blocked mark, so a
-    `Stop` of the caller's instance waits for the callee to return. The callee's frames poll the callee's own
-    instance, which is another world. This is #515's instance-scoped `Stop`, and this ADR does not repair it.
+  - **The callee's own execution**, as this half landed. While the callee executed, the caller's agent held no
+    blocked mark, so a `Stop` of the caller's instance waited for the callee to return. This section said "this
+    ADR does not repair it". The chair's third ruling ordered the repair, and it is built (the amendment
+    below).
   - **A list's lifted value was one zeroed Go allocation** (`canon.LoadList`'s `make([]Value, count)`): runtime
     work proportional to the element count, which no poll could interrupt. Locally, a 512 Ki-element
     `list<u8>` crossing the adapter, with every poll in place, reached 9ms arrivals. **Built since: the
@@ -259,3 +260,32 @@ poll path.
 
 **`Stop`'s documented behaviour.** If `Stop`'s API doc text would change, and not only its internals, that
 sentence goes to Scott before merging. `Stop` lives in `internal/interp`, and the root package exposes none.
+
+### As built, 2026-10-18
+
+- **Built:** `invokeSync` runs a sync callee's core invocation and its `post-return` through
+  `CanonCaller.Blocking` when a caller waits (`underCallerMark`).
+  - **Three paths pass their caller:** ADR 0103's adapter; the flat-word passthrough, which had said *"there is
+    nothing to mark"*; and an async lower of a sync lift (#1050), through `invokeWithCaller`. **The first draft
+    marked only the adapter path, and its witness still missed**, because a `(u32) -> u32` call never reaches
+    the adapter.
+- **The entry rule needed no new poll.** `Blocking` ends in `leaveBlocked`, which polls, and a callback's first
+  frame polls in `enterFrame`.
+  - `Blocking`'s doc rule against realloc and `post-return` inside `fn` is narrowed to the *calling agent's
+    own*. The callee's `post-return` runs in another instance.
+- **`Stop`'s doc text is unchanged.** It reads *"returns nil when no caller of the instance is executing guest
+  code"*, which a caller waiting on another instance's code satisfies. So nothing goes to Scott under the
+  ruling's condition.
+- **Readings** (janus, tables on #515):
+  - stops of a caller whose callee spins arrived in 259ns to 2.9µs (task 57), where the stop had waited for the
+    whole callee;
+  - the cost is ~ on every row, geomean −0.12% (task 56).
+- **Witnesses:** `TestAStopOfTheCallerDoesNotWaitForItsCallee` and `TestAStopOfTheCallerParksACallbackBeforeItRuns`
+  (`testdata/callee-gap.wat`; wasmtime 49.0.3 reads `run-spin(3, 10)` = 3 and `run-cb(2, 3)` = 6).
+  - **No blocked mark:** misses its bound on trial 0.
+  - **No entry poll:** the callback counter moved by about 140 while the caller was stopped.
+  - Both neuters were run, and both fail every run.
+- **What reading (a) still names as not reached.** This section does not call the reading complete. That is the
+  chair's call, and the claim was withdrawn once already. Two stretches are still named here:
+  - the table and GC-array bulk instructions, unpolled and unmeasured (the first half's section);
+  - straight-line code, bounded by its module's size by ADR 0059's choice.
