@@ -14,13 +14,18 @@ import (
 )
 
 // The table and GC-array bulk instructions' structural witnesses (contract §3 SP-1, ADR 0104; the chair's
-// ruling of 2026-10-19, item 3). Each instruction runs in `elemChunk` pieces with a poll between them
-// (`eachPiece`), and each witness holds it to item 1's boundary rule: a stop can park the agent inside the
-// instruction, every observed stop point is a multiple of `elemChunk`, and some point is not a multiple of
-// twice it.
+// ruling of 2026-10-19, item 3). Each instruction runs in `elemChunk` pieces with a poll between them (the
+// piece loop `elemChunk`'s comment states, written out at each site). Each witness holds it to item 1's
+// boundary rule: a stop can park the agent inside the instruction, every observed stop point is a multiple of
+// `elemChunk`, and some point is not a multiple of twice it.
 //
-// NEUTERS (run): `eachPiece` with its poll removed, and no stop lands inside any instruction; `eachPiece`
-// stepping `elemChunk*64`, and stops still land inside, but the interval check fails.
+// NEUTERS (run):
+//   - **No poll:** every class fails, because no stop lands inside any instruction (the `array.new*` classes:
+//     every stop sees a new trip).
+//   - **The step ×64:** every class fails the interval check, with stops still landing inside the instruction.
+//   - **Where they were run.** Both were first run on this slice's shared-helper draft, across all eleven
+//     classes. The ×64 neuter was re-run on the inlined loops at four sites (`table.fill`, `table.copy`,
+//     `array.copy` and `array.new`), and failed at each.
 
 // bulkWitnessLen is each observable destination's length in elements: 1 Mi, so 256 pieces per instruction.
 const bulkWitnessLen = 1 << 20
@@ -225,7 +230,7 @@ func TestAStopLandsInsideATableOrArrayBulkInstruction(t *testing.T) {
 }
 
 // TestABulkPieceCopyKeepsItsDirection: a self-overlapping `table.copy` or `array.copy` of more than one piece
-// copies memmove-correctly in both directions. One `copy` call was a memmove; pieces are not, so `eachPiece`'s
+// copies memmove-correctly in both directions. One `copy` call was a memmove; pieces are not, so the piece loop's
 // direction is what keeps them correct. Each row copies 3·elemChunk+5 elements of a ramp by 7 places, up and
 // down, and reads every element back: element k of the destination must hold the source's k-th original value.
 //

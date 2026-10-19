@@ -156,33 +156,35 @@ const bulkChunk = 64 << 10
 // `bulkChunk` of bytes.
 const elemChunk = 4096
 
-// eachPiece runs body over [0, n) in `elemChunk` pieces, polling the agent between two pieces, for the table
-// and array bulk instructions. **backward** runs the pieces from the end, which is what a copy whose destination
-// lies above an overlapping source needs, for `memory.copy`'s reason. Within a piece, body runs in whatever
-// order it likes.
+// **The piece loop, written out at each table and array site rather than shared.** Each site runs its
+// instruction over [0, n) in `elemChunk` pieces, polling the agent between two pieces:
 //
-// **The caller loads its images once, before the first piece**, which is decision 0065's rule, and holds them
+//	for lo := uint64(0); lo < n; {
+//		hi := min(lo+elemChunk, n)
+//		… the instruction over [lo, hi) …
+//		lo = hi
+//		if lo < n {
+//			st.t.poll()
+//		}
+//	}
+//
+// A copy whose destination lies above an overlapping source runs the pieces from the end, for `memory.copy`'s
+// reason.
+//
+// **A shared `eachPiece(t, n, backward, body func(lo, hi))` was this slice's first draft.** It missed ADR 0059's
+// cost bar on janus: `BenchmarkShortBulkOps` read `table.fill` +6.66% and a geomean of +4.12%, task 60. That
+// was not allocation, since locally it was 12 allocations per 1000 instructions. It was the closure call and its
+// frame, paid on every instruction, including the one-piece instructions that are almost all of them. So the
+// loop is written out at each site, as `bulk.go`'s memory ops already are.
+//
+// **Each site loads its images once, before the first piece**, which is decision 0065's rule, and holds them
 // across the polls. That is safe for a table because `table.grow` refuses to relocate while another agent has a
 // caller (`soleAgentLocked`), and a parked agent is inside a call. An array is a heap object, which never moves.
 // A segment's image is held for `memory.init`'s reason: an `init` that began before a `drop` finishes from the
 // segment it began with.
 //
-// NEUTER THIS by stepping `elemChunk*64` (the poll interval ×64), and the boundary witnesses in
-// `sp1bulk_test.go` fail their interval check.
-func eachPiece(t *thread, n uint64, backward bool, body func(lo, hi uint64)) {
-	for done := uint64(0); done < n; {
-		size := min(elemChunk, n-done)
-		lo := done
-		if backward {
-			lo = n - done - size
-		}
-		body(lo, lo+size)
-		done += size
-		if done < n {
-			t.poll()
-		}
-	}
-}
+// NEUTER a site by stepping `elemChunk*64` (the poll interval ×64), and that site's boundary witness in
+// `sp1bulk_test.go` fails its interval check. Removing its poll fails it outright.
 
 // execMemoryCopy is `fc 0a` — `memory.copy x y`, `eval.ml:567`.
 //
@@ -298,9 +300,18 @@ func (in *Instance) execTableCopy(ins binary.Instr, st *stack) error {
 	// In `elemChunk` pieces, keeping `memory.copy`'s direction across them: backward when the destination lies
 	// above an overlapping source in the same table, so no piece's write lands on a later piece's source.
 	backward := dstTab == srcTab && d > s && d < s+n
-	eachPiece(st.t, n, backward, func(lo, hi uint64) {
-		copy(dstSlots[d+lo:d+hi], srcSlots[s+lo:s+hi])
-	})
+	for done := uint64(0); done < n; { // the piece loop (see `elemChunk`)
+		size := min(elemChunk, n-done)
+		lo := done
+		if backward {
+			lo = n - done - size
+		}
+		copy(dstSlots[d+lo:d+lo+size], srcSlots[s+lo:s+lo+size])
+		done += size
+		if done < n {
+			st.t.poll()
+		}
+	}
 	return nil
 }
 
@@ -364,9 +375,14 @@ func (in *Instance) execTableInit(ins binary.Instr, st *stack) error {
 	if n == 0 {
 		return nil
 	}
-	eachPiece(st.t, n, false, func(lo, hi uint64) { // `elemChunk` pieces, polled between (SP-1)
+	for lo := uint64(0); lo < n; { // the piece loop (see `elemChunk`)
+		hi := min(lo+elemChunk, n)
 		copy(slots[d+lo:d+hi], refs[s+lo:s+hi])
-	})
+		lo = hi
+		if lo < n {
+			st.t.poll()
+		}
+	}
 	return nil
 }
 

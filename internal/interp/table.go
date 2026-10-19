@@ -725,12 +725,17 @@ func (t *table) fill(i, n uint64, r ref, th *thread) error {
 	if end < i || end > uint64(len(slots)) { // `lt_u (add i n) i || gt_u (add i n) j`
 		return trapOOBTable
 	}
-	// In `elemChunk` pieces with a poll between them (contract §3 SP-1; `eachPiece`).
-	eachPiece(th, n, false, func(lo, hi uint64) {
+	// In `elemChunk` pieces with a poll between them (contract §3 SP-1; the piece loop, see `elemChunk`).
+	for lo := uint64(0); lo < n; {
+		hi := min(lo+elemChunk, n)
 		for k := i + lo; k < i+hi; k++ {
 			slots[k] = r
 		}
-	})
+		lo = hi
+		if lo < n {
+			th.poll()
+		}
+	}
 	return nil
 }
 

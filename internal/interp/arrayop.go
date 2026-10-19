@@ -114,26 +114,25 @@ func (in *Instance) execArrayNew(ins binary.Instr, st *stack) error {
 	if err != nil {
 		return err
 	}
-	fields := newArrayFields(st, n, func(lo, hi uint64, fields []gcField) {
+	// **The `array.new*` element loops run in `elemChunk` pieces, polled between them** (contract §3 SP-1; the
+	// piece loop, see `elemChunk`). **The allocation itself stays one piece.** An array's backing is one
+	// contiguous `[]gcField`, which the runtime zeroes as one stretch no poll can interrupt: 112 MiB at 2 Mi
+	// elements, measured on #515 at p99 5.8–7.4ms on janus. That is named, not repaired, because repairing it
+	// would mean a segmented array representation, which is its own decision. The other three `array.new*`
+	// sites below carry the same loop.
+	fields := make([]gcField, n)
+	for lo := uint64(0); lo < n; {
+		hi := min(lo+elemChunk, n)
 		for i := lo; i < hi; i++ {
 			fields[i] = f
 		}
-	})
+		lo = hi
+		if lo < n {
+			st.t.poll()
+		}
+	}
 	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
-}
-
-// newArrayFields allocates an n-element array backing and fills it in `elemChunk` pieces, polling between them,
-// for the `array.new*` instructions (contract §3 SP-1, ADR 0104; the chair's ruling of 2026-10-19, item 3).
-//
-// **The allocation itself stays one piece.** An array's backing is one contiguous `[]gcField`, and the runtime
-// zeroes it as one stretch that no poll can interrupt: 112 MiB at 2 Mi elements. #515 records that stretch as
-// measured and named, not repaired, because repairing it would mean a segmented array representation, which is
-// its own decision. Only the element loop is polled.
-func newArrayFields(st *stack, n uint64, fill func(lo, hi uint64, fields []gcField)) []gcField {
-	fields := make([]gcField, n)
-	eachPiece(st.t, n, false, func(lo, hi uint64) { fill(lo, hi, fields) })
-	return fields
 }
 
 // execArrayNewDefault allocates an array of n defaults — `eval.ml:711-723`'s `Implicit` arm.
@@ -154,11 +153,17 @@ func (in *Instance) execArrayNewDefault(ins binary.Instr, st *stack) error {
 		return short
 	}
 	n := uint64(uint32(st.popI32()))
-	fields := newArrayFields(st, n, func(lo, hi uint64, fields []gcField) {
+	fields := make([]gcField, n)   // one piece; see execArrayNew
+	for lo := uint64(0); lo < n; { // the piece loop (see `elemChunk`)
+		hi := min(lo+elemChunk, n)
 		for i := lo; i < hi; i++ {
 			fields[i] = f
 		}
-	})
+		lo = hi
+		if lo < n {
+			st.t.poll()
+		}
+	}
 	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
 }
@@ -223,12 +228,18 @@ func (in *Instance) execArrayNewData(ins binary.Instr, st *stack) error {
 	if outOfBounds(src, n*width, uint64(len(bs))) {
 		return trapOOB
 	}
-	fields := newArrayFields(st, n, func(lo, hi uint64, fields []gcField) {
+	fields := make([]gcField, n)   // one piece; see execArrayNew
+	for lo := uint64(0); lo < n; { // the piece loop (see `elemChunk`)
+		hi := min(lo+elemChunk, n)
 		for i := lo; i < hi; i++ {
 			a := src + i*width
 			fields[i] = loadStorage(bs[a:a+width], ft.Storage)
 		}
-	})
+		lo = hi
+		if lo < n {
+			st.t.poll()
+		}
+	}
 	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
 }
@@ -256,11 +267,17 @@ func (in *Instance) execArrayNewElem(ins binary.Instr, st *stack) error {
 	if outOfBounds(src, n, uint64(len(refs))) {
 		return trapOOBTable
 	}
-	fields := newArrayFields(st, n, func(lo, hi uint64, fields []gcField) {
+	fields := make([]gcField, n)   // one piece; see execArrayNew
+	for lo := uint64(0); lo < n; { // the piece loop (see `elemChunk`)
+		hi := min(lo+elemChunk, n)
 		for i := lo; i < hi; i++ {
 			fields[i] = gcField{r: refs[src+i]}
 		}
-	})
+		lo = hi
+		if lo < n {
+			st.t.poll()
+		}
+	}
 	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
 }
@@ -414,11 +431,16 @@ func (in *Instance) execArrayFill(ins binary.Instr, st *stack) error {
 	if outOfBounds(i, n, uint64(len(obj.fields))) {
 		return trapOOBArray
 	}
-	eachPiece(st.t, n, false, func(lo, hi uint64) { // `elemChunk` pieces, polled between (SP-1)
+	for lo := uint64(0); lo < n; { // the piece loop, polled between pieces (SP-1; see `elemChunk`)
+		hi := min(lo+elemChunk, n)
 		for j := i + lo; j < i+hi; j++ {
 			obj.fields[j] = f
 		}
-	})
+		lo = hi
+		if lo < n {
+			st.t.poll()
+		}
+	}
 	return nil
 }
 
@@ -492,21 +514,30 @@ func (in *Instance) execArrayCopy(ins binary.Instr, st *stack) error {
 	// Asserted rather than assumed: TestArrayCopyHandlesOverlapInBothDirections, and the overlap rows of
 	// `TestABulkPieceCopyKeepsItsDirection`.
 	backward := dst == src && dstIdx > srcIdx && dstIdx < srcIdx+n
-	eachPiece(st.t, n, backward, func(lo, hi uint64) {
-		if !dstFT.Storage.Packed {
-			copy(dst.fields[dstIdx+lo:dstIdx+hi], src.fields[srcIdx+lo:srcIdx+hi])
-			return
+	for done := uint64(0); done < n; { // the piece loop (see `elemChunk`)
+		size := min(elemChunk, n-done)
+		lo := done
+		if backward {
+			lo = n - done - size
 		}
-		if !backward {
+		hi := lo + size
+		switch {
+		case !dstFT.Storage.Packed:
+			copy(dst.fields[dstIdx+lo:dstIdx+hi], src.fields[srcIdx+lo:srcIdx+hi])
+		case !backward:
 			for j := lo; j < hi; j++ {
 				dst.fields[dstIdx+j] = copyElem(dstFT, src.fields[srcIdx+j])
 			}
-			return
+		default:
+			for j := hi; j > lo; j-- {
+				dst.fields[dstIdx+j-1] = copyElem(dstFT, src.fields[srcIdx+j-1])
+			}
 		}
-		for j := hi; j > lo; j-- {
-			dst.fields[dstIdx+j-1] = copyElem(dstFT, src.fields[srcIdx+j-1])
+		done += size
+		if done < n {
+			st.t.poll()
 		}
-	})
+	}
 	return nil
 }
 
@@ -571,12 +602,17 @@ func (in *Instance) execArrayInitData(ins binary.Instr, st *stack) error {
 	if outOfBounds(src, n*width, uint64(len(bs))) {
 		return trapOOB
 	}
-	eachPiece(st.t, n, false, func(lo, hi uint64) { // `elemChunk` pieces, polled between (SP-1)
+	for lo := uint64(0); lo < n; { // the piece loop, polled between pieces (SP-1; see `elemChunk`)
+		hi := min(lo+elemChunk, n)
 		for j := lo; j < hi; j++ {
 			a := src + j*width
 			obj.fields[dstIdx+j] = loadStorage(bs[a:a+width], ft.Storage)
 		}
-	})
+		lo = hi
+		if lo < n {
+			st.t.poll()
+		}
+	}
 	return nil
 }
 
@@ -610,10 +646,15 @@ func (in *Instance) execArrayInitElem(ins binary.Instr, st *stack) error {
 	if outOfBounds(src, n, uint64(len(refs))) {
 		return trapOOBTable
 	}
-	eachPiece(st.t, n, false, func(lo, hi uint64) { // `elemChunk` pieces, polled between (SP-1)
+	for lo := uint64(0); lo < n; { // the piece loop, polled between pieces (SP-1; see `elemChunk`)
+		hi := min(lo+elemChunk, n)
 		for j := lo; j < hi; j++ {
 			obj.fields[dstIdx+j] = gcField{r: refs[src+j]}
 		}
-	})
+		lo = hi
+		if lo < n {
+			st.t.poll()
+		}
+	}
 	return nil
 }
