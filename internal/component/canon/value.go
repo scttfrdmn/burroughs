@@ -470,7 +470,11 @@ func (v Value) elems() []Value {
 		for i := range out {
 			// The bytes were validated when packed, so a decode error is a broken invariant, not a guest
 			// fault. It is carried as a zero element rather than panicking inside an embedder's read.
-			out[i], _ = LoadVia(h, *v.Type.Elem, i*es)
+			e, err := LoadVia(h, *v.Type.Elem, i*es)
+			if err != nil {
+				e = Value{Type: *v.Type.Elem}
+			}
+			out[i] = e
 		}
 		return out
 	case listSegmented:

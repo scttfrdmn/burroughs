@@ -186,8 +186,8 @@ func TestAPackedListCrossesTheHeapInChunks(t *testing.T) {
 		t.Errorf("a %d-byte packed list was read in %d call(s), the largest %d bytes; want at least 4 calls of "+
 			"at most %d", n, c.reads, c.maxRead, StringChunk)
 	}
-	if _, _, err := StoreListIntoRange(c, v, func(e Value, at int) error { return StoreVia(c, e, at) }); err != nil {
-		t.Fatalf("StoreListIntoRange: %v", err)
+	if _, _, serr := StoreListIntoRange(c, v, func(e Value, at int) error { return StoreVia(c, e, at) }); serr != nil {
+		t.Fatalf("StoreListIntoRange: %v", serr)
 	}
 	if c.writes < 4 || c.maxWrite > StringChunk {
 		t.Errorf("a %d-byte packed list was written in %d call(s), the largest %d bytes; want at least 4 calls "+
