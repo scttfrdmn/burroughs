@@ -115,6 +115,13 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **The global tear controls no longer fail when one trial's two agents did not overlap**
+  ([#1063](https://github.com/scttfrdmn/burroughs/issues/1063)). On CI arm64, a writer finished before its
+  reader read, and the v128 control's vacuity floor failed with no tear. Each control now retries a
+  non-overlapping trial, up to 8 times, and sums every trial's torn count. It fails only on a torn read, or
+  on no overlap within the limit. Neuters run: an unlocked v128 store fails, and an overlap that never holds
+  fails after the limit.
+
 - **Default-path defect: a lift's `post-return` was decoded and never run**
   ([#1058](https://github.com/scttfrdmn/burroughs/issues/1058), found reading for ADR 0103's build).
   - **The cause:** the canonopt was recorded in `opts.PostReturn` and no code read it. So a guest that freed

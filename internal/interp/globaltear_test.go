@@ -37,6 +37,54 @@ func buildTearModule(t *testing.T, src string) *Instance {
 	return in
 }
 
+// tearMaxTrials is how many times a control re-runs its two agents when they failed to overlap, before it
+// reports that it could not open the window (#1063).
+const tearMaxTrials = 8
+
+// runTearTrials runs the module's `write` agent concurrently with its `read` agent, and repeats while the
+// read's results show no overlap (`overlapped` false), up to `tearMaxTrials` times. It returns every
+// trial's read results, so a control counts a torn read from any trial and not only from the last, and it
+// reports whether some trial overlapped.
+//
+// **A retry, because the overlap is scheduling and not the engine.** The writer starts on a goroutine and
+// the reader on this one, so on a loaded runner the writer can finish before the reader reads at all. CI
+// arm64 did exactly that on #1062's run: 0 all-zero and 200000 all-one reads. One non-overlapping trial is
+// therefore the instrument's bad luck, and only a limit's worth of them is the instrument failing. A retry
+// can never hide a tear: every trial's torn count is returned and summed.
+//
+// **Neuters, run (on the v128 control):**
+//   - the v128 `set` storing its two halves without the global's mutex fails 5 of 5 runs, with 1 to 270 torn
+//     reads;
+//   - an `overlapped` that never answers true fails 2 of 2 with the vacuity message, after all
+//     `tearMaxTrials` trials.
+func runTearTrials(t *testing.T, in *Instance, want int, overlapped func([]Value) bool) ([][]Value, bool) {
+	t.Helper()
+	var all [][]Value
+	for trial := range tearMaxTrials {
+		werr := make(chan error, 1)
+		go func() {
+			_, err := in.Invoke("write")
+			werr <- err
+		}()
+		got, rerr := in.Invoke("read")
+		if err := <-werr; err != nil {
+			t.Fatalf("trial %d: write agent: %v", trial, err)
+		}
+		if rerr != nil {
+			t.Fatalf("trial %d: read agent: %v", trial, rerr)
+		}
+		if len(got) != want {
+			t.Fatalf("trial %d: read returned %d values, want %d", trial, len(got), want)
+		}
+		all = append(all, got)
+		if overlapped(got) {
+			return all, true
+		}
+		t.Logf("trial %d: the two agents did not overlap (%v); retrying", trial, got)
+	}
+	return all, false
+}
+
 // TestAV128GlobalIsNeverAssembledFromTwoWrites is the v128 arm's witness, and it needs no race
 // detector: the defect is observable **as a value**.
 //
@@ -91,31 +139,26 @@ func TestAV128GlobalIsNeverAssembledFromTwoWrites(t *testing.T) {
 
 	in := buildTearModule(t, src)
 
-	werr := make(chan error, 1)
-	go func() {
-		_, err := in.Invoke("write")
-		werr <- err
-	}()
-	got, rerr := in.Invoke("read")
-	if err := <-werr; err != nil {
-		t.Fatalf("write agent: %v", err)
+	trials, overlapped := runTearTrials(t, in, 3, func(got []Value) bool {
+		return got[1].Int32() != 0 && got[2].Int32() != 0
+	})
+	var torn int32
+	for _, got := range trials {
+		torn += got[0].Int32()
 	}
-	if rerr != nil {
-		t.Fatalf("read agent: %v", rerr)
-	}
-	if len(got) != 3 {
-		t.Fatalf("read returned %d values, want 3", len(got))
-	}
-	torn, zeros, ones := got[0].Int32(), got[1].Int32(), got[2].Int32()
+	last := trials[len(trials)-1]
+	zeros, ones := last[1].Int32(), last[2].Int32()
 
-	// Vacuity first, because a torn count of zero means nothing until the window is known to have been
-	// open. Reported as a failure rather than a skip: *a skip is not a verdict*, and a control that
-	// declines to run is indistinguishable here from one that ran and found nothing.
-	if zeros == 0 || ones == 0 {
-		t.Fatalf("the reader saw %d all-zero and %d all-one vectors in %d reads, so it never observed "+
-			"both of the values the writer stores — the two agents did not overlap and a torn count of "+
-			"%d is not evidence of anything. This control measures nothing in this state",
-			zeros, ones, tearAgentIters, torn)
+	// A torn read fails whatever the overlap, because a vector with unequal lanes is a defect in any trial.
+	// Then the vacuity: a torn count of zero means nothing until the window is known to have been open.
+	// That is a failure, not a skip: *a skip is not a verdict*, and a control that declines to run is
+	// indistinguishable here from one that ran and found nothing. It now needs `tearMaxTrials`
+	// non-overlapping trials in a row (#1063), not one.
+	if torn == 0 && !overlapped {
+		t.Fatalf("in %d trials the reader never observed both of the values the writer stores (the last saw "+
+			"%d all-zero and %d all-one vectors in %d reads) — the two agents did not overlap, and a torn count "+
+			"of 0 is not evidence of anything. This control measures nothing in this state",
+			len(trials), zeros, ones, tearAgentIters)
 	}
 	if torn != 0 {
 		t.Errorf("%d of %d `global.get`s on a v128 global returned a vector whose two i64 lanes "+
@@ -125,7 +168,7 @@ func TestAV128GlobalIsNeverAssembledFromTwoWrites(t *testing.T) {
 			"one unit: decision 0063 holds the global's own mutex across both stores in `set` and both "+
 			"loads in `get`. No spec vector can witness this — the reference has one thread — so this "+
 			"test is the oracle (#573)",
-			torn, tearAgentIters)
+			torn, len(trials)*tearAgentIters)
 	}
 }
 
@@ -187,28 +230,21 @@ func TestANumericGlobalIsNotWrittenAndReadWithoutSynchronisation(t *testing.T) {
 
 	in := buildTearModule(t, src)
 
-	werr := make(chan error, 1)
-	go func() {
-		_, err := in.Invoke("write")
-		werr <- err
-	}()
-	got, rerr := in.Invoke("read")
-	if err := <-werr; err != nil {
-		t.Fatalf("write agent: %v", err)
+	trials, overlapped := runTearTrials(t, in, 3, func(got []Value) bool {
+		return got[1].Int32() != 0 && got[2].Int32() != 0
+	})
+	var other int32
+	for _, got := range trials {
+		other += got[0].Int32()
 	}
-	if rerr != nil {
-		t.Fatalf("read agent: %v", rerr)
-	}
-	if len(got) != 3 {
-		t.Fatalf("read returned %d values, want 3", len(got))
-	}
-	other, zeros, ones := got[0].Int32(), got[1].Int32(), got[2].Int32()
+	last := trials[len(trials)-1]
+	zeros, ones := last[1].Int32(), last[2].Int32()
 
-	if zeros == 0 || ones == 0 {
-		t.Fatalf("the reader saw %d zeros and %d all-ones in %d reads of an i64 global, so it never "+
-			"observed both values the writer stores — the agents did not overlap, and under `-race` "+
-			"this run exercised no concurrent access at all. This control measures nothing in this state",
-			zeros, ones, tearAgentIters)
+	if other == 0 && !overlapped {
+		t.Fatalf("in %d trials the reader never observed both values the writer stores (the last saw %d "+
+			"zeros and %d all-ones in %d reads of an i64 global) — the agents did not overlap, and under "+
+			"`-race` this run exercised no concurrent access at all. This control measures nothing in this state",
+			len(trials), zeros, ones, tearAgentIters)
 	}
 	// Weak by construction and kept anyway: on amd64 and arm64 an aligned 8-byte store is indivisible,
 	// so this arm cannot fail on the defect and is not what makes this control work. It is here because
@@ -217,7 +253,7 @@ func TestANumericGlobalIsNotWrittenAndReadWithoutSynchronisation(t *testing.T) {
 		t.Errorf("%d of %d `global.get`s on an i64 global returned neither 0 nor -1, and those are the "+
 			"only two values written — an 8-byte global was observed torn, which this engine's target "+
 			"architectures were assumed not to permit (#573, decision 0063)",
-			other, tearAgentIters)
+			other, len(trials)*tearAgentIters)
 	}
 }
 
@@ -292,28 +328,17 @@ func TestARefGlobalIsNotWrittenAndReadWithoutSynchronisation(t *testing.T) {
 
 	in := buildTearModule(t, src)
 
-	werr := make(chan error, 1)
-	go func() {
-		_, err := in.Invoke("write")
-		werr <- err
-	}()
-	got, rerr := in.Invoke("read")
-	if err := <-werr; err != nil {
-		t.Fatalf("write agent: %v", err)
-	}
-	if rerr != nil {
-		t.Fatalf("read agent: %v", rerr)
-	}
-	if len(got) != 2 {
-		t.Fatalf("read returned %d values, want 2", len(got))
-	}
-	nulls, funcs := got[0].Int32(), got[1].Int32()
+	trials, overlapped := runTearTrials(t, in, 2, func(got []Value) bool {
+		return got[0].Int32() != 0 && got[1].Int32() != 0
+	})
+	last := trials[len(trials)-1]
+	nulls, funcs := last[0].Int32(), last[1].Int32()
 
-	if nulls == 0 || funcs == 0 {
-		t.Fatalf("the reader saw %d nulls and %d function references in %d reads of a funcref global, "+
-			"so it never observed both values the writer stores — the agents did not overlap, and under "+
-			"`-race` this run exercised no concurrent access at all. This control measures nothing in "+
-			"this state", nulls, funcs, tearAgentIters)
+	if !overlapped {
+		t.Fatalf("in %d trials the reader never observed both values the writer stores (the last saw %d "+
+			"nulls and %d function references in %d reads of a funcref global) — the agents did not overlap, "+
+			"and under `-race` this run exercised no concurrent access at all. This control measures nothing "+
+			"in this state", len(trials), nulls, funcs, tearAgentIters)
 	}
 	// The two counts must also account for every read, which is the arm that fires if a torn reference
 	// were ever *reported* as neither — it cannot be, since `ref.is_null` is one bit and the `if` above
