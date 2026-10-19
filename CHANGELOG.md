@@ -26,6 +26,25 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A list crossing a sync cross-component call is never one allocation proportional to its count** (contract
+  §3 SP-1, the chair's third ruling of 2026-10-18, item 2;
+  [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
+  - **The change:**
+    - a list of bool, an integer kind or char is lifted as its canonical bytes in `StringChunk` pieces, with
+      no `[]Value`: bool normalised, char validated per element, stored the same way;
+    - other lists longer than 4096 elements are built in 4096-element segments.
+    - The one `make([]Value, count)` this replaces reached 9ms with every poll in place.
+  - **The forecast was registered on #515 before building, and it was met** (janus `measured`, tasks 53 and
+    54). At 512 Ki elements:
+    - `list<u8>`: p99 20–22ms to **35–45µs**, max 83–94ms to **61–111µs**;
+    - `list<string>`: p99 11–27ms to **13–17µs**, max 87–92ms to **15–32µs**.
+  - **The cost** (task 55): a 64-element `list<u8>` round trip is **70% faster**, and `list<string>` is ~.
+  - **The adapter's arrival witnesses now assert a place, not a time.** #1062's 2ms miss-count witness missed 11
+    of 40 on CI amd64 with its polls in place. `TestAStopLandsInsideAnAdapterCopy` instead reads the parent's
+    result memory after each stop, and finds a write stopped part-way, which only a poll inside the copy can
+    produce. Polled, 15 to 26 of 200 stops land inside a copy; neutered, 0 of 200. The bound is carried by the
+    janus readings.
+
 - **`Stop`'s arrival no longer scales with a value crossing a sync cross-component call** (contract §3 SP-1,
   reading (a)'s second half;
   [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
@@ -38,14 +57,15 @@ says what it now requires and what it gives up.
   - **The cost is inside ADR 0059's bar:** ADR 0103's string round trip reads sync +0.99% and async ~, with a
     geomean of −0.01%. That is the second draft. The first read +8.46%, from eight allocations per call, and
     was repaired before landing.
-  - **Witness:** `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`, a 2ms bound over 40 trials that fails at
-    6 misses. Its neuter, every adapter poll removed, missed 15 to 24 of 40 and failed every run.
+  - **Witness:** landed as `TestAStopDuringAnAdapterCopyArrivesWithinTheBound`, a 2ms bound with a miss count.
+    That witness has since been replaced: CI amd64 missed 11 of 40 with the polls in place (the entry above).
   - **Not reached:**
     - a `Stop` of the caller's instance still waits for the callee's own execution, which polls the callee's
       instance (#515's instance-scoped `Stop`);
-    - a list's lift allocates its element slice in one unpollable piece. Locally, 512 Ki elements reached 9ms.
+    - a list's lift allocated its element slice in one unpollable piece; the entry above repairs it.
   - **Reading (a) is not complete.** This line said it was until the chair's third ruling of 2026-10-18. Two
-    stretches are owed: the list lift above, and the callee's own execution. Reading (b)'s proposal is #1064.
+    stretches were owed: the list lift, now built (above), and the callee's own execution. Reading (b)'s
+    proposal is #1064.
 
 - **`Stop`'s arrival no longer scales with a bulk memory instruction's operand** (contract §3 SP-1, reading (a)'s
   first half; [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md),
