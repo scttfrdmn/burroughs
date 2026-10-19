@@ -229,6 +229,42 @@ func TestAnAdapterCopyCrossesItsString(t *testing.T) {
 	}
 }
 
+// checkPollLattice pins a copy's poll interval from where stops landed (the chair's ruling of 2026-10-19, item
+// 1). A witness that passes on any mid-copy stop would also pass a copy that polled once per 16 MiB. So it
+// asserts two things:
+//   - **every stop point is on a chunk boundary**, a multiple of `chunk`, so no poll sits off the lattice;
+//   - **some stop point is off the coarser lattice**, not a multiple of 2·chunk, so a poll sits at every chunk
+//     and not only at every other one. A copy polling every k·chunk, k ≥ 2, puts every point on the coarse
+//     lattice and fails this.
+//
+// With polls at every chunk, a point is on the coarse lattice half the time, so all n of them land there with
+// probability 2⁻ⁿ. Ten points make that a one-in-a-thousand false failure, so the second check needs at least
+// ten points, and fewer is the instrument failing.
+func checkPollLattice(t *testing.T, points []uint64, chunk uint64, what string) {
+	t.Helper()
+	const minPoints = 10
+	if len(points) < minPoints {
+		t.Fatalf("only %d stop point(s) inside %s, fewer than the %d the interval check needs: instrument fault",
+			len(points), what, minPoints)
+	}
+	offCoarse := 0
+	for _, k := range points {
+		if k%chunk != 0 {
+			t.Fatalf("a stop parked inside %s at byte %d, which is not a multiple of the %d-byte chunk: "+
+				"a poll sits off the chunk lattice", what, k, chunk)
+		}
+		if k%(2*chunk) != 0 {
+			offCoarse++
+		}
+	}
+	t.Logf("%d stop point(s) inside %s, all on the %d-byte lattice; %d off the 2×%d lattice",
+		len(points), what, chunk, offCoarse, chunk)
+	if offCoarse == 0 {
+		t.Fatalf("all %d stop points inside %s are multiples of %d, twice the chunk: the copy polls every "+
+			"second chunk or less often, not every %d bytes", len(points), what, 2*chunk, chunk)
+	}
+}
+
 // TestAStopLandsInsideAnAdapterCopy is SP-1's adapter-copy witness (contract §3, ADR 0104): a `Stop` can park the
 // caller's agent **inside** one of ADR 0103's adapter copies, which only a poll inside the copy can do. One
 // subtest crosses a 24 MiB string, and one a 24 Mi-element `list<u8>`, the packed form.
@@ -254,7 +290,11 @@ func TestAnAdapterCopyCrossesItsString(t *testing.T) {
 // **Neuters, run:**
 //   - **string:** `pollCaller` returning at once removes every adapter poll, and no trial parks mid-copy;
 //   - **list<u8>:** `storeListData`'s packed arm writing the whole list in one `WriteBytes`, and no trial
-//     parks mid-copy.
+//     parks mid-copy;
+//   - **both, the interval:** the two store loops' step ×64 (`StringChunk*64`). Stops still land mid-copy, 25 to
+//     29 of 400, but every stop point is a multiple of the coarser lattice, so `checkPollLattice` fails. This is
+//     the check the chair's ruling of 2026-10-19 (item 1) added: a mid-copy stop alone would pass a copy that
+//     polled once per 4 MiB.
 //
 // The packed *lift*'s chunking is a read, which no memory state records. Its deterministic witness is canon's
 // `TestAPackedListCrossesTheHeapInChunks`.
@@ -337,12 +377,36 @@ func TestAStopLandsInsideAnAdapterCopy(t *testing.T) {
 				}
 				return !bytes.Equal(first, last)
 			}
+			// stopPoint is where a stopped write stopped: the offset, from the region's start, of the first byte
+			// still holding the old fill. The write runs forward, so the new byte is a prefix, found by bisection.
+			byteAt := func(off uint64) byte {
+				b, err := interp.ReadBoundaryMemory(mem, off, 1)
+				if err != nil {
+					t.Fatalf("reading byte %d: %v", off, err)
+				}
+				return b[0]
+			}
+			stopPoint := func(off uint64) uint64 {
+				newByte := byteAt(off)
+				lo, hi := uint64(0), uint64(n-1) // byteAt(off+lo) is new; byteAt(off+hi) is old
+				for hi-lo > 1 {
+					mid := lo + (hi-lo)/2
+					if byteAt(off+mid) == newByte {
+						lo = mid
+					} else {
+						hi = mid
+					}
+				}
+				return hi
+			}
 
-			// 200 trials, because about 1 in 10 lands inside a copy. The rest land in the adapter's other
-			// stretches, or in the callee's own fill, which runs under the caller's blocked mark.
-			const trials = 200
+			// 400 trials, because about 1 in 12 lands inside a copy. The rest land in the adapter's other
+			// stretches, or in the callee's own fill, which runs under the caller's blocked mark. The interval
+			// check wants at least 10 points, and at 200 trials 13 to 20 landed: too close to the floor.
+			const trials = 400
 			rng := rand.New(rand.NewPCG(1, 6))
 			inside := 0
+			var points []uint64
 			var slowest time.Duration
 			for i := range trials {
 				// The host's clock, spun: a point in the guest's run, not a wait for a signal.
@@ -354,8 +418,11 @@ func TestAStopLandsInsideAnAdapterCopy(t *testing.T) {
 					t.Fatalf("trial %d: Stop: %v", i, err)
 				}
 				slowest = max(slowest, time.Since(t0))
-				if mixed(region) || mixed(region+n) {
-					inside++
+				for _, r := range []uint64{region, region + n} {
+					if mixed(r) {
+						inside++
+						points = append(points, stopPoint(r))
+					}
 				}
 				core.Resume()
 			}
@@ -371,6 +438,7 @@ func TestAStopLandsInsideAnAdapterCopy(t *testing.T) {
 					"held one fill byte. Only a poll inside the copy can park the agent there, so the copy ran "+
 					"unpolled (SP-1, ADR 0104)", c.name, trials)
 			}
+			checkPollLattice(t, points, canon.StringChunk, "the adapter's "+c.name+" result copy")
 		})
 	}
 }

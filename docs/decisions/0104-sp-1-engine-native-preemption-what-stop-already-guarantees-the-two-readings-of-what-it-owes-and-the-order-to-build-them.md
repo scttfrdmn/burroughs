@@ -289,3 +289,25 @@ sentence goes to Scott before merging. `Stop` lives in `internal/interp`, and th
   chair's call, and the claim was withdrawn once already. Two stretches are still named here:
   - the table and GC-array bulk instructions, unpolled and unmeasured (the first half's section);
   - straight-line code, bounded by its module's size by ADR 0059's choice.
+
+## 2026-10-19: what the witnesses assert, and what carries the bound (the chair's ruling of that day)
+
+- **The structural witnesses pin the poll interval** (item 1). A witness passing on any mid-copy stop would also
+  pass a copy that polled once per 16 MiB. So each now finds where every observed stop landed and asserts two
+  things:
+  - every stop point is a multiple of the chunk (`canon.StringChunk` for the adapter, `bulkChunk` for fill and
+    copy);
+  - some point is not a multiple of twice the chunk, so a poll sits at every chunk, not every k-th.
+  - **Neuter, run:** each loop's step ×64. Stops still land mid-copy, and the second check is what fails.
+  - The witnesses: `TestAStopLandsInsideAnAdapterCopy`, `TestAStopLandsInsideABulkFill`, and the new
+    `TestAStopLandsInsideABulkCopy`.
+- **Janus is the only reading of the arrival bound.** The witnesses assert where a stop parks, never how
+  long it took. So **a PR that touches a poll site re-reads the arrival on janus**: `BenchmarkSP1Arrival`,
+  `BenchmarkSP1AdapterArrival` or `BenchmarkSP1AdapterListArrival` for the site's class. Its report reads the
+  result against #515's forecast.
+- **Reading (b)'s fairness case is a recorded reading, not a gate** (item 2): two goroutines on one agent, one in
+  a tight loop, the other required to run.
+  - **Known limit:** wasm Go has no time-slice preemption, because the runtime does not run `sysmon` on wasm
+    (`haveSysmon = GOARCH != "wasm"`), and (b) does not add one. So the case is **predicted to fail**, with the
+    loop checks on and with the import alike.
+  - It is recorded when (b)'s build runs it. It gates nothing.

@@ -110,6 +110,7 @@ func TestAStopLandsInsideABulkFill(t *testing.T) {
 	const trials = 40
 	rng := rand.New(rand.NewPCG(1, 2))
 	inside := 0
+	var points []uint64
 	for range trials {
 		// Let the guest run to an arbitrary point of a fill before the request: the host's clock, spun.
 		until := time.Now().Add(time.Duration(rng.Int64N(int64(40 * time.Millisecond))))
@@ -121,6 +122,7 @@ func TestAStopLandsInsideABulkFill(t *testing.T) {
 		// Read only while the agent is parked: `Stop` returning orders its writes before these reads (SP-6).
 		if stopWord(t, in, 0) != stopWord(t, in, size-4) {
 			inside++
+			points = append(points, wordStopPoint(t, in, 0, size))
 		}
 		in.Resume()
 	}
@@ -130,6 +132,76 @@ func TestAStopLandsInsideABulkFill(t *testing.T) {
 			"agreed. A bulk instruction polls between %d-byte chunks, and only that poll can park the agent "+
 			"mid-fill, so the fill ran unpolled", trials, bulkChunk)
 	}
+	// **And where each stop landed** (the chair's ruling of 2026-10-19, item 1): on the chunk lattice, and not
+	// only on a coarser one. Neuter, run: the fill's step ×64, and stops still land mid-fill, but every point is
+	// a multiple of the coarser lattice, so this fails.
+	checkBulkPollLattice(t, points, bulkChunk, "a memory.fill")
+}
+
+// TestAStopLandsInsideABulkCopy is `TestAStopLandsInsideABulkFill`'s twin for `memory.copy`: a stop can park
+// the agent inside one 32 MiB copy, at a chunk boundary, at every chunk. The guest fills two 32 MiB sources with
+// 7 and 8 once, then copies them alternately over a 32 MiB destination below both. That is a non-overlapping,
+// forward copy, so a mid-copy park leaves the destination with a prefix of the new source and a suffix of the
+// old.
+//
+// **Neuters, run:** the copy's per-chunk poll removed, and no stop lands mid-copy; the copy's step ×64, and the
+// lattice check fails.
+func TestAStopLandsInsideABulkCopy(t *testing.T) {
+	const size = 33554432 // 32 MiB
+	const src = `(module
+		(memory 2048 2048)
+		(func (export "copies") (param i32) (result i32)
+			(memory.fill (i32.const 33554432) (i32.const 7) (i32.const 33554432))
+			(memory.fill (i32.const 67108864) (i32.const 8) (i32.const 33554432))
+			(loop
+				(memory.copy (i32.const 0)
+					(i32.add (i32.const 33554432) (i32.mul (i32.and (local.get 0) (i32.const 1)) (i32.const 33554432)))
+					(i32.const 33554432))
+				(local.set 0 (i32.sub (local.get 0) (i32.const 1))) (br_if 0 (local.get 0)))
+			(i32.const 0)))`
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	m, err := binary.DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	in, trap := mustInst(t, m)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+	go func() { _, _ = in.Invoke("copies", I32(1_000_000)) }()
+	defer func() { _ = in.Close() }()
+	for primed := false; !primed; { // both ends of the destination hold a copied byte
+		if err := in.Stop(30 * time.Second); err != nil {
+			t.Fatalf("waiting for the first copies: %v", err)
+		}
+		primed = stopWord(t, in, size-4) != 0
+		in.Resume()
+	}
+
+	const trials = 80
+	rng := rand.New(rand.NewPCG(1, 7))
+	var points []uint64
+	for range trials {
+		until := time.Now().Add(time.Duration(rng.Int64N(int64(20 * time.Millisecond))))
+		for time.Now().Before(until) {
+		}
+		if err := in.Stop(30 * time.Second); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		if stopWord(t, in, 0) != stopWord(t, in, size-4) {
+			points = append(points, wordStopPoint(t, in, 0, size))
+		}
+		in.Resume()
+	}
+	t.Logf("%d of %d stops parked the agent inside a memory.copy", len(points), trials)
+	if len(points) == 0 {
+		t.Fatalf("no stop of %d parked the agent inside a 32 MiB memory.copy: the destination's two ends always "+
+			"agreed, so the copy ran unpolled", trials)
+	}
+	checkBulkPollLattice(t, points, bulkChunk, "a memory.copy")
 }
 
 // TestSP1StopBringsEveryAgentToASafepointByTheDeadline is the litmus case

@@ -26,6 +26,15 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The SP-1 structural witnesses pin the poll interval, not only that a stop landed mid-copy** (the chair's
+  ruling of 2026-10-19, item 1;
+  [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
+  - **The check:** every observed stop point must be a multiple of the chunk, and some must not be a multiple of
+    twice it. So a copy that polled every k-th chunk fails.
+  - **Where it applies:** the adapter's copies, `memory.fill`, and a new `memory.copy` witness.
+  - **Neuter, run:** each loop's step ×64. Stops still land mid-copy, and the interval check is what fails.
+  - The arrival bound stays janus's reading alone, re-read on any PR that touches a poll site.
+
 - **A `Stop` of a caller no longer waits for its sync cross-component callee to return** (contract §3 SP-1, the
   chair's third ruling of 2026-10-18, item 3;
   [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)'s
