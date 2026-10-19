@@ -3,6 +3,7 @@
 package component
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"slices"
@@ -91,6 +92,122 @@ func BenchmarkSP1AdapterArrival(b *testing.B) {
 	b.ReportMetric(float64(pct(0.50).Nanoseconds()), "arrival-p50-ns")
 	b.ReportMetric(float64(pct(0.99).Nanoseconds()), "arrival-p99-ns")
 	b.ReportMetric(float64(arrivals[len(arrivals)-1].Nanoseconds()), "arrival-max-ns")
+}
+
+// adapterListLen is the element count of SP-1's list readings: 512 Ki, the count whose lift reached 9ms with
+// every poll in place (ADR 0104's as-built section).
+const adapterListLen = 512 << 10
+
+// placeAdapterList loads testdata/adapter-copy-list.wasm and calls `export` once with `arg`, so the list sits
+// in the parent's memory at 1024, where the fixture's bump allocator starts (a list's backing is its first
+// allocation). It returns the instance and a function that crosses that placed list through the adapter by
+// invoking the export's core function directly. The core instance is what a `Stop` must wait for. An export
+// call would lower its argument on the embedder's goroutine, outside any agent, which dilutes a reading.
+func placeAdapterList(tb testing.TB, export string, arg canon.Value, n int) (*Instantiated, *interp.Instance, func() error) {
+	tb.Helper()
+	b, err := os.ReadFile("testdata/adapter-copy-list.wasm")
+	if err != nil {
+		tb.Fatalf("the committed fixture is missing: %v", err)
+	}
+	in, err := Instantiate(b)
+	if err != nil {
+		tb.Fatalf("instantiate: %v", err)
+	}
+	cd, ok := in.export.exports[export]
+	if !ok || cd.fn == nil || cd.fn.core.inst == nil {
+		tb.Fatalf("the fixture's %q export resolves to no core instance", export)
+	}
+	if res, err := in.CallValues(export, arg); err != nil {
+		tb.Fatalf("placing the list: %v", err)
+	} else if v, ok := res[0].U32(); !ok || v != uint32(n) {
+		tb.Fatalf("placing the list: %s = %v, want u32 %d", export, res, n)
+	}
+	core, name := cd.fn.core.inst, cd.fn.core.name
+	return in, core, func() error {
+		res, err := core.Invoke(name, interp.I32(1024), interp.I32(int32(n)))
+		if err == nil && (len(res) != 1 || res[0].Int32() != int32(n)) {
+			err = fmt.Errorf("%s read %v, want %d", export, res, n)
+		}
+		return err
+	}
+}
+
+// adapterListArg builds the `list<u8>` or `list<string>` argument of `n` elements.
+func adapterListArg(tb testing.TB, export string, n int) canon.Value {
+	tb.Helper()
+	elems := make([]canon.Value, n)
+	elem := canon.Type{Kind: canon.KindU8}
+	for i := range elems {
+		if export == "run-strs" {
+			elems[i] = canon.Str(string(rune('a' + i%26)))
+		} else {
+			elems[i] = canon.U8(uint8(i))
+		}
+	}
+	if export == "run-strs" {
+		elem = canon.Type{Kind: canon.KindString}
+	}
+	l, err := canon.List(elem, elems...)
+	if err != nil {
+		tb.Fatalf("building the list: %v", err)
+	}
+	return l
+}
+
+// BenchmarkSP1AdapterListArrival is SP-1's instrument for a list crossing ADR 0103's adapter (the chair's
+// third ruling of 2026-10-18, item 2): `BenchmarkSP1AdapterArrival`'s protocol over a 512 Ki-element list,
+// one sub-benchmark per element class. `list<u8>` is the scalar class, which may cross as bytes, and
+// `list<string>` the non-scalar one. It asserts nothing. Run it with `-benchtime=1x` on janus's `measured`
+// group.
+func BenchmarkSP1AdapterListArrival(b *testing.B) {
+	for _, class := range []struct {
+		name, export string
+		trials       int
+	}{{"list-u8", "run-list", 400}, {"list-string", "run-strs", 200}} {
+		b.Run("class="+class.name, func(b *testing.B) {
+			in, core, cross := placeAdapterList(b, class.export, adapterListArg(b, class.export, adapterListLen), adapterListLen)
+			defer in.Close()
+			done := make(chan struct{})
+			defer close(done)
+			go func() {
+				for {
+					select {
+					case <-done:
+						return
+					default:
+					}
+					if cross() != nil {
+						return
+					}
+				}
+			}()
+			var arrivals []time.Duration
+			rng := rand.New(rand.NewPCG(1, 5))
+			for b.Loop() {
+				arrivals = arrivals[:0]
+				for i := range class.trials {
+					// The host's clock, spun: a point in the guest's run, not a wait for a signal.
+					until := time.Now().Add(time.Duration(rng.Int64N(int64(20 * time.Millisecond))))
+					for time.Now().Before(until) {
+					}
+					t0 := time.Now()
+					if err := core.Stop(30 * time.Second); err != nil {
+						b.Fatalf("trial %d: Stop: %v", i, err)
+					}
+					d := time.Since(t0)
+					core.Resume()
+					if i > 0 {
+						arrivals = append(arrivals, d)
+					}
+				}
+			}
+			slices.Sort(arrivals)
+			pct := func(p float64) time.Duration { return arrivals[int(p*float64(len(arrivals)-1))] }
+			b.ReportMetric(float64(pct(0.50).Nanoseconds()), "arrival-p50-ns")
+			b.ReportMetric(float64(pct(0.99).Nanoseconds()), "arrival-p99-ns")
+			b.ReportMetric(float64(arrivals[len(arrivals)-1].Nanoseconds()), "arrival-max-ns")
+		})
+	}
 }
 
 // TestAnAdapterCopyCrossesItsString is the fixture's own witness, so the arrival readings time calls known to
