@@ -101,7 +101,7 @@ reach is a law out of context.
   - `make refcite` fails until every row's `read_at` is `CANON_PIN`, every quote is still in its
     ADR, and every `false` row names the issue that owns it.
 
-  The sweep that built the list re-read 152 claims in ADRs 0084–0104. Besides #1040's, it found
+  The sweep that built the list re-read 156 claims in ADRs 0084–0104. Besides #1040's, it found
   eight false facts, filed as #1075–#1082, and one the ADR had already corrected (#1005). Only
   #1040's had engine consequences. **What the list cannot
   do is find a claim nobody listed**, so an ADR that adds one adds its row.

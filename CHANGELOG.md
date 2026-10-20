@@ -34,7 +34,7 @@ says what it now requires and what it gives up.
     re-read at 2e7895c.
   - **The check:** `make refcite` (`--negative-claims`) fails unless each quote is still in its ADR, each
     `read_at` is `CANON_PIN`, and each `false` row names an issue.
-  - **The sweep:** it re-read 152 claims and filed eight false facts as #1075–#1082. All are ADR prose, and the
+  - **The sweep:** it re-read 156 claims and filed eight false facts as #1075–#1082. All are ADR prose, and the
     engine already follows the current pin on each.
 - **`ciwatch.sh` reads the Windows run against the triage map** ([#1037](https://github.com/scttfrdmn/burroughs/issues/1037);
   the chair's second ruling of 2026-10-20). It takes the SHA's `windows` run whose job ran, and reads the failed
