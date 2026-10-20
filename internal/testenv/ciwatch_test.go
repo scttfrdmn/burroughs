@@ -473,6 +473,32 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		}
 	})
 
+	// A package can fail with no `--- FAIL:` name, and every other failing name being mapped must not hide it.
+	// Both shapes are appended after the recorded log, whose seven names are all mapped.
+	const pfx = "windows (measured, not a gate)\tgo test -race\t2026-10-20T17:00:00.0000000Z "
+	for _, c := range []struct{ name, tail, pkg string }{
+		{
+			"a_package_build_failure_is_red", pfx + "FAIL\tgithub.com/scttfrdmn/burroughs/internal/x [build failed]\n",
+			"internal/x",
+		},
+		{
+			"a_package_timeout_is_red", pfx + "panic: test timed out after 30m0s\n" + pfx + "\trunning tests:\n" +
+				pfx + "\t\tTestSlow (30m0s)\n" + pfx + "FAIL\tgithub.com/scttfrdmn/burroughs/internal/y\t1800.012s\n",
+			"internal/y",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, out, v := winRun(t, winFailed, string(recorded)+c.tail)
+			if code == 0 || v["ciwatch_verdict"] != "fail" {
+				t.Fatalf("exit %d, verdict %v: a package failed with no test named, which the map cannot "+
+					"classify:\n%s", code, v["ciwatch_verdict"], out)
+			}
+			if !strings.Contains(out, c.pkg) {
+				t.Errorf("the failure does not name the package %s:\n%s", c.pkg, out)
+			}
+		})
+	}
+
 	t.Run("a_passing_windows_run_is_green", func(t *testing.T) {
 		code, out, v := winRun(t, winPassed, "")
 		if code != 0 || v["ciwatch_verdict"] != "green" {

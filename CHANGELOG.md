@@ -29,7 +29,8 @@ says what it now requires and what it gives up.
 - **`ciwatch.sh` reads the Windows run against the triage map** ([#1037](https://github.com/scttfrdmn/burroughs/issues/1037);
   the chair's second ruling of 2026-10-20). It takes the SHA's `windows` run whose job ran, and reads the failed
   job's `--- FAIL:` names. A name not in `.github/windows-triage.tsv` fails the verdict, and so does a failed job
-  whose log names no test. No windows run is reported as unchecked. This replaces a check read by hand at every
+  whose log names no test, or a package that failed with no test named (a build failure or a timeout panic),
+  even when every named failure is mapped. No windows run is reported as unchecked. This replaces a check read by hand at every
   merge. The witness drives a log recorded from a real run, and an unmapped name injected into it turns the
   verdict red.
 - **Reading (b)'s spike is recorded: the fork's no-loop-checks build and the spinner witness are done, and the
