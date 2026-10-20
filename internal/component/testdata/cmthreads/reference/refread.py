@@ -898,6 +898,89 @@ def reenter_after_suspend():
     return body
 
 
+def trap_then_call(t_traps):
+    """`trap-then-call.wat` (#1040): the sync `run` creates Thread T and yield-then-resumes it; T traps
+    (t_traps) or returns. Then the embedder makes a SECOND call, to the sync `ok` (7), on the same store.
+
+    The first call's trap ends on T's Python thread, so this body takes its own excepthook for the first
+    call and restores the watch's before it reports. The second call is made directly through
+    `Store.invoke`, because that is the embedding API whose first line is the refusal under test
+    (def:Store.invoke:"assert(not self.lockdown)"), and an AssertionError there is the reference refusing
+    the call. The lock is set by the trap itself (def:trap:"current_instance().store.lock_down()"), and the
+    embedder reads it through def:Store.is_locked_down:"return self.lockdown"."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        first = {"trap": None, "value": None}
+        ev = threading.Event()
+
+        def t(args):
+            if t_traps:
+                first["trap"] = "T"
+                d.trap()
+            return []
+
+        tbl = d.Table()
+        fi = tbl.add(d.CoreFuncRef(BODYT, t))
+
+        def run(args):
+            [ti] = d.canon_thread_new_indirect(BODYT, tbl, fi, 0)
+            d.canon_thread_yield_then_resume(ti)
+            return [1]
+
+        ft = d.FuncType([], [d.U32Type()])
+        run_fi = store.lift(run, ft, d.CanonicalOptions(), inst)
+        ok_fi = store.lift(lambda args: [7], ft, d.CanonicalOptions(), inst)
+
+        watch_hook = threading.excepthook
+
+        def hook(args):
+            if issubclass(args.exc_type, d.Trap):
+                if first["trap"] is None:
+                    first["trap"] = "elsewhere (not T)"
+                ev.set()
+            else:
+                first["trap"] = "ERROR %s: %s" % (args.exc_type.__name__, args.exc_value)
+                ev.set()
+
+        threading.excepthook = hook
+
+        def call1():
+            got = []
+            host_invoke(store, run_fi, lambda r: got.append(r))
+            while not got:
+                store.tick()
+            first["value"] = got[0][0]
+            ev.set()
+
+        threading.Thread(target=call1, daemon=True).start()
+        ev.wait(BOUND_S)
+        threading.excepthook = watch_hook
+        if first["value"] is not None:
+            c1 = "call 1 value %d" % first["value"]
+        elif first["trap"] is not None and ev.is_set():
+            c1 = "call 1 trap %s" % first["trap"]
+        else:
+            c1 = "call 1 HANG"
+        locked = store.is_locked_down()
+        got2 = []
+        try:
+            if locked:
+                store.invoke(ok_fi, lambda: [], lambda r: got2.append(r))
+            else:
+                host_invoke(store, ok_fi, lambda r: got2.append(r))
+                while not got2:
+                    store.tick()
+            c2 = "call 2 value %d" % got2[0][0]
+        except AssertionError:
+            c2 = "call 2 refused (Store.invoke: assert not lockdown)"
+        out.value = "%s; is_locked_down %s; %s" % (c1, locked, c2)
+        out.done.set()
+
+    return body
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -925,6 +1008,9 @@ def battery():
     read("first-segment-return (#1020 mechanism (c); wasmtime 49.0.3: 2)", first_segment_return())
     read("host-event-inline (#1020 mechanism (c): call-wat-parent's inline arm)", host_event_inline())
     read("reenter-after-suspend (the fence's re-entry; wasmtime 49.0.3: 8)", reenter_after_suspend())
+    read("trap-then-call (#1040; wasmtime 49.0.3: call 1 trap, call 2 'cannot enter component instance')",
+         trap_then_call(True))
+    read("trap-then-call control (T returns)", trap_then_call(False))
 
 
 if __name__ == "__main__":

@@ -27,3 +27,5 @@ host-event-later, sync cancel (#1020 mechanism (b)): value 20
 first-segment-return (#1020 mechanism (c); wasmtime 49.0.3: 2): value 2
 host-event-inline (#1020 mechanism (c): call-wat-parent's inline arm): value 2
 reenter-after-suspend (the fence's re-entry; wasmtime 49.0.3: 8): value 8
+trap-then-call (#1040; wasmtime 49.0.3: call 1 trap, call 2 'cannot enter component instance'): call 1 trap T; is_locked_down True; call 2 refused (Store.invoke: assert not lockdown)
+trap-then-call control (T returns): call 1 value 1; is_locked_down False; call 2 value 7
