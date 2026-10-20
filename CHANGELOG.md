@@ -26,6 +26,14 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The one-load rule the pieced bulk instructions depend on is witnessed, and the `array.new*` limit is
+  measured** (the chair's second ruling of 2026-10-19;
+  [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
+  - **The witness:** an agent stopped mid-`memory.fill` or mid-`table.fill` keeps its one image load. A
+    sibling's grow is refused, and the fill completes. With the grow guard removed, 10 of 10 runs fail.
+  - **The limit:** `array.new*` arrival first exceeds 1ms at about 64 Ki elements on janus. It stays a named
+    limit, with a revisit trigger recorded: a guest allocating GC arrays that large that needs a bounded stop.
+
 - **The table and GC-array bulk instructions poll every 4096 elements** (contract §3 SP-1, the chair's ruling of
   2026-10-19, item 3;
   [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
