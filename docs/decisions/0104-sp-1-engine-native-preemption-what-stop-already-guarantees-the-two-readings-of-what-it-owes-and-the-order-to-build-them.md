@@ -385,3 +385,29 @@ sentence goes to Scott before merging. `Stop` lives in `internal/interp`, and th
     bounded stop. No corpus guest does today: the Go fork and the Rust fixtures emit no GC instructions.
   - **What a repair would cost:** storing arrays in pieces, which taxes every array access in every guest. That
     is why it waits for the trigger rather than being built ahead of it.
+
+## 2026-10-20: reading (b)'s spike, two steps done and the rest parked (the chair's ruling of that day)
+
+The chair's second ruling of 2026-10-19 made a spike (b)'s build order, recorded on #1064. Its state:
+
+- **2a, done: the fork can build without its loop checks.** Fork `wasmpreempt/phase4` 944cfd2350 adds
+  `GOEXPERIMENT=burroughsnoresched`, which turns the resched pass off under `burroughsspawn`. The default is
+  unchanged. On compiled output, a call-free loop has one `wasmSafepointYield` call by default and none with the
+  experiment.
+- **2b, done: the spinner witness replaces clause 3 as the proving test.**
+  - One goroutine runs a loop with no calls, holding the only references to two checksummed objects in wasm
+    locals. It re-checks them after each of 8 forced collections, under `GOGC=1` and
+    `GODEBUG=gccheckmark=1,invalidptr=1`.
+  - **The readings:** with the checks on it verifies 3 of 3. With them off the first collection hangs, which a
+    watchdog reports. With the pointers hidden as `uintptr`, 3 of 3 runs report the loss.
+  - It is on the never-merged branch `spike-1064-never-merge`. A first draft allocated the objects inside the
+    spinner, which left copies in its frame for a conservative scan to find, so it could not have failed. That
+    was repaired before any reading was taken.
+  - **Clause 3 is not the proof.** Its mutator compiles call-free, but it stops after 600 iterations, so it would
+    pass without (b). It stays a regression case.
+- **2c–2e, parked: the fork half is not written.** The engine half of the delivery is on the spike branch, and
+  builds but has not been run. The fork's preemption export does not exist, so none of the three loud-failure
+  neuters has run. If Scott writes the fork-side export, it is wired into the spike branch, the neuters run as
+  ruled, and the results go to the chair before step 4.
+- **The decided state of (b) is unchanged.** It is decided unless Scott objects, with no objection as of
+  2026-10-20. Nothing in the tree depends on it, because the fork's existing loop checks keep Go guests stoppable.
