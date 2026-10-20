@@ -467,13 +467,32 @@ mapped = set()
 for line in open(triage, encoding="utf-8"):
     if line.strip() and not line.startswith("#"):
         mapped.add(line.split("\t")[0].strip())
-names = sorted(set(re.findall(r"--- FAIL: (Test[A-Za-z0-9_]+)", open(log, encoding="utf-8", errors="replace").read())))
+text = open(log, encoding="utf-8", errors="replace").read()
+names = sorted(set(re.findall(r"--- FAIL: (Test[A-Za-z0-9_]+)", text)))
+# A package can FAIL with no test named: a build or setup failure, or a timeout panic, which lists the running
+# tests but prints no `--- FAIL:`. Go prints a package's names before its result line, so a `FAIL<tab><pkg>`
+# with no name since the previous result line is a package failure the map cannot classify, even when every
+# other failing name is mapped.
+unnamed, block = [], 0
+for line in text.splitlines():
+    # `gh run view --log-failed` prefixes each line with the job, the step and a timestamp ending in `Z `.
+    content = re.sub(r"^.*?\d{4}-\d\d-\d\dT[\d:.]+Z ", "", line)
+    if content.lstrip().startswith("--- FAIL: Test"):
+        block += 1
+    m = re.match(r"(ok  |FAIL|\?   )\t(\S+)", content)  # a package result line, as `go test` prints it
+    if m:
+        if m.group(1) == "FAIL" and block == 0:
+            unnamed.append(m.group(2))
+        block = 0
 unmapped = [n for n in names if n not in mapped]
 if not failed:
     print("windows job passed")
     raise SystemExit(0)
 if not names:
     print("windows job failed (%s) and its log names no failing test, which the map cannot classify" % ", ".join(failed))
+    raise SystemExit(1)
+if unnamed:
+    print("%d package(s) failed with no test named, which the map cannot classify: %s" % (len(unnamed), " ".join(unnamed)))
     raise SystemExit(1)
 if unmapped:
     print("%d failing test(s), %d not in the triage map: %s" % (len(names), len(unmapped), " ".join(unmapped)))
