@@ -976,7 +976,8 @@ ratiocheck:
 	@./scripts/ratiocheck.sh $(if $(PR),--pr $(PR))
 # triagecheck — every issue in the Windows triage map (`.github/windows-triage.tsv`) is still open (the
 # chair's order of 2026-10-17, which moved the map into the tree as data). A closed issue means a row is
-# stale; a fetch that fails is a failure, never a pass. Reading the map from `ciwatch.sh` is #1037, parked.
+# stale; a fetch that fails is a failure, never a pass. `ciwatch.sh` reads the map (#1037): an unmapped
+# failing name in the windows run fails its verdict.
 triagecheck:
 	@./scripts/triagecheck.sh
 

@@ -1,0 +1,119 @@
+windows (measured, not a gate)	go test -race	﻿2026-10-20T16:34:53.0786625Z ##[group]Run go test -race -timeout 30m ./...
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0787051Z ^[[36;1mgo test -race -timeout 30m ./...^[[0m
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0805900Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0806987Z env:
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0807175Z   GOTOOLCHAIN: local
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0807476Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0807957Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.13.16\x64/lib/pkgconfig
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0808421Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0808837Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0809240Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	go test -race	2026-10-20T16:34:53.0809562Z ##[endgroup]
+windows (measured, not a gate)	go test -race	2026-10-20T16:35:51.9658505Z ok  	github.com/scttfrdmn/burroughs	30.315s
+windows (measured, not a gate)	go test -race	2026-10-20T16:36:53.2116272Z ok  	github.com/scttfrdmn/burroughs/cmd/burroughs	91.237s
+windows (measured, not a gate)	go test -race	2026-10-20T16:36:53.2117386Z ok  	github.com/scttfrdmn/burroughs/internal/binary	2.964s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.8740724Z ok  	github.com/scttfrdmn/burroughs/internal/component	121.169s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.8942372Z ok  	github.com/scttfrdmn/burroughs/internal/component/canon	2.970s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9106650Z ok  	github.com/scttfrdmn/burroughs/internal/gen	1.089s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9161710Z ok  	github.com/scttfrdmn/burroughs/internal/gen/keywordgen	1.834s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9182311Z ?   	github.com/scttfrdmn/burroughs/internal/gen/keywordgen/cmd/keywordgen	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9212258Z ok  	github.com/scttfrdmn/burroughs/internal/gen/memarggen	2.773s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9225697Z ?   	github.com/scttfrdmn/burroughs/internal/gen/memarggen/cmd/memarggen	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9230143Z ok  	github.com/scttfrdmn/burroughs/internal/gen/mllex	1.220s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9252215Z ok  	github.com/scttfrdmn/burroughs/internal/gen/opcodegen	8.352s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9343122Z ?   	github.com/scttfrdmn/burroughs/internal/gen/opcodegen/cmd/opcodegen	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9344352Z ok  	github.com/scttfrdmn/burroughs/internal/gen/opgen	7.560s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9367481Z ?   	github.com/scttfrdmn/burroughs/internal/gen/opgen/cmd/opgen	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9441949Z ok  	github.com/scttfrdmn/burroughs/internal/gen/xcorpus	2.149s
+windows (measured, not a gate)	go test -race	2026-10-20T16:37:26.9445307Z ?   	github.com/scttfrdmn/burroughs/internal/gen/xcorpus/cmd/xcorpus	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2684470Z --- FAIL: TestStopBringsATailCallLoopToASafepoint (30.00s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2687992Z     safepoint_test.go:724: the chain did not finish 30s after Resume
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2689623Z FAIL
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2691061Z 0076 reservations: unavailable=357 (of which 37 are deliberate refusals by refuseReservation), declined=59, released=0, release failures=0
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2693732Z 0076 reservation gauge: peak=0 live-at-exit=0
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2694677Z FAIL	github.com/scttfrdmn/burroughs/internal/interp	368.916s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2696263Z ok  	github.com/scttfrdmn/burroughs/internal/interp/dispatchbench	1.124s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2697325Z ok  	github.com/scttfrdmn/burroughs/internal/interp/dropbench	1.056s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2698348Z ok  	github.com/scttfrdmn/burroughs/internal/interp/globalbench	13.533s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2699595Z ok  	github.com/scttfrdmn/burroughs/internal/interp/growbench	1.063s [no tests to run]
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2700233Z ok  	github.com/scttfrdmn/burroughs/internal/interp/invokebench	1.067s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2700806Z ok  	github.com/scttfrdmn/burroughs/internal/interp/loopbench	1.904s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2701332Z ok  	github.com/scttfrdmn/burroughs/internal/interp/membench	1.573s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2701845Z ok  	github.com/scttfrdmn/burroughs/internal/interp/rmwbench	10.828s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2702359Z ok  	github.com/scttfrdmn/burroughs/internal/interp/scanbench	1.859s
+windows (measured, not a gate)	go test -race	2026-10-20T16:42:26.2702889Z ok  	github.com/scttfrdmn/burroughs/internal/interp/vecbench	1.066s
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8212795Z ok  	github.com/scttfrdmn/burroughs/internal/spec	1095.780s
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8214172Z --- FAIL: TestPreCommitRefusesCommitsOnTheDefaultBranch (2.25s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8217900Z     branchguard_test.go:40: .githooks/pre-commit is not executable (-rw-rw-rw-); git will not run it
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8218745Z --- FAIL: TestCILockAllowsOneGateAtATime (7.96s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8219715Z     --- FAIL: TestCILockAllowsOneGateAtATime/the_stop_advice_matches_whether_the_group_is_the_gates_own (2.32s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8220926Z         --- FAIL: TestCILockAllowsOneGateAtATime/the_stop_advice_matches_whether_the_group_is_the_gates_own/detached_or_nested_so_the_group_is_ours (0.18s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8221998Z             cilock_test.go:171: reading the holder's pgid: exit status 1
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8222601Z --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork (4.97s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8380267Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/checkout_ddash (1.68s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8383156Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8384386Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/restore_worktree (0.18s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8385910Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8387198Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/dash_C_repo (0.23s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8388718Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8389954Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/dash_C_subdir (0.25s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8391488Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8392290Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/bare_path_from_subdir (0.23s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8393364Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8393943Z --- FAIL: TestEditRouteHookRefusesBashEditsOfTrackedFiles (0.15s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8395570Z     editroute_test.go:129: C:\Users\RUNNER~1\AppData\Local\Temp\TestEditRouteHookRefusesBashEditsOfTrackedFiles3072634230\001\locked is readable at mode 0o000, so 'a directory that exists and cannot be entered' cannot be constructed here and its arm has no subject
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8397254Z --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun (23.46s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8397962Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/each_class_from_its_own_run (1.04s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8399492Z         ciwatch_test.go:125: the verdict file is not JSON, so it cannot be read by the tool that needs it: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8400192Z             {
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8400555Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8401088Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8403149Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuneach_class_from_its_ow2047258101\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8405601Z               "body_subject": { "run": "2", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuneach_class_from_its_ow2047258101\001\out.2.json" },
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8406645Z               "body_stale": null,
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8407500Z               "body_stale_note": "unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8409431Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8412130Z             }
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8412793Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/a_comment_after_the_run_does_not_make_an_unedited_body_stale (1.35s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8414197Z         ciwatch_test.go:185: the verdict file is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8414721Z             {
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8415129Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8415787Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8417633Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_comment_after_the_ru1324409358\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8420735Z               "body_subject": { "run": "2", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_comment_after_the_ru1324409358\001\out.2.json" },
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8421869Z               "body_stale": false,
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8422804Z               "body_stale_note": "the body-class run (2026-10-17T16:47:27Z) is not older than the body's last edit (2026-10-17T16:47:24Z)",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8424626Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8425889Z             }
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8426437Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/an_edit_after_the_run_is_stale (2.39s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8427310Z         ciwatch_test.go:192: the verdict file is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8427997Z             {
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8428365Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8428922Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8430932Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_edit_after_the_run_555126247\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8433323Z               "body_subject": { "run": "2", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_edit_after_the_run_555126247\001\out.2.json" },
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8434299Z               "body_stale": true,
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8435379Z               "body_stale_note": "the body was edited at 2026-10-17T17:00:00Z, AFTER the body-class run was created at 2026-10-17T16:47:27Z",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8437380Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8438436Z             }
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8439287Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/an_edit_before_the_run_is_current (1.44s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8440389Z         ciwatch_test.go:199: the verdict file is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8441051Z             {
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8441399Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8441927Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8443966Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_edit_before_the_run3411333786\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8446254Z               "body_subject": { "run": "2", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_edit_before_the_run3411333786\001\out.2.json" },
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8447400Z               "body_stale": false,
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8448671Z               "body_stale_note": "the body-class run (2026-10-17T16:47:27Z) is not older than the body's last edit (2026-10-17T16:47:26Z)",
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8450639Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8451673Z             }
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8452244Z --- FAIL: TestShellAndGoAgreeOnTheSuitePopulation (0.01s)
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8453733Z     testenv_test.go:359: ../../scripts/suite-count.sh C:\Users\RUNNER~1\AppData\Local\Temp\TestShellAndGoAgreeOnTheSuitePopulation4272895343\001: fork/exec ../../scripts/suite-count.sh: %1 is not a valid Win32 application.
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8456012Z         	If this is a permission error the executable bit is not committed, and the Makefile and both CI floors invoke this script by path — they would fail the same way, one push later.
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8457031Z FAIL
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8457362Z FAIL	github.com/scttfrdmn/burroughs/internal/testenv	465.954s
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8457832Z ok  	github.com/scttfrdmn/burroughs/internal/text	3.224s
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8458388Z ok  	github.com/scttfrdmn/burroughs/internal/validate	23.928s
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8459020Z ok  	github.com/scttfrdmn/burroughs/internal/wasi	242.194s
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:16.8459390Z FAIL
+windows (measured, not a gate)	go test -race	2026-10-20T16:55:17.1815574Z ##[error]Process completed with exit code 1.

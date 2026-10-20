@@ -154,7 +154,17 @@ fetch_run() {
 		cat "$CIWATCH_FIXTURE/$1.json"
 		return
 	fi
-	gh run view "$1" --repo "$repo" --json status,conclusion,headSha,jobs
+	gh run view "$1" --repo "$repo" --json status,conclusion,headSha,jobs,workflowName
+}
+
+# fetch_failed_log prints the failed jobs' log of run $1: from <dir>/<id>.log under a fixture (empty when the
+# fixture has none), else `gh run view --log-failed`.
+fetch_failed_log() {
+	if [ -n "${CIWATCH_FIXTURE:-}" ]; then
+		cat "$CIWATCH_FIXTURE/$1.log" 2>/dev/null || true
+		return
+	fi
+	gh run view "$1" --repo "$repo" --log-failed
 }
 
 # --- wait a BOUNDED time for a run to appear, because "not yet" is not "not coming" -------------------------
@@ -419,6 +429,69 @@ bodyok=true
 assert_class "$prefix.$treerun.json" "tree-subject (run $treerun)" "$treekeys" || { fail=1; treeok=false; }
 assert_class "$prefix.$bodyrun.json" "body-subject (run $bodyrun)" "$bodykeys" || { fail=1; bodyok=false; }
 
+# --- the Windows run, read against the triage map (#1037) --------------------------------------------------
+#
+# `windows` is measured, not a gate, so none of its jobs is a required key above, and its failures were read
+# by hand at every merge against `.github/windows-triage.tsv`. The chair's rule is that every recurring Windows
+# failure maps to an open issue, so a failing name that is NOT in the map is new, and that is a verdict failure.
+#
+# The run read is the newest `windows` run for the SHA whose job actually ran: an edit-triggered run skips it,
+# as the tree class's selection already knows. A failed job that names no failing test (a build or setup
+# failure) is a failure too, because the map can classify only a test name. No windows run at all is reported
+# as unchecked, never as green.
+#
+# The comparison is by the top-level name `--- FAIL:` prints, which is how the map is keyed; a subtest's failure
+# also fails its parent, so the parent's row covers it.
+triage=${CIWATCH_TRIAGE:-$(cd "$(dirname "$0")/.." && pwd)/.github/windows-triage.tsv}
+winrun=""
+for id in $runs; do
+	fetch_run "$id" >"$prefix.$id.win.json" 2>&1 || continue
+	if python3 -c 'import json,sys
+v = json.load(open(sys.argv[1]))
+ran = [j for j in v.get("jobs", []) if j.get("conclusion") not in ("skipped", None, "")]
+raise SystemExit(0 if v.get("workflowName") == "windows" and ran else 1)' "$prefix.$id.win.json" 2>/dev/null; then
+		winrun=$id
+		break
+	fi
+done
+winok=null
+winnote="unchecked: no windows run for this SHA ran its job"
+if [ -n "$winrun" ]; then
+	fetch_failed_log "$winrun" >"$prefix.$winrun.log" 2>&1 || true
+	if winnote=$(python3 - "$prefix.$winrun.win.json" "$prefix.$winrun.log" "$triage" <<'PYWIN'
+import json, re, sys
+run, log, triage = sys.argv[1], sys.argv[2], sys.argv[3]
+v = json.load(open(run))
+failed = [j["name"] for j in v.get("jobs", []) if j.get("conclusion") not in ("success", "skipped", None, "")]
+mapped = set()
+for line in open(triage, encoding="utf-8"):
+    if line.strip() and not line.startswith("#"):
+        mapped.add(line.split("\t")[0].strip())
+names = sorted(set(re.findall(r"--- FAIL: (Test[A-Za-z0-9_]+)", open(log, encoding="utf-8", errors="replace").read())))
+unmapped = [n for n in names if n not in mapped]
+if not failed:
+    print("windows job passed")
+    raise SystemExit(0)
+if not names:
+    print("windows job failed (%s) and its log names no failing test, which the map cannot classify" % ", ".join(failed))
+    raise SystemExit(1)
+if unmapped:
+    print("%d failing test(s), %d not in the triage map: %s" % (len(names), len(unmapped), " ".join(unmapped)))
+    raise SystemExit(1)
+print("%d failing test(s), all in the triage map" % len(names))
+PYWIN
+	); then
+		winok=true
+		echo "ciwatch: windows (run $winrun): $winnote" >&2
+	else
+		winok=false
+		fail=1
+		echo "ciwatch: FAIL windows (run $winrun): $winnote" >&2
+	fi
+else
+	echo "ciwatch: windows: $winnote" >&2
+fi
+
 # --- the verdict file carries THIS SCRIPT's verdict, not a run's conclusion ---------------------------------
 #
 # It used to be `cp` of the chosen tree run's JSON, and that was a trap this script built for its own reader.
@@ -439,6 +512,7 @@ cat > "$prefix.verdict" <<VERDICT
   "body_subject": { "run": "$bodyrun", "ok": $bodyok, "keys": "$(printf '%s ' $bodykeys)", "json": "$prefix.$bodyrun.json" },
   "body_stale": $body_stale,
   "body_stale_note": "$body_stale_note",
+  "windows": { "run": "$winrun", "ok": $winok, "note": "$winnote", "triage": "$triage" },
   "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
 }
 VERDICT
