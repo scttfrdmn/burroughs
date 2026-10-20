@@ -26,6 +26,16 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A pin move re-reads every negative claim about the reference, from a list `make refcite` keeps** (the
+  chair's third ruling of 2026-10-20; [#1040](https://github.com/scttfrdmn/burroughs/issues/1040)).
+  - **Why:** ADR 0100's *"the reference does not model instance poisoning"* went false at the 2026-10-17 pin
+    move, and nothing fired, because a negative claim names no symbol to resolve.
+  - **The list:** `docs/upstream/negative-claims.tsv` holds the 36 negative claims in ADRs 0084–0104, each
+    re-read at 2e7895c.
+  - **The check:** `make refcite` (`--negative-claims`) fails unless each quote is still in its ADR, each
+    `read_at` is `CANON_PIN`, and each `false` row names an issue.
+  - **The sweep:** it re-read 152 claims and filed eight false facts as #1075–#1082. All are ADR prose, and the
+    engine already follows the current pin on each.
 - **`ciwatch.sh` reads the Windows run against the triage map** ([#1037](https://github.com/scttfrdmn/burroughs/issues/1037);
   the chair's second ruling of 2026-10-20). It takes the SHA's `windows` run whose job ran, and reads the failed
   job's `--- FAIL:` names. A name not in `.github/windows-triage.tsv` fails the verdict, and so does a failed job

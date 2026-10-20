@@ -987,6 +987,10 @@ triagecheck:
 # lines nobody touched — the Makefile's CANON_PIN line is the only line that changes. A live citation resolves
 # at CANON_PIN; a record (an ADR, a released CHANGELOG entry) names the pin it read, from CANON_RECORD_PINS.
 #
+# It also keeps docs/upstream/negative-claims.tsv, the negative claims about the reference that no symbol
+# resolves (the chair's third ruling of 2026-10-20, #1040). A pin move re-reads every row there and sets its
+# read_at; until then this target fails.
+#
 # The interpreter is uv's exact CANON_PYTHON here. CI has no uv and sets REFCITE_PY to the runner's
 # `python3 -I`: the check needs only `ast`, and the vendored head parses on 3.12, 3.13 and 3.14 (measured).
 CANON_VENDOR := internal/component/canon/gen/vendor
@@ -995,7 +999,7 @@ REFCITE_PY ?= uv run --no-project --managed-python --python $(CANON_PYTHON) pyth
 refcite:
 	@$(MAKE) --no-print-directory canon-ref
 	@$(REFCITE_PY) scripts/refcite.py --pin $(CANON_PIN) $(foreach p,$(CANON_RECORD_PINS),--record-pin $(p)) \
-		--vendor $(CANON_VENDOR)
+		--vendor $(CANON_VENDOR) --negative-claims docs/upstream/negative-claims.tsv
 
 # canon-ref — vendor `definitions.py` at CANON_PIN and at each record pin, named by SHA so a file can never be
 # read as another pin's. Fetched once per SHA: a commit's raw file is immutable. Into a temp name first, so a
