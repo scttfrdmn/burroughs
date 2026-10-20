@@ -358,3 +358,30 @@ sentence goes to Scott before merging. `Stop` lives in `internal/interp`, and th
     loop, so every Go basic block ends in a back-edge.
   - **What the reading does not model:** `br_on_cast*` and `try_table` edges, and a test checks the corpora
     contain neither.
+
+## 2026-10-19: the one-load rule's witness, and the `array.new*` limit (the chair's second ruling of that day)
+
+- **The one-load rule is witnessed.** The pieced bulk instructions load an image once and hold it across their
+  polls, which is #1061's form and decision 0065's rule. That rests on one guard: a grow refuses to relocate
+  while another agent of the instance is mid-call (`soleAgentLocked`, ADR 0073).
+  - **The witnesses:** `TestAMemoryFillHeldAcrossAParkSurvivesASiblingGrow` and
+    `TestATableFillHeldAcrossAParkSurvivesASiblingGrow`. Agent A is stopped part-way through one large
+    `memory.fill` or `table.fill`, then resumed, and agent B grows the same memory or table at once. B's grow
+    must be refused, and A's fill must cover the whole live region.
+  - **Neuter, run:** the guard removed from both relocating grows. Ten of ten runs failed. In eight, the grow
+    relocated and A's remaining pieces went to the abandoned array, leaving the live image's tail unfilled.
+  - The two earlier refusal tests park the sibling in a host call, not mid-instruction, so they were not this
+    witness.
+- **`array.new*`'s backing allocation is a named limit, not repaired.** That is the chair's recommendation to
+  Scott on #515, whose answer settles whether reading (a) is finished.
+  - **The crossing, measured on janus** (`BenchmarkSP1ArrayNewThreshold`, `array.new_default`, tasks 64 and
+    65): arrival first exceeds 1ms at **about 64 Ki elements**. At 32 Ki the max stays at or under 0.99ms over 5
+    runs; at 64 Ki (a 3.5 MiB backing) 3 of 5 runs exceed it, with max 0.80–1.77ms. Above that the stretch grows
+    with the length, to max 6–26ms at 2 Mi.
+  - **It is not purely the zeroing.** The sizes are not monotonic: 128 Ki read worse than 512 Ki, and 16 Ki
+    already sits near 0.5ms. The stretch evidently includes collector work the allocation itself triggers, so
+    any repair would have to address that as well as the allocation.
+  - **The trigger for revisiting:** a guest that allocates GC arrays of 64 Ki elements or more and needs a
+    bounded stop. No corpus guest does today: the Go fork and the Rust fixtures emit no GC instructions.
+  - **What a repair would cost:** storing arrays in pieces, which taxes every array access in every guest. That
+    is why it waits for the trigger rather than being built ahead of it.
