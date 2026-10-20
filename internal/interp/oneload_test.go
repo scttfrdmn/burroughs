@@ -94,8 +94,8 @@ func TestAMemoryFillHeldAcrossAParkSurvivesASiblingGrow(t *testing.T) {
 		}
 		done = make(chan error, 1)
 		go func(in *Instance, done chan error) {
-			_, err := in.Invoke("fill")
-			done <- err
+			_, ferr := in.Invoke("fill")
+			done <- ferr
 		}(in, done)
 		if stopMidFill(t, in, done, func() bool { return stopWord(t, in, 0) != stopWord(t, in, size-4) }) {
 			break
@@ -161,8 +161,8 @@ func TestATableFillHeldAcrossAParkSurvivesASiblingGrow(t *testing.T) {
 		}
 		done = make(chan error, 1)
 		go func(in *Instance, done chan error) {
-			_, err := in.Invoke("fill")
-			done <- err
+			_, ferr := in.Invoke("fill")
+			done <- ferr
 		}(in, done)
 		if stopMidFill(t, in, done, func() bool {
 			v := in.tables[0].view()
