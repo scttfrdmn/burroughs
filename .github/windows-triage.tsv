@@ -1,10 +1,11 @@
 # The Windows triage map: each recurring failure of the `windows` workflow's test job, and the issue it is.
 #
 # The chair's rule: every recurring Windows failure maps to an issue. A failing name that is not in this
-# file is new, and it gets classified and filed before a merge. The map is read by hand for now. Making
-# `ciwatch.sh` read it is #1037, which is parked. `scripts/triagecheck.sh` (`make triagecheck`, run inside
-# `make cite` and by CI's `citations` job) fails when any issue below has closed. A closed issue means the
-# failure is either fixed, so its row should go, or still recurring with nothing tracking it.
+# file is new, and it gets classified and filed before a merge. `ciwatch.sh` reads it (#1037): a failing
+# name in the SHA's windows run that is not in this file fails the verdict. `scripts/triagecheck.sh`
+# (`make triagecheck`, run inside `make cite` and by CI's `citations` job) fails when any issue below has
+# closed. A closed issue means the failure is either fixed, so its row should go, or still recurring with
+# nothing tracking it.
 #
 # One row per test name, tab-separated: the bare test name as `--- FAIL:` prints it, the issue numbers
 # (comma-separated, without a hash), and a note. A row whose issues are all open is current.

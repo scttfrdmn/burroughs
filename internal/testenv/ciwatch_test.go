@@ -398,4 +398,85 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 				"forgets to set one hangs the package", elapsed)
 		}
 	})
+
+	// #1037: the Windows run is read against the triage map. The log is RECORDED, from run 39458535651 (the
+	// windows run for #1072's head), so the parser meets the real `gh run view --log-failed` line shape:
+	// job, step and timestamp before `--- FAIL:`, and subtests indented under their parent.
+	recorded, err := os.ReadFile(filepath.Join("testdata", "ciwatch", "windows-39458535651.log"))
+	if err != nil {
+		t.Fatalf("the recorded Windows log is missing: %v", err)
+	}
+	// The map: the seven top-level names that run failed, under a comment header in the real file's form.
+	const triage = "# a comment line, which is not a row\n#\n" +
+		"TestCILockAllowsOneGateAtATime\t1000\tnote\n" +
+		"TestCIWatchTakesEachJobClassFromItsOwnRun\t1000\tnote\n" +
+		"TestEditRouteHookRefusesBashEditsOfTrackedFiles\t1000\tnote\n" +
+		"TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork\t1000\tnote\n" +
+		"TestPreCommitRefusesCommitsOnTheDefaultBranch\t1000\tnote\n" +
+		"TestShellAndGoAgreeOnTheSuitePopulation\t1000\tnote\n" +
+		"TestStopBringsATailCallLoopToASafepoint\t1000\tnote\n"
+	const winFailed = `{"status":"completed","conclusion":"failure","headSha":"SHA","workflowName":"windows","jobs":[
+		{"name":"windows (measured, not a gate)","conclusion":"failure"}]}`
+	const winPassed = `{"status":"completed","conclusion":"success","headSha":"SHA","workflowName":"windows","jobs":[
+		{"name":"windows (measured, not a gate)","conclusion":"success"}]}`
+	winRun := func(t *testing.T, runJSON, log string) (int, string, map[string]any) {
+		t.Helper()
+		dir := t.TempDir()
+		write(dir, "runs.json", `[{"databaseId": 3}, {"databaseId": 1}]`)
+		write(dir, "1.json", strings.ReplaceAll(pushRun, `"conclusion":"failure"}]}`, `"conclusion":"success"}]}`))
+		write(dir, "3.json", runJSON)
+		write(dir, "3.log", log)
+		write(dir, "triage.tsv", triage)
+		code, out := run(t, dir, "CIWATCH_TRIAGE="+filepath.Join(dir, "triage.tsv"))
+		raw, err := os.ReadFile(filepath.Join(dir, "out.verdict"))
+		if err != nil {
+			t.Fatalf("no verdict file: %v\n%s", err, out)
+		}
+		var v map[string]any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			t.Fatalf("verdict is not JSON: %v\n%s", err, raw)
+		}
+		return code, out, v
+	}
+
+	t.Run("windows_failures_all_in_the_map_are_green", func(t *testing.T) {
+		code, out, v := winRun(t, winFailed, string(recorded))
+		if code != 0 || v["ciwatch_verdict"] != "green" {
+			t.Fatalf("exit %d, verdict %v: every failing name in the recorded log is mapped, so this is green:\n%s",
+				code, v["ciwatch_verdict"], out)
+		}
+		if !strings.Contains(out, "7 failing test(s), all in the triage map") {
+			t.Errorf("the log does not say how many failures were read and that all were mapped; a parser that "+
+				"read none would also be green:\n%s", out)
+		}
+	})
+
+	// NEUTER, as the chair ruled it: an unmapped failure injected into the recorded log must turn the verdict red.
+	t.Run("an_unmapped_windows_failure_is_red", func(t *testing.T) {
+		injected := string(recorded) + "windows (measured, not a gate)\tgo test -race\t2026-10-20T17:00:00.0000000Z" +
+			" --- FAIL: TestNotInTheTriageMap (0.01s)\n"
+		code, out, v := winRun(t, winFailed, injected)
+		if code == 0 || v["ciwatch_verdict"] != "fail" {
+			t.Fatalf("exit %d, verdict %v: TestNotInTheTriageMap is in no row, so the verdict must fail:\n%s",
+				code, v["ciwatch_verdict"], out)
+		}
+		if !strings.Contains(out, "TestNotInTheTriageMap") {
+			t.Errorf("the failure does not name the unmapped test:\n%s", out)
+		}
+	})
+
+	t.Run("a_windows_failure_that_names_no_test_is_red", func(t *testing.T) {
+		code, out, v := winRun(t, winFailed, "windows (measured, not a gate)\tSet up Go\terror: setup failed\n")
+		if code == 0 || v["ciwatch_verdict"] != "fail" {
+			t.Fatalf("exit %d, verdict %v: a failed job with no test named cannot be classified by the map:\n%s",
+				code, v["ciwatch_verdict"], out)
+		}
+	})
+
+	t.Run("a_passing_windows_run_is_green", func(t *testing.T) {
+		code, out, v := winRun(t, winPassed, "")
+		if code != 0 || v["ciwatch_verdict"] != "green" {
+			t.Fatalf("exit %d, verdict %v:\n%s", code, v["ciwatch_verdict"], out)
+		}
+	})
 }
