@@ -1,0 +1,8 @@
+[package]
+name = "twocall"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wasmtime = { version = "=49.0.3", features = ["component-model-async"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
