@@ -106,7 +106,8 @@ func sp1BulkModule(tb testing.TB) *binary.Module {
 // 63), over sizes doubling from 64 Ki, with `BenchmarkSP1BulkArrival`'s protocol at each size. Run it with
 // `-benchtime=1x` on janus's `measured` group.
 func BenchmarkSP1ArrayNewThreshold(b *testing.B) {
-	for _, n := range []int{64 << 10, 128 << 10, 256 << 10, 512 << 10, 1 << 20, 2 << 20} {
+	// From 16 Ki, because the first sweep (task 64) found 64 Ki straddling the 1ms line.
+	for _, n := range []int{16 << 10, 32 << 10, 64 << 10, 128 << 10, 256 << 10, 512 << 10, 1 << 20, 2 << 20} {
 		b.Run("elems="+itoa(uint64(n)), func(b *testing.B) {
 			src := `(module (type $a (array (mut i64)))
 				(func (export "run") (param i32) (result i32)
