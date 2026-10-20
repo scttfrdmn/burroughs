@@ -26,6 +26,11 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **Reading (b)'s spike is recorded: the fork's no-loop-checks build and the spinner witness are done, and the
+  rest is parked** (the chair's ruling of 2026-10-20;
+  [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
+  The fork's preemption export is not written, so the delivery's three neuters have not run. Nothing in the
+  tree changes, and (b)'s decided state is unchanged.
 - **The one-load rule the pieced bulk instructions depend on is witnessed, and the `array.new*` limit is
   measured** (the chair's second ruling of 2026-10-19;
   [ADR 0104](docs/decisions/0104-sp-1-engine-native-preemption-what-stop-already-guarantees-the-two-readings-of-what-it-owes-and-the-order-to-build-them.md)).
