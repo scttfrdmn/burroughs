@@ -100,6 +100,64 @@ func sp1BulkModule(tb testing.TB) *binary.Module {
 	return m
 }
 
+// BenchmarkSP1ArrayNewThreshold finds the `array.new*` element count at which arrival first exceeds the forecast's
+// 1ms max (the chair's second ruling of 2026-10-19, item 3). Its stretch is the one-piece backing allocation, so
+// it grows with the length. It sweeps `array.new_default`, which at 2 Mi elements read the worst of the four (task
+// 63), over sizes doubling from 64 Ki, with `BenchmarkSP1BulkArrival`'s protocol at each size. Run it with
+// `-benchtime=1x` on janus's `measured` group.
+func BenchmarkSP1ArrayNewThreshold(b *testing.B) {
+	for _, n := range []int{64 << 10, 128 << 10, 256 << 10, 512 << 10, 1 << 20, 2 << 20} {
+		b.Run("elems="+itoa(uint64(n)), func(b *testing.B) {
+			src := `(module (type $a (array (mut i64)))
+				(func (export "run") (param i32) (result i32)
+					(loop (drop (array.new_default $a (i32.const ` + itoa(uint64(n)) + `)))
+						(local.set 0 (i32.sub (local.get 0) (i32.const 1))) (br_if 0 (local.get 0)))
+					(i32.const 0)))`
+			img, err := text.EncodeModule([]byte(src))
+			if err != nil {
+				b.Fatalf("encode: %v", err)
+			}
+			m, err := (&binary.Decoder{Features: binary.Features{GC: true}}).DecodeModule(img)
+			if err != nil {
+				b.Fatalf("decode: %v", err)
+			}
+			if _, err := validate.Module(m); err != nil {
+				b.Fatalf("validate: %v", err)
+			}
+			in, trap := mustInst(b, m)
+			if trap != nil {
+				b.Fatalf("instantiate: %v", trap)
+			}
+			go func() { _, _ = in.Invoke("run", I32(1_000_000)) }()
+			defer func() { _ = in.Close() }()
+			const trials = 200
+			var arrivals []time.Duration
+			rng := rand.New(rand.NewPCG(1, uint64(n)))
+			for b.Loop() {
+				arrivals = arrivals[:0]
+				for i := range trials {
+					until := time.Now().Add(time.Duration(rng.Int64N(int64(20 * time.Millisecond))))
+					for time.Now().Before(until) {
+					}
+					t0 := time.Now()
+					if err := in.Stop(30 * time.Second); err != nil {
+						b.Fatalf("trial %d: Stop: %v", i, err)
+					}
+					d := time.Since(t0)
+					in.Resume()
+					if i > 0 {
+						arrivals = append(arrivals, d)
+					}
+				}
+			}
+			slices.Sort(arrivals)
+			pct := func(p float64) time.Duration { return arrivals[int(p*float64(len(arrivals)-1))] }
+			b.ReportMetric(float64(pct(0.99).Nanoseconds()), "arrival-p99-ns")
+			b.ReportMetric(float64(arrivals[len(arrivals)-1].Nanoseconds()), "arrival-max-ns")
+		})
+	}
+}
+
 // BenchmarkSP1BulkArrival is SP-1's instrument for the table and GC-array bulk instructions (the chair's ruling of
 // 2026-10-19, item 3), `BenchmarkSP1Arrival`'s protocol over the classes those instructions make: one guest per
 // class, stopped `trials` times at random points, reporting `arrival-p50-ns`, `arrival-p99-ns` and
