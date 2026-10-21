@@ -24,6 +24,83 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+## [0.9.0] - 2026-10-21
+*Implements contract v0.1.*
+
+**What changes by default, first.** Each item changes what a component observes without opting in to anything.
+None has a gate that restores the old behaviour: each was a conformance defect, or a public type that could not be
+named before.
+
+- **A trap locks the component instance, and every later call returns `ErrInstanceLocked`, wrapping the trap**
+  ([#1040](https://github.com/scttfrdmn/burroughs/issues/1040); ADR 0105).
+  - **Why:** the reference locks the store on every trap, and wasmtime refuses a second call with "cannot enter
+    component instance". Before this, Burroughs ran the next call on the state the trap left. That held with
+    Threads or without them.
+  - **What a host sees:** the trapping call returns its trap. A call in flight on another goroutine ends with
+    `ErrInstanceLocked` at its next suspension point or canon built-in, including in an instance composed with it.
+  - **Not affected:** core wasm modules, which the core spec keeps callable after a trap.
+- **A component's trap is a `burroughs.Trap`**, as a core module's is
+  ([#1084](https://github.com/scttfrdmn/burroughs/issues/1084)).
+  - **What it enables:** `errors.As(err, &trap)` works for a component call, and through `ErrInstanceLocked`.
+  - **The CLI:** `burroughs run` on a component that traps exits `4`. It exited `1`.
+- **A sync cross-component call carries strings, lists and records**
+  ([#995](https://github.com/scttfrdmn/burroughs/issues/995); ADR 0103). It crosses as component values, lifted from
+  one memory and lowered into the other. It failed on arity, or read the wrong memory, before. That was `v0.8.0`'s
+  first known limit.
+- **A cross-component result store that fails after the lower returned traps the caller's task**
+  ([#994](https://github.com/scttfrdmn/burroughs/issues/994)). The parent waited out a 30s bound before.
+- **A lift's `post-return` runs** ([#1058](https://github.com/scttfrdmn/burroughs/issues/1058)). It was decoded
+  and never called.
+- **An async lower of a sync-lifted sibling stores its result**
+  ([#1050](https://github.com/scttfrdmn/burroughs/issues/1050)), where it returned RETURNED with the result never
+  stored.
+- **An outer-aliased func type lowers its result** ([#756](https://github.com/scttfrdmn/burroughs/issues/756)). Its
+  signature was silently nil.
+- **`Stop` reaches its threads promptly through long instructions** (contract §3 SP-1, reading (a); ADR 0104).
+  - **What changed:** bulk memory, table and GC-array instructions poll as they go, and so do a list or value
+    crossing a sync cross-component call. So `Stop`'s arrival no longer scales with their size. A caller's `Stop`
+    no longer waits for a sync cross-component callee.
+  - **The named limit:** `array.new*`'s single backing allocation, which crosses 1ms at about 64 Ki elements on
+    janus.
+  - **Large lists:** a list crossing a sync cross-component call is never one allocation proportional to its count.
+
+**Then the fixes and instruments**, under Changed and Fixed below. The instruments of this cycle:
+- a pin move re-reads every negative claim about the reference (`docs/upstream/negative-claims.tsv`, kept by
+  `make refcite`);
+- `ciwatch.sh` reads the Windows run against the triage map.
+
+**Platforms.** 64-bit Linux and macOS are built and tested. **Windows support remains undecided**, per Scott's ruling
+of 2026-10-08, because the Windows job is not green. Its failures are now classified against
+`.github/windows-triage.tsv` on every CI verdict.
+
+**What `v0.9.0` claims, since the digit does not say it** (ADR 0004's 2026-08-28 amendment). This release brings the
+component model's default path into line with the reference on what follows a trap, and lifts `v0.8.0`'s first three
+known limits. **Not a v1.0.0 claim, and not a claim that v1's threads are finished:**
+- the §4 litmus battery is unscheduled (#10);
+- `gate:threads` stays off;
+- reading (b) of SP-1, a Go guest's stop-the-world without the fork's loop checks, is parked (#1064).
+
+**Conformance, measured at the cut** (`make conformance` on the release tree, re-run on the tagged SHA):
+- the spec board over 256 files reads **60957 pass, 0 fail, 0 unsupported, 4187 gated, 0 unimplemented**, the same
+  as `v0.8.0`'s;
+- with every gate on, 65109 pass, 0 fail and 0 gated (`TestAllGatesOnLeavesNothingGated`). Guard 4's count is 0.
+
+**Known limits, open on default-on paths, each with its issue:**
+- **`burroughs run` forwards the host's environment to the guest**, and the leaked `PWD` breaks relative path
+  resolution ([#830](https://github.com/scttfrdmn/burroughs/issues/830)), carried from `v0.8.0`.
+- **`Close` with a zero bound returns `nil` on Windows** ([#945](https://github.com/scttfrdmn/burroughs/issues/945)),
+  carried.
+- **The interpreter's hot loop is sensitive to goroutine-stack placement on x86**, by about 9% in `branch`
+  ([#1036](https://github.com/scttfrdmn/burroughs/issues/1036)). It is a performance limit, not a correctness one, and
+  is next in the queue.
+- **`array.new*`'s backing allocation is not polled**, so `Stop` can take over 1ms on a GC array of about 64 Ki
+  elements or more (ADR 0104's named limit, with its revisit trigger).
+- **A Go guest's stop-the-world still depends on the fork's compiler-inserted loop checks** (SP-1 reading (b), #1064,
+  parked).
+- **A Go runtime fatal was seen once on CI's arm64 runner** in `internal/spec`
+  ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)). It did not repeat, and it is recorded so a second
+  occurrence is recognized.
+
 ### Changed
 
 - **A component's trap reaches the host as `burroughs.Trap`**, the type a core module's trap already is
@@ -18986,7 +19063,8 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/scttfrdmn/burroughs/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/scttfrdmn/burroughs/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/scttfrdmn/burroughs/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/scttfrdmn/burroughs/compare/v0.5.0...v0.6.0
