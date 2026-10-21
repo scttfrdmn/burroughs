@@ -319,3 +319,20 @@ If an embedder API for async host imports is ever added, this rule becomes part 
 So the pre-fence arm's callback entry ran with a goroutine-stack placement that made `branch`'s load-after-store pair slow on this Intel part, and almost any change to the frames above it escapes that. The fence arm's larger `runLiftTask` frame is such a change. The likely hardware event is 4K aliasing between the stack and the heap, but janus has no `perf`, so that is not measured. The fence's own cost on the `after` rows is therefore about nil, not a 9% gain.
 
 **The concurrency witnesses, 50 times under `-race`:** the whole `internal/component` package, which holds every cancellation, Threads and cross-call witness, ran 50 times on darwin/arm64 (1,226 s), with 0 failures and no data race reported.
+
+## Corrected, 2026-10-21: the "one runner" claims, re-read at 2e7895c (#1075)
+
+This is the negative-claim sweep of #1040, by the chair's ruling of 2026-10-21. The body above is kept as written.
+
+**Four sentences are false at 2e7895c, for one reason:**
+- *"The reference has one runner: a callee advances only when its caller suspends, yields or returns"*;
+- *"What the reference forbids is progress after the callee's first suspension while its caller has not suspended"*;
+- *"A blocked callee is resumed only by `Store.tick`"*;
+- *"a callee continuing while its caller executes, which the reference never does"*.
+
+`Task.request_cancellation` now resumes a cancellable, ready implicit Thread inside its caller's `subtask.cancel`
+(`def@2e7895c:Task.request_cancellation:"if self.implicit_thread.cancellable and self.implicit_thread.ready():"`,
+upstream #726), at nesting depth above zero. **So a parked callee runs while its caller executes, in exactly that
+window.** This record's departure 3, the #726 window, names the case. The four sentences did not carve it out.
+
+**This is prose only:** the engine already follows #726 (`cancel726_test.go`).

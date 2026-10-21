@@ -149,3 +149,12 @@ in the message, which stays as the chair approved on #973.
   slice's own decision, made when it implements the form.
 - **Scott may reverse the interim rule.** Each case above names what it rests on, so a reversal knows what
   it changes.
+
+## Corrected, 2026-10-21: a stale line citation, re-read at 2e7895c (#1078)
+
+This is the negative-claim sweep of #1040, by the chair's ruling of 2026-10-21. The body above is kept as written.
+
+- **`canon_lift:2161` was the sync tail's line at 2bed77e.** At 2e7895c the same statement is
+  `def@2e7895c:canon_lift:"trap_if(not candidates)"`, and the claim it supports holds.
+- **The form `symbol:NNNN` passes `make refcite`'s line rule,** which fires only on the `def:` and `definitions.py:`
+  prefixes. #1078 records that half.

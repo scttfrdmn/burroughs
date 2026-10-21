@@ -26,6 +26,11 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **ADRs 0094, 0095, 0097, 0100, 0101 and 0102 carry dated corrections** for the eight claims about the reference
+  that #1040's sweep found false (#1075–#1082). Each is a note, with the body unedited, and none changes engine
+  behaviour. The sweep's range is widened to ADRs 0001–0083. It found one more negative claim, ADR 0004's, which
+  holds, so `docs/upstream/negative-claims.tsv` now has 39 rows.
+
 - **A component instance is locked after a trap, and every later call returns `ErrInstanceLocked`, wrapping the
   trap.** This matches the reference and wasmtime
   ([#1040](https://github.com/scttfrdmn/burroughs/issues/1040);
