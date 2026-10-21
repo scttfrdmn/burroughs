@@ -19,6 +19,21 @@ const (
 // with gate:components on (the default) but gate:async off (the default), `run p3async-hello.wasm` exits
 // exitGated, stdout empty, stderr naming gate:async. The refusal fires because the guest's imports are
 // async-lowered — a component the gate:components path alone would otherwise accept.
+// TestRunAComponentThatTrapsExitsTrap: a component's trap exits 4, the code a core module's trap gets (#1084).
+// Before the public boundary converted it, the engine's internal trap matched no arm of exitCode and exited 1,
+// "this invocation's own failure". That was read from the code on #1084, then measured here.
+func TestRunAComponentThatTrapsExitsTrap(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "")
+	var out, errBuf bytes.Buffer
+	code := dispatch(&out, &errBuf, []string{"run", "../../internal/component/testdata/cli-run-trap.wasm"})
+	if code != exitTrap {
+		t.Fatalf("`run cli-run-trap.wasm` exited %d, want %d (exitTrap)\nstderr: %q", code, exitTrap, errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "unreachable") {
+		t.Errorf("stderr = %q, want it to name the trap", errBuf.String())
+	}
+}
+
 func TestRunRefusesAnAsyncComponentByName(t *testing.T) {
 	t.Setenv("BURROUGHS_COMPONENTS", "") // gate:components on (default)
 	t.Setenv("BURROUGHS_ASYNC", "0")     // gate:async OFF by explicit opt-out (on is the default since the flip)

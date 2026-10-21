@@ -110,9 +110,10 @@ var (
 	// locks the whole component instance, as it does in the component model's reference and in wasmtime,
 	// and every later call is refused, so no call runs on the state a trap left behind (#1040).
 	//
-	// **The error the trapping call returned is wrapped too**, so errors.Is(err, thatCallsErr) holds: a
-	// host that wants the cause of the lockdown reads it from the refusal. The call that trapped returns
-	// its trap itself, not this.
+	// **The trap that locked it is wrapped too, as the same [*Trap] the trapping call returned** (#1084):
+	// errors.As(err, &trap) reaches it, and errors.Is(err, thatCallsErr) holds. The call that trapped returns
+	// its *Trap itself, not this.
+	//
 	// A call already in flight on another goroutine when the trap happened ends with this error at its next
 	// suspension point or canon built-in.
 	//
@@ -144,6 +145,10 @@ var (
 )
 
 // Trap is a wasm trap: the module executed correctly and the program went wrong.
+//
+// **A component's trap is a Trap too** (#1084), from [Component.Call], [ComponentConfig.Run], and inside an
+// [ErrInstanceLocked] refusal. Before #1084 a component's trap reached the host as the engine's own type,
+// which no code outside this module could name.
 //
 // Converted from the engine's own trap rather than re-exported, for Value's reason. Reason is the
 // spec's trap text verbatim — "integer divide by zero", "out of bounds memory access" — because

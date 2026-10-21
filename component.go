@@ -15,6 +15,7 @@ import (
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/component"
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
+	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
 // componentsGateEnv is the config gate for the component mechanism (`gate:components`, ADR 0084). It is
@@ -193,7 +194,7 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	}
 	defer in.Close()
 	if err := in.CallRun(); err != nil {
-		return 0, err
+		return 0, publicRunTrap(err) // a trap is this package's *Trap, so the CLI exits 4 (#1084)
 	}
 	if h.Exited {
 		return int(h.ExitCode), nil
@@ -325,6 +326,48 @@ type Component struct {
 	// active counts Calls in flight. A plain counter rather than a `sync.WaitGroup`, because `Wait` is
 	// unbounded and Close's wait is bounded — see Close for why that bound exists.
 	active int
+
+	// traps converts the engine's traps to this package's, once each (#1084). Once, so the trap a call
+	// returns and the trap a later call's ErrInstanceLocked wraps are the same *Trap: errors.Is(err2, err1)
+	// holds. Guarded by mu.
+	traps map[*interp.Trap]*Trap
+}
+
+// publicTrap converts the engine trap inside err to this package's *Trap, at the public boundary, as the core
+// path's publicError does (#1084). A lockdown refusal keeps its sentinel and wraps the converted trap. It returns
+// nil for an error with no engine trap in its chain.
+func (c *Component) publicTrap(err error) error {
+	var t *interp.Trap
+	if !errors.As(err, &t) {
+		return nil
+	}
+	c.mu.Lock()
+	p, ok := c.traps[t]
+	if !ok {
+		if c.traps == nil {
+			c.traps = map[*interp.Trap]*Trap{}
+		}
+		p = &Trap{Reason: t.Reason}
+		c.traps[t] = p
+	}
+	c.mu.Unlock()
+	if errors.Is(err, component.ErrInstanceLocked) {
+		return fmt.Errorf("%w: %w", ErrInstanceLocked, p)
+	}
+	return p
+}
+
+// publicRunTrap is publicTrap for a one-shot run, which has no Component to remember the conversion on.
+func publicRunTrap(err error) error {
+	var t *interp.Trap
+	if !errors.As(err, &t) {
+		return err
+	}
+	p := &Trap{Reason: t.Reason}
+	if errors.Is(err, component.ErrInstanceLocked) {
+		return fmt.Errorf("%w: %w", ErrInstanceLocked, p)
+	}
+	return p
 }
 
 // componentCloseBound is how long [Component.Close] waits for in-flight calls to finish cancelling
@@ -494,8 +537,12 @@ func (c *Component) Call(ctx context.Context, name string, args ...ComponentValu
 
 	res, err := c.in.CallValuesCtx(ctx, name, in...)
 	if err != nil {
-		// A call refused or ended by the lockdown (#1040). Both are wrapped, so the trap that locked the
-		// instance stays reachable through the chain.
+		// A trap reaches the host as this package's *Trap (#1084), including the trap a lockdown refusal wraps
+		// (#1040), so errors.As(err, &trap) works for a component call as it does for a core one.
+		if pe := c.publicTrap(err); pe != nil {
+			return nil, pe
+		}
+		// A lockdown refusal whose cause is no engine trap (a host function's failure) keeps its sentinel.
 		if errors.Is(err, component.ErrInstanceLocked) {
 			return nil, fmt.Errorf("%w: %w", ErrInstanceLocked, err)
 		}

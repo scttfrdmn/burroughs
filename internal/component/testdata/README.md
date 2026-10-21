@@ -534,6 +534,7 @@ witnesses for a component locking after a trap (`lockdown_test.go`, ADR 0105).
 | `cmthreads/trap-then-call.wasm` | sync `run` yield-then-resumes a Thread whose body traps; sync `ok` returns 7 | wasmtime 49.0.3 two-call host: call 2 "cannot enter component instance"; the pin: `refread.py` `trap_then_call`, store locked, call 2 refused |
 | `cmthreads/trap-then-call-control.wasm` | the same with the Thread's `unreachable` removed | both oracles: 1, then 7 |
 | `trap-then-call-plain.wasm` | no Threads: `run` is a bare `unreachable` | wasmtime 49.0.3 two-call host: call 2 refused |
+| `cli-run-trap.wasm` | the smallest `wasi:cli/run` export whose `run` traps (#1084): `burroughs run` must exit 4 | wasmtime 49.0.3 `run`: traps at `unreachable` |
 | `lockdown-composed.wasm` | a parent whose async `go` waits on a child's never-ending async `g`, which calls `context.get` every turn; the parent's sync `boom` traps | no external reading: wasmtime's CLI cannot hold `go` open while it calls `boom`; the pin's store-wide `lock_down` is the semantics |
 
 **The two-call wasmtime host** is `cmthreads/twocall/` (Rust, the `wasmtime =49.0.3` crate). It exists because
