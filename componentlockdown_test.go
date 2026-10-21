@@ -43,4 +43,17 @@ func TestAComponentCallAfterATrapIsRefusedAtThePublicBoundary(t *testing.T) {
 	if errors.Is(err, burroughs.ErrComponentClosed) {
 		t.Errorf("call 2 reported the component closed; it is locked, and Close is still owed")
 	}
+
+	// #1084: the trap is this package's *Trap, directly and through the lockdown, as a core module's trap is.
+	// NEUTER, run: Component.Call without the publicTrap conversion fails both, because the engine's trap type
+	// cannot be named from here.
+	var trap *burroughs.Trap
+	if !errors.As(first, &trap) || trap.Reason != "unreachable" {
+		t.Errorf("call 1: errors.As(*burroughs.Trap) did not reach the component's trap: %v", first)
+	}
+	var locked *burroughs.Trap
+	if !errors.As(err, &locked) || locked != trap {
+		t.Errorf("call 2: errors.As(*burroughs.Trap) through ErrInstanceLocked did not reach call 1's trap, "+
+			"the same value: %v", err)
+	}
 }

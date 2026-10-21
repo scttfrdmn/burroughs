@@ -26,6 +26,17 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A component's trap reaches the host as `burroughs.Trap`**, the type a core module's trap already is
+  ([#1084](https://github.com/scttfrdmn/burroughs/issues/1084)).
+  - **Where:** `Component.Call` and `ComponentConfig.Run`, including the trap that an `ErrInstanceLocked` refusal
+    wraps.
+  - **What it enables:** `errors.As(err, &trap)` now works for a component call. The refusal wraps the same
+    `*Trap` the trapping call returned.
+  - **The CLI:** `burroughs run` on a component that traps now exits 4 (trap), where it exited 1, which was
+    measured with the conversion removed.
+  - **Who it breaks:** no one. The engine's trap type could not be named from outside the module, so nothing
+    outside could have matched on it.
+
 - **ADRs 0094, 0095, 0097, 0100, 0101 and 0102 carry dated corrections** for the eight claims about the reference
   that #1040's sweep found false (#1075–#1082). Each is a note, with the body unedited, and none changes engine
   behaviour. The sweep's range is widened to ADRs 0001–0083. It found one more negative claim, ADR 0004's, which
