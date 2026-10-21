@@ -234,6 +234,15 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A call that succeeded is no longer reported as `ErrInstanceLocked` because a Thread it readied trapped
+  after it** (#1040's lockdown, #1085).
+  - **The defect:** the lockdown's in-flight mapping also relabelled a SUCCESS that ended after the lock. A sync
+    call that `resume-later`s a Thread resolves first, and in the reference the Thread runs on a later tick. In
+    Burroughs it could trap in the gap before the call's result was returned, and the call reported locked.
+  - **How it showed:** `TestATrapAfterItsOwnerReturnedIsKept` failed on main's arm64 CI at 5c45a6b. It
+    reproduced at 3 in 5,000 runs across `-cpu 1,2,4,8,16`.
+  - **The repair:** a success passes through, since a call the lock really ends has already failed at a built-in
+    or a wait. 0 in 15,000 runs afterwards.
 - **The global tear controls no longer fail when one trial's two agents did not overlap**
   ([#1063](https://github.com/scttfrdmn/burroughs/issues/1063)). On CI arm64, a writer finished before its
   reader read, and the v128 control's vacuity floor failed with no tear. Each control now retries a

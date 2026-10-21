@@ -113,24 +113,31 @@ func isTrap(err error) bool {
 }
 
 // finish maps the outcome of an embedder call. A call's own trap sets the lock. A call that was in flight when
-// the store locked (it started unlocked and ended locked) reports ErrInstanceLocked, unless the trap that locked it
-// is its own.
+// the store locked (it started unlocked and ended locked) and FAILED reports ErrInstanceLocked, unless the trap
+// that locked it is its own.
 //
 // **A call that started locked is passed through unmapped.** Refusing it is the entry check's job alone, so that
 // removing the check is visible: mapping it here would relabel a call that had already run guest code as
 // refused, and the entry check's neuter passed until this distinction was restored.
+//
+// **A call that succeeded is passed through too.** Its guest code finished, and it released the run slot before
+// anything that locked the store could run. That is the reference's order: an orphan Thread readied by a
+// `resume-later` runs on a later tick, after the readying call has resolved. The first draft also mapped a
+// success, and on arm64 CI `TestATrapAfterItsOwnerReturnedIsKept` failed: `poke` resolved with 0, and its Thread
+// trapped in the gap before `finish` ran. A call the lock actually ends has already failed, at a built-in or a
+// wait, with the lock's error.
 func (l *storeLock) finish(startedLocked bool, err error) error {
-	if l == nil || startedLocked {
+	if l == nil || startedLocked || err == nil {
 		return err
 	}
-	if err != nil && isTrap(err) {
+	if isTrap(err) {
 		l.set(err)
 	}
 	t := l.trap()
 	if t == nil {
 		return err
 	}
-	if err != nil && errors.Is(err, t) {
+	if errors.Is(err, t) {
 		return err // this call's own trap locked the store, and it reports that trap itself
 	}
 	return &lockedError{trap: t}
