@@ -48,13 +48,19 @@ import (
 // relax the assertion.
 func TestConcurrentHostCallsShareOneThreadID(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
-	// The waitset synth guest, because its lifts are SYNC lifts: it reaches a host import without going
-	// through the async-lift loop, so the measurement is not blocked by the at-most-one assertion the
-	// slice is about to change. Measuring `Invoke`'s thread assignment needs no async lift at all — the
-	// question is about the engine's threading, not about lifts.
-	b, err := os.ReadFile("testdata/async-waitset-synth.wasm")
+	// **The `suspending` guest, an async lift that parks in its imported `tick`** (#1040's re-reading). This
+	// test used the waitset synth guest, a SYNC lift, chosen so the measurement would not meet an at-most-one
+	// async-lift assertion that has since been lifted (`TestASecondLiftIsPermittedWhileTheFirstIsParked`).
+	//
+	// **That guest's pair stopped being concurrent on 2026-10-16**, and nothing noticed. Since #1005, a sync
+	// `waitable-set.wait` with no Thread to satisfy it traps at the reference's sync tail, so the first caller
+	// trapped right after entering `op`. The second caller reached the import only because the instance kept
+	// running after a trap. The store lockdown refuses that second call, and the test failed with "only 1 of
+	// 2 callers". The async lift parks without trapping, so both callers are genuinely in flight again, and
+	// both calls are now checked to succeed.
+	b, err := os.ReadFile("testdata/asynclift/suspending/component.wasm")
 	if err != nil {
-		t.Fatalf("synth fixture: %v", err)
+		t.Fatalf("the committed suspending guest is missing: %v", err)
 	}
 
 	var mu sync.Mutex
@@ -66,7 +72,7 @@ func TestConcurrentHostCallsShareOneThreadID(t *testing.T) {
 	h := NewHost(io.Discard, io.Discard, nil)
 	var calls int32
 	h.asyncImpls = map[string]asyncLowerImpl{
-		"test:async/ops::op": func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+		"tick": func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 			onStart()
 			mu.Lock()
 			seen = append(seen, c.Thread())
@@ -93,28 +99,23 @@ func TestConcurrentHostCallsShareOneThreadID(t *testing.T) {
 	}
 	defer in.Close()
 
-	// **Both callers must be `run`, because `run` is the export that calls `op`.** A first draft used
-	// `run` and `sibling`, and only one caller ever reached the import — `sibling` returns 42 without
-	// touching a host import, so the pair could not be compared. The failure was legible ("only 1 of 2
-	// callers reached the host import") rather than a false agreement, which is the arm's own vacuity
-	// guard working.
+	// **Both callers are `run`, because `run` is the export that calls `tick`.** A first draft used `run`
+	// and `sibling`, and only one caller ever reached the import. The failure was legible ("only 1 of 2
+	// callers reached the host import") rather than a false agreement, which is the arm's own vacuity guard
+	// working, and it worked again when the lockdown refused a call after a trap (#1040).
 	//
-	// The second call proceeds only once the first has PARKED in `waitable-set.wait`, whose excursion
-	// releases the engine thread (the H-1/H-4 sibling-progress property) and the instance's run slot
-	// (ADR 0101). So this pair is concurrent in the sense that matters: both callers are in flight in the
-	// instance at once.
+	// The second call proceeds only once the first has PARKED in `tick`, which releases the instance's run
+	// slot (ADR 0101). So this pair is concurrent in the sense that matters: both callers are in flight in
+	// the instance at once.
 	//
 	// **Through `CallValues`, not the core instance's `Invoke`, since #975.** The core door has no run
-	// slot. Two core `Invoke`s are two agents on one unshared memory (ADR 0073), and once released both
-	// stored `waitable-set.wait`'s event at the same `ptr` through `Caller.Write`, which is ADR 0064's
-	// plain region (its #651 amendment). That is two agents writing one guest address with nothing
-	// ordering them, a guest race the detector is entitled to report, and it did, on Windows. The
-	// component door orders those writes. The measurement is unchanged by the move: `CallValues` reaches
-	// the same `invokeIndex` on the same `&in.host`.
+	// slot, so two core `Invoke`s are two agents on one unshared memory (ADR 0073), and the race detector
+	// reported their writes on Windows. The component door orders them. `CallValues` reaches the same
+	// `invokeIndex` on the same `&in.host`, so the measurement is unchanged by the move.
 	done := make(chan error, 2)
-	for range 2 {
+	for i := range 2 {
 		go func() {
-			_, e := in.CallValues("run")
+			_, e := in.CallValues("run", canon.U32(uint32(i)))
 			done <- e
 		}()
 	}
@@ -137,7 +138,11 @@ func TestConcurrentHostCallsShareOneThreadID(t *testing.T) {
 
 	for range 2 {
 		select {
-		case <-done:
+		case e := <-done:
+			// Checked since #1040: an unchecked caller error is how a trapping first call passed here unseen.
+			if e != nil {
+				t.Fatalf("a caller failed: %v", e)
+			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("a caller never returned")
 		}

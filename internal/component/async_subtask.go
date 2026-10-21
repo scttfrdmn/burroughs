@@ -118,6 +118,10 @@ type asyncHandles struct {
 	// enterTask for why entries wait rather than refuse.
 	entrySem chan struct{}
 
+	// lock is the store lockdown (lockdown.go, #1040), which this instance's waits select on so a task
+	// parked when another call traps ends at that suspension point.
+	lock *storeLock
+
 	// runSlot is a capacity-1 semaphore held by whichever agent is EXECUTING this instance's guest code —
 	// the reference's one-thread-at-a-time (ADR 0101, #975). It is not `entrySem`: that is
 	// `exclusive_thread`, backpressure an async-callback task holds across its whole callee including its
@@ -570,6 +574,8 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 					return nil
 				case <-abort:
 					return nil // `suspending` returns the abort's error
+				case <-h.lock.wait(): // another call's trap locked the store (#1040): end at this suspension
+					return h.lock.locked()
 				case <-time.After(subtaskCancelBound):
 					return fmt.Errorf("%w: subtask %d's callee did not hand back within %s of its "+
 						"cancellation", ErrSubtaskCancelExpired, i, subtaskCancelBound)
@@ -667,6 +673,8 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 					return nil
 				case <-abort: // a trap in this Thread's task ended it (ADR 0101's Option A, point 7)
 					return nil // `suspending` returns the abort's error
+				case <-h.lock.wait(): // another call's trap locked the store (#1040): end at this suspension
+					return h.lock.locked()
 				case <-time.After(subtaskCancelBound):
 					return fmt.Errorf("%w: subtask %d did not resolve within %s of its cancellation — "+
 						"the host impl's cancel handler never resolved it", ErrSubtaskCancelExpired, i,

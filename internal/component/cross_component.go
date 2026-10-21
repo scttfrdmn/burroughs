@@ -82,7 +82,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		// goroutine that must not park. Refused at call rather than at bind because the resolver has no
 		// error channel — the same shape `refuse` uses.
 		if callee.async {
-			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+			return w.lowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
 				return nil, fmt.Errorf("%w: a sync canon lower cannot target an async lift — the lower "+
 					"must match its import's asyncness, and running the callee's callback loop here "+
 					"would park an agent that is inside guest execution (§5 H-1)", ErrUnsupportedForm)
@@ -92,7 +92,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		// crosses as one pointer to a tuple in the caller's memory, and lowering it into the callee needs a
 		// spilled-parameter lowering `lowerFlatArgs` does not have.
 		if form, spills := paramSpill(callee.sig); spills {
-			return interp.CanonLowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+			return w.lowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
 				return nil, fmt.Errorf("%w: a sync cross-component call whose %s is not carried yet: it crosses "+
 					"through a pointer into the caller's memory, and lowering it into the callee needs a "+
 					"spilled-parameter lowering (ADR 0103)", ErrUnsupportedForm, form)
@@ -104,9 +104,9 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		// arity error on a spilled result (`sync-spill-string.wasm`). Everything else keeps the passthrough
 		// below, whose words mean the same in both memories.
 		if syncNeedsAdapter(callee.sig) {
-			return interp.CanonLowerExtern(ft, mayLeaveGuard("cross-component lower (adapter)", w.syncAdapter(callee)), opts), true
+			return w.lowerExtern(ft, mayLeaveGuard("cross-component lower (adapter)", w.syncAdapter(callee)), opts), true
 		}
-		return interp.CanonLowerExtern(ft, mayLeaveGuard("cross-component lower", func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		return w.lowerExtern(ft, mayLeaveGuard("cross-component lower", func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 			// A sync callee: `invokeWith` reaches `inst.Invoke` directly, with no loop and no park. This
 			// is guest-calling-guest on one goroutine, which is what a sync call means, so there is
 			// nothing to mark and nothing to wait on.
@@ -160,7 +160,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		//
 		// NEUTER THIS by dropping the `!callee.async` arm, and `TestAnAsyncLowerOfASyncLiftStoresItsResult`
 		// reads 200.
-		return interp.CanonLowerExtern(aft, mayLeaveGuard("cross-component async lower of a sync lift",
+		return w.lowerExtern(aft, mayLeaveGuard("cross-component async lower of a sync lift",
 			asyncLowerFunc(func(c *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
 				params := onStart()
 				// Under the caller's blocked mark, as the sync arm runs its callee (ADR 0104's amendment).
@@ -176,7 +176,7 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 				return func() {}, nil // resolved before the lower returns, so nothing is left to cancel
 			}, hasResult, w.async)), opts), true
 	}
-	return interp.CanonLowerExtern(aft, mayLeaveGuard("cross-component async lower",
+	return w.lowerExtern(aft, mayLeaveGuard("cross-component async lower",
 		asyncLowerFuncFor(func(st *subtask) asyncLowerImpl { return liftAsAsyncImpl(callee, st, w.async) }, hasResult,
 			w.async)), opts), true
 }

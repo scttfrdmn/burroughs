@@ -26,6 +26,20 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A component instance is locked after a trap, and every later call returns `ErrInstanceLocked`, wrapping the
+  trap.** This matches the reference and wasmtime
+  ([#1040](https://github.com/scttfrdmn/burroughs/issues/1040);
+  [ADR 0105](docs/decisions/0105-a-trap-locks-the-component-instance-and-every-later-call-is-refused-with-the-trap-because-the-pin-locks-the-store.md)).
+  Previously a call after a trap ran on the state the trap left. Core wasm modules are unaffected.
+  - **The default behaviour changes**, gate on or off: a component with no Threads diverged too.
+  - **The trapping call** still returns its trap.
+  - **A call in flight on another goroutine** ends with `ErrInstanceLocked` at its next suspension point or canon
+    built-in. This includes one in an instance composed with it.
+  - **`burroughs.ErrInstanceLocked`** is the public sentinel. It wraps the trapping call's error.
+  - **An orphan trap**, whose owner's call had already returned, locks the instance like any trap. That answers
+    [#1041](https://github.com/scttfrdmn/burroughs/issues/1041).
+  - **ADR 0100's no-poison section is superseded**, and ADR 0101's Option A is amended for the moment after a trap.
+
 - **A pin move re-reads every negative claim about the reference, from a list `make refcite` keeps** (the
   chair's third ruling of 2026-10-20; [#1040](https://github.com/scttfrdmn/burroughs/issues/1040)).
   - **Why:** ADR 0100's *"the reference does not model instance poisoning"* went false at the 2026-10-17 pin

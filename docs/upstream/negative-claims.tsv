@@ -52,3 +52,5 @@
 0101	resumes only candidates from `inst.threads`	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	canon_lift's sync tail
 0102	checks only `may_leave`, so a sync task may block	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1005	false at both pins (canon_lift's sync tail traps); #1005 (closed) corrected it in the ADR's own 2026-10-16 section
 0104	is silent on preemption	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: preempt, interrupt, timer; Threads switch only through yield_, suspend_then_resume, wait_until
+0105	Every other parked Thread is never resumed	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Store.tick asserts not lockdown; the cancel on_cancel asserts it too; no other path wakes a waiting Thread
+0105	the pin leaves an in-flight call unresolved	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	a trap reaches only its resumer chain (resume re-raises it); no on_resolve fires for other tasks

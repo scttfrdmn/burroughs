@@ -92,6 +92,9 @@ type threadTable struct {
 	sched *cmScheduler
 	// h is the instance's async handle table, whose run slot the append assertion checks (point 5).
 	h *asyncHandles
+	// lock is the store lockdown (lockdown.go, #1040). routeFault sets it before the owner learns of the
+	// trap, so no call can start in between.
+	lock *storeLock
 	// promotedWait is the task a promote has just switched to, until it re-enters (#1012): the scheduler
 	// runs no queue meanwhile, so the promoter cannot resume ahead of the callback the promote chose.
 	promotedWait *cmThread
@@ -405,6 +408,9 @@ func (tt *threadTable) finish(owner *cmThread) error {
 //
 // The closes are after the unlock.
 func (tt *threadTable) routeFault(owner *cmThread, err error) {
+	// **The store locks first** (#1040), before the owner learns of the trap, so no call can start in between.
+	// An orphan trap locks it too, because the pin's trap() does not ask whether a call is waiting.
+	tt.lock.set(err)
 	tt.mu.Lock()
 	registered := owner != nil && int(owner.index) < len(tt.array) && tt.array[owner.index] == owner
 	if !registered || owner.returned {

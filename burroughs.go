@@ -106,6 +106,21 @@ var (
 	// that matters.
 	ErrComponentClosed = errors.New("burroughs: the component is closed")
 
+	// ErrInstanceLocked is a [Component.Call] refused, or ended, because an earlier call trapped. A trap
+	// locks the whole component instance, as it does in the component model's reference and in wasmtime,
+	// and every later call is refused, so no call runs on the state a trap left behind (#1040).
+	//
+	// **The error the trapping call returned is wrapped too**, so errors.Is(err, thatCallsErr) holds: a
+	// host that wants the cause of the lockdown reads it from the refusal. The call that trapped returns
+	// its trap itself, not this.
+	// A call already in flight on another goroutine when the trap happened ends with this error at its next
+	// suspension point or canon built-in.
+	//
+	// **It is not [ErrComponentClosed].** The component is still open, and Close is still owed. Its state
+	// is just no longer callable. Core wasm modules are unaffected: under the core spec an instance stays
+	// callable after a trap.
+	ErrInstanceLocked = errors.New("burroughs: the component instance is locked by an earlier trap")
+
 	// ErrCloseIncomplete is a [Component.Close] that reached its bound with calls still in flight: the
 	// cancellations were requested and did not finish, and the instance was torn down anyway.
 	//

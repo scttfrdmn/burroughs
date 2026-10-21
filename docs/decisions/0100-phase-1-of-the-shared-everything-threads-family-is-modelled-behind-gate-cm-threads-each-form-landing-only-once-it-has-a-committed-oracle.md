@@ -935,3 +935,16 @@ need: both variables unset admits `index-call.wasm`, and `BURROUGHS_CM_THREADS=0
 default refuses it by name. **Neuter, run:** a predicate that ignores `=0` fails both `=0` cells. Two
 `fence_test.go` loops and the fan-out fixture used `""` as gate-off. After the flip `""` means on, so they are
 re-pointed to `"0"`.
+
+## Superseded in part, 2026-10-20: instance poisoning (ADR 0105, #1040)
+
+**The section "Instance poisoning: no, and the reference does not require it" is superseded** by
+[ADR 0105](0105-a-trap-locks-the-component-instance-and-every-later-call-is-refused-with-the-trap-because-the-pin-locks-the-store.md),
+and so is the paragraph before it, *"The reference does not model instance poisoning"*. The body above is kept
+as written, so the record shows what was decided and on what premise.
+
+**The premise was true at the pin this record read (2bed77e) and false at 2e7895c**, the pin since 2026-10-17,
+where the trap locks the whole store. Nothing fired when the pin moved, because a negative claim names no symbol.
+Both sentences are rows of `docs/upstream/negative-claims.tsv`, marked false against #1040. A component instance
+now locks after a trap, and every later call is refused with `ErrInstanceLocked`. Core wasm is unaffected. The
+rest of this record stands.

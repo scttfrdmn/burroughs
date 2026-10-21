@@ -318,6 +318,8 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 					return c.Context().Err()
 				case <-abort: // a trap in this Thread's task ended it (ADR 0101's Option A, point 7)
 					return nil // `suspending` returns the abort's error
+				case <-h.lock.wait(): // another call's trap locked the store (#1040): end at this suspension
+					return h.lock.locked()
 				}
 			}
 		}))

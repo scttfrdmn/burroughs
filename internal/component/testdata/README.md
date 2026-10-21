@@ -523,3 +523,19 @@ Fixtures written for the run-slot and result-store witnesses (`result-store-heap
 authored heap-backed. **Not converted:** `asynclift/suspending/component.wasm`. It is Rust-built, its
 witness's oracle is an event order rather than the detector, and re-encoding a generated binary would
 detach it from its build record.
+
+## The store lockdown's fixtures (#1040)
+
+Hand-authored WAT, each committed beside its `.wasm` and parsed with `wasm-tools parse` (1.258.0). They are the
+witnesses for a component locking after a trap (`lockdown_test.go`, ADR 0105).
+
+| fixture | what it is | oracle |
+|---|---|---|
+| `cmthreads/trap-then-call.wasm` | sync `run` yield-then-resumes a Thread whose body traps; sync `ok` returns 7 | wasmtime 49.0.3 two-call host: call 2 "cannot enter component instance"; the pin: `refread.py` `trap_then_call`, store locked, call 2 refused |
+| `cmthreads/trap-then-call-control.wasm` | the same with the Thread's `unreachable` removed | both oracles: 1, then 7 |
+| `trap-then-call-plain.wasm` | no Threads: `run` is a bare `unreachable` | wasmtime 49.0.3 two-call host: call 2 refused |
+| `lockdown-composed.wasm` | a parent whose async `go` waits on a child's never-ending async `g`, which calls `context.get` every turn; the parent's sync `boom` traps | no external reading: wasmtime's CLI cannot hold `go` open while it calls `boom`; the pin's store-wide `lock_down` is the semantics |
+
+**The two-call wasmtime host** is `cmthreads/twocall/` (Rust, the `wasmtime =49.0.3` crate). It exists because
+`wasmtime run --invoke` instantiates afresh per call, so it cannot ask what a second call on the same instance
+does. `cargo build --release` there, then run it with a component path.

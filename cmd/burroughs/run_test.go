@@ -48,6 +48,8 @@ var publicSentinels = map[string]error{
 	// #858's `Close`. Third and fourth specimens of this derived domain earning itself.
 	"ErrComponentClosed": burroughs.ErrComponentClosed,
 	"ErrCloseIncomplete": burroughs.ErrCloseIncomplete,
+	// #1040's lockdown. The fifth specimen: this guard failed when the sentinel landed, as it should.
+	"ErrInstanceLocked": burroughs.ErrInstanceLocked,
 }
 
 // declaredSentinels reads the exported `Err*` variables out of the public package's source.
