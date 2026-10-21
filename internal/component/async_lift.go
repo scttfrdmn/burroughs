@@ -1097,6 +1097,10 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 		case <-faulted:
 			// One of this task's Threads trapped while it waited (ADR 0101's Option A, point 7).
 			return event{}, h.threads.faultOf(owner)
+		case <-h.lock.wait():
+			// Another call trapped and locked the store (#1040). This task is at a suspension point, so it
+			// ends here, with the trap that locked the store.
+			return event{}, h.lock.locked()
 		case <-deadline.C:
 			return event{}, fmt.Errorf("%w: waitable set %d produced nothing in %s — the host impl or "+
 				"guest that would resolve it never did", ErrLiftParkExpired, si, bound)

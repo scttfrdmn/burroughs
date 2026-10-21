@@ -1366,7 +1366,14 @@ func Instantiate(bytes []byte) (*Instantiated, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Instantiated{w: w, export: w.exportInstance()}, nil
+	return newInstantiated(w), nil
+}
+
+// newInstantiated wraps a walked root as the embedder's handle, with the one store lock its whole tree of
+// instances shares (lockdown.go, #1040).
+func newInstantiated(w *walker) *Instantiated {
+	w.shareLock(newStoreLock())
+	return &Instantiated{w: w, export: w.exportInstance()}
 }
 
 // InstantiateWithHost loads and instantiates a component against a real preview-2 host (PR C.2): the
@@ -1390,13 +1397,23 @@ func InstantiateWithHostFeatures(bytes []byte, h *Host, feats bin.Features) (*In
 	if err != nil {
 		return nil, err
 	}
-	return &Instantiated{w: w, export: w.exportInstance()}, nil
+	return newInstantiated(w), nil
 }
 
 // Call invokes a component export by name. For run() (no params, empty result) this drives the guest;
 // with the stub host, reaching a wasi import returns the refusal. Value-carrying exports are a later
 // slice (run moves none).
 func (in *Instantiated) Call(name string) error {
+	// The store lockdown (#1040): a call after a trap is refused before anything is resolved or run.
+	if err := in.w.lock.locked(); err != nil {
+		return err
+	}
+	startedLocked := in.w.lock.trap() != nil
+	return in.w.lock.finish(startedLocked, in.call(name))
+}
+
+// call is Call's body, outside the lockdown check.
+func (in *Instantiated) call(name string) error {
 	cd, ok := in.export.exports[name]
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrNoRun, name)
@@ -1480,6 +1497,11 @@ func (in *Instantiated) CallRun() error {
 // Returns no error: the only refusals underneath are "nothing running" and "already past running", both of
 // which mean there was nothing to cancel, which is the normal case for a `Close` on an idle instance.
 func (in *Instantiated) CancelAll() {
+	// A locked store cancels nothing: the reference's cancel asserts the same lock (Store.invoke's
+	// on_cancel), and the lockdown has already ended what was in flight (#1040).
+	if in.w.lock.locked() != nil {
+		return
+	}
 	//nolint:errcheck // ErrCancelNotRunning means there was nothing in flight, which is what a Close on
 	// an idle instance finds; the caller is tearing down either way.
 	_ = in.w.async.requestCancelAll()

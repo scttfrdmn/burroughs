@@ -494,6 +494,11 @@ func (c *Component) Call(ctx context.Context, name string, args ...ComponentValu
 
 	res, err := c.in.CallValuesCtx(ctx, name, in...)
 	if err != nil {
+		// A call refused or ended by the lockdown (#1040). Both are wrapped, so the trap that locked the
+		// instance stays reachable through the chain.
+		if errors.Is(err, component.ErrInstanceLocked) {
+			return nil, fmt.Errorf("%w: %w", ErrInstanceLocked, err)
+		}
 		// The engine's cancellation sentinel becomes the public one. Wrapped rather than replaced so the
 		// engine's own message — which names the park or the entry wait it ended at — survives for a
 		// reader, while `errors.Is(err, ErrCancelled)` is what an embedder matches on.

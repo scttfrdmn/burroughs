@@ -690,6 +690,10 @@ func exitCode(err error) int {
 		return exitClosed
 	case errors.Is(err, burroughs.ErrCloseIncomplete):
 		return exitCloseIncomplete
+	// A call refused or ended because an earlier trap locked the component (#1040). Its cause is a trap, so it
+	// is the program going wrong, exitTrap. No new code: the lockdown's cause is what a script acts on.
+	case errors.Is(err, burroughs.ErrInstanceLocked):
+		return exitTrap
 	}
 	var trap *burroughs.Trap
 	if errors.As(err, &trap) {

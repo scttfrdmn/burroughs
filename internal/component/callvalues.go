@@ -62,6 +62,20 @@ func (in *Instantiated) CallValues(name string, args ...canon.Value) ([]canon.Va
 // the call returns `ErrCancelled` from a task that actually ended. It reaches the two places a lift task
 // waits — the park and the entry semaphore.
 func (in *Instantiated) CallValuesCtx(ctx context.Context, name string, args ...canon.Value) ([]canon.Value, error) {
+	// The store lockdown (#1040): a call after a trap is refused before anything is resolved or run.
+	if err := in.w.lock.locked(); err != nil {
+		return nil, err
+	}
+	startedLocked := in.w.lock.trap() != nil
+	res, callErr := in.callValues(ctx, name, args...)
+	if err := in.w.lock.finish(startedLocked, callErr); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// callValues is CallValuesCtx's body, outside the lockdown check.
+func (in *Instantiated) callValues(ctx context.Context, name string, args ...canon.Value) ([]canon.Value, error) {
 	fn, err := in.resolveValueExport(name)
 	if err != nil {
 		return nil, err

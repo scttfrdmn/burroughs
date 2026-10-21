@@ -188,6 +188,9 @@ type walker struct {
 	// reason and a stated trigger ("when something needs the compaction"); Threads are that trigger,
 	// because the committed wasmtime reading measures index reuse as observable guest behaviour.
 	threads *threadTable
+	// lock is the store lockdown, shared by every walker of one `Instantiated` (lockdown.go, #1040). Nil
+	// until `shareLock` installs it after the walk, so the guards read it at call time.
+	lock *storeLock
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -433,7 +436,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// Every arm below that binds a canon built-in or a lowered import wraps it in `mayLeaveGuard`
 		// (#990), the reference's `trap_if(not may_leave)`, except the two unchecked built-ins bound here.
 		if d.resourceDrop {
-			return interp.CanonLowerExtern(ft, mayLeaveGuard("resource.drop", dropNoop), interp.CanonOptions{}), true
+			return w.lowerExtern(ft, mayLeaveGuard("resource.drop", dropNoop), interp.CanonOptions{}), true
 		}
 		// A modeled 🧵 built-in binds to its Go impl, typed from the guest's import signature. Before the
 		// async arm because the two dispatch on different fields and a 🧵 opcode must never reach
@@ -441,7 +444,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// field would have made that collision expressible, which is why `Canon.ThreadOp` is its own.
 		if d.threadBuiltin {
 			if fn, ok := w.threadBuiltinFunc(d.threadBuiltinOp, d.threadTable); ok {
-				return interp.CanonLowerExtern(ft, mayLeaveGuard(name, fn), interp.CanonOptions{}), true
+				return w.lowerExtern(ft, mayLeaveGuard(name, fn), interp.CanonOptions{}), true
 			}
 			return interp.Extern{}, false
 		}
@@ -453,7 +456,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				if !asyncBuiltinMayLeaveExempt(d.asyncBuiltinOp) {
 					fn = mayLeaveGuard(name, fn)
 				}
-				return interp.CanonLowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
+				return w.lowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
 			}
 			return interp.Extern{}, false
 		}
@@ -476,7 +479,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				sig := w.lowerSignature(d.lowerName)
 				hasResult := sig != nil && sig.Result != nil
 				aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
-				return interp.CanonLowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFunc(aimpl, hasResult, w.async)), interp.CanonOptions{
+				return w.lowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFunc(aimpl, hasResult, w.async)), interp.CanonOptions{
 					Memory:  d.lowerMem,
 					Realloc: d.lowerRealloc,
 				}), true
@@ -489,7 +492,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// which needs this instance's async handle table (to reach the readable end the guest hands it). The
 		// factory is called with w.async to produce the marshaling impl, bound to the lower's memory/realloc.
 		if f, ok := w.streamConsumers[stripVersion(d.lowerName)]; ok {
-			return interp.CanonLowerExtern(ft, mayLeaveGuard(d.lowerName, f(w.async)), interp.CanonOptions{
+			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, f(w.async)), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
@@ -502,7 +505,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			// the guest arguments through the memory-less trampoline and can lower a host-produced list
 			// through the guest's allocator. A lower with no memory/realloc option (the stdio getters,
 			// exit) binds neither.
-			return interp.CanonLowerExtern(ft, mayLeaveGuard(d.lowerName, impl), interp.CanonOptions{
+			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, impl), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true

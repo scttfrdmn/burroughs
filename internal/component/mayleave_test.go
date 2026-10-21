@@ -40,26 +40,33 @@ func TestAReallocThatCallsABuiltInTraps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the committed fixture is missing: %v", err)
 	}
-	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
-	if err != nil {
-		t.Fatalf("instantiate: %v", err)
+	// **One instance per arm, since #1040.** A trap locks the instance and the next call is refused with
+	// ErrInstanceLocked wrapping that trap. On one shared instance, `res`'s refusal wrapped `arg`'s trap, whose
+	// reason also says "may not leave", so `res`'s assertion passed on `arg`'s trap and asked nothing of its
+	// own; `ctl` was refused outright.
+	fresh := func() *Instantiated {
+		in, ierr := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+		if ierr != nil {
+			t.Fatalf("instantiate: %v", ierr)
+		}
+		t.Cleanup(in.Close)
+		return in
 	}
-	defer in.Close()
 
-	_, err = in.CallValues("arg", canon.Str("hi")) // the lift's own realloc, lowering the argument
+	_, err = fresh().CallValues("arg", canon.Str("hi")) // the lift's own realloc, lowering the argument
 	var trap *interp.Trap
 	if !errors.As(err, &trap) || !strings.Contains(trap.Reason, "may not leave") {
 		t.Errorf("arg: got %v; want the may_leave trap from waitable-set.wait inside cabi_realloc "+
 			"(wasmtime: \"cannot leave component instance\")", err)
 	}
 
-	_, err = in.CallValues("res") // the lower's realloc, lowering the child's string result
-	if !errors.As(err, &trap) || !strings.Contains(trap.Reason, "may not leave") {
+	_, err = fresh().CallValues("res") // the lower's realloc, lowering the child's string result
+	if !errors.As(err, &trap) || !strings.Contains(trap.Reason, "may not leave") || errors.Is(err, ErrInstanceLocked) {
 		t.Errorf("res: got %v; want the may_leave trap from waitable-set.wait inside the lower's realloc "+
 			"(wasmtime: \"cannot leave component instance\")", err)
 	}
 
-	res, err := in.CallValues("ctl", canon.Str("hi"))
+	res, err := fresh().CallValues("ctl", canon.Str("hi"))
 	if err != nil {
 		t.Fatalf("ctl: %v; context.set is unchecked in the reference, so a realloc may call it", err)
 	}

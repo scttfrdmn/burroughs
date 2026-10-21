@@ -955,3 +955,24 @@ submit), i9-9960X, linux/amd64, 12 rounds, every round's load between 2.9 and 3.
 
 A second janus run (task 27) put the post-A `main` against the embedding: 113.2µ against 113.4µ (p=1.000),
 and 221 against 216 allocs/op. So the embedding removes A's five allocations at no time cost.
+
+## Amendment, 2026-10-20: after a trap, the other tasks end (ADR 0105, #1040)
+
+This is the chair's third ruling of 2026-10-20, with Scott's package on #1040, decided unless he objects. The body
+above is not edited.
+
+**Option A's owner routing stays.** A Thread's trap is still routed to its owner task's call, through
+`routeFault`, and that call returns the trap itself.
+
+**What changes is the sentence that the instance's other calls continue.** That premise came from ADR 0100's
+*"nothing poisons the instance"*, which was false at the pin from 2026-10-17: the pin's `trap()` locks the whole
+store. Since [ADR 0105](0105-a-trap-locks-the-component-instance-and-every-later-call-is-refused-with-the-trap-because-the-pin-locks-the-store.md):
+- `routeFault` locks the store **before** it hands the owner its trap, and an orphan trap locks it too;
+- every other task and Thread of the `Instantiated` (this instance and every instance composed with it) ends with
+  `ErrInstanceLocked`, wrapping the trap, at its next suspension point or canon built-in;
+- every later call is refused with the same error.
+
+**The run slot is what makes "next suspension point" exact for this instance.** One task executes at a time, so
+when a task traps, every other task of the instance is already parked at a suspension point. Each wait now selects
+on the lock and ends there, through its own unwind, so slot accounting is unchanged. An instance composed with it
+holds its own slot and may be mid-segment. It ends at its next built-in, which the lock guard refuses.
