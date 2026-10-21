@@ -50,6 +50,7 @@ runs this script.
 
 import argparse
 import ast
+import glob
 import os
 import re
 import subprocess
@@ -121,6 +122,7 @@ def main(argv):
     ap.add_argument("--vendor", required=True)
     ap.add_argument("--root", default=".")
     ap.add_argument("--record-pin", action="append", default=[])
+    ap.add_argument("--negative-claims", default=None)
     a = ap.parse_args(argv[1:])
 
     refs, fails = {}, []
@@ -173,11 +175,62 @@ def main(argv):
                                      f"{sha[:12]}")
         files += hit
 
+    claims = None
+    if a.negative_claims is not None:
+        claims = negative_claims(a.negative_claims, a.root, a.pin, fails)
+
     for f in fails:
         print(f"refcite: FAIL {f}", file=sys.stderr)
     print(f"refcite: {n} citation(s) in {files} file(s); {quoted} quoted, {recorded} at a record pin; "
           f"pin {a.pin[:12]}; {len(fails)} failure(s). Python {sys.version.split()[0]}.", file=sys.stderr)
+    if claims is not None:
+        print(f"refcite: {claims} negative claim(s) in {a.negative_claims}, each re-read at {a.pin[:12]}.",
+              file=sys.stderr)
     return 1 if fails else 0
+
+
+def negative_claims(path, root, pin, fails):
+    """Check the list of negative claims about the reference is kept (the chair's third ruling of 2026-10-20).
+
+    A negative claim ("the reference does not…") names no symbol, so the citation check above cannot see it rot:
+    ADR 0100's no-poison premise was true at 2bed77e and false at 2e7895c, and nothing fired. The list is the
+    population a pin move must re-read. Each row is checked for three things:
+
+    * its quote still appears in its ADR, so a claim edited away takes its row with it;
+    * its ``read_at`` pin is the current pin, so **a pin move fails this check until every row is re-read**;
+    * a ``false`` verdict names an issue, because a false premise is a defect someone must own.
+
+    What it cannot do is find a negative claim nobody listed. That half is the sweep's, and is stated rather than
+    claimed."""
+    full = os.path.join(root, path)
+    if not os.path.isfile(full):
+        fails.append(f"{path}: the negative-claims list is missing")
+        return 0
+    rows = 0
+    for i, line in enumerate(open(full, encoding="utf-8").read().split("\n"), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        cols = line.split("\t")
+        if len(cols) != 6:
+            fails.append(f"{path}:{i}: want 6 tab-separated columns (adr, quote, read_at, verdict, issue, note), "
+                         f"got {len(cols)}")
+            continue
+        rows += 1
+        adr, quote, read_at, verdict, issue, _ = cols
+        hits = glob.glob(os.path.join(root, "docs", "decisions", adr + "-*.md"))
+        if len(hits) != 1:
+            fails.append(f"{path}:{i}: ADR {adr} names {len(hits)} file(s) in docs/decisions, want 1")
+            continue
+        if norm(quote) not in norm(open(hits[0], encoding="utf-8").read()):
+            fails.append(f"{path}:{i}: the quote is no longer in ADR {adr}: {quote[:80]!r}")
+        if read_at != pin:
+            fails.append(f"{path}:{i}: ADR {adr}'s claim was last read at {read_at[:12]}, and the pin is "
+                         f"{pin[:12]}: re-read it at the new pin, then set read_at")
+        if verdict not in ("holds", "false"):
+            fails.append(f"{path}:{i}: verdict {verdict!r}, want holds or false")
+        elif verdict == "false" and not issue.strip().isdigit():
+            fails.append(f"{path}:{i}: ADR {adr}'s claim is false and names no issue")
+    return rows
 
 
 if __name__ == "__main__":

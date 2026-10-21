@@ -90,6 +90,22 @@ reach is a law out of context.
   asking whether the prose's own backticked names belong to the cited symbol. **The prose is the
   second oracle**, because whoever wrote the citation also wrote down what they meant.
 
+- **A negative claim about the reference names no symbol, so a pin move re-reads it from a list.**
+  ADR 0100 said *"the reference does not model instance poisoning"*. That was true at 2bed77e and
+  false at 2e7895c, where `trap()` locks the store down, and `make refcite` passed across the move,
+  because "does not" has nothing to resolve (#1040). **The pin-move rule** (the chair's third ruling
+  of 2026-10-20):
+  - every negative claim an accepted ADR makes about the reference is a row in
+    [`docs/upstream/negative-claims.tsv`](../upstream/negative-claims.tsv);
+  - a pin move re-reads each row at the new pin and sets its `read_at`;
+  - `make refcite` fails until every row's `read_at` is `CANON_PIN`, every quote is still in its
+    ADR, and every `false` row names the issue that owns it.
+
+  The sweep that built the list re-read 156 claims in ADRs 0084–0104. Besides #1040's, it found
+  eight false facts, filed as #1075–#1082, and one the ADR had already corrected (#1005). Only
+  #1040's had engine consequences. **What the list cannot
+  do is find a claim nobody listed**, so an ADR that adds one adds its row.
+
 ### A stale citation is a cheap tell for an expired claim, so a repaired pointer gets its sentence read.
 
 - **A stale citation is a cheap tell for an expired claim.** `internal/interp/value.go` said

@@ -145,3 +145,102 @@ func TestRefciteResolvesEachCitationAtItsPin(t *testing.T) {
 		}
 	})
 }
+
+// TestRefciteKeepsTheNegativeClaimsList witnesses refcite's `--negative-claims` check (the chair's third ruling
+// of 2026-10-20). A negative claim about the reference names no symbol, so the citation check cannot see it rot;
+// the list is the population a pin move must re-read.
+//
+// **The arm the rule exists for is `a_pin_move_fails_until_the_row_is_re_read`:** a row read at the old pin
+// must fail once the pin moves. The other arms keep it honest: the accepting arm, a quote edited out of its ADR,
+// a false row with no owner, and an absent list.
+func TestRefciteKeepsTheNegativeClaimsList(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "scripts", "refcite.py")
+	const (
+		pin = "1111111111111111111111111111111111111111"
+		old = "3333333333333333333333333333333333333333"
+	)
+	const adr = "# 0100 — an ADR\n\nThe reference does not model\ninstance poisoning, it said.\n"
+	run := func(t *testing.T, list string, writeList bool) (int, string) {
+		t.Helper()
+		repo := t.TempDir()
+		if out, gitErr := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); gitErr != nil {
+			t.Fatalf("git init: %v\n%s", gitErr, out)
+		}
+		for _, d := range []string{"docs/decisions", "docs/upstream"} {
+			if mkErr := os.MkdirAll(filepath.Join(repo, d), 0o755); mkErr != nil {
+				t.Fatal(mkErr)
+			}
+		}
+		if wErr := os.WriteFile(filepath.Join(repo, "docs/decisions/0100-an-adr.md"), []byte(adr), 0o600); wErr != nil {
+			t.Fatal(wErr)
+		}
+		if writeList {
+			if wErr := os.WriteFile(filepath.Join(repo, "docs/upstream/claims.tsv"), []byte(list), 0o600); wErr != nil {
+				t.Fatal(wErr)
+			}
+		}
+		vendor := t.TempDir()
+		if wErr := os.WriteFile(filepath.Join(vendor, "definitions-"+pin+".py"), []byte("X = 1\n"), 0o600); wErr != nil {
+			t.Fatal(wErr)
+		}
+		cmd := exec.Command("python3", "-I", script, "--root", repo, "--vendor", vendor, "--pin", pin,
+			"--negative-claims", "docs/upstream/claims.tsv")
+		var out bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &out
+		code := 0
+		if runErr := cmd.Run(); runErr != nil {
+			var ee *exec.ExitError
+			if !errors.As(runErr, &ee) {
+				t.Fatalf("running refcite.py: %v\n%s", runErr, out.String())
+			}
+			code = ee.ExitCode()
+		}
+		return code, out.String()
+	}
+	row := func(quote, readAt, verdict, issue string) string {
+		return "# a comment\n0100\t" + quote + "\t" + readAt + "\t" + verdict + "\t" + issue + "\ta note\n"
+	}
+
+	t.Run("a_kept_list_is_accepted", func(t *testing.T) {
+		// The quote spans a line break in the ADR, which the whitespace-insensitive match must accept.
+		code, out := run(t, row("does not model instance poisoning", pin, "false", "1040"), true)
+		if code != 0 {
+			t.Fatalf("exit %d on a kept list:\n%s", code, out)
+		}
+		if !strings.Contains(out, "1 negative claim(s)") {
+			t.Errorf("the summary does not count the rows read:\n%s", out)
+		}
+	})
+	for _, a := range []struct{ name, list, want string }{
+		{
+			"a_pin_move_fails_until_the_row_is_re_read", row("does not model instance poisoning", old, "holds", "-"),
+			"re-read it at the new pin",
+		},
+		{
+			"a_quote_edited_out_of_its_adr_is_refused", row("does not model resource leaks", pin, "holds", "-"),
+			"the quote is no longer in ADR 0100",
+		},
+		{
+			"a_false_claim_with_no_owner_is_refused", row("does not model instance poisoning", pin, "false", "-"),
+			"is false and names no issue",
+		},
+		{"a_malformed_row_is_refused", "0100\tonly three\tcolumns\n", "want 6 tab-separated columns"},
+	} {
+		t.Run(a.name, func(t *testing.T) {
+			code, out := run(t, a.list, true)
+			if code == 0 || !strings.Contains(out, a.want) {
+				t.Errorf("exit %d, want a refusal naming %q:\n%s", code, a.want, out)
+			}
+		})
+	}
+	t.Run("an_absent_list_fails", func(t *testing.T) {
+		code, out := run(t, "", false)
+		if code == 0 || !strings.Contains(out, "the negative-claims list is missing") {
+			t.Errorf("exit %d with no list; an absent list must fail, never pass by not asking:\n%s", code, out)
+		}
+	})
+}

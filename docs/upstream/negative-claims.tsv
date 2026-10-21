@@ -1,0 +1,54 @@
+# Negative claims about the Canonical ABI reference (`definitions.py`), one row per claim in an accepted ADR.
+#
+# A negative claim ("the reference does not…", "only…", "never…") names no symbol, so `make refcite` cannot see it
+# rot. ADR 0100's no-poison premise was true at 2bed77e and false at 2e7895c, and nothing fired (#1040). So this
+# list is the population a pin move must re-read, by the chair's third ruling of 2026-10-20.
+#
+# THE PIN-MOVE RULE: after moving CANON_PIN, re-read every row below at the new pin, then set its read_at to the
+# new pin. `make refcite` fails until every row's read_at equals CANON_PIN. A row whose claim has become false
+# gets `false` and the number of the issue that owns it.
+#
+# `make refcite` checks that the list is kept: each quote still appears in its ADR, each read_at is the current
+# pin, and each `false` row names an issue. It cannot find a negative claim nobody listed. Adding a row when an
+# ADR makes a new claim about the reference is the author's job, and the sweep of 2026-10-20 (#1040) is the
+# population at that date.
+#
+# One row per claim, tab-separated: the ADR number, a verbatim quote of the claim (whitespace-insensitive, no
+# tab), read_at (the full pin SHA it was last re-read at), the verdict (holds or false), the issue (a number, or
+# - when it holds), and a note.
+0084	is absent from 0.3.0's shipped ABI	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	no spawn in definitions.py; the 🧵-gated thread.new-indirect is present under its own name
+0087	no `thread.spawn` in the shipped Canonical ABI	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: spawn
+0089	no `thread.spawn` in the shipped Canonical ABI	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: spawn
+0092	The three it lacks are exactly	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	46 canon_* against 49 productions at 2e7895c; the three missing are still thread.spawn-ref, spawn-indirect, available-parallelism
+0094	There is no instance-level cancel, and no context parameter	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Store.invoke returns OnCancel; no cancel on ComponentInstance
+0094	The model asserts, which specifies nothing	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	request_cancellation asserts STARTED
+0095	The reference has one runner	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1075	request_cancellation resumes a cancellable ready implicit Thread inside the caller's subtask.cancel (#726)
+0095	A blocked callee is resumed only by	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1075	request_cancellation resumes at nesting depth above zero
+0095	What the reference forbids is progress **after the callee's first suspension**	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1075	#726
+0095	which the reference never does	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1075	#726
+0095	In the reference no callee is mid-segment when its caller resumes	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Thread.resume returns only once the resumed Thread is blocked or exited
+0097	There is no behaviour to support	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1082	lower_flat_record lowers an empty record; the type is refused by validation instead
+0098	has no matching free	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: free, unlower
+0098	side has no `MAX_STRING_BYTE_LENGTH` trap	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	only load_string_from_range traps on it
+0100	The reference does not model instance poisoning	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1040	trap locks the store (def:trap)
+0100	is therefore not constrained by the reference	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1040	Store.invoke asserts not lockdown
+0100	and the reference does not require it	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1040	trap locks the store
+0100	does not define `0x40`	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: spawn, available_parallelism
+0100	None of the eleven requires a shared linear memory	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	no shared-memory precondition in any canon_thread_*
+0100	carries only `trap_if(i == thread.index)`	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	canon_thread_suspend_then_promote
+0100	neither touches `self.threads` or `store.waiting`	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Task.return_ and Task.cancel
+0100	filters on readiness and nothing else	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Store.tick adds only lockdown and nesting asserts
+0100	there is no such loop and no such trap	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Store.tick: if candidates, with no else
+0100	only sets `PENDING_CANCEL`	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1075	#726: the STARTED arm also resumes a cancellable ready implicit Thread
+0100	So a suspended Thread is never handed a cancel	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	cancellable is set only in canon_lift's callback arms
+0100	takes no flag	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	def canon_thread_suspend(): no parameter
+0100	takes the cancel arm only for	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	canon_lower.on_resolve: if result is None
+0101	which `Task.needs_exclusive` asserts only of async-typed functions	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Task.needs_exclusive asserts ft.async_
+0101	consults `exclusive_thread` only for async-typed entries	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	enter_implicit_thread: if self.ft.async_
+0101	The reference has no reentrance rule at this pin	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	canon_lower guards only may_leave; absent: may_enter, reentr
+0101	there is no `may_block` in `definitions.py`	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: may_block
+0101	In the reference it is not a field at all	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	threads serialised by Continuation.lock and Handler.lock
+0101	in the reference nothing runs between	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Thread.resume resumes the successor directly (now via block(switch_to=…))
+0101	resumes only candidates from `inst.threads`	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	canon_lift's sync tail
+0102	checks only `may_leave`, so a sync task may block	2e7895c76905cd3fb7e6be4ac632258972b1f688	false	1005	false at both pins (canon_lift's sync tail traps); #1005 (closed) corrected it in the ADR's own 2026-10-16 section
+0104	is silent on preemption	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: preempt, interrupt, timer; Threads switch only through yield_, suspend_then_resume, wait_until
