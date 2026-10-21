@@ -203,3 +203,12 @@ The surface's implementation lands with ADR 0085's surface, which amendment 1's 
 - **The YIELD arm's second check (def@2bed77e:canon_lift.thread_func) is the one genuine divergence.** Burroughs' analog of its `wait_until` is `enterTask`'s semaphore acquire, and the loop does not re-check after it; such a cancel is delivered one callback entry later. That consequence really is latency rather than outcome, which is what the WAIT claim was wrongly asserted to be.
 - **A host async impl's `onCancel` must resolve its subtask, or a conforming guest panics** — and this is a separate, filed gap rather than a property of this slice. The model's `canon_subtask_cancel` **waits** for resolution when the cancel is sync-lowered (`thread.wait_until(subtask.resolved)`, def@2bed77e:canon_subtask_cancel:"thread.wait_until(subtask.resolved)") and returns BLOCKED only on the async form; Burroughs returns BLOCKED unconditionally. `wit-bindgen`'s drop glue is synchronous, cannot await, and meets BLOCKED in `in_progress_update`'s `other => panic!("unknown code {other:#x}")`. Measured as a bare `unreachable` with no receipt on this slice's first run. It is `subtask.cancel`'s arm — the parent's path — so it is out of scope here and filed with the citation.
 - `gate:async` cancellation is **not embedder-reachable** when this lands. Said in the slice's report rather than implied — and the reason is that the decided surface (`Component.Call(ctx, …)`, ADR 0085 amendment 1) is **unimplemented**, which is a sequencing fact rather than an open design question. [#858](https://github.com/scttfrdmn/burroughs/issues/858) is where it becomes reachable.
+
+## Corrected, 2026-10-21: `request_cancellation`'s two arms, re-read at 2e7895c (#1075)
+
+This is the negative-claim sweep of #1040, by the chair's ruling of 2026-10-21. The body above is kept as written.
+- **The block quoted as "`request_cancellation`'s two arms, exactly" is 2bed77e's.** At 2e7895c, the STARTED arm
+  also resumes the implicit Thread when it is cancellable and ready
+  (`def@2e7895c:Task.request_cancellation:"if self.implicit_thread.cancellable and self.implicit_thread.ready():"`,
+  upstream #726).
+- **This is prose only:** the engine already follows #726 (`cancel726_test.go`).

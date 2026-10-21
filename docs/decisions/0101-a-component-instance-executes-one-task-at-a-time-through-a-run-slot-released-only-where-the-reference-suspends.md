@@ -976,3 +976,30 @@ store. Since [ADR 0105](0105-a-trap-locks-the-component-instance-and-every-later
 when a task traps, every other task of the instance is already parked at a suspension point. Each wait now selects
 on the lock and ends there, through its own unwind, so slot accounting is unchanged. An instance composed with it
 holds its own slot and may be mid-segment. It ends at its next built-in, which the lock guard refuses.
+
+## Corrected, 2026-10-21: four reference claims, re-read at 2e7895c (#1076, #1077, #1080, #1081)
+
+This is the negative-claim sweep of #1040, by the chair's ruling of 2026-10-21. The body above is kept as written,
+and the engine needs no change for any of these.
+
+- **#1076, async `subtask.cancel`.** *"The async form of `subtask.cancel` is `thread.yield_()` in the reference"*
+  was 2bed77e's code.
+  - At 2e7895c it does not yield: `def@2e7895c:canon_subtask_cancel:"if not async_ and not subtask.resolved():"`
+    waits on the sync form only, then returns `BLOCKED`.
+  - The engine already follows 2e7895c (`async_subtask.go`).
+- **#1077, renamed primitives.** *"`suspend`, under `block` and `switch_to`"*, *"`suspend(switch_to)` … or a
+  returning `cont_func`"*, the table's *"→ `switch_to(other)`"* rows, *"All five end in `suspend(switch_to)`"* and
+  *"`cont_func` returning `None`"* name symbols renamed at 2e7895c.
+  - They are one primitive now, `def@2e7895c:block`.
+  - Behaviour is unchanged.
+- **#1080, `may_leave`.** *"… and every built-in and `canon_lower` traps on it"* is false at both pins.
+  - `resource.rep`, `context.get`, `context.set`, `backpressure.inc` and `backpressure.dec` carry no
+    `trap_if(not inst.may_leave)`.
+  - The stream and future built-ins check it in `def@2e7895c:drop`, `def@2e7895c:cancel_copy` and `copy`.
+  - The engine already exempts exactly those five (#990, `asyncBuiltinMayLeaveExempt`).
+- **#1081, `wait_until`.** *"`wait_until` is `start_waiting` then `block()`, so the chain ends there"* is false at
+  both pins.
+  - `def@2e7895c:Thread.wait_until:"if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):"` may
+    return without blocking when already ready.
+  - Burroughs always suspends there, which is the deterministic profile, one of the behaviours the reference
+    allows.

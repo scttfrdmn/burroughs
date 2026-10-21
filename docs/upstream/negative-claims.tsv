@@ -16,6 +16,7 @@
 # One row per claim, tab-separated: the ADR number, a verbatim quote of the claim (whitespace-insensitive, no
 # tab), read_at (the full pin SHA it was last re-read at), the verdict (holds or false), the issue (a number, or
 # - when it holds), and a note.
+0004	no `thread.spawn` in the shipped Canonical ABI	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: spawn (found by the 0001–0083 sweep, 2026-10-21)
 0084	is absent from 0.3.0's shipped ABI	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	no spawn in definitions.py; the 🧵-gated thread.new-indirect is present under its own name
 0087	no `thread.spawn` in the shipped Canonical ABI	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: spawn
 0089	no `thread.spawn` in the shipped Canonical ABI	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: spawn

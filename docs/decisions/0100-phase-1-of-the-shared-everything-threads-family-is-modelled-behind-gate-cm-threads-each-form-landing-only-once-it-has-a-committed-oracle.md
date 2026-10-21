@@ -948,3 +948,27 @@ where the trap locks the whole store. Nothing fired when the pin moved, because 
 Both sentences are rows of `docs/upstream/negative-claims.tsv`, marked false against #1040. A component instance
 now locks after a trap, and every later call is refused with `ErrInstanceLocked`. Core wasm is unaffected. The
 rest of this record stands.
+
+## Corrected, 2026-10-21: three more reference claims, re-read at 2e7895c (#1075, #1077, #1079)
+
+This is the negative-claim sweep of #1040, by the chair's ruling of 2026-10-21. The body above is kept as written,
+and the engine needs no change for any of these.
+
+- **#1075, cancellation on a STARTED task.**
+  - *"`Task.request_cancellation` on a STARTED task only sets `PENDING_CANCEL`"* was 2bed77e's code. At 2e7895c it
+    also resumes a cancellable, ready implicit Thread, through
+    `def@2e7895c:Task.request_cancellation:"if self.implicit_thread.cancellable and self.implicit_thread.ready():"`
+    (upstream #726).
+  - *"… resumes the implicit Thread and the task resolves"* is false at both pins: a STARTED task does not resolve
+    there.
+  - The engine already follows #726.
+- **#1077, renamed primitives.** The reference's control-transfer primitives were renamed.
+  - `suspend(switch_to)`, `switch_to(other)` and `cont_func` are now one primitive, `def@2e7895c:block`.
+  - `Thread.resume`'s loop reads `def@2e7895c:Thread.resume:"(thread.cont, thread) = resume(cont, thread)"`.
+  - Behaviour is unchanged (`def@2e7895c:Thread.suspend_then_resume:"block(switch_to = other)"`). Only the names
+    in this record's prose are stale.
+- **#1079, what a promote revives.** A `*-then-promote` form cannot revive a bare-suspended Thread, at either pin.
+  - `def@2e7895c:Thread.suspend_then_promote:"if other.ready():"` switches only to a READY target, and otherwise
+    suspends itself.
+  - `thread.resume-later` and the `*-then-resume` forms do revive a suspended Thread.
+  - The engine's promote matches the pin (`cmthreads.go`'s promote arm).

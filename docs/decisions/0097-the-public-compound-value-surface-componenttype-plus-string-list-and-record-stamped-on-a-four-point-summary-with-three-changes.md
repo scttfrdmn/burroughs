@@ -134,3 +134,20 @@ That limit fired once before and was passed (0096's amendment 2 is the record), 
 - **`ComponentValue`'s internal storage widens** to carry a string, an element slice and a type. That is precisely the widening ADR 0029 predicted — and it is allowed here because the fields are unexported, which is the whole reason that treatment was chosen. Worth stating so the next reader sees the prediction coming true *inside* the boundary rather than across it.
 - **The deferred alternative keeps its trigger.** Signature-derived typing may be added later as a convenience **over** this, never instead of it — ADR 0085's own A-then-D shape. Trigger: spelling types out proving tedious in practice, meaning a real embedder or our own fixtures carrying enough descriptor boilerplate to be worth removing. *A deferral's trigger is a hypothesis about its consumer*, so whoever picks it up says whether the named trigger actually fired.
 - **Type introspection stays deferred**: `ComponentValue.Type()`, `ComponentType.Elem()`, `.Fields()`. The three accessors answer every question these kinds raise, because a caller knows the signature it called. Trigger: code that must branch on a returned value's type rather than knowing it in advance.
+
+## Corrected, 2026-10-21: the empty record, re-read at 2e7895c (#1078, #1082)
+
+This is the negative-claim sweep of #1040, by the chair's ruling of 2026-10-21. The body above is kept as written.
+
+- **The line citations are stale (#1078).**
+  - `(:1228)` and `(:1193-1197)` were lines at 2bed77e, and they moved at 2e7895c.
+  - By symbol, they are `def@2e7895c:elem_size:"match despecialize(t):"` and
+    `def@2e7895c:alignment_record:"a = 1"`.
+  - The bare `:NNNN` form passes `make refcite`'s line rule, which fires only on the `def:` and `definitions.py:`
+    prefixes. That is #1078's other half.
+- **The reasoning behind *"There is no behaviour to support … could not be lowered"* is false at both pins (#1082).**
+  - `def@2e7895c:lower_flat_record` lowers an empty record flat to `[]`, with no assertion; only the
+    `elem_size`/store paths assert.
+  - **The conclusion still holds, by validation instead.** wasm-tools 1.258.0 refuses
+    `(component (type (record)))` with *"record type must have at least one field"*, so no valid component
+    carries the type.
