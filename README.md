@@ -94,9 +94,12 @@ it.
   `Component.Close` are public. What crosses that boundary as a **value** is
   less: `u32`, `string`, `list` and `record`, in both directions, since
   `v0.7.0`; `variant`, `flags` and resource handles do not. A kind that cannot
-  cross is refused **by name**, never marshalled approximately. The open
-  defects on these default-on paths are listed in `CHANGELOG.md`'s `v0.8.0`
-  block.
+  cross is refused **by name**, never marshalled approximately. **A trap locks
+  the component instance**, as it does in the reference and in wasmtime: every
+  later `Component.Call` returns `ErrInstanceLocked`, wrapping the trap (since
+  `v0.9.0`). A component's trap is a `burroughs.Trap`, as a core module's is,
+  and the CLI exits `4` on it. The open defects on these default-on paths are
+  listed in `CHANGELOG.md`'s `v0.9.0` block.
 - **Threads: the mechanism is on main, the gate is not flipped.** `thread.spawn`,
   futex wait/notify, the safepoint poll, and thread exit/join/detach are
   implemented. `gate:threads` stays off by default, and contract §4's litmus
@@ -173,7 +176,7 @@ inspects before running does not have to translate (decision 0033):
 | `1` | this invocation's own failure — unreadable file, unspellable value, no such export |
 | `2` | wrong arguments |
 | `3` | the module was refused: malformed, invalid, or declined under `--strict` |
-| `4` | the module executed correctly and the program went wrong — a trap |
+| `4` | the module executed correctly and the program went wrong — a trap, in a core module or a component, or a component call refused because an earlier trap locked the instance |
 | `5` | the engine reached something it does not implement in this phase |
 | `6` | the module is fine; this build has that proposal's gate off |
 | `7` | a component call the **caller** cancelled — the module ran correctly and the invoker stopped it |
