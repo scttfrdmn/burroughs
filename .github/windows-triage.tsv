@@ -17,4 +17,5 @@ TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork	1002	the guard allows 
 TestPreCommitRefusesCommitsOnTheDefaultBranch	944	POSIX exec and permission semantics
 TestShellAndGoAgreeOnTheSuitePopulation	944	POSIX exec and permission semantics
 TestStopBringsATailCallLoopToASafepoint	946,896	the 30s wait after Resume; also times out under race on amd64
+TestStopRefusesASecondConcurrentStop	946	the same 30s wait after Resume; seen once (run 40035281003, 2026-10-23), not on re-run
 TestClause3GCAcrossTwoAgents	982	unaligned writeNum against atomicCell.load; intermittent
