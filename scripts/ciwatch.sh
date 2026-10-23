@@ -536,6 +536,24 @@ cat > "$prefix.verdict" <<VERDICT
 }
 VERDICT
 
+# --- the merge gate's record (the chair's ruling of 2026-10-23) ---------------------------------------------
+#
+# A merge was made past this script's own FAIL line, because a person read the wrapper's exit code instead
+# (#1087). The verdict is therefore also written where `editroute.py`'s merge route reads it:
+# `.ci-verdict.d/ci-<sha>`, beside `make ci`'s local record `.ci-verdict.d/<sha>`. The route refuses a merge
+# unless both are green for the PR's head, and unless main's tip has a green record of its own, so a red
+# main stops the next merge. A fixture run writes it only where CIWATCH_VERDICT_DIR points, never into the
+# repository.
+verdict_dir=${CIWATCH_VERDICT_DIR:-}
+if [ -z "$verdict_dir" ] && [ -z "${CIWATCH_FIXTURE:-}" ]; then
+	verdict_dir="$(cd "$(dirname "$0")/.." && pwd)/.ci-verdict.d"
+fi
+if [ -n "$verdict_dir" ]; then
+	mkdir -p "$verdict_dir"
+	printf 'ciwatch=%s\nsha=%s\nrun=%s\nwhen=%s\n' "$([ "$fail" -eq 0 ] && echo green || echo fail)" "$sha" \
+		"$treerun" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$verdict_dir/ci-$sha"
+fi
+
 if [ "$fail" -ne 0 ]; then
 	echo "ciwatch: FAIL not green" >&2
 	exit 1

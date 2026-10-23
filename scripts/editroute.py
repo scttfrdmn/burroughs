@@ -838,6 +838,115 @@ def publish_past_unchecked(tokens: list[str]) -> str | None:
     return None
 
 
+# --- route 8: a merge needs a green verdict for the PR's head, and a watched, green main ------------------------
+#
+# The chair's ruling of 2026-10-23. #1087 was merged while `ciwatch` printed `FAIL not green`, because the actor
+# read a wrapper's exit code; and main had gone red from #1085 with nothing watching it. Checking the verdict line
+# by habit is vigilance, not an instrument, so a merge is refused here unless:
+#   - `make ci`'s record for the PR's CURRENT head SHA is green (`.ci-verdict.d/<sha>`, `exit=0`);
+#   - `ciwatch`'s record for that SHA is green (`.ci-verdict.d/ci-<sha>`, `ciwatch=green`). The local record alone
+#     would not have refused #1087, whose local gate was green and whose CI was red;
+#   - main's tip has a `ciwatch` record that is green or explained (`explained=<issue>`). An unwatched main
+#     refuses too, so every merge is followed by a watch of main before the next one.
+# Each record is found by the `sha=` line it carries, compared with the SHA that must be green. That comparison
+# is the predicate: without it, a green record for an older commit of the PR would admit the merge.
+# The head and main SHAs come from `gh`, or from EDITROUTE_PR_HEAD / EDITROUTE_MAIN_SHA in the witnesses.
+# Failing to learn either is a refusal, never a pass.
+MERGE_VERDICT_DIR = ".ci-verdict.d"
+
+
+def merge_selector(cmdv: list[str]) -> tuple[bool, str | None]:
+    """(True, selector) if this simple command is `gh pr merge [selector] …`, else (False, None)."""
+    head = 0
+    while head < len(cmdv) and (cmdv[head] in SHELL_KEYWORDS or ENV_ASSIGNMENT.match(cmdv[head])):
+        head += 1
+    a = cmdv[head:]
+    if len(a) < 3 or basename(a[0]) != "gh" or a[1] != "pr" or a[2] != "merge":
+        return False, None
+    rest = a[3:]
+    for i, w in enumerate(rest):
+        if w.startswith("-"):
+            continue
+        if i > 0 and rest[i - 1] in ("-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email",
+                                     "--match-head-commit", "-R", "--repo"):
+            continue
+        return True, w
+    return True, None
+
+
+def read_record(path: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                k, sep, v = line.strip().partition("=")
+                if sep:
+                    out[k] = v
+    except OSError:
+        pass
+    return out
+
+
+def find_record(vdir: str, prefix: str, sha: str) -> dict[str, str] | None:
+    """The record in vdir, named with `prefix`, whose `sha=` line is `sha`; None if there is none."""
+    try:
+        names = sorted(os.listdir(vdir))
+    except OSError:
+        return None
+    for name in names:
+        if prefix == "" and name.startswith("ci-"):
+            continue
+        if prefix and not name.startswith(prefix):
+            continue
+        rec = read_record(os.path.join(vdir, name))
+        if rec.get("sha") == sha:
+            return rec
+    return None
+
+
+def gh_value(args: list[str]) -> str | None:
+    try:
+        out = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    v = out.stdout.strip()
+    return v if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", v) else None
+
+
+def merge_refusal(cmdv: list[str], root: str) -> str | None:
+    """The refusal for a `gh pr merge` the verdicts do not support, or None."""
+    is_merge, sel = merge_selector(cmdv)
+    if not is_merge:
+        return None
+    vdir = os.environ.get("EDITROUTE_VERDICT_DIR") or os.path.join(root, MERGE_VERDICT_DIR)
+    head = os.environ.get("EDITROUTE_PR_HEAD") or gh_value(
+        ["pr", "view", *([sel] if sel else []), "--json", "headRefOid", "-q", ".headRefOid"])
+    if not head:
+        return "`gh pr merge`: the PR's head SHA could not be learned, so its verdict cannot be checked"
+    main = os.environ.get("EDITROUTE_MAIN_SHA") or gh_value(["api", "repos/{owner}/{repo}/commits/main", "-q", ".sha"])
+    if not main:
+        return "`gh pr merge`: main's tip SHA could not be learned, so main's verdict cannot be checked"
+    local = find_record(vdir, "", head)
+    if local is None:
+        return f"`gh pr merge`: no `make ci` verdict for the PR's head {head[:12]} — run `make ci` on that commit"
+    if local.get("exit") != "0":
+        return f"`gh pr merge`: `make ci`'s verdict for the PR's head {head[:12]} is red (exit={local.get('exit')})"
+    ci = find_record(vdir, "ci-", head)
+    if ci is None:
+        return (f"`gh pr merge`: no `ciwatch` verdict for the PR's head {head[:12]} — watch its CI run with "
+                "scripts/ciwatch.sh")
+    if ci.get("ciwatch") != "green":
+        return f"`gh pr merge`: CI's verdict for the PR's head {head[:12]} is {ci.get('ciwatch')}, not green"
+    m = find_record(vdir, "ci-", main)
+    if m is None:
+        return (f"`gh pr merge`: main's tip {main[:12]} has no `ciwatch` verdict — watch main's push run after "
+                "every merge, before the next one")
+    if m.get("ciwatch") != "green" and not m.get("explained"):
+        return (f"`gh pr merge`: main's tip {main[:12]} is red ({m.get('ciwatch')}) — explain it "
+                "(scripts/explainred.sh) or repair it before merging anything else")
+    return None
+
+
 def findings(cmd: str, root: str, cwd: str) -> list[str]:
     """Every reason this command must not run, as sentences. Empty means allow."""
     text, bodies = lift_heredocs(cmd)
@@ -879,6 +988,12 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     # Route 7 is judged before the subst1.py block, because that block returns early. Its reason is added
     # on that path only when route 6 has not already refused the same separator, so one slip is one reason.
     published = publish_past_unchecked(tokens)
+
+    # Route 8, judged here for route 7's reason: the subst1.py block below returns early.
+    for cmdv in simple_commands(tokens):
+        refused = merge_refusal(cmdv, root)
+        if refused:
+            reasons.append(refused)
 
     # subst1.py's own invocation is the one explicit exemption: it IS a permitted route, and it
     # writes its target by design. But the exemption is conditional on the route still being the route.
@@ -1196,7 +1311,9 @@ def main() -> int:
     ]
     # Route 7 is about sequencing, not editing, so it gets its own guidance too.
     publishing = [r for r in reasons if "whatever the last one's exit status was" in r]
-    editing = [r for r in reasons if r not in sleeping and r not in discarding and r not in publishing]
+    merging = [r for r in reasons if r.startswith("`gh pr merge`")]
+    editing = [r for r in reasons if r not in sleeping and r not in discarding and r not in publishing
+               and r not in merging]
 
     msg = "editroute: REFUSED.\n\n" + "".join(f"  * {r}\n" for r in reasons) + "\n"
     if editing:
@@ -1233,6 +1350,15 @@ def main() -> int:
             "  PR opened with the placeholder still in its body (the chair's ruling of 2026-10-17).\n\n"
             "  Re-issue the WHOLE command with `&&` between every step. A refusal here ran nothing, so\n"
             "  re-running only its tail would skip the steps it was meant to follow.\n\n"
+        )
+    if merging:
+        msg += (
+            "  A merge needs verdicts, not a reading of them (the chair's ruling of 2026-10-23, after #1087\n"
+            "  was merged past `ciwatch: FAIL not green`). The merge route reads `.ci-verdict.d/`:\n"
+            "    - `make ci` on the PR's head writes `<sha>` (exit=0);\n"
+            "    - `scripts/ciwatch.sh <head-sha>` writes `ci-<sha>` (ciwatch=green);\n"
+            "    - after every merge, `scripts/ciwatch.sh <merge-sha>` on main writes main's record, and the\n"
+            "      next merge waits for it. A red main is repaired, or explained with scripts/explainred.sh.\n\n"
         )
     if sleeping:
         msg += (
