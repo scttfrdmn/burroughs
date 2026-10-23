@@ -499,6 +499,30 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		})
 	}
 
+	// The merge route's record (the chair's ruling of 2026-10-23): ciwatch writes `ci-<sha>` where editroute's
+	// route 8 reads it, green or fail, and a fixture run writes it nowhere unless told where.
+	t.Run("the_verdict_is_recorded_for_the_merge_route", func(t *testing.T) {
+		for _, c := range []struct {
+			name, run, want string
+		}{
+			{"green", strings.ReplaceAll(pushRun, `"conclusion":"failure"}]}`, `"conclusion":"success"}]}`), "ciwatch=green"},
+			{"red", pushRun, "ciwatch=fail"},
+		} {
+			dir := t.TempDir()
+			vdir := filepath.Join(dir, "verdicts")
+			write(dir, "runs.json", `[{"databaseId": 1}]`)
+			write(dir, "1.json", c.run)
+			_, out := run(t, dir, "CIWATCH_VERDICT_DIR="+vdir)
+			rec, err := os.ReadFile(filepath.Join(vdir, "ci-"+sha))
+			if err != nil {
+				t.Fatalf("%s: no record for the merge route: %v\n%s", c.name, err, out)
+			}
+			if !strings.Contains(string(rec), c.want+"\n") || !strings.Contains(string(rec), "sha="+sha+"\n") {
+				t.Errorf("%s: record %q, want %s and the SHA", c.name, rec, c.want)
+			}
+		}
+	})
+
 	t.Run("a_passing_windows_run_is_green", func(t *testing.T) {
 		code, out, v := winRun(t, winPassed, "")
 		if code != 0 || v["ciwatch_verdict"] != "green" {

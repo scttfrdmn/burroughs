@@ -24,6 +24,17 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Changed
+
+- **A merge is refused without green verdicts for the PR's head and a watched, green main** (the chair's ruling of
+  2026-10-23). `editroute.py`'s route 8 refuses `gh pr merge` unless:
+  - `make ci`'s record (`.ci-verdict.d/<sha>`) and `ciwatch`'s record (`.ci-verdict.d/ci-<sha>`, new) are green for
+    the PR's current head, each found by its `sha=` line;
+  - main's tip has a green `ciwatch` record, or a red one explained by an open issue (`scripts/explainred.sh`).
+  - **Why:** #1087 was merged past `ciwatch: FAIL not green`, and main had gone red from #1085 unwatched.
+  - **Neuter:** the SHA comparison removed admits a green record for another commit.
+  - The procedure is in `docs/laws/operations.md`.
+
 ## [0.9.0] - 2026-10-21
 *Implements contract v0.1.*
 

@@ -304,6 +304,29 @@ discipline rather than a mechanism. What changed is that the first watcher's pid
 collision is visible instead of silent. (Scott's order, in session on the #658 review, held by no artifact —
 so every commit in the slice carrying it is `Ratio-Class: carried`.)
 
+### Merging: a verdict for the head, and a watched main, before every merge
+
+**The procedure** (the chair's ruling of 2026-10-23):
+1. `make ci` on the PR's head. It writes `.ci-verdict.d/<sha>`.
+2. `scripts/ciwatch.sh <head-sha>` on the PR's CI run. It writes `.ci-verdict.d/ci-<sha>`.
+3. `gh pr merge`.
+4. **At once, `scripts/ciwatch.sh <merge-sha>` on main's push run**, which writes main's record.
+5. If main is red, nothing else merges until it is repaired, or its red is explained by an open issue that owns it
+   (`scripts/explainred.sh <sha> <issue>`).
+
+**The hook enforces it, so no habit does.** `editroute.py`'s route 8 refuses `gh pr merge` unless the PR's
+current head has a green `make ci` record and a green `ciwatch` record, and main's tip has a green or explained
+`ciwatch` record. Each record is found by its `sha=` line, compared with the SHA that must be green, so a green
+record for an older commit of the PR does not admit the merge. A head or main SHA that `gh` cannot supply is a
+refusal. Witness: `TestTheMergeRouteRefusesWithoutAGreenVerdictForTheHead`, whose neuter (the comparison removed)
+admits the stale case.
+
+**Why both records:**
+- **#1087 was merged past `ciwatch: FAIL not green`**: the actor read the watcher's exit code, which is the
+  wrapper's. Its local gate was green, so the local record alone would have admitted it.
+- **Main went red from #1085, and nothing reported it** until the actor went back. An unwatched main is now as
+  much a refusal as a red one.
+
 ## Local cross-architecture verification
 
 The dev box is arm64 — the weakly-ordered side, contract §9's own reason both CI
