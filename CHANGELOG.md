@@ -26,6 +26,19 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The §4 battery's first hole is closed: B-MM-1's guest→guest message across a host-call return is witnessed**
+  (`b-mm-1-message-passing-across-a-host-call-return`, re-registered;
+  `TestBMM1AMessagePassesAcrossAHostCallReturnBetweenTwoGuests`; the chair's fourth ruling of 2026-10-24).
+  - **The reopening condition** (Scott, 2026-09-14: publisher and consumer both guest agents) is met.
+    ADR 0052's package-level boundary counter carries the edge.
+  - **The witness:** two instances over one shared memory, so the counter is the only edge. A guest does
+    `memory.fill` and a host call; the other guest's host call sleeps, returns, and it reads.
+  - **The sleep is a timing assumption:** a round read before the write is inconclusive, never a pass, and more
+    than 10% of rounds inconclusive fails the case.
+  - **Neuter, run:** the counter's `Add`s removed gives `execMemoryFill` against `memAccess` under `-race`, on
+    darwin/arm64 and linux/amd64.
+  - **The earlier registrations are kept visible.** The 2026-09-12 diagnosis is corrected in place: the missing
+    piece was a neutral signal, not an engine edge.
 - **A session-memory update runs no git** (`scripts/editroute.py` route 9; the chair's fourth ruling of 2026-10-24).
   - **The specimen:** a memory-index update ended `cd ~/src/burroughs && git checkout -q main`. Local `main` was
     four squash-merges behind `origin/main`, so the tree moved back to aee4f54. Nothing was lost:
