@@ -312,7 +312,13 @@ so every commit in the slice carrying it is `Ratio-Class: carried`.)
 3. `gh pr merge`.
 4. **At once, `scripts/ciwatch.sh <merge-sha>` on main's push run**, which writes main's record.
 5. If main is red, nothing else merges until it is repaired, or its red is explained by an open issue that owns it
-   (`scripts/explainred.sh <sha> <issue>`).
+   (`scripts/explainred.sh <sha> <issue>`). **The explanation is checked** (the chair's ruling of 2026-10-24):
+   - the issue must be open;
+   - it must have existed before the red run, or name one of the run's failing tests in its body;
+   - every use is logged to `.ci-verdict.d/explained.log`, and listed in the next report to the chair.
+
+**The hook fails closed.** A command `editroute.py` cannot tokenise is refused whole, naming the parse error, so an
+unbalanced quote around `gh pr merge` cannot get past route 8.
 
 **The hook enforces it, so no habit does.** `editroute.py`'s route 8 refuses `gh pr merge` unless the PR's
 current head has a green `make ci` record and a green `ciwatch` record, and main's tip has a green or explained

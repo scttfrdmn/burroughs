@@ -26,14 +26,27 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`editroute.py` fails closed on a command it cannot tokenise, and `explainred.sh` checks its explanation** (the
+  chair's ruling of 2026-10-24).
+  - **The hook:** an untokenisable command was allowed with a warning, past every route at once, including the merge
+    gate. It is now refused, naming the parse error. Neuter: the old early return admits an unbalanced quote around
+    `gh pr merge`.
+  - **The escape hatch:** an explanation releases a red main only if its issue is open, and either existed before
+    the red run or names one of the run's failing tests. Every use is logged. An issue filed after the red, naming
+    none of its tests, is refused.
+
 - **`branch` takes its label by pointer, not by a copy onto the goroutine stack**
   ([#1036](https://github.com/scttfrdmn/burroughs/issues/1036)).
   - **On janus**, measured with `make lab-ab` over 16 stack offsets (`BenchmarkBranchAtStackOffset`, new) against a
     null arm that read `~` everywhere:
     - every offset is faster, by 0.74–2.59% (p=0.000), with a geomean of −1.22%;
     - the spread across offsets falls from 2.8% to 1.9%.
-  - **Not shown fixed:** #1036's ~9% between two binaries was never reproduced by this instrument. Its baseline spread
-    was 3.0%, against a forecast of ≥ 5%, so the issue stays open.
+  - **This instrument did not reproduce #1036's ~9%.** Its baseline spread was 3.0%, against a forecast of ≥ 5%.
+  - **#1036's own pair did, and settled it** (the chair's rule of 2026-10-24).
+    - The pair is `BenchmarkFanOut` pre-fence against fence, with this change in both arms (`make lab-ab`, task 71,
+      null arm `~`).
+    - The rows that were −9.71% and −9.25% read −0.44% and `~`, within 2%.
+    - The label copy was the mechanism. #1036 is closed.
 
 - **A merge is refused without green verdicts for the PR's head and a watched, green main** (the chair's ruling of
   2026-10-23). `editroute.py`'s route 8 refuses `gh pr merge` unless:
@@ -331,6 +344,10 @@ known limits. **Not a v1.0.0 claim, and not a claim that v1's threads are finish
 
 ### Fixed
 
+- **A correction to the `v0.8.0` and `v0.9.0` known limits.** Both listed #830 (`burroughs run` forwards the host
+  environment) as open. #832 fixed it on 2026-09-30, and it shipped in `v0.7.0`: `burroughs run` passes nothing unless
+  `--env` names it. The issue had stayed open, which is how it was carried forward. The tag messages are not changed.
+  #830 is closed by hand, and #1090 records the correction.
 - **A call that succeeded is no longer reported as `ErrInstanceLocked` because a Thread it readied trapped
   after it** (#1040's lockdown, #1085).
   - **The defect:** the lockdown's in-flight mapping also relabelled a SUCCESS that ended after the lock. A sync
