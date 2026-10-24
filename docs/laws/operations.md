@@ -333,6 +333,30 @@ admits the stale case.
 - **Main went red from #1085, and nothing reported it** until the actor went back. An unwatched main is now as
   much a refusal as a red one.
 
+### Cutting a release
+
+The procedure `v0.8.0` and `v0.9.0` were cut by, written down because it lived in their PR bodies:
+1. **A release PR.**
+   - Derive the version from `git tag`.
+   - Move `[Unreleased]` under `## [x.y.z] - <date>`, leaving an empty `[Unreleased]` at the top, and update the
+     link references.
+   - Lead the block with every default-behaviour change, then the instruments, the platforms, the claim, the board
+     (`make conformance`), and the known limits.
+2. **`make limitcheck LIMITCHECK=--force` on that tree** (the chair's second ruling of 2026-10-24).
+   - Every issue cited under Known limits must be open.
+   - Read every `note` line it prints. A merged PR naming a limit in its title is how #830's fix went unnoticed:
+     `v0.8.0` and `v0.9.0` listed #830 as open after #832 had fixed it in `v0.7.0`. The issue was still open, so
+     only the note would have caught it.
+3. **Post the block** on the release issue, with the principal's authorisation recorded there.
+4. **Merge through route 8. Then re-check on the merge SHA:**
+   - `make ci`;
+   - `make conformance`;
+   - main's push run, by `ciwatch`;
+   - the posted block diffed against the merged CHANGELOG;
+   - signing, on a throwaway local tag.
+5. **The signed annotated tag** on the merge commit, then push it, verify it (`git tag -v`), and record it on the
+   release issue.
+
 ## Local cross-architecture verification
 
 The dev box is arm64 — the weakly-ordered side, contract §9's own reason both CI
