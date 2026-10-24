@@ -26,6 +26,18 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **B-MM-1's acquire half at a host-call return has a litmus case**
+  (`b-mm-1-a-host-write-is-visible-after-a-host-call-return`, `TestBMM1AHostWriteIsVisibleAfterAHostCallReturn`;
+  item D of the §4 plan on [#10](https://github.com/scttfrdmn/burroughs/issues/10), the chair's third ruling of
+  2026-10-24).
+  - **The reading, recorded on #10 first:** the clause's first sentence names no writer, so a host publisher is
+    within it. The second sentence, the release edge, needs a guest publisher, so that half stays the registered
+    hole.
+  - **The witness:** a host goroutine writes through `Caller.Write` during the guest's host call, and the guest
+    reads after the return. The signal is a sleep, so the engine's boundary edge is the only happens-before.
+  - **Arbiter:** `-race`, on both CI architectures.
+  - **Neuter, run:** with the boundary counter's `Add`s removed, `-race` reports `(*memory).write` against
+    `memAccess`, on darwin/arm64 and linux/amd64.
 - **`Close` has a witness for counting every call it admits** (`TestCloseCountsEveryCallItAdmits`, #945; the chair's
   third ruling of 2026-10-24). Four callers start while `Close` runs, at a zero bound and at 2ms.
   - **The violation it looks for:** `Close` returns nil in a trial where an admitted call ended only through
