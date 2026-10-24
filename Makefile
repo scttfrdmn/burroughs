@@ -965,7 +965,15 @@ cite:
 	@./scripts/citecheck.sh $(CITE)
 	@$(MAKE) --no-print-directory refcite
 	@$(MAKE) --no-print-directory triagecheck
+	@$(MAKE) --no-print-directory limitcheck
 	@$(MAKE) --no-print-directory ratiocheck
+
+# limitcheck — every issue the newest release block cites under Known limits is still open (the chair's second
+# ruling of 2026-10-24, after v0.8.0 and v0.9.0 listed #830 as open after v0.7.0 fixed it). It checks only while a
+# cut is in progress, meaning `[Unreleased]` holds no entries. The cut procedure runs it with LIMITCHECK=--force.
+# An unreadable tracker is a failure, never a pass.
+limitcheck:
+	@./scripts/limitcheck.py $(LIMITCHECK)
 
 # ratiocheck — a PR body's quoted ratio equals what `scripts/ratio.sh` prints for the PR's merge base..head
 # (the chair's ruling of 2026-10-17, after a stale substitution file carried #1038's figure into #1039's

@@ -26,6 +26,15 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A release's known limits are checked against the tracker at the cut** (`scripts/limitcheck.py`, `make
+  limitcheck`; the chair's second ruling of 2026-10-24).
+  - **What it checks:** every issue cited under the newest version block's **Known limits** must be open, and an
+    unreadable tracker fails. It runs in `make ci` through `make cite`, and in CI, while a cut is in progress, and
+    with `--force` in the cut procedure, now written in `docs/laws/operations.md`.
+  - **Neuter:** the state check removed passes a closed limit.
+  - **What it does not catch:** #830's own case, an issue left open after its fix. So it also notes any merged PR
+    whose title names a limit. #832 is found for #830. That note is a prompt, not a verdict.
+
 - **`editroute.py` fails closed on a command it cannot tokenise, and `explainred.sh` checks its explanation** (the
   chair's ruling of 2026-10-24).
   - **The hook:** an untokenisable command was allowed with a warning, past every route at once, including the merge
