@@ -852,6 +852,39 @@ This is exactly `b-mm-2`'s stillbirth (#603): the value-observation window at SC
 - **Status:** blocked — #742 (documented hole, ruled 2026-09-12; the host-call-return crossing is unwitnessed
   by any available instrument — see above. The sibling async-wake crossing is discharged by the case below.)
 
+#### Case `b-mm-1-a-host-write-is-visible-after-a-host-call-return`
+
+**Registered 2026-10-24, under item D of the §4 plan on [#10](https://github.com/scttfrdmn/burroughs/issues/10)**
+(the chair's third ruling of 2026-10-24). This is a new case, not a rewrite of the hole above it. The reading it
+rests on is recorded on #10.
+
+B-MM-1's first sentence promises *"the resuming agent"* an acquire edge *"over the entire shared address space"*,
+and it names no writer. So a host publisher's writes, when ordered before a host-call return, are within its scope.
+The clause's second sentence, the release edge at a guest→host transition, is not this case's subject: a host
+publisher makes no such transition. So the hole above stays the release half's.
+
+- **Discharges:** B-MM-1 (the acquire half, at host-call return)
+- **Allowed:** no `-race` report naming the located pair. The pair is the host's plain `memory.write` under
+  `Caller.Write`, against the guest's post-return load in `memAccess` at the same address.
+- **Forbidden:** a `-race` report on that located pair. As in the `b-mm-2` cases, the detector's silence about the
+  pair is the pass and a located report is the fail.
+- **Witness:** the guest calls host `wait`. `wait` starts a host goroutine that writes a fresh word through
+  `Caller.Write`, then sleeps, then returns. The guest then loads the word.
+  - **The signal is a delay, because every other signal decides the verdict itself.** The 2026-09-12 attempt
+    failed both ways. An atomic host flag ordered the write itself, so the neuter was silent. A plain flag raced
+    itself, so the unbroken case failed.
+  - A sleep neither synchronises nor races. That leaves the engine's boundary edge as the only happens-before
+    from the write to the read: the write's `leaveGuest` and the return's `enterGuest`, both on ADR 0052's
+    package-level counter.
+  - Fresh 16-byte-aligned words per round, R = 20.
+- **Floor:** every round reads the published value. A round that does not means the publisher wrote after the
+  return. Then the write and the read are concurrent in the unbroken engine too, and the round is an instrument
+  fault, not a finding.
+- **Arbiter:** **`-race` (Go's memory model), both arches. It is not the hardware** (the #742 limit, and #795's).
+- **Watched dying:** `enterGuest` and `leaveGuest` emptied produced the located report on darwin/arm64 and on
+  linux/amd64 (janus, pueue task 90). The live engine was silent on both, and the floor held (janus task 89).
+- **Status:** implemented — TestBMM1AHostWriteIsVisibleAfterAHostCallReturn
+
 #### Case `b-mm-1-async-wake-is-an-acquire-edge`
 
 **The reopening condition met (2026-09-16), closing the async-wake crossing as STRUCTURAL — not as a
