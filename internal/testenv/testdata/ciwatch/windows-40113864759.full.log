@@ -1,0 +1,539 @@
+windows (measured, not a gate)	Set up job	﻿2026-10-24T16:56:47.1922666Z Current runner version: '2.338.0'
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1973384Z ##[group]Runner Image Provisioner
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1974029Z Hosted Compute Agent
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1974507Z Version: 20261021.618
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1974980Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1975522Z Build Date: 2026-10-21T00:45:21Z
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1976072Z Worker ID: {fb55062d-432c-41ba-a96e-145b518ec5aa}
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1976622Z Region: westus3
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1977043Z Cloud: Azure
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1977430Z ##[endgroup]
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1978398Z ##[group]Operating System
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1978881Z Microsoft Windows Server 2025
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1979331Z 10.0.26100
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1979727Z Datacenter
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1980106Z ##[endgroup]
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1980492Z ##[group]Runner Image
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1980990Z Image: windows-2025-vs2026
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1981432Z Version: 20261021.278.1
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1982315Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20261021.278/images/windows/Windows2025-VS2026-Readme.md
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1984286Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20261021.278
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1985032Z ##[endgroup]
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1985833Z ##[group]GITHUB_TOKEN Permissions
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1987344Z Contents: read
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1987783Z Metadata: read
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1988203Z ##[endgroup]
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1989794Z Secret source: Actions
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1990507Z Cache mode: write
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.1991026Z Prepare workflow directory
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.2326752Z Prepare all required actions
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.2377250Z Getting action download info
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.5205136Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:47.6828642Z Download action repository 'actions/setup-go@v6' (SHA:924ae3a1cded613372ab5595356fb5720e22ba16)
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:48.2897928Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+windows (measured, not a gate)	Set up job	2026-10-24T16:56:48.5647501Z Complete job name: windows (measured, not a gate)
+windows (measured, not a gate)	Run actions/checkout@v5	﻿2026-10-24T16:56:48.7221257Z ##[group]Run actions/checkout@v5
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7222582Z with:
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7223233Z   repository: scttfrdmn/burroughs
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7228535Z   token: ***
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7229162Z   ssh-strict: true
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7229823Z   ssh-user: git
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7230458Z   persist-credentials: true
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7231464Z   clean: true
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7232114Z   sparse-checkout-cone-mode: true
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7232853Z   fetch-depth: 1
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7233466Z   fetch-tags: false
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7234095Z   show-progress: true
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7234720Z   lfs: false
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7235362Z   submodules: false
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7236006Z   set-safe-directory: true
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7236758Z   allow-unsafe-pr-checkout: false
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.7237747Z ##[endgroup]
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.8418256Z Syncing repository: scttfrdmn/burroughs
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.8420372Z ##[group]Getting Git version info
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.8421246Z Working directory is 'D:\a\burroughs\burroughs'
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:48.9079248Z [command]"C:\Program Files\Git\bin\git.exe" version
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.3026021Z git version 2.56.0.windows.2
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.3067135Z ##[endgroup]
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.3083241Z Temporarily overriding HOME='D:\a\_temp\d9114f62-712f-429a-9589-2c93f2e895a1' before making global git config changes
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.3084526Z Adding repository directory to the temporary git global config as a safe directory
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.3092260Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\burroughs\burroughs
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.3778088Z Deleting the contents of 'D:\a\burroughs\burroughs'
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.3783465Z ##[group]Initializing the repository
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.3790531Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\burroughs\burroughs
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.5236781Z Initialized empty Git repository in D:/a/burroughs/burroughs/.git/
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.5278260Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/scttfrdmn/burroughs
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.5948631Z ##[endgroup]
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.5950003Z ##[group]Disabling automatic garbage collection
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.5951137Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.6371545Z ##[endgroup]
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.6372250Z ##[group]Setting up auth
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.6372835Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:49.6677968Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:51.2745928Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:51.3056337Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:51.7848318Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:51.8161616Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:52.2769188Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:52.3087022Z ##[endgroup]
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:52.3087822Z ##[group]Fetching the repository
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:52.3097985Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a95615cc5210f159bc79b868ee35e6ce45a530cc:refs/remotes/pull/1096/merge
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.4573190Z From https://github.com/scttfrdmn/burroughs
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.4576539Z  * [new ref]         a95615cc5210f159bc79b868ee35e6ce45a530cc -> pull/1096/merge
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.4608791Z ##[endgroup]
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.4609320Z ##[group]Determining the checkout info
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.4610779Z ##[endgroup]
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.4622405Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.5070065Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.5385462Z ##[group]Checking out the ref
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:54.5392914Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/remotes/pull/1096/merge
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2139554Z Note: switching to 'refs/remotes/pull/1096/merge'.
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2140051Z 
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2140315Z You are in 'detached HEAD' state. You can look around, make experimental
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2140821Z changes and commit them, and you can discard any commits you make in this
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2141247Z state without impacting any branches by switching back to a branch.
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2141450Z 
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2141608Z If you want to create a new branch to retain commits you create, you may
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2141976Z do so (now or later) by using -c with the switch command. Example:
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2142178Z 
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2142296Z   git switch -c <new-branch-name>
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2142439Z 
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2142514Z Or undo this operation with:
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2142760Z 
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2142878Z   git switch -
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2143023Z 
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2143281Z Turn off this advice by setting config variable advice.detachedHead to false
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2143660Z 
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2144088Z HEAD is now at a95615c Merge 9147d911e9959d3665de1d41e3ba2e8507a3477e into 25dd9d51f77feb5cb69e8304a05ac6af48f68a59
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2224708Z ##[endgroup]
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2706777Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+windows (measured, not a gate)	Run actions/checkout@v5	2026-10-24T16:56:55.2985043Z a95615cc5210f159bc79b868ee35e6ce45a530cc
+windows (measured, not a gate)	Run actions/setup-go@v6	﻿2026-10-24T16:56:55.3366752Z ##[group]Run actions/setup-go@v6
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:55.3367025Z with:
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:55.3367181Z   go-version-file: go.mod
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:55.3367352Z   cache: true
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:55.3367502Z   check-latest: false
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:55.3369602Z   token: ***
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:55.3369759Z ##[endgroup]
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:55.4623888Z Setup go version spec 1.26.9
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:55.4636059Z Attempting to download 1.26.9...
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:56.3579848Z matching 1.26.9...
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:56.3610908Z Acquiring 1.26.9 from https://github.com/actions/go-versions/releases/download/1.26.9-37875104533/go-1.26.9-win32-x64.zip
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:56.9473671Z Extracting Go...
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:56:57.0297675Z [command]"C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Unrestricted -Command "$ErrorActionPreference = 'Stop' ; try { Add-Type -AssemblyName System.IO.Compression.ZipFile } catch { } ; try { [System.IO.Compression.ZipFile]::ExtractToDirectory('D:\a\_temp\go-1.26.9-win32-x64.zip', 'D:\a\_temp\557ac2e7-e8d4-4b5a-8366-bf98b59f172e', $true) } catch { if (($_.Exception.GetType().FullName -eq 'System.Management.Automation.MethodException') -or ($_.Exception.GetType().FullName -eq 'System.Management.Automation.RuntimeException') ){ Expand-Archive -LiteralPath 'D:\a\_temp\go-1.26.9-win32-x64.zip' -DestinationPath 'D:\a\_temp\557ac2e7-e8d4-4b5a-8366-bf98b59f172e' -Force } else { throw $_ } } ;"
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:01.9051850Z Successfully extracted go to D:\a\_temp\557ac2e7-e8d4-4b5a-8366-bf98b59f172e
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:01.9052438Z Adding to the cache ...
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.5141281Z Created link C:\hostedtoolcache\windows\go\1.26.9\x64 => D:\hostedtoolcache\windows\go\1.26.9\x64
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.5144842Z Created link C:\hostedtoolcache\windows\go\1.26.9\x64.complete => D:\hostedtoolcache\windows\go\1.26.9\x64.complete
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.5145913Z Successfully cached go to C:\hostedtoolcache\windows\go\1.26.9\x64
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.5149801Z Added go to the path
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.5152076Z Successfully set up Go version 1.26.9
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.7353268Z [command]C:\hostedtoolcache\windows\go\1.26.9\x64\bin\go.exe env GOMODCACHE
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.7400870Z [command]C:\hostedtoolcache\windows\go\1.26.9\x64\bin\go.exe env GOCACHE
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.7592488Z C:\Users\runneradmin\go\pkg\mod
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:10.7613265Z C:\Users\runneradmin\AppData\Local\go-build
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:11.0590117Z Cache is not found
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:11.0608805Z go version go1.26.9 windows/amd64
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:11.0609002Z 
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:11.0609245Z ##[group]go env
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3045535Z set AR=ar
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3045824Z set CC=gcc
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3046089Z set CGO_CFLAGS=-O2 -g
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3046359Z set CGO_CPPFLAGS=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3046613Z set CGO_CXXFLAGS=-O2 -g
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3046856Z set CGO_ENABLED=1
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3047114Z set CGO_FFLAGS=-O2 -g
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3047360Z set CGO_LDFLAGS=-O2 -g
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3047594Z set CXX=g++
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3048034Z set GCCGO=gccgo
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3048272Z set GO111MODULE=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3048416Z set GOAMD64=v1
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3048555Z set GOARCH=amd64
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3048691Z set GOAUTH=netrc
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3048824Z set GOBIN=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3049025Z set GOCACHE=C:\Users\runneradmin\AppData\Local\go-build
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3049267Z set GOCACHEPROG=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3049408Z set GODEBUG=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3049592Z set GOENV=C:\Users\runneradmin\AppData\Roaming\go\env
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3049825Z set GOEXE=.exe
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3049971Z set GOEXPERIMENT=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3050120Z set GOFIPS140=off
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3050499Z set GOFLAGS=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3051066Z set GOGCCFLAGS=-m64 -mthreads -Wl,--no-gc-sections -fmessage-length=0 -ffile-prefix-map=C:\Users\RUNNER~1\AppData\Local\Temp\go-build1939565340=/tmp/go-build -gno-record-gcc-switches
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3051630Z set GOHOSTARCH=amd64
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3051825Z set GOHOSTOS=windows
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3053885Z set GOINSECURE=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3054071Z set GOMOD=D:\a\burroughs\burroughs\go.mod
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3054313Z set GOMODCACHE=C:\Users\runneradmin\go\pkg\mod
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3054526Z set GONOPROXY=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3054663Z set GONOSUMDB=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3054795Z set GOOS=windows
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3054958Z set GOPATH=C:\Users\runneradmin\go
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3055158Z set GOPRIVATE=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3055419Z set GOPROXY=https://proxy.golang.org,direct
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3055677Z set GOROOT=C:\hostedtoolcache\windows\go\1.26.9\x64
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3055905Z set GOSUMDB=sum.golang.org
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3056076Z set GOTELEMETRY=local
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3056334Z set GOTELEMETRYDIR=C:\Users\runneradmin\AppData\Roaming\go\telemetry
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3056606Z set GOTMPDIR=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3056749Z set GOTOOLCHAIN=local
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3057000Z set GOTOOLDIR=C:\hostedtoolcache\windows\go\1.26.9\x64\pkg\tool\windows_amd64
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3057278Z set GOVCS=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3057421Z set GOVERSION=go1.26.9
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3057574Z set GOWORK=
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3057728Z set PKG_CONFIG=pkg-config
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3057832Z 
+windows (measured, not a gate)	Run actions/setup-go@v6	2026-10-24T16:57:14.3058137Z ##[endgroup]
+windows (measured, not a gate)	Run actions/setup-python@v5	﻿2026-10-24T16:57:14.3353797Z ##[group]Run actions/setup-python@v5
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3354095Z with:
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3354258Z   python-version: 3.13
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3354474Z   check-latest: false
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3356245Z   token: ***
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3356404Z   update-environment: true
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3356582Z   allow-prereleases: false
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3356746Z   freethreaded: false
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3356913Z env:
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3357044Z   GOTOOLCHAIN: local
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.3357191Z ##[endgroup]
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.4674489Z ##[group]Installed versions
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.4798255Z (node:5872) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.4798829Z (Use `node --trace-deprecation ...` to show where the warning was created)
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.4799702Z Successfully set up CPython (3.13.16)
+windows (measured, not a gate)	Run actions/setup-python@v5	2026-10-24T16:57:14.4800181Z ##[endgroup]
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	﻿2026-10-24T16:57:14.5050033Z ##[group]Run go version
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5050339Z ^[[36;1mgo version^[[0m
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5050514Z ^[[36;1mgit --version^[[0m
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5050693Z ^[[36;1mpython3 --version^[[0m
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5051045Z ^[[36;1m# The stub's tell: `--version` exits 0 while `-c` exits 49 with empty stdout. Asserting the^[[0m
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5051460Z ^[[36;1m# `-c` form is what distinguishes a real interpreter from the alias.^[[0m
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5051820Z ^[[36;1mpython3 -c "print('python3 -c works, stdout non-empty')"^[[0m
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5141678Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5142009Z env:
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5142165Z   GOTOOLCHAIN: local
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5142401Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5142750Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.13.16\x64/lib/pkgconfig
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5143085Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5143440Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5143735Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.5143969Z ##[endgroup]
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.7472874Z go version go1.26.9 windows/amd64
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:14.7918380Z git version 2.56.0.windows.2
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:15.0579366Z Python 3.13.16
+windows (measured, not a gate)	versions, so any failure below is readable against what produced it	2026-10-24T16:57:15.6210789Z python3 -c works, stdout non-empty
+windows (measured, not a gate)	the toolchain is the one go.mod names	﻿2026-10-24T16:57:15.6434738Z ##[group]Run make toolchain-check
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6435057Z ^[[36;1mmake toolchain-check^[[0m
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6447296Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6447604Z env:
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6447750Z   GOTOOLCHAIN: local
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6447975Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6448322Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.13.16\x64/lib/pkgconfig
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6448663Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6448967Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6449259Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:15.6449494Z ##[endgroup]
+windows (measured, not a gate)	the toolchain is the one go.mod names	2026-10-24T16:57:16.1163167Z toolchain-check: go1.26.9, matching go.mod's toolchain line
+windows (measured, not a gate)	vendor the pinned corpora	﻿2026-10-24T16:57:16.1386984Z ##[group]Run make spec-tests
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1387319Z ^[[36;1mmake spec-tests^[[0m
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1387498Z ^[[36;1mmake spec-ref^[[0m
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1387660Z ^[[36;1mmake threads-ref^[[0m
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1400418Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1400736Z env:
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1400882Z   GOTOOLCHAIN: local
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1401109Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1401462Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.13.16\x64/lib/pkgconfig
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1401794Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1402097Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1402393Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.1402973Z ##[endgroup]
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:16.2098425Z ./scripts/fetch-spec-tests.sh
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:28.1303058Z corpus-lf: testdata/spec LF-clean over 257 file(s)
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:28.1314473Z spec suite vendored at testdata/spec (de54fd27ecf3e68dfd16b6199c548df77b6a2cc1, 257 .wast files, reconciled)
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:28.1688604Z ./scripts/fetch-spec-ref.sh
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.3740182Z   interpreter/binary/decode.ml 38042 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.4060367Z   interpreter/text/lexer.mll 36686 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.4383989Z   interpreter/text/parser.mly 54523 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.5000940Z   interpreter/binary/encode.ml 45362 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.5344439Z   interpreter/syntax/free.ml 7508 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.5670228Z   interpreter/valid/valid.ml 38707 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.6115880Z   interpreter/valid/match.ml 5426 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.6457537Z   interpreter/syntax/mnemonics.ml 28444 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:30.6773284Z   interpreter/exec/v128.ml 16679 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:31.1046573Z corpus-lf: third_party/spec LF-clean over 9 file(s)
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:31.1177271Z reference vendored at third_party/spec (bdd7164bfe18cf0bd5c3d90ef8cc3b8919fb9c0a)
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:31.1541285Z ./scripts/fetch-threads-ref.sh
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:32.6476231Z   interpreter/binary/decode.ml 34324 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:32.6768049Z   interpreter/valid/valid.ml 23157 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:32.7061261Z   interpreter/text/lexer.mll 37579 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:32.7357593Z   interpreter/text/parser.mly 38622 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:32.7764713Z   interpreter/binary/encode.ml 46030 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:32.8080808Z   interpreter/syntax/operators.ml 29166 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:32.8418667Z   test/core/threads/atomic.wast 55475 bytes
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:33.2509642Z corpus-lf: third_party/spec-threads LF-clean over 7 file(s)
+windows (measured, not a gate)	vendor the pinned corpora	2026-10-24T16:57:33.3513816Z threads reference vendored at third_party/spec-threads (cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0)
+windows (measured, not a gate)	go test -race	﻿2026-10-24T16:57:33.3700923Z ##[group]Run go test -race -timeout 30m ./...
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3701373Z ^[[36;1mgo test -race -timeout 30m ./...^[[0m
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3714138Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3715033Z env:
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3715184Z   GOTOOLCHAIN: local
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3715420Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3715765Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.13.16\x64/lib/pkgconfig
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3716103Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3716400Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3716687Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	go test -race	2026-10-24T16:57:33.3716928Z ##[endgroup]
+windows (measured, not a gate)	go test -race	2026-10-24T16:58:22.0891484Z ok  	github.com/scttfrdmn/burroughs	27.660s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:01.9210092Z ok  	github.com/scttfrdmn/burroughs/cmd/burroughs	67.364s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:01.9210899Z ok  	github.com/scttfrdmn/burroughs/internal/binary	2.137s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4753845Z ok  	github.com/scttfrdmn/burroughs/internal/component	89.688s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4754502Z ok  	github.com/scttfrdmn/burroughs/internal/component/canon	2.311s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4754967Z ok  	github.com/scttfrdmn/burroughs/internal/gen	1.165s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4755886Z ok  	github.com/scttfrdmn/burroughs/internal/gen/keywordgen	1.719s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4756539Z ?   	github.com/scttfrdmn/burroughs/internal/gen/keywordgen/cmd/keywordgen	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4757205Z ok  	github.com/scttfrdmn/burroughs/internal/gen/memarggen	3.019s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4757819Z ?   	github.com/scttfrdmn/burroughs/internal/gen/memarggen/cmd/memarggen	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4758359Z ok  	github.com/scttfrdmn/burroughs/internal/gen/mllex	1.281s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4759314Z ok  	github.com/scttfrdmn/burroughs/internal/gen/opcodegen	7.020s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4759715Z ?   	github.com/scttfrdmn/burroughs/internal/gen/opcodegen/cmd/opcodegen	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4760114Z ok  	github.com/scttfrdmn/burroughs/internal/gen/opgen	6.616s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4760471Z ?   	github.com/scttfrdmn/burroughs/internal/gen/opgen/cmd/opgen	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4760825Z ok  	github.com/scttfrdmn/burroughs/internal/gen/xcorpus	1.770s
+windows (measured, not a gate)	go test -race	2026-10-24T16:59:28.4761201Z ?   	github.com/scttfrdmn/burroughs/internal/gen/xcorpus/cmd/xcorpus	[no test files]
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1066739Z --- FAIL: TestStopBringsATailCallLoopToASafepoint (30.06s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1068002Z     safepoint_test.go:724: the chain did not finish 30s after Resume
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1068531Z FAIL
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1069355Z 0076 reservations: unavailable=357 (of which 37 are deliberate refusals by refuseReservation), declined=59, released=0, release failures=0
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1071176Z 0076 reservation gauge: peak=0 live-at-exit=0
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1071804Z FAIL	github.com/scttfrdmn/burroughs/internal/interp	276.017s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1072560Z ok  	github.com/scttfrdmn/burroughs/internal/interp/dispatchbench	1.035s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1073278Z ok  	github.com/scttfrdmn/burroughs/internal/interp/dropbench	1.056s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1073985Z ok  	github.com/scttfrdmn/burroughs/internal/interp/globalbench	10.257s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1074743Z ok  	github.com/scttfrdmn/burroughs/internal/interp/growbench	1.046s [no tests to run]
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1075504Z ok  	github.com/scttfrdmn/burroughs/internal/interp/invokebench	1.130s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1076213Z ok  	github.com/scttfrdmn/burroughs/internal/interp/loopbench	1.586s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1076856Z ok  	github.com/scttfrdmn/burroughs/internal/interp/membench	1.413s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1077493Z ok  	github.com/scttfrdmn/burroughs/internal/interp/rmwbench	9.220s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1078146Z ok  	github.com/scttfrdmn/burroughs/internal/interp/scanbench	2.309s
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1078890Z ok  	github.com/scttfrdmn/burroughs/internal/interp/stackbench	1.211s [no tests to run]
+windows (measured, not a gate)	go test -race	2026-10-24T17:03:17.1081807Z ok  	github.com/scttfrdmn/burroughs/internal/interp/vecbench	1.144s
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6941161Z ok  	github.com/scttfrdmn/burroughs/internal/spec	827.389s
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6942473Z --- FAIL: TestPreCommitRefusesCommitsOnTheDefaultBranch (1.89s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6943700Z     branchguard_test.go:40: .githooks/pre-commit is not executable (-rw-rw-rw-); git will not run it
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6944167Z --- FAIL: TestCILockAllowsOneGateAtATime (3.36s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6944736Z     --- FAIL: TestCILockAllowsOneGateAtATime/the_stop_advice_matches_whether_the_group_is_the_gates_own (1.38s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6945647Z         --- FAIL: TestCILockAllowsOneGateAtATime/the_stop_advice_matches_whether_the_group_is_the_gates_own/detached_or_nested_so_the_group_is_ours (0.15s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6946473Z             cilock_test.go:171: reading the holder's pgid: exit status 1
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6946944Z --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork (3.89s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6947623Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/checkout_ddash (0.88s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6949640Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6950435Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/restore_worktree (0.15s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6951123Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6951701Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/dash_C_repo (0.17s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6952348Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6952926Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/dash_C_subdir (0.17s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6953884Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6954484Z     --- FAIL: TestEditRouteRefusesGitCommandsThatDiscardUncommittedWork/bare_path_from_subdir (0.15s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6955179Z         discardguard_test.go:150: ALLOWED — this discards uncommitted work:
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.6955615Z --- FAIL: TestEditRouteHookRefusesBashEditsOfTrackedFiles (0.12s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7089930Z     editroute_test.go:129: C:\Users\RUNNER~1\AppData\Local\Temp\TestEditRouteHookRefusesBashEditsOfTrackedFiles2578819359\001\locked is readable at mode 0o000, so 'a directory that exists and cannot be entered' cannot be constructed here and its arm has no subject
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7091539Z --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun (27.01s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7092348Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/each_class_from_its_own_run (1.09s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7093603Z         ciwatch_test.go:125: the verdict file is not JSON, so it cannot be read by the tool that needs it: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7094359Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7094762Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7095380Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7097416Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuneach_class_from_its_ow2567564861\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7100297Z               "body_subject": { "run": "2", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuneach_class_from_its_ow2567564861\001\out.2.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7101870Z               "body_stale": null,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7102863Z               "body_stale_note": "unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7104734Z               "windows": { "run": "", "ok": null, "note": "unchecked: no windows run for this SHA ran its job", "triage": "/d/a/burroughs/burroughs/.github/windows-triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7107321Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7108139Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7108678Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/a_comment_after_the_run_does_not_make_an_unedited_body_stale (1.16s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7109489Z         ciwatch_test.go:185: the verdict file is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7109954Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7110384Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7110933Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7112221Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_comment_after_the_ru664070627\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7113856Z               "body_subject": { "run": "2", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_comment_after_the_ru664070627\001\out.2.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7114479Z               "body_stale": false,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7115225Z               "body_stale_note": "the body-class run (2026-10-17T16:47:27Z) is not older than the body's last edit (2026-10-17T16:47:24Z)",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7116414Z               "windows": { "run": "", "ok": null, "note": "unchecked: no windows run for this SHA ran its job", "triage": "/d/a/burroughs/burroughs/.github/windows-triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7117733Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7118340Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7118763Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/an_edit_after_the_run_is_stale (1.13s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7119415Z         ciwatch_test.go:192: the verdict file is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7119783Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7120084Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7120458Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7121932Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_edit_after_the_run_2467188180\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7123441Z               "body_subject": { "run": "2", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_edit_after_the_run_2467188180\001\out.2.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7124169Z               "body_stale": true,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7124852Z               "body_stale_note": "the body was edited at 2026-10-17T17:00:00Z, AFTER the body-class run was created at 2026-10-17T16:47:27Z",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7125864Z               "windows": { "run": "", "ok": null, "note": "unchecked: no windows run for this SHA ran its job", "triage": "/d/a/burroughs/burroughs/.github/windows-triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7127393Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7128026Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7128451Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/an_edit_before_the_run_is_current (1.12s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7129128Z         ciwatch_test.go:199: the verdict file is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7129645Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7130101Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7130543Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7132147Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_edit_before_the_run1094990397\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7133605Z               "body_subject": { "run": "2", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_edit_before_the_run1094990397\001\out.2.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7134276Z               "body_stale": false,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7135170Z               "body_stale_note": "the body-class run (2026-10-17T16:47:27Z) is not older than the body's last edit (2026-10-17T16:47:26Z)",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7136218Z               "windows": { "run": "", "ok": null, "note": "unchecked: no windows run for this SHA ran its job", "triage": "/d/a/burroughs/burroughs/.github/windows-triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7137752Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7138376Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7138820Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/windows_failures_all_in_the_map_are_green (1.03s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7139488Z         ciwatch_test.go:443: verdict is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7139884Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7140183Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7140613Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7141895Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunwindows_failures_all_i3373402716\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7143613Z               "body_subject": { "run": "1", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunwindows_failures_all_i3373402716\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7144318Z               "body_stale": null,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7145032Z               "body_stale_note": "unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7146360Z               "windows": { "run": "3", "ok": true, "note": "7 failing test(s), all in the triage map", "triage": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunwindows_failures_all_i3373402716\001\triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7147810Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7148456Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7148882Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/an_unmapped_windows_failure_is_red (1.07s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7149533Z         ciwatch_test.go:458: verdict is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7150293Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7150561Z               "ciwatch_verdict": "fail",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7150994Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7152244Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_unmapped_windows_fa974884420\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7153723Z               "body_subject": { "run": "1", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_unmapped_windows_fa974884420\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7155287Z               "body_stale": null,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7156000Z               "body_stale_note": "unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7157424Z               "windows": { "run": "3", "ok": false, "note": "8 failing test(s), 1 not in the triage map: TestNotInTheTriageMap", "triage": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRunan_unmapped_windows_fa974884420\001\triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7158935Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7159537Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7159995Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/a_windows_failure_that_names_no_test_is_red (1.01s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7160840Z         ciwatch_test.go:469: verdict is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7161272Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7161569Z               "ciwatch_verdict": "fail",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7161981Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7163243Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_windows_failure_that2771343903\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7164745Z               "body_subject": { "run": "1", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_windows_failure_that2771343903\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7165421Z               "body_stale": null,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7166173Z               "body_stale_note": "unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7167975Z               "windows": { "run": "3", "ok": false, "note": "windows job failed (windows (measured, not a gate)) and its log names no failing test, which the map cannot classify", "triage": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_windows_failure_that2771343903\001\triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7169624Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7170354Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7170767Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/a_package_build_failure_is_red (1.02s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7171464Z         ciwatch_test.go:491: verdict is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7171945Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7172164Z               "ciwatch_verdict": "fail",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7172567Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7173822Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_package_build_failur3300792399\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7175322Z               "body_subject": { "run": "1", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_package_build_failur3300792399\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7176008Z               "body_stale": null,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7176706Z               "body_stale_note": "unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7178515Z               "windows": { "run": "3", "ok": false, "note": "1 package(s) failed with no test named, which the map cannot classify: github.com/scttfrdmn/burroughs/internal/x", "triage": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_package_build_failur3300792399\001\triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7180712Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7181333Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7181741Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/a_package_timeout_is_red (1.04s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7182642Z         ciwatch_test.go:491: verdict is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7183000Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7183289Z               "ciwatch_verdict": "fail",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7183694Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7184966Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_package_timeout_is_r938737436\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7186455Z               "body_subject": { "run": "1", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_package_timeout_is_r938737436\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7187143Z               "body_stale": null,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7188026Z               "body_stale_note": "unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7189766Z               "windows": { "run": "3", "ok": false, "note": "1 package(s) failed with no test named, which the map cannot classify: github.com/scttfrdmn/burroughs/internal/y", "triage": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_package_timeout_is_r938737436\001\triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7191578Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7192236Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7192673Z     --- FAIL: TestCIWatchTakesEachJobClassFromItsOwnRun/a_passing_windows_run_is_green (0.91s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7193568Z         ciwatch_test.go:527: verdict is not JSON: invalid character 'U' in string escape code
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7193953Z             {
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7194264Z               "ciwatch_verdict": "green",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7194684Z               "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7195947Z               "tree_subject": { "run": "1", "ok": true, "keys": "build conformance fuzz-smoke lint vuln witnesses ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_passing_windows_run_3790968972\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7197458Z               "body_subject": { "run": "1", "ok": true, "keys": "citations ", "json": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_passing_windows_run_3790968972\001\out.1.json" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7198144Z               "body_stale": null,
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7198922Z               "body_stale_note": "unchecked: no PR number given (set CIWATCH_PR), so body currency was not measured",
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7200163Z               "windows": { "run": "3", "ok": true, "note": "windows job passed", "triage": "C:\Users\RUNNER~1\AppData\Local\Temp\TestCIWatchTakesEachJobClassFromItsOwnRuna_passing_windows_run_3790968972\001\triage.tsv" },
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7201556Z               "note": "A run's own conclusion is NOT this verdict: a tree run may conclude failure on a body job that read a superseded body, and a run may conclude success over skipped jobs. Read ciwatch_verdict."
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7202275Z             }
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7202543Z --- FAIL: TestShellAndGoAgreeOnTheSuitePopulation (0.01s)
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7203489Z     testenv_test.go:359: ../../scripts/suite-count.sh C:\Users\RUNNER~1\AppData\Local\Temp\TestShellAndGoAgreeOnTheSuitePopulation3708716407\001: fork/exec ../../scripts/suite-count.sh: %1 is not a valid Win32 application.
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7205339Z         	If this is a permission error the executable bit is not committed, and the Makefile and both CI floors invoke this script by path — they would fail the same way, one push later.
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7205953Z FAIL
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7206218Z FAIL	github.com/scttfrdmn/burroughs/internal/testenv	371.080s
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7206573Z ok  	github.com/scttfrdmn/burroughs/internal/text	2.752s
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7206912Z ok  	github.com/scttfrdmn/burroughs/internal/validate	18.667s
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7207255Z ok  	github.com/scttfrdmn/burroughs/internal/wasi	186.663s
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.7207532Z FAIL
+windows (measured, not a gate)	go test -race	2026-10-24T17:13:08.9433779Z ##[error]Process completed with exit code 1.
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	﻿2026-10-24T17:13:08.9601288Z ##[group]Run # `set +e` around the run so the status can be reported before it is re-raised. PIPESTATUS[0]
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9602058Z ^[[36;1m# `set +e` around the run so the status can be reported before it is re-raised. PIPESTATUS[0]^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9602575Z ^[[36;1m# is `go test`'s own, not `tee`'s — the distinction this repo has paid for twice.^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9602942Z ^[[36;1mset +e^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9603388Z ^[[36;1mgo test -race -run TestAScratchGrantIsNotEscapableThroughAJunction -v ./internal/wasi/ 2>&1 | tee witness.log^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9603869Z ^[[36;1mstatus=${PIPESTATUS[0]}^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9604105Z ^[[36;1mset -e^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9604452Z ^[[36;1m# **The verdict goes in the job summary, separately from the suite's.** A reader scanning a red^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9605312Z ^[[36;1m# job needs to know whether confinement held, and that answer must not require unfolding a^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9605820Z ^[[36;1m# 1300-line log to find out whether this step ran at all.^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9606185Z ^[[36;1m#^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9606492Z ^[[36;1m# **`tee -a` and not `>>`, so the same bytes land in the log too.** This was `>>`, and the^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9606980Z ^[[36;1m# consequence surfaced the moment anyone tried to *verify* the summary: GitHub echoes a `run:`^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9607472Z ^[[36;1m# block's source into the log, so both the PASS and the FAIL `echo` lines appear there as^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9607976Z ^[[36;1m# script text while neither appears as output — and the rendered summary is HTML-only, absent^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9608470Z ^[[36;1m# from `repos/{o}/{r}/actions/jobs/{id}`. The verdict was therefore unreadable by any means^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9608956Z ^[[36;1m# except the step's own conclusion, which is the box-ticking a verifier must not accept.^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9609333Z ^[[36;1m#^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9609655Z ^[[36;1m# One source, two destinations: whatever the summary says, the log says, and a future reader^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9610058Z ^[[36;1m# needs neither web access nor trust.^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9610317Z ^[[36;1m{^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9610511Z ^[[36;1m  if [ "$status" -eq 0 ]; then^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9610780Z ^[[36;1m    echo "## Confinement witness: **PASS**"^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9611183Z ^[[36;1m    echo "A scratch grant was not escapable through a junction or a symlink on this runner."^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9611544Z ^[[36;1m  else^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9611804Z ^[[36;1m    echo "## Confinement witness: **FAIL** (exit $status)"^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9612223Z ^[[36;1m    echo "A \`--scratch\` grant may be escapable on this runner, or the witness could not set"^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9612700Z ^[[36;1m    echo "up its own vector. Either way the Windows support claim stays unmade."^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9613042Z ^[[36;1m  fi^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9613228Z ^[[36;1m  echo^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9613419Z ^[[36;1m  echo '```'^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9613912Z ^[[36;1m  grep -E "WINDOWS-CONFINEMENT|ESCAPE PERMITTED|could not create the junction|symlink arm|^--- (PASS|FAIL|SKIP)|^(ok|FAIL)" witness.log | head -20 || true^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9614629Z ^[[36;1m  echo '```'^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9615107Z ^[[36;1m} | tee -a "$GITHUB_STEP_SUMMARY"^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9615397Z ^[[36;1mexit "$status"^[[0m
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9628442Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9628812Z env:
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9629007Z   GOTOOLCHAIN: local
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9629286Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9629630Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.13.16\x64/lib/pkgconfig
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9630015Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9630370Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9630733Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.13.16\x64
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:08.9632365Z ##[endgroup]
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:10.8258833Z === RUN   TestAScratchGrantIsNotEscapableThroughAJunction
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:10.8561294Z     confinement_windows_test.go:183: WINDOWS-CONFINEMENT: 8 escape shape(s) refused through a junction and a symlink, nothing outside the grant touched
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:10.8562188Z --- PASS: TestAScratchGrantIsNotEscapableThroughAJunction (0.02s)
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:10.8562761Z PASS
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:11.8524685Z ok  	github.com/scttfrdmn/burroughs/internal/wasi	1.062s
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:12.0247489Z ## Confinement witness: **PASS**
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:12.0250602Z A scratch grant was not escapable through a junction or a symlink on this runner.
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:12.0252860Z 
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:12.0253246Z ```
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:12.0327658Z     confinement_windows_test.go:183: WINDOWS-CONFINEMENT: 8 escape shape(s) refused through a junction and a symlink, nothing outside the grant touched
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:12.0328754Z --- PASS: TestAScratchGrantIsNotEscapableThroughAJunction (0.02s)
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:12.0329475Z ok  	github.com/scttfrdmn/burroughs/internal/wasi	1.062s
+windows (measured, not a gate)	the confinement witness — a scratch grant is not escapable through a junction	2026-10-24T17:13:12.0331330Z ```
+windows (measured, not a gate)	Post Run actions/checkout@v5	﻿2026-10-24T17:13:12.0571320Z Post job cleanup.
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.2193029Z [command]"C:\Program Files\Git\bin\git.exe" version
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.2466986Z git version 2.56.0.windows.2
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.2519895Z Temporarily overriding HOME='D:\a\_temp\99af9a59-8942-43e5-8ffe-e8b7ccb75ebf' before making global git config changes
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.2520919Z Adding repository directory to the temporary git global config as a safe directory
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.2528343Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\burroughs\burroughs
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.2820206Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.3133327Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.8292666Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.8558335Z http.https://github.com/.extraheader
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.8595715Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:12.8909976Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:13.3827198Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+windows (measured, not a gate)	Post Run actions/checkout@v5	2026-10-24T17:13:13.4141925Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
