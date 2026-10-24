@@ -26,6 +26,15 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`editroute.py` fails closed on a command it cannot tokenise, and `explainred.sh` checks its explanation** (the
+  chair's ruling of 2026-10-24).
+  - **The hook:** an untokenisable command was allowed with a warning, past every route at once, including the merge
+    gate. It is now refused, naming the parse error. Neuter: the old early return admits an unbalanced quote around
+    `gh pr merge`.
+  - **The escape hatch:** an explanation releases a red main only if its issue is open, and either existed before
+    the red run or names one of the run's failing tests. Every use is logged. An issue filed after the red, naming
+    none of its tests, is refused.
+
 - **`branch` takes its label by pointer, not by a copy onto the goroutine stack**
   ([#1036](https://github.com/scttfrdmn/burroughs/issues/1036)).
   - **On janus**, measured with `make lab-ab` over 16 stack offsets (`BenchmarkBranchAtStackOffset`, new) against a

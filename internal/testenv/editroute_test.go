@@ -620,12 +620,24 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
-			// The known gap, pinned as a deliberate arm rather than left to be discovered: a command
-			// that cannot be tokenised is allowed, with a warning. Failing closed selectively would
-			// mean grepping the raw text, which is the defect property 21 names.
-			name: "an_untokenisable_command_is_allowed_with_a_warning",
-			cmd:  "echo 'unbalanced",
-			deny: false,
+			// **Fail closed, since the chair's ruling of 2026-10-24.** A command that cannot be tokenised
+			// was allowed with a warning, which is the hook failing open for every route at once, and
+			// route 8's merge gate now depends on the hook. It is refused WHOLE, not selectively, so
+			// property 21 (no grepping the raw text) still holds.
+			// NEUTER, run: the old `return []` restored admits both arms.
+			name:   "an_untokenisable_command_is_refused",
+			cmd:    "echo 'unbalanced",
+			deny:   true,
+			want:   "could not be tokenised",
+			routes: []string{"balance it"},
+		},
+		{
+			// The ruling's own witness: an unbalanced quote around a merge.
+			name:   "an_untokenisable_merge_is_refused",
+			cmd:    "gh pr merge 1093 --squash --subject 'unbalanced",
+			deny:   true,
+			want:   "could not be tokenised",
+			routes: []string{"balance it"},
 		},
 	}
 

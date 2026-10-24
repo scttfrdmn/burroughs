@@ -99,11 +99,13 @@ intent, and saying so is better than letting a reader infer a precision the chec
 
 The known gap in parsing
 ------------------------
-A command `shlex` cannot tokenise at all (unbalanced quotes) is **allowed**, with a warning on
-stderr. Failing closed there would block commands whose only problem is that this hook cannot read
-them, and failing closed *selectively* would mean grepping the raw text for a tracked path — the
-exact thing property 21 forbids. `TestEditRouteHook` pins this behaviour as a deliberate arm, so a
-reader can price the gap instead of discovering it.
+A command `shlex` cannot tokenise at all (unbalanced quotes) is **refused**, whole, with the parse
+error in the reason (the chair's ruling of 2026-10-24). It used to be allowed with a warning, on the
+argument that failing closed would block commands whose only problem is that this hook cannot read
+them. That held while every route was an editing check; route 8's merge gate made "unreadable" a way
+past the gate, so the hook now fails closed. It still refuses WHOLE rather than *selectively*, so
+property 21 (no grepping the raw text for a tracked path) holds. `TestEditRouteHook` pins both the
+refusal and the merge case.
 
 Protocol
 --------
@@ -571,6 +573,17 @@ def tokenize(text: str) -> list[str] | None:
         return None
 
 
+def tokenize_error(text: str) -> str:
+    """The tokeniser's own reason for refusing text, for the refusal message."""
+    lex = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        list(lex)
+    except ValueError as e:
+        return str(e)
+    return "unknown"
+
+
 def simple_commands(tokens: list[str]) -> list[list[str]]:
     return [c for c, _ in simple_commands_with_sep(tokens)]
 
@@ -971,12 +984,13 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     text = separate_commands(text)
     tokens = tokenize(text)
     if tokens is None:
-        print(
-            "editroute: this command could not be tokenised, so it was ALLOWED unchecked. "
-            "See the known-gap note in scripts/editroute.py.",
-            file=sys.stderr,
-        )
-        return []
+        # **Fail closed** (the chair's ruling of 2026-10-24). This returned no reasons, which let an
+        # unreadable command past every route at once, route 8's merge gate included.
+        return [
+            f"the command could not be tokenised ({tokenize_error(text)}), so no route can judge it, and it is "
+            "refused rather than allowed unchecked. Usually an unbalanced quote: balance it, or move the text "
+            "into a file and pass the file"
+        ]
 
     reasons: list[str] = []
 
@@ -1312,8 +1326,10 @@ def main() -> int:
     # Route 7 is about sequencing, not editing, so it gets its own guidance too.
     publishing = [r for r in reasons if "whatever the last one's exit status was" in r]
     merging = [r for r in reasons if r.startswith("`gh pr merge`")]
+    # An untokenisable command carries its own advice; the editing guidance would name the wrong route.
+    unparsed = [r for r in reasons if r.startswith("the command could not be tokenised")]
     editing = [r for r in reasons if r not in sleeping and r not in discarding and r not in publishing
-               and r not in merging]
+               and r not in merging and r not in unparsed]
 
     msg = "editroute: REFUSED.\n\n" + "".join(f"  * {r}\n" for r in reasons) + "\n"
     if editing:
