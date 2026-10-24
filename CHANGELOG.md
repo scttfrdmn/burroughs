@@ -26,6 +26,20 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The §4 battery's registration agrees with the tree: SP-1 implemented, two B-MM-1 crossings given states**
+  (items A–C of the §4 plan on [#10](https://github.com/scttfrdmn/burroughs/issues/10); the chair's third ruling
+  of 2026-10-24).
+  - **A:** `sp1-stop-brings-every-agent-to-a-safepoint-by-the-deadline` now reads `implemented —
+    TestSP1StopBringsEveryAgentToASafepointByTheDeadline`. It had read `blocked — #10` since the test landed in
+    #1061.
+    - The new control is `TestALitmusCaseMarkedBlockedHasNoTestClaimingIt`. It fails a row that reads blocked
+      while a test's doc comment claims to be its case, and it runs without the network.
+    - It was watched failing on the SP-1 row and no other. **Neuter:** the test-existence lookup removed passes
+      that row.
+  - **B:** trap resume is registered as structural and not applicable. The crossing does not exist here: a trap
+    unwinds, and under ADR 0105 it locks a component instance. It expires when a resumable trap lands.
+  - **C:** stack-switch resume is deferred to v2 (§7), and expires with `gate:stack-switching`'s first mechanism
+    slice.
 - **A release's known limits are checked against the tracker at the cut** (`scripts/limitcheck.py`, `make
   limitcheck`; the chair's second ruling of 2026-10-24).
   - **What it checks:** every issue cited under the newest version block's **Known limits** must be open, and an

@@ -525,7 +525,15 @@ carries the per-frame resolution behind a trigger.
 - **Floor:** every run must observe all N counters advancing before the request; a run that does not is an
   instrument fault.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #10
+- **Status:** implemented — TestSP1StopBringsEveryAgentToASafepointByTheDeadline
+
+  > Corrected 2026-10-24 (item A of the §4 plan on #10, the chair's third ruling of 2026-10-24). The case
+  > landed in #1061 on 2026-10-18 (`internal/interp/sp1_test.go`), built standalone as ADR 0104's ruling 2
+  > allowed, and this row went on reading `blocked — #10` for six days. `make blockercheck` could not see it:
+  > it asks whether a blocker is still open, and #10 is the battery's own tracking issue, so it stays open
+  > until the battery is done. The inverse check, `TestALitmusCaseMarkedBlockedHasNoTestClaimingIt`, now fails
+  > a row that reads blocked while a test claims to be its case. It was watched failing on this row first.
+  > The earlier re-pointing note is kept below.
 
   > Re-pointed from #554 (2026-09-16). #554 (T-1's spawn) is closed and T-1 is implemented
   > (`TestNAgentsAreAllParkedInAWaitAtOneInstant`); the mechanism SP-1 needs — Spawn supplying N agents in
@@ -738,10 +746,25 @@ stop racing the resumed guest's read when the `Resume` acquire edge is missing �
   - **host-call return** — an **open hole, no instrument** (the `-race` defeat, #742): its A→B channel is a
     harness flag, nothing on an engine edge to break.
   - **trap resume** and **stack-switch resume** — **unwitnessed** (stack switching is v2, §7; a trap unwinds
-    rather than resuming into a memory-publishing crossing).
+    rather than resuming into a memory-publishing crossing). *Superseded 2026-10-24 by the two registrations
+    below (items B and C of the §4 plan on #10, the chair's third ruling of 2026-10-24). The line is kept so the
+    earlier "unwitnessed" reading stays visible.*
+  - **trap resume — structural, not applicable: the crossing does not exist in this engine.** A trap unwinds
+    the call it occurred in, and nothing re-enters the guest at the trapping point. For components, ADR 0105
+    goes further: a trap **locks the instance**, so every later call is refused with `ErrInstanceLocked`
+    rather than being admitted at all. So there is no host→guest transition that resumes after a trap, and
+    no outcome tuple to write. A case built anyway would observe an ordinary call entry and name it a trap
+    resume. **Expiry:** the first mechanism that resumes a guest after a trap (a resumable trap, or a
+    trap-handler proposal landing behind a gate) reopens this crossing, and it gets a case then.
+  - **stack-switch resume — deferred to v2.** The crossing belongs to contract §7, and the engine has no
+    stack switching, so there is nothing to resume. **Expiry:** `gate:stack-switching`'s first mechanism
+    slice. That slice owes this crossing a case before its flip, as behaviour 4 requires of any default it
+    would make.
   So structural-by-identity and structural-by-redundancy are two strengths of the same category, and the
   charter carries both — one crossing is closed the strongest way available, one the redundant way, one is an
-  open hole, and two are unbuilt.
+  open hole, and two are unbuilt. *As of 2026-10-24 the two unbuilt crossings have stated states: trap resume
+  is not applicable (it does not exist here), and stack-switch resume is deferred to v2. Each carries its own
+  expiry.*
 - **Blocked by:** nothing, as of #602. Re-pointed from #554 and then discharged: the witness below passes its
   message through host `publish`/`poll` calls, so spawn was neither necessary (ADR 0062's vehicle supplies the
   two agents) nor sufficient (there was nothing to call), and `HostExtern` is now the thing to call. The
