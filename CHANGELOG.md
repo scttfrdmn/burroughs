@@ -26,6 +26,14 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`Close` has a witness for counting every call it admits** (`TestCloseCountsEveryCallItAdmits`, #945; the chair's
+  third ruling of 2026-10-24). Four callers start while `Close` runs, at a zero bound and at 2ms.
+  - **The violation it looks for:** `Close` returns nil in a trial where an admitted call ended only through
+    teardown, which is after `Close`'s sample.
+  - **Measured:** 0 violations in 27,000 trials per bound on macOS arm64 and Linux x86-64. Committed at 500
+    trials per bound, about 1s.
+  - **Neuter:** the increment split from the closed check fails both bounds.
+  - #945's Windows failure is still unexplained and stays parked.
 - **The §4 battery's registration agrees with the tree: SP-1 implemented, two B-MM-1 crossings given states**
   (items A–C of the §4 plan on [#10](https://github.com/scttfrdmn/burroughs/issues/10); the chair's third ruling
   of 2026-10-24).
