@@ -175,6 +175,7 @@ RULES: tuple[tuple[str, str], ...] = (
     ("subst1-discarded", "landing display"),
     ("subst1-chained", "runs whatever its exit status was"),
     ("publish-chained", "whatever the last one's exit status was"),
+    ("memory-git", "touches session memory"),
     ("sleep-as-wait", "a duration is not a signal"),
     ("inline-write", "an inline interpreter opens"),
     ("in-place-edit", "in place"),
@@ -851,6 +852,38 @@ def publish_past_unchecked(tokens: list[str]) -> str | None:
     return None
 
 
+# --- route 9: a session-memory update runs no git ------------------------------------------------------------
+#
+# The chair's fourth ruling of 2026-10-24. A command that updated the agent's memory index ended
+# `cd ~/src/burroughs && git checkout -q main …`, which was meant to "return to main". Local `main` was four
+# squash-merges behind `origin/main`, so the checkout moved the tree back to aee4f54. Nothing was lost,
+# because the work was all pushed. But a memory update is bookkeeping outside the repo, and the git step in it
+# was a repo operation riding along unexamined.
+#
+# The subject is a command that names a path under the session memory directory (`.claude/projects/…/memory`)
+# and also runs `git`. It is refused whole. A memory update is one command; git in the repo is another, run on
+# its own, where its effect is read.
+MEMORY_PATH = re.compile(r"\.claude/projects/[^/\s]+/memory(/|$)")
+
+
+def memory_command_runs_git(tokens: list[str]) -> str | None:
+    """The refusal for a command that touches session memory and also runs git, or None."""
+    if not any(MEMORY_PATH.search(t) for t in tokens):
+        return None
+    for cmdv in simple_commands(tokens):
+        head = 0
+        while head < len(cmdv) and (cmdv[head] in SHELL_KEYWORDS or ENV_ASSIGNMENT.match(cmdv[head])):
+            head += 1
+        if head < len(cmdv) and basename(cmdv[head]) == "git":
+            sub = next((w for w in cmdv[head + 1 :] if not w.startswith("-")), "")
+            return (
+                f"the command touches session memory (`.claude/projects/…/memory`) and also runs `git {sub}`. "
+                "A memory update is bookkeeping outside the repo, so it carries no git step: run the git "
+                "command on its own, where its effect is read"
+            )
+    return None
+
+
 # --- route 8: a merge needs a green verdict for the PR's head, and a watched, green main ------------------------
 #
 # The chair's ruling of 2026-10-23. #1087 was merged while `ciwatch` printed `FAIL not green`, because the actor
@@ -1008,6 +1041,11 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
         refused = merge_refusal(cmdv, root)
         if refused:
             reasons.append(refused)
+
+    # Route 9, judged here for the same reason.
+    memory_git = memory_command_runs_git(tokens)
+    if memory_git:
+        reasons.append(memory_git)
 
     # subst1.py's own invocation is the one explicit exemption: it IS a permitted route, and it
     # writes its target by design. But the exemption is conditional on the route still being the route.
@@ -1328,8 +1366,10 @@ def main() -> int:
     merging = [r for r in reasons if r.startswith("`gh pr merge`")]
     # An untokenisable command carries its own advice; the editing guidance would name the wrong route.
     unparsed = [r for r in reasons if r.startswith("the command could not be tokenised")]
+    # Route 9 carries its own advice in the reason; the editing guidance would name the wrong route.
+    remembering = [r for r in reasons if r.startswith("the command touches session memory")]
     editing = [r for r in reasons if r not in sleeping and r not in discarding and r not in publishing
-               and r not in merging and r not in unparsed]
+               and r not in merging and r not in unparsed and r not in remembering]
 
     msg = "editroute: REFUSED.\n\n" + "".join(f"  * {r}\n" for r in reasons) + "\n"
     if editing:

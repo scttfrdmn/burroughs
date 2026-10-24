@@ -392,6 +392,31 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			want:   "`git commit` comes after `&`",
 			routes: []string{"&&"},
 		},
+		// Route 9 (the chair's fourth ruling of 2026-10-24): a session-memory update runs no git. The specimen is
+		// verbatim, down to its `git checkout -q main`. Local `main` was four squash-merges behind, so the tree
+		// moved back to aee4f54.
+		// **Neuter, run:** `memory_command_runs_git` returning None fails this deny arm, plus
+		// `TestEveryRefusalReasonHasARule/memory_git`, and nothing else.
+		{
+			name: "a_memory_update_that_runs_git_in_the_repo_is_refused",
+			cmd: "cd ~/.claude/projects/-Users-scttfrdmn-src-burroughs/memory && python3 - <<'EOF'\n" +
+				"p='MEMORY.md'; s=open(p).read()\nopen(p,'w').write(s)\nEOF\n" +
+				"cd ~/src/burroughs && git checkout -q main 2>/dev/null; git status --short | head -3",
+			deny:   true,
+			want:   "touches session memory (`.claude/projects/…/memory`) and also runs `git checkout`",
+			routes: []string{"run the git command on its own"},
+		},
+		{
+			// The same memory update without the git step, and a git command that names no memory path.
+			name: "a_memory_update_alone_and_git_alone_are_permitted",
+			cmd:  "cd ~/.claude/projects/-Users-scttfrdmn-src-burroughs/memory && python3 - <<'EOF'\nprint(1)\nEOF",
+			deny: false,
+		},
+		{
+			name: "git_naming_no_memory_path_is_permitted",
+			cmd:  "git status --short && git log --oneline -1 && cat ~/.claude/settings.json",
+			deny: false,
+		},
 		{
 			// The allow arms. `&&` throughout, including after a pipe, is what the rule asks for.
 			name: "publishing_steps_chained_with_and_are_permitted",

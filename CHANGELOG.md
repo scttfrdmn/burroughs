@@ -26,6 +26,15 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A session-memory update runs no git** (`scripts/editroute.py` route 9; the chair's fourth ruling of 2026-10-24).
+  - **The specimen:** a memory-index update ended `cd ~/src/burroughs && git checkout -q main`. Local `main` was
+    four squash-merges behind `origin/main`, so the tree moved back to aee4f54. Nothing was lost:
+    `origin/main..HEAD` was empty and every work branch matched its remote. The tree was fast-forwarded to
+    42b5360.
+  - **The rule:** a command naming a path under `.claude/projects/…/memory` that also runs `git` is refused
+    whole.
+  - **Neuter, run:** the route returning None fails the specimen's deny arm and its rule-table arm, and nothing
+    else.
 - **B-MM-1's acquire half at a host-call return has a litmus case**
   (`b-mm-1-a-host-write-is-visible-after-a-host-call-return`, `TestBMM1AHostWriteIsVisibleAfterAHostCallReturn`;
   item D of the §4 plan on [#10](https://github.com/scttfrdmn/burroughs/issues/10), the chair's third ruling of
