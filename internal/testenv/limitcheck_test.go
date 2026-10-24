@@ -15,7 +15,7 @@ import (
 // second ruling of 2026-10-24). `v0.8.0` and `v0.9.0` listed #830 as an open known limit after `v0.7.0` had fixed it.
 // The check reads the newest version block's **Known limits** paragraph, and every issue it cites must be open.
 //
-// The tracker is a `gh` shim on PATH, as in `TestTriageCheckFlagsAMapRowWhoseIssueHasClosed`. It answers `closed`
+// The tracker is a `gh` shim reached through `LIMITCHECK_GH`. It answers `closed`
 // for the numbers in CLOSED and `open` for the rest, names a repository, and lists merged PR 9 as naming issue 1.
 //
 // NEUTER, run: `main` without the `st != "open"` arm passes the closed-issue arm.
@@ -25,15 +25,21 @@ func TestLimitCheckRefusesAClosedIssueCitedAsAKnownLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := filepath.Join(root, "scripts", "limitcheck.py")
-	const shim = `#!/bin/sh
-if [ "$1" = "repo" ]; then echo owner/repo; exit 0; fi
-if [ -n "$GH_FAIL" ]; then echo "HTTP 502" >&2; exit 1; fi
-case "$*" in
-*search/issues*) case "$*" in *"#1"*) echo 9 ;; esac; exit 0 ;;
-esac
-n=$(printf '%s' "$2" | sed 's/.*issues\///')
-for c in $CLOSED; do [ "$c" = "$n" ] && { echo closed; exit 0; }; done
-echo open
+	// **In Python, and reached through `LIMITCHECK_GH` rather than PATH.** The first shim was a `gh` shell script on
+	// PATH, which `subprocess` cannot execute on Windows: every arm there read as an unreadable tracker, so the
+	// fail-closed path answered for a shim that never ran (PR #1095's first Windows run).
+	const shim = `import os, sys
+a = sys.argv[1:]
+if a[0] == "repo":
+    print("owner/repo"); sys.exit(0)
+if os.environ.get("GH_FAIL"):
+    print("HTTP 502", file=sys.stderr); sys.exit(1)
+if "search/issues" in a:
+    if any("#1" in x for x in a):
+        print(9)
+    sys.exit(0)
+n = a[1].rsplit("issues/", 1)[1]
+print("closed" if n in os.environ.get("CLOSED", "").split() else "open")
 `
 	cut := "# Changelog\n\n## [Unreleased]\n*Implements contract v0.1.*\n\n## [1.0.0] - 2026-10-24\n\n" +
 		"**Known limits, open on default-on paths:**\n- one ([#1](https://x/issues/1))\n- two (#2)\n\n" +
@@ -44,7 +50,8 @@ echo open
 	run := func(t *testing.T, changelog string, env ...string) (int, string) {
 		t.Helper()
 		dir := t.TempDir()
-		if werr := os.WriteFile(filepath.Join(dir, "gh"), []byte(shim), 0o755); werr != nil {
+		gh := filepath.Join(dir, "gh.py")
+		if werr := os.WriteFile(gh, []byte(shim), 0o600); werr != nil {
 			t.Fatal(werr)
 		}
 		cl := filepath.Join(dir, "CHANGELOG.md")
@@ -52,7 +59,9 @@ echo open
 			t.Fatal(werr)
 		}
 		cmd := exec.Command("python3", script, cl)
-		cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		// Slashes, and single-quoted, because the script splits this with `shlex`, which reads a backslash as an
+		// escape.
+		cmd.Env = append(os.Environ(), "LIMITCHECK_GH=python3 '"+filepath.ToSlash(gh)+"'")
 		cmd.Env = append(cmd.Env, env...)
 		out, rerr := cmd.CombinedOutput()
 		code := 0

@@ -25,9 +25,16 @@ When it runs
 Usage: limitcheck.py [--force] [CHANGELOG]
 """
 
+import os
 import re
+import shlex
 import subprocess
 import sys
+
+# The `gh` command, as an argv prefix. `LIMITCHECK_GH` is the test's seam: its tracker is a Python shim run as
+# `python3 shim.py`, because a `gh` shell script on PATH cannot be executed by `subprocess` on Windows, and every
+# arm there read as an unreadable tracker (PR #1095's first Windows run).
+GH = shlex.split(os.environ.get("LIMITCHECK_GH", "gh"))
 
 VERSION = re.compile(r"^## \[(\d+\.\d+\.\d+)\]")
 UNRELEASED = re.compile(r"^## \[Unreleased\]")
@@ -71,7 +78,7 @@ def known_limits(body):
 def state(n):
     """The issue's state from GitHub, or None if it could not be read."""
     try:
-        out = subprocess.run(["gh", "api", f"repos/{{owner}}/{{repo}}/issues/{n}", "--jq", ".state"],
+        out = subprocess.run([*GH, "api", f"repos/{{owner}}/{{repo}}/issues/{n}", "--jq", ".state"],
                              capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -88,12 +95,12 @@ def merged_prs_naming(n):
     # `gh` expands {owner}/{repo} in the API path only, never inside a -f parameter. The first draft put it in the
     # query, where the search failed validation, and this returned nothing at all: an advisory that never spoke.
     try:
-        repo = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        repo = subprocess.run([*GH, "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
                               capture_output=True, text=True, timeout=60).stdout.strip()
         if not repo:
             print(f"note  #{n}: the repository could not be named, so no merged PR was searched for")
             return []
-        out = subprocess.run(["gh", "api", "-X", "GET", "search/issues", "-f",
+        out = subprocess.run([*GH, "api", "-X", "GET", "search/issues", "-f",
                               f"q=repo:{repo} is:pr is:merged in:title #{n}", "--jq", ".items[].number"],
                              capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
