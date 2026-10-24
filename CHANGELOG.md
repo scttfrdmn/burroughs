@@ -26,6 +26,15 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`ciwatch` classifies a Windows run from its full log when `--log-failed` comes back empty** (the chair's
+  fourth ruling of 2026-10-24).
+  - **The specimen:** on #1096's first head, GitHub recorded the failed `go test -race` step with no conclusion.
+    `--log-failed` printed nothing, and `ciwatch` refused a log that named no test, while the full log named
+    seven failures, all mapped.
+  - **The fix:** an empty failed-step log now falls back to `gh run view --log`, classified by the same parser.
+    The refusal stands only if the full log names no test either.
+  - **The witness** is the recorded run (attempt 1 of 40113864759), since GitHub has since filled the
+    conclusion in. **Neuter, run:** the fallback removed reads it red.
 - **The §4 battery's first hole is closed: B-MM-1's guest→guest message across a host-call return is witnessed**
   (`b-mm-1-message-passing-across-a-host-call-return`, re-registered;
   `TestBMM1AMessagePassesAcrossAHostCallReturnBetweenTwoGuests`; the chair's fourth ruling of 2026-10-24).

@@ -159,12 +159,31 @@ fetch_run() {
 
 # fetch_failed_log prints the failed jobs' log of run $1: from <dir>/<id>.log under a fixture (empty when the
 # fixture has none), else `gh run view --log-failed`.
+#
+# **An empty failed-log falls back to the run's full log** (the chair's fourth ruling of 2026-10-24). On #1096's
+# first head, GitHub recorded the failed `go test -race` step's conclusion as null. `--log-failed` selects
+# steps by conclusion, so it printed nothing and exited 0, and this script refused a log that named no test.
+# The full log named seven failures, all mapped. GitHub filled the conclusion in later, so the specimen is the
+# record this script kept at the time (`testdata/ciwatch/windows-40113864759.*`), not a re-fetch. The full log
+# is classified by the same parser. If it names no test either, the refusal stands.
+# A fixture's full log is <dir>/<id>.full.log.
 fetch_failed_log() {
 	if [ -n "${CIWATCH_FIXTURE:-}" ]; then
-		cat "$CIWATCH_FIXTURE/$1.log" 2>/dev/null || true
+		if [ -s "$CIWATCH_FIXTURE/$1.log" ]; then
+			cat "$CIWATCH_FIXTURE/$1.log"
+		elif [ -f "$CIWATCH_FIXTURE/$1.full.log" ]; then
+			echo "ciwatch: run $1's failed-step log is empty; classifying from its full log" >&2
+			cat "$CIWATCH_FIXTURE/$1.full.log"
+		fi
 		return
 	fi
-	gh run view "$1" --repo "$repo" --log-failed
+	failed_log=$(gh run view "$1" --repo "$repo" --log-failed) || return
+	if [ -n "$failed_log" ]; then
+		printf '%s\n' "$failed_log"
+		return
+	fi
+	echo "ciwatch: run $1's failed-step log is empty; classifying from its full log" >&2
+	gh run view "$1" --repo "$repo" --log
 }
 
 # --- wait a BOUNDED time for a run to appear, because "not yet" is not "not coming" -------------------------

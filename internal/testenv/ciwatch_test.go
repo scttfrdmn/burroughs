@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -462,6 +463,88 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		}
 		if !strings.Contains(out, "TestNotInTheTriageMap") {
 			t.Errorf("the failure does not name the unmapped test:\n%s", out)
+		}
+	})
+
+	// The chair's fourth ruling of 2026-10-24: an empty `--log-failed` falls back to the run's full log. The
+	// specimen is RECORDED from run 40113864759, attempt 1 (#1096's first head), as this script kept it at the time:
+	// - the run JSON, whose failed job's `go test -race` step has an empty conclusion;
+	// - the 0-byte failed-step log;
+	// - the attempt's full log, which names seven failures, all mapped.
+	// GitHub later filled in the conclusion, so a re-fetch would not reproduce it.
+	// NEUTER, run: `fetch_failed_log`'s full-log branch removed reads the witness red, "names no failing test".
+	nullRun, nerr := os.ReadFile(filepath.Join("testdata", "ciwatch", "windows-40113864759.json"))
+	if nerr != nil {
+		t.Fatalf("the recorded null-step run is missing: %v", nerr)
+	}
+	// The specimen's property, read rather than assumed: a FAILED job whose `go test -race` step has no
+	// conclusion. GitHub left the step `in_progress`, inside a job it had completed as a failure.
+	var rec struct {
+		Jobs []struct {
+			Conclusion string `json:"conclusion"`
+			Steps      []struct {
+				Name       string `json:"name"`
+				Conclusion string `json:"conclusion"`
+			} `json:"steps"`
+		} `json:"jobs"`
+	}
+	if jerr := json.Unmarshal(nullRun, &rec); jerr != nil {
+		t.Fatalf("the recorded run is not JSON: %v", jerr)
+	}
+	nullStep := false
+	for _, j := range rec.Jobs {
+		for _, s := range j.Steps {
+			if j.Conclusion == "failure" && s.Name == "go test -race" && s.Conclusion == "" {
+				nullStep = true
+			}
+		}
+	}
+	if !nullStep {
+		t.Fatal("the recorded run has no failed job whose `go test -race` step lacks a conclusion, so it is not the specimen")
+	}
+	nullFull, ferr := os.ReadFile(filepath.Join("testdata", "ciwatch", "windows-40113864759.full.log"))
+	if ferr != nil {
+		t.Fatalf("the recorded full log is missing: %v", ferr)
+	}
+	// The recorded run names its head SHA. The fixture's push run uses "SHA", so the record is re-keyed to match.
+	nullRunJSON := regexp.MustCompile(`"headSha":"[0-9a-f]{40}"`).ReplaceAllString(string(nullRun), `"headSha":"SHA"`)
+	fullRun := func(t *testing.T, full string) (int, string, map[string]any) {
+		t.Helper()
+		dir := t.TempDir()
+		write(dir, "runs.json", `[{"databaseId": 3}, {"databaseId": 1}]`)
+		write(dir, "1.json", strings.ReplaceAll(pushRun, `"conclusion":"failure"}]}`, `"conclusion":"success"}]}`))
+		write(dir, "3.json", nullRunJSON)
+		write(dir, "3.log", "")
+		if full != "" {
+			write(dir, "3.full.log", full)
+		}
+		write(dir, "triage.tsv", triage)
+		code, out := run(t, dir, "CIWATCH_TRIAGE="+filepath.Join(dir, "triage.tsv"))
+		raw, rerr := os.ReadFile(filepath.Join(dir, "out.verdict"))
+		if rerr != nil {
+			t.Fatalf("no verdict file: %v\n%s", rerr, out)
+		}
+		var v map[string]any
+		if jerr := json.Unmarshal(raw, &v); jerr != nil {
+			t.Fatalf("verdict is not JSON: %v\n%s", jerr, raw)
+		}
+		return code, out, v
+	}
+	t.Run("an_empty_failed_log_with_a_null_step_is_classified_from_the_full_log", func(t *testing.T) {
+		code, out, v := fullRun(t, string(nullFull))
+		if code != 0 || v["ciwatch_verdict"] != "green" {
+			t.Fatalf("exit %d, verdict %v: the full log names only mapped tests, so this is green:\n%s",
+				code, v["ciwatch_verdict"], out)
+		}
+		if !strings.Contains(out, "7 failing test(s), all in the triage map") {
+			t.Errorf("the verdict does not say it read seven mapped failures from the full log:\n%s", out)
+		}
+	})
+	t.Run("an_empty_failed_log_whose_full_log_names_no_test_is_still_red", func(t *testing.T) {
+		code, out, v := fullRun(t, "windows (measured, not a gate)\tSet up Go\terror: setup failed\n")
+		if code == 0 || v["ciwatch_verdict"] != "fail" || !strings.Contains(out, "names no failing test") {
+			t.Fatalf("exit %d, verdict %v: the full log names no test, so the refusal stands:\n%s",
+				code, v["ciwatch_verdict"], out)
 		}
 	})
 
