@@ -744,7 +744,10 @@ stop racing the resumed guest's read when the `Resume` acquire edge is missing �
   - **Resume-after-Stop** (the amendment's further crossing) — witnessed at §3 **SP-6** (#779),
     **structural-by-redundancy**: the named channel edge is deletable because `stopReq` carries it too.
   - **host-call return** — an **open hole, no instrument** (the `-race` defeat, #742): its A→B channel is a
-    harness flag, nothing on an engine edge to break.
+    harness flag, nothing on an engine edge to break. *Superseded 2026-10-24: both halves are now witnessed. The
+    acquire half is `b-mm-1-a-host-write-is-visible-after-a-host-call-return`, with a host publisher. The
+    composed guest→guest message is the re-registered `b-mm-1-message-passing-across-a-host-call-return`, over
+    two instances, where ADR 0052's counter is the only edge.*
   - **trap resume** and **stack-switch resume** — **unwitnessed** (stack switching is v2, §7; a trap unwinds
     rather than resuming into a memory-publishing crossing). *Superseded 2026-10-24 by the two registrations
     below (items B and C of the §4 plan on #10, the chair's third ruling of 2026-10-24). The line is kept so the
@@ -849,8 +852,41 @@ This is exactly `b-mm-2`'s stillbirth (#603): the value-observation window at SC
   completion path**, which *is* an engine-carried A→B edge — B-MM-1 becomes witnessable and the hole
   closes. Registered now so the hole does not read as permanent. **Met at the async-wake crossing, 2026-09-16
   — see the case below; this host-call-return crossing stays a hole.**
-- **Status:** blocked — #742 (documented hole, ruled 2026-09-12; the host-call-return crossing is unwitnessed
-  by any available instrument — see above. The sibling async-wake crossing is discharged by the case below.)
+- *Status until 2026-10-24, kept visible: `blocked — #742` (documented hole, ruled 2026-09-12; the
+  host-call-return crossing is unwitnessed by any available instrument — see above. The sibling async-wake
+  crossing is discharged by the case below.)*
+- **Re-registered 2026-10-24 (the chair's fourth ruling of 2026-10-24): the hole's reopening condition is met, and
+  the registrations above are kept as they were.** Scott's 2026-09-14 condition was *"an edge whose publisher AND
+  consumer are both guest agents"*.
+  - The probe recorded on [#10](https://github.com/scttfrdmn/burroughs/issues/10) found one: ADR 0052's
+    package-level counter, which every `enterGuest`/`leaveGuest` `Add`s. With it removed, `-race` reported the
+    located pair on darwin/arm64 and on linux/amd64 (janus, pueue task 90). With it live, the run was silent
+    (task 89).
+  - **What the 2026-09-12 diagnosis got wrong:** the missing piece was not an engine edge but a neutral signal.
+    Its host flag decided the verdict itself, ordering the write as an atomic and racing itself as a plain
+    variable.
+  - **Within one instance there is a second, redundant edge,** in the host-call path's world bookkeeping, so
+    only a two-instance case can be watched dying.
+- **Discharges:** B-MM-1
+- **Allowed:** no `-race` report naming the located pair: A's plain `memory.fill` write in `execMemoryFill`,
+  against B's post-return load in `memAccess` at the same address.
+- **Forbidden:** a `-race` report on that located pair.
+- **Witness:** **two instances over one shared memory.** The publisher instance exports the memory, and the
+  consumer instance imports it, so each is its own world.
+  - A (the publisher) does `memory.fill` on a fresh word and then calls host `pub`, a guest→host transition.
+  - B (the consumer) calls host `sleep`, which waits 20ms and returns (a host→guest transition), then loads the
+    word.
+  - The signal is the sleep, so ADR 0052's counter is the only happens-before from A's write to B's read.
+  - Fresh 16-byte-aligned words per round, R = 40.
+- **Floor:** **the sleep is a timing assumption, not an edge.** A round in which B reads before A's fill has
+  happened (B reads anything but `0x01010101`) witnessed nothing. It is counted **inconclusive**, never as a pass.
+  More than 10% of rounds inconclusive (above 4 of 40) fails the case. With the delay set to 0, all 40 rounds read
+  inconclusive and the case failed on the bound.
+- **Arbiter:** **`-race` (Go's memory model), both arches. It is not the hardware** (#742, #795).
+- **Watched dying:** `enterGuest` and `leaveGuest` emptied produced the located report, `execMemoryFill` against
+  `memAccess`, on darwin/arm64 and on linux/amd64. That held for the probe (janus tasks 89 and 90) and for the
+  committed case (janus task 102 neutered; task 101 live and clean).
+- **Status:** implemented — TestBMM1AMessagePassesAcrossAHostCallReturnBetweenTwoGuests
 
 #### Case `b-mm-1-a-host-write-is-visible-after-a-host-call-return`
 
@@ -861,7 +897,8 @@ rests on is recorded on #10.
 B-MM-1's first sentence promises *"the resuming agent"* an acquire edge *"over the entire shared address space"*,
 and it names no writer. So a host publisher's writes, when ordered before a host-call return, are within its scope.
 The clause's second sentence, the release edge at a guest→host transition, is not this case's subject: a host
-publisher makes no such transition. So the hole above stays the release half's.
+publisher makes no such transition. So the hole above stays the release half's. *(As of the same day, it no
+longer does: the case above was re-registered and built under the chair's fourth ruling of 2026-10-24.)*
 
 - **Discharges:** B-MM-1 (the acquire half, at host-call return)
 - **Allowed:** no `-race` report naming the located pair. The pair is the host's plain `memory.write` under
