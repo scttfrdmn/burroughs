@@ -324,7 +324,11 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 			"(%d explicit, plus the implicit function body)",
 			ErrNotValidated, depth, len(ctrl)+1, len(ctrl))
 	}
-	l := ctrl[len(ctrl)-1-int(depth)]
+	// **A pointer, not a copy** (#1036). `l := ctrl[i]` copied the whole label (about 80 bytes, a slice header
+	// included) onto the goroutine stack on every taken branch and read its fields back. #1036's profile put the
+	// hot loop's cost on this load, and on x86 it depended on where the stack landed. Nothing here writes
+	// through `l`.
+	l := &ctrl[len(ctrl)-1-int(depth)]
 	// Keep the top `arity` values, truncate to the label's height, push them back. Done with
 	// a copy inside the same slice rather than a temporary: the source range is above the
 	// destination whenever anything is dropped, so a forward copy cannot overwrite an unread

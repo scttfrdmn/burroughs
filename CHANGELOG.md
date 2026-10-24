@@ -26,6 +26,15 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`branch` takes its label by pointer, not by a copy onto the goroutine stack**
+  ([#1036](https://github.com/scttfrdmn/burroughs/issues/1036)).
+  - **On janus**, measured with `make lab-ab` over 16 stack offsets (`BenchmarkBranchAtStackOffset`, new) against a
+    null arm that read `~` everywhere:
+    - every offset is faster, by 0.74–2.59% (p=0.000), with a geomean of −1.22%;
+    - the spread across offsets falls from 2.8% to 1.9%.
+  - **Not shown fixed:** #1036's ~9% between two binaries was never reproduced by this instrument. Its baseline spread
+    was 3.0%, against a forecast of ≥ 5%, so the issue stays open.
+
 - **A merge is refused without green verdicts for the PR's head and a watched, green main** (the chair's ruling of
   2026-10-23). `editroute.py`'s route 8 refuses `gh pr merge` unless:
   - `make ci`'s record (`.ci-verdict.d/<sha>`) and `ciwatch`'s record (`.ci-verdict.d/ci-<sha>`, new) are green for
