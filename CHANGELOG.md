@@ -24,6 +24,17 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Fixed
+
+- **`explainred.sh` no longer exits silently, or misreads an issue, when a pipe closes early**
+  ([#1107](https://github.com/scttfrdmn/burroughs/issues/1107)).
+  - **The mechanism:** under `set -euo pipefail`, `printf … | head -1` lost `printf` to SIGPIPE once `head` had its
+    line, so the script exited with no message. CI's linux runner hit it twice, under load, with a two-line body.
+  - **A second instance:** `printf "$body" | grep -qF` turned an early match into a false condition, so an issue
+    naming the failing test first was refused.
+  - **The fix:** parameter expansion, and a `[[ … ]]` pattern match.
+  - **The witnesses:** three large-body arms. **Neuter, run:** the old split restored fails all three.
+
 ## [0.10.0] - 2026-10-25
 *Implements contract v0.1.*
 

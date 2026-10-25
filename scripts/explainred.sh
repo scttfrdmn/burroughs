@@ -34,9 +34,17 @@ if [ -n "${EXPLAINRED_ISSUE:-}" ]; then
 else
 	issue_json=$(gh api "repos/{owner}/{repo}/issues/$issue" -q '"\(.state)\t\(.created_at)\n\(.body // "")"' 2>/dev/null || true)
 fi
-state=$(printf '%s\n' "$issue_json" | head -1 | cut -f1)
-issued=$(printf '%s\n' "$issue_json" | head -1 | cut -f2)
-body=$(printf '%s\n' "$issue_json" | tail -n +2)
+# **Split by parameter expansion, never by `printf … | head -1`** (#1107). Under `set -euo pipefail`, `head`
+# exits after one line, and if `printf` is still writing it takes SIGPIPE. `pipefail` then fails the
+# substitution, and `set -e` ends the script with no message at all. A loaded CI runner hit that twice with a
+# two-line body, and any body larger than the pipe buffer hits it every time. Expansion has no pipe to signal.
+first=${issue_json%%$'\n'*}
+state=${first%%$'\t'*}
+issued=
+[ "$first" = "$state" ] || issued=${first#*$'\t'}
+issued=${issued%%$'\t'*}
+body=
+[ "$issue_json" = "$first" ] || body=${issue_json#*$'\n'}
 [ "$state" = "open" ] || { echo "explainred: issue #$issue is not open (state: ${state:-unknown})" >&2; exit 1; }
 
 if [ -n "${EXPLAINRED_RUN_CREATED:-}" ]; then
@@ -58,7 +66,9 @@ else
 	fi
 	while IFS= read -r t; do
 		[ -n "$t" ] || continue
-		if printf '%s' "$body" | grep -qF -- "$t"; then
+		# A pattern match, not `printf "$body" | grep -qF` (#1107's second instance): `grep -q` exits on its
+		# first match, `printf` then takes SIGPIPE, and `pipefail` makes the match a false condition.
+		if [[ $body == *"$t"* ]]; then
 			ground="names the failing test $t"
 			break
 		fi
