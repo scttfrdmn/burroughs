@@ -106,7 +106,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        # `macos-15` (arm64, GitHub-hosted) is a third leg of THIS job, not a job of its own. The chair's second
+        # ruling of 2026-10-25 required darwin CI "on the same terms as linux" before the v1 threads claim names
+        # darwin, and a leg runs every step the linux legs run, so it cannot drift from them. `ciwatch` requires
+        # every leg matching the `build` key to succeed, so a red darwin leg is a red verdict.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
