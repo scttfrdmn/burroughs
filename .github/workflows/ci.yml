@@ -127,21 +127,18 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: tools/go.sum
 
-      - name: bash 5 on darwin, as the development host has
-        # The runner's `bash` is /bin/bash 3.2, which has no `BASHPID`. `scripts/detach.sh` reads it under
-        # `set -u`, so its wrapper died before running anything, and `TestDetachStopEndsTheWholeProcessGroup`
-        # failed on this leg's first run (child-gone, exit 120) while passing on the darwin dev host, whose
-        # `bash` is Homebrew's 5.x. This gives the leg that same bash, ahead of /bin, for every later step and
-        # every script it runs. The 3.2 incompatibility itself is #1105, filed against the script rather than hidden here.
+      - name: the shell darwin runs is the system bash
+        # The darwin leg runs macOS's /bin/bash 3.2, deliberately. It installed Homebrew's bash 5 until #1105
+        # made `scripts/detach.sh` 3.2-safe, and nothing else in the tree needed it: the whole suite passed with
+        # 3.2 first on PATH. The Makefile's `SHELL := /bin/bash` meant every recipe ran 3.2 on darwin anyway.
+        # So this leg is now the standing witness that the scripts run under the shell a stock Mac has. The
+        # step asserts that, so a later image that changes the shell cannot make the witness vacuous.
         if: runner.os == 'macOS'
         run: |
-          brew install bash
-          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
-          major="$("$(brew --prefix)/bin/bash" -c 'echo ${BASH_VERSINFO[0]}')"
-          echo "bash major version: $major"
-          if [ "$major" -lt 4 ]; then
-            echo "::error::bash $major after install; scripts here need bash 4+ (BASHPID)"
-            exit 1
+          major="$(bash -c 'echo ${BASH_VERSINFO[0]}')"
+          echo "bash on PATH: $(command -v bash), major version $major"
+          if [ "$major" -ge 4 ]; then
+            echo "::warning::bash on PATH is $major, not the system 3.2, so this leg no longer witnesses #1105's shell"
           fi
 
       - name: pipefail is in effect, here and in the Makefile

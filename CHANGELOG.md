@@ -26,6 +26,15 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **`scripts/detach.sh` runs under macOS's `/bin/bash` 3.2** ([#1105](https://github.com/scttfrdmn/burroughs/issues/1105)).
+  - **The defect:** it read `BASHPID`, which is bash 4+, under `set -u`. On 3.2 its wrapper died before running
+    anything, and it reported child-gone with exit 120.
+  - **The fix:** the subshell's pid falls back to `$(exec sh -c 'echo "$PPID"')`.
+  - **The witness:** `TestDetachStopEndsTheWholeProcessGroup` now runs under every bash the host has, adding
+    `/bin/bash` whenever it is older than 4. **Neuter, run:** the bare `$BASHPID` restored fails the 3.2 arm only.
+  - **CI's darwin leg no longer installs bash 5.** The whole suite passed with 3.2 first on PATH, so nothing else
+    needed it. The leg now runs, and asserts, the system shell.
+
 - **`explainred.sh` no longer exits silently, or misreads an issue, when a pipe closes early**
   ([#1107](https://github.com/scttfrdmn/burroughs/issues/1107)).
   - **The mechanism:** under `set -euo pipefail`, `printf … | head -1` lost `printf` to SIGPIPE once `head` had its
