@@ -26,8 +26,8 @@ says what it now requires and what it gives up.
 
 ### Added
 
-- **`gate:threads` is on** (ADR 0106; the chair's ruling of 2026-10-25, held for Scott's non-objection on
-  [#10](https://github.com/scttfrdmn/burroughs/issues/10)). A module using shared memories and the 0xFE atomics
+- **`gate:threads` is on** (ADR 0106; the chair's ruling of 2026-10-25, and Scott's *"I do not object"*, recorded
+  on [#10](https://github.com/scttfrdmn/burroughs/issues/10#issuecomment-6392956652)). A module using shared memories and the 0xFE atomics
   region is admitted with nothing supplied. **To restore the old behaviour, set `BURROUGHS_THREADS=0`.** A module
   using a threads construct is then refused by name, and `FeatureThreads` / `--features=threads` admits it
   explicitly.
