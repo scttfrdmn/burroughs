@@ -33,12 +33,13 @@ func TestComponentCoreModuleFeaturesAreCallerSupplied(t *testing.T) {
 		t.Fatalf("fixture missing (it is committed): %v", err)
 	}
 
-	// Withheld: the default set refuses the 0xFE region, by name.
+	// Withheld, under the rollback: the old default refuses the 0xFE region, by name. Since ADR 0106 the
+	// default admits it, so this is what `BURROUGHS_THREADS=0` must restore.
+	t.Setenv("BURROUGHS_THREADS", "0")
 	_, err = InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
 	if err == nil {
-		t.Fatal("a component using the 0xFE atomics region loaded under the DEFAULT feature set — the " +
-			"refusal must survive ADR 0088 as the default, or the surface removed a gate instead of " +
-			"making it conditional")
+		t.Fatal("a component using the 0xFE atomics region loaded with BURROUGHS_THREADS=0 — the rollback " +
+			"must restore the refusal, or the flip removed a gate instead of changing its default")
 	}
 	if got := err.Error(); !strings.Contains(got, "0xfe") {
 		t.Errorf("refusal %q must name the 0xFE region (refuse by name)", got)
@@ -65,4 +66,12 @@ func TestComponentCoreModuleFeaturesAreCallerSupplied(t *testing.T) {
 	if len(res) != 1 || res[0].Bits != 42 {
 		t.Errorf("hello() = %v, want 42", res)
 	}
+
+	// The default, since ADR 0106: the same bytes load with nothing supplied.
+	t.Setenv("BURROUGHS_THREADS", "")
+	din, derr := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if derr != nil {
+		t.Fatalf("with gate:threads on by default, the component did not load with nothing supplied: %v", derr)
+	}
+	din.Close()
 }

@@ -24,6 +24,27 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Added
+
+- **`gate:threads` is on** (ADR 0106; the chair's ruling of 2026-10-25, held for Scott's non-objection on
+  [#10](https://github.com/scttfrdmn/burroughs/issues/10)). A module using shared memories and the 0xFE atomics
+  region is admitted with nothing supplied. **To restore the old behaviour, set `BURROUGHS_THREADS=0`.** A module
+  using a threads construct is then refused by name, and `FeatureThreads` / `--features=threads` admits it
+  explicitly.
+  - **The forecast, re-read on the flipped tree:**
+    - the core board is unchanged at 60957 pass, 0 fail, 0 unsupported, 4187 gated;
+    - G1 (`TestThreadsGateLeavesTheCoreBoardUnchanged`) reads 256 of 256 files identical;
+    - the threads lane reads 576 pass, 41 fail, 2 bound, and all 41 failures are superseded-corpus rows in
+      `internal/spec/threads_superseded_test.go`'s register, with 0 engine defects;
+    - the battery's 17 implemented cases are green.
+  - **The off state stays witnessed.** The tests that pinned the old default (ADR 0088's caller-supplied
+    surfaces, #813's detection, and the CLI's `--features` hint) now run under `BURROUGHS_THREADS=0`, each with
+    an arm asserting the new default beside it.
+  - **Not promised:** stop-the-world, which is not public API; Windows (Scott's 2026-10-10 ruling); and
+    hardware weak-memory ordering (#795).
+  - **A README sentence corrected.** It said every Go guest needs the 0xFE region. A stock Go wasip1 guest does
+    not, as `TestTheGoGuestNeedsNoThreadsFeature` asserts.
+
 ### Changed
 
 - **`gate:threads` leaves the core board unchanged, per file** (`TestThreadsGateLeavesTheCoreBoardUnchanged`; gap G1

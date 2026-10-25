@@ -34,13 +34,28 @@ func TestComponentConfigFeaturesIsTheCallerSuppliedCapabilitySurface(t *testing.
 		t.Fatalf("fixture missing (it is committed): %v", err)
 	}
 
-	// Withheld — the zero value is the old behaviour, refused by name.
+	// Withheld, under the rollback — the old default, refused by name. ADR 0106 flipped `gate:threads` on, so
+	// this is now what `BURROUGHS_THREADS=0` must restore, and the off state keeps its witness here.
+	t.Setenv("BURROUGHS_THREADS", "0")
 	_, werr := (ComponentConfig{Stdout: io.Discard}).Run(wasm)
 	if werr == nil {
-		t.Error("a component using atomics ran with no Features supplied — the default must still refuse")
+		t.Error("a component using atomics ran with no Features supplied and BURROUGHS_THREADS=0 — the " +
+			"rollback must restore the refusal")
 	} else if !strings.Contains(werr.Error(), "0xfe") {
 		t.Errorf("refusal %q must name the 0xFE region", werr.Error())
 	}
+
+	// Withheld, under the default since ADR 0106 — the feature refusal is gone with nothing supplied, and what
+	// remains is the world mismatch, exactly as when the capability is supplied.
+	t.Setenv("BURROUGHS_THREADS", "")
+	_, derr := (ComponentConfig{Stdout: io.Discard}).Run(wasm)
+	if derr != nil && strings.Contains(derr.Error(), "0xfe") {
+		t.Errorf("gate:threads is on by default and the 0xFE refusal still fired with nothing supplied: %v", derr)
+	}
+	if derr == nil || !strings.Contains(derr.Error(), "run export") {
+		t.Errorf("want the world mismatch (no wasi:cli/run export) under the default, got %v", derr)
+	}
+	t.Setenv("BURROUGHS_THREADS", "0")
 
 	// Supplied — the feature refusal is gone; what remains is the world mismatch, which is the point.
 	_, err = (ComponentConfig{Stdout: io.Discard, Features: []Feature{FeatureThreads}}).Run(wasm)

@@ -382,7 +382,11 @@ func TestThreadsProposalLane(t *testing.T) {
 	//
 	// The comparison feeds `GateSensitive`, and the pin is checked by the same per-column loop as
 	// every other figure, so the two directions are one assertion rather than a bespoke arm.
-	offRows, offTot := scoreThreadsLane(t, paths, binary.DefaultFeatures(), false)
+	// "Off" is stated, not defaulted: since ADR 0106 `DefaultFeatures()` has Threads on, so taking it as the off
+	// set would compare the gate-on board against itself and report every file insensitive.
+	offSet := binary.DefaultFeatures()
+	offSet.Threads = false
+	offRows, offTot := scoreThreadsLane(t, paths, offSet, false)
 	sensitive := 0
 	for name, on := range rows {
 		off, ok := offRows[name]
