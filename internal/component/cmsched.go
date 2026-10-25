@@ -103,6 +103,11 @@ type handoff struct {
 // because nothing is waiting for it.
 var errThreadKilled = errors.New("component: the component-model Thread was ended while parked, by a trap in its task or by Close")
 
+// fenceSkipWindow is a test seam, nil outside tests. `drive` calls it between a fenced Thread's refused
+// reader and its requeue, which is #1106's window. The witness for #1106 holds that window open, so the
+// caller's last writer leaves inside it every run, not one run in thousands.
+var fenceSkipWindow func()
+
 // scheduler returns the instance's scheduler, starting it on first use.
 func (tt *threadTable) scheduler(h *asyncHandles) *cmScheduler {
 	tt.mu.Lock()
@@ -302,9 +307,22 @@ func (s *cmScheduler) drive(first *cmThread) (idle bool) {
 		// that cannot run goes back to the head of the queue, the chain ends, and the caller's last writer
 		// kicks this scheduler when the fence opens.
 		if !s.fenceAdmit(cur) {
+			if fenceSkipWindow != nil {
+				fenceSkipWindow() // a test seam: holds open the window between the refused reader and the requeue
+			}
 			s.tt.requeueFront(cur)
-			s.fenceSkipped = true
-			return true
+			// **Try the reader once more, now that `cur` is queued** (#1106). The refused reader registered this
+			// instance for a kick. If the caller's last writer left before the requeue, its kick read an empty
+			// ready queue and sent nothing, and `free` does not kick. Nothing would then run `cur`. A writer still
+			// present at this retry registers another kick, which now finds `cur` queued; a writer already gone
+			// admits it here.
+			if !s.fenceAdmit(cur) {
+				s.fenceSkipped = true
+				return true
+			}
+			if head := s.tt.popReady(); head != cur {
+				panic("component: the ready queue's head changed while the scheduler held the slot (#1106's retry)")
+			}
 		}
 		s.giveTo(cur)
 		cur.resume <- nil // capacity 1, and only this goroutine sends

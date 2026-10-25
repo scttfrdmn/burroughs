@@ -27,9 +27,18 @@ import (
 // **Neuter, run:** removing the callback loop's top-of-loop delivery (`deliverPendingCancelLocked`). `work`'s
 // callback then sees NONE and returns 9, so the parent reads RETURNED (2).
 func TestACancelRequestedWhileSuspendedIsDeliveredAtTheLoop(t *testing.T) {
-	_, res, err := callBounded(t, "cancel-suspended", "run")
-	wantU32(t, "cancel-suspended", res, err, 4)
+	// Two subtests, so the arm that hung once (#1106) can be stressed on its own with
+	// `-run …/delivered_at_the_loop -count=N`, without paying the control's two-second bounded negative on
+	// every iteration.
+	t.Run("delivered_at_the_loop", func(t *testing.T) {
+		_, res, err := callBounded(t, "cancel-suspended", "run")
+		wantU32(t, "cancel-suspended", res, err, 4)
+	})
+	t.Run("the_control_never_returns", testCancelSuspendedControl)
+}
 
+// testCancelSuspendedControl is the control half of TestACancelRequestedWhileSuspendedIsDeliveredAtTheLoop.
+func testCancelSuspendedControl(t *testing.T) {
 	t.Setenv(cmThreadsGateEnv, "1")
 	t.Setenv(asyncGateEnv, "1")
 	b, rerr := os.ReadFile("testdata/cmthreads/cancel-suspended-control.wasm")
