@@ -3,6 +3,7 @@ package component
 import (
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,12 @@ func callBounded(t *testing.T, fixture, export string) (*Instantiated, []canon.V
 	case o := <-ch:
 		return in, o.res, o.err
 	case <-time.After(optionABound):
+		// **The watchdog dumps every goroutine before failing** (#1106, the chair's third ruling of 2026-10-25). A
+		// hang reported only by its bound names no cycle. #1106's one occurrence left nothing to read and did not
+		// recur in 453 attempts, so the next one must carry its own dump.
+		buf := make([]byte, 1<<22)
+		buf = buf[:runtime.Stack(buf, true)]
+		t.Logf("%s: every goroutine at the bound (%d bytes):\n%s", fixture, len(buf), buf)
 		t.Fatalf("%s: %s() did not return within %s — the hang this witness exists to catch", fixture, export,
 			optionABound)
 		return nil, nil, nil

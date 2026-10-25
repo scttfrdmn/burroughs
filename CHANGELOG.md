@@ -34,6 +34,20 @@ says what it now requires and what it gives up.
     `/bin/bash` whenever it is older than 4. **Neuter, run:** the bare `$BASHPID` restored fails the 3.2 arm only.
   - **CI's darwin leg no longer installs bash 5.** The whole suite passed with 3.2 first on PATH, so nothing else
     needed it. The leg now runs, and asserts, the system shell.
+- **A fence-skipped component-model Thread could be stranded, so the call hung**
+  ([#1106](https://github.com/scttfrdmn/burroughs/issues/1106), a lost wakeup in `cmScheduler.drive`).
+  - **The race:** `drive` pops a fenced task's Thread, and its caller's fence refuses the reader and registers a
+    kick. If the caller's last writer left before the Thread was requeued, the kick read an empty ready queue and
+    sent nothing. Then `free`, which does not kick, left the Thread queued forever. The parked task and the
+    cross-component caller waited with it.
+  - **Found by** the chair-ordered stress: 1 in 10,000 `-race` iterations on darwin/arm64, with a watchdog
+    goroutine dump showing the four-way wait. It did not appear in 10,000 iterations on janus x86-64.
+  - **The fix:** after the requeue, the reader is tried once more, so a writer gone by then admits the Thread and
+    a writer still present kicks a queue that now holds it.
+  - **The witness** (`TestAFenceSkippedThreadIsRunWhenTheWriterLeavesBeforeTheRequeue`) holds the window open
+    through a test seam on every run that reaches it. **Neuter, run:** the retry removed hangs, with the same dump.
+  - **After the fix:** 10,000 of 10,000 iterations pass on each architecture, and the witness passes 20 of 20.
+  - **Kept:** `callBounded`'s watchdog dumps every goroutine at its bound, for the next hang anywhere it is used.
 
 - **`explainred.sh` no longer exits silently, or misreads an issue, when a pipe closes early**
   ([#1107](https://github.com/scttfrdmn/burroughs/issues/1107)).
