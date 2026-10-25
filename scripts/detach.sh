@@ -163,8 +163,14 @@ set -m
 	# with job control on, the backgrounded subshell leads its own group, so that is the group every
 	# descendant inherits. `cilock.sh` records `group_owned=yes` only on an exact match, so a missing
 	# or stale value fails safe.
-	BURROUGHS_GATE_PGID=$(ps -o pgid= -p "$BASHPID" 2>/dev/null | tr -d ' ')
-	[ -n "$BURROUGHS_GATE_PGID" ] || BURROUGHS_GATE_PGID=$BASHPID
+	#
+	# **`BASHPID` is bash 4+, and macOS's `/bin/bash` is 3.2** (#1105). Read bare under `set -u`, it killed
+	# this subshell before it ran anything, and the launcher reported child-gone with exit 120. The
+	# fallback is the subshell's pid by another route: `exec` makes `sh` replace the command substitution's
+	# own fork, so its `$PPID` is this subshell.
+	self_pid=${BASHPID:-$(exec sh -c 'echo "$PPID"')}
+	BURROUGHS_GATE_PGID=$(ps -o pgid= -p "$self_pid" 2>/dev/null | tr -d ' ')
+	[ -n "$BURROUGHS_GATE_PGID" ] || BURROUGHS_GATE_PGID=$self_pid
 	export BURROUGHS_GATE_PGID
 	"$@"
 	echo $? >"$rcfile"

@@ -33,6 +33,26 @@ import (
 // same vacuity as a refusal-only check that cannot see a wrong aim. The grandchild's own liveness is what
 // discriminates.
 func TestDetachStopEndsTheWholeProcessGroup(t *testing.T) {
+	// **Under every bash this host has, including a 3.2** (#1105). The darwin CI leg puts Homebrew's bash 5
+	// first on PATH, so "bash" alone would never meet macOS's /bin/bash 3.2, the shell #1105 failed under.
+	// /bin/bash is added whenever it is older than 4. On linux it is 5, and only "bash" runs.
+	shells := []string{"bash"}
+	if out, err := exec.Command("/bin/bash", "-c", "echo ${BASH_VERSINFO[0]}").Output(); err == nil {
+		if v := strings.TrimSpace(string(out)); v != "" && v < "4" {
+			shells = append(shells, "/bin/bash")
+		}
+	}
+	for _, sh := range shells {
+		t.Run(filepath.Base(sh)+"_"+strings.ReplaceAll(sh, "/", "_"), func(t *testing.T) {
+			detachStopEndsTheWholeProcessGroup(t, sh)
+		})
+	}
+	t.Logf("ran under %v", shells)
+}
+
+// detachStopEndsTheWholeProcessGroup is the body of TestDetachStopEndsTheWholeProcessGroup, under one bash.
+func detachStopEndsTheWholeProcessGroup(t *testing.T, sh string) {
+	t.Helper()
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Fatalf("bash is required and absent: %v", err)
 	}
@@ -91,7 +111,7 @@ func TestDetachStopEndsTheWholeProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating the launch log: %v", err)
 	}
-	launch := exec.Command("bash", detach, stamp, "120", "--", "bash", payload, grandchildPID)
+	launch := exec.Command(sh, detach, stamp, "120", "--", sh, payload, grandchildPID)
 	launch.Dir = root
 	launch.Stdout = logFile
 	launch.Stderr = logFile
@@ -201,7 +221,7 @@ func TestDetachStopEndsTheWholeProcessGroup(t *testing.T) {
 			"to do and the arm cannot discriminate", gpid)
 	}
 
-	stop := exec.Command("bash", detach, "--stop", stamp)
+	stop := exec.Command(sh, detach, "--stop", stamp)
 	stop.Dir = root
 	var stopOut bytes.Buffer
 	stop.Stdout = &stopOut
