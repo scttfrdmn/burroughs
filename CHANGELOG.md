@@ -47,6 +47,10 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **CI runs on darwin** (`macos-15`, arm64, a third leg of the `build` matrix; the chair's second ruling of
+  2026-10-25). Every step the linux legs run, including `-race`, now runs on darwin, and `ciwatch` requires every
+  `build` leg to succeed. Before this, darwin evidence was the development host's own runs, which gate nothing.
+  The v1 threads claim names darwin only once this leg is green on main.
 - **`gate:threads` leaves the core board unchanged, per file** (`TestThreadsGateLeavesTheCoreBoardUnchanged`; gap G1
   of the flip forecast on [#10](https://github.com/scttfrdmn/burroughs/issues/10), the chair's ruling of
   2026-10-25).
