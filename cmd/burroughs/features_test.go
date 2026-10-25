@@ -20,9 +20,11 @@ const atomicsGuest = "../../internal/wasi/testdata/atomics-wasip1-synth.wasm"
 // `burroughs run` on either path.** ADR 0088 added `ComponentConfig.Features` on 2026-09-18 and the CLI
 // never passed it, which is why Phase 4's two-engine claim runs through an internal test.
 func TestRunSuppliesCapabilitiesFromTheCommandLine(t *testing.T) {
-	// WITHHELD → gated, and the exit code says *gated* rather than *broken*. That distinction is grave
-	// #301's and it is the reason this asserts the code and not just non-zero: a script has to be able
-	// to tell "rebuild with the capability" from "fix your module".
+	// WITHHELD, under the rollback → gated, and the exit code says *gated* rather than *broken*. That
+	// distinction is grave #301's and it is the reason this asserts the code and not just non-zero: a script
+	// has to be able to tell "rebuild with the capability" from "fix your module". Since ADR 0106 the default
+	// admits this guest, so the refusal is what `BURROUGHS_THREADS=0` must restore.
+	t.Setenv("BURROUGHS_THREADS", "0")
 	var out, errBuf bytes.Buffer
 	if code := dispatch(&out, &errBuf, []string{"run", atomicsGuest, "--", "x"}); code != exitGated {
 		t.Errorf("without --features: exit %d, want exitGated (%d)\nstderr: %q",
@@ -64,6 +66,15 @@ func TestRunSuppliesCapabilitiesFromTheCommandLine(t *testing.T) {
 	// "unknown component feature" on the wasip1 path until this was run.
 	if got := errBuf.String(); strings.Contains(got, "component feature") {
 		t.Errorf("stderr = %q: the shared resolver named the component path while serving wasip1", got)
+	}
+
+	// THE DEFAULT, since ADR 0106 → the same guest runs with no `--features` at all.
+	t.Setenv("BURROUGHS_THREADS", "")
+	out.Reset()
+	errBuf.Reset()
+	if code := dispatch(&out, &errBuf, []string{"run", atomicsGuest}); code != 0 {
+		t.Errorf("with gate:threads on by default and no --features: exit %d, want 0\nstderr: %q",
+			code, errBuf.String())
 	}
 }
 

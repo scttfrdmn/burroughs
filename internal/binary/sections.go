@@ -1,6 +1,9 @@
 package binary
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 // Section payload decoding — "the decoder stops taking sections' word for it".
 //
@@ -157,9 +160,26 @@ type Features struct {
 // promise to a caller who asked for nothing. No vector can measure it — every `(either …)`
 // alternative passes — so the instrument that holds it is
 // `TestRelaxedLoweringChoicesArePinned` (#283), which pins all 32 choices by matched text.
+//
+// **Third divergence: Threads** ([ADR 0106]). The first flip with a field rollback: `BURROUGHS_THREADS=0`
+// restores the old default, modelled on `BURROUGHS_CM_THREADS=0`. It is read here, where the default is
+// defined, so every path that starts from this function honours it alike: core `Instantiate`,
+// `IsWASIP1Command`, a component's core modules, and the CLI. SIMD's and relaxed SIMD's flips had no runtime
+// behaviour an operator might need to switch off in the field, so their rollback is a revert. Threads has
+// such behaviour, and an embedder may need the old refusal without rebuilding.
+//
+// What the flip promises is stated in the ADR, and what it leaves unchanged is witnessed separately:
+// `TestThreadsGateLeavesTheCoreBoardUnchanged` (G1) asserts all 256 core board files read identically with
+// the gate off and on.
+//
+// [ADR 0106]: ../../docs/decisions/0106-gate-threads-defaults-on-with-burroughs-threads-0-as-the-rollback-because-the-4-battery-has-no-hole-and-the-off-state-stays-witnessed.md
 func DefaultFeatures() Features {
-	return Features{SIMD: true, RelaxedSIMD: true}
+	return Features{SIMD: true, RelaxedSIMD: true, Threads: os.Getenv(threadsGateEnv) != "0"}
 }
+
+// threadsGateEnv is `gate:threads`' field rollback (ADR 0106): set to "0", the default refuses a threads
+// construct by name, as it did before the flip.
+const threadsGateEnv = "BURROUGHS_THREADS"
 
 // Decoder holds the configuration one decode runs under. A config struct rather
 // than a widening parameter list: per-section acceptance is gate-dependent for

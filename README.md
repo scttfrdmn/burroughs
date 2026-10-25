@@ -100,14 +100,17 @@ it.
   `v0.9.0`). A component's trap is a `burroughs.Trap`, as a core module's is,
   and the CLI exits `4` on it. The open defects on these default-on paths are
   listed in `CHANGELOG.md`'s `v0.9.0` block.
-- **Threads: the mechanism is on main, the gate is not flipped.** `thread.spawn`,
-  futex wait/notify, the safepoint poll, and thread exit/join/detach are
-  implemented. `gate:threads` stays off by default, and contract §4's litmus
-  battery beyond what spawn needed is outstanding and not currently scheduled.
-  `FeatureThreads` is a different thing from that gate: an embedder supplies it
-  to declare that their artifact needs the 0xFE atomics region and shared
-  memories — which every Go guest does, Go emitting atomics unconditionally —
-  and supplying it flips no default.
+- **Threads are on by default, on linux and darwin** (`gate:threads`, ADR 0106).
+  A module using shared memories, the 0xFE atomics region, and
+  `memory.atomic.wait`/`notify` is admitted rather than refused, with no
+  `FeatureThreads` needed. **To restore the old behaviour, set
+  `BURROUGHS_THREADS=0`:** such a module is then refused by name, and
+  `FeatureThreads` (or `--features=threads`) admits it explicitly, as before.
+  Contract §4's litmus battery has 17 of 19 cases implemented and no
+  registered hole. Its strength is stated in ADR 0106 and on
+  [#10](https://github.com/scttfrdmn/burroughs/issues/10): Go's race detector
+  and scheduling claims, **not** hardware weak-memory readings. Stop-the-world exists in the engine but is not public
+  API, so nothing here promises it. Windows is not covered.
 - **Stack switching has not started.** Contract §7, the v2 rung.
 - **Nothing defaults on without its own suite green** (contract §9) — which is
   not the same as everything defaulting off. Several gates have flipped, each by

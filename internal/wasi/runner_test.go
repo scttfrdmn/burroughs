@@ -51,11 +51,12 @@ func TestAGoGuestRunsToMainAndWritesStdout(t *testing.T) {
 // `gate:threads` is not load-bearing for this workload. A future Go runtime that started emitting
 // atomics would fail here rather than silently — the premise is asserted, not assumed.
 func TestTheGoGuestNeedsNoThreadsFeature(t *testing.T) {
-	if GuestFeatures().Threads {
-		t.Fatal("GuestFeatures has Threads on, so decoding it proves nothing about the guest's needs")
-	}
+	// Threads stated off rather than taken from the default: since ADR 0106 the default has it on, and the
+	// premise under test is about the guest, not about what the default happens to admit.
+	off := GuestFeatures()
+	off.Threads = false
 	guest := buildGuest(t, "hello")
-	if _, err := (&bin.Decoder{Features: GuestFeatures()}).DecodeModule(guest); err != nil {
+	if _, err := (&bin.Decoder{Features: off}).DecodeModule(guest); err != nil {
 		t.Errorf("the guest failed to decode with Threads off: %v\n"+
 			"That would mean the Go wasip1 runtime now emits a threads-gated opcode, and gate:threads "+
 			"would have become load-bearing for a plain guest — the opposite of 0080's finding", err)

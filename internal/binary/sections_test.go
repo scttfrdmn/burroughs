@@ -589,7 +589,7 @@ var defaultGatePolicy = map[string]struct {
 }{
 	"ExceptionHandling": {why: "behaviour 4's default: no flip event. #95 owes the tag section's payload grammar first"},
 	"SIMD":              {on: true, stamp: "0025-g-1-carves-out-vectors-whose-sole-blocker-is-9s-deferred-validator.md", why: "#227, the project's first default-behaviour change"},
-	"Threads":           {why: "behaviour 4's default, and the feature is v1's phase (contract §§2–5) — its vectors are outside the board's file set, so no board could see this row move"},
+	"Threads":           {on: true, stamp: "0106-gate-threads-defaults-on-with-burroughs-threads-0-as-the-rollback-because-the-4-battery-has-no-hole-and-the-off-state-stays-witnessed.md", why: "Scott's non-objection, 2026-10-25, recorded on #10 (comment 6392956652); the first flip with a field rollback (BURROUGHS_THREADS=0), and G1 (TestThreadsGateLeavesTheCoreBoardUnchanged) witnesses that the core board does not move"},
 	"Memory64":          {why: "behaviour 4's default: no flip event"},
 	"GC":                {why: "behaviour 4's default. #172 is scheduled to `v0.2.0 GC gate`, a milestone after v0.1.0"},
 	"TailCall":          {why: "behaviour 4's default: no flip event"},

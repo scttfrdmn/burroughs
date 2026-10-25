@@ -37,12 +37,13 @@ func readFixture(t *testing.T) []byte {
 func TestWASIP1FeaturesAreCallerSupplied(t *testing.T) {
 	wasm := readFixture(t)
 
-	// WITHHELD → refused, by name, and classifiable. This is main's behaviour before #813 and it must
-	// survive as the default: supplying a capability makes the refusal conditional, not absent.
+	// WITHHELD, under the rollback → refused, by name, and classifiable. This was the default until ADR 0106
+	// flipped `gate:threads` on. It is now what `BURROUGHS_THREADS=0` must restore, so the off state keeps its
+	// witness: supplying a capability makes the refusal conditional, and the rollback must make it reappear.
+	t.Setenv("BURROUGHS_THREADS", "0")
 	if _, err := (burroughs.WASIP1Config{Stdout: io.Discard, Stderr: io.Discard}).Run(wasm); err == nil {
-		t.Fatal("a wasip1 guest using the 0xFE atomics region RAN under the default feature set — the " +
-			"refusal must survive as the default, or this surface removed a gate instead of making it " +
-			"conditional on what the caller supplied")
+		t.Fatal("a wasip1 guest using the 0xFE atomics region RAN with BURROUGHS_THREADS=0 — the rollback " +
+			"must restore the refusal, or the flip removed a gate instead of changing its default")
 	} else if !strings.Contains(err.Error(), "0xfe") {
 		t.Errorf("refusal %q must name the 0xFE region (refuse by name)", err)
 	}
@@ -78,6 +79,18 @@ func TestWASIP1FeaturesAreCallerSupplied(t *testing.T) {
 	if !strings.Contains(err.Error(), "no-such-capability") {
 		t.Errorf("refusal %q must name the unrecognized capability", err)
 	}
+
+	// THE DEFAULT, since ADR 0106 → the same bytes run with nothing supplied. This is the flip's promise on
+	// this path, asserted beside the refusal the rollback restores, so neither half can pass alone.
+	t.Setenv("BURROUGHS_THREADS", "")
+	code, err = (burroughs.WASIP1Config{Stdout: io.Discard, Stderr: io.Discard}).Run(wasm)
+	if err != nil {
+		t.Fatalf("with gate:threads on by default, a wasip1 guest using the 0xFE region was refused with "+
+			"nothing supplied: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d under the default, want 0", code)
+	}
 }
 
 // TestDetectionIsNotAPermissionDecision is the substantive half of #813, and it is the failure ADR
@@ -92,6 +105,11 @@ func TestWASIP1FeaturesAreCallerSupplied(t *testing.T) {
 // reached"*) on the engine's own public surface.
 func TestDetectionIsNotAPermissionDecision(t *testing.T) {
 	wasm := readFixture(t)
+
+	// Under the rollback, because the property is about a GATED module and, since ADR 0106, the default no
+	// longer gates this one. `BURROUGHS_THREADS=0` restores the default this test was written against, and the
+	// property must still hold there: an embedder who rolls back gets (false, ErrGated), not (false, nil).
+	t.Setenv("BURROUGHS_THREADS", "0")
 
 	// The capability-free entry: false, with an error that says why. Both channels are asserted,
 	// because the bool alone is what misled `burroughs run` and the error alone would not show that.
@@ -129,6 +147,14 @@ func TestDetectionIsNotAPermissionDecision(t *testing.T) {
 	if isCmd || err == nil {
 		t.Errorf("IsCommand with NO capability supplied = (%v, %v), want (false, non-nil): it must "+
 			"decode under this config's set, not under an always-permissive one", isCmd, err)
+	}
+
+	// And under the default since ADR 0106, the capability-free entry answers true: the module IS a command,
+	// and nothing now stands between it and the answer.
+	t.Setenv("BURROUGHS_THREADS", "")
+	if isCmd, err = burroughs.IsWASIP1Command(wasm); !isCmd || err != nil {
+		t.Errorf("IsWASIP1Command under the default = (%v, %v), want (true, nil) now that gate:threads is on",
+			isCmd, err)
 	}
 }
 
