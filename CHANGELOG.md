@@ -26,6 +26,14 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`gate:threads` leaves the core board unchanged, per file** (`TestThreadsGateLeavesTheCoreBoardUnchanged`; gap G1
+  of the flip forecast on [#10](https://github.com/scttfrdmn/burroughs/issues/10), the chair's ruling of
+  2026-10-25).
+  - **What it checks:** every core board file is scored with the gate off and on. The per-command fingerprints
+    (counts, failing lines with their answers, gated lines) must match, and all 256 files do.
+  - **The floor:** the threads proposal's own files must differ through the same comparison, and 3 of 4 do. So an
+    unapplied gate cannot pass it.
+  - **Neuter, run:** `i32.add` feature-checked under the gate makes 36 core files differ.
 - **`ciwatch` classifies a Windows run from its full log when `--log-failed` comes back empty** (the chair's
   fourth ruling of 2026-10-24).
   - **The specimen:** on #1096's first head, GitHub recorded the failed `go test -race` step with no conclusion.
