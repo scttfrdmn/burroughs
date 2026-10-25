@@ -24,6 +24,74 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+## [0.10.0] - 2026-10-25
+*Implements contract v0.1.*
+
+**What changes by default, first: core threads are on.** `gate:threads` flipped (ADR 0106; Scott's *"I do not
+object"*, 2026-10-25, recorded on [#10](https://github.com/scttfrdmn/burroughs/issues/10#issuecomment-6392956652)).
+
+- **What it means:** a module using shared memories, the 0xFE atomics region, and `memory.atomic.wait`/`notify` is
+  admitted with nothing supplied. That holds on every embedder path: core `Instantiate`, `WASIP1Config`, a
+  component's core modules, and `burroughs run`.
+- **The rollback:** **set `BURROUGHS_THREADS=0`** to restore the old default. A module using a threads construct is
+  then refused by name, and `FeatureThreads` (or `--features=threads`) admits it explicitly, as before.
+- **What does not change:** a module that uses no threads feature. All 256 core spec files read identically with
+  the gate off and on, command by command (`TestThreadsGateLeavesTheCoreBoardUnchanged`).
+
+**The v1 threads claim this release makes** (the text on [#10](https://github.com/scttfrdmn/burroughs/issues/10),
+amended by the chair and not objected to by Scott):
+
+> **On linux and darwin**, Burroughs runs WebAssembly threads on OS threads in pure Go: shared memories, the threads
+> proposal's atomics, and `memory.atomic.wait`/`notify` backed by a futex-style wake. Blocking host calls block only
+> their own thread. The boundary memory model of contract §4 holds at every host↔guest crossing the engine has.
+> Windows is not covered (Scott's ruling of 2026-10-10: unsupported, and its CI job gates nothing).
+>
+> **How each guarantee is checked.** The §§2–5 litmus battery (`docs/litmus-battery-preregistration.md`) has 19
+> pre-registered cases. 17 are implemented, and all 17 are green on CI's three gating legs, `ubuntu-24.04` (x86-64,
+> TSO), `ubuntu-24.04-arm` (AArch64, weakly ordered) and `macos-15` (AArch64, darwin), in both the test and `-race`
+> runs, with no skips.
+>
+> - **Judged by Go's memory model via `-race` (5 cases):** SP-6; B-MM-1's async wake; B-MM-1's host write after a
+>   host-call return; B-MM-1's guest→guest message across a host-call return; B-MM-2's two sibling-field cases. Each
+>   case's control was watched producing a located race report on both architectures. **This certifies that
+>   Burroughs' Go implementation of each edge has no data race in the schedules explored. It is not a reading of
+>   hardware ordering.**
+> - **Judged as scheduling claims, where both architectures must agree (12 cases):** T-1, T-2, T-3, T-6 ×3, SP-1,
+>   SP-2, SP-4, H-1 and H-3.
+> - **Structural, checked by controls rather than outcome tuples:** T-4, T-5, SP-3, B-MM-3, B-MM-4, B-MM-5 and H-2,
+>   plus two B-MM-1 crossings: trap resume, which does not exist in this engine, and stack-switch resume, which is v2.
+> - **SP-1, SP-2, SP-4 and SP-6 witness the engine's internal stop-the-world.** No public API exposes it, so they
+>   support no clause of this claim. They are counted so that the counts are the battery's, not a selection from it.
+> - **No case is judged by hardware weak-memory values** (#795). A memory-model gap that `-race` cannot see, one
+>   correct in Go's model but not in the guest's, is outside what this claim establishes.
+>
+> **Limits.** Aligned accesses only (#567). The bulk and SIMD families are plain at every alignment (ADR 0064).
+> `sp5` and `h4`, guest-called suspension, wait on the async-lift half (#771).
+
+**Platforms.** CI gates merges on three legs: linux x86-64, linux arm64, and darwin arm64. The darwin leg is new in
+this release (#1104), so the claim's platform line matches the CI that gates merges. Windows runs a CI job that
+gates nothing.
+
+**The board** (`make conformance`): 60957 pass, 0 fail, 0 unsupported, 4187 gated, 0 unimplemented, over 256 files.
+The threads lane reads 576 pass, 41 fail and 2 bound, and every one of the 41 failures is a registered
+superseded-corpus row, with 0 engine defects.
+
+**Known limits, open on default-on paths, each with its issue:**
+- **`Close` with a zero bound returns `nil` on Windows** ([#945](https://github.com/scttfrdmn/burroughs/issues/945)),
+  carried. The witness `TestCloseCountsEveryCallItAdmits` found 0 violations in 27,000 trials per bound on linux and
+  darwin. Windows is outside the claim.
+- **A component's cancel-while-suspended witness hung once** under `make ci`, and did not reproduce in 453 attempts
+  ([#1106](https://github.com/scttfrdmn/burroughs/issues/1106)). It is recorded so that a second occurrence is
+  recognized and dumped.
+- **A Go guest's stop-the-world still depends on the fork's compiler-inserted loop checks** (SP-1 reading (b),
+  [#1064](https://github.com/scttfrdmn/burroughs/issues/1064), parked).
+- **A Go runtime fatal was seen once on CI's arm64 runner** in `internal/spec`
+  ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)), carried. It has not repeated.
+- **`array.new*`'s backing allocation is not polled**, so `Stop` can take over 1ms on a GC array of about 64 Ki
+  elements or more (ADR 0104's named limit, with its revisit trigger).
+
+**Then the instruments and fixes**, under Added and Changed below.
+
 ### Added
 
 - **`gate:threads` is on** (ADR 0106; the chair's ruling of 2026-10-25, and Scott's *"I do not object"*, recorded
@@ -19207,7 +19275,8 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/scttfrdmn/burroughs/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/scttfrdmn/burroughs/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/scttfrdmn/burroughs/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/scttfrdmn/burroughs/compare/v0.6.0...v0.7.0
