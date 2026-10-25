@@ -32,23 +32,32 @@ import (
 // NEUTER, run: the re-try after the requeue (`drive`'s second `fenceAdmit`) removed. Then every run hangs to the
 // bound, with the same four-way dump.
 func TestAFenceSkippedThreadIsRunWhenTheWriterLeavesBeforeTheRequeue(t *testing.T) {
-	// Reaching the fence-skip path is itself a race: T must be popped while the parent still holds its fence.
-	// Measured at 15 of 400 iterations. So the witness iterates until the window has been held open `wantWindows`
-	// times, and treats too few entries as a failure, not a pass.
-	const wantWindows, maxIters = 5, 1000
+	// Reaching the fence-skip path is itself a race: T must be popped while the parent still holds its fence. Its rate
+	// is platform-dependent: 15 in 400 iterations on the darwin dev host, but 2 in 1000 on CI's macos-15 runner, where
+	// this witness's first version failed its own vacuity floor. So the witness iterates until the window has been
+	// held open `wantWindows` times, bounded by a time budget rather than a fixed count, and too few entries still
+	// fail it rather than pass. Each iteration is a subtest, so its instance closes when it ends rather than at the
+	// end of the whole test.
+	const wantWindows = 3
+	budget := time.Now().Add(60 * time.Second)
 	widened := 0
 	fenceSkipWindow = func() { widened++; time.Sleep(50 * time.Millisecond) }
 	defer func() { fenceSkipWindow = nil }()
 
 	iters := 0
-	for ; iters < maxIters && widened < wantWindows; iters++ {
-		_, res, err := callBounded(t, "cancel-suspended", "run")
-		wantU32(t, "cancel-suspended", res, err, 4)
+	for ; time.Now().Before(budget) && widened < wantWindows; iters++ {
+		t.Run("iteration", func(t *testing.T) {
+			_, res, err := callBounded(t, "cancel-suspended", "run")
+			wantU32(t, "cancel-suspended", res, err, 4)
+		})
+		if t.Failed() {
+			return
+		}
 	}
 	if widened < wantWindows {
-		t.Fatalf("the fence-skip window was entered %d times in %d iterations, want %d. Too few runs reached "+
-			"#1106's interleaving for this to witness it; check that the fixture still fences T behind its caller",
-			widened, iters, wantWindows)
+		t.Fatalf("the fence-skip window was entered %d times in %d iterations within the budget, want %d. Too few "+
+			"runs reached #1106's interleaving for this to witness it; check that the fixture still fences T behind "+
+			"its caller", widened, iters, wantWindows)
 	}
 	t.Logf("the fence-skip window was held open %d times over %d iterations, and every run returned 4", widened, iters)
 }
