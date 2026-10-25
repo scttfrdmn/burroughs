@@ -71,6 +71,28 @@ func TestExplainRedAcceptsOnlyAnIssueThatOwnsTheFailure(t *testing.T) {
 			"a_green_record_is_refused", "ciwatch=green\nsha=" + sha + "\n",
 			"open\t2026-10-01T00:00:00Z\nold", false, "nothing to explain",
 		},
+		// #1107: a body larger than the pipe buffer. The script split the issue with `printf … | head -1`, and
+		// under `set -euo pipefail` `printf` took SIGPIPE once `head` had its line, so the script exited with no
+		// message. CI hit that twice with a two-line body under load, and this size hits it every time. 80 KB
+		// stays under linux's 128 KB limit for one environment variable.
+		//
+		// NEUTER, run: the `printf | head` split restored. All three large-body arms then fail, 5 of 5 runs each.
+		{
+			"a_closed_issue_with_a_large_body_still_says_why", red,
+			"closed\t2026-10-01T00:00:00Z\n" + strings.Repeat("x\n", 40000), false, "not open",
+		},
+		{
+			"a_large_body_naming_the_failing_test_at_its_end_is_admitted", red,
+			"open\t2026-10-24T11:00:00Z\n" + strings.Repeat("x\n", 40000) + failing, true, "names the failing test",
+		},
+		// The same shape, one block down: `printf "$body" | grep -qF` inside an `if`. If `grep -q` matches early
+		// and exits, `printf` takes SIGPIPE, and `pipefail` turns the match into a false condition. So an issue
+		// naming the failing test FIRST read as naming none.
+		// NEUTER, run: the `printf | grep -qF` test restored refuses this arm.
+		{
+			"a_large_body_naming_the_failing_test_first_is_admitted", red,
+			"open\t2026-10-24T11:00:00Z\n" + failing + "\n" + strings.Repeat("x\n", 40000), true, "names the failing test",
+		},
 	} {
 		t.Run(a.name, func(t *testing.T) {
 			ok, out, rec := run(t, a.record, a.issue)
