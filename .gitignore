@@ -41,3 +41,7 @@ internal/component/testdata/asynclift/*/target/
 # about one machine's recent sessions, and because the point is to measure the hook's FALSE-POSITIVE rate
 # rather than to publish a project-wide statistic. `scripts/refusals.sh` reports it.
 .editroute-log
+
+# The pinned wasmtime oracle, installed by `scripts/oracle-fetch.sh` from a release archive verified against
+# `scripts/oracle-wasmtime.sha256`. The sums are committed; the binary is fetched, like the spec corpora.
+/.oracle/

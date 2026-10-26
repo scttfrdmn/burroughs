@@ -26,6 +26,18 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **The wasmtime oracle is fetched and checksummed, not taken from the package manager** (the chair's third ruling of
+  2026-10-26). `scripts/oracle-fetch.sh` installs wasmtime 49.0.3 at `.oracle/wasmtime-49.0.3/wasmtime` (gitignored):
+  - it downloads the official release archive for the host's platform (darwin or linux, arm64 or x86-64);
+  - it verifies it against `scripts/oracle-wasmtime.sha256`, whose sums match GitHub's published digests;
+  - it installs only the binary and its license.
+
+  Both fixture `build.sh` scripts now read that path by default. The installed wasmtime had moved under the
+  committed readings twice: 49.0.2 to 49.0.3, and then Homebrew's 50.0.0, which still has #1045's bug.
+  - **Witness:** `TestOracleFetchRefusesATamperedArchive`. An untouched archive installs; a substituted
+    well-formed archive whose binary also reports 49.0.3 is refused on its checksum, as is a corrupted one.
+  - **Neuter, run:** with the comparison removed, the substituted archive installs.
+
 - **The §§2–5 litmus battery's last two cases are implemented: SP-5 and H-4's no-starvation half**
   ([#771](https://github.com/scttfrdmn/burroughs/issues/771)). Both run on `cmthreads/parked-runner.wasm`: one
   async-callback task with N Threads parked in `waitable-set.wait`, plus a runner Thread that counts.

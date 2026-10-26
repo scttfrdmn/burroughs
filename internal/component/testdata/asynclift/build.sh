@@ -37,7 +37,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 : "${HOST_CARGO:=/opt/homebrew/bin/cargo}"    # new enough for the wasmtime crate
 : "${HOST_RUSTC:=/opt/homebrew/bin/rustc}"    # pinned for the same reason, in the other direction
 : "${WASM_TOOLS:=wasm-tools}"
-: "${WASMTIME:=wasmtime}"      # the CLI, for the single guest's value reading (#864)
+# The CLI, for the single guest's value reading (#864). By default it is the pinned oracle that
+# scripts/oracle-fetch.sh installs, not whatever wasmtime the package manager has put on PATH.
+: "${WASMTIME:=$here/../../../../.oracle/wasmtime-49.0.3/wasmtime}"
+[ -x "$WASMTIME" ] || [ -n "$(command -v "$WASMTIME" 2>/dev/null)" ] ||
+	{ echo "build.sh: no wasmtime oracle at $WASMTIME; run scripts/oracle-fetch.sh" >&2; exit 2; }
 
 # ## Pinning the cargo is not enough: `rustc` must be pinned too
 #
