@@ -1,6 +1,6 @@
 # 0084 — The component loader and Canonical ABI lift/lower for value types, sync only, behind `gate:components`
 
-Date: 2026-09-09 · Status: **proposed** · [#694](https://github.com/scttfrdmn/burroughs/issues/694) · Opens the p3 track (contract §6)
+Date: 2026-09-09 · Status: **accepted**: Scott stamped the pre-registered forecast to flip `gate:components`, the gate this ADR defines, on [#720](https://github.com/scttfrdmn/burroughs/issues/720#issuecomment-5643091558); the flip landed on that stamp ([`#720#issuecomment-5643733251`](https://github.com/scttfrdmn/burroughs/issues/720#issuecomment-5643733251), #733), as this ADR's amendment of 2026-09-11 records. The status read **proposed** until the chair's fourth ruling of 2026-10-26 found it unrevised, with that stamp seven weeks old. The stamp is ADR 0086's standard for `accepted`. · [#694](https://github.com/scttfrdmn/burroughs/issues/694) · Opens the p3 track (contract §6)
 Ratio-Class: carried
 
 ## Pinned spec commits

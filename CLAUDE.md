@@ -79,27 +79,23 @@ was neither: v0's conditions are discharged and its milestone is closed, so *no*
 true. (Ruling: Scott, on the #534 review — dissolve #527 rather than adjudicate it, since both of its
 readings turn on which phase is current.)
 
-**`gate:threads` is not flipped, and its condition is stated rather than parked.** The front-end work
-is in flight (the `shared` flag, the keyword table, the 67 atomic mnemonics) and the mechanism above is
-landing behind it; the default **flips when #586 is resolved and the §4 battery covers what the default
-would then promise**, which is Scott's condition in his words and is a condition, not a deferral — the
-difference being that a reader can check whether it holds. **A reader checking it now finds the first half
-held and the second not**: #586 is resolved by
-[0073](docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md),
-and #10's battery still does not cover what the default would promise. The half that holds is recorded here
-rather than the condition rewritten, because the condition is quoted and its state is the reader's to
-derive. The flip is still behaviour 4's own stamp-tier event when it comes.
+**`gate:threads` is flipped, default-on since `v0.10.0`**
+([0106](docs/decisions/0106-gate-threads-defaults-on-with-burroughs-threads-0-as-the-rollback-because-the-4-battery-has-no-hole-and-the-off-state-stays-witnessed.md),
+accepted 2026-10-25 on Scott's *"I do not object"*, recorded on
+[#10](https://github.com/scttfrdmn/burroughs/issues/10)). This paragraph read *"`gate:threads` is not
+flipped, and its condition is stated rather than parked"* for a day after the flip, and the one below it
+said the battery was unscheduled. That was the foreclosing-words shape the ladder above names, at this
+page's own head. The chair's fourth ruling of 2026-10-26 found it. **Scott's condition was met in both halves,
+each by a recorded event:**
+- #586 was resolved by
+  [0073](docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md);
+- the battery he unscheduled on the #670 review was rescheduled with the end point below, and completed in
+  [#1114](https://github.com/scttfrdmn/burroughs/pull/1114).
 
-**And on the #670 review Scott took his own flip off the schedule, which took the battery with it.** His
-words: *"those six rows have exactly one consumer, and it's a condition I invented … The condition stands,
-but the flip isn't scheduled — which means the battery isn't either."* Read carefully, because it is a
-narrower move than it looks: the **condition above is untouched** and still says what it said, so a reader
-can still check it and still find the second half unmet. What changed is that nothing is currently working
-toward making it hold. A principal may unschedule work; **what a principal may not do silently is leave a
-condition standing that reads as though someone were discharging it**, which is why the unscheduling is
-recorded against the condition rather than folded into it. The consequence for a future actor is one line:
-do not pick up #10's battery as though the flip were pending, and do not treat the flip as available
-because #586 is resolved — the schedule, not the condition, is what is empty.
+The flip was its own stamp-tier event (behaviour 4). **What it opened is the threads grammar, not threads.**
+No public path can start a second agent over a shared memory
+([#1121](https://github.com/scttfrdmn/burroughs/pull/1121)'s witnesses, one per entry point). Guest-started
+threads are the next milestone's work, decided by Scott; host-started threads are not built.
 
 ## Where the work is tracked
 
