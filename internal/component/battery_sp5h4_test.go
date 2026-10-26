@@ -91,6 +91,7 @@ type prState struct{ parked, woke, counter uint32 }
 func (pr *parkedRunner) stopped() prState {
 	pr.t.Helper()
 	if err := pr.body.Stop(30 * time.Second); err != nil {
+		dumpAllGoroutines(pr.t)
 		pr.t.Fatalf("a stop taken to read the counters failed: %v", err)
 	}
 	s := prState{pr.u32(prParked), pr.u32(prWoke), pr.u32(prCounter)}
@@ -110,6 +111,7 @@ func (pr *parkedRunner) waitFor(what string, bound time.Duration, cond func(prSt
 			return s
 		}
 		if time.Now().After(deadline) {
+			dumpAllGoroutines(pr.t)
 			pr.t.Fatalf("parked-runner never reached %q within %s (parked=%d woke=%d counter=%d)", what, bound,
 				s.parked, s.woke, s.counter)
 		}
@@ -127,12 +129,19 @@ func (pr *parkedRunner) result(bound time.Duration) uint32 {
 		v, _ := o.res[0].U32()
 		return v
 	case <-time.After(bound):
-		buf := make([]byte, 1<<22)
-		buf = buf[:runtime.Stack(buf, true)]
-		pr.t.Logf("every goroutine at the bound (%d bytes):\n%s", len(buf), buf)
+		dumpAllGoroutines(pr.t)
 		pr.t.Fatalf("run did not return within %s", bound)
 		return 0
 	}
+}
+
+// dumpAllGoroutines logs every goroutine. Every bounded failure in these cases calls it first, so a failure in a
+// stress can be classified by where the guest was (the chair's second ruling of 2026-10-26), not by its count.
+func dumpAllGoroutines(t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	t.Logf("every goroutine at the bound (%d bytes):\n%s", len(buf), buf)
 }
 
 // prRunnerK is the runner's count: about 1.2s of counting in either build on darwin/arm64 (16M at 13.6M counts per
@@ -166,6 +175,7 @@ func TestSP5StopCompletesWithAgentsSuspendedInBuiltins(t *testing.T) {
 	pr.waitFor("the runner counting", 10*time.Second, func(s prState) bool { return s.counter > c0 })
 
 	if err := pr.body.Stop(time.Second); err != nil {
+		dumpAllGoroutines(t)
 		t.Fatalf("Stop did not complete with four agents suspended in waitable-set.wait and the runner executing: %v", err)
 	}
 	stopped, woke := pr.u32(prCounter), pr.u32(prWoke)
