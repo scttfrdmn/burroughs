@@ -8,6 +8,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -634,14 +635,53 @@ func TestStopRefusesASecondConcurrentStop(t *testing.T) {
 			"wrong answer")
 	}
 	in.Resume()
+	resumed := time.Now()
 
 	select {
 	case <-done:
+		logPostResume(t, resumed)
 	case err := <-errs:
 		t.Fatalf("the guest failed: %v", err)
-	case <-time.After(30 * time.Second):
-		t.Fatal("the guest did not finish after Resume")
+	case <-time.After(postResumeBound):
+		dumpGoroutinesAtTheBound(t)
+		t.Fatalf("the guest did not finish %s after Resume", postResumeBound)
 	}
+}
+
+// postResumeBound is how long TestStopRefusesASecondConcurrentStop and TestStopBringsATailCallLoopToASafepoint
+// wait for the guest to finish after Resume (#896, #946). It was 30s, and it is **set from measurement**, not
+// raised by guesswork (the chair's second ruling of 2026-10-26):
+//   - **What the timeouts were:** 8 in 20,000 `-race` iterations on darwin/arm64, and every dump showed the guest
+//     still executing in the interpreter (impatience, not a lost wakeup). Janus x86-64 had 0 in 20,000.
+//   - **What caused them:** contention, settled by a 2×2 experiment of host × load (about 0.5 and 0.67 processes
+//     per core), with 1,000 iterations per test per arm, normalised by each host's unloaded median. The
+//     distribution moves with load and stays tight (p99 within 6% of the median), with no ARM-only mode. All 8
+//     stress timeouts fell while other work was running on the darwin host; at the stress's own load on an
+//     otherwise quiet host, darwin had 0 in 2,000.
+//   - **The slowest passing post-Resume time measured:** 22.1s (janus, 22 `-race` processes on 32 cores). The
+//     slowest passing whole-test time under the stress's extra load was 30.0s.
+//   - **The margin:** 60s is 2.7× the first and 2× the second. A guest that is merely slow under heavy load
+//     finishes inside it, and a lost wakeup, which never finishes, still fails it and dumps its stacks.
+const postResumeBound = 60 * time.Second
+
+// logPostResume logs how long the guest took to finish after Resume, in one parseable form. It is the
+// measurement #946 needs: whether a timeout is the far tail of one distribution (impatience, which tracks load)
+// or a separate mode (a defect). It also sets the bound from data rather than raising a number.
+func logPostResume(t *testing.T, resumed time.Time) {
+	t.Helper()
+	t.Logf("post-resume-elapsed-ms %d", time.Since(resumed).Milliseconds())
+}
+
+// dumpGoroutinesAtTheBound logs every goroutine's stack before a bounded wait after Resume fails (#896, #946; the
+// chair's ruling of 2026-10-26, applying #1106's method). #946's open question is whether this 30s bound expires
+// from impatience under load or from a lost wakeup. A dump answers it, where the bound alone cannot:
+//   - **impatience:** the guest's goroutine is still running in the interpreter;
+//   - **a lost wakeup:** every goroutine is parked, and their stacks name the cycle.
+func dumpGoroutinesAtTheBound(t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	t.Logf("every goroutine at the bound (%d bytes):\n%s", len(buf), buf)
 }
 
 // TestStopBringsATailCallLoopToASafepoint is the arm without which `enterFrame`'s poll could be
@@ -710,9 +750,11 @@ func TestStopBringsATailCallLoopToASafepoint(t *testing.T) {
 	}
 
 	in.Resume()
+	resumed := time.Now()
 
 	select {
 	case out := <-done:
+		logPostResume(t, resumed)
 		if len(out) != 1 || out[0].Bits != 1 {
 			t.Errorf("after Resume the chain returned %v, want 1 — parking inside the "+
 				"trampoline perturbed the frame it was about to enter, which is the failure "+
@@ -720,8 +762,9 @@ func TestStopBringsATailCallLoopToASafepoint(t *testing.T) {
 		}
 	case err := <-errs:
 		t.Fatalf("after Resume the guest failed: %v", err)
-	case <-time.After(30 * time.Second):
-		t.Fatal("the chain did not finish 30s after Resume")
+	case <-time.After(postResumeBound):
+		dumpGoroutinesAtTheBound(t)
+		t.Fatalf("the chain did not finish %s after Resume", postResumeBound)
 	}
 }
 

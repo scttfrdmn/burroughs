@@ -26,6 +26,19 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **Two Stop/Resume tests no longer time out under heavy load, and a real hang would still dump its cause**
+  ([#896](https://github.com/scttfrdmn/burroughs/issues/896), [#946](https://github.com/scttfrdmn/burroughs/issues/946)).
+  `TestStopBringsATailCallLoopToASafepoint` and `TestStopRefusesASecondConcurrentStop` waited 30s after Resume.
+  - **The diagnosis:**
+    - The #1106 method: 10,000 `-race` iterations of each on darwin/arm64 and janus x86-64, with a goroutine dump at
+      the bound. That gave 8 timeouts on darwin and 0 on janus, and every dump showed the guest still executing
+      (impatience, not a lost wakeup).
+    - A 2×2 experiment of host × load, Scott's question being whether ARM's memory model was involved. It found
+      contention: the distribution moves with load and stays tight, with no ARM-only mode. On a quiet darwin host
+      at the stress's own load there were 0 timeouts in 2,000.
+  - **The bound is now 60s**, set from the slowest passing post-Resume time measured (22.1s) with a stated margin.
+    Both tests log `post-resume-elapsed-ms` and dump every goroutine at the bound.
+
 - **`scripts/detach.sh` runs under macOS's `/bin/bash` 3.2** ([#1105](https://github.com/scttfrdmn/burroughs/issues/1105)).
   - **The defect:** it read `BASHPID`, which is bash 4+, under `set -u`. On 3.2 its wrapper died before running
     anything, and it reported child-gone with exit 120.
