@@ -22,7 +22,52 @@ platform"*) was satisfiable as written while misleading as read, and the amendme
 says what it now requires and what it gives up.
 
 ## [Unreleased]
+
+## [0.11.0] - 2026-10-26
 *Implements contract v0.1.*
+
+**What changes by default: nothing.** No gate flips in this release.
+
+**The claim, corrected first.** `v0.10.0`'s threads claim said *"Burroughs runs WebAssembly threads on OS threads in
+pure Go"*. That is true of the engine, but no public path can start a second thread over a shared memory.
+`gate:threads` admits the grammar, and nothing a guest or an embedder can reach starts a second agent (Fixed, below;
+#1121). The correction is also posted on [#10](https://github.com/scttfrdmn/burroughs/issues/10) and
+[#1108](https://github.com/scttfrdmn/burroughs/issues/1108). Guest-started threads are `v0.12.0`'s work
+([#1122](https://github.com/scttfrdmn/burroughs/issues/1122)).
+
+**The §§2–5 litmus battery is complete: 19 of 19 cases implemented.** SP-5 and H-4's no-starvation half landed
+(#1114), each after 10,000 `-race` iterations on darwin/arm64 and on janus x86-64 with no failure. The claim's limit
+*"two cases pending"* is lifted. The battery's strength is unchanged: Go's race detector and scheduling claims, not
+hardware weak-memory readings. And it witnesses the engine, which, per the correction above, is not yet reachable
+for threads from a public path.
+
+**The oracle is pinned.** wasmtime 49.0.3 is fetched from its release and checked against a committed SHA-256
+(`scripts/oracle-fetch.sh`, #1117), so a package-manager upgrade can no longer move it under the readings.
+
+**Board** (`make conformance`): the core board reads 60957 pass, 0 fail, 0 unsupported, 4187 gated, 0 unimplemented
+over 256 files. The threads lane reads 576 pass, 41 fail, 2 bound over 4 files, and all 41 failures are
+superseded-corpus rows (`threads_superseded_test.go`'s register), with 0 engine defects. Both are unchanged from
+`v0.10.0`.
+
+**A `v0.10.0` limit is gone:** the cancel-while-suspended hang was a lost wakeup, and it is fixed (Fixed, below).
+
+**Known limits, open on default-on paths, each with its issue:**
+- **No public path starts a second thread over a shared memory**
+  ([#1122](https://github.com/scttfrdmn/burroughs/issues/1122)). The threads grammar is admitted, but a public
+  module's shared memory has one agent, and `memory.atomic.wait` on it can only time out. Component-model Threads do
+  start through the component path, one at a time per instance.
+- **A shared-everything-threads table is refused as "malformed", not by name**
+  ([#1120](https://github.com/scttfrdmn/burroughs/issues/1120)). It is still a refusal.
+- **`Close` with a zero bound returns `nil` on Windows** ([#945](https://github.com/scttfrdmn/burroughs/issues/945)),
+  carried. Windows is outside the claim.
+- **A Go guest's stop-the-world still depends on the fork's compiler-inserted loop checks** (SP-1 reading (b),
+  [#1064](https://github.com/scttfrdmn/burroughs/issues/1064), parked).
+- **A Go runtime fatal was seen once on CI's arm64 runner** in `internal/spec`
+  ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)), carried. It has not repeated.
+- **`array.new*`'s backing allocation is not polled**, so `Stop` can take over 1ms on a GC array of about 64 Ki
+  elements or more (ADR 0104's named limit, with its revisit trigger).
+
+**Then the instruments and fixes**, under Added, Changed and Fixed below.
 
 ### Added
 
@@ -19397,7 +19442,8 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/scttfrdmn/burroughs/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/scttfrdmn/burroughs/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/scttfrdmn/burroughs/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/scttfrdmn/burroughs/compare/v0.7.0...v0.8.0
