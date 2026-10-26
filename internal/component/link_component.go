@@ -1193,8 +1193,10 @@ func gateAsync(c *Component) error {
 	// the refusal for the unbuilt rest fires (witnessed on a blocking-arm/lift/built-in case), not merely
 	// the sync-resolving lower passing.
 	if unbuilt, ok := unbuiltAsyncSurface(c); ok {
+		// The message cited "(#739 slice 1)" until #771's build: #739 closed long ago, and a refusal citing a closed
+		// slice tells the reader the work is in flight when it is not.
 		return fmt.Errorf("%w: this component uses %s, and gate:async is on, but that async surface's "+
-			"execution is not yet implemented — it lands incrementally (#739 slice 1)",
+			"execution is not yet implemented, so it is refused by name",
 			ErrAsyncNotImplemented, unbuilt)
 	}
 	return nil // only async lowers (2a-i-A's built surface) — permit; the walk binds the adapter

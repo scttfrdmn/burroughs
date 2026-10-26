@@ -654,9 +654,9 @@ carries the per-frame resolution behind a trigger.
 > a safepoint, and SP-1's and SP-2's predicates are unaffected.
 
 - **Shape:** outcome
-- **Blocked by:** slice 1 — the `gate:async` substrate does not exist yet (ADR 0086; lands after #737). This
-  is SP-4's case for the guest-called-suspend category: the same scheduling claim, whose witness needs an
-  agent that can suspend in a `waitable-set.wait`, which slice 1 builds.
+- **Blocked by:** none since 2026-10-26 (#771). It read *"slice 1 — the `gate:async` substrate does not exist
+  yet"*; that substrate landed, and this is SP-4's case for the guest-called-suspend category, witnessed on an
+  agent suspended in `waitable-set.wait`.
 
 #### Case `sp5-stop-completes-with-agents-suspended-in-builtins`
 
@@ -669,7 +669,15 @@ carries the per-frame resolution behind a trigger.
   hot loop so the stop has something to stop.
 - **Floor:** every run must confirm all N suspended before the request.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #771
+- **Status:** implemented — TestSP5StopCompletesWithAgentsSuspendedInBuiltins
+
+  > Landed 2026-10-26 (#771). The witness is `cmthreads/parked-runner.wasm`: one async-callback task, four Threads
+  > parked in `waitable-set.wait` (confirmed under a stop before the request), and a runner Thread counting in a
+  > loop. The oracle is the pin, which reads `value 1000`. Stock wasmtime reaches #1045's bug here, so its reading
+  > does not count (ADR 0102); a #1045-patched build agrees with the pin, as corroboration only. **Control,
+  > watched:** the wait without its `c.Blocking` excursion fails the case 2 of 2 under `-race`, at the first stop
+  > after a Thread parks. Both forbidden halves are checked (no wake, and Stop returns within 1s). 10,000 `-race`
+  > iterations on darwin/arm64 and 10,000 on janus x86-64 passed, with no failure and no dump.
 
 ### SP-6 — a resumed agent sees writes made while the world was stopped
 
@@ -1336,9 +1344,9 @@ semantics.
 > same instance remain runnable, and the runtime introduces no sibling starvation.
 
 - **Shape:** outcome
-- **Blocked by:** #739 — the `gate:async` substrate (slice 1) does not exist yet (ADR 0086; lands after
-  #737). This is H-1's case for the guest-called-suspend category: the same scheduling claim, whose witness
-  needs an agent that can suspend in a `waitable-set.wait`, which slice 1 builds.
+- **Blocked by:** none since 2026-10-26 (#771). It read *"#739 — the `gate:async` substrate (slice 1) does not
+  exist yet"*; that substrate landed, and this is H-1's case for the guest-called-suspend category, witnessed on
+  an agent suspended in `waitable-set.wait`.
 
 #### Case `h4-a-suspended-agent-does-not-starve-its-siblings`
 
@@ -1351,7 +1359,13 @@ semantics.
   built-in, so its progress is not an artifact of the substrate.
 - **Floor:** every run must confirm A suspended before sampling.
 - **Arbiter:** neither — a scheduling claim.
-- **Status:** blocked — #771
+- **Status:** implemented — TestH4ASuspendedAgentDoesNotStarveItsSiblings
+
+  > Landed 2026-10-26 (#771), on SP-5's fixture with N = 1. A is the one parked Thread; B is the runner, readied
+  > only once A has parked, and its loop contains no suspending built-in. Every read is taken under a stop.
+  > **Control, watched:** the wait keeping the run slot fails the case 2 of 2 under `-race`, with zero advance.
+  > B's advance in 100ms over 10,000 `-race` iterations: darwin/arm64 min 29,565 (median 60,005), and janus
+  > x86-64 min 16,443 (median 30,196). No failure and no dump on either.
 
 **Why the self-deadlock half has no litmus case:** the clause's last sentence is a *non-guarantee* — the
 runtime does not detect the all-agents-suspended-on-unsatisfiable-waitable-sets case; `Close` and the fault

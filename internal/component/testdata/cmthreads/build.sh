@@ -280,6 +280,31 @@ opta trap-while-waiting-control "BUG: delivering non-present event" # oracle: th
 opta sync-wait-own-thread 7
 opta sync-wait-own-thread-control "cannot block a synchronous task before returning"
 
+# #771's sp5/h4 shape. The oracle is the REFERENCE READING (refread.reading's parked-threads-and-a-runner lines,
+# value 1000 for N = 4 and N = 1): stock wasmtime reaches #1045's bug, so its reading does not count (the chair's
+# ruling of 2026-10-26; ADR 0102). It is asserted here so that a fixed wasmtime fails and the fixture is re-read.
+# WASMTIME_1045_PATCHED, if set, names a wasmtime built with #1045's diagnosed patch. Its reading is corroboration
+# only, never the oracle: on 2026-10-26 a v49.0.3 build with the patch read 1000 for both.
+"$WASM_TOOLS" parse "$here/parked-runner.wat" -o "$here/parked-runner.wasm"
+for a in 'run(4, 1000)' 'run(1, 1000)'; do
+	out=$("$WASMTIME" run -W component-model-threading=y -W component-model-async=y \
+		--invoke "$a" "$here/parked-runner.wasm" 2>&1 || true)
+	case "$out" in
+	*"BUG: delivering non-present event"*) echo "build.sh: parked-runner $a still hits #1045 (oracle: the reference reading)" >&2 ;;
+	*)
+		echo "build.sh: parked-runner $a no longer hits #1045. Re-read it against the reference reading. Got:" >&2
+		echo "$out" >&2
+		exit 1
+		;;
+	esac
+	if [ -n "${WASMTIME_1045_PATCHED:-}" ]; then
+		got=$("$WASMTIME_1045_PATCHED" run -W component-model-threading=y -W component-model-async=y \
+			--invoke "$a" "$here/parked-runner.wasm" 2>&1 || true)
+		[ "$got" = "1000" ] || { echo "build.sh: patched wasmtime reads parked-runner $a as '$got', not 1000." >&2; exit 1; }
+		echo "build.sh: parked-runner $a reads 1000 on the #1045-patched wasmtime (corroboration only)" >&2
+	fi
+done
+
 # The chair's step 3: cancellation requested while a Thread is suspended. The async subtask.cancel needs
 # wasmtime's `more-async-builtins` feature. The control and the cancellable variant read as NO RETURN, so
 # their check is that the bounded run times out (exit 124), not that it prints a figure.

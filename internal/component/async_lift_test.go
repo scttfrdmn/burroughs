@@ -540,8 +540,9 @@ func TestFutureWriteDroppedStaysFixtureOnly(t *testing.T) {
 
 // TestP3AsyncCancelStillRefusedByName witnesses the boundary honestly (#785, #732): p3async-cancel — the Rust
 // guest whose wit-bindgen surface DRAGS future built-ins its run() never calls — still refuses at instantiate
-// by name, because the unexercised ones (future.cancel-read 0x18, future.drop-writable 0x1b, task.cancel
-// 0x05) stay unbuilt. The refusal fires on its own bytes: the boundary is a named refusal, not a gap. It
+// by name, because the unexercised ones (future.cancel-read 0x18, future.drop-writable 0x1b) stay unbuilt. Read on
+// 2026-10-26, the refusal names 0x18. `task.cancel` (0x05) was listed here until #771's build, and has been built
+// since #862. The refusal fires on its own bytes: the boundary is a named refusal, not a gap. It
 // stays the standing end-to-end candidate (blocker = those unbuilt built-ins); when a later guest drives
 // them, the Rust end-to-end lands.
 func TestP3AsyncCancelStillRefusedByName(t *testing.T) {
