@@ -106,6 +106,16 @@ it.
   `FeatureThreads` needed. **To restore the old behaviour, set
   `BURROUGHS_THREADS=0`:** such a module is then refused by name, and
   `FeatureThreads` (or `--features=threads`) admits it explicitly, as before.
+  **But no public path can start a second thread over that memory.** The
+  public API has no spawn, join or host-function registration, and no
+  public path supplies a guest-side spawn: the Phase 4 fork's
+  `"burroughs" "spawn"` import fails to link, and a component's
+  `thread.spawn-ref`/`-indirect` is refused. So a public module's shared
+  memory has one agent, and `memory.atomic.wait` on it can only time out.
+  The threads machinery is built and measured inside the engine; exposing it
+  is an open public-API decision. Component-model Threads (`gate:cm-threads`)
+  do start through the component paths, but they run one at a time per
+  instance and share no memory between agents.
   Contract §4's litmus battery has 19 of 19 cases implemented and no
   registered hole. Its strength is stated in ADR 0106 and on
   [#10](https://github.com/scttfrdmn/burroughs/issues/10): Go's race detector

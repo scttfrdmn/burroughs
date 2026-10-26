@@ -60,6 +60,22 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **Correction to the v0.10.0 threads claim: no public path can start a second thread over a shared memory.** The
+  claim reads *"Burroughs runs WebAssembly threads on OS threads in pure Go"*. That is true of the engine, and its
+  litmus battery measures it there, but it is not true of anything an embedder can reach. `gate:threads` admits the
+  threads **grammar** on every public path (shared memories, the 0xFE atomics, `memory.atomic.wait`/`notify`), but:
+  - **for embedders:** the public API has no spawn, join, stop or host-function registration;
+  - **for guests:** no public path supplies a spawn door. The Phase 4 fork's `"burroughs" "spawn"` import fails to
+    link through `Instantiate`, `WASIP1Config.Run` and `burroughs run`.
+  - **for components:** the shared-everything-threads `thread.spawn-ref` is refused by name, and
+    `thread.spawn-indirect` is refused at decode, through `LoadComponent` and `ComponentConfig.Run`.
+
+  So a public module's shared memory has exactly one agent, and a `memory.atomic.wait` on it can only time out.
+  - **What does run:** component-model Threads (`gate:cm-threads`, since v0.8.0) start through the public component
+    paths. They are cooperative, running one at a time per instance (ADR 0101), not agents over a shared memory.
+  - **Witnessed:** `TestNoPublicPathRunsASecondSharedMemoryThread`, `TestAComponentModelThreadRunsThroughThePublicPath`
+    and `cmd/burroughs`'s `TestRunCannotStartASecondSharedMemoryThread` (the chair's fourth ruling of 2026-10-26).
+  - The v0.10.0 tag and its block are unchanged. Exposing a threads API is a public-API decision, which is Scott's.
 - **The one-load witnesses read whether agent A is still filling instead of assuming it**
   ([grave #1118](https://github.com/scttfrdmn/burroughs/issues/1118)). Both took "A is still inside its fill" from
   the order `Resume`, then B's grow. On ubuntu-arm64 A finished first, B's grow correctly relocated, and main went
