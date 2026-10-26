@@ -22,6 +22,19 @@ platform"*) was satisfiable as written while misleading as read, and the amendme
 says what it now requires and what it gives up.
 
 ## [Unreleased]
+*Implements contract v0.1.*
+
+### Added
+
+- **A per-gate board lane: what each default-off gate does on its own** (`TestEachDefaultOffGateOnItsOwnLane`; the
+  chair's addendum of 2026-10-26, "the flips"). The all-gates-on lane says the gates together leave nothing failing.
+  This one gives what a flip of ONE gate changes, which is what a G-1 forecast pre-registers.
+  - For each gate `binary.DefaultFeatures` leaves off (found by reflection, so a new gate gets a lane unedited), it
+    runs the board with that gate alone added. It asserts no new failure and at least one answered vector, and
+    checks that every lane's counters balance against the default lane.
+  - **Neuter, run:** with every lane built from the defaults, all six gates fail the answered-none arm.
+  - Read on darwin/arm64 and on janus x86-64 (native), identical in every counter. The forecasts are posted for
+    Scott's stamp; no gate flips here.
 
 ## [0.11.0] - 2026-10-26
 *Implements contract v0.1.*
