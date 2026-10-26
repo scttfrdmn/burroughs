@@ -981,6 +981,80 @@ def trap_then_call(t_traps):
     return body
 
 
+def parked_threads_and_a_runner(n, k, release=True):
+    """#771's sp5/h4 shape (the plan on #771, accepted by the chair on 2026-10-26): ONE async-callback task whose
+    N created Threads each park in `waitable-set.wait` (`def:Thread.wait_until`), while a further created Thread,
+    the runner, executes. Not N tasks: `def:WaitableSet.wait` keeps `exclusive_thread`, so a second callback task
+    could not enter while the first is parked in a sync wait.
+
+    It mirrors cmthreads/parked-runner.wat. Each parked Thread reads its own future, finds it BLOCKED, and waits
+    on a set joined to it. `run` creates the runner without readying it, and the N-th parked Thread readies it
+    just before its own wait. One Thread runs at a time (`def:Store.tick`), so the runner starts only after all N
+    have parked. That ordering needs no `thread.yield`, which Burroughs refuses (#952). The runner counts to k,
+    then writes the N futures to release them. `run`'s callback returns the count once all N have woken. So
+    "value k" means the runner ran to completion with N Threads parked in a guest-called built-in, which is the
+    state h4 asserts. A HANG or a trap would mean the pin does not admit the shape."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        fut = d.FutureType(d.U8Type())
+        aopts = d.CanonicalOptions(async_=True, memory=mem)
+        state = {"parked": 0, "woke": 0, "count": 0, "runner": None}
+        ends = []  # (readable, writable) per parked Thread
+
+        def parked(args):
+            i = args[0]
+            readable = ends[i][0]
+            [r] = d.canon_future_read(fut, aopts, readable, 1024 + i)
+            if r == d.BLOCKED:
+                [s] = d.canon_waitable_set_new()
+                d.canon_waitable_join(readable, s)
+                state["parked"] += 1
+                if state["parked"] == n:
+                    d.canon_thread_resume_later(state["runner"])
+                site["name"] = "parked Thread %d's wait" % i
+                d.canon_waitable_set_wait(mem, s, 2048 + 8 * i)
+            state["woke"] += 1
+            return []
+
+        def runner(args):
+            for _ in range(k):
+                state["count"] += 1
+            if release:  # the control never releases: the parked Threads must then stay parked, and run HANG
+                for i in range(n):
+                    mem.bytes[900] = 1
+                    d.canon_future_write(fut, aopts, ends[i][1], 900)
+            return []
+
+        tbl = d.Table()
+        pfi = tbl.add(d.CoreFuncRef(BODYT, parked))
+        rfi = tbl.add(d.CoreFuncRef(BODYT, runner))
+
+        def run(args):
+            [state["runner"]] = d.canon_thread_new_indirect(BODYT, tbl, rfi, 0)  # created, readied by the last parked
+            for _ in range(n):
+                [packed] = d.canon_future_new(fut)
+                ends.append((packed & 0xFFFFFFFF, packed >> 32))
+            for i in range(n):
+                [t] = d.canon_thread_new_indirect(BODYT, tbl, pfi, i)
+                d.canon_thread_resume_later(t)
+            return [1]  # YIELD
+
+        def cb(args):
+            if state["woke"] == n:
+                d.canon_task_return([d.U32Type()], d.LiftOptions(), [state["count"]])
+                return [0]  # EXIT
+            return [1]
+
+        rft = d.FuncType([], [d.U32Type()], async_=True)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(async_=True, callback=cb), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1011,6 +1085,9 @@ def battery():
     read("trap-then-call (#1040; wasmtime 49.0.3: call 1 trap, call 2 'cannot enter component instance')",
          trap_then_call(True))
     read("trap-then-call control (T returns)", trap_then_call(False))
+    read("parked-threads-and-a-runner, N=4 (#771's sp5 shape)", parked_threads_and_a_runner(4, 1000))
+    read("parked-threads-and-a-runner, N=1 (#771's h4 shape)", parked_threads_and_a_runner(1, 1000))
+    read("parked-threads-and-a-runner control (never released; must HANG)", parked_threads_and_a_runner(4, 1000, False))
 
 
 if __name__ == "__main__":
