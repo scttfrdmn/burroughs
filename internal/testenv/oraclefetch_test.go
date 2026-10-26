@@ -39,9 +39,9 @@ func TestOracleFetchRefusesATamperedArchive(t *testing.T) {
 	if plat == "" {
 		t.Skipf("oracle-fetch.sh pins archives for darwin and linux only; %s/%s has no sums row", runtime.GOOS, runtime.GOARCH)
 	}
-	script, err := filepath.Abs("../../scripts/oracle-fetch.sh")
-	if err != nil {
-		t.Fatal(err)
+	script, aerr := filepath.Abs("../../scripts/oracle-fetch.sh")
+	if aerr != nil {
+		t.Fatal(aerr)
 	}
 
 	// A release-shaped archive: wasmtime-v49.0.3-<plat>/wasmtime, an executable reporting the version.
