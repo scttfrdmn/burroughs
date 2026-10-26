@@ -635,15 +635,25 @@ func TestStopRefusesASecondConcurrentStop(t *testing.T) {
 			"wrong answer")
 	}
 	in.Resume()
+	resumed := time.Now()
 
 	select {
 	case <-done:
+		logPostResume(t, resumed)
 	case err := <-errs:
 		t.Fatalf("the guest failed: %v", err)
 	case <-time.After(30 * time.Second):
 		dumpGoroutinesAtTheBound(t)
 		t.Fatal("the guest did not finish after Resume")
 	}
+}
+
+// logPostResume logs how long the guest took to finish after Resume, in one parseable form. It is the
+// measurement #946 needs: whether a timeout is the far tail of one distribution (impatience, which tracks load)
+// or a separate mode (a defect). It also sets the bound from data rather than raising a number.
+func logPostResume(t *testing.T, resumed time.Time) {
+	t.Helper()
+	t.Logf("post-resume-elapsed-ms %d", time.Since(resumed).Milliseconds())
 }
 
 // dumpGoroutinesAtTheBound logs every goroutine's stack before a bounded wait after Resume fails (#896, #946; the
@@ -724,9 +734,11 @@ func TestStopBringsATailCallLoopToASafepoint(t *testing.T) {
 	}
 
 	in.Resume()
+	resumed := time.Now()
 
 	select {
 	case out := <-done:
+		logPostResume(t, resumed)
 		if len(out) != 1 || out[0].Bits != 1 {
 			t.Errorf("after Resume the chain returned %v, want 1 — parking inside the "+
 				"trampoline perturbed the frame it was about to enter, which is the failure "+
