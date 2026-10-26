@@ -60,6 +60,13 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **The one-load witnesses read whether agent A is still filling instead of assuming it**
+  ([grave #1118](https://github.com/scttfrdmn/burroughs/issues/1118)). Both took "A is still inside its fill" from
+  the order `Resume`, then B's grow. On ubuntu-arm64 A finished first, B's grow correctly relocated, and main went
+  red against an engine that was right (98dccb7). A 200ms gap reproduces it 5 of 5. Now a relocation is the
+  defect only when A is observably still filling after the grow returns; otherwise the scenario reruns, with a
+  floor so it cannot pass by never deciding.
+  - **Neuter, run:** with `soleAgentLocked`'s check removed, 10 of 10 runs still fail.
 - **The edit-route hook now refuses `mv` onto a tracked file.** Route 1 refused a shell redirection or `tee` into a
   tracked path, but let `mv` through, which replaces the file the same way. The specimen was #771's test file,
   rewritten in scratch and moved over its tracked copy. The destination is read as the last operand, `-t`'s value,
