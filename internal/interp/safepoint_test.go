@@ -8,6 +8,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -640,8 +641,21 @@ func TestStopRefusesASecondConcurrentStop(t *testing.T) {
 	case err := <-errs:
 		t.Fatalf("the guest failed: %v", err)
 	case <-time.After(30 * time.Second):
+		dumpGoroutinesAtTheBound(t)
 		t.Fatal("the guest did not finish after Resume")
 	}
+}
+
+// dumpGoroutinesAtTheBound logs every goroutine's stack before a bounded wait after Resume fails (#896, #946; the
+// chair's ruling of 2026-10-26, applying #1106's method). #946's open question is whether this 30s bound expires
+// from impatience under load or from a lost wakeup. A dump answers it, where the bound alone cannot:
+//   - **impatience:** the guest's goroutine is still running in the interpreter;
+//   - **a lost wakeup:** every goroutine is parked, and their stacks name the cycle.
+func dumpGoroutinesAtTheBound(t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	t.Logf("every goroutine at the bound (%d bytes):\n%s", len(buf), buf)
 }
 
 // TestStopBringsATailCallLoopToASafepoint is the arm without which `enterFrame`'s poll could be
@@ -721,6 +735,7 @@ func TestStopBringsATailCallLoopToASafepoint(t *testing.T) {
 	case err := <-errs:
 		t.Fatalf("after Resume the guest failed: %v", err)
 	case <-time.After(30 * time.Second):
+		dumpGoroutinesAtTheBound(t)
 		t.Fatal("the chain did not finish 30s after Resume")
 	}
 }
