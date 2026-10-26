@@ -123,6 +123,10 @@ var licensed = map[string]string{
 	// toolchain is fatal at each, not skipped.
 	"wasi_test.go:buildWASIGuest":               "local dev without a wasip1-capable Go toolchain; CI builds the guest so this never fires there (decision 0081, public differential test)",
 	"cmd/burroughs/wasi_test.go:buildGuestFile": "local dev without a wasip1-capable Go toolchain; CI builds the guest so this never fires there (decision 0081, `burroughs run` end-to-end test)",
+	// The tenth door: the oracle is pinned for darwin and linux only, the platforms the readings are taken on,
+	// so a platform with no sums row (Windows) has no archive to tamper with. ci.yml's jobs are all darwin or
+	// linux, so the skip never fires under its `no test declined to answer` step.
+	"internal/testenv/oraclefetch_test.go:TestOracleFetchRefusesATamperedArchive": "a platform with no row in scripts/oracle-wasmtime.sha256 (Windows): oracle-fetch.sh refuses it by name, so there is no archive to tamper with; every ci.yml job is darwin or linux, where the witness runs",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.

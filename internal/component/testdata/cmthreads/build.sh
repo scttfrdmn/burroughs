@@ -40,7 +40,11 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 : "${WASM_TOOLS:=wasm-tools}"
-: "${WASMTIME:=wasmtime}"
+# The pinned oracle that scripts/oracle-fetch.sh installs, not whatever wasmtime the package manager has
+# put on PATH: Homebrew moved PATH's to 50.0.0 underneath these readings on 2026-10-26.
+: "${WASMTIME:=$here/../../../../.oracle/wasmtime-49.0.3/wasmtime}"
+[ -x "$WASMTIME" ] || [ -n "$(command -v "$WASMTIME" 2>/dev/null)" ] ||
+	{ echo "build.sh: no wasmtime oracle at $WASMTIME; run scripts/oracle-fetch.sh" >&2; exit 2; }
 for t in "$WASM_TOOLS" "$WASMTIME"; do
 	command -v "$t" >/dev/null || { echo "build.sh: $t not found" >&2; exit 2; }
 done
