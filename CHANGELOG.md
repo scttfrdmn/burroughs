@@ -24,6 +24,28 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Added
+
+- **The §§2–5 litmus battery's last two cases are implemented: SP-5 and H-4's no-starvation half**
+  ([#771](https://github.com/scttfrdmn/burroughs/issues/771)). Both run on `cmthreads/parked-runner.wasm`: one
+  async-callback task with N Threads parked in `waitable-set.wait`, plus a runner Thread that counts.
+  - `TestSP5StopCompletesWithAgentsSuspendedInBuiltins`: `Stop(1s)` completes with four agents suspended in the
+    wait and the runner executing, and none of the four is woken.
+  - `TestH4ASuspendedAgentDoesNotStarveItsSiblings`: the runner advances over 100ms while its sibling is suspended.
+  - **The oracle is the pin** (`refread.reading`, `value 1000` for N = 4 and N = 1, and HANG for a never-released
+    control). Stock wasmtime, 49.0.3 and 50.0.0, reaches #1045's bug on this shape, so its reading does not count
+    (ADR 0102). A 49.0.3 build with #1045's diagnosed patch reads 1000 on both, which `build.sh` checks as
+    corroboration only.
+  - **Neuters, 2 of 2 each under `-race`:** the wait without its `c.Blocking` excursion fails sp5 at its first stop;
+    the wait keeping the run slot fails h4 on its starvation assertion.
+  - **Stress:** 10,000 `-race` iterations of each, with a goroutine dump at every bounded failure, on darwin/arm64
+    and on janus x86-64 (task 183). All 40,000 passed, with no dump. B's smallest advance in 100ms was 29,565 on
+    darwin and 16,443 on janus.
+  - The harness reads guest memory only under a stop. Its first draft read while the runner stored, and `-race`
+    reported it.
+- Two stale texts are corrected: the async refusal no longer cites "#739 slice 1", and
+  `TestP3AsyncCancelStillRefusedByName`'s comment no longer lists 0x05 as unbuilt.
+
 ### Fixed
 
 - **Two Stop/Resume tests no longer time out under heavy load, and a real hang would still dump its cause**

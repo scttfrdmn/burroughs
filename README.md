@@ -106,7 +106,7 @@ it.
   `FeatureThreads` needed. **To restore the old behaviour, set
   `BURROUGHS_THREADS=0`:** such a module is then refused by name, and
   `FeatureThreads` (or `--features=threads`) admits it explicitly, as before.
-  Contract §4's litmus battery has 17 of 19 cases implemented and no
+  Contract §4's litmus battery has 19 of 19 cases implemented and no
   registered hole. Its strength is stated in ADR 0106 and on
   [#10](https://github.com/scttfrdmn/burroughs/issues/10): Go's race detector
   and scheduling claims, **not** hardware weak-memory readings. Stop-the-world exists in the engine but is not public
