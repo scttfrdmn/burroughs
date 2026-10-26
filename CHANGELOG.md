@@ -58,6 +58,17 @@ says what it now requires and what it gives up.
 - Two stale texts are corrected: the async refusal no longer cites "#739 slice 1", and
   `TestP3AsyncCancelStillRefusedByName`'s comment no longer lists 0x05 as unbuilt.
 
+### Changed
+
+- **Two governance records corrected to what is true** (the chair's fourth ruling of 2026-10-26, item 3):
+  - **`CLAUDE.md`** said `gate:threads` *"is not flipped"* and that its battery was unscheduled, a day after
+    the flip. It now cites ADR 0106, records both halves of Scott's condition as met (#586 by ADR 0073, the
+    battery in #1114), and says what the flip opened: the grammar, not threads.
+  - **ADR 0084** reads `accepted`, citing Scott's stamp of the `gate:components` flip forecast on #720. It had
+    read `proposed` for seven weeks after that stamp.
+
+  ADRs 0102 and 0076 stay `proposed`. No stamp for either is on record, and they go to the chair.
+
 ### Fixed
 
 - **Correction to the v0.10.0 threads claim: no public path can start a second thread over a shared memory.** The
