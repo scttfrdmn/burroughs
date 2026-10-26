@@ -21,7 +21,7 @@ The subject is **a tracked file being edited from a Bash command**. Three routes
 * an **inline interpreter** (`python3 - <<EOF`, `python3 -c`, `perl -e`, …) that opens a file for
   writing;
 * **`sed -i`** (and `perl -i`), whose in-place edit has the same silent-miss shape;
-* **shell redirection** into a tracked path — `>`, `>>`, or `tee`.
+* **shell redirection** into a tracked path — `>`, `>>`, or `tee` — and **`mv`** onto one.
 
 It does **not** refuse creating a new file. The defect is a silent no-op *on a miss*, which requires
 an anchor, which requires the file to already exist. `cat > newfile` has no anchor to miss, so
@@ -180,6 +180,7 @@ RULES: tuple[tuple[str, str], ...] = (
     ("inline-write", "an inline interpreter opens"),
     ("in-place-edit", "in place"),
     ("tee-write", "tee would overwrite"),
+    ("mv-write", "mv would overwrite"),
     ("redirect-write", "a shell redirection"),
     ("git-discard", "would DISCARD uncommitted changes"),
     # The fail-closed case needs its own slug: it is a DIFFERENT finding from a measured discard — one is
@@ -607,6 +608,41 @@ def simple_commands_with_sep(tokens: list[str]) -> list[tuple[list[str], str]]:
         else:
             out[-1][0].append(t)
     return [(c, s) for c, s in out if c]
+
+
+def mv_overwrites(args: list[str]) -> list[str]:
+    """The paths an `mv` with these arguments could overwrite.
+
+    The destination is the last operand, or `-t`/`--target-directory`'s value. Where the destination is a
+    directory, each source lands at `dir/basename(source)`, so both spellings are returned. Only one of them
+    can be a tracked file, so the caller needs no filesystem test to tell which applies.
+    """
+    operands: list[str] = []
+    target = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            operands.extend(args[i + 1 :])
+            break
+        if a in ("-t", "--target-directory") and i + 1 < len(args):
+            target = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("--target-directory="):
+            target = a.split("=", 1)[1]
+        elif a in ("-S", "--suffix") and i + 1 < len(args):
+            i += 1  # the backup suffix's value is not an operand
+        elif not a.startswith("-") or a == "-":
+            operands.append(a)
+        i += 1
+    if target is None:
+        if len(operands) < 2:
+            return []
+        target, operands = operands[-1], operands[:-1]
+    out = [target]
+    out.extend(target.rstrip("/") + "/" + basename(src.rstrip("/")) for src in operands)
+    return out
 
 
 def basename(word: str) -> str:
@@ -1130,6 +1166,14 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
             for arg in cmdv[1:]:
                 if is_tracked(arg, root, bases, moved):
                     reasons.append(f"tee would overwrite the tracked file {arg!r}")
+        # `mv` onto a tracked path replaces the file wholesale, the same overwrite a redirection makes,
+        # and route 1 missed it until the chair's third ruling of 2026-10-26. The specimen was a test file
+        # rewritten in scratch and moved over its tracked copy. A rename AWAY from a tracked path overwrites
+        # nothing, so only the destination is the subject.
+        if cmdv and basename(cmdv[0]) == "mv":
+            for dest in mv_overwrites(cmdv[1:]):
+                if is_tracked(dest, root, bases, moved):
+                    reasons.append(f"mv would overwrite the tracked file {dest!r}")
 
         # --- route 2: in-place stream editors -------------------------------------------------
         if cmdv and basename(cmdv[0]) in ("sed", "gsed", "perl", "ruby"):

@@ -48,6 +48,13 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **The edit-route hook now refuses `mv` onto a tracked file.** Route 1 refused a shell redirection or `tee` into a
+  tracked path, but let `mv` through, which replaces the file the same way. The specimen was #771's test file,
+  rewritten in scratch and moved over its tracked copy. The destination is read as the last operand, `-t`'s value,
+  or `dir/basename(source)` when it is a directory. A rename away from a tracked path is still allowed.
+  - **Witness:** four refused `mv` forms and two allowed ones, in `TestEditRouteHookRefusesBashEditsOfTrackedFiles`.
+  - **Neuter, run:** with the arm removed, the four refused forms fail.
+  - `cp`, `install` and `ln -f` onto a tracked path have the same shape and are still not covered.
 - **Two Stop/Resume tests no longer time out under heavy load, and a real hang would still dump its cause**
   ([#896](https://github.com/scttfrdmn/burroughs/issues/896), [#946](https://github.com/scttfrdmn/burroughs/issues/946)).
   `TestStopBringsATailCallLoopToASafepoint` and `TestStopRefusesASecondConcurrentStop` waited 30s after Resume.

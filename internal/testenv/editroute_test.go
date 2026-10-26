@@ -229,6 +229,45 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			want: "tee",
 		},
 		{
+			// The chair's third ruling of 2026-10-26. The specimen is a test file rewritten in scratch and
+			// moved over its tracked copy, which route 1 let through.
+			// **Neuter, run:** the `mv` arm removed from route 1, and the four mv deny arms here fail.
+			name: "mv_over_a_tracked_file",
+			cmd:  "mv /tmp/ratio.new scripts/ratio.sh",
+			deny: true,
+			want: "mv would overwrite the tracked file 'scripts/ratio.sh'",
+		},
+		{
+			name: "mv_with_a_flag_over_a_tracked_file",
+			cmd:  "mv -f /tmp/notes CHANGELOG.md",
+			deny: true,
+			want: "mv would overwrite",
+		},
+		{
+			// The destination is a directory, so the file overwritten is dir/basename(source).
+			name: "mv_into_a_directory_over_a_tracked_file",
+			cmd:  "mv /tmp/ratio.sh scripts/",
+			deny: true,
+			want: "scripts/ratio.sh",
+		},
+		{
+			name: "mv_with_a_target_directory_over_a_tracked_file",
+			cmd:  "mv -t scripts /tmp/ratio.sh",
+			deny: true,
+			want: "scripts/ratio.sh",
+		},
+		{
+			name: "mv_between_untracked_paths_is_allowed",
+			cmd:  "mv /tmp/a.log /tmp/b.log",
+			deny: false,
+		},
+		{
+			// A rename away from a tracked path overwrites nothing, so only the destination is the subject.
+			name: "mv_of_a_tracked_file_to_a_new_name_is_allowed",
+			cmd:  "mv scripts/ratio.sh /tmp/ratio.sh.bak",
+			deny: false,
+		},
+		{
 			// /tmp needs no exemption clause: it is untracked, so it is not the subject.
 			name: "writing_tmp_is_allowed_because_tmp_is_untracked",
 			cmd:  "cat > /tmp/pr.md <<'EOF'\nbody\nEOF",
