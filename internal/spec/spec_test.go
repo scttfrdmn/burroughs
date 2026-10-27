@@ -1384,8 +1384,8 @@ var gatedAssertInvalid = map[string]int{
 	"type-subtyping.wast":   36,
 	// Tail calls and typed function references, alone or mixed with gc.
 	"call_ref.wast":             4,  // call_ref, return_call_ref
-	"return_call.wast":          12, // return_call ×11 + gc ×1
-	"return_call_indirect.wast": 16, // return_call_indirect ×15 + gc ×1
+	"return_call.wast":          1,  // gc ×1 (return_call ×11 left with ADR 0108's flip)
+	"return_call_indirect.wast": 1,  // gc ×1 (return_call_indirect ×15 left with ADR 0108's flip)
 	"return_call_ref.wast":      11, // call_ref, return_call_ref ×4 + gc ×7
 	"ref_eq.wast":               6,  // gc ×4 + ref.eq ×2
 	"unreached-invalid.wast":    3,  // call_ref, return_call_ref ×2 + ref.as_non_null etc ×1
@@ -6214,8 +6214,10 @@ func TestGatedVectors(t *testing.T) {
 	for _, n := range gatedAssertInvalid {
 		sum += n
 	}
-	if sum != 471 {
-		t.Errorf("gatedAssertInvalid sums to %d, want 471 — the gated assert_invalid population "+
+	// 471 → 445 with `gate:tail-call`'s flip (ADR 0108): its 26, `return_call.wast`'s 11 and
+	// `return_call_indirect.wast`'s 15.
+	if sum != 445 {
+		t.Errorf("gatedAssertInvalid sums to %d, want 445 — the gated assert_invalid population "+
 			"changed size. Two causes are legitimate and each re-bases this figure with its subject "+
 			"named: a gate flip (name the proposal), or the harness learning to *ask* a form it "+
 			"previously scored as unsupported (name the Kind — the 17-head slice added 2 this way, "+
@@ -11070,7 +11072,7 @@ func TestPhase1Files(t *testing.T) {
 	// # 39 → 38, slice 9 (ADR 0035), and the one row that moved is the row the forecast said could not
 	//
 	// **The tail-call arms contribute nothing to this lane and the ADR said so correctly** — `TailCall`
-	// is absent from `DefaultFeatures()`, so `return_call` and `return_call_indirect` are refused at
+	// was absent from `DefaultFeatures()` (until ADR 0108's flip, which is where its 26 arrive), so `return_call` and `return_call_indirect` are refused at
 	// *decode* here and never reach a validator column. What the ADR then said, and got wrong, is that
 	// the default lane would therefore be byte-identical: the slice also repaired grave #390, the
 	// element-type `require` missing from `call_indirect`, and **`call_indirect` is MVP core**. So
@@ -11872,7 +11874,7 @@ func TestPhase1Files(t *testing.T) {
 	// what the harness is able to *ask*. The reward figure with a subject is the fail column, −47 here
 	// and −62 in the all-on lane.
 	// **60837 → 60838, slice 9 (ADR 0035): +1, and the whole of it is a grave rather than a slice.**
-	// The tail-call arms are gated off here, so the slice's 34 declines never appear on this lane at all;
+	// The tail-call arms were gated off here (until ADR 0108), so the slice's 34 declines never appeared on this lane;
 	// the single row is `call_indirect.wast:994`, the admission grave #390's repair converts, and
 	// `validateAdmitCeiling` 31 → 30 is where it lands. `encodeFailCeiling` unmoved at 68,
 	// `execFailCeiling` at 81, `validateDeclineCeiling` at 8 — so fail 188 → 187 decomposes to one
@@ -12249,7 +12251,10 @@ func TestPhase1Files(t *testing.T) {
 	// **60957 → 61027 with `gate:extended-const`'s flip (ADR 0107)**, a distance of 70: exactly the 70 vectors its
 	// lane answers (`TestEachDefaultOffGateOnItsOwnLane`, #1127), all pass, 0 fail.
 	// `TestEachFlippedGateMovesOnlyItsOwnVectors` checks that they are the only ones that moved.
-	const passFloor = 61027
+	//
+	// **61027 → 61053 with `gate:tail-call`'s flip (ADR 0108)**, a distance of 26, its lane's reading on both
+	// platforms, all pass, 0 fail; the same table's second row checks them.
+	const passFloor = 61053
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

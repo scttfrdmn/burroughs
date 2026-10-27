@@ -47,6 +47,7 @@ var flippedGates = []struct {
 	answered int    // vectors its lane answers: the flip must move exactly these
 }{
 	{"ExtendedConst", 70}, // ADR 0107
+	{"TailCall", 26},      // ADR 0108
 }
 
 // TestEachFlippedGateMovesOnlyItsOwnVectors is each flip's G1-style check (the chair's ruling of 2026-10-27, item 1:
