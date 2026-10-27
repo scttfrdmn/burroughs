@@ -90,6 +90,26 @@ says what it now requires and what it gives up.
   - The first of four flips in this order: ExtendedConst, TailCall, MultiMemory, Memory64. Exception handling (#95)
     and GC (#172, #262) stay off, with their open work.
 
+- **`gate:tail-call` is on by default** (ADR 0108; the same agreement, the second of the four). A module using
+  `return_call` or `return_call_indirect` is admitted with nothing supplied. `return_call_ref` is mapped to
+  `gate:gc` and stays off with it.
+  - **The rollback:** set `BURROUGHS_TAIL_CALL=0` to restore the old default.
+  - **The board moved by exactly the forecast:** 61027 → **61053 pass**, 4117 → **4091 gated**, 0 fail. That is the
+    26 vectors its lane answers on top of ExtendedConst's flip, read identically on darwin/arm64 and janus x86-64.
+  - **Nothing else moved:** `TestEachFlippedGateMovesOnlyItsOwnVectors` gains its second row, `{"TailCall", 26}`.
+    - **Neuter, run:** `BURROUGHS_TAIL_CALL=0` fails its "is it on" arm.
+  - **Controls that pinned the old default moved with it:**
+    - all 26 are `assert_invalid` (`return_call.wast`'s 11, `return_call_indirect.wast`'s 15), so
+      `gatedAssertInvalid` goes 471 → 445, and the destination ledger's converted group goes `gated` 468 → 442 and
+      `pass` 2123 → 2149. The ledger names the flip as the first entry contributed by a default change rather
+      than a rule;
+    - `passFloor` goes to 61053;
+    - grave #301's gated-module fixture for tail calls retired, as its own message asks; exception handling, a
+      gate that stays off, replaces it, so the set stays at three;
+    - two ledger comments that said the tail-call arms *are* off on this lane now say *were*, until ADR 0108;
+    - `foreclose_test.go`'s 13 line-keyed exemptions are re-keyed by +2 lines, each matched by content to the
+      sweep's own finding (#1150 is the repair that would end this).
+
 - **A per-gate board lane: what each default-off gate does on its own** (`TestEachDefaultOffGateOnItsOwnLane`; the
   chair's addendum of 2026-10-26, "the flips"). The all-gates-on lane says the gates together leave nothing failing.
   This one gives what a flip of ONE gate changes, which is what a G-1 forecast pre-registers.

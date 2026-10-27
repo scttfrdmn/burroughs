@@ -96,9 +96,11 @@ const (
 // of one retires the day its proposal flips, and the corpus control in publicpath_test.go covers the
 // space (429 module forms, nine proposals) while these cover the classification cheaply.
 var gatedWATs = map[string]string{
-	"memory64":  `(module (memory i64 1))`,
-	"gc":        `(module (type $s (struct (field i32))))`,
-	"tail call": `(module (func $f) (func (export "g") return_call $f))`,
+	"memory64": `(module (memory i64 1))`,
+	"gc":       `(module (type $s (struct (field i32))))`,
+	// "tail call" retired with ADR 0108's flip; exception handling replaces it, as a gate that stays off
+	// (#95) rather than one of the four flips still to come.
+	"exception handling": `(module (func (export "g") (block $l (try_table (catch_all $l)))))`,
 }
 
 // TestTheThreeOutcomesAreDistinguishable is decision 0029's central claim made executable: valid,

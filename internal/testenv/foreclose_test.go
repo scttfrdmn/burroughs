@@ -622,20 +622,20 @@ var foreclosingLicensed = map[string]string{
 	// The historical-account class. `spec_test.go`'s bound comments are a changelog of past
 	// measurements, so a foreclosing word inside a dated PR narrative is a claim about the board as
 	// it stood then, not a statement that there is no work now. The tense is the mechanism.
-	"internal/spec/spec_test.go:7122 bound account unreachable SIMD": "past-tense account of #328's " +
+	"internal/spec/spec_test.go:7124 bound account unreachable SIMD": "past-tense account of #328's " +
 		"session; `unreachable` describes ErrNotValidated's call sites once a validator refuses those " +
 		"modules first — a state of the engine, not a tracker event (ADR 0043), and not the SIMD gate",
-	"internal/spec/spec_test.go:9178 bound account never SIMD": "past-tense account of #196's board; " +
+	"internal/spec/spec_test.go:9180 bound account never SIMD": "past-tense account of #196's board; " +
 		"`never` is what the default lane and the harness did at that measurement (\"never asked\", " +
 		"\"a setup `invoke` never wrote\"), and the paragraph exists to record a delta rather than to " +
 		"forecast one",
-	"internal/spec/spec_test.go:9178 bound account never RelaxedSIMD": "as above — the paragraph names " +
+	"internal/spec/spec_test.go:9180 bound account never RelaxedSIMD": "as above — the paragraph names " +
 		"both gates while describing one past board",
-	"internal/spec/spec_test.go:11739 bound account structural SIMD": "the control sense of the word: " +
+	"internal/spec/spec_test.go:11741 bound account structural SIMD": "the control sense of the word: " +
 		"\"verified against the structural control, the all-on lane reports 0\", this codebase's term " +
 		"of art for a derived-domain control as opposed to a per-vector allowlist. The homonym, and the " +
 		"reason a token sweep over unscoped prose would be noise",
-	"internal/spec/spec_test.go:11739 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11741 bound account structural RelaxedSIMD": "as above",
 
 	// The retained-testimony paragraphs of the `validateFailCeiling` account. The word stays on the
 	// page — a corrected transcript is a worse record than an annotated one — so the sweep finds it
@@ -669,23 +669,23 @@ var foreclosingLicensed = map[string]string{
 	// about an issue's state, and `gh issue view 432` — one call, the ruling's own remedy — said
 	// closed. Recorded because a stale-premise repair drawing less scrutiny than the original is
 	// #432's corollary 1, and this paragraph is a stale-premise repair.
-	"internal/spec/spec_test.go:11058 bound account structural SIMD": "retained falsified testimony: " +
+	"internal/spec/spec_test.go:11060 bound account structural SIMD": "retained falsified testimony: " +
 		"this paragraph asserts the eight relaxed-SIMD operators are a *structural* residue \"whose " +
 		"gate is its own event\", which is the claim #427 refuted. Its annotation is not in this " +
 		"paragraph — it is at spec_test.go:11189 in this same account",
-	"internal/spec/spec_test.go:11058 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11089 bound account structural SIMD": "retained falsified testimony, " +
+	"internal/spec/spec_test.go:11060 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11091 bound account structural SIMD": "retained falsified testimony, " +
 		"the `validateDeclineCeiling`-is-unmoved-at-8 paragraph, resting on the same refuted premise " +
 		"and annotated at the same place (spec_test.go:11189)",
-	"internal/spec/spec_test.go:11089 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11107 bound account structural SIMD": "retained falsified testimony, " +
+	"internal/spec/spec_test.go:11091 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11109 bound account structural SIMD": "retained falsified testimony, " +
 		"the paragraph on the two bounds becoming the same number: \"one counts a structural residue\". " +
 		"Annotated at spec_test.go:11189",
-	"internal/spec/spec_test.go:11107 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11120 bound account structural SIMD": "grave #427's annotation itself, " +
+	"internal/spec/spec_test.go:11109 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11122 bound account structural SIMD": "grave #427's annotation itself, " +
 		"and the only one of these four whose ground *is* legible in the licensed paragraph: it reads " +
 		"\"Nothing about them was structural\" and gives the gate's flip commit",
-	"internal/spec/spec_test.go:11120 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11122 bound account structural RelaxedSIMD": "as above",
 
 	// Grave #427's record at the fix site. This is the paragraph the falsification probe restored to
 	// confirm the sweep can see the original defect, so it is licensed at the *repaired* version and
