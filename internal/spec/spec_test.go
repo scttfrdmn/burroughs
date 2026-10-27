@@ -1579,17 +1579,8 @@ func TestGatedVectors(t *testing.T) {
 			544: "gc/function-references: the 0x40 table form with an initializer",
 			561: "gc/function-references: the 0x40 table form with an initializer",
 			578: "gc/function-references: the 0x40 table form with an initializer",
-			// The four extended-const offsets, each now followed by the `assert_trap (invoke …)`
-			// that runs against its module (#157) — see the section 9 / call_indirect batch
-			// below for why the feature is the *offset expression's* and not the segment's.
-			1065: "extended-const: (offset (i32.add …)) in an element segment at :1057",
-			1066: "extended-const: an arithmetic constant expression at :1057 — the module this action runs against",
-			1076: "extended-const: (offset (i32.add …)) in an element segment at :1068",
-			1077: "extended-const: an arithmetic constant expression at :1068 — the module this action runs against",
-			1087: "extended-const: (offset (i32.add …)) in an element segment at :1079",
-			1088: "extended-const: an arithmetic constant expression at :1079 — the module this action runs against",
-			1109: "extended-const: (offset (i32.add …)) in an element segment at :1092",
-			1110: "extended-const: an arithmetic constant expression at :1092 — the module this action runs against",
+			// The four extended-const offsets (:1057, :1068, :1079, :1092) and their `assert_trap (invoke …)`
+			// actions, 8 entries, left with `gate:extended-const`'s flip (ADR 0107): the default lane now answers them.
 		},
 
 		// The board's last `fail` became a `gated`, which is the gates doctrine working
@@ -4053,73 +4044,11 @@ func TestGatedVectors(t *testing.T) {
 		// All three gates are *right*, so these are allowlisted rather than treated as
 		// over-gating; all 167 are simultaneously answered on the merits in the all-on lane
 		// (allOnPassFloor 28497 → 29516), so the deferral cannot become a disappearance.
-		"global.wast": {
-			204: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			205: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			208: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			209: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			210: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			211: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			212: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			213: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			214: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			215: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			217: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			218: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			219: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			220: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			222: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			223: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			225: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			226: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			228: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			229: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			230: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			231: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			233: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			234: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			237: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			238: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			239: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			240: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			243: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			244: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			245: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			247: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			248: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			249: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			251: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			252: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			253: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			255: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			256: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			258: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			259: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			261: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			262: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			263: "extended-const: an arithmetic constant expression at :3 — the module this action runs against",
-			265: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			266: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			267: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			268: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			270: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			272: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			273: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			274: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			276: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			277: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			278: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			280: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			281: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			282: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			// **:206, :207, :235, :241 join since #196/#197** — `get-r`/`get-mr`/`set-mr` cross
-			// the boundary with an externref, which a pre-#196/#197 harness refused before ever
-			// reaching this same module's own extended-const gate.
-			206: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			207: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			235: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-			241: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
-		},
+		// **`global.wast`'s 62 entries left with `gate:extended-const`'s flip (ADR 0107).** All were the module at :3,
+		// whose `(global $z3 i32 (i32.add …))` at :19 is an extended constant expression, plus the action that runs
+		// against it. Since the flip the default lane answers them, and this control reported each one as "no longer
+		// declined; remove the entry". `TestEachFlippedGateMovesOnlyItsOwnVectors` witnesses that they, and nothing
+		// else, moved.
 		"load2.wast": {
 			162: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
 			164: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
@@ -12316,7 +12245,11 @@ func TestPhase1Files(t *testing.T) {
 	// corpus population is 11 rows over 2 files and none of them is a `v128`, a reference, or an
 	// immutable-versus-mutable distinction. The unit control above is what covers those; the board's
 	// +11 is a fact about the harness's reach.
-	const passFloor = 60957
+	//
+	// **60957 → 61027 with `gate:extended-const`'s flip (ADR 0107)**, a distance of 70: exactly the 70 vectors its
+	// lane answers (`TestEachDefaultOffGateOnItsOwnLane`, #1127), all pass, 0 fail.
+	// `TestEachFlippedGateMovesOnlyItsOwnVectors` checks that they are the only ones that moved.
+	const passFloor = 61027
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

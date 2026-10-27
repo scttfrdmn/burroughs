@@ -56,6 +56,24 @@ says what it now requires and what it gives up.
     build still reached 3, because the Go runtime keeps Ms for its own work. So the witness samples
     `ExecutingAgents` (agents inside a call and not blocked) instead, which reads 4 against the neuter's 2.
 
+- **`gate:extended-const` is on by default** (ADR 0107; Scott's *"Agree with your recommendation"*, relayed in the
+  chair's ruling of 2026-10-27, on #1131's forecast). A module using an extended constant expression (`i32`/`i64`
+  `add`, `sub` or `mul` in a constant expression, Wasm 3.0) is admitted with nothing supplied.
+  - **The rollback:** set `BURROUGHS_EXTENDED_CONST=0` to restore the old default. Such a module is then refused by
+    name.
+  - **The board moved by exactly the forecast:** 60957 → **61027 pass**, 4187 → **4117 gated**, 0 fail. That is the
+    70 vectors its lane answers, read identically on darwin/arm64 and janus x86-64.
+  - **Nothing else moved:** `TestEachFlippedGateMovesOnlyItsOwnVectors` compares the board with the gate on and off,
+    file by file. It is a table that each later flip adds a row to.
+    - **Neuter, run:** an expected count of 69 fails its total arm, and `BURROUGHS_EXTENDED_CONST=0` fails its "is it
+      on" arm.
+  - **Controls that pinned the old default moved with it:**
+    - `TestGatedVectors` loses its 70 extended-const entries;
+    - `TestKindGateCensusIsPinned`'s default lane goes 30 → 31, the one new row being `global.wast:241`;
+    - `passFloor` goes to 61027.
+  - The first of four flips in this order: ExtendedConst, TailCall, MultiMemory, Memory64. Exception handling (#95)
+    and GC (#172, #262) stay off, with their open work.
+
 - **A per-gate board lane: what each default-off gate does on its own** (`TestEachDefaultOffGateOnItsOwnLane`; the
   chair's addendum of 2026-10-26, "the flips"). The all-gates-on lane says the gates together leave nothing failing.
   This one gives what a flip of ONE gate changes, which is what a G-1 forecast pre-registers.

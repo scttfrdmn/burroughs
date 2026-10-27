@@ -133,7 +133,12 @@ var kindGateUnequalPasses = map[string]string{
 // still does. The map counts a *comparison* between two Kinds, and splitting one member into two made
 // four previously-equal pairs unequal. A figure that moved and a figure that did not, under one edit,
 // with a stated reason for each.
-var kindGateRefReaches = map[string]int{"default": 30, "all-on": 125}
+//
+// **The default lane went 30 → 31 with `gate:extended-const`'s flip (ADR 0107)**, by exactly one row, read by
+// diffing the census with `BURROUGHS_EXTENDED_CONST=0` and without: `global.wast:241 result 0: want externref,
+// got externref`. Its module uses an extended constant expression, so the default lane declined it before the
+// flip and answers it after. The all-on lane, which already had the gate on, is unchanged at 125.
+var kindGateRefReaches = map[string]int{"default": 31, "all-on": 125}
 
 // TestKindGateCensusIsPinned prints the census and pins it.
 //
