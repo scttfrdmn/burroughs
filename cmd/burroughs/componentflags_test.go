@@ -52,8 +52,11 @@ func TestRunRoutesAComponentWhateverFlagsAreGiven(t *testing.T) {
 		argv       []string
 	}{
 		{"a_function_name", "takes no function name", []string{p3hello, "run"}},
-		{"--dir", "takes no --dir or --scratch", []string{"--dir", os.TempDir(), p3hello}},
-		{"--scratch", "takes no --dir or --scratch", []string{"--scratch", t.TempDir(), p3hello}},
+		// An explicit HOST:/GUEST mapping, not a bare host path. A bare `C:\…` is refused at flag parsing on
+		// Windows, before routing is reached, so the arm would test the flag's grammar rather than the refusal
+		// (found on #1149's Windows run). The parser's drive-letter rule handles `C:\…:/g`.
+		{"--dir", "takes no --dir or --scratch", []string{"--dir", t.TempDir() + ":/g", p3hello}},
+		{"--scratch", "takes no --dir or --scratch", []string{"--scratch", t.TempDir() + ":/g", p3hello}},
 		{"--env", "takes no --env", []string{"--env", "X=1", p3hello}},
 	} {
 		t.Run("refuses_"+c.name+"_by_name", func(t *testing.T) {
