@@ -80,6 +80,12 @@ type world struct {
 	// T-5.2 (ADR 0071) is the lifecycle.
 	live []*thread
 
+	// peakLive is the largest `len(live)` this world has reached, raised in `addLocked` under `mu`. It is
+	// v0.12.0's evidence that a guest's agents existed AT ONCE (#1122), read through `PeakLiveAgents`. It shows
+	// that N agents were alive simultaneously, **not that they executed at the same instant**; that is the
+	// limit of what membership can say.
+	peakLive int
+
 	// exited is T-5.2's `tid`→terminal-status record: what a `Join` answers for a thread that has
 	// already gone. Nil until the first exit, so an instance that never spawns carries no map.
 	//
@@ -710,6 +716,9 @@ func (w *world) admit(t *thread) error {
 // [0069]: ../../docs/decisions/0069-a-host-function-is-a-caller-and-a-value-slice-a-host-call-marks-its-thread-blocked-and-shutdown-is-its-own-terminal-method.md
 func (w *world) addLocked(t *thread) {
 	w.live = append(w.live, t)
+	if len(w.live) > w.peakLive {
+		w.peakLive = len(w.live)
+	}
 	t.w = w
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 	if w.closed {

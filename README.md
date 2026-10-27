@@ -106,16 +106,17 @@ it.
   `FeatureThreads` needed. **To restore the old behaviour, set
   `BURROUGHS_THREADS=0`:** such a module is then refused by name, and
   `FeatureThreads` (or `--features=threads`) admits it explicitly, as before.
-  **But no public path can start a second thread over that memory.** The
-  public API has no spawn, join or host-function registration, and no
-  public path supplies a guest-side spawn: the Phase 4 fork's
-  `"burroughs" "spawn"` import fails to link, and a component's
-  `thread.spawn-ref`/`-indirect` is refused. So a public module's shared
-  memory has one agent, and `memory.atomic.wait` on it can only time out.
-  The threads machinery is built and measured inside the engine; exposing it
-  is an open public-API decision. Component-model Threads (`gate:cm-threads`)
-  do start through the component paths, but they run one at a time per
-  instance and share no memory between agents.
+  **A guest can start its own threads on the WASI preview-1 path**
+  (`WASIP1Config.Run` and `burroughs run` on a command, since #1122). A
+  module that imports `"burroughs" "spawn"` and exports `mstart` starts a new
+  agent, an OS thread over its shared memory, each time it calls the import.
+  That is the door the Phase 4 Go fork uses, so a fork-built Go program runs
+  with real threads, with nothing supplied beyond the module. **The other
+  public paths still start no second thread:** core `Instantiate` supplies no
+  imports (host-started threads are not built), and a component's
+  `thread.spawn-ref`/`-indirect` is refused. Component-model Threads
+  (`gate:cm-threads`) do start through the component paths, but they run one
+  at a time per instance and share no memory between agents.
   Contract §4's litmus battery has 19 of 19 cases implemented and no
   registered hole. Its strength is stated in ADR 0106 and on
   [#10](https://github.com/scttfrdmn/burroughs/issues/10): Go's race detector

@@ -115,15 +115,42 @@ func newHost(cfg Config) *host {
 // to see `refusalsForTest`, which `Run` has no way to expose — without duplicating this body, which is
 // the shape that lets a test path drift from the real one.
 func runModule(m *bin.Module, h *host) (int, error) {
-	in, trap, err := interp.InstantiateLinked(m, h.imports())
+	// The guest-side spawn door (#1122), served only to a module that imports it, and refused at link if its
+	// type or its `mstart` entry is wrong. See spawn.go.
+	door, derr := spawnDoorFor(m)
+	if derr != nil {
+		return 0, derr
+	}
+	imports := h.imports()
+	if door != nil {
+		preview1 := imports
+		imports = func(mod, name string) (interp.Extern, bool) {
+			if mod == spawnModule && name == spawnName {
+				return door.extern(), true
+			}
+			return preview1(mod, name)
+		}
+	}
+	in, trap, err := interp.InstantiateLinked(m, imports)
 	if err != nil {
 		return 0, fmt.Errorf("wasi: link: %w", err)
 	}
 	if trap != nil {
 		return 0, fmt.Errorf("wasi: instantiate: %w", trap)
 	}
+	// `Close` ends every spawned agent and waits for it (T-5.4), so a guest whose `_start` returns, or whose
+	// `proc_exit` ends the instance (ADR 0090), leaves no agent running after this returns.
 	defer in.Close()
+	if door != nil {
+		door.in.Store(in)
+	}
 
+	if beforeStartForTest != nil {
+		beforeStartForTest(in)
+	}
+	if afterStartForTest != nil {
+		defer afterStartForTest(in)
+	}
 	if _, err := in.Invoke("_start"); err != nil {
 		var ee exitError
 		if errors.As(err, &ee) {

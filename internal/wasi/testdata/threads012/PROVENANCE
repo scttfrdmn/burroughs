@@ -1,0 +1,27 @@
+v0.12.0's end-to-end witness guest (#1122) — provenance, per clause 2's and clause 3's. The binary is not
+reproducible from this repository alone: it comes from the Phase 4 fork.
+
+Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch wasmpreempt/phase4
+Fork HEAD:    944cfd235088042487b0873555f73d03d0890fac
+Toolchain:    go version go1.28-devel_d147ddc568 Thu Oct 1 17:47:21 2026 -0700 darwin/arm64
+              (the fork's bin/go; the runtime is compiled from the fork tree's src/ at the HEAD above)
+Built on:     darwin/arm64, 2026-10-27
+Guest source: guest.go.txt in this directory (module `threads012`, go 1.26)
+
+  threads012.wasm
+    GOEXPERIMENT=burroughsspawn GOOS=wasip1 GOARCH=wasm $(fork)/bin/go build -o threads012.wasm .
+    sha256: 5313c7795520d4179cf9b84d8714c694b872697ac8db8276e18d101950fa1700
+    bytes:  2595469
+
+It imports "burroughs" "spawn", exports mstart, and declares a shared memory: the fork's spawn door, which
+v0.12.0 serves on the public WASIP1 path (internal/wasi/spawn.go).
+
+EXPECTED OUTPUT (stock Go, natively, from the same source, `go run .`):
+    digest 194b925792819171
+    workers 4
+    gc VERIFIED nodes 50 finalized 0 collections 8
+
+NOT runtime.LockOSThread. The first build pinned each worker with LockOSThread; on this fork a locked M that
+needs a new M throws "fatal error: on a locked thread with no template thread". That is a fork-side
+limitation, recorded on #1122. The guest relies on GOMAXPROCS = workers and busy goroutines instead, and the
+engine's live-agent gauge (Instance.PeakLiveAgents) is the evidence that several agents existed.
