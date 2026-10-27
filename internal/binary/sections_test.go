@@ -595,7 +595,7 @@ var defaultGatePolicy = map[string]struct {
 	"TailCall":          {why: "behaviour 4's default: no flip event"},
 	"RelaxedSIMD":       {on: true, stamp: "0028-relaxed-simd-lowerings-are-deterministic-and-architecture-uniform-the-references-choice-taken-once.md", why: "#275, and it satisfies G-1's literal reading without ADR 0025's carve-out"},
 	"MultiMemory":       {why: "behaviour 4's default: no flip event"},
-	"ExtendedConst":     {why: "behaviour 4's default. #109 is why this field exists at all — the gate the file forgot"},
+	"ExtendedConst":     {on: true, stamp: "0107-gate-extended-const-defaults-on-with-burroughs-extended-const-0-as-the-rollback.md", why: "Scott's \"Agree with your recommendation\", 2026-10-26, on #1131's forecasts (the chair's ruling of 2026-10-27, item 1). Field rollback BURROUGHS_EXTENDED_CONST=0. TestEachFlippedGateMovesOnlyItsOwnVectors witnesses that only its own vectors move. #109 is why this field exists at all: the gate the file forgot"},
 }
 
 // TestDefaultGatePolicyIsPinnedGateByGateWithItsStamp is the whole of `DefaultFeatures`

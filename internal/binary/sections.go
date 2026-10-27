@@ -172,10 +172,25 @@ type Features struct {
 // `TestThreadsGateLeavesTheCoreBoardUnchanged` (G1) asserts all 256 core board files read identically with
 // the gate off and on.
 //
+// **Fourth divergence: ExtendedConst** ([ADR 0107]). The first of the four Wasm 3.0 flips Scott's agreement
+// covers (#1131), each with a field rollback modelled on threads': `BURROUGHS_EXTENDED_CONST=0` restores the old
+// default. `TestEachFlippedGateMovesOnlyItsOwnVectors` witnesses that the flip answers exactly the vectors its
+// own lane answers, and moves nothing else.
+//
 // [ADR 0106]: ../../docs/decisions/0106-gate-threads-defaults-on-with-burroughs-threads-0-as-the-rollback-because-the-4-battery-has-no-hole-and-the-off-state-stays-witnessed.md
+// [ADR 0107]: ../../docs/decisions/0107-gate-extended-const-defaults-on-with-burroughs-extended-const-0-as-the-rollback.md
 func DefaultFeatures() Features {
-	return Features{SIMD: true, RelaxedSIMD: true, Threads: os.Getenv(threadsGateEnv) != "0"}
+	return Features{
+		SIMD:          true,
+		RelaxedSIMD:   true,
+		Threads:       os.Getenv(threadsGateEnv) != "0",
+		ExtendedConst: os.Getenv(extendedConstGateEnv) != "0",
+	}
 }
+
+// extendedConstGateEnv is `gate:extended-const`'s field rollback (ADR 0107): set to "0", the default refuses an
+// extended constant expression by name, as it did before the flip.
+const extendedConstGateEnv = "BURROUGHS_EXTENDED_CONST"
 
 // threadsGateEnv is `gate:threads`' field rollback (ADR 0106): set to "0", the default refuses a threads
 // construct by name, as it did before the flip.
