@@ -487,7 +487,15 @@ test-endtable:
 #   because `mapReservation` always fails there and every memory is on the Go heap. That makes its reports
 #   more significant than its "measured, not a gate" label suggests (see `.github/workflows/windows.yml`).
 race:
-	@./scripts/budget.sh 1500 race -- $(GO) test -race -timeout 25m -shuffle=on \
+#
+# **AMENDED 2026-10-27 (#1148): 25m → 50m, for the darwin leg.** `macos-15` joined the build matrix after the
+# figures above, and it is now the slowest leg by far. `internal/spec` under `-race` there measured **1447.682s**
+# on main 0f1e96e (run 40419796411), against 124.895s plain and 140.635s endtable. That left 25m at **1.04×** the
+# largest completed observation, and the timeout fired twice in a row on it: #1145's run, and main at 2bfabce (run
+# 40438827329). Neither was a hang: the stack at the timeout showed a test running, not parked. **50m is ≈2.07×
+# 1447.682s, the "about 2×" this note's own rule asks for.** The budget moves with it, so `budget.sh`'s 75%
+# warning stays meaningful.
+	@./scripts/budget.sh 3000 race -- $(GO) test -race -timeout 50m -shuffle=on \
 		-skip 'TestClause2|TestClause3' ./...
 
 # witnesses — Phase 4's clauses 1–3, which are expensive and have their own budget.

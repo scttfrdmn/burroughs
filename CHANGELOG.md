@@ -74,6 +74,10 @@ says what it now requires and what it gives up.
   `atomicCell.load`, the same access pair from the same Go runtime as clause 3's mapped row. Guest memory is on the Go
   heap only on Windows, so only there does `-race` see it. It is intermittent, since the witness passed on #1147's own
   Windows run, and main's red was explained by #982. Windows remains outside the claim.
+- **`make race`'s per-package timeout is 50m, up from 25m** ([#1148](https://github.com/scttfrdmn/burroughs/issues/1148)).
+  `internal/spec` under `-race` on the `macos-15` leg measured 1447.682s on main, which left 25m at 1.04× the largest
+  completed observation. The timeout then fired twice in a row on it (#1145, and main at 2bfabce), neither time a
+  hang. 50m is ≈2.07×, the "about 2×" the Makefile's own note asks for, and `budget.sh` moves with it (3000s).
 
 ### Fixed
 
