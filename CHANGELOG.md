@@ -26,6 +26,22 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A hardware weak-memory reading: `scripts/hwlitmus.sh`** ([#1126](https://github.com/scttfrdmn/burroughs/issues/1126);
+  the chair's ruling of 2026-10-27, item 2). MP, SB, LB and IRIW run at 2²⁰ trials per cell, with persistent
+  agents and a barrier before every trial. The arms:
+  - **the engine**, on ADR 0054's SC kinds;
+  - **an engine neuter**: the build tag `burroughs_plainmem` swaps `atomicLoadWord`/`atomicStoreWord` (moved to
+    `memop_sc.go`) for plain Go accesses (`memop_plain.go`);
+  - **a native plain-Go control**;
+  - **the plain kinds** (unaligned, v128, bulk), checked against the wasm allowed set;
+  - **wasmtime's core threads**, as registration corroboration.
+
+  The tests are behind the `hwlitmus` tag, so no gate runs them. They are a reading of the machine.
+  - **Found while building it:** the oracle pin, wasmtime 49.0.3, has no wasi-threads. It was removed upstream
+    in bytecodealliance/wasmtime#13558, first absent from v46.0.0. 49.0.3 still lists `-S threads` in its help
+    and refuses it. So the wasmtime arm uses v36.0.19 LTS, fetched by its release digest, and the pin is
+    unchanged. #1126's recon had assumed 49.0.3 could run the arm.
+
 - **A guest starts its own threads on the WASI preview-1 path: a fork-built Go program runs with real threads
   through `burroughs run`** ([#1122](https://github.com/scttfrdmn/burroughs/issues/1122), v0.12.0; the chair's
   ruling of 2026-10-27, item 3).

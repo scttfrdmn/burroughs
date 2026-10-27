@@ -1,7 +1,6 @@
 package interp
 
 import (
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -161,29 +160,13 @@ func wordAligned(bs []byte, width uint64) bool {
 // the pointer is derived from the slice handed in per access, so an unshared memory's `grow` cannot
 // leave a stale one behind — the property ADR 0051 states for `atomicCell` and the reason #568's
 // tripwire is a separate guard rather than a duplicate of this one.
-func atomicLoadWord(bs []byte) (uint64, bool) {
-	switch len(bs) {
-	case 4:
-		return uint64(guestWord32(atomic.LoadUint32((*uint32)(unsafe.Pointer(&bs[0]))))), true
-	case 8:
-		return guestWord64(atomic.LoadUint64((*uint64)(unsafe.Pointer(&bs[0])))), true
-	default:
-		return 0, false
-	}
-}
-
-func atomicStoreWord(bs []byte, v uint64) bool {
-	switch len(bs) {
-	case 4:
-		atomic.StoreUint32((*uint32)(unsafe.Pointer(&bs[0])), guestWord32(uint32(v)))
-		return true
-	case 8:
-		atomic.StoreUint64((*uint64)(unsafe.Pointer(&bs[0])), guestWord64(v))
-		return true
-	default:
-		return false
-	}
-}
+//
+// # The bodies are in `memop_sc.go`, and `memop_plain.go` is their neuter
+//
+// Moved there for #1126's hardware reading, which needs a build in which these two accesses are plain Go
+// and nothing else differs. The default build compiles `memop_sc.go` (`!burroughs_plainmem`); the tag
+// `burroughs_plainmem` compiles the plain pair instead. That build breaks ADR 0054's promise on purpose
+// and is never shipped: it exists so the reading can watch the promise's absence on weak hardware.
 
 // extendSlot turns raw access bytes into a slot value: sign-extension where the mnemonic asks for it,
 // verbatim otherwise.
