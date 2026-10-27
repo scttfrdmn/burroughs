@@ -222,6 +222,9 @@ func (w *walker) step(d Def) error {
 			// marshaling impl, or the refusing stub, is chosen in the resolver by that name. Resource
 			// built-ins keep the stub (their discipline is Phase 3).
 			cn := w.c.Canons[d.Item]
+			if err := w.refuseSharedCanonMemory(cn); err != nil {
+				return err
+			}
 			if cn.Kind == CanonLower && int(cn.FuncIdx) < len(w.compFuncs) {
 				// **A callee that is a real component func is the guest-to-guest case** (#888): a composed
 				// sibling's lift, reachable right here and discarded until now. The `stubName != ""` arm
@@ -528,6 +531,23 @@ func (w *walker) lowerMemory(cn Canon) *interp.Extern {
 	}
 	ext := mems[*cn.Opts.Memory].extern
 	return &ext
+}
+
+// refuseSharedCanonMemory refuses a canon whose `(memory …)` option names a SHARED memory (#1141; the chair's
+// ruling of 2026-10-27). wasm-tools 1.258.0 refuses that component (*"mismatch in the shared flag for
+// memories"*). The pinned reference sets no shared/unshared rule for the option, and nothing witnesses what lifting
+// or lowering through a memory other agents write does. ADR 0102's posture is that a toolchain's stricter refusal
+// is followed unless Burroughs implements and witnesses what the pin admits, so this is refused by name and not
+// admitted unwitnessed. A shared memory a component uses in any OTHER way is untouched. Threaded Go components
+// depend on this case, so the WASI 0.3 design (#1140) has to resolve it; until then, it is a refusal.
+func (w *walker) refuseSharedCanonMemory(cn Canon) error {
+	ext := w.lowerMemory(cn)
+	if ext == nil || !ext.SharedMemory() {
+		return nil
+	}
+	return fmt.Errorf("%w: a canon's (memory %d) option names a shared memory, which this engine refuses: "+
+		"the Canonical ABI's memory option is not admitted shared (wasm-tools refuses it, and no witness covers "+
+		"lifting or lowering through a memory other agents write; #1141, ADR 0102)", ErrUnsupportedForm, *cn.Opts.Memory)
 }
 
 // lowerRealloc resolves a canon lower's `(realloc $f)` option to the core `cabi_realloc` func extern it

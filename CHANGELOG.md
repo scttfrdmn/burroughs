@@ -36,6 +36,26 @@ says what it now requires and what it gives up.
   - Read on darwin/arm64 and on janus x86-64 (native), identical in every counter. The forecasts are posted for
     Scott's stamp; no gate flips here.
 
+### Fixed
+
+- **A shared memory used as a component's Canonical ABI memory option is refused by name**
+  ([#1141](https://github.com/scttfrdmn/burroughs/issues/1141); the chair's ruling of 2026-10-27).
+  - Until now a `canon lower` or `canon lift` whose `(memory …)` option names a shared memory was **admitted**.
+    wasm-tools 1.258.0 refuses that component (*"mismatch in the shared flag for memories"*), and no witness covered
+    what admitting it does. The pinned reference sets no rule for the option, so ADR 0102's posture applies: follow
+    the toolchain's stricter refusal unless Burroughs implements and witnesses what the pin admits.
+  - It is refused as `ErrUnsupportedForm` (the public `ErrUnsupported`), naming the option and #1141. A shared
+    memory a component uses in any other way still loads.
+  - **Witness:** `TestASharedMemoryAsACanonMemoryOptionIsRefusedByName`, over a lower and a lift fixture, plus a
+    control.
+  - **Neuter, run:** with the check returning nil, both canon fixtures load again.
+  - Threaded Go components need exactly this case, so the WASI 0.3 design (#1140) has to resolve it. Until then it
+    is a refusal.
+- **Correction to the `v0.11.0` block: its `array.new*` limit was in the wrong section.** The block lists *"`array.new*`'s
+  backing allocation is not polled"* under *"Known limits, open on default-on paths"*. `array.new*` is GC, and
+  `gate:gc` is off by default, so the limit is reachable only with GC on, not on a default path. The limit itself
+  stands, and is tracked as #1138. The `v0.11.0` tag and its block are unchanged.
+
 ## [0.11.0] - 2026-10-26
 *Implements contract v0.1.*
 
