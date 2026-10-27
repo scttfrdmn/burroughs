@@ -594,7 +594,7 @@ var defaultGatePolicy = map[string]struct {
 	"GC":                {why: "behaviour 4's default. #172 is scheduled to `v0.2.0 GC gate`, a milestone after v0.1.0"},
 	"TailCall":          {on: true, stamp: "0108-gate-tail-call-defaults-on-with-burroughs-tail-call-0-as-the-rollback.md", why: "Scott's \"Agree with your recommendation\", 2026-10-26, on #1131's forecasts (the chair's ruling of 2026-10-27, item 1), the second of the four. Field rollback BURROUGHS_TAIL_CALL=0. TestEachFlippedGateMovesOnlyItsOwnVectors witnesses that only its own vectors move"},
 	"RelaxedSIMD":       {on: true, stamp: "0028-relaxed-simd-lowerings-are-deterministic-and-architecture-uniform-the-references-choice-taken-once.md", why: "#275, and it satisfies G-1's literal reading without ADR 0025's carve-out"},
-	"MultiMemory":       {why: "behaviour 4's default: no flip event"},
+	"MultiMemory":       {on: true, stamp: "0109-gate-multi-memory-defaults-on-with-burroughs-multi-memory-0-as-the-rollback.md", why: "Scott's \"Agree with your recommendation\", 2026-10-26, on #1131's forecasts (the chair's ruling of 2026-10-27, item 1), the third of the four. Field rollback BURROUGHS_MULTI_MEMORY=0. TestEachFlippedGateMovesOnlyItsOwnVectors witnesses that only its own vectors move"},
 	"ExtendedConst":     {on: true, stamp: "0107-gate-extended-const-defaults-on-with-burroughs-extended-const-0-as-the-rollback.md", why: "Scott's \"Agree with your recommendation\", 2026-10-26, on #1131's forecasts (the chair's ruling of 2026-10-27, item 1). Field rollback BURROUGHS_EXTENDED_CONST=0. TestEachFlippedGateMovesOnlyItsOwnVectors witnesses that only its own vectors move. #109 is why this field exists at all: the gate the file forgot"},
 }
 

@@ -48,6 +48,23 @@ var flippedGates = []struct {
 }{
 	{"ExtendedConst", 70}, // ADR 0107
 	{"TailCall", 26},      // ADR 0108
+	{"MultiMemory", 645},  // ADR 0109
+}
+
+// declineLane is the shipped default with multi-memory's rollback set (`BURROUGHS_MULTI_MEMORY=0`): the lane on
+// which decision 0038's side-effect-of-decline mechanism still has its corpus specimens.
+//
+// **ADR 0109 answered every one of them on the default lane.** `load1.wast:25-29` are 0038's only rows, and
+// their declined writer is a two-memory module, so with multi-memory on nothing declines and nothing is gated
+// *by* the mechanism. The mechanism is still there, and still reachable: a rollback, an embedder's `Features`,
+// or a future corpus file under a gate that stays off. A control comparing two empty sets would agree with
+// any registry at all. So the controls whose subject is the mechanism (`TestDeclineSideEffectsAreRegistered`,
+// and the registry-versus-run count beside it) run here, where it can still be watched dying, while
+// `TestGatedVectors` asserts that the default lane's population is empty.
+func declineLane() binary.Features {
+	f := binary.DefaultFeatures()
+	f.MultiMemory = false
+	return f
 }
 
 // TestEachFlippedGateMovesOnlyItsOwnVectors is each flip's G1-style check (the chair's ruling of 2026-10-27, item 1:

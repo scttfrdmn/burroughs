@@ -180,9 +180,13 @@ type Features struct {
 // **Fifth divergence: TailCall** ([ADR 0108]). The second of the four, the same shape: `BURROUGHS_TAIL_CALL=0`
 // restores the old default, and the same table witnesses it with a second row.
 //
+// **Sixth divergence: MultiMemory** ([ADR 0109]). The third of the four: `BURROUGHS_MULTI_MEMORY=0` restores the
+// old default, and the table's third row witnesses it.
+//
 // [ADR 0106]: ../../docs/decisions/0106-gate-threads-defaults-on-with-burroughs-threads-0-as-the-rollback-because-the-4-battery-has-no-hole-and-the-off-state-stays-witnessed.md
 // [ADR 0107]: ../../docs/decisions/0107-gate-extended-const-defaults-on-with-burroughs-extended-const-0-as-the-rollback.md
 // [ADR 0108]: ../../docs/decisions/0108-gate-tail-call-defaults-on-with-burroughs-tail-call-0-as-the-rollback.md
+// [ADR 0109]: ../../docs/decisions/0109-gate-multi-memory-defaults-on-with-burroughs-multi-memory-0-as-the-rollback.md
 func DefaultFeatures() Features {
 	return Features{
 		SIMD:          true,
@@ -190,8 +194,13 @@ func DefaultFeatures() Features {
 		Threads:       os.Getenv(threadsGateEnv) != "0",
 		ExtendedConst: os.Getenv(extendedConstGateEnv) != "0",
 		TailCall:      os.Getenv(tailCallGateEnv) != "0",
+		MultiMemory:   os.Getenv(multiMemoryGateEnv) != "0",
 	}
 }
+
+// multiMemoryGateEnv is `gate:multi-memory`'s field rollback (ADR 0109): set to "0", the default refuses a
+// second memory and a nonzero memory index by name, as it did before the flip.
+const multiMemoryGateEnv = "BURROUGHS_MULTI_MEMORY"
 
 // tailCallGateEnv is `gate:tail-call`'s field rollback (ADR 0108): set to "0", the default refuses
 // `return_call` and `return_call_indirect` by name, as it did before the flip. `return_call_ref` is not

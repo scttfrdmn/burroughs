@@ -56,10 +56,21 @@ import (
 //     correct and is why both halves exist. The registry-versus-run agreement is that test's job.
 //
 // The third one is the reason the floor is written as a floor and not as a comment.
+//
+// # Since ADR 0109 it runs on `declineLane`, not the default lane
+//
+// Multi-memory's flip answered `load1.wast`'s declined writer on the default lane, so the derivation
+// there found 0 rows and the floor fired as written. Its own message asked for the control to be
+// **re-pointed at the risk rather than closed**. The risk is a declined module's side effect, which any
+// off gate can still produce, so the "default lane" in every message below is now `declineLane`: the
+// shipped default with `BURROUGHS_MULTI_MEMORY=0`. The registry-versus-run count that `TestGatedVectors`
+// carried as its fourth allowance moved here with it, because it is about the same lane. The fourth
+// mutation above now fires that count, still in a different control from this derivation.
 func TestDeclineSideEffectsAreRegistered(t *testing.T) {
 	requireSuite(t)
 
 	_, _, allOnEngine := allOnLane(t)
+	_, declineEngine := gateLane(declineLane())
 
 	// derived[file] is the lines that fail in the default lane with 0038 neutered and do *not* fail
 	// with every gate on. Any stratum, deliberately: which component a row is charged to is a
@@ -74,12 +85,35 @@ func TestDeclineSideEffectsAreRegistered(t *testing.T) {
 			t.Errorf("%s: parse: %v", f, err)
 			continue
 		}
-		e := engine()
+		e := declineEngine()
 		e.Has = EngineCapabilities()
+		neutered := s.runWith(e, true)
 		var candidates []int
-		for _, fs := range s.runWith(e, true).Buckets {
+		for _, fs := range neutered.Buckets {
 			for _, row := range fs {
 				candidates = append(candidates, row.Line)
+			}
+		}
+
+		// The registry against the run, at slack 0 in both directions by construction: the lines gated
+		// with 0038's consult and not without it are the lines it gates, and their count is the entry's.
+		// Moved here from `TestGatedVectors` with ADR 0109 (see the section above).
+		if entry, ok := sideEffectOfDecline[filepath.Base(f)]; ok {
+			without := map[int]bool{}
+			for _, line := range neutered.GatedAt {
+				without[line] = true
+			}
+			by := 0
+			for _, line := range s.RunGated(declineEngine()).GatedAt {
+				if !without[line] {
+					by++
+				}
+			}
+			if by != len(entry.Lines) {
+				t.Errorf("%s: %d lines gated by decision 0038's side-effect registry on declineLane, want %d — "+
+					"the registry and the run disagree about this file;\n\tif a line stopped being gated the "+
+					"entry is stale and the fail it hid is back, and if one started the entry is missing "+
+					"the declined module that writes it (see sideEffectOfDecline)", f, by, len(entry.Lines))
 			}
 		}
 		if len(candidates) == 0 {
