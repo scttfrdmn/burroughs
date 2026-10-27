@@ -110,6 +110,33 @@ says what it now requires and what it gives up.
     - `foreclose_test.go`'s 13 line-keyed exemptions are re-keyed by +2 lines, each matched by content to the
       sweep's own finding (#1150 is the repair that would end this).
 
+- **`gate:multi-memory` is on by default** (ADR 0109; the same agreement, the third of the four). A module with a
+  second memory, or a memory instruction with a nonzero memory index, is admitted with nothing supplied.
+  - **The rollback:** set `BURROUGHS_MULTI_MEMORY=0` to restore the old default.
+  - **The board moved by exactly the forecast:** 61053 → **61695 pass**, 4091 → **3446 gated**, 43 → 46 bound,
+    0 fail. That is the 645 vectors its lane answers on top of TailCall's flip, read identically on darwin/arm64 and
+    janus x86-64.
+  - **Nothing else moved:** `TestEachFlippedGateMovesOnlyItsOwnVectors` gains its third row, `{"MultiMemory", 645}`.
+    - **Neuter, run:** `BURROUGHS_MULTI_MEMORY=0` fails its "is it on" arm.
+  - **Controls that pinned the old default moved with it:**
+    - `TestGatedVectors` loses 625 allowlist entries over 25 files, every removed reason naming multi-memory, and
+      `align.wast`'s `gatedAssertInvalid` goes 1 → 0, with the sum going 445 → 444;
+    - the destination ledger's converted group goes `gated` 442 → 441 and `pass` 2149 → 2150;
+    - `gatedDeclinedRegistration`'s `linking1`–`3.wast` go to 0, kept as checkable zeros;
+    - `passFloor` goes to 61695;
+    - the 13 line-keyed foreclose exemptions are re-keyed by −672, each matched by content (#1150).
+  - **Decision 0038's controls are re-pointed rather than closed.** Its only corpus specimen, `load1.wast:25-29`,
+    has a two-memory module as its declined writer, so the flip left the mechanism nothing to gate on the default
+    lane. That would have left `TestDeclineSideEffectsAreRegistered` comparing two empty sets. It now runs on
+    `declineLane`, the shipped default with `BURROUGHS_MULTI_MEMORY=0`, together with the registry-versus-run
+    count. On the default lane, `TestGatedVectors` asserts the population is empty.
+    - **Neuter, run:** pointing the registry's `Module` at `:11` fails the moved count (*"0 lines gated … on
+      declineLane, want 5"*).
+  - **Found:** `gatedDeclinedRegistration` said `linking.wast`'s 13 were `$Mm`/`$Mt` *"declined on the
+    multi-memory memarg bit"*. The flip left all 13 in place. Adding each still-off gate to the defaults in turn
+    measured GC as the cause: GC alone takes the count to 0, while EH and Memory64 leave it at 13. The comment now
+    says so.
+
 - **A per-gate board lane: what each default-off gate does on its own** (`TestEachDefaultOffGateOnItsOwnLane`; the
   chair's addendum of 2026-10-26, "the flips"). The all-gates-on lane says the gates together leave nothing failing.
   This one gives what a flip of ONE gate changes, which is what a G-1 forecast pre-registers.

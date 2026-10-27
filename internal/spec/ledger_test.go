@@ -245,7 +245,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2591 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2591, pass: 2149, declined: 0, accepted: 0, mismatch: 0, gated: 442, precondition: 0},
+			want: tally{total: 2591, pass: 2150, declined: 0, accepted: 0, mismatch: 0, gated: 441, precondition: 0},
 			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
 				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
@@ -436,7 +436,8 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"2149, `total` unmoved. The 26 are `return_call.wast`'s 11 and " +
 				"`return_call_indirect.wast`'s 15, the same 26 `TestEachFlippedGateMovesOnlyItsOwnVectors` " +
 				"counts. Their rules were already in the validator, one lane over; the default lane now " +
-				"asks them",
+				"asks them. ADR 0109's multi-memory flip is the second such entry: `gated` 442 → 441, " +
+				"`pass` 2149 → 2150, `align.wast`'s one vector behind memarg flags bit 6",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
@@ -610,14 +611,14 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"identity currently agrees vacuously; a nonzero value on either path is the finding, and "+
 			"which path moved is the first thing to read", got)
 	}
-	if got := already.gated + fresh.gated; got != 445 {
-		t.Errorf("gated assert_invalid = %d, want 445 (471 before ADR 0108's 26) to match the unsupportedCeiling ledger's "+
+	if got := already.gated + fresh.gated; got != 444 {
+		t.Errorf("gated assert_invalid = %d, want 444 (471 before ADR 0108's 26 and ADR 0109's 1) to match the unsupportedCeiling ledger's "+
 			"own gated count, summed across both groups — note this figure's subject is "+
 			"board-wide where the 2591 above is the converted group alone, so the two are cross-checks "+
 			"of different populations and not two halves of one subtraction", got)
 	}
-	if got := already.pass + fresh.pass; got != 2269 {
-		t.Errorf("assert_invalid passes = %d, want 2269 to match passFloor's account — 1023 at "+
+	if got := already.pass + fresh.pass; got != 2270 {
+		t.Errorf("assert_invalid passes = %d, want 2270 to match passFloor's account — 1023 at "+
 			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648, "+
 			"slice 3's 58, #294's 2, slice 5's 358 (356 converted + 2 from the arrived group), "+
 			"the 17-head slice's 7 — the only entry in this sum that raised the ledger's `total` "+
@@ -633,8 +634,8 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"sum whose rows came out of `mismatch`, three of them earning a new rule and the fourth "+
 			"(`ref_func.wast:112`) earning nothing but reachability, and ADR 0108's 26 — "+
 			"`gate:tail-call`'s flip, the first entry in this sum that a default change contributed "+
-			"rather than a rule. "+
-			"**That sums to 2268 against an actual 2269, and the one-vector residue is stated rather "+
+			"rather than a rule, and ADR 0109's 1 — `align.wast`'s, the second. "+
+			"**That sums to 2269 against an actual 2270, and the one-vector residue is stated rather "+
 			"than absorbed:** it predates the last nine slices (the account read 2096 against a "+
 			"pinned 2097 before any of them), so it belongs to an entry above and not to them. Filed as "+
 			"a loose end as #334; an unexplained +1 folded into a named entry would make one of these "+
