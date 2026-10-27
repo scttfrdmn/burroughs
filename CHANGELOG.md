@@ -66,6 +66,15 @@ says what it now requires and what it gives up.
   - Read on darwin/arm64 and on janus x86-64 (native), identical in every counter. The forecasts are posted for
     Scott's stamp; no gate flips here.
 
+### Changed
+
+- **The Windows triage map gains v0.12.0's end-to-end witness, mapped to
+  [#982](https://github.com/scttfrdmn/burroughs/issues/982).** `TestAForkBuiltGoProgramRunsWithRealThreadsThroughThePublicPath`
+  reached #982's race on main's Windows run at d30169b: a plain unaligned `writeNum` against an atomic narrow
+  `atomicCell.load`, the same access pair from the same Go runtime as clause 3's mapped row. Guest memory is on the Go
+  heap only on Windows, so only there does `-race` see it. It is intermittent, since the witness passed on #1147's own
+  Windows run, and main's red was explained by #982. Windows remains outside the claim.
+
 ### Fixed
 
 - **A shared memory used as a component's Canonical ABI memory option is refused by name**
