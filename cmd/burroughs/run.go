@@ -439,6 +439,13 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		Preopens: append(dirs.preopens(), scratch.preopens()...),
 		Features: feats.features(),
 	}
+	// **A component is recognised FIRST** (#1128). Its preamble's version word (layer 1) is not a core module's,
+	// so the wasip1 command probe below fails to decode it. With guest args, `--dir` or `--features` given, that
+	// probe's error used to be returned as the answer: *"malformed module: unknown binary version: 65549"*, exit 3,
+	// for a well-formed component. Reading the preamble first routes a component whatever flags are given.
+	if isComp, cerr := burroughs.IsComponent(wasm); cerr == nil && isComp {
+		return runComponent(stdout, stderr, file, wasm, invokeArgs, guestArgs, dirs, envs, scratch, feats)
+	}
 	isCmd, derr := wasiCfg.IsCommand(wasm)
 	// **A decode failure is reported, not folded into "not a command."** `derr != nil` and `!isCmd` are
 	// different answers — the first says this build could not read the module, the second that it read
@@ -475,42 +482,17 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		return nil
 	}
 
-	// A component (layer 1) runs its `wasi:cli/run` world through the preview-2 host, dispatched on the
-	// preamble like the wasip1 command above (ADR 0084/0085, #694). Detection reads the header before any
-	// instantiate; a bad header falls through to the core-module path, which classifies it. The stdio is
-	// bound at the writer, the same os.Stdout/os.Stderr a wasip1 command receives (ADR 0083, shared).
-	if isComp, cerr := burroughs.IsComponent(wasm); cerr == nil && isComp {
-		if len(invokeArgs) > 0 || len(dirs) > 0 {
-			fmt.Fprintf(stderr, "%sa component runs its wasi:cli/run world; it takes no function name or --dir\n", prefix)
-			return errUsage
-		}
-		// argv is the file's basename followed by anything after `--`, as a wasip1 command's is.
-		//
-		// **`--features` reaches this path too, and before #813 it reached NEITHER.** ADR 0088 added
-		// `ComponentConfig.Features` on 2026-09-18 and the CLI never passed it, so the capability has
-		// been unreachable from `burroughs run` since the day it was added — which is why Phase 4's
-		// two-engine claim runs through an internal test (#802's close records that as a limitation).
-		// One flag serves both paths: wiring only the wasip1 half would leave an asymmetry a reader
-		// could not recover a reason for.
-		code, rerr := burroughs.ComponentConfig{
-			Args:     append([]string{filepath.Base(file)}, guestArgs...),
-			Stdin:    os.Stdin,
-			Stdout:   stdout,
-			Stderr:   stderr,
-			Features: feats.features(),
-		}.Run(wasm)
-		if rerr != nil {
-			return rerr
-		}
-		if code != 0 {
-			return wasiExit(code)
-		}
-		return nil
+	// Not a command: `--`, `--dir`, `--env` and `--scratch` are the command grammar and do not apply, and
+	// `--features` does not either. A core module runs through `Config.Instantiate`, which takes no capability
+	// set, so the flag would be dropped silently (#1128). Each is refused by name, as a usage error.
+	if len(guestArgs) > 0 || len(dirs) > 0 || len(envs) > 0 || len(scratch.inner) > 0 {
+		fmt.Fprintf(stderr, "%s--, --dir, --env and --scratch apply to a wasip1 command or a component, and this "+
+			"module is neither\n", prefix)
+		return errUsage
 	}
-
-	// Not a command: `--` and `--dir` are the command grammar and do not apply.
-	if len(guestArgs) > 0 || len(dirs) > 0 {
-		fmt.Fprintf(stderr, "%s-- and --dir apply to a wasip1 command, and this module is not one\n", prefix)
+	if len(feats) > 0 {
+		fmt.Fprintf(stderr, "%s--features applies to a wasip1 command or a component; a core module takes the "+
+			"default proposal set\n", prefix)
 		return errUsage
 	}
 
@@ -700,4 +682,48 @@ func exitCode(err error) int {
 		return exitTrap
 	}
 	return exitError
+}
+
+// runComponent runs a component (layer 1) through its `wasi:cli/run` world on the preview-2 host (ADR 0084/0085,
+// #694). Its stdio is bound at the writer, the same `os.Stdout`/`os.Stderr` a wasip1 command receives (ADR 0083,
+// shared).
+//
+// argv is the file's basename followed by anything after `--`, as a wasip1 command's is, lowered through
+// `wasi:cli/environment.get-arguments`. **`--features` reaches this path too, and before #813 it reached NEITHER.**
+// ADR 0088 added `ComponentConfig.Features` on 2026-09-18, and the CLI never passed it.
+//
+// **A flag that does not apply to a component is refused by name, not ignored** (#1128). A function name, `--dir`
+// (the preview-2 host serves no preopens), `--env` (its environment is empty) and `--scratch` all used to be dropped
+// silently or mis-routed.
+func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs, guestArgs []string,
+	dirs preopenFlag, envs envFlag, scratch scratchFlag, feats featureFlag,
+) error {
+	switch {
+	case len(invokeArgs) > 0:
+		fmt.Fprintf(stderr, "%sa component runs its wasi:cli/run world; it takes no function name (its arguments "+
+			"go after --)\n", prefix)
+		return errUsage
+	case len(dirs) > 0 || len(scratch.inner) > 0:
+		fmt.Fprintf(stderr, "%sa component takes no --dir or --scratch: this build's component host grants no "+
+			"directories\n", prefix)
+		return errUsage
+	case len(envs) > 0:
+		fmt.Fprintf(stderr, "%sa component takes no --env: this build's component host serves an empty environment\n",
+			prefix)
+		return errUsage
+	}
+	code, rerr := burroughs.ComponentConfig{
+		Args:     append([]string{filepath.Base(file)}, guestArgs...),
+		Stdin:    os.Stdin,
+		Stdout:   stdout,
+		Stderr:   stderr,
+		Features: feats.features(),
+	}.Run(wasm)
+	if rerr != nil {
+		return rerr
+	}
+	if code != 0 {
+		return wasiExit(code)
+	}
+	return nil
 }

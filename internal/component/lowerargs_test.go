@@ -402,8 +402,11 @@ func TestAParameterTypeIsComparedStructurallyNotByKind(t *testing.T) {
 			"comparison lets it through; the elements then go in at the string stride and the guest " +
 			"reads them as u32s — a plausible wrong value, which is the outcome this check exists to stop")
 	}
-	if !errors.Is(err, ErrUnsupportedForm) {
-		t.Errorf("the refusal is not ErrUnsupportedForm: %v", err)
+	// **A mistyped argument is the caller's mistake, so it carries no engine sentinel** (#1129). Until #1129 this
+	// asserted `ErrUnsupportedForm`, which mapped to the public `ErrUnsupported` and told the caller its mistake
+	// was a missing feature.
+	if errors.Is(err, ErrUnsupportedForm) {
+		t.Errorf("a mistyped argument is classified ErrUnsupportedForm, which reads as a missing feature: %v", err)
 	}
 	// **The message must distinguish the two types**, not print "list" twice: a refusal naming both sides
 	// identically reads as though the engine had refused a type for matching.

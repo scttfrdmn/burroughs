@@ -85,6 +85,28 @@ says what it now requires and what it gives up.
   backing allocation is not polled"* under *"Known limits, open on default-on paths"*. `array.new*` is GC, and
   `gate:gc` is off by default, so the limit is reachable only with GC on, not on a default path. The limit itself
   stands, and is tracked as #1138. The `v0.11.0` tag and its block are unchanged.
+- **`burroughs run <component>` with guest args or `--features` runs the component**
+  ([#1128](https://github.com/scttfrdmn/burroughs/issues/1128), v0.12.0). It used to fail as *"malformed module:
+  unknown binary version: 65549"*, exit 3. The wasip1 command probe ran first, could not decode a component, and its
+  error was returned whenever those flags were given. A component is now recognised before that probe.
+  - A flag that does not apply to the module's kind is refused by name, as a usage error (exit 2), where it used to
+    be dropped silently or misrouted: a function name, `--dir`, `--scratch` and `--env` for a component, and
+    `--features` for a core module.
+  - **Witness:** `TestRunRoutesAComponentWhateverFlagsAreGiven`.
+  - **Neuter, run:** with the component check moved back after the probe, both routing arms exit 3 with the
+    "malformed module" message.
+- **A mistyped or mis-counted `Component.Call` argument is the caller's error, not `ErrUnsupported`**
+  ([#1129](https://github.com/scttfrdmn/burroughs/issues/1129), v0.12.0).
+  - Both used to read *"feature not implemented in this phase: … unsupported instantiation form"*, mapping to
+    `ErrUnsupported` (CLI exit 5). So a caller branching on that sentinel took its own mistake for a missing
+    feature.
+  - Both are now plain errors that name the parameter and both types, or the counts, as core `Instance.Call`'s
+    arity and type checks are.
+  - **Witness:** `TestAMistypedComponentCallArgumentIsTheCallersError`, on the public path.
+  - **Neuter, run:** with the wrap restored at the type check, the type arm fails, classified `ErrUnsupported`.
+  - Two internal tests that pinned the old class now assert the new one.
+  - **Not changed here:** three name-shape refusals (an export that is an instance, not a function) still carry
+    `ErrUnsupportedForm`. They are about which name was called, not about its arguments.
 
 ## [0.11.0] - 2026-10-26
 *Implements contract v0.1.*

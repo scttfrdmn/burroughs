@@ -158,8 +158,11 @@ func TestAStringArgumentToALiftWithoutAReallocIsRefusedByName(t *testing.T) {
 	if err == nil {
 		t.Fatal("an argument was accepted by an export declaring no parameters")
 	}
-	if !errors.Is(err, burroughs.ErrUnsupported) {
-		t.Fatalf("the refusal is not ErrUnsupported: %v", err)
+	// **An argument mistake is the caller's, so it carries no engine sentinel** (#1129), as core `Instance.Call`'s
+	// arity and type checks carry none. Until #1129 this asserted `ErrUnsupported`, which is the class that told a
+	// caller its own mistake was a missing feature.
+	if errors.Is(err, burroughs.ErrUnsupported) {
+		t.Fatalf("an arity mistake is classified ErrUnsupported, which reads as a missing feature: %v", err)
 	}
 	if !strings.Contains(err.Error(), "parameter") {
 		t.Errorf("the refusal %q does not name the arity mismatch", err)

@@ -254,9 +254,14 @@ func (in *Instantiated) ValueExportNames() []string {
 // placed here: the model lowers a lift's parameters inside the callee's task, on the entry the callee then
 // runs on (definitions.py:canon_lift.thread_func), and nothing holds that entry at this point. See `lowerargs.go`.
 func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Value, []pendingLower, error) {
+	// **A caller's argument mistake carries no engine sentinel** (#1129), as core `Instance.Call`'s arity and type
+	// checks carry none. It is not a feature this engine lacks, so it is not `ErrUnsupportedForm`. That sentinel
+	// made it read as one, *"feature not implemented in this phase … unsupported instantiation form"*, and mapped
+	// it to `ErrUnsupported` (CLI exit 5), so a caller branching on that sentinel took its own mistake for a
+	// missing feature.
 	if len(args) != len(sig.Params) {
-		return nil, nil, fmt.Errorf("%w: export %q takes %d parameter(s), got %d",
-			ErrUnsupportedForm, name, len(sig.Params), len(args))
+		return nil, nil, fmt.Errorf("component: export %q takes %d parameter(s), got %d",
+			name, len(sig.Params), len(args))
 	}
 	flat := make([]interp.Value, 0, len(args))
 	var pend []pendingLower
@@ -281,10 +286,10 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 				ErrUnsupportedForm, name, p.Name, berr)
 		}
 		if !canon.TypeEqual(args[i].Type, want) {
-			return nil, nil, fmt.Errorf("%w: export %q parameter %q is declared %s but the value given is "+
-				"%s; the types must match structurally, so a list of the wrong element type is refused "+
-				"here rather than written at the wrong stride",
-				ErrUnsupportedForm, name, p.Name, want, args[i].Type)
+			return nil, nil, fmt.Errorf("component: export %q parameter %q is declared %s but the value given "+
+				"is %s; the types must match structurally, so a list of the wrong element type is refused "+
+				"here rather than written at the wrong stride (a caller error, as above; #1129)",
+				name, p.Name, want, args[i].Type)
 		}
 		// The lowering is one recursive walk, because **a record's flat form is the concatenation of
 		// its fields'** (CanonicalABI.md `lower_flat_record`). So a record of scalars is words, a
