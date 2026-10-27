@@ -89,6 +89,13 @@ type Extern struct {
 // sentence for the zero Extern and the **wrong subject** for a host function — so `InstantiateLinked`
 // intercepts the host arm before that check rather than letting this nil reach it. Both causes still
 // answer nil here; what differs is who is entitled to ask.
+// SharedMemory reports whether e names a shared memory. The component walk asks it of a canon option's memory,
+// because a shared memory used as a Canonical ABI memory option is refused by name (#1141). `Shared` is fixed at
+// decode and never written after, so reading it here races with nothing.
+func (e Extern) SharedMemory() bool {
+	return e.Kind == binary.ExternMemory && e.mem != nil && e.mem.limits.Shared
+}
+
 func (e Extern) typeSpace() *binary.Module {
 	switch e.Kind {
 	case binary.ExternTable:

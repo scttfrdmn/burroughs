@@ -887,6 +887,9 @@ func (w *walker) funcStep(d Def) error {
 	switch d.Section {
 	case SectionCanon: // a lift (lowers land in the core space, handled by step)
 		cn := w.c.Canons[d.Item]
+		if err := w.refuseSharedCanonMemory(cn); err != nil {
+			return err
+		}
 		if int(cn.FuncIdx) >= len(w.coreSpace[SpaceCoreFunc]) {
 			return fmt.Errorf("component: canon lift names core func %d of %d", cn.FuncIdx, len(w.coreSpace[SpaceCoreFunc]))
 		}
