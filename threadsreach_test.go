@@ -14,20 +14,25 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/text"
 )
 
-// TestNoPublicPathRunsASecondSharedMemoryThread answers the chair's fourth ruling of 2026-10-26, item 1. For each
-// public entry point, it asks whether a guest can run a second thread of a shared memory through it. **None can.**
-// `gate:threads` (ADR 0106) admits the threads GRAMMAR on every path, and that half is asserted here too, so that
-// the answer is about starting a thread and not about decoding one.
+// TestNoPublicPathRunsASecondSharedMemoryThread answered the chair's fourth ruling of 2026-10-26, item 1: for each
+// public entry point, whether a guest can run a second thread of a shared memory through it. At v0.11.0 none
+// could (#1121). `gate:threads` (ADR 0106) admits the threads GRAMMAR on every path, and that half is asserted here
+// too, so that the answer is about starting a thread and not about decoding one.
 //
-// The guest-side doors asked:
-//   - **Core and WASIP1:** the Phase 4 fork's spawn import, `"burroughs" "spawn"` (`internal/wasi/clause2_test.go`).
-//     Only tests supply it. The public paths supply no import of that module, so a guest importing it fails to
-//     link.
+// **Since v0.12.0 the WASIP1 path can** (#1122). It serves the Phase 4 fork's spawn door, `"burroughs" "spawn"`,
+// to a module that imports it and exports `mstart`. `TestAGuestStartsASecondThreadThroughWASIP1ConfigRun` below is
+// that answer. The name is kept because v0.11.0's release record cites it. Its arms now cover the paths that still
+// start no second shared-memory thread, and the door's link-time refusal:
+//   - **`Instantiate`:** it supplies no imports, so the door does not link. Host-started threads are not built
+//     (Scott's decision).
+//   - **WASIP1, without `mstart`:** the door is refused at link, by name, because a spawned agent would have no
+//     entry.
 //   - **Components:** `thread.spawn-ref` (0x40) and `thread.spawn-indirect` (0x41), the shared-everything-threads
 //     built-ins. The first is refused by name. The second cannot be reached at all: the shared table it needs is
-//     refused first, at decode.
+//     refused first, at decode (#1120).
 //
-// The CLI's arm is `cmd/burroughs`'s `TestRunCannotStartASecondSharedMemoryThread`.
+// The CLI's arms are `cmd/burroughs`'s `TestRunCannotStartASecondSharedMemoryThread` (a core module, still
+// refused) and `TestRunStartsAGuestsSecondThread`.
 //
 // **What this does not cover.** Component-model Threads (`gate:cm-threads`, default on since v0.8.0) DO run
 // through the public component paths, and `TestAComponentModelThreadRunsThroughThePublicPath` below shows one. They
@@ -67,13 +72,16 @@ func TestNoPublicPathRunsASecondSharedMemoryThread(t *testing.T) {
 		refusesTheSpawnImport(t, err)
 	})
 
-	t.Run("WASIP1Config_Run_cannot_link_the_spawn_import", func(t *testing.T) {
+	t.Run("WASIP1Config_Run_refuses_the_door_without_mstart", func(t *testing.T) {
 		var out, errOut bytes.Buffer
 		_, err := burroughs.WASIP1Config{Stdout: &out, Stderr: &errOut}.Run(encode(t, `(module
 			(import "burroughs" "spawn" (func (param i32)))
 			(import "wasi_snapshot_preview1" "proc_exit" (func (param i32)))
 			(memory (export "memory") 1 1 shared) (func (export "_start")))`))
 		refusesTheSpawnImport(t, err)
+		if err != nil && !strings.Contains(err.Error(), "mstart") {
+			t.Errorf("refused, but not for the missing mstart entry: %v", err)
+		}
 	})
 
 	for _, c := range []struct{ fixture, want string }{
@@ -139,5 +147,46 @@ func TestAComponentModelThreadRunsThroughThePublicPath(t *testing.T) {
 	}
 	if got&0x3f != 0x3f {
 		t.Errorf("run(0)'s marker mask is %#b, want 0b111111: not every created Thread ran", got&0x3f)
+	}
+}
+
+// spawnHandshakeWAT is a two-agent handshake through the spawn door, and its exit code says whether a SECOND agent
+// ran. `_start` spawns `mstart`, then sets A and waits for B. `mstart` waits for A, then sets B. If the door ran
+// `mstart` inline on the calling agent, `mstart` would wait on an A not yet set, and time out; then B would never
+// be set, and the exit code would be 1. **Exit 42 means `mstart` ran on another agent, concurrently.** The waits are
+// bounded at 5s, so a missing second agent fails as a code, not a hang.
+const spawnHandshakeWAT = `(module
+  (import "burroughs" "spawn" (func $spawn (param i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1 shared)
+  (func (export "mstart") (param i32)
+    (drop (memory.atomic.wait32 (i32.const 0) (i32.const 0) (i64.const 5000000000)))
+    (i32.atomic.store (i32.const 4) (i32.const 1))
+    (drop (memory.atomic.notify (i32.const 4) (i32.const 1))))
+  (func (export "_start")
+    (call $spawn (i32.const 0))
+    (i32.atomic.store (i32.const 0) (i32.const 1))
+    (drop (memory.atomic.notify (i32.const 0) (i32.const 1)))
+    (drop (memory.atomic.wait32 (i32.const 4) (i32.const 0) (i64.const 5000000000)))
+    (call $exit (select (i32.const 42) (i32.const 1) (i32.atomic.load (i32.const 4))))))`
+
+// TestAGuestStartsASecondThreadThroughWASIP1ConfigRun is v0.12.0's public-path answer (#1122): a guest starts a
+// second shared-memory agent through `WASIP1Config.Run`, with nothing supplied beyond the module. The fork-built Go
+// program that does the same at scale is `internal/wasi`'s `TestAForkBuiltGoProgramRunsWithRealThreadsThroughThePublicPath`.
+//
+// **Neuter, run:** with the door not served (`spawnDoorFor` replaced by a nil door in `runModule`), this fails to
+// link with *"unknown import: "burroughs" "spawn""*.
+func TestAGuestStartsASecondThreadThroughWASIP1ConfigRun(t *testing.T) {
+	wasm, err := text.EncodeModule([]byte(spawnHandshakeWAT))
+	if err != nil {
+		t.Fatalf("assembling the handshake failed: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code, err := burroughs.WASIP1Config{Stdout: &out, Stderr: &errOut}.Run(wasm)
+	if err != nil {
+		t.Fatalf("Run: %v (stderr: %s)", err, errOut.String())
+	}
+	if code != 42 {
+		t.Fatalf("exit %d, want 42: mstart did not run on a second agent concurrently with _start", code)
 	}
 }

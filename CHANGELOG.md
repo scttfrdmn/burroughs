@@ -26,6 +26,36 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A guest starts its own threads on the WASI preview-1 path: a fork-built Go program runs with real threads
+  through `burroughs run`** ([#1122](https://github.com/scttfrdmn/burroughs/issues/1122), v0.12.0; the chair's
+  ruling of 2026-10-27, item 3).
+  - `WASIP1Config.Run` (and `burroughs run` on a command) now serves the Phase 4 fork's spawn door. A module that
+    imports `"burroughs" "spawn"` with type `(i32) -> ()` or `(i32) -> (i32)`, and exports `mstart` with type
+    `(i32) -> ()`, starts a new agent running `mstart(arg)` on each call, backed by an OS thread over its shared
+    memory. Nothing is supplied beyond the module.
+  - A module that imports the door without exporting `mstart`, or with the wrong types, is refused at link, by name.
+  - **This lifts `v0.11.0`'s reachability limit for the WASIP1 path.** Core `Instantiate` still supplies no imports
+    (host-started threads are not built), and components' `thread.spawn*` stay refused.
+  - The contract text (an append to §2 T-1 naming this import) is with Scott on #1122, and is **not** part of this
+    change.
+  - **The end-to-end witness:** `TestAForkBuiltGoProgramRunsWithRealThreadsThroughThePublicPath`. A committed
+    fork-built Go program (`internal/wasi/testdata/threads012`, with its PROVENANCE) does 4 workers' hash chains
+    under GOMAXPROCS = 4 and clause 3's GC ring across agents. Its stdout must equal the expected output, whose
+    digest the test recomputes with stock Go. At least 3 agents must be sampled executing guest code at once
+    (measured: 4).
+  - **Neuters, run:** the door not served fails at link. A GOMAXPROCS = 1 build matches the digest but reads at
+    most 2 agents executing at once, so it fails the floor. The GC half's neuter is clause 3's `c3_notstopped`.
+  - **Also:** `TestAGuestStartsASecondThreadThroughWASIP1ConfigRun` and `TestRunStartsAGuestsSecondThread` run a
+    two-agent handshake whose exit code 42 is reachable only if `mstart` ran on another agent concurrently.
+    `TestTheSpawnDoorIsRefusedAtLinkWhenItsShapeIsWrong` covers the refusals. #1121's reachability tests keep their
+    names (v0.11.0 cites them), and now cover only the paths that still refuse.
+  - **Found while building it:** on the fork, `runtime.LockOSThread` on an M that needs a new M throws *"on a
+    locked thread with no template thread"*. The witness does not pin its workers, and the finding is recorded on
+    #1122.
+  - **A gauge's limit, measured:** the peak number of live agents could not show parallelism. The GOMAXPROCS = 1
+    build still reached 3, because the Go runtime keeps Ms for its own work. So the witness samples
+    `ExecutingAgents` (agents inside a call and not blocked) instead, which reads 4 against the neuter's 2.
+
 - **A per-gate board lane: what each default-off gate does on its own** (`TestEachDefaultOffGateOnItsOwnLane`; the
   chair's addendum of 2026-10-26, "the flips"). The all-gates-on lane says the gates together leave nothing failing.
   This one gives what a flip of ONE gate changes, which is what a G-1 forecast pre-registers.

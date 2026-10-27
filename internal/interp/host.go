@@ -1147,6 +1147,32 @@ var closeQuiesceInterval = 10 * time.Second
 // Safe after `Close`: the fault slot is one slot and is never dropped, where the per-`tid` records are.
 func (in *Instance) Fault() error { return in.world.faultValue() }
 
+// PeakLiveAgents is the most agents this instance has had alive at once: its initial agent plus every spawned one
+// not yet exited, at the high-water mark. It is v0.12.0's witness that a guest's threads ran on several agents
+// (#1122). It counts agents that EXISTED at once, not ones that executed at the same instant.
+func (in *Instance) PeakLiveAgents() int {
+	in.world.mu.Lock()
+	defer in.world.mu.Unlock()
+	return in.world.peakLive
+}
+
+// ExecutingAgents is how many of this instance's live agents are executing guest code at this moment: inside a
+// call (`callers`) and not parked in a host call or a wait (`blocked`). A witness samples it while a guest runs,
+// because `PeakLiveAgents` cannot separate parallel execution from idle Ms. A Go runtime keeps several Ms alive
+// even at GOMAXPROCS = 1 (measured: a peak of 3), and its idle Ms park in a futex wait, which this does not count.
+// It takes `world.mu`, so it is for witnesses, not hot paths.
+func (in *Instance) ExecutingAgents() int {
+	in.world.mu.Lock()
+	defer in.world.mu.Unlock()
+	n := 0
+	for _, t := range in.world.live {
+		if t.callers > t.blocked {
+			n++
+		}
+	}
+	return n
+}
+
 // Close is contract §5 H-3's engine shutdown and §2 T-5.4's: terminal, cancelling, *ending every thread*,
 // and waiting for the unwinds.
 //

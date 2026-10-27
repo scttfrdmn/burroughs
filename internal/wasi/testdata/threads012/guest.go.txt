@@ -1,0 +1,139 @@
+// v0.12.0's end-to-end witness guest (#1122): a fork-built Go program that runs with real threads through
+// `burroughs run`, with nothing supplied beyond the module.
+//
+//  1. Real parallel work: `workers` busy goroutines under GOMAXPROCS = workers, so the runtime starts several Ms,
+//     each a spawned agent. Each computes a fixed hash chain over its index. The program prints the combined
+//     digest, which the test recomputes with stock Go.
+//  2. GC across agents: clause 3's checksummed ring (testdata/clause3/guest.go.txt, scaled the same way), mutated
+//     while collections are forced, with finalizers on nodes the ring still holds. The program prints VERIFIED
+//     only if every node's checksum holds and no finalizer ran.
+//
+// Output is written once, at the end, after every goroutine has finished. Clause 3 recorded that `print` takes
+// locks while a collection may be stopping the world.
+package main
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"sync"
+)
+
+const (
+	workers     = 4
+	rounds      = 200000
+	nodes       = 50
+	collections = 8
+	mutations   = 600
+)
+
+// chain is the worker's deterministic share. The test computes the same function with stock Go.
+func chain(seed uint64) uint64 {
+	x := seed*0x9E3779B97F4A7C15 + 1
+	for i := 0; i < rounds; i++ {
+		x ^= x >> 33
+		x *= 0xFF51AFD7ED558CCD
+		x ^= x >> 29
+		x += uint64(i)
+	}
+	return x
+}
+
+type node struct {
+	id, pay, sum uint32
+	next         *node
+}
+
+func checksum(n *node) uint32 {
+	var succ uint32
+	if n.next != nil {
+		succ = n.next.id
+	}
+	return n.id*2654435761 ^ n.pay*40503 ^ succ*2246822519
+}
+
+var (
+	head      *node
+	finalized uint32
+	finMu     sync.Mutex
+)
+
+func main() {
+	runtime.GOMAXPROCS(workers)
+
+	results := make([]uint64, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			// Not runtime.LockOSThread: on this fork a locked M that needs a new M throws "on a locked thread
+			// with no template thread" (#1122's build, 2026-10-27). GOMAXPROCS = workers and busy goroutines
+			// are what put the work on several Ms, each a spawned agent; the engine's live-agent gauge is the
+			// evidence that it did.
+			results[w] = chain(uint64(w) + 1)
+		}(w)
+	}
+
+	var prev *node
+	for i := 0; i < nodes; i++ {
+		n := &node{id: uint32(i) + 1}
+		if prev != nil {
+			prev.next = n
+		} else {
+			head = n
+		}
+		runtime.SetFinalizer(n, func(*node) { finMu.Lock(); finalized++; finMu.Unlock() })
+		prev = n
+	}
+	prev.next = head
+	for n, i := head, 0; i < nodes; n, i = n.next, i+1 {
+		n.sum = checksum(n)
+	}
+	done := make(chan struct{})
+	go func() {
+		n := head
+		for i := 0; i < mutations; i++ {
+			n.pay = uint32(i)*2654435761 + 1
+			n.sum = checksum(n)
+			n = n.next
+		}
+		close(done)
+	}()
+	for i := 0; i < collections; i++ {
+		runtime.GC()
+	}
+	<-done
+	wg.Wait()
+
+	seen, bad := 0, uint32(0)
+	for n, i := head, 0; i < nodes; i++ {
+		if n == nil || n.sum != checksum(n) {
+			if n != nil {
+				bad = n.id
+			} else {
+				bad = uint32(seen) + 1
+			}
+			break
+		}
+		seen++
+		n = n.next
+	}
+	finMu.Lock()
+	fin := finalized
+	finMu.Unlock()
+	verdict := "VERIFIED"
+	if bad != 0 || seen != nodes || fin != 0 {
+		verdict = "FAILED"
+	}
+
+	var digest uint64
+	for w, r := range results {
+		digest = digest*1099511628211 ^ r ^ uint64(w)
+	}
+	fmt.Fprintf(os.Stdout, "digest %016x\nworkers %d\ngc %s nodes %d finalized %d collections %d\n",
+		digest, workers, verdict, seen, fin, collections)
+	if verdict != "VERIFIED" {
+		os.Exit(1)
+	}
+}
