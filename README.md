@@ -120,8 +120,19 @@ it.
   Contract §4's litmus battery has 19 of 19 cases implemented and no
   registered hole. Its strength is stated in ADR 0106 and on
   [#10](https://github.com/scttfrdmn/burroughs/issues/10): Go's race detector
-  and scheduling claims, **not** hardware weak-memory readings. Stop-the-world exists in the engine but is not public
+  and scheduling claims, **not** hardware weak-memory readings. A separate
+  hardware reading (`scripts/hwlitmus.sh`,
+  [#1126](https://github.com/scttfrdmn/burroughs/issues/1126)) does witness the
+  SC ordering of aligned accesses on Apple arm64. On x86-64 and Graviton3 it
+  cannot discriminate, and it is a reading, not a conformance claim. Stop-the-world exists in the engine but is not public
   API, so nothing here promises it. Windows is not covered.
+- **Four more Wasm 3.0 proposals are on by default:** extended constant
+  expressions, tail calls, multi-memory and memory64 (ADRs 0107–0110). Each
+  flip moved the board by exactly its own lane's pre-registered reading, and
+  each keeps an env-var rollback (`BURROUGHS_EXTENDED_CONST=0`,
+  `BURROUGHS_TAIL_CALL=0`, `BURROUGHS_MULTI_MEMORY=0`, `BURROUGHS_MEMORY64=0`).
+  **Exception handling and GC stay off**, with their open work (#95; #172,
+  #262), and `return_call_ref` is GC's.
 - **Stack switching has not started.** Contract §7, the v2 rung.
 - **Nothing defaults on without its own suite green** (contract §9) — which is
   not the same as everything defaulting off. Several gates have flipped, each by

@@ -92,14 +92,15 @@ const (
 // fixtures, one per gate so that a single flip cannot empty the set.
 //
 // The spelling matters: each is a module the **spec accepts**, which is the entire reason reporting
-// it as malformed is a lie rather than an approximation. They are three because a fixture population
-// of one retires the day its proposal flips, and the corpus control in publicpath_test.go covers the
-// space (429 module forms, nine proposals) while these cover the classification cheaply.
+// it as malformed is a lie rather than an approximation. They are more than one because a fixture
+// population of one retires the day its proposal flips, and the corpus control in publicpath_test.go covers
+// the space (429 module forms, nine proposals) while these cover the classification cheaply.
+//
+// **Two since ADR 0110, because two gates are left off.** "memory64" retired with that flip and "tail call"
+// with ADR 0108's; no third proposal is off to replace them. GC (#172) and exception handling (#95) are the
+// last, and a flip of either one leaves this set at one, which is the moment its own sentence above warns of.
 var gatedWATs = map[string]string{
-	"memory64": `(module (memory i64 1))`,
-	"gc":       `(module (type $s (struct (field i32))))`,
-	// "tail call" retired with ADR 0108's flip; exception handling replaces it, as a gate that stays off
-	// (#95) rather than one of the four flips still to come.
+	"gc":                 `(module (type $s (struct (field i32))))`,
 	"exception handling": `(module (func (export "g") (block $l (try_table (catch_all $l)))))`,
 }
 

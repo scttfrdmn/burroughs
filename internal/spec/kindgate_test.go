@@ -138,7 +138,12 @@ var kindGateUnequalPasses = map[string]string{
 // diffing the census with `BURROUGHS_EXTENDED_CONST=0` and without: `global.wast:241 result 0: want externref,
 // got externref`. Its module uses an extended constant expression, so the default lane declined it before the
 // flip and answers it after. The all-on lane, which already had the gate on, is unchanged at 125.
-var kindGateRefReaches = map[string]int{"default": 31, "all-on": 125}
+//
+// **Then 31 → 65 with `gate:memory64`'s flip (ADR 0110)**, read the same way, with `BURROUGHS_MEMORY64=0` and
+// without: 34 new rows and none lost, all in the i64-table files (`table_fill64.wast` 26, `table_grow64.wast`
+// 6, `table_get64.wast` 1, `table_set64.wast` 1), each an externref or funcref crossing a table whose index
+// type is i64. TailCall's and MultiMemory's flips moved it by 0. The all-on lane is unchanged at 125.
+var kindGateRefReaches = map[string]int{"default": 65, "all-on": 125}
 
 // TestKindGateCensusIsPinned prints the census and pins it.
 //

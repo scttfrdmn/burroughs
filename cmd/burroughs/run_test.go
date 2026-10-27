@@ -237,7 +237,8 @@ func TestRunSubcommandOutcomes(t *testing.T) {
 	// paths with no reachable input at this boundary now. #326 is the vehicle if a derived specimen ever
 	// gives them one again.
 	invalid := writeModule(t, "invalid.wasm", `(module (func (export "f") (result i32) i64.const 42))`)
-	gated := writeModule(t, "gated.wasm", `(module (memory i64 1))`)
+	// GC's struct type since ADR 0110 flipped memory64, whose `(memory i64 1)` stood here; GC stays off (#172).
+	gated := writeModule(t, "gated.wasm", `(module (type $s (struct (field i32))))`)
 	malformed := filepath.Join(t.TempDir(), "malformed.wasm")
 	if err := os.WriteFile(malformed, []byte("not a wasm module"), 0o600); err != nil {
 		t.Fatal(err)
@@ -278,7 +279,7 @@ func TestRunSubcommandOutcomes(t *testing.T) {
 		// remedy — a gate flip, not an edit to the module — is legible without reading this source.
 		"a gated proposal has its own code": {
 			argv: []string{gated}, code: exitGated, emptyOut: true,
-			stderrHas: []string{"memory64", "gate"},
+			stderrHas: []string{"gc", "gate"},
 		},
 		"a trap has its own code": {
 			argv: []string{valid, "divz", "i32:1"}, code: exitTrap,

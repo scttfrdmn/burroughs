@@ -49,6 +49,7 @@ var flippedGates = []struct {
 	{"ExtendedConst", 70}, // ADR 0107
 	{"TailCall", 26},      // ADR 0108
 	{"MultiMemory", 645},  // ADR 0109
+	{"Memory64", 2078},    // ADR 0110
 }
 
 // declineLane is the shipped default with multi-memory's rollback set (`BURROUGHS_MULTI_MEMORY=0`): the lane on
