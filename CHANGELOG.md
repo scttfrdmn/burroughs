@@ -85,6 +85,16 @@ says what it now requires and what it gives up.
   backing allocation is not polled"* under *"Known limits, open on default-on paths"*. `array.new*` is GC, and
   `gate:gc` is off by default, so the limit is reachable only with GC on, not on a default path. The limit itself
   stands, and is tracked as #1138. The `v0.11.0` tag and its block are unchanged.
+- **`burroughs run <component>` with guest args or `--features` runs the component**
+  ([#1128](https://github.com/scttfrdmn/burroughs/issues/1128), v0.12.0). It used to fail as *"malformed module:
+  unknown binary version: 65549"*, exit 3. The wasip1 command probe ran first, could not decode a component, and its
+  error was returned whenever those flags were given. A component is now recognised before that probe.
+  - A flag that does not apply to the module's kind is refused by name, as a usage error (exit 2), where it used to
+    be dropped silently or misrouted: a function name, `--dir`, `--scratch` and `--env` for a component, and
+    `--features` for a core module.
+  - **Witness:** `TestRunRoutesAComponentWhateverFlagsAreGiven`.
+  - **Neuter, run:** with the component check moved back after the probe, both routing arms exit 3 with the
+    "malformed module" message.
 
 ## [0.11.0] - 2026-10-26
 *Implements contract v0.1.*
