@@ -59,11 +59,13 @@ func TestBothSubcommandsClassifyOneModuleTheSameWay(t *testing.T) {
 		},
 		{
 			name: "a gated proposal keeps its own code on both paths",
-			path: writeModule(t, "gated.wasm", `(module (memory i64 1))`),
+			// GC's struct type since ADR 0110 flipped memory64, whose `(memory i64 1)` stood here: GC stays
+			// off (#172), so this row is not retired by a flip still to come.
+			path: writeModule(t, "gated.wasm", `(module (type $s (struct (field i32))))`),
 			// Grave #301 at the shell, in the subcommand that did not have it: a gated module is
 			// well-formed, and exitRefused would send a caller looking for a defect in their module.
 			wantRun: exitGated, wantInspect: exitGated,
-			why: "memory64's gate is off in DefaultFeatures, which is the feature set *both* paths " +
+			why: "GC's gate is off in DefaultFeatures, which is the feature set *both* paths " +
 				"decode under — `binary.DecodeModule`'s doc and `Config.Instantiate`'s decoder agree, " +
 				"and if they ever stopped agreeing this row is where it would show",
 		},
@@ -162,8 +164,8 @@ func TestDiagnosticNamesTheProgramExactlyOnce(t *testing.T) {
 	for _, argv := range [][]string{
 		{"run", malformed},
 		{"inspect", malformed},
-		{"run", writeModule(t, "gated.wasm", `(module (memory i64 1))`)},
-		{"inspect", writeModule(t, "gated2.wasm", `(module (memory i64 1))`)},
+		{"run", writeModule(t, "gated.wasm", `(module (type $s (struct (field i32))))`)},
+		{"inspect", writeModule(t, "gated2.wasm", `(module (type $s (struct (field i32))))`)},
 		{"run", writeModule(t, "invalid.wasm",
 			`(module (func (export "f") (result i32) i64.const 42))`)},
 		{"run", filepath.Join(t.TempDir(), "absent.wasm")},

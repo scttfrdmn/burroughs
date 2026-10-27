@@ -137,6 +137,31 @@ says what it now requires and what it gives up.
     measured GC as the cause: GC alone takes the count to 0, while EH and Memory64 leave it at 13. The comment now
     says so.
 
+- **`gate:memory64` is on by default** (ADR 0110; the same agreement, the last of the four). A memory or a table
+  with an `i64` index type is admitted with nothing supplied. **The four are done:** the default gate set is now
+  every Wasm 3.0 proposal except exception handling (#95) and GC (#172, #262), which stay off with their open work.
+  - **The rollback:** set `BURROUGHS_MEMORY64=0` to restore the old default.
+  - **The board moved by exactly the forecast:** 61695 → **63769 pass**, 3446 → **1368 gated**, 46 → 50 bound,
+    0 fail. That is the 2078 vectors its lane answers on top of MultiMemory's flip, read identically on
+    darwin/arm64 and janus x86-64.
+  - **Nothing else moved:** `TestEachFlippedGateMovesOnlyItsOwnVectors` gains its fourth row, `{"Memory64", 2078}`.
+    - **Neuter, run:** `BURROUGHS_MEMORY64=0` fails its "is it on" arm.
+  - **Controls that pinned the old default moved with it** (2078 = 1790 + 284 + 4):
+    - `TestGatedVectors` loses 1790 allowlist entries, every removed reason naming memory64;
+    - the eight memory64 files' `gatedAssertInvalid` counts go to 0 (284 in all), with the sum going 444 → 160,
+      and the destination ledger's converted group goes `gated` 441 → 157 and `pass` 2150 → 2434;
+    - `gatedDeclinedRegistration`'s `memory64-imports.wast` goes 4 → 0;
+    - `TestKindGateCensusIsPinned`'s default lane goes 31 → 65. The 34 new rows, all i64-table reference
+      crossings, were read by diffing the census with the rollback set and unset;
+    - `passFloor` goes to 63769, and the 13 foreclose exemptions are re-keyed by −1862 (#1150).
+  - **Fixtures that used memory64 as "a gated proposal" moved to GC**, which stays off: `cmd/burroughs`'
+    `TestBothSubcommandsClassifyOneModuleTheSameWay`, `TestDiagnosticNamesTheProgramExactlyOnce` and
+    `TestRunSubcommandOutcomes`. Grave #301's root fixture set goes to two (GC, exception handling), because no
+    third proposal is still off.
+  - **Allowlist testimony left by the removals:**
+    - five per-file notes whose blocks had gone were removed, one of them left by the MultiMemory removal;
+    - `start0.wast`'s note is kept for its #413 finding, and now says its entries left with ADR 0109.
+
 - **A per-gate board lane: what each default-off gate does on its own** (`TestEachDefaultOffGateOnItsOwnLane`; the
   chair's addendum of 2026-10-26, "the flips"). The all-gates-on lane says the gates together leave nothing failing.
   This one gives what a flip of ONE gate changes, which is what a G-1 forecast pre-registers.
