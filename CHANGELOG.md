@@ -24,6 +24,26 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Added
+
+- **#406's Go-runtime torture suite, black-box**
+  ([#406](https://github.com/scttfrdmn/burroughs/issues/406)). There are eight guests, each built with the Phase 4
+  fork and committed under `internal/wasi/testdata/torture406/`. Each runs through `Run`, the function behind
+  `WASIP1Config.Run`, and must match stock Go's result: its class, exit code, first stderr line and stdout.
+  `TestGoRuntimeTortureExpectationsAreStockGos` re-derives every expectation by building the same source natively.
+  - The cases: stop-the-world under allocating load, with v0.12.0's executing-agents floor; checkdead in both
+    directions; a futex-backed `sync.Cond` wake; and a deadlock that a pending timer cannot resolve.
+  - Positive controls for the crashed, hung and wrong-output classifiers.
+  - **c1stw is pinned, not passing.** A worker that spins without allocating is never preempted on the fork, so
+    the collections never complete. That is #1064's known limit, and the case asserts the divergence, so lifting the
+    limit turns it red.
+  - `TestGoRuntimeTortureStress` is the 10,000-iteration stress, opt-in through `BURROUGHS_T406_ITERS`.
+  - **Its first Windows run found a limit**, filed as [#1165](https://github.com/scttfrdmn/burroughs/issues/1165) and
+    mapped in the triage table. On the Go allocator's path, a shared memory cannot grow past 128 pages, so c1alloc's
+    guest runs out of memory at about 4 MiB in use. Unix reserves address space instead (ADR 0076). Windows is
+    unsupported, and v0.12.0's threads claim names linux and darwin only.
+  - Nothing in the fork's runtime is read.
+
 ### Fixed
 
 - **A component's core modules are validated, so an invalid one is refused at load**

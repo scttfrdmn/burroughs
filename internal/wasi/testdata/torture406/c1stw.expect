@@ -1,0 +1,6 @@
+class completed
+exit 0
+stderr1 
+stdout:
+gc forced 8, at least 8 collections: true
+workers 4 done

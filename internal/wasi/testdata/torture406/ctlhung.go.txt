@@ -1,0 +1,12 @@
+// ctlhung: the hung classifier's positive control. An unconditional loop; only the wall clock ends it.
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("looping")
+	x := 0
+	for {
+		x++
+	}
+}

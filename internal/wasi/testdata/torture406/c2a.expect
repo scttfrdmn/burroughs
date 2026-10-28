@@ -1,0 +1,5 @@
+class deadlock
+exit 2
+stderr1 fatal error: all goroutines are asleep - deadlock!
+stdout:
+blocking
