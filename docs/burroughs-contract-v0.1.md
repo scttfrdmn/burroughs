@@ -45,6 +45,19 @@ wasmtime is for.
   `spawn(entry_func, arg, stack_hint) → tid`, creating a wasm thread backed
   1:1 by an OS thread, sharing the module's shared linear memory.
   *This is `newosproc`, not a Worker with a message port.*
+  T-1's primitive is reachable from a guest. A module that imports
+  `"burroughs" "spawn"` with type `(i32) -> ()` or `(i32) -> (i32)`, and
+  exports a function `mstart` of type `(i32) -> ()`, may call the import to
+  start a new agent running `mstart(arg)`, backed 1:1 by an OS thread and
+  sharing the module's shared memory. The result, if declared, is the new
+  agent's `tid`. The engine supplies the import on every public path that runs
+  WASI preview-1 modules. A module that imports it without exporting `mstart`
+  is refused at link.
+  *Appended on Scott's answer, in session, 2026-10-28: "no objection to all
+  five, go ahead on the repo" (relayed in the chair's addendum of 2026-10-28;
+  #1122, v0.12.0). It names the guest-facing door to the primitive above and
+  changes nothing T-1 already required, so it is an append rather than an
+  amendment.*
 - **T-2.** There is **no main-thread special case**. Every thread, including
   the first, MUST be permitted to block in `memory.atomic.wait` and in
   blocking host calls. No agent is forbidden from sleeping.
@@ -217,6 +230,16 @@ that spin is unnecessary.*
   platform.
   *Provenance: mac/ARM exhibited what janus/x86-TSO structurally could not;
   a contract clause without a weak-memory witness is a wish.*
+  *Note, non-normative: the weak-memory witness is `scripts/hwlitmus.sh`
+  (#1126). It discriminates on Apple arm64 for SB and MP: with ADR 0054's
+  atomics removed, the forbidden outcome appears there, and with them in place
+  it does not. On Graviton3 and x86-64 the interpreter's store-to-load latency
+  hides the reorderings, so its zeros there are not evidence. "Weakly-ordered
+  platform" is therefore not one thing, and a reader of this clause should know
+  which platform its evidence rests on. The note changes no MUST; it goes stale
+  if a compiler tier changes that latency, and is re-read then. Added on Scott's
+  answer, in session, 2026-10-28: "no objection to all five, go ahead on the
+  repo" (relayed in the chair's addendum of 2026-10-28; #1126, option B).*
 
 ## §5. Blocking host calls
 
@@ -294,6 +317,21 @@ commits to that reading.*
   first guest recon #734). A consequence of R-1/R-2/R-4 already stamped — the
   pull-not-push sentence is what a future async design is checked against — so
   an append rather than an amendment.*
+  **This paragraph interprets R-2**, and is not a consequence of it. A
+  stackless (callback) async lift's callback is invoked only after the guest's
+  previous call returned `WAIT` naming a waitable set, or `YIELD`. It delivers
+  the event of the set the guest named, at the point the guest chose, and is
+  the callback form of `waitable-set.wait`: a pull, not a push. R-2's "never
+  pushed by callback into guest code" forbids host-initiated entry into guest
+  code to deliver readiness, and the Canonical ABI's callback lift is not that.
+  R-2's `findRunnable` integration point governs guests with their own
+  scheduler; a stackless lift delegates scheduling to the Canonical ABI's
+  callback loop, which runs only at the guest's returns.
+  *Appended on Scott's answer, in session, 2026-10-28: "no objection to all
+  five, go ahead on the repo" (relayed in the chair's addendum of 2026-10-28;
+  #1135, the chair's amended text). It reads R-2's words where R-5 had only
+  followed from them, which is why it says so: an interpretation of normative
+  text is the owner's stamp, not the actor's inference.*
 
 ## §7. Stacks
 
