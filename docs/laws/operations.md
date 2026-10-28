@@ -356,6 +356,13 @@ The procedure `v0.8.0` and `v0.9.0` were cut by, written down because it lived i
    - signing, on a throwaway local tag.
 5. **The signed annotated tag** on the merge commit, then push it, verify it (`git tag -v`), and record it on the
    release issue.
+6. **A release re-runs the site build** (the chair's site order of 2026-10-27). The site,
+   [`scttfrdmn/burroughs.run`](https://github.com/scttfrdmn/burroughs.run), generates its release block from this
+   repository's CHANGELOG at the latest tag, and runs its examples against that tag.
+   - Dispatch its `pages.yml` once the tag is pushed (`gh workflow run pages.yml -R scttfrdmn/burroughs.run`), and
+     read the run's verdict.
+   - Re-check the site's fact pass (#1146) against the new tag. A page that states what the previous release did
+     or did not do is the foreclosing-words shape on a public surface.
 
 ## Local cross-architecture verification
 
