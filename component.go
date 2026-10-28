@@ -160,6 +160,14 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	}
 	in, err := component.InstantiateWithHostFeatures(wasm, h, feats)
 	if err != nil {
+		// A core module the validator refuses or declines (#1162): the same two verdicts core `Instantiate`
+		// reports, classified the same way at all three component doors.
+		if errors.Is(err, component.ErrCoreModuleInvalid) {
+			return 0, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		if errors.Is(err, component.ErrCoreModuleDeclined) {
+			return 0, fmt.Errorf("%w: %w", ErrDeclined, err)
+		}
 		// `gate:async` (ADR 0086) refuses an async component at bind, by name; it is a distinct gate from
 		// `gate:components`, off by default. Wrap its sentinel as ErrGated so the boundary classifies it
 		// exit 6 (well-formed, gate off — grave #301), the same outcome `gate:components` off produces.
@@ -258,6 +266,13 @@ func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
 	}
 	in, err := component.InstantiateWithHostFeatures(wasm, h, feats)
 	if err != nil {
+		// #1162's two verdicts — see ComponentConfig.Run.
+		if errors.Is(err, component.ErrCoreModuleInvalid) {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		if errors.Is(err, component.ErrCoreModuleDeclined) {
+			return nil, fmt.Errorf("%w: %w", ErrDeclined, err)
+		}
 		if errors.Is(err, component.ErrAsyncGated) {
 			return nil, fmt.Errorf("%w: %w", ErrGated, err)
 		}
@@ -403,6 +418,13 @@ func LoadComponent(wasm []byte) (*Component, error) {
 	h := component.NewHost(io.Discard, io.Discard, nil)
 	in, err := component.InstantiateWithHost(wasm, h)
 	if err != nil {
+		// #1162's two verdicts — see ComponentConfig.Run.
+		if errors.Is(err, component.ErrCoreModuleInvalid) {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		if errors.Is(err, component.ErrCoreModuleDeclined) {
+			return nil, fmt.Errorf("%w: %w", ErrDeclined, err)
+		}
 		// The same classification [ComponentConfig.Run] performs, for the same reason: `gate:async` is a
 		// distinct gate from `gate:components` and a component refused by it is **well-formed**, so it
 		// crosses as ErrGated rather than as a malformedness this boundary would be manufacturing
