@@ -22,7 +22,68 @@ platform"*) was satisfiable as written while misleading as read, and the amendme
 says what it now requires and what it gives up.
 
 ## [Unreleased]
+
+## [0.12.0] - 2026-10-28
 *Implements contract v0.1.*
+
+**What changes by default: four Wasm 3.0 proposals, one stamped flip each.** Extended constant expressions, tail
+calls, multi-memory and memory64 are on by default (ADRs 0107–0110, Added below). Each flip moved the core board by
+exactly its own lane's pre-registered reading, with 0 new failures, identically on darwin/arm64 and janus x86-64.
+Each keeps an env-var rollback: `BURROUGHS_EXTENDED_CONST=0`, `BURROUGHS_TAIL_CALL=0`, `BURROUGHS_MULTI_MEMORY=0` and
+`BURROUGHS_MEMORY64=0`. **Exception handling and GC stay off**, with their open work (#95; #172, #262), and
+`return_call_ref` is GC's.
+
+**Guest-started threads, through the public paths.** A WASI preview-1 module that imports `"burroughs" "spawn"` and
+exports `mstart` starts agents on OS threads over its shared memory, through `WASIP1Config.Run` and `burroughs run`
+([#1122](https://github.com/scttfrdmn/burroughs/issues/1122)).
+- The contract names the door: an append to §2 T-1.
+- **The end-to-end witness** is a committed fork-built Go program. Its output equals stock Go's, with a digest
+  recomputed natively, and 4 agents are sampled executing at once against a floor of 3.
+- `v0.11.0`'s limit *"no public path starts a second thread"* is lifted for the WASIP1 path. Core `Instantiate`
+  still supplies no imports (host-started threads are not built), and a component's `thread.spawn*` is still refused.
+
+**Public-path defects fixed:**
+- `burroughs run <component>` is routed whatever flags are given (#1128).
+- A mistyped `Component.Call` argument is the caller's error, not `ErrUnsupported` (#1129).
+- A shared memory used as a Canonical ABI memory option is refused by name (#1141).
+
+**A hardware weak-memory reading** (`scripts/hwlitmus.sh`, #1126). MP, SB, LB and IRIW run at 2²⁰ trials per cell on
+darwin/arm64, janus x86-64 and Graviton3, over the engine and a neuter build without ADR 0054's atomics, with a native
+control and wasmtime as comparisons.
+- The engine shows **0** SC-forbidden outcomes everywhere.
+- **Only Apple arm64 discriminates:** there the neuter shows SB's forbidden outcome in every run and MP's in most. On
+  Graviton3 and x86-64 the interpreter's store-to-load latency hides the reorderings, and those zeros are not evidence.
+- Contract B-MM-5 gains a non-normative note saying so (Scott's answer, option B). It changes no MUST.
+
+**Contract v0.1 appends**, on Scott's answer of 2026-10-28:
+- §2 T-1's guest door;
+- §6's interpretation of R-2, flagged as one: a stackless lift's callback is a pull;
+- B-MM-5's note.
+
+**Board** (`make conformance`): the core board reads 63769 pass, 0 fail, 0 unsupported, 1368 gated, 0 unimplemented
+over 256 files (`v0.11.0`: 60957 pass, 4187 gated). The 2819 vectors answered are the four flips' own lanes, 2812
+passing and 7 bound. The all-gates-on lane reads 65109 pass, 0 fail, 0 gated. The threads lane reads 576 pass,
+41 fail, 2 bound over 4 files, unchanged from `v0.11.0`, and all 41 failures are superseded-corpus rows
+(`threads_superseded_test.go`'s register), with 0 engine defects.
+
+**Known limits, open on default-on paths, each with its issue:**
+- **A guest that calls `runtime.LockOSThread` and then needs another M crashes on the Phase 4 fork**
+  ([#1157](https://github.com/scttfrdmn/burroughs/issues/1157)), with *"fatal error: on a locked thread with no
+  template thread"*. The throw is the fork runtime's own. v0.12.0's end-to-end witness does not pin its workers for
+  this reason.
+- **`Close` with a zero bound returns `nil` on Windows** ([#945](https://github.com/scttfrdmn/burroughs/issues/945)),
+  carried. Windows is outside the claim.
+- **A Go runtime fatal was seen once on CI's arm64 runner** in `internal/spec`
+  ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)), carried. It has not repeated.
+- **`array.new*`'s backing allocation is not polled**, so `Stop` can take over 1ms on a GC array of about 64 Ki
+  elements or more (ADR 0104's named limit). **This applies only with GC on**, which is not the default.
+- **Carried from `v0.11.0`, both still open:**
+  - a shared-everything-threads heap type is refused as "malformed", not by name
+    ([#1120](https://github.com/scttfrdmn/burroughs/issues/1120));
+  - a Go guest's stop-the-world still depends on the fork's compiler-inserted loop checks
+    ([#1064](https://github.com/scttfrdmn/burroughs/issues/1064), parked).
+
+**Then the instruments and fixes**, under Added, Changed and Fixed below.
 
 ### Added
 
@@ -19667,7 +19728,8 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/scttfrdmn/burroughs/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/scttfrdmn/burroughs/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/scttfrdmn/burroughs/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/scttfrdmn/burroughs/compare/v0.8.0...v0.9.0
