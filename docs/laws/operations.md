@@ -363,6 +363,10 @@ The procedure `v0.8.0` and `v0.9.0` were cut by, written down because it lived i
      read the run's verdict.
    - Re-check the site's fact pass (#1146) against the new tag. A page that states what the previous release did
      or did not do is the foreclosing-words shape on a public surface.
+7. **List what has not fired, and post it on the release issue** (the chair's fifth ruling of 2026-10-28, item 6).
+   Run `scripts/unfired.py <previous-tag>` from the main checkout, where the refusal log is, and post its output
+   for Scott to retire any law or route on it. What "fired" means, and why the list is an upper bound, is in
+   [the law it serves](graves-and-sweeps.md#a-new-law-needs-two-recorded-occurrences-and-the-laws-that-have-not-fired-are-listed-at-each-cut).
 
 ## Local cross-architecture verification
 
