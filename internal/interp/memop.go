@@ -221,10 +221,12 @@ func extendSlot(raw uint64, m memop) uint64 {
 // (cost 65 → 165, measured with `-gcflags=-m=2`), and every load in every module paid a call. The
 // figure, the mechanism and the pre-registration it falsified are in ADR 0053.
 //
-// **Its remaining callers are the ones with no tearing obligation**: `memAccess`'s unaligned branch,
-// where tearing is permitted, and `gcobj.go`, whose bytes are Go-allocated struct fields rather than
+// **Its remaining engine caller is `gcobj.go`**, whose bytes are Go-allocated struct fields rather than
 // linear memory — `struct.get` is a different rule from `t.load`, so the proposal's condition does not
 // reach them. That makes the narrower placement more faithful than the wider one, not a concession.
+// `memAccess`'s unaligned branch called it too, until ADR 0111 (#982) moved that branch onto its
+// containing words' atomics; this function is still the byte-loop authority the agreement tests compare
+// that branch against.
 func loadValue(bs []byte, m memop) uint64 {
 	var raw uint64
 	for i := len(bs) - 1; i >= 0; i-- {

@@ -764,7 +764,8 @@ func (m *memory) write(idx, offset uint64, bs []byte) error {
 // `write` receives a rendered `[]byte` and `copy`s it, and a `memmove`'s granularity is not a
 // guest-visible guarantee — so an aligned `i32.store`, which the threads proposal marks `NOTEARS`,
 // could observably decompose. Here an aligned access is one typed host-word store (ADR 0053, #557).
-// The byte fallback is the unaligned path, where tearing is permitted.
+// The unaligned path may tear, and since ADR 0111 (#982) it writes through its containing words' atomics
+// rather than a plain byte loop, so it cannot race a neighbouring aligned access on the host.
 //
 // **It is not here for an allocation, and that is a correction rather than a scruple.** ADR 0053
 // forecast that deleting `storeBytes`' 4-byte `make` per store would be the larger of two speedups.
@@ -810,9 +811,9 @@ func (m *memory) writeNum(idx, offset, width, v uint64) error {
 		c.store(v)
 		return nil
 	}
-	for i := range dst {
-		dst[i] = byte(v >> (8 * uint(i)))
-	}
+	// The unaligned arm touches its containing words atomically too, so it cannot race an aligned narrow
+	// access to a neighbouring byte (#982, ADR 0111). It was a plain byte loop.
+	atomicStoreSpan(dst, v)
 	return nil
 }
 
@@ -1327,7 +1328,10 @@ func (in *Instance) memAccess(ins binary.Instr, st *stack) error {
 		}
 		st.pushNum(extendSlot(c.load(), m))
 	} else {
-		st.pushNum(loadValue(bs, m))
+		// Through the containing words' atomics, not `loadValue`'s byte loop, for writeNum's reason (#982,
+		// ADR 0111). `loadValue` stays the byte-loop authority the agreement tests compare against, and
+		// `gcobj.go`'s field reads, whose bytes are not linear memory, keep it.
+		st.pushNum(extendSlot(atomicLoadSpan(bs), m))
 	}
 	return nil
 }
