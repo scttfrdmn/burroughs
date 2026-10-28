@@ -1,0 +1,50 @@
+// c1stw: stop-the-world under load. Four workers spin in call-free loops (a flag check every 65536 iterations)
+// while main forces eight collections; the runtime must stop the spinning workers for each GC. The workers run
+// until main has finished collecting, so every collection happens under load.
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
+)
+
+func main() {
+	const workers = 4
+	runtime.GOMAXPROCS(workers)
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	sums := make([]uint64, workers)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			h := uint64(w + 1)
+			for i := 0; ; i++ {
+				h = h*6364136223846793005 + 1442695040888963407
+				if i&0xffff == 0 && stop.Load() {
+					break
+				}
+			}
+			sums[w] = h
+		}(w)
+	}
+	before := new(runtime.MemStats)
+	runtime.ReadMemStats(before)
+	const k = 8
+	for i := 0; i < k; i++ {
+		runtime.GC()
+	}
+	after := new(runtime.MemStats)
+	runtime.ReadMemStats(after)
+	stop.Store(true)
+	wg.Wait()
+	var d uint64
+	for _, s := range sums {
+		d = d*1099511628211 ^ s
+	}
+	fmt.Printf("gc forced %d, at least %d collections: %v\n", k, k, after.NumGC-before.NumGC >= k)
+	_ = d
+	fmt.Println("workers", workers, "done")
+}

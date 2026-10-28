@@ -1,0 +1,42 @@
+// c1alloc: stop-the-world under load, with workers that allocate. Four workers loop until main has forced eight
+// collections, each iteration allocating a small slice (an allocation is a point where a goroutine can be
+// stopped); the runtime must stop all four for each collection while they are running.
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
+)
+
+var sink atomic.Pointer[[]byte]
+
+func main() {
+	const workers = 4
+	runtime.GOMAXPROCS(workers)
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for !stop.Load() {
+				b := make([]byte, 64)
+				sink.Store(&b)
+			}
+		}()
+	}
+	before := new(runtime.MemStats)
+	runtime.ReadMemStats(before)
+	const k = 8
+	for i := 0; i < k; i++ {
+		runtime.GC()
+	}
+	after := new(runtime.MemStats)
+	runtime.ReadMemStats(after)
+	stop.Store(true)
+	wg.Wait()
+	fmt.Printf("gc forced %d, at least %d collections: %v\n", k, k, after.NumGC-before.NumGC >= k)
+	fmt.Println("workers", workers, "done")
+}

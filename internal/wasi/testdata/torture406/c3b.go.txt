@@ -1,0 +1,19 @@
+// c3b: deadlock inverse. main blocks on a channel nobody sends to, while a pending timer's goroutine wakes and then
+// blocks on a send nobody receives. The timer cannot unblock main, so once it has fired every goroutine is asleep.
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	ch := make(chan int)
+	other := make(chan int)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		other <- 1 // nobody receives
+	}()
+	fmt.Println("blocking")
+	<-ch
+}

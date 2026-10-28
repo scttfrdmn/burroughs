@@ -1,0 +1,12 @@
+// ctlcrash: the crashed classifier's positive control. A nil pointer dereference: a runtime panic, exit 2.
+package main
+
+import "fmt"
+
+type node struct{ v int }
+
+func main() {
+	var n *node
+	fmt.Println("dereferencing")
+	fmt.Println(n.v)
+}

@@ -1,0 +1,17 @@
+// c2b: checkdead must NOT report a deadlock while a sleeper exists that will wake the others.
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	ch := make(chan int)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		ch <- 42
+	}()
+	fmt.Println("waiting")
+	fmt.Println("got", <-ch)
+}

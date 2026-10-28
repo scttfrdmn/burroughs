@@ -1,0 +1,12 @@
+// c2a: checkdead must report a real deadlock — every goroutine blocked, none able to proceed.
+package main
+
+import "fmt"
+
+func main() {
+	ch := make(chan int)
+	done := make(chan struct{})
+	go func() { <-done }() // blocked forever: nothing closes done
+	fmt.Println("blocking")
+	<-ch // nothing sends on ch
+}

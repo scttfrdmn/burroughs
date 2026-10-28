@@ -20,3 +20,4 @@ TestStopBringsATailCallLoopToASafepoint	946,896	the 30s wait after Resume; also 
 TestStopRefusesASecondConcurrentStop	946	the same 30s wait after Resume; seen once (run 40035281003, 2026-10-23), not on re-run
 TestClause3GCAcrossTwoAgents	982	unaligned writeNum against atomicCell.load; intermittent
 TestAForkBuiltGoProgramRunsWithRealThreadsThroughThePublicPath	982	the same unaligned writeNum against atomicCell.load, from the same Go runtime, via the v0.12.0 spawn door; intermittent (main d30169b, run 40435169135)
+TestGoRuntimeTortureSuite	1165	c1alloc: a shared memory on the fallback path cannot grow past 128 pages, so the Go guest runs out of memory (run 40743299337)

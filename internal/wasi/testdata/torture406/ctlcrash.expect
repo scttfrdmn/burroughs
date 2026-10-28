@@ -1,0 +1,5 @@
+class crashed
+exit 2
+stderr1 panic: runtime error: invalid memory address or nil pointer dereference
+stdout:
+dereferencing
