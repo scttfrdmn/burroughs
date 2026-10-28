@@ -21,6 +21,27 @@ import (
 	"fmt"
 
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/validate"
+)
+
+// ErrCoreModuleInvalid and ErrCoreModuleDeclined are a component core module's validation verdicts, the same
+// two the core path reaches through `validate.Module` (#1162).
+//
+// **Until #1162 no core module inside a component met the validator.** Core `Instantiate` and
+// `WASIP1Config.Run` validate before they instantiate; the component loader decoded each core module and
+// handed it on, so a module the spec rejects loaded, and its exports ran. Measured on v0.12.0: a core
+// function declaring an `i32` result and pushing an `i64` returned `u32(1)` through `Component.Call`, with no
+// error, and a `local.get 5` with no locals reached the interpreter's `ErrNotValidated` check from a public
+// path, which is #1134's census finding. The validator runs here, right after each core module is decoded, so
+// every core module is validated whether or not anything instantiates it, as component validation requires.
+//
+// **A declined core module is refused, not run.** The core path runs a declined module unless `Strict` (ADR
+// 0029) and reports the decline through `Instance.Decline`. A component has neither a `Strict` nor a
+// `Decline`, so a decline that ran would have nowhere to be reported. Refusing is the reversible direction,
+// and no default-lane construct declines today (#1134's census).
+var (
+	ErrCoreModuleInvalid  = errors.New("component: core module is invalid")
+	ErrCoreModuleDeclined = errors.New("component: core module uses a construct the validator has no rule for")
 )
 
 // ErrNotComponent is returned when the bytes are not a component: bad magic, or the preamble's layer
@@ -266,6 +287,13 @@ func LoadWithFeatures(b []byte, feats bin.Features) (*Component, error) {
 			m, derr := (&bin.Decoder{Features: feats}).DecodeModule(body)
 			if derr != nil {
 				return nil, fmt.Errorf("component: core module %d: %w", len(c.CoreModules), derr)
+			}
+			// #1162: validated here, as core `Instantiate` validates, before anything can instantiate it.
+			if _, verr := validate.Module(m); verr != nil {
+				if errors.Is(verr, validate.ErrUnsupported) {
+					return nil, fmt.Errorf("%w: core module %d: %w", ErrCoreModuleDeclined, len(c.CoreModules), verr)
+				}
+				return nil, fmt.Errorf("%w: core module %d: %w", ErrCoreModuleInvalid, len(c.CoreModules), verr)
 			}
 			c.CoreModules = append(c.CoreModules, m)
 			c.def(SpaceCoreModule, SectionCoreModule, len(c.CoreModules)-1)

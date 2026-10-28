@@ -22,6 +22,28 @@ platform"*) was satisfiable as written while misleading as read, and the amendme
 says what it now requires and what it gives up.
 
 ## [Unreleased]
+*Implements contract v0.1.*
+
+### Fixed
+
+- **A component's core modules are validated, so an invalid one is refused at load**
+  ([#1162](https://github.com/scttfrdmn/burroughs/issues/1162)). Found by #1134's census.
+  - **What it was:** core `Instantiate` and `WASIP1Config.Run` validate a module before instantiating it, but the
+    component loader decoded each core module and handed it on. So a module the spec rejects loaded, and its exports
+    ran. Observed on `v0.12.0`:
+    - a core function declaring an `i32` result and pushing an `i64` returned `u32(1)` through `Component.Call`, with
+      no error;
+    - a `local.get 5` with no locals reached the interpreter's `ErrNotValidated` check from a public path.
+
+    `wasm-tools validate` refuses both. `gate:components` has been on by default since 2026-09-11, so this was a
+    correctness defect on a default-on path.
+  - **Now:** every core module is validated where the loader decodes it, whether or not anything instantiates it.
+    An invalid one is refused at load as `ErrInvalid` (CLI exit 3), with the validator's message and the core
+    module's index, through `LoadComponent`, `ComponentConfig.LoadComponent` and `ComponentConfig.Run` alike.
+  - **A declined core module is refused as `ErrDeclined`, not run.** A component has no `Strict` and no `Decline()`
+    to report a decline that ran. No default-lane construct declines today, so this changes nothing observable.
+  - **The witness:** `TestAComponentsInvalidCoreModuleIsRefusedAtLoad`, two committed fixtures across all three
+    doors. **Neuter, run:** with the validation removed, all six rows fail.
 
 ## [0.12.0] - 2026-10-28
 *Implements contract v0.1.*
