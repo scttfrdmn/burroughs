@@ -46,6 +46,28 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **An unaligned typed access no longer races a neighbouring byte on the host**
+  ([#982](https://github.com/scttfrdmn/burroughs/issues/982), [ADR 0111](docs/decisions/0111-an-unaligned-typed-access-touches-its-containing-words-atomically-because-a-host-race-between-disjoint-guest-bytes-is-not-the-guests.md)).
+  - **What it was:** an unaligned `i32.store` at 0x931 was a plain byte loop, and an aligned `i32.load8_u` at 0x930
+    is an atomic of the word containing it. The guest bytes are disjoint, so the guest had no race, but the host
+    did. Go's race detector reported it from fork-built Go programs on Windows, the one platform whose guest memory
+    is on the Go heap. `withoutReservation` reproduced it on darwin at the same two lines.
+  - **Now:** the unaligned arms of `writeNum` and `memAccess` touch each containing 32-bit word through its atomics
+    (`atomicLoadSpan`, `atomicStoreSpan`). An access straddling a word may still tear at the boundary, where the
+    proposal permits it.
+  - **The witness:** `TestAnUnalignedAccessDoesNotRaceANeighbouringByte`, #982's pair as guest instructions on two
+    agents, on the Go heap, under `-race`. **Neuters, run:** restoring either arm's plain loop is reported.
+  - **The cost**, measured on the first implementation (the pointer repair below is not yet re-measured), on the
+    unaligned rows only, with aligned rows unchanged on both:
+    - janus x86-64: unaligned loads +7.54%, unaligned stores +57.30%;
+    - orion arm64: unaligned loads +3.07%, unaligned stores +44.29%.
+  - **The first version formed a pointer past the image**, and the PR's own Windows run caught it before merge. An
+    access ending in the last word advanced its word pointer one past the allocation, and `checkptr` aborted. Each
+    word's pointer is now formed only for a word the access touches.
+    `TestAnUnalignedSpanEndingInTheLastWordFormsNoPointerPastTheImage` supplies a live neighbouring allocation, so
+    `checkptr` can catch it off Windows too. Both helpers' neuters abort.
+  - The two triage rows stay until a Windows run shows the race gone.
+
 - **A component's core modules are validated, so an invalid one is refused at load**
   ([#1162](https://github.com/scttfrdmn/burroughs/issues/1162)). Found by #1134's census.
   - **What it was:** core `Instantiate` and `WASIP1Config.Run` validate a module before instantiating it, but the

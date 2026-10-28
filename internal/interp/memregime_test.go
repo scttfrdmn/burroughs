@@ -27,6 +27,13 @@ const (
 	// Consequences record that the unaligned path has no atomic mechanism at all, so this is a
 	// stated residue rather than an oversight, and it is a third regime rather than a rounding of
 	// the other two: calling it `atomic` would restate the over-claim #627 exists to correct.
+	//
+	// **No row holds it since [ADR 0111][0111] (#982).** The typed path's unaligned arms now touch
+	// their containing words atomically, so `writeNum` and `memAccess` are `atomic`. The regime
+	// stays a name the control accepts, so a future arm that reintroduces a plain tail has an honest
+	// label to take rather than a reason to claim `atomic`.
+	//
+	// [0111]: ../../docs/decisions/0111-an-unaligned-typed-access-touches-its-containing-words-atomically-because-a-host-race-between-disjoint-guest-bytes-is-not-the-guests.md
 	regimeMixed memRegime = "mixed"
 	// regimeBounds — the view or read is taken for its length, or to make a bounds check happen,
 	// and no guest byte is read or written through it.
@@ -58,10 +65,11 @@ var guestMemoryRegimes = map[string]memRegime{
 	"memory.go:memory.write": regimePlain,
 	"memory.go:memory.read":  regimePlain,
 
-	// The typed path, which is what 0054's mechanism actually reaches. Both are `mixed`: the
-	// aligned arm is atomic and the unaligned tail is a plain byte loop.
-	"memory.go:memory.writeNum":    regimeMixed,
-	"memory.go:Instance.memAccess": regimeMixed,
+	// The typed path, which is what 0054's mechanism actually reaches. Both are `atomic`: the aligned
+	// arm is 0054's, and the unaligned arm touches its containing words atomically (ADR 0111, #982).
+	// Both were `mixed` until then, with the unaligned arm a plain byte loop.
+	"memory.go:memory.writeNum":    regimeAtomic,
+	"memory.go:Instance.memAccess": regimeAtomic,
 
 	// The bulk family, `0xFC`, no gate at all.
 	"bulk.go:Instance.execMemoryFill": regimePlain,

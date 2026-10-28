@@ -513,6 +513,68 @@ type atomicCell struct {
 	mask  uint64
 }
 
+// atomicLoadSpan reads an unaligned typed access's bytes through atomic loads of the 32-bit words that
+// contain them, and atomicStoreSpan writes them through those words' `atomicCell`s ([ADR 0111][0111], #982).
+//
+// **What this repairs is a host race between disjoint guest bytes.** The unaligned arm was a plain byte loop,
+// and an aligned narrow access next to it is an atomic of its *containing word*: an unaligned `i32.store` at
+// 0x931 and an `i32.load8_u` at 0x930 touch different guest bytes, so the guest model has no race, but the
+// host had one — a plain write of byte 0x931 against an atomic load of the word at 0x930. Go's race detector
+// reported exactly that pair from a fork-built Go program on Windows, the one platform whose guest memory is
+// on the Go heap, and `withoutReservation` reproduces it everywhere. Once every typed access touches guest
+// bytes only through containing-word atomics, no typed access can race the host over a byte the guest did not
+// race over.
+//
+// **Not atomic, and not claimed to be.** An access that straddles a word boundary is two or three word
+// operations, so it can tear at the boundary, which is where the proposal already permits an unaligned access
+// to tear. What it buys is report-freedom between the typed paths, the property ADR 0054's Consequences named
+// as *"per-word atomic touches … unwritten"*.
+//
+// bs is the access's own bytes, already bounds-checked, as `atomicLoadWord` takes them. The containing words
+// lie inside the memory for `atomicCell`'s reason: the image starts word-aligned and its length is a multiple
+// of the page.
+//
+// [0111]: ../../docs/decisions/0111-an-unaligned-typed-access-touches-its-containing-words-atomically-because-a-host-race-between-disjoint-guest-bytes-is-not-the-guests.md
+//
+// **A word's pointer is formed only for a word the access touches.** The first version advanced its pointer by
+// 4 after every word, the last included, so an access ending in the image's last word formed a pointer one past
+// the allocation. `checkptr`, which `-race` enables, rejects that as *"pointer arithmetic result points to
+// invalid allocation"*. #1166's Windows run hit it, the one platform whose image is a Go allocation `checkptr`
+// can see. `TestAnUnalignedSpanEndingInTheLastWordFormsNoPointerPastTheImage` is its witness.
+func atomicLoadSpan(bs []byte) uint64 {
+	p := unsafe.Pointer(&bs[0])
+	lead := uint(uintptr(p) & 3)
+	base := unsafe.Add(p, -int(lead))
+	n := uint(len(bs))
+	var v uint64
+	for got, i := uint(0), 0; got < n; i++ {
+		take := min(4-lead, n-got)
+		w := (*uint32)(unsafe.Add(base, 4*i))
+		word := uint64(guestWord32(atomic.LoadUint32(w))) >> (8 * lead)
+		v |= word & (1<<(8*take) - 1) << (8 * got)
+		got += take
+		lead = 0
+	}
+	return v
+}
+
+// atomicStoreSpan is atomicLoadSpan's store side: each containing word's share of v lands through that word's
+// `atomicCell`, so a neighbour's bytes in the same word are never overwritten (the cell's full-word
+// compare-and-swap is what guarantees it).
+func atomicStoreSpan(bs []byte, v uint64) {
+	p := unsafe.Pointer(&bs[0])
+	lead := uint(uintptr(p) & 3)
+	base := unsafe.Add(p, -int(lead))
+	n := uint(len(bs))
+	for done, i := uint(0), 0; done < n; i++ {
+		take := min(4-lead, n-done)
+		w := (*uint32)(unsafe.Add(base, 4*i))
+		atomicCell{p32: w, shift: 8 * lead, mask: 1<<(8*take) - 1}.store(v >> (8 * done))
+		done += take
+		lead = 0
+	}
+}
+
 // cell resolves an atomic access, reporting the same out-of-bounds trap `read` and `write` do.
 //
 // Called *after* `checkAlign` at every site, which is the trap precedence the reference fixes: an

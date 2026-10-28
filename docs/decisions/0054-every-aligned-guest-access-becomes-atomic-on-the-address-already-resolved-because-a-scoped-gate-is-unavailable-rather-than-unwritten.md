@@ -141,6 +141,7 @@ cheaper plain accesses; it is a racy region with no boundary anyone can state.
   unaligned 4-byte access can straddle an 8-byte boundary, and pure Go has no 16-byte CAS. The realizable
   design is per-word atomic touches — report-free without being atomic, tearing exactly where the
   proposal already permits it — and it is unwritten. This ADR does not conjure it.
+  *(2026-10-28: written by [ADR 0111](0111-an-unaligned-typed-access-touches-its-containing-words-atomically-because-a-host-race-between-disjoint-guest-bytes-is-not-the-guests.md), for #982.)*
 - **#10's coverage statement is fixed in advance by the stamp: aligned only, with unaligned named as
   uncovered.** Stated in the battery rather than left to be inferred from what it happens to contain,
   because a suite's silence otherwise reads as coverage.
