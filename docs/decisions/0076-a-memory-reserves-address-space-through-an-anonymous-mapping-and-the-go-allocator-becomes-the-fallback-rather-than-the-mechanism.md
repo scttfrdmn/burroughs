@@ -2,8 +2,11 @@
 
 # 0076 — a memory reserves address space through an anonymous mapping, and the Go allocator becomes the fallback rather than the mechanism, because `make` commits everything it reserves and a kernel commits what is touched
 
-Date: 2026-09-06 · Status: **proposed** — no stamp exists to cite, and *a `Status:` field is a citation to
-an approval*, so it stays open until one does. Scott's words after
+Date: 2026-09-06 · Status: **accepted**, 2026-10-28. Scott, in session: *"no objection to all five, go ahead on
+the repo"* (relayed in the chair's addendum of 2026-10-28; [#1142](https://github.com/scttfrdmn/burroughs/issues/1142),
+where this ADR was brought to him decided-unless-he-objects). Until then it was **proposed**, held open because
+no stamp existed to cite, and *a `Status:` field is a citation to an approval*. The rest of this paragraph is the
+provenance it carried while open, and describes the slice that built it: Scott's words after
 [#670](https://github.com/scttfrdmn/burroughs/pull/670) merged were *"You pick under
 decide-and-proceed"*, with §8 M-1 named as one of the two real gaps and *"the dissolving move at platform
 level"* as his reading of it. That is latitude and a premise, not approval of any option below, and it is

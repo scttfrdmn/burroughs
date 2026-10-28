@@ -113,36 +113,11 @@ Scott, *is* the decisions-needed queue, now queryable. **Queryable by the issues
 have just drained reads as full, in a report to the principal whose queue it is. Recipe, and the
 two ways the API arm still under-reports: [reading the tracker's
 state](docs/laws/operations.md#reading-the-trackers-state-the-queue-comes-from-the-issues-api-never-from-a-cached-listing).
-**And the queue is parked: it is not reported at all until v1's threads are complete.** No count, no list, no *"none blocking"* —
-an item is surfaced only when it **blocks code**, and then only that item. Filing is untouched; what is
-parked is the reporting. Scott's order on the #562 review, and the end point is half of it: *"the queue
-parking gets an end point so it stops recurring … Until then, don't report the queue at all — 'twelve
-waiting, none blocking' is itself the surfacing I asked you to stop, and half-parking pays both costs."*
-**The end point has moved twice, and each move is recorded rather than the line rewritten**, because the
-moves are what say the parking is a schedule and not a verdict on the queue's contents. On the #647
-review it went from #10's §4 litmus battery to spawn, with two companions: *"Parked stays parked. The
-decisions queue, the §4 battery beyond what spawn needs, the eight unstamped ADRs. They drain when spawn
-runs."* So #10 was itself parked past what spawn needed, which is why the end point could not stay pinned
-to it — **a parked subject cannot be another subject's end point.** Spawn then ran, and Scott moved the
-target rather than letting it discharge: *"And the target moves. From 'spawn runs' to 'v1's threads are
-complete': join, [#586](https://github.com/scttfrdmn/burroughs/issues/586)'s resolution, and the battery
-… So the sequence is #650, #12, then §4 for #586's sake, then the flip."* **That move unparks the battery
-by naming it**, on the same lesson read forwards: the §4 work is now scheduled work inside the end point
-rather than deferred past it, and a condition cannot be simultaneously owed and postponed. What stays
-parked is the reporting of the decisions queue and the eight unstamped ADRs. **And on the #670 review the
-battery went back off the schedule** — Scott unscheduled his own `gate:threads` flip and said so of the
-battery in the same breath (the paragraph above quotes him), which means **the end point above now names an
-unscheduled subject again**: "v1's threads are complete" is join, #586, *and the battery*, and the third of
-those is nobody's current work. That is this page's own lesson landing for the **third** time — *a parked
-subject cannot be another subject's end point* — and it is recorded rather than repaired here because
-re-pinning it is Scott's move and not the actor's: the #562 order that created the parking is the same order
-that required it to have an end point, so an actor who quietly chose a new one would be discharging half of
-that order by overriding the other half. What a reader should take from it: **the two discharged components
-are discharged** (join in #12, #586 in 0073), the parking is in force, and its end point is not currently
-reachable. Recorded here by the actor
-who was ordered, which is not independent provenance
-— *durability is not independence* — so commits in the slices this covers stay `Ratio-Class: carried`.
-Graves are closed issues labeled
+**The decisions queue is reported again.** It was parked from Scott's #562 review, and he ended the parking
+in session on 2026-10-28: *"no objection to all five, go ahead on the repo"* (relayed in the chair's addendum
+of that day; [#1143](https://github.com/scttfrdmn/burroughs/issues/1143)). The paragraph that stood here
+recorded the parking and its end point, which moved three times. Its lesson outlives it: *a parked subject
+cannot be another subject's end point.* Graves are closed issues labeled
 `type:grave`, lesson in the closing comment, with a comment at the fix site citing the number.
 
 Do not reintroduce `PROGRESS.md`, `docs/reports/`, or any status file.

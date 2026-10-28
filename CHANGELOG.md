@@ -187,6 +187,14 @@ says what it now requires and what it gives up.
     arm64 for SB and MP, and not on Graviton3 or x86-64. No MUST changes
     ([#1126](https://github.com/scttfrdmn/burroughs/issues/1126), option B).
 
+- **ADR 0076 and ADR 0102 are accepted, and the decisions queue is no longer parked**, on Scott's answer in
+  session, 2026-10-28: *"no objection to all five, go ahead on the repo"* (relayed in the chair's addendum of that
+  day; [#1142](https://github.com/scttfrdmn/burroughs/issues/1142),
+  [#1143](https://github.com/scttfrdmn/burroughs/issues/1143)).
+  - Each ADR's `Status:` cites that line, and keeps the provenance it carried while proposed.
+  - `CLAUDE.md`'s parking paragraph is replaced by one sentence recording when the parking ended, and on whose word.
+  - v0.11.0's note that they *"stay `proposed`"* was true when it shipped, and is left as written.
+
 - **The Windows triage map gains v0.12.0's end-to-end witness, mapped to
   [#982](https://github.com/scttfrdmn/burroughs/issues/982).** `TestAForkBuiltGoProgramRunsWithRealThreadsThroughThePublicPath`
   reached #982's race on main's Windows run at d30169b: a plain unaligned `writeNum` against an atomic narrow

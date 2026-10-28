@@ -1,8 +1,9 @@
 # 0102 — The pinned reference defines the semantics; a toolchain's stricter refusal is followed unless Burroughs implements and witnesses what the pin admits
 
-Date: 2026-10-12 · Status: **proposed** — chair's ruling, in session, 2026-10-12, as an interim rule. The
-chair will bring it to Scott decided-unless-he-objects, because it touches what the project conforms to.
-Held open until then. `Ratio-Class: carried`.
+Date: 2026-10-12 · Status: **accepted**, 2026-10-28. Scott, in session: *"no objection to all five, go ahead on
+the repo"* (relayed in the chair's addendum of 2026-10-28; [#1142](https://github.com/scttfrdmn/burroughs/issues/1142)).
+Until then it was **proposed**: the chair's ruling, in session, 2026-10-12, as an interim rule, held open for
+Scott because it touches what the project conforms to. `Ratio-Class: carried`.
 
 **Every citation into this tree names a symbol rather than a line**, per ADR 0047. Citations into
 `definitions.py` name a function, since that file is fetched material under a gitignored path.
