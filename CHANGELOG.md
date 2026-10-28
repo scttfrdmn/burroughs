@@ -44,6 +44,14 @@ says what it now requires and what it gives up.
     unsupported, and v0.12.0's threads claim names linux and darwin only.
   - Nothing in the fork's runtime is read.
 
+### Changed
+
+- **The README's Windows paragraph says what runs there.** It read *"Windows is compiled, not tested … no test ever
+  runs there"*, which the non-gating Windows lane falsified. It now says Windows is measured and unsupported, that
+  the lane runs the suite to expose portability gaps, and that its failures don't block main once each is mapped in
+  [the triage map](.github/windows-triage.tsv). The platforms paragraph names `macos-15`, the build job's third
+  leg since v0.10.0.
+
 ### Fixed
 
 - **An unaligned typed access no longer races a neighbouring byte on the host**
@@ -67,6 +75,15 @@ says what it now requires and what it gives up.
     `TestAnUnalignedSpanEndingInTheLastWordFormsNoPointerPastTheImage` supplies a live neighbouring allocation, so
     `checkptr` can catch it off Windows too. Both helpers' neuters abort.
   - The two triage rows stay until a Windows run shows the race gone.
+- **`burroughs version` reports the version it was built at**
+  ([#1130](https://github.com/scttfrdmn/burroughs/issues/1130), item 1). The banner was the constant
+  `burroughs v0.0.1` from genesis through v0.12.0. It now comes from `debug.ReadBuildInfo`'s module version, which
+  `go install …@<tag>` stamps, with `-ldflags "-X main.version=…"` as the fallback for a build that recorded none.
+  - **The witness:** `TestABuiltBinaryReportsTheVersionItWasBuiltWith` builds the CLI with a known ldflags value and
+    runs it. **Neuter, run:** with the fallback dropped, the binary prints `(devel)` and the test fails.
+  - `TestTheVersionBannerResolvesBuildInfoFirstThenLdflags` is the resolution's table, both arms and neither.
+  - The README transcript no longer shows a version line, since it differs per build. The prose above it says
+    what each kind of build prints.
 
 - **A component's core modules are validated, so an invalid one is refused at load**
   ([#1162](https://github.com/scttfrdmn/burroughs/issues/1162)). Found by #1134's census.

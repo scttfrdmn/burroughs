@@ -40,15 +40,17 @@ There is still no compiler, and no rung on the published ladder adds one —
 correctness and spec-tracking agility are what this buys.
 
 **Platforms: 64-bit Linux and macOS.** Those are what is built *and tested* —
-CI runs `ubuntu-24.04` and `ubuntu-24.04-arm`, and development is on macOS.
+CI's build job runs on `ubuntu-24.04`, `ubuntu-24.04-arm` and `macos-15`, and
+development is on macOS.
 Nothing here claims a 32-bit target; where the engine does width-sensitive
 arithmetic it does it in `uint64`, which is not a portability promise but means
 a future port starts from working code rather than from a sweep.
 
-**Windows is compiled, not tested.** `make build` cross-compiles
-`GOOS=windows GOARCH=amd64`, so it is in `make ci` and a break in the shared
-body is caught — but no test ever runs there, so "it compiles" is the whole of
-the claim. Treat it as unsupported until a Windows job runs the suite.
+**Windows is measured, unsupported.** A non-gating Windows lane runs the suite
+to expose portability gaps, and its failures don't block main once each is
+mapped to an issue in the
+[triage map](.github/windows-triage.tsv). A failure the map does not name is
+new, and it is classified and filed before the next merge.
 
 **The toolchain is pinned exactly**, by `go.mod`'s `toolchain` line, and
 `make toolchain-check` fails if the version that actually ran is a different
@@ -144,13 +146,14 @@ it.
 
 Build the CLI and run the example module — three exports, one per outcome a
 caller has to tell apart, short enough to read in full at
-`examples/add/add.wat`:
+`examples/add/add.wat`. (`burroughs version` prints the module version the
+build recorded: `go install github.com/scttfrdmn/burroughs/cmd/burroughs@<tag>`
+prints that tag, and a build from a checkout prints the toolchain's
+pseudo-version. Releases up to v0.12.0 print a constant `v0.0.1` instead
+(#1130). The line differs per build, so the transcript below leaves it out.)
 
 ```console
 $ go build -o bin/burroughs ./cmd/burroughs
-
-$ ./bin/burroughs version
-burroughs v0.0.1 — the machine Burroughs never built
 
 $ ./bin/burroughs inspect examples/add/add.wasm
 examples/add/add.wasm: wasm v1, 4 section(s)

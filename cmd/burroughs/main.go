@@ -15,13 +15,40 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/scttfrdmn/burroughs"
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-const banner = "burroughs v0.0.1 — the machine Burroughs never built"
+// version is the banner's ldflags fallback (`-ldflags "-X main.version=v0.13.0"`), read only when the build
+// recorded no module version of its own (#1130).
+var version string
+
+// banner is what `burroughs version` prints: the module version the build recorded, which is what `go install
+// github.com/scttfrdmn/burroughs/cmd/burroughs@v0.13.0` stamps, and otherwise the ldflags value.
+//
+// It was the constant `burroughs v0.0.1` from genesis to v0.12.0, so every release's CLI named the first
+// scaffold. A version a release has to remember to edit is one it will forget, which is why it is read from
+// the build and nothing in the cut procedure has to touch it.
+func banner() string {
+	bi, ok := debug.ReadBuildInfo()
+	return bannerFor(bi, ok, version)
+}
+
+// bannerFor is banner's resolution, separated so each arm can be asked about without building a binary for it.
+// `(devel)` is what the toolchain records when it has no version, so it counts as none.
+func bannerFor(bi *debug.BuildInfo, ok bool, ldflags string) string {
+	v := "(devel)"
+	switch {
+	case ok && bi != nil && bi.Main.Version != "" && bi.Main.Version != "(devel)":
+		v = bi.Main.Version
+	case ldflags != "":
+		v = ldflags
+	}
+	return "burroughs " + v + " — the machine Burroughs never built"
+}
 
 // prefix is what this CLI says before a diagnostic, and it is a constant because `diagnose` has to
 // be able to ask whether the message it was handed already carries it.
@@ -46,7 +73,7 @@ func dispatch(stdout, stderr io.Writer, argv []string) int {
 	}
 	switch argv[0] {
 	case "version":
-		fmt.Fprintln(stdout, banner)
+		fmt.Fprintln(stdout, banner())
 		return exitOK
 	case "inspect":
 		if len(argv) != 2 {
