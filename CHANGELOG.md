@@ -52,8 +52,8 @@ says what it now requires and what it gives up.
   - A module that imports the door without exporting `mstart`, or with the wrong types, is refused at link, by name.
   - **This lifts `v0.11.0`'s reachability limit for the WASIP1 path.** Core `Instantiate` still supplies no imports
     (host-started threads are not built), and components' `thread.spawn*` stay refused.
-  - The contract text (an append to §2 T-1 naming this import) is with Scott on #1122, and is **not** part of this
-    change.
+  - **The contract names the import:** an append to §2 T-1, on Scott's answer of 2026-10-28 (see *Changed*). It
+    was with Scott on #1122 when the door landed, and lands separately, before the release.
   - **The end-to-end witness:** `TestAForkBuiltGoProgramRunsWithRealThreadsThroughThePublicPath`. A committed
     fork-built Go program (`internal/wasi/testdata/threads012`, with its PROVENANCE) does 4 workers' hash chains
     under GOMAXPROCS = 4 and clause 3's GC ring across agents. Its stdout must equal the expected output, whose
@@ -173,6 +173,19 @@ says what it now requires and what it gives up.
     Scott's stamp; no gate flips here.
 
 ### Changed
+
+- **Contract v0.1 gains three dated appends**, each on Scott's answer of 2026-10-28, *"no objection to all five, go
+  ahead on the repo"*, relayed in the chair's addendum of that day:
+  - **§2 T-1:** the guest-facing door to the spawn primitive. A module importing `"burroughs" "spawn"` and
+    exporting `mstart` may start agents through it, and every public WASIP1 path supplies the import
+    ([#1122](https://github.com/scttfrdmn/burroughs/issues/1122)).
+  - **§6, after R-5: an interpretation of R-2, flagged as one.** A stackless async lift's callback is a pull,
+    invoked only at the guest's `WAIT`/`YIELD` returns. R-2's `findRunnable` integration point governs guests
+    with their own scheduler ([#1135](https://github.com/scttfrdmn/burroughs/issues/1135), with the chair's
+    amended text).
+  - **§4 B-MM-5: a non-normative note.** The weak-memory witness, `scripts/hwlitmus.sh`, discriminates on Apple
+    arm64 for SB and MP, and not on Graviton3 or x86-64. No MUST changes
+    ([#1126](https://github.com/scttfrdmn/burroughs/issues/1126), option B).
 
 - **The Windows triage map gains v0.12.0's end-to-end witness, mapped to
   [#982](https://github.com/scttfrdmn/burroughs/issues/982).** `TestAForkBuiltGoProgramRunsWithRealThreadsThroughThePublicPath`
