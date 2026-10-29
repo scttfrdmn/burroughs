@@ -26,6 +26,18 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **The wat encoder's accept-direction comparator, #67's half 2**
+  ([#467](https://github.com/scttfrdmn/burroughs/issues/467)). `TestTheEncoderEmitsTheModuleTheTextDenotes` requires
+  `text.EncodeModule(source)` to equal the image wabt 1.0.41 made from the same source, for every comparable suite
+  text module. That is the direction §9 G-3 says the suite scores green by construction. It joins the corpus to the
+  harness by file and line, because wabt's ordinal also counts `module binary` and `module quote`.
+  - **Population, re-measured first:** 1817 comparable, the floor, against the issue's registered *"at most
+    1262"*. Four default flips have opened gates since then. 1814 are byte-identical.
+  - **One named divergence, three rows:** a block, loop or if written with an explicit `(type $t)`. Ours emits the
+    type index, as the reference parser and encoder do (`VarBlockType`), and wabt spells the type inline. A listed row
+    may differ only at blocktype immediates, each ours a type index whose function type is wabt's inline spelling.
+  - **Neuters, run:** a row removed from the class fails as unexplained, and a one-bit corruption of a class row is
+    rejected by the class check.
 - **Contract §5 H-2 has witnesses** ([#1136](https://github.com/scttfrdmn/burroughs/issues/1136)), where it held
   only by construction: *"host calls MUST NOT re-enter the guest on the caller's stack"*, with #694's carve-out for
   the canon options' `realloc` and `post-return`.

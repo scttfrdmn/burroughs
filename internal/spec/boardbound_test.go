@@ -104,6 +104,7 @@ import (
 //	agreementFloor           6498     vacuity       —       the cross-check compared something
 //	attemptedFloor           2494     vacuity       —       the link census's hook fired at all
 //	kindGateNumericFloor     143256   vacuity       —       the #441 census walked the corpus
+//	encoderComparableFloor   1817     exact re-base  0      the encoder comparator's population (#467)
 //
 // `kindGateNumericFloor`'s violation means the *census* stopped, not that the gate went quiet:
 // every numeric `assert_return` in the corpus reaches the gate it counts, so a low figure leaves
@@ -451,7 +452,7 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	//
 	// So the arrival is worth the row for the reason the four above it are: a number the ladder is
 	// steered by, previously unasserted, and the PR that moved the steering is the PR that bounds it.
-	const boundPopulation = 23
+	const boundPopulation = 24 // 23 until #467's encoderComparableFloor
 	if len(bounds) != boundPopulation {
 		t.Errorf("found %d board bounds, want exactly %d. A new bound is welcome — add its row to "+
 			"this file's table with its kind and its reason, and re-base this constant in the same "+
