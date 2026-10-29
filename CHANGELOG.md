@@ -26,6 +26,17 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **Contract §2 T-5.1's OS-thread half is measured** ([#1132](https://github.com/scttfrdmn/burroughs/issues/1132)):
+  *"an unobserved exit MUST leak neither a wasm thread nor an OS thread."* The wasm-thread half was measured. This
+  half rested on Go ending a goroutine's thread when it exits locked, which `Spawn` relies on and nothing counted.
+  **`TestAnUnobservedExitLeaksNoOSThread`** counts the process's OS threads from outside the runtime:
+  `/proc/self/status` on linux, `ps -M` on darwin. It runs four rounds of 50 spawns, every exit unobserved, and
+  compares the count after the last round with the count after the first. Go never reaps an idle thread, so the
+  first round's growth is its pool settling, while a leak repeats every round.
+  - **Measured:** darwin/arm64 settled at 7–8 threads, and linux/amd64 (janus, five runs) at 5–15.
+  - **Windows is not covered.** A build tag says so, not a skip.
+  - **Neuter, run:** with the spawn goroutine blocking after `close(t.done)`, which keeps its locked thread, the
+    count grows by exactly 150 and the test fails.
 - **The wat encoder's accept-direction comparator, #67's half 2**
   ([#467](https://github.com/scttfrdmn/burroughs/issues/467)). `TestTheEncoderEmitsTheModuleTheTextDenotes` requires
   `text.EncodeModule(source)` to equal the image wabt 1.0.41 made from the same source, for every comparable suite
