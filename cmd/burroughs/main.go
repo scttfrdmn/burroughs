@@ -158,6 +158,9 @@ func inspect(stdout io.Writer, path string) error {
 		if errors.Is(err, binary.ErrFeatureDisabled) {
 			return fmt.Errorf("%w: %w", burroughs.ErrGated, err)
 		}
+		if errors.Is(err, binary.ErrUnimplementedProposal) { // #1120, as Config.Instantiate
+			return fmt.Errorf("%w: %w", burroughs.ErrUnsupported, err)
+		}
 		return fmt.Errorf("%w: %w", burroughs.ErrMalformed, err)
 	}
 	fmt.Fprintf(stdout, "%s: wasm v%d, %d section(s)\n", path, m.Version, len(m.Sections))

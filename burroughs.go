@@ -230,6 +230,10 @@ func (c Config) Instantiate(wasm []byte) (*Instance, error) {
 		if errors.Is(err, binary.ErrFeatureDisabled) {
 			return nil, fmt.Errorf("%w: %w", ErrGated, err)
 		}
+		// A proposal with no gate, refused by name (#1120): well-formed, and nothing to turn on.
+		if errors.Is(err, binary.ErrUnimplementedProposal) {
+			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
 		return nil, fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
 

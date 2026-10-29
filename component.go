@@ -198,6 +198,11 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 		if errors.Is(err, component.ErrUnsupportedForm) {
 			return 0, fmt.Errorf("%w: %w", ErrUnsupported, err)
 		}
+		// A core module using a proposal with no gate, refused by name at decode (#1120). It crossed this door
+		// unclassified, as "malformed reference type: 0x65".
+		if errors.Is(err, bin.ErrUnimplementedProposal) {
+			return 0, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
 		return 0, err
 	}
 	defer in.Close()
@@ -282,6 +287,9 @@ func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
 			return nil, fmt.Errorf("%w: %w", ErrGated, err)
 		}
 		if errors.Is(err, component.ErrUnsupportedForm) {
+			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
+		if errors.Is(err, bin.ErrUnimplementedProposal) { // #1120, as ComponentConfig.Run
 			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
 		}
 		if errors.Is(err, component.ErrAsyncNotImplemented) {
@@ -437,6 +445,9 @@ func LoadComponent(wasm []byte) (*Component, error) {
 			return nil, fmt.Errorf("%w: %w", ErrGated, err)
 		}
 		if errors.Is(err, component.ErrUnsupportedForm) {
+			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
+		if errors.Is(err, bin.ErrUnimplementedProposal) { // #1120, as ComponentConfig.Run
 			return nil, fmt.Errorf("%w: %w", ErrUnsupported, err)
 		}
 		// **This classification was missing, and the error crossed unwrapped.** Measured through

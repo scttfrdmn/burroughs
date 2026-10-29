@@ -155,6 +155,9 @@ var declaredErrors = []error{
 	// the decoder declined to judge. Listed here because the fuzz target's question
 	// is "is this error one the decoder is allowed to return", and it is.
 	ErrFeatureDisabled,
+	// ErrUnimplementedProposal is the same kind of decline, for a proposal with no gate (#1120): the decoder
+	// recognizes the encoding and does not judge it. Its bytes are attacker-supplied, so it is reachable.
+	ErrUnimplementedProposal,
 
 	// ErrDataCountRequired became reachable with the code section's grammar (#22,
 	// closed inside #39): a body using one of the four data-referencing opcodes in a

@@ -87,10 +87,10 @@ func TestNoPublicPathRunsASecondSharedMemoryThread(t *testing.T) {
 	for _, c := range []struct{ fixture, want string }{
 		// Refused by name: the production and its opcode.
 		{"thread-spawn-ref-synth.wasm", "thread.spawn-ref (0x40)"},
-		// Refused before its canon is read: the shared table spawn-indirect requires is not decodable. That
-		// refusal says "malformed", which is a misclassification of a well-formed component (wasm-tools 1.258.0
-		// validates it with --features all), filed as #1120. It is still a refusal, so no path runs a thread.
-		{"thread-spawn-indirect-synth.wasm", "reference type"},
+		// Refused before its canon is read, at the shared table spawn-indirect requires, and since #1120 by name:
+		// shared-everything-threads' 0x65 is ErrUnsupported, not "malformed reference type: 0x65". wasm-tools
+		// 1.258.0 validates the component with --features all, so "malformed" told a caller it was broken.
+		{"thread-spawn-indirect-synth.wasm", "shared-everything-threads"},
 	} {
 		w, err := os.ReadFile("internal/component/testdata/" + c.fixture)
 		if err != nil {
@@ -109,15 +109,29 @@ func TestNoPublicPathRunsASecondSharedMemoryThread(t *testing.T) {
 			}
 		})
 	}
-	t.Run("the_named_refusal_is_ErrUnsupported", func(t *testing.T) {
-		w, err := os.ReadFile("internal/component/testdata/thread-spawn-ref-synth.wasm")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := burroughs.LoadComponent(w); !errors.Is(err, burroughs.ErrUnsupported) {
-			t.Errorf("thread.spawn-ref is not refused as ErrUnsupported: %v", err)
-		}
-	})
+	// Both spellings of the proposal are one class at every load door (#1120). Before, spawn-indirect's shared table
+	// was ErrMalformed at Instantiate and unclassified at the component doors, while spawn-ref was ErrUnsupported.
+	for _, fixture := range []string{"thread-spawn-ref-synth.wasm", "thread-spawn-indirect-synth.wasm"} {
+		t.Run("the_named_refusal_is_ErrUnsupported_"+fixture, func(t *testing.T) {
+			w, err := os.ReadFile("internal/component/testdata/" + fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := burroughs.LoadComponent(w); !errors.Is(err, burroughs.ErrUnsupported) {
+				t.Errorf("LoadComponent(%s) is not refused as ErrUnsupported: %v", fixture, err)
+			}
+			if _, err := (burroughs.ComponentConfig{}).LoadComponent(w); !errors.Is(err, burroughs.ErrUnsupported) {
+				t.Errorf("ComponentConfig.LoadComponent(%s) is not refused as ErrUnsupported: %v", fixture, err)
+			}
+			_, runErr := burroughs.ComponentConfig{}.Run(w)
+			if !errors.Is(runErr, burroughs.ErrUnsupported) {
+				t.Errorf("ComponentConfig.Run(%s) is not refused as ErrUnsupported: %v", fixture, runErr)
+			}
+			if errors.Is(runErr, burroughs.ErrMalformed) {
+				t.Errorf("%s is refused as ErrMalformed, which says the bytes are not a component", fixture)
+			}
+		})
+	}
 }
 
 // TestAComponentModelThreadRunsThroughThePublicPath is the other half of the answer. A component-model Thread is a

@@ -943,7 +943,7 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 	// a silently absorbed difference.
 	excluded := map[byte]string{0x40: "table initializer prefix", 0x63: "(ref null ht)", 0x64: "(ref ht)"}
 
-	var ungated, malformed int
+	var ungated, malformed, unimplemented int
 	gatedBy := map[string]int{}
 	seenExcluded := map[byte]bool{}
 	for v := -64; v < 64; v++ {
@@ -964,6 +964,9 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 			gatedBy[strings.TrimSuffix(off.Error(), ": "+ErrFeatureDisabled.Error())]++
 		case errors.Is(off, ErrMalformedRefType) && errors.Is(all, ErrMalformedRefType):
 			malformed++
+		case errors.Is(off, ErrUnimplementedProposal) && errors.Is(all, ErrUnimplementedProposal):
+			// Refused by name under every gate set, because no gate admits the proposal (#1120).
+			unimplemented++
 		case excluded[form] != "":
 			seenExcluded[form] = true
 		default:
@@ -974,15 +977,16 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 
 	// The counts are the assertion: two ungated (funcref 0x70, externref 0x6F — the Wasm
 	// 2.0 subset), eight abstract forms gated by GC, **two gated by exception handling**
-	// (`exn` -0x17, `noexn` -0x0c), and the remaining 113 malformed. 2+8+2+113+3 = 128,
-	// which is the whole s7 space. The per-gate split is #395's pin: before it, both
-	// spellings of this line read `10` and agreed with a wrong attribution.
+	// (`exn` -0x17, `noexn` -0x0c), **one refused by name as unimplemented** (0x65,
+	// shared-everything-threads' shared prefix, #1120), and the remaining 112 malformed.
+	// 2+8+2+1+112+3 = 128, which is the whole s7 space. The per-gate split is #395's pin:
+	// before it, both spellings of this line read `10` and agreed with a wrong attribution.
 	wantGated := map[string]int{"gc": 8, "exception handling": 2}
-	if ungated != 2 || malformed != 113 || !maps.Equal(gatedBy, wantGated) {
-		t.Errorf("reftype partition over s7: %d ungated, %v gated, %d malformed; "+
-			"want 2 / %v / 113 — funcref+externref ungated, eight GC abstract forms, "+
-			"exn and noexn under the exception gate (#395), the rest malformed",
-			ungated, gatedBy, malformed, wantGated)
+	if ungated != 2 || malformed != 112 || unimplemented != 1 || !maps.Equal(gatedBy, wantGated) {
+		t.Errorf("reftype partition over s7: %d ungated, %v gated, %d unimplemented, %d malformed; "+
+			"want 2 / %v / 1 / 112 — funcref+externref ungated, eight GC abstract forms, "+
+			"exn and noexn under the exception gate (#395), 0x65 refused by name (#1120), the rest malformed",
+			ungated, gatedBy, unimplemented, malformed, wantGated)
 	}
 	// Vacuity floor: an all-zero tally satisfies a comparison against zeros, so the sweep
 	// asserts it actually classified the space rather than merely finishing the loop.
@@ -990,7 +994,7 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 	for _, n := range gatedBy {
 		gated += n
 	}
-	if n := ungated + gated + malformed + len(seenExcluded); n != 128 {
+	if n := ungated + gated + unimplemented + malformed + len(seenExcluded); n != 128 {
 		t.Errorf("classified %d of 128 s7 forms; the sweep is not covering the space", n)
 	}
 	for form, why := range excluded {

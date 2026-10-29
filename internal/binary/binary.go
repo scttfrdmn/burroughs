@@ -122,6 +122,20 @@ var (
 	ErrMalformedHeapType = errors.New("malformed heap type")
 	ErrMalformedLimits   = errors.New("malformed limits flags")
 
+	// ErrUnimplementedProposal is an encoding that is well-formed under a proposal this engine implements no part
+	// of and has no gate for, so it is refused **by name** rather than as malformed (#1120).
+	//
+	// It is not ErrFeatureDisabled. That one says *this build has the gate off*, which a caller can answer by
+	// turning the gate on, and here no gate exists. The public doors classify it as `ErrUnsupported`, "the engine
+	// reached something it does not implement", which is what a component path already says for the same
+	// proposal's canon built-ins (`thread.spawn-ref`). The text names the proposal and the byte, and it does not
+	// resemble any spec suite string, for featureErr's reason.
+	//
+	// Its first members are shared-everything-threads' `0x65` prefix, as a reference type and as a composite
+	// type. They were refused *"malformed reference type: 0x65"* and *"malformed definition type: 0x65"*, so the
+	// same proposal was refused two different ways depending on which encoding the decoder met first.
+	ErrUnimplementedProposal = errors.New("not implemented by this engine")
+
 	// ErrSharedTable is a tabletype whose limits flags set the shared bit — `require (not
 	// shared) s (pos s - 1) "tables cannot be shared (yet)"` (`spec-threads/binary/decode.ml:190-194`).
 	// The threads reference's message text verbatim, parenthetical included: the "(yet)" is

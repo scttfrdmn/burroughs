@@ -316,6 +316,9 @@ func TestEverySentinelIsTheReferencesOrIsDeclared(t *testing.T) {
 		"feature gate disabled": "the gates doctrine's whole point: a construct the spec " +
 			"defines and this configuration declines gets a feature-named error, never a " +
 			"spec malformed-string (#5)",
+		"not implemented by this engine": "the same doctrine for a proposal with no gate (#1120): " +
+			"shared-everything-threads' 0x65 is refused by name, never as a spec malformed-string, " +
+			"so a caller is not told their well-formed module is broken",
 		"misplaced opcode": "declared-and-tracked (#6): the reference's two such arms carry " +
 			"their own text after the colon, and both are unreachable here — see " +
 			"TestEveryReasonRowIsABlockDelimiter",
