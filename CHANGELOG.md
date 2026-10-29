@@ -26,6 +26,17 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **Contract §5 H-2 has witnesses** ([#1136](https://github.com/scttfrdmn/burroughs/issues/1136)), where it held
+  only by construction: *"host calls MUST NOT re-enter the guest on the caller's stack"*, with #694's carve-out for
+  the canon options' `realloc` and `post-return`.
+  - **`TestAHostFunctionHasNoPathBackIntoTheGuest`** pins every exported method of `*interp.Caller` and
+    `*interp.CanonCaller`, each classified as entering guest code or not. Only `Realloc` does. An exported field
+    other than the embedded `*Caller` fails it too.
+  - **`TestTheAdapterEntersOnlyItsNamedGuestFunctions`** derives every `Invoke*` call in `internal/component` from
+    the AST and pins the six sites: the lifted call itself (three), a component-model thread's entry, realloc and
+    post-return. A new site fails until it is classified, and an adapter entry beyond the carve-out is a contract
+    question.
+  - **Neuters, run:** a method removed from its row, and the post-return row deleted, each fail as unclassified.
 - **`scripts/markercheck.py`, the README's version marker checked at the cut**
   ([#1170](https://github.com/scttfrdmn/burroughs/issues/1170), item 4b). The README's status says
   *Written against `vX.Y.Z`*, and during a cut the marker must name the release being cut. It runs in `make cite`
