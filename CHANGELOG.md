@@ -77,6 +77,10 @@ says what it now requires and what it gives up.
   - **The exit-code table stays**, because `TestREADMEDocumentsEveryExitCode` holds it to `run.go` and no control
     here can read the site.
   - `boards-and-buckets.md`'s pointer to the README's five-verdict list is re-pointed, with the move recorded.
+  - **"How the thesis is tested"** presents the Phase 4 Go fork, Burroughs and #406's torture suite together as the
+    experimental apparatus (the chair's addendum of 2026-10-29, item 4). The fork is named and not linked. The old
+    phase paragraph, whose *"the §4 litmus battery … is outstanding and unscheduled"* contradicted the README's
+    own *"19 of 19"*, is gone with the rest of that section (item 1).
 - **The README's Windows paragraph says what runs there.** It read *"Windows is compiled, not tested … no test ever
   runs there"*, which the non-gating Windows lane falsified. It now says Windows is measured and unsupported, that
   the lane runs the suite to expose portability gaps, and that its failures don't block main once each is mapped in

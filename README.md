@@ -71,6 +71,18 @@ whose output `go test` asserts.
   exit codes, and a trap is a type a caller can match.
 - **Correctness-neutral.** The spec suite is the oracle, and nothing defaults on without its own suite green.
 
+## How the thesis is tested
+
+Three things make the experimental apparatus:
+- **Burroughs**, the engine.
+- **The Phase 4 Go fork**, a modified Go toolchain whose `wasip1` port starts real threads through Burroughs' spawn
+  import. Stock Go's `wasip1` port is single-threaded. The fork is not published.
+- **The Go-runtime torture suite** ([#406](https://github.com/scttfrdmn/burroughs/issues/406)): Go programs built
+  with the fork, each of whose observable results must match the same program built with stock Go.
+
+[The v0.12.0 threads witness](https://burroughs.run/docs/threads-witness/) is one reading of the apparatus, with what
+it does not show.
+
 ## Status
 
 *Written against `v0.12.0`.*
