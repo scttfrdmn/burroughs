@@ -425,9 +425,11 @@ func TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish(t *testing.T) {
 	}
 
 	in.Resume()
+	resumed := time.Now()
 
 	select {
 	case out := <-done:
+		logPostResume(t, resumed)
 		if len(out) != 1 || out[0].Bits != trips {
 			t.Errorf("after Resume the guest returned %v, want %d — the loop counts its own "+
 				"trips, so a wrong count means parking and releasing at a back-edge "+
@@ -438,9 +440,11 @@ func TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish(t *testing.T) {
 	case err := <-errs:
 		t.Fatalf("after Resume the guest failed: %v — nothing about SP-1 makes a stop "+
 			"observable to the guest as an error", err)
-	case <-time.After(30 * time.Second):
-		t.Fatal("the guest did not finish 30s after Resume — the release channel is not " +
-			"reaching the parked thread, which is a hang rather than a degraded mode")
+	case <-time.After(postResumeBound):
+		dumpGoroutinesAtTheBound(t)
+		t.Fatalf("the guest did not finish %s after Resume. If the dump shows the guest still executing in "+
+			"the interpreter, this is load; if every goroutine is parked, the release channel is not reaching "+
+			"the parked thread, which is a hang rather than a degraded mode", postResumeBound)
 	}
 }
 
@@ -648,9 +652,15 @@ func TestStopRefusesASecondConcurrentStop(t *testing.T) {
 	}
 }
 
-// postResumeBound is how long TestStopRefusesASecondConcurrentStop and TestStopBringsATailCallLoopToASafepoint
-// wait for the guest to finish after Resume (#896, #946). It was 30s, and it is **set from measurement**, not
-// raised by guesswork (the chair's second ruling of 2026-10-26):
+// postResumeBound is how long TestStopRefusesASecondConcurrentStop, TestStopBringsATailCallLoopToASafepoint and
+// TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish wait for the guest to finish after Resume (#896, #946).
+// It was 30s, and it is **set from measurement**, not raised by guesswork (the chair's second ruling of 2026-10-26).
+//
+// The third test joined after #1113 because it had three recorded timeouts and no dump, which is #1113's own
+// condition for moving a bound. Its workload is the measured one: TestStopRefusesASecondConcurrentStop's guest is the
+// same `spin` module at the same 10M trips, stopped and resumed once.
+//
+// The measurement:
 //   - **What the timeouts were:** 8 in 20,000 `-race` iterations on darwin/arm64, and every dump showed the guest
 //     still executing in the interpreter (impatience, not a lost wakeup). Janus x86-64 had 0 in 20,000.
 //   - **What caused them:** contention, settled by a 2×2 experiment of host × load (about 0.5 and 0.67 processes
