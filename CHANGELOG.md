@@ -124,7 +124,10 @@ says what it now requires and what it gives up.
     word's pointer is now formed only for a word the access touches.
     `TestAnUnalignedSpanEndingInTheLastWordFormsNoPointerPastTheImage` supplies a live neighbouring allocation, so
     `checkptr` can catch it off Windows too. Both helpers' neuters abort.
-  - The two triage rows stay until a Windows run shows the race gone.
+  - **The two triage rows are gone**, after five consecutive clean Windows runs on main since the repair: no race
+    report, no `checkptr` abort, and neither `TestClause3GCAcrossTwoAgents` nor
+    `TestAForkBuiltGoProgramRunsWithRealThreadsThroughThePublicPath` failed. The runs, 9e93247 through 21fdb9f, are
+    listed on #982. Both failures had been intermittent, so one clean run would have been consistent with luck.
 - **`burroughs version` reports the version it was built at**
   ([#1130](https://github.com/scttfrdmn/burroughs/issues/1130), item 1). The banner was the constant
   `burroughs v0.0.1` from genesis through v0.12.0. It now comes from `debug.ReadBuildInfo`'s module version, which
