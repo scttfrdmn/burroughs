@@ -108,6 +108,10 @@ var t406Cases = []t406Case{
 	// pending timer cannot resolve.
 	{name: "c3a"},
 	{name: "c3b"},
+	// #1157's reproducer: four workers pinned with LockOSThread that sleep, so a locked M hands its P on. The fork at
+	// 944cfd2 threw "on a locked thread with no template thread"; this guest is built from the fork commit that
+	// repairs it (PROVENANCE), so it must match stock Go's "done".
+	{name: "c4lock"},
 	// Case 4's positive controls, one per classifier that no case above exercises: crashed and hung. Completed and
 	// deadlock are exercised by c2b and c2a; wrong output has its own test below.
 	{name: "ctlcrash"},
