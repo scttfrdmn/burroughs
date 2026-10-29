@@ -299,9 +299,9 @@ func TestGoRuntimeTortureSuite(t *testing.T) {
 			got := t406RunFork(t, c)
 			if c.pinned != "" {
 				if got.class != c.pinnedClass && c.reportOnly != "" {
-					t.Logf("REPORTED, NOT FAILED (%s): %s departed from its pin, %s not %s (exit %d, stdout %q, %d "+
-						"agents sampled executing). Record this run on %s.",
-						c.reportOnly, c.name, got.class, c.pinnedClass, got.exit, got.stdout, got.gauge, c.reportOnly)
+					t406Report(t, fmt.Sprintf("REPORTED, NOT FAILED (%s): %s departed from its pin, %s not %s "+
+						"(exit %d, stdout %q, %d agents sampled executing). Record this run on %s.",
+						c.reportOnly, c.name, got.class, c.pinnedClass, got.exit, got.stdout, got.gauge, c.reportOnly))
 					return
 				}
 				if got.class != c.pinnedClass {
@@ -428,4 +428,47 @@ func t406Head(s string, lines int) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// t406Report is a report-only pin's channel: `t.Logf` for a local `-v` run, and a line appended to the GitHub
+// Actions job summary when `GITHUB_STEP_SUMMARY` names one.
+//
+// **`t.Logf` alone reached nobody in CI.** The build job runs `go test -shuffle=on ./...` without `-v`, and a
+// passing package's test output is not printed at all. So #1173's first version of this arm "logged" a departure
+// into nothing, and #1172's promise to read departures at each cut could not be kept. The job summary is shown on
+// the run's page whatever the step printed, so a departure is visible on every run that has one.
+//
+// A summary that cannot be written is the test's failure, not a silent drop, because the channel is the whole point.
+func t406Report(t *testing.T, msg string) {
+	t.Helper()
+	t.Log(msg)
+	path := os.Getenv("GITHUB_STEP_SUMMARY")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("the job summary %s cannot be opened, so this report would reach nobody: %v", path, err)
+	}
+	defer f.Close()
+	if _, err := fmt.Fprintf(f, "- **%s**\n", msg); err != nil {
+		t.Fatalf("writing the job summary %s: %v", path, err)
+	}
+}
+
+// TestAReportOnlyDepartureReachesTheJobSummary is t406Report's witness: with GITHUB_STEP_SUMMARY pointing at a file,
+// the report lands in it.
+//
+// NEUTER, run (2026-10-29, darwin/arm64): with t406Report reduced to its `t.Log`, the file stays empty and this fails.
+func TestAReportOnlyDepartureReachesTheJobSummary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "summary.md")
+	t.Setenv("GITHUB_STEP_SUMMARY", path)
+	t406Report(t, "REPORTED, NOT FAILED (#1172): a witness line")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the summary was never written: %v", err)
+	}
+	if !strings.Contains(string(b), "REPORTED, NOT FAILED (#1172): a witness line") {
+		t.Errorf("the summary holds %q, without the report", b)
+	}
 }
