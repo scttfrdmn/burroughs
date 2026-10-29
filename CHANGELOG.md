@@ -51,6 +51,18 @@ says what it now requires and what it gives up.
     guest runs out of memory at about 4 MiB in use. Unix reserves address space instead (ADR 0076). Windows is
     unsupported, and v0.12.0's threads claim names linux and darwin only.
   - Nothing in the fork's runtime is read.
+- **A pinned-thread Go guest runs: #406's suite gains `c4lock`, #1157's reproducer**
+  ([#1157](https://github.com/scttfrdmn/burroughs/issues/1157)). v0.12.0's Known limits list a guest that calls
+  `runtime.LockOSThread` and then needs another M crashing on the Phase 4 fork, with *"on a locked thread with no
+  template thread"*.
+  - **The fix is the fork's**, on its branch `fix-1157-lockedm-newm` (f608b56). Under burroughsspawn, `newm` on a
+    locked M creates the M directly instead of through a template thread wasm never starts, the same exclusion
+    Plan 9 has. A new M is a fresh host agent, so there is no kernel thread state to inherit. The fork is
+    unpublished, and the branch's disposition is Scott's.
+  - **The witness** is `c4lock`, built from that commit (PROVENANCE). It must match stock Go's `done`.
+    **Neuter, run:** the same source built with the fork at 944cfd2 fails the case with the throw.
+  - Rebuilt with the fix, v0.12.0's witness guest and six of #406's guests match their committed expectations, 7
+    of 7.
 - **The one law about adding laws**
   ([graves-and-sweeps.md](docs/laws/graves-and-sweeps.md#a-new-law-needs-two-recorded-occurrences-and-the-laws-that-have-not-fired-are-listed-at-each-cut)),
   from the chair's fifth ruling of 2026-10-28, item 6, decided unless Scott objects.
@@ -103,6 +115,10 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **`TestAnEntryWaitsForTheExecutionSlot` starts its clock before the slot's releaser.** It started after the
+  releaser's 300ms sleep had begun, so an entry that waited could measure 297.9ms and fail, as it did on PR #1177's
+  `build (ubuntu-24.04-arm)`. Now the release cannot land before `start + held`, so the bound holds by construction.
+  **Neuter, run:** with the slot left unoccupied, the entry completes in about 0.26ms and the test fails.
 - **#406's c1stw pin no longer fails a required job on a host where its divergence is not stable**
   ([#1172](https://github.com/scttfrdmn/burroughs/issues/1172)). The case is pinned as hung by #1064's limit, and
   it completed twice on CI's `build (macos-15)` (PR #1171's head) while every other run hangs. Its departure is now

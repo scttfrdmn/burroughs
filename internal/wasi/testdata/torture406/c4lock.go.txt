@@ -1,0 +1,36 @@
+// c4lock: #1157's reproducer. Four workers under GOMAXPROCS = 4, each pinned with runtime.LockOSThread, compute and
+// sleep, so a locked M has to hand its P on while the others still need Ps (stoplockedm -> handoffp -> startm ->
+// newm). On the Phase 4 fork at 944cfd2 that threw "on a locked thread with no template thread"; this guest is built
+// from the fork commit that repairs it (PROVENANCE).
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+	"time"
+)
+
+func main() {
+	const workers = 4
+	runtime.GOMAXPROCS(workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			h := uint64(1)
+			for round := 0; round < 20; round++ {
+				for i := 0; i < 200_000; i++ {
+					h = h*6364136223846793005 + 1442695040888963407
+				}
+				time.Sleep(time.Millisecond)
+			}
+			_ = h
+		}()
+	}
+	wg.Wait()
+	fmt.Println("done")
+}

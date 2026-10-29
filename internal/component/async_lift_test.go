@@ -220,12 +220,16 @@ func TestAnEntryWaitsForTheExecutionSlot(t *testing.T) {
 	// **wait and then succeed** — it must not refuse, and it must not expire, because there is no bound.
 	in.w.async.entrySem <- struct{}{}
 	const held = 300 * time.Millisecond
+	// **The clock starts before the releaser does**, so the release cannot land earlier than `start + held` and
+	// an entry that waited measures at least `held` by construction. It started after the releaser until
+	// PR #1177's CI, where an entry that did wait measured 297.9ms on ubuntu-24.04-arm: the releaser's sleep
+	// had begun before `start` was taken.
+	start := time.Now()
 	go func() {
 		time.Sleep(held)
 		<-in.w.async.entrySem
 	}()
 
-	start := time.Now()
 	err = cd.fn.invoke()
 	elapsed := time.Since(start)
 
