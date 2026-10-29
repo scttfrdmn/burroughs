@@ -100,6 +100,12 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **#946's own test waits `postResumeBound` after Resume and dumps its goroutines at the bound**
+  ([#946](https://github.com/scttfrdmn/burroughs/issues/946)). #1113 set the 60s bound from measurement, with a
+  dump, for two Stop/Resume tests, and left the file's other 30s waits alone because none had a recorded timeout.
+  `TestStopBringsAGuestLoopToASafepointAndResumeLetsItFinish` now has three (two linux, one darwin), and none was
+  classified, because the test kept nothing at the bound. Its workload is the measured one: the same `spin` guest at
+  the same 10M trips. **Neuter, run:** with the wait at 1ms, the test fails at the bound and logs the dump.
 - **A hung #406 torture run keeps its goroutine stacks**
   ([#1181](https://github.com/scttfrdmn/burroughs/issues/1181)). On unix, a run past its bound gets SIGQUIT and a
   five-second grace before the kill, so the failure's stderr carries the engine's goroutine dump. Before, a bare
