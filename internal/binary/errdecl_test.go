@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -383,89 +384,137 @@ func TestTheASTGrepGapHasAWitness(t *testing.T) {
 		len(inText), len(domain), len(textOnly), textOnly)
 }
 
-// excludedFromConstExprErrors holds the sentinels instr.go raises that are deliberately **not**
-// in `constExprErrors`, each with the reason it is out.
+// excludedFromConstExprErrors holds the declared sentinels that are deliberately **not** in
+// `constExprErrors`, each with the reader that raises it.
 //
-// All three are raised by the function-body layer that *wraps* the instruction grammar rather
-// than by the grammar itself. They live in instr.go because that is where the code section's
-// body reader lives, and `constExprErr` never enters it — a constant expression is read from a
-// global, element or data segment, none of which has a body size or a locals vector. So the
-// narrower registry rightly omits them, and all three are enrolled in `declaredErrors`, where
-// the wider claim does cover them.
+// **Every sentinel in `declaredErrors` is enrolled or here (#1179).** Until #1179 this set held
+// only what instr.go's function bodies mentioned, and a sentinel raised from another file was in
+// neither answer: #1120's `ErrUnimplementedProposal`, returned by sections.go's `decodeRefType`,
+// reached `FuzzConstExprProgress` unenrolled. Totality over `declaredErrors` means a new declared
+// sentinel can't land without one of the two decisions.
 //
-// The discriminator is *which reader raises it*, not reachability, for the reason
-// `excludedFromDeclaredErrors` states one registry over. An entry without a reason is a
-// suppression wearing a disguise.
+// **Each entry is a checked claim.** Its reason names the reader that raises it, and
+// TestEveryInstrGrammarSentinelIsInTheConstExprRegistry fails an entry whose sentinel is
+// mentioned in any function reachable from `decodeConstExpr` (`constExprSentinels`). So the
+// discriminator is still *which reader raises it*, now verified rather than asserted. That is
+// this registry's question, *may the grammar return it*. `excludedFromDeclaredErrors`' reason for
+// not using reachability belongs to its own question, *verdict or bug*.
+//
+// The first three are the function-body layer that *wraps* the instruction grammar. The rest are
+// the module, section and segment layers, which call the grammar and are not called by it.
 var excludedFromConstExprErrors = map[string]string{
 	"ErrSectionOverrun":      "decodeFuncBody's `sized` extent check — face 1 of the size mechanism at the body level, below a section and above the grammar",
 	"ErrSectionSizeMismatch": "decodeFuncBody's reconciliation of declared body size against bytes the grammar consumed, which has no analogue inside a constant expression",
 	"ErrTooManyLocals":       "decodeLocals' 2^32 aggregate — a locals vector is part of a function body's preamble and no constant expression has one",
+
+	"ErrBadMagic":             "DecodeModule's preamble: the magic number, before any section",
+	"ErrBadVersion":           "DecodeModule's preamble: the version field",
+	"ErrTrailingData":         "DecodeModule: bytes after the last section",
+	"ErrMalformedSectionID":   "DecodeModule's and decodePayload's section dispatch",
+	"ErrDataCountRequired":    "DecodeModule: a data reference with no data count section, decided after the sections are read",
+	"ErrDataCountMismatch":    "checkCounts: the data count section against the data section's length",
+	"ErrFuncCodeMismatch":     "checkCounts: the function section's length against the code section's",
+	"ErrMalformedUTF8":        "nameString: import, export and custom-section names",
+	"ErrMalformedImportKind":  "decodeImport's descriptor kind",
+	"ErrMalformedExportKind":  "decodeExport's descriptor kind",
+	"ErrZeroByteExpected":     "the reserved zero bytes in decodeTableForm, decodeImport and decodeTag",
+	"ErrMalformedLimits":      "decodeLimits: a memory or table type's limits flags",
+	"ErrSharedTable":          "decodeTableType's flags",
+	"ErrMalformedMutability":  "decodeMutability: a global type's flag, read before its initializer",
+	"ErrMalformedDefType":     "decodeCompType: the type section's composite-type form",
+	"ErrMalformedStorageType": "decodeStorageType: a struct or array field's type, in the type section",
+	"ErrMalformedElemSegKind": "decodeElemSegment's segment kind: the element reader calls the grammar, not the reverse",
+	"ErrMalformedElemKind":    "decodeElemSegment's element kind: the element reader calls the grammar, not the reverse",
+	"ErrMalformedDataSegKind": "decodeDataSegmentMode: the data reader calls the grammar, not the reverse",
 }
 
-// grammarSentinels reads every error sentinel mentioned inside a function body in instr.go,
-// keyed by name and carrying its sites so a failure names the raise rather than the set.
+// constExprRoot is the constant-expression grammar's entry, the function `constExprErr` (and so
+// `FuzzConstExprProgress`) drives.
+const constExprRoot = "decodeConstExpr"
+
+// constExprSentinels reads every error sentinel mentioned in a function the constant-expression
+// grammar can reach from constExprRoot, keyed by name and carrying its sites so a failure names
+// the raise rather than the set.
 //
-// **Why instr.go and not a derived call graph.** The narrower registry's claim is "only these may
-// come out of the instruction grammar", and instr.go is the file the instruction grammar is: the
-// opcode dispatch, the immediate vocabulary, and the productions those two reach. A new immediate
-// reader goes there, which is what makes the file a *structural* domain rather than a list of
-// today's cases. Two other candidate domains were measured and rejected:
+// **Reachability, not one file (#1179).** This read instr.go's function bodies until #1120's
+// `ErrUnimplementedProposal`, returned by sections.go's `decodeRefType`, reached the fuzzer
+// unenrolled: the grammar calls readers outside instr.go. The domain is now what the grammar can
+// reach, over the package's non-test sources.
 //
-//   - **Receiver `*instrCtx`** — 6 sentinels, five of them already enrolled. It is the tightest
-//     honest scope and it would have caught #531, but it drops `ErrIllegalOpcode`,
-//     `ErrEndExpected`, `ErrMalformedTypeIndex` and `ErrMalformedCatch`, which the grammar raises
-//     from free functions and plain methods. A domain that excludes four enrolled members is not
-//     measuring the claim.
-//   - **Adding constexpr.go** — three more sentinels (`ErrMalformedElemSegKind`,
-//     `ErrMalformedElemKind`, `ErrMalformedDataSegKind`), all raised by the segment readers that
-//     *call* the grammar, so it would cost three more exclusions and catch nothing.
+// **Over-approximated on purpose.** Any identifier naming a package function or method is followed,
+// whether it is a call or a value (an immediate-reader table entry is a value), and a method is
+// followed by name, whatever its receiver. That can only add functions. An added function costs an
+// enrolment or an exclusion, and a missed one costs a grave, so the error goes the safe way. The
+// first measurement reached 61 functions and 20 sentinel names from decodeConstExpr.
 //
 // Mentions rather than raises, deliberately: a body-wide walk also picks up an `errors.Is`
-// comparison (`either`'s `ErrFeatureDisabled`), which over-covers. Over-covering costs an
-// exclusion entry with a reason; under-covering costs a grave.
-func grammarSentinels(t *testing.T) map[string][]string {
+// comparison (`either`'s `ErrFeatureDisabled`), which over-covers for the same reason.
+func constExprSentinels(t *testing.T) map[string][]string {
 	t.Helper()
 
-	const grammarFile = "instr.go"
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, grammarFile, nil, parser.SkipObjectResolution)
+	files, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("parsing %s: %v", grammarFile, err)
+		t.Fatal(err)
 	}
-	found := map[string][]string{}
-	funcs := map[string]bool{}
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
+	fset := token.NewFileSet()
+	bodies := map[string][]*ast.FuncDecl{} // by name: methods on different receivers share one
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		funcs[fd.Name.Name] = true
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			id, ok := n.(*ast.Ident)
-			if !ok || !errSentinelName.MatchString(id.Name) {
-				return true
+		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+		for _, decl := range f.Decls {
+			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Body != nil {
+				bodies[fd.Name.Name] = append(bodies[fd.Name.Name], fd)
 			}
-			found[id.Name] = append(found[id.Name],
-				fmt.Sprintf("%s:%d/%s", grammarFile, fset.Position(id.Pos()).Line, fd.Name.Name))
-			return true
-		})
+		}
 	}
-	// Liveness on the domain rather than on its size alone. A file rename, a package split, or
-	// the grammar moving out of instr.go all produce a walk that reads a real file and finds
-	// nothing this registry is about — and an empty domain agrees with any registry (#29). These
-	// three names are the dispatch, the immediate vocabulary, and the deferred-decline recorder:
-	// the grammar is not in this file if they are not.
-	for _, want := range []string{"instr", "imm", "decline"} {
-		if !funcs[want] {
-			t.Fatalf("%s declares no %s: the instruction grammar has moved, so this control's "+
-				"domain is a file that no longer holds its subject — re-point grammarFile rather "+
-				"than reading its silence as a pass", grammarFile, want)
+	if len(bodies[constExprRoot]) == 0 {
+		t.Fatalf("no function named %s in the package's non-test sources: the grammar's entry has "+
+			"moved, so this walk would start nowhere and agree with any registry. Re-point constExprRoot",
+			constExprRoot)
+	}
+
+	found := map[string][]string{}
+	reached := map[string]bool{constExprRoot: true}
+	work := []string{constExprRoot}
+	for len(work) > 0 {
+		name := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, fd := range bodies[name] {
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				id, ok := n.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				if errSentinelName.MatchString(id.Name) {
+					pos := fset.Position(id.Pos())
+					found[id.Name] = append(found[id.Name],
+						fmt.Sprintf("%s:%d/%s", pos.Filename, pos.Line, fd.Name.Name))
+				}
+				if _, ok := bodies[id.Name]; ok && !reached[id.Name] {
+					reached[id.Name] = true
+					work = append(work, id.Name)
+				}
+				return true
+			})
+		}
+	}
+	// Liveness on the domain rather than on its size alone (#29). The dispatch, the immediate
+	// vocabulary and the deferred-decline recorder are the grammar. decodeRefType is in sections.go,
+	// and it is #1179's own case: a walk that stops at instr.go no longer reaches it.
+	for _, want := range []string{"instr", "imm", "decline", "decodeRefType"} {
+		if !reached[want] {
+			t.Fatalf("the walk from %s never reached %s: the grammar is not where this control looks, "+
+				"so its silence is not a pass", constExprRoot, want)
 		}
 	}
 	if len(found) < 10 {
-		t.Fatalf("found %d sentinels mentioned in %s, want ≥10: the grammar raises more than "+
-			"that, so a domain this small is the walk failing rather than the file shrinking",
-			len(found), grammarFile)
+		t.Fatalf("found %d sentinels reachable from %s, want ≥10: the grammar raises more than that, "+
+			"so a domain this small is the walk failing", len(found), constExprRoot)
 	}
 	return found
 }
@@ -479,10 +528,16 @@ func grammarSentinels(t *testing.T) map[string][]string {
 // green — omitted from `constExprErrors`, and found by `FuzzConstExprProgress` on `fe 03 30`
 // while `make check` passed. Fourth instance of the class, second one found by the fuzzer.
 //
-// Three relations, and they fail for unrelated reasons:
+// Five relations, and they fail for unrelated reasons:
 //
-//   - **Forwards.** Every sentinel the grammar mentions is in `constExprErrors` or excluded with
-//     a reason. This is the arm that fires on #531's omission.
+//   - **Forwards.** Every sentinel the grammar can reach (`constExprSentinels`) is in
+//     `constExprErrors` or excluded with a reason. This is the arm that fires on #531's omission,
+//     and since #1179 it reaches the grammar's readers outside instr.go, which is where #1120's
+//     sentinel was.
+//   - **Totality (#1179).** Every sentinel in `declaredErrors` is in `constExprErrors` or excluded
+//     with a reason, so a sentinel added in any file arrives with one of the two decisions.
+//   - **Exclusions are checked.** No excluded sentinel is mentioned in a function the grammar can
+//     reach. An exclusion is a negative claim, and this is what makes it more than an assertion.
 //   - **Backwards.** Every name in `constExprErrors` is a sentinel the package declares — a
 //     stale entry is a claim about nobody.
 //   - **Subset.** `constExprErrors ⊆ declaredErrors`, because the narrower claim is a claim
@@ -490,9 +545,17 @@ func grammarSentinels(t *testing.T) map[string][]string {
 //     instruction grammar may return something the decoder may not. Stated as a subset and not
 //     an equality on purpose — an equality would make one list derivable from the other, which
 //     is the tautology `constExprErrors`' own comment declines.
+//
+// NEUTERS, run (2026-10-29, darwin/arm64):
+//   - with `ErrUnimplementedProposal` removed from constExprErrors, the forwards arm fails at
+//     sections.go's `unimplementedProposal`, which decodeRefType calls and the instr.go domain could
+//     not see (#1179's case), and the totality arm fails too;
+//   - with `ErrBadMagic`'s exclusion removed, the totality arm fails;
+//   - with `ErrMalformedRefType` moved from constExprErrors to the exclusions, the exclusion
+//     check fails at its reachable sites.
 func TestEveryInstrGrammarSentinelIsInTheConstExprRegistry(t *testing.T) {
 	domain := packageSentinels(t)
-	grammar := grammarSentinels(t)
+	grammar := constExprSentinels(t)
 	narrow := registryNames(t, "constExprErrors")
 	wide := registryNames(t, "declaredErrors")
 
@@ -508,10 +571,10 @@ func TestEveryInstrGrammarSentinelIsInTheConstExprRegistry(t *testing.T) {
 			"not a bare identifier (this reader skips those) or a name is listed twice",
 			len(narrow), len(constExprErrors))
 	}
-	if len(excludedFromConstExprErrors) < 3 {
-		t.Fatalf("the exclusion set holds %d entries, want ≥3: the three function-body-layer "+
-			"sentinels are all deliberately out, so a shorter set means one was dropped and its "+
-			"sentinel now reads as an unenrolled grammar error", len(excludedFromConstExprErrors))
+	if len(excludedFromConstExprErrors) < 20 {
+		t.Fatalf("the exclusion set holds %d entries, want ≥20: every declared sentinel the grammar "+
+			"cannot reach is here since #1179, so a much shorter set means entries were dropped",
+			len(excludedFromConstExprErrors))
 	}
 
 	for name, sites := range grammar {
@@ -547,15 +610,27 @@ func TestEveryInstrGrammarSentinelIsInTheConstExprRegistry(t *testing.T) {
 				"return, so the narrower registry must be a subset of the wider one", name)
 		}
 	}
+	for name := range wide {
+		if !narrow[name] && excludedFromConstExprErrors[name] == "" {
+			t.Errorf("%s is in declaredErrors and in neither constExprErrors nor "+
+				"excludedFromConstExprErrors (#1179). Enrol it if the constant-expression grammar may "+
+				"return it, or exclude it with the reader that raises it. Undecided, it is the shape "+
+				"#1120's ErrUnimplementedProposal had when the fuzzer found it", name)
+		}
+	}
 	for name, reason := range excludedFromConstExprErrors {
-		if _, ok := grammar[name]; !ok {
-			t.Errorf("the exclusion set names %s (%q), which no function body in instr.go "+
-				"mentions: a stale exclusion is a suppression with no subject, and this one "+
-				"would hide the sentinel's return if the raise came back", name, reason)
+		if sites, ok := grammar[name]; ok {
+			t.Errorf("the exclusion set names %s (%q), but it is mentioned where the grammar can reach "+
+				"it (%s): the exclusion's claim, that the grammar cannot return it, is false. Enrol it "+
+				"in constExprErrors instead", name, reason, strings.Join(sites, " "))
+		}
+		if !wide[name] {
+			t.Errorf("the exclusion set names %s (%q), which declaredErrors does not hold: a stale "+
+				"exclusion is a suppression with no subject", name, reason)
 		}
 	}
 
-	t.Logf("%d sentinels mentioned in the grammar, %d enrolled in constExprErrors, %d excluded "+
-		"here, %d excluded from declaredErrors", len(grammar), len(narrow),
+	t.Logf("%d sentinels reachable from %s, %d enrolled in constExprErrors, %d excluded here, %d "+
+		"excluded from declaredErrors", len(grammar), constExprRoot, len(narrow),
 		len(excludedFromConstExprErrors), len(excludedFromDeclaredErrors))
 }

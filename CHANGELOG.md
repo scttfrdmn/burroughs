@@ -100,6 +100,21 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The constexpr fuzz registry's control reads what the grammar can reach, not one file**
+  ([#1179](https://github.com/scttfrdmn/burroughs/issues/1179), grave #531's shape). It read instr.go's sentinels,
+  so #1120's `ErrUnimplementedProposal`, returned by sections.go's `decodeRefType`, reached `FuzzConstExprProgress`
+  unenrolled. `TestEveryInstrGrammarSentinelIsInTheConstExprRegistry` now holds five relations:
+  - **forwards**, over every sentinel mentioned in a function reachable from `decodeConstExpr`. That is 61
+    functions across the package, over-approximated so the error goes the safe way;
+  - **totality**, so every `declaredErrors` sentinel is enrolled or excluded with its reader. 19 were in neither,
+    and all are now excluded;
+  - **checked exclusions**, so no excluded sentinel is mentioned where the grammar can reach it;
+  - **backwards** and **subset**, which were already there.
+
+  **Neuters, run:**
+  - `ErrUnimplementedProposal` unenrolled fails forwards, at `sections.go`, and totality;
+  - an exclusion removed fails totality;
+  - a reachable sentinel excluded fails the exclusion check.
 - **`Close`'s expiry error says what each still-live thread's callers are doing, and which named case that is**
   ([#1133](https://github.com/scttfrdmn/burroughs/issues/1133), contract §2 T-5.4: *"reported as shutdown's
   error"*). It used to name the live threads and leave the case to the reader. Each thread now reads, from its own
