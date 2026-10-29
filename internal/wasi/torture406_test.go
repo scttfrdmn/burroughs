@@ -195,7 +195,18 @@ func t406Wasm(t *testing.T, name string) []byte {
 	return b
 }
 
+// t406DumpGrace is how long a hung child has, after SIGQUIT, to write its goroutine dump before it is killed.
+const t406DumpGrace = 5 * time.Second
+
+// t406DumpMark opens the Go runtime's SIGQUIT dump on stderr.
+const t406DumpMark = "SIGQUIT: quit"
+
 // t406Run runs one command to completion or to its bound, and reads its observables.
+//
+// A run past its bound is asked for its goroutine stacks before it is killed, where the platform can ask (#1181).
+// With a bare kill, a hang in the engine and a slow run under load left the same record, so the one c1alloc hang
+// seen in `make ci` could not be told from either. The dump is in stderr, for a failure's message. The record is
+// what it was under a bare kill: exit -1, and the first stderr line from before the dump.
 func t406Run(cmd *exec.Cmd, bound time.Duration) (t406Result, error) {
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -209,14 +220,31 @@ func t406Run(cmd *exec.Cmd, bound time.Duration) (t406Result, error) {
 	case <-done:
 	case <-time.After(bound):
 		timedOut = true
-		_ = cmd.Process.Kill()
-		<-done
+		if !t406AskForStacks(cmd.Process) {
+			_ = cmd.Process.Kill()
+			<-done
+			break
+		}
+		select {
+		case <-done:
+		case <-time.After(t406DumpGrace):
+			_ = cmd.Process.Kill()
+			<-done
+		}
 	}
 	exit := cmd.ProcessState.ExitCode()
-	stderr1, _, _ := strings.Cut(errb.String(), "\n")
+	stderr := errb.String()
+	before := stderr
+	if timedOut {
+		exit = -1
+		if i := strings.Index(stderr, t406DumpMark); i >= 0 {
+			before = stderr[:i]
+		}
+	}
+	stderr1, _, _ := strings.Cut(before, "\n")
 	return t406Result{
 		class: t406Classify(exit, timedOut, stderr1), exit: exit, stderr1: stderr1,
-		stdout: out.String(), stderr: errb.String(), gauge: -1,
+		stdout: out.String(), stderr: stderr, gauge: -1,
 	}, nil
 }
 
@@ -225,7 +253,7 @@ func t406RunFork(t *testing.T, c t406Case) t406Result {
 	t.Helper()
 	gauge := filepath.Join(t.TempDir(), "gauge")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestTorture406Helper$", "-test.count=1")
-	cmd.Env = append(os.Environ(), "BURROUGHS_T406_CASE="+c.name, "BURROUGHS_T406_GAUGE="+gauge)
+	cmd.Env = append(os.Environ(), "BURROUGHS_T406_CASE="+c.name, "BURROUGHS_T406_GAUGE="+gauge, "GOTRACEBACK=all")
 	r, err := t406Run(cmd, t406Bound(c))
 	if err != nil {
 		t.Fatalf("%s: starting the helper: %v", c.name, err)
@@ -301,6 +329,10 @@ func TestGoRuntimeTortureSuite(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			want := t406ReadExpect(t, c.name)
 			got := t406RunFork(t, c)
+			if got.class == t406Hung && t406CanAskForStacks && !strings.Contains(got.stderr, t406DumpMark) {
+				t.Errorf("%s hung, and its record carries no goroutine dump: a hang in the engine and a slow run "+
+					"would leave the same record again (#1181)", c.name)
+			}
 			if c.pinned != "" {
 				if got.class != c.pinnedClass && c.reportOnly != "" {
 					t406Report(t, fmt.Sprintf("REPORTED, NOT FAILED (%s): %s departed from its pin, %s not %s "+
@@ -416,7 +448,13 @@ func TestGoRuntimeTortureStress(t *testing.T) {
 			}
 			if d != "" {
 				fails++
-				t.Errorf("%s iteration %d of %d: %s\nstderr:\n%s", c.name, i+1, n, d, t406Head(got.stderr, 200))
+				// A hung run's stderr is its goroutine dump, which runs past 200 lines and is the record's
+				// point (#1181). Hangs are rare enough that printing it whole costs nothing.
+				stderr := t406Head(got.stderr, 200)
+				if got.class == t406Hung {
+					stderr = got.stderr
+				}
+				t.Errorf("%s iteration %d of %d: %s\nstderr:\n%s", c.name, i+1, n, d, stderr)
 			}
 		}
 		t.Logf("%s: %d of %d iterations failed, %v per iteration", c.name, fails, n,
