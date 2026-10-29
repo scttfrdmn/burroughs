@@ -974,6 +974,7 @@ cite:
 	@$(MAKE) --no-print-directory refcite
 	@$(MAKE) --no-print-directory triagecheck
 	@$(MAKE) --no-print-directory limitcheck
+	@$(MAKE) --no-print-directory markercheck
 	@$(MAKE) --no-print-directory ratiocheck
 
 # limitcheck — every issue the newest release block cites under Known limits is still open (the chair's second
@@ -982,6 +983,13 @@ cite:
 # An unreadable tracker is a failure, never a pass.
 limitcheck:
 	@./scripts/limitcheck.py $(LIMITCHECK)
+
+# markercheck — the README's *Written against `vX.Y.Z`* marker names the release being cut (the chair's fifth
+# ruling of 2026-10-28, item 4b, #1170). It checks exactly when limitcheck does, by the same test: during a cut, so a
+# release PR fails until the front door's status has been re-read and its marker moved. MARKERCHECK=--force in the
+# cut procedure.
+markercheck:
+	@./scripts/markercheck.py $(MARKERCHECK)
 
 # ratiocheck — a PR body's quoted ratio equals what `scripts/ratio.sh` prints for the PR's merge base..head
 # (the chair's ruling of 2026-10-17, after a stale substitution file carried #1038's figure into #1039's

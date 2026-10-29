@@ -88,9 +88,9 @@ func ExampleComponent_record() {
 //
 // **The external test package is deliberate.** `burroughs_test` can reach only the exported surface,
 // so an example that compiles here is an example a caller can copy — one written in the internal
-// test package would compile against fields no consumer has. It is also the README's "Use from Go"
-// section: `TestREADMEGoBlocksAreRealCode` holds this body and that fenced block equal, so the
-// documented snippet is this function or the build goes red.
+// test package would compile against fields no consumer has. It was the README's "Use from Go"
+// section until #1170 made the README a front door. The README now quotes [Example_quickstart], and
+// this fuller tour is what the site's Embedding guide covers with its own run examples.
 //
 // The fixture is `examples/add/add.wasm`, committed and derived from the `.wat` beside it — see
 // TestExampleWasmIsDerivedFromItsWat, which is what keeps the binary honest about its own source.
@@ -132,6 +132,27 @@ func Example() {
 	// exports: [add fib div]
 	// add(2, 40) = 42
 	// div(7, 0) trapped: integer divide by zero
+}
+
+// Example_quickstart is the README's Go example (#1170): read a module, instantiate it, call an export.
+// `TestREADMEGoBlocksAreRealCode` holds its body and the README's fenced block equal, so the front door
+// quotes code `go test` runs and whose printed output it asserts. [Example] is the fuller tour.
+func Example_quickstart() {
+	wasm, err := os.ReadFile("examples/add/add.wasm")
+	if err != nil {
+		log.Fatal(err)
+	}
+	in, err := burroughs.Instantiate(wasm)
+	if err != nil {
+		log.Fatal(err)
+	}
+	sum, err := in.Call("add", burroughs.I32(2), burroughs.I32(40))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(sum[0].Int32())
+
+	// Output: 42
 }
 
 // ExampleConfig shows the other half of the decline: `Strict` refuses a module the validator could

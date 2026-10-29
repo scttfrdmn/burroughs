@@ -76,10 +76,11 @@ func byteAt(b []byte, i int) []byte {
 // TestREADMEGoBlocksAreRealCode requires every fenced `go` block in README.md to appear, verbatim
 // modulo indentation, inside a `.go` file this module builds.
 //
-// **A code sample nothing compiles is prose pretending to be tested.** The README's "Use from Go"
-// section is the body of `Example` in example_test.go, whose printed output `go test` asserts; that
-// is what makes the snippet a claim rather than an illustration, and this test is what keeps the two
-// the same text. Editing either one alone goes red.
+// **A code sample nothing compiles is prose pretending to be tested.** The README's "From Go"
+// section is the body of `Example_quickstart` in example_test.go, whose printed output `go test`
+// asserts; that is what makes the snippet a claim rather than an illustration, and this test is what
+// keeps the two the same text. Editing either one alone goes red. (It was "Use from Go" and the fuller
+// `Example` until #1170 made the README a front door.)
 //
 // Scoped to the *space* rather than to today's single block: any `go` block added to the README later
 // is checked by the same walk, without anyone remembering to come here. Whitespace is normalized per
@@ -94,18 +95,23 @@ func TestREADMEGoBlocksAreRealCode(t *testing.T) {
 	blocks := fencedBlocks(string(readme), "go")
 	if len(blocks) == 0 {
 		t.Fatal("README.md holds no fenced `go` block, so this test checked nothing; either the " +
-			"\"Use from Go\" section was removed or its fence's language tag was")
+			"\"From Go\" section was removed or its fence's language tag was")
 	}
 	// The anchor: the README claims to document the Go surface with a snippet substantial enough to
 	// copy, and a one-liner would satisfy the substring check below trivially. This is that claim,
 	// asserted — it is the difference between "some go block exists" and "the section is there".
+	//
+	// **10 lines, from 15, since #1170.** The chair's fifth ruling of 2026-10-28, item 4, made the README
+	// a front door with "a ~10-line Go example", and the fuller tour moved to the site. The floor was
+	// encoding the earlier "copyable example" choice, so it moves with the ruling, and it still refuses a
+	// block too short to be an example.
 	longest := 0
 	for _, b := range blocks {
 		longest = max(longest, len(strings.Split(strings.TrimSpace(b), "\n")))
 	}
-	if longest < 15 {
-		t.Errorf("the longest `go` block in README.md is %d lines; the \"Use from Go\" section is "+
-			"supposed to carry a copyable example, and a short block passes the check below by "+
+	if longest < 10 {
+		t.Errorf("the longest `go` block in README.md is %d lines; the front door is supposed to "+
+			"carry a runnable example of about 10 lines, and a short block passes the check below by "+
 			"saying nothing", longest)
 	}
 
@@ -143,8 +149,8 @@ func TestREADMEGoBlocksAreRealCode(t *testing.T) {
 // # Scoped to the space, not to today's block
 //
 // Any `go` block added to `CHANGELOG.md` later is checked by the same walk, with no one remembering to
-// come back here. Deliberately **no length anchor**, unlike the README's: that file promises a copyable
-// "Use from Go" section and a one-liner would satisfy it vacuously, whereas a changelog may legitimately
+// come back here. Deliberately **no length anchor**, unlike the README's: that file promises a runnable
+// "From Go" example and a one-liner would satisfy it vacuously, whereas a changelog may legitimately
 // quote three lines to show one call. What is asserted here is only that whatever it quotes is real.
 func TestCHANGELOGGoBlocksAreRealCode(t *testing.T) {
 	changelog, err := os.ReadFile("CHANGELOG.md")
