@@ -115,6 +115,10 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **`TestAnEntryWaitsForTheExecutionSlot` starts its clock before the slot's releaser.** It started after the
+  releaser's 300ms sleep had begun, so an entry that waited could measure 297.9ms and fail, as it did on PR #1177's
+  `build (ubuntu-24.04-arm)`. Now the release cannot land before `start + held`, so the bound holds by construction.
+  **Neuter, run:** with the slot left unoccupied, the entry completes in about 0.26ms and the test fails.
 - **#406's c1stw pin no longer fails a required job on a host where its divergence is not stable**
   ([#1172](https://github.com/scttfrdmn/burroughs/issues/1172)). The case is pinned as hung by #1064's limit, and
   it completed twice on CI's `build (macos-15)` (PR #1171's head) while every other run hangs. Its departure is now
