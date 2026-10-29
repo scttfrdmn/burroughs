@@ -100,6 +100,24 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`Close`'s expiry error says what each still-live thread's callers are doing, and which named case that is**
+  ([#1133](https://github.com/scttfrdmn/burroughs/issues/1133), contract §2 T-5.4: *"reported as shutdown's
+  error"*). It used to name the live threads and leave the case to the reader. Each thread now reads, from its own
+  marks under `world.mu`:
+  - **suspended** in a host call or a wait. The error names that as `Close`'s case 1 (a host function ignoring
+    its cancelled context) or case 2 (`Close` called from inside one), since the engine's own wait leaves on
+    cancellation;
+  - **executing**, which is neither case;
+  - **parked**.
+
+  It still makes no claim that a case was un-endable, and `ErrCloseDeadline`'s identity is unchanged.
+  **Witnesses:**
+  - `TestCloseReportsAnInstanceItCouldNotQuiesce` asserts a wedged host call reads as suspended, on the real path;
+  - `TestCloseStateTellsSuspendedFromExecutingCallers` covers every mix over the marks.
+
+  The executing arm has no real-path witness, because a draft's non-polling stretch (straight-line 4MiB
+  `memory.fill`s) polls since ADR 0104. `closeQuiesceInterval`'s comment, which still cited it, is corrected.
+  **Neuter, run:** with executing callers counted as suspended, the executing rows fail.
 - **#946's own test waits `postResumeBound` after Resume and dumps its goroutines at the bound**
   ([#946](https://github.com/scttfrdmn/burroughs/issues/946)). #1113 set the 60s bound from measurement, with a
   dump, for two Stop/Resume tests, and left the file's other 30s waits alone because none had a recorded timeout.
