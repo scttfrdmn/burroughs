@@ -139,3 +139,29 @@ reach is a law out of context.
   accepted ADR that commissions a control is the nearest prior payment there is, and
   re-deriving the control from its title re-earns the grave the ADR was written to
   prevent. Both pairings are asserted now. (Ruling: Scott, on the PR #281 relay.)
+
+### A new law needs two recorded occurrences, and the laws that have not fired are listed at each cut.
+
+- **A new law needs two recorded occurrences of the failure it prevents, each cited.** A single occurrence
+  earns a fix and an issue comment that records the lesson: in the closing comment if the issue is a grave,
+  otherwise on the issue the fix closed. That comment is what a second occurrence cites when it comes, so a
+  lesson is not lost by waiting for its second instance. It just stops being minted into the corpus on its
+  first. This is the one law about adding laws, and it binds every law written after it. It does not reach
+  back: the laws already here stand until they are retired, which is what the list below is for.
+- **At each release cut, every law and hook route that has not fired since the previous release is listed**,
+  and the list is posted on the release issue for Scott to retire any. `scripts/unfired.py <previous-tag>`
+  produces it. A law fired when it was cited in the window, by its anchor or by its title quoted. A route
+  fired when the hook's refusal log has an entry for it. Both definitions undercount, so the list is an upper
+  bound on what is unused, which is the safe direction for a list that proposes retirements. The log is
+  machine-local, so the routes half is about the cutting machine's sessions. The step is in
+  [the cut procedure](operations.md#cutting-a-release).
+- **Why.** Until this law, one defect was enough to mint a law, and a law costs every later reader. It is
+  read when
+  its subject is in play, and it is a constraint on every PR that touches it, whether or not the failure it
+  names ever recurs. A failure seen once may be a property of one site. Seen twice, it is a shape, and a shape
+  is what a law is for ([lessons are indexed by
+  shape](#lessons-are-indexed-by-shape-not-by-file-so-the-sweep-runs-backwards-too)). The retirement list
+  prices the other end: a law nobody cites or applies is overhead, and until now nothing ever proposed taking
+  one away. (Ruling: the chair, the fifth ruling of 2026-10-28, item 6, on an external review of e5a37a7 and
+  of the site at v0.11.0. Decided unless Scott objects, and recorded by the actor it was given to, so commits
+  resting on it are `Ratio-Class: carried`.)

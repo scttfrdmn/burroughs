@@ -43,6 +43,17 @@ says what it now requires and what it gives up.
     guest runs out of memory at about 4 MiB in use. Unix reserves address space instead (ADR 0076). Windows is
     unsupported, and v0.12.0's threads claim names linux and darwin only.
   - Nothing in the fork's runtime is read.
+- **The one law about adding laws**
+  ([graves-and-sweeps.md](docs/laws/graves-and-sweeps.md#a-new-law-needs-two-recorded-occurrences-and-the-laws-that-have-not-fired-are-listed-at-each-cut)),
+  from the chair's fifth ruling of 2026-10-28, item 6, decided unless Scott objects.
+  - A new law needs two recorded occurrences of the failure it prevents, each cited. A single occurrence earns a
+    fix and an issue comment.
+  - At each cut, the laws and hook routes that have not fired since the previous release are listed and posted on
+    the release issue for Scott to retire any. `scripts/unfired.py <previous-tag>` produces the list, and it is step
+    7 of the cut procedure. A law fired when it was cited by its anchor or its quoted title; a route fired when the
+    refusal log has an entry for it. Both undercount, so the list is an upper bound on what is unused.
+  - **The control:** `TestUnfiredListsWhatWasNotCitedAndOmitsWhatWas`, offline over fixed evidence. **Neuter,
+    run:** with `fired` returning False, the cited laws are listed and the test fails.
 
 ### Changed
 
