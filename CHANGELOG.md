@@ -88,6 +88,15 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A hung #406 torture run keeps its goroutine stacks**
+  ([#1181](https://github.com/scttfrdmn/burroughs/issues/1181)). On unix, a run past its bound gets SIGQUIT and a
+  five-second grace before the kill, so the failure's stderr carries the engine's goroutine dump. Before, a bare
+  SIGKILL left a hang in the engine and a slow run under load with the same record, and the one `c1alloc` hang seen in
+  `make ci` could not be told from either. The record is unchanged: exit -1, and the first stderr line from before
+  the dump. The stress prints a hung iteration's stderr whole, not its first 200 lines. Windows has no such signal
+  and kills bare, as before. **Witness:** every hung case must carry the dump,
+  so `ctlhung` and c1stw's pinned hang check it on every run. **Neuter, run:** with the signal not sent, both fail
+  on the missing dump.
 - **The README is a front door** ([#1170](https://github.com/scttfrdmn/burroughs/issues/1170), the chair's fifth
   ruling of 2026-10-28, item 4). It carries the wordmark and thesis, install, a four-stanza quickstart, a Go example,
   what is different, the status, the exit-code table and links. It went from 384 lines to about 115.
