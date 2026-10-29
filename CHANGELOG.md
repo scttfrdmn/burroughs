@@ -99,6 +99,10 @@ says what it now requires and what it gives up.
   - #1172 says what ends the suppression: an observable that discriminates, or #1064's resolution.
   - **On the fork, collections also wait for goroutines parked in `time.Sleep`.** This was found in the same
     variants and is recorded on #406. It is not #1064's subject.
+  - **The departure reaches the CI run's job summary**, so it is not only logged. The first version used `t.Logf`
+    alone, and CI's `go test ./...` without `-v` prints nothing from a passing package, so it reached nobody. It
+    now also appends to `$GITHUB_STEP_SUMMARY`. **Witness:** `TestAReportOnlyDepartureReachesTheJobSummary`.
+    **Neuter, run:** with the summary write removed, the file stays empty.
 
 - **An unaligned typed access no longer races a neighbouring byte on the host**
   ([#982](https://github.com/scttfrdmn/burroughs/issues/982), [ADR 0111](docs/decisions/0111-an-unaligned-typed-access-touches-its-containing-words-atomically-because-a-host-race-between-disjoint-guest-bytes-is-not-the-guests.md)).
