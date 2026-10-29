@@ -347,6 +347,8 @@ The procedure `v0.8.0` and `v0.9.0` were cut by, written down because it lived i
    - Read every `note` line it prints. A merged PR naming a limit in its title is how #830's fix went unnoticed:
      `v0.8.0` and `v0.9.0` listed #830 as open after #832 had fixed it in `v0.7.0`. The issue was still open, so
      only the note would have caught it.
+   - **`make markercheck MARKERCHECK=--force` on the same tree**: the README's status must say it is written against
+     the release being cut (see step 6's last bullet).
 3. **Post the block** on the release issue, with the principal's authorisation recorded there.
 4. **Merge through route 8. Then re-check on the merge SHA:**
    - `make ci`;
@@ -363,6 +365,11 @@ The procedure `v0.8.0` and `v0.9.0` were cut by, written down because it lived i
      read the run's verdict.
    - Re-check the site's fact pass (#1146) against the new tag. A page that states what the previous release did
      or did not do is the foreclosing-words shape on a public surface.
+   - **The README's status is the same shape on this repository's own front door** (the chair's fifth ruling of
+     2026-10-28, item 4b, #1170). Re-read its status section against the tree in the release PR, and move its
+     *Written against `vX.Y.Z`* marker to the release being cut. `make markercheck MARKERCHECK=--force` (step 2)
+     fails until it names that release, and `make ci` runs it too while a cut is in progress, so the release PR
+     cannot merge with a front door describing the release before.
 7. **List what has not fired, and post it on the release issue** (the chair's fifth ruling of 2026-10-28, item 6).
    Run `scripts/unfired.py <previous-tag>` from the main checkout, where the refusal log is, and post its output
    for Scott to retire any law or route on it. What "fired" means, and why the list is an upper bound, is in

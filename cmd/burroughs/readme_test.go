@@ -16,7 +16,7 @@ import (
 	"testing"
 )
 
-// TestREADMETranscriptIsExecutable runs the README's own "Try it" transcript through the CLI and
+// TestREADMETranscriptIsExecutable runs the README's own "Quickstart" transcript through the CLI and
 // compares what it printed, and what it exited with, to what the file says.
 //
 // **A transcript is a claim about behaviour, so it gets the treatment every other claim here gets.**
@@ -53,7 +53,7 @@ func TestREADMETranscriptIsExecutable(t *testing.T) {
 	// transcript with no failing command would document only the happy path while claiming to
 	// document the exit taxonomy the section beneath it tabulates.
 	if len(stanzas) < 4 {
-		t.Fatalf("found %d executable stanzas in README.md; the \"Try it\" section is supposed to "+
+		t.Fatalf("found %d executable stanzas in README.md; the \"Quickstart\" section is supposed to "+
 			"be a transcript, and this test agrees with anything when there is nothing to run",
 			len(stanzas))
 	}

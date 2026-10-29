@@ -51,10 +51,17 @@ reach is a law out of context.
     statement about where Burroughs stands at one moment, not a rule for reading boards, and
     a law page is the wrong home for it because reaching it requires already knowing the law
     exists and thinking to apply it. It is stated where the closure set is defined instead —
-    the five-verdict list in [`README.md`](../../README.md#conformance), beside the column
-    it is about and beside the `unimplemented` bullet that names the other v0 closure
-    condition. (Ruling: Scott, PR #460, correcting a first attempt that filed the position
-    statement here and in the ceiling's ledger only.)
+    the five-verdict list, beside the column it is about and beside the `unimplemented` bullet
+    that names the other v0 closure condition. (Ruling: Scott, PR #460, correcting a first
+    attempt that filed the position statement here and in the ceiling's ledger only.)
+
+    **That list left the README in #1170**, when the chair's fifth ruling of 2026-10-28
+    (item 4) made the README a front door and moved its Conformance section to the site's
+    [Working on Burroughs](https://burroughs.run/docs/working-on-burroughs/) page. The position
+    statement went with it, as *"a zero here is a fact about the harness's vocabulary, not an
+    engine milestone."* The site is outside every control in this tree, so the in-repo home is
+    the account beside `unsupportedCeiling` in `internal/spec/spec_test.go`, which the old
+    README already named as where the class is restated each time that bound moves.
   - **The consequence for reporting is that the column's own comment carries the
     classification, not just the count.** A ledger entry that records `14 → 11` and the
     mechanism is still readable, two years on, as three capabilities landing. The reader who

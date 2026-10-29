@@ -26,6 +26,14 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **`scripts/markercheck.py`, the README's version marker checked at the cut**
+  ([#1170](https://github.com/scttfrdmn/burroughs/issues/1170), item 4b). The README's status says
+  *Written against `vX.Y.Z`*, and during a cut the marker must name the release being cut. It runs in `make cite`
+  (so in `make ci`), in CI's citations job, and in the cut procedure with `MARKERCHECK=--force`, and it checks
+  exactly when `limitcheck` does, by the same test. So a release PR fails until the front door's status is
+  re-read. **Witness:** `TestMarkerCheckRefusesAStatusWrittenAgainstAnOlderRelease`. **Neuter, run:** with the
+  comparison removed, the stale row passes.
+
 - **#406's Go-runtime torture suite, black-box**
   ([#406](https://github.com/scttfrdmn/burroughs/issues/406)). There are eight guests, each built with the Phase 4
   fork and committed under `internal/wasi/testdata/torture406/`. Each runs through `Run`, the function behind
@@ -57,6 +65,18 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The README is a front door** ([#1170](https://github.com/scttfrdmn/burroughs/issues/1170), the chair's fifth
+  ruling of 2026-10-28, item 4). It carries the wordmark and thesis, install, a four-stanza quickstart, a Go example,
+  what is different, the status, the exit-code table and links. It went from 384 lines to about 115.
+  - **The rest moved to burroughs.run first**, with its fact pass on #1146. The contributor material is on the new
+    *Working on Burroughs* page; the value spellings and exit-code notes were already in the CLI reference, and the
+    fuller Go tour in the Embedding guide.
+  - **Every executed example is kept.** The transcript is still run by `TestREADMETranscriptIsExecutable`, at
+    four stanzas, one exiting 4. The Go block is the new `Example_quickstart`, whose output `go test` asserts.
+    `TestREADMEGoBlocksAreRealCode`'s length floor moves from 15 lines to 10 with the ruling.
+  - **The exit-code table stays**, because `TestREADMEDocumentsEveryExitCode` holds it to `run.go` and no control
+    here can read the site.
+  - `boards-and-buckets.md`'s pointer to the README's five-verdict list is re-pointed, with the move recorded.
 - **The README's Windows paragraph says what runs there.** It read *"Windows is compiled, not tested … no test ever
   runs there"*, which the non-gating Windows lane falsified. It now says Windows is measured and unsupported, that
   the lane runs the suite to expose portability gaps, and that its failures don't block main once each is mapped in
