@@ -1114,11 +1114,12 @@ func hostTypeMatches(want, got binary.FuncType) bool {
 // is a later decision if an embedder asks for one; the two cases the bound exists for are named on `Close`
 // and neither is made better by being waited on longer.
 //
-// **Generous on purpose, for the reason the expiry error does not claim un-endability.** A non-polling
-// guest tail is measurable on this engine — 40 `memory.fill`s of 4MiB run for the better part of a second
-// with no back-edge and no call, so no poll — and slow is not distinguishable from impossible from out
-// here. The interval is set well above any such stretch a real module has, so that an expiry means
-// *something is not cooperating* rather than *something was busy*.
+// **Generous on purpose, for the reason the expiry error does not claim un-endability**: slow is not
+// distinguishable from impossible from out here. The interval is set well above any stretch a real module runs
+// between two polls, so that an expiry means *something is not cooperating* rather than *something was busy*.
+// This paragraph used to give 40 straight-line `memory.fill`s of 4MiB as a stretch with no poll. ADR 0104
+// overtook that: the fills now poll per `bulkChunk`, and #1133's first witness found it, when `Close` fell
+// quiet at once inside such a run.
 //
 // **A `var` and not a `const`, and the reason is that the alternative is an untested arm.** The only way to
 // witness the expiry on the real path is to reach it, and at ten seconds that is a test whose cost is the
@@ -1208,8 +1209,10 @@ func (in *Instance) ExecutingAgents() int {
 //     which Go does not offer, so it is nameable but **not distinguishable** from a sibling thread's host
 //     call that is about to return.
 //
-// **The expiry error does not claim the case was un-endable**, and names the threads still live instead of
-// a reason. See `closeQuiesceInterval` for why: from out here, slow and impossible look the same.
+// **The expiry error does not claim the case was un-endable.** It names the threads still live and, for each,
+// what its callers are doing: suspended (a host call or a wait, which after cancellation is case 1 or 2) or
+// executing (neither case). That is what the marks can say (#1133, `unquiesced`), and no more. See
+// `closeQuiesceInterval` for why it stops there: from out here, slow and impossible look the same.
 //
 // # Idempotence, and what is dropped
 //
@@ -1296,18 +1299,60 @@ func (in *Instance) Close() error {
 // clearing it here would be a write racing them for no benefit. An embedder holding an expired `Close` has
 // a live instance it could not tear down, and a `Join` is one of the few things left that can tell it
 // anything.
+//
+// # Which case, where the marks can say (#1133)
+//
+// T-5.4 wants a case that cannot be ended reported as shutdown's error. The error used to name the live threads
+// and leave the case to the reader. Each thread's own marks tell its callers apart, read under `w.mu`, where
+// every one of them is guarded:
+//   - **suspended** (`blocked`): in a host call, or in `memory.atomic.wait`. After cancellation that is
+//     `Close`'s case 1, or case 2 if `Close` was called from inside it, because the engine's own wait leaves on
+//     cancellation. The mark names no reason by design (grave #645), so the error says "a host call or a wait"
+//     and gives the reason a wait is unlikely. It does not pretend to know which.
+//   - **executing** (`callers - blocked - parked`): guest code, or the canon adapter's own copying between its
+//     polls (`callAdapter` takes no blocked mark outside `CanonCaller.Blocking`). It has not reached a
+//     safepoint since `exitReq` was set. That is neither named case. It is a stretch with no poll, and slow can
+//     explain it.
+//
+// Why not split suspended callers by `hostCalls`: both host-call paths (`callHost`, `callAdapter`) count in
+// `hostCalls`, but only `callHost` and an adapter inside `Blocking` hold a blocked mark. So `blocked -
+// hostCalls` is not a count of waits. The world's `hostCalls` is still reported, as a figure in its own right.
 func (in *Instance) unquiesced() error {
 	w := &in.world
 
 	w.mu.Lock()
 	names := make([]string, 0, len(w.live))
 	for _, t := range w.live {
-		names = append(names, t.String())
+		names = append(names, fmt.Sprintf("%s (%s)", t, t.closeStateLocked()))
 	}
 	hostCalls := w.hostCalls
 	w.mu.Unlock()
 
-	return fmt.Errorf("%w: %s elapsed with %s still live and %d host call(s) in flight (contract §2 "+
-		"T-5.4; see Instance.Close for the two cases that cannot be ended)",
-		ErrCloseDeadline, closeQuiesceInterval, strings.Join(names, ", "), hostCalls)
+	return fmt.Errorf("%w: %s elapsed with %d thread(s) still live: %s; %d host call(s) in flight. A suspended "+
+		"caller is Close's case 1, a host function ignoring its cancelled context, or case 2, Close called from "+
+		"inside one of this instance's host functions; the engine's own memory.atomic.wait leaves on "+
+		"cancellation. An executing caller (guest code, or the canon adapter between its polls) is neither: it has "+
+		"not yet reached a safepoint, and slow "+
+		"is not told apart from impossible (contract §2 T-5.4; Instance.Close names both cases)",
+		ErrCloseDeadline, closeQuiesceInterval, len(names), strings.Join(names, "; "), hostCalls)
+}
+
+// closeStateLocked describes this thread's callers for `unquiesced`, from the marks `world.mu` guards. `mu`
+// held.
+func (t *thread) closeStateLocked() string {
+	executing := t.callers - t.blocked - t.parked
+	var parts []string
+	if t.blocked > 0 {
+		parts = append(parts, fmt.Sprintf("%d suspended in a host call or a wait", t.blocked))
+	}
+	if executing > 0 {
+		parts = append(parts, fmt.Sprintf("%d executing", executing))
+	}
+	if t.parked > 0 {
+		parts = append(parts, fmt.Sprintf("%d parked at a safepoint", t.parked))
+	}
+	if len(parts) == 0 {
+		return "no caller in it"
+	}
+	return fmt.Sprintf("%d caller(s): %s", t.callers, strings.Join(parts, ", "))
 }

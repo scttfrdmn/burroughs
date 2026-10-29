@@ -641,9 +641,10 @@ func TestAClosedInstanceInvokesNothing(t *testing.T) {
 // for being a `var`: at ten seconds the only test that can witness this arm costs the bound, and the
 // alternative — calling `in.unquiesced()` directly — proves the message renders while nothing reaches it.
 //
-// The expiry error deliberately does **not** claim the case was un-endable, and the assertion mirrors that:
-// it reads `ErrCloseDeadline` and the still-live thread's name, not a diagnosis. From out here, slow and
-// impossible look the same.
+// The expiry error deliberately does **not** claim the case was un-endable, and the assertion mirrors that.
+// It reads `ErrCloseDeadline`, the still-live thread's name, and what that thread's caller is doing: suspended
+// in a host call or a wait, which the error names as case 1 or 2 (#1133). From out here, slow and impossible
+// look the same. TestCloseStateTellsSuspendedFromExecutingCallers covers the other arms, over the marks.
 func TestCloseReportsAnInstanceItCouldNotQuiesce(t *testing.T) {
 	withCloseInterval(t, 50*time.Millisecond)
 
@@ -681,6 +682,42 @@ func TestCloseReportsAnInstanceItCouldNotQuiesce(t *testing.T) {
 		t.Errorf("the expiry error %q does not name the thread that is still live (%s) — the error "+
 			"reports which threads did not end, because from outside the engine slow and impossible "+
 			"are the same observation", err, &in.host)
+	}
+	t.Logf("the expiry error: %v", err)
+	if want := in.host.String() + " (1 caller(s): 1 suspended in a host call or a wait)"; !errorMentions(err, want) {
+		t.Errorf("the expiry error %q does not say the live thread's caller is suspended (%q). Its caller is "+
+			"inside the wedged host function, which is the case 1 the error names, and T-5.4 asks the case to "+
+			"be reported rather than left to the reader (#1133)", err, want)
+	}
+}
+
+// TestCloseStateTellsSuspendedFromExecutingCallers is #1133's description of a live thread, over the marks
+// themselves, for every mix of callers a thread can hold.
+//
+// **Over the marks, not the path, and the reason is a finding.** The suspended arm is witnessed on the real path
+// by TestCloseReportsAnInstanceItCouldNotQuiesce. The executing arm needs a caller still executing at the
+// deadline. A first draft used 400 straight-line `memory.fill`s of 4MiB, the stretch `closeQuiesceInterval`
+// named as non-polling, and `Close` fell quiet at once, because since ADR 0104 the fills poll per `bulkChunk`.
+// So this is the helper-level test. It can test the rendering, not reachability, and it says so.
+//
+// NEUTER, run (2026-10-29, darwin/arm64): with `closeStateLocked` counting executing callers as suspended, the
+// executing rows fail.
+func TestCloseStateTellsSuspendedFromExecutingCallers(t *testing.T) {
+	for _, c := range []struct {
+		callers, blocked, parked int
+		want                     string
+	}{
+		{0, 0, 0, "no caller in it"},
+		{1, 1, 0, "1 caller(s): 1 suspended in a host call or a wait"},
+		{1, 0, 0, "1 caller(s): 1 executing"},
+		{1, 0, 1, "1 caller(s): 1 parked at a safepoint"},
+		{2, 1, 0, "2 caller(s): 1 suspended in a host call or a wait, 1 executing"},
+		{3, 1, 1, "3 caller(s): 1 suspended in a host call or a wait, 1 executing, 1 parked at a safepoint"},
+	} {
+		th := &thread{callers: c.callers, blocked: c.blocked, parked: c.parked}
+		if got := th.closeStateLocked(); got != c.want {
+			t.Errorf("callers %d, blocked %d, parked %d: %q, want %q", c.callers, c.blocked, c.parked, got, c.want)
+		}
 	}
 }
 
