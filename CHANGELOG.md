@@ -129,6 +129,9 @@ says what it now requires and what it gives up.
     refusal and `ErrUnsupported` at all three component doors. **Neuter, run:** with the decoder arm removed, they
     fail on *"malformed reference type: 0x65"*.
   - The binary package's partition control counts 0x65 as its own class: 1 unimplemented, 112 malformed.
+  - **The fuzzer found a path the first version missed**, on this PR's own CI. A block type in a constant expression
+    reaches the 0x65 arm (input `02 65`), and the sentinel was not in the constexpr target's registry: grave #531's
+    shape again. It is enrolled, and the crasher is committed under `testdata/fuzz/FuzzConstExprProgress/`.
 - **`TestAnEntryWaitsForTheExecutionSlot` starts its clock before the slot's releaser.** It started after the
   releaser's 300ms sleep had begun, so an entry that waited could measure 297.9ms and fail, as it did on PR #1177's
   `build (ubuntu-24.04-arm)`. Now the release cannot land before `start + held`, so the bound holds by construction.
