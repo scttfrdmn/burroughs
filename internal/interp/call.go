@@ -548,7 +548,7 @@ func funcRefTarget(r ref, site string) (funcTarget, error) {
 		// rather than a panic, per grave 0003: this asserts a property of a *sibling function*, and
 		// a future arm could falsify it silently.
 		return funcTarget{}, fmt.Errorf("%w: %s resolves to function %d of a supplier that does not define it",
-			ErrNotValidated, site, ext.fnIdx)
+			ErrEngineInvariant, site, ext.fnIdx)
 	}
 	return funcTarget{inst: target, fn: fn}, nil
 }

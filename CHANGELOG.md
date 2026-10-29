@@ -81,6 +81,20 @@ says what it now requires and what it gives up.
     experimental apparatus (the chair's addendum of 2026-10-29, item 4). The fork is named and not linked. The old
     phase paragraph, whose *"the §4 litmus battery … is outstanding and unscheduled"* contradicted the README's
     own *"19 of 19"*, is gone with the rest of that section (item 1).
+- **Eleven engine-wiring checks name the engine, not the module**
+  ([#1134](https://github.com/scttfrdmn/burroughs/issues/1134), class B of its census). They returned
+  `ErrNotValidated` (*"module reached the interpreter unvalidated"*), which sends an embedder to audit a module
+  with nothing wrong in it. They now return `ErrEngineInvariant`, ADR 0077's sentinel for exactly this category.
+  - **The sites:** the three boundary accessors given no memory; a host call or an adapter call on a thread no
+    world admitted; a host function's or a canon lower's bound memory being nil; `atomic.fence` reaching the
+    memarg path, and an atomic kind with no arm; a re-export resolving to a non-definer; and an element segment
+    whose element type the decoder cannot emit.
+  - Both sentinels pass through `publicError` unchanged, so only the text an embedder reads changes.
+    `ErrNotValidated`'s doc promise, that every remaining site is one a validator can retire, is now true of the
+    sites left. Classes A, C and D wait on the chair's answer on #1134.
+  - **Witness:** `TestEngineWiringChecksNameTheEngineNotTheModule` for the three accessors, and
+    `TestElemSegmentWithANumericElementTypeIsRefused` (moved to the new sentinel) for the segment. **Neuter, run:**
+    one site put back to `ErrNotValidated` fails both of its row's assertions.
 - **The README's Windows paragraph says what runs there.** It read *"Windows is compiled, not tested … no test ever
   runs there"*, which the non-gating Windows lane falsified. It now says Windows is measured and unsupported, that
   the lane runs the suite to expose portability gaps, and that its failures don't block main once each is mapped in

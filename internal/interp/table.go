@@ -878,7 +878,7 @@ func (in *Instance) segmentRefs(seg *binary.ElemSegment) ([]ref, error) {
 	// Unreachable through the decoder today; scoped to the space, not to the sample.
 	if !seg.ElemType.IsRef() {
 		return nil, fmt.Errorf("%w: an element segment declares element type %s, which is not a "+
-			"reference type", ErrNotValidated, seg.ElemType)
+			"reference type", ErrEngineInvariant, seg.ElemType)
 	}
 	rs := make([]ref, len(seg.Exprs))
 	for i := range seg.Exprs {

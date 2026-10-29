@@ -290,7 +290,7 @@ func checkRangeUnderGrowthLock(mem *memory, offset, n uint64) error {
 // `mem` names without copying it, for a list's framing (ADR 0103).
 func CheckBoundaryRange(mem *Extern, offset, n uint64) error {
 	if mem == nil || mem.mem == nil {
-		return fmt.Errorf("%w: a boundary range check names no memory", ErrNotValidated)
+		return fmt.Errorf("%w: a boundary range check names no memory", ErrEngineInvariant)
 	}
 	return checkRangeUnderGrowthLock(mem.mem, offset, n)
 }
@@ -336,7 +336,7 @@ func writeUnderGrowthLock(mem *memory, offset uint64, buf []byte) error {
 // written. The allocation that makes the offset legal is a separate, ordinary guest call.
 func WriteBoundaryMemory(mem *Extern, offset uint64, buf []byte) error {
 	if mem == nil || mem.mem == nil {
-		return fmt.Errorf("%w: a boundary write names no memory", ErrNotValidated)
+		return fmt.Errorf("%w: a boundary write names no memory", ErrEngineInvariant)
 	}
 	return writeUnderGrowthLock(mem.mem, offset, buf)
 }
@@ -349,7 +349,7 @@ func WriteBoundaryMemory(mem *Extern, offset uint64, buf []byte) error {
 // read returns the guest's own trap.
 func ReadBoundaryMemory(mem *Extern, offset, n uint64) ([]byte, error) {
 	if mem == nil || mem.mem == nil {
-		return nil, fmt.Errorf("%w: a boundary read names no memory", ErrNotValidated)
+		return nil, fmt.Errorf("%w: a boundary read names no memory", ErrEngineInvariant)
 	}
 	return readUnderGrowthLock(mem.mem, offset, n)
 }
@@ -570,8 +570,7 @@ func (in *Instance) callHost(h *hostFunc, st *stack) error {
 		// `admit`ted, and `addLocked` is the one place membership is established — and reported rather
 		// than dereferenced, per grave 0003's rule for an invariant a caller could break later. A panic
 		// here would name the crash site instead of the invariant.
-		return fmt.Errorf("%w: a host call on a thread no world admitted (engine invariant, "+
-			"world.addLocked)", ErrNotValidated)
+		return fmt.Errorf("%w: a host call on a thread no world admitted (world.addLocked)", ErrEngineInvariant)
 	}
 	if err := w.beginHostCall(); err != nil {
 		return err
@@ -610,7 +609,7 @@ func (in *Instance) callHost(h *hostFunc, st *stack) error {
 		if h.mem.mem != nil {
 			mem, memErr = h.mem.mem, nil
 		} else {
-			mem, memErr = nil, fmt.Errorf("%w: a memory-bound host function's bound memory is nil", ErrNotValidated)
+			mem, memErr = nil, fmt.Errorf("%w: a memory-bound host function's bound memory is nil", ErrEngineInvariant)
 		}
 	}
 	c := &Caller{ctx: t.context(), tid: t.threadID(), mem: mem, memErr: memErr}
@@ -679,8 +678,7 @@ func (in *Instance) callAdapter(h *hostFunc, st *stack, depth int) error {
 	t := st.t
 	w := t.world()
 	if w == nil {
-		return fmt.Errorf("%w: an adapter call on a thread no world admitted (engine invariant, "+
-			"world.addLocked)", ErrNotValidated)
+		return fmt.Errorf("%w: an adapter call on a thread no world admitted (world.addLocked)", ErrEngineInvariant)
 	}
 	if err := w.beginHostCall(); err != nil {
 		return err
@@ -697,7 +695,7 @@ func (in *Instance) callAdapter(h *hostFunc, st *stack, depth int) error {
 		if h.mem.mem != nil {
 			mem, memErr = h.mem.mem, nil
 		} else {
-			mem, memErr = nil, fmt.Errorf("%w: a canon lower's bound memory is nil", ErrNotValidated)
+			mem, memErr = nil, fmt.Errorf("%w: a canon lower's bound memory is nil", ErrEngineInvariant)
 		}
 	}
 	cc := newCanonCaller(t.context(), t.threadID(), mem, memErr, h.realloc, t, st, depth)

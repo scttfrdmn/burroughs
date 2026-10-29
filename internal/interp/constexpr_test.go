@@ -231,8 +231,12 @@ func TestElemSegmentWithANumericElementTypeIsRefused(t *testing.T) {
 		t.Fatalf("an element segment typed i32 was accepted, yielding %+v — a reference that is "+
 			"neither null nor valid, written into a table for call_indirect to dereference", got)
 	}
-	if !errors.Is(err, ErrNotValidated) {
-		t.Fatalf("got %v, want ErrNotValidated for an element segment typed i32", err)
+	// ErrEngineInvariant, not ErrNotValidated, since #1134's class B refile. No decoded module can carry
+	// this (the paragraph above), so reaching it is a fact about the engine's representation and not a
+	// module the validator missed. This asserted ErrNotValidated until then, because ADR 0077's sentinel
+	// did not exist when the guard was written.
+	if !errors.Is(err, ErrEngineInvariant) {
+		t.Fatalf("got %v, want ErrEngineInvariant for an element segment typed i32", err)
 	}
 	if msg := err.Error(); !strings.Contains(msg, "i32") {
 		t.Errorf("message is %q, want it to name the offending type", msg)
