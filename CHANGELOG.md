@@ -65,6 +65,17 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **#406's c1stw pin no longer fails a required job on a host where its divergence is not stable**
+  ([#1172](https://github.com/scttfrdmn/burroughs/issues/1172)). The case is pinned as hung by #1064's limit, and
+  it completed twice on CI's `build (macos-15)` (PR #1171's head) while every other run hangs. Its departure is now
+  logged, *"REPORTED, NOT FAILED (#1172)"*, with class, exit, stdout and gauge, and does not fail. Every other case
+  still gates.
+  - Three repairs were tried black-box and rejected because none moved the symptom: a start barrier, a delayed
+    agent start, and a premise on the executing-agents gauge, which reads 4 even for workers that return at once.
+  - #1172 says what ends the suppression: an observable that discriminates, or #1064's resolution.
+  - **On the fork, collections also wait for goroutines parked in `time.Sleep`.** This was found in the same
+    variants and is recorded on #406. It is not #1064's subject.
+
 - **An unaligned typed access no longer races a neighbouring byte on the host**
   ([#982](https://github.com/scttfrdmn/burroughs/issues/982), [ADR 0111](docs/decisions/0111-an-unaligned-typed-access-touches-its-containing-words-atomically-because-a-host-race-between-disjoint-guest-bytes-is-not-the-guests.md)).
   - **What it was:** an unaligned `i32.store` at 0x931 was a plain byte loop, and an aligned `i32.load8_u` at 0x930
