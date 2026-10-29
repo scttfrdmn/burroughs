@@ -174,6 +174,9 @@ func isWASIP1CommandWith(wasm []byte, feats binary.Features) (bool, error) {
 		if errors.Is(err, binary.ErrFeatureDisabled) {
 			return false, fmt.Errorf("%w: %w", ErrGated, err)
 		}
+		if errors.Is(err, binary.ErrUnimplementedProposal) { // #1120, as Config.Instantiate
+			return false, fmt.Errorf("%w: %w", ErrUnsupported, err)
+		}
 		return false, fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
 	importsWASI := false

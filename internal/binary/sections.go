@@ -720,6 +720,12 @@ func (d *Decoder) decodeCompType(r *reader) error {
 		// always has length 1.
 		d.mod().Types = append(d.mod().Types, CompType{Kind: CompArray, Fields: []FieldType{d.fieldType}})
 		return nil
+
+	case -0x1B: // 0x65 — shared-everything-threads' `shared` composite-type prefix
+		// decodeRefType's arm, for the type section's spelling of the same proposal (#1120). Without it the
+		// proposal's `(shared (func ...))` was "malformed definition type: 0x65" while its shared heap type
+		// was refused another way.
+		return unimplementedProposal("shared-everything-threads", "a shared composite type", 0x65)
 	}
 	// GRAVE (#36): the message names the byte the image actually held, which at
 	// width 7 is the low seven bits of the decoded value — the range is -64..63, so
@@ -993,8 +999,18 @@ func (d *Decoder) decodeRefType(r *reader) error {
 		// prefix that told us whether this is `(ref ht)` or `(ref null ht)`.
 		d.valType.null = form == -0x1D
 		return nil
+
+	case -0x1B: // 0x65 — shared-everything-threads' `shared` heap-type prefix
+		// Refused by name (#1120): well-formed under a proposal this engine implements no part of and gates
+		// nowhere. It was "malformed reference type: 0x65", which told a caller their module was broken.
+		return unimplementedProposal("shared-everything-threads", "a shared reference type", 0x65)
 	}
 	return fmt.Errorf("%w: %#02x", ErrMalformedRefType, byte(form&0x7F))
+}
+
+// unimplementedProposal is ErrUnimplementedProposal with the proposal, the construct and its byte named.
+func unimplementedProposal(proposal, what string, b byte) error {
+	return fmt.Errorf("%s: %s (%#02x): %w", proposal, what, b, ErrUnimplementedProposal)
 }
 
 // decodeHeapType reads a heap type — `heaptype` (decode.ml:178-198).
