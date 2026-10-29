@@ -209,8 +209,9 @@ var constExprErrors = []error{
 	ErrMalformedBrOnCastFlags, ErrZeroFlagExpected,
 	// **Found by the fuzzer, grave #531's shape a fifth time** (#1120's PR #1178, input `02 65`). The sentinel was
 	// added to declaredErrors and not here, and a block type in a constant expression reaches decodeRefType's 0x65
-	// arm. TestEveryInstrGrammarSentinelIsInTheConstExprRegistry reads instr.go's sentinels, and this one is
-	// returned from sections.go, so it was outside that control's domain.
+	// arm. TestEveryInstrGrammarSentinelIsInTheConstExprRegistry read instr.go's sentinels then, and this one is
+	// returned from sections.go, so it was outside that control's domain. #1179 widened the domain to what
+	// decodeConstExpr can reach and made every declaredErrors sentinel need a decision here.
 	ErrUnimplementedProposal,
 }
 
