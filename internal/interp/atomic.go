@@ -391,12 +391,12 @@ func (in *Instance) execFE(ins binary.Instr, st *stack) error {
 		// resolution, both of which succeed, and then lands here and fails loudly. A comment
 		// claiming the property the code has to have is how review confirms a bug.
 		return fmt.Errorf("%w: atomic.fence reached the memarg path, which has no memarg to read",
-			ErrNotValidated)
+			ErrEngineInvariant)
 	}
 	// Not reachable: buildAtomicops assigns one of the seven kinds to every row or panics. Stated
 	// rather than defaulted, since a silent `nil` here would make a future eighth family a no-op
 	// that scores as a pass wherever the value coincided.
-	return fmt.Errorf("%w: 0xfe atomic kind %d has no arm", ErrNotValidated, a.kind)
+	return fmt.Errorf("%w: 0xfe atomic kind %d has no arm", ErrEngineInvariant, a.kind)
 }
 
 // checkAlign traps unless the **effective** address is naturally aligned for the access.

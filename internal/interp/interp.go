@@ -589,6 +589,12 @@ var ErrUnsupportedOp = errors.New("interp: no arm for opcode")
 // target over decoded-but-invalid modules is the reason it exists at all, because such a module
 // is exactly what the decoder accepts and the validator would not.
 //
+// **That promise was false for 11 sites until #1134's class B refile.** They asserted the engine's
+// own wiring (a thread no world admitted, a bound memory that is nil, a boundary access naming no
+// memory, an atomic kind with no arm, a re-export resolving to a non-definer, an element type the
+// decoder cannot emit), and no validator can make those unreachable. They return ErrEngineInvariant
+// now, ADR 0077's sentinel for that category, so every site left here is one a validator can retire.
+//
 // What it must never become is a spec verdict: `type mismatch` is the validator's string, and
 // reporting it from here would put #9's answer in a place #9 cannot be tested from.
 var ErrNotValidated = errors.New("interp: module reached the interpreter unvalidated")
