@@ -129,8 +129,7 @@ func BenchmarkSP1ArrayNewThreshold(b *testing.B) {
 			if trap != nil {
 				b.Fatalf("instantiate: %v", trap)
 			}
-			go func() { _, _ = in.Invoke("run", I32(1_000_000)) }()
-			defer func() { _ = in.Close() }()
+			goInvoke(b, in, "run", I32(1_000_000)) // and waits for it, after Close (#1193)
 			const trials = 200
 			var arrivals []time.Duration
 			rng := rand.New(rand.NewPCG(1, uint64(n)))
@@ -176,8 +175,7 @@ func BenchmarkSP1BulkArrival(b *testing.B) {
 			if trap != nil {
 				b.Fatalf("instantiate: %v", trap)
 			}
-			go func() { _, _ = in.Invoke(class, I32(1_000_000)) }()
-			defer func() { _ = in.Close() }()
+			goInvoke(b, in, class, I32(1_000_000)) // and waits for it, after Close (#1193)
 			var arrivals []time.Duration
 			rng := rand.New(rand.NewPCG(1, uint64(len(class))))
 			for b.Loop() {

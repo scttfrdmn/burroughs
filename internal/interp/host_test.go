@@ -656,7 +656,8 @@ func TestCallerNamesTheThreadTheHostCallRanOn(t *testing.T) {
 	// `Join` is the signal that the crossing is closed rather than merely reached: `spawn`'s goroutine
 	// closes `done` in a `defer` that runs *after* `runEntry` has returned, so the release edge is
 	// already established when a joiner is woken. `Instance.Close` and `<-t.done` are the other two
-	// sound joiners; a channel the host function itself signals is not one.
+	// sound joiners for a *spawned* thread; a channel the host function itself signals is not one. For the
+	// embedder's own `Invoke` on a goroutine, `Close` is not a sound joiner, and `goInvoke` is (#1193).
 	if err := in.Join(tid); err != nil {
 		t.Errorf("joining the spawned thread: %v — an unjoined thread leaves a boundary crossing open "+
 			"past this test's return and lands it in another test's delta (grave #666)", err)

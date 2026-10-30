@@ -26,8 +26,7 @@ import (
 func TestATightLoopReachesASafepointWithinTheBound(t *testing.T) {
 	const trips = 100_000_000
 	in := spinModule(t)
-	go func() { _, _ = in.Invoke("spin", I32(trips)) }()
-	defer func() { _ = in.Close() }()
+	goInvoke(t, in, "spin", I32(trips)) // and waits for it, after Close (#1193)
 	// A first stop, so the guest is known to be inside its loop: a stop issued before it enters is answered
 	// at its first frame entry, which is not the poll under test.
 	if err := in.Stop(30 * time.Second); err != nil {
@@ -95,8 +94,7 @@ func TestAStopLandsInsideABulkFill(t *testing.T) {
 	if trap != nil {
 		t.Fatalf("instantiate: %v", trap)
 	}
-	go func() { _, _ = in.Invoke("fills", I32(1_000_000)) }()
-	defer func() { _ = in.Close() }()
+	goInvoke(t, in, "fills", I32(1_000_000)) // and waits for it, after Close (#1193)
 	// Two passes before any trial, so both ends of the region hold a fill byte rather than the zero memory
 	// started with.
 	for primed := false; !primed; {
@@ -171,9 +169,8 @@ func TestAStopLandsInsideABulkCopy(t *testing.T) {
 	if trap != nil {
 		t.Fatalf("instantiate: %v", trap)
 	}
-	go func() { _, _ = in.Invoke("copies", I32(1_000_000)) }()
-	defer func() { _ = in.Close() }()
-	for primed := false; !primed; { // both ends of the destination hold a copied byte
+	goInvoke(t, in, "copies", I32(1_000_000)) // and waits for it, after Close (#1193)
+	for primed := false; !primed; {           // both ends of the destination hold a copied byte
 		if err := in.Stop(30 * time.Second); err != nil {
 			t.Fatalf("waiting for the first copies: %v", err)
 		}

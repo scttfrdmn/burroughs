@@ -86,8 +86,7 @@ func BenchmarkSP1Arrival(b *testing.B) {
 			if trap != nil {
 				b.Fatalf("instantiate: %v", trap)
 			}
-			go func() { _, _ = in.Invoke(class.export, I32(class.trips)) }()
-			defer func() { _ = in.Close() }()
+			goInvoke(b, in, class.export, I32(class.trips)) // and waits for it, after Close (#1193)
 
 			var arrivals []time.Duration
 			rng := rand.New(rand.NewPCG(1, uint64(len(class.export))))

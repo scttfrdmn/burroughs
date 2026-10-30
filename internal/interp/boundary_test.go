@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
@@ -20,6 +21,123 @@ import (
 // accident: the word is package-level and never reset, so its value is a fact about whatever ran
 // earlier in the binary (decision 0052's consequences).
 func crossings() uint64 { return boundaryCrossings.Load() }
+
+// goInvoke runs in.Invoke on a goroutine the test does not otherwise wait for, and makes the test wait for that
+// goroutine to return before it ends (#1193, grave #666's shape a second time).
+//
+// **`Close` alone is not that wait.** It returns when the caller uncount releases quiescence, and `invokeIndex`'s
+// defer uncounts (`leaveCall`) before its last `leaveGuest`. So a test that ends at `Close` can leave that one
+// crossing to land in whichever test runs next. TestEveryBoundaryCrossingIsPaired then reads an odd delta as an
+// engine site that pairs its crossings by hand, which is what reddened main at 3140542. For a spawned thread,
+// `Join` and `<-t.done` are complete waits, because `done` closes after `runEntry` returns. For the embedder's own
+// `Invoke` the only complete wait is the goroutine itself returning.
+//
+// The cleanup closes the instance first. `Close` is idempotent, and it ends a guest still running at its next
+// safepoint, so the wait has an end. Cleanups run after the test's defers, so a test that also defers `Close`
+// keeps its order.
+func goInvoke(tb testing.TB, in *Instance, name string, args ...Value) {
+	tb.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = in.Invoke(name, args...)
+	}()
+	tb.Cleanup(func() {
+		_ = in.Close()
+		select {
+		case <-done:
+		case <-time.After(60 * time.Second):
+			tb.Errorf("an Invoke of %q did not return 60s after Close, so its last crossings would land in a "+
+				"later test (#1193)", name)
+		}
+	})
+}
+
+// fireAndForgetInvokeExceptions are the test functions allowed a fire-and-forget Invoke that bypasses goInvoke,
+// each with its reason.
+var fireAndForgetInvokeExceptions = map[string]string{
+	"t5_test.go:TestCloseReportsAnInstanceItCouldNotQuiesce": "its host function is wedged on purpose and never " +
+		"returns, so goInvoke's wait would always expire. Its crossings are already even: in through Invoke, out " +
+		"through callHost.",
+}
+
+// TestEveryFireAndForgetInvokeGoesThroughGoInvoke is #1193's recurrence guard. It flags a `go` statement whose
+// function literal is exactly one `_, _ = x.Invoke(…)`, which discards the result and sends nothing back, so nothing
+// waits for it. Every such site must use goInvoke, or be a named exception. A goroutine that reports through a
+// channel is not this shape and is not its subject: the channel is the test's wait.
+//
+// NEUTER, run (2026-10-30): with one `goInvoke` call reverted to the raw `go` form, this test fails at that site.
+func TestEveryFireAndForgetInvokeGoesThroughGoInvoke(t *testing.T) {
+	ents, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	found, files := 0, 0
+	used := map[string]bool{}
+	for _, e := range ents {
+		if !strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, e.Name(), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", e.Name(), err)
+		}
+		files++
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || fd.Name.Name == "goInvoke" {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				g, ok := n.(*ast.GoStmt)
+				if !ok {
+					return true
+				}
+				lit, ok := g.Call.Fun.(*ast.FuncLit)
+				if !ok || len(lit.Body.List) != 1 {
+					return true
+				}
+				as, ok := lit.Body.List[0].(*ast.AssignStmt)
+				if !ok || len(as.Rhs) != 1 {
+					return true
+				}
+				for _, l := range as.Lhs {
+					if id, isIdent := l.(*ast.Ident); !isIdent || id.Name != "_" {
+						return true
+					}
+				}
+				call, ok := as.Rhs[0].(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "Invoke" {
+					return true
+				}
+				found++
+				key := e.Name() + ":" + fd.Name.Name
+				if _, ok := fireAndForgetInvokeExceptions[key]; ok {
+					used[key] = true
+					return true
+				}
+				t.Errorf("%s:%d (%s) starts a fire-and-forget Invoke that nothing waits for. Use goInvoke: Close "+
+					"returns before the goroutine's last crossing, so this test can donate a crossing to the "+
+					"next one (#1193)", e.Name(), fset.Position(g.Pos()).Line, fd.Name.Name)
+				return true
+			})
+		}
+	}
+	if files < 50 {
+		t.Fatalf("parsed %d test files, want ≥50: the scan read the wrong directory", files)
+	}
+	for key, reason := range fireAndForgetInvokeExceptions {
+		if !used[key] {
+			t.Errorf("the exception %s (%q) names no fire-and-forget Invoke: a stale exception is a place this "+
+				"control looks away for no reason", key, reason)
+		}
+	}
+	t.Logf("%d fire-and-forget Invoke sites outside goInvoke, %d of them named exceptions", found, len(used))
+}
 
 // TestEveryBoundaryCrossingIsPaired is contract §4 B-MM-1's **presence** oracle, and the first
 // paragraph of this comment exists to stop it being read as more than that.
@@ -274,6 +392,13 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 	// distinction is the whole lesson: the repair is always at the leaking test (`Join`, `Close`, or
 	// `<-t.done`), never a weaker read here.
 	//
+	// **`Close` in that list is right for a spawned thread and wrong for the embedder's own `Invoke`** (#1193).
+	// It returns when the caller uncount releases quiescence, and `invokeIndex`'s defer uncounts before its last
+	// `leaveGuest`, so a test whose `Invoke` goroutine it ended can still donate that one crossing. Main reddened
+	// on that at 3140542, from `TestAStopLandsInsideABulkFill`. The repair is the same law, at the leaking test:
+	// `goInvoke`, which waits for the goroutine itself after `Close`, and
+	// `TestEveryFireAndForgetInvokeGoesThroughGoInvoke`, which refuses a fire-and-forget `Invoke` that bypasses it.
+	//
 	// `atStart` rather than `before`, because the baseline is now live across the per-case loop that
 	// takes its own `before` and `govet`'s `shadow` says so. Worth a line: the shadow was *unreportable*
 	// while the outer name died before the loop, so the lint arriving with this repair is the repair
@@ -285,7 +410,8 @@ func TestEveryBoundaryCrossingIsPaired(t *testing.T) {
 			"test's goroutine still inside the guest while these cases ran, because a delta subtracts "+
 			"what the binary has *finished* doing and nothing from what it is still doing. Before "+
 			"auditing engine sites, look for a test that spawns a thread and returns without `Join`, "+
-			"`Close` or `<-t.done`",
+			"`Close` or `<-t.done`, or that starts an `Invoke` on a goroutine without `goInvoke` "+
+			"(`Close` returns before such a goroutine's last crossing, #1193)",
 			crossings()-atStart)
 	}
 }
