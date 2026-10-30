@@ -143,8 +143,14 @@ func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 	// **The partial edge words are written atomically, and the whole words between them plainly** (ADR 0112,
 	// #1167). The edges are at most 3 bytes each and are written once, before and after the chunk loop, which
 	// runs over the interior alone.
+	//
+	// **Each edge call is guarded here, at the call site**, so a whole-word extent pays only `edgeSplit`'s
+	// arithmetic. The first measurement called the helpers unconditionally (they return on an empty span), and the
+	// aligned rows moved +7–15% on janus for it (#1167).
 	head, tail := edgeSplit(i, n)
-	atomicStoreSpanOrNothing(bs[i:i+head], splat(k))
+	if head != 0 {
+		atomicStoreSpan(bs[i:i+head], splat(k))
+	}
 	for off, interior := head, n-tail; off < interior; {
 		end := min(off+bulkChunk, interior)
 		dst := bs[i+off : i+end]
@@ -156,7 +162,9 @@ func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 			st.t.poll()
 		}
 	}
-	atomicStoreSpanOrNothing(bs[i+n-tail:i+n], splat(k))
+	if tail != 0 {
+		atomicStoreSpan(bs[i+n-tail:i+n], splat(k))
+	}
 	return nil
 }
 
@@ -270,9 +278,12 @@ func (in *Instance) execMemoryCopy(ins binary.Instr, st *stack) error {
 	if hi < lo {
 		hi = lo
 	}
+	// Each edge call is guarded at its call site, for `memory.fill`'s measured reason.
 	if backward {
-		atomicCopyEdge(dstBs, srcBs, d, s, hi, n)
-	} else {
+		if hi != n {
+			atomicCopyEdge(dstBs, srcBs, d, s, hi, n)
+		}
+	} else if lo != 0 {
 		atomicCopyEdge(dstBs, srcBs, d, s, 0, lo)
 	}
 	for done, m := uint64(0), hi-lo; done < m; {
@@ -290,8 +301,10 @@ func (in *Instance) execMemoryCopy(ins binary.Instr, st *stack) error {
 		}
 	}
 	if backward {
-		atomicCopyEdge(dstBs, srcBs, d, s, 0, lo)
-	} else {
+		if lo != 0 {
+			atomicCopyEdge(dstBs, srcBs, d, s, 0, lo)
+		}
+	} else if hi != n {
 		atomicCopyEdge(dstBs, srcBs, d, s, hi, n)
 	}
 	return nil
@@ -483,8 +496,11 @@ func (in *Instance) execMemoryInit(ins binary.Instr, st *stack) error {
 	//
 	// **The destination's partial edge words are written atomically** (ADR 0112, #1167). The source is a data
 	// segment, host bytes no guest access shares a word with, so only the destination has edges.
+	// Each edge call is guarded at its call site, for `memory.fill`'s measured reason.
 	head, tail := edgeSplit(d, n)
-	atomicStoreSpanOrNothing(bs[d:d+head], packLE(segBs[s:s+head]))
+	if head != 0 {
+		atomicStoreSpan(bs[d:d+head], packLE(segBs[s:s+head]))
+	}
 	for off, interior := head, n-tail; off < interior; {
 		end := min(off+bulkChunk, interior)
 		copy(bs[d+off:d+end], segBs[s+off:s+end])
@@ -493,7 +509,9 @@ func (in *Instance) execMemoryInit(ins binary.Instr, st *stack) error {
 			st.t.poll()
 		}
 	}
-	atomicStoreSpanOrNothing(bs[d+n-tail:d+n], packLE(segBs[s+n-tail:s+n]))
+	if tail != 0 {
+		atomicStoreSpan(bs[d+n-tail:d+n], packLE(segBs[s+n-tail:s+n]))
+	}
 	return nil
 }
 

@@ -66,9 +66,13 @@ func (m *memory) readEdges(idx, offset, n uint64, buf []byte) ([]byte, error) {
 		return bs[ea : ea+n], nil
 	}
 	dst := buf[:n]
-	unpackLE(dst[:head], atomicLoadSpanOrZero(bs[ea:ea+head]))
+	if head != 0 {
+		unpackLE(dst[:head], atomicLoadSpan(bs[ea:ea+head]))
+	}
 	copy(dst[head:n-tail], bs[ea+head:ea+n-tail])
-	unpackLE(dst[n-tail:], atomicLoadSpanOrZero(bs[ea+n-tail:ea+n]))
+	if tail != 0 {
+		unpackLE(dst[n-tail:], atomicLoadSpan(bs[ea+n-tail:ea+n]))
+	}
 	return dst, nil
 }
 
@@ -85,24 +89,20 @@ func (m *memory) writeEdges(idx, offset uint64, src []byte) error {
 	if n > uint64(len(bs)) || ea > uint64(len(bs))-n {
 		return trapOOB
 	}
+	// A whole-word access is `write`'s plain copy, and each edge call is guarded at its call site, so an aligned
+	// access pays only `edgeSplit`'s arithmetic (#1167's first measurement charged the aligned rows for unguarded
+	// calls).
 	head, tail := edgeSplit(ea, n)
-	atomicStoreSpanOrNothing(bs[ea:ea+head], packLE(src[:head]))
+	if head == 0 && tail == 0 {
+		copy(bs[ea:ea+n], src)
+		return nil
+	}
+	if head != 0 {
+		atomicStoreSpan(bs[ea:ea+head], packLE(src[:head]))
+	}
 	copy(bs[ea+head:ea+n-tail], src[head:n-tail])
-	atomicStoreSpanOrNothing(bs[ea+n-tail:ea+n], packLE(src[n-tail:]))
+	if tail != 0 {
+		atomicStoreSpan(bs[ea+n-tail:ea+n], packLE(src[n-tail:]))
+	}
 	return nil
-}
-
-// atomicLoadSpanOrZero and atomicStoreSpanOrNothing are the span helpers for an edge that may be empty: an empty
-// span has no first byte to take a pointer to.
-func atomicLoadSpanOrZero(bs []byte) uint64 {
-	if len(bs) == 0 {
-		return 0
-	}
-	return atomicLoadSpan(bs)
-}
-
-func atomicStoreSpanOrNothing(bs []byte, v uint64) {
-	if len(bs) != 0 {
-		atomicStoreSpan(bs, v)
-	}
 }
