@@ -845,7 +845,7 @@ func (in *Instance) vecLoad(ins binary.Instr, st *stack, decode func([]byte) (hi
 	}
 	idx := st.popNum()
 	n := vecLoadWidth(ins.Op)
-	bs, err := mem.read(mem.addr(idx), offset, n)
+	bs, err := mem.readEdges(mem.addr(idx), offset, n, st.edgeBuf[:])
 	if err != nil {
 		return err
 	}
@@ -892,7 +892,7 @@ func (in *Instance) vecStore(ins binary.Instr, st *stack, encode func(hi, lo uin
 	}
 	hi, lo := st.popV128() // the value, pushed second
 	idx := st.popNum()     // the address, pushed first
-	return mem.write(mem.addr(idx), offset, encode(hi, lo))
+	return mem.writeEdges(mem.addr(idx), offset, encode(hi, lo))
 }
 
 // vecLoadLane reads width bytes at the memarg's address and replaces one lane of the v128
@@ -908,7 +908,7 @@ func (in *Instance) vecLoadLane(ins binary.Instr, st *stack, width uint64) error
 	}
 	hi, lo := st.popV128() // the operand vector, pushed second
 	idx := st.popNum()     // the address, pushed first
-	bs, err := mem.read(mem.addr(idx), offset, width)
+	bs, err := mem.readEdges(mem.addr(idx), offset, width, st.edgeBuf[:])
 	if err != nil {
 		return err
 	}
@@ -930,7 +930,7 @@ func (in *Instance) vecStoreLane(ins binary.Instr, st *stack, width uint64) erro
 	hi, lo := st.popV128() // the value, pushed second
 	idx := st.popNum()     // the address, pushed first
 	lane := binary.MemargLane(ins.Imm1)
-	return mem.write(mem.addr(idx), offset, laneBytes(hi, lo, uint(lane), width))
+	return mem.writeEdges(mem.addr(idx), offset, laneBytes(hi, lo, uint(lane), width))
 }
 
 // laneBytes extracts one lane's little-endian bytes from a v128, where a "lane" for this family

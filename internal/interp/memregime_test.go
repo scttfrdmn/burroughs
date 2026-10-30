@@ -38,6 +38,13 @@ const (
 	// regimeBounds — the view or read is taken for its length, or to make a bounds check happen,
 	// and no guest byte is read or written through it.
 	regimeBounds memRegime = "bounds"
+	// regimeEdges — an extent's partial edge words go through ADR 0111's containing-word atomics, and its whole
+	// interior words stay plain ([ADR 0112][0112], #1167). It is mixed's mirror image: atomic at the ends, plain in
+	// the middle, because only an edge word can be shared with a neighbour the extent does not overlap. It must
+	// call a synchronisation helper, as `atomic` and `mixed` must.
+	//
+	// [0112]: ../../docs/decisions/0112-a-bulk-or-simd-extent-touches-its-partial-edge-words-atomically-and-its-whole-words-plainly-because-only-an-edge-word-can-be-shared-with-a-disjoint-neighbour.md
+	regimeEdges memRegime = "edges"
 )
 
 // guestMemoryRegimes is the pinned enumeration ADR 0064 rests on, keyed `file.go:Receiver.Symbol`.
@@ -58,7 +65,14 @@ const (
 // guest-reachable instructions and `write`'s caller set is wider — *an issue's list is a registry, not
 // an inventory*, which is why the domain below is derived from the AST and not typed out.
 //
+// **Since [ADR 0112][0112] (#1167), six of the seven are `edges`, not `plain`.** The three bulk instructions and
+// the SIMD accesses touch an extent's partial edge words atomically, the SIMD ones through
+// `memory.readEdges`/`writeEdges` rather than `read`/`write`. Only `runData` is still plain, together with the
+// shared helpers and the embedder's accessors below. The list above is kept as 0064's own extent, which is what
+// 0112 narrowed.
+//
 // [0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
+// [0112]: ../../docs/decisions/0112-a-bulk-or-simd-extent-touches-its-partial-edge-words-atomically-and-its-whole-words-plainly-because-only-an-edge-word-can-be-shared-with-a-disjoint-neighbour.md
 var guestMemoryRegimes = map[string]memRegime{
 	// The two shared helpers. `write`'s `copy` is plain at every alignment and every one of its
 	// callers inherits that; `read` hands a plain slice back and its callers read it plainly.
@@ -71,16 +85,22 @@ var guestMemoryRegimes = map[string]memRegime{
 	"memory.go:memory.writeNum":    regimeAtomic,
 	"memory.go:Instance.memAccess": regimeAtomic,
 
-	// The bulk family, `0xFC`, no gate at all.
-	"bulk.go:Instance.execMemoryFill": regimePlain,
-	"bulk.go:Instance.execMemoryCopy": regimePlain,
-	"bulk.go:Instance.execMemoryInit": regimePlain,
+	// The bulk family, `0xFC`, no gate at all. `edges` since ADR 0112 (#1167): the partial edge words are atomic
+	// and the whole words plain. They were `plain` at every alignment until then.
+	//
+	// **ADR 0064's obligation is met, not discharged.** The B-MM-2 case
+	// (`TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify`) takes its verdict from the race detector's
+	// silence over a plain `memory.fill`. Its extent is one whole aligned word, so it is interior and still plain.
+	// The case asserts that premise, so an edit that moved its extent onto an edge would fail there.
+	"bulk.go:Instance.execMemoryFill": regimeEdges,
+	"bulk.go:Instance.execMemoryCopy": regimeEdges,
+	"bulk.go:Instance.execMemoryInit": regimeEdges,
 
-	// The SIMD family, on a default-on gate since ADR 0025 and ADR 0028.
-	"simd.go:Instance.vecStore":     regimePlain,
-	"simd.go:Instance.vecStoreLane": regimePlain,
-	"simd.go:Instance.vecLoad":      regimePlain,
-	"simd.go:Instance.vecLoadLane":  regimePlain,
+	// The SIMD family, on a default-on gate since ADR 0025 and ADR 0028. Its four sites (`vecLoad`, `vecLoadLane`,
+	// `vecStore`, `vecStoreLane`) reach guest memory through these two helpers since ADR 0112, so the regime is the
+	// helpers'. Each site was `plain` through `memory.read` and `memory.write` until then.
+	"edges.go:memory.readEdges":  regimeEdges,
+	"edges.go:memory.writeEdges": regimeEdges,
 
 	// The seventh site: instantiation, not an instruction. Instantiation *looks* single-threaded
 	// and is not necessarily — a second module importing an already-shared memory can be
@@ -280,10 +300,11 @@ func TestNoGuestMemoryAccessSiteJoinsWithoutAClassification(t *testing.T) {
 				"that an enumeration asserted by a control is a checkable claim where testimony is "+
 				"not.\nClassify it in `guestMemoryRegimes` — %q if every access is plain at every "+
 				"alignment, %q if it goes through ADR 0054's atomic word path, %q if the aligned arm "+
-				"is atomic and the unaligned tail is not, %q if no guest byte crosses it — and if the "+
+				"is atomic and the unaligned tail is not, %q if an extent's partial edge words are atomic "+
+				"and its whole words plain (ADR 0112), %q if no guest byte crosses it — and if the "+
 				"answer is %q, say so in ADR 0064, because widening that region is the decision's "+
 				"business and not a diff's.",
-				site, regimePlain, regimeAtomic, regimeMixed, regimeBounds, regimePlain)
+				site, regimePlain, regimeAtomic, regimeMixed, regimeEdges, regimeBounds, regimePlain)
 		}
 		if !classified {
 			continue
@@ -305,7 +326,7 @@ func TestNoGuestMemoryAccessSiteJoinsWithoutAClassification(t *testing.T) {
 					"If the repair is intended, amend ADR 0064 and re-classify this row; the fix is "+
 					"not to delete this check.", site, regime)
 			}
-		case regimeAtomic, regimeMixed:
+		case regimeAtomic, regimeMixed, regimeEdges:
 			if !synchronised[site] {
 				t.Errorf("%s is classified %q and calls no synchronisation helper, so ADR 0054's "+
 					"mechanism no longer reaches it.\nEither the atomic path was removed from this "+
@@ -320,7 +341,7 @@ func TestNoGuestMemoryAccessSiteJoinsWithoutAClassification(t *testing.T) {
 			// regime's own constructor — so neither arm above carries information here. What the
 			// row asserts is the population membership, which is assertion 1.
 		default:
-			t.Errorf("%s carries regime %q, which is not one of the four", site, regime)
+			t.Errorf("%s carries regime %q, which is not one of the five", site, regime)
 		}
 	}
 

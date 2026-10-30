@@ -65,7 +65,15 @@ import (
 // (`:35`-`:37`). Without the narrowing a Go `byte()` conversion is the only thing standing
 // between `0xbbaa` and a panic-free wrong answer, which is why the row exists.
 //
-// # The byte loop below is plain at every alignment, ADR 0054 does not reach it, and ADR 0064 keeps it that way (#627)
+// # The byte loop below was plain at every alignment; since ADR 0112 its whole words are, and its edges are not
+//
+// **The history first, because what follows is that history.** Until [ADR 0112][0112] (#1167) every byte of this
+// family was plain, and the paragraphs below record why that was decided and what it obliged. 0112 narrowed it:
+// the partial edge words of an extent are now touched through ADR 0111's containing-word atomics, because only an
+// edge word can be shared with a neighbour the extent does not overlap. The whole words between stay plain, so
+// the B-MM-2 carrier, a one-word aligned fill, keeps its plain side. That case asserts the premise each round.
+//
+// [0112]: ../../docs/decisions/0112-a-bulk-or-simd-extent-touches-its-partial-edge-words-atomically-and-its-whole-words-plainly-because-only-an-edge-word-can-be-shared-with-a-disjoint-neighbour.md
 //
 // 0054 made *typed word* accesses sequentially consistent — `atomicLoadWord`/`atomicStoreWord` at widths 4
 // and 8, `atomicCell` at 1 and 2 — and its title's "every aligned guest access" was read as covering this
@@ -131,16 +139,31 @@ func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
 	// NEUTER THIS by skipping the poll, and `TestAStopLandsInsideABulkFill` finds no stop inside a fill.
 	//
 	// The range form inside a chunk is one pass, and is what the compiler recognizes as a memset.
-	for off := uint64(0); off < n; {
-		end := min(off+bulkChunk, n)
+	//
+	// **The partial edge words are written atomically, and the whole words between them plainly** (ADR 0112,
+	// #1167). The edges are at most 3 bytes each and are written once, before and after the chunk loop, which
+	// runs over the interior alone.
+	//
+	// **Each edge call is guarded here, at the call site**, so a whole-word extent pays only `edgeSplit`'s
+	// arithmetic. The first measurement called the helpers unconditionally (they return on an empty span), and the
+	// aligned rows moved +7–15% on janus for it (#1167).
+	head, tail := edgeSplit(i, n)
+	if head != 0 {
+		atomicStoreSpan(bs[i:i+head], splat(k))
+	}
+	for off, interior := head, n-tail; off < interior; {
+		end := min(off+bulkChunk, interior)
 		dst := bs[i+off : i+end]
 		for j := range dst {
 			dst[j] = k
 		}
 		off = end
-		if off < n {
+		if off < interior {
 			st.t.poll()
 		}
+	}
+	if tail != 0 {
+		atomicStoreSpan(bs[i+n-tail:i+n], splat(k))
 	}
 	return nil
 }
@@ -242,21 +265,63 @@ func (in *Instance) execMemoryCopy(ins binary.Instr, st *stack) error {
 	// an overlapping source is copied backward, from the end, for the same reason the other way round. Within
 	// a chunk, Go's `copy` is already memmove.
 	backward := dstMem == srcMem && d > s && d < s+n
-	for done := uint64(0); done < n; {
-		size := min(bulkChunk, n-done)
+	//
+	// **The edges are atomic on both sides** (ADR 0112, #1167). A byte is in the plain interior only when both
+	// its source and its destination lie in whole words of their extents, so [lo, hi) is the intersection of the
+	// two extents' interiors in the copy's own coordinates. What lies outside it, at most 3 bytes at each end, is
+	// read through its source words' atomics and written through its destination words'. Each edge is read in
+	// full before it is written, and the edges run in the interior's direction (head first going forward, tail
+	// first going backward), so the overlap argument above holds for them too.
+	hs, ts := edgeSplit(s, n)
+	hd, td := edgeSplit(d, n)
+	lo, hi := max(hs, hd), n-max(ts, td)
+	if hi < lo {
+		hi = lo
+	}
+	// Each edge call is guarded at its call site, for `memory.fill`'s measured reason.
+	if backward {
+		if hi != n {
+			atomicCopyEdge(dstBs, srcBs, d, s, hi, n)
+		}
+	} else if lo != 0 {
+		atomicCopyEdge(dstBs, srcBs, d, s, 0, lo)
+	}
+	for done, m := uint64(0), hi-lo; done < m; {
+		size := min(bulkChunk, m-done)
 		var at uint64 // the chunk's offset within the n bytes
 		if backward {
-			at = n - done - size
+			at = hi - done - size
 		} else {
-			at = done
+			at = lo + done
 		}
 		copy(dstBs[d+at:d+at+size], srcBs[s+at:s+at+size])
 		done += size
-		if done < n {
+		if done < m {
 			st.t.poll()
 		}
 	}
+	if backward {
+		if lo != 0 {
+			atomicCopyEdge(dstBs, srcBs, d, s, 0, lo)
+		}
+	} else if hi != n {
+		atomicCopyEdge(dstBs, srcBs, d, s, hi, n)
+	}
 	return nil
+}
+
+// atomicCopyEdge copies bytes [a, b) of a `memory.copy` through the containing words' atomics on both sides (ADR
+// 0112): the whole span is read before any of it is written, so an overlapping edge is copied as if through a
+// buffer. A function rather than a closure in execMemoryCopy, for this file's own measured reason: a closure call
+// paid on every instruction cost the table and array loops +6.66% (`BenchmarkShortBulkOps`).
+//
+// **Its name begins `atomic` on purpose.** TestNoGuestMemoryAccessSiteJoinsWithoutAClassification recognises a
+// synchronisation helper by that prefix. Named `copyEdge`, `execMemoryCopy` read as calling none, and its row
+// passed as `plain` while the edges were atomic: a control looking away from the change it exists to see.
+func atomicCopyEdge(dstBs, srcBs []byte, d, s, a, b uint64) {
+	if a < b {
+		atomicStoreSpan(dstBs[d+a:d+b], atomicLoadSpan(srcBs[s+a:s+b]))
+	}
 }
 
 // execTableCopy is `fc 0e` — `table.copy x y`, `eval.ml:395`.
@@ -428,13 +493,24 @@ func (in *Instance) execMemoryInit(ins binary.Instr, st *stack) error {
 	// predicate). The segment is safe because only `data.drop` replaces its image (decision 0065), and the old
 	// image stays valid under Go's collector. So an `init` that began before a drop finishes from the segment
 	// it began with, which is the sequential answer.
-	for off := uint64(0); off < n; {
-		end := min(off+bulkChunk, n)
+	//
+	// **The destination's partial edge words are written atomically** (ADR 0112, #1167). The source is a data
+	// segment, host bytes no guest access shares a word with, so only the destination has edges.
+	// Each edge call is guarded at its call site, for `memory.fill`'s measured reason.
+	head, tail := edgeSplit(d, n)
+	if head != 0 {
+		atomicStoreSpan(bs[d:d+head], packLE(segBs[s:s+head]))
+	}
+	for off, interior := head, n-tail; off < interior; {
+		end := min(off+bulkChunk, interior)
 		copy(bs[d+off:d+end], segBs[s+off:s+end])
 		off = end
-		if off < n {
+		if off < interior {
 			st.t.poll()
 		}
+	}
+	if tail != 0 {
+		atomicStoreSpan(bs[d+n-tail:d+n], packLE(segBs[s+n-tail:s+n]))
 	}
 	return nil
 }

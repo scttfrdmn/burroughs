@@ -470,7 +470,15 @@ func TestAWakeArrivesAtFutexLatencyAndNotEventLoopLatency(t *testing.T) {
 //     passing with nothing to detect.
 //   - **The only replacement in hand is an unaligned typed store**, since 0054's Consequences record that
 //     the unaligned path has no atomic mechanism at all. That re-points this oracle at *that* gap rather
-//     than rescuing it, and couples the case to that gap staying open.
+//     than rescuing it, and couples the case to that gap staying open. **Overtaken by [ADR 0111]**, which made
+//     the unaligned typed path atomic (#982), so that replacement no longer exists.
+//
+// **[ADR 0112] narrowed the region, and this carrier is inside what is left** (#1167). A bulk or SIMD extent now
+// touches its partial edge words atomically and its whole words plainly, so the plain region is the whole
+// interior words of a bulk or SIMD extent. This carrier is a 4-byte fill of a 4-byte-aligned sibling: one whole
+// word, all interior, still plain. **The case asserts that premise every round**, because the carrier is plain
+// only while its extent stays whole-word: moved off alignment, it would become an edge and atomic, and the case
+// would pass with nothing to detect.
 //   - **A complete repair of every plain path leaves this case with no `-race` oracle in the tree.** There
 //     is no third arbiter: the clause would have to be re-registered against an ordering assertion a
 //     passing run cannot distinguish from a lucky one, or its `Status:` goes back to blocked.
@@ -482,6 +490,8 @@ func TestAWakeArrivesAtFutexLatencyAndNotEventLoopLatency(t *testing.T) {
 //
 // [ADR 0054]: ../../docs/decisions/0054-every-aligned-guest-access-becomes-atomic-on-the-address-already-resolved-because-a-scoped-gate-is-unavailable-rather-than-unwritten.md
 // [ADR 0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
+// [ADR 0111]: ../../docs/decisions/0111-an-unaligned-typed-access-touches-its-containing-words-atomically-because-a-host-race-between-disjoint-guest-bytes-is-not-the-guests.md
+// [ADR 0112]: ../../docs/decisions/0112-a-bulk-or-simd-extent-touches-its-partial-edge-words-atomically-and-its-whole-words-plainly-because-only-an-edge-word-can-be-shared-with-a-disjoint-neighbour.md
 // [#627]: https://github.com/scttfrdmn/burroughs/issues/627
 func TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify(t *testing.T) {
 	const (
@@ -506,6 +516,12 @@ func TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify(t *testing.T) {
 		// it, per round. 1000 rounds at a stride of 16 stay inside the one page this module declares.
 		p := pair{futex: int32(16 * (i + 1))}
 		p.sib = p.futex + 8
+		// The carrier's premise (ADR 0112): a 4-byte fill at a word-aligned address is one whole word, so it is
+		// interior and plain. An edge would be atomic and leave the detector nothing to report.
+		if head, tail := edgeSplit(uint64(p.sib), 4); head != 0 || tail != 0 {
+			t.Fatalf("round %d: the sibling extent at %d is not one whole word (head %d, tail %d), so its "+
+				"memory.fill would be atomic and this case's plain side would be gone (ADR 0112)", i, p.sib, head, tail)
+		}
 		pairs <- p
 
 		if !litmusArmed(mem, uint64(p.futex), time.Now().Add(10*time.Second)) {

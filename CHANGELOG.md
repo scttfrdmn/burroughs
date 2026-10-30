@@ -232,6 +232,32 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A bulk or SIMD extent's partial edge words are touched atomically, so it cannot race a disjoint neighbour on
+  the host** ([#1167](https://github.com/scttfrdmn/burroughs/issues/1167),
+  [ADR 0112](docs/decisions/0112-a-bulk-or-simd-extent-touches-its-partial-edge-words-atomically-and-its-whole-words-plainly-because-only-an-edge-word-can-be-shared-with-a-disjoint-neighbour.md),
+  the chair's ruling of 2026-10-30, item 4). #982's host race was also in ADR 0064's plain region:
+  `memory.fill`, `copy` or `init`, or a SIMD access, writing or reading byte 0x931 plainly, beside an aligned
+  narrow guest access to 0x930 that is an atomic of the same word. The guest bytes are disjoint, so the guest had
+  not raced.
+  - **The repair:** an extent's first and last partial words now go through ADR 0111's containing-word
+    atomics. Its whole interior words stay plain, because any other access to one overlaps the extent, which is a
+    guest race 0064 permits. `memory.copy` treats a byte as interior only when both its source and its
+    destination lie in whole words.
+  - **The regime table:** `guestMemoryRegimes` gains an `edges` regime. The three bulk rows take it, and the SIMD
+    sites reach memory through `memory.readEdges` and `memory.writeEdges`.
+  - **The B-MM-2 case keeps its plain side:** its carrier is one whole aligned word, and the case now asserts
+    that premise every round.
+  - **Witness:** `TestABulkOrSIMDEdgeDoesNotRaceANeighbouringByte`, under `-race` on the Go heap. **Neuter,
+    run:** with `edgeSplit` returning (0, 0), the old path, the detector reports at every repaired site.
+  - **The cost** was pre-registered on #1167 against new `membench` rows (`bulkvec_test.go`), and **the first A/B
+    falsified it.** Aligned rows moved (janus +5–15%) because unguarded edge calls were paid on whole-word
+    extents, and janus's unaligned v128 load ran past twice its band.
+  - **The code as merged** guards each edge call at its site, and measures (janus task 248, orion task 51):
+    - aligned rows: janus +1.75–9.93%, orion −9.72 to +9.07%;
+    - unaligned rows: +20–62 ns per instruction on janus, +5–16 ns on orion;
+    - a page-sized fill: ≤2.2%.
+
+    Both measurements are in ADR 0112. A janus run contaminated by another project's unqueued job was discarded.
 - **A test that ends an embedder `Invoke` goroutine with `Close` no longer donates a boundary crossing to the next
   test** ([grave #1193](https://github.com/scttfrdmn/burroughs/issues/1193), grave #666's shape a second time).
   `TestEveryBoundaryCrossingIsPaired` reddened main at 3140542 with an odd delta.
