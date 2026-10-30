@@ -111,6 +111,15 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **ADR 0111's cost tables are re-measured on the merged implementation**
+  ([#982](https://github.com/scttfrdmn/burroughs/issues/982)), as the ADR pre-registered. The first tables predated
+  the pointer repair, and the re-measure had to wait for #406's stress to free the hosts. `membench`, 9e93247
+  against its parent 1e5c608, `measured` group, 0 tasks running on either box at submit:
+  - **janus** (task 223): LoadUnaligned **+7.85%**, StoreUnaligned **+62.54%**;
+  - **orion** (task 47): LoadUnaligned **+3.67%**, StoreUnaligned **+45.47%**;
+  - aligned rows `~` on both.
+
+  The unaligned rows are 0.3–5.2 points above the first tables, and the first tables are kept in the ADR as history.
 - **The constexpr fuzz registry's control reads what the grammar can reach, not one file**
   ([#1179](https://github.com/scttfrdmn/burroughs/issues/1179), grave #531's shape). It read instr.go's sentinels,
   so #1120's `ErrUnimplementedProposal`, returned by sections.go's `decodeRefType`, reached `FuzzConstExprProgress`

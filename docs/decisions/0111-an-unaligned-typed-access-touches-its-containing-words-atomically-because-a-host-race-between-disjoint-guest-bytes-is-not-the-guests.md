@@ -32,28 +32,28 @@ Date: 2026-10-28 · Status: **accepted**. The chair's fifth ruling of 2026-10-28
 
 - **The typed path has no plain arm.** Every typed guest access touches guest bytes only through word atomics, so no typed access can race the host over a byte the guest did not race over.
 - **The witness is `TestAnUnalignedAccessDoesNotRaceANeighbouringByte`**: #982's pair as guest instructions on two agents over one shared memory, on the Go heap (premise asserted), 10,000 iterations each. Its verdict is the race detector's. Without `-race` it asserts that each agent's last value is in its own bytes. **Neuters, run** (darwin/arm64, `-race`): `writeNum`'s byte loop restored is reported at `writeNum`, and `memAccess`'s `loadValue` restored is reported at `loadValue`.
-- **The cost is on the unaligned rows only**, measured by `make lab-ab AB='--pkg ./internal/interp/membench --base origin/main --head fix-982'` on janus.local (i9-9960X, x86-64), `measured` group, pueue task 202, 1-minute load 0.31–1.32 across the ten rounds, 2026-10-28:
+- **The cost is on the unaligned rows only.** It was measured on the implementation as merged, this ADR's PR's squash 9e93247 against its parent 1e5c608, by `make lab-ab AB='--pkg ./internal/interp/membench --base 1e5c608 --head 9e93247'`. That run was on janus.local (i9-9960X, x86-64), `measured` group, pueue task 223, 0 tasks running on the box at submit, 1-minute load 0.54–1.16 across the ten rounds, 2026-10-29:
 
   | row | base | head | delta |
   |---|---|---|---|
-  | LoadAligned | 60.20µ ± 1% | 60.37µ ± 3% | ~ (p=0.971) |
-  | LoadUnaligned | 61.96µ ± 4% | 66.63µ ± 2% | **+7.54%** (p=0.000) |
-  | StoreAligned | 44.34µ ± 2% | 43.59µ ± 3% | ~ (p=0.306) |
-  | StoreUnaligned | 41.75µ ± 5% | 65.68µ ± 0% | **+57.30%** (p=0.000) |
+  | LoadAligned | 61.73µ ± 2% | 60.67µ ± 2% | ~ (p=0.315) |
+  | LoadUnaligned | 61.86µ ± 4% | 66.72µ ± 1% | **+7.85%** (p=0.000) |
+  | StoreAligned | 43.47µ ± 2% | 44.28µ ± 3% | ~ (p=0.190) |
+  | StoreUnaligned | 41.48µ ± 5% | 67.43µ ± 2% | **+62.54%** (p=0.000) |
 
   The store's cost is the containing-word compare-and-swap: an unaligned `i32` covers two words, so it is two CAS loops where it was four byte writes. These rows are 100% unaligned by construction. How often a real Go guest issues an unaligned typed access is **unmeasured**; Go lays out fields at their natural alignment, so the population is expected to be small, and that expectation is not a figure.
-  - **arm64, on orion.local** (M4 Pro, darwin/arm64), `measured` group, pueue task 43. Scott cleared the host in session on 2026-10-28 (*"run on orion it is not being used"*):
+  - **arm64, on orion.local** (M4 Pro, darwin/arm64), `measured` group, pueue task 47, 0 tasks running on the box at submit, the same two commits, 2026-10-29. Scott cleared the host in session on 2026-10-28 (*"run on orion it is not being used"*):
 
     | row | base | head | delta |
     |---|---|---|---|
-    | LoadAligned | 28.89µ ± 2% | 28.72µ ± 3% | ~ (p=0.436) |
-    | LoadUnaligned | 29.86µ ± 2% | 30.77µ ± 2% | **+3.07%** (p=0.000) |
-    | StoreAligned | 18.15µ ± 2% | 18.18µ ± 1% | ~ (p=0.986) |
-    | StoreUnaligned | 18.62µ ± 2% | 26.86µ ± 2% | **+44.29%** (p=0.000) |
+    | LoadAligned | 29.06µ ± 3% | 28.98µ ± 1% | ~ (p=0.971) |
+    | LoadUnaligned | 29.95µ ± 3% | 31.05µ ± 1% | **+3.67%** (p=0.000) |
+    | StoreAligned | 18.21µ ± 2% | 18.27µ ± 2% | ~ (p=0.912) |
+    | StoreUnaligned | 18.64µ ± 1% | 27.12µ ± 2% | **+45.47%** (p=0.000) |
 
-    `ab.sh` noted that the 1-minute load passed a quarter of the 14 CPUs during the run (5.8–13.7, from 3.4 at submit, with nothing else in the queue). The spreads stayed at 1–3%, so the rows are read as the arms'. The note is recorded rather than dropped.
+    `ab.sh` noted that the 1-minute load passed a quarter of the 14 CPUs: 8.3 at the first round, falling to 4.1 by the tenth, with nothing else in the queue. The fall follows the task's own build of both arms just before round 1, which a 1-minute average lags. The spreads stayed at 1–3%, so the rows are read as the arms'. The note is recorded rather than dropped.
   - **The development machine's arm is not quoted.** Its load was 18–30 on 12 CPUs from other work, and every row came back `~` with ± up to 82%, which is the box and not the arms.
-  - **Both tables were taken on the first implementation**, before the pointer repair below. That repair changes only how each word's pointer is formed (an index times four from the base, instead of an advancing pointer), not how many atomics an access makes. It has **not** been re-measured. A re-run was started and killed: pueue's `measured` group excludes other measured tasks, not the `build` group, and #406's 10,000-iteration stress was running in `build` on both hosts. The re-measure runs when the stress has freed them, and these tables are replaced if it differs.
+  - **These tables replace the first implementation's, as this paragraph pre-registered.** The first tables (janus task 202 and orion task 43, 2026-10-28, `--base origin/main --head fix-982`) were taken before the pointer repair below. They read LoadUnaligned +7.54% and +3.07%, and StoreUnaligned +57.30% and +44.29%, with no movement on the aligned rows. The repair changes only how each word's pointer is formed (an index times four from the base, instead of an advancing pointer), not how many atomics an access makes. On the merged code the unaligned rows read 0.3–5.2 points higher, and the aligned rows still don't move. The re-measure waited on #406's 10,000-iteration stress, which ran in `build` on both hosts until 2026-10-29: pueue's `measured` group excludes other measured tasks, not the `build` group.
   - **The price was not a condition of the choice.** The repair was ordered, and the alternatives are a moved race (option 2) or a hidden one (3, 4), so no figure here could have selected another option. It is recorded so the cost is known, and its rollback is reverting this ADR's PR.
 - **A pointer is formed only for a word the access touches.** The first implementation advanced past its last word, so an access ending in the image's last word formed a pointer one past the allocation. `checkptr` rejected that on Windows, the platform whose image it can see, in this ADR's own PR. `TestAnUnalignedSpanEndingInTheLastWordFormsNoPointerPastTheImage` is the witness, and it supplies the neighbouring allocation `checkptr` needs to see the defect anywhere.
 - **The triage rows stay until CI shows the race gone**, per the ruling. They are removed in a later slice, on a Windows run's evidence.
