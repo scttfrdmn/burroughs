@@ -177,6 +177,7 @@ RULES: tuple[tuple[str, str], ...] = (
     ("publish-chained", "whatever the last one's exit status was"),
     ("memory-git", "touches session memory"),
     ("sleep-as-wait", "a duration is not a signal"),
+    ("detach-backgrounded", "backgrounded with a trailing `&`"),
     ("inline-write", "an inline interpreter opens"),
     ("in-place-edit", "in place"),
     ("tee-write", "tee would overwrite"),
@@ -1283,6 +1284,36 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
             elif w == "done":
                 depth = max(0, depth - 1)
 
+    # --- route 10: a watch launched with `&` --------------------------------------------------------
+    #
+    # Behaviour 5 says to wait in the background and read the verdict from the notification. A
+    # `scripts/detach.sh … &` inside a foreground command backgrounds the watch in the SHELL, which the
+    # harness does not track, so no completion notification ever arrives: the actor waits on a signal that
+    # cannot come. Three recorded occurrences (2026-10-28 and twice on 2026-10-29, cited in
+    # operations.md's launched-process law), and the third came after a memory note saying not to, so a note
+    # is not enough. The chair's ruling of 2026-10-30, item 1, ordered this route.
+    #
+    # The subject is the WATCH, so the program word is found past what can stand before it: `VAR=value`
+    # assignments, `env`, `nohup`, and a `bash`/`sh` wrapper. The discriminator is the separator that
+    # follows the command, the same `backgrounded` set route 4 reads. `2>&1` tokenises as `>&`, not as a
+    # separator, so the ordinary `detach.sh … > log 2>&1; tail …` under run_in_background is untouched.
+    for n, cmdv in enumerate(simple_commands(tokens)):
+        if n not in backgrounded:
+            continue
+        head = 0
+        while head < len(cmdv) and (
+            cmdv[head] in SHELL_KEYWORDS
+            or cmdv[head] in ("env", "bash", "sh")
+            or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", cmdv[head])
+        ):
+            head += 1
+        if head < len(cmdv) and basename(cmdv[head]) == "detach.sh":
+            reasons.append(
+                "`scripts/detach.sh` is backgrounded with a trailing `&`, so the shell holds the watch and the "
+                "harness never notifies when it ends — launch it with the Bash tool's `run_in_background: "
+                "true` instead, with no `&`"
+            )
+
     # --- route 3: an inline interpreter that opens a file for writing ---------------------------
     programs: list[str] = list(bodies)
     for cmdv in simple_commands(tokens):
@@ -1412,8 +1443,10 @@ def main() -> int:
     unparsed = [r for r in reasons if r.startswith("the command could not be tokenised")]
     # Route 9 carries its own advice in the reason; the editing guidance would name the wrong route.
     remembering = [r for r in reasons if r.startswith("the command touches session memory")]
+    # Route 10 carries its own advice in the reason, and is about launching, not editing.
+    launching = [r for r in reasons if r.startswith("`scripts/detach.sh` is backgrounded")]
     editing = [r for r in reasons if r not in sleeping and r not in discarding and r not in publishing
-               and r not in merging and r not in unparsed and r not in remembering]
+               and r not in merging and r not in unparsed and r not in remembering and r not in launching]
 
     msg = "editroute: REFUSED.\n\n" + "".join(f"  * {r}\n" for r in reasons) + "\n"
     if editing:
