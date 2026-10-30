@@ -110,39 +110,48 @@ native() {
 }
 
 run_native() {
-	echo "xcheck: native x86_64 via $host — copying the working tree (uncommitted state included)"
-	ssh -o BatchMode=yes "$host" "rm -rf ~/$dest && mkdir -p ~/$dest"
-	COPYFILE_DISABLE=1 tar -c --no-mac-metadata --exclude bin -f - . 2>/dev/null |
-		ssh -o BatchMode=yes "$host" "tar -x -C ~/$dest"
-
-	# The two assertions the prose recipe could only ask for politely. Counted with
-	# find on the far side too: `*.wast` here means what Go means by it.
-	remote=$(ssh -o BatchMode=yes "$host" "cd ~/$dest && find testdata/spec -maxdepth 1 -name '*.wast' | wc -l" | tr -d ' ')
-	sidecars=$(ssh -o BatchMode=yes "$host" "cd ~/$dest && find testdata/spec -maxdepth 1 -name '._*' | wc -l" | tr -d ' ')
-	if [ "$sidecars" -ne 0 ]; then
-		echo "xcheck: FAIL to copy — $sidecars AppleDouble sidecars in testdata/spec on $host." >&2
-		echo "  The corpus is poisoned and the board would redden for the copy, not the arch." >&2
-		exit 3
-	fi
-	if [ "$remote" != "$localwast" ]; then
-		echo "xcheck: FAIL to copy — testdata/spec holds $localwast .wast here, $remote on $host." >&2
-		echo "  Reconciliation, not a floor: too few means a lossy copy, too many means junk." >&2
-		exit 3
-	fi
 	if [ "$localwast" -eq 0 ]; then
 		echo "xcheck: testdata/spec is empty — run 'make spec-tests' first; a skip is not a verdict." >&2
 		exit 3
 	fi
-	echo "xcheck: corpus reconciled at $localwast vectors, 0 sidecars; running: $cmd"
 
+	# **A fresh tree per invocation, extracted, checked and removed by the queued task itself (#1188).**
+	# The copy used to `rm -rf ~/$dest` and untar into it over plain ssh, then queue only the command.
+	# So an earlier xcheck task still queued or running in that tree had it replaced underneath it, and
+	# pueue could not order a direct write against its own tasks (Scott, 2026-10-29: *"you should always
+	# use pueue"*). Now the only thing written outside the queue is a tarball at a path no task has ever
+	# used. The task unpacks it, reconciles the corpus there, runs the command, and removes its tree.
+	nonce="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)-$$-$(date +%s)"
+	home=$(ssh -o BatchMode=yes "$host" 'echo "$HOME"')
 	# An absolute far-side path, because pueue's `-w` is not passed through a shell that would
 	# expand a `~`. labrun quotes it into the submission single-quoted, so a tilde would arrive
 	# literally and the task would start in a directory named `~`.
-	remote_root=$(ssh -o BatchMode=yes "$host" 'echo "$HOME"')/$dest
-	case "$remote_root" in
+	case "$home" in
 	/*) ;;
-	*) echo "xcheck: NOT RUN — could not resolve \$HOME on $host (got '$remote_root')." >&2; exit 4 ;;
+	*) echo "xcheck: NOT RUN — could not resolve \$HOME on $host (got '$home')." >&2; exit 4 ;;
 	esac
+	remote_root="$home/$dest-$nonce"
+	arch=$(ssh -o BatchMode=yes "$host" 'uname -m' 2>/dev/null) || arch=unknown
+	echo "xcheck: native $arch via $host — copying the working tree (uncommitted state included) to $remote_root"
+	COPYFILE_DISABLE=1 tar -c --no-mac-metadata --exclude bin -f - . 2>/dev/null |
+		ssh -o BatchMode=yes "$host" "cat > '$remote_root.tar'"
+
+	# The far side's own preamble. The two assertions the prose recipe could only ask for politely run
+	# here, inside the task, against the tree the command will actually run in. The vectors are counted by
+	# the copied tree's own suite-count.sh, the definition `localwast` came from, so the two sides cannot
+	# disagree about what a vector is. The sidecars are counted separately, which is the poisoning check
+	# and a different question from the population. A copy failure prints a
+	# `xcheck-copy:` line and exits 3, and the check after labrun turns that back into this script's
+	# FAIL to copy, so a poisoned corpus is never read as the command's verdict.
+	pre="f() { echo \"xcheck-copy: \$1\"; cd / && rm -rf '$remote_root' '$remote_root.tar'; exit 3; };"
+	pre="$pre mkdir -p '$remote_root' && tar -x -C '$remote_root' -f '$remote_root.tar' && rm -f '$remote_root.tar'"
+	pre="$pre && cd '$remote_root' || f 'extraction failed';"
+	pre="$pre n=\$(sh scripts/suite-count.sh testdata/spec);"
+	pre="$pre s=\$(find testdata/spec -maxdepth 1 -name '._*' | wc -l | tr -d ' ');"
+	pre="$pre [ \"\$s\" -eq 0 ] || f \"\$s AppleDouble sidecars in testdata/spec: the corpus is poisoned\";"
+	pre="$pre [ \"\$n\" = $localwast ] || f \"testdata/spec holds $localwast .wast here, \$n on $host: a lossy or junk copy\";"
+	post="st=\$?; cd / && rm -rf '$remote_root'; exit \$st"
+	echo "xcheck: the task reconciles the corpus at $localwast vectors before running: $cmd"
 
 	# The submit-time concurrency count, for the provenance block scripts/labprov writes into
 	# each arm log. Taken here rather than on the runner because it is a fact about the moment
@@ -183,9 +192,17 @@ print(sum(1 for t in tasks.values()
 	# mistake would hand back `tee`'s success as the cross-check's verdict.
 	labout="$scratch/labrun.err"
 	st=0
-	LABRUN_DIR="$remote_root" "$(dirname "$0")/labrun" "$host" "$group" -- \
-		sh -c "cd $remote_root && LAB_CONCURRENT=$concurrent $cmd" 2>"$labout" || st=$?
+	# `-w` is the far-side home, which exists when the task is added. The tree does not exist until
+	# the task's own preamble makes it.
+	LABRUN_DIR="$home" "$(dirname "$0")/labrun" "$host" "$group" -- \
+		sh -c "$pre LAB_CONCURRENT=$concurrent $cmd; $post" 2>"$labout" || st=$?
 	cat "$labout" >&2
+
+	if grep -q 'xcheck-copy: ' "$labout"; then
+		echo "xcheck: FAIL to copy — $(grep -o 'xcheck-copy: .*' "$labout" | head -1 | sed 's/^xcheck-copy: //')." >&2
+		echo "  The corpus on $host is not this tree's, so the board would redden for the copy, not the arch." >&2
+		exit 3
+	fi
 
 	# **A positive delivery check, not an inference from the code.** labrun prints its
 	# `submitted …` line only after `pueue add` returned an id, so the line's *absence* means
@@ -269,8 +286,9 @@ if native; then
 	# passes — a report that can only say yes.
 	st=0
 	run_native || st=$?
-	not_run_if_undelivered "$st" "NATIVE x86_64 ($host)"
-	echo "xcheck: verdict from NATIVE x86_64 ($host), exit $st"
+	# The far side's own `uname -m`, not this script's name: on orion.local the verdict is arm64's.
+	not_run_if_undelivered "$st" "NATIVE $arch ($host)"
+	echo "xcheck: verdict from NATIVE $arch ($host), exit $st"
 	exit "$st"
 fi
 
