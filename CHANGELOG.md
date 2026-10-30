@@ -100,7 +100,9 @@ says what it now requires and what it gives up.
   - **The fix is the fork's**, on its branch `fix-1157-lockedm-newm` (f608b56). Under burroughsspawn, `newm` on a
     locked M creates the M directly instead of through a template thread wasm never starts, the same exclusion
     Plan 9 has. A new M is a fresh host agent, so there is no kernel thread state to inherit. The fork is
-    unpublished, and the branch's disposition is Scott's.
+    unpublished. On the chair's ruling of 2026-10-30, item 5 (decided unless Scott objects), the branch was
+    fast-forwarded into the fork's `wasmpreempt/phase4`, so f608b56 is now on that branch, and c4lock's
+    PROVENANCE names it.
   - **The witness** is `c4lock`, built from that commit (PROVENANCE). It must match stock Go's `done`.
     **Neuter, run:** the same source built with the fork at 944cfd2 fails the case with the throw.
   - Rebuilt with the fix, v0.12.0's witness guest and six of #406's guests match their committed expectations, 7

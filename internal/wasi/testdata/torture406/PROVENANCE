@@ -24,7 +24,8 @@ compression (one space, not sha256sum's two, which the tree's spacing check read
 **c4lock is the exception, built from a later fork commit**, because the commit above is the one it exercises the
 defect of (#1157):
 
-    Fork branch:  fix-1157-lockedm-newm (local, unpublished; its disposition is Scott's)
+    Fork branch:  wasmpreempt/phase4, into which fix-1157-lockedm-newm was fast-forwarded on 2026-10-30 (the
+                  chair's ruling of that day, item 5, decided unless Scott objects)
     Fork commit:  f608b567d5b49de5ca7a3dd13b617f3e9c9cd545, one commit on 944cfd2 (src/runtime/proc.go, newm)
     Toolchain:    go version go1.28-devel_f608b567d5 Thu Oct 29 03:00:38 2026 -0700 darwin/arm64
     Built on:     darwin/arm64, 2026-10-29, with the same build line as above
