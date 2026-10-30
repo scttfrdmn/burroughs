@@ -249,8 +249,15 @@ says what it now requires and what it gives up.
     that premise every round.
   - **Witness:** `TestABulkOrSIMDEdgeDoesNotRaceANeighbouringByte`, under `-race` on the Go heap. **Neuter,
     run:** with `edgeSplit` returning (0, 0), the old path, the detector reports at every repaired site.
-  - **The cost** was pre-registered on #1167 against new `membench` rows (`bulkvec_test.go`), and the A/B on
-    janus and orion is in ADR 0112.
+  - **The cost** was pre-registered on #1167 against new `membench` rows (`bulkvec_test.go`), and **the first A/B
+    falsified it.** Aligned rows moved (janus +5–15%) because unguarded edge calls were paid on whole-word
+    extents, and janus's unaligned v128 load ran past twice its band.
+  - **The code as merged** guards each edge call at its site, and measures (janus task 248, orion task 51):
+    - aligned rows: janus +1.75–9.93%, orion −9.72 to +9.07%;
+    - unaligned rows: +20–62 ns per instruction on janus, +5–16 ns on orion;
+    - a page-sized fill: ≤2.2%.
+
+    Both measurements are in ADR 0112. A janus run contaminated by another project's unqueued job was discarded.
 - **A test that ends an embedder `Invoke` goroutine with `Close` no longer donates a boundary crossing to the next
   test** ([grave #1193](https://github.com/scttfrdmn/burroughs/issues/1193), grave #666's shape a second time).
   `TestEveryBoundaryCrossingIsPaired` reddened main at 3140542 with an odd delta.

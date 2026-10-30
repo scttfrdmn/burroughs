@@ -46,8 +46,40 @@ So touching those through 0111's containing-word atomics removes exactly the cas
   Agent B loads and stores the aligned byte at 0x930. The memory is on the Go heap (premise asserted), and the verdict is the race detector's. **Neuter, run** (darwin/arm64, `-race`): with `edgeSplit` returning (0, 0), so every extent is all interior and plain as before this ADR, the detector made 17 reports. Their plain side was `execMemoryFill`, `execMemoryInit`, `execMemoryCopy`, `memory.writeEdges`, `v128FromBytes` and `replaceLaneBytes`, against B's `atomicCell.load` and `update`.
 - **0064's obligation is met and asserted.** The B-MM-2 case (`TestAResumedAgentSeesASiblingFieldWrittenBeforeTheNotify`) takes its verdict from the race detector's silence over a plain `memory.fill`. Its extent is one whole aligned word, so it is interior and still plain. The case now asserts that premise every round, with `edgeSplit`, so an edit that moved its extent onto an edge fails there rather than leaving the case with nothing to detect.
 - **The control caught a blind spot in the slice.** The copy's edge helper was first named `copyEdge`, so the regime control's predicate (*a callee whose name begins `atomic`*) saw no synchronisation, and `execMemoryCopy`'s row would have passed as `plain`. It is `atomicCopyEdge`, and its comment says why.
-- **The cost**, pre-registered on #1167 before any head figure existed. A/B: `make lab-ab AB='--pkg ./internal/interp/membench --base 783d444 --head <this ADR's code commit>'`, `measured` on janus.local and orion.local, over the bulk and SIMD rows commit 783d444 added (`internal/interp/membench/bulkvec_test.go`):
+- **The cost, measured twice, with the forecast pre-registered on #1167 before either.** Each A/B is `make lab-ab` over the bulk and SIMD rows (`internal/interp/membench/bulkvec_test.go`) in the `measured` group on janus.local (x86-64) and orion.local (arm64). Every group on both hosts was checked idle first, with 0 tasks running at submit. A µs per 1000 instructions is a ns per instruction.
 
-  *(the measured tables are recorded here when the A/B completes, against the forecast's bands)*
+  **The first measurement falsified the forecast** (base 783d444, the rows; head 7030f8a, the repair; janus task 246, orion task 50; recorded on #1167):
+  - **Aligned rows moved.** On janus: fill +7.67%, copy +15.19%, init +15.04%, v128 store +8.42%, v128 load +4.89%. On orion, v128 store +9.40%, while copy (−6.49%) and init (−9.95%) got faster. The forecast said aligned rows pay only `edgeSplit`'s arithmetic, but they also paid the edge helpers' calls, which returned on an empty span but were still made.
+  - **janus's V128LoadUnaligned (+20.4 ns) was over twice its 2–10 ns band.** The forecast priced an edge as its atomics alone, and the span helpers' word loops and `packLE`/`unpackLE` cost more than the loads.
+
+  **The second measurement is the code as merged** (base 3b467c2, the same rows rebased; head 8a6eeb0, the repair with each edge call guarded at its call site and `writeEdges` given `readEdges`'s whole-word fast path). orion task 51, and janus task 248. An earlier janus run, task 247, was discarded: another project's `keel.test` ran on janus outside pueue during its last two rounds (load rising to 7, head spreads ±24–37%), and the queue recorded nothing else in that window.
+
+  | row | janus (task 248) | orion (task 51) |
+  |---|---|---|
+  | FillAligned | +5.18% | +9.07% |
+  | FillUnaligned | +75.82% (+30.2 ns) | +18.24% (+4.5 ns) |
+  | FillPage (4094 B) | +2.17% | ~ |
+  | CopyAligned | +9.93% | −9.72% |
+  | CopyUnaligned | +147.26% (+62.4 ns) | +65.10% (+16.2 ns) |
+  | InitAligned | +6.23% | −5.19% |
+  | InitUnaligned | +91.43% (+37.2 ns) | +31.73% (+7.6 ns) |
+  | V128StoreAligned | +1.75% | +3.02% |
+  | V128StoreUnaligned | +67.30% (+40.7 ns) | +52.86% (+13.7 ns) |
+  | V128LoadAligned | +2.92% | +2.30% |
+  | V128LoadUnaligned | +44.82% (+20.6 ns) | +34.53% (+7.4 ns) |
+  | Store8Lane (1 B, always an edge) | +42.53% (+19.3 ns) | +27.62% (+5.6 ns) |
+
+  The typed rows (Load/StoreAligned/Unaligned), which this ADR doesn't touch, were `~` on both hosts in both measurements.
+
+  **What the second measurement says:**
+  - **The guards recovered about half of janus's aligned overhead** (copy 15.2% → 9.9%, init 15.0% → 6.2%, v128 store 8.4% → 1.75%).
+  - **The residual is real and is not the edges.** A whole-word extent makes no edge call. What it still pays is `edgeSplit` and, in `memory.copy`, the lo/hi bookkeeping, about 2–4 ns per instruction on janus.
+  - **orion's aligned fill (+9.07%, ~ in the first measurement) has the same code path in both heads**, so the swing between measurements is variance in that row, not the change. Its aligned copy and init are faster than the base in both.
+  - **The edge cost is 2 to 6 word operations through the span helpers:** about 20–60 ns per unaligned instruction on janus and 5–16 ns on orion. That is roughly twice what the forecast's per-atomic prices said, for the reason the first measurement found.
+  - **A page-sized fill pays ≤2.2%.**
+
+  The forecast stays falsified as registered. Nothing re-bands it after the fact.
+
+  **The SHAs above are the branch's before its last rebase**, onto main's 67656c1 (#1194). They were measured locally and never pushed. The rebase changed none of what was measured: `git diff 8a6eeb0 8355bac` over `internal/interp`'s non-test sources and over `internal/interp/membench` is empty. So the second measurement is of this ADR's code as merged.
 
 - **The price was not a condition of the choice.** The repair was ordered, and the alternatives are leaving the race (1) or a wider and costlier repair (2) that buys nothing more, so no figure could have selected another option. The rollback is reverting this ADR's PR.
