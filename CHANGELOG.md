@@ -111,6 +111,22 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`xcheck` writes nothing a queued task could be using: the copy, checks and cleanup run inside the task**
+  ([#1188](https://github.com/scttfrdmn/burroughs/issues/1188)). Scott's rule of 2026-10-29 is *"you should
+  always use pueue"*. `scripts/xcheck-amd64.sh` used to `rm -rf` and re-extract a fixed `~/burroughs-xcheck` over
+  plain ssh, then queue only the command, so a still-queued earlier run could have its tree replaced underneath it.
+  - **Each invocation now uploads a tarball to a fresh path** (`~/burroughs-xcheck-<sha>-<pid>-<time>.tar`).
+  - **The queued task does the rest:** it extracts the tarball, reconciles the corpus there (the sidecar and
+    `.wast` counts, against the tree the command runs in), runs the command, and removes its tree.
+  - **A copy failure is still `FAIL to copy`** (exit 3), not the command's verdict.
+  - **The verdict line names the far side's `uname -m`.** It said "x86_64" for orion's arm64 runs.
+  - **The far side counts vectors with the copied tree's own `suite-count.sh`**, the definition the local count
+    uses. So `TestEveryShellSuiteCountGoesThroughOneScript` loses its one exception, a `*.wast` glob on an `ssh`
+    line, which no longer had a subject.
+
+  **Run on janus `build`** (tasks 224–229): passing commands (exit 0), a failing one (exit 7, propagated), and a
+  planted sidecar, which fails the copy with exit 3 without running the command, before and after the count
+  moved. No tree was left after any of them.
 - **ADR 0111's cost tables are re-measured on the merged implementation**
   ([#982](https://github.com/scttfrdmn/burroughs/issues/982)), as the ADR pre-registered. The first tables predated
   the pointer repair, and the re-measure had to wait for #406's stress to free the hosts. `membench`, 9e93247

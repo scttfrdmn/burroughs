@@ -394,11 +394,11 @@ func TestShellAndGoAgreeOnTheSuitePopulation(t *testing.T) {
 // expressions are still two expressions, and the second one is where the next drift lands.
 //
 // Derived, not enumerated — the domain is every file in the repo that carries shell (`Makefile`,
-// the workflows, `scripts/*.sh`), scanned for a `*.wast` glob outside a comment. The one
-// admissible exception is derived too rather than listed by line: a glob on a line that also
-// runs `ssh` is asking a different question — what the *far side of a copy* holds, vectors and
-// sidecars counted separately, which is the poisoning check in `xcheck-amd64.sh` and not the
-// population.
+// the workflows, `scripts/*.sh`), scanned for a `*.wast` glob outside a comment. **There is no
+// exception.** There was one, derived rather than listed by line: a glob on a line that also ran
+// `ssh` was `xcheck-amd64.sh` counting the far side of its copy. #1188 moved that count inside the
+// queued task and through this same script, so the exception had no subject, and it was removed
+// rather than left as a place this control looks away.
 func TestEveryShellSuiteCountGoesThroughOneScript(t *testing.T) {
 	const counter = "suite-count.sh"
 
@@ -432,7 +432,7 @@ func TestEveryShellSuiteCountGoesThroughOneScript(t *testing.T) {
 			if trimmed := strings.TrimLeft(line, " \t"); strings.HasPrefix(trimmed, "#") {
 				continue // prose quotes the expressions it replaced, at length
 			}
-			if !strings.Contains(line, "*.wast") || strings.Contains(line, "ssh") {
+			if !strings.Contains(line, "*.wast") {
 				continue
 			}
 			t.Errorf("%s:%d globs *.wast in shell without going through %s:\n\t%s\n\tA POSIX `*` "+
