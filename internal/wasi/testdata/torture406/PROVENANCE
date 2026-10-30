@@ -1,45 +1,50 @@
 #406's Go-runtime torture suite — provenance. The guests are not reproducible from this repository alone: they come from
 the Phase 4 fork, as v0.12.0's witness guest does (../threads012/PROVENANCE).
 
-Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch wasmpreempt/phase4
-Fork HEAD:    944cfd235088042487b0873555f73d03d0890fac
-Toolchain:    go version go1.28-devel_d147ddc568 Thu Oct 1 17:47:21 2026 -0700 darwin/arm64 (the fork's bin/go)
-Built on:     darwin/arm64, 2026-10-28
+Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch fix-1181-idle-break
+Fork commit:  01f3108158, one commit on wasmpreempt/phase4's f608b56 (src/runtime/netpoll_wasip1*.go: under
+              burroughsspawn, wasip1's netpollBreak wakes the netpoller through the futex, #1181). Local and
+              unpublished, with the same merge question to Scott as #1157's branch.
+Toolchain:    go version go1.28-devel_f608b567d5 Thu Oct 29 03:00:38 2026 -0700 darwin/arm64 (the fork's bin/go).
+              The binary was built at f608b56, and a guest's runtime is compiled from the fork tree's source, which
+              was at 01f3108158 for every build below.
+Built on:     darwin/arm64, 2026-10-30
 
 Each <case>.go.txt is the guest's source (module <case>, go 1.26). Each <case>.wasm.gz is that source built as
     GOEXPERIMENT=burroughsspawn GOOS=wasip1 GOARCH=wasm $(fork)/bin/go build -trimpath -ldflags='-s -w' -o <case>.wasm .
-and compressed with `gzip -9 -n` (no name, no timestamp), because a fork-built Go guest is about 2.5 MB and these eight
-would otherwise be about 20 MB in the tree. The test reads them through compress/gzip. sha256 of each .wasm, before
+and compressed with `gzip -9 -n` (no name, no timestamp), because a fork-built Go guest is about 2.5 MB and these nine
+would otherwise be about 22 MB in the tree. The test reads them through compress/gzip. sha256 of each .wasm, before
 compression (one space, not sha256sum's two, which the tree's spacing check reads as a lost word):
 
-    5bea0ef386ce924d101d519111ed1ae7843767a223dd8239b496312601e51a3d c1alloc.wasm
-    d23dcb3671f640a3c2ebc2be1ac711a7faf7addb82309d8bf1f903141b485476 c1stw.wasm
-    f083d6e19900860ef693968f3b902ceefe5d037edf261b0243a4cdb9162cac07 c2a.wasm
-    bcb8c6a532aa0724718d612a447c740a7feb1d9351ba5a2457c7d0619b21feaa c2b.wasm
-    a5ba5510b35de29b829db8e43e0164f70dffa7806c0d7ae73dd431dc542045fc c3a.wasm
-    37ae4f0b5ca00482e0d6f93233e9d5af6d1b8c63b08f9ec42b17cceea2001b60 c3b.wasm
-    4d67cc6ff02e9ddfb6a625afeca73ea7c612f5bad36194c069a019225c52589f ctlcrash.wasm
-    fcc7f9f7ad282854410fff9db43fd8762658cf3040fca81188ff33c16594fe52 ctlhung.wasm
+    92acc11f2740d7189594573af37c492a9ce7de846472d7edcd1a7dcd6fa02c31 c1alloc.wasm
+    d46fa97577664e8296ae1afc102321279708b2fc2e68820d202c6c4affb832de c1stw.wasm
+    3f8adec9ea70f9f9cb1ed1445c957c53a13b2b6767f881e9d024ce07569a83a1 c2a.wasm
+    c0213112765e6e2d262e53f86cf99b350e00d4f20842f66d8fe0e077b0d0b446 c2b.wasm
+    0ee888216e8e7b2cc5020591e0419c3ffad145b5cca930081dc24917a3b0bf10 c3a.wasm
+    148455bccb867ada35fc1fe40580006d95623ddd61a5151750f49320a34d2733 c3b.wasm
+    2999e4a23237e1590cc8860e309598a955951565b34438adbab5d77de4161721 c4lock.wasm
+    64ebf0ff9c04f9aa497e03e10a4434bab440141e88eda7a9072dbdaa446ddab8 ctlcrash.wasm
+    915d65ea5e4db46cb19752ebec7dd4f10cbb51ec5fa692229362780a035f9485 ctlhung.wasm
 
-**c4lock is the exception, built from a later fork commit**, because the commit above is the one it exercises the
-defect of (#1157):
-
-    Fork branch:  wasmpreempt/phase4, into which fix-1157-lockedm-newm was fast-forwarded on 2026-10-30 (the
-                  chair's ruling of that day, item 5, decided unless Scott objects)
-    Fork commit:  f608b567d5b49de5ca7a3dd13b617f3e9c9cd545, one commit on 944cfd2 (src/runtime/proc.go, newm)
-    Toolchain:    go version go1.28-devel_f608b567d5 Thu Oct 29 03:00:38 2026 -0700 darwin/arm64
-    Built on:     darwin/arm64, 2026-10-29, with the same build line as above
-
-    270a51a0c6a2bb762e2a67b9d70a3e737df3588f95ff9fd4c3db668cc8b1d826 c4lock.wasm
-
-The same source built with the fork at 944cfd2 throws "on a locked thread with no template thread" and exits 2. That
-is the neuter, run 3 of 3 on 2026-10-29, recorded on #1157.
+**Why every guest was rebuilt, and what the previous builds showed (the neuters).**
+- **Eight guests were built from 944cfd2** (wasmpreempt/phase4, 2026-10-28). Their c1alloc hung at the 60s bound at a
+  low rate: 9 in 10,000 iterations on orion.local and 17 in 10,000 on janus.local (#406's stress), and 7 by about
+  iteration 1600 on maya.local. In every dump the stall was an idle M asleep in poll_oneoff on a far timer, with the
+  others in futex waits nothing notified (#1181).
+- **c4lock was built from f608b56** (#1157's fix, 2026-10-29). The same source built with the fork at 944cfd2 throws
+  "on a locked thread with no template thread" and exits 2. That is #1157's neuter, run 3 of 3 on 2026-10-29.
+- **With all nine rebuilt from 01f3108158**, maya.local's stress (pueue build task 7) gave 0 of 4000 for c1alloc and
+  for c4lock. The 10,000-iteration counts on janus and orion are recorded on #1181.
+- **c1stw still hangs with this build**, 3 of 3 at a 90s bound. Its hang is #1064's (a spinning goroutine the fork's
+  compiler-inserted loop checks don't preempt), not #1181's, so it keeps its pin and its report-only arm (#1172).
 
 Each <case>.expect is stock Go's result for the same source: class, exit code, first stderr line, and stdout. It was
 generated by building <case>.go.txt NATIVELY with stock Go (a built binary, not `go run`, which reports its own exit 1
 for a program that exits 2) and running it under a 30 s wall clock. TestGoRuntimeTortureExpectationsAreStockGos
 re-derives every .expect from stock Go on each run, so an expectation cannot drift from the toolchain it claims.
 ctlhung.expect is the one written by hand: stock Go was killed by the same wall clock, and "hung" is what that kill is.
+None of the .expect files changed with the rebuild: stock Go's results don't depend on the fork.
 
 Black-box by the chair's ruling (2026-10-28, fifth, item 1): nothing here reads the fork's runtime. The observables
-are what each guest prints and how it ends.
+are what each guest prints and how it ends. The fork's fix was made in the fork's own tree, on the chair's ruling of
+2026-10-30, item 3.
