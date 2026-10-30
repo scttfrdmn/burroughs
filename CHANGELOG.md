@@ -26,6 +26,14 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **editroute's route 10: a `scripts/detach.sh` watch backgrounded with `&` is refused**
+  ([operations.md](docs/laws/operations.md#a-launched-process-is-a-claim-that-something-will-end-it), the chair's
+  ruling of 2026-10-30, item 1). A watch the shell backgrounds never notifies the harness, so `run_in_background`
+  is the only launch that reports. Three recorded occurrences (2026-10-28 and twice on 2026-10-29) are cited in
+  the law. The route finds the program past `VAR=value`, `env`, `nohup` and a `bash`/`sh` wrapper, and leaves
+  `2>&1` alone. **Witness:** three refused shapes and the permitted ordinary form, in
+  `TestEditRouteHookRefusesBashEditsOfTrackedFiles`. **Neuter, run:** with the arm removed, exactly those three
+  fail.
 - **Contract §2 T-5.1's OS-thread half is measured** ([#1132](https://github.com/scttfrdmn/burroughs/issues/1132)):
   *"an unobserved exit MUST leak neither a wasm thread nor an OS thread."* The wasm-thread half was measured. This
   half rested on Go ending a goroutine's thread when it exits locked, which `Spawn` relies on and nothing counted.

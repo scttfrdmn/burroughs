@@ -304,6 +304,26 @@ discipline rather than a mechanism. What changed is that the first watcher's pid
 collision is visible instead of silent. (Scott's order, in session on the #658 review, held by no artifact —
 so every commit in the slice carrying it is `Ratio-Class: carried`.)
 
+**The launch is routed, because a watch backgrounded with `&` never reports.** `scripts/detach.sh … &` inside a
+foreground command hands the watch to the shell, which the harness does not track. So no completion
+notification arrives, and the actor waits on a signal that cannot come. `run_in_background` is the only launch
+that reports. Three recorded occurrences, each caught by hand, with the process group ended from the stamp's
+`kill_handle` and the watch relaunched:
+
+1. 2026-10-28: main's push watch for 9e93247, #1166's merge.
+2. 2026-10-29: the burroughs.run Pages watch for 9c941d3.
+3. 2026-10-29: main's push watch for 719f032, #1177's merge, appended to the end of an issue-comment command.
+   This came **after** a session note saying not to, so a note was not enough.
+
+Three occurrences pass [the two-occurrence
+bar](graves-and-sweeps.md#a-new-law-needs-two-recorded-occurrences-and-the-laws-that-have-not-fired-are-listed-at-each-cut).
+On the chair's ruling of 2026-10-30 (item 1), `scripts/editroute.py`'s route 10 refuses a command whose program
+is `scripts/detach.sh` and which a trailing `&` backgrounds. It finds the program past `VAR=value`, `env`,
+`nohup` and a `bash`/`sh` wrapper. `2>&1` is a redirection and not a backgrounding, so the ordinary `detach.sh …
+> log 2>&1; tail …` under `run_in_background` passes. **Witness:** `TestEditRouteHookRefusesBashEditsOfTrackedFiles`
+refuses all three shapes and permits the ordinary form. **Neuter, run:** with the route's arm removed, exactly
+the three refused arms fail.
+
 ### Merging: a verdict for the head, and a watched main, before every merge
 
 **The procedure** (the chair's ruling of 2026-10-23):

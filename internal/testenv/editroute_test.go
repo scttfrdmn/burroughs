@@ -522,6 +522,39 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			deny: false,
 		},
 		{
+			// Route 10 (the chair's ruling of 2026-10-30, item 1): a watch backgrounded in the shell never
+			// notifies the harness. Three recorded occurrences, cited in operations.md's launched-process law.
+			// NEUTER, run (2026-10-30): with the route's arm removed, this arm and the next two fail.
+			name:   "a_detach_watch_backgrounded_with_an_ampersand_is_refused",
+			cmd:    "scripts/detach.sh /tmp/w.stamp 7200 -- scripts/ciwatch.sh abc123 /tmp/w > /tmp/w.log 2>&1 &",
+			deny:   true,
+			want:   "backgrounded with a trailing `&`",
+			routes: []string{"run_in_background"},
+		},
+		{
+			// The watch's own environment stands before it, so the program word is found past assignments.
+			name:   "a_detach_watch_with_env_assignments_and_an_ampersand_is_refused",
+			cmd:    "CIWATCH_PR=1 CIWATCH_JOB_WAIT=4800 scripts/detach.sh /tmp/w.stamp 7200 -- scripts/ciwatch.sh abc123 /tmp/w &",
+			deny:   true,
+			want:   "backgrounded with a trailing `&`",
+			routes: []string{"run_in_background"},
+		},
+		{
+			// Occurrence 3's shape: the watch tacked onto the end of an unrelated command.
+			name:   "a_detach_watch_tacked_onto_another_command_with_an_ampersand_is_refused",
+			cmd:    "gh issue comment 1 --body x | tail -1 && scripts/detach.sh /tmp/w.stamp 60 -- scripts/ciwatch.sh abc123 /tmp/w > /tmp/w.log 2>&1 &",
+			deny:   true,
+			want:   "backgrounded with a trailing `&`",
+			routes: []string{"run_in_background"},
+		},
+		{
+			// The allowed form, launched with run_in_background: `2>&1` tokenises as `>&`, not a separator, so
+			// the redirection and the trailing `; tail` are not a backgrounding.
+			name: "a_detach_watch_with_a_redirection_and_no_ampersand_is_permitted",
+			cmd:  "scripts/detach.sh /tmp/w.stamp 7200 -- scripts/ciwatch.sh abc123 /tmp/w > /tmp/w.log 2>&1; tail -2 /tmp/w.log",
+			deny: false,
+		},
+		{
 			// `sleep` inside a committed script is untouched, because the hook never sees past the command
 			// line. Stated as an arm so the boundary is asserted rather than merely true today.
 			name: "a_script_that_sleeps_internally_is_not_the_subject",
