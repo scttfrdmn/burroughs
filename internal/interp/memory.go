@@ -743,7 +743,12 @@ func (m *memory) read(idx, offset, n uint64) ([]byte, error) {
 // fails that control until someone classifies it — which is how the seventh site, `runData`, stopped being
 // a site nobody had counted.
 //
+// **The SIMD stores no longer reach it** ([ADR 0112][0112], #1167). They go through `memory.writeEdges`, which
+// writes an access's partial edge words atomically, and the paragraph above names them as they were. Its callers
+// now are `runData` and the embedder's accessors.
+//
 // [0064]: ../../docs/decisions/0064-the-bulk-and-simd-region-stays-plain-and-is-confined-by-an-enumeration-a-control-asserts-because-the-guest-model-permits-the-tear.md
+// [0112]: ../../docs/decisions/0112-a-bulk-or-simd-extent-touches-its-partial-edge-words-atomically-and-its-whole-words-plainly-because-only-an-edge-word-can-be-shared-with-a-disjoint-neighbour.md
 func (m *memory) write(idx, offset uint64, bs []byte) error {
 	ea, err := effectiveAddress(idx, offset)
 	if err != nil {

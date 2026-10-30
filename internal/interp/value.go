@@ -235,6 +235,10 @@ type stack struct {
 	// business, which is what `math.Float64bits` and friends are for below.
 	num []uint64
 
+	// edgeBuf is where a SIMD load with partial edge words assembles its bytes (`memory.readEdges`, ADR 0112).
+	// It is per stack, so per thread, and so the unaligned load allocates nothing.
+	edgeBuf [16]byte
+
 	// refs holds every reference slot.
 	//
 	// **No longer empty, and the suppression is gone rather than kept.** It carried
