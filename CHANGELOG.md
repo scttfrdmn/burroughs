@@ -232,6 +232,19 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A test that ends an embedder `Invoke` goroutine with `Close` no longer donates a boundary crossing to the next
+  test** ([grave #1193](https://github.com/scttfrdmn/burroughs/issues/1193), grave #666's shape a second time).
+  `TestEveryBoundaryCrossingIsPaired` reddened main at 3140542 with an odd delta.
+  - **The cause:** `TestAStopLandsInsideABulkFill` ran five tests earlier, with an `Invoke` on a goroutine ended by
+    `defer in.Close()`. `Close` returns when the caller uncount releases quiescence, and `invokeIndex`'s defer
+    uncounts before its last `leaveGuest`. So the goroutine's final crossing could land in a later test.
+  - **The repair, at the leaking tests:** all nine fire-and-forget `Invoke` sites in `internal/interp`'s tests (six
+    tests and three benchmarks) go through `goInvoke`, which waits for the goroutine itself after `Close`.
+  - **The guard:** `TestEveryFireAndForgetInvokeGoesThroughGoInvoke` refuses a new site that bypasses it. Its one
+    named exception is t5_test.go's deliberately wedged host call. **Neuter, run:** reverting one site fails at
+    that site.
+  - **Grave #666's lesson** said `Close` was a join, and is corrected where it is stated: true for a spawned
+    thread, false for the embedder's own `Invoke`.
 - **A shared-everything-threads encoding is refused by name, as `ErrUnsupported`, not as malformed**
   ([#1120](https://github.com/scttfrdmn/burroughs/issues/1120)). Its `0x65` prefix was *"malformed reference type:
   0x65"* (as a reference type) or *"malformed definition type: 0x65"* (as a composite type). That told a caller a

@@ -184,8 +184,7 @@ func TestAStopLandsInsideATableOrArrayBulkInstruction(t *testing.T) {
 	for _, w := range bulkWitnesses(t) {
 		t.Run(w.name, func(t *testing.T) {
 			in := gcInst(t, w.wat)
-			go func() { _, _ = in.Invoke("run", I32(1_000_000)) }()
-			defer func() { _ = in.Close() }()
+			goInvoke(t, in, "run", I32(1_000_000)) // and waits for it, after Close (#1193)
 			// Three trips first, so both ends of the destination hold a written value.
 			for primed := false; !primed; {
 				if err := in.Stop(30 * time.Second); err != nil {
@@ -351,8 +350,7 @@ func TestAStopLandsInsideAnArrayNew(t *testing.T) {
 						(global.set $it (i32.add (global.get $it) (i32.const 1)))
 						(local.set 0 (i32.sub (local.get 0) (i32.const 1))) (br_if 0 (local.get 0)))
 					(i32.const 0)))`)
-			go func() { _, _ = in.Invoke("run", I32(1_000_000)) }()
-			defer func() { _ = in.Close() }()
+			goInvoke(t, in, "run", I32(1_000_000)) // and waits for it, after Close (#1193)
 			// **The floor: the guest is inside its loop.** Until `Invoke` has entered, no caller of the instance
 			// exists, so every `Stop` is satisfied at once and every one sees the count 0. The first draft of
 			// this witness counted those as stops inside one instruction, and passed with the poll removed: 85 to

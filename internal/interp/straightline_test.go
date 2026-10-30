@@ -365,8 +365,7 @@ func arrivalForStretch(b *testing.B, stretch int) {
 	if trap != nil {
 		b.Fatalf("instantiate: %v", trap)
 	}
-	go func() { _, _ = in.Invoke("run", I32(2_000_000_000)) }()
-	defer func() { _ = in.Close() }()
+	goInvoke(b, in, "run", I32(2_000_000_000)) // and waits for it, after Close (#1193)
 	const trials = 200
 	var arrivals []time.Duration
 	rng := rand.New(rand.NewPCG(1, uint64(stretch)))
