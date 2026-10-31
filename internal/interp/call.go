@@ -243,7 +243,7 @@ func (in *Instance) resolveCall(idx uint32) (funcTarget, error) {
 		}
 		// Past the end of the index space, which is #9's `unknown function`.
 		return funcTarget{}, fmt.Errorf("%w: call names function %d of %d",
-			ErrNotValidated, idx, in.mod.ImportedFuncs()+len(in.mod.Funcs))
+			ErrEngineInvariant, idx, in.mod.ImportedFuncs()+len(in.mod.Funcs))
 	}
 	ft, err := in.funcType(fn)
 	if err != nil {
@@ -312,7 +312,7 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 	if gotNum, gotRef := len(st.num)-numBase, len(st.refs)-refBase; gotNum != wantNum || gotRef != wantRef {
 		return fmt.Errorf("%w: a called function declares %d results (%d numeric, %d reference) "+
 			"and left %d numeric, %d reference values on the stack",
-			ErrNotValidated, len(ft.Results), wantNum, wantRef, gotNum, gotRef)
+			ErrEngineInvariant, len(ft.Results), wantNum, wantRef, gotNum, gotRef)
 	}
 	return nil
 }
@@ -507,7 +507,7 @@ func funcRefTarget(r ref, site string) (funcTarget, error) {
 	}
 	if r.Addr >= uint32(target.mod.ImportedFuncs()) {
 		return funcTarget{}, fmt.Errorf("%w: %s names function %d of %d",
-			ErrNotValidated, site, r.Addr, target.mod.ImportedFuncs()+len(target.mod.Funcs))
+			ErrEngineInvariant, site, r.Addr, target.mod.ImportedFuncs()+len(target.mod.Funcs))
 	}
 	// **Resolved here and then type-checked by the *caller*, sharing the defined path's check.**
 	// `call` names a function statically and the validator has agreed its signature;
@@ -861,12 +861,12 @@ func resolveCallRef(st *stack) (funcTarget, *binary.FuncType, error) {
 func (in *Instance) declaredFuncType(idx uint64) (*binary.FuncType, error) {
 	if idx >= uint64(len(in.mod.Types)) {
 		return nil, fmt.Errorf("%w: call_indirect names type %d of %d",
-			ErrNotValidated, idx, len(in.mod.Types))
+			ErrEngineInvariant, idx, len(in.mod.Types))
 	}
 	ct := &in.mod.Types[idx]
 	if ct.Kind != binary.CompFunc {
 		return nil, fmt.Errorf("%w: call_indirect names type %d, which is a %s",
-			ErrNotValidated, idx, ct.Kind)
+			ErrEngineInvariant, idx, ct.Kind)
 	}
 	return &ct.Func, nil
 }

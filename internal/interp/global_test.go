@@ -320,8 +320,8 @@ func TestGlobalOutOfRangeIsTheLayeringDebt(t *testing.T) {
 		t.Fatalf("trap: %v", trap)
 	}
 	_, err := in.globalFor(&in.host, "instruction", 4)
-	if !errors.Is(err, ErrNotValidated) {
-		t.Errorf("got %v, want ErrNotValidated", err)
+	if !errors.Is(err, ErrEngineInvariant) {
+		t.Errorf("got %v, want ErrEngineInvariant (#1134 class A)", err)
 	}
 	// The message names the holder and both numbers, because "global 4" alone sends a reader
 	// looking for a global they do not have without saying how many they do.
@@ -617,15 +617,15 @@ func TestGlobalExportKindIsNotDeclarationOrder(t *testing.T) {
 func TestNeedRefReadsTheRefArray(t *testing.T) {
 	st := &stack{}
 	st.pushNum(1)
-	if err := st.needRef(1); !errors.Is(err, ErrNotValidated) {
-		t.Errorf("needRef(1) with one *numeric* slot: got %v, want ErrNotValidated — "+
+	if err := st.needRef(1); !errors.Is(err, ErrEngineInvariant) {
+		t.Errorf("needRef(1) with one *numeric* slot: got %v, want ErrEngineInvariant — "+
 			"the two arrays have independent depths", err)
 	}
 	st.pushRef(ref{Null: true})
 	if err := st.needRef(1); err != nil {
 		t.Errorf("needRef(1) with one reference: %v", err)
 	}
-	if err := st.needRef(2); !errors.Is(err, ErrNotValidated) {
-		t.Errorf("needRef(2) with one reference: got %v, want ErrNotValidated", err)
+	if err := st.needRef(2); !errors.Is(err, ErrEngineInvariant) {
+		t.Errorf("needRef(2) with one reference: got %v, want ErrEngineInvariant", err)
 	}
 }

@@ -55,6 +55,8 @@ package binary
 // they are checked, in sections.go. This file governs the instruction stream only, and
 // `Features`' own comments name both halves.
 
+import "slices"
+
 // gateID identifies a Features field. It is a string rather than an index because an
 // index into a struct is a fact that changes when a field is inserted, and the whole
 // point of this file is that the mapping survives the table being regenerated.
@@ -304,4 +306,56 @@ func (f Features) enabled(g gateID) (on bool, known bool) {
 		return f.ExtendedConst, true
 	}
 	return false, false
+}
+
+// AdmittedOpcode is one instruction opcode the decoder accepts under some Features value.
+type AdmittedOpcode struct {
+	Prefix byte   // 0 for a single-byte opcode
+	Op     uint32 // the opcode, or the region's sub-opcode
+	// Label is the table's mnemonic, or for ELSE and END, which carry none, their reason text.
+	Label string
+}
+
+// AdmittedOpcodes returns every instruction opcode f admits, ordered by prefix and then opcode.
+// That is every row of the opcode tables that is neither illegal nor an escape byte, and whose
+// gate, if it has one, is on.
+//
+// **It answers from the decoder's own two inputs**: the generated tables, and `gateFor` read
+// through `enabled`, which is what `gateCheck` applies to each instruction. So a consumer asking
+// "every opcode a module can carry past the decoder" gets the decoder's set, not a list kept beside
+// it that drifts when a table is regenerated or a gate added. A gate `enabled` does not know is
+// treated as off, which is the decoder's answer too: `gateCheck` declines it.
+//
+// The consumer is #1134's decline control in `internal/validate`, which asks the validator about
+// each opcode a lane admits (the chair's ruling of 2026-10-31, items 1 and 2).
+func (f Features) AdmittedOpcodes() []AdmittedOpcode {
+	var out []AdmittedOpcode
+	add := func(prefix byte, table map[uint32]opInfo) {
+		for op, info := range table {
+			if info.illegal || info.escape {
+				continue
+			}
+			if g, gated := gateFor(prefix, op); gated {
+				if on, known := f.enabled(g.gate); !on || !known {
+					continue
+				}
+			}
+			label := info.mnemonic
+			if label == "" {
+				label = info.reason
+			}
+			out = append(out, AdmittedOpcode{Prefix: prefix, Op: op, Label: label})
+		}
+	}
+	add(0, opTable)
+	for prefix, region := range prefixRegions {
+		add(prefix, region)
+	}
+	slices.SortFunc(out, func(a, b AdmittedOpcode) int {
+		if a.Prefix != b.Prefix {
+			return int(a.Prefix) - int(b.Prefix)
+		}
+		return int(a.Op) - int(b.Op)
+	})
+	return out
 }

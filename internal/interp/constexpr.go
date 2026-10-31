@@ -149,7 +149,7 @@ func (in *Instance) runConst(expr []binary.Instr, numWant, refWant int, site str
 	if len(st.num) != numWant || len(st.refs) != refWant {
 		return nil, fmt.Errorf("%w: %s left %d numeric and %d reference values on the stack, "+
 			"but its declared type wants %d and %d",
-			ErrNotValidated, site, len(st.num), len(st.refs), numWant, refWant)
+			ErrEngineInvariant, site, len(st.num), len(st.refs), numWant, refWant)
 	}
 	return st, nil
 }

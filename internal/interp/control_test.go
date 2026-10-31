@@ -1,7 +1,7 @@
 package interp
 
 import (
-	"strings"
+	"errors"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -496,8 +496,9 @@ func TestBranchToMissingLabelIsTheLayeringDebt(t *testing.T) {
 	if err == nil {
 		t.Fatalf("br 3 with two labels in scope was accepted, returning %v", out)
 	}
-	if !strings.Contains(err.Error(), "reached the interpreter unvalidated") {
-		t.Errorf("got %v, want the layering debt", err)
+	if !errors.Is(err, ErrEngineInvariant) {
+		t.Errorf("got %v, want ErrEngineInvariant: a validated module cannot branch past its labels, so "+
+			"this reaching the interpreter is the engine's failure (#1134 class A)", err)
 	}
 }
 

@@ -227,7 +227,7 @@ func (in *Instance) newTable(t binary.Table) (*table, error) {
 	}
 	if lim.HasMax && lim.Min > lim.Max {
 		return nil, fmt.Errorf("%w: table declares min %d above max %d",
-			ErrNotValidated, lim.Min, lim.Max)
+			ErrEngineInvariant, lim.Min, lim.Max)
 	}
 	if lim.Min > math.MaxInt/refSize {
 		return nil, &Trap{Reason: "out of memory"}
@@ -775,7 +775,7 @@ func (t *table) blit(offset uint64, rs []ref) error {
 func (in *Instance) tableFor(what string, idx uint64) (*table, error) {
 	if idx >= uint64(len(in.tables)) {
 		return nil, fmt.Errorf("%w: %s names table %d of %d",
-			ErrNotValidated, what, idx, len(in.tables))
+			ErrEngineInvariant, what, idx, len(in.tables))
 	}
 	if in.tables[idx] == nil {
 		// A reserved slot with nothing in it, and the two reasons are reported apart because
@@ -791,7 +791,7 @@ func (in *Instance) tableFor(what string, idx uint64) (*table, error) {
 				ErrUnsupported, idx)
 		}
 		return nil, fmt.Errorf("%w: table %d was declared but not allocated: %w",
-			ErrNotValidated, idx, in.deferred)
+			ErrEngineInvariant, idx, in.deferred)
 	}
 	return in.tables[idx], nil
 }

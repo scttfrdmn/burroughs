@@ -220,11 +220,11 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// arrays, independently, per label's own doc comment (#196/#197).
 			if len(st.num) < params {
 				return fmt.Errorf("%w: block takes %d parameters with %d values on the stack",
-					ErrNotValidated, params, len(st.num))
+					ErrEngineInvariant, params, len(st.num))
 			}
 			if len(st.refs) < refParams {
 				return fmt.Errorf("%w: block takes %d reference parameters with %d references on the stack",
-					ErrNotValidated, refParams, len(st.refs))
+					ErrEngineInvariant, refParams, len(st.refs))
 			}
 			l.height = len(st.num) - params
 			l.refHeight = len(st.refs) - refParams
@@ -247,11 +247,11 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			}
 			if len(st.num) < params {
 				return fmt.Errorf("%w: try_table takes %d parameters with %d values on the stack",
-					ErrNotValidated, params, len(st.num))
+					ErrEngineInvariant, params, len(st.num))
 			}
 			if len(st.refs) < refParams {
 				return fmt.Errorf("%w: try_table takes %d reference parameters with %d references on the stack",
-					ErrNotValidated, refParams, len(st.refs))
+					ErrEngineInvariant, refParams, len(st.refs))
 			}
 			// **The catch vector is retrieved by `pc`, before `ctrl` grows** — `CatchVector`
 			// mirrors `LabelVector`'s own present/absent distinction, and a `try_table` always
@@ -281,11 +281,11 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			cond := st.popI32()
 			if len(st.num) < params {
 				return fmt.Errorf("%w: if takes %d parameters with %d values on the stack",
-					ErrNotValidated, params, len(st.num))
+					ErrEngineInvariant, params, len(st.num))
 			}
 			if len(st.refs) < refParams {
 				return fmt.Errorf("%w: if takes %d reference parameters with %d references on the stack",
-					ErrNotValidated, refParams, len(st.refs))
+					ErrEngineInvariant, refParams, len(st.refs))
 			}
 			// The label is pushed for **both** arms and for the no-else case, because `br 0`
 			// inside either arm exits the whole `if`. Its continuation is past the END, like
@@ -329,7 +329,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// blind spot — a green that survives the bug it names — cleared by the artifact
 			// the control was waiting on rather than by more control.
 			if len(ctrl) == 0 {
-				return fmt.Errorf("%w: ELSE outside any if", ErrNotValidated)
+				return fmt.Errorf("%w: ELSE outside any if", ErrEngineInvariant)
 			}
 			pc = st.t.jumpTo(ctrl[len(ctrl)-1].cont-1, pc) // cont is past the END; pc++ restores it
 			ctrl = ctrl[:len(ctrl)-1]
@@ -730,7 +730,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// layering debt for a module that validly drops a lone reference with an empty
 			// numeric array, which is exactly `TestDropPicksTheCorrectArray`'s own shape.
 			if len(st.num) == 0 && len(st.refs) == 0 {
-				return fmt.Errorf("%w: stack has 0 values, an instruction wanted 1", ErrNotValidated)
+				return fmt.Errorf("%w: stack has 0 values, an instruction wanted 1", ErrEngineInvariant)
 			}
 			st.drop()
 
@@ -1485,7 +1485,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 	// again rather than a reachable path, and it says so instead of returning nil. A `nil`
 	// here would let a hand-built or fuzz-mutated body fall out silently and be scored on
 	// whatever the stack happened to hold.
-	return fmt.Errorf("%w: function body ended without END", ErrNotValidated)
+	return fmt.Errorf("%w: function body ended without END", ErrEngineInvariant)
 }
 
 // unsupported names the opcode the engine has no arm for, in the table's own two-field
@@ -1506,7 +1506,7 @@ func unsupported(ins binary.Instr) error {
 
 // badLocal reports a local index the frame does not have.
 func badLocal(idx uint64, n int) error {
-	return fmt.Errorf("%w: local.* index %d of %d locals", ErrNotValidated, idx, n)
+	return fmt.Errorf("%w: local.* index %d of %d locals", ErrEngineInvariant, idx, n)
 }
 
 // needNum reports whether the numeric stack holds at least n values.
@@ -1525,7 +1525,7 @@ func badLocal(idx uint64, n int) error {
 func (s *stack) needNum(n int) error {
 	if len(s.num) < n {
 		return fmt.Errorf("%w: stack has %d values, an instruction wanted %d",
-			ErrNotValidated, len(s.num), n)
+			ErrEngineInvariant, len(s.num), n)
 	}
 	return nil
 }
