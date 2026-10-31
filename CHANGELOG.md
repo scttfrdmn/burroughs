@@ -26,6 +26,9 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **#406's stress reports each case's progress every ten minutes**: iterations done, failures so far, time
+  elapsed and an estimate of what is left (`BURROUGHS_T406_PROGRESS` overrides the interval). A 10,000-iteration
+  c1alloc run takes most of a day, and until now it printed nothing until the case finished.
 - **editroute's route 10: a `scripts/detach.sh` watch backgrounded with `&` is refused**
   ([operations.md](docs/laws/operations.md#a-launched-process-is-a-claim-that-something-will-end-it), the chair's
   ruling of 2026-10-30, item 1). A watch the shell backgrounds never notifies the harness, so `run_in_background`
