@@ -24,6 +24,19 @@ says what it now requires and what it gives up.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+**Known limits, open on default-on paths, each with its issue:**
+- **A Phase 4 fork guest whose goroutine spins in a loop that never allocates is never preempted**
+  ([#1064](https://github.com/scttfrdmn/burroughs/issues/1064), parked). Its stop-the-world never completes, and
+  under GOMAXPROCS = 1 `main` never runs again. Stock Go completes the same program. This is #406's c1stw, which keeps
+  its pin, and whose departure is report-only
+  ([#1172](https://github.com/scttfrdmn/burroughs/issues/1172)). The #1181 fix did not change it. The work is
+  fork-side preemption, parked on the chair's ruling of 2026-10-31 after two safeguard stops.
+- **Carried from `v0.12.0`, still open:**
+  - `Close` with a zero bound returns `nil` on Windows ([#945](https://github.com/scttfrdmn/burroughs/issues/945));
+    Windows is outside the claim;
+  - a Go runtime fatal seen once on CI's arm64 runner in `internal/spec`
+    ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)), not repeated.
+
 ### Added
 
 - **#406's stress reports each case's progress every ten minutes**: iterations done, failures so far, time
