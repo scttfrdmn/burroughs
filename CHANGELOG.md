@@ -240,12 +240,13 @@ says what it now requires and what it gives up.
   c1alloc hung at its 60s bound at a low rate: 9 in 10,000 on orion, 17 in 10,000 on janus, and on CI.
   - **The cause, settled on #1181:** the fork's wasip1 `netpollBreak` was empty, so an idle M asleep in
     `poll_oneoff` on a far timer could not be woken when another M added an earlier one.
-  - **The fix is the fork's,** on branch `fix-1181-idle-break` (01f3108158). Under burroughsspawn, a netpoll with no
-    fd subscriptions sleeps on a futex word, and the break is a notify on it.
+  - **The fix is the fork's,** on wasmpreempt/phase4 at 01f3108158, fast-forwarded from `fix-1181-idle-break` on
+    2026-10-31 on Scott's answer. Under burroughsspawn, a netpoll with no fd subscriptions sleeps on a futex word, and
+    the break is a notify on it.
   - **All nine guests are rebuilt from it** (PROVENANCE has the hashes, and the previous builds' results as the
     neuters).
-  - **Measured on maya:** c1alloc 0 of 4000, against 7 by about 1600 before, and c4lock 0 of 4000. The
-    10,000-iteration counts on janus and orion are on #1181.
+  - **Witnessed by #406's stress:** c1alloc 0 of 10,000 on orion and 0 of 10,000 on janus, against 9 and 17
+    before, and 0 of 4000 on maya, against 7 by about 1600. The other cases were 0 on every host (#1181).
   - **c1stw still hangs,** for #1064's reason and not #1181's, so it keeps its pin (#1172).
 - **A bulk or SIMD extent's partial edge words are touched atomically, so it cannot race a disjoint neighbour on
   the host** ([#1167](https://github.com/scttfrdmn/burroughs/issues/1167),

@@ -1,10 +1,10 @@
 #406's Go-runtime torture suite — provenance. The guests are not reproducible from this repository alone: they come from
 the Phase 4 fork, as v0.12.0's witness guest does (../threads012/PROVENANCE).
 
-Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch fix-1181-idle-break
-Fork commit:  01f3108158, one commit on wasmpreempt/phase4's f608b56 (src/runtime/netpoll_wasip1*.go: under
-              burroughsspawn, wasip1's netpollBreak wakes the netpoller through the futex, #1181). Local and
-              unpublished, with the same merge question to Scott as #1157's branch.
+Fork tree:    github.com/scttfrdmn/wp-phase4 (local), branch wasmpreempt/phase4, into which fix-1181-idle-break
+              was fast-forwarded on 2026-10-31 (Scott, in session, on #1196's merge question)
+Fork commit:  01f3108158, one commit on f608b56 (src/runtime/netpoll_wasip1*.go: under burroughsspawn, wasip1's
+              netpollBreak wakes the netpoller through the futex, #1181).
 Toolchain:    go version go1.28-devel_f608b567d5 Thu Oct 29 03:00:38 2026 -0700 darwin/arm64 (the fork's bin/go).
               The binary was built at f608b56, and a guest's runtime is compiled from the fork tree's source, which
               was at 01f3108158 for every build below.
