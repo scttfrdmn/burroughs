@@ -425,14 +425,30 @@ func TestGoRuntimeTortureExpectationsAreStockGos(t *testing.T) {
 	}
 }
 
+// t406ProgressEvery is how often the stress reports a case's progress.
+const t406ProgressEvery = 10 * time.Minute
+
 // TestGoRuntimeTortureStress is the 10,000-iteration stress, as #1111 ran its: every case that must match stock Go,
 // N times, with the failing run's full stderr on any mismatch. It runs only when BURROUGHS_T406_ITERS is set,
 // because N runs of a fork guest are hours, not a gate: it goes to janus through pueue `measured`, not `make ci`.
 // Like the helper, it returns rather than skips when unset.
+//
+// **It reports progress**, a line per case every t406ProgressEvery (BURROUGHS_T406_PROGRESS, a Go duration, to
+// override). A clean run otherwise prints nothing until a case's total, and a 10,000-iteration c1alloc is most of a
+// day: the #1181 stresses on janus and orion ran 20 hours with no way to tell progress from a wedge except by looking
+// for fresh helper processes on the host. Under `-test.v`, `t.Logf` streams as it happens, so `pueue log` shows it live.
 func TestGoRuntimeTortureStress(t *testing.T) {
 	n, _ := strconv.Atoi(os.Getenv("BURROUGHS_T406_ITERS"))
 	if n <= 0 {
 		return
+	}
+	every := t406ProgressEvery
+	if s := os.Getenv("BURROUGHS_T406_PROGRESS"); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil || d <= 0 {
+			t.Fatalf("BURROUGHS_T406_PROGRESS=%q is not a positive Go duration: %v", s, err)
+		}
+		every = d
 	}
 	for _, c := range t406Cases {
 		if c.pinned != "" || strings.HasPrefix(c.name, "ctl") {
@@ -440,7 +456,15 @@ func TestGoRuntimeTortureStress(t *testing.T) {
 		}
 		want := t406ReadExpect(t, c.name)
 		start, fails := time.Now(), 0
+		lastReport := start
 		for i := range n {
+			if now := time.Now(); i > 0 && now.Sub(lastReport) >= every {
+				lastReport = now
+				done := time.Since(start)
+				left := time.Duration(float64(done) / float64(i) * float64(n-i))
+				t.Logf("%s: %d of %d, %d failed, %v elapsed, about %v left", c.name, i, n, fails,
+					done.Round(time.Second), left.Round(time.Minute))
+			}
 			got := t406RunFork(t, c)
 			d := t406Mismatch(got, want)
 			if d == "" && c.floor > 0 && got.gauge < c.floor {

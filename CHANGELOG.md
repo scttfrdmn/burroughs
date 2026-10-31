@@ -26,6 +26,9 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **#406's stress reports each case's progress every ten minutes**: iterations done, failures so far, time
+  elapsed and an estimate of what is left (`BURROUGHS_T406_PROGRESS` overrides the interval). A 10,000-iteration
+  c1alloc run takes most of a day, and until now it printed nothing until the case finished.
 - **editroute's route 10: a `scripts/detach.sh` watch backgrounded with `&` is refused**
   ([operations.md](docs/laws/operations.md#a-launched-process-is-a-claim-that-something-will-end-it), the chair's
   ruling of 2026-10-30, item 1). A watch the shell backgrounds never notifies the harness, so `run_in_background`
@@ -232,6 +235,19 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **#406's c1alloc no longer hangs: the suite's guests are rebuilt from the fork's #1181 fix**
+  ([#1181](https://github.com/scttfrdmn/burroughs/issues/1181), the chair's ruling of 2026-10-30, item 3).
+  c1alloc hung at its 60s bound at a low rate: 9 in 10,000 on orion, 17 in 10,000 on janus, and on CI.
+  - **The cause, settled on #1181:** the fork's wasip1 `netpollBreak` was empty, so an idle M asleep in
+    `poll_oneoff` on a far timer could not be woken when another M added an earlier one.
+  - **The fix is the fork's,** on wasmpreempt/phase4 at 01f3108158, fast-forwarded from `fix-1181-idle-break` on
+    2026-10-31 on Scott's answer. Under burroughsspawn, a netpoll with no fd subscriptions sleeps on a futex word, and
+    the break is a notify on it.
+  - **All nine guests are rebuilt from it** (PROVENANCE has the hashes, and the previous builds' results as the
+    neuters).
+  - **Witnessed by #406's stress:** c1alloc 0 of 10,000 on orion and 0 of 10,000 on janus, against 9 and 17
+    before, and 0 of 4000 on maya, against 7 by about 1600. The other cases were 0 on every host (#1181).
+  - **c1stw still hangs,** for #1064's reason and not #1181's, so it keeps its pin (#1172).
 - **A bulk or SIMD extent's partial edge words are touched atomically, so it cannot race a disjoint neighbour on
   the host** ([#1167](https://github.com/scttfrdmn/burroughs/issues/1167),
   [ADR 0112](docs/decisions/0112-a-bulk-or-simd-extent-touches-its-partial-edge-words-atomically-and-its-whole-words-plainly-because-only-an-edge-word-can-be-shared-with-a-disjoint-neighbour.md),
