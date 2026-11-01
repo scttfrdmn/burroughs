@@ -641,7 +641,9 @@ func TestAClosedInstanceInvokesNothing(t *testing.T) {
 // for being a `var`: at ten seconds the only test that can witness this arm costs the bound, and the
 // alternative — calling `in.unquiesced()` directly — proves the message renders while nothing reaches it.
 //
-// The expiry error deliberately does **not** claim the case was un-endable, and the assertion mirrors that.
+// The expiry error deliberately does **not** claim this case is un-endable, and the assertion mirrors that: it is
+// case 1, which nothing can prove. Case 2, the one that can be proved, is
+// TestCloseFromInsideItsOwnHostCallIsReportedAsCaseTwo.
 // It reads `ErrCloseDeadline`, the still-live thread's name, and what that thread's caller is doing: suspended
 // in a host call or a wait, which the error names as case 1 or 2 (#1133). From out here, slow and impossible
 // look the same. TestCloseStateTellsSuspendedFromExecutingCallers covers the other arms, over the marks.
@@ -689,6 +691,93 @@ func TestCloseReportsAnInstanceItCouldNotQuiesce(t *testing.T) {
 			"inside the wedged host function, which is the case 1 the error names, and T-5.4 asks the case to "+
 			"be reported rather than left to the reader (#1133)", err, want)
 	}
+}
+
+// TestCloseFromInsideItsOwnHostCallIsReportedAsCaseTwo is #1133's open half (the chair's ruling of 2026-11-01,
+// item 4): contract §2 T-5.4's *"a case that provably cannot be ended MUST be … reported as shutdown's error"*.
+//
+// A host function calls `Close` on its own instance. Its caller mark is what `Close` waits for, and its host call
+// cannot return until `Close` does, so the instance can never fall quiet. That is `Close`'s case 2, and this
+// `Close` can prove it from its own goroutine's stack (`closerInsideOwnHostCall`). The error must say case 2, and
+// that it cannot end, where the case 1 fixture above gets only "case 1 or case 2".
+//
+// The second row is the control on the match's exactness. A host function of a *different* instance calls this
+// instance's `Close` while this instance is wedged in case 1. The closer is inside a host call, but not one of
+// this instance's, so the error must not claim case 2.
+//
+// NEUTER, run: see the PR that landed this. With `closerInsideOwnHostCall` answering false, the first row fails
+// and the second still passes.
+func TestCloseFromInsideItsOwnHostCallIsReportedAsCaseTwo(t *testing.T) {
+	withCloseInterval(t, 50*time.Millisecond)
+	const caseTwo = "which is Close's case 2, and it cannot end"
+
+	t.Run("own_host_call", func(t *testing.T) {
+		var in *Instance
+		got := make(chan error, 1)
+		in = hostLink(t, `(module
+			(import "h" "closer" (func $closer))
+			(func (export "call") (call $closer)))`,
+			binary.Features{}, hostImports(map[string]Extern{
+				"closer": HostExtern(ft(nil, nil), func(*Caller, []Value) ([]Value, error) {
+					got <- in.Close()
+					return nil, nil
+				}),
+			}))
+		_, _ = in.Invoke("call")
+		var err error
+		select {
+		case err = <-got:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the host function's Close never returned, so the bound did not hold")
+		}
+		if !errors.Is(err, ErrCloseDeadline) {
+			t.Fatalf("Close from inside its own host call returned %v, want ErrCloseDeadline", err)
+		}
+		if !errorMentions(err, caseTwo) || !errorMentions(err, "callHost") {
+			t.Errorf("the error %q does not report case 2 by name. This Close is inside its own instance's host "+
+				"call, which provably cannot end, and T-5.4 requires that reported as shutdown's error", err)
+		}
+	})
+
+	t.Run("another_instances_host_call", func(t *testing.T) {
+		entered, wedged := make(chan struct{}), make(chan struct{})
+		victim := hostLink(t, `(module
+			(import "h" "wedge" (func $wedge))
+			(func (export "call") (call $wedge)))`,
+			binary.Features{}, hostImports(map[string]Extern{
+				"wedge": HostExtern(ft(nil, nil), func(*Caller, []Value) ([]Value, error) {
+					close(entered)
+					<-wedged // case 1, a host function that ignores its context, until the cleanup below
+					return nil, nil
+				}),
+			}))
+		goInvoke(t, victim, "call")
+		// Registered after goInvoke's, so it runs first: the wedge is released, the Invoke returns, and goInvoke's
+		// wait finds it done, so this row leaves no crossing behind (#1193). The wedge has to hold only until the
+		// assertion.
+		t.Cleanup(func() { close(wedged) })
+		<-entered
+		got := make(chan error, 1)
+		other := hostLink(t, `(module
+			(import "h" "closer" (func $closer))
+			(func (export "call") (call $closer)))`,
+			binary.Features{}, hostImports(map[string]Extern{
+				"closer": HostExtern(ft(nil, nil), func(*Caller, []Value) ([]Value, error) {
+					got <- victim.Close()
+					return nil, nil
+				}),
+			}))
+		_, _ = other.Invoke("call")
+		err := <-got
+		if !errors.Is(err, ErrCloseDeadline) {
+			t.Fatalf("Close of the wedged instance returned %v, want ErrCloseDeadline", err)
+		}
+		if errorMentions(err, caseTwo) {
+			t.Errorf("the error %q claims case 2, but the closer is inside a host call of a different instance. "+
+				"This instance's wait is on a sibling host call, case 1, which a traceback cannot prove "+
+				"un-endable", err)
+		}
+	})
 }
 
 // TestCloseStateTellsSuspendedFromExecutingCallers is #1133's description of a live thread, over the marks

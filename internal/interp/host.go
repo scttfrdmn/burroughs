@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -1213,14 +1214,16 @@ func (in *Instance) ExecutingAgents() int {
 //  1. **A host function that ignores its cancelled context.** Stated on `Caller.Context`: pure Go cannot
 //     take a running function's goroutine away.
 //  2. **`Close` called from inside a host function of the same instance.** That call's own marks are what
-//     quiescence waits for, so the wait is on the caller itself. Detecting it needs goroutine identity,
-//     which Go does not offer, so it is nameable but **not distinguishable** from a sibling thread's host
-//     call that is about to return.
+//     quiescence waits for, so the wait is on the caller itself, and it **provably cannot end**. Go offers no
+//     goroutine identity, and this used to read "nameable but not distinguishable" for that reason. The
+//     closer's own stack can answer it, though, on the cold path (`closerInsideOwnHostCall`, #1133).
 //
-// **The expiry error does not claim the case was un-endable.** It names the threads still live and, for each,
-// what its callers are doing: suspended (a host call or a wait, which after cancellation is case 1 or 2) or
-// executing (neither case). That is what the marks can say (#1133, `unquiesced`), and no more. See
-// `closeQuiesceInterval` for why it stops there: from out here, slow and impossible look the same.
+// **The expiry error claims un-endable only for case 2, the one it can prove.** When this `Close` is running
+// inside one of this instance's own host calls, the error says so and says it cannot end, as T-5.4 requires.
+// Otherwise it names the threads still live and, for each, what its callers are doing: suspended (a host call
+// or a wait, which after cancellation is case 1, or case 2 from another goroutine's `Close`) or executing
+// (neither case). That is what the marks can say (`unquiesced`). Case 1 is never claimed un-endable: from out
+// here, a host function about to return and one that never will look the same (`closeQuiesceInterval`).
 //
 // # Idempotence, and what is dropped
 //
@@ -1310,9 +1313,10 @@ func (in *Instance) Close() error {
 //
 // # Which case, where the marks can say (#1133)
 //
-// T-5.4 wants a case that cannot be ended reported as shutdown's error. The error used to name the live threads
-// and leave the case to the reader. Each thread's own marks tell its callers apart, read under `w.mu`, where
-// every one of them is guarded:
+// T-5.4 wants a case that cannot be ended reported as shutdown's error. **Case 2 is asked first**, of this
+// goroutine's own stack: a `Close` inside its own instance's host call cannot end, and the error says so
+// (`closerInsideOwnHostCall`). Otherwise each thread's own marks tell its callers apart, read under `w.mu`,
+// where every one of them is guarded:
 //   - **suspended** (`blocked`): in a host call, or in `memory.atomic.wait`. After cancellation that is
 //     `Close`'s case 1, or case 2 if `Close` was called from inside it, because the engine's own wait leaves on
 //     cancellation. The mark names no reason by design (grave #645), so the error says "a host call or a wait"
@@ -1327,6 +1331,17 @@ func (in *Instance) Close() error {
 // hostCalls` is not a count of waits. The world's `hostCalls` is still reported, as a figure in its own right.
 func (in *Instance) unquiesced() error {
 	w := &in.world
+
+	// Case 2 is the one a Close can prove from where it stands, so it is asked first and outside the lock.
+	if fr, ok := in.closerInsideOwnHostCall(); ok {
+		w.mu.Lock()
+		n := len(w.live)
+		w.mu.Unlock()
+		return fmt.Errorf("%w: this Close is running inside one of this instance's own host calls (%s), which is "+
+			"Close's case 2, and it cannot end: that host call's caller mark is what quiescence waits for, and the "+
+			"call cannot return until this Close does. %d thread(s) still live after %s (contract §2 T-5.4; "+
+			"Instance.Close names both cases)", ErrCloseDeadline, fr, n, closeQuiesceInterval)
+	}
 
 	w.mu.Lock()
 	names := make([]string, 0, len(w.live))
@@ -1343,6 +1358,48 @@ func (in *Instance) unquiesced() error {
 		"not yet reached a safepoint, and slow "+
 		"is not told apart from impossible (contract §2 T-5.4; Instance.Close names both cases)",
 		ErrCloseDeadline, closeQuiesceInterval, len(names), strings.Join(names, "; "), hostCalls)
+}
+
+// closerInsideOwnHostCall reports whether the goroutine running `Close` is inside one of this instance's own
+// host calls, and which kind of call it is. That is case 2: the call's caller mark is what `Close` waits on, so
+// the wait is on its own caller and provably cannot end (#1133, the chair's ruling of 2026-11-01, item 4).
+//
+// # Why a traceback, and why that is exact
+//
+// The question is goroutine identity: is the closer the goroutine that entered the host call? Go offers no
+// goroutine identity, and recording one on the way into every host call would cost 1.5µs at a shallow depth
+// and 10µs at depth 30 (`runtime.Stack`, measured on darwin/arm64). That is far too much for the call path,
+// for a diagnostic only a failing `Close` reads. So it is asked here, on the cold path, of the closer's own
+// stack, which is the one stack this function runs on.
+//
+// A traceback prints each frame's arguments. It marks with `?` a value that may be stale, and prints a value
+// it knows exactly with no mark. `callHost` and `callAdapter` keep `in` live across the host call (each uses
+// it after `h.fn` returns), so the receiver is printed exactly. The match is `callHost(0x<this instance>,`,
+// with the receiver followed directly by `,` or `)`. A stale value carries a `?`, so it cannot match.
+// Different instances have different pointers, so a host call of another instance cannot match either. The
+// one way to miss is a receiver the traceback cannot print exactly. That gives `false`, and the report
+// falls back to "case 1 or 2", which is what it said before.
+//
+// Tracebacks print the innermost 50 frames before eliding, and a host function calling `Close` is a few
+// frames above its `callHost`. The witness, `TestCloseFromInsideItsOwnHostCallIsReportedAsCaseTwo`, drives the
+// real path, so a change in the format or in the receiver's liveness fails it.
+func (in *Instance) closerInsideOwnHostCall() (string, bool) {
+	buf := make([]byte, 64<<10)
+	tb := string(buf[:runtime.Stack(buf, false)])
+	for _, fn := range []string{"callHost", "callAdapter"} {
+		frame := fmt.Sprintf("interp.(*Instance).%s(%p", fn, in)
+		for i := strings.Index(tb, frame); i >= 0; {
+			if j := i + len(frame); j < len(tb) && (tb[j] == ',' || tb[j] == ')') {
+				return fn, true
+			}
+			next := strings.Index(tb[i+1:], frame)
+			if next < 0 {
+				break
+			}
+			i += 1 + next
+		}
+	}
+	return "", false
 }
 
 // closeStateLocked describes this thread's callers for `unquiesced`, from the marks `world.mu` guards. `mu`

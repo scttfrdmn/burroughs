@@ -300,6 +300,26 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A `Close` called from inside its own instance's host function is reported as case 2, which cannot end**
+  ([#1133](https://github.com/scttfrdmn/burroughs/issues/1133), contract §2 T-5.4, the chair's ruling of 2026-11-01,
+  item 4). T-5.4 requires *"a case that provably cannot be ended"* to be reported as shutdown's error.
+  - **Before:** the expiry error named the live threads and said a suspended caller was *"case 1 or case 2"*,
+    because telling them apart needs goroutine identity, which Go doesn't offer.
+  - **The mechanism:** `closerInsideOwnHostCall` reads the closer's own goroutine traceback, on the cold path,
+    only once `Close` has expired. It looks for `interp.(*Instance).callHost(0x<this instance>` (or
+    `callAdapter`) with the receiver printed exactly, followed by `,` or `)`. A traceback marks a value that may
+    be stale with `?`, and both functions keep `in` live across the host call, so a match is exact. A host call
+    of another instance has a different pointer and does not match. A receiver the traceback cannot print
+    exactly gives no match, and the error falls back to the old wording.
+  - **Why not identity on the way in:** `runtime.Stack` measured 1.5µs at a shallow depth and 10µs at depth 30 on
+    darwin/arm64, which is far too much for every host call.
+  - **Unchanged:** `ErrCloseDeadline`'s identity, and when `Close` returns.
+  - **Witness:** `TestCloseFromInsideItsOwnHostCallIsReportedAsCaseTwo`, also under `-race`. A host function that
+    calls its own instance's `Close` gets an error naming case 2. A host function of another instance that closes
+    a case-1-wedged instance does not.
+  - **Neuters, run:**
+    - with the detection answering false, the first row fails and the second passes;
+    - with the receiver match dropped, so any `callHost` frame matches, the second row fails.
 - **#406's c1alloc no longer hangs: the suite's guests are rebuilt from the fork's #1181 fix**
   ([#1181](https://github.com/scttfrdmn/burroughs/issues/1181), the chair's ruling of 2026-10-30, item 3).
   c1alloc hung at its 60s bound at a low rate: 9 in 10,000 on orion, 17 in 10,000 on janus, and on CI.
