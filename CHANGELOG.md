@@ -137,6 +137,23 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The interpreter's 42 module-validity checks report `ErrEngineInvariant`, not `ErrNotValidated`**
+  ([#1134](https://github.com/scttfrdmn/burroughs/issues/1134) class A, the chair's ruling of 2026-10-31, item 1).
+  - **The proof comes first**: `TestNoAdmittedOpcodeReachesADeclineArm` (`internal/validate`). It asks the real
+    validator dispatch about every opcode the decoder admits under `DefaultFeatures()`: 711 opcodes, and none
+    reaches any of the validator's seven fallthrough arms (`ErrUnsupported`).
+  - **Why that retires them.** ADR 0029's decline-runs-anyway path can carry no unvalidated instruction into
+    the interpreter, and every public path validates first (#1162). So a validated module reaching one of these
+    checks is the engine's bug.
+  - **What the checks cover:** stack depth and arity, END/ELSE structure, local, label, function, type,
+    memory, table, global, element and data indices, limits, and deferred instantiation failures. They stay
+    and are refiled under ADR 0077's sentinel. ADR 0029 is not amended.
+  - **The population comes from the decoder, not the corpus**: `binary.Features.AdmittedOpcodes` is the
+    generated tables filtered by the decoder's own gate check.
+  - **Neuter, run:** with `memory.fill`'s validator arm made to fall through, the control fails naming
+    `0xfc 0x0b memory_fill`.
+  - **Left on `ErrNotValidated`:** class D's 23 GC and exception-handling sites, and class C's 2 component
+    canon-option sites.
 - **`xcheck` writes nothing a queued task could be using: the copy, checks and cleanup run inside the task**
   ([#1188](https://github.com/scttfrdmn/burroughs/issues/1188)). Scott's rule of 2026-10-29 is *"you should
   always use pueue"*. `scripts/xcheck-amd64.sh` used to `rm -rf` and re-extract a fixed `~/burroughs-xcheck` over

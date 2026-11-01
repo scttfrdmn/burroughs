@@ -240,7 +240,7 @@ func newMemory(m binary.Memory) (*memory, error) {
 	}
 	if lim.HasMax && lim.Min > lim.Max {
 		return nil, fmt.Errorf("%w: memory declares min %d above max %d",
-			ErrNotValidated, lim.Min, lim.Max)
+			ErrEngineInvariant, lim.Min, lim.Max)
 	}
 	// The multiplication cannot overflow after validSize: an i32 memory is capped at 0xffff
 	// pages and an i64 memory's min has already been bounded by what the host can allocate,
@@ -1221,7 +1221,7 @@ func (in *Instance) runData(idx int, seg *binary.DataSegment) error {
 func (in *Instance) memoryFor(what string, idx uint64) (*memory, error) {
 	if idx >= uint64(len(in.mems)) {
 		return nil, fmt.Errorf("%w: %s names memory %d of %d",
-			ErrNotValidated, what, idx, len(in.mems))
+			ErrEngineInvariant, what, idx, len(in.mems))
 	}
 	if in.mems[idx] == nil {
 		// A reserved slot with nothing in it, and the two reasons are reported apart because
@@ -1251,7 +1251,7 @@ func (in *Instance) memoryFor(what string, idx uint64) (*memory, error) {
 				ErrUnsupported, idx)
 		}
 		return nil, fmt.Errorf("%w: memory %d was declared but not allocated: %w",
-			ErrNotValidated, idx, in.deferred)
+			ErrEngineInvariant, idx, in.deferred)
 	}
 	return in.mems[idx], nil
 }

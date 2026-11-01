@@ -272,7 +272,7 @@ func (in *Instance) globalFor(t *thread, what string, idx uint64) (*global, erro
 	}
 	if idx >= uint64(len(gs)) {
 		return nil, fmt.Errorf("%w: %s names global %d of %d",
-			ErrNotValidated, what, idx, len(gs))
+			ErrEngineInvariant, what, idx, len(gs))
 	}
 	if gs[idx] == nil {
 		// A reserved slot with nothing in it, reported by *which* nothing — memoryFor's
@@ -286,7 +286,7 @@ func (in *Instance) globalFor(t *thread, what string, idx uint64) (*global, erro
 				ErrUnsupported, idx)
 		}
 		return nil, fmt.Errorf("%w: global %d was declared but not initialized: %w",
-			ErrNotValidated, idx, in.deferred)
+			ErrEngineInvariant, idx, in.deferred)
 	}
 	return gs[idx], nil
 }

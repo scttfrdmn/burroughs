@@ -154,12 +154,12 @@ func (in *Instance) blockArity(imm0, imm1 uint64) (params, refParams, results, r
 	default:
 		if int(idx) >= len(in.mod.Types) {
 			return 0, 0, 0, 0, fmt.Errorf("%w: blocktype names type %d of %d",
-				ErrNotValidated, idx, len(in.mod.Types))
+				ErrEngineInvariant, idx, len(in.mod.Types))
 		}
 		ct := &in.mod.Types[idx]
 		if ct.Kind != binary.CompFunc {
 			return 0, 0, 0, 0, fmt.Errorf("%w: blocktype names type %d, which is a %s",
-				ErrNotValidated, idx, ct.Kind)
+				ErrEngineInvariant, idx, ct.Kind)
 		}
 		np, nr := countByArray(ct.Func.Params)
 		rp, rr := countByArray(ct.Func.Results)
@@ -223,7 +223,7 @@ func matchEnd(body []binary.Instr, pc int) (int, error) {
 			}
 		}
 	}
-	return 0, fmt.Errorf("%w: structural instruction at %d has no END", ErrNotValidated, pc)
+	return 0, fmt.Errorf("%w: structural instruction at %d has no END", ErrEngineInvariant, pc)
 }
 
 // elseOf finds the ELSE belonging to the `if` at `pc`, or reports that there is none.
@@ -322,7 +322,7 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 		// the engine will accept.
 		return 0, 0, fmt.Errorf("%w: branch to label %d with %d labels in scope "+
 			"(%d explicit, plus the implicit function body)",
-			ErrNotValidated, depth, len(ctrl)+1, len(ctrl))
+			ErrEngineInvariant, depth, len(ctrl)+1, len(ctrl))
 	}
 	// **A pointer, not a copy** (#1036). `l := ctrl[i]` copied the whole label (about 80 bytes, a slice header
 	// included) onto the goroutine stack on every taken branch and read its fields back. #1036's profile put the
@@ -347,7 +347,7 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 			// Fewer values on the stack than the label promises to yield. #9's arity
 			// check again; without it the copy below would read below the block's base.
 			return 0, 0, fmt.Errorf("%w: branch to a label of arity %d with %d values above its base",
-				ErrNotValidated, l.arity, len(st.num)-l.height)
+				ErrEngineInvariant, l.arity, len(st.num)-l.height)
 		}
 		copy(st.num[l.height:], st.num[src:])
 		if st.tracking {
@@ -367,7 +367,7 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 		src := len(st.refs) - l.refArity
 		if src < l.refHeight {
 			return 0, 0, fmt.Errorf("%w: branch to a label of reference arity %d with %d references above its base",
-				ErrNotValidated, l.refArity, len(st.refs)-l.refHeight)
+				ErrEngineInvariant, l.refArity, len(st.refs)-l.refHeight)
 		}
 		copy(st.refs[l.refHeight:], st.refs[src:])
 		copy(st.refSeq[l.refHeight:], st.refSeq[src:])
@@ -445,15 +445,15 @@ func returnFrom(st *stack, base frameBase, results, refResults int) error {
 	// exactly this grave's tell.
 	if len(st.num) < base.num || len(st.refs) < base.ref {
 		return fmt.Errorf("%w: return with the stack below the frame's own base (%d/%d numeric, %d/%d reference)",
-			ErrNotValidated, len(st.num), base.num, len(st.refs), base.ref)
+			ErrEngineInvariant, len(st.num), base.num, len(st.refs), base.ref)
 	}
 	if have := len(st.num) - base.num; have < results {
 		return fmt.Errorf("%w: return with %d values on this frame's stack, but the function declares %d results",
-			ErrNotValidated, have, results)
+			ErrEngineInvariant, have, results)
 	}
 	if have := len(st.refs) - base.ref; have < refResults {
 		return fmt.Errorf("%w: return with %d references on this frame's stack, but the function declares %d reference results",
-			ErrNotValidated, have, refResults)
+			ErrEngineInvariant, have, refResults)
 	}
 	copy(st.num[base.num:], st.num[len(st.num)-results:])
 	st.num = st.num[:base.num+results]

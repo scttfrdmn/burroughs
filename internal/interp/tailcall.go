@@ -94,7 +94,7 @@ func tailFrom(target *Instance, fn *binary.Func, ft *binary.FuncType, st *stack,
 	}
 	if len(st.num) < base.num || len(st.refs) < base.ref {
 		return fmt.Errorf("%w: tail call with the stack below the frame's own base (%d/%d numeric, %d/%d reference)",
-			ErrNotValidated, len(st.num), base.num, len(st.refs), base.ref)
+			ErrEngineInvariant, len(st.num), base.num, len(st.refs), base.ref)
 	}
 	st.num = st.num[:base.num]
 	if st.tracking {

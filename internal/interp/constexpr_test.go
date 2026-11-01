@@ -139,9 +139,9 @@ func TestConstExprMessageNamesItsOwnCallerNotAnother(t *testing.T) {
 			t.Errorf("%s: an expression leaving two values where one is wanted was accepted", r.site)
 			continue
 		}
-		if !errors.Is(err, ErrNotValidated) {
-			t.Errorf("%s: got %v, want ErrNotValidated — a shape a validator would have caught is "+
-				"#9's verdict, not a trap", r.site, err)
+		if !errors.Is(err, ErrEngineInvariant) {
+			t.Errorf("%s: got %v, want ErrEngineInvariant — a shape the validator refuses reaching "+
+				"here is the engine's failure, not a trap (#1134 class A)", r.site, err)
 		}
 		got := err.Error()
 		if !strings.Contains(got, r.site) {

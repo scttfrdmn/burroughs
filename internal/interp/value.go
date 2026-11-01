@@ -749,7 +749,7 @@ func (s *stack) topIsV128() bool {
 func (s *stack) needRef(n int) error {
 	if len(s.refs) < n {
 		return fmt.Errorf("%w: stack has %d references, an instruction wanted %d",
-			ErrNotValidated, len(s.refs), n)
+			ErrEngineInvariant, len(s.refs), n)
 	}
 	return nil
 }

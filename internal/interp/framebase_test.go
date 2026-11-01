@@ -197,8 +197,9 @@ func TestReturnBelowTheFrameBaseNamesWhatItIs(t *testing.T) {
 	if err == nil {
 		t.Fatalf("got no error, want a report: the callee consumed its caller's operands")
 	}
-	if !errors.Is(err, ErrNotValidated) {
-		t.Errorf("got %v, want ErrNotValidated — an invalid module, not a trap and not a spec verdict", err)
+	if !errors.Is(err, ErrEngineInvariant) {
+		t.Errorf("got %v, want ErrEngineInvariant — an invalid module reaching the interpreter is the "+
+			"engine's failure (#1134 class A), not a trap and not a spec verdict", err)
 	}
 	// `errors.Is` cannot tell this apart from every other arity message here (they all wrap the
 	// same sentinel — constexpr_test.go's own lesson about a partition sharing an error value), so

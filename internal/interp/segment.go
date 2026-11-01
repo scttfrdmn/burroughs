@@ -167,7 +167,7 @@ func newDataInstance(bs []byte) *dataInstance {
 func (in *Instance) elemFor(what string, idx uint64) (*elemInstance, error) {
 	if idx >= uint64(len(in.elems)) {
 		return nil, fmt.Errorf("%w: %s names element segment %d of %d",
-			ErrNotValidated, what, idx, len(in.elems))
+			ErrEngineInvariant, what, idx, len(in.elems))
 	}
 	return in.elems[idx], nil
 }
@@ -177,7 +177,7 @@ func (in *Instance) elemFor(what string, idx uint64) (*elemInstance, error) {
 func (in *Instance) dataFor(what string, idx uint64) (*dataInstance, error) {
 	if idx >= uint64(len(in.datas)) {
 		return nil, fmt.Errorf("%w: %s names data segment %d of %d",
-			ErrNotValidated, what, idx, len(in.datas))
+			ErrEngineInvariant, what, idx, len(in.datas))
 	}
 	return in.datas[idx], nil
 }

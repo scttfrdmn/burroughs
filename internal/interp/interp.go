@@ -595,6 +595,15 @@ var ErrUnsupportedOp = errors.New("interp: no arm for opcode")
 // decoder cannot emit), and no validator can make those unreachable. They return ErrEngineInvariant
 // now, ADR 0077's sentinel for that category, so every site left here is one a validator can retire.
 //
+// **Class A's 42 module-validity sites are retired the same way** (#1134, the chair's ruling of
+// 2026-10-31, item 1). `validate`'s `TestNoAdmittedOpcodeReachesADeclineArm` shows that no opcode
+// the decoder admits under default features reaches a validator decline. So ADR 0029's
+// decline-runs-anyway path cannot carry an unvalidated instruction here, and every public path
+// validates first (#1162). A validated module reaching one of those checks is therefore the
+// engine's failure, and they return ErrEngineInvariant. What is left here are class D's GC and
+// exception-handling sites, reachable only with those gates on, and class C's two component
+// canon-option sites.
+//
 // What it must never become is a spec verdict: `type mismatch` is the validator's string, and
 // reporting it from here would put #9's answer in a place #9 cannot be tested from.
 var ErrNotValidated = errors.New("interp: module reached the interpreter unvalidated")
@@ -640,9 +649,14 @@ var ErrUnsupported = errors.New("interp: feature not implemented in this phase")
 // dressing an engine bug as a spec verdict the guest earned is what makes it invisible rather than
 // merely misfiled ([decision 0077][0077] option 5).
 //
-// Unlike ErrNotValidated this carries no retirement promise, because no validator can make any of
-// its call sites unreachable: their conditions are properties of this engine's own allocation and
-// initialization sites, which is precisely what distinguishes the two categories.
+// Unlike ErrNotValidated this carries no retirement promise. Its call sites are of two kinds, and
+// neither is a module's fault:
+//   - properties of this engine's own allocation and initialization sites, which no validator can
+//     make unreachable (ADR 0077, and #1134's class B);
+//   - module-validity checks a validated module cannot fail (#1134's class A). They are filed here
+//     because the validator has been shown to type every opcode the decoder admits, so reaching one
+//     means the validator, the decoder or this package disagree about a rule, which is the engine's
+//     bug and not the module's.
 //
 // [0077]: ../../docs/decisions/0077-a-non-null-reference-with-no-defining-instance-is-the-engines-own-broken-invariant-so-it-gets-its-own-sentinel-rather-than-the-modules-blame.md
 var ErrEngineInvariant = errors.New("interp: engine invariant broken")
@@ -1077,11 +1091,11 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value, cmThread 
 		// #9's arity check, arriving late. Stated as the layering debt it is rather than
 		// dressed as `type mismatch`.
 		return nil, fmt.Errorf("%w: %q declares %d numeric results and left %d values on the stack",
-			ErrNotValidated, name, numResults, len(st.num))
+			ErrEngineInvariant, name, numResults, len(st.num))
 	}
 	if len(st.refs) != refResults {
 		return nil, fmt.Errorf("%w: %q declares %d reference results and left %d references on the stack",
-			ErrNotValidated, name, refResults, len(st.refs))
+			ErrEngineInvariant, name, refResults, len(st.refs))
 	}
 	out := make([]Value, len(ft.Results))
 	for i := len(out) - 1; i >= 0; i-- {
@@ -1143,12 +1157,12 @@ func (in *Instance) exportedIndex(kind binary.ExternKind, name string) (uint32, 
 func (in *Instance) funcType(fn *binary.Func) (*binary.FuncType, error) {
 	if int(fn.TypeIndex) >= len(in.mod.Types) {
 		return nil, fmt.Errorf("%w: function declares type %d of %d",
-			ErrNotValidated, fn.TypeIndex, len(in.mod.Types))
+			ErrEngineInvariant, fn.TypeIndex, len(in.mod.Types))
 	}
 	ct := &in.mod.Types[fn.TypeIndex]
 	if ct.Kind != binary.CompFunc {
 		return nil, fmt.Errorf("%w: function declares type %d, which is a %s",
-			ErrNotValidated, fn.TypeIndex, ct.Kind)
+			ErrEngineInvariant, fn.TypeIndex, ct.Kind)
 	}
 	return &ct.Func, nil
 }
