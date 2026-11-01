@@ -27,15 +27,20 @@ says what it now requires and what it gives up.
 **Known limits, open on default-on paths, each with its issue:**
 - **A Phase 4 fork guest whose goroutine spins in a loop that never allocates is never preempted**
   ([#1064](https://github.com/scttfrdmn/burroughs/issues/1064), parked). Its stop-the-world never completes, and
-  under GOMAXPROCS = 1 `main` never runs again. Stock Go completes the same program. This is #406's c1stw, which keeps
-  its pin, and whose departure is report-only
-  ([#1172](https://github.com/scttfrdmn/burroughs/issues/1172)). The #1181 fix did not change it. The work is
-  fork-side preemption, parked on the chair's ruling of 2026-10-31 after two safeguard stops.
-- **Carried from `v0.12.0`, still open:**
-  - `Close` with a zero bound returns `nil` on Windows ([#945](https://github.com/scttfrdmn/burroughs/issues/945));
-    Windows is outside the claim;
-  - a Go runtime fatal seen once on CI's arm64 runner in `internal/spec`
-    ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)), not repeated.
+  under GOMAXPROCS = 1 `main` never runs again. Stock Go completes the same program. It is the Go-runtime torture
+  suite's c1stw case, which keeps its pin and whose departure is report-only. The fix for c1alloc's hang did not
+  change it. The work is fork-side preemption, parked on the chair's ruling of 2026-10-31 after two safeguard
+  stops. **Confirmed still holding** on 2026-11-01: the case, run alone on darwin/arm64, reached its 10 s bound
+  with no departure logged.
+- **Carried from `v0.12.0`, still open:** a Go runtime fatal on CI's arm64 runner in `internal/spec`
+  ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)), seen twice (2026-10-21 and 2026-11-01), and
+  neither repeated on a re-run. It is a v0.13.0 blocker, under investigation.
+
+**Dropped from the list: `Close` with a zero bound returning `nil` on Windows**, which v0.7.0 through v0.12.0
+listed. Checked on 2026-11-01 (the chair's ruling of that day, item 3): `TestCloseReachesItsBoundWithANamedOutcome`
+sits in the root package, which passed on Windows in all six of main's recent runs (348db4f through 33cf9a5), and the
+triage map has no row for it. #1096 had already found that `Close` was right and the old test was racing its own
+sample. So the limit no longer holds. Its issue stays open under Scott's Windows ruling.
 
 ### Added
 
@@ -137,6 +142,21 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **`limitcheck` reads the list being written: `[Unreleased]`'s Known limits when that block has entries, and the
+  newest version block only when it doesn't** (the chair's ruling of 2026-11-01, item 3).
+  - **Why:** it read the newest version block always. So between cuts, `--force` judged the last release's list,
+    a record that correctly stays unedited, and failed on 0.12.0 citing #1120 after #1120 closed. That FAIL is
+    noise, and noise teaches people to ignore a check. At a cut, `[Unreleased]` is empty and the release's own
+    block is the one being written, so that is what it reads then.
+  - **Witness:** four `--force` rows in `TestLimitCheckRefusesAClosedIssueCitedAsAKnownLimit`.
+    - An `[Unreleased]` list citing a closed issue fails.
+    - A released block's closed citation no longer fails between cuts.
+    - An `[Unreleased]` block with entries but no Known limits paragraph fails.
+    - At the cut, the new version block is read.
+  - **Neuter, run:** with the `[Unreleased]` arm disabled, the three rows that read it fail, and on the real
+    CHANGELOG *"#1120 is closed, and 0.12.0's Known limits cites it"* comes back.
+  - **Found on its first real run:** this block's own list cited closed #1181 and #406 in prose, and limitcheck
+    counts every issue a Known limits paragraph names. The entry now names only its limit's issue.
 - **The interpreter's 42 module-validity checks report `ErrEngineInvariant`, not `ErrNotValidated`**
   ([#1134](https://github.com/scttfrdmn/burroughs/issues/1134) class A, the chair's ruling of 2026-10-31, item 1).
   - **The proof comes first**: `TestNoAdmittedOpcodeReachesADeclineArm` (`internal/validate`). It asks the real
@@ -175,6 +195,9 @@ says what it now requires and what it gives up.
     where the core function space is resolved, so nothing runs. All three public doors report it as
     `ErrInvalid`. Before, it instantiated, and only a call that reached the realloc found the wrong arity,
     reported as `ErrNotValidated` at run time.
+  - **A deviation from the ruling's proposal, accepted by the chair on 2026-11-01:** the proposal grouped both
+    conditions as one canon-option rule, and only the mistyped one is refused. Refusing a host-backed `realloc`
+    would reject a component the spec accepts.
   - **A host-function `realloc` is not refused.** It has the right type and the spec accepts it, but this
     engine calls realloc as guest code on the caller's stack and cannot call a host one. So `CanonCaller.Realloc`
     reports it as `ErrUnsupported` when reached. That also fixes a nil dereference for a host extern given

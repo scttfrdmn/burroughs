@@ -9,7 +9,9 @@ known-limit entry with the tracker, so the false entry passed through two releas
 
 What it checks
 --------------
-The **newest version block** in CHANGELOG.md (the first `## [x.y.z]` heading). Within it, the paragraph that
+The **list being written**: `[Unreleased]` when it has entries, and otherwise the newest version block (the first
+`## [x.y.z]` heading), which at a cut is the block the release PR just wrote (`list_being_written`). A released
+block is a record and is never what this judges while a newer list exists. Within the block, the paragraph that
 starts `**Known limits`, up to the next bold paragraph or heading. Every issue that paragraph cites, as `#N` or as
 an `/issues/N` link, must be OPEN on GitHub. **A tracker that cannot be read is a FAIL**, never a pass, and so is a
 version block with no Known limits paragraph, because a release that names none was never checked.
@@ -111,6 +113,24 @@ def merged_prs_naming(n):
     return [x for x in out.stdout.split() if x.isdigit() and x != str(n)]
 
 
+def list_being_written(bl):
+    """(label, body) of the block whose Known limits the next release will ship, or None.
+
+    **That is `[Unreleased]` when it has entries, and the newest version block only when it doesn't** (the chair's
+    ruling of 2026-11-01, item 3). This read the newest version block always, so between cuts `--force` checked
+    the last release's list: a record that correctly stays unedited, and whose FAIL (0.12.0 citing #1120 after
+    #1120 closed) was noise that would teach people to ignore the check. An `[Unreleased]` with no entries is the
+    release PR's state, where the release's block has just been written under its version, so that block is the
+    one being written."""
+    unrel = next((b for n, b in bl if UNRELEASED.match(n)), None)
+    if unrel is not None and has_entries(unrel):
+        return "Unreleased", unrel
+    newest = next(((n, b) for n, b in bl if VERSION.match(n)), None)
+    if newest is None:
+        return None
+    return VERSION.match(newest[0]).group(1), newest[1]
+
+
 def main(argv):
     args = argv[1:]
     force = "--force" in args
@@ -127,12 +147,11 @@ def main(argv):
         print("limitcheck: [Unreleased] has entries, so no release cut is in progress; nothing checked "
               "(the cut procedure runs this with --force)")
         return 0
-    newest = next(((n, b) for n, b in bl if VERSION.match(n)), None)
-    if newest is None:
+    chosen = list_being_written(bl)
+    if chosen is None:
         print(f"FAIL  limitcheck: {path} has no version block")
         return 1
-    name, body = newest
-    version = VERSION.match(name).group(1)
+    version, body = chosen
     cited = known_limits(body)
     if cited is None:
         print(f"FAIL  limitcheck: {version}'s block has no **Known limits** paragraph, so its limits were never "
