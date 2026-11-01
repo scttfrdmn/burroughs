@@ -52,12 +52,12 @@ func (in *Instance) newTags() error {
 		idx := in.mod.Tags[i].TypeIndex
 		if int(idx) >= len(in.mod.Types) {
 			return fmt.Errorf("%w: tag %d declares type %d of %d",
-				ErrNotValidated, off+i, idx, len(in.mod.Types))
+				ErrEngineInvariant, off+i, idx, len(in.mod.Types))
 		}
 		ct := &in.mod.Types[idx]
 		if ct.Kind != binary.CompFunc {
 			return fmt.Errorf("%w: tag %d declares type %d, which is a %s",
-				ErrNotValidated, off+i, idx, ct.Kind)
+				ErrEngineInvariant, off+i, idx, ct.Kind)
 		}
 		in.tags[off+i] = &tagInst{typ: &ct.Func, mod: in.mod, typeIdx: idx}
 	}
@@ -70,7 +70,7 @@ func (in *Instance) newTags() error {
 // its own resolution point — memoryFor, tableFor, globalFor).
 func (in *Instance) tagFor(idx uint32) (*tagInst, error) {
 	if int(idx) >= len(in.tags) {
-		return nil, fmt.Errorf("%w: tag %d of %d", ErrNotValidated, idx, len(in.tags))
+		return nil, fmt.Errorf("%w: tag %d of %d", ErrEngineInvariant, idx, len(in.tags))
 	}
 	t := in.tags[idx]
 	if t == nil {

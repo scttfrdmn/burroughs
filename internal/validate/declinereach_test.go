@@ -25,9 +25,10 @@ type declineLane struct {
 	floor int
 }
 
-// declineLanes is the control's population of lanes. Today it is the default lane alone; #1134's
-// class D extends it to each gate whose flip the control conditions (the chair's ruling of
-// 2026-10-31, item 2).
+// declineLanes is the control's population of lanes: the default, and each gate whose flip the
+// control conditions (#1134 D1, the chair's ruling of 2026-10-31, item 2). gate:gc and
+// gate:exceptions cannot flip while their lane here has a reachable decline arm, and
+// `binary.DefaultFeatures`' doc records that. A gate added to that condition gets a lane here.
 func declineLanes() []declineLane {
 	return []declineLane{{
 		name:     "default",
@@ -41,7 +42,42 @@ func declineLanes() []declineLane {
 			(data "")
 			(func))`,
 		floor: 400,
+	}, {
+		name:     "gate:gc",
+		features: withGate(func(f *binary.Features) { f.GC = true }),
+		wat: `(module
+			(type (func))
+			(type (struct (field (mut i32))))
+			(type (array (mut i32)))
+			(memory 1 1 shared)
+			(table 1 funcref)
+			(global (mut i32) (i32.const 0))
+			(elem declare func 0)
+			(data "")
+			(func))`,
+		floor: 700,
+	}, {
+		name:     "gate:exceptions",
+		features: withGate(func(f *binary.Features) { f.ExceptionHandling = true }),
+		wat: `(module
+			(type (func))
+			(memory 1 1 shared)
+			(table 1 funcref)
+			(global (mut i32) (i32.const 0))
+			(elem declare func 0)
+			(data "")
+			(tag (param))
+			(func))`,
+		floor: 700,
 	}}
+}
+
+// withGate is the default lane with one gate turned on, so each gated lane differs from the default by
+// exactly the gate whose flip it conditions.
+func withGate(on func(*binary.Features)) binary.Features {
+	f := binary.DefaultFeatures()
+	on(&f)
+	return f
 }
 
 // admittedDeclines asks the real dispatch about every opcode a lane's Features admits, and returns
@@ -84,21 +120,32 @@ func admittedDeclines(t *testing.T, lane declineLane) (declined []string, asked,
 // That is what makes `interp`'s module-validity checks unreachable from a validated module. ADR
 // 0029 lets a module the validator declines run unless `Strict`, so a decline arm reachable by an
 // admitted opcode would be a path from the public API into those checks. With no such arm, a
-// validated module reaching one is the engine's bug, which is why class A's sites are filed under
-// `interp.ErrEngineInvariant`.
+// validated module reaching one is the engine's bug, which is why class A's sites, and class D's on
+// the gated lanes (D1, item 2), are filed under `interp.ErrEngineInvariant`.
 //
 // The board's decline ceiling (`validateDeclineCeiling`, 0) says the same of the corpus. This says
 // it of the grammar, which is the claim ADR 0043's retirement condition needs.
 //
-// **Neuter, run:** see the PR that landed this. With one rule arm deleted so that its opcode falls
-// through, this test names that opcode and fails.
+// **Run against its subject** (the PRs that landed it record each):
+//   - A1's neuter: with `memory.fill`'s arm made to fall through, the default lane fails naming it;
+//   - D1's witness: with `ref.i31`'s arm made to fall through, the default lane passes and the
+//     gate:gc lane fails naming it;
+//   - D1's neuter: with the lanes cut to the default alone, that broken arm goes unseen and the test
+//     passes, which is why the lanes are a parameter and not a single Features value.
 func TestNoAdmittedOpcodeReachesADeclineArm(t *testing.T) {
+	defaultAdmits := len(binary.DefaultFeatures().AdmittedOpcodes())
 	for _, lane := range declineLanes() {
 		t.Run(lane.name, func(t *testing.T) {
 			declined, asked, panicked := admittedDeclines(t, lane)
 			if asked < lane.floor {
 				t.Fatalf("the %s lane admits %d opcodes, floor %d: an empty population passes this "+
 					"test while asking nothing", lane.name, asked, lane.floor)
+			}
+			// A gated lane that admits no more than the default asks the default's question again, and
+			// would pass with its own gate's opcodes never asked about.
+			if lane.name != "default" && asked <= defaultAdmits {
+				t.Fatalf("the %s lane admits %d opcodes and the default lane %d: the gate added "+
+					"nothing, so its own opcodes were never asked about", lane.name, asked, defaultAdmits)
 			}
 			t.Logf("%s lane: %d admitted opcodes asked, %d declined, %d panicked in an arm",
 				lane.name, asked, len(declined), panicked)

@@ -600,9 +600,12 @@ var ErrUnsupportedOp = errors.New("interp: no arm for opcode")
 // the decoder admits under default features reaches a validator decline. So ADR 0029's
 // decline-runs-anyway path cannot carry an unvalidated instruction here, and every public path
 // validates first (#1162). A validated module reaching one of those checks is therefore the
-// engine's failure, and they return ErrEngineInvariant. What is left here are class D's GC and
-// exception-handling sites, reachable only with those gates on, and class C's two component
-// canon-option sites.
+// engine's failure, and they return ErrEngineInvariant.
+//
+// **Class D's 23 GC and exception-handling sites followed** (D1, item 2 of the same ruling). The
+// same control runs on the gate:gc and gate:exceptions lanes and reads 0 there too, and neither gate
+// can flip while its lane has a reachable decline (`binary.DefaultFeatures`' doc records that
+// precondition). What is left here are class C's two component canon-option sites.
 //
 // What it must never become is a spec verdict: `type mismatch` is the validator's string, and
 // reporting it from here would put #9's answer in a place #9 cannot be tested from.
@@ -653,8 +656,9 @@ var ErrUnsupported = errors.New("interp: feature not implemented in this phase")
 // neither is a module's fault:
 //   - properties of this engine's own allocation and initialization sites, which no validator can
 //     make unreachable (ADR 0077, and #1134's class B);
-//   - module-validity checks a validated module cannot fail (#1134's class A). They are filed here
-//     because the validator has been shown to type every opcode the decoder admits, so reaching one
+//   - module-validity checks a validated module cannot fail (#1134's classes A and D). They are filed
+//     here because the validator has been shown to type every opcode the decoder admits, on the
+//     default lane and on the gate:gc and gate:exceptions lanes, so reaching one
 //     means the validator, the decoder or this package disagree about a rule, which is the engine's
 //     bug and not the module's.
 //

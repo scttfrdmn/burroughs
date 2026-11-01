@@ -358,9 +358,10 @@ func TestStructGetSignednessMustMatchFieldPacking(t *testing.T) {
 				t.Fatalf("%s on a %s field was accepted, want the reference's `failwith`",
 					r.get, r.field)
 			}
-			if !errors.Is(err, ErrNotValidated) {
-				t.Errorf("%s on a %s field gave %v, want ErrNotValidated — aggr.ml:38 is a "+
-					"`failwith`, which is validation's verdict and not a trap", r.get, r.field, err)
+			if !errors.Is(err, ErrEngineInvariant) {
+				t.Errorf("%s on a %s field gave %v, want ErrEngineInvariant — aggr.ml:38 is a "+
+					"`failwith`, which validation rules out, so reaching it is the engine's failure "+
+					"and not a trap (#1134 class D)", r.get, r.field, err)
 			}
 			var trap *Trap
 			if errors.As(err, &trap) {
@@ -393,8 +394,8 @@ func TestStructNewDefaultRefusesNonDefaultableField(t *testing.T) {
 		if err == nil {
 			t.Fatalf("struct.new_default on a non-nullable reference field was accepted")
 		}
-		if !errors.Is(err, ErrNotValidated) {
-			t.Errorf("got %v, want ErrNotValidated — eval.ml:683 is a Crash, not a trap", err)
+		if !errors.Is(err, ErrEngineInvariant) {
+			t.Errorf("got %v, want ErrEngineInvariant — eval.ml:683 is a Crash, not a trap", err)
 		}
 		if !strings.Contains(err.Error(), "non-defaultable") {
 			t.Errorf("message %q does not name the reason; the reference calls it "+

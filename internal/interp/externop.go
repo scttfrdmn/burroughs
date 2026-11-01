@@ -71,7 +71,7 @@ func execExternConvertAny(st *stack) error {
 	case r.Externalized:
 		return fmt.Errorf("%w: extern.convert_any on an already-externalized reference, which "+
 			"would nest a wrapper the type system permits only one level of (0027 decision 3)",
-			ErrNotValidated)
+			ErrEngineInvariant)
 	default:
 		r.Externalized = true
 	}
@@ -145,7 +145,7 @@ func execAnyConvertExtern(st *stack) error {
 	default:
 		return fmt.Errorf("%w: any.convert_extern on a non-null reference that is not an "+
 			"externref (eval.ml:929-933 has no arm for this operand, the reference asserting "+
-			"validation ruled it out)", ErrNotValidated)
+			"validation ruled it out)", ErrEngineInvariant)
 	}
 	st.pushRef(r)
 	return nil

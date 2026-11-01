@@ -51,8 +51,8 @@ func TestAnyConvertExternRefusesANonExternref(t *testing.T) {
 			st := &stack{}
 			st.pushRef(tc.r)
 			err := execAnyConvertExtern(st)
-			if !errors.Is(err, ErrNotValidated) {
-				t.Errorf("execAnyConvertExtern(%+v) = %v, want ErrNotValidated: eval.ml:929-933 has "+
+			if !errors.Is(err, ErrEngineInvariant) {
+				t.Errorf("execAnyConvertExtern(%+v) = %v, want ErrEngineInvariant: eval.ml:929-933 has "+
 					"no arm for a non-null non-externref operand, so returning it unchanged invents "+
 					"an identity conversion the reference does not have — and no vector can say so",
 					tc.r, err)
@@ -68,9 +68,9 @@ func TestAnyConvertExternRefusesANonExternref(t *testing.T) {
 func TestExternConvertAnyRefusesNesting(t *testing.T) {
 	st := &stack{}
 	st.pushRef(ref{Externalized: true, IsI31: true, I31: 5})
-	if err := execExternConvertAny(st); !errors.Is(err, ErrNotValidated) {
+	if err := execExternConvertAny(st); !errors.Is(err, ErrEngineInvariant) {
 		t.Errorf("execExternConvertAny of an already-externalized reference = %v, want "+
-			"ErrNotValidated: a bit cannot nest, so the alternative is returning the operand "+
+			"ErrEngineInvariant: a bit cannot nest, so the alternative is returning the operand "+
 			"unchanged and calling depth two depth one", err)
 	}
 }

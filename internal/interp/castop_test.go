@@ -285,8 +285,8 @@ func TestBranchCastTargetArityIsExact(t *testing.T) {
 				t.Fatalf("no error for a %s cast vector — the accessor's whole contract is "+
 					"that it returns rt2 or says why it cannot", tc.name)
 			}
-			if !errors.Is(err, ErrNotValidated) {
-				t.Errorf("got %v, want ErrNotValidated", err)
+			if !errors.Is(err, ErrEngineInvariant) {
+				t.Errorf("got %v, want ErrEngineInvariant (#1134 class D)", err)
 			}
 		})
 	}
@@ -535,8 +535,8 @@ func TestFieldStorageClassDisagreementIsRefused(t *testing.T) {
 		t.Fatalf("a numeric field read through a v128 immediate was accepted, returning %v\n"+
 			"\tthe wrong stack array is read and nothing reports it — grave #243's shape", out)
 	}
-	if !errors.Is(err, ErrNotValidated) {
-		t.Fatalf("got %v, want ErrNotValidated", err)
+	if !errors.Is(err, ErrEngineInvariant) {
+		t.Fatalf("got %v, want ErrEngineInvariant (#1134 class D)", err)
 	}
 	// The message names both classes, per #248: "numeric storage in the object's" is the half that
 	// tells a reader which side to look at, and an error saying only that the two disagree would
@@ -647,12 +647,12 @@ func TestAnUnrepresentableReferenceArgumentIsReportedNotResolved(t *testing.T) {
 					"reference with no discriminator set — a value every later reader "+
 					"classifies as something else or crashes on (grave #676)", kind)
 			}
-			if errors.Is(err, ErrNotValidated) {
-				t.Errorf("got %v, want anything but ErrNotValidated.\n"+
-					"That sentinel reads `module reached the interpreter unvalidated` and "+
-					"`publicError` passes the text to an embedder unchanged: the module "+
-					"here is well-formed and the argument is the caller's own, so it sends "+
-					"them to audit the wrong artifact (decision 0077)", err)
+			if errors.Is(err, ErrNotValidated) || errors.Is(err, ErrEngineInvariant) {
+				t.Errorf("got %v, want anything but ErrNotValidated or ErrEngineInvariant.\n"+
+					"`publicError` passes either text to an embedder unchanged. The module "+
+					"here is well-formed and the argument is the caller's own, so blaming the "+
+					"module or the engine sends them to audit the wrong artifact (decision "+
+					"0077; #1134 moved the module-validity checks to ErrEngineInvariant)", err)
 			}
 			// The register, re-pointed at 0079's split. `PayloadNone` is a malformed `Value`
 			// and carries no sentinel *on purpose*, so its row asserts the absence — an

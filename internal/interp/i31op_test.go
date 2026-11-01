@@ -106,8 +106,9 @@ func TestI31ReachingAnAggregateArmNamesItself(t *testing.T) {
 	if err == nil {
 		t.Fatalf("got no error, want a report: array.len on an i31 reference")
 	}
-	if !errors.Is(err, ErrNotValidated) {
-		t.Errorf("got %v, want ErrNotValidated — #9's verdict, not a trap", err)
+	if !errors.Is(err, ErrEngineInvariant) {
+		t.Errorf("got %v, want ErrEngineInvariant — a validated module cannot reach this, so it is "+
+			"the engine's failure (#1134 class D), not a trap", err)
 	}
 	if !strings.Contains(err.Error(), "an i31 reference") {
 		t.Errorf("got %q, want the kind named as an i31 reference", err)

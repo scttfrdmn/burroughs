@@ -180,12 +180,12 @@ func packSignExtend(width byte, stored uint64) int32 {
 func (in *Instance) structType(what string, idx uint64) (*binary.CompType, error) {
 	if idx >= uint64(len(in.mod.Types)) {
 		return nil, fmt.Errorf("%w: %s names type %d of %d",
-			ErrNotValidated, what, idx, len(in.mod.Types))
+			ErrEngineInvariant, what, idx, len(in.mod.Types))
 	}
 	ct := &in.mod.Types[idx]
 	if ct.Kind != binary.CompStruct {
 		return nil, fmt.Errorf("%w: %s names type %d, which is a %s",
-			ErrNotValidated, what, idx, ct.Kind)
+			ErrEngineInvariant, what, idx, ct.Kind)
 	}
 	return ct, nil
 }
@@ -219,18 +219,18 @@ func (in *Instance) structType(what string, idx uint64) (*binary.CompType, error
 func (in *Instance) arrayType(what string, idx uint64) (binary.FieldType, error) {
 	if idx >= uint64(len(in.mod.Types)) {
 		return binary.FieldType{}, fmt.Errorf("%w: %s names type %d of %d",
-			ErrNotValidated, what, idx, len(in.mod.Types))
+			ErrEngineInvariant, what, idx, len(in.mod.Types))
 	}
 	ct := &in.mod.Types[idx]
 	if ct.Kind != binary.CompArray {
 		return binary.FieldType{}, fmt.Errorf("%w: %s names type %d, which is a %s",
-			ErrNotValidated, what, idx, ct.Kind)
+			ErrEngineInvariant, what, idx, ct.Kind)
 	}
 	if len(ct.Fields) != 1 {
 		return binary.FieldType{}, fmt.Errorf(
 			"%w: %s names array type %d with %d element types, want exactly 1 "+
 				"(arraytype is one bare fieldtype, decode.ml:257)",
-			ErrNotValidated, what, idx, len(ct.Fields))
+			ErrEngineInvariant, what, idx, len(ct.Fields))
 	}
 	return ct.Fields[0], nil
 }
@@ -279,7 +279,7 @@ func notAggregate(what, want string, r ref) error {
 	case r.Inst != nil:
 		kind = "a function reference with a defining instance"
 	}
-	return fmt.Errorf("%w: %s on %s, not %s", ErrNotValidated, what, kind, want)
+	return fmt.Errorf("%w: %s on %s, not %s", ErrEngineInvariant, what, kind, want)
 }
 
 // storageSize is `Types.storage_size` (types.ml:75-77) — a storage type's width **in bytes**, which
@@ -306,7 +306,7 @@ func storageSize(what string, st binary.StorageType) (uint64, error) {
 		return 16, nil
 	}
 	return 0, fmt.Errorf("%w: %s on an array of %s, which has no bytes in a data segment "+
-		"(value.ml:190 is `raise Type`)", ErrNotValidated, what, st.Val)
+		"(value.ml:190 is `raise Type`)", ErrEngineInvariant, what, st.Val)
 }
 
 // loadStorage is `Data.load_val_storage` (data.ml:45) — one element read out of a data segment's
@@ -373,19 +373,19 @@ func loadStorage(bs []byte, st binary.StorageType) gcField {
 func fieldStorage(ct *binary.CompType, obj *gcObj, i uint64) (binary.FieldType, error) {
 	if i >= uint64(len(ct.Fields)) {
 		return binary.FieldType{}, fmt.Errorf("%w: undefined field %d of %d in type %s",
-			ErrNotValidated, i, len(ct.Fields), ct.Kind)
+			ErrEngineInvariant, i, len(ct.Fields), ct.Kind)
 	}
 	ft := ct.Fields[i]
 	if obj != nil {
 		if i >= uint64(len(obj.fields)) {
 			return binary.FieldType{}, fmt.Errorf("%w: undefined field %d of %d in the object",
-				ErrNotValidated, i, len(obj.fields))
+				ErrEngineInvariant, i, len(obj.fields))
 		}
 		if oct, ok := compTypeAt(obj.mod, obj.typeIdx); ok && i < uint64(len(oct.Fields)) {
 			if a, b := storageClassOf(ft), storageClassOf(oct.Fields[i]); a != b {
 				return binary.FieldType{}, fmt.Errorf(
 					"%w: field %d is %s storage in the instruction's type and %s storage in the object's",
-					ErrNotValidated, i, a, b)
+					ErrEngineInvariant, i, a, b)
 			}
 		}
 	}
@@ -500,7 +500,7 @@ func defaultField(ft binary.FieldType) (gcField, error) {
 	if t.IsRef() {
 		if !t.Null() {
 			return gcField{}, fmt.Errorf("%w: non-defaultable type %s in a struct.new_default field",
-				ErrNotValidated, t)
+				ErrEngineInvariant, t)
 		}
 		return gcField{r: ref{Null: true}}, nil
 	}
@@ -529,14 +529,14 @@ func pushField(ft binary.FieldType, f gcField, ext fieldExt, st *stack) error {
 		default:
 			return fmt.Errorf("%w: struct.get with no sign on packed field of width %d "+
 				"(aggr.ml:38 is `failwith`; the read must be get_s or get_u)",
-				ErrNotValidated, ft.Storage.Width)
+				ErrEngineInvariant, ft.Storage.Width)
 		}
 		return nil
 	}
 	if ext != extNone {
 		return fmt.Errorf("%w: struct.get_%s on unpacked field of type %s "+
 			"(aggr.ml:38 is `failwith`; a signed read wants a packed field)",
-			ErrNotValidated, map[fieldExt]string{extU: "u", extS: "s"}[ext], ft.Storage.Val)
+			ErrEngineInvariant, map[fieldExt]string{extU: "u", extS: "s"}[ext], ft.Storage.Val)
 	}
 	switch t := ft.Storage.Val; {
 	case t.IsRef():
