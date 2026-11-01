@@ -152,8 +152,22 @@ says what it now requires and what it gives up.
     generated tables filtered by the decoder's own gate check.
   - **Neuter, run:** with `memory.fill`'s validator arm made to fall through, the control fails naming
     `0xfc 0x0b memory_fill`.
-  - **Left on `ErrNotValidated`:** class D's 23 GC and exception-handling sites, and class C's 2 component
-    canon-option sites.
+  - **Class D's 23 sites followed, in the entry below.** That leaves class C's 2 component canon-option sites
+    on `ErrNotValidated`.
+- **The GC and exception-handling checks (#1134 class D, 23 sites) report `ErrEngineInvariant` too, and
+  gate:gc and gate:exceptions gain a flip precondition** (D1, the chair's ruling of 2026-10-31, item 2).
+  - **The control runs per lane**: default, gate:gc and gate:exceptions, each the default with one gate on. A
+    gated lane must admit more opcodes than the default does, or its own gate's opcodes were never asked
+    about. Today the lanes read 711, 754 and 717 opcodes, and 0 declines on each.
+  - **The precondition**, recorded in `binary.DefaultFeatures`' doc and on #172, #262 and #95: neither gate can
+    flip while its lane has a reachable decline arm. The flips stay Scott's decision.
+  - **Witness, run:** with `ref.i31`'s validator arm made to fall through, the default lane passes and the
+    gate:gc lane fails, naming `0xfb 0x1c ref_i31`.
+  - **Neuter, run:** with the lanes cut to the default alone, the same broken arm goes unseen and the control
+    passes.
+  - **Tests updated:** eight GC/EH assertions now expect `ErrEngineInvariant`. A boundary test that refused
+    `ErrNotValidated` for a caller's bad argument now refuses both sentinels, because a caller's own argument
+    is neither the module's fault nor the engine's.
 - **`xcheck` writes nothing a queued task could be using: the copy, checks and cleanup run inside the task**
   ([#1188](https://github.com/scttfrdmn/burroughs/issues/1188)). Scott's rule of 2026-10-29 is *"you should
   always use pueue"*. `scripts/xcheck-amd64.sh` used to `rm -rf` and re-extract a fixed `~/burroughs-xcheck` over

@@ -186,6 +186,13 @@ type Features struct {
 // **Seventh divergence: Memory64** ([ADR 0110]). The last of the four: `BURROUGHS_MEMORY64=0` restores the old
 // default, and the table's fourth row witnesses it. Exception handling (#95) and GC (#172, #262) stay off.
 //
+// **A precondition on the two flips left** (#1134 D1, the chair's ruling of 2026-10-31, item 2): gate:gc and
+// gate:exceptions cannot flip while their lane has a reachable validator decline arm. Each lane is a row of
+// `internal/validate`'s `TestNoAdmittedOpcodeReachesADeclineArm`, which asks the validator about every
+// opcode the lane admits (`Features.AdmittedOpcodes`). A decline is reachable from the public API unless
+// `Strict` (ADR 0029), so a flip over one would put an unvalidated instruction in front of the
+// interpreter on the default path. Both lanes read 0 today. The flips themselves stay Scott's decision.
+//
 // [ADR 0106]: ../../docs/decisions/0106-gate-threads-defaults-on-with-burroughs-threads-0-as-the-rollback-because-the-4-battery-has-no-hole-and-the-off-state-stays-witnessed.md
 // [ADR 0107]: ../../docs/decisions/0107-gate-extended-const-defaults-on-with-burroughs-extended-const-0-as-the-rollback.md
 // [ADR 0108]: ../../docs/decisions/0108-gate-tail-call-defaults-on-with-burroughs-tail-call-0-as-the-rollback.md

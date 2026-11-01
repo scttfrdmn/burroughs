@@ -87,7 +87,7 @@ func branchCastTargetAt(fn *binary.Func, pc int, site string) (binary.ValType, e
 	if !ok || len(v) != 2 {
 		return binary.NoValType, fmt.Errorf(
 			"%w: %s at instruction %d staged %d cast types, want exactly 2 (rt1 then rt2)",
-			ErrNotValidated, site, pc, len(v))
+			ErrEngineInvariant, site, pc, len(v))
 	}
 	return v[1], nil
 }
@@ -481,7 +481,7 @@ func castTypeAt(fn *binary.Func, pc int, site string) (binary.ValType, error) {
 	if !ok || len(v) != 1 {
 		return binary.NoValType, fmt.Errorf(
 			"%w: %s at instruction %d staged %d cast types, want exactly 1",
-			ErrNotValidated, site, pc, len(v))
+			ErrEngineInvariant, site, pc, len(v))
 	}
 	return v[0], nil
 }

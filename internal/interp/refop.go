@@ -229,11 +229,11 @@ func refEq(a, b ref) (bool, error) {
 	if a.Exc != nil || b.Exc != nil {
 		return false, fmt.Errorf("%w: ref.eq on an exception reference, which is not under eq "+
 			"(exn.ml:26 is `failwith`, the reference asserting validation ruled this out)",
-			ErrNotValidated)
+			ErrEngineInvariant)
 	}
 	return false, fmt.Errorf("%w: ref.eq on a function reference, which is not under eq "+
 		"(instance.ml:42 is `failwith`, the reference asserting validation ruled this out)",
-		ErrNotValidated)
+		ErrEngineInvariant)
 }
 
 // refEqTreatment is refEq's claim about `ref`'s fields: one entry per field, saying what the

@@ -201,8 +201,8 @@ says they are. Current claim:
 		t.Run(w.field+"/"+w.why[:min(len(w.why), 40)], func(t *testing.T) {
 			got, err := refEq(w.a, w.b)
 			if w.wantErr {
-				if !errors.Is(err, ErrNotValidated) {
-					t.Errorf("refEq(%+v, %+v) = (%v, %v), want ErrNotValidated — the entry's claim "+
+				if !errors.Is(err, ErrEngineInvariant) {
+					t.Errorf("refEq(%+v, %+v) = (%v, %v), want ErrEngineInvariant — the entry's claim "+
 						"is about the *verdict*: %s", w.a, w.b, got, err, w.why)
 				}
 				return

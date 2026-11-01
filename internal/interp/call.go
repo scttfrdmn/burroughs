@@ -833,7 +833,7 @@ func resolveCallRef(st *stack) (funcTarget, *binary.FuncType, error) {
 	if r.Exc != nil {
 		return funcTarget{}, nil, fmt.Errorf(
 			"%w: call_ref on an exception reference, which is not a function reference",
-			ErrNotValidated)
+			ErrEngineInvariant)
 	}
 	t, err := funcRefTarget(r, "call_ref operand")
 	if err != nil {
