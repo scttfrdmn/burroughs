@@ -43,6 +43,16 @@ import (
 // kept because a caller may match on it.
 var ErrUnsupportedForm = errors.New("component: unsupported instantiation form")
 
+// ErrCanonOptionInvalid is a canon option the component model's validation rules refuse: a canon lower's
+// `realloc` whose core function is not `(i32 i32 i32 i32) -> i32` (#1134 class C). wasm-tools refuses the same
+// component with *"canonical option `realloc` uses a core function with an incorrect signature"*. It is checked
+// in the walk, where the core function index space is resolved, so it is refused at instantiation, before
+// anything runs. The public doors report it as `ErrInvalid`, as they report an invalid core module.
+//
+// A `realloc` that is a host function has a valid type and is not refused here. The spec allows it, and this
+// engine cannot call one, so `CanonCaller.Realloc` reports it as unsupported when it is reached.
+var ErrCanonOptionInvalid = errors.New("component: canon option is invalid")
+
 // coreDef is a resolved core index-space entry: a real extern (a core instance's export, or an aliased
 // core export — carried by reference), or a canon-lowered stub whose core type is deferred to the
 // module that imports it (materialized in the resolver from that module's declaration, since B.2 does
@@ -235,10 +245,14 @@ func (w *walker) step(d Def) error {
 				// rather than an impl: the binding happens in `resolverFor`, where the module's own import
 				// type is in hand. What changes is only that the lower no longer forgets its callee.
 				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName == "" && cf.core.inst != nil {
+					realloc, err := w.lowerRealloc(cn)
+					if err != nil {
+						return err
+					}
 					w.appendCore(SpaceCoreFunc, coreDef{
 						lowerCallee:  cf,
 						lowerMem:     w.lowerMemory(cn),
-						lowerRealloc: w.lowerRealloc(cn),
+						lowerRealloc: realloc,
 						async:        cn.Opts.Async,
 					})
 					return nil
@@ -269,10 +283,14 @@ func (w *walker) step(d Def) error {
 							}
 						}
 					}
+					realloc, err := w.lowerRealloc(cn)
+					if err != nil {
+						return err
+					}
 					w.appendCore(SpaceCoreFunc, coreDef{
 						lowerName:    cf.stubName,
 						lowerMem:     w.lowerMemory(cn),
-						lowerRealloc: w.lowerRealloc(cn),
+						lowerRealloc: realloc,
 						async:        cn.Opts.Async,
 					})
 					return nil
@@ -554,16 +572,37 @@ func (w *walker) refuseSharedCanonMemory(cn Canon) error {
 // names, or nil when the lower carries no realloc option (a getter that returns only a handle, or exit,
 // or a method whose result the guest's return pointer already holds). The option is a core func index,
 // defined earlier in the stream, and a real aliased core func (not a lower stub), so its extern is set.
-func (w *walker) lowerRealloc(cn Canon) *interp.Extern {
+func (w *walker) lowerRealloc(cn Canon) (*interp.Extern, error) {
 	if cn.Opts.Realloc == nil {
-		return nil
+		return nil, nil
 	}
 	funcs := w.coreSpace[SpaceCoreFunc]
 	if int(*cn.Opts.Realloc) >= len(funcs) {
-		return nil // out-of-range is caught by the forward-reference check; nil here declines to bind
+		return nil, nil // out-of-range is caught by the forward-reference check; nil here declines to bind
 	}
 	ext := funcs[*cn.Opts.Realloc].extern
-	return &ext
+	// The type rule (#1134 class C). An entry whose extern is not yet bound, such as a lowered function the
+	// resolver binds later, answers !ok and is not judged here. Its type is derived from a component
+	// function type, and if it is reached, `CanonCaller.Realloc` reports it as a host function.
+	if ft, _, ok := ext.FuncSignature(); ok && !isReallocType(ft) {
+		return nil, fmt.Errorf("%w: a canon lower's realloc is core function %d, with %d params and %d results; "+
+			"the component model wants (i32 i32 i32 i32) -> i32", ErrCanonOptionInvalid, *cn.Opts.Realloc,
+			len(ft.Params), len(ft.Results))
+	}
+	return &ext, nil
+}
+
+// isReallocType reports whether ft is `cabi_realloc`'s type, `(i32 i32 i32 i32) -> i32`.
+func isReallocType(ft bin.FuncType) bool {
+	if len(ft.Params) != 4 || len(ft.Results) != 1 || ft.Results[0] != bin.I32 {
+		return false
+	}
+	for _, p := range ft.Params {
+		if p != bin.I32 {
+			return false
+		}
+	}
+	return true
 }
 
 // stripVersion removes the `@x.y.z` version from a lowered func's "interface@version::export" identity,
