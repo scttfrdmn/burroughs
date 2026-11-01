@@ -809,20 +809,28 @@ func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32,
 	if c.depth >= callBudget {
 		return 0, trapExhaustion
 	}
+	// A host-function realloc is valid in the component model and beyond this engine, which calls realloc as
+	// guest code on the caller's stack. So it is unsupported, reported when it is reached (#1134 class C). It
+	// is answered before `resolveCall`, because a host extern has no owner to resolve through.
+	if c.realloc.host != nil {
+		return 0, fmt.Errorf("%w: a canon lower's realloc is a host function", ErrUnsupported)
+	}
 	target, err := c.realloc.owner.resolveCall(c.realloc.fnIdx)
 	if err != nil {
 		return 0, err
 	}
 	if target.host != nil {
-		return 0, fmt.Errorf("%w: a canon lower's realloc resolves to a host function", ErrNotValidated)
+		return 0, fmt.Errorf("%w: a canon lower's realloc resolves to a host function", ErrUnsupported)
 	}
 	ft, err := target.inst.funcType(target.fn)
 	if err != nil {
 		return 0, err
 	}
+	// The component walk refuses a mistyped realloc before instantiation (`component.ErrCanonOptionInvalid`),
+	// so reaching this is the engine's failure, not the component's.
 	if len(ft.Params) != 4 || len(ft.Results) != 1 {
 		return 0, fmt.Errorf("%w: cabi_realloc declares %d params and %d results, want 4 and 1",
-			ErrNotValidated, len(ft.Params), len(ft.Results))
+			ErrEngineInvariant, len(ft.Params), len(ft.Results))
 	}
 	c.st.pushI32(int32(origPtr))
 	c.st.pushI32(int32(origSize))

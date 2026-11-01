@@ -162,7 +162,8 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	if err != nil {
 		// A core module the validator refuses or declines (#1162): the same two verdicts core `Instantiate`
 		// reports, classified the same way at all three component doors.
-		if errors.Is(err, component.ErrCoreModuleInvalid) {
+		// A canon option the component model refuses, a mistyped `realloc` (#1134 class C), is the same verdict.
+		if errors.Is(err, component.ErrCoreModuleInvalid) || errors.Is(err, component.ErrCanonOptionInvalid) {
 			return 0, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		if errors.Is(err, component.ErrCoreModuleDeclined) {
@@ -271,8 +272,8 @@ func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
 	}
 	in, err := component.InstantiateWithHostFeatures(wasm, h, feats)
 	if err != nil {
-		// #1162's two verdicts — see ComponentConfig.Run.
-		if errors.Is(err, component.ErrCoreModuleInvalid) {
+		// #1162's two verdicts, and #1134's canon option — see ComponentConfig.Run.
+		if errors.Is(err, component.ErrCoreModuleInvalid) || errors.Is(err, component.ErrCanonOptionInvalid) {
 			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		if errors.Is(err, component.ErrCoreModuleDeclined) {
@@ -426,8 +427,8 @@ func LoadComponent(wasm []byte) (*Component, error) {
 	h := component.NewHost(io.Discard, io.Discard, nil)
 	in, err := component.InstantiateWithHost(wasm, h)
 	if err != nil {
-		// #1162's two verdicts — see ComponentConfig.Run.
-		if errors.Is(err, component.ErrCoreModuleInvalid) {
+		// #1162's two verdicts, and #1134's canon option — see ComponentConfig.Run.
+		if errors.Is(err, component.ErrCoreModuleInvalid) || errors.Is(err, component.ErrCanonOptionInvalid) {
 			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		if errors.Is(err, component.ErrCoreModuleDeclined) {

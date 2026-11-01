@@ -168,6 +168,27 @@ says what it now requires and what it gives up.
   - **Tests updated:** eight GC/EH assertions now expect `ErrEngineInvariant`. A boundary test that refused
     `ErrNotValidated` for a caller's bad argument now refuses both sentinels, because a caller's own argument
     is neither the module's fault nor the engine's.
+- **A component whose canon lower names a mistyped `realloc` is refused as `ErrInvalid` at instantiation, and
+  `ErrNotValidated` has no producer left** (#1134 class C, the chair's ruling of 2026-10-31, item 3).
+  - **The rule:** the component model requires a canon lower's `realloc` to be `(i32 i32 i32 i32) -> i32`, and
+    wasm-tools refuses a component that breaks it. `component.ErrCanonOptionInvalid` refuses it in the walk,
+    where the core function space is resolved, so nothing runs. All three public doors report it as
+    `ErrInvalid`. Before, it instantiated, and only a call that reached the realloc found the wrong arity,
+    reported as `ErrNotValidated` at run time.
+  - **A host-function `realloc` is not refused.** It has the right type and the spec accepts it, but this
+    engine calls realloc as guest code on the caller's stack and cannot call a host one. So `CanonCaller.Realloc`
+    reports it as `ErrUnsupported` when reached. That also fixes a nil dereference for a host extern given
+    directly as the option, which has no owner to resolve through.
+  - **Witnesses:** `TestAComponentsMistypedReallocIsRefusedAsInvalid` uses two committed fixtures (the
+    mistyped one, and a host-backed one that must load), and `TestACanonReallocThatIsAHostFunctionIsUnsupported`
+    covers the interp half. **Neuters, run:** with the walk's type check removed, the mistyped fixture loads at
+    `LoadComponent` and `ComponentConfig.LoadComponent`, and reaches *"no callable run export"* at `Run`. With
+    the host arm put back on `ErrNotValidated`, the interp test fails.
+  - **The retirement is held by a control.** `TestErrNotValidatedHasNoProducer` parses `internal/interp`'s
+    engine files and fails on any reference other than the declaration. Its neuter, one site put back,
+    names that file and line. The declaration stays, because contract §9 and ADRs 0025, 0043 and 0077 cite it.
+  - **G-1's carve-out is retired**: ADR 0043's condition, *"no reachable call site"*, is met by there being no
+    call site at all.
 - **`xcheck` writes nothing a queued task could be using: the copy, checks and cleanup run inside the task**
   ([#1188](https://github.com/scttfrdmn/burroughs/issues/1188)). Scott's rule of 2026-10-29 is *"you should
   always use pueue"*. `scripts/xcheck-amd64.sh` used to `rm -rf` and re-extract a fixed `~/burroughs-xcheck` over

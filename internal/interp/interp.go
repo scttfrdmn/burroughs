@@ -605,7 +605,18 @@ var ErrUnsupportedOp = errors.New("interp: no arm for opcode")
 // **Class D's 23 GC and exception-handling sites followed** (D1, item 2 of the same ruling). The
 // same control runs on the gate:gc and gate:exceptions lanes and reads 0 there too, and neither gate
 // can flip while its lane has a reachable decline (`binary.DefaultFeatures`' doc records that
-// precondition). What is left here are class C's two component canon-option sites.
+// precondition).
+//
+// **Class C's two component canon-option sites were the last** (item 3 of the same ruling). A mistyped
+// `realloc` is now refused by the component walk (`component.ErrCanonOptionInvalid`), so its arity check
+// here reports ErrEngineInvariant. A host-function `realloc` is valid in the component model and beyond
+// this engine, so it reports ErrUnsupported.
+//
+// **So this sentinel has no producer: it is retired, and G-1's carve-out with it** (ADR 0043's condition,
+// *"no reachable call site"*, is met by there being no call site at all). It stays declared because
+// contract §9 and ADRs 0025, 0043 and 0077 cite it by name, and tests use it to assert that an error does
+// *not* blame the module. A new use is a regression of #1134, not a fresh category: a check a validator
+// rules out belongs under ErrEngineInvariant.
 //
 // What it must never become is a spec verdict: `type mismatch` is the validator's string, and
 // reporting it from here would put #9's answer in a place #9 cannot be tested from.

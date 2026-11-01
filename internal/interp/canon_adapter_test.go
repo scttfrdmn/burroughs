@@ -73,6 +73,41 @@ func adapterCallerModule(t *testing.T, provider *Instance, onEnter func()) *Inst
 // TestCanonAdapterReallocAtLengthZeroReturnsTheGuestPointer is the realloc exit: the adapter invokes the
 // guest's `cabi_realloc` even for a zero-length allocation and gets the pointer the guest allocator
 // returns — the model-faithful path condition 3 requires, replacing the `(0,0)` shortcut.
+// TestACanonReallocThatIsAHostFunctionIsUnsupported is #1134 class C's interp half. A canon lower whose
+// `realloc` option is a host function has a valid type, so the component model accepts it. This engine calls
+// realloc as guest code on the caller's stack and cannot call a host one, so the call is refused as
+// ErrUnsupported when it is reached. It was ErrNotValidated, which blamed a module the spec accepts.
+// `component`'s walk refuses only the mistyped case (`ErrCanonOptionInvalid`).
+func TestACanonReallocThatIsAHostFunctionIsUnsupported(t *testing.T) {
+	provider := providerModule(t, 0, 48)
+	mem, ok := provider.Export("mem")
+	if !ok {
+		t.Fatal("provider exports no memory")
+	}
+	realloc := HostExtern(ft([]binary.ValType{binary.I32, binary.I32, binary.I32, binary.I32},
+		[]binary.ValType{binary.I32}), func(*Caller, []Value) ([]Value, error) { return []Value{I32(0)}, nil })
+	lower := CanonLowerExtern(ft(nil, []binary.ValType{binary.I32}),
+		func(c *CanonCaller, _ []Value) ([]Value, error) {
+			p, err := c.Realloc(0, 0, 4, 8)
+			if err != nil {
+				return nil, err
+			}
+			return []Value{I32(int32(p))}, nil
+		},
+		CanonOptions{Memory: &mem, Realloc: &realloc})
+	caller := hostLink(t, `(module
+		(import "h" "lower" (func $lower (result i32)))
+		(func (export "call") (result i32) (call $lower)))`,
+		binary.Features{}, hostImports(map[string]Extern{"lower": lower}))
+	_, err := caller.Invoke("call")
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("got %v, want ErrUnsupported: a host-function realloc is valid and beyond this engine", err)
+	}
+	if errors.Is(err, ErrNotValidated) || errors.Is(err, ErrEngineInvariant) {
+		t.Errorf("got %v, which blames the module or the engine for a construct the spec accepts", err)
+	}
+}
+
 func TestCanonAdapterReallocAtLengthZeroReturnsTheGuestPointer(t *testing.T) {
 	provider := providerModule(t, 0, 48)
 	caller := adapterCallerModule(t, provider, nil)

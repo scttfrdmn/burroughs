@@ -96,6 +96,37 @@ func (e Extern) SharedMemory() bool {
 	return e.Kind == binary.ExternMemory && e.mem != nil && e.mem.limits.Shared
 }
 
+// FuncSignature resolves a function extern to the function a call through it reaches, and reports that
+// function's type and whether it is a host function. ok is false for a non-function extern, or one whose index
+// resolves to nothing.
+//
+// The component walk asks it of a canon lower's `realloc` option, whose type the component model fixes at
+// `(i32 i32 i32 i32) -> i32` (#1134 class C). It resolves the same way `CanonCaller.Realloc` does, through
+// `resolveCall`, so the walk checks the function the adapter would call rather than the one the index names.
+func (e Extern) FuncSignature() (ft binary.FuncType, host, ok bool) {
+	if e.Kind != binary.ExternFunc {
+		return binary.FuncType{}, false, false
+	}
+	if e.host != nil {
+		return e.host.ft, true, true
+	}
+	if e.owner == nil {
+		return binary.FuncType{}, false, false
+	}
+	t, err := e.owner.resolveCall(e.fnIdx)
+	if err != nil {
+		return binary.FuncType{}, false, false
+	}
+	if t.host != nil {
+		return t.host.ft, true, true
+	}
+	fp, err := t.inst.funcType(t.fn)
+	if err != nil {
+		return binary.FuncType{}, false, false
+	}
+	return *fp, false, true
+}
+
 func (e Extern) typeSpace() *binary.Module {
 	switch e.Kind {
 	case binary.ExternTable:
