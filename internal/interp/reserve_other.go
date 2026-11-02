@@ -1,6 +1,10 @@
 // Copyright 2026 Scott Friedman. SPDX-License-Identifier: Apache-2.0
 
-//go:build !unix
+//go:build !unix || burroughs_noreserve
+
+// `burroughs_noreserve` is #1089's test-only fallback tag (the chair's ruling of 2026-11-01, item 1). It selects
+// this file on a unix port too, so every memory is a Go allocation instead of an anonymous mapping (ADR 0076).
+// That is the bisection's ADR 0076 arm, and nothing ships with it.
 
 package interp
 
