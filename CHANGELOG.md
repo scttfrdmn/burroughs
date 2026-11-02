@@ -44,6 +44,23 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Added
 
+- **The lab helpers the actor ran from scratch are in `scripts/`** (the chair's ruling of 2026-11-01, item 5: a
+  helper still in use is code the project depends on, and shouldn't live in a scratch directory).
+  - **`scripts/labtask`** reads or waits on a pueue task that already exists, the half `scripts/labrun` doesn't
+    cover:
+    - `status <host> <id>` is one line;
+    - `wait <host> <id> <log>` fetches the task's full log and exits with the task's own exit code, never pueue's,
+      for labrun's reason (`pueue wait` exits 0 for a failed task).
+  - **`scripts/specstress.sh`** is #1089's reproduction stress. It runs one test from a compiled test binary, one
+    process per iteration, across workers, to a target or a failure cap, under a `mkdir` lock so it runs on
+    darwin and linux alike.
+    - **A non-zero exit, a SKIP, or no PASS line all count as failures**, so a run that asks nothing cannot read as
+      0 in N.
+    - **Witness:** `TestSpecStressCountsWhatItRan`, five rows over a shim binary.
+    - **Neuter, run:** with the SKIP check removed, the skip row reads 4 passed and fails, and no other row does.
+  - **Not moved:** the launch and wait glue for #1089's Graviton and orion runs, which is personal tooling
+    driven by Scott's `spawn` and is named on #1089. And the old `wintriage.sh`, superseded since #1073/#1074
+    by `ciwatch` reading the triage map itself.
 - **#406's stress reports each case's progress every ten minutes**: iterations done, failures so far, time
   elapsed and an estimate of what is left (`BURROUGHS_T406_PROGRESS` overrides the interval). A 10,000-iteration
   c1alloc run takes most of a day, and until now it printed nothing until the case finished.
