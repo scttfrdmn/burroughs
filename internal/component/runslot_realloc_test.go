@@ -34,7 +34,8 @@ import (
 // defect it is the whole realloc**, tens of milliseconds and more under `-race`. The threshold, 20 ms, is
 // far below the spin and far above any critical section. This is a duration, not an ordering of two clocks.
 //
-// **Neuter, run:** making the store hold `h.mu` across its guest-memory work again makes the poller see it
+// **Neuter, run**, and re-run against #1207's denser measurement (2026-11-02, darwin/arm64, `-race`, 3 of 3, about
+// 1.65 s each): making the store hold `h.mu` across its guest-memory work again makes the poller see it
 // held for the realloc's duration, and this fails on the stretch.
 func TestAResultStoresReallocRunsWithNoEngineLockHeld(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
@@ -58,23 +59,34 @@ func TestAResultStoresReallocRunsWithNoEngineLockHeld(t *testing.T) {
 
 	var stop atomic.Bool
 	longest := make(chan time.Duration, 1)
+	// **A stretch counts only while the poller is observing it** (#1207). The poller's attempts are microseconds
+	// apart while it runs. A gap longer than denseGap between two of them means the poller was descheduled, and
+	// nothing watched the lock in that gap. So the stretch ends at the last attempt actually made, not at the
+	// next one. Without this, a 27 ms deschedule on a loaded Windows runner under -race read as a 27 ms hold. The
+	// defect, a hold across the realloc's guest code, is a dense run of failed attempts, so it is still a stretch.
+	const denseGap = time.Millisecond
 	go func() {
-		var best, cur time.Duration
-		var since time.Time
+		var best time.Duration
+		var since, last time.Time
 		for !stop.Load() {
+			now := time.Now()
+			if !since.IsZero() && now.Sub(last) > denseGap {
+				best = max(best, last.Sub(since))
+				since = time.Time{}
+			}
+			last = now
 			if in.w.async.mu.TryLock() {
 				in.w.async.mu.Unlock()
 				if !since.IsZero() {
-					cur = time.Since(since)
-					best = max(best, cur)
+					best = max(best, now.Sub(since))
 					since = time.Time{}
 				}
 			} else if since.IsZero() {
-				since = time.Now()
+				since = now
 			}
 		}
 		if !since.IsZero() {
-			best = max(best, time.Since(since))
+			best = max(best, last.Sub(since))
 		}
 		longest <- best
 	}()

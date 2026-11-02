@@ -340,6 +340,24 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Fixed
 
+- **The realloc lock witness no longer counts its poller's own scheduling gap as a lock hold, and a Windows-only
+  red is explainable** ([#1207](https://github.com/scttfrdmn/burroughs/issues/1207)).
+  - **The witness:** `TestAResultStoresReallocRunsWithNoEngineLockHeld` failed on Windows at main b72f070 with
+    *"held for an unbroken 27.3517ms"* (bound 20 ms). Its poller measured how long its `TryLock` attempts kept
+    failing, and a gap between two attempts counted as "held" though nothing observed the lock. That reading
+    is inferred from the construction. Now a stretch ends at the last attempt actually made when the next one
+    comes more than 1 ms later.
+    - Passes 5 of 5 under `-race`.
+    - **Neuter, re-run** (the store holding `h.mu` across its guest-memory work): it still fails 3 of 3, at about
+      1.65 s, so the denser observation lost no power to detect.
+  - **`explainred`:**
+    - **The defect:** it read failing test names only from the record's tree run, so the Windows-only red at
+      b72f070 refused #1207, which names that test, as naming none of the run's failures.
+    - **The repair:** `ciwatch.sh` now records the windows run as `winrun=` beside `run=`, and explainred reads
+      both. A record from before this has no `winrun=` and reads the tree run alone.
+    - **Witness:** `TestExplainRedReadsTheWindowsRunsFailures`, through a new `EXPLAINRED_GH` seam, so the two-run
+      reading is exercised end to end.
+    - **Neuter, run:** with `$winrun` dropped, the Windows-only row is refused.
 - **A `Close` called from inside its own instance's host function is reported as case 2, which cannot end**
   ([#1133](https://github.com/scttfrdmn/burroughs/issues/1133), contract §2 T-5.4, the chair's ruling of 2026-11-01,
   item 4). T-5.4 requires *"a case that provably cannot be ended"* to be reported as shutdown's error.

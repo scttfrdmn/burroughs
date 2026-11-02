@@ -567,10 +567,16 @@ verdict_dir=${CIWATCH_VERDICT_DIR:-}
 if [ -z "$verdict_dir" ] && [ -z "${CIWATCH_FIXTURE:-}" ]; then
 	verdict_dir="$(cd "$(dirname "$0")/.." && pwd)/.ci-verdict.d"
 fi
+#
+# **The windows run is recorded beside the tree run** (#1207). A red can come from either, and
+# `explainred.sh` reads the failing test names from the record's runs. With only `run=` recorded, a red that
+# was only in the windows run left explainred reading the tree run's green log. Then an issue filed for the
+# Windows failure, and naming it, was refused as naming none of the run's failing tests. b72f070 was the first
+# such red.
 if [ -n "$verdict_dir" ]; then
 	mkdir -p "$verdict_dir"
-	printf 'ciwatch=%s\nsha=%s\nrun=%s\nwhen=%s\n' "$([ "$fail" -eq 0 ] && echo green || echo fail)" "$sha" \
-		"$treerun" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$verdict_dir/ci-$sha"
+	printf 'ciwatch=%s\nsha=%s\nrun=%s\nwinrun=%s\nwhen=%s\n' "$([ "$fail" -eq 0 ] && echo green || echo fail)" "$sha" \
+		"$treerun" "$winrun" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$verdict_dir/ci-$sha"
 fi
 
 if [ "$fail" -ne 0 ]; then
