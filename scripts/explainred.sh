@@ -28,6 +28,9 @@ rec="$vdir/ci-$sha"
 [ -f "$rec" ] || { echo "explainred: no ciwatch record for $sha ($rec); watch main first" >&2; exit 1; }
 grep -q '^ciwatch=green$' "$rec" && { echo "explainred: $sha is green; there is nothing to explain" >&2; exit 1; }
 run=$(sed -n 's/^run=//p' "$rec" | head -1)
+# The windows run, which `ciwatch.sh` records beside the tree run since #1207. A red can be either run's, so the
+# failing names are read from both. A record from before #1207 has no `winrun=` line and reads the tree run alone.
+winrun=$(sed -n 's/^winrun=//p' "$rec" | head -1)
 
 if [ -n "${EXPLAINRED_ISSUE:-}" ]; then
 	issue_json=$EXPLAINRED_ISSUE
@@ -62,7 +65,11 @@ else
 	if [ -n "${EXPLAINRED_FAILED+x}" ]; then
 		failed=$EXPLAINRED_FAILED
 	else
-		failed=$(gh run view "$run" --log-failed 2>/dev/null | grep -oE -- '--- FAIL: Test[A-Za-z0-9_]+' | sed 's/--- FAIL: //' | sort -u || true)
+		# EXPLAINRED_GH is the witness's seam for this one call, an argv prefix such as `bash shim.sh`, so the
+		# two-run reading is tested end to end rather than through EXPLAINRED_FAILED.
+		read -ra ghcmd <<<"${EXPLAINRED_GH:-gh}"
+		failed=$(for r in $run $winrun; do "${ghcmd[@]}" run view "$r" --log-failed 2>/dev/null; done |
+			grep -oE -- '--- FAIL: Test[A-Za-z0-9_]+' | sed 's/--- FAIL: //' | sort -u || true)
 	fi
 	while IFS= read -r t; do
 		[ -n "$t" ] || continue
