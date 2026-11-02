@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# labtask — read or wait on a pueue task that already exists on a lab host.
+#
+#   labtask status <host> <task-id>          one line: host, id, state, start time, and result once Done
+#   labtask wait   <host> <task-id> <log>    wait until the task is Done, write its full log to <log>, and exit
+#                                            with the task's own exit code
+#
+# `scripts/labrun` submits and waits in one call. This is for a task submitted earlier: a long stress queued
+# behind a setup task, or one a reboot left running. Both reads are over plain ssh, which is read-only. The
+# host's queue is pueue's, so nothing here starts, stops or edits a task (Scott's rule, 2026-10-29: every
+# lab-host action goes through pueue, and only read-only queries go over plain ssh).
+#
+# **`wait` exits with the task's result, never with pueue's.** `pueue wait` exits 0 even when the task failed,
+# which is the reason labrun exists, and this reads the task's own result for the same reason: 0 for Success, the
+# task's exit code for Failed, 1 for any other terminal result. A transport failure while polling is retried. It
+# is not read as the task's end, because an unreadable status is not a verdict.
+#
+# The poll interval is the sleep inside a loop on a real condition, the task leaving Queued or Running. It is not
+# a wait on a timer (behaviour 5). Moved from the actor's scratch on the chair's ruling of 2026-11-01, item 5.
+set -u
+
+state() { # <host> <id>: prints "<state> <start> <result> <code>", or nothing if the status cannot be read
+	ssh -o BatchMode=yes -o ConnectTimeout=10 "$1" "pueue status --json" 2>/dev/null |
+		uv run --no-project python3 -I -c '
+import json, sys
+t = json.load(sys.stdin)["tasks"].get(sys.argv[1])
+if t is None:
+    print("Absent - - 1"); raise SystemExit
+st = t["status"]
+name = next(iter(st)) if isinstance(st, dict) else st
+body = st.get(name, {}) if isinstance(st, dict) else {}
+start = (body.get("start") or "-")[:19]
+res, code = "-", 0
+if name == "Done":
+    r = body.get("result")
+    if r == "Success":
+        res = "Success"
+    elif isinstance(r, dict) and "Failed" in r:
+        res, code = "Failed", r["Failed"]
+    else:
+        res, code = (r if isinstance(r, str) else next(iter(r))), 1
+print(name, start, res, code)' "$2" 2>/dev/null
+}
+
+case "${1:-}" in
+status)
+	[ $# -eq 3 ] || { echo "usage: labtask status <host> <task-id>" >&2; exit 2; }
+	s=$(state "$2" "$3")
+	[ -n "$s" ] || { echo "labtask: $2 task $3: status unreadable" >&2; exit 3; }
+	read -r name start res _ <<<"$s"
+	echo "$2 $3 $name $start $res"
+	;;
+wait)
+	[ $# -eq 4 ] || { echo "usage: labtask wait <host> <task-id> <log>" >&2; exit 2; }
+	host=$2 id=$3 log=$4
+	while :; do
+		s=$(state "$host" "$id")
+		read -r name _ res code <<<"${s:-Unreadable - - 0}"
+		case "$name" in
+		Done) break ;;
+		Absent) echo "labtask: $host has no task $id" >&2; exit 3 ;;
+		Queued | Running | Paused | Stashed | Locked) ;;
+		*) echo "labtask: $host task $id status unreadable; retrying" >&2 ;;
+		esac
+		sleep "${LABTASK_POLL:-300}"
+	done
+	ssh -o BatchMode=yes "$host" "pueue log $id --full" > "$log" 2>&1
+	echo "labtask: $host task $id: $res (exit $code); log in $log" >&2
+	exit "$code"
+	;;
+*)
+	echo "usage: labtask status <host> <task-id> | labtask wait <host> <task-id> <log>" >&2
+	exit 2
+	;;
+esac
