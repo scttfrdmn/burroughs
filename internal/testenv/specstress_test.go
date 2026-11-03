@@ -32,6 +32,9 @@ pass) echo "--- PASS: TestThreadsGateLeavesTheCoreBoardUnchanged (0.00s)" ;;
 fail) echo "fatal error: found pointer to free object"; exit 2 ;;
 skip) echo "--- SKIP: TestThreadsGateLeavesTheCoreBoardUnchanged (0.00s)"; echo "--- PASS: TestThreadsGateLeavesTheCoreBoardUnchanged (0.00s)" ;;
 silent) echo "testing: warning: no tests to run" ;;
+whole-skip) echo "--- SKIP: TestNeedsACorpus (0.00s)"; echo "PASS" ;;
+whole-fail) echo "--- FAIL: TestSomething (0.00s)"; echo "FAIL"; exit 1 ;;
+whole-cut) echo "--- PASS: TestSomething (0.00s)" ;;
 esac
 `
 	if werr := os.WriteFile(shim, []byte(body), 0o755); werr != nil { //nolint:gosec // an executable test shim
@@ -43,14 +46,20 @@ esac
 	// so the claim lock is exercised.
 	for _, r := range []struct {
 		name, shim, maxfail, workers string
+		whole                        bool
 		passed, failed               string
 		stop                         bool
 	}{
-		{"a_clean_run_counts_every_iteration", "pass", "", "2", "4 passed", "0 failed", false},
-		{"a_non_zero_exit_stops_at_the_first", "fail", "", "1", "0 passed", "1 failed", true},
-		{"a_skip_is_a_failure", "skip", "", "1", "0 passed", "1 failed", true},
-		{"no_pass_line_is_a_failure", "silent", "", "1", "0 passed", "1 failed", true},
-		{"the_cap_runs_on_to_a_rate", "fail", "3", "1", "0 passed", "3 failed", true},
+		{"a_clean_run_counts_every_iteration", "pass", "", "2", false, "4 passed", "0 failed", false},
+		{"a_non_zero_exit_stops_at_the_first", "fail", "", "1", false, "0 passed", "1 failed", true},
+		{"a_skip_is_a_failure", "skip", "", "1", false, "0 passed", "1 failed", true},
+		{"no_pass_line_is_a_failure", "silent", "", "1", false, "0 passed", "1 failed", true},
+		{"the_cap_runs_on_to_a_rate", "fail", "3", "1", false, "0 passed", "3 failed", true},
+		// The whole-binary mode (#1089's widening). A licensed skip is not a failure there, but a failed test is,
+		// and so is an exit 0 whose output does not end in PASS.
+		{"whole_a_licensed_skip_still_passes", "whole-skip", "", "2", true, "4 passed", "0 failed", false},
+		{"whole_a_failed_test_is_a_failure", "whole-fail", "", "1", true, "0 passed", "1 failed", true},
+		{"whole_no_final_pass_is_a_failure", "whole-cut", "", "1", true, "0 passed", "1 failed", true},
 	} {
 		t.Run(r.name, func(t *testing.T) {
 			out := t.TempDir()
@@ -58,6 +67,9 @@ esac
 			cmd.Env = append(os.Environ(), "SPECSTRESS_OUT="+out, "SPECSTRESS_DIR="+dir)
 			if r.maxfail != "" {
 				cmd.Env = append(cmd.Env, "SPECSTRESS_MAXFAIL="+r.maxfail)
+			}
+			if r.whole {
+				cmd.Env = append(cmd.Env, "SPECSTRESS_WHOLE=1")
 			}
 			got, err := cmd.CombinedOutput()
 			if err != nil {

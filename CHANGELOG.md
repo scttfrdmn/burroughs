@@ -58,6 +58,10 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
       0 in N.
     - **Witness:** `TestSpecStressCountsWhatItRan`, five rows over a shim binary.
     - **Neuter, run:** with the SKIP check removed, the skip row reads 4 passed and fails, and no other row does.
+    - **`SPECSTRESS_WHOLE=1` runs the whole binary as one iteration**, #1089's widening, since heap corruption can
+      come from any earlier test in the process. There a pass is exit 0 and a last line of `PASS`, so a licensed
+      skip is not a failure but a failed test, or output with no final PASS, is. Three more witness rows.
+      **Neuter, run:** with the final-PASS check made to always pass, only the truncated-output row fails.
   - **Not moved:** the launch and wait glue for #1089's Graviton and orion runs, which is personal tooling
     driven by Scott's `spawn` and is named on #1089. And the old `wintriage.sh`, superseded since #1073/#1074
     by `ciwatch` reading the triage map itself.
