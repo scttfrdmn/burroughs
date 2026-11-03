@@ -16,6 +16,13 @@
 #                       is in), which is where the test's relative corpus paths resolve
 #   SPECSTRESS_OUT      where results go (default ~/specstress); the run's are in <out>/<name>/
 #   SPECSTRESS_MAXFAIL  failures before the run stops (default 1, "until the first fatal"); higher measures a rate
+#   SPECSTRESS_WHOLE    1 to run the whole binary, every test, as one iteration (#1089's widening: heap corruption
+#                       can come from any earlier test in the process). SPECSTRESS_RUN is then ignored.
+#
+# **What counts as a pass depends on the mode.** One test: exit 0, no SKIP, and that test's `--- PASS:` line.
+# Whole binary: exit 0 and a last line of `PASS`, which is what a test binary prints when every test passed. A
+# skip is not a failure there, because a full package has licensed skips. A crash or a failed test still exits
+# non-zero.
 #
 # Results in <out>/<name>/:
 #   - started and done: counters;
@@ -62,15 +69,28 @@ claim() { # prints the claimed iteration number, or -1 when the target is reache
 	echo "$n"
 }
 
+passed() { # <rc> <output>: whether the iteration passed, by the mode's rule above
+	[ "$1" -eq 0 ] || return 1
+	if [ "${SPECSTRESS_WHOLE:-}" = 1 ]; then
+		[ "$(tail -n 1 "$2")" = PASS ]
+		return
+	fi
+	! grep -q -- '--- SKIP' "$2" && grep -q -- "--- PASS: $want" "$2"
+}
+
 worker() {
 	local w=$1 n rc
 	shift
 	while :; do
 		n=$(claim)
 		[ "$n" = -1 ] && return
-		env "$@" "$bin" -test.count=1 -test.v -test.timeout=30m -test.run "$run" > "$out/cur.$w" 2>&1
+		if [ "${SPECSTRESS_WHOLE:-}" = 1 ]; then
+			env "$@" "$bin" -test.count=1 -test.timeout=60m > "$out/cur.$w" 2>&1
+		else
+			env "$@" "$bin" -test.count=1 -test.v -test.timeout=30m -test.run "$run" > "$out/cur.$w" 2>&1
+		fi
 		rc=$?
-		if [ "$rc" -ne 0 ] || grep -q -- '--- SKIP' "$out/cur.$w" || ! grep -q -- "--- PASS: $want" "$out/cur.$w"; then
+		if ! passed "$rc" "$out/cur.$w"; then
 			cp "$out/cur.$w" "$out/fail.$n.log"
 			lock
 			echo "iteration $n worker $w rc=$rc" >> "$out/failures"
