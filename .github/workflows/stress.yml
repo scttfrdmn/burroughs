@@ -1,0 +1,77 @@
+name: stress
+
+# #1089's stress on CI's own hardware. CI's two linux/arm64 runtime fatals (traceback did not unwind, at b8b5578;
+# found pointer to free object, at bc75589) did not reproduce in 66,000 iterations off CI: Graviton3, 4 and 5,
+# single-test and whole-package, both builds. None of those used CI's core, which is Azure Cobalt 100 (Neoverse
+# N2). This runs the whole `internal/spec` binary per iteration on the runner both fatals came from, through
+# `scripts/specstress.sh` (SPECSTRESS_WHOLE=1), so a reproduction is the platform's and not a lab host's.
+#
+# Dispatched by hand, never on a push: it spends hours of runner time, and it gates nothing. A fatal is reported as
+# this run's failure, and its whole output is uploaded as an artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "iterations per shard (each runs until this, its first fatal, or the job's timeout)"
+        default: "400"
+      workers:
+        description: "concurrent test processes per runner (4 vCPUs each)"
+        default: "2"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  whole:
+    runs-on: ubuntu-24.04-arm
+    # GitHub-hosted jobs stop at six hours. This leaves time to upload a failing iteration's log.
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [default, endtable]
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: tools/go.sum
+
+      # Every pinned corpus, as ci.yml's build job fetches them (TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob).
+      - name: vendor the spec suite
+        run: make spec-tests
+      - name: vendor the reference interpreter
+        run: make spec-ref
+      - name: vendor the threads reference
+        run: make threads-ref
+
+      - name: build internal/spec's test binary (${{ matrix.build }})
+        run: |
+          tags=""
+          [ "${{ matrix.build }}" = endtable ] && tags="-tags burroughs_endtable"
+          go test -c $tags -o "$RUNNER_TEMP/spec.test" ./internal/spec
+          uname -m; nproc; grep -m1 'CPU part' /proc/cpuinfo || true
+
+      - name: stress, whole package per iteration
+        env:
+          SPECSTRESS_WHOLE: "1"
+          SPECSTRESS_OUT: ${{ runner.temp }}/specstress
+        run: |
+          scripts/specstress.sh "${{ matrix.build }}-${{ matrix.shard }}" "$RUNNER_TEMP/spec.test" \
+            "${{ inputs.workers }}" "${{ inputs.iterations }}"
+          f=$(wc -l < "$SPECSTRESS_OUT/${{ matrix.build }}-${{ matrix.shard }}/failures" | tr -d ' ')
+          echo "fatals: $f"
+          [ "$f" -eq 0 ]
+
+      - name: upload a failing iteration's output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-${{ matrix.build }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/specstress/
