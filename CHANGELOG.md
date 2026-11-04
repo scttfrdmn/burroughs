@@ -44,6 +44,15 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Added
 
+- **A hand-dispatched `stress` workflow runs #1089's stress on CI's own arm64 runner**
+  ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)).
+  - **Why:** CI's two linux/arm64 runtime fatals did not reproduce in 66,000 iterations off CI, on hosts that
+    don't use its core, Azure Cobalt 100 (Neoverse N2).
+  - **What it runs:** `.github/workflows/stress.yml` runs the whole `internal/spec` binary per iteration on
+    `ubuntu-24.04-arm`, through `scripts/specstress.sh`, for both of CI's builds (default and
+    `burroughs_endtable`), four shards each. Iterations and workers are dispatch inputs.
+  - **On a fatal:** the shard fails and uploads the failing iteration's output.
+  - **Scope:** it runs only when dispatched, never on a push, and gates nothing.
 - **The lab helpers the actor ran from scratch are in `scripts/`** (the chair's ruling of 2026-11-01, item 5: a
   helper still in use is code the project depends on, and shouldn't live in a scratch directory).
   - **`scripts/labtask`** reads or waits on a pueue task that already exists, the half `scripts/labrun` doesn't
