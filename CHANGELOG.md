@@ -53,6 +53,23 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
     `burroughs_endtable`), four shards each. Iterations and workers are dispatch inputs.
   - **On a fatal:** the shard fails and uploads the failing iteration's output.
   - **Scope:** it runs only when dispatched, never on a push, and gates nothing.
+  - **Its first run reproduced CI's fatal**: run 41882817381 at 940e1ad, `traceback did not unwind completely`
+    once in about 1,500 iterations, against 0 in 6,000 on a Graviton5 in the same mode. The fatal depends on
+    the hardware.
+  - **It now bisects on that hardware.** The arms are builds, taken as a JSON input: CI's `default` and
+    `endtable`, and #1089's three test-only fallback tags.
+  - **Its counts survive the clock.** A time budget inside the stress step (`minutes`, under the job's
+    timeout) ends the stress, not the job, so every shard prints `counts: … done=… failures=…`. The first run's
+    shards were cancelled at the timeout and lost theirs.
+  - **Whole mode runs `-test.v`**, so a failing iteration's log names the test that was running. The first
+    reproduction could not.
+- **#1089's three test-only fallback tags are on main**, so the stress workflow can build the bisection's arms:
+  - `burroughs_noreserve`: ADR 0076's memories on the Go allocator;
+  - `burroughs_plainspan`: ADR 0111's span helpers made plain;
+  - `burroughs_noedges`: ADR 0112's edges removed.
+
+  Each is false in every shipped build. They were run on orion first, and the `noreserve` arm made ADR 0076 the
+  cause of the darwin `-race` fatal: 0 in 10,000 against the baseline's 7 in about 10,700.
 - **The lab helpers the actor ran from scratch are in `scripts/`** (the chair's ruling of 2026-11-01, item 5: a
   helper still in use is code the project depends on, and shouldn't live in a scratch directory).
   - **`scripts/labtask`** reads or waits on a pueue task that already exists, the half `scripts/labrun` doesn't

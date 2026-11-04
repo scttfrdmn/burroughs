@@ -1,23 +1,36 @@
 name: stress
 
 # #1089's stress on CI's own hardware. CI's two linux/arm64 runtime fatals (traceback did not unwind, at b8b5578;
-# found pointer to free object, at bc75589) did not reproduce in 66,000 iterations off CI: Graviton3, 4 and 5,
-# single-test and whole-package, both builds. None of those used CI's core, which is Azure Cobalt 100 (Neoverse
-# N2). This runs the whole `internal/spec` binary per iteration on the runner both fatals came from, through
-# `scripts/specstress.sh` (SPECSTRESS_WHOLE=1), so a reproduction is the platform's and not a lab host's.
+# found pointer to free object, at bc75589) did not reproduce in 66,000 iterations off CI, on hosts that don't use
+# CI's core, Azure Cobalt 100 (Neoverse N2). This runs the whole `internal/spec` binary per iteration on the runner
+# both fatals came from, through `scripts/specstress.sh` (SPECSTRESS_WHOLE=1). Its first run, 41882817381 at 940e1ad,
+# reproduced `traceback did not unwind completely` once in about 1,500 iterations.
 #
 # Dispatched by hand, never on a push: it spends hours of runner time, and it gates nothing. A fatal is reported as
-# this run's failure, and its whole output is uploaded as an artifact.
+# its shard's failure, and its whole output is uploaded as an artifact.
+#
+# **Arms are builds, so the same workflow bisects.** `default` and `endtable` are CI's two builds. `noreserve`,
+# `plainspan` and `noedges` are #1089's test-only fallback tags (internal/interp/fallback1089_*.go and the
+# reservation files' build lines), each switching one suspect to a fallback.
 
 on:
   workflow_dispatch:
     inputs:
+      arms:
+        description: 'JSON list of arms: default, endtable, noreserve, plainspan, noedges'
+        default: '["default", "endtable"]'
+      shards:
+        description: 'JSON list of shard numbers per arm'
+        default: '[1, 2, 3, 4]'
       iterations:
-        description: "iterations per shard (each runs until this, its first fatal, or the job's timeout)"
+        description: "iterations per shard (each runs until this, its first fatal, or the time budget)"
         default: "400"
       workers:
         description: "concurrent test processes per runner (4 vCPUs each)"
         default: "2"
+      minutes:
+        description: "the stress step's own time budget, kept under the job's timeout so its counts are always printed"
+        default: "320"
 
 permissions:
   contents: read
@@ -29,13 +42,14 @@ defaults:
 jobs:
   whole:
     runs-on: ubuntu-24.04-arm
-    # GitHub-hosted jobs stop at six hours. This leaves time to upload a failing iteration's log.
-    timeout-minutes: 340
+    # GitHub-hosted jobs stop at six hours. The stress step's own budget (`minutes`) sits under this, so a shard that
+    # runs out of time still prints its counts and uploads. The first run's shards were cancelled here and lost them.
+    timeout-minutes: 350
     strategy:
       fail-fast: false
       matrix:
-        build: [default, endtable]
-        shard: [1, 2, 3, 4]
+        arm: ${{ fromJSON(inputs.arms) }}
+        shard: ${{ fromJSON(inputs.shards) }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -51,11 +65,15 @@ jobs:
       - name: vendor the threads reference
         run: make threads-ref
 
-      - name: build internal/spec's test binary (${{ matrix.build }})
+      - name: build internal/spec's test binary (${{ matrix.arm }})
         run: |
-          tags=""
-          [ "${{ matrix.build }}" = endtable ] && tags="-tags burroughs_endtable"
-          go test -c $tags -o "$RUNNER_TEMP/spec.test" ./internal/spec
+          case "${{ matrix.arm }}" in
+          default) tags="" ;;
+          endtable) tags="burroughs_endtable" ;;
+          noreserve | plainspan | noedges) tags="burroughs_${{ matrix.arm }}" ;;
+          *) echo "unknown arm: ${{ matrix.arm }}" >&2; exit 1 ;;
+          esac
+          go test -c ${tags:+-tags "$tags"} -o "$RUNNER_TEMP/spec.test" ./internal/spec
           uname -m; nproc; grep -m1 'CPU part' /proc/cpuinfo || true
 
       - name: stress, whole package per iteration
@@ -63,15 +81,20 @@ jobs:
           SPECSTRESS_WHOLE: "1"
           SPECSTRESS_OUT: ${{ runner.temp }}/specstress
         run: |
-          scripts/specstress.sh "${{ matrix.build }}-${{ matrix.shard }}" "$RUNNER_TEMP/spec.test" \
-            "${{ inputs.workers }}" "${{ inputs.iterations }}"
-          f=$(wc -l < "$SPECSTRESS_OUT/${{ matrix.build }}-${{ matrix.shard }}/failures" | tr -d ' ')
-          echo "fatals: $f"
+          name="${{ matrix.arm }}-${{ matrix.shard }}"
+          # The budget ends the stress, not the job, so what follows always runs. `timeout` signals the stress's
+          # process group, which ends its workers too.
+          timeout --kill-after=60s "${{ inputs.minutes }}m" \
+            scripts/specstress.sh "$name" "$RUNNER_TEMP/spec.test" "${{ inputs.workers }}" "${{ inputs.iterations }}"
+          rc=$?
+          d="$SPECSTRESS_OUT/$name"
+          f=$(wc -l < "$d/failures" | tr -d ' ')
+          echo "counts: arm=${{ matrix.arm }} shard=${{ matrix.shard }} done=$(cat "$d/done") failures=$f stress_rc=$rc"
           [ "$f" -eq 0 ]
 
       - name: upload a failing iteration's output
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: stress-${{ matrix.build }}-${{ matrix.shard }}
+          name: stress-${{ matrix.arm }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/specstress/
