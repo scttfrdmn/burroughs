@@ -353,6 +353,15 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Fixed
 
+- **`ciwatch` waits only on the workflows its verdict reads, `ci` and `windows`**
+  ([#1211](https://github.com/scttfrdmn/burroughs/issues/1211)).
+  - **The defect:** it waited for every run of the SHA to finish. At main 940e1ad, a hand-dispatched `stress` run
+    (#1210), six hours of eight runners, held the verdict past its 5,400 s bound, while `ci` had completed green.
+    `nightly`'s scheduled runs on main's tip were the same latent case.
+  - **The repair:** the run list is an allowlist, so a new workflow does not join the wait by default.
+  - **Witness:** a fixture with a green `ci` run and an in-progress `stress` run reads GREEN without naming the
+    stress run.
+  - **Neuter, run:** with the filter removed, it ends *"UNFINISHED run 9 is still 'in_progress'"*.
 - **The realloc lock witness no longer counts its poller's own scheduling gap as a lock hold, and a Windows-only
   red is explainable** ([#1207](https://github.com/scttfrdmn/burroughs/issues/1207)).
   - **The witness:** `TestAResultStoresReallocRunsWithNoEngineLockHeld` failed on Windows at main b72f070 with

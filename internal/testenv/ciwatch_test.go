@@ -350,6 +350,31 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		}
 	})
 
+	t.Run("a_run_of_a_workflow_the_verdict_does_not_read_is_not_waited_for", func(t *testing.T) {
+		// #1211: a hand-dispatched `stress` run on main's tip (#1210) is still in progress, six hours of eight
+		// runners, while `ci` has completed green. The verdict reads only `ci` and `windows`, so the stress run
+		// must neither be waited on nor named. Before the allowlist it joined the completion wait and held
+		// main's verdict past the bound.
+		//
+		// NEUTER, run (2026-11-04, darwin/arm64): with the allowlist's filter removed, this row waits on run 9
+		// until the fixture bound and ends UNFINISHED.
+		dir := t.TempDir()
+		write(dir, "runs.json", `[{"databaseId": 9, "workflowName": "stress"}, {"databaseId": 1, "workflowName": "ci"}]`)
+		write(dir, "1.json", strings.ReplaceAll(pushRun,
+			`{"name":"citations","conclusion":"failure"}`, `{"name":"citations","conclusion":"success"}`))
+		write(dir, "9.json", `{"status":"in_progress","conclusion":null,"headSha":"SHA","workflowName":"stress",
+			"jobs":[{"name":"whole (default, 1)","conclusion":null}]}`)
+
+		code, out := run(t, dir)
+		if code != 0 || !strings.Contains(out, "GREEN") {
+			t.Fatalf("exit %d — ci completed green, and an unfinished run of a workflow the verdict does not read "+
+				"must not hold it:\n%s", code, out)
+		}
+		if strings.Contains(out, "run 9") {
+			t.Errorf("the stress run was named in the verdict's log, so it was considered:\n%s", out)
+		}
+	})
+
 	t.Run("a_spent_job_bound_is_unfinished_not_fail", func(t *testing.T) {
 		// The bound's expiry is its OWN outcome. A reader acts differently on "still running" than on "the
 		// tree is broken", so collapsing them into `fail` would re-create the defect with a bound on it.

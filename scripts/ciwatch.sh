@@ -125,13 +125,19 @@ fetch_runs() {
 				return
 			fi
 		fi
-		python3 -c 'import json,sys; print(" ".join(str(r["databaseId"]) for r in json.load(open(sys.argv[1]))))' \
-			"$CIWATCH_FIXTURE/runs.json"
+		python3 -c "$keep_watched" "$CIWATCH_FIXTURE/runs.json"
 		return
 	fi
-	gh run list --repo "$repo" --commit "$sha" --json databaseId --limit 20 |
-		python3 -c 'import json,sys; print(" ".join(str(r["databaseId"]) for r in json.load(sys.stdin)))'
+	gh run list --repo "$repo" --commit "$sha" --json databaseId,workflowName --limit 20 | python3 -c "$keep_watched" -
 }
+
+# **Only the workflows the verdict reads are waited on: `ci` and `windows`** (#1211). Every run for the SHA used to
+# go into the completion wait. A hand-dispatched `stress` run on main's tip (#1210), six hours of eight runners,
+# then held main's verdict past the bound, and `nightly`'s scheduled runs were the same latent case. A run with
+# no `workflowName` is kept, which is a fixture's shape from before this.
+keep_watched='import json, sys
+src = sys.stdin if sys.argv[1] == "-" else open(sys.argv[1])
+print(" ".join(str(r["databaseId"]) for r in json.load(src) if r.get("workflowName", "ci") in ("ci", "windows")))'
 
 fetch_run() {
 	if [ -n "${CIWATCH_FIXTURE:-}" ]; then
