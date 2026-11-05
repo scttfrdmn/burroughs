@@ -85,7 +85,9 @@ worker() {
 		n=$(claim)
 		[ "$n" = -1 ] && return
 		if [ "${SPECSTRESS_WHOLE:-}" = 1 ]; then
-			env "$@" "$bin" -test.count=1 -test.timeout=60m > "$out/cur.$w" 2>&1
+			# -test.v so a failing iteration's log names the test that was running. CI's reproduction at 940e1ad
+			# could not say which test took its fault (#1089). The last line is still PASS on a clean run.
+			env "$@" "$bin" -test.count=1 -test.v -test.timeout=60m > "$out/cur.$w" 2>&1
 		else
 			env "$@" "$bin" -test.count=1 -test.v -test.timeout=30m -test.run "$run" > "$out/cur.$w" 2>&1
 		fi

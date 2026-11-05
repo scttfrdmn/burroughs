@@ -542,6 +542,9 @@ type atomicCell struct {
 // invalid allocation"*. #1166's Windows run hit it, the one platform whose image is a Go allocation `checkptr`
 // can see. `TestAnUnalignedSpanEndingInTheLastWordFormsNoPointerPastTheImage` is its witness.
 func atomicLoadSpan(bs []byte) uint64 {
+	if plainSpan1089 { // #1089's test-only bisection arm; false in every shipped build
+		return packLE(bs)
+	}
 	p := unsafe.Pointer(&bs[0])
 	lead := uint(uintptr(p) & 3)
 	base := unsafe.Add(p, -int(lead))
@@ -562,6 +565,10 @@ func atomicLoadSpan(bs []byte) uint64 {
 // `atomicCell`, so a neighbour's bytes in the same word are never overwritten (the cell's full-word
 // compare-and-swap is what guarantees it).
 func atomicStoreSpan(bs []byte, v uint64) {
+	if plainSpan1089 { // #1089's test-only bisection arm; false in every shipped build
+		unpackLE(bs, v)
+		return
+	}
 	p := unsafe.Pointer(&bs[0])
 	lead := uint(uintptr(p) & 3)
 	base := unsafe.Add(p, -int(lead))

@@ -23,6 +23,9 @@ package interp
 // before its first word boundary, and tail the number after its last. An extent inside one word is all head.
 // The bytes between are whole words of the extent, and an aligned whole-word extent has neither.
 func edgeSplit(i, n uint64) (head, tail uint64) {
+	if noEdges1089 { // #1089's test-only bisection arm; false in every shipped build
+		return 0, 0
+	}
 	head = (4 - i&3) & 3
 	if head >= n {
 		return n, 0
