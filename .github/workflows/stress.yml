@@ -31,6 +31,12 @@ on:
       minutes:
         description: "the stress step's own time budget, kept under the job's timeout so its counts are always printed"
         default: "320"
+      target:
+        description: "spec-whole (internal/spec, every test) or interp-churn (internal/interp's mapping-lifecycle probe)"
+        default: "spec-whole"
+      churn:
+        description: "cycles per worker for interp-churn (BURROUGHS_RESERVE_CHURN)"
+        default: "2000"
 
 permissions:
   contents: read
@@ -65,7 +71,7 @@ jobs:
       - name: vendor the threads reference
         run: make threads-ref
 
-      - name: build internal/spec's test binary (${{ matrix.arm }})
+      - name: build the test binary (${{ inputs.target }}, ${{ matrix.arm }})
         run: |
           case "${{ matrix.arm }}" in
           default) tags="" ;;
@@ -73,19 +79,33 @@ jobs:
           noreserve | plainspan | noedges) tags="burroughs_${{ matrix.arm }}" ;;
           *) echo "unknown arm: ${{ matrix.arm }}" >&2; exit 1 ;;
           esac
-          go test -c ${tags:+-tags "$tags"} -o "$RUNNER_TEMP/spec.test" ./internal/spec
+          case "${{ inputs.target }}" in
+          spec-whole) pkg=./internal/spec ;;
+          interp-churn) pkg=./internal/interp ;;
+          *) echo "unknown target: ${{ inputs.target }}" >&2; exit 1 ;;
+          esac
+          go test -c ${tags:+-tags "$tags"} -o "$RUNNER_TEMP/spec.test" "$pkg"
           uname -m; nproc; grep -m1 'CPU part' /proc/cpuinfo || true
 
-      - name: stress, whole package per iteration
+      - name: stress (${{ inputs.target }})
         env:
-          SPECSTRESS_WHOLE: "1"
           SPECSTRESS_OUT: ${{ runner.temp }}/specstress
         run: |
           name="${{ matrix.arm }}-${{ matrix.shard }}"
+          # spec-whole runs internal/spec's whole binary per iteration. interp-churn runs internal/interp's
+          # mapping-lifecycle probe, one test per iteration, lengthened by BURROUGHS_RESERVE_CHURN.
+          if [ "${{ inputs.target }}" = interp-churn ]; then
+            export SPECSTRESS_DIR="$GITHUB_WORKSPACE/internal/interp"
+            export SPECSTRESS_RUN='^TestMappedMemoriesSurviveChurn$'
+            extra="BURROUGHS_RESERVE_CHURN=${{ inputs.churn }}"
+          else
+            export SPECSTRESS_WHOLE=1
+            extra=""
+          fi
           # The budget ends the stress, not the job, so what follows always runs. `timeout` signals the stress's
           # process group, which ends its workers too.
           timeout --kill-after=60s "${{ inputs.minutes }}m" \
-            scripts/specstress.sh "$name" "$RUNNER_TEMP/spec.test" "${{ inputs.workers }}" "${{ inputs.iterations }}"
+            scripts/specstress.sh "$name" "$RUNNER_TEMP/spec.test" "${{ inputs.workers }}" "${{ inputs.iterations }}" $extra
           rc=$?
           d="$SPECSTRESS_OUT/$name"
           f=$(wc -l < "$d/failures" | tr -d ' ')

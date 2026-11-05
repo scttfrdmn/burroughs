@@ -63,6 +63,14 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
     shards were cancelled at the timeout and lost theirs.
   - **Whole mode runs `-test.v`**, so a failing iteration's log names the test that was running. The first
     reproduction could not.
+  - **A second target, `interp-churn`**, stresses `TestMappedMemoriesSurviveChurn`, a new probe of ADR 0076's
+    mapping lifecycle on CI's hardware.
+    - Goroutines instantiate modules whose memories are mapped reservations. Each guest grows its memory,
+      stores, fills across a page boundary and reads back, then the instance is dropped while forced collections
+      run, so each mapping is released through `runtime.AddCleanup`. A wrong read-back fails the test.
+    - It is short in every `go test` (4 goroutines, 64 cycles), and `BURROUGHS_RESERVE_CHURN` lengthens it.
+    - It reports whether mappings were made at all. Locally they were: gauge `peak=32`, `live-at-exit=0`, plain
+      and under `-race`.
 - **#1089's three test-only fallback tags are on main**, so the stress workflow can build the bisection's arms:
   - `burroughs_noreserve`: ADR 0076's memories on the Go allocator;
   - `burroughs_plainspan`: ADR 0111's span helpers made plain;
