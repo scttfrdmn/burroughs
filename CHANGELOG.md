@@ -60,7 +60,10 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
     `endtable`, and #1089's three test-only fallback tags.
   - **Its counts survive the clock.** A time budget inside the stress step (`minutes`, under the job's
     timeout) ends the stress, not the job, so every shard prints `counts: … done=… failures=…`. The first run's
-    shards were cancelled at the timeout and lost theirs.
+    shards were cancelled at the timeout and lost theirs. **The first version of this did not do what it said.**
+    GitHub runs `shell: bash` as `bash -e`, so `timeout`'s exit 124 ended the step before the counts, and run
+    41945025945 lost 15 of 16 shards' counts lines and marked every shard failed. The exit status is now taken
+    with `|| rc=$?`.
   - **Whole mode runs `-test.v`**, so a failing iteration's log names the test that was running. The first
     reproduction could not.
   - **A second target, `interp-churn`**, stresses `TestMappedMemoriesSurviveChurn`, a new probe of ADR 0076's

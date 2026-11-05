@@ -104,9 +104,11 @@ jobs:
           fi
           # The budget ends the stress, not the job, so what follows always runs. `timeout` signals the stress's
           # process group, which ends its workers too.
+          # `|| rc=$?`, not `rc=$?` on the next line: GitHub runs `shell: bash` as `bash -e`, so timeout's 124 at the
+          # budget ended the step before the counts. Run 41945025945 lost 15 of 16 shards' counts lines that way.
+          rc=0
           timeout --kill-after=60s "${{ inputs.minutes }}m" \
-            scripts/specstress.sh "$name" "$RUNNER_TEMP/spec.test" "${{ inputs.workers }}" "${{ inputs.iterations }}" $extra
-          rc=$?
+            scripts/specstress.sh "$name" "$RUNNER_TEMP/spec.test" "${{ inputs.workers }}" "${{ inputs.iterations }}" $extra || rc=$?
           d="$SPECSTRESS_OUT/$name"
           f=$(wc -l < "$d/failures" | tr -d ' ')
           echo "counts: arm=${{ matrix.arm }} shard=${{ matrix.shard }} done=$(cat "$d/done") failures=$f stress_rc=$rc"
