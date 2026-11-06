@@ -106,7 +106,7 @@ the [changelog](CHANGELOG.md).
 | `0` | the module ran |
 | `1` | this invocation's own failure — unreadable file, unspellable value, no such export |
 | `2` | wrong arguments |
-| `3` | the module was refused: malformed, invalid, or declined under `--strict` |
+| `3` | the module was refused: malformed, invalid, unlinkable (an import nobody supplied), or declined under `--strict` |
 | `4` | the module executed correctly and the program went wrong — a trap, in a core module or a component, or a component call refused because an earlier trap locked the instance |
 | `5` | the engine reached something it does not implement in this phase |
 | `6` | the module is fine; this build has that proposal's gate off |
