@@ -44,6 +44,9 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Added
 
+- **#1089's experiment workflow compares `default` with `plainmem`**, continues to a failure cap of
+  100, and reports completed attempts, started attempts, and elapsed stress time. `plainmem` removes
+  sequential consistency from the word accessors; it retains their typed `unsafe` accesses.
 - **A hand-dispatched `stress` workflow runs #1089's stress on CI's own arm64 runner**
   ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)).
   - **Why:** CI's two linux/arm64 runtime fatals did not reproduce in 66,000 iterations off CI, on hosts that

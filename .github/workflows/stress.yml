@@ -17,13 +17,13 @@ on:
   workflow_dispatch:
     inputs:
       arms:
-        description: 'JSON list of arms: default, endtable, noreserve, plainspan, noedges'
+        description: 'JSON list of arms: default, endtable, noreserve, plainspan, noedges, plainmem'
         default: '["default", "endtable"]'
       shards:
         description: 'JSON list of shard numbers per arm'
         default: '[1, 2, 3, 4]'
       iterations:
-        description: "iterations per shard (each runs until this, its first fatal, or the time budget)"
+        description: "iterations per shard (each runs until this, its failure cap, or the time budget)"
         default: "400"
       workers:
         description: "concurrent test processes per runner (4 vCPUs each)"
@@ -76,7 +76,7 @@ jobs:
           case "${{ matrix.arm }}" in
           default) tags="" ;;
           endtable) tags="burroughs_endtable" ;;
-          noreserve | plainspan | noedges) tags="burroughs_${{ matrix.arm }}" ;;
+          noreserve | plainspan | noedges | plainmem) tags="burroughs_${{ matrix.arm }}" ;;
           *) echo "unknown arm: ${{ matrix.arm }}" >&2; exit 1 ;;
           esac
           case "${{ inputs.target }}" in
@@ -90,6 +90,8 @@ jobs:
       - name: stress (${{ inputs.target }})
         env:
           SPECSTRESS_OUT: ${{ runner.temp }}/specstress
+          # Experiment: keep counting after rare failures rather than losing the remaining budget.
+          SPECSTRESS_MAXFAIL: "100"
         run: |
           name="${{ matrix.arm }}-${{ matrix.shard }}"
           # spec-whole runs internal/spec's whole binary per iteration. interp-churn runs internal/interp's
@@ -107,11 +109,13 @@ jobs:
           # `|| rc=$?`, not `rc=$?` on the next line: GitHub runs `shell: bash` as `bash -e`, so timeout's 124 at the
           # budget ended the step before the counts. Run 41945025945 lost 15 of 16 shards' counts lines that way.
           rc=0
+          start=$SECONDS
           timeout --kill-after=60s "${{ inputs.minutes }}m" \
             scripts/specstress.sh "$name" "$RUNNER_TEMP/spec.test" "${{ inputs.workers }}" "${{ inputs.iterations }}" $extra || rc=$?
           d="$SPECSTRESS_OUT/$name"
           f=$(wc -l < "$d/failures" | tr -d ' ')
-          echo "counts: arm=${{ matrix.arm }} shard=${{ matrix.shard }} done=$(cat "$d/done") failures=$f stress_rc=$rc"
+          done=$(cat "$d/done")
+          echo "counts: arm=${{ matrix.arm }} shard=${{ matrix.shard }} done=$done failures=$f stress_rc=$rc attempts=$((done + f)) started=$(cat "$d/started") elapsed_seconds=$((SECONDS - start))"
           [ "$f" -eq 0 ]
 
       - name: upload a failing iteration's output
