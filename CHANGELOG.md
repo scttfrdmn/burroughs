@@ -81,6 +81,10 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
   Each is false in every shipped build. They were run on orion first, and the `noreserve` arm made ADR 0076 the
   cause of the darwin `-race` fatal: 0 in 10,000 against the baseline's 7 in about 10,700.
+
+  A fourth arm, `plainmem`, builds #1126's existing `burroughs_plainmem` neuter of ADR 0054's typed accesses. It
+  is the next suspect: on CI's arm64 runner the platform control (`internal/binary`, `internal/text` and
+  `internal/validate`, about 64 runner-hours) read 0 failures while `internal/spec` reproduced the fatal.
 - **The lab helpers the actor ran from scratch are in `scripts/`** (the chair's ruling of 2026-11-01, item 5: a
   helper still in use is code the project depends on, and shouldn't live in a scratch directory).
   - **`scripts/labtask`** reads or waits on a pueue task that already exists, the half `scripts/labrun` doesn't
