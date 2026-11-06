@@ -11,13 +11,15 @@ name: stress
 #
 # **Arms are builds, so the same workflow bisects.** `default` and `endtable` are CI's two builds. `noreserve`,
 # `plainspan` and `noedges` are #1089's test-only fallback tags (internal/interp/fallback1089_*.go and the
-# reservation files' build lines), each switching one suspect to a fallback.
+# reservation files' build lines), each switching one suspect to a fallback. `plainmem` is #1126's existing
+# neuter of ADR 0054's typed accesses (internal/interp/memop_plain.go), the next suspect after the platform
+# control left the failure with the engine's workload.
 
 on:
   workflow_dispatch:
     inputs:
       arms:
-        description: 'JSON list of arms: default, endtable, noreserve, plainspan, noedges'
+        description: 'JSON list of arms: default, endtable, noreserve, plainspan, noedges, plainmem'
         default: '["default", "endtable"]'
       shards:
         description: 'JSON list of shard numbers per arm'
@@ -76,7 +78,7 @@ jobs:
           case "${{ matrix.arm }}" in
           default) tags="" ;;
           endtable) tags="burroughs_endtable" ;;
-          noreserve | plainspan | noedges) tags="burroughs_${{ matrix.arm }}" ;;
+          noreserve | plainspan | noedges | plainmem) tags="burroughs_${{ matrix.arm }}" ;;
           *) echo "unknown arm: ${{ matrix.arm }}" >&2; exit 1 ;;
           esac
           case "${{ inputs.target }}" in
