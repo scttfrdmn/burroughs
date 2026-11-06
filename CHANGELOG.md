@@ -44,6 +44,10 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Added
 
+- **#1089's stress workflow has platform controls:** `control-binary`, `control-text`, and
+  `control-validate` run whole test binaries without the interpreter or project `unsafe` dependencies.
+  All targets report process CPU time and elapsed time for exposure comparisons. A clean control
+  narrows attribution to the spec workload; it does not establish an engine defect.
 - **A hand-dispatched `stress` workflow runs #1089's stress on CI's own arm64 runner**
   ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)).
   - **Why:** CI's two linux/arm64 runtime fatals did not reproduce in 66,000 iterations off CI, on hosts that

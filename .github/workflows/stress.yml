@@ -32,7 +32,7 @@ on:
         description: "the stress step's own time budget, kept under the job's timeout so its counts are always printed"
         default: "320"
       target:
-        description: "spec-whole (internal/spec, every test) or interp-churn (internal/interp's mapping-lifecycle probe)"
+        description: "spec-whole, interp-churn, control-binary, control-text, or control-validate"
         default: "spec-whole"
       churn:
         description: "cycles per worker for interp-churn (BURROUGHS_RESERVE_CHURN)"
@@ -82,6 +82,9 @@ jobs:
           case "${{ inputs.target }}" in
           spec-whole) pkg=./internal/spec ;;
           interp-churn) pkg=./internal/interp ;;
+          control-binary) pkg=./internal/binary ;;
+          control-text) pkg=./internal/text ;;
+          control-validate) pkg=./internal/validate ;;
           *) echo "unknown target: ${{ inputs.target }}" >&2; exit 1 ;;
           esac
           go test -c ${tags:+-tags "$tags"} -o "$RUNNER_TEMP/spec.test" "$pkg"
@@ -99,6 +102,11 @@ jobs:
             export SPECSTRESS_RUN='^TestMappedMemoriesSurviveChurn$'
             extra="BURROUGHS_RESERVE_CHURN=${{ inputs.churn }}"
           else
+            case "${{ inputs.target }}" in
+            control-binary) export SPECSTRESS_DIR="$GITHUB_WORKSPACE/internal/binary" ;;
+            control-text) export SPECSTRESS_DIR="$GITHUB_WORKSPACE/internal/text" ;;
+            control-validate) export SPECSTRESS_DIR="$GITHUB_WORKSPACE/internal/validate" ;;
+            esac
             export SPECSTRESS_WHOLE=1
             extra=""
           fi
@@ -107,8 +115,13 @@ jobs:
           # `|| rc=$?`, not `rc=$?` on the next line: GitHub runs `shell: bash` as `bash -e`, so timeout's 124 at the
           # budget ended the step before the counts. Run 41945025945 lost 15 of 16 shards' counts lines that way.
           rc=0
-          timeout --kill-after=60s "${{ inputs.minutes }}m" \
+          # CPU time includes the workers and their test processes, including work interrupted
+          # at the budget. Compare failures per CPU-hour, not per package iteration.
+          /usr/bin/time -o "$RUNNER_TEMP/stress-exposure.txt" \
+            -f 'exposure: user_seconds=%U system_seconds=%S elapsed_seconds=%e' \
+            timeout --kill-after=60s "${{ inputs.minutes }}m" \
             scripts/specstress.sh "$name" "$RUNNER_TEMP/spec.test" "${{ inputs.workers }}" "${{ inputs.iterations }}" $extra || rc=$?
+          cat "$RUNNER_TEMP/stress-exposure.txt"
           d="$SPECSTRESS_OUT/$name"
           f=$(wc -l < "$d/failures" | tr -d ' ')
           echo "counts: arm=${{ matrix.arm }} shard=${{ matrix.shard }} done=$(cat "$d/done") failures=$f stress_rc=$rc"
