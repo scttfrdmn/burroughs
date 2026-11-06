@@ -586,7 +586,7 @@ const (
 	exitOK          = 0 // the module ran
 	exitError       = 1 // this invocation's own failure: unreadable file, unspellable value
 	exitUsage       = 2 // wrong arguments; the conventional code for it
-	exitRefused     = 3 // the module was refused: malformed, invalid, or declined under --strict
+	exitRefused     = 3 // the module was refused: malformed, invalid, unlinkable, or declined under --strict
 	exitTrap        = 4 // the module executed correctly and the program went wrong
 	exitUnsupported = 5 // the engine reached something it does not implement in this phase
 	exitGated       = 6 // the module is fine; this build has that proposal's gate off (#301)

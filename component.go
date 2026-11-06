@@ -43,10 +43,12 @@ type Feature string
 // memories — for a component's core modules.
 //
 // An embedder supplies it to say what their artifact requires, which is not the same as flipping a
-// gate: `gate:threads`' default is unchanged, and a component that supplies nothing is refused
-// exactly as before. The consumer that forced this capability is a Go component: Go's compiler emits
-// atomics unconditionally — a hello-world that starts no goroutines carries over a thousand of them —
-// so no Go component can decode under the default set.
+// gate. **Since v0.10.0 the default set already has it** (`gate:threads` flipped, ADR 0106), so
+// supplying it changes the outcome only under the field rollback `BURROUGHS_THREADS=0`, where it
+// admits this artifact's atomics while the default stays off. The consumer that forced this
+// capability, before the flip, is a Go component: Go's compiler emits atomics unconditionally — a
+// hello-world that starts no goroutines carries over a thousand of them — so no Go component could
+// decode under the default set as it then was.
 //
 // Whether `gate:threads` off *should* admit atomics when nothing can spawn is a separate, open
 // question (#799), deliberately not answered by supplying this capability.

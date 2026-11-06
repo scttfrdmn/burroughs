@@ -381,6 +381,16 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Fixed
 
+- **Documentation that described the tree before v0.7.0 and v0.10.0**
+  ([#1130](https://github.com/scttfrdmn/burroughs/issues/1130), items 2 and 3).
+  - **The README's exit-code table** now lists an unlinkable module (an import nobody supplied) under `3`, which is
+    where the CLI has sent it since decision 0082. `TestREADMEDocumentsEveryExitCode` checks the codes, not the
+    causes listed per code, so it passed.
+  - **`ComponentKind` and `ComponentU32`** said only `u32` crosses. `string`, `list` and `record` have crossed
+    since v0.7.0 (ADR 0097).
+  - **`FeatureThreads` and `WASIP1Config.Features`** said threads are off by default. Since v0.10.0 they are on
+    (ADR 0106), so supplying the feature changes the outcome only under `BURROUGHS_THREADS=0`.
+  - The comment item 3 named for `ComponentConfig` had already been repaired.
 - **`ciwatch` waits only on the workflows its verdict reads, `ci` and `windows`**
   ([#1211](https://github.com/scttfrdmn/burroughs/issues/1211)).
   - **The defect:** it waited for every run of the SHA to finish. At main 940e1ad, a hand-dispatched `stress` run

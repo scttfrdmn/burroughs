@@ -32,10 +32,10 @@ import (
 
 // ComponentKind is which WIT value type a [ComponentValue] carries.
 //
-// **Enumerated beyond what crosses today, deliberately.** Only `KindComponentU32` can cross the boundary
-// in this release (ADR 0085's guest-driven scope, and the first-merge scope Scott stamped), and the others
-// exist so a refusal can **name the kind it refused** rather than saying "unsupported". A kind becomes
-// crossable by gaining a constructor and a conversion arm, which is additive.
+// **Enumerated beyond what crosses today, deliberately.** `u32`, `string`, `list` and `record` cross the
+// boundary (ADR 0085's guest-driven scope, widened by ADR 0097's stamp), and the others exist so a refusal
+// can **name the kind it refused** rather than saying "unsupported". A kind becomes crossable by gaining a
+// constructor and a conversion arm, which is additive.
 type ComponentKind uint8
 
 // The component value kinds. KindComponentNone is the zero value and names no type, so a ComponentValue
@@ -368,18 +368,17 @@ type ComponentValue struct {
 func (v ComponentValue) Kind() ComponentKind { return v.typ.kind }
 
 // There is deliberately **no** accessor for the full type, exported or not. The `typ` field is what ADR
-// 0097's first change requires — construction compares types structurally rather than by kind — and that
-// comparison arrives with the list and record constructors that need it. An accessor added now would have
-// no caller, which `deadcode` says plainly and which is the honest signal: *decline speculative API with
+// 0097's first change requires — construction compares types structurally rather than by kind, which is
+// what the list and record constructors do with it. An accessor would have no caller, which `deadcode` says plainly and which is the honest signal: *decline speculative API with
 // a consumer trigger.* ADR 0097 records the trigger for a public `Type()` — code that must branch on a
 // returned value's type rather than knowing it from the signature it called.
 
 // ComponentU32 constructs a `u32`.
 //
-// **This is the only constructor in this release**, and the narrowness is the stamped first-merge scope,
-// not an oversight: `u32` is what the committed guests drive, and every other kind refuses by name at the
+// It was the only constructor in the first merge, the stamped scope; [ComponentString], [ComponentList]
+// and [ComponentRecord] joined it under ADR 0097, and every other kind still refuses by name at the
 // boundary. Each additional kind is a new constructor plus a conversion arm — purely additive, so no
-// embedder depending on this one is affected when the others arrive.
+// embedder depending on this one is affected when another arrives. Unlike those three it cannot fail.
 func ComponentU32(v uint32) ComponentValue {
 	return ComponentValue{typ: ComponentTypeU32(), bits: uint64(v)}
 }

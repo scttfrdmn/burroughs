@@ -42,9 +42,10 @@ type WASIP1Config struct {
 	// supplying one is an embedder saying what their artifact needs, not a gate flipping.
 	//
 	// The consumer that forced it: Phase 4's fork emits Go `wasip1` guests carrying atomic
-	// instructions — **1025 in a hello-world that starts no goroutines** — so none of them decodes
-	// under the default set. ADR 0088 deferred this path by name and recorded the trigger; this is
-	// that trigger firing.
+	// instructions — **1025 in a hello-world that starts no goroutines** — so none of them decoded
+	// under the default set before `gate:threads` flipped (v0.10.0, ADR 0106). ADR 0088 deferred this
+	// path by name and recorded the trigger; this is that trigger firing. Since the flip, supplying
+	// [FeatureThreads] changes the outcome only under the rollback `BURROUGHS_THREADS=0`.
 	//
 	// Supplying [FeatureThreads] here also admits a guest with real threads, which is why the
 	// preview-1 host's fd table is locked as of the same change rather than later.
