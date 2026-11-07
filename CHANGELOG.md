@@ -386,9 +386,9 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 ### Fixed
 
 - **`ciwatch` waits long enough for a normal `ci` run** ([#1220](https://github.com/scttfrdmn/burroughs/issues/1220)).
-  Its default job wait was 2,400 s, and on 2026-11-06 main's green `ci` runs took 2,708 s and 2,850 s. So the wait
-  expired three times that day on runs that went on to pass. It read `unfinished` rather than `fail`, so no verdict
-  was wrong, but each watch had to be re-launched by hand. The default is now 4,200 s, about 1.5× the slowest of
+  Its default job wait was 2,400 s, and on 2026-11-06 main's green `ci` runs took 2,708 s and 2,850 s. So the default
+  expired that day on a normal run that went on to pass. It read `unfinished` rather than `fail`, so no verdict was
+  wrong, but the watch had to be re-launched by hand. The default is now 4,200 s, about 1.5× the slowest of
   those runs. In the same change, the Windows triage map's two Stop/Resume rows say 60 s, #1113's bound, not 30 s.
   Their tail-call row no longer cites #896, which that bound settled, so #896 can close without failing
   `triagecheck`.

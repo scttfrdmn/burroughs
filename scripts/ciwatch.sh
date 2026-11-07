@@ -271,9 +271,8 @@ echo "ciwatch: runs for this SHA: $runs" >&2
 #
 # **The production default is 4200s because the run outgrew 2400s.** On 2026-11-06, main's green `ci` runs took
 # 2708s and 2850s from creation to conclusion. The bound counts from when this loop starts waiting on a run,
-# which is usually just after the push, so it covers the queue too. 2400s expired three times that day on runs
-# that went on to pass. 4200s is about 1.5× the
-# slowest of those. A run queued behind other work can still exceed it, and that is `unfinished`, which says so.
+# which is usually just after the push, so it covers the queue too. The 2400s default expired that day on a normal
+# run that went on to pass. 4200s is about 1.5× the slowest of those. A run queued behind other work can still exceed it, and that is `unfinished`, which says so.
 if [ -n "${CIWATCH_FIXTURE:-}" ]; then
 	job_wait=${CIWATCH_JOB_WAIT:-3}
 	job_poll=${CIWATCH_JOB_POLL:-1}
