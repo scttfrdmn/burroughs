@@ -385,6 +385,11 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Fixed
 
+- **`ciwatch` waits long enough for a normal `ci` run** ([#1220](https://github.com/scttfrdmn/burroughs/issues/1220)).
+  Its default job wait was 2,400 s, and on 2026-11-06 main's green `ci` runs took 2,708 s and 2,850 s. So the wait
+  expired three times that day on runs that went on to pass. It read `unfinished` rather than `fail`, so no verdict
+  was wrong, but each watch had to be re-launched by hand. The default is now 4,200 s, about 1.5× the slowest of
+  those runs.
 - **Documentation that described the tree before v0.7.0 and v0.10.0**
   ([#1130](https://github.com/scttfrdmn/burroughs/issues/1130), items 2 and 3).
   - **The README's exit-code table** now lists an unlinkable module (an import nobody supplied) under `3`, which is

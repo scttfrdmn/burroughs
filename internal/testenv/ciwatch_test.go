@@ -418,7 +418,7 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		if code != 4 {
 			t.Fatalf("exit %d, want 4 — with no bound set a fixture must still reach unfinished:\n%s", code, out)
 		}
-		// The production default is 2400s. Anything near it means the fixture scale did not apply.
+		// The production default is 4200s. Anything near it means the fixture scale did not apply.
 		if elapsed > 30*time.Second {
 			t.Errorf("took %s with no bound set; the fixture-scale default did not apply, so a test that "+
 				"forgets to set one hangs the package", elapsed)
