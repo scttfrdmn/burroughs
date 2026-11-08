@@ -34,7 +34,18 @@ says what it now requires and what it gives up.
   with no departure logged.
 - **Carried from `v0.12.0`, still open:** a Go runtime fatal on CI's arm64 runner in `internal/spec`
   ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)), seen twice (2026-10-21 and 2026-11-01), and
-  neither repeated on a re-run. It is a v0.13.0 blocker, under investigation.
+  neither repeated on a re-run. **It is specific to that runner's CPU, so far as anything has measured**, and is
+  no longer a v0.13.0 blocker (Scott, 2026-11-07: *"I do not want to hold the project up anymore for something
+  that only shows up on this one CPU"*). It is kept open as side work.
+  - **Where it shows:** GitHub's `ubuntu-24.04-arm` runners (Azure Cobalt 100, Neoverse N2), in about 1 in 1,315
+    whole-package iterations (6 in 7,889).
+  - **Where it did not:**
+    - AWS Graviton3, 4 and 5 (0 in 60,000 single-test, 0 in 6,000 whole-package);
+    - two DGX Sparks (0 in 4,944 whole-package, with CI's Go 1.26.9; a zero there by luck is about 2%);
+    - x86-64 on janus (0 in 2,016, a weaker zero).
+  - **What a CI run sees:** an occasional red on the arm64 build job that passes on re-run.
+  - **Not cleared by any one engine fallback** on that runner: ADR 0076's mapping, ADR 0111's spans, ADR 0112's
+    edges and ADR 0054's typed accesses were each turned off, and none cleared it.
 
 **Dropped from the list: `Close` with a zero bound returning `nil` on Windows**, which v0.7.0 through v0.12.0
 listed. Checked on 2026-11-01 (the chair's ruling of that day, item 3): `TestCloseReachesItsBoundWithANamedOutcome`
