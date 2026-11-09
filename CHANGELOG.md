@@ -55,9 +55,10 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Added
 
-- **ADR 0113, `proposed`: a reservation is mapped at a high base address**
+- **ADR 0113, accepted: a reservation is mapped at a high base address**
   ([#1218](https://github.com/scttfrdmn/burroughs/issues/1218)). It is the fix decision for the darwin `-race`
-  fatal, and is held for Scott's stamp because it changes ADR 0076's mechanism. **No behaviour changes yet.**
+  fatal. Scott stamped option 1 on 2026-11-09, and ADR 0076 gains a postscript pointing to it. **No behaviour
+  changes yet:** the implementation is its own PR.
   - **The cause:** under `-race` the Go runtime keeps its heap in a fixed band at 768–896 GiB
     (`runtime/malloc.go:mallocinit`), and darwin places the engine's 4 GiB reservations upward from 448 GiB,
     into that band.

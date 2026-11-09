@@ -1,6 +1,6 @@
 # 0113 — A reservation is mapped at a high base address, because under `-race` the heap must live in a fixed band that a kernel-placed mapping can occupy
 
-Date: 2026-11-09 · Status: **proposed**. It changes the mechanism of [ADR 0076](0076-a-memory-reserves-address-space-through-an-anonymous-mapping-and-the-go-allocator-becomes-the-fallback-rather-than-the-mechanism.md), which is Scott's stamp, so it is held open for his. Drafted at Scott's request on 2026-11-09 (*"draft the ADR for that fix"*), after [#1218](https://github.com/scttfrdmn/burroughs/issues/1218)'s option A (narrow the cause within ADR 0076) found the cause. Filed against [#1218](https://github.com/scttfrdmn/burroughs/issues/1218).
+Date: 2026-11-09 · Status: **accepted**, 2026-11-09. Scott, in session: *"stamp option 1"*, recorded on [#1218](https://github.com/scttfrdmn/burroughs/issues/1218#issuecomment-6752676147). It changes the mechanism of [ADR 0076](0076-a-memory-reserves-address-space-through-an-anonymous-mapping-and-the-go-allocator-becomes-the-fallback-rather-than-the-mechanism.md), which is Scott's stamp, and so it was held open for his. The record is the actor's, so commits resting on it are `Ratio-Class: carried`. Drafted at Scott's request on 2026-11-09 (*"draft the ADR for that fix"*), after [#1218](https://github.com/scttfrdmn/burroughs/issues/1218)'s option A (narrow the cause within ADR 0076) found the cause. Filed against [#1218](https://github.com/scttfrdmn/burroughs/issues/1218).
 
 ## Context
 

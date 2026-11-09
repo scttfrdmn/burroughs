@@ -429,3 +429,16 @@ take this path, which is the build-tag half held by
 `internal/testenv:TestTheNonConformantPortsAreTheOnesWithoutAMapping`, and that this path costs this much.
 *The classification test is runtime-vs-harness*, and the composite claim — *these ports are non-conformant,
 by this much* — is deliberately two instruments rather than one that would have to pretend to be both.
+
+## Postscript (2026-11-09): where a reservation lands is ADR 0113's
+
+**[ADR 0113](0113-a-reservation-is-mapped-at-a-high-base-address-because-under-race-the-heap-must-live-in-a-fixed-band-that-a-kernel-placed-mapping-can-occupy.md),
+stamped by Scott on 2026-11-09, amends this decision's primitive and nothing else.**
+- **What changes:** a reservation is mapped at or above a high base address (16 TiB), not wherever the kernel
+  puts it.
+- **Why:** under `-race` the Go runtime keeps its heap in a fixed band, [0x00c0_0000_0000, 0x00e0_0000_0000), and
+  has no fallback. darwin placed this decision's reservations upward from 448 GiB and into that band, which was
+  the darwin `-race` fatal of [#1089](https://github.com/scttfrdmn/burroughs/issues/1089) and
+  [#1218](https://github.com/scttfrdmn/burroughs/issues/1218).
+- **What stands:** the size rule (*reserve to what*), the lifetime (`runtime.AddCleanup`), the fallback and the
+  growth arms, all as written above.
