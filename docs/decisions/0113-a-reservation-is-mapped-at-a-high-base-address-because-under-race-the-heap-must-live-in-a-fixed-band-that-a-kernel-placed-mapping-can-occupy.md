@@ -51,6 +51,7 @@ Holding the mappings reproduces the rare fatal deterministically. Placing the sa
   - **32-bit linux:** `SYS_MMAP` is the old struct-pointer form on 386 and is absent on arm. They keep `syscall.Mmap`, and so does every 32-bit port. Their reservations still map where they fit under the caller's `math.MaxInt` bound, placed by the kernel as today.
   - **openbsd, solaris/illumos, aix:** a raw `syscall.Syscall6` is restricted or differs there, and none of it is measured. They keep `syscall.Mmap`.
   - **freebsd and netbsd on amd64** support `-race`, and could meet the same band if their kernels place mappings low. That is unmeasured, and possible later work. They keep `syscall.Mmap` until it is measured.
+  - **ios and android** satisfy Go's `darwin` and `linux` build tags, but their address spaces were not measured, and iOS's is far smaller than 16 TiB. They are excluded by name and keep `syscall.Mmap`. This was found while implementing, under the same delegation.
   - **Measured:** darwin and linux 64-bit honour the 16 TiB hint exactly. They are where the band matters: darwin is where the fatal occurred, and linux is CI's race lanes.
 
 ## Consequences

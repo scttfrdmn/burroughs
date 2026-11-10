@@ -43,6 +43,9 @@ func mapReservation(n int) ([]byte, bool) {
 	if n <= 0 {
 		return nil, false
 	}
+	if hintedPlacement {
+		return mapPlaced(n) // decision 0113: at or above a high base, on darwin and linux on 64-bit ports
+	}
 	bs, err := syscall.Mmap(-1, 0, n,
 		syscall.PROT_READ|syscall.PROT_WRITE,
 		syscall.MAP_ANON|syscall.MAP_PRIVATE)
@@ -56,4 +59,9 @@ func mapReservation(n int) ([]byte, bool) {
 // length — the kernel is given a base and a length, and a resliced view would unmap the wrong extent.
 // `internal/interp/reserve.go:releaseMapping` is the only caller and it holds the full slice for exactly
 // that reason.
-func unmapReservation(bs []byte) error { return syscall.Munmap(bs) }
+func unmapReservation(bs []byte) error {
+	if hintedPlacement {
+		return unmapPlaced(bs) // syscall.Munmap refuses a mapping syscall.Mmap did not make
+	}
+	return syscall.Munmap(bs)
+}
