@@ -405,6 +405,22 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Fixed
 
+- **A rare Go runtime fatal under `-race` on darwin is gone: a reservation is mapped at a high base address**
+  ([#1218](https://github.com/scttfrdmn/burroughs/issues/1218), ADR 0113). This covers darwin and linux on 64-bit
+  ports. Every other unix port is unchanged.
+  - **The defect:** under `-race` the Go runtime keeps its heap in a fixed band at 768–896 GiB and has no
+    fallback. darwin placed ADR 0076's 4 GiB reservations upward from 448 GiB, into that band, so a heap or stack
+    growth occasionally had nowhere to go: `runtime: split stack overflow`, about 1 in 1,550 runs. Shipped builds
+    were never affected, because outside `-race` the runtime takes any address.
+  - **The repair:** reservations are mapped at or above 16 TiB, with a raw `mmap` address hint (not `MAP_FIXED`),
+    each one at the end of the one before. Mappings that land below the base are counted.
+  - **Witness:** `TestHeldReservationsDoNotStarveTheRaceHeap`, under `-race`. A child holds 160 × 4 GiB
+    reservations, then grows the heap, and must survive. It is deterministic, where the defect was rare.
+  - **Its neuter runs beside it:** the same child with kernel placement must die on darwin, and does, with
+    *"too many address space collisions for -race mode"*.
+  - **Control:** `TestAReservationIsPlacedAtOrAboveTheBase`.
+  - **Neuter, run:** with placement turned off, both tests fail. The control finds a reservation at
+    0x7000000000, below the base.
 - **`ciwatch` waits long enough for a normal `ci` run** ([#1220](https://github.com/scttfrdmn/burroughs/issues/1220)).
   Its default job wait was 2,400 s, and on 2026-11-06 main's green `ci` runs took 2,708 s and 2,850 s. So the default
   expired that day on a normal run that went on to pass. It read `unfinished` rather than `fail`, so no verdict was
