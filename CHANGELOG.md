@@ -55,6 +55,15 @@ sample. So the limit no longer holds. Its issue stays open under Scott's Windows
 
 ### Added
 
+- **ADR 0113, accepted: a reservation is mapped at a high base address**
+  ([#1218](https://github.com/scttfrdmn/burroughs/issues/1218)). It is the fix decision for the darwin `-race`
+  fatal. Scott stamped option 1 on 2026-11-09, and ADR 0076 gains a postscript pointing to it. **No behaviour
+  changes yet:** the implementation is its own PR.
+  - **The cause:** under `-race` the Go runtime keeps its heap in a fixed band at 768–896 GiB
+    (`runtime/malloc.go:mallocinit`), and darwin places the engine's 4 GiB reservations upward from 448 GiB,
+    into that band.
+  - **The evidence:** never releasing them reproduces the fatal's signature on every run, and mapping the same
+    reservations at 16 TiB removes it.
 - **A hand-dispatched `stress` workflow runs #1089's stress on CI's own arm64 runner**
   ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)).
   - **Why:** CI's two linux/arm64 runtime fatals did not reproduce in 66,000 iterations off CI, on hosts that
