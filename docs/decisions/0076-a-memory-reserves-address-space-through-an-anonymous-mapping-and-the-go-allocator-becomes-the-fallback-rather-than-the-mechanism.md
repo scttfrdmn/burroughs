@@ -434,8 +434,8 @@ by this much* — is deliberately two instruments rather than one that would hav
 
 **[ADR 0113](0113-a-reservation-is-mapped-at-a-high-base-address-because-under-race-the-heap-must-live-in-a-fixed-band-that-a-kernel-placed-mapping-can-occupy.md),
 stamped by Scott on 2026-11-09, amends this decision's primitive and nothing else.**
-- **What changes:** a reservation is mapped at or above a high base address (16 TiB), not wherever the kernel
-  puts it.
+- **What changes:** on darwin and linux on 64-bit ports, a reservation is mapped at or above a high base address
+  (16 TiB), not wherever the kernel puts it. Every other unix port is unchanged. The reasons are in ADR 0113.
 - **Why:** under `-race` the Go runtime keeps its heap in a fixed band, [0x00c0_0000_0000, 0x00e0_0000_0000), and
   has no fallback. darwin placed this decision's reservations upward from 448 GiB and into that band, which was
   the darwin `-race` fatal of [#1089](https://github.com/scttfrdmn/burroughs/issues/1089) and

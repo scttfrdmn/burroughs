@@ -28,8 +28,8 @@ Holding the mappings reproduces the rare fatal deterministically. Placing the sa
 
 ## Options
 
-1. **Map every reservation at a high base address, on every 64-bit unix build.** A hint at 16 TiB, with each mapping placed after the previous one.
-   - *Keeps:* contract §8 M-1 in full: reserved up front, no cap, no copying growth. One mechanism in every build, so `-race` lanes keep testing what ships.
+1. **Map every reservation at a high base address, on darwin and linux on 64-bit ports.** A hint at 16 TiB, with each mapping placed after the previous one. The scope is set out under *Choice*.
+   - *Keeps:* contract §8 M-1 in full: reserved up front, no cap, no copying growth. A port's `-race` and shipped builds share one mechanism, so the `-race` lanes keep testing what ships.
    - *Costs:* `syscall.Mmap` takes no address, so the call becomes a raw `syscall.Syscall6(SYS_MMAP, …)`, with a matching raw `munmap`, since `syscall.Munmap` refuses a mapping it did not make. That is the engine's second and third syscalls.
 2. **The same, under `-race` only.**
    - *Keeps:* M-1 in full.
@@ -47,7 +47,11 @@ Holding the mappings reproduces the rare fatal deterministically. Placing the sa
   - A process would need terabytes of Go heap to reach 16 TiB.
 - **A hint, not `MAP_FIXED`.** The same probe found the 16 TiB hint honoured exactly on both kernels, four mappings in a row. Still, the kernel may place a mapping elsewhere, and an ignored hint must not fail the memory. A mapping that lands below the base is counted (`reservationBelowBase`) and kept: it is no worse than today's placement. `MAP_FIXED` would silently replace whatever was already mapped at the address.
 - **Contiguous above the base.** Each reservation's hint is the end of the previous one, under a mutex. Released ranges are not reused, which is the arm's measured behaviour. Over a long-lived process that walks upward through address space that is never reclaimed. Reuse of the lowest released range is a refinement for when that is measured to matter.
-- **32-bit ports:** unchanged. The caller's `math.MaxInt` bound already keeps them from mapping.
+- **Scope: darwin and linux on 64-bit ports, and every other unix port unchanged.** Scott deferred the scope to the actor (2026-11-09, *"I defer to you on this"*, recorded on [#1218](https://github.com/scttfrdmn/burroughs/issues/1218#issuecomment-6756720020)). It narrows option 1's first wording, *"every 64-bit unix build"*, for one reason: the raw `mmap` with an address does not carry safely past these ports.
+  - **32-bit linux:** `SYS_MMAP` is the old struct-pointer form on 386 and is absent on arm. They keep `syscall.Mmap`, and so does every 32-bit port. Their reservations still map where they fit under the caller's `math.MaxInt` bound, placed by the kernel as today.
+  - **openbsd, solaris/illumos, aix:** a raw `syscall.Syscall6` is restricted or differs there, and none of it is measured. They keep `syscall.Mmap`.
+  - **freebsd and netbsd on amd64** support `-race`, and could meet the same band if their kernels place mappings low. That is unmeasured, and possible later work. They keep `syscall.Mmap` until it is measured.
+  - **Measured:** darwin and linux 64-bit honour the 16 TiB hint exactly. They are where the band matters: darwin is where the fatal occurred, and linux is CI's race lanes.
 
 ## Consequences
 
