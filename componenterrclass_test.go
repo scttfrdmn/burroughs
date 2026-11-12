@@ -101,9 +101,11 @@ func TestEveryEntryPointClassifiesARefusalTheSameWay(t *testing.T) {
 		// for: *"the row is written and will start asserting the moment a fixture reaches it."*
 		// #957's by-name decode refusal reaches it. What it does NOT make reachable is the
 		// *binding-stage* producer the old note described — `ErrUnsupportedForm` raised while walking,
-		// which is still only exercised by `walkComponent` called directly with a stub host
-		// (internal/component's TestBindingRefusesImplementedFilesystemErrorCodeOnRealGuest), and the
-		// public path still loads `p3hello` without error. So the SENTINEL is reached, at decode, by
+		// which is still only exercised below the public path, by a walker stepped directly with a
+		// host-filled lower (internal/component's TestBindingRefusesImplementedLowerCarryingUnmodeledKind),
+		// and the public path still loads `p3hello` without error. (The real-guest witness here formerly
+		// refused filesystem-error-code's `option` while walking; ADR 0116 modeled `option`, so that
+		// binding now succeeds.) So the SENTINEL is reached, at decode, by
 		// another route. That distinction is kept rather than smoothed over: a row that claimed to
 		// cover the binding path would be asserting something no arm here measures.
 		//

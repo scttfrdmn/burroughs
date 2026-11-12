@@ -193,6 +193,9 @@ func TestTaskReturnLiftsEveryScalarKind(t *testing.T) {
 		{"s64-sign-extends", ValType{Kind: VS64}, 0xffffffffffffffff, canon.KindS64, canon.S64(-1)},
 		{"char-ascii", ValType{Kind: VChar}, 'A', canon.KindChar, mustChar(t, 'A')},
 		{"char-astral", ValType{Kind: VChar}, 0x10FFFF, canon.KindChar, mustChar(t, 0x10FFFF)},
+		// ADR 0116: flags is one word too, and only as many bits as there are labels are read
+		// (definitions.py:unpack_flags_from_int), so a guest's stray high bits are dropped.
+		{"flags-masks-to-its-labels", ValType{Kind: VFlags, Labels: []string{"a", "b", "c"}}, 0xff, canon.KindFlags, mustFlagsABC(t, "a", "b", "c")},
 	}
 
 	for _, c := range cases {
@@ -233,12 +236,25 @@ func TestTaskReturnLiftsEveryScalarKind(t *testing.T) {
 		})
 	}
 
-	// A floor, because the point of this test is coverage of a closed set: twelve one-word kinds plus the
-	// two floats handled above.
-	if len(cases) != 12 {
-		t.Fatalf("the table covers %d kind(s); the one-word set this test is about has 12 besides the "+
+	// A floor, because the point of this test is coverage of a closed set: thirteen one-word kinds plus the
+	// two floats handled above. (Twelve until ADR 0116 made flags one of them.)
+	if len(cases) != 13 {
+		t.Fatalf("the table covers %d kind(s); the one-word set this test is about has 13 besides the "+
 			"two floats, so a kind has been added or dropped without a decision", len(cases))
 	}
+}
+
+func mustFlagsABC(t *testing.T, set ...string) canon.Value {
+	t.Helper()
+	ft, err := canon.FlagsType("a", "b", "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := canon.Flags(ft, set...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }
 
 func mustChar(t *testing.T, r rune) canon.Value {
@@ -385,7 +401,22 @@ func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 			"variant",
 			ValType{Kind: VVariant, Cases: []VarCase{{Name: "a"}}},
 			[]interp.Value{interp.I32(0)},
-			"LoadVia",
+			"no arm for kind variant",
+		},
+		// ADR 0116's enum and option despecialize to a variant, so they reach the same refusal, named as
+		// themselves because the bridge keeps their kinds. (`want` was "LoadVia" until ADR 0116 gave
+		// `LoadVia` a variant arm, which made the message it matched false; see the message's comment.)
+		{
+			"enum",
+			ValType{Kind: VEnum, Labels: []string{"a", "b"}},
+			[]interp.Value{interp.I32(0)},
+			"no arm for kind enum",
+		},
+		{
+			"option",
+			ValType{Kind: VOption, Elem: &ValType{Kind: VU32}},
+			[]interp.Value{interp.I32(0), interp.I32(0)},
+			"no arm for kind option",
 		},
 		// **`record` was here and has gone, which is the FOURTH time this campaign a specimen chosen
 		// because it happened to be unimplemented has expired** — and this table's own repair predicted
@@ -393,10 +424,10 @@ func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 		// (`TestTaskReturnLiftsARecordFromItsFieldsWords`), so asserting it is refused would assert the
 		// opposite of the engine.
 		//
-		// The table is down to one entry, and that is the honest state rather than a gap: `variant` is
-		// the only kind the bridge carries and the flat lift does not. When a variant arm lands, this
-		// table becomes empty — at which point it should be **deleted**, not kept with a comment, since
-		// a refusal table over no kinds asserts nothing.
+		// The table is the variant family, and that is the honest state rather than a gap: `variant` and
+		// the two kinds that despecialize to it are the ones the bridge carries and the flat lift does
+		// not. When a variant arm lands, this table becomes empty — at which point it should be
+		// **deleted**, not kept with a comment, since a refusal table over no kinds asserts nothing.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := liftTaskReturnValue(nil, c.vt, c.flat)

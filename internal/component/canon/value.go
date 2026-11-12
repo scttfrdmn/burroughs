@@ -19,9 +19,9 @@ import (
 )
 
 // Kind is a WIT value type's discriminant, for the types slice 2's guest drives. Modeled: the scalars,
-// char, string, list, variant/result, own/borrow, and `tuple`'s size/alignment (for lowering an empty
-// `list<tuple>` — the getters' result; tuple *element* lowering is not modeled). Types outside this set
-// (record, flags, enum, option, non-empty tuple lowering) are refused by name until a guest drives one.
+// char, string, list, variant/result, record (and tuple, which despecializes to it), own/borrow, and since
+// ADR 0116 flags, enum and option. A type outside this set (error-context, map) is refused by name until a
+// guest drives one.
 type Kind uint8
 
 const (
@@ -57,6 +57,14 @@ const (
 	// in the async handle table. It carries no payload (a stream is a channel, not a single value); the
 	// guest supplies the elements via stream.write.
 	KindStream
+	// KindFlags is a `flags` type: one bit per label in a packed integer of the reference's width (ADR 0116).
+	// The model does NOT despecialize it, so it is the one kind here with a layout of its own.
+	KindFlags
+	// KindEnum and KindOption despecialize to variants (def:despecialize:"case EnumType(labels) : return VariantType([ CaseType(l, None) for l in labels ])"
+	// and def:despecialize:"case OptionType(t)"), so they have no layout of their own. They are kinds rather than constructor-despecialized types,
+	// unlike `tuple`, because a lifted value must come back as the enum or option the caller declared.
+	KindEnum
+	KindOption
 )
 
 func (k Kind) String() string {
@@ -105,20 +113,27 @@ func (k Kind) String() string {
 		return "future"
 	case KindStream:
 		return "stream"
+	case KindFlags:
+		return "flags"
+	case KindEnum:
+		return "enum"
+	case KindOption:
+		return "option"
 	default:
 		return fmt.Sprintf("kind(%d)", uint8(k))
 	}
 }
 
-// Type is a WIT value type. Elem is the element type of a list; Cases are a variant's cases (a result
-// is a two-case variant, "ok"/"err"); Fields are a record's fields. All are nil/empty for the other
-// kinds.
+// Type is a WIT value type. Elem is the element type of a list or an option; Cases are a variant's cases
+// (a result is a two-case variant, "ok"/"err"); Fields are a record's fields; Labels are a flags' or an
+// enum's labels. All are nil/empty for the other kinds.
 type Type struct {
 	Kind   Kind
 	Elem   *Type
 	Cases  []Case
-	Fields []Field // record fields (KindRecord); a tuple's are labelled "0", "1", … — see [TupleType]
-	RT     int     // resource-type id for own/borrow (PR A models a resource type as an opaque id)
+	Fields []Field  // record fields (KindRecord); a tuple's are labelled "0", "1", … — see [TupleType]
+	Labels []string // flags and enum labels (KindFlags, KindEnum), in declared order — the layout's order
+	RT     int      // resource-type id for own/borrow (PR A models a resource type as an opaque id)
 }
 
 // Field is one record field: its WIT label and its type.
@@ -209,6 +224,15 @@ func (t Type) describe(depth int) string {
 		// The resource id is part of the type: `own<rt=3>` and `own<rt=4>` are different types, and
 		// TypeEqual says so, so a rendering that dropped the id would print a mismatch as a match.
 		return fmt.Sprintf("%s<rt=%d>", t.Kind, t.RT)
+	case KindFlags, KindEnum:
+		// Labels included for the record arm's reason: `enum{a, b}` and `enum{x, y}` have one layout and
+		// are different types.
+		return t.Kind.String() + "{" + strings.Join(t.Labels, ", ") + "}"
+	case KindOption:
+		if t.Elem == nil {
+			return "option<?>" // malformed rather than unmodeled; rendered for the list arm's reason
+		}
+		return "option<" + t.Elem.describe(depth+1) + ">"
 	default:
 		return t.Kind.String()
 	}
@@ -273,6 +297,16 @@ func typeEqual(a, b Type) bool {
 			return false
 		}
 		if !typeEqual(a.Fields[i].Type, b.Fields[i].Type) {
+			return false
+		}
+	}
+	// Labels by position, for the fields' reason: a flags' label order is its bit order and an enum's is
+	// its discriminant order, so the same labels in another order are another type.
+	if len(a.Labels) != len(b.Labels) {
+		return false
+	}
+	for i := range a.Labels {
+		if a.Labels[i] != b.Labels[i] {
 			return false
 		}
 	}
@@ -689,3 +723,158 @@ func OwnType(rt int) Type    { return Type{Kind: KindOwn, RT: rt} }
 func BorrowType(rt int) Type { return Type{Kind: KindBorrow, RT: rt} }
 
 func Own(rt int, rep uint32) Value { return Value{Type: OwnType(rt), u: uint64(rep)} }
+
+// MaxFlagsLabels is the most labels a `flags` type may declare: the model asserts `0 < n <= 32` in every
+// flags rule (def:alignment_flags:"assert(0 < n <= 32)"), and Binary.md's grammar admits `(flags l+)`
+// only under the same bound. So a 33-label flags has no layout to match, and is refused rather than given
+// a second `u32` word (ADR 0116).
+const MaxFlagsLabels = 32
+
+// checkLabels refuses an empty or duplicated label set, the two conditions a flags and an enum share.
+//
+// **A duplicate is refused because the model's lookup is by label**: `match_case` finds a case with
+// `[index] = [i for i,c in enumerate(cases) if c.label == label]` (def:match_case), which two equal
+// labels make fail, and a flags value is a `{label: bool}` map in which one of two equal labels is lost.
+// Binary.md requires labels to be strongly-unique; exact equality is the part of that the layout needs.
+func checkLabels(kind string, labels []string) error {
+	if len(labels) == 0 {
+		return fmt.Errorf("canon: a %s type must declare at least one label; the Canonical ABI gives an "+
+			"empty one no layout", kind)
+	}
+	seen := make(map[string]int, len(labels))
+	for i, l := range labels {
+		if j, dup := seen[l]; dup {
+			return fmt.Errorf("canon: %s labels %d and %d are both %q; a value is matched to its "+
+				"label by name, so a duplicate makes that match ambiguous", kind, j, i, l)
+		}
+		seen[l] = i
+	}
+	return nil
+}
+
+// FlagsType is a `flags` of the given labels, refusing an empty set, more than [MaxFlagsLabels], and a
+// duplicate.
+//
+// **It returns an error where [RecordType] does not**, and the difference is the bound. An empty record
+// is one condition the decoder already refuses; a flags type has three, and one of them (the 32-label
+// ceiling) is the model's alone. A type that could be built past it would reach `size` with no answer.
+func FlagsType(labels ...string) (Type, error) {
+	if err := checkLabels("flags", labels); err != nil {
+		return Type{}, err
+	}
+	if len(labels) > MaxFlagsLabels {
+		return Type{}, fmt.Errorf("canon: a flags type has %d labels, past the %d the Canonical ABI lays "+
+			"out (definitions.py asserts 0 < n <= 32 for every flags rule)", len(labels), MaxFlagsLabels)
+	}
+	return Type{Kind: KindFlags, Labels: append([]string(nil), labels...)}, nil
+}
+
+// EnumType is an `enum` of the given labels, refusing an empty set and a duplicate. Its layout is the
+// variant of payload-free cases it despecializes to, so the case count sets the discriminant width
+// exactly as a variant's does: `u8` for 256 labels, `u16` for 257.
+func EnumType(labels ...string) (Type, error) {
+	if err := checkLabels("enum", labels); err != nil {
+		return Type{}, err
+	}
+	return Type{Kind: KindEnum, Labels: append([]string(nil), labels...)}, nil
+}
+
+// OptionType is an `option<elem>`. Nothing about it can be refused: it despecializes to
+// `variant { none, some(elem) }` for any element type.
+func OptionType(elem Type) Type { return Type{Kind: KindOption, Elem: &elem} }
+
+// Flags builds a flags value with the named labels set, refusing a label the type does not declare.
+//
+// The value holds the packed bits in u, bit i for label i, which is `pack_flags_into_int`'s order
+// (def:pack_flags_into_int) and the layout's. Naming a label twice is not an error: a set is a set.
+func Flags(t Type, set ...string) (Value, error) {
+	if t.Kind != KindFlags {
+		return Value{}, fmt.Errorf("canon: Flags on non-flags type %s", t)
+	}
+	var bits uint64
+	for _, l := range set {
+		i := labelIndex(t.Labels, l)
+		if i < 0 {
+			return Value{}, fmt.Errorf("canon: flags type %s has no label %q", t, l)
+		}
+		bits |= 1 << uint(i)
+	}
+	return Value{Type: t, u: bits}, nil
+}
+
+// FlagSet returns the labels a flags value has set, in declared order, and whether it is a flags value.
+func (v Value) FlagSet() ([]string, bool) {
+	if v.Type.Kind != KindFlags {
+		return nil, false
+	}
+	out := []string{}
+	for i, l := range v.Type.Labels {
+		if v.u&(1<<uint(i)) != 0 {
+			out = append(out, l)
+		}
+	}
+	return out, true
+}
+
+// Enum builds an enum value of the named label, refusing a label the type does not declare. The value
+// holds the label's index in u, which is the discriminant the despecialized variant stores.
+func Enum(t Type, label string) (Value, error) {
+	if t.Kind != KindEnum {
+		return Value{}, fmt.Errorf("canon: Enum on non-enum type %s", t)
+	}
+	i := labelIndex(t.Labels, label)
+	if i < 0 {
+		return Value{}, fmt.Errorf("canon: enum type %s has no label %q", t, label)
+	}
+	return Value{Type: t, u: uint64(i)}, nil
+}
+
+// EnumLabel returns an enum value's label, and whether it is an enum value with an in-range index.
+func (v Value) EnumLabel() (string, bool) {
+	if v.Type.Kind != KindEnum || v.u >= uint64(len(v.Type.Labels)) {
+		return "", false
+	}
+	return v.Type.Labels[v.u], true
+}
+
+// Some builds `some(v)` of an option type, refusing a payload whose type is not the option's element
+// type. None builds `none`. The value holds the despecialized case index in u (0 none, 1 some), so the
+// variant arms store it unchanged.
+func Some(t Type, v Value) (Value, error) {
+	if t.Kind != KindOption || t.Elem == nil {
+		return Value{}, fmt.Errorf("canon: Some on non-option type %s", t)
+	}
+	if !typeEqual(v.Type, *t.Elem) {
+		return Value{}, fmt.Errorf("canon: option payload is %s, want %s", v.Type, *t.Elem)
+	}
+	return Value{Type: t, u: 1, payload: &v}, nil
+}
+
+// None builds the `none` of an option type.
+func None(t Type) (Value, error) {
+	if t.Kind != KindOption || t.Elem == nil {
+		return Value{}, fmt.Errorf("canon: None on non-option type %s", t)
+	}
+	return Value{Type: t}, nil
+}
+
+// Option returns an option value's payload and whether it is `some`, and whether it is an option at all.
+// The three are distinguishable for the accessors' usual reason: a `none` is a legitimate value.
+func (v Value) Option() (payload Value, isSome, ok bool) {
+	if v.Type.Kind != KindOption {
+		return Value{}, false, false
+	}
+	if v.u == 1 && v.payload != nil {
+		return *v.payload, true, true
+	}
+	return Value{}, false, true
+}
+
+func labelIndex(labels []string, l string) int {
+	for i := range labels {
+		if labels[i] == l {
+			return i
+		}
+	}
+	return -1
+}

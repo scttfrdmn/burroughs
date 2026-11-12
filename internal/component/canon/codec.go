@@ -15,8 +15,79 @@ const ptrSize = 4
 // alignTo rounds ptr up to a multiple of a, matching the reference model's align_to.
 func alignTo(ptr, a int) int { return (ptr + a - 1) / a * a }
 
+// despecialize is the model's `despecialize` for the two kinds this codec keeps as kinds (ADR 0116): an
+// enum becomes the variant of its labels with no payloads, and an option becomes `variant { none, some(T)
+// }` (def:despecialize). Every other type is returned unchanged; `tuple` and `result` were despecialized by
+// their constructors already.
+//
+// It is called where the model calls it, at the entry to each layout rule and each store and load, so an
+// enum or an option never reaches a layout arm as itself and the variant arms are the only ones carrying
+// them. That is what the variant and result fixtures verifying the framing buys here.
+func despecialize(t Type) Type {
+	switch t.Kind {
+	case KindEnum:
+		cases := make([]Case, len(t.Labels))
+		for i, l := range t.Labels {
+			cases[i] = Case{Name: l}
+		}
+		return VariantType(cases...)
+	case KindOption:
+		return VariantType(Case{Name: "none"}, Case{Name: "some", Type: t.Elem})
+	default:
+		return t
+	}
+}
+
+// despecializeValue gives an enum or option value its despecialized variant type. The payload fields are
+// already the variant's, case index in u and the `some` payload in payload, so only the type changes.
+func despecializeValue(v Value) Value {
+	if v.Type.Kind == KindEnum || v.Type.Kind == KindOption {
+		return Value{Type: despecialize(v.Type), u: v.u, payload: v.payload}
+	}
+	return v
+}
+
+// respecialize is despecializeValue's inverse on the lifting side: a variant read back at an enum's or an
+// option's despecialized type is given the declared type again, so a lifted value is the kind its caller
+// asked for rather than an anonymous variant. A non-variant passes through, which is every other kind.
+func respecialize(t Type, v Value) Value {
+	if (t.Kind == KindEnum || t.Kind == KindOption) && v.Type.Kind == KindVariant {
+		return Value{Type: t, u: v.u, payload: v.payload}
+	}
+	return v
+}
+
+// flagsSize is a flags type's width in bytes, which is also its alignment (definitions.py:elem_size_flags,
+// def:alignment_flags): one byte up to 8 labels, two up to 16, and four up to the model's 32. It panics
+// past that, for [sizeRecord]'s reason: the model asserts the bound and has no answer, and every layer
+// that can return an error refuses first ([FlagsType], and [flagsLayout] in each store and load).
+func flagsSize(n int) int {
+	switch {
+	case n <= 0 || n > MaxFlagsLabels:
+		panic(fmt.Sprintf("canon: size: a flags type of %d labels has no layout in the Canonical ABI "+
+			"(definitions.py asserts 0 < n <= 32); it must be refused before any layout is computed", n))
+	case n <= 8:
+		return 1
+	case n <= 16:
+		return 2
+	default:
+		return 4
+	}
+}
+
+// flagsLayout is flagsSize behind an error, for the store and load paths, which can refuse a hand-built
+// flags type rather than reach the panic.
+func flagsLayout(t Type) (int, error) {
+	if n := len(t.Labels); n == 0 || n > MaxFlagsLabels {
+		return 0, fmt.Errorf("canon: a flags type of %d labels has no layout in the Canonical ABI (it "+
+			"lays out 1 to %d)", n, MaxFlagsLabels)
+	}
+	return flagsSize(len(t.Labels)), nil
+}
+
 // alignment is the byte alignment of a type in linear memory (CanonicalABI.md `alignment`).
 func alignment(t Type) int {
+	t = despecialize(t)
 	switch t.Kind {
 	case KindBool, KindU8, KindS8:
 		return 1
@@ -30,6 +101,8 @@ func alignment(t Type) int {
 		return alignmentVariant(t.Cases)
 	case KindRecord:
 		return alignmentRecord(t.Fields)
+	case KindFlags:
+		return flagsSize(len(t.Labels))
 	default:
 		panic(fmt.Sprintf("canon: alignment: unmodeled kind %s", t.Kind))
 	}
@@ -104,6 +177,7 @@ func sizeRecord(fields []Field) int {
 // size is the in-memory element size of a type (CanonicalABI.md `elem_size`). A string and a
 // non-length-tagged list are each a (ptr, length) pair.
 func size(t Type) int {
+	t = despecialize(t)
 	switch t.Kind {
 	case KindBool, KindU8, KindS8:
 		return 1
@@ -119,6 +193,8 @@ func size(t Type) int {
 		return sizeVariant(t.Cases)
 	case KindRecord:
 		return sizeRecord(t.Fields)
+	case KindFlags:
+		return flagsSize(len(t.Labels))
 	default:
 		panic(fmt.Sprintf("canon: size: unmodeled kind %s", t.Kind))
 	}
@@ -174,8 +250,13 @@ func sizeVariant(cases []Case) int {
 
 // flattenType is a type's core flat representation (CanonicalABI.md flatten_type).
 func flattenType(t Type) []string {
+	t = despecialize(t)
 	switch t.Kind {
 	case KindBool, KindU8, KindU16, KindU32, KindS8, KindS16, KindS32, KindChar:
+		return []string{"i32"}
+	case KindFlags:
+		// One i32 for any label count the model lays out (def:flatten_type:"case FlagsType(labels) : return ['i32']"),
+		// since the model caps flags at 32 labels. A rule of one i32 per 32 labels would agree up to the cap.
 		return []string{"i32"}
 	case KindU64, KindS64:
 		return []string{"i64"}
@@ -540,6 +621,14 @@ func LiftFlatScalar(t Type, word uint64) (Value, error) {
 		// word, so a word with the top bit set is a large code point to be trapped — not a negative rune
 		// that would slip past an `i >= 0x110000` test.
 		return Char(rune(uint32(word)))
+	case KindFlags:
+		// A flags value is one word too, whatever its width in memory (ADR 0116). Only as many bits as
+		// there are labels are read — `unpack_flags_from_int` walks the labels and shifts
+		// (def:unpack_flags_from_int) — so a guest's stray high bits are dropped rather than carried.
+		if _, err := flagsLayout(t); err != nil {
+			return Value{}, err
+		}
+		return Value{Type: t, u: word & (1<<uint(len(t.Labels)) - 1)}, nil
 	default:
 		return Value{}, fmt.Errorf("canon: %s is not a scalar and does not lift from a single core word", t.Kind)
 	}
@@ -790,29 +879,27 @@ func LoadListAt(h ReadHeap, t Type, ptr int, loadElem func(int) (Value, error)) 
 // That is how a codec ends up with two of itself, and the whole reason `StoreList` takes its store
 // injected rather than switching internally.
 //
-// # The coverage is NOT identical to StoreVia's, and the two exceptions have different standings
+// # The coverage is NOT identical to StoreVia's, and the one exception is structural
 //
 // This comment claimed the sets were identical. They are not, and the control that checks the claim —
-// `TestLoadViaIsStoreViasMirrorOverTheSameKinds` — found it false on its first run. `StoreVia` has arms
-// for `variant` and `own` that this has no mirror for:
+// `TestLoadViaIsStoreViasMirrorOverTheSameKinds` — found it false on its first run. `StoreVia` has an arm
+// for `own` that this has no mirror for:
 //
 //   - **`own` cannot be symmetric at this layer, as a matter of mechanism.** The store side writes an
 //     already-minted handle index, which the *component* layer minted; reading one back means resolving
 //     an index against that instance's handle table, and the codec cannot reach it. So the asymmetry is
 //     structural rather than unfinished, and widening `LoadVia` would require handing it a capability
 //     the package is defined not to have.
-//   - **`variant` is simply not written yet**, and is deliberately not written on spec. The mirror would
-//     be a `LoadVariant` taking an injected element load, exactly as `StoreVariant` takes an injected
-//     store — but nothing needs it: no guest returns a variant, and `deadcode` would report it as what
-//     it would be. It arrives with its consumer, which is the same rule every other kind here landed
-//     under. *Decline speculative API with a consumer trigger.*
+//
+// `variant` was the second exception, declined on spec until it had a consumer. Enum and option are that
+// consumer (ADR 0116), so [LoadVariant] landed with them and the allowance went.
 //
 // `f32` and `f64` are composable in **neither** direction (`intBytes` returns 0 for both and neither has
 // a switch arm on either side), which is a gap and not an asymmetry.
 //
 // The pair still matters, and the control enforces the part that is enforceable: the asymmetric set must
-// be **exactly** those two, so a new one-directional kind fails, and so does an allowance that has
-// become stale. The reason to care is that a kind this engine can hand a guest and cannot read back
+// be **exactly** `own`, so a new one-directional kind fails, and so does an allowance that has become
+// stale. The reason to care is that a kind this engine can hand a guest and cannot read back
 // makes a round trip untestable — and untestability is the property nobody notices.
 func LoadVia(h ReadHeap, t Type, ptr int) (Value, error) {
 	if n := intBytes(t.Kind); n > 0 {
@@ -848,6 +935,30 @@ func LoadVia(h ReadHeap, t Type, ptr int) (Value, error) {
 		return LoadRecord(h, t, ptr, func(ft Type, at int) (Value, error) {
 			return LoadVia(h, ft, at)
 		})
+	case KindVariant:
+		// The mirror that was declined on spec until it had a consumer. Enum and option are the
+		// consumer (ADR 0116): both despecialize to a variant, so lifting either needs this arm.
+		return LoadVariant(h, t, ptr, func(ct Type, at int) (Value, error) { return LoadVia(h, ct, at) })
+	case KindEnum, KindOption:
+		v, err := LoadVia(h, despecialize(t), ptr)
+		if err != nil {
+			return Value{}, err
+		}
+		return respecialize(t, v), nil
+	case KindFlags:
+		n, err := flagsLayout(t)
+		if err != nil {
+			return Value{}, err
+		}
+		b, err := h.ReadBytes(ptr, n)
+		if err != nil {
+			return Value{}, fmt.Errorf("canon: reading a %s at %d: %w", t, ptr, err)
+		}
+		var word uint64
+		for i := range n {
+			word |= uint64(b[i]) << (8 * i)
+		}
+		return LiftFlatScalar(t, word)
 	default:
 		return Value{}, fmt.Errorf("canon: LoadVia: kind %s is not heap-composable (the mirror of "+
 			"StoreVia's own limit — a kind becomes composable in both directions at once)", t.Kind)
@@ -1004,7 +1115,14 @@ func StoreVia(h Heap, v Value, ptr int) error {
 	if n := intBytes(v.Type.Kind); n > 0 {
 		return h.StoreInt(v.u, ptr, n)
 	}
+	v = despecializeValue(v) // an enum or option is stored as its variant (ADR 0116)
 	switch v.Type.Kind {
+	case KindFlags:
+		n, err := flagsLayout(v.Type)
+		if err != nil {
+			return err
+		}
+		return h.StoreInt(v.u, ptr, n)
 	case KindString:
 		return StoreString(h, v.s, ptr)
 	case KindList:
@@ -1043,6 +1161,43 @@ func StoreVariant(h Heap, v Value, ptr int, storeElem func(Value, int) error) er
 		return storeElem(*v.payload, off)
 	}
 	return nil
+}
+
+// LoadVariant lifts a `variant` (`load_variant`, def:load_variant) — [StoreVariant]'s mirror, with the
+// payload load injected the same way. The model heap's `load` reaches it with its full element load, so
+// the variant and result fixtures verify the framing that [LoadVia] runs against guest memory.
+//
+// The case index is the guest's word, so an out-of-range one traps (def:load_variant:"trap_if(case_index >= len(cases))")
+// rather than indexing past the cases.
+func LoadVariant(h ReadHeap, t Type, ptr int, loadElem func(Type, int) (Value, error)) (Value, error) {
+	cases := t.Cases
+	if len(cases) == 0 {
+		// A variant with no cases has no discriminant type (def:discriminant_type:"assert(0 < n < (1 << 32))").
+		return Value{}, fmt.Errorf("canon: load_variant: a variant with no cases has no layout")
+	}
+	discSize := size(Type{Kind: discriminantType(len(cases))})
+	b, err := h.ReadBytes(ptr, discSize)
+	if err != nil {
+		return Value{}, fmt.Errorf("canon: reading a variant discriminant at %d: %w", ptr, err)
+	}
+	var ci uint64
+	for i := range discSize {
+		ci |= uint64(b[i]) << (8 * i)
+	}
+	if ci >= uint64(len(cases)) {
+		return Value{}, fmt.Errorf("canon: load_variant: case index %d out of range", ci)
+	}
+	c := cases[ci]
+	var payload *Value
+	if c.Type != nil {
+		off := alignTo(ptr+discSize, maxCaseAlignment(cases))
+		pv, err := loadElem(*c.Type, off)
+		if err != nil {
+			return Value{}, err
+		}
+		payload = &pv
+	}
+	return Variant(t, c.Name, payload)
 }
 
 // resourceHandle is one entry in a component instance's handle table.
@@ -1158,7 +1313,16 @@ func (h *heap) store(v Value, ptr int) error {
 		h.storeInt(v.u, ptr, n)
 		return nil
 	}
+	v = despecializeValue(v) // the model's `match despecialize(t)` (def:store), ADR 0116
 	switch v.Type.Kind {
+	case KindFlags:
+		// `store_flags`: the packed integer at the flags' own width (def:store_flags).
+		n, err := flagsLayout(v.Type)
+		if err != nil {
+			return err
+		}
+		h.storeInt(v.u, ptr, n)
+		return nil
 	case KindF32:
 		h.storeInt(uint64(canonicalizeNaN32(uint32(v.u))), ptr, 4)
 		return nil
@@ -1318,8 +1482,15 @@ type flatVal struct {
 // lowerFlat lowers v to the flat core-value sequence (CanonicalABI.md `lower_flat`). A string or list is
 // stored to memory through realloc and lowered as its (pointer, length) pair.
 func (h *heap) lowerFlat(v Value) ([]flatVal, error) {
+	v = despecializeValue(v) // the model's `match despecialize(t)` (def:lower_flat), ADR 0116
 	switch v.Type.Kind {
 	case KindBool, KindU8, KindU16, KindU32, KindChar:
+		return []flatVal{{"i32", v.u}}, nil
+	case KindFlags:
+		// `lower_flat_flags`: the packed integer as one i32 (def:lower_flat_flags).
+		if _, err := flagsLayout(v.Type); err != nil {
+			return nil, err
+		}
 		return []flatVal{{"i32", v.u}}, nil
 	case KindS8, KindS16, KindS32:
 		return []flatVal{{"i32", uint64(uint32(v.u))}}, nil
@@ -1412,6 +1583,21 @@ func (h *heap) load(ptr int, t Type) (Value, error) {
 		return Value{Type: t, u: canonicalizeNaN64(h.loadInt(ptr, 8))}, nil
 	case KindChar:
 		return Char(rune(h.loadInt(ptr, 4)))
+	case KindFlags:
+		// `load_flags` (def:load_flags), through the one flags word lift so the label-count mask is
+		// shared with the flat lift and with LoadVia.
+		n, err := flagsLayout(t)
+		if err != nil {
+			return Value{}, err
+		}
+		return LiftFlatScalar(t, h.loadInt(ptr, n))
+	case KindEnum, KindOption:
+		// Read at the despecialized variant type, then given the declared type back (ADR 0116).
+		v, err := h.load(ptr, despecialize(t))
+		if err != nil {
+			return Value{}, err
+		}
+		return respecialize(t, v), nil
 	case KindString:
 		// Through the one string lift (#903), where this sliced `h.mem` directly. The differential's
 		// fixtures are well-formed so the traps never fired here, which is exactly why they were missing
@@ -1449,25 +1635,10 @@ func (h *heap) load(ptr int, t Type) (Value, error) {
 }
 
 // loadVariant reads a variant's discriminant, aligns to the cases' max alignment, and loads the
-// selected case's payload (CanonicalABI.md load_variant).
+// selected case's payload (CanonicalABI.md load_variant) — through [LoadVariant], the one variant lift
+// framing, so the definitions.py variant fixtures verify the function LoadVia runs against guest memory.
 func (h *heap) loadVariant(ptr int, t Type) (Value, error) {
-	cases := t.Cases
-	discSize := size(Type{Kind: discriminantType(len(cases))})
-	ci := int(h.loadInt(ptr, discSize))
-	if ci >= len(cases) {
-		return Value{}, fmt.Errorf("canon: load_variant: case index %d out of range", ci)
-	}
-	c := cases[ci]
-	var payload *Value
-	if c.Type != nil {
-		off := alignTo(ptr+discSize, maxCaseAlignment(cases))
-		pv, err := h.load(off, *c.Type)
-		if err != nil {
-			return Value{}, err
-		}
-		payload = &pv
-	}
-	return Variant(t, c.Name, payload)
+	return LoadVariant(h, t, ptr, func(ct Type, at int) (Value, error) { return h.load(at, ct) })
 }
 
 // liftOwn consumes an owned handle at table index i (CanonicalABI.md lift_own), trapping a missing
@@ -1526,12 +1697,18 @@ func coerce(have, want string, bits uint64) uint64 {
 func (h *heap) liftFlat(it *coreValueIter, t Type) (Value, error) {
 	switch t.Kind {
 	case KindBool, KindU8, KindU16, KindU32, KindU64, KindS8, KindS16, KindS32, KindS64,
-		KindF32, KindF64, KindChar:
+		KindF32, KindF64, KindChar, KindFlags:
 		// **One scalar flat lift** (#903), where these were thirteen arms here and a second set of the
 		// same conversions in the component layer's `task.return`. The core type to pull is the kind's own
 		// flat type rather than a literal per arm — `flattenType` is the authority on which word a scalar
-		// occupies, so an arm cannot disagree with it.
+		// occupies, so an arm cannot disagree with it. Flags is one word too (`lift_flat_flags`, ADR 0116).
 		return LiftFlatScalar(t, it.next(flattenType(t)[0]))
+	case KindEnum, KindOption:
+		v, err := h.liftFlat(it, despecialize(t))
+		if err != nil {
+			return Value{}, err
+		}
+		return respecialize(t, v), nil
 	case KindString:
 		// Through the one string lift (#903). The flat form supplies the two words from the core value
 		// iterator rather than from memory, which is why it calls the range function and `load` calls the

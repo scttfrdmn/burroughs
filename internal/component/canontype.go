@@ -241,9 +241,37 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 	case VBorrow:
 		return canon.BorrowType(int(vt.Ref)), 0, true
 
+	case VFlags:
+		// Modeled as of ADR 0116. Through the codec's constructor, so a label set the model has no layout
+		// for — empty, past 32, or duplicated — is refused here by name, by the same rule that would
+		// refuse it in the codec, rather than reaching `size` with no answer.
+		ft, err := canon.FlagsType(vt.Labels...)
+		if err != nil {
+			return canon.Type{}, VFlags, false
+		}
+		return ft, 0, true
+	case VEnum:
+		// Modeled as of ADR 0116; the codec despecializes it to a variant of payload-free cases.
+		et, err := canon.EnumType(vt.Labels...)
+		if err != nil {
+			return canon.Type{}, VEnum, false
+		}
+		return et, 0, true
+	case VOption:
+		// Modeled as of ADR 0116; the codec despecializes it to `variant { none, some(T) }`. A nil
+		// element is malformed, refused as the list arm refuses one.
+		if vt.Elem == nil {
+			return canon.Type{}, VOption, false
+		}
+		e, k, ok := canonTypeWalk(*vt.Elem, depth+1)
+		if !ok {
+			return canon.Type{}, k, false
+		}
+		return canon.OptionType(e), 0, true
+
 	default:
-		// VFlags, VEnum, VOption, VErrorContext, VUnresolvedAlias — not modeled by the codec.
-		// (VRecord moved out of this list when #904 gave the codec its base field-carrying arm.)
+		// VErrorContext, VUnresolvedAlias — not modeled by the codec. (VRecord moved out of this list
+		// when #904 gave the codec its base field-carrying arm; VFlags, VEnum and VOption with ADR 0116.)
 		//
 		// **VStream and VFuture are refused here even though `canon.KindStream`/`KindFuture` exist**, and
 		// that is not an inconsistency: those two are minted by the async lower/lift wrapper into the

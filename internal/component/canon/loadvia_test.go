@@ -96,14 +96,40 @@ func TestLoadViaIsStoreViasMirrorOverTheSameKinds(t *testing.T) {
 			rt := RecordType(rf)
 			v, err := Record(rt, map[string]Value{"x": U32(7)})
 			return v, rt, err == nil
+		case KindVariant:
+			// Non-empty for the record arm's reason: a zero-case variant has no layout, so a probe of
+			// one asks both functions a question neither can answer and reads the refusal as a verdict.
+			u32 := Type{Kind: KindU32}
+			vt := VariantType(Case{Name: "a"}, Case{Name: "b", Type: &u32})
+			p := U32(9)
+			v, err := Variant(vt, "b", &p)
+			return v, vt, err == nil
+		case KindFlags:
+			ft, err := FlagsType("a", "b", "c")
+			if err != nil {
+				return Value{}, t, false
+			}
+			v, err := Flags(ft, "a", "c")
+			return v, ft, err == nil
+		case KindEnum:
+			et, err := EnumType("x", "y")
+			if err != nil {
+				return Value{}, t, false
+			}
+			v, err := Enum(et, "y")
+			return v, et, err == nil
+		case KindOption:
+			ot := OptionType(Type{Kind: KindString})
+			v, err := Some(ot, Str("hi"))
+			return v, ot, err == nil
 		case KindFuture, KindStream:
 			// Wrapper-minted, never codec-lowered. `canon`'s own doc says they must not reach the Kind
 			// switches, so excluding them here is the documented contract and not a convenience.
 			return Value{}, t, false
 		default:
-			// f32/f64, variant, own/borrow, tuple: either not composable in both directions or needing a
-			// type this helper cannot build generically. Handled by the asymmetry check below, which
-			// asks both functions rather than needing a value.
+			// f32/f64, own/borrow, tuple: either not composable in both directions or needing a type this
+			// helper cannot build generically. Handled by the asymmetry check below, which asks both
+			// functions rather than needing a value.
 			return Value{}, t, false
 		}
 	}
@@ -149,21 +175,21 @@ func TestLoadViaIsStoreViasMirrorOverTheSameKinds(t *testing.T) {
 	// (the kind's own name) and not by position or count, so reordering the enum cannot silently move an
 	// allowance onto a different kind.
 	//
-	// The two standings are different and are recorded as different, because an exemption that does not
-	// say why is an exemption nobody can retire:
+	// The standing is recorded with its reason, because an exemption that does not say why is an
+	// exemption nobody can retire:
 	//
 	//   - `own` is structural: the store side writes a handle the component layer minted, and reading one
 	//     back needs that layer's handle table, which this package cannot reach by design.
-	//   - `variant` is unwritten, not impossible. Its mirror is a `LoadVariant` with an injected element
-	//     load; it arrives with the consumer that needs one.
+	//
+	// `variant` had an allowance too, as unwritten rather than impossible. It was retired when enum and
+	// option, which despecialize to a variant, became the consumer `LoadVariant` was waiting for (ADR 0116).
 	allowedAsymmetric := map[string]string{
-		"own":     "the store side writes a component-minted handle; lifting one needs the instance's handle table, which canon cannot reach",
-		"variant": "LoadVariant is unwritten and declined on spec — it arrives with its consumer",
+		"own": "the store side writes a component-minted handle; lifting one needs the instance's handle table, which canon cannot reach",
 	}
 	for _, k := range asymmetric {
 		if _, ok := allowedAsymmetric[k]; !ok {
-			t.Errorf("%s is composable in one direction only, and is not one of the two documented "+
-				"exceptions. StoreVia and LoadVia are mirrors apart from those: a kind this engine can "+
+			t.Errorf("%s is composable in one direction only, and is not the documented exception. "+
+				"StoreVia and LoadVia are mirrors apart from it: a kind this engine can "+
 				"hand a guest and cannot read back makes a round trip untestable, and untestability is "+
 				"the property nobody notices. Either write the missing side or document the asymmetry "+
 				"with its reason in LoadVia's doc comment and here", k)
@@ -239,6 +265,11 @@ func TestLoadViaRoundTripsEveryCompositeItAccepts(t *testing.T) {
 		// still return the right values for a single record — the wrongness only shows inside a list.
 		{"record u8 then u32", mustRecord(t, "small", U8v(255), "wide", U32(2882400001))},
 		{"record u32 then u8", mustRecord(t, "wide", U32(2882400001), "small", U8v(255))},
+		// ADR 0116's kinds: a flags past one byte, an enum through its despecialized variant, and an option
+		// whose payload lives in memory, so the re-specialized lift is exercised through a pointer.
+		{"flags 9 labels", mustFlags(t, 9, 0, 8)},
+		{"enum last label", mustEnum(t, 3, 2)},
+		{"option<string> some", mustSome(t, Str("burroughs"))},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHeap(1 << 14)
@@ -266,35 +297,19 @@ func TestLoadViaRoundTripsEveryCompositeItAccepts(t *testing.T) {
 	}
 }
 
-// valuesEqualForTest compares two values by payload, recursing into a list.
+// valuesEqualForTest compares two values structurally: the types with [TypeEqual], then the payloads with
+// the differential's `valueEqual`.
 //
 // Deliberately **not** an exported `Value.Equal`: nothing in the engine needs value equality, and adding
 // it would be speculative API with no consumer (`deadcode` would say so). A test helper is the honest
 // scope — it exists for this round trip and says so.
+//
+// **It delegates rather than keeping its own switch (#1245).** It had one, with a list arm and a default
+// of `a.u == b.u`, and so did `valueEqual`, and neither had a record arm: both compared two records as
+// 0 == 0. So this test's two record round trips below passed vacuously beside the differential's ten. One
+// equality with the record arm is the repair; two would be two places for the next arm to be missing.
 func valuesEqualForTest(a, b Value) bool {
-	if !TypeEqual(a.Type, b.Type) {
-		return false
-	}
-	switch a.Type.Kind {
-	case KindString:
-		as, _ := a.Str()
-		bs, _ := b.Str()
-		return as == bs
-	case KindList:
-		al, _ := a.List()
-		bl, _ := b.List()
-		if len(al) != len(bl) {
-			return false
-		}
-		for i := range al {
-			if !valuesEqualForTest(al[i], bl[i]) {
-				return false
-			}
-		}
-		return true
-	default:
-		return a.u == b.u
-	}
+	return TypeEqual(a.Type, b.Type) && valueEqual(a, b)
 }
 
 // TestAnEmptyRecordIsRefusedAtEveryLayerThatCanSayNo is the chair's change 1: the model gives an empty
