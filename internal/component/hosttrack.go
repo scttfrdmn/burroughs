@@ -116,7 +116,7 @@ func semverNumeric(s string) bool {
 	if s == "" || (len(s) > 1 && s[0] == '0') {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] < '0' || s[i] > '9' {
 			return false
 		}
@@ -132,7 +132,7 @@ func semverIdents(s string, numericNoLeadingZero bool) bool {
 			return false
 		}
 		digits := true
-		for i := 0; i < len(id); i++ {
+		for i := range len(id) {
 			switch c := id[i]; {
 			case c >= '0' && c <= '9':
 			case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '-':
