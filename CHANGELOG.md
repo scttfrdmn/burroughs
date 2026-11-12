@@ -143,8 +143,9 @@ says what it now requires and what it gives up.
   - **Neuter, run:** with the old `addr < placeNext` test, the witness fails at the stray count, 0 instead of 1.
   - **Not yet named:** why one hint was ignored on GitHub's x86 runner in the first place. The repair makes that
     stray harmless, and the counter records it.
-- **A canon lift's signature was read from the wrong type when a type alias preceded it** (found on
-  [#1231](https://github.com/scttfrdmn/burroughs/issues/1231); no `type:grave` issue is filed yet).
+- **A canon lift's signature was read from the wrong type when a type alias preceded it**
+  ([#1250](https://github.com/scttfrdmn/burroughs/issues/1250), a grave found on
+  [#1231](https://github.com/scttfrdmn/burroughs/issues/1231)).
   - **The defect:** `liftSignature` indexed the type section by the lift's type-space ordinal. Its comment said the
     lookup was the section one, which held for the references inside the signature and not for the index naming
     it. The two agree until a type alias precedes the lift's type, and no committed fixture had one, so every

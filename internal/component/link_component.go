@@ -1459,7 +1459,7 @@ func (in *Instantiated) call(name string) error {
 // export refusal. A lift names its type (`ft:typeidx`, unlike a lower); nil when the index is out of
 // range or names a non-function type.
 func (w *walker) liftSignature(cn Canon) *FuncType {
-	// **The lift's own type index is an index-space ordinal too** (found on #1231). This read
+	// **The lift's own type index is an index-space ordinal too** (grave #1250, found on #1231). This read
 	// `w.c.Types[cn.TypeIdx]` while the comment below said the lookup was the section one, which held for
 	// the VRefs inside the signature and not for the index naming it. Every fixture before ADR 0117's
 	// defined its lift types ahead of any type alias, so ordinal and section position agreed; the first
