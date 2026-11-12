@@ -181,11 +181,13 @@ type walker struct {
 	host          host
 	// wasiHost maps a canon-lowered func's "module::export" identity to a real marshaling impl (PR C.2).
 	// A lowered func with no entry here reaches the refusing stub — an unexercised import stays refused.
+	// All three tables are keyed by name and compatibility class (`classKey`, an unversioned key being a
+	// wildcard) and read through lookupHost (ADR 0115).
 	wasiHost map[string]interp.CanonFunc
 	// asyncWasiHost is the async-lower impl source (gate:async 2a-i-A), SEPARATE from wasiHost by type so
 	// a wrong-source binding is a compile error. An async lower binds through it, not wasiHost.
 	asyncWasiHost map[string]asyncLowerImpl
-	// streamConsumers maps a version-stripped import identity to a host import that consumes a guest stream
+	// streamConsumers maps a class-keyed import identity to a host import that consumes a guest stream
 	// (write-via-stream). Threaded like asyncWasiHost; resolverFor binds it with this instance's async table.
 	streamConsumers map[string]streamConsumer
 	// async is this component instance's async handle table (gate:async 2a-i-B): subtasks and waitable-sets
@@ -274,7 +276,9 @@ func (w *walker) step(d Def) error {
 					// the stub (`filesystem-error-code`, result `option`, stays exactly as it is, so the
 					// guests keep instantiating). `tuple`/`f32`/`f64` are modeled and refuse at marshal, not
 					// here (so `get-environment`'s empty `list<tuple>` is not refused).
-					if _, implemented := w.wasiHost[stripVersion(cf.stubName)]; implemented {
+					// Through lookupHost, so a cross-track import (ADR 0115) counts as unimplemented here: it
+					// binds a refusal at call, and would never marshal the signature this checks.
+					if _, implemented, _ := lookupHost(w.wasiHost, cf.stubName); implemented {
 						if sig := w.lowerSignature(cf.stubName); sig != nil {
 							if k, bad := unmodeledInSig(sig); bad {
 								return fmt.Errorf("%w: canon lower of %s carries %s, which this engine's "+
@@ -491,48 +495,103 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			}
 			return interp.Extern{}, false
 		}
-		// A canon lower carrying the `async` canonopt (gate:async 2a-i-A) binds to the async-lower adapter:
-		// its flat ABI is this sync signature plus a packed i32 return, and it executes the sync-resolving
-		// arm (the blocking arm refuses by name at runtime). Bound through the SEPARATE async-impl source
-		// (asyncWasiHost), so a wrong-source binding is a compile error, not a runtime surprise.
-		if d.async {
-			if aimpl, ok := w.asyncWasiHost[stripVersion(d.lowerName)]; ok {
-				sig := w.lowerSignature(d.lowerName)
-				hasResult := sig != nil && sig.Result != nil
-				aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
-				return w.lowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFunc(aimpl, hasResult, w.async)), interp.CanonOptions{
-					Memory:  d.lowerMem,
-					Realloc: d.lowerRealloc,
-				}), true
-			}
-			// An async lower with no async impl falls through: the guest's async lowers are refused at
-			// bind by gateAsync (they accompany async built-ins, 2b) before reaching here; this path is
-			// the synthesized-guest test's when its impl is absent.
+		// The host tables are asked once, keyed by name and compatibility class (resolveHost, ADR 0115). An
+		// async lower with an async impl binds to the async-lower adapter: its flat ABI is this sync
+		// signature plus a packed i32 return.
+		r := w.resolveHost(d.lowerName, d.async)
+		if r.async != nil {
+			sig := w.lowerSignature(d.lowerName)
+			hasResult := sig != nil && sig.Result != nil
+			aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
+			return w.lowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFunc(r.async, hasResult, w.async)), interp.CanonOptions{
+				Memory:  d.lowerMem,
+				Realloc: d.lowerRealloc,
+			}), true
 		}
 		// A stream-consuming host import (write-via-stream) binds through the SEPARATE stream-consumer source,
 		// which needs this instance's async handle table (to reach the readable end the guest hands it). The
 		// factory is called with w.async to produce the marshaling impl, bound to the lower's memory/realloc.
-		if f, ok := w.streamConsumers[stripVersion(d.lowerName)]; ok {
-			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, f(w.async)), interp.CanonOptions{
+		if r.consumer != nil {
+			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, r.consumer(w.async)), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
 		}
 		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
 		// stub — it refuses by name, typed from the importing module's own declaration.
-		if impl, ok := w.wasiHost[stripVersion(d.lowerName)]; ok {
+		if r.sync != nil {
 			// A canon lower with a real impl becomes a canonical-ABI adapter (ADR 0084 / §5 H-2
 			// amended), bound to the memory and realloc its options name — so the marshaling reaches
 			// the guest arguments through the memory-less trampoline and can lower a host-produced list
 			// through the guest's allocator. A lower with no memory/realloc option (the stdio getters,
 			// exit) binds neither.
-			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, impl), interp.CanonOptions{
+			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, r.sync), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
 		}
-		return interp.HostExtern(ft, refuse(mod, name, d.lowerName)), true
+		return interp.HostExtern(ft, r.refusal(mod, name, d.lowerName)), true
 	}
+}
+
+// hostResolution is what the host tables answer for one lowered import's identity: at most one of the
+// three implementation sources, or none and the classes some table serves the name under instead.
+type hostResolution struct {
+	async     asyncLowerImpl
+	consumer  streamConsumer
+	sync      interp.CanonFunc
+	servedFor []string
+}
+
+// resolveHost consults the host tables in binding order — the async-impl source for an async lower, then
+// the stream consumers, then the sync impls — each through lookupHost (ADR 0115), so the version's
+// compatibility class decides whether an entry serves the import.
+//
+// The cross-track classes are gathered across all three, because the tables are disjoint by kind and an
+// earlier table's track can be the only one the name has: `write-via-stream@0.2.6` misses the 0.3-only
+// stream consumer and then plainly misses the sync table, and reporting only the last table's answer
+// would call it *"not provided"* when the host does provide it, for 0.3.
+func (w *walker) resolveHost(lowerName string, async bool) hostResolution {
+	var r hostResolution
+	// A canon lower carrying the `async` canonopt (gate:async 2a-i-A) binds to the async-lower adapter:
+	// its flat ABI is this sync signature plus a packed i32 return, and it executes the sync-resolving
+	// arm (the blocking arm refuses by name at runtime). Bound through the SEPARATE async-impl source
+	// (asyncWasiHost), so a wrong-source binding is a compile error, not a runtime surprise.
+	if async {
+		aimpl, ok, served := lookupHost(w.asyncWasiHost, lowerName)
+		if ok {
+			r.async = aimpl
+			return r
+		}
+		r.servedFor = append(r.servedFor, served...)
+		// An async lower with no async impl falls through: the guest's async lowers are refused at
+		// bind by gateAsync (they accompany async built-ins, 2b) before reaching here; this path is
+		// the synthesized-guest test's when its impl is absent.
+	}
+	f, ok, served := lookupHost(w.streamConsumers, lowerName)
+	if ok {
+		r.consumer = f
+		return r
+	}
+	// NEUTER THIS append, and `TestCrossTrackImportRefusesNamingBothTracks`' write-via-stream@0.2.6 row reads
+	// *"is not provided"*: the sync table's plain miss is all the refusal hears.
+	r.servedFor = append(r.servedFor, served...)
+	impl, ok, served := lookupHost(w.wasiHost, lowerName)
+	if ok {
+		r.sync = impl
+		return r
+	}
+	r.servedFor = append(r.servedFor, served...)
+	return r
+}
+
+// refusal is the stub an unserved import binds: the cross-track refusal when some table serves its name
+// under another class, and the plain "not provided" stub when none does.
+func (r hostResolution) refusal(mod, name, lowerName string) interp.HostFunc {
+	if len(r.servedFor) > 0 {
+		return refuseTrack(mod, name, lowerName, r.servedFor)
+	}
+	return refuse(mod, name, lowerName)
 }
 
 // lowerMemory resolves a canon lower's `(memory $m)` option to the core memory extern it names, or nil
@@ -603,21 +662,6 @@ func isReallocType(ft bin.FuncType) bool {
 		}
 	}
 	return true
-}
-
-// stripVersion removes the `@x.y.z` version from a lowered func's "interface@version::export" identity,
-// leaving "interface::export" — the version-independent key the host serves (a guest at @0.2.6 and one
-// at @0.2.3 name the same interface). The version sits on the interface, before "::"; the export name
-// (which may itself contain '.', as in "[method]output-stream.write") is left untouched.
-func stripVersion(name string) string {
-	iface, export, found := strings.Cut(name, "::")
-	if !found {
-		return name
-	}
-	if at := strings.IndexByte(iface, '@'); at >= 0 {
-		iface = iface[:at]
-	}
-	return iface + "::" + export
 }
 
 // funcImportType finds a module's declared type for a function import.

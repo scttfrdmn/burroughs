@@ -34,6 +34,29 @@ says what it now requires and what it gives up.
   - Contract §10.6 (#15) stays open.
   - **No behaviour changes.**
 
+### Changed
+
+- **The component host keys an import by its name and its semver compatibility class, so WASI 0.2 and 0.3 are
+  never merged** ([#1229](https://github.com/scttfrdmn/burroughs/issues/1229), ADR 0115, decided in the slice).
+  - **The defect:** `stripVersion` cut `@x.y.z` from every import before the host tables were consulted. WASI 0.2
+    and 0.3 share names with different signatures, so a 0.3 guest could bind a 0.2 implementation by name, and the
+    other way round. The 0.3 fixtures ran partly on entries nobody had said were 0.3's.
+  - **The repair:** a host key is `interface@class::export`, registered through `serve`, where the class is
+    `major.minor` for 0.x, the major from 1 up, and `none` for an unversioned key. A pre-release keeps its class,
+    and an unparseable version matches nothing. `exit`, `get-arguments` and `get-environment` are registered for
+    both 0.2 and 0.3, `write-via-stream` for 0.3, and the rest for 0.2. An unversioned key, which is every
+    test-only registration, is a wildcard.
+  - **What a guest sees:** an import whose name the host serves only for another track binds a stub that, called,
+    returns `ErrLinkRefused` naming both tracks, e.g. *"import wasi:cli/stdout@0.3.0::get-stdout has only a WASI
+    0.2 implementation; it is not served for 0.3"*. As with any unprovided import, the refusal comes at call, not
+    at instantiate. Every committed guest runs as before.
+  - **Witness:** `TestSplitVersionKeysByCompatibilityClass`, `TestCrossTrackImportRefusesNamingBothTracks` (both
+    directions, called), `TestSharedTrackEntriesStillServe`, `TestUnversionedHostKeyIsAWildcard`, and the control
+    `TestProductionHostEntriesDeclareTheirTracks`.
+  - **Neuter, run:** with the lookup ignoring the class, as `stripVersion` did, the three cross-track rows fail and
+    every fixture test stays green. With only the stream-consumer table's classes dropped from the refusal,
+    `write-via-stream@0.2.6` reads *"is not provided"*.
+
 ## [0.13.0] - 2026-11-11
 *Implements contract v0.1.*
 
