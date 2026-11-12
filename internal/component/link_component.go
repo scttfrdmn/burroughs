@@ -842,7 +842,7 @@ func stubHost(name string) (compDef, bool) {
 // the gate was on or off, so the gate had no say at all. Putting the call here rather than fixing the
 // recursion's call site makes it structural: every component that gets walked gets gated, at every
 // depth, and a future third entry point cannot forget it. The entry points no longer call it.
-func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl, streamConsumers map[string]streamConsumer) (*walker, error) {
+func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl, streamConsumers map[string]streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
 	if gerr := gateAsync(c); gerr != nil {
 		return nil, gerr
 	}
@@ -853,7 +853,11 @@ func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, 
 	if gerr := gateCMThreads(c); gerr != nil {
 		return nil, gerr
 	}
-	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, async: newAsyncHandles(), threads: newThreadTable()}
+	// hostRes is created here, per component instance, for `async`'s reason (ADR 0117): a nested instance
+	// walks through this function too, so it gets a table of its own rather than its parent's. NEUTER THIS by
+	// sharing one table across walkers, and TestHostResourceHandleIsRefusedInAnotherInstance resolves
+	// instance a's index in instance b (#1137's R-4).
+	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, resourceSrc: resourceSrc, hostRes: newHostResources(), async: newAsyncHandles(), threads: newThreadTable()}
 	w.async.threads = w.threads // a suspension point finds its caller's chain through the table (runslot.go)
 	w.threads.h = w.async       // the append assertion reads the slot's holder (ADR 0101, Option A, point 5)
 	for _, d := range c.Defs {
@@ -876,8 +880,12 @@ func (w *walker) stepAll(d Def) error {
 		return w.instanceStep(d)
 	case SpaceComponent:
 		return w.componentStep(d)
+	case SpaceType:
+		// Not resolved as types, only recorded for the host-resource identity each may carry (ADR 0117).
+		w.typeStep(d)
+		return nil
 	default:
-		return nil // value/type spaces are not resolved this slice
+		return nil // the value space is not resolved this slice
 	}
 }
 
@@ -1034,7 +1042,7 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		}
 		return compDef{}, false
 	}
-	nw, err := w.nested[in.ComponentIdx].walkComponent(argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers)
+	nw, err := w.nested[in.ComponentIdx].walkComponent(argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers, w.resourceSrc)
 	if err != nil {
 		return compDef{}, err
 	}
@@ -1367,7 +1375,7 @@ func Instantiate(bytes []byte) (*Instantiated, error) {
 		return nil, err
 	}
 	// gateAsync is not called here: it lives in walkComponent, so nested components are gated too (#952).
-	w, err := c.walkComponent(stubHost, nil, nil, nil)
+	w, err := c.walkComponent(stubHost, nil, nil, nil, hostResourceSource{})
 	if err != nil {
 		return nil, err
 	}
@@ -1398,7 +1406,7 @@ func InstantiateWithHostFeatures(bytes []byte, h *Host, feats bin.Features) (*In
 		return nil, err
 	}
 	// gateAsync is not called here: it lives in walkComponent, so nested components are gated too (#952).
-	w, err := c.walkComponent(stubHost, h.wasi(), h.asyncWasi(), h.streamConsumers())
+	w, err := c.walkComponent(stubHost, h.wasi(), h.asyncWasi(), h.streamConsumers(), h.resourceSource())
 	if err != nil {
 		return nil, err
 	}
@@ -1451,11 +1459,16 @@ func (in *Instantiated) call(name string) error {
 // export refusal. A lift names its type (`ft:typeidx`, unlike a lower); nil when the index is out of
 // range or names a non-function type.
 func (w *walker) liftSignature(cn Canon) *FuncType {
-	if int(cn.TypeIdx) >= len(w.c.Types) {
-		return nil
-	}
-	td := w.c.Types[cn.TypeIdx]
-	if td.Kind != TDFunc {
+	// **The lift's own type index is an index-space ordinal too** (found on #1231). This read
+	// `w.c.Types[cn.TypeIdx]` while the comment below said the lookup was the section one, which held for
+	// the VRefs inside the signature and not for the index naming it. Every fixture before ADR 0117's
+	// defined its lift types ahead of any type alias, so ordinal and section position agreed; the first
+	// one with `(alias export $t "thing" (type))` ahead of its lifts got the next lift's type for each,
+	// and `make: func() -> u32` refused a call with no arguments as wanting one. NEUTER THIS lookup back to
+	// `sliceTypeAt(w.c.Types)`, and the four tests over host-resource-synth fail, among them
+	// TestHostResourceDropRunsTheDestructorOnce, and no other test in the package does.
+	td, ok := w.c.sectionTypeAt()(cn.TypeIdx)
+	if !ok || td.Kind != TDFunc {
 		return nil
 	}
 	// **Resolved, where this returned `td.Func` raw until #903.** A lift's signature comes straight from

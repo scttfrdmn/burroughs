@@ -92,9 +92,11 @@ type coreDef struct {
 	// the guest allocator the adapter invokes as agent execution to lower a host-produced list/string
 	// (ADR 0084 / §5 H-2 amended). Bound into the adapter so CanonCaller.Realloc can reach it.
 	lowerRealloc *interp.Extern
-	// resourceDrop marks a canon resource.drop intrinsic — a host resource's drop is a no-op (the
-	// streams and errors are the process's, not the guest's to free), so it neither refuses nor frees.
+	// resourceDrop marks a canon resource.drop intrinsic. dropType is the host resource type its type
+	// operand names (ADR 0117), whose drop is real; nil for a type the host does not implement, whose drop
+	// stays dropNoop until guest-defined resources are built.
 	resourceDrop bool
+	dropType     *hostResource
 	// async marks a canon lower carrying the `async` canonopt (gate:async 2a-i-A). Its flat ABI is the
 	// sync lower's args plus a packed i32 return; it binds to the async-lower adapter (asyncLowerFunc),
 	// which executes the sync-resolving arm (2a-i-A) or registers a subtask for the blocking arm (2a-i-B-1).
@@ -190,6 +192,15 @@ type walker struct {
 	// streamConsumers maps a class-keyed import identity to a host import that consumes a guest stream
 	// (write-via-stream). Threaded like asyncWasiHost; resolverFor binds it with this instance's async table.
 	streamConsumers map[string]streamConsumer
+	// resourceSrc is the host's resource types and the imports over them (ADR 0117), threaded like
+	// streamConsumers; resolverFor binds a resource method with this instance's hostRes.
+	resourceSrc hostResourceSource
+	// hostRes is this component instance's table of handles to host resources (ADR 0117). Per-instance, as
+	// `async` is: a handle minted for one instance is an index no other instance holds (#1137's R-4).
+	hostRes *hostResources
+	// typeIdents is the host-resource identity of each entry of the component type index space, in
+	// ordinal order ("" for none), which is how a `canon resource.drop` finds the host type it drops.
+	typeIdents []string
 	// async is this component instance's async handle table (gate:async 2a-i-B): subtasks and waitable-sets
 	// in one index space. The blocking arm of an async lower registers a subtask here; the waitable-set
 	// built-ins allocate and consume from it. Per-instance (component-model handles are per-ComponentInstance).
@@ -278,7 +289,12 @@ func (w *walker) step(d Def) error {
 					// here (so `get-environment`'s empty `list<tuple>` is not refused).
 					// Through lookupHost, so a cross-track import (ADR 0115) counts as unimplemented here: it
 					// binds a refusal at call, and would never marshal the signature this checks.
-					if _, implemented, _ := lookupHost(w.wasiHost, cf.stubName); implemented {
+					_, implemented, _ := lookupHost(w.wasiHost, cf.stubName)
+					if !implemented {
+						// A resource method marshals its signature too (ADR 0117), so it is checked alike.
+						_, implemented, _ = lookupHost(w.resourceSrc.methods, cf.stubName)
+					}
+					if implemented {
 						if sig := w.lowerSignature(cf.stubName); sig != nil {
 							if k, bad := unmodeledInSig(sig); bad {
 								return fmt.Errorf("%w: canon lower of %s carries %s, which this engine's "+
@@ -301,7 +317,9 @@ func (w *walker) step(d Def) error {
 				}
 			}
 			if cn.Kind == CanonResourceDrop {
-				w.appendCore(SpaceCoreFunc, coreDef{resourceDrop: true})
+				// The drop's type operand is a type-space ordinal, resolved here to the host type it names
+				// (ADR 0117), so the binding drops a host resource for real. nil for any other type.
+				w.appendCore(SpaceCoreFunc, coreDef{resourceDrop: true, dropType: w.hostResourceAt(cn.TypeIdx)})
 				return nil
 			}
 			if cn.Kind == CanonThreadBuiltin {
@@ -455,13 +473,24 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		if !ok {
 			return interp.Extern{}, false
 		}
-		// A canon resource.drop of a host resource is a no-op — the stream/error is the process's, not
-		// the guest's to free — typed from the importing module's own declaration.
+		// A canon resource.drop of a host resource type is real (ADR 0117): it removes the handle from this
+		// instance's table, traps on an outstanding lend, and runs the type's destructor for an own. It was
+		// `dropNoop` for every type, so a dropped handle stayed in the host's maps for the life of the Host.
+		//
+		// **A type the host does not implement keeps dropNoop**, which is a guest-defined resource or an
+		// unresolved type operand: no guest can mint one while `resource.new` binds the refusing stub, so
+		// there is no handle a real drop could act on. That changes when resource.new/rep are built.
 		//
 		// Every arm below that binds a canon built-in or a lowered import wraps it in `mayLeaveGuard`
 		// (#990), the reference's `trap_if(not may_leave)`, except the two unchecked built-ins bound here.
 		if d.resourceDrop {
-			return w.lowerExtern(ft, mayLeaveGuard("resource.drop", dropNoop), interp.CanonOptions{}), true
+			drop := dropNoop
+			// NEUTER THIS arm (bind dropNoop for every type), and TestHostResourceDropRunsTheDestructorOnce
+			// counts no destructor run.
+			if d.dropType != nil {
+				drop = w.hostRes.dropFunc(d.dropType)
+			}
+			return w.lowerExtern(ft, mayLeaveGuard("resource.drop", drop), interp.CanonOptions{}), true
 		}
 		// A modeled 🧵 built-in binds to its Go impl, typed from the guest's import signature. Before the
 		// async arm because the two dispatch on different fields and a 🧵 opcode must never reach
@@ -517,6 +546,14 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				Realloc: d.lowerRealloc,
 			}), true
 		}
+		// An import over host resources (ADR 0117) binds through its own source with this instance's table,
+		// so the handles it lends, takes and mints are this instance's and no other's.
+		if r.method != nil {
+			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, r.method(w.hostRes)), interp.CanonOptions{
+				Memory:  d.lowerMem,
+				Realloc: d.lowerRealloc,
+			}), true
+		}
 		// A canon-lowered func with a real marshaling impl runs it; absent one — or a resource-built-in
 		// stub — it refuses by name, typed from the importing module's own declaration.
 		if r.sync != nil {
@@ -535,19 +572,20 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 }
 
 // hostResolution is what the host tables answer for one lowered import's identity: at most one of the
-// three implementation sources, or none and the classes some table serves the name under instead.
+// four implementation sources, or none and the classes some table serves the name under instead.
 type hostResolution struct {
 	async     asyncLowerImpl
 	consumer  streamConsumer
+	method    resourceMethod
 	sync      interp.CanonFunc
 	servedFor []string
 }
 
 // resolveHost consults the host tables in binding order — the async-impl source for an async lower, then
-// the stream consumers, then the sync impls — each through lookupHost (ADR 0115), so the version's
-// compatibility class decides whether an entry serves the import.
+// the stream consumers, then the resource methods (ADR 0117), then the sync impls — each through
+// lookupHost (ADR 0115), so the version's compatibility class decides whether an entry serves the import.
 //
-// The cross-track classes are gathered across all three, because the tables are disjoint by kind and an
+// The cross-track classes are gathered across all four, because the tables are disjoint by kind and an
 // earlier table's track can be the only one the name has: `write-via-stream@0.2.6` misses the 0.3-only
 // stream consumer and then plainly misses the sync table, and reporting only the last table's answer
 // would call it *"not provided"* when the host does provide it, for 0.3.
@@ -575,6 +613,12 @@ func (w *walker) resolveHost(lowerName string, async bool) hostResolution {
 	}
 	// NEUTER THIS append, and `TestCrossTrackImportRefusesNamingBothTracks`' write-via-stream@0.2.6 row reads
 	// *"is not provided"*: the sync table's plain miss is all the refusal hears.
+	r.servedFor = append(r.servedFor, served...)
+	m, ok, served := lookupHost(w.resourceSrc.methods, lowerName)
+	if ok {
+		r.method = m
+		return r
+	}
 	r.servedFor = append(r.servedFor, served...)
 	impl, ok, served := lookupHost(w.wasiHost, lowerName)
 	if ok {
@@ -677,8 +721,9 @@ func funcImportType(m *bin.Module, mod, name string) (bin.FuncType, bool) {
 	return bin.FuncType{}, false
 }
 
-// dropNoop is a canon resource.drop for a host resource: it takes the handle and returns, freeing
-// nothing (the streams and errors are the process's, not the guest's to free).
+// dropNoop is a canon resource.drop for a type the host does not implement: it takes the handle and
+// returns, freeing nothing. A host resource type's drop is hostResources.dropFunc (ADR 0117); this stays
+// for the types no guest can yet mint, until resource.new/rep are built.
 func dropNoop(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) { return nil, nil }
 
 // refuse is the stub host function: called, it refuses by name — the "imports reach a stub host that

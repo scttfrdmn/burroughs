@@ -86,6 +86,46 @@ says what it now requires and what it gives up.
     unmodeled kind expired when those kinds were modeled. `TestBindingRefusesImplementedFilesystemErrorCodeOnRealGuest`
     is now `TestBindingAdmitsImplementedFilesystemErrorCodeOnRealGuest`, because the same real-guest binding now
     admits `option<error-code>`.
+- **A host resource is an entry in the holding instance's own handle table, and its drop is real**
+  ([#1231](https://github.com/scttfrdmn/burroughs/issues/1231), [#1137](https://github.com/scttfrdmn/burroughs/issues/1137)'s
+  R-4, ADR 0117, decided in the slice). WASI 0.3's `tcp-socket` and `descriptor` need this.
+  - **What was missing:** the Host kept its stream and error handles in two maps of its own, shared by every
+    instance it served, numbered from counters that never reused a number. Every `canon resource.drop` was a
+    no-op. The `own<error>` and `get-directories`' `own<descriptor>` were both resource type 0, and `get-stdin`
+    minted an output-stream. A handle index minted in one instance named the same stream in another.
+  - **The repair:** the codec's table is exported as `canon.HandleTable`, with `Add`, `Get`, `Remove`, `LiftOwn`,
+    `LiftBorrow`, `Drop` and `ResourceHandle.EndLend`, so the lend count the reference keeps is kept here too. Each
+    component instance, nested ones included, gets its own table, created in the walk beside the async table and
+    captured by the host functions bound for it. A host resource type is declared by its WASI name in ADR 0115's
+    keying (`wasi:io/streams@0.2::output-stream`), and a `canon resource.drop` finds it through the type alias its
+    operand names. Host imports over resources are a fourth host source, built from typed adapters: `self` is
+    lent for the call and released at return, an `own` argument transfers to the host, and a returned `own` is
+    added to the table.
+  - **What a guest sees:** a drop of a host resource removes the handle, runs its destructor once, and frees the
+    slot, which the next handle reuses as wasmtime does. An own with a borrow outstanding traps on drop. A stale,
+    foreign or wrongly typed handle traps where it used to be answered. `p3hello` and `p3echo` still match
+    wasmtime. A drop of any other type, and `resource.new`/`resource.rep`, are unchanged.
+  - **Out of scope, stated in the ADR:** guest-defined resources, and one table shared with the waitables. A
+    guest's resource handle numbers come from their own index space. An own still held at `Close` is not
+    destroyed. The guest-side signature's `own`/`borrow` still carry a local type index.
+  - **Witness:** `TestHandleTableLifecycleFollowsTheReference`, and on `host-resource-synth.wasm`
+    `TestHostResourceHandleIsRefusedInAnotherInstance` (R-4: an index minted in one instance traps in another),
+    `TestHostResourceDropRunsTheDestructorOnce`, `TestHostResourceBorrowIsLentForTheCallAndReleasedAtReturn`,
+    `TestHostResourceOwnArgumentTransfersToTheHost` and `TestHostResourceTypesAreDistinct`. The differential is
+    `TestHostResourceSlotReuseMatchesWasmtime`: `host-resource-reuse.wasm` prints the indices `get-stdout` returns
+    around a drop, and wasmtime 49.0.3 reads `1 1 2`, 10 of 10, where Burroughs read `1 2 3`.
+  - **Neuters, run:** with `Drop`'s lend check removed, the lifecycle's lent-own row and the borrow test fail. With
+    one table shared by every walker, R-4's witness reads instance a's object through instance b
+    (`b.poke(7) = 101`), and the differential reads `8 8 9`. With `dropNoop` bound for every type, the destructor
+    count is 0, the differential reads `1 2 3`, and `TestStreamErrArmLowersAnOwnErrorHandle`'s new drop assertion
+    fails.
+  - **Tests changed:** `TestStreamErrArmLowersAnOwnErrorHandle` read the Host's error map, which is gone; the
+    debug-string reaching stderr now proves the mint, and the test asserts the guest's drop freed the error.
+    `TestSharedTrackEntriesStillServe`, `TestCrossTrackImportRefusesNamingBothTracks`,
+    `TestProductionHostEntriesDeclareTheirTracks` and `TestSyncImplsAreServedAlongsideWASI` ask for the stdio
+    getters and `wasi:io` in the resource source, where they moved. `canonbuiltins_test.go`'s one `resources`
+    status, glossed *"modeled since ADR 0084"*, is split: `resource.drop` is real for host types only, and
+    `resource.new`/`resource.rep` refuse at call.
 
 ### Fixed
 
@@ -103,6 +143,18 @@ says what it now requires and what it gives up.
   - **Neuter, run:** with the old `addr < placeNext` test, the witness fails at the stray count, 0 instead of 1.
   - **Not yet named:** why one hint was ignored on GitHub's x86 runner in the first place. The repair makes that
     stray harmless, and the counter records it.
+- **A canon lift's signature was read from the wrong type when a type alias preceded it** (found on
+  [#1231](https://github.com/scttfrdmn/burroughs/issues/1231); no `type:grave` issue is filed yet).
+  - **The defect:** `liftSignature` indexed the type section by the lift's type-space ordinal. Its comment said the
+    lookup was the section one, which held for the references inside the signature and not for the index naming
+    it. The two agree until a type alias precedes the lift's type, and no committed fixture had one, so every
+    export of the first that did got the next export's type: `make: func() -> u32` refused a call with no
+    arguments as wanting one.
+  - **The repair:** the lookup goes through `sectionTypeAt`, the index-space map the other top-level lookups use.
+  - **Witness:** `host-resource-synth.wasm`, whose type alias precedes its lifts, under the four
+    `TestHostResource` tests that call it.
+  - **Neuter, run:** with the direct index restored, those four tests fail and every other test in the package
+    passes, which is why nothing caught it.
 - **The codec's differential compared record values with an equality that had no record arm, so every record
   lift check passed vacuously** ([#1245](https://github.com/scttfrdmn/burroughs/issues/1245), `type:grave`).
   - **The defect:** `codec_test.go:valueEqual` had no `KindRecord` arm, so two records fell to `a.u == b.u`, which

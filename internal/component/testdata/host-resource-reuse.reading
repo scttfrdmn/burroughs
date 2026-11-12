@@ -1,0 +1,16 @@
+# Committed readings for host-resource-reuse.wasm (#1231; ADR 0117).
+# Default path: gate:components on, a WASI 0.2 host, no Threads.
+# Built:       wasm-tools parse host-resource-reuse.wat -o host-resource-reuse.wasm   (wasm-tools 1.258.0; validates
+#              with --features all)
+# Invocation:  wasmtime run host-resource-reuse.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                      reading
+# wasmtime 49.0.3, 10 of 10                   1 1 2
+# Burroughs at 7321e3d, 3 of 3                1 2 3
+# Burroughs with ADR 0117's build             1 1 2
+#
+# Meaning:     the three indices get-stdout returned, printed one per line. The second call follows a drop of the
+#              first handle, so the reference's Table reuses its slot (def:Table.add pops the free list); the
+#              third follows no drop, so it takes the next slot. Burroughs minted from a counter on the Host that
+#              never reused a number, because every resource.drop was a no-op: 1 2 3.
