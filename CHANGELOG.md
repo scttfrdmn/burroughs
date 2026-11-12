@@ -68,7 +68,8 @@ says what it now requires and what it gives up.
   - **Out of scope, stated in the ADR:** guest-defined resources (#1251), whose handles keep a local index, and
     aliases out of an instance the guest instantiates itself, which stay unresolved. A nested component's lowers
     are not cross-checked: `lowerSignature` looks their outer import name up among the nested component's own
-    imports and finds no signature, a gap it already had for its other checks.
+    imports and finds no signature, a gap it already had for its other checks
+    ([#1257](https://github.com/scttfrdmn/burroughs/issues/1257)).
   - **Witness:** `TestAUsedTypeDecodesAsItsDefinition` and `TestUsedTypesResolveInP3HelloAndEveryImportStillBinds`
     on the real guests; `TestAGuestHandleCarriesItsHostResourcesIdentity` on p3hello; and, on new `.wat`
     fixtures, `TestAUsedCompoundTypeIsResolvedInItsOwnScope`, `TestAWorldLevelTypeImportResolvesThroughItsBound`,
@@ -174,15 +175,23 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
-- **A type named twice side by side no longer reads as a cycle** (a repair ADR 0118's slice compelled).
+- **A type named twice side by side no longer reads as a cycle, and one resolve is bounded by a size budget**
+  ([#1256](https://github.com/scttfrdmn/burroughs/issues/1256), `type:grave`; a repair ADR 0118's slice compelled).
   - **The defect:** `resolveVal`'s `seen` map was meant to be the current chain of type references, but nothing
     removed an index from it when its chain returned. So a second sibling reference to the same type read as a
     cycle and became `VUnresolvedAlias`. Nothing reached it while a `use`d type decoded as a resource placeholder,
     which is not followed. Once ADR 0118 resolved them, p3hello's `descriptor-stat`, which names
     `option<datetime>` three times, lost its second and third timestamps, and p3hello was refused at instantiate.
-  - **The repair:** the index leaves `seen` when its chain returns.
-  - **Witness:** `TestUsedTypesResolveInP3HelloAndEveryImportStillBinds` asserts all three timestamps.
+  - **The repair:** the index leaves the chain set when its chain returns. That alone lets a type shared by others
+    expand at every use: a chain of `tuple<t, t>` types took 2.9 s at 24 levels, doubling per level, and a crafted
+    component picks the depth. So one resolve (`resolveState`) also carries a budget of nodes it may build, at
+    wasmparser's `limits::MAX_WASM_TYPE_SIZE` (1,000,000), and a type past it resolves to `VUnresolvedAlias`,
+    which the instantiate-time refusal names. `resolveVal`'s doc had said the chain set *"bounds nothing legal"*;
+    it now says the budget is the bound.
+  - **Witness:** `TestUsedTypesResolveInP3HelloAndEveryImportStillBinds` asserts all three timestamps;
+    `TestASharedTypeChainIsCutAtTheSizeBudget` resolves a 16-level chain in full and cuts a 24-level one.
   - **Neuter, run:** with the removal undone, the second and third timestamps are unresolved and p3hello is refused.
+    With the budget check removed, the 24-level chain resolves in full, with no alias.
 - **One ignored placement hint no longer sends every later reservation off-hint**
   ([#1254](https://github.com/scttfrdmn/burroughs/issues/1254), `type:grave`; ADR 0113's placement).
   - **The defect:** `mapPlaced` counted a mapping below the cursor as a stray, but took one placed anywhere above

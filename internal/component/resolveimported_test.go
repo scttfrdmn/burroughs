@@ -239,6 +239,45 @@ func TestAResolvedHandleKeepsItsIdentityInAnotherScope(t *testing.T) {
 	}
 }
 
+// TestASharedTypeChainIsCutAtTheSizeBudget is grave #1256's bound. With the chain set repaired, a type
+// shared by others is expanded at every use: in a local space where t0 is u32 and t_k is
+// tuple<t_{k-1}, t_{k-1}>, t_n inlines to 2^(n+1)-1 nodes. A crafted component picks n, so one resolve is
+// bounded at maxResolvedTypeSize nodes and cut to VUnresolvedAlias past it, which the instantiate-time
+// refusal names. At 16 levels (131071 nodes) the chain resolves in full; at 24 (33554431) it is cut.
+//
+// Hand-built, because the space is the subject: wasm-tools would refuse such a component's type as too
+// large, so no fixture of it can be assembled.
+//
+// NEUTER, run: the budget check removed in resolveVal, and the 24-level chain resolves in full, with no alias.
+func TestASharedTypeChainIsCutAtTheSizeBudget(t *testing.T) {
+	chain := func(n int) typeAt {
+		local := []TypeDef{{Kind: TDVal, Val: ValType{Kind: VU32}}}
+		for k := 1; k <= n; k++ {
+			ref := ValType{Kind: VRef, Ref: uint32(k - 1)}
+			local = append(local, TypeDef{Kind: TDVal, Val: ValType{Kind: VTuple, Elems: []ValType{ref, ref}}})
+		}
+		return sliceTypeAt(local)
+	}
+	var contains func(vt ValType) bool
+	contains = func(vt ValType) bool {
+		if vt.Kind == VUnresolvedAlias {
+			return true
+		}
+		for _, e := range vt.Elems {
+			if contains(e) {
+				return true
+			}
+		}
+		return false
+	}
+	if full := resolveVal(ValType{Kind: VRef, Ref: 16}, chain(16), nil); full.Kind != VTuple || contains(full) {
+		t.Errorf("the 16-level chain, 131071 nodes, did not resolve in full under the budget")
+	}
+	if cut := resolveVal(ValType{Kind: VRef, Ref: 24}, chain(24), nil); !contains(cut) {
+		t.Errorf("the 24-level chain, 33554431 nodes, resolved with no VUnresolvedAlias: the budget did not cut it")
+	}
+}
+
 // TestAnUnresolvedAliasIsSeenInsideAFutureAndARecord pins valHasUnresolvedAlias's ADR 0118 arms. The
 // instantiate-time refusal of an unresolved alias asks it, and a future's payload and a record's fields are
 // where a `use`d type sits since #1248, so an unresolved one there must be seen, as one in a list is.

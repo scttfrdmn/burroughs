@@ -361,16 +361,35 @@ func (r *reader) instanceType() (*InstanceType, error) {
 // **`Async` is carried through.** It was dropped while the only caller was the instance-export path,
 // where no caller read it back off a resolved signature; the lift path added in #903 does, and a
 // signature that forgot it was an async functype would be a different type than the one decoded.
+//
+// One resolve, so one size budget, covers the parameters and the result together (resolveState).
 func resolveFunc(ft *FuncType, at typeAt) *FuncType {
+	st := newResolveState()
 	out := &FuncType{Params: make([]NamedVal, len(ft.Params)), Async: ft.Async}
 	for i, p := range ft.Params {
-		out.Params[i] = NamedVal{Name: p.Name, Type: resolveVal(p.Type, at, nil)}
+		out.Params[i] = NamedVal{Name: p.Name, Type: resolveVal(p.Type, at, st)}
 	}
 	if ft.Result != nil {
-		r := resolveVal(*ft.Result, at, nil)
+		r := resolveVal(*ft.Result, at, st)
 		out.Result = &r
 	}
 	return out
+}
+
+// maxResolvedTypeSize is the most nodes one resolve may build, wasmparser's `limits::MAX_WASM_TYPE_SIZE`
+// (1_000_000 in wasmparser 0.258.3, which wasm-tools 1.258.0 uses, and in 0.262.0). wasmparser bounds a
+// type's size by it; this engine inlines references, so the same bound is applied to the inlined form.
+const maxResolvedTypeSize = 1_000_000
+
+// resolveState is one resolve's state (grave #1256): the VRef indices on the current chain, for the cycle
+// check, and the nodes the resolve may still build.
+type resolveState struct {
+	seen map[uint32]bool
+	left int
+}
+
+func newResolveState() *resolveState {
+	return &resolveState{seen: map[uint32]bool{}, left: maxResolvedTypeSize}
 }
 
 // typeAt resolves a type index to its definition, reporting whether the index names a parsed one.
@@ -513,10 +532,17 @@ func (c *Component) spaceDef(s Space, ord uint32) (Def, bool) {
 // resolveVal follows a VRef through `at` and inlines the referenced value type, recursing into compound
 // elements. own/borrow keep their resource type index (a handle is an i32 regardless) and gain the
 // resource's identity when the index names one (ADR 0118).
-// `seen` tracks the VRef indices already entered on the current chain, so a cyclic reference (a
-// self-referential placeholder, or any fuzzer-crafted VRef cycle) is detected and returned as
-// VUnresolvedAlias — a named, refusable outcome — rather than overflowing the stack (#753). It bounds
-// nothing legal: a finite, acyclic type visits each index at most once. `seen` is nil at the top level.
+// `st` carries one resolve's state (resolveState): the VRef indices on the current chain, so a cyclic
+// reference (a self-referential placeholder, or any fuzzer-crafted VRef cycle) is detected and returned as
+// VUnresolvedAlias — a named, refusable outcome — rather than overflowing the stack (#753); and the size
+// budget left, so a legal acyclic type cannot expand without bound. `st` is nil at the top level, which
+// starts a fresh resolve.
+//
+// **The chain set does not bound the work, and this comment said it did.** It read *"It bounds nothing
+// legal: a finite, acyclic type visits each index at most once."* True only while the set never shrank,
+// which was grave #1256: a second sibling reference to the same type read as a cycle. Once an index leaves
+// the set when its chain returns, a type shared by others is expanded at every use, and a chain of
+// `tuple<t, t>` types doubles with each level. The budget is what bounds it now.
 //
 // **The record and tuple arms were absent until #903**, so a record field or tuple element that was
 // itself a VRef stayed a reference while every other compound inlined. It was unreachable in the one
@@ -524,26 +550,33 @@ func (c *Component) spaceDef(s Space, ord uint32) (Def, bool) {
 // reads its fields — but `tuple` is modeled for size and alignment, and the bridge to the codec's types
 // reads both. A resolver that inlines four of six compound kinds is one whose output cannot be told from
 // a fully resolved type by its own shape.
-func resolveVal(vt ValType, at typeAt, seen map[uint32]bool) ValType {
+func resolveVal(vt ValType, at typeAt, st *resolveState) ValType {
+	if st == nil {
+		st = newResolveState()
+	}
+	// **The size budget** (grave #1256): every node this resolve builds is counted, and past the budget the
+	// node resolves to VUnresolvedAlias, which the instantiate-time refusal names. NEUTER THIS check, and
+	// TestASharedTypeChainIsCutAtTheSizeBudget's 24-level chain resolves in full, with no alias in it.
+	st.left--
+	if st.left < 0 {
+		return ValType{Kind: VUnresolvedAlias}
+	}
 	switch vt.Kind {
 	case VRef:
 		if td, ok := at(vt.Ref); ok && td.Kind == TDVal {
-			if seen[vt.Ref] {
+			if st.seen[vt.Ref] {
 				return ValType{Kind: VUnresolvedAlias} // a cycle — unresolvable, refuse by name downstream
 			}
-			if seen == nil {
-				seen = map[uint32]bool{}
-			}
-			// **`seen` is the current chain, so an index leaves it on the way back out** (ADR 0118). It was
-			// never removed, so the map recorded every index entered anywhere in the type, and a second
-			// sibling reference to the same type read as a cycle: p3hello's `descriptor-stat` names
+			// **The set is the current chain, so an index leaves it on the way back out** (grave #1256, ADR
+			// 0118). It was never removed, so the map recorded every index entered anywhere in the type, and a
+			// second sibling reference to the same type read as a cycle: p3hello's `descriptor-stat` names
 			// `option<datetime>` three times, and the second and third became VUnresolvedAlias. Nothing
 			// reached it while a `use`d type decoded as a resource placeholder, which is not followed. NEUTER
 			// THIS delete, and TestUsedTypesResolveInP3HelloAndEveryImportStillBinds finds the second
 			// timestamp unresolved.
-			seen[vt.Ref] = true
-			out := resolveVal(td.Val, at, seen)
-			delete(seen, vt.Ref)
+			st.seen[vt.Ref] = true
+			out := resolveVal(td.Val, at, st)
+			delete(st.seen, vt.Ref)
 			return out
 		}
 		return vt // a ref to a resource/func/instance type — left as a reference
@@ -570,23 +603,23 @@ func resolveVal(vt ValType, at typeAt, seen map[uint32]bool) ValType {
 		// element inlined. Nothing read the payload until #1248 gave `write-via-stream`'s one a definition.
 		// NEUTER THIS, and TestAUsedTypeDecodesAsItsDefinition reads the payload as a reference.
 		if vt.Elem != nil {
-			e := resolveVal(*vt.Elem, at, seen)
+			e := resolveVal(*vt.Elem, at, st)
 			vt.Elem = &e
 		}
 		return vt
 	case VList, VOption:
 		if vt.Elem != nil {
-			e := resolveVal(*vt.Elem, at, seen)
+			e := resolveVal(*vt.Elem, at, st)
 			vt.Elem = &e
 		}
 		return vt
 	case VResult:
 		if vt.Ok != nil {
-			ok := resolveVal(*vt.Ok, at, seen)
+			ok := resolveVal(*vt.Ok, at, st)
 			vt.Ok = &ok
 		}
 		if vt.Err != nil {
-			e := resolveVal(*vt.Err, at, seen)
+			e := resolveVal(*vt.Err, at, st)
 			vt.Err = &e
 		}
 		return vt
@@ -595,7 +628,7 @@ func resolveVal(vt ValType, at typeAt, seen map[uint32]bool) ValType {
 		for i, c := range vt.Cases {
 			cs[i] = c
 			if c.Type != nil {
-				t := resolveVal(*c.Type, at, seen)
+				t := resolveVal(*c.Type, at, st)
 				cs[i].Type = &t
 			}
 		}
@@ -604,14 +637,14 @@ func resolveVal(vt ValType, at typeAt, seen map[uint32]bool) ValType {
 	case VRecord:
 		fs := make([]NamedVal, len(vt.Fields))
 		for i, f := range vt.Fields {
-			fs[i] = NamedVal{Name: f.Name, Type: resolveVal(f.Type, at, seen)}
+			fs[i] = NamedVal{Name: f.Name, Type: resolveVal(f.Type, at, st)}
 		}
 		vt.Fields = fs
 		return vt
 	case VTuple:
 		es := make([]ValType, len(vt.Elems))
 		for i, e := range vt.Elems {
-			es[i] = resolveVal(e, at, seen)
+			es[i] = resolveVal(e, at, st)
 		}
 		vt.Elems = es
 		return vt
