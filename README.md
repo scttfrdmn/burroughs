@@ -85,7 +85,7 @@ it does not show.
 
 ## Status
 
-*Written against `v0.12.0`.*
+*Written against `v0.13.0`.*
 
 - **The threads phase**, v1 (decision 0099). The MVP core suite is green.
 - **On by default:** threads, SIMD, relaxed SIMD, extended constant expressions, tail calls, multi-memory, memory64,

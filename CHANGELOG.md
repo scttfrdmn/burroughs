@@ -22,7 +22,52 @@ platform"*) was satisfiable as written while misleading as read, and the amendme
 says what it now requires and what it gives up.
 
 ## [Unreleased]
+
+## [0.13.0] - 2026-11-11
 *Implements contract v0.1.*
+
+**What changes by default: input the spec rejects is refused where it used to run, and refusals are named
+correctly.** Fixed and Changed below have the detail.
+- **A component's core modules are validated at load** (#1162). A core module the spec rejects was decoded and run.
+  It is now refused, as core `Instantiate` and `WASIP1Config.Run` already did.
+- **A canon lower whose `realloc` is mistyped is refused as `ErrInvalid` at instantiation** (#1134 class C), as
+  wasm-tools refuses it. Before, it instantiated, and only a call that reached the `realloc` failed, at run time.
+- **A shared-everything-threads encoding is `ErrUnsupported`, not malformed** (#1120). A well-formed module was
+  being told it was broken.
+- **`burroughs version` reports the version it was built at** (#1130). It printed `v0.0.1` from genesis through
+  v0.12.0.
+
+**Host races between disjoint guest bytes are gone.** These were races in the engine's Go code, which Go's race
+detector reported, not races a guest made. An unaligned typed access (ADR 0111) and a bulk or SIMD extent's partial
+edge words (ADR 0112) now touch their containing words atomically. What a guest observes is unchanged.
+
+**`-race` on darwin no longer dies at random** (ADR 0113, #1218). Under `-race` the Go runtime keeps its heap in a
+fixed address band, and darwin placed ADR 0076's reservations into it. On darwin and linux on 64-bit ports, a
+reservation is now mapped at or above 16 TiB. Shipped builds were never affected.
+
+**`Close` names which of its cases each live thread is in** (#1133, contract §2 T-5.4). Its expiry error tells a
+host function ignoring cancellation (case 1) from a `Close` called inside its own instance's host function (case
+2, which cannot end).
+
+**Internal accuracy:**
+- The interpreter's module-validity, GC, exception-handling and engine-wiring checks (76 sites) report
+  `ErrEngineInvariant`, not `ErrNotValidated`, which has no producer left (#1134).
+- Every public path validates first, so no embedder-visible error changes.
+
+**Instruments:**
+- the Go-runtime torture suite (#406);
+- witnesses for contract §5 H-2 (#1136), and T-5.1's OS-thread half measured (#1132);
+- the wat encoder's accept-direction comparator (#67);
+- `markercheck` and the one law about adding laws;
+- a dispatch-only `stress` workflow, which Scott has since stopped using because its runs cost money.
+
+**The contract:** unchanged. v0.1 has no appends since v0.12.0.
+
+**Board** (`make conformance`): unchanged from v0.12.0.
+- **Core:** 63769 pass, 0 fail, 0 unsupported, 1368 gated, 0 unimplemented, over 256 files.
+- **All gates on:** 65109 pass, 0 fail, 0 gated.
+- **Threads lane:** 576 pass, 41 fail, 2 bound, over 4 files. All 41 failures are superseded-corpus rows, with 0
+  engine defects.
 
 **Known limits, open on default-on paths, each with its issue:**
 - **A Phase 4 fork guest whose goroutine spins in a loop that never allocates is never preempted**
@@ -20331,7 +20376,8 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/scttfrdmn/burroughs/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/scttfrdmn/burroughs/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/scttfrdmn/burroughs/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/scttfrdmn/burroughs/compare/v0.9.0...v0.10.0
