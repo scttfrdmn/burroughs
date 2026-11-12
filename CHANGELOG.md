@@ -89,6 +89,20 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **One ignored placement hint no longer sends every later reservation off-hint**
+  ([#1254](https://github.com/scttfrdmn/burroughs/issues/1254), `type:grave`; ADR 0113's placement).
+  - **The defect:** `mapPlaced` counted a mapping below the cursor as a stray, but took one placed anywhere above
+    it as honoured and moved the cursor there. Linux's own placement is top-down from about `0x7f…`, so one ignored
+    hint threw the cursor to the top of the address space. Every later hint then landed off-hint. CI's x86-64 runner
+    showed it: three reservations at `0x7f70…`, `0x7f6f…` and `0x7f6e…`, non-contiguous and all counted as strays.
+    It did not reproduce with the same seed on darwin or on janus, where no earlier hint was ignored.
+  - **The repair:** only an honoured hint (`addr == hint`) advances the cursor. Any other placement is a stray,
+    counted (`reservationOffHint`, formerly `reservationBelowBase`) and kept, as ADR 0113 says.
+  - **Witness:** `TestOneIgnoredHintDoesNotMoveTheCursor`, through an `mmapAt` seam that places one mapping 32 TiB
+    above the hint, standing in for Linux's top-down stray. The next reservation must land at the cursor's hint.
+  - **Neuter, run:** with the old `addr < placeNext` test, the witness fails at the stray count, 0 instead of 1.
+  - **Not yet named:** why one hint was ignored on GitHub's x86 runner in the first place. The repair makes that
+    stray harmless, and the counter records it.
 - **The codec's differential compared record values with an equality that had no record arm, so every record
   lift check passed vacuously** ([#1245](https://github.com/scttfrdmn/burroughs/issues/1245), `type:grave`).
   - **The defect:** `codec_test.go:valueEqual` had no `KindRecord` arm, so two records fell to `a.u == b.u`, which
