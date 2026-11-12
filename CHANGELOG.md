@@ -23,6 +23,17 @@ says what it now requires and what it gives up.
 
 ## [Unreleased]
 
+### Added
+
+- **ADR 0114, accepted: the fork's WASI 0.3 work targets `GOOS=wasip3` on `GOARCH=wasm`**
+  ([#1228](https://github.com/scttfrdmn/burroughs/issues/1228)), and the WASI pin is 0.3.0 semantics, admitting 0.3.x
+  imports by semver, as the pinned wasmtime 49.0.3 does. It opens v0.14.0 (WASI 0.3, single-threaded first; Scott,
+  2026-11-11, #1140).
+  - It amends ADR 0087's `GEOEXPERIMENT` shape for that work only. The fork's private tree, its no-upstream rule and
+    its existing `wasip1` experiments stand.
+  - Contract §10.6 (#15) stays open.
+  - **No behaviour changes.**
+
 ## [0.13.0] - 2026-11-11
 *Implements contract v0.1.*
 
