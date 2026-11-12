@@ -842,7 +842,7 @@ func stubHost(name string) (compDef, bool) {
 // the gate was on or off, so the gate had no say at all. Putting the call here rather than fixing the
 // recursion's call site makes it structural: every component that gets walked gets gated, at every
 // depth, and a future third entry point cannot forget it. The entry points no longer call it.
-func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl, streamConsumers map[string]streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
+func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl, streamConsumers map[string]*streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
 	if gerr := gateAsync(c); gerr != nil {
 		return nil, gerr
 	}

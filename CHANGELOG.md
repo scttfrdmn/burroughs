@@ -36,6 +36,51 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A type a guest `use`s from an imported instance decodes as its definition, a handle in a guest's signature
+  carries its resource's identity and is checked against the host's, and `Close` destroys the owns a guest still
+  holds** ([#1248](https://github.com/scttfrdmn/burroughs/issues/1248),
+  [#1252](https://github.com/scttfrdmn/burroughs/issues/1252), ADR 0118). E4, E6 and E7 take `use`d WASI types,
+  and E7's sockets need the teardown.
+  - **What was missing:** every type export of an instance type decoded as a resource placeholder, whatever its
+    bound, and a top-level `alias export` of one never resolved. So `wasi:cli/types`' `error-code` reached
+    `write-via-stream` as a reference, and the signature read `future<ref>`. `resolveVal` did not follow a
+    future's payload. An `own` or `borrow` in a guest's signature carried only its local type index, and nothing
+    compared the guest's resources with the host's. An own the guest never dropped was left to the Go collector,
+    which runs no destructor.
+  - **The repair:**
+    - An eq-bound type export is the type it names, and a `sub resource` one is a resource named by the export.
+      `InstanceType.Types` keeps them. A top-level alias of an imported instance's type export resolves to it,
+      with its resources named by the import, `wasi:io/streams@0.2.3::output-stream`. A top-level type import
+      keeps its bound too.
+    - `resolveVal` follows futures and streams, and an own or borrow gains its resource's identity
+      (`ValType.Resource`). The codec bridge gives a host resource's handle that resource's RT.
+    - At instantiate, every import a host table serves is checked: each handle must name a host resource, and a
+      `[method]R.m`'s self must be a borrow of `R`. `write-via-stream`'s future payload must equal the type the
+      host lowers its completion at, so #1246's substitution of the host's type is now a checked agreement.
+    - `canon.HandleTable.Each` (the reference's `Table.__iter__`) lets an instance's teardown find what it holds.
+      After the core instances close, each remaining own's destructor runs once, across nested instances. An own
+      still lent to a call is left alone.
+  - **What a guest sees:** a guest whose host-served import declares a handle the host does not implement, a method
+    whose self is another resource, or a `write-via-stream` payload other than the host's is refused at
+    instantiate with `ErrLinkRefused`. Before, it bound and then trapped at call or read the wrong bytes. A
+    resource a guest never dropped is destroyed once when its instance closes. p3hello, p3echo and p3async-hello
+    run as before.
+  - **Out of scope, stated in the ADR:** guest-defined resources (#1251), whose handles keep a local index, and
+    aliases out of an instance the guest instantiates itself, which stay unresolved. A nested component's lowers
+    are not cross-checked: `lowerSignature` looks their outer import name up among the nested component's own
+    imports and finds no signature, a gap it already had for its other checks.
+  - **Witness:** `TestAUsedTypeDecodesAsItsDefinition` and `TestUsedTypesResolveInP3HelloAndEveryImportStillBinds`
+    on the real guests; `TestAGuestHandleCarriesItsHostResourcesIdentity` on p3hello; and, on new `.wat`
+    fixtures, `TestAUsedCompoundTypeIsResolvedInItsOwnScope`, `TestAWorldLevelTypeImportResolvesThroughItsBound`,
+    `TestHostMethodWhoseSelfIsAnotherResourceIsRefused`, `TestHostImportOverAResourceTheHostDoesNotImplementIsRefused`
+    and `TestWriteViaStreamPayloadMustAgreeWithTheHosts`, whose two fixtures differ in one enum label. Also
+    `TestCloseDestroysTheOwnsTheGuestStillHolds`, `TestCloseReachesTheOwnsANestedInstanceHolds`,
+    `TestCloseLeavesAnOwnLentToACallInProgress`,
+    `TestAResolvedHandleKeepsItsIdentityInAnotherScope` and `TestAnUnresolvedAliasIsSeenInsideAFutureAndARecord`.
+  - **Neuters, run:** each mechanism removed fails its witness. Leaving the alias export unresolved refuses p3hello
+    at instantiate. Without the teardown call, the destructor runs for 1 of 3 owns. The full list is in the ADR.
+  - **Tests changed:** `TestBindingAdmitsImplementedFilesystemErrorCodeOnRealGuest` walks with the production
+    resource types, since its implemented `filesystem-error-code` takes `borrow<error>`, which must now name one.
 - **The component host keys an import by its name and its semver compatibility class, so WASI 0.2 and 0.3 are
   never merged** ([#1229](https://github.com/scttfrdmn/burroughs/issues/1229), ADR 0115, decided in the slice).
   - **The defect:** `stripVersion` cut `@x.y.z` from every import before the host tables were consulted. WASI 0.2
@@ -129,6 +174,15 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A type named twice side by side no longer reads as a cycle** (a repair ADR 0118's slice compelled).
+  - **The defect:** `resolveVal`'s `seen` map was meant to be the current chain of type references, but nothing
+    removed an index from it when its chain returned. So a second sibling reference to the same type read as a
+    cycle and became `VUnresolvedAlias`. Nothing reached it while a `use`d type decoded as a resource placeholder,
+    which is not followed. Once ADR 0118 resolved them, p3hello's `descriptor-stat`, which names
+    `option<datetime>` three times, lost its second and third timestamps, and p3hello was refused at instantiate.
+  - **The repair:** the index leaves `seen` when its chain returns.
+  - **Witness:** `TestUsedTypesResolveInP3HelloAndEveryImportStillBinds` asserts all three timestamps.
+  - **Neuter, run:** with the removal undone, the second and third timestamps are unresolved and p3hello is refused.
 - **One ignored placement hint no longer sends every later reservation off-hint**
   ([#1254](https://github.com/scttfrdmn/burroughs/issues/1254), `type:grave`; ADR 0113's placement).
   - **The defect:** `mapPlaced` counted a mapping below the cursor as a stray, but took one placed anywhere above

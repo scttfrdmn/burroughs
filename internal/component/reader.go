@@ -116,60 +116,68 @@ func (r *reader) name() (string, error) {
 	return string(s), nil
 }
 
-// externType reads an `externtype` and returns its kind, consuming the whole production so a caller's
-// vec stays in sync. The value case's `0x01 valtype` form (an inline value type) is not modelled this
-// slice and is refused, named — no in-scope fixture imports a value.
-// externType reads an `externtype` and returns its kind and, for the func/component/instance cases, the
-// type index it names (0 otherwise). The instance-type index is what lets a binding resolve an
-// imported instance's export signatures (ADR 0084 / #720's binding refusal).
-func (r *reader) externType() (ExternKind, uint32, error) {
+// externType reads an `externtype`, consuming the whole production so a caller's vec stays in sync, and
+// returns its kind and, for the func/component/instance cases, the type index it names. The instance-type
+// index is what lets a binding resolve an imported instance's export signatures (ADR 0084 / #720's binding
+// refusal). The value case's `0x01 valtype` form (an inline value type) is not modelled this slice and is
+// refused, named — no in-scope fixture imports a value.
+//
+// For a type, the bound is kept (ADR 0118): an `eq` bound returns its type index, and `sub resource`
+// returns subResource set and index 0.
+func (r *reader) externType() (kind ExternKind, idx uint32, subResource bool, err error) {
 	disc, err := r.byte()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	switch disc {
 	case 0x00: // core:* — only `core module` (0x11) is a valid externtype
 		sub, serr := r.byte()
 		if serr != nil {
-			return 0, 0, serr
+			return 0, 0, false, serr
 		}
 		if sub != 0x11 {
-			return 0, 0, fmt.Errorf("externtype 0x00: core sort %#x is not module (0x11)", sub)
+			return 0, 0, false, fmt.Errorf("externtype 0x00: core sort %#x is not module (0x11)", sub)
 		}
 		i, ierr := r.u32()
-		return ExternCoreModule, i, ierr
+		return ExternCoreModule, i, false, ierr
 	case 0x01: // func (type i)
 		i, err := r.u32()
-		return ExternFunc, i, err
+		return ExternFunc, i, false, err
 	case 0x02: // value b
-		return ExternValue, 0, r.valueBound()
+		return ExternValue, 0, false, r.valueBound()
 	case 0x03: // type b
-		return ExternType, 0, r.typeBound()
+		eq, i, err := r.typeBound()
+		return ExternType, i, !eq, err
 	case 0x04: // component (type i)
 		i, err := r.u32()
-		return ExternComponent, i, err
+		return ExternComponent, i, false, err
 	case 0x05: // instance (type i)
 		i, err := r.u32()
-		return ExternInstance, i, err
+		return ExternInstance, i, false, err
 	default:
-		return 0, 0, fmt.Errorf("externtype discriminant %#x is undefined", disc)
+		return 0, 0, false, fmt.Errorf("externtype discriminant %#x is undefined", disc)
 	}
 }
 
-// typeBound reads a `typebound`: 0x00 typeidx (eq) or 0x01 (sub resource, no operand).
-func (r *reader) typeBound() error {
+// typeBound reads a `typebound`: 0x00 typeidx (eq) or 0x01 (sub resource, no operand). It reports which,
+// and the eq form's type index.
+//
+// **It used to read the bound and return nothing** (#1248, ADR 0118), so every exported type was a
+// resource placeholder whatever it was bound to. `wasi:cli/types`' `(export "error-code" (type (eq 0)))`
+// over an enum decoded as a resource, and a guest signature that `use`d it could not name the enum.
+func (r *reader) typeBound() (eq bool, idx uint32, err error) {
 	disc, err := r.byte()
 	if err != nil {
-		return err
+		return false, 0, err
 	}
 	switch disc {
 	case 0x00:
-		_, err = r.u32()
-		return err
+		idx, err = r.u32()
+		return true, idx, err
 	case 0x01:
-		return nil
+		return false, 0, nil
 	default:
-		return fmt.Errorf("typebound discriminant %#x is not 0x00/0x01", disc)
+		return false, 0, fmt.Errorf("typebound discriminant %#x is not 0x00/0x01", disc)
 	}
 }
 

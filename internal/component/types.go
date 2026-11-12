@@ -4,6 +4,7 @@ package component
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 )
@@ -61,13 +62,18 @@ const (
 type ValType struct {
 	Kind   ValKind
 	Ref    uint32     // VRef / VOwn / VBorrow: the referenced type index
-	Elem   *ValType   // VList / VOption
+	Elem   *ValType   // VList / VOption / VFuture / VStream
 	Fields []NamedVal // VRecord
 	Cases  []VarCase  // VVariant
 	Elems  []ValType  // VTuple
 	Labels []string   // VFlags / VEnum
 	Ok     *ValType   // VResult (nil if absent)
 	Err    *ValType   // VResult (nil if absent)
+	// Resource is a VOwn / VBorrow's resource identity, filled in by resolveVal when Ref reaches a named
+	// resource type (ADR 0118): `interface@version::resource` once bound to an import, the form `typeStep`
+	// builds and `lookupHost` reads. "" for a guest-defined resource, which keeps only its local index
+	// until #1251. See selfResourceID for the unbound form.
+	Resource string
 }
 
 // NamedVal is a labelled value type (a record field / a function parameter).
@@ -103,9 +109,14 @@ const (
 
 // InstanceType is a component instance type: the export names it declares with the type each names, in
 // its own nested type space (the declarations that build that space are decoded but only exports are
-// retained — the marshaling reaches functions through an instance's export names).
+// retained — the marshaling reaches functions through an instance's export names, and a `use` reaches a
+// type through its type export).
 type InstanceType struct {
 	Exports []InstExport
+	// Types are the instance type's type exports, each resolved against its local space so it can be
+	// copied out of it (ADR 0118). A top-level `alias export $inst "x" (type)` of an imported instance
+	// resolves to the entry named x.
+	Types []InstTypeExport
 }
 
 // InstExport is one export declaration of an instance type: a name and the func type it names (nil for
@@ -115,12 +126,40 @@ type InstExport struct {
 	Func *FuncType
 }
 
+// InstTypeExport is one type export of an instance type: `(export "x" (type (eq N)))`, whose Def is the
+// definition N names, or `(export "x" (type (sub resource)))`, a TDResource whose identity is
+// selfResourceID(x) until the instance type is bound to an import.
+type InstTypeExport struct {
+	Name string
+	Def  TypeDef
+}
+
 // TypeDef is one entry in the component type index space.
 type TypeDef struct {
 	Kind TypeDefKind
 	Val  ValType
 	Func *FuncType
 	Inst *InstanceType
+	// Resource is a TDResource's identity, the form ValType.Resource carries (ADR 0118); "" for a resource
+	// the component defines itself.
+	Resource string
+}
+
+// selfResourceID is the identity of a resource an instance type declares with `(export "x" (type (sub
+// resource)))`, before the instance type is bound to an import: "::x". Which interface the resource belongs
+// to is the import's name, which the instance type does not know, since one instance type can type several
+// imports. qualifyResourceID completes it when the import is known.
+//
+// The empty interface cannot be confused with a bound identity: a component import's name is never empty.
+func selfResourceID(name string) string { return "::" + name }
+
+// qualifyResourceID completes an unbound identity with the interface it was imported as, and leaves a bound
+// one (`wasi:io/error@0.2.3::error`, reached through an outer alias) as it is.
+func qualifyResourceID(id, iface string) string {
+	if strings.HasPrefix(id, "::") {
+		return iface + id
+	}
+	return id
 }
 
 // parseTypes decodes the component type section into c.Types, appending in stream order. Each entry is
@@ -285,9 +324,13 @@ func (r *reader) instanceType() (*InstanceType, error) {
 			if err != nil {
 				return nil, err
 			}
-			ie, err := r.exportDecl(name, &local)
+			ie, isType, err := r.exportDecl(name, &local)
 			if err != nil {
 				return nil, err
+			}
+			if isType {
+				// The definition the export introduced is the one exportDecl just appended to local.
+				inst.Types = append(inst.Types, InstTypeExport{Name: name, Def: local[len(local)-1]})
 			}
 			inst.Exports = append(inst.Exports, ie)
 		default:
@@ -301,6 +344,14 @@ func (r *reader) instanceType() (*InstanceType, error) {
 		if inst.Exports[i].Func != nil {
 			inst.Exports[i].Func = resolveFunc(inst.Exports[i].Func, sliceTypeAt(local))
 		}
+	}
+	// The type exports likewise, since a top-level alias copies one out of this space, where its local
+	// ordinals would name whatever sits at the same position (typeAt's wrong-type-that-exists).
+	//
+	// NEUTER THIS loop, and TestAUsedCompoundTypeIsResolvedInItsOwnScope reads the record's field against the
+	// wrong scope.
+	for i := range inst.Types {
+		inst.Types[i].Def = inlineTypeDef(inst.Types[i].Def, sliceTypeAt(local))
 	}
 	return inst, nil
 }
@@ -344,22 +395,124 @@ func sliceTypeAt(local []TypeDef) typeAt {
 	}
 }
 
-// sectionTypeAt is the lookup for a top-level VRef: a type-index-space ordinal, mapped through
-// [Component.typeSpaceToTypes] to the compacted section. An ordinal naming an alias or an import rather
-// than a parsed section type does not resolve, which is the honest answer — the alternative is the
+// sectionTypeAt is the lookup for a top-level VRef: a type-index-space ordinal, mapped through the
+// definition that contributed it. A section type is mapped through [Component.typeSpaceToTypes] to the
+// compacted section; the alias and import forms ADR 0118 resolves are in [Component.typeOrdinal]. An
+// ordinal naming anything else does not resolve, which is the honest answer — the alternative is the
 // wrong-type-that-exists above.
 func (c *Component) sectionTypeAt() typeAt {
-	return func(i uint32) (TypeDef, bool) {
-		ct := c.typeSpaceToTypes(i)
-		if ct < 0 || ct >= len(c.Types) {
+	return func(i uint32) (TypeDef, bool) { return c.typeOrdinal(i, 0) }
+}
+
+// maxTypeChase bounds typeOrdinal's recursion. Each step follows a reference to an earlier definition, so a
+// well-formed component never nears it; it is reached only by a crafted chain that the forward-reference
+// check (run once the whole stream is in) has not yet refused, since types resolve live during the decode.
+const maxTypeChase = 64
+
+// typeOrdinal resolves one type-index-space ordinal (#1248, ADR 0118):
+//
+//   - a type section entry is itself;
+//   - `alias export $inst "x" (type)` of an **imported** instance is that instance type's type export x,
+//     with its unbound resource identities completed by the import's name. This is how a `use`d type reaches
+//     a guest: `use types.{error-code}` is an alias of `wasi:cli/types`' type export, which the next instance
+//     type pulls in by `alias outer`. An alias out of an instance the component instantiates itself is not
+//     resolved, since its exports' types are the nested component's (out of scope, ADR 0118);
+//   - an imported type is its `eq` target, or for `sub resource` a fresh resource named by the import.
+//
+// **Until ADR 0118 only the first resolved**, so every `alias outer` that named a `use`d type became
+// VUnresolvedAlias, and a signature carrying one is refused at instantiate. NEUTER THIS alias arm (leave it
+// unresolved), and TestUsedTypesResolveInP3HelloAndEveryImportStillBinds finds `datetime` unresolved and
+// p3hello refused.
+func (c *Component) typeOrdinal(ord uint32, depth int) (TypeDef, bool) {
+	if depth > maxTypeChase {
+		return TypeDef{}, false
+	}
+	d, ok := c.spaceDef(SpaceType, ord)
+	if !ok {
+		return TypeDef{}, false
+	}
+	switch d.Section {
+	case SectionType:
+		if d.Item >= len(c.Types) {
 			return TypeDef{}, false
 		}
-		return c.Types[ct], true
+		return c.Types[d.Item], true
+	case SectionAlias:
+		if d.Item >= len(c.Aliases) {
+			return TypeDef{}, false
+		}
+		a := c.Aliases[d.Item]
+		if a.Kind != AliasExport || a.Sort != SortType {
+			return TypeDef{}, false
+		}
+		it, iface, ok := c.importedInstanceType(a.InstanceIdx, depth+1)
+		if !ok {
+			return TypeDef{}, false
+		}
+		for _, te := range it.Types {
+			if te.Name == a.Name {
+				return qualifyTypeDef(te.Def, iface), true
+			}
+		}
+		return TypeDef{}, false
+	case SectionImport:
+		if d.Item >= len(c.Imports) {
+			return TypeDef{}, false
+		}
+		imp := c.Imports[d.Item]
+		// NEUTER THIS arm (answer nothing), and TestAWorldLevelTypeImportResolvesThroughItsBound reads a
+		// self with no identity and a result left as a reference.
+		if imp.Kind != ExternType {
+			return TypeDef{}, false
+		}
+		if imp.SubResource {
+			return TypeDef{Kind: TDResource, Resource: imp.Name}, true
+		}
+		if imp.TypeIndex >= ord { // an eq names an earlier type; anything else is malformed
+			return TypeDef{}, false
+		}
+		return c.typeOrdinal(imp.TypeIndex, depth+1)
+	default:
+		return TypeDef{}, false
 	}
 }
 
+// importedInstanceType resolves an instance-index-space ordinal that names an instance import to that
+// import's instance type and its name, the interface its unbound resource identities belong to.
+func (c *Component) importedInstanceType(ord uint32, depth int) (*InstanceType, string, bool) {
+	d, ok := c.spaceDef(SpaceInstance, ord)
+	if !ok || d.Section != SectionImport || d.Item >= len(c.Imports) {
+		return nil, "", false
+	}
+	imp := c.Imports[d.Item]
+	if imp.Kind != ExternInstance {
+		return nil, "", false
+	}
+	td, ok := c.typeOrdinal(imp.TypeIndex, depth)
+	if !ok || td.Kind != TDInstance || td.Inst == nil {
+		return nil, "", false
+	}
+	return td.Inst, imp.Name, true
+}
+
+// spaceDef is the definition that contributed ordinal ord of one index space.
+func (c *Component) spaceDef(s Space, ord uint32) (Def, bool) {
+	var seen uint32
+	for _, d := range c.Defs {
+		if d.Space != s {
+			continue
+		}
+		if seen == ord {
+			return d, true
+		}
+		seen++
+	}
+	return Def{}, false
+}
+
 // resolveVal follows a VRef through `at` and inlines the referenced value type, recursing into compound
-// elements. own/borrow keep their resource type index (a handle is an i32 regardless).
+// elements. own/borrow keep their resource type index (a handle is an i32 regardless) and gain the
+// resource's identity when the index names one (ADR 0118).
 // `seen` tracks the VRef indices already entered on the current chain, so a cyclic reference (a
 // self-referential placeholder, or any fuzzer-crafted VRef cycle) is detected and returned as
 // VUnresolvedAlias — a named, refusable outcome — rather than overflowing the stack (#753). It bounds
@@ -381,10 +534,46 @@ func resolveVal(vt ValType, at typeAt, seen map[uint32]bool) ValType {
 			if seen == nil {
 				seen = map[uint32]bool{}
 			}
+			// **`seen` is the current chain, so an index leaves it on the way back out** (ADR 0118). It was
+			// never removed, so the map recorded every index entered anywhere in the type, and a second
+			// sibling reference to the same type read as a cycle: p3hello's `descriptor-stat` names
+			// `option<datetime>` three times, and the second and third became VUnresolvedAlias. Nothing
+			// reached it while a `use`d type decoded as a resource placeholder, which is not followed. NEUTER
+			// THIS delete, and TestUsedTypesResolveInP3HelloAndEveryImportStillBinds finds the second
+			// timestamp unresolved.
 			seen[vt.Ref] = true
-			return resolveVal(td.Val, at, seen)
+			out := resolveVal(td.Val, at, seen)
+			delete(seen, vt.Ref)
+			return out
 		}
 		return vt // a ref to a resource/func/instance type — left as a reference
+	case VOwn, VBorrow:
+		// The handle keeps its index and gains the resource's identity when the index names one (ADR
+		// 0118), which is what lets a guest's signature be checked against the host's resource types.
+		//
+		// **An identity once found is kept.** A resolved type copied into another scope (an outer alias of a
+		// `use`d type) is resolved again there, and its Ref is still an ordinal of the scope it came from,
+		// so asking the new scope would name whatever resource sits at that position.
+		//
+		// NEUTER THIS keep, and TestAResolvedHandleKeepsItsIdentityInAnotherScope names the second scope's
+		// resource. NEUTER the fill below it, and TestAGuestHandleCarriesItsHostResourcesIdentity reads an
+		// empty identity on output-stream.write's self.
+		if vt.Resource != "" {
+			return vt
+		}
+		if td, ok := at(vt.Ref); ok && td.Kind == TDResource {
+			vt.Resource = td.Resource
+		}
+		return vt
+	case VFuture, VStream:
+		// **Absent until ADR 0118**, so a future's payload stayed a reference while every other container's
+		// element inlined. Nothing read the payload until #1248 gave `write-via-stream`'s one a definition.
+		// NEUTER THIS, and TestAUsedTypeDecodesAsItsDefinition reads the payload as a reference.
+		if vt.Elem != nil {
+			e := resolveVal(*vt.Elem, at, seen)
+			vt.Elem = &e
+		}
+		return vt
 	case VList, VOption:
 		if vt.Elem != nil {
 			e := resolveVal(*vt.Elem, at, seen)
@@ -436,6 +625,9 @@ func resolveVal(vt ValType, at typeAt, seen map[uint32]bool) ValType {
 // instance's local space.
 //
 // # It resolves the alias, where it used to record a placeholder (#756)
+//
+// Since ADR 0118 the component scope it reads answers for a `use`d type too (Component.typeOrdinal), so an
+// alias of one inlines the type's definition rather than becoming the placeholder.
 //
 // It read the count and index and appended a placeholder, so a func whose TYPE was the alias got a nil
 // signature in `exportDecl`, and an async lower of it never lowered its result. Measured before the fix:
@@ -509,53 +701,151 @@ func inlineTypeDef(td TypeDef, at typeAt) TypeDef {
 	return td
 }
 
+// qualifyTypeDef completes a definition's unbound resource identities with the interface its instance type
+// was imported as (qualifyResourceID), so a type copied out of an imported instance names that instance's
+// resources. A nested instance type is left alone: its resources are its own import's, not this one's.
+func qualifyTypeDef(td TypeDef, iface string) TypeDef {
+	switch td.Kind {
+	case TDResource:
+		td.Resource = qualifyResourceID(td.Resource, iface)
+	case TDVal:
+		td.Val = qualifyVal(td.Val, iface)
+	case TDFunc:
+		if td.Func != nil {
+			td.Func = qualifyFunc(td.Func, iface)
+		}
+	case TDInstance:
+	}
+	return td
+}
+
+// qualifyFunc is qualifyTypeDef over a function type's parameters and result. The input is not mutated.
+func qualifyFunc(ft *FuncType, iface string) *FuncType {
+	out := &FuncType{Params: make([]NamedVal, len(ft.Params)), Async: ft.Async}
+	for i, p := range ft.Params {
+		out.Params[i] = NamedVal{Name: p.Name, Type: qualifyVal(p.Type, iface)}
+	}
+	if ft.Result != nil {
+		r := qualifyVal(*ft.Result, iface)
+		out.Result = &r
+	}
+	return out
+}
+
+// qualifyVal is qualifyTypeDef over a resolved value type, rebuilding every compound it descends, since the
+// decoded slices are shared by every reader of the type.
+func qualifyVal(vt ValType, iface string) ValType {
+	elem := func(p *ValType) *ValType {
+		if p == nil {
+			return nil
+		}
+		v := qualifyVal(*p, iface)
+		return &v
+	}
+	switch vt.Kind {
+	case VOwn, VBorrow:
+		vt.Resource = qualifyResourceID(vt.Resource, iface)
+	case VList, VOption, VFuture, VStream:
+		vt.Elem = elem(vt.Elem)
+	case VResult:
+		vt.Ok, vt.Err = elem(vt.Ok), elem(vt.Err)
+	case VVariant:
+		cs := make([]VarCase, len(vt.Cases))
+		for i, c := range vt.Cases {
+			cs[i] = VarCase{Name: c.Name, Type: elem(c.Type)}
+		}
+		vt.Cases = cs
+	case VRecord:
+		fs := make([]NamedVal, len(vt.Fields))
+		for i, f := range vt.Fields {
+			fs[i] = NamedVal{Name: f.Name, Type: qualifyVal(f.Type, iface)}
+		}
+		vt.Fields = fs
+	case VTuple:
+		es := make([]ValType, len(vt.Elems))
+		for i, e := range vt.Elems {
+			es[i] = qualifyVal(e, iface)
+		}
+		vt.Elems = es
+	default:
+	}
+	return vt
+}
+
 // exportDecl reads an exportdecl's externtype and, for a function export, resolves its type from the
 // instance's local type space. A type-exporting decl (a resource subtype or a type eq) introduces a
-// type into that space, so it appends to local — keeping later func references' indices aligned.
-func (r *reader) exportDecl(name string, local *[]TypeDef) (InstExport, error) {
+// type into that space, so it appends to local — keeping later func references' indices aligned — and
+// reports isType, so the caller records the export.
+func (r *reader) exportDecl(name string, local *[]TypeDef) (ie InstExport, isType bool, err error) {
 	disc, err := r.byte()
 	if err != nil {
-		return InstExport{}, err
+		return InstExport{}, false, err
 	}
 	switch disc {
 	case 0x01: // func (type i)
 		i, err := r.u32()
 		if err != nil {
-			return InstExport{}, err
+			return InstExport{}, false, err
 		}
 		if int(i) < len(*local) && (*local)[i].Kind == TDFunc {
-			return InstExport{Name: name, Func: (*local)[i].Func}, nil
+			return InstExport{Name: name, Func: (*local)[i].Func}, false, nil
 		}
-		return InstExport{Name: name}, nil
+		return InstExport{Name: name}, false, nil
 	case 0x03: // type b — exports (and introduces) a type: a resource subtype or a type eq
-		if err := r.typeBound(); err != nil {
-			return InstExport{}, err
+		eq, idx, err := r.typeBound()
+		if err != nil {
+			return InstExport{}, false, err
 		}
-		*local = append(*local, TypeDef{Kind: TDResource}) // the exported type joins the local type space
-		return InstExport{Name: name}, nil
+		*local = append(*local, exportedTypeDef(name, eq, idx, *local)) // the exported type joins the local space
+		return InstExport{Name: name}, true, nil
 	case 0x05: // instance (type i)
 		if _, err := r.u32(); err != nil {
-			return InstExport{}, err
+			return InstExport{}, false, err
 		}
-		return InstExport{Name: name}, nil
+		return InstExport{Name: name}, false, nil
 	case 0x00: // core module
 		if b, err := r.byte(); err != nil || b != 0x11 {
-			return InstExport{}, fmt.Errorf("exportdecl core sort not module")
+			return InstExport{}, false, fmt.Errorf("exportdecl core sort not module")
 		}
 		if _, err := r.u32(); err != nil {
-			return InstExport{}, err
+			return InstExport{}, false, err
 		}
-		return InstExport{Name: name}, nil
+		return InstExport{Name: name}, false, nil
 	case 0x02: // value
-		return InstExport{Name: name}, r.valueBound()
+		return InstExport{Name: name}, false, r.valueBound()
 	case 0x04: // component
 		if _, err := r.u32(); err != nil {
-			return InstExport{}, err
+			return InstExport{}, false, err
 		}
-		return InstExport{Name: name}, nil
+		return InstExport{Name: name}, false, nil
 	default:
-		return InstExport{}, fmt.Errorf("exportdecl externtype %#x undefined", disc)
+		return InstExport{}, false, fmt.Errorf("exportdecl externtype %#x undefined", disc)
 	}
+}
+
+// exportedTypeDef is the definition a type export introduces into its instance type's local space (#1248,
+// ADR 0118).
+//
+//   - `(eq N)` introduces the type N already names, so it is a copy of local[N]. `wasi:cli/types`' `error-code`
+//     is `(export "error-code" (type (eq 0)))` over an enum, and a signature reaching it now reaches the enum.
+//   - `(sub resource)` introduces a fresh resource type, whose identity is the export's name in an instance
+//     not yet known (selfResourceID).
+//
+// **This was a resource placeholder for both**, whatever the bound was, so a `use`d record, enum or variant
+// decoded as a reference to a resource, and `write-via-stream`'s `future<result<_, error-code>>` as
+// `future<ref>`. NEUTER THIS eq arm (return the sub-resource placeholder for both), and
+// TestAUsedTypeDecodesAsItsDefinition reads a VRef where the enum should be.
+//
+// An eq naming no earlier type is malformed; it keeps the unresolved-alias marker rather than failing the
+// decode, for instanceAlias's reason: a component that never marshals the type is still well formed here.
+func exportedTypeDef(name string, eq bool, idx uint32, local []TypeDef) TypeDef {
+	if !eq {
+		return TypeDef{Kind: TDResource, Resource: selfResourceID(name)}
+	}
+	if int(idx) < len(local) {
+		return local[idx]
+	}
+	return TypeDef{Kind: TDVal, Val: ValType{Kind: VUnresolvedAlias}}
 }
 
 // labelName reads a label (a plain length-prefixed UTF-8 name, as in a record field or a param).
@@ -783,6 +1073,8 @@ func unmodeledValKind(vt ValType, depth int) (ValKind, bool) {
 	}
 	switch vt.Kind {
 	case VErrorContext, VStream, VFuture, VUnresolvedAlias:
+		// A future or stream is refused as itself, so its payload, resolvable since ADR 0118, is never
+		// reached here: no element could make the verdict cleaner, and the kind already names the obstacle.
 		return vt.Kind, true
 	case VFlags:
 		// Modeled, but only for a label set the codec can lay out: the bridge refuses the rest through
@@ -896,8 +1188,19 @@ func valHasUnresolvedAlias(vt ValType, depth int) bool {
 	switch vt.Kind {
 	case VUnresolvedAlias:
 		return true
-	case VList, VOption:
+	case VList, VOption, VFuture, VStream:
+		// The future and stream arms are ADR 0118's: a future's payload is a type like any other, and since
+		// #1248 it can carry a `use`d type, which is where an unresolved alias would sit. NEUTER THESE and the
+		// record arm, and TestAnUnresolvedAliasIsSeenInsideAFutureAndARecord reads all three specimens clean.
 		return vt.Elem != nil && valHasUnresolvedAlias(*vt.Elem, depth+1)
+	case VRecord:
+		// Absent until ADR 0118, so an unresolved field of a record was not seen. p3hello's
+		// `descriptor-stat` is a record whose timestamps are `option<datetime>`, a `use`d type.
+		for _, f := range vt.Fields {
+			if valHasUnresolvedAlias(f.Type, depth+1) {
+				return true
+			}
+		}
 	case VResult:
 		return (vt.Ok != nil && valHasUnresolvedAlias(*vt.Ok, depth+1)) || (vt.Err != nil && valHasUnresolvedAlias(*vt.Err, depth+1))
 	case VVariant:

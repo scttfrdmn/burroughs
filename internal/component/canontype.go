@@ -39,8 +39,17 @@ import (
 //
 // The returned error names the first kind the codec cannot carry. `canonUnmodeled` is the same walk
 // without the construction, so the two cannot disagree about what is carryable.
-func canonTypeOf(vt ValType) (canon.Type, error) {
-	t, k, ok := canonTypeWalk(vt, 0)
+func canonTypeOf(vt ValType) (canon.Type, error) { return canonTypeIn(vt, nil) }
+
+// resourceRT answers a resource identity (ValType.Resource) with the RT the codec carries for it, or false
+// when the identity names nothing it knows.
+type resourceRT func(identity string) (int, bool)
+
+// canonTypeIn is canonTypeOf with the resources resolved (ADR 0118): an own or borrow whose identity rt
+// answers carries that RT, and every other keeps its local type index, the only number a guest-defined
+// resource has until #1251. A nil rt resolves none, which is canonTypeOf.
+func canonTypeIn(vt ValType, rt resourceRT) (canon.Type, error) {
+	t, k, ok := canonTypeWalk(vt, 0, rt)
 	if !ok {
 		return canon.Type{}, fmt.Errorf("%w: %s is not modeled by this engine's Canonical ABI",
 			ErrUnsupportedForm, valKindName(k))
@@ -56,7 +65,7 @@ func canonTypeOf(vt ValType) (canon.Type, error) {
 // beside a converter that answers "carry it" is exactly that pair, so there is one walk and this is a
 // projection of it.
 func canonUnmodeled(vt ValType) (ValKind, bool) {
-	_, k, ok := canonTypeWalk(vt, 0)
+	_, k, ok := canonTypeWalk(vt, 0, nil)
 	return k, !ok
 }
 
@@ -98,7 +107,9 @@ func canonSigUnmodeled(ft *FuncType) (ValKind, bool) {
 // construction (a cycle resolves to VUnresolvedAlias, refused below), so this bound is reached only by a
 // type built directly in a test or by a resolver bug, and 32 is `unmodeledValKind`'s existing figure
 // rather than a new one to justify.
-func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
+//
+// rt resolves an own's or borrow's identity to its RT (canonTypeIn); nil keeps the local index.
+func canonTypeWalk(vt ValType, depth int, rt resourceRT) (canon.Type, ValKind, bool) {
 	if depth > 32 {
 		return canon.Type{}, vt.Kind, false
 	}
@@ -137,7 +148,7 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		if vt.Elem == nil {
 			return canon.Type{}, VList, false
 		}
-		e, k, ok := canonTypeWalk(*vt.Elem, depth+1)
+		e, k, ok := canonTypeWalk(*vt.Elem, depth+1, rt)
 		if !ok {
 			return canon.Type{}, k, false
 		}
@@ -167,7 +178,7 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		}
 		fields := make([]canon.Type, len(vt.Elems))
 		for i, e := range vt.Elems {
-			ft, k, ok := canonTypeWalk(e, depth+1)
+			ft, k, ok := canonTypeWalk(e, depth+1, rt)
 			if !ok {
 				return canon.Type{}, k, false
 			}
@@ -192,7 +203,7 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		}
 		fields := make([]canon.Field, len(vt.Fields))
 		for i, f := range vt.Fields {
-			ft, k, ok := canonTypeWalk(f.Type, depth+1)
+			ft, k, ok := canonTypeWalk(f.Type, depth+1, rt)
 			if !ok {
 				return canon.Type{}, k, false
 			}
@@ -207,7 +218,7 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 			if c.Type == nil {
 				continue
 			}
-			ct, k, ok := canonTypeWalk(*c.Type, depth+1)
+			ct, k, ok := canonTypeWalk(*c.Type, depth+1, rt)
 			if !ok {
 				return canon.Type{}, k, false
 			}
@@ -221,14 +232,14 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		// names come from one place.
 		var okT, errT *canon.Type
 		if vt.Ok != nil {
-			t, k, ok := canonTypeWalk(*vt.Ok, depth+1)
+			t, k, ok := canonTypeWalk(*vt.Ok, depth+1, rt)
 			if !ok {
 				return canon.Type{}, k, false
 			}
 			okT = &t
 		}
 		if vt.Err != nil {
-			t, k, ok := canonTypeWalk(*vt.Err, depth+1)
+			t, k, ok := canonTypeWalk(*vt.Err, depth+1, rt)
 			if !ok {
 				return canon.Type{}, k, false
 			}
@@ -236,10 +247,22 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		}
 		return canon.ResultType(okT, errT), 0, true
 
-	case VOwn:
-		return canon.OwnType(int(vt.Ref)), 0, true
-	case VBorrow:
-		return canon.BorrowType(int(vt.Ref)), 0, true
+	case VOwn, VBorrow:
+		// **The RT is the resource's when its identity resolves** (#1252, ADR 0118), so a guest signature's
+		// `borrow<output-stream>` carries the host's output-stream RT, the number its table entries hold.
+		// It was the local type index for every handle, which named nothing a table holds. A guest-defined
+		// resource has no identity yet and keeps the index (#1251). NEUTER THIS resolution, and
+		// TestAGuestHandleCarriesItsHostResourcesIdentity reads the local index 0 for the RT.
+		id := int(vt.Ref)
+		if rt != nil && vt.Resource != "" {
+			if n, ok := rt(vt.Resource); ok {
+				id = n
+			}
+		}
+		if vt.Kind == VOwn {
+			return canon.OwnType(id), 0, true
+		}
+		return canon.BorrowType(id), 0, true
 
 	case VFlags:
 		// Modeled as of ADR 0116. Through the codec's constructor, so a label set the model has no layout
@@ -263,7 +286,7 @@ func canonTypeWalk(vt ValType, depth int) (canon.Type, ValKind, bool) {
 		if vt.Elem == nil {
 			return canon.Type{}, VOption, false
 		}
-		e, k, ok := canonTypeWalk(*vt.Elem, depth+1)
+		e, k, ok := canonTypeWalk(*vt.Elem, depth+1, rt)
 		if !ok {
 			return canon.Type{}, k, false
 		}

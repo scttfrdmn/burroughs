@@ -191,7 +191,7 @@ type walker struct {
 	asyncWasiHost map[string]asyncLowerImpl
 	// streamConsumers maps a class-keyed import identity to a host import that consumes a guest stream
 	// (write-via-stream). Threaded like asyncWasiHost; resolverFor binds it with this instance's async table.
-	streamConsumers map[string]streamConsumer
+	streamConsumers map[string]*streamConsumer
 	// resourceSrc is the host's resource types and the imports over them (ADR 0117), threaded like
 	// streamConsumers; resolverFor binds a resource method with this instance's hostRes.
 	resourceSrc hostResourceSource
@@ -300,6 +300,21 @@ func (w *walker) step(d Def) error {
 								return fmt.Errorf("%w: canon lower of %s carries %s, which this engine's "+
 									"Canonical ABI does not model — refused at instantiate rather than mis-lowered",
 									ErrUnsupportedForm, cf.stubName, valKindName(k))
+							}
+						}
+					}
+					// The guest's declaration against the host's (ADR 0118), for every import a host table
+					// serves: its handles must be the host's resources, a method's self its own type, and a
+					// stream consumer's future payload the type the host lowers the completion at.
+					if r := w.resolveHost(cf.stubName, cn.Opts.Async); r.async != nil || r.consumer != nil ||
+						r.method != nil || r.sync != nil {
+						sig := w.lowerSignature(cf.stubName)
+						if err := w.checkHostResources(cf.stubName, sig); err != nil {
+							return err
+						}
+						if r.consumer != nil {
+							if err := w.checkConsumerPayload(cf.stubName, sig, r.consumer); err != nil {
+								return err
 							}
 						}
 					}
@@ -541,7 +556,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// which needs this instance's async handle table (to reach the readable end the guest hands it). The
 		// factory is called with w.async to produce the marshaling impl, bound to the lower's memory/realloc.
 		if r.consumer != nil {
-			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, r.consumer(w.async)), interp.CanonOptions{
+			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, r.consumer.bind(w.async)), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
@@ -575,7 +590,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 // four implementation sources, or none and the classes some table serves the name under instead.
 type hostResolution struct {
 	async     asyncLowerImpl
-	consumer  streamConsumer
+	consumer  *streamConsumer
 	method    resourceMethod
 	sync      interp.CanonFunc
 	servedFor []string
@@ -785,6 +800,12 @@ func (w *walker) close() {
 	for _, in := range w.toClose {
 		_ = in.Close()
 	}
+	// **The owns the guest still holds are destroyed next** (#1252, ADR 0118), across the tree of nested
+	// instances, each of which has its own table. After the core instances close, because their Close waits
+	// for the host calls in flight, so no handler is still using an object when its destructor runs. A
+	// destructor's error is dropped for the instances' reason: Close has no error to return. NEUTER THIS call, and
+	// TestCloseDestroysTheOwnsTheGuestStillHolds counts only the guest's own drop, 1 run of 3.
+	w.closeAllHostResources()
 	// **The scheduler goroutines end LAST**, after every Thread they could be waiting on has been woken and
 	// the instances closed — a Thread still running guest code is ended by its instance's `Close` and
 	// reports back to a scheduler that is still there to receive it.
@@ -803,6 +824,19 @@ func (w *walker) killAllParked() {
 	}
 	for _, c := range w.children {
 		c.killAllParked()
+	}
+}
+
+// closeAllHostResources destroys the held owns of this walker's table and every nested one's. hostRes is
+// nil for a walker built without the component walk (instantiate's core-only path).
+func (w *walker) closeAllHostResources() {
+	if w.hostRes != nil {
+		w.hostRes.closeAll()
+	}
+	// NEUTER THIS recursion, and TestCloseReachesTheOwnsANestedInstanceHolds counts no destructor run for the
+	// own a nested instance held.
+	for _, c := range w.children {
+		c.closeAllHostResources()
 	}
 }
 
@@ -861,17 +895,15 @@ func (w *walker) lowerSignature(lowerName string) *FuncType {
 		// The import's TypeIndex is a component type-index-*space* ordinal; c.Types is the compacted type
 		// *section*, a subset (aliases and instance-local sub-types also grow the space, so a guest-driven
 		// import like filesystem/types sits at a space ordinal well past its c.Types position). Map through.
-		ct := w.c.typeSpaceToTypes(imp.TypeIndex)
-		if ct < 0 || ct >= len(w.c.Types) {
-			return nil
-		}
-		td := w.c.Types[ct]
-		if td.Kind != TDInstance || td.Inst == nil {
+		td, ok := w.c.sectionTypeAt()(imp.TypeIndex)
+		if !ok || td.Kind != TDInstance || td.Inst == nil {
 			return nil
 		}
 		for _, e := range td.Inst.Exports {
-			if e.Name == export {
-				return e.Func
+			if e.Name == export && e.Func != nil {
+				// The resources the instance type declares itself are this import's (ADR 0118):
+				// `[method]output-stream.write`'s self is `borrow<wasi:io/streams@0.2.3::output-stream>`.
+				return qualifyFunc(e.Func, mod)
 			}
 		}
 	}

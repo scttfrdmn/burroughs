@@ -1285,6 +1285,17 @@ func (tb *HandleTable) Remove(i int) (*ResourceHandle, error) {
 	return h, nil
 }
 
+// Each calls f on every live handle, in index order — def:Table.__iter__, which yields every slot that is
+// not None. It is how an instance's teardown finds the owns it still holds (ADR 0118). f must not add to or
+// remove from the table.
+func (tb *HandleTable) Each(f func(i int, h *ResourceHandle)) {
+	for i, h := range tb.array {
+		if h != nil {
+			f(i, h)
+		}
+	}
+}
+
 // LiftOwn consumes an owned handle at index i, of resource type rt, and returns its rep (def:lift_own). A
 // missing slot, a wrong type, a lent handle, or a borrow in an own position is refused. The order is the
 // reference's, removal first, so a refused lift has freed the slot just as the trap it stands for would.
