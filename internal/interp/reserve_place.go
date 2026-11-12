@@ -37,9 +37,18 @@ var (
 	placeMu   sync.Mutex
 	placeNext = reservationBase
 
-	// reservationBelowBase counts mappings the kernel placed below the hint. It is a total, read by the placement
-	// control: zero on a kernel that honours hints, which darwin and linux were measured to do (decision 0113).
-	reservationBelowBase atomic.Uint64
+	// reservationOffHint counts mappings the kernel placed anywhere but the hint. It is a total, read by the
+	// placement control: zero on a kernel that honours hints, which darwin and linux were measured to do (decision
+	// 0113). It was `reservationBelowBase` and counted only placements below the cursor (grave #1254).
+	reservationOffHint atomic.Uint64
+
+	// mmapAt is the hinted anonymous mmap: the syscall, and a seam so a test can stand in for a kernel that
+	// ignores a hint, which no kernel this was measured on does on demand.
+	mmapAt = func(hint, n uintptr) (uintptr, syscall.Errno) {
+		addr, _, errno := syscall.Syscall6(syscall.SYS_MMAP, hint, n,
+			syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE, ^uintptr(0), 0)
+		return addr, errno
+	}
 )
 
 // mapPlaced maps n bytes at the next free address at or above reservationBase.
@@ -50,15 +59,21 @@ var (
 func mapPlaced(n int) ([]byte, bool) {
 	placeMu.Lock()
 	defer placeMu.Unlock()
-	addr, _, errno := syscall.Syscall6(syscall.SYS_MMAP, placeNext, uintptr(n),
-		syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE, ^uintptr(0), 0)
+	addr, errno := mmapAt(placeNext, uintptr(n))
 	if errno != 0 {
 		return nil, false
 	}
-	if addr < placeNext {
-		reservationBelowBase.Add(1)
-	} else {
+	// **Only an honoured hint advances the cursor** (grave #1254). This was `addr < placeNext` counted as a
+	// stray and anything else taken as the new cursor, so a mapping the kernel placed elsewhere but *above* the
+	// cursor moved it there. Linux's own placement is top-down from about 0x7f…, so one ignored hint sent the
+	// cursor to the top of the address space and every later reservation off-hint. A stray is counted and kept,
+	// as decision 0113 says, and the cursor stays where the next hint should go.
+	//
+	// NEUTER: restore the `addr < placeNext` test, and TestOneIgnoredHintDoesNotMoveTheCursor fails.
+	if addr == placeNext {
 		placeNext = addr + uintptr(n)
+	} else {
+		reservationOffHint.Add(1)
 	}
 	// The address is read through a pointer to it rather than converted from a uintptr, which is the form
 	// `go vet` accepts for memory the kernel returned and the runtime never moves (x/sys's mmap does the same).
