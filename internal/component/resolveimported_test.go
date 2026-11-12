@@ -4,6 +4,7 @@ package component
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -226,7 +227,10 @@ func TestAGuestHandleCarriesItsHostResourcesIdentity(t *testing.T) {
 // ordinal of the scope it came from. Here that ordinal names another resource in the new scope, which is
 // the case the rule exists for: the identity found in the first scope must survive.
 //
-// NEUTER, run: resolveVal re-asking the scope when Resource is already set, and the own names b's resource.
+// Since grave #1256 the rule is resolveVal's sharing: a resolved type is answered as it is and never asked of
+// a scope again.
+//
+// NEUTER, run: resolveVal's sharing removed, so the resolved own is resolved again, and it names b's resource.
 func TestAResolvedHandleKeepsItsIdentityInAnotherScope(t *testing.T) {
 	first := sliceTypeAt([]TypeDef{{Kind: TDResource, Resource: "test:a/i@0.1.0::x"}})
 	second := sliceTypeAt([]TypeDef{{Kind: TDResource, Resource: "test:b/i@0.1.0::y"}})
@@ -275,6 +279,104 @@ func TestASharedTypeChainIsCutAtTheSizeBudget(t *testing.T) {
 	}
 	if cut := resolveVal(ValType{Kind: VRef, Ref: 24}, chain(24), nil); !contains(cut) {
 		t.Errorf("the 24-level chain, 33554431 nodes, resolved with no VUnresolvedAlias: the budget did not cut it")
+	}
+}
+
+// chainTypes loads a type-chain fixture and returns its exported t1..tn by level, and its instance type.
+func chainTypes(t *testing.T, fx string, n int) (map[int]ValType, *Component) {
+	t.Helper()
+	c := loadFixture(t, fx)
+	td, ok := c.sectionTypeAt()(c.Imports[0].TypeIndex)
+	if !ok || td.Inst == nil {
+		t.Fatalf("%s: the import's instance type did not decode", fx)
+	}
+	byLevel := map[int]ValType{}
+	for _, te := range td.Inst.Types {
+		var k int
+		if _, err := fmt.Sscanf(te.Name, "t%d", &k); err == nil {
+			byLevel[k] = te.Def.Val
+		}
+	}
+	if len(byLevel) != n {
+		t.Fatalf("%s: %d chain level(s) exported, want %d", fx, len(byLevel), n)
+	}
+	return byLevel, c
+}
+
+// loadAllocs is how many allocations one Load of a fixture makes.
+func loadAllocs(t *testing.T, fx string) float64 {
+	t.Helper()
+	b, err := os.ReadFile("testdata/" + fx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return testing.AllocsPerRun(1, func() {
+		if _, err := Load(b); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// TestAResolvedTypeIsSharedNotRebuilt is grave #1256's storage witness. type-chain-18 exports a chain of
+// shared types, t_k = tuple<t_{k-1}, t_{k-1}>, whose effective sizes reach half a million nodes. Each level
+// is resolved once, as it is defined, and a reference to it shares it, so decoding allocates a few times
+// per level; a decoder that rebuilds each use allocates the expansion, about a million nodes. Every level
+// is within the budget, so each must keep its whole effective size, 2^(k+1)-1.
+//
+// The bound is on allocations, not time. 1000 is several times what the shared decode makes (116 when
+// this was written), and about a thousandth of the expansion.
+//
+// NEUTER, run: resolveVal's sharing removed (a resolved type rebuilt at each reference), and Load of this
+// file allocates past the bound.
+func TestAResolvedTypeIsSharedNotRebuilt(t *testing.T) {
+	levels, _ := chainTypes(t, "type-chain-18.wasm", 18)
+	for k := 1; k <= 18; k++ {
+		if want := 1<<(k+1) - 1; levels[k].size != want {
+			t.Errorf("t%d resolved to %d nodes, want all %d: a level within the budget was cut", k, levels[k].size, want)
+		}
+	}
+	if got := loadAllocs(t, "type-chain-18.wasm"); got > 1000 {
+		t.Errorf("Load of an 18-level shared chain made %.0f allocations, want at most 1000: a resolved type is "+
+			"being rebuilt at each use rather than shared", got)
+	}
+}
+
+// TestATypeChainPastTheBudgetIsCutAndStoredShared is the same chain to 40 levels, the out-of-memory shape a
+// per-resolve budget alone kept: every level past the budget would store about a million nodes. Levels up
+// to 18 resolve in full; from 19 on, the second element of each tuple is past the budget and is cut to
+// VUnresolvedAlias, so each level's effective size stays under it. t16 reaches `get16` whole, `get40`
+// carries the cut, and the decode allocates a few times per level (208 when this was written), where one
+// level stored expanded is a million nodes.
+//
+// The neuter is run on the 18-level witness above, where the expansion is still affordable.
+func TestATypeChainPastTheBudgetIsCutAndStoredShared(t *testing.T) {
+	levels, c := chainTypes(t, "type-chain-40.wasm", 40)
+	for k := 1; k <= 40; k++ {
+		vt := levels[k]
+		switch {
+		case k <= 18:
+			if want := 1<<(k+1) - 1; vt.size != want {
+				t.Errorf("t%d resolved to %d nodes, want all %d", k, vt.size, want)
+			}
+		default:
+			if vt.Kind != VTuple || len(vt.Elems) != 2 || vt.Elems[1].Kind != VUnresolvedAlias {
+				t.Errorf("t%d is not cut past the budget: its second element is %s", k, valKindName(vt.Elems[1].Kind))
+			}
+			if vt.size > maxResolvedTypeSize {
+				t.Errorf("t%d's effective size is %d, past the budget %d", k, vt.size, maxResolvedTypeSize)
+			}
+		}
+	}
+	w := &walker{c: c}
+	if g := w.lowerSignature("test:chain/types@0.1.0::get16"); g == nil || g.Result == nil ||
+		g.Result.size != 1<<17-1 || valHasUnresolvedAlias(*g.Result, 0) {
+		t.Errorf("get16's result is not t16 whole")
+	}
+	if g := w.lowerSignature("test:chain/types@0.1.0::get40"); g == nil || !sigHasUnresolvedAlias(g) {
+		t.Errorf("get40's result carries no VUnresolvedAlias, so the instantiate-time refusal would not name it")
+	}
+	if got := loadAllocs(t, "type-chain-40.wasm"); got > 2000 {
+		t.Errorf("Load of a 40-level shared chain made %.0f allocations, want at most 2000", got)
 	}
 }
 

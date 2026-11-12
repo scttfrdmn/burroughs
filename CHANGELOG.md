@@ -188,10 +188,20 @@ says what it now requires and what it gives up.
     wasmparser's `limits::MAX_WASM_TYPE_SIZE` (1,000,000), and a type past it resolves to `VUnresolvedAlias`,
     which the instantiate-time refusal names. `resolveVal`'s doc had said the chain set *"bounds nothing legal"*;
     it now says the budget is the bound.
+  - **And storage is shared, as wasmparser's is,** since a per-resolve budget alone still stored each level of a
+    shared chain expanded: about a million nodes per level, so N levels in a file under a kilobyte cost N million.
+    Every value type is resolved as it is defined, and a resolved type carries its effective size. A reference to
+    it is answered with it as it is, sharing its storage, and its size is charged to the budget. So construction is
+    linear in the distinct types, and the budget still bounds what later walks traverse. Qualifying a type's
+    resource identities shares the same way.
   - **Witness:** `TestUsedTypesResolveInP3HelloAndEveryImportStillBinds` asserts all three timestamps;
-    `TestASharedTypeChainIsCutAtTheSizeBudget` resolves a 16-level chain in full and cuts a 24-level one.
+    `TestASharedTypeChainIsCutAtTheSizeBudget` resolves a 16-level chain in full and cuts a 24-level one;
+    `TestAResolvedTypeIsSharedNotRebuilt` bounds `Load` of `type-chain-18.wasm` at 1000 allocations (116
+    measured); `TestATypeChainPastTheBudgetIsCutAndStoredShared` decodes 40 levels within 2000 allocations, whole to
+    level 18 and cut after it. wasm-tools refuses both chain files, and the decoder reads them anyway.
   - **Neuter, run:** with the removal undone, the second and third timestamps are unresolved and p3hello is refused.
-    With the budget check removed, the 24-level chain resolves in full, with no alias.
+    With the budget check removed, the 24-level chain resolves in full, with no alias. With the sharing removed,
+    the 18-level `Load` makes 1,376,312 allocations, and the 40-level one 23.6 million, in about ten seconds.
 - **One ignored placement hint no longer sends every later reservation off-hint**
   ([#1254](https://github.com/scttfrdmn/burroughs/issues/1254), `type:grave`; ADR 0113's placement).
   - **The defect:** `mapPlaced` counted a mapping below the cursor as a stray, but took one placed anywhere above

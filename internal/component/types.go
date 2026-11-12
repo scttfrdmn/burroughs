@@ -74,6 +74,14 @@ type ValType struct {
 	// builds and `lookupHost` reads. "" for a guest-defined resource, which keeps only its local index
 	// until #1251. See selfResourceID for the unbound form.
 	Resource string
+
+	// size is the node count of the type as resolved, its effective size, counting a shared subtree at every
+	// use; 0 means not resolved. A resolved type is never resolved again: a reference to it is answered with
+	// it as it is, sharing its storage, and its size is charged to the resolve's budget (grave #1256).
+	size int
+	// selfRes reports that the resolved type carries an unbound resource identity (selfResourceID)
+	// somewhere, so qualification must rebuild it; a resolved type without one is shared as it is.
+	selfRes bool
 }
 
 // NamedVal is a labelled value type (a record field / a function parameter).
@@ -178,7 +186,8 @@ func (c *Component) parseTypes(body []byte) error {
 		if err != nil {
 			return fmt.Errorf("component: type %d: %w", len(c.Types), err)
 		}
-		c.Types = append(c.Types, td)
+		// Resolved as it is defined (grave #1256), so every later reference to it shares the resolved form.
+		c.Types = append(c.Types, resolveDefined(td, c.sectionTypeAt(), c.spaceLen(SpaceType)))
 		c.def(SpaceType, SectionType, len(c.Types)-1)
 	}
 	return endOf("type", r, len(body))
@@ -314,7 +323,8 @@ func (r *reader) instanceType() (*InstanceType, error) {
 			if err != nil {
 				return nil, err
 			}
-			local = append(local, td)
+			// Resolved as it is defined (grave #1256): see resolveDefined.
+			local = append(local, resolveDefined(td, sliceTypeAt(local), uint32(len(local))))
 		case 0x02: // alias — an outer/export type alias within the instance type
 			if err := r.instanceAlias(&local); err != nil {
 				return nil, err
@@ -554,19 +564,37 @@ func resolveVal(vt ValType, at typeAt, st *resolveState) ValType {
 	if st == nil {
 		st = newResolveState()
 	}
+	// **A resolved type is shared, not rebuilt** (grave #1256). Every definition is resolved as it is
+	// defined (resolveDefined), so a reference reaches a resolved type, which is answered as it is: its
+	// slices are shared, and its effective size is charged to the budget. Construction is linear in the
+	// distinct types, where rebuilding each use stored every level of a shared chain expanded. It also keeps
+	// a resolved type copied into another scope from being resolved against that scope, where its Refs are
+	// stale ordinals, which an own's identity once needed a rule of its own for. NEUTER THIS sharing, and
+	// TestAResolvedTypeIsSharedNotRebuilt's 18-level chain allocates its expansion, and
+	// TestAResolvedHandleKeepsItsIdentityInAnotherScope names the second scope's resource.
+	if vt.size > 0 {
+		if st.left < vt.size {
+			st.left = 0
+			return unresolvedLeaf()
+		}
+		st.left -= vt.size
+		return vt
+	}
 	// **The size budget** (grave #1256): every node this resolve builds is counted, and past the budget the
 	// node resolves to VUnresolvedAlias, which the instantiate-time refusal names. NEUTER THIS check, and
 	// TestASharedTypeChainIsCutAtTheSizeBudget's 24-level chain resolves in full, with no alias in it.
 	st.left--
 	if st.left < 0 {
-		return ValType{Kind: VUnresolvedAlias}
+		st.left = 0
+		return unresolvedLeaf()
 	}
 	switch vt.Kind {
 	case VRef:
 		if td, ok := at(vt.Ref); ok && td.Kind == TDVal {
 			if st.seen[vt.Ref] {
-				return ValType{Kind: VUnresolvedAlias} // a cycle — unresolvable, refuse by name downstream
+				return unresolvedLeaf() // a cycle — unresolvable, refuse by name downstream
 			}
+			st.left++ // the reference is replaced by its target, which is charged in its place
 			// **The set is the current chain, so an index leaves it on the way back out** (grave #1256, ADR
 			// 0118). It was never removed, so the map recorded every index entered anywhere in the type, and a
 			// second sibling reference to the same type read as a cycle: p3hello's `descriptor-stat` names
@@ -579,25 +607,18 @@ func resolveVal(vt ValType, at typeAt, st *resolveState) ValType {
 			delete(st.seen, vt.Ref)
 			return out
 		}
-		return vt // a ref to a resource/func/instance type — left as a reference
+		return finish(vt) // a ref to a resource/func/instance type — left as a reference
 	case VOwn, VBorrow:
 		// The handle keeps its index and gains the resource's identity when the index names one (ADR
-		// 0118), which is what lets a guest's signature be checked against the host's resource types.
+		// 0118), which is what lets a guest's signature be checked against the host's resource types. Once
+		// resolved it is never asked again (the sharing above), so a copy in another scope keeps it.
 		//
-		// **An identity once found is kept.** A resolved type copied into another scope (an outer alias of a
-		// `use`d type) is resolved again there, and its Ref is still an ordinal of the scope it came from,
-		// so asking the new scope would name whatever resource sits at that position.
-		//
-		// NEUTER THIS keep, and TestAResolvedHandleKeepsItsIdentityInAnotherScope names the second scope's
-		// resource. NEUTER the fill below it, and TestAGuestHandleCarriesItsHostResourcesIdentity reads an
-		// empty identity on output-stream.write's self.
-		if vt.Resource != "" {
-			return vt
-		}
+		// NEUTER THIS fill, and TestAGuestHandleCarriesItsHostResourcesIdentity reads an empty identity on
+		// output-stream.write's self.
 		if td, ok := at(vt.Ref); ok && td.Kind == TDResource {
 			vt.Resource = td.Resource
 		}
-		return vt
+		return finish(vt)
 	case VFuture, VStream:
 		// **Absent until ADR 0118**, so a future's payload stayed a reference while every other container's
 		// element inlined. Nothing read the payload until #1248 gave `write-via-stream`'s one a definition.
@@ -606,13 +627,13 @@ func resolveVal(vt ValType, at typeAt, st *resolveState) ValType {
 			e := resolveVal(*vt.Elem, at, st)
 			vt.Elem = &e
 		}
-		return vt
+		return finish(vt)
 	case VList, VOption:
 		if vt.Elem != nil {
 			e := resolveVal(*vt.Elem, at, st)
 			vt.Elem = &e
 		}
-		return vt
+		return finish(vt)
 	case VResult:
 		if vt.Ok != nil {
 			ok := resolveVal(*vt.Ok, at, st)
@@ -622,7 +643,7 @@ func resolveVal(vt ValType, at typeAt, st *resolveState) ValType {
 			e := resolveVal(*vt.Err, at, st)
 			vt.Err = &e
 		}
-		return vt
+		return finish(vt)
 	case VVariant:
 		cs := make([]VarCase, len(vt.Cases))
 		for i, c := range vt.Cases {
@@ -633,24 +654,100 @@ func resolveVal(vt ValType, at typeAt, st *resolveState) ValType {
 			}
 		}
 		vt.Cases = cs
-		return vt
+		return finish(vt)
 	case VRecord:
 		fs := make([]NamedVal, len(vt.Fields))
 		for i, f := range vt.Fields {
 			fs[i] = NamedVal{Name: f.Name, Type: resolveVal(f.Type, at, st)}
 		}
 		vt.Fields = fs
-		return vt
+		return finish(vt)
 	case VTuple:
 		es := make([]ValType, len(vt.Elems))
 		for i, e := range vt.Elems {
 			es[i] = resolveVal(e, at, st)
 		}
 		vt.Elems = es
-		return vt
+		return finish(vt)
 	default:
-		return vt
+		return finish(vt)
 	}
+}
+
+// unresolvedLeaf is the VUnresolvedAlias a resolve gives for what it cannot or may not resolve, marked as
+// resolved, a leaf of size 1.
+func unresolvedLeaf() ValType { return ValType{Kind: VUnresolvedAlias, size: 1} }
+
+// finish marks a node whose children are resolved: its effective size is its own node plus its children's,
+// and it carries an unbound identity if it is one or any child does.
+func finish(vt ValType) ValType {
+	size, self := 1, (vt.Kind == VOwn || vt.Kind == VBorrow) && strings.HasPrefix(vt.Resource, "::")
+	add := func(c ValType) {
+		size += c.size
+		self = self || c.selfRes
+	}
+	eachChild(vt, add)
+	vt.size, vt.selfRes = size, self
+	return vt
+}
+
+// eachChild calls f on each direct child of a value type, in declaration order.
+func eachChild(vt ValType, f func(ValType)) {
+	ptr := func(p *ValType) {
+		if p != nil {
+			f(*p)
+		}
+	}
+	switch vt.Kind {
+	case VList, VOption, VFuture, VStream:
+		ptr(vt.Elem)
+	case VResult:
+		ptr(vt.Ok)
+		ptr(vt.Err)
+	case VVariant:
+		for _, c := range vt.Cases {
+			ptr(c.Type)
+		}
+	case VRecord:
+		for _, fd := range vt.Fields {
+			f(fd.Type)
+		}
+	case VTuple:
+		for _, e := range vt.Elems {
+			f(e)
+		}
+	default:
+	}
+}
+
+// resolveDefined resolves a type definition as it joins a type space at ordinal ord (grave #1256), so the
+// space holds resolved types and a reference to one shares it (resolveVal). A reference at or past ord
+// names no earlier definition, which a well-formed component never has: it resolves to VUnresolvedAlias,
+// as the lazy resolve's cycle check gave for a self-reference. Only a value type is resolved here; a
+// function type is resolved where its signature is read, against resolved definitions.
+func resolveDefined(td TypeDef, at typeAt, ord uint32) TypeDef {
+	if td.Kind != TDVal {
+		return td
+	}
+	guarded := func(i uint32) (TypeDef, bool) {
+		if i >= ord {
+			return TypeDef{Kind: TDVal, Val: unresolvedLeaf()}, true
+		}
+		return at(i)
+	}
+	td.Val = resolveVal(td.Val, guarded, nil)
+	return td
+}
+
+// spaceLen is how many entries one index space has so far: the ordinal the next definition takes.
+func (c *Component) spaceLen(s Space) uint32 {
+	var n uint32
+	for _, d := range c.Defs {
+		if d.Space == s {
+			n++
+		}
+	}
+	return n
 }
 
 // instanceAlias handles an `alias` inside an instance type. The only form reached here is an outer type
@@ -742,7 +839,7 @@ func qualifyTypeDef(td TypeDef, iface string) TypeDef {
 	case TDResource:
 		td.Resource = qualifyResourceID(td.Resource, iface)
 	case TDVal:
-		td.Val = qualifyVal(td.Val, iface)
+		td.Val = newQualifier(iface).val(td.Val)
 	case TDFunc:
 		if td.Func != nil {
 			td.Func = qualifyFunc(td.Func, iface)
@@ -754,54 +851,79 @@ func qualifyTypeDef(td TypeDef, iface string) TypeDef {
 
 // qualifyFunc is qualifyTypeDef over a function type's parameters and result. The input is not mutated.
 func qualifyFunc(ft *FuncType, iface string) *FuncType {
+	q := newQualifier(iface)
 	out := &FuncType{Params: make([]NamedVal, len(ft.Params)), Async: ft.Async}
 	for i, p := range ft.Params {
-		out.Params[i] = NamedVal{Name: p.Name, Type: qualifyVal(p.Type, iface)}
+		out.Params[i] = NamedVal{Name: p.Name, Type: q.val(p.Type)}
 	}
 	if ft.Result != nil {
-		r := qualifyVal(*ft.Result, iface)
+		r := q.val(*ft.Result)
 		out.Result = &r
 	}
 	return out
 }
 
-// qualifyVal is qualifyTypeDef over a resolved value type, rebuilding every compound it descends, since the
-// decoded slices are shared by every reader of the type.
-func qualifyVal(vt ValType, iface string) ValType {
-	elem := func(p *ValType) *ValType {
-		if p == nil {
-			return nil
-		}
-		v := qualifyVal(*p, iface)
-		return &v
+// qualifier is one qualification of resolved value types (qualifyTypeDef). It rebuilds only what carries an
+// unbound identity, sharing every resolved subtree that does not (ValType.selfRes), and it rebuilds each
+// shared subtree once, keyed by where the subtree is stored, so a subtree reached by many paths is
+// qualified once and shared again (grave #1256). Without both, qualifying a chain of shared types would
+// rebuild it at every use, which is the expansion resolveVal's sharing exists to avoid. A qualification
+// changes no shape, so the sizes stay as they were.
+type qualifier struct {
+	iface string
+	done  map[*ValType]*ValType
+}
+
+func newQualifier(iface string) *qualifier {
+	return &qualifier{iface: iface, done: map[*ValType]*ValType{}}
+}
+
+// child qualifies the subtree stored at p.
+func (q *qualifier) child(p *ValType) *ValType {
+	if p == nil || (p.size > 0 && !p.selfRes) {
+		return p
+	}
+	if r, ok := q.done[p]; ok {
+		return r
+	}
+	v := q.val(*p)
+	q.done[p] = &v
+	return &v
+}
+
+// val qualifies one value type. The input is not mutated: the decoded slices are shared by every reader.
+func (q *qualifier) val(vt ValType) ValType {
+	if vt.size > 0 && !vt.selfRes {
+		return vt
 	}
 	switch vt.Kind {
 	case VOwn, VBorrow:
-		vt.Resource = qualifyResourceID(vt.Resource, iface)
+		vt.Resource = qualifyResourceID(vt.Resource, q.iface)
 	case VList, VOption, VFuture, VStream:
-		vt.Elem = elem(vt.Elem)
+		vt.Elem = q.child(vt.Elem)
 	case VResult:
-		vt.Ok, vt.Err = elem(vt.Ok), elem(vt.Err)
+		vt.Ok, vt.Err = q.child(vt.Ok), q.child(vt.Err)
 	case VVariant:
 		cs := make([]VarCase, len(vt.Cases))
 		for i, c := range vt.Cases {
-			cs[i] = VarCase{Name: c.Name, Type: elem(c.Type)}
+			cs[i] = VarCase{Name: c.Name, Type: q.child(c.Type)}
 		}
 		vt.Cases = cs
 	case VRecord:
 		fs := make([]NamedVal, len(vt.Fields))
-		for i, f := range vt.Fields {
-			fs[i] = NamedVal{Name: f.Name, Type: qualifyVal(f.Type, iface)}
+		for i := range vt.Fields {
+			fs[i] = NamedVal{Name: vt.Fields[i].Name, Type: *q.child(&vt.Fields[i].Type)}
 		}
 		vt.Fields = fs
 	case VTuple:
 		es := make([]ValType, len(vt.Elems))
-		for i, e := range vt.Elems {
-			es[i] = qualifyVal(e, iface)
+		for i := range vt.Elems {
+			es[i] = *q.child(&vt.Elems[i])
 		}
 		vt.Elems = es
 	default:
 	}
+	vt.selfRes = false
 	return vt
 }
 
