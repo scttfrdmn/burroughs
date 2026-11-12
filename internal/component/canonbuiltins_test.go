@@ -42,9 +42,18 @@ const (
 	// carry the `async` canonopt that gates the tier, but they are not members of the async built-in set,
 	// and the demand set names one (`[async-lower]tick`) that no opcode in isBuiltAsyncBuiltin can cover.
 	statusLifting canonBuiltinStatus = "lifting-operation"
-	// statusResource is resource.new/drop/rep — modeled since ADR 0084, behind gate:components (on by
-	// default). Decoded into their own CanonKinds, not as CanonAsyncBuiltin.
-	statusResource canonBuiltinStatus = "resources"
+	// The resource built-ins are decoded into their own CanonKinds, not as CanonAsyncBuiltin, behind
+	// gate:components (on by default). They had one status, `resources`, glossed *"modeled since ADR 0084"*,
+	// which overstated all three: until ADR 0117 every drop was a no-op and new/rep refused when called.
+	//
+	// statusResourceDropHostTypes is resource.drop: real for a resource type the host implements (it removes
+	// the handle, traps on an outstanding lend and runs the destructor, ADR 0117), and still `dropNoop` for
+	// any other type, which no guest can mint while resource.new refuses.
+	statusResourceDropHostTypes canonBuiltinStatus = "resource-drop-host-types"
+	// statusResourceRefusedAtCall is resource.new and resource.rep: decoded and bound to the refusing stub,
+	// so a guest instantiates and refuses by name if it calls one. Guest-defined resources are out of ADR
+	// 0117's scope.
+	statusResourceRefusedAtCall canonBuiltinStatus = "resource-refused-at-call"
 	// statusAsyncDemandedBuilt: an async built-in the committed suspending guest imports, and which this
 	// engine executes.
 	statusAsyncDemandedBuilt canonBuiltinStatus = "async-demanded-built"
@@ -88,9 +97,9 @@ const (
 var canonStatus = map[string]canonBuiltinStatus{
 	"lift":          statusLifting,
 	"lower":         statusLifting,
-	"resource.new":  statusResource,
-	"resource.drop": statusResource,
-	"resource.rep":  statusResource,
+	"resource.new":  statusResourceRefusedAtCall,
+	"resource.drop": statusResourceDropHostTypes,
+	"resource.rep":  statusResourceRefusedAtCall,
 
 	"backpressure.inc": statusAsyncRefusedByName,
 	"backpressure.dec": statusAsyncRefusedByName,
@@ -173,7 +182,8 @@ func (s canonBuiltinStatus) isAsyncFamily() bool {
 	case statusAsyncDemandedBuilt, statusAsyncDemandedAbsent, statusAsyncBuiltUndemanded,
 		statusAsyncRefusedByName:
 		return true
-	case statusLifting, statusResource, statusErrorContext, statusThreads, statusThreadsPhase2, statusForward:
+	case statusLifting, statusResourceDropHostTypes, statusResourceRefusedAtCall, statusErrorContext,
+		statusThreads, statusThreadsPhase2, statusForward:
 		return false
 	}
 	return false
@@ -304,7 +314,8 @@ func TestEveryCanonProductionHasExactlyOneStatus(t *testing.T) {
 
 	// --- the status values themselves are a closed set ---
 	for name, st := range canonStatus {
-		if !st.isAsyncFamily() && st != statusLifting && st != statusResource && st != statusErrorContext &&
+		if !st.isAsyncFamily() && st != statusLifting && st != statusResourceDropHostTypes &&
+			st != statusResourceRefusedAtCall && st != statusErrorContext &&
 			st != statusThreads && st != statusThreadsPhase2 && st != statusForward {
 			t.Errorf("%s carries status %q, which is outside the closed set", name, st)
 		}
@@ -534,7 +545,8 @@ func TestTheDemandedAbsentSetIsSliceTwosWorkList(t *testing.T) {
 				t.Errorf("%s is classified demanded-BUILT but the engine does not execute it", r.name)
 			}
 			built = append(built, fmt.Sprintf("%#x %s", r.ops[0], r.name))
-		case statusLifting, statusResource, statusAsyncBuiltUndemanded, statusAsyncRefusedByName,
+		case statusLifting, statusResourceDropHostTypes, statusResourceRefusedAtCall,
+			statusAsyncBuiltUndemanded, statusAsyncRefusedByName,
 			statusErrorContext, statusThreads, statusThreadsPhase2,
 			statusForward: // ➡️: no committed guest imports them, and no toolchain emits them yet
 			// Not part of the demand set, so not part of slice 2's list. Named rather than left to a

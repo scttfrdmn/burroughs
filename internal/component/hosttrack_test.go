@@ -57,7 +57,10 @@ func TestSplitVersionKeysByCompatibilityClass(t *testing.T) {
 // productionWalker is a walker carrying the real production host tables, wired exactly as
 // InstantiateWithHostFeatures wires them, so resolveHost is the lookup a guest's lower meets.
 func productionWalker(h *Host) *walker {
-	return &walker{wasiHost: h.wasi(), asyncWasiHost: h.asyncWasi(), streamConsumers: h.streamConsumers(), async: newAsyncHandles()}
+	return &walker{
+		wasiHost: h.wasi(), asyncWasiHost: h.asyncWasi(), streamConsumers: h.streamConsumers(),
+		resourceSrc: h.resourceSource(), hostRes: newHostResources(), async: newAsyncHandles(),
+	}
 }
 
 // TestCrossTrackImportRefusesNamingBothTracks is the defect's witness. Each import names a function the
@@ -79,7 +82,7 @@ func TestCrossTrackImportRefusesNamingBothTracks(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.key, func(t *testing.T) {
 			r := productionWalker(NewHost(io.Discard, io.Discard, nil)).resolveHost(c.key, false)
-			if r.sync != nil || r.consumer != nil || r.async != nil {
+			if r.sync != nil || r.consumer != nil || r.async != nil || r.method != nil {
 				t.Fatalf("%s bound an implementation; the host serves it only for %s", c.key, c.served)
 			}
 			_, err := r.refusal("actual", "0", c.key)(nil, nil)
@@ -120,11 +123,19 @@ func TestSharedTrackEntriesStillServe(t *testing.T) {
 	for _, key := range []string{
 		"wasi:cli/environment@0.3.0::get-arguments",
 		"wasi:cli/environment@0.2.3::get-arguments",
-		"wasi:cli/stdout@0.2.6::get-stdout",
-		"wasi:io/streams@0.2.3::[method]output-stream.write",
 	} {
 		if r := w.resolveHost(key, false); r.sync == nil {
 			t.Errorf("%s is not served (servedFor %v)", key, r.servedFor)
+		}
+	}
+	// The stdio getters and `wasi:io` moved to the resource-method source (ADR 0117), so they are asked
+	// for there; served from any other source they would bind without the instance's table.
+	for _, key := range []string{
+		"wasi:cli/stdout@0.2.6::get-stdout",
+		"wasi:io/streams@0.2.3::[method]output-stream.write",
+	} {
+		if r := w.resolveHost(key, false); r.method == nil {
+			t.Errorf("%s is not served as a resource method (servedFor %v)", key, r.servedFor)
 		}
 	}
 	if r := w.resolveHost("wasi:cli/stdout@0.3.0::write-via-stream", false); r.consumer == nil {
@@ -165,6 +176,14 @@ func TestProductionHostEntriesDeclareTheirTracks(t *testing.T) {
 		keys = append(keys, k)
 	}
 	for k := range h.streamConsumers() {
+		keys = append(keys, k)
+	}
+	// The resource half (ADR 0117): its types and its imports are production keys too.
+	src := h.resourceSource()
+	for k := range src.types {
+		keys = append(keys, k)
+	}
+	for k := range src.methods {
 		keys = append(keys, k)
 	}
 	if len(keys) == 0 {

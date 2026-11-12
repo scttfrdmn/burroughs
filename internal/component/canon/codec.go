@@ -345,10 +345,10 @@ type heap struct {
 	mem       []byte
 	lastAlloc int
 	calls     []reallocCall
-	table     *resourceTable // the instance's handle table (own/borrow), CanonicalABI.md's Table
+	table     *HandleTable // the instance's handle table (own/borrow), CanonicalABI.md's Table
 }
 
-func newHeap(size int) *heap { return &heap{mem: make([]byte, size), table: newResourceTable()} }
+func newHeap(size int) *heap { return &heap{mem: make([]byte, size), table: NewHandleTable()} }
 
 // Heap is the memory a value lowering allocates in and writes through: the model's `[]byte` bump heap in
 // the differential, and guest linear memory in the host (ADR 0084 / #719). Extracting it lets one
@@ -1200,25 +1200,60 @@ func LoadVariant(h ReadHeap, t Type, ptr int, loadElem func(Type, int) (Value, e
 	return Variant(t, c.Name, payload)
 }
 
-// resourceHandle is one entry in a component instance's handle table.
-type resourceHandle struct {
+// ResourceHandle is one entry in a component instance's handle table (def:ResourceHandle): the resource
+// type it names, the representation the type's implementation chose, whether the entry owns it, and how
+// many borrows of it are lent out. The reference's `borrow_scope` is not carried, because nothing here
+// mints a borrow handle yet: a host lowers no borrow, and `lower_borrow` arrives with guest-defined
+// resources (ADR 0117).
+type ResourceHandle struct {
 	rt       int
 	rep      uint32
 	own      bool
-	numLends int // bumped only under a borrow scope (PR B); always 0 in PR A's own-only paths
+	numLends int // raised by LiftBorrow, def:Subtask.add_lender:"lending_handle.num_lends += 1"; lowered by EndLend
 }
 
-// resourceTable is a component instance's handle table (CanonicalABI.md Table): a slot array whose
-// index 0 is a reserved sentinel, plus a free list. add/remove/get mirror the reference model, so a
-// lowered handle's index and the table's shape match byte-for-byte.
-type resourceTable struct {
-	array []*resourceHandle // array[0] is the reserved nil sentinel
+// RT is the resource type the handle names. Its meaning belongs to the table's user: a type-space
+// ordinal in the model heap, a host resource's identity in the engine (ADR 0117).
+func (h *ResourceHandle) RT() int { return h.rt }
+
+// Rep is the representation the resource's implementation chose for this value.
+func (h *ResourceHandle) Rep() uint32 { return h.rep }
+
+// Own reports whether the entry owns the resource, rather than borrowing it.
+func (h *ResourceHandle) Own() bool { return h.own }
+
+// Lends is how many borrows of this handle are lent to calls still in progress.
+func (h *ResourceHandle) Lends() int { return h.numLends }
+
+// EndLend ends one lend LiftBorrow began — def:Subtask.deliver_resolve:"h.num_lends -= 1", run when the
+// call the borrow was lent to returns. An EndLend with no lend outstanding is an engine bug rather than a
+// guest's, so it panics instead of letting the count go negative and admit a later drop.
+func (h *ResourceHandle) EndLend() {
+	if h.numLends <= 0 {
+		panic("canon: EndLend on a handle with no lend outstanding")
+	}
+	h.numLends--
+}
+
+// HandleTable is a component instance's handle table (def:Table): a slot array whose index 0 is a
+// reserved sentinel, plus a free list. Add/Get/Remove mirror the reference model, so a lowered handle's
+// index and the table's shape match byte-for-byte.
+//
+// **Exported so that production uses the table the reference fixtures test** (ADR 0117). It was the model
+// heap's alone, while the host kept its stream and error handles in two private maps that shared no
+// numbering with it and freed nothing.
+type HandleTable struct {
+	array []*ResourceHandle // array[0] is the reserved nil sentinel
 	free  []int
 }
 
-func newResourceTable() *resourceTable { return &resourceTable{array: []*resourceHandle{nil}} }
+// NewHandleTable returns an empty table, its slot 0 reserved.
+func NewHandleTable() *HandleTable { return &HandleTable{array: []*ResourceHandle{nil}} }
 
-func (tb *resourceTable) add(h *resourceHandle) int {
+// Add places a new handle in the table and returns its index (def:Table.add), reusing the most recently
+// freed slot first.
+func (tb *HandleTable) Add(rt int, rep uint32, own bool) int {
+	h := &ResourceHandle{rt: rt, rep: rep, own: own}
 	if n := len(tb.free); n > 0 {
 		i := tb.free[n-1]
 		tb.free = tb.free[:n-1]
@@ -1230,21 +1265,79 @@ func (tb *resourceTable) add(h *resourceHandle) int {
 	return i
 }
 
-func (tb *resourceTable) get(i int) (*resourceHandle, error) {
+// Get returns the handle at index i, refusing an index the table does not hold (def:Table.get). That
+// refusal is what makes an index minted in one instance's table meaningless in another's.
+func (tb *HandleTable) Get(i int) (*ResourceHandle, error) {
 	if i < 0 || i >= len(tb.array) || tb.array[i] == nil {
 		return nil, fmt.Errorf("canon: handle index %d is not live", i)
 	}
 	return tb.array[i], nil
 }
 
-func (tb *resourceTable) remove(i int) (*resourceHandle, error) {
-	h, err := tb.get(i)
+// Remove takes the handle at index i out of the table and frees its slot (def:Table.remove).
+func (tb *HandleTable) Remove(i int) (*ResourceHandle, error) {
+	h, err := tb.Get(i)
 	if err != nil {
 		return nil, err
 	}
 	tb.array[i] = nil
 	tb.free = append(tb.free, i)
 	return h, nil
+}
+
+// LiftOwn consumes an owned handle at index i, of resource type rt, and returns its rep (def:lift_own). A
+// missing slot, a wrong type, a lent handle, or a borrow in an own position is refused. The order is the
+// reference's, removal first, so a refused lift has freed the slot just as the trap it stands for would.
+func (tb *HandleTable) LiftOwn(i, rt int) (uint32, error) {
+	hnd, err := tb.Remove(i)
+	if err != nil {
+		return 0, err
+	}
+	if hnd.rt != rt {
+		return 0, fmt.Errorf("canon: lift_own: handle rt %d != expected %d", hnd.rt, rt)
+	}
+	if hnd.numLends != 0 {
+		return 0, fmt.Errorf("canon: lift_own: handle has %d active lends", hnd.numLends)
+	}
+	if !hnd.own {
+		return 0, fmt.Errorf("canon: lift_own: handle is a borrow, not an own")
+	}
+	return hnd.rep, nil
+}
+
+// LiftBorrow lends the handle at index i, of resource type rt, to a call (def:lift_borrow). A missing slot
+// or a wrong type is refused; otherwise the handle's lend count rises until the caller's EndLend. The
+// handle stays in the table, because the guest still holds it while the callee borrows it.
+func (tb *HandleTable) LiftBorrow(i, rt int) (*ResourceHandle, error) {
+	hnd, err := tb.Get(i)
+	if err != nil {
+		return nil, err
+	}
+	if hnd.rt != rt {
+		return nil, fmt.Errorf("canon: lift_borrow: handle rt %d != expected %d", hnd.rt, rt)
+	}
+	hnd.numLends++
+	return hnd, nil
+}
+
+// Drop is `canon resource.drop`'s table half (def:canon_resource_drop). It removes the handle at index i,
+// refusing a missing slot, a wrong type, and — the rule the drop exists to enforce — a handle with a lend
+// outstanding (def:canon_resource_drop:"trap_if(h.num_lends != 0)"). The caller runs the destructor for an
+// own; for a borrow there is nothing more, since no borrow scope is modeled here.
+func (tb *HandleTable) Drop(i, rt int) (*ResourceHandle, error) {
+	hnd, err := tb.Remove(i)
+	if err != nil {
+		return nil, err
+	}
+	if hnd.rt != rt {
+		return nil, fmt.Errorf("canon: resource.drop: handle rt %d != expected %d", hnd.rt, rt)
+	}
+	// NEUTER THIS check, and TestHandleTableLifecycleFollowsTheReference's lent-own row drops a handle a
+	// call is still borrowing.
+	if hnd.numLends != 0 {
+		return nil, fmt.Errorf("canon: resource.drop: handle has %d active lends", hnd.numLends)
+	}
+	return hnd, nil
 }
 
 // realloc is the four-argument cabi_realloc contract (origPtr, origSize, align, newSize). Current
@@ -1550,9 +1643,9 @@ func (h *heap) lowerFlat(v Value) ([]flatVal, error) {
 }
 
 // lowerOwn adds an owned handle to the instance table and returns its index (CanonicalABI.md
-// lower_own). num_lends starts at 0; the lend accounting is PR B's, at the borrow scope.
+// lower_own). num_lends starts at 0; LiftBorrow and EndLend account for it.
 func (h *heap) lowerOwn(v Value) int {
-	return h.table.add(&resourceHandle{rt: v.Type.RT, rep: uint32(v.u), own: true})
+	return h.table.Add(v.Type.RT, uint32(v.u), true)
 }
 
 // load lifts a value from linear memory (CanonicalABI.md `load`), the inverse of store. A float's NaN
@@ -1642,22 +1735,14 @@ func (h *heap) loadVariant(ptr int, t Type) (Value, error) {
 }
 
 // liftOwn consumes an owned handle at table index i (CanonicalABI.md lift_own), trapping a missing
-// slot, a wrong resource type, a lent handle, or a borrow in an own position.
+// slot, a wrong resource type, a lent handle, or a borrow in an own position — through the table's own
+// LiftOwn, the one the engine's host resources use (ADR 0117).
 func (h *heap) liftOwn(i int, t Type) (Value, error) {
-	hnd, err := h.table.remove(i)
+	rep, err := h.table.LiftOwn(i, t.RT)
 	if err != nil {
 		return Value{}, err
 	}
-	if hnd.rt != t.RT {
-		return Value{}, fmt.Errorf("canon: lift_own: handle rt %d != expected %d", hnd.rt, t.RT)
-	}
-	if hnd.numLends != 0 {
-		return Value{}, fmt.Errorf("canon: lift_own: handle has %d active lends", hnd.numLends)
-	}
-	if !hnd.own {
-		return Value{}, fmt.Errorf("canon: lift_own: handle is a borrow, not an own")
-	}
-	return Own(t.RT, hnd.rep), nil
+	return Own(t.RT, rep), nil
 }
 
 // coreValueIter is a cursor over a flat core-value sequence (CanonicalABI.md CoreValueIter). next

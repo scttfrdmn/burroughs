@@ -213,7 +213,7 @@ func TestBindingAdmitsImplementedFilesystemErrorCodeOnRealGuest(t *testing.T) {
 	}
 	const name = "wasi:filesystem/types::filesystem-error-code"
 	wh := map[string]interp.CanonFunc{name: dummyCanon}
-	w, err := c.walkComponent(stubHost, wh, nil, nil)
+	w, err := c.walkComponent(stubHost, wh, nil, nil, hostResourceSource{})
 	if err != nil {
 		t.Fatalf("an implemented filesystem-error-code refused at instantiate: %v", err)
 	}

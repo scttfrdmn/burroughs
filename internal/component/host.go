@@ -73,22 +73,24 @@ func (g guestHeap) CheckRange(ptr, n int) error {
 // written and the `err` arm is unreachable on the success path (its `own<error>` payload is refused at
 // lower time — the deferral recorded on #694). A byte string crosses through the codec's `list<u8>`
 // semantics: the guest hands a (ptr, len) pair and the host reads exactly those bytes from the bound
-// memory. Stream handles are minted in a per-host resource table; a borrow of one resolves to the
-// writer it names.
+// memory. Stream and error handles are entries in the calling instance's own handle table (ADR 0117,
+// hostresource.go); a borrow of one is lent for the call and resolves to the stream it names.
 
-// Host is a preview-2 host: the standard streams and a resource table of the stream handles it has
-// minted. Exited/ExitCode record a guest `exit` call.
+// Host is a preview-2 host: the standard streams, and the resource types and imports a guest reaches them
+// through. It holds no handles: those are per component instance (ADR 0117), so one Host can serve several
+// instances without one's handle meaning anything in another's. Exited/ExitCode record a guest `exit` call.
 type Host struct {
 	Stdout   io.Writer
 	Stderr   io.Writer
 	Stdin    io.Reader
-	Args     []string            // the guest's argv, lowered by get-arguments
-	writers  map[int32]io.Writer // output-stream handles → the writer they name
-	next     int32
-	errors   map[int32]error // error handles (own<error>) minted for a stream-error's last-operation-failed
-	errNext  int32
+	Args     []string // the guest's argv, lowered by get-arguments
 	Exited   bool
 	ExitCode int32
+	// resourceTypeImpls and resourceImpls are test-only extra resource types and imports over them (ADR
+	// 0117), the resource half's counterpart of syncImpls, merged into resourceSource() under the same
+	// no-shadowing rule. Their keys are unversioned, so each is a wildcard (lookupHost).
+	resourceTypeImpls map[string]*hostResource
+	resourceImpls     map[string]resourceMethod
 	// asyncImpls is the async-lower impl source (gate:async 2a-i-A), kept SEPARATE from wasi(): an async
 	// impl has a distinct signature (asyncLowerImpl — it can signal would-block), so a single source
 	// returning both would let a wrong-source call site compile. Empty in production (no real async impls
@@ -205,31 +207,69 @@ func stdioWriteResultOK() (canon.Value, error) {
 	return canon.Variant(canon.ResultType(nil, &ec), "ok", nil)
 }
 
-// NewHost builds a preview-2 host over the given streams. Handles are minted from 1 (0 is left unused so
-// a zero value is never a live handle).
+// NewHost builds a preview-2 host over the given streams. Handles are minted per instance, from 1, by the
+// instance's table (ADR 0117).
 func NewHost(stdout, stderr io.Writer, stdin io.Reader) *Host {
-	return &Host{
-		Stdout: stdout, Stderr: stderr, Stdin: stdin,
-		writers: map[int32]io.Writer{}, next: 1,
-		errors: map[int32]error{}, errNext: 1,
+	return &Host{Stdout: stdout, Stderr: stderr, Stdin: stdin}
+}
+
+// outputStream is the object behind a `wasi:io/streams` `output-stream` handle. **Not an io.Closer, on
+// purpose**: the stdio streams are the process's, so dropping the guest's handle must not close them, and
+// a nil destructor closes only an object that is a Closer.
+type outputStream struct{ w io.Writer }
+
+// inputStream is the object behind an `input-stream` handle; not a Closer, for outputStream's reason.
+type inputStream struct{ r io.Reader }
+
+// resourceSource is the host's resource half (ADR 0117): the resource types it implements and the imports
+// over them, each keyed by name and compatibility class through serve, with the test-only extras merged.
+//
+// The four types are WASI 0.2's. `descriptor` is declared although nothing mints one: `get-directories`
+// grants an empty list, and a guest's `[resource-drop]descriptor` must still name a host type rather than
+// fall back to dropNoop.
+func (h *Host) resourceSource() hostResourceSource {
+	types := map[string]*hostResource{}
+	serve(types, wasiP2, "wasi:io/streams::output-stream", outputStreamResource)
+	serve(types, wasiP2, "wasi:io/streams::input-stream", inputStreamResource)
+	serve(types, wasiP2, "wasi:io/error::error", errorResource)
+	serve(types, wasiP2, "wasi:filesystem/types::descriptor", descriptorResource)
+
+	m := map[string]resourceMethod{}
+	// The stdio getters mint an own of their stream (def:lower_own), built at the call so a Stdout set
+	// after NewHost is the one written. stdin's stream is an input-stream; it was minted as an
+	// output-stream over io.Discard while the handle maps were untyped, and nothing could tell.
+	serve(m, wasiP2, "wasi:cli/stdout::get-stdout", mints(outputStreamResource, func() any { return &outputStream{w: h.Stdout} }))
+	serve(m, wasiP2, "wasi:cli/stderr::get-stderr", mints(outputStreamResource, func() any { return &outputStream{w: h.Stderr} }))
+	serve(m, wasiP2, "wasi:cli/stdin::get-stdin", mints(inputStreamResource, func() any { return &inputStream{r: h.Stdin} }))
+
+	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.blocking-write-and-flush", method(outputStreamResource, h.streamWrite))
+	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.write", method(outputStreamResource, h.streamWrite))
+	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.check-write", method(outputStreamResource, h.checkWrite))
+	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.blocking-flush", method(outputStreamResource, h.blockingFlush))
+	serve(m, wasiP2, "wasi:io/streams::[method]input-stream.blocking-read", method(inputStreamResource, h.blockingRead))
+
+	serve(m, wasiP2, "wasi:io/error::[method]error.to-debug-string", method(errorResource, h.errorToDebugString))
+
+	mergeExtras(types, h.resourceTypeImpls, "resource type")
+	mergeExtras(m, h.resourceImpls, "resource import")
+	return hostResourceSource{types: types, methods: m}
+}
+
+// mergeExtras merges test-only entries into a production table, refusing one that would shadow a name the
+// table serves under any class — wasi()'s rule for syncImpls, for the resource half.
+func mergeExtras[V any](m, extras map[string]V, what string) {
+	served := map[string]bool{}
+	for k := range m {
+		name, _, _ := cutVersion(k)
+		served[name] = true
 	}
-}
-
-// mintError records a host error as an own<error> handle, for a stream-error's last-operation-failed
-// case; error.to-debug-string later reads it back.
-func (h *Host) mintError(err error) int32 {
-	id := h.errNext
-	h.errNext++
-	h.errors[id] = err
-	return id
-}
-
-// mintWriter records a writer in the resource table and returns its handle.
-func (h *Host) mintWriter(w io.Writer) int32 {
-	id := h.next
-	h.next++
-	h.writers[id] = w
-	return id
+	for name, v := range extras {
+		if base, _, _ := cutVersion(name); served[base] {
+			panic("component: an extra " + what + " would shadow the host's " + name +
+				" — pick another name; the host does not let an extra entry displace a real one")
+		}
+		m[name] = v
+	}
 }
 
 // wasi builds the import-name → canon-lower-impl table the walk consults. The keys are the
@@ -243,20 +283,9 @@ func (h *Host) mintWriter(w io.Writer) int32 {
 // the same entry, and the 0.3 fixtures ran partly on implementations nobody had said were 0.3's.
 func (h *Host) wasi() map[string]interp.CanonFunc {
 	m := map[string]interp.CanonFunc{}
-	// 0.2 only. The stdio getters and `wasi:io` are gone from 0.3, which hands streams across as values
-	// (`write-via-stream`, in streamConsumers). `get-directories`' 0.3 descriptor differs and is
-	// unverified, and no 0.3 fixture imports it.
-	serve(m, wasiP2, "wasi:cli/stdout::get-stdout", h.getWriter(func() io.Writer { return h.Stdout }))
-	serve(m, wasiP2, "wasi:cli/stderr::get-stderr", h.getWriter(func() io.Writer { return h.Stderr }))
-	serve(m, wasiP2, "wasi:cli/stdin::get-stdin", h.getWriter(func() io.Writer { return io.Discard }))
-
-	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.blocking-write-and-flush", h.streamWrite)
-	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.write", h.streamWrite)
-	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.check-write", h.checkWrite)
-	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.blocking-flush", h.blockingFlush)
-	serve(m, wasiP2, "wasi:io/streams::[method]input-stream.blocking-read", h.blockingRead)
-
-	serve(m, wasiP2, "wasi:io/error::[method]error.to-debug-string", h.errorToDebugString)
+	// The stdio getters and every `wasi:io` import take or return resource handles, so they are in
+	// resourceSource(), bound with the calling instance's table (ADR 0117). They are 0.2 only: 0.3 hands
+	// streams across as values (`write-via-stream`, in streamConsumers).
 
 	// One implementation for both tracks: these signatures are the same in 0.2 and 0.3, which is what the
 	// 0.3 fixtures (p3async-hello, p3async-cancel) were relying on when the version was stripped.
@@ -268,19 +297,15 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 	serve(m, wasiP2P3, "wasi:cli/environment::get-arguments", h.getArguments)
 	serve(m, wasiP2P3, "wasi:cli/environment::get-environment", h.emptyListOf(
 		canon.TupleType(canon.Type{Kind: canon.KindString}, canon.Type{Kind: canon.KindString})))
+	// 0.2 only: `get-directories`' 0.3 descriptor differs and is unverified, and no 0.3 fixture imports it.
+	// The element names the host's descriptor type; it named RT 0, which was `errorRT` too (ADR 0117).
 	serve(m, wasiP2, "wasi:filesystem/preopens::get-directories", h.emptyListOf(
-		canon.TupleType(canon.OwnType(0), canon.Type{Kind: canon.KindString})))
+		canon.TupleType(canon.OwnType(descriptorResource.rt), canon.Type{Kind: canon.KindString})))
 
-	// The resource-drop intrinsics the world lowers are no-ops here: the table entry is left in place
-	// (the streams are the process's, not the guest's to free), so a drop neither refuses nor frees.
-	for _, name := range []string{
-		"wasi:io/streams::[resource-drop]output-stream",
-		"wasi:io/streams::[resource-drop]input-stream",
-		"wasi:io/error::[resource-drop]error",
-		"wasi:filesystem/types::[resource-drop]descriptor",
-	} {
-		serve(m, wasiP2, name, h.noop)
-	}
+	// **No `[resource-drop]` keys** (ADR 0117). Four stood here, bound to a no-op, and no guest could reach
+	// them: a key here is a `canon lower`'s identity, and a resource drop is a `canon resource.drop`, which
+	// the walk binds itself. A drop of a host type is now real there (walk.go, resolverFor).
+	//
 	// Extra SYNC impls, the counterpart of `asyncImpls` (#863). A guest in the async tier can import a
 	// plain function the host must answer — #862's receipt guest calls `note` from `Drop` glue, which
 	// cannot await, so it has to be sync. `asyncImpls` already had a field for its half; this is the other.
@@ -297,6 +322,12 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 		name, _, _ := cutVersion(k)
 		served[name] = true
 	}
+	// The resource imports count as served: `get-stdout` moved to resourceSource(), which resolveHost asks
+	// before this table, so an extra impl of that name would be silently unreachable rather than refused.
+	for k := range h.resourceSource().methods {
+		name, _, _ := cutVersion(k)
+		served[name] = true
+	}
 	for name, fn := range h.syncImpls {
 		if base, _, _ := cutVersion(name); served[base] {
 			panic("component: syncImpls would shadow the WASI impl for " + name +
@@ -307,27 +338,10 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 	return m
 }
 
-// getWriter returns a get-{stdout,stderr,stdin} impl: no arguments, one result — an own handle to a
-// freshly minted stream resource (the codec's own-handle lower is a bare i32 handle). It touches no
-// memory, so it needs neither the bound memory nor realloc.
-func (h *Host) getWriter(pick func() io.Writer) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
-		return []interp.Value{interp.I32(h.mintWriter(pick()))}, nil
-	}
-}
-
-// streamWrite marshals output-stream.write / blocking-write-and-flush: (self: borrow<output-stream>,
-// contents: list<u8>) -> result<_, stream-error>, flattened to (self, ptr, len, ret). It lifts the
-// list<u8> from the bound memory (canon load over u8), writes it to the stream `self` names, and writes
-// the `ok` result at the return pointer. It allocates nothing (the guest owns the bytes and the ret ptr).
-// errorRT is the opaque resource-type id for the own<error> handles the host mints. Only an i32 handle
-// is ever lowered, so the id is unused by the guest-heap lowering; it names the resource type for the
-// value's construction.
-const errorRT = 0
-
-// streamErrorType is the WIT `stream-error` variant: `last-operation-failed(own<error>)` or `closed`.
+// streamErrorType is the WIT `stream-error` variant: `last-operation-failed(own<error>)` or `closed`. The
+// own names the host's error type, whose number no other type shares (ADR 0117).
 func streamErrorType() canon.Type {
-	own := canon.OwnType(errorRT)
+	own := canon.OwnType(errorResource.rt)
 	return canon.VariantType(
 		canon.Case{Name: "last-operation-failed", Type: &own},
 		canon.Case{Name: "closed"},
@@ -355,18 +369,18 @@ func lowerResult(c *interp.CanonCaller, ret uint64, v canon.Value, buildErr erro
 // writes it to the stream `self` names, and lowers Ok — or, when the write fails,
 // Err(last-operation-failed(own<error>)) minted from the underlying error (#694's deferred err arm).
 // Both arms lower through the codec (#724), not a hand path.
-func (h *Host) streamWrite(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-	if len(args) != 4 {
-		return nil, fmt.Errorf("component: stream write: got %d core args, want 4 (self, ptr, len, ret)", len(args))
+//
+// `self` arrives lent (`method`, ADR 0117): a handle this instance does not hold, or one naming another
+// type, traps before this runs. It was a lookup in a map every instance of the Host shared, and an unknown
+// handle was refused as a link error.
+func (h *Host) streamWrite(res *hostResources, c *interp.CanonCaller, self *outputStream, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 3 {
+		return nil, fmt.Errorf("component: stream write: got %d core args, want 4 (self, ptr, len, ret)", len(args)+1)
 	}
-	self := args[0].Int32()
-	ptr := uint64(uint32(args[1].Bits))
-	n := uint64(uint32(args[2].Bits))
-	ret := uint64(uint32(args[3].Bits))
-	w, ok := h.writers[self]
-	if !ok {
-		return nil, fmt.Errorf("%w: stream write on unknown handle %d", ErrLinkRefused, self)
-	}
+	ptr := uint64(uint32(args[0].Bits))
+	n := uint64(uint32(args[1].Bits))
+	ret := uint64(uint32(args[2].Bits))
+	w := self.w
 	// **Through the codec, which this function's doc comment already claimed** (#903). It read raw bytes
 	// with `c.Read` and said it lifted "the list<u8> from the bound memory (canon load over u8)" — a
 	// comment naming one mechanism while the code embodied another, and the reason it could say so with a
@@ -381,7 +395,8 @@ func (h *Host) streamWrite(c *interp.CanonCaller, args []interp.Value) ([]interp
 		return nil, fmt.Errorf("component: stream write: reading contents: %w", err)
 	}
 	if _, werr := w.Write(buf); werr != nil {
-		own := canon.Own(errorRT, uint32(h.mintError(werr)))
+		// The error is minted in the calling instance's table, an own the guest drops or debug-strings.
+		own := canon.Own(errorResource.rt, uint32(res.mint(errorResource, werr)))
 		se, serr := canon.Variant(streamErrorType(), "last-operation-failed", &own)
 		if serr != nil {
 			return nil, serr
@@ -395,11 +410,13 @@ func (h *Host) streamWrite(c *interp.CanonCaller, args []interp.Value) ([]interp
 
 // checkWrite marshals output-stream.check-write: (self) -> result<u64, stream-error>, flattened to
 // (self, ret). It reports a large writable budget (the ok arm), so the guest never blocks on capacity.
-func (h *Host) checkWrite(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("component: check-write: got %d core args, want 2 (self, ret)", len(args))
+// `self` is lent and checked by `method` though no field of it is read: a handle the instance does not hold
+// traps here as it would at a write.
+func (h *Host) checkWrite(_ *hostResources, c *interp.CanonCaller, _ *outputStream, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("component: check-write: got %d core args, want 2 (self, ret)", len(args)+1)
 	}
-	ret := uint64(uint32(args[1].Bits))
+	ret := uint64(uint32(args[0].Bits))
 	u := canon.U64(1 << 30) // a large writable budget, so the guest never blocks on capacity
 	okT := canon.Type{Kind: canon.KindU64}
 	v, verr := canon.Variant(streamResultType(&okT), "ok", &u)
@@ -407,11 +424,11 @@ func (h *Host) checkWrite(c *interp.CanonCaller, args []interp.Value) ([]interp.
 }
 
 // blockingFlush marshals output-stream.blocking-flush: (self) -> result<_, stream-error>, always Ok.
-func (h *Host) blockingFlush(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("component: blocking-flush: got %d core args, want 2 (self, ret)", len(args))
+func (h *Host) blockingFlush(_ *hostResources, c *interp.CanonCaller, _ *outputStream, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("component: blocking-flush: got %d core args, want 2 (self, ret)", len(args)+1)
 	}
-	ret := uint64(uint32(args[1].Bits))
+	ret := uint64(uint32(args[0].Bits))
 	v, verr := canon.Variant(streamResultType(nil), "ok", nil)
 	return nil, lowerResult(c, ret, v, verr)
 }
@@ -425,9 +442,6 @@ func (h *Host) exit(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value,
 	}
 	return nil, nil
 }
-
-// noop is a resource-drop intrinsic: it accepts the handle argument and returns, freeing nothing.
-func (h *Host) noop(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) { return nil, nil }
 
 // getArguments lowers the host's argv as a non-empty `list<string>` at the return pointer (its sole
 // arg) — the first host-produced list with real payload. Each string's bytes are allocated in guest
@@ -452,15 +466,17 @@ func (h *Host) getArguments(c *interp.CanonCaller, args []interp.Value) ([]inter
 
 // blockingRead marshals input-stream.blocking-read: (self: borrow<input-stream>, len: u64) ->
 // result<list<u8>, stream-error>, flattened to (self, len, ret). It reads up to `len` bytes from the
-// host stdin **through the blocking excursion** (§5 H-1/H-3, `CanonCaller.Blocking`), then — after the
-// wake, never while blocked — lowers the result: Ok(list<u8>) when bytes were read, Err(closed) at EOF
-// (the stream-error variant's `closed` case, no payload). The read is interruptible: Close cancels it.
-func (h *Host) blockingRead(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-	if len(args) != 3 {
-		return nil, fmt.Errorf("component: blocking-read: got %d core args, want 3 (self, len, ret)", len(args))
+// stream `self` names, the host stdin, **through the blocking excursion** (§5 H-1/H-3,
+// `CanonCaller.Blocking`), then — after the wake, never while blocked — lowers the result: Ok(list<u8>)
+// when bytes were read, Err(closed) at EOF (the stream-error variant's `closed` case, no payload). The read
+// is interruptible: Close cancels it. `self` stays lent across the read, so a drop of it from another agent
+// meanwhile traps rather than freeing the stream under the read (ADR 0117).
+func (h *Host) blockingRead(_ *hostResources, c *interp.CanonCaller, self *inputStream, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("component: blocking-read: got %d core args, want 3 (self, len, ret)", len(args)+1)
 	}
-	maxLen := args[1].Bits // u64
-	ret := uint64(uint32(args[2].Bits))
+	maxLen := args[0].Bits // u64
+	ret := uint64(uint32(args[1].Bits))
 
 	const readCap = 1 << 16
 	n := maxLen
@@ -468,7 +484,7 @@ func (h *Host) blockingRead(c *interp.CanonCaller, args []interp.Value) ([]inter
 		n = readCap
 	}
 	var data []byte
-	if h.Stdin != nil && n > 0 {
+	if self.r != nil && n > 0 {
 		buf := make([]byte, n)
 		var m int
 		var rerr error
@@ -478,7 +494,7 @@ func (h *Host) blockingRead(c *interp.CanonCaller, args []interp.Value) ([]inter
 		// Close (H-3) once the read returns. A reader that never returns is p1's own limitation, not this
 		// slice's to lift; a mid-read-cancellable read would be a goroutine site behind its own decision.
 		if err := c.Blocking(func() error {
-			m, rerr = h.Stdin.Read(buf)
+			m, rerr = self.r.Read(buf)
 			if rerr != nil && rerr != io.EOF {
 				return rerr
 			}
@@ -513,19 +529,16 @@ func (h *Host) blockingRead(c *interp.CanonCaller, args []interp.Value) ([]inter
 }
 
 // errorToDebugString marshals error.to-debug-string: (self: borrow<error>) -> string, flattened to
-// (self, ret). It looks the error up in the host error table and lowers its message as a string.
-func (h *Host) errorToDebugString(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("component: error.to-debug-string: got %d core args, want 2 (self, ret)", len(args))
-	}
-	self := args[0].Int32()
-	msg := "stream error"
-	if e, ok := h.errors[self]; ok {
-		msg = e.Error()
+// (self, ret). `self` is the lent error, and its message is lowered as a string. An unknown handle used to
+// lower a placeholder, "stream error"; it now traps, as def:lift_borrow refuses an index the instance does
+// not hold (ADR 0117).
+func (h *Host) errorToDebugString(_ *hostResources, c *interp.CanonCaller, self error, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("component: error.to-debug-string: got %d core args, want 2 (self, ret)", len(args)+1)
 	}
 	// The string is lowered by the codec's one string lowering (canon.StoreString), against guest memory
 	// — the same code the definitions.py string fixtures verify (#719), not a hand path.
-	return nil, canon.StoreString(guestHeap{c}, msg, int(uint32(args[1].Bits)))
+	return nil, canon.StoreString(guestHeap{c}, self.Error(), int(uint32(args[0].Bits)))
 }
 
 // emptyListOf marshals a `() -> list<elem>` import this host grants nothing (get-environment,
