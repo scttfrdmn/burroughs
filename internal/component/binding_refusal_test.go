@@ -4,6 +4,7 @@ package component
 
 import (
 	"errors"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -213,7 +214,9 @@ func TestBindingAdmitsImplementedFilesystemErrorCodeOnRealGuest(t *testing.T) {
 	}
 	const name = "wasi:filesystem/types::filesystem-error-code"
 	wh := map[string]interp.CanonFunc{name: dummyCanon}
-	w, err := c.walkComponent(stubHost, wh, nil, nil, hostResourceSource{})
+	// The production resource types, since ADR 0118: the import's `err: borrow<error>` must name a resource
+	// the host implements, and an empty source implements none, which no real host is.
+	w, err := c.walkComponent(stubHost, wh, nil, nil, NewHost(io.Discard, io.Discard, nil).resourceSource())
 	if err != nil {
 		t.Fatalf("an implemented filesystem-error-code refused at instantiate: %v", err)
 	}

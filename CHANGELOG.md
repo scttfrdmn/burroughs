@@ -36,6 +36,52 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **A type a guest `use`s from an imported instance decodes as its definition, a handle in a guest's signature
+  carries its resource's identity and is checked against the host's, and `Close` destroys the owns a guest still
+  holds** ([#1248](https://github.com/scttfrdmn/burroughs/issues/1248),
+  [#1252](https://github.com/scttfrdmn/burroughs/issues/1252), ADR 0118). E4, E6 and E7 take `use`d WASI types,
+  and E7's sockets need the teardown.
+  - **What was missing:** every type export of an instance type decoded as a resource placeholder, whatever its
+    bound, and a top-level `alias export` of one never resolved. So `wasi:cli/types`' `error-code` reached
+    `write-via-stream` as a reference, and the signature read `future<ref>`. `resolveVal` did not follow a
+    future's payload. An `own` or `borrow` in a guest's signature carried only its local type index, and nothing
+    compared the guest's resources with the host's. An own the guest never dropped was left to the Go collector,
+    which runs no destructor.
+  - **The repair:**
+    - An eq-bound type export is the type it names, and a `sub resource` one is a resource named by the export.
+      `InstanceType.Types` keeps them. A top-level alias of an imported instance's type export resolves to it,
+      with its resources named by the import, `wasi:io/streams@0.2.3::output-stream`. A top-level type import
+      keeps its bound too.
+    - `resolveVal` follows futures and streams, and an own or borrow gains its resource's identity
+      (`ValType.Resource`). The codec bridge gives a host resource's handle that resource's RT.
+    - At instantiate, every import a host table serves is checked: each handle must name a host resource, and a
+      `[method]R.m`'s self must be a borrow of `R`. `write-via-stream`'s future payload must equal the type the
+      host lowers its completion at, so #1246's substitution of the host's type is now a checked agreement.
+    - `canon.HandleTable.Each` (the reference's `Table.__iter__`) lets an instance's teardown find what it holds.
+      After the core instances close, each remaining own's destructor runs once, across nested instances. An own
+      still lent to a call is left alone.
+  - **What a guest sees:** a guest whose host-served import declares a handle the host does not implement, a method
+    whose self is another resource, or a `write-via-stream` payload other than the host's is refused at
+    instantiate with `ErrLinkRefused`. Before, it bound and then trapped at call or read the wrong bytes. A
+    resource a guest never dropped is destroyed once when its instance closes. p3hello, p3echo and p3async-hello
+    run as before.
+  - **Out of scope, stated in the ADR:** guest-defined resources (#1251), whose handles keep a local index, and
+    aliases out of an instance the guest instantiates itself, which stay unresolved. A nested component's lowers
+    are not cross-checked: `lowerSignature` looks their outer import name up among the nested component's own
+    imports and finds no signature, a gap it already had for its other checks
+    ([#1257](https://github.com/scttfrdmn/burroughs/issues/1257)).
+  - **Witness:** `TestAUsedTypeDecodesAsItsDefinition` and `TestUsedTypesResolveInP3HelloAndEveryImportStillBinds`
+    on the real guests; `TestAGuestHandleCarriesItsHostResourcesIdentity` on p3hello; and, on new `.wat`
+    fixtures, `TestAUsedCompoundTypeIsResolvedInItsOwnScope`, `TestAWorldLevelTypeImportResolvesThroughItsBound`,
+    `TestHostMethodWhoseSelfIsAnotherResourceIsRefused`, `TestHostImportOverAResourceTheHostDoesNotImplementIsRefused`
+    and `TestWriteViaStreamPayloadMustAgreeWithTheHosts`, whose two fixtures differ in one enum label. Also
+    `TestCloseDestroysTheOwnsTheGuestStillHolds`, `TestCloseReachesTheOwnsANestedInstanceHolds`,
+    `TestCloseLeavesAnOwnLentToACallInProgress`,
+    `TestAResolvedHandleKeepsItsIdentityInAnotherScope` and `TestAnUnresolvedAliasIsSeenInsideAFutureAndARecord`.
+  - **Neuters, run:** each mechanism removed fails its witness. Leaving the alias export unresolved refuses p3hello
+    at instantiate. Without the teardown call, the destructor runs for 1 of 3 owns. The full list is in the ADR.
+  - **Tests changed:** `TestBindingAdmitsImplementedFilesystemErrorCodeOnRealGuest` walks with the production
+    resource types, since its implemented `filesystem-error-code` takes `borrow<error>`, which must now name one.
 - **The component host keys an import by its name and its semver compatibility class, so WASI 0.2 and 0.3 are
   never merged** ([#1229](https://github.com/scttfrdmn/burroughs/issues/1229), ADR 0115, decided in the slice).
   - **The defect:** `stripVersion` cut `@x.y.z` from every import before the host tables were consulted. WASI 0.2
@@ -129,6 +175,33 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A type named twice side by side no longer reads as a cycle, and one resolve is bounded by a size budget**
+  ([#1256](https://github.com/scttfrdmn/burroughs/issues/1256), `type:grave`; a repair ADR 0118's slice compelled).
+  - **The defect:** `resolveVal`'s `seen` map was meant to be the current chain of type references, but nothing
+    removed an index from it when its chain returned. So a second sibling reference to the same type read as a
+    cycle and became `VUnresolvedAlias`. Nothing reached it while a `use`d type decoded as a resource placeholder,
+    which is not followed. Once ADR 0118 resolved them, p3hello's `descriptor-stat`, which names
+    `option<datetime>` three times, lost its second and third timestamps, and p3hello was refused at instantiate.
+  - **The repair:** the index leaves the chain set when its chain returns. That alone lets a type shared by others
+    expand at every use: a chain of `tuple<t, t>` types took 2.9 s at 24 levels, doubling per level, and a crafted
+    component picks the depth. So one resolve (`resolveState`) also carries a budget of nodes it may build, at
+    wasmparser's `limits::MAX_WASM_TYPE_SIZE` (1,000,000), and a type past it resolves to `VUnresolvedAlias`,
+    which the instantiate-time refusal names. `resolveVal`'s doc had said the chain set *"bounds nothing legal"*;
+    it now says the budget is the bound.
+  - **And storage is shared, as wasmparser's is,** since a per-resolve budget alone still stored each level of a
+    shared chain expanded: about a million nodes per level, so N levels in a file under a kilobyte cost N million.
+    Every value type is resolved as it is defined, and a resolved type carries its effective size. A reference to
+    it is answered with it as it is, sharing its storage, and its size is charged to the budget. So construction is
+    linear in the distinct types, and the budget still bounds what later walks traverse. Qualifying a type's
+    resource identities shares the same way.
+  - **Witness:** `TestUsedTypesResolveInP3HelloAndEveryImportStillBinds` asserts all three timestamps;
+    `TestASharedTypeChainIsCutAtTheSizeBudget` resolves a 16-level chain in full and cuts a 24-level one;
+    `TestAResolvedTypeIsSharedNotRebuilt` bounds `Load` of `type-chain-18.wasm` at 1000 allocations (116
+    measured); `TestATypeChainPastTheBudgetIsCutAndStoredShared` decodes 40 levels within 2000 allocations, whole to
+    level 18 and cut after it. wasm-tools refuses both chain files, and the decoder reads them anyway.
+  - **Neuter, run:** with the removal undone, the second and third timestamps are unresolved and p3hello is refused.
+    With the budget check removed, the 24-level chain resolves in full, with no alias. With the sharing removed,
+    the 18-level `Load` makes 1,376,312 allocations, and the 40-level one 23.6 million, in about ten seconds.
 - **One ignored placement hint no longer sends every later reservation off-hint**
   ([#1254](https://github.com/scttfrdmn/burroughs/issues/1254), `type:grave`; ADR 0113's placement).
   - **The defect:** `mapPlaced` counted a mapping below the cursor as a stray, but took one placed anywhere above

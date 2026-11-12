@@ -175,8 +175,12 @@ type Import struct {
 	Kind ExternKind
 	// TypeIndex is the component type index the import's externtype names — the instance/func/component
 	// type. Meaningful for ExternInstance (the imported instance's type, whose export signatures a
-	// binding refusal resolves), ExternFunc, and ExternComponent; 0 otherwise.
+	// binding refusal resolves), ExternFunc, and ExternComponent, and for an ExternType bound `eq`, whose
+	// target it is (ADR 0118); 0 otherwise.
 	TypeIndex uint32
+	// SubResource marks an ExternType import bound `sub resource`: a fresh resource type, whose identity is
+	// the import's name (ADR 0118).
+	SubResource bool
 }
 
 // Export is one component-level export: its name and the sort it names.
@@ -362,11 +366,11 @@ func (c *Component) parseImports(body []byte) error {
 		if err != nil {
 			return fmt.Errorf("component: import %d name: %w", i, err)
 		}
-		kind, typeIdx, err := r.externType()
+		kind, typeIdx, sub, err := r.externType()
 		if err != nil {
 			return fmt.Errorf("component: import %d (%q) externtype: %w", i, name, err)
 		}
-		c.Imports = append(c.Imports, Import{Name: name, Kind: kind, TypeIndex: typeIdx})
+		c.Imports = append(c.Imports, Import{Name: name, Kind: kind, TypeIndex: typeIdx, SubResource: sub})
 		c.def(externKindSpace(kind), SectionImport, len(c.Imports)-1)
 	}
 	if r.pos != len(body) {
@@ -403,7 +407,7 @@ func (c *Component) parseExports(body []byte) error {
 		case 0x00:
 			// no ascribed externtype
 		case 0x01:
-			if _, _, terr := r.externType(); terr != nil {
+			if _, _, _, terr := r.externType(); terr != nil {
 				return fmt.Errorf("component: export %d (%q) ascribed externtype: %w", i, name, terr)
 			}
 		default:

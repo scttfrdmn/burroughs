@@ -5,6 +5,7 @@ package component
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -90,10 +91,59 @@ type hostResources struct {
 	table   *canon.HandleTable
 	objs    map[uint32]any
 	nextRep uint32
+	// types maps each RT this table has minted an own of to its type, so teardown can find the destructor of
+	// an own the guest never dropped (closeAll).
+	types map[int]*hostResource
 }
 
 func newHostResources() *hostResources {
-	return &hostResources{table: canon.NewHandleTable(), objs: map[uint32]any{}}
+	return &hostResources{table: canon.NewHandleTable(), objs: map[uint32]any{}, types: map[int]*hostResource{}}
+}
+
+// closeAll destroys every own the guest still holds, once, when its instance closes (#1252, ADR 0118): a
+// socket or a file a guest never dropped is closed rather than left to the Go collector, which runs no
+// destructor. Each handle leaves the table under the lock and its destructor runs outside it, as drop's
+// does, so a second closeAll finds nothing and destroys nothing more.
+//
+// **An own lent to a call still in progress is left alone**, since its object is in use. walker.close calls
+// this after the instance's core instances have closed, and `interp.Instance.Close` waits for the host calls
+// in flight, so a lend outstanding here is one whose host function did not return within that wait. Its
+// object is not destroyed, which leaks it, and that is preferred to destroying it under the call.
+//
+// The reference has no instance teardown to follow. wasmtime drops a store's host resources with the store.
+//
+// **A destructor's error is dropped**, because it has no reader: Close returns none, and a guest that could
+// be told has already gone. wasmtime's teardown is a Rust `Drop`, which cannot fail either.
+func (r *hostResources) closeAll() {
+	type doomed struct {
+		t   *hostResource
+		obj any
+	}
+	r.mu.Lock()
+	var held []int
+	r.table.Each(func(i int, h *canon.ResourceHandle) {
+		// NEUTER THIS lend test, and TestCloseLeavesAnOwnLentToACallInProgress runs the destructor inside the
+		// call that borrows the object.
+		if h.Own() && h.Lends() == 0 {
+			held = append(held, i)
+		}
+	})
+	ds := make([]doomed, 0, len(held))
+	for _, i := range held {
+		h, err := r.table.Remove(i)
+		if err != nil {
+			continue // Each just reported it live under this lock; unreachable
+		}
+		ds = append(ds, doomed{t: r.types[h.RT()], obj: r.objs[h.Rep()]})
+		delete(r.objs, h.Rep())
+	}
+	r.mu.Unlock()
+	for _, d := range ds {
+		if d.t == nil {
+			continue // an RT no mint recorded; mint is the only way an own enters this table
+		}
+		_ = d.t.destroy(d.obj) //nolint:errcheck // no reader: Close returns no error, and the guest that could be told is gone (ADR 0118)
+	}
 }
 
 // resourceTrap renders a refused handle operation as the trap the reference raises for it.
@@ -108,6 +158,7 @@ func (r *hostResources) mint(t *hostResource, obj any) int32 {
 	defer r.mu.Unlock()
 	r.nextRep++
 	r.objs[r.nextRep] = obj
+	r.types[t.rt] = t
 	return int32(r.table.Add(t.rt, r.nextRep, true))
 }
 
@@ -255,12 +306,168 @@ func (w *walker) typeStep(d Def) {
 // hostResourceAt resolves a type-space ordinal to the host resource type it names, or nil when it names
 // none the host implements for the guest's track.
 func (w *walker) hostResourceAt(typeIdx uint32) *hostResource {
-	if int(typeIdx) >= len(w.typeIdents) || w.typeIdents[typeIdx] == "" {
+	if int(typeIdx) >= len(w.typeIdents) {
 		return nil
 	}
-	t, ok, _ := lookupHost(w.resourceSrc.types, w.typeIdents[typeIdx])
+	return w.hostResourceNamed(w.typeIdents[typeIdx])
+}
+
+// hostResourceNamed resolves a resource identity (`interface@version::resource`) to the host resource type
+// serving it for the identity's track, or nil.
+func (w *walker) hostResourceNamed(identity string) *hostResource {
+	if identity == "" {
+		return nil
+	}
+	t, ok, _ := lookupHost(w.resourceSrc.types, identity)
 	if !ok {
 		return nil
 	}
 	return t
+}
+
+// hostRT is the resolver canonTypeIn takes (ADR 0118): a resource identity the host implements carries
+// that resource's RT, the number the instance's table entries hold.
+func (w *walker) hostRT(identity string) (int, bool) {
+	if t := w.hostResourceNamed(identity); t != nil {
+		return t.rt, true
+	}
+	return 0, false
+}
+
+// checkHostResources checks a host-served import's signature against the host's resource types (#1252,
+// ADR 0118), so a guest whose declaration disagrees with the host's is refused at instantiate rather than
+// trapping at its first call, or worse, being answered over a handle of another type.
+//
+//   - **Every own and borrow must name a resource the host implements.** The host's handlers read a handle
+//     as an index into the instance's table of host resources; a handle the host does not implement is not
+//     in it, and one with no identity is a resource this engine did not resolve (a guest-defined one, #1251).
+//   - **A `[method]R.m` lends its self as `borrow<R>`.** The host's adapter lends self at R's type (method
+//     in hostresource.go), so a self of another type would trap at every call.
+//
+// It is checked for each import a host table serves, whichever table, since each marshals its signature.
+func (w *walker) checkHostResources(lowerName string, sig *FuncType) error {
+	if sig == nil {
+		return nil
+	}
+	var bad error
+	visit := func(vt ValType) {
+		if bad != nil {
+			return
+		}
+		if vt.Resource == "" {
+			bad = fmt.Errorf("%w: import %s takes or returns %s of a resource this engine did not resolve "+
+				"to a host resource type (ADR 0118)", ErrLinkRefused, lowerName, valKindName(vt.Kind))
+			return
+		}
+		// NEUTER THIS check, and TestHostImportOverAResourceTheHostDoesNotImplementIsRefused instantiates a
+		// guest whose consume takes a widget.
+		if w.hostResourceNamed(vt.Resource) == nil {
+			bad = fmt.Errorf("%w: import %s takes or returns %s<%s>, a resource the host does not implement "+
+				"(ADR 0118)", ErrLinkRefused, lowerName, valKindName(vt.Kind), vt.Resource)
+		}
+	}
+	for _, p := range sig.Params {
+		eachHandle(p.Type, visit, 0)
+	}
+	if sig.Result != nil {
+		eachHandle(*sig.Result, visit, 0)
+	}
+	if bad != nil {
+		return bad
+	}
+	return w.checkMethodSelf(lowerName, sig)
+}
+
+// checkMethodSelf is checkHostResources' method rule. NEUTER THIS (return nil), and
+// TestHostMethodWhoseSelfIsAnotherResourceIsRefused instantiates a guest whose `[method]thing.poke` lends
+// a gadget.
+func (w *walker) checkMethodSelf(lowerName string, sig *FuncType) error {
+	iface, export, qualified := strings.Cut(lowerName, "::")
+	if !qualified {
+		iface, export = "", lowerName
+	}
+	rest, isMethod := strings.CutPrefix(export, "[method]")
+	if !isMethod {
+		return nil
+	}
+	resource, _, _ := strings.Cut(rest, ".")
+	identity := resource
+	if qualified {
+		identity = iface + "::" + resource
+	}
+	want := w.hostResourceNamed(identity)
+	if len(sig.Params) == 0 || sig.Params[0].Type.Kind != VBorrow || want == nil ||
+		w.hostResourceNamed(sig.Params[0].Type.Resource) != want {
+		self := "nothing"
+		if len(sig.Params) > 0 {
+			self = valKindName(sig.Params[0].Type.Kind) + "<" + sig.Params[0].Type.Resource + ">"
+		}
+		return fmt.Errorf("%w: import %s is a method of %s, and the guest declares its self as %s; the host "+
+			"lends borrow<%s> (ADR 0118)", ErrLinkRefused, lowerName, identity, self, identity)
+	}
+	return nil
+}
+
+// eachHandle calls f on every own and borrow in a resolved value type.
+func eachHandle(vt ValType, f func(ValType), depth int) {
+	if depth > 32 {
+		return // a resolved type is acyclic; unmodeledValKind's bound, for a hand-built one
+	}
+	sub := func(p *ValType) {
+		if p != nil {
+			eachHandle(*p, f, depth+1)
+		}
+	}
+	switch vt.Kind {
+	case VOwn, VBorrow:
+		f(vt)
+	case VList, VOption, VFuture, VStream:
+		sub(vt.Elem)
+	case VResult:
+		sub(vt.Ok)
+		sub(vt.Err)
+	case VVariant:
+		for _, c := range vt.Cases {
+			sub(c.Type)
+		}
+	case VRecord:
+		for _, fd := range vt.Fields {
+			eachHandle(fd.Type, f, depth+1)
+		}
+	case VTuple:
+		for _, e := range vt.Elems {
+			eachHandle(e, f, depth+1)
+		}
+	default:
+	}
+}
+
+// checkConsumerPayload is #1248's consumer (ADR 0118): the future a stream consumer returns is lowered at
+// the host's declared payload type (stdioWriteResultType), and the guest reads the completion at the type
+// its own signature declares, so the two must be one type. The guest's is resolved through its `use`d types
+// and its resources through the host's (canonTypeIn), then compared structurally (canon.TypeEqual).
+//
+// NEUTER THIS (return nil), and TestWriteViaStreamPayloadMustAgreeWithTheHosts instantiates a guest whose
+// `error-code` has other labels, which would read the host's discriminants as its own.
+func (w *walker) checkConsumerPayload(lowerName string, sig *FuncType, sc *streamConsumer) error {
+	if sig == nil || sc.payload == nil {
+		return nil
+	}
+	want, err := sc.payload()
+	if err != nil {
+		return err
+	}
+	if sig.Result == nil || sig.Result.Kind != VFuture || sig.Result.Elem == nil {
+		return fmt.Errorf("%w: import %s must return future<%s>, the host's declaration; the guest's signature "+
+			"returns no future payload (ADR 0118)", ErrLinkRefused, lowerName, want)
+	}
+	got, err := canonTypeIn(*sig.Result.Elem, w.hostRT)
+	if err != nil {
+		return fmt.Errorf("%w: import %s's future payload: %w", ErrLinkRefused, lowerName, err)
+	}
+	if !canon.TypeEqual(got, want) {
+		return fmt.Errorf("%w: import %s returns future<%s> in the guest's signature and future<%s> in the "+
+			"host's declaration, which the host lowers its completion at (ADR 0118)", ErrLinkRefused, lowerName, got, want)
+	}
+	return nil
 }

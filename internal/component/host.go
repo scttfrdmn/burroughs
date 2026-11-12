@@ -115,14 +115,20 @@ func (h *Host) asyncWasi() map[string]asyncLowerImpl { return h.asyncImpls }
 // so it is a factory the walk calls with the instance's table, kept SEPARATE from wasi()/asyncWasi() by type
 // for the same reason those are separate (a wrong-source binding is a compile error). It stays INTERNAL: it
 // takes an *asyncHandles, an unexported type, so it cannot appear on the exported API (gate:async #739).
-type streamConsumer func(async *asyncHandles) interp.CanonFunc
+type streamConsumer struct {
+	bind func(async *asyncHandles) interp.CanonFunc
+	// payload is the type of the future the consumer returns, as the host's interface declares it and the
+	// consumer lowers its completion at (ADR 0116). The guest's own signature must declare the same type,
+	// checked at instantiate (ADR 0118), since the guest reads the bytes the host writes at that type.
+	payload func() (canon.Type, error)
+}
 
 // streamConsumers maps an import identity, keyed by compatibility class like wasi()'s, to a stream-consuming
 // host import. Only write-via-stream is served (the p3async-hello sink), and only for WASI 0.3, where it
 // replaces 0.2's `get-stdout`; an unlisted consumer reaches the refusing stub.
-func (h *Host) streamConsumers() map[string]streamConsumer {
-	m := map[string]streamConsumer{}
-	serve(m, wasiP3, "wasi:cli/stdout::write-via-stream", h.writeViaStream)
+func (h *Host) streamConsumers() map[string]*streamConsumer {
+	m := map[string]*streamConsumer{}
+	serve(m, wasiP3, "wasi:cli/stdout::write-via-stream", &streamConsumer{bind: h.writeViaStream, payload: stdioWriteResultType})
 	return m
 }
 
@@ -185,26 +191,37 @@ func (h *Host) writeViaStream(async *asyncHandles) interp.CanonFunc {
 // `wasm-tools component wit`.
 var stdioErrorCodeLabels = []string{"io", "illegal-byte-sequence", "pipe"}
 
-// stdioWriteResultOK is `result::ok` at `write-via-stream`'s future payload type, `result<_, error-code>`
-// (ADR 0116): a 1-byte discriminant and a 1-byte enum payload, size 2 and alignment 1.
+// stdioWriteResultType is `write-via-stream`'s future payload type, `result<_, error-code>` (ADR 0116): a
+// 1-byte discriminant and a 1-byte enum payload, size 2 and alignment 1.
 //
-// # Why the type is the host's declaration and not the guest's signature
-//
-// The guest's import signature is where the payload type would ideally come from, and it does not carry
-// it. Decoded from p3async-hello, `write-via-stream`'s result is `future<ref>`, whose `error-code` is
-// `use`d from `wasi:cli/types`: an outer alias of an `alias export` of an imported instance's type export.
-// This decoder records an instance type's exported types as a resource placeholder (`exportDecl`'s `0x03`
-// arm), so the reference resolves to no value type. Resolving type-export aliases is its own slice.
+// # The host's declaration, checked against the guest's signature
 //
 // The host implements `wasi:cli/stdout@0.3`'s `write-via-stream`, and that WIT fixes the type, so the host's
-// declaration is the type the interface promises. Built through the codec's constructors on each call;
-// they cannot fail on these constant labels, and are checked anyway rather than assumed.
-func stdioWriteResultOK() (canon.Value, error) {
+// declaration is the type the interface promises and the one the completion is lowered at.
+//
+// **When ADR 0116 chose it, the guest's signature could not be asked.** Its `error-code` is `use`d from
+// `wasi:cli/types`, an outer alias of an `alias export` of an imported instance's type export, and the
+// decoder recorded every type export as a resource placeholder, so the payload decoded as `future<ref>`.
+// ADR 0118 resolves it, and the two are now a checked agreement rather than a substitution: at instantiate
+// the guest's declared payload must equal this one (walker.checkConsumerPayload), or the lower is refused.
+//
+// Built through the codec's constructors on each call; they cannot fail on these constant labels, and are
+// checked anyway rather than assumed.
+func stdioWriteResultType() (canon.Type, error) {
 	ec, err := canon.EnumType(stdioErrorCodeLabels...)
 	if err != nil {
-		return canon.Value{}, fmt.Errorf("component: write-via-stream: error-code: %w", err)
+		return canon.Type{}, fmt.Errorf("component: write-via-stream: error-code: %w", err)
 	}
-	return canon.Variant(canon.ResultType(nil, &ec), "ok", nil)
+	return canon.ResultType(nil, &ec), nil
+}
+
+// stdioWriteResultOK is `result::ok` at stdioWriteResultType, the value a completed write resolves with.
+func stdioWriteResultOK() (canon.Value, error) {
+	t, err := stdioWriteResultType()
+	if err != nil {
+		return canon.Value{}, err
+	}
+	return canon.Variant(t, "ok", nil)
 }
 
 // NewHost builds a preview-2 host over the given streams. Handles are minted per instance, from 1, by the

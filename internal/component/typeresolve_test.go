@@ -52,7 +52,10 @@ func TestSectionTypeAtResolvesThroughTheIndexSpaceNotTheSection(t *testing.T) {
 			valKindName(got.Kind), valKindName(c.Types[2].Val.Kind))
 	}
 
-	// An ordinal naming the alias does not resolve, and is left as a reference rather than guessed at.
+	// An ordinal naming an alias the lookup cannot answer does not resolve, and is left as a reference rather
+	// than guessed at. Since ADR 0118 an alias export of an imported instance's type does resolve
+	// (TestAUsedTypeDecodesAsItsDefinition); this one has no alias record behind it, so there is nothing to
+	// follow, and the section entry at the same position must not answer for it.
 	if got := resolveVal(ValType{Kind: VRef, Ref: 0}, at, nil); got.Kind != VRef {
 		t.Fatalf("ordinal 0 names an alias, not a parsed type; resolveVal returned %s rather than "+
 			"leaving the reference alone", valKindName(got.Kind))
