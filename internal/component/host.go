@@ -115,12 +115,13 @@ func (h *Host) asyncWasi() map[string]asyncLowerImpl { return h.asyncImpls }
 // takes an *asyncHandles, an unexported type, so it cannot appear on the exported API (gate:async #739).
 type streamConsumer func(async *asyncHandles) interp.CanonFunc
 
-// streamConsumers maps a version-stripped import identity to a stream-consuming host import. Only
-// write-via-stream is served (the p3async-hello sink); an unlisted consumer reaches the refusing stub.
+// streamConsumers maps an import identity, keyed by compatibility class like wasi()'s, to a stream-consuming
+// host import. Only write-via-stream is served (the p3async-hello sink), and only for WASI 0.3, where it
+// replaces 0.2's `get-stdout`; an unlisted consumer reaches the refusing stub.
 func (h *Host) streamConsumers() map[string]streamConsumer {
-	return map[string]streamConsumer{
-		"wasi:cli/stdout::write-via-stream": h.writeViaStream,
-	}
+	m := map[string]streamConsumer{}
+	serve(m, wasiP3, "wasi:cli/stdout::write-via-stream", h.writeViaStream)
+	return m
 }
 
 // writeViaStream implements `wasi:cli/stdout::write-via-stream: func(data: stream<u8>) -> future<result<_,
@@ -199,35 +200,42 @@ func (h *Host) mintWriter(w io.Writer) int32 {
 // wasi builds the import-name → canon-lower-impl table the walk consults. The keys are the
 // "module::export" identities the loader records; a lowered func whose identity is absent still reaches
 // the refusing stub (an unexercised import remains refused, by name).
-// The keys are **version-stripped** "interface::export" identities (`wasi:cli/stdout::get-stdout`), not
-// the full `interface@x.y.z::export` a lower names — a guest at `@0.2.6` (p3echo) and one at `@0.2.3`
-// (p3hello) name the same interface at different versions, and the host serves the interface, not a
-// version. `resolverFor` strips the `@version` before the lookup (walk.go, stripVersion).
+//
+// **Each key carries the compatibility class it serves** (#1229, ADR 0115): `wasi:cli/stdout@0.2::get-stdout`,
+// registered through `serve`. A guest at `@0.2.6` (p3echo) and one at `@0.2.3` (p3hello) are one class and
+// meet one entry; a guest at `@0.3.0` meets it only if the entry was registered for 0.3. This replaced
+// version-stripped keys, under which WASI 0.2 and 0.3 — which share names with different signatures — met
+// the same entry, and the 0.3 fixtures ran partly on implementations nobody had said were 0.3's.
 func (h *Host) wasi() map[string]interp.CanonFunc {
-	m := map[string]interp.CanonFunc{
-		"wasi:cli/stdout::get-stdout": h.getWriter(func() io.Writer { return h.Stdout }),
-		"wasi:cli/stderr::get-stderr": h.getWriter(func() io.Writer { return h.Stderr }),
-		"wasi:cli/stdin::get-stdin":   h.getWriter(func() io.Writer { return io.Discard }),
+	m := map[string]interp.CanonFunc{}
+	// 0.2 only. The stdio getters and `wasi:io` are gone from 0.3, which hands streams across as values
+	// (`write-via-stream`, in streamConsumers). `get-directories`' 0.3 descriptor differs and is
+	// unverified, and no 0.3 fixture imports it.
+	serve(m, wasiP2, "wasi:cli/stdout::get-stdout", h.getWriter(func() io.Writer { return h.Stdout }))
+	serve(m, wasiP2, "wasi:cli/stderr::get-stderr", h.getWriter(func() io.Writer { return h.Stderr }))
+	serve(m, wasiP2, "wasi:cli/stdin::get-stdin", h.getWriter(func() io.Writer { return io.Discard }))
 
-		"wasi:io/streams::[method]output-stream.blocking-write-and-flush": h.streamWrite,
-		"wasi:io/streams::[method]output-stream.write":                    h.streamWrite,
-		"wasi:io/streams::[method]output-stream.check-write":              h.checkWrite,
-		"wasi:io/streams::[method]output-stream.blocking-flush":           h.blockingFlush,
-		"wasi:io/streams::[method]input-stream.blocking-read":             h.blockingRead,
+	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.blocking-write-and-flush", h.streamWrite)
+	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.write", h.streamWrite)
+	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.check-write", h.checkWrite)
+	serve(m, wasiP2, "wasi:io/streams::[method]output-stream.blocking-flush", h.blockingFlush)
+	serve(m, wasiP2, "wasi:io/streams::[method]input-stream.blocking-read", h.blockingRead)
 
-		"wasi:io/error::[method]error.to-debug-string": h.errorToDebugString,
+	serve(m, wasiP2, "wasi:io/error::[method]error.to-debug-string", h.errorToDebugString)
 
-		"wasi:cli/exit::exit": h.exit,
+	// One implementation for both tracks: these signatures are the same in 0.2 and 0.3, which is what the
+	// 0.3 fixtures (p3async-hello, p3async-cancel) were relying on when the version was stripped.
+	serve(m, wasiP2P3, "wasi:cli/exit::exit", h.exit)
 
-		// get-arguments lowers the host's argv as a non-empty list<string>; get-environment/get-directories
-		// grant nothing, so each lowers an empty list of its element type — through the codec, so the
-		// backing realloc's alignment is the element's, not a hand-hardcoded 4.
-		"wasi:cli/environment::get-arguments": h.getArguments,
-		"wasi:cli/environment::get-environment": h.emptyListOf(
-			canon.TupleType(canon.Type{Kind: canon.KindString}, canon.Type{Kind: canon.KindString})),
-		"wasi:filesystem/preopens::get-directories": h.emptyListOf(
-			canon.TupleType(canon.OwnType(0), canon.Type{Kind: canon.KindString})),
-	}
+	// get-arguments lowers the host's argv as a non-empty list<string>; get-environment/get-directories
+	// grant nothing, so each lowers an empty list of its element type — through the codec, so the
+	// backing realloc's alignment is the element's, not a hand-hardcoded 4.
+	serve(m, wasiP2P3, "wasi:cli/environment::get-arguments", h.getArguments)
+	serve(m, wasiP2P3, "wasi:cli/environment::get-environment", h.emptyListOf(
+		canon.TupleType(canon.Type{Kind: canon.KindString}, canon.Type{Kind: canon.KindString})))
+	serve(m, wasiP2, "wasi:filesystem/preopens::get-directories", h.emptyListOf(
+		canon.TupleType(canon.OwnType(0), canon.Type{Kind: canon.KindString})))
+
 	// The resource-drop intrinsics the world lowers are no-ops here: the table entry is left in place
 	// (the streams are the process's, not the guest's to free), so a drop neither refuses nor frees.
 	for _, name := range []string{
@@ -236,19 +244,26 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 		"wasi:io/error::[resource-drop]error",
 		"wasi:filesystem/types::[resource-drop]descriptor",
 	} {
-		m[name] = h.noop
+		serve(m, wasiP2, name, h.noop)
 	}
 	// Extra SYNC impls, the counterpart of `asyncImpls` (#863). A guest in the async tier can import a
 	// plain function the host must answer — #862's receipt guest calls `note` from `Drop` glue, which
 	// cannot await, so it has to be sync. `asyncImpls` already had a field for its half; this is the other.
+	// Their keys are unversioned, so each is a wildcard and serves every class (lookupHost).
 	//
 	// **A name already served by WASI is REFUSED, not shadowed.** Silently overriding
 	// `wasi:cli/exit::exit` with a test's function would be a capability change disguised as a map write,
 	// and the guest would have no way to tell. The panic is the right severity for an in-package
 	// misconfiguration: `syncImpls` is unexported and set only by a test, so a collision is a programming
-	// error at the call site rather than anything a guest or an embedder can provoke.
+	// error at the call site rather than anything a guest or an embedder can provoke. The collision is by
+	// version-free name, under any class: a wildcard `wasi:cli/exit::exit` would answer 0.2's and 0.3's guests.
+	served := map[string]bool{}
+	for k := range m {
+		name, _, _ := cutVersion(k)
+		served[name] = true
+	}
 	for name, fn := range h.syncImpls {
-		if _, taken := m[name]; taken {
+		if base, _, _ := cutVersion(name); served[base] {
 			panic("component: syncImpls would shadow the WASI impl for " + name +
 				" — pick another name; the host does not let an extra impl displace a real capability")
 		}

@@ -32,12 +32,15 @@ func TestSyncImplsAreServedAlongsideWASI(t *testing.T) {
 	}
 	// WASI must still be there. A merge that replaced the map rather than adding to it would pass the
 	// assertion above and break every real guest, so the two are checked separately.
+	//
+	// Asked through lookupHost at a guest's versioned identity, not by indexing the map: since ADR 0115 a
+	// WASI key carries its compatibility class (`wasi:cli/exit@0.2::exit`), so the bare name is no key.
 	for _, want := range []string{
-		"wasi:cli/exit::exit",
-		"wasi:cli/stdout::get-stdout",
-		"wasi:io/streams::[method]output-stream.write",
+		"wasi:cli/exit@0.2.3::exit",
+		"wasi:cli/stdout@0.2.3::get-stdout",
+		"wasi:io/streams@0.2.3::[method]output-stream.write",
 	} {
-		if _, ok := m[want]; !ok {
+		if _, ok, _ := lookupHost(m, want); !ok {
 			t.Errorf("WASI impl %q disappeared when syncImpls were merged", want)
 		}
 	}
