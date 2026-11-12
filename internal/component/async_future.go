@@ -52,10 +52,14 @@ type readableFutureEnd struct {
 	resolved  bool         // the copy has ended (COMPLETED or CANCELLED)
 	delivered bool         // the FUTURE_READ event has been taken by a waitable-set.wait
 	result    copyResult
-	value     uint32              // the value this future delivers on COMPLETED (future<u32>, first slice)
-	readPtr   uint32              // where a pending future.read wants the value written
-	hasRead   bool                // a future.read is pending on this end
-	caller    *interp.CanonCaller // the reading agent's caller, for the completion's memory write
+	value     uint32 // the value this future delivers on COMPLETED (future<u32>, first slice)
+	// payload, when set, is the value this future delivers **at its declared payload type**, lowered
+	// through the codec on COMPLETED instead of `value`'s 4-byte write (#1246, ADR 0116). A future<u32>
+	// leaves it nil, since 4 bytes is that type's size; any other payload type must set it.
+	payload *canon.Value
+	readPtr uint32              // where a pending future.read wants the value written
+	hasRead bool                // a future.read is pending on this end
+	caller  *interp.CanonCaller // the reading agent's caller, for the completion's memory write
 	// completeErr holds a deferred completion failure — when a host consumer resolves this future off the
 	// stream-copy path (write-via-stream's onHostComplete, which cannot return an error), a guest-memory
 	// write failure lands here and is surfaced when the guest next touches the end (futureDrop).
@@ -97,7 +101,18 @@ func (e *readableFutureEnd) resolveLocked(r copyResult) {
 // resolution sees the lowered value. The caller holds asyncHandles.mu; the write may run on the host's
 // goroutine while the reading agent is parked (the mutex is the happens-before). CANCELLED writes nothing.
 func (e *readableFutureEnd) completeLocked(r copyResult) error {
-	if r == copyCompleted && e.hasRead {
+	if r == copyCompleted && e.hasRead && e.payload != nil {
+		// **The codec lowers the payload, so at most `size(type)` bytes are written** (#1246). This was the
+		// 4-byte write below for every future, and write-via-stream's payload is `result<_, error-code>`,
+		// which is 2 bytes at alignment 1: each completion zeroed 2 guest bytes past the result. A
+		// payload-less case writes only its discriminant, as the model's `store_variant` does.
+		//
+		// NEUTER: drop this arm so write-via-stream falls through to the 4-byte write, and
+		// `TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes` fails on the bytes past the result.
+		if err := canon.StoreVia(guestHeap{e.caller}, *e.payload, int(e.readPtr)); err != nil {
+			return fmt.Errorf("component: future.read completion: lowering a %s at ptr: %w", e.payload.Type, err)
+		}
+	} else if r == copyCompleted && e.hasRead {
 		var buf [4]byte
 		binary.LittleEndian.PutUint32(buf[:], e.value)
 		if err := e.caller.Write(uint64(e.readPtr), buf[:]); err != nil {

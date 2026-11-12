@@ -19,10 +19,20 @@ import (
 const fixturesPath = "testdata/fixtures.json"
 
 type fixtureFile struct {
-	Pin     string        `json:"pin"`
-	Cases   []fixtureCase `json:"cases"`
-	Handles []handleFix   `json:"handles"`
-	Shapes  []shapeFix    `json:"shapes"`
+	Pin         string        `json:"pin"`
+	Cases       []fixtureCase `json:"cases"`
+	Handles     []handleFix   `json:"handles"`
+	Shapes      []shapeFix    `json:"shapes"`
+	FlagsBounds []flagsBound  `json:"flags_bounds"`
+}
+
+// flagsBound is the model's answer for a flags type of `Labels` labels: its size and alignment, or that
+// the model refused to lay it out (its `assert(0 < n <= 32)` fired). ADR 0116.
+type flagsBound struct {
+	Labels  int  `json:"labels"`
+	Refused bool `json:"refused"`
+	Size    int  `json:"size"`
+	Align   int  `json:"align"`
 }
 
 type fixtureCase struct {
@@ -46,6 +56,7 @@ type typeSpec struct {
 	Ok     *typeSpec         `json:"ok"`
 	Err    *typeSpec         `json:"err"`
 	Rt     int               `json:"rt"`
+	Labels []string          `json:"labels"` // flags and enum (ADR 0116); an option's inner type is Elem
 }
 
 type fieldSpec struct {
@@ -142,6 +153,23 @@ func typeFromSpec(t *testing.T, s typeSpec) Type {
 			fields[i] = Field{Name: fs.Name, Type: typeFromSpec(t, fs.Type)}
 		}
 		return RecordType(fields...)
+	case "flags":
+		ft, err := FlagsType(s.Labels...)
+		if err != nil {
+			t.Fatalf("flags type: %v", err)
+		}
+		return ft
+	case "enum":
+		et, err := EnumType(s.Labels...)
+		if err != nil {
+			t.Fatalf("enum type: %v", err)
+		}
+		return et
+	case "option":
+		if s.Elem == nil {
+			t.Fatal("option fixture type has no elem")
+		}
+		return OptionType(typeFromSpec(t, *s.Elem))
 	}
 	k, ok := map[string]Kind{
 		"bool": KindBool, "u8": KindU8, "u16": KindU16, "u32": KindU32, "u64": KindU64,
@@ -262,6 +290,40 @@ func valueFromJSON(t *testing.T, typ Type, raw any) Value {
 		// An own handle's fixture value is its resource representation (an i32 rep); the codec's
 		// lower_own assigns the table index, as the reference model does.
 		return Own(typ.RT, uint32(mustParseUint(t, raw.(json.Number))))
+	case KindFlags:
+		// A flags value is the list of labels set, which `gen.py` turns into the model's {label: bool}.
+		arr := raw.([]any)
+		set := make([]string, len(arr))
+		for i, e := range arr {
+			set[i] = e.(string)
+		}
+		v, err := Flags(typ, set...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	case KindEnum:
+		v, err := Enum(typ, raw.(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	case KindOption:
+		// `{"none": null}` or `{"some": v}`, the despecialized variant's spelling, so `option<option<T>>`'s
+		// `some(none)` and `none` are distinguishable where a bare null would not be.
+		m := raw.(map[string]any)
+		if p, some := m["some"]; some {
+			v, err := Some(typ, valueFromJSON(t, *typ.Elem, p))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+		v, err := None(typ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
 	default:
 		t.Fatalf("value kind %s outside modeled scope", typ.Kind)
 		return Value{}
@@ -396,6 +458,12 @@ func TestCodecMatchesReferenceModel(t *testing.T) {
 // valueEqual compares two values for the differential's lift check. Floats compare as canonicalized
 // bits (a non-canonical NaN lowered then lifted comes back canonical), matching how the codec and the
 // reference model both canonicalize.
+//
+// **Every kind whose payload is not in `u` needs its own arm, and the default must never be reached by
+// one** (#1245). `record` had no arm, so two records fell to `a.u == b.u`, which is 0 == 0 for every
+// record: the lift and lift-flat checks on the ten record cases compared nothing, and a codec lifting the
+// wrong field values would have passed. The store side was still checked, byte for byte, so only the
+// read-back direction was blind. The default is now only for kinds whose whole value is `u`.
 func valueEqual(a, b Value) bool {
 	if a.Type.Kind != b.Type.Kind {
 		return false
@@ -408,6 +476,21 @@ func valueEqual(a, b Value) bool {
 	case KindString:
 		return a.s == b.s
 	case KindList:
+		// Through `elems`, which sees every form a list takes: a packed or segmented list holds nothing
+		// in `list` at the top level, so comparing `a.list` would compare two empty slices.
+		if a.listLen() != b.listLen() || !typeEqual(a.Type, b.Type) {
+			return false
+		}
+		ae, be := a.elems(), b.elems()
+		for i := range ae {
+			if !valueEqual(ae[i], be[i]) {
+				return false
+			}
+		}
+		return true
+	case KindRecord:
+		// #1245's repair. NEUTER: delete this arm, and `TestValueEqualSeesARecordsFields` fails while
+		// `TestCodecMatchesReferenceModel` stays green — the grave's specimen, run.
 		if len(a.list) != len(b.list) || !typeEqual(a.Type, b.Type) {
 			return false
 		}
@@ -417,11 +500,14 @@ func valueEqual(a, b Value) bool {
 			}
 		}
 		return true
-	case KindVariant:
+	case KindVariant, KindOption:
 		if a.u != b.u || (a.payload == nil) != (b.payload == nil) {
 			return false
 		}
 		return a.payload == nil || valueEqual(*a.payload, *b.payload)
+	case KindFlags, KindEnum:
+		// The labels are part of the value's meaning: bit 1 of `flags{a, b}` is not bit 1 of `flags{x, y}`.
+		return a.u == b.u && typeEqual(a.Type, b.Type)
 	case KindOwn:
 		return a.u == b.u && a.Type.RT == b.Type.RT
 	default:

@@ -28,6 +28,7 @@ from definitions import (  # noqa: E402
     BoolType, U8Type, U16Type, U32Type, U64Type, S8Type, S16Type, S32Type, S64Type,
     F32Type, F64Type, CharType, StringType, ListType, VariantType, ResultType,
     OwnType, BorrowType, TupleType, CaseType, RecordType, FieldType,
+    FlagsType, EnumType, OptionType,
     MemInst, CanonicalOptions, ComponentInstance,
     LiftLowerContext, Store, store, load, lower_flat_values, flatten_types, align_to,
     alignment, elem_size, ResourceType, ResourceHandle,
@@ -132,6 +133,12 @@ def build_type(spec):
             return ResultType(ok, err)
         case "own": return OwnType(spec.get("rt", 0))
         case "borrow": return BorrowType(spec.get("rt", 0))
+        # ADR 0116. `flags` is NOT despecialized by the model and has its own layout; `enum` and `option`
+        # are, to variants (definitions.py:despecialize). Built as themselves so the model despecializes
+        # them, rather than this script doing it and the reading describing a variant.
+        case "flags": return FlagsType(list(spec["labels"]))
+        case "enum": return EnumType(list(spec["labels"]))
+        case "option": return OptionType(build_type(spec["elem"]))
     raise ValueError(f"unknown type kind {k!r}")
 
 
@@ -179,6 +186,26 @@ def build_value(spec, value):
         (arm, payload), = value.items()
         sub = spec.get("ok") if arm == "ok" else spec.get("err")
         return {arm: build_value(sub, payload) if sub else None}
+    if k == "flags":
+        # The case lists the labels SET; the model's flags value is {label: bool} over every label
+        # (definitions.py:pack_flags_into_int reads `v[l]` for each). A label not in the type is loud.
+        unknown = [l for l in value if l not in spec["labels"]]
+        if unknown:
+            raise ValueError(f"flags case sets label(s) not in its type: {unknown}")
+        return {l: (l in value) for l in spec["labels"]}
+    if k == "enum":
+        # An enum value is its despecialized variant's: {label: None}.
+        if value not in spec["labels"]:
+            raise ValueError(f"enum case label {value!r} is not in its type")
+        return {value: None}
+    if k == "option":
+        # {"none": null} or {"some": v}, the despecialized variant's spelling.
+        (arm, payload), = value.items()
+        if arm == "none":
+            return {"none": None}
+        if arm != "some":
+            raise ValueError(f"option case arm {arm!r} is neither none nor some")
+        return {"some": build_value(spec["elem"], payload)}
     return value  # primitives, char (a 1-char str), own/borrow (an int)
 
 
@@ -1320,6 +1347,24 @@ def emit_stream_drops():
     }
 
 
+# The flags label bound, asked of the model rather than restated (ADR 0116): every flags rule asserts
+# `0 < n <= 32` (definitions.py:alignment_flags, def:elem_size_flags), so a count past it has no layout. Each
+# row records the size and alignment, or that the model refused. The Go side's FlagsType must refuse exactly
+# the refused rows, so the bound is the model's reading and not a constant copied from it.
+FLAGS_BOUND_COUNTS = [0, 1, 8, 9, 16, 17, 32, 33, 64]
+
+
+def emit_flags_bounds():
+    rows = []
+    for n in FLAGS_BOUND_COUNTS:
+        t = FlagsType([f"f{i}" for i in range(n)])
+        try:
+            rows.append({"labels": n, "refused": False, "size": elem_size(t, "i32"), "align": alignment(t, "i32")})
+        except AssertionError:
+            rows.append({"labels": n, "refused": True, "size": 0, "align": 0})
+    return rows
+
+
 def main():
     with open(os.path.join(os.path.dirname(__file__), "cases.json")) as f:
         cases = json.load(f)
@@ -1344,6 +1389,7 @@ def main():
         "context_ops": emit_context_ops(),  # gate:async increment 4: context.get/set (the guest's first op)
         "stream_new": emit_stream_new(),  # gate:async increment 4: stream.new (the guest->host inversion)
         "shapes": emit_shapes(),
+        "flags_bounds": emit_flags_bounds(),  # ADR 0116: the model's flags label bound, refused rows included
     }
     json.dump(out, sys.stdout, indent=2)
     sys.stdout.write("\n")

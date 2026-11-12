@@ -91,6 +91,11 @@ var bridgeAccepted = []struct {
 	{"result", ValType{Kind: VResult, Ok: &ValType{Kind: VU32}}, canon.KindVariant},
 	{"own", ValType{Kind: VOwn, Ref: 3}, canon.KindOwn},
 	{"borrow", ValType{Kind: VBorrow, Ref: 4}, canon.KindBorrow},
+	// ADR 0116. Enum and option keep their own codec kinds, which the codec despecializes to variants at
+	// each layout rule, so a lifted value comes back as the kind that was declared.
+	{"flags", ValType{Kind: VFlags, Labels: []string{"a"}}, canon.KindFlags},
+	{"enum", ValType{Kind: VEnum, Labels: []string{"a"}}, canon.KindEnum},
+	{"option", ValType{Kind: VOption, Elem: &ValType{Kind: VU32}}, canon.KindOption},
 }
 
 // bridgeRefused is every ValKind the bridge refuses. VRef is refused for a different reason than the
@@ -105,9 +110,12 @@ var bridgeRefused = []struct {
 	// layout to match. Same for an empty tuple, which despecializes to an empty record.
 	{"empty-record", ValType{Kind: VRecord}},
 	{"empty-tuple", ValType{Kind: VTuple}},
-	{"flags", ValType{Kind: VFlags, Labels: []string{"a"}}},
-	{"enum", ValType{Kind: VEnum, Labels: []string{"a"}}},
-	{"option", ValType{Kind: VOption, Elem: &ValType{Kind: VU32}}},
+	// `flags`, `enum` and `option` moved to bridgeAccepted with ADR 0116. What stays refused is a label
+	// set the model has no layout for: a flags past 32 labels (definitions.py asserts 0 < n <= 32), and an
+	// empty or duplicated set for either.
+	{"flags-33", ValType{Kind: VFlags, Labels: nLabels(33)}},
+	{"flags-empty", ValType{Kind: VFlags}},
+	{"enum-duplicate", ValType{Kind: VEnum, Labels: []string{"a", "a"}}},
 	{"error-context", ValType{Kind: VErrorContext}},
 	{"stream", ValType{Kind: VStream}},
 	{"future", ValType{Kind: VFuture}},
@@ -192,15 +200,26 @@ func TestBridgeMapsEveryCarryableKindToItsCodecKind(t *testing.T) {
 	})
 
 	// An unmodeled kind NESTED inside a carryable one must refuse, naming the inner kind rather than the
-	// outer one — `list<record>` is refused because of the record, and saying "list" would send a reader
-	// to the wrong place.
+	// outer one — `list<option<error-context>>` is refused because of the error-context, and saying "list"
+	// or "option" would send a reader to the wrong place. (The specimen was `list<record>` until records
+	// were modeled, and the inner `option` is ADR 0116's, so its recursion is on the path.)
 	t.Run("a-nested-refusal-names-the-inner-kind", func(t *testing.T) {
-		_, err := canonTypeOf(ValType{Kind: VList, Elem: &ValType{Kind: VRecord}})
+		_, err := canonTypeOf(ValType{Kind: VList, Elem: &ValType{Kind: VOption, Elem: &ValType{Kind: VErrorContext}}})
 		if err == nil {
-			t.Fatal("list<record> was carried; record is not modeled")
+			t.Fatal("list<option<error-context>> was carried; error-context is not modeled")
 		}
-		if !strings.Contains(err.Error(), "record") {
-			t.Fatalf("list<record> refusal %q does not name record", err)
+		if !strings.Contains(err.Error(), "error-context") {
+			t.Fatalf("list<option<error-context>> refusal %q does not name error-context", err)
+		}
+	})
+
+	t.Run("option-carries-its-element", func(t *testing.T) {
+		got, err := canonTypeOf(ValType{Kind: VOption, Elem: &ValType{Kind: VString}})
+		if err != nil {
+			t.Fatalf("option<string> refused: %v", err)
+		}
+		if got.Elem == nil || got.Elem.Kind != canon.KindString {
+			t.Fatalf("option<string> bridged to %s", got)
 		}
 	})
 }
@@ -307,6 +326,22 @@ func TestTheCodecAcceptsEveryTypeTheBridgeBuilds(t *testing.T) {
 			ValType{Kind: VVariant, Cases: []VarCase{{Name: "a"}, {Name: "b", Type: &ValType{Kind: VU32}}}},
 			func(t canon.Type) (canon.Value, error) { return canon.Variant(t, "a", nil) },
 		},
+		// ADR 0116's kinds, each built against the type the bridge produced.
+		{
+			"flags",
+			ValType{Kind: VFlags, Labels: []string{"read", "write"}},
+			func(t canon.Type) (canon.Value, error) { return canon.Flags(t, "write") },
+		},
+		{
+			"enum",
+			ValType{Kind: VEnum, Labels: []string{"io", "illegal-byte-sequence", "pipe"}},
+			func(t canon.Type) (canon.Value, error) { return canon.Enum(t, "pipe") },
+		},
+		{
+			"option<string>",
+			ValType{Kind: VOption, Elem: &ValType{Kind: VString}},
+			func(t canon.Type) (canon.Value, error) { return canon.Some(t, canon.Str("x")) },
+		},
 	}
 
 	for _, c := range cases {
@@ -350,25 +385,28 @@ func TestCanonSigUnmodeledIsTheExportCallRefusal(t *testing.T) {
 		}
 	})
 
+	// The specimens were an empty `record` and a label-less `flags` until ADR 0116, and both still refused
+	// afterwards — as malformed label or field sets rather than as unmodeled kinds, which is a different
+	// question from the one these ask. `error-context` asks it.
 	t.Run("an-unmodeled-parameter-is-named", func(t *testing.T) {
 		ft := &FuncType{Params: []NamedVal{
 			{Name: "ok", Type: ValType{Kind: VU32}},
-			{Name: "bad", Type: ValType{Kind: VRecord}},
+			{Name: "bad", Type: ValType{Kind: VErrorContext}},
 		}}
 		k, bad := canonSigUnmodeled(ft)
 		if !bad {
-			t.Fatal("a record parameter was accepted")
+			t.Fatal("an error-context parameter was accepted")
 		}
-		if k != VRecord {
-			t.Fatalf("the refusal named %s, want record", valKindName(k))
+		if k != VErrorContext {
+			t.Fatalf("the refusal named %s, want error-context", valKindName(k))
 		}
 	})
 
 	t.Run("an-unmodeled-result-is-named", func(t *testing.T) {
-		ft := &FuncType{Result: &ValType{Kind: VFlags}}
+		ft := &FuncType{Result: &ValType{Kind: VErrorContext}}
 		k, bad := canonSigUnmodeled(ft)
-		if !bad || k != VFlags {
-			t.Fatalf("a flags result gave (%s, %v), want (flags, true)", valKindName(k), bad)
+		if !bad || k != VErrorContext {
+			t.Fatalf("an error-context result gave (%s, %v), want (error-context, true)", valKindName(k), bad)
 		}
 	})
 
@@ -396,22 +434,23 @@ func TestCanonSigUnmodeledIsTheExportCallRefusal(t *testing.T) {
 		//
 		// **The obstacle behind the reference used to be a `record`, and had to change**: #904 gave the
 		// codec a record arm, so a reference to a record now resolves to a type the bridge *carries*,
-		// and the subtest would have been asserting that a working type is an obstacle. `flags` is the
-		// replacement — unmodeled for a reason unrelated to which compound forms have landed, which is
-		// what a specimen holding this assertion needs. (The same lesson as `componentlistconv_test`'s
-		// `tuple`-to-`char` swap, one package over and in the same slice: a specimen chosen because it
-		// happens to be unimplemented expires when it gets implemented.)
+		// and the subtest would have been asserting that a working type is an obstacle. `flags` was the
+		// replacement, and **expired the same way** when ADR 0116 modeled it — which is the lesson this
+		// comment already recorded, paid a second time: a specimen chosen because it happens to be
+		// unimplemented expires when it gets implemented. `error-context` is unmodeled for a reason
+		// unrelated to which compound forms have landed, so it is the specimen now. (The same lesson as
+		// `componentlistconv_test`'s `tuple`-to-`char` swap.)
 		at := sliceTypeAt([]TypeDef{
 			{},
 			{},
 			{},
 			{},
-			{Kind: TDVal, Val: ValType{Kind: VFlags, Labels: []string{"a", "b"}}},
+			{Kind: TDVal, Val: ValType{Kind: VErrorContext}},
 		})
 		resolved := resolveFunc(ref, at)
 		k, bad = canonSigUnmodeled(resolved)
-		if !bad || k != VFlags {
-			t.Fatalf("after resolution the refusal gave (%s, %v), want (flags, true) — the point of "+
+		if !bad || k != VErrorContext {
+			t.Fatalf("after resolution the refusal gave (%s, %v), want (error-context, true) — the point of "+
 				"resolving at bind is that the refusal names the real obstacle", valKindName(k), bad)
 		}
 	})
@@ -435,27 +474,19 @@ func TestTheBridgeAndTheUnmodeledPredicateAgree(t *testing.T) {
 	declaredDivergence := map[ValKind]string{
 		VRef: "the predicate counts a typeidx reference modeled (a handle is an i32); the bridge cannot " +
 			"follow one because a ValType does not record its index space",
-		// Declared when #904 gave the codec its record arm. The bridge builds a record now; the
-		// predicate still refuses one, and **that asymmetry is deliberate rather than lag**.
+		// **There is no VRecord entry any more.** It was declared when #904 gave the codec its record
+		// arm: the bridge built a record and the predicate still refused one, deliberately, because the
+		// predicate is consulted at instantiate and widening it changes which components load. ADR 0116
+		// was that slice — the one that gave the codec flags, enum and option too — so the predicate now
+		// recurses into a record's fields, and the two agree on every row. Its witness is
+		// `TestBindingAdmitsImplementedLowerOfADR0116Kinds`.
 		//
-		// `unmodeledValKind` is consulted at **instantiate**, for every implemented lower, so widening
-		// its verdict changes which components load — a different blast radius from the bridge's, which
-		// is consulted at the call. `callvalues.go` records the rule this follows: the predicate is not
-		// retired in the slice that outgrows it, because changing what instantiates is its own slice
-		// with its own witness.
-		//
-		// The consequence for a reader: a component whose *signature* carries a record still fails to
-		// instantiate, and a record that reaches the codec does so through a `task.return` result or a
-		// value built in-process. Lifting that restriction is the next slice, not this one.
-		VRecord: "the bridge builds a record (#904's codec arm); the predicate still refuses one, and " +
-			"is consulted at instantiate where widening it changes which components load — its own " +
-			"slice, per callvalues.go's rule about not retiring it in the slice that outgrows it",
 		// **There is no VTuple entry, and the history of this one is the useful part.**
 		//
 		// It was declared twice and is now retired, each time on a measurement this control forced:
 		//
 		//  1. First declared on the theory that despecialization would make the two disagree about a
-		//     tuple the way they do about a record. False — `unmodeledValKind`'s tuple arm recurses
+		//     tuple the way they then did about a record. False — `unmodeledValKind`'s tuple arm recurses
 		//     into the elements and otherwise falls through as *modeled*, so they agree on every
 		//     non-empty tuple. The control's stale-declaration arm caught it.
 		//  2. Re-declared on the real divergence: `tuple<>`, which the bridge refused (no layout in the

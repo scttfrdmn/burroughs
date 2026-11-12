@@ -56,6 +56,73 @@ says what it now requires and what it gives up.
   - **Neuter, run:** with the lookup ignoring the class, as `stripVersion` did, the three cross-track rows fail and
     every fixture test stays green. With only the stream-consumer table's classes dropped from the refusal,
     `write-via-stream@0.2.6` reads *"is not provided"*.
+- **The Canonical ABI codec carries `flags`, `enum` and `option`, and a component whose implemented import
+  carries a record, flags, an enum or an option now instantiates**
+  ([#1230](https://github.com/scttfrdmn/burroughs/issues/1230), ADR 0116, decided in the slice). WASI 0.3's host
+  functions need these kinds.
+  - **Enum and option despecialize to variants**, as the pinned `definitions.py` does: an enum is a variant of
+    payload-free cases, and an option is `variant { none, some(T) }`. The despecialization is applied at each
+    layout rule and each store and load, so the variant arms carry both. A lifted value comes back as the enum or
+    option that was declared.
+  - **Flags take the reference's packed layout:** `u8` up to 8 labels, `u16` up to 16, `u32` up to 32, one `i32`
+    flat, and bit *i* for label *i*. The pin asserts `0 < n <= 32` in every flags rule, so `FlagsType` refuses 33
+    labels or more, an empty set, and a duplicate label. `EnumType` refuses an empty set and a duplicate.
+  - `LoadVia` gains its variant arm through a new `LoadVariant`, and the model heap's variant load uses it, so the
+    StoreVia/LoadVia symmetry control's allowance is down to `own`.
+  - **At bind:** `unmodeledValKind` stops refusing `record`, `flags`, `enum` and `option`, and scans into a
+    record's fields and an option's element. The bridge maps all three new kinds. The two now agree on every row
+    but `VRef`, so the declared `record` divergence is retired. `error-context` is still refused.
+  - The public `ComponentValue` surface is unchanged and refuses the new kinds by name. The eager flat lift
+    (`task.return`) gains flags. Enum and option still refuse there, with variant.
+  - **Witness:** 34 new differential cases generated from the pin. They cover flags of 1, 8, 9, 16, 17 and 32
+    labels (empty, full and mixed sets), enums of 2, 3, 256 and 257 labels at their first and last labels, and
+    `option` of `u8`, `string`, a record and `option<u32>`. A new `flags_bounds` fixture section asks the model
+    for each label count's layout, refusals included, and `TestFlagsTypeRefusesExactlyWhereTheModelDoes` holds
+    `FlagsType` to it. Also `TestLabelledTypesRefuseEmptyAndDuplicateLabels`, `TestNewKindsConstructAndReadBack`,
+    and `TestBindingAdmitsImplementedLowerOfADR0116Kinds`.
+  - **Neuter, run:** with the flags bit order reversed, the five mixed-set flags cases fail. The empty and full sets
+    are symmetric under reversal.
+  - **The refusal specimens moved to `error-context`.** The tests that used `record`, `flags` or `option` as the
+    unmodeled kind expired when those kinds were modeled. `TestBindingRefusesImplementedFilesystemErrorCodeOnRealGuest`
+    is now `TestBindingAdmitsImplementedFilesystemErrorCodeOnRealGuest`, because the same real-guest binding now
+    admits `option<error-code>`.
+
+### Fixed
+
+- **The codec's differential compared record values with an equality that had no record arm, so every record
+  lift check passed vacuously** ([#1245](https://github.com/scttfrdmn/burroughs/issues/1245), `type:grave`).
+  - **The defect:** `codec_test.go:valueEqual` had no `KindRecord` arm, so two records fell to `a.u == b.u`, which
+    is 0 == 0. `TestCodecMatchesReferenceModel`'s lift and lift-flat checks on its ten record cases compared
+    nothing. The store side was still checked byte for byte, so only the read-back direction was blind.
+    `loadvia_test.go:valuesEqualForTest` had its own copy of the same switch with the same gap, so its two record
+    round trips were vacuous too.
+  - **The repair:** `valueEqual` gains arms for `record`, `flags`, `enum` and `option`, and its list arm reads
+    every list form rather than the plain one alone. `valuesEqualForTest` delegates to it rather than keeping a
+    second switch. With the arm in place, every record case still passes, so the record codec was right and only
+    the check was blind.
+  - **Witness:** `TestValueEqualSeesARecordsFields`. Two records that differ in one field compare unequal, bare,
+    inside an option and inside a list.
+  - **Neuter, run:** with the record arm deleted, the witness fails and `TestCodecMatchesReferenceModel` stays green.
+    That is the grave's specimen.
+- **write-via-stream's completion wrote 4 bytes where `result<_, error-code>` is 2, zeroing two guest bytes past
+  the result** ([#1246](https://github.com/scttfrdmn/burroughs/issues/1246), `type:grave`). This was on a default-on
+  path: gate:async is on, and every WASI 0.3 guest that writes stdout reached it.
+  - **The defect:** `host.go:writeViaStream` completed its future with `readableFutureEnd{value: 0}`, and
+    `completeLocked` wrote `value` as a 4-byte `PutUint32` at the reader's pointer.
+  - **The repair:** a readable future end can carry a typed payload, and `completeLocked` lowers it with
+    `canon.StoreVia`, so at most `size(type)` bytes are written. write-via-stream completes with `result::ok` at
+    `result<_, error-code>`, where `error-code` is `enum { io, illegal-byte-sequence, pipe }`, using ADR 0116's
+    enum. That type comes from the host's declaration of `wasi:cli/stdout@0.3`, because the guest's decoded
+    signature does not resolve `error-code`: it is a type exported by an imported instance, which the decoder
+    keeps as a placeholder. The async-lower wrapper's `future<u32>` keeps its 4-byte write, which is that type's
+    size.
+  - **Witness:** `TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes`. The memory around the reader's pointer is
+    `0xAA` sentinels, and the future is completed through `writeViaStream`, `future.read` and the stream's
+    host-completion hook. Exactly the discriminant byte changes, as the model's `store_variant` writes nothing for
+    a payload-less case, and every byte from offset 2 on is untouched.
+  - **Neuter, run:** with the payload arm dropped, so the completion falls through to the 4-byte write, the witness
+    fails on bytes 1 to 3. `TestGateAsyncGuestRunsToTheCommittedReading` stays green under the neuter, which is why
+    nothing caught the defect.
 
 ## [0.13.0] - 2026-11-11
 *Implements contract v0.1.*

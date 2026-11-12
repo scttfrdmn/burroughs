@@ -2,7 +2,11 @@
 
 package component
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
+)
 
 // Component-type decoding (PR C / C.1, ADR 0084 §6). The loader framed the type section and B.1 read
 // types only to canon's depth; the value-marshaling path (C.2) needs function types resolved to their
@@ -763,20 +767,45 @@ func (r *reader) labelVec() ([]string, error) {
 }
 
 // unmodeledValKind reports the first component value kind in vt that the canon codec has no value
-// representation for — `record`, `flags`, `enum`, `option`, `error-context` (no `canon.Kind` and no
-// `store`/`StoreVia` arm lowers them; a value can never be constructed). It recurses through the
-// containers the codec *does* model (`list`, `result`, `variant`, `tuple`) so a modeled container of an
-// unmodeled element is caught — `list<tuple<string,string>>` is clean, `tuple<record>` is not — while
-// `tuple`/`result`/`variant` themselves, and every scalar/string/handle, are modeled and pass. Derived
-// from the codec's kinds (ADR 0084 / #720's binding refusal), not a hardcoded list.
+// representation for — `error-context` (no `canon.Kind` and no `store`/`StoreVia` arm lowers it; a value
+// can never be constructed), and the wrapper-minted `stream`/`future`. It recurses through the containers
+// the codec *does* model (`list`, `option`, `result`, `variant`, `tuple`, `record`) so a modeled container
+// of an unmodeled element is caught — `list<tuple<string,string>>` is clean, `option<error-context>` is
+// not — while the containers themselves, `flags`, `enum`, and every scalar/string/handle, are modeled and
+// pass. Derived from the codec's kinds (ADR 0084 / #720's binding refusal), not a hardcoded list.
+//
+// `record`, `flags`, `enum` and `option` left the refused list with ADR 0116, which gave the codec their
+// arms. Widening this predicate changes which components instantiate — an implemented lower carrying one
+// now binds — which is why it moved in the slice that gave the codec the kinds, and not before.
 func unmodeledValKind(vt ValType, depth int) (ValKind, bool) {
 	if depth > 32 {
 		return 0, false // a cyclic/pathological type; the decoder's own depth guards apply first
 	}
 	switch vt.Kind {
-	case VRecord, VFlags, VEnum, VOption, VErrorContext, VStream, VFuture, VUnresolvedAlias:
+	case VErrorContext, VStream, VFuture, VUnresolvedAlias:
 		return vt.Kind, true
-	case VList: // VOption is handled above (it is itself unmodeled); a list recurses into its element
+	case VFlags:
+		// Modeled, but only for a label set the codec can lay out: the bridge refuses the rest through
+		// `canon.FlagsType`, and asking the same constructor here is what keeps the two walks agreeing.
+		if _, err := canon.FlagsType(vt.Labels...); err != nil {
+			return VFlags, true
+		}
+	case VEnum:
+		if _, err := canon.EnumType(vt.Labels...); err != nil {
+			return VEnum, true
+		}
+	case VRecord:
+		// An empty record is unmodeled for `VTuple`'s reason below: the model gives it no size. The
+		// decoder refuses one, so this answers for a hand-built `ValType`.
+		if len(vt.Fields) == 0 {
+			return VRecord, true
+		}
+		for _, f := range vt.Fields {
+			if k, ok := unmodeledValKind(f.Type, depth+1); ok {
+				return k, true
+			}
+		}
+	case VList, VOption: // each recurses into its element
 		if vt.Elem != nil {
 			return unmodeledValKind(*vt.Elem, depth+1)
 		}

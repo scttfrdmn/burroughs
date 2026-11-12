@@ -737,14 +737,14 @@ func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp
 	args := words
 
 	switch ct.Kind {
-	// Every one-word kind — bool, the eight integers, the two floats, char — goes through the codec's
-	// **one** scalar flat lift. Delegated rather than restated: `canon.LiftFlatScalar` is the function
-	// `liftFlat` reaches for every scalar, so the differential against `definitions.py` over
+	// Every one-word kind — bool, the eight integers, the two floats, char, and flags (ADR 0116) — goes
+	// through the codec's **one** scalar flat lift. Delegated rather than restated: `canon.LiftFlatScalar` is
+	// the function `liftFlat` reaches for every scalar, so the differential against `definitions.py` over
 	// `gen/cases.json` is its oracle, and these arms are verified against the model rather than against a
 	// table. Restating them here is what produced the `u32`-only regression in the first place.
 	case canon.KindBool, canon.KindU8, canon.KindU16, canon.KindU32, canon.KindU64,
 		canon.KindS8, canon.KindS16, canon.KindS32, canon.KindS64,
-		canon.KindF32, canon.KindF64, canon.KindChar:
+		canon.KindF32, canon.KindF64, canon.KindChar, canon.KindFlags:
 		if err := want(1); err != nil {
 			return canon.Value{}, 0, err
 		}
@@ -851,8 +851,8 @@ func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp
 		return rv, used, nil
 
 	default:
-		// Everything left is compound and not a list: variant (and so result/option/enum, which
-		// despecialize to one), record, tuple, own/borrow.
+		// Everything left is compound and not a list or a record: variant (and so result, and ADR 0116's
+		// option and enum, which despecialize to one) and own/borrow.
 		//
 		// **This message has now been wrong twice, in opposite directions, and both are worth naming.**
 		// It first said "this engine lifts scalars and string" while only `u32` was handled, which made
@@ -867,15 +867,17 @@ func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp
 		// earlier than this one. Three wrong versions of one sentence, each wrong because it described
 		// a *state of the engine* that then changed.
 		//
-		// So this names only what is true by construction: the kinds this arm reaches are the ones with
-		// no arm above, and the authority on why is `canon.LoadVia`'s own refusal rather than a summary
-		// kept in step by hand. A message that forwards to the single place the limit lives cannot go
-		// stale when that limit moves — which the three previous versions all could.
+		// **And a FOURTH time, through the forwarding itself.** The third repair forwarded the reader to
+		// `canon.LoadVia`'s refusal and listed the kinds with an arm here. ADR 0116 gave `LoadVia` its
+		// variant arm and gave this switch flags, so the refusal it forwarded to no longer refuses a
+		// variant, and the list missed a kind. A forward is a description of where the limit lives, and
+		// that moved too.
+		//
+		// So this names only what is true by construction and lists nothing: the kinds this arm reaches
+		// are the ones with no arm above.
 		return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf(
-			"%s declares a %s value, which this engine does not lift from flat values. The "+
-				"kinds it does are the ones with an arm here — the scalars, char, string, list and "+
-				"record; what a %s would need is a composable load, and canon.LoadVia's refusal is "+
-				"where that limit is stated for both directions at once", label, ct, ct.Kind)}
+			"%s declares a %s value, which this engine does not lift from flat values: liftFlatValue "+
+				"has no arm for kind %s, and the kinds it lifts are the ones it has an arm for", label, ct, ct.Kind)}
 	}
 }
 

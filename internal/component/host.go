@@ -128,12 +128,16 @@ func (h *Host) streamConsumers() map[string]streamConsumer {
 // error-code>>` — the real host consumer of the readable stream end the guest hands it (the exit-condition
 // path, gate:async increment 4). It reads `data` into the host's stdout (a host sink, NOT a guest ptr — the
 // #763 divergence) and returns a host-minted future that resolves when the consume completes. The future
-// reuses the readable-future-end kind already on main (async_lower.go mints one for a KindFuture result);
-// result<_, error-code>::ok lifts to discriminant 0, which the future's u32 value carries.
+// reuses the readable-future-end kind already on main (async_lower.go mints one for a KindFuture result),
+// and completes with `result::ok`, lowered through the codec at the future's payload type (#1246).
 func (h *Host) writeViaStream(async *asyncHandles) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: write-via-stream: got %d args, want (data)", len(args))
+		}
+		okv, err := stdioWriteResultOK()
+		if err != nil {
+			return nil, err
 		}
 		ri := uint32(args[0].Bits)
 		async.mu.Lock()
@@ -142,8 +146,13 @@ func (h *Host) writeViaStream(async *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, fmt.Errorf("%w: write-via-stream on handle %d that is not a readable stream end", ErrLinkRefused, ri)
 		}
-		// Mint the future the guest awaits; it resolves when the consume completes. value 0 == result::ok.
-		fe := &readableFutureEnd{value: 0}
+		// Mint the future the guest awaits; it resolves with `result::ok` when the consume completes.
+		//
+		// **The payload is typed, not a u32** (#1246). This was `readableFutureEnd{value: 0}`, and the
+		// completion wrote `value` as 4 bytes at the reader's pointer where `result<_, error-code>` is 2,
+		// zeroing two guest bytes past the result on every completion. It is a default-on path: gate:async
+		// is on, and every WASI 0.3 guest that writes stdout reaches it.
+		fe := &readableFutureEnd{payload: &okv}
 		fe.index = async.addLocked(fe)
 		// Register the host read: sink to stdout, resolve the future on completion. readN takes all the
 		// guest offers in a write.
@@ -168,6 +177,32 @@ func (h *Host) writeViaStream(async *asyncHandles) interp.CanonFunc {
 		}
 		return []interp.Value{interp.I32(int32(fe.index))}, nil
 	}
+}
+
+// stdioErrorCodeLabels are `wasi:cli/types@0.3`'s `error-code`, read from p3async-hello.wasm with
+// `wasm-tools component wit`.
+var stdioErrorCodeLabels = []string{"io", "illegal-byte-sequence", "pipe"}
+
+// stdioWriteResultOK is `result::ok` at `write-via-stream`'s future payload type, `result<_, error-code>`
+// (ADR 0116): a 1-byte discriminant and a 1-byte enum payload, size 2 and alignment 1.
+//
+// # Why the type is the host's declaration and not the guest's signature
+//
+// The guest's import signature is where the payload type would ideally come from, and it does not carry
+// it. Decoded from p3async-hello, `write-via-stream`'s result is `future<ref>`, whose `error-code` is
+// `use`d from `wasi:cli/types`: an outer alias of an `alias export` of an imported instance's type export.
+// This decoder records an instance type's exported types as a resource placeholder (`exportDecl`'s `0x03`
+// arm), so the reference resolves to no value type. Resolving type-export aliases is its own slice.
+//
+// The host implements `wasi:cli/stdout@0.3`'s `write-via-stream`, and that WIT fixes the type, so the host's
+// declaration is the type the interface promises. Built through the codec's constructors on each call;
+// they cannot fail on these constant labels, and are checked anyway rather than assumed.
+func stdioWriteResultOK() (canon.Value, error) {
+	ec, err := canon.EnumType(stdioErrorCodeLabels...)
+	if err != nil {
+		return canon.Value{}, fmt.Errorf("component: write-via-stream: error-code: %w", err)
+	}
+	return canon.Variant(canon.ResultType(nil, &ec), "ok", nil)
 }
 
 // NewHost builds a preview-2 host over the given streams. Handles are minted from 1 (0 is left unused so
