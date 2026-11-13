@@ -840,9 +840,26 @@ func (c *CanonCaller) Realloc(origPtr, origSize, align, newSize uint32) (uint32,
 	// **may_leave is false for the call (#990)**: the reference's `LiftLowerContext.reallocate` sets
 	// `inst.may_leave = False` around it, so a canon built-in or lowered import the realloc calls traps.
 	// The realloc runs on this stack, so the built-ins it calls see the mark through `MayLeave`.
+	//
+	// **And its context storage is its own, starting at zero** (ADR 0119). The reference does not call the
+	// realloc inside the caller's thread: `reallocate` lifts it and invokes it as a call of its own
+	// (def:LiftLowerContext.reallocate:"self.inst.store.invoke(realloc, on_start, on_resolve)"), which runs on
+	// a new Thread whose context starts [0, 0]. A `wasm32-wasip3` std guest depends on that: its realloc is
+	// wrapped in task hooks that switch the shadow stack pointer, context slot 0, to a scratch stack on entry
+	// and set it to 0 on exit, which is right for a fresh context and, run on the caller's, left the caller's
+	// stack pointer at 0, so its next frame stored below address 0 and trapped. The caller's slots are saved
+	// and restored around the call, whatever it returns.
+	//
+	// NEUTER THIS (run realloc over the caller's slots, removing both the zeroing and the restore), and
+	// internal/component's TestP3SysMatchesWasmtime traps out of bounds after its first get-random-bytes,
+	// and TestReallocRunsWithItsOwnContext reads 0xdead << 16 | 12345 where wasmtime reads 12345 << 16 | 0.
+	// Removing the zeroing alone, or the restore alone, fails the second as well.
+	saved := c.st.ctxSlots
+	c.st.ctxSlots = [2]uint32{}
 	c.st.mayNotLeave++
 	err = target.inst.invoke(target.fn, ft, c.st, c.depth)
 	c.st.mayNotLeave--
+	c.st.ctxSlots = saved
 	if err != nil {
 		return 0, err
 	}

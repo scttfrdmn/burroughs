@@ -3,6 +3,7 @@
 package canon
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -180,6 +181,52 @@ func TestLoadListU8(t *testing.T) {
 	}
 	if _, err := LoadListU8(h, -1, 4); err == nil {
 		t.Fatal("a negative pointer lifted successfully")
+	}
+}
+
+// TestStoreListU8IsStoreListsFraming holds the produced-bytes store (ADR 0119) to the list framing the
+// reference fixtures verify: for each count, StoreListU8 and StoreVia of the same bytes as a plain
+// list<u8> must leave identical model heaps and make identical realloc calls. The counts include zero
+// (the model still allocates) and one past two whole chunks, so the chunked write is the subject.
+func TestStoreListU8IsStoreListsFraming(t *testing.T) {
+	for _, count := range []int{0, 5, 2*StringChunk + 3} {
+		data := make([]byte, count)
+		for i := range data {
+			data[i] = byte(i*7 + i>>9)
+		}
+		const hdr = 8
+		size := hdr + count + 16
+
+		want := newHeap(size)
+		want.lastAlloc = hdr
+		elems := make([]Value, count)
+		for i, b := range data {
+			elems[i] = U8(b)
+		}
+		lst, err := List(Type{Kind: KindU8}, elems...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := StoreVia(want, lst, 0); err != nil {
+			t.Fatalf("count %d: StoreVia: %v", count, err)
+		}
+
+		got := newHeap(size)
+		got.lastAlloc = hdr
+		off := 0
+		fill := func(b []byte) error {
+			off += copy(b, data[off:])
+			return nil
+		}
+		if err := StoreListU8(got, count, fill, 0); err != nil {
+			t.Fatalf("count %d: StoreListU8: %v", count, err)
+		}
+		if string(got.mem) != string(want.mem) {
+			t.Errorf("count %d: StoreListU8's heap differs from StoreVia's list<u8>", count)
+		}
+		if fmt.Sprint(got.calls) != fmt.Sprint(want.calls) {
+			t.Errorf("count %d: realloc calls %v, want %v", count, got.calls, want.calls)
+		}
 	}
 }
 

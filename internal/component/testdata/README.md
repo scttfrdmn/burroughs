@@ -540,3 +540,22 @@ witnesses for a component locking after a trap (`lockdown_test.go`, ADR 0105).
 **The two-call wasmtime host** is `cmthreads/twocall/` (Rust, the `wasmtime =49.0.3` crate). It exists because
 `wasmtime run --invoke` instantiates afresh per call, so it cannot ask what a second call on the same instance
 does. `cargo build --release` there, then run it with a component path.
+
+## WASI 0.3's synchronous system rows (#1232, ADR 0119)
+
+`p3sys/p3sys.wasm` is E4's witness guest (`TestP3SysMatchesWasmtime`): a Rust `wasm32-wasip3` std program,
+`p3sys/src/main.rs`, that calls every synchronous WASI 0.3 function E4 serves through wit-bindgen 0.61.1
+bindings generated from the pinned WASI 0.3.0 WIT, and prints properties of the answers, never the answers.
+`p3sys.reading` is wasmtime 49.0.3's stdout, stderr and exit code for it, 10 of 10, each channel's lines
+prefixed by its name. **`p3sys/build.sh` rebuilds both**, offline and out of CI: it stages the crate and the
+nightly's vendored WIT (`library/vendor/wasip3-0.8.0+wasi-0.3.0/wit/deps`) in a scratch directory, builds
+with `cargo --offline --locked` against the committed `Cargo.lock`, and takes the reading with stdin from
+`/dev/null` and both outputs to files, so no stream is a terminal. The build is byte-reproducible (two runs,
+one sha256, recorded in `p3sys/PROVENANCE`). It needs the nightly named by its toolchain directory, because
+`rustc +nightly` resolves to Homebrew's 1.99.1 here, which has no `wasm32-wasip3` target. **The guest writes
+each channel once**, for the reason ADR 0119 records: `write-via-stream` consumes a single write.
+
+`realloc-context.wasm` (`TestReallocRunsWithItsOwnContext`) isolates the repair p3sys compelled: whose context
+a lower's realloc sees. `run` sets context slot 0 to 12345 and calls `get-random-bytes(4)`, whose realloc
+records the slot and sets it to 0xdead. `realloc-context.reading` is wasmtime 49.0.3's answer, `12345 << 16 |
+0`. Hand-authored WAT, parsed with `wasm-tools parse` (1.258.0), validating with `--features all`.

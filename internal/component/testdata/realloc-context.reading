@@ -1,0 +1,17 @@
+# Committed readings for realloc-context.wasm (ADR 0119).
+# Default path: gate:async on, a WASI 0.3 host serving get-random-bytes.
+# Built:       wasm-tools parse realloc-context.wat -o realloc-context.wasm   (wasm-tools 1.258.0; validates
+#              with --features all)
+# Invocation:  wasmtime run --invoke 'run()' realloc-context.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                      reading
+# wasmtime 49.0.3, 10 of 10                   809041920
+# Burroughs with the realloc neutered         3735892025
+# Burroughs with ADR 0119's build             809041920
+#
+# Meaning:     run's context slot 0 after the call, shifted left 16, or'd with the slot 0 the realloc saw.
+#              809041920 is 12345 << 16 | 0: the realloc ran in a context of its own, starting at 0, and its
+#              context.set did not reach run's. 3735892025 is 0xdead << 16 | 12345: the realloc saw run's
+#              12345 and left its 0xdead in run's slot. Burroughs at 32bfa9e served no get-random-bytes, so the
+#              fixture had no reading there.

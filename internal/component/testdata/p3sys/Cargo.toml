@@ -1,0 +1,14 @@
+[package]
+name = "p3sys"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# wit-bindgen at the version the nightly's std vendors for its own wasip3 bindings, without its default
+# `std`/`bitflags`/`macro-string` features: the macro, the realloc export and the async runtime the
+# generated monotonic-clock module needs for `wait-for`, which this guest never calls.
+[dependencies]
+wit-bindgen = { version = "=0.61.1", default-features = false, features = ["macros", "realloc", "async"] }
+
+[profile.release]
+opt-level = "s"

@@ -66,6 +66,9 @@ var (
 	inputStreamResource  = newHostResource("wasi:io/streams::input-stream", nil)
 	errorResource        = newHostResource("wasi:io/error::error", nil)
 	descriptorResource   = newHostResource("wasi:filesystem/types::descriptor", nil)
+	// WASI 0.3's terminal types (ADR 0119). Nothing mints one: every `get-terminal-*` answers none.
+	terminalInputResource  = newHostResource("wasi:cli/terminal-input::terminal-input", nil)
+	terminalOutputResource = newHostResource("wasi:cli/terminal-output::terminal-output", nil)
 )
 
 // destroy runs the type's destructor over a dropped own's object.

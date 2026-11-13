@@ -5,6 +5,7 @@ package component
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -78,7 +79,8 @@ func (g guestHeap) CheckRange(ptr, n int) error {
 
 // Host is a preview-2 host: the standard streams, and the resource types and imports a guest reaches them
 // through. It holds no handles: those are per component instance (ADR 0117), so one Host can serve several
-// instances without one's handle meaning anything in another's. Exited/ExitCode record a guest `exit` call.
+// instances without one's handle meaning anything in another's. Exited/ExitCode record a guest `exit` or
+// `exit-with-code` call.
 type Host struct {
 	Stdout   io.Writer
 	Stderr   io.Writer
@@ -86,6 +88,11 @@ type Host struct {
 	Args     []string // the guest's argv, lowered by get-arguments
 	Exited   bool
 	ExitCode int32
+	// start is the monotonic clock's origin and seed is `get-insecure-seed`'s pair (ADR 0119), both set by
+	// NewHost, the only constructor. A zero start is preview 1's #815: time.Since saturates, and the clock
+	// stands still.
+	start time.Time
+	seed  [2]uint64
 	// resourceTypeImpls and resourceImpls are test-only extra resource types and imports over them (ADR
 	// 0117), the resource half's counterpart of syncImpls, merged into resourceSource() under the same
 	// no-shadowing rule. Their keys are unversioned, so each is a wildcard (lookupHost).
@@ -124,21 +131,32 @@ type streamConsumer struct {
 }
 
 // streamConsumers maps an import identity, keyed by compatibility class like wasi()'s, to a stream-consuming
-// host import. Only write-via-stream is served (the p3async-hello sink), and only for WASI 0.3, where it
-// replaces 0.2's `get-stdout`; an unlisted consumer reaches the refusing stub.
+// host import. stdout's and stderr's write-via-stream are served, only for WASI 0.3, where they replace
+// 0.2's `get-stdout` and `get-stderr`; an unlisted consumer reaches the refusing stub. The two are one
+// implementation over two writers, read here, when an instantiate builds the host's tables (ADR 0119).
 func (h *Host) streamConsumers() map[string]*streamConsumer {
 	m := map[string]*streamConsumer{}
-	serve(m, wasiP3, "wasi:cli/stdout::write-via-stream", &streamConsumer{bind: h.writeViaStream, payload: stdioWriteResultType})
+	serve(m, wasiP3, "wasi:cli/stdout::write-via-stream", &streamConsumer{bind: writeViaStream(h.Stdout), payload: stdioWriteResultType})
+	// NEUTER THIS (h.Stdout for h.Stderr), and TestP3SysMatchesWasmtime's stderr line lands on stdout.
+	serve(m, wasiP3, "wasi:cli/stderr::write-via-stream", &streamConsumer{bind: writeViaStream(h.Stderr), payload: stdioWriteResultType})
 	return m
 }
 
-// writeViaStream implements `wasi:cli/stdout::write-via-stream: func(data: stream<u8>) -> future<result<_,
-// error-code>>` — the real host consumer of the readable stream end the guest hands it (the exit-condition
-// path, gate:async increment 4). It reads `data` into the host's stdout (a host sink, NOT a guest ptr — the
-// #763 divergence) and returns a host-minted future that resolves when the consume completes. The future
-// reuses the readable-future-end kind already on main (async_lower.go mints one for a KindFuture result),
-// and completes with `result::ok`, lowered through the codec at the future's payload type (#1246).
-func (h *Host) writeViaStream(async *asyncHandles) interp.CanonFunc {
+// writeViaStream implements `wasi:cli/stdout::write-via-stream` and `wasi:cli/stderr::write-via-stream`:
+// `func(data: stream<u8>) -> future<result<_, error-code>>`, the real host consumer of the readable stream
+// end the guest hands it (the exit-condition path, gate:async increment 4). It reads `data` into w, the
+// host's stdout or stderr (a host sink, NOT a guest ptr — the #763 divergence), and returns a host-minted
+// future that resolves when the consume completes. The future reuses the readable-future-end kind already on
+// main (async_lower.go mints one for a KindFuture result), and completes with `result::ok`, lowered through
+// the codec at the future's payload type (#1246).
+//
+// It is the consumer's bind: given w, it returns the factory the walk calls with each instance's async table.
+func writeViaStream(w io.Writer) func(async *asyncHandles) interp.CanonFunc {
+	return func(async *asyncHandles) interp.CanonFunc { return writeViaStreamTo(w, async) }
+}
+
+// writeViaStreamTo is writeViaStream's consumer over one writer and one instance's async table.
+func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: write-via-stream: got %d args, want (data)", len(args))
@@ -162,9 +180,9 @@ func (h *Host) writeViaStream(async *asyncHandles) interp.CanonFunc {
 		// is on, and every WASI 0.3 guest that writes stdout reaches it.
 		fe := &readableFutureEnd{payload: &okv}
 		fe.index = async.addLocked(fe)
-		// Register the host read: sink to stdout, resolve the future on completion. readN takes all the
+		// Register the host read: sink to the writer, resolve the future on completion. readN takes all the
 		// guest offers in a write.
-		re.hostSink = func(b []byte) error { _, werr := h.Stdout.Write(b); return werr }
+		re.hostSink = func(b []byte) error { _, werr := w.Write(b); return werr }
 		re.onHostComplete = func(copyResult) {
 			if cerr := fe.completeLocked(copyCompleted); cerr != nil {
 				fe.completeErr = cerr // deferred: onHostComplete cannot return; futureDrop surfaces it
@@ -225,9 +243,12 @@ func stdioWriteResultOK() (canon.Value, error) {
 }
 
 // NewHost builds a preview-2 host over the given streams. Handles are minted per instance, from 1, by the
-// instance's table (ADR 0117).
+// instance's table (ADR 0117). The monotonic clock starts here and the insecure seed is drawn here (ADR
+// 0119), so every instance one Host serves reads one clock and one seed.
 func NewHost(stdout, stderr io.Writer, stdin io.Reader) *Host {
-	return &Host{Stdout: stdout, Stderr: stderr, Stdin: stdin}
+	// NEUTER THIS (drop `start`), and TestP3SysMatchesWasmtime's monotonic line reads false: the clock
+	// saturates at 2^63-1 and never advances.
+	return &Host{Stdout: stdout, Stderr: stderr, Stdin: stdin, start: time.Now(), seed: newInsecureSeed()}
 }
 
 // outputStream is the object behind a `wasi:io/streams` `output-stream` handle. **Not an io.Closer, on
@@ -241,7 +262,7 @@ type inputStream struct{ r io.Reader }
 // resourceSource is the host's resource half (ADR 0117): the resource types it implements and the imports
 // over them, each keyed by name and compatibility class through serve, with the test-only extras merged.
 //
-// The four types are WASI 0.2's. `descriptor` is declared although nothing mints one: `get-directories`
+// Four types are WASI 0.2's and two are 0.3's terminals. `descriptor` is declared although nothing mints one: `get-directories`
 // grants an empty list, and a guest's `[resource-drop]descriptor` must still name a host type rather than
 // fall back to dropNoop.
 func (h *Host) resourceSource() hostResourceSource {
@@ -250,6 +271,15 @@ func (h *Host) resourceSource() hostResourceSource {
 	serve(types, wasiP2, "wasi:io/streams::input-stream", inputStreamResource)
 	serve(types, wasiP2, "wasi:io/error::error", errorResource)
 	serve(types, wasiP2, "wasi:filesystem/types::descriptor", descriptorResource)
+	// WASI 0.3's terminal types (ADR 0119), declared because the `get-terminal-*` getters in wasi() are
+	// served: each returns `option<own<…>>`, and checkHostResources refuses a served import whose own names no
+	// host resource (ADR 0118). So without these, every std guest that lowers the getters, p3async-hello
+	// first, is refused at instantiate. It also gives a guest's drop of one a host type rather than dropNoop.
+	//
+	// NEUTER THIS (delete both lines), and TestGateAsyncGuestRunsToTheCommittedReading and
+	// TestP3SysMatchesWasmtime are refused at instantiate, naming get-terminal-stdin's terminal-input.
+	serve(types, wasiP3, "wasi:cli/terminal-input::terminal-input", terminalInputResource)
+	serve(types, wasiP3, "wasi:cli/terminal-output::terminal-output", terminalOutputResource)
 
 	m := map[string]resourceMethod{}
 	// The stdio getters mint an own of their stream (def:lower_own), built at the call so a Stdout set
@@ -318,6 +348,26 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 	// The element names the host's descriptor type; it named RT 0, which was `errorRT` too (ADR 0117).
 	serve(m, wasiP2, "wasi:filesystem/preopens::get-directories", h.emptyListOf(
 		canon.TupleType(canon.OwnType(descriptorResource.rt), canon.Type{Kind: canon.KindString})))
+
+	// WASI 0.3's synchronous system rows (#1232, ADR 0119; hostsys.go), 0.3 only: 0.2's random and clocks
+	// are other interfaces with other signatures, and are not v0.14.0's.
+	serve(m, wasiP3, "wasi:random/random::get-random-bytes", h.randomBytes)
+	serve(m, wasiP3, "wasi:random/random::get-random-u64", h.randomU64)
+	serve(m, wasiP3, "wasi:random/insecure::get-insecure-random-bytes", h.randomBytes)
+	serve(m, wasiP3, "wasi:random/insecure::get-insecure-random-u64", h.randomU64)
+	serve(m, wasiP3, "wasi:random/insecure-seed::get-insecure-seed", h.insecureSeed)
+	serve(m, wasiP3, "wasi:clocks/monotonic-clock::now", h.monotonicNow)
+	serve(m, wasiP3, "wasi:clocks/monotonic-clock::get-resolution", h.clockGetResolution)
+	serve(m, wasiP3, "wasi:clocks/system-clock::now", h.systemNow)
+	serve(m, wasiP3, "wasi:clocks/system-clock::get-resolution", h.clockGetResolution)
+	serve(m, wasiP3, "wasi:cli/exit::exit-with-code", h.exitWithCode)
+	// cwd and the terminals are none: #1232 grants no cwd, and the host's streams are io.Writers and an
+	// io.Reader, which cannot say whether a terminal is behind them. The terminal getters return an own, so
+	// their resource types are declared in resourceSource(); none is ever minted.
+	serve(m, wasiP3, "wasi:cli/environment::get-initial-cwd", noneOf("get-initial-cwd", canon.Type{Kind: canon.KindString}))
+	serve(m, wasiP3, "wasi:cli/terminal-stdin::get-terminal-stdin", noneOf("get-terminal-stdin", canon.OwnType(terminalInputResource.rt)))
+	serve(m, wasiP3, "wasi:cli/terminal-stdout::get-terminal-stdout", noneOf("get-terminal-stdout", canon.OwnType(terminalOutputResource.rt)))
+	serve(m, wasiP3, "wasi:cli/terminal-stderr::get-terminal-stderr", noneOf("get-terminal-stderr", canon.OwnType(terminalOutputResource.rt)))
 
 	// **No `[resource-drop]` keys** (ADR 0117). Four stood here, bound to a no-op, and no guest could reach
 	// them: a key here is a `canon lower`'s identity, and a resource drop is a `canon resource.drop`, which
