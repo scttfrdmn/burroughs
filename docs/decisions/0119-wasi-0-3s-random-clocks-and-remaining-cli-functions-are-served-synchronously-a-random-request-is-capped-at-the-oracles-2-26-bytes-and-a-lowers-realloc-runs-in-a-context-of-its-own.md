@@ -65,8 +65,8 @@ For the resolutions: the oracle's 1000 ns, or 1 ns, preview 1's figure.
 
 ### Out of scope, recorded
 
-- **A guest writes stdout once.** std's wasip3 stdout keeps one stream open across writes, and `write-via-stream` consumes a single write, then resolves its future. A second write has no reader, and a sync task blocks with nothing to run: *"cannot block a synchronous task before returning"*. Measured on a probe that prints two lines. The oracle reads until the writer drops. p3sys therefore writes each channel once, and p3async-hello prints one line. A follow-up is the consumer re-arming its read after each copy and resolving its future at the writer's drop.
-- **`exit` and `exit-with-code` record and return**, so the guest runs on. std's `process::exit` follows the call with `unreachable`, so a guest calling it traps here where the oracle exits. p3sys calls the binding and returns from `main`, which the two engines read alike. A follow-up is an exit that unwinds the run.
+- **A guest writes stdout once.** std's wasip3 stdout keeps one stream open across writes, and `write-via-stream` consumes a single write, then resolves its future. A second write has no reader, and a sync task blocks with nothing to run: *"cannot block a synchronous task before returning"*. Measured on a probe that prints two lines. The oracle reads until the writer drops. p3sys therefore writes each channel once, and p3async-hello prints one line. The follow-up is #1261: the consumer re-arming its read after each copy and resolving its future at the writer's drop.
+- **`exit` and `exit-with-code` record and return**, so the guest runs on. std's `process::exit` follows the call with `unreachable`, so a guest calling it traps here where the oracle exits. p3sys calls the binding and returns from `main`, which the two engines read alike. The follow-up is #1262: an exit that unwinds the run.
 - **The realloc's `thread.index`** is still the caller's. In the reference it is the new Thread's.
 
 ## Consequences

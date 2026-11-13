@@ -48,8 +48,10 @@ says what it now requires and what it gives up.
   - **Neuters, run:** the cap at 0, `NewHost` without its clock origin, the terminal types undeclared and stderr's
     consumer over stdout each fail it.
   - **Two limits found and recorded, not repaired:** `write-via-stream` consumes one write, so a guest's second
-    stdout write blocks and traps; and `exit` and `exit-with-code` return, so std's `process::exit` reaches its
-    `unreachable`. p3sys writes each channel once and returns from `main`.
+    stdout write blocks and traps ([#1261](https://github.com/scttfrdmn/burroughs/issues/1261)); and `exit` and
+    `exit-with-code` return, so std's `process::exit` reaches its `unreachable`
+    ([#1262](https://github.com/scttfrdmn/burroughs/issues/1262)). p3sys writes each channel once and returns from
+    `main`.
 
 - **ADR 0114, accepted: the fork's WASI 0.3 work targets `GOOS=wasip3` on `GOARCH=wasm`**
   ([#1228](https://github.com/scttfrdmn/burroughs/issues/1228)), and the WASI pin is 0.3.0 semantics, admitting 0.3.x
@@ -202,7 +204,8 @@ says what it now requires and what it gives up.
 ### Fixed
 
 - **A lower's realloc runs in a context of its own, so a `wasm32-wasip3` std guest's stack pointer survives it**
-  (ADR 0119; a repair E4's witness compelled).
+  ([#1260](https://github.com/scttfrdmn/burroughs/issues/1260), `type:grave`; ADR 0119; a repair E4's witness
+  compelled).
   - **The defect:** `CanonCaller.Realloc` ran the guest's realloc over the caller's context slots. The reference
     invokes it as a call of its own, on a new Thread whose context starts at zero
     (def:LiftLowerContext.reallocate). A wasip3 std guest's realloc is wrapped in wasi-libc task hooks that move
