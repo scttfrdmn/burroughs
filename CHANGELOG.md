@@ -25,6 +25,34 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **WASI 0.3's random, both clocks and the rest of `wasi:cli` are served**
+  ([#1232](https://github.com/scttfrdmn/burroughs/issues/1232), ADR 0119). A `wasm32-wasip3` std guest reaches them
+  on startup, and each was refused at call.
+  - **The rows**, each registered for 0.3 only (ADR 0115):
+    - `wasi:random`: `get-random-bytes`, `get-random-u64`, their two `insecure` twins, all from `crypto/rand`, and
+      `get-insecure-seed`, one pair per `Host`.
+    - `wasi:clocks`: `monotonic-clock.now` (the nanoseconds since `NewHost`), `system-clock.now`, and both
+      `get-resolution`s, which answer 1 ns.
+    - `wasi:cli`: stderr's `write-via-stream` (stdout's consumer over `Stderr`), `get-initial-cwd` and the three
+      `get-terminal-*` (none), and `exit-with-code`, which records its code as `exit` does.
+  - **A random request is capped at 2^26 bytes**, wasmtime 49.0.3's figure, measured: `max-len` of 2^26-1 gets
+    2^26-1 bytes, and 2^26 through `u64::MAX` get 2^26. The bytes are written through the guest's realloc a 64 KiB
+    chunk at a time (`canon.StoreListU8`), so the host holds one chunk whatever the guest asks for.
+  - **The 0.3 terminal resource types are declared**, since the getters return an `own` and ADR 0118's check refuses a
+    served import whose handle names no host resource. Without them p3async-hello is refused at instantiate.
+  - **Two stated divergences:** wasmtime answers each resolution with its host's clock granularity (1000 ns on
+    darwin/arm64), and a terminal where its stream is one. The host's streams are `io.Writer`s, which cannot say.
+  - **Witness:** `TestP3SysMatchesWasmtime` runs `p3sys.wasm`, a Rust `wasm32-wasip3` guest built offline by
+    `testdata/p3sys/build.sh`, that calls every row and prints properties of the answers. Its stdout, stderr and
+    exit code 7 equal wasmtime 49.0.3's reading byte for byte.
+  - **Neuters, run:** the cap at 0, `NewHost` without its clock origin, the terminal types undeclared and stderr's
+    consumer over stdout each fail it.
+  - **Two limits found and recorded, not repaired:** `write-via-stream` consumes one write, so a guest's second
+    stdout write blocks and traps ([#1261](https://github.com/scttfrdmn/burroughs/issues/1261)); and `exit` and
+    `exit-with-code` return, so std's `process::exit` reaches its `unreachable`
+    ([#1262](https://github.com/scttfrdmn/burroughs/issues/1262)). p3sys writes each channel once and returns from
+    `main`.
+
 - **ADR 0114, accepted: the fork's WASI 0.3 work targets `GOOS=wasip3` on `GOARCH=wasm`**
   ([#1228](https://github.com/scttfrdmn/burroughs/issues/1228)), and the WASI pin is 0.3.0 semantics, admitting 0.3.x
   imports by semver, as the pinned wasmtime 49.0.3 does. It opens v0.14.0 (WASI 0.3, single-threaded first; Scott,
@@ -175,6 +203,22 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A lower's realloc runs in a context of its own, so a `wasm32-wasip3` std guest's stack pointer survives it**
+  ([#1260](https://github.com/scttfrdmn/burroughs/issues/1260), `type:grave`; ADR 0119; a repair E4's witness
+  compelled).
+  - **The defect:** `CanonCaller.Realloc` ran the guest's realloc over the caller's context slots. The reference
+    invokes it as a call of its own, on a new Thread whose context starts at zero
+    (def:LiftLowerContext.reallocate). A wasip3 std guest's realloc is wrapped in wasi-libc task hooks that move
+    the shadow stack pointer, context slot 0, to a scratch stack on entry and set it to 0 on exit. Over the
+    caller's slots, that left the caller's stack pointer at 0, and the guest trapped out of bounds at its next
+    frame. Nothing reached it until a 0.3 host row returned a list.
+  - **The repair:** the caller's slots are saved, zeroed for the call and restored after it.
+  - **Witness:** `TestReallocRunsWithItsOwnContext` (`realloc-context.wasm`): the realloc sees 0, and the caller's
+    slot is as it left it, `12345 << 16 | 0`, as wasmtime 49.0.3 reads 10 of 10. `TestP3SysMatchesWasmtime` runs.
+  - **Neuter, run:** the old call reads `0xdead << 16 | 12345` and traps p3sys. The zeroing alone or the restore alone
+    removed fails the first as well.
+  - **Not covered:** a caller whose context lives in a Thread record (an async-lift task or a created Thread) still
+    lends that storage to the realloc.
 - **A type named twice side by side no longer reads as a cycle, and one resolve is bounded by a size budget**
   ([#1256](https://github.com/scttfrdmn/burroughs/issues/1256), `type:grave`; a repair ADR 0118's slice compelled).
   - **The defect:** `resolveVal`'s `seen` map was meant to be the current chain of type references, but nothing

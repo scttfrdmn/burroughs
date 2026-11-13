@@ -1,0 +1,17 @@
+// The interfaces p3sys calls explicitly (#1232, ADR 0119). build.sh stages this beside the pinned WASI 0.3.0
+// WIT the nightly's std vendors (wasip3-0.8.0+wasi-0.3.0), as wit/deps, so the bindings are generated from the
+// same WIT the std guest's own imports are.
+package burroughs:p3sys;
+
+world p3sys {
+  import wasi:random/random@0.3.0;
+  import wasi:random/insecure@0.3.0;
+  import wasi:random/insecure-seed@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:cli/environment@0.3.0;
+  import wasi:cli/terminal-stdin@0.3.0;
+  import wasi:cli/terminal-stdout@0.3.0;
+  import wasi:cli/terminal-stderr@0.3.0;
+  import wasi:cli/exit@0.3.0;
+}

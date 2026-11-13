@@ -1,0 +1,23 @@
+E4's witness guest (#1232, ADR 0119) — provenance, per ADR 0114's rule for committed guest binaries. Unlike
+clause 1's or threads012's, it is reproducible from this repository plus the pinned toolchain: p3sys/build.sh
+rebuilds it offline.
+
+Source:       src/main.rs, wit/world.wit, Cargo.toml, Cargo.lock (this directory)
+WIT:          the nightly's vendored WASI 0.3.0 WIT, library/vendor/wasip3-0.8.0+wasi-0.3.0/wit/deps
+              (random, clocks, cli, filesystem, sockets), staged by build.sh, not committed
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Bindings:     wit-bindgen 0.61.1 (features macros, realloc, async), resolved offline from the local registry
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-12
+
+  p3sys.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: b03ced18cf892ad303849a8ca2928d1d276131bed51306bb5cede7ede8ece1eb
+    bytes:  115985
+    The same sha256 on a second build.
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on
+PATH. build.sh writes its reading to ../p3sys.reading. Invocation: `wasmtime run p3sys.wasm </dev/null`, with
+stdout and stderr to files. No -S flag: `exit-with-code(7)` exits 7 without one, and on 49.0.3
+`-S cli-exit-with-code=n` warns that it cannot be disabled any more and exits 7 too. 10 of 10 runs gave one stdout, one stderr and exit 7.

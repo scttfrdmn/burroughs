@@ -988,6 +988,51 @@ func LoadListU8(h ReadHeap, ptr, count int) ([]byte, error) {
 	return h.ReadBytes(ptr, count)
 }
 
+// StoreListU8 lowers a `list<u8>` of count bytes produced by fill, writing its (pointer, count) pair at ptr:
+// [StoreList]'s framing for the one element type whose element loop is a contiguous write, and the store
+// side of [LoadListU8] (ADR 0119). The backing is allocated through the heap's realloc at the element's
+// alignment, as `store_list` allocates (definitions.py:store_list_into_range), and then filled
+// [StringChunk] bytes at a time through one buffer, which fill writes in place.
+//
+// **The producer is a function, not a slice**, because a host that produces its bytes (`get-random-bytes`)
+// would otherwise hold the whole list in host memory before writing any of it. Here the host holds one
+// chunk, whatever count is, and a guest's request costs the guest's memory rather than the host's.
+func StoreListU8(h Heap, count int, fill func([]byte) error, ptr int) error {
+	elem := Type{Kind: KindU8}
+	if s, a := size(elem), alignment(elem); s != 1 || a != 1 {
+		return fmt.Errorf("canon: list<u8> fast path assumes a 1-byte element at 1-byte alignment, "+
+			"but u8 now sizes %d and aligns %d — the contiguous write is no longer the element loop", s, a)
+	}
+	byteLen, err := ListByteLength(count, 1)
+	if err != nil {
+		return err
+	}
+	p, err := h.Realloc(0, 0, 1, byteLen)
+	if err != nil {
+		return err
+	}
+	var buf []byte
+	for off := 0; off < byteLen; {
+		n := min(StringChunk, byteLen-off)
+		if buf == nil {
+			buf = make([]byte, n)
+		}
+		if err := fill(buf[:n]); err != nil {
+			return err
+		}
+		// NEUTER THIS (write every chunk at p), and TestStoreListU8IsStoreListsFraming's 2-chunks-plus-3 count
+		// leaves a heap that differs from StoreVia's.
+		if err := h.WriteBytes(p+off, buf[:n]); err != nil {
+			return err
+		}
+		off += n
+	}
+	if err := h.StoreInt(uint64(p), ptr, ptrSize); err != nil {
+		return err
+	}
+	return h.StoreInt(uint64(byteLen), ptr+ptrSize, ptrSize)
+}
+
 // LoadString lifts a `string` from the (pointer, length) PAIR stored at ptr — the model's `load_string`
 // (definitions.py:load_string), which reads the two words and defers to [LoadStringFromRange]. Separate
 // from that function because the flat lifting gets its two words from the core value iterator rather

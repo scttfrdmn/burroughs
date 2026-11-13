@@ -49,8 +49,7 @@ func TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes(t *testing.T) {
 	async := newAsyncHandles()
 	re := &readableStreamEnd{}
 	ri := async.addLocked(re)
-	h := NewHost(io.Discard, io.Discard, nil)
-	ret, err := h.writeViaStream(async)(cc, []interp.Value{interp.I32(int32(ri))})
+	ret, err := writeViaStream(io.Discard)(async)(cc, []interp.Value{interp.I32(int32(ri))})
 	if err != nil {
 		t.Fatalf("write-via-stream: %v", err)
 	}
