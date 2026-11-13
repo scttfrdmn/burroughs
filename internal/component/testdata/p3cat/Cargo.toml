@@ -1,0 +1,12 @@
+[package]
+name = "p3cat"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# No dependencies: the guest is std alone, so its imports are exactly the ones Rust std and wasi-libc make
+# for a wasm32-wasip3 program that reads stdin to its end (#1234, #1264, ADR 0122).
+[dependencies]
+
+[profile.release]
+opt-level = "s"

@@ -1,0 +1,25 @@
+# Committed wasmtime readings for read-park.wasm: WASI 0.3's stdin read-via-stream and one async stream.read (#1234, ADR 0122).
+# Built:       wasm-tools parse read-park.wat -o read-park.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  printf '<stdin>' | wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y -S p3=y \
+#                --invoke '<export>()' read-park.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical.
+#
+# Each line is `<export> <stdin>: <wasmtime's reading>`, and the test reads them by export and stdin.
+run abc: 131120
+run empty: 131073
+run abcdefghijkl: 131200
+run devnull: 131073
+twice abcdef: 2162687
+twice a: 1114111
+start abc: 4294967295
+#
+# Meaning (the read asks for 8 bytes):
+#   run abc            0x20030: STREAM_READ (2) << 16, COMPLETED (0) with progress 3.
+#   run empty          0x20001: STREAM_READ, DROPPED (1) with progress 0: the writer dropped at the end of input.
+#   run devnull        the same, with stdin </dev/null rather than an empty pipe.
+#   run abcdefghijkl   0x20080: STREAM_READ, COMPLETED with progress 8, the read's length.
+#   start abc          0xffffffff: the read's BLOCKED, returned while the host's read is in flight.
+#   twice abcdef       0x20ffff: the first read COMPLETED with progress 2, the second BLOCKED, not served inline.
+#   twice a            0x10ffff: the first read COMPLETED with progress 1, the second BLOCKED: the end of input is
+#                      learned at a read, not with the last byte.
