@@ -284,7 +284,8 @@ says what it now requires and what it gives up.
   - **Neuter, run:** the drop leaving the ends linked fails three of its five rows. `TestP3CatMatchesWasmtime`
     passes under it, since p3cat's stream ends with a read pending.
 - **`future.read`, `future.write` and `stream.write` keep their `(memory …)` option, so a future's completion
-  reaches the guest's memory** (ADR 0122).
+  reaches the guest's memory** ([#1270](https://github.com/scttfrdmn/burroughs/issues/1270), `type:grave`;
+  ADR 0122).
   - **The defect:** the decoder read their canonopts and dropped them, so each one's caller fell back to the memory
     of the core instance that declared it. A wit-component guest declares these built-ins in its shim's fixup
     instance, which has no memory, so the first `future.read` of a host future with a payload trapped, *"the

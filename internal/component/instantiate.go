@@ -657,7 +657,7 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		if err := readIdx(); err != nil {
 			return Canon{}, err
 		}
-		// **The `(memory $m)` is kept for these too** (ADR 0122). It was read and dropped, so each one's caller
+		// **The `(memory $m)` is kept for these too** (grave #1270, ADR 0122). It was read and dropped, so each one's caller
 		// fell back to its declaring core instance's memory 0. A wit-component guest declares these built-ins in
 		// its shim's fixup instance, which has no memory, so the first future.read of a host future that resolves
 		// with a payload — read-via-stream's, at the end of stdin — failed its completion with "the instance

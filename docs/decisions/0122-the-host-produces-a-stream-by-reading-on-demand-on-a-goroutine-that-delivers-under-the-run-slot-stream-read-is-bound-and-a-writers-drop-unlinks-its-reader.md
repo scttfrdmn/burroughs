@@ -114,12 +114,12 @@ None measured. Both p3cat readings, and every read-park row, match byte for byte
 
 ### Out of scope, recorded
 
-- **A producer goroutine abandoned in `Read` reads one more chunk** from the source when it returns. For `os.Stdin` that is bytes another reader of the process's stdin will not see. Interrupting it needs a reader that can be cancelled, which `io.Reader` is not.
-- **`write-via-stream` of a host-produced stream** (a guest forwarding stdin to stdout without reading it) is refused at the call.
+- **A producer goroutine abandoned in `Read` reads one more chunk** from the source when it returns. For `os.Stdin` that is bytes another reader of the process's stdin will not see. Interrupting it needs a reader that can be cancelled, which `io.Reader` is not (#1274).
+- **`write-via-stream` of a host-produced stream** (a guest forwarding stdin to stdout without reading it) is refused at the call (#1273).
 - **The writer side of `End.drop`'s idle notify:** a guest writer whose reader dropped while it was IDLE gets no pending event; its next `stream.write` completes DROPPED inline, which is the observable the pin gives, and a waitable-set wait on the idle writer alone sees nothing.
-- **Stream element types other than one byte**, which `stream.read` refuses and `stream.write` does not check.
-- **`future.write`'s type index is dropped at decode,** so `futureElemOf(cn.TypeIdx)` classifies type 0 whatever the operand names. Found reading the decoder for finding 4, and not repaired here: it is a defect of the future copy's element rule (#1006), whose fixtures pass because their future is type 0. To be filed.
-- **The pin's sync `stream.read`**, which waits in the copy, refused at instantiate.
+- **Stream element types other than one byte**, which `stream.read` refuses and `stream.write` does not check (#1275).
+- **`future.write`'s type index is dropped at decode,** so `futureElemOf(cn.TypeIdx)` classifies type 0 whatever the operand names. Found reading the decoder for finding 4 (grave #1270), and not repaired here: it is a defect of the future copy's element rule (#1006), whose fixtures pass because their future is type 0. Filed as #1271.
+- **The pin's sync `stream.read`**, which waits in the copy, refused at instantiate (#1272).
 
 ## Consequences
 
