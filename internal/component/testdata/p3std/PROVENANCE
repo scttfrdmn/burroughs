@@ -1,0 +1,21 @@
+The witness guest for #1261 and #1262 (ADR 0120) — provenance, per ADR 0114's rule for committed guest
+binaries. Like p3sys, it is reproducible from this repository plus the pinned toolchain: p3std/build.sh
+rebuilds it offline.
+
+Source:       src/main.rs, Cargo.toml, Cargo.lock (this directory). No dependencies and no WIT of its own: its
+              imports are the ones Rust std and wasi-libc make for a wasm32-wasip3 program.
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-12
+
+  p3std.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: 6ba896dbe48149475059292b31da4254b40c4d05eaa73c2a5a5650ea4aec73e6
+    bytes:  122459
+    The same sha256 on a second build.
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on
+PATH. build.sh writes its reading to ../p3std.reading. Invocation: `wasmtime run p3std.wasm </dev/null`, with
+stdout and stderr to files. 10 of 10 runs gave the same stdout, the same stderr and exit 7. stdout ends with
+the line std had buffered with no newline, so std's process::exit flushed it before exiting.

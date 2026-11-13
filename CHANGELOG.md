@@ -203,6 +203,38 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **WASI 0.3's `write-via-stream` reads until the writer drops, so a std guest prints more than once**
+  ([#1261](https://github.com/scttfrdmn/burroughs/issues/1261), ADR 0120).
+  - **The defect:** the host's read of the guest's stream resolved its future on the first copy and was never
+    re-armed. Rust std keeps one stdout stream open across writes, so its second `println!` parked on a stream
+    nobody read, and trapped *"cannot block a synchronous task before returning"*.
+  - **The repair:** a COMPLETED copy re-arms the host's read, and only the writer's drop resolves the future, as
+    wasmtime 49.0.3 does. Three repairs ride with it, each found once the read re-armed:
+    - **Taking a writable stream end's event returns it to idle**, as the reference's `stream_event` does. A second
+      inline write reported progress 0, and a write after a guest-first completion was refused as not writable.
+    - **A write of 0 elements completes only the writer**, in either order, as the reference's `End.copy` does.
+    - **A future read arriving after the host resolved the future completes inline**, where it was refused as
+      single-shot.
+  - **Witnesses:** `TestP3StdMatchesWasmtime` (below), `TestWriteViaStreamResolvesAtTheWritersDrop` and
+    `TestAStreamWriteEndIsIdleOnceItsEventIsTaken`.
+  - **Neuters, run:** the read not re-armed traps p3std at its second line. Each idle-on-event reset, each
+    zero-length arm and the inline future read, removed, fails its witness.
+- **WASI's `exit` and `exit-with-code` end the run, and a `run` returning `err` exits 1**
+  ([#1262](https://github.com/scttfrdmn/burroughs/issues/1262), ADR 0120).
+  - **The defect:** both recorded the code and returned to the guest. Rust std's `process::exit` follows the call
+    with `unreachable`, so the guest trapped where wasmtime 49.0.3 exits. Separately, `run`'s own result was
+    discarded, so a `run` returning `err` exited 0 where wasmtime exits 1.
+  - **The repair:** both exits return an unexported `exitError`, preview 1's shape, which unwinds the guest.
+    `ComponentConfig.Run` and `burroughs run` return its code with no diagnostic, and a `run` returning `err` is
+    exit 1. `Component.Call` returns the exit as an error that names it. The store still locks after it. No exported
+    symbol is added.
+  - **Witness:** `TestP3StdMatchesWasmtime` runs `p3std.wasm`, a dependency-free Rust `wasm32-wasip3` program built
+    offline by `testdata/p3std/build.sh`. It prints three lines, one to stderr, nothing and a flush, then a line std
+    still holds in its buffer, and calls `process::exit(7)`. Its stdout, stderr and exit code equal wasmtime 49.0.3's
+    reading byte for byte, 10 of 10 runs there. `TestARunReturningErrExitsOne` and
+    `TestRunAComponentsExitIsTheProcesssExit` cover the result and the CLI.
+  - **Neuters, run:** `exit-with-code` returning nil traps p3std at `unreachable`. `CallRun` not unwrapping the exit
+    turns p3std's and p3sys's code 7 into an error. The result read removed exits 0.
 - **A lower's realloc runs in a context of its own, so a `wasm32-wasip3` std guest's stack pointer survives it**
   ([#1260](https://github.com/scttfrdmn/burroughs/issues/1260), `type:grave`; ADR 0119; a repair E4's witness
   compelled).

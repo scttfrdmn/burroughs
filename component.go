@@ -209,13 +209,16 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 		return 0, err
 	}
 	defer in.Close()
-	if err := in.CallRun(); err != nil {
+	// The code is the guest's exit, or 1 for a run returning err, or 0 (ADR 0120). An exit unwinds the guest
+	// and arrives here as a code, never as a trap, so `process::exit(7)` is exit 7 with no diagnostic.
+	//
+	// NEUTER: return 0 for the code, and cmd/burroughs's TestRunAComponentsExitIsTheProcesssExit exits 0 for
+	// both of its guests.
+	code, err := in.CallRun()
+	if err != nil {
 		return 0, publicRunTrap(err) // a trap is this package's *Trap, so the CLI exits 4 (#1084)
 	}
-	if h.Exited {
-		return int(h.ExitCode), nil
-	}
-	return 0, nil
+	return code, nil
 }
 
 // LoadComponent loads a component against this configuration and returns it for [Component.Call],

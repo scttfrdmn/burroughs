@@ -73,13 +73,10 @@ func TestP3SysMatchesWasmtime(t *testing.T) {
 		t.Fatalf("p3sys did not instantiate: %v", err)
 	}
 	defer in.Close()
-	if err := in.CallRun(); err != nil {
+	// The code is CallRun's, as Run returns it: the guest's exit-with-code(7) ends the run (ADR 0120).
+	code, err := in.CallRun()
+	if err != nil {
 		t.Fatalf("p3sys did not run to completion: %v\nstdout so far:\n%s", err, out.String())
-	}
-	// Run's own reading of the exit: the recorded code if the guest exited, else 0.
-	code := 0
-	if h.Exited {
-		code = int(h.ExitCode)
 	}
 	if got := out.String(); got != want.stdout {
 		t.Errorf("stdout differs from wasmtime 49.0.3's reading.\n got:\n%s\nwant:\n%s", got, want.stdout)

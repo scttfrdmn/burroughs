@@ -44,9 +44,18 @@ type writableStreamEnd struct {
 
 // pendingEventLocked delivers the write's (STREAM_WRITE, index, result|progress<<4) event once — progress
 // is the load-bearing difference from the future read end. The caller holds asyncHandles.mu.
+//
+// **Taking the event returns the end to IDLE** (ADR 0120): the write is no longer pending, so `hasWrite` is
+// cleared, as the reference's `stream_event` sets `End.State.IDLE` when the event is taken
+// (def:StreamEnd.notify.stream_event:"self.state = End.State.IDLE"). It was cleared only by a cancel, so a
+// write after a guest-first completion was refused as "not writable".
+//
+// NEUTER: drop the clear, and TestAStreamWriteEndIsIdleOnceItsEventIsTaken's write after a taken guest-first
+// completion is refused.
 func (e *writableStreamEnd) pendingEventLocked() (event, bool) {
 	if e.resolved && !e.delivered {
 		e.delivered = true
+		e.hasWrite = false
 		return event{code: eventStreamWrite, p1: uint32(e.index), p2: uint32(e.result) | (e.progress << 4)}, true
 	}
 	return event{}, false
@@ -117,11 +126,31 @@ func streamWrite(h *asyncHandles) interp.CanonFunc {
 		if e.done || e.hasWrite {
 			return nil, fmt.Errorf("component: stream.write: end %d is not writable (done or write pending)", i)
 		}
+		// **A write starts from IDLE, so the last copy's state is cleared here** (ADR 0120). Reaching this line
+		// means no write is pending and any completed write's event has been taken, the reference's IDLE
+		// (def:copy:"trap_if(end.state != End.State.IDLE)"). `delivered` left set made the next inline write's
+		// pendingEventLocked deliver nothing, so it reported progress 0.
+		//
+		// NEUTER: drop this reset, and TestAStreamWriteEndIsIdleOnceItsEventIsTaken's second host-first write
+		// reports progress 0.
+		e.resolved, e.delivered, e.progress, e.result = false, false, 0, copyCompleted
 		e.srcPtr = ptr
 		e.n = n
 		e.caller = c
 		// Host-first: the paired readable end already has a pending read. Drive the copy now and complete
-		// inline — the write is the second arriver (SharedStreamImpl.write, def:End.copy:"elif buffer.remain() > 0 or (is_read and").
+		// inline — the write is the second arriver (def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:").
+		//
+		// **A write of 0 elements completes only itself** (ADR 0120): the reference's last `End.copy` arm,
+		// def:End.copy:"self.notify(progress = 0)", notifies the writer and leaves the reader parked. Driving
+		// the copy armed the reader too, which a host consumer reads as a copy that ended.
+		//
+		// NEUTER: drop this arm, and TestAStreamWriteEndIsIdleOnceItsEventIsTaken's write of 0 arms the parked
+		// reader.
+		if e.conn != nil && e.conn.hasRead && !e.conn.resolved && n == 0 {
+			e.completeWriteLocked(0, copyCompleted)
+			ev, _ := e.pendingEventLocked()
+			return []interp.Value{interp.I32(int32(ev.p2))}, nil
+		}
 		if e.conn != nil && e.conn.hasRead && !e.conn.resolved {
 			progress, err := driveStreamCopyLocked(e.conn, e)
 			if err != nil {
@@ -284,10 +313,25 @@ func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32)
 	if e.state != copyStateIdle {
 		return false, fmt.Errorf("component: stream read: end %d is not readable (state %s)", e.index, e.state.name())
 	}
+	// From IDLE, so the last copy's state is cleared, as streamWrite clears the writable end's (ADR 0120).
+	//
+	// NEUTER: drop this reset, and TestAStreamWriteEndIsIdleOnceItsEventIsTaken's second host-first write
+	// parks BLOCKED, the re-parked read still reading as resolved.
+	e.resolved, e.delivered, e.progress, e.result, e.hasRead = false, false, 0, copyCompleted, false
 	e.dstPtr = ptr
 	e.readN = n
 	e.caller = c
 	e.state = copyStateCopying
+	// A parked write of 0 elements is completed with progress 0 and the read parks: the reference's
+	// def:End.copy:"elif buffer.remain() > 0 or (is_read and self.other.buffer.remain() == 0):" arm (ADR 0120).
+	//
+	// NEUTER: drop this arm, and TestAStreamWriteEndIsIdleOnceItsEventIsTaken's read at a parked write of 0
+	// completes.
+	if e.conn != nil && e.conn.hasWrite && !e.conn.resolved && e.conn.n == 0 {
+		e.conn.completeWriteLocked(0, copyCompleted)
+		e.hasRead = true
+		return false, nil
+	}
 	// Read-first (guest-first for the write): a write is already parked — drive the copy now and complete
 	// both ends. The read consumes its own event inline (→ IDLE); the write's event is armed for its wait.
 	if e.conn != nil && e.conn.hasWrite && !e.conn.resolved {

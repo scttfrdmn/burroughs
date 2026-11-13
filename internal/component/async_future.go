@@ -101,7 +101,19 @@ func (e *readableFutureEnd) resolveLocked(r copyResult) {
 // resolution sees the lowered value. The caller holds asyncHandles.mu; the write may run on the host's
 // goroutine while the reading agent is parked (the mutex is the happens-before). CANCELLED writes nothing.
 func (e *readableFutureEnd) completeLocked(r copyResult) error {
-	if r == copyCompleted && e.hasRead && e.payload != nil {
+	if r == copyCompleted && e.hasRead {
+		if err := e.storeValueLocked(); err != nil {
+			return err
+		}
+	}
+	e.resolveLocked(r)
+	return nil
+}
+
+// storeValueLocked writes the future's value at the pending read's pointer: completeLocked's write when the
+// read was first, and futureRead's when the host's completion was (ADR 0120). The caller holds mu.
+func (e *readableFutureEnd) storeValueLocked() error {
+	if e.payload != nil {
 		// **The codec lowers the payload, so at most `size(type)` bytes are written** (#1246). This was the
 		// 4-byte write below for every future, and write-via-stream's payload is `result<_, error-code>`,
 		// which is 2 bytes at alignment 1: each completion zeroed 2 guest bytes past the result. A
@@ -112,14 +124,13 @@ func (e *readableFutureEnd) completeLocked(r copyResult) error {
 		if err := canon.StoreVia(guestHeap{e.caller}, *e.payload, int(e.readPtr)); err != nil {
 			return fmt.Errorf("component: future.read completion: lowering a %s at ptr: %w", e.payload.Type, err)
 		}
-	} else if r == copyCompleted && e.hasRead {
-		var buf [4]byte
-		binary.LittleEndian.PutUint32(buf[:], e.value)
-		if err := e.caller.Write(uint64(e.readPtr), buf[:]); err != nil {
-			return fmt.Errorf("component: future.read completion: writing value at ptr: %w", err)
-		}
+		return nil
 	}
-	e.resolveLocked(r)
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], e.value)
+	if err := e.caller.Write(uint64(e.readPtr), buf[:]); err != nil {
+		return fmt.Errorf("component: future.read completion: writing value at ptr: %w", err)
+	}
 	return nil
 }
 
@@ -140,6 +151,25 @@ func futureRead(h *asyncHandles) interp.CanonFunc {
 		fe, ok := handleAt[*readableFutureEnd](h, i)
 		if !ok {
 			return nil, fmt.Errorf("component: future.read: handle %d is not a readable future end", i)
+		}
+		// **A read of a future the host has already completed is the second arriver, and completes inline**
+		// (ADR 0120). The host's completion parked its value on the future first, as the reference's writer
+		// parks its buffer, and the read that arrives after it copies the value and takes its own event in the
+		// same call (def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:"). A guest that
+		// drops its stream's writer before it reads write-via-stream's future has the host resolve the future
+		// first, and this refused that read as single-shot.
+		//
+		// NEUTER: drop this arm, and TestWriteViaStreamResolvesAtTheWritersDrop's read after the drop is
+		// refused. p3std does not reach it: Rust std never closes stdout, so its writer is never dropped.
+		if fe.resolved && !fe.hasRead && !fe.delivered && fe.result == copyCompleted {
+			fe.readPtr = ptr
+			fe.hasRead = true
+			fe.caller = c
+			if err := fe.storeValueLocked(); err != nil {
+				return nil, err
+			}
+			ev, _ := fe.pendingEventLocked()
+			return []interp.Value{interp.I32(int32(ev.p2))}, nil
 		}
 		if fe.resolved || fe.hasRead {
 			return nil, fmt.Errorf("component: future.read: end %d already read (a future is single-shot)", i)

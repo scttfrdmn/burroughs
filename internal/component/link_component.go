@@ -70,15 +70,16 @@ type compFunc struct {
 	// which is per-call by construction rather than by locking.
 }
 
-// invoke runs the func and discards any resolution — for callers whose export returns nothing (`run()`).
+// invoke runs the func and discards any resolution. Its callers are the lift-loop tests: `run()` was one until
+// ADR 0120, and its result is now read (Instantiated.callResult), since a `run` returning err exits 1.
 func (f *compFunc) invoke() error {
 	_, err := f.invokeWith(context.Background())
 	return err
 }
 
 // invokeWith is invoke carrying flat core params (#864's value-carrying export call). `invoke()` is this
-// with none, which is what run() needs — kept as the name every existing caller uses, so adding params
-// did not touch any of them.
+// with the resolution discarded. run() called `invoke()` until ADR 0120 and calls this now, to read its
+// result.
 // It returns the lift's results: what `task.return` lowered for an async lift, or the core func's own
 // returns for a sync one. **Returned rather than stored on the func** — see the comment where the
 // `result` field used to be.
@@ -1417,19 +1418,27 @@ func InstantiateWithHostFeatures(bytes []byte, h *Host, feats bin.Features) (*In
 // with the stub host, reaching a wasi import returns the refusal. Value-carrying exports are a later
 // slice (run moves none).
 func (in *Instantiated) Call(name string) error {
+	_, _, err := in.callResult(name)
+	return err
+}
+
+// callResult is Call returning what the export resolved with and the function that ran, for CallRun's read
+// of `run`'s result (ADR 0120). The function is nil when none was reached.
+func (in *Instantiated) callResult(name string) (liftResult, *compFunc, error) {
 	// The store lockdown (#1040): a call after a trap is refused before anything is resolved or run.
 	if err := in.w.lock.locked(); err != nil {
-		return err
+		return liftResult{}, nil, err
 	}
 	startedLocked := in.w.lock.trap() != nil
-	return in.w.lock.finish(startedLocked, in.call(name))
+	res, fn, err := in.call(name)
+	return res, fn, in.w.lock.finish(startedLocked, err)
 }
 
 // call is Call's body, outside the lockdown check.
-func (in *Instantiated) call(name string) error {
+func (in *Instantiated) call(name string) (liftResult, *compFunc, error) {
 	cd, ok := in.export.exports[name]
 	if !ok {
-		return fmt.Errorf("%w: %q", ErrNoRun, name)
+		return liftResult{}, nil, fmt.Errorf("%w: %q", ErrNoRun, name)
 	}
 	fn := cd.fn
 	// A wasi world export is an interface *instance* (e.g. wasi:cli/run) whose sole function is `run`;
@@ -1440,7 +1449,7 @@ func (in *Instantiated) call(name string) error {
 		}
 	}
 	if fn == nil {
-		return fmt.Errorf("%w: export %q is not a callable function", ErrUnsupportedForm, name)
+		return liftResult{}, nil, fmt.Errorf("%w: export %q is not a callable function", ErrUnsupportedForm, name)
 	}
 	// The export refusal (ADR 0084 / #720): an exported function whose signature carries a value kind the
 	// codec cannot marshal refuses **by name at Call** — the earliest point a value crosses. `run` carries
@@ -1448,11 +1457,12 @@ func (in *Instantiated) call(name string) error {
 	// instantiate, for the same reason decode stays permissive: the boundary is where the value moves.
 	if fn.sig != nil {
 		if k, bad := unmodeledInSig(fn.sig); bad {
-			return fmt.Errorf("%w: export %q carries %s, which this engine's Canonical ABI does not model",
+			return liftResult{}, nil, fmt.Errorf("%w: export %q carries %s, which this engine's Canonical ABI does not model",
 				ErrUnsupportedForm, name, valKindName(k))
 		}
 	}
-	return fn.invoke()
+	res, err := fn.invokeWith(context.Background())
+	return res, fn, err
 }
 
 // liftSignature resolves a canon lift's type index to the component function type it lifts, for the
@@ -1492,13 +1502,48 @@ func (w *walker) liftSignature(cn Canon) *FuncType {
 // CallRun invokes the component's `wasi:cli/run` export, whatever version it names
 // (`wasi:cli/run@0.2.3`, `@0.2.0`, …), so a caller need not know the world's exact version. There is
 // one such export in a `wasi:cli/run` world; if none, ErrNoRun.
-func (in *Instantiated) CallRun() error {
+//
+// It returns the run's exit code (ADR 0120), which has three sources, in order:
+//   - a guest's `wasi:cli/exit` call, which unwinds the run as an exitError and is its code with a nil error
+//     (#1262). An exit is not a trap, so a caller never sees it as one;
+//   - `run`'s own result, whose `err` is 1, as wasmtime 49.0.3 exits. This was discarded, so a run
+//     returning err exited 0;
+//   - otherwise 0.
+//
+// A trap or any other failure is `(0, err)`.
+func (in *Instantiated) CallRun() (exitCode int, err error) {
 	for name := range in.export.exports {
-		if strings.HasPrefix(name, "wasi:cli/run") {
-			return in.Call(name)
+		if !strings.HasPrefix(name, "wasi:cli/run") {
+			continue
 		}
+		res, fn, cerr := in.callResult(name)
+		// NEUTER: drop this unwrap, and TestP3StdMatchesWasmtime and TestP3SysMatchesWasmtime get the exit
+		// as an error in place of code 7.
+		var ee exitError
+		if errors.As(cerr, &ee) {
+			return int(ee.code), nil
+		}
+		if cerr != nil {
+			return 0, cerr
+		}
+		if runReturnedErr(fn, res) {
+			return 1, nil
+		}
+		return 0, nil
 	}
-	return fmt.Errorf("%w: no wasi:cli/run export", ErrNoRun)
+	return 0, fmt.Errorf("%w: no wasi:cli/run export", ErrNoRun)
+}
+
+// runReturnedErr reports whether a `run` export's result is `err`. `wasi:cli/run`'s `run` returns a
+// `result` with neither payload, which flattens to one discriminant word, a sync lift's own return or the
+// word `task.return` received, so 0 is ok and anything else is err (def:lift_flat_variant).
+//
+// NEUTER: return false, and TestARunReturningErrExitsOne's run exits 0 where wasmtime exits 1.
+func runReturnedErr(fn *compFunc, res liftResult) bool {
+	if fn == nil || fn.sig == nil || fn.sig.Result == nil || fn.sig.Result.Kind != VResult {
+		return false
+	}
+	return len(res.flat) == 1 && res.flat[0].Int32() != 0
 }
 
 // CancelAll requests cancellation of every async-lift task this instance currently hosts, and is what

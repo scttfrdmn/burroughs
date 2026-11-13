@@ -151,12 +151,15 @@ func noneOf(what string, elem canon.Type) interp.CanonFunc {
 }
 
 // exitWithCode marshals `wasi:cli/exit.exit-with-code: func(status-code: u8)`. It records the code the way
-// `exit` records its status: the guest is not unwound, and the run's caller reads Exited and ExitCode.
+// `exit` records its status, and ends the run with it as `exit` does (exitError, ADR 0120). This returned
+// nil until #1262, so the guest ran on past a call it treats as one that does not return.
 func (h *Host) exitWithCode(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("component: exit-with-code: got %d core args, want 1 (status-code)", len(args))
 	}
 	h.Exited = true
 	h.ExitCode = int32(uint8(args[0].Bits)) // lift_flat of a u8 keeps the low 8 bits
-	return nil, nil
+	// NEUTER: return nil, and TestP3StdMatchesWasmtime traps at the `unreachable` std puts after the call, and
+	// TestP3SysMatchesWasmtime's run exits 0.
+	return nil, exitError{code: h.ExitCode}
 }

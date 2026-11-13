@@ -34,7 +34,7 @@ func TestP3EchoMatchesWasmtime(t *testing.T) {
 		t.Fatalf("instantiate: %v", err)
 	}
 	defer in.Close()
-	if err := in.CallRun(); err != nil {
+	if _, err := in.CallRun(); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if got := out.Bytes(); !bytes.Equal(got, want) {
@@ -73,7 +73,7 @@ func TestStreamErrArmLowersAnOwnErrorHandle(t *testing.T) {
 	defer in.Close()
 	// The guest, told its write failed, debug-strings the error and aborts — a trap, the guest seeing
 	// the err arm, not the host failing.
-	_ = in.CallRun()
+	_, _ = in.CallRun()
 
 	// error.to-debug-string lowered it correctly, end-to-end: the host lowered the error message through
 	// canon.StoreString into guest memory, the guest read it back, and Rust's panic surfaced it on stderr —
