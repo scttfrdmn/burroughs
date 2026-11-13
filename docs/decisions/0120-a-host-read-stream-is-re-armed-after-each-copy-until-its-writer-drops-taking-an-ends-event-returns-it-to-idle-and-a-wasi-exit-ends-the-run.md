@@ -70,8 +70,8 @@ For #1262:
 
 ### Out of scope, recorded
 
-- **A writer dropped before the host reads.** The reference's drop clears the reader's `other` and arms a DROPPED event the reader's next copy finds. Burroughs's drop keeps `conn` and notifies only a reader already pending, so a `write-via-stream` handed a stream whose writer is already gone would park. No committed guest orders it that way.
-- **An exit on a spawned component-model Thread.** `exitError` is not an `interp.InstanceEnder` (ADR 0090's mechanism), so it ends the agent that calls it. No committed guest exits from a created Thread.
+- **A writer dropped before the host reads.** The reference's drop clears the reader's `other` and arms a DROPPED event the reader's next copy finds. Burroughs's drop keeps `conn` and notifies only a reader already pending, so a `write-via-stream` handed a stream whose writer is already gone would park. No committed guest orders it that way. Filed as #1264.
+- **An exit on a spawned component-model Thread.** `exitError` is not an `interp.InstanceEnder` (ADR 0090's mechanism), so it ends the agent that calls it. No committed guest exits from a created Thread. Filed as #1265, with `Call`'s "trapped" wording.
 - **The guest-to-guest witness is a harness test, not a `.wat`.** The plan asked for a `.wat`. A guest cannot read a stream here, since `stream.read` is not bound as a built-in, so no component can hold both ends' guests; the async-stream tests' harness, which drives the built-ins directly, is the nearest form.
 
 ## Consequences
