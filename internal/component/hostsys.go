@@ -6,6 +6,7 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -14,8 +15,8 @@ import (
 
 // WASI 0.3's synchronous system interfaces (#1232, ADR 0119): `wasi:random`, the two clocks' `now` and
 // `get-resolution`, and the rest of `wasi:cli` a `wasm32-wasip3` std guest reaches on startup. Every row is
-// registered for 0.3 only (ADR 0115). The async `wait-for` and `wait-until` are E5's (#1233), and stdin's
-// `read-via-stream` is E6's.
+// registered for 0.3 only (ADR 0115). The monotonic clock's async `wait-for` and `wait-until` are served here
+// too, as the production async imports (asyncSource, #1233, ADR 0121), and stdin's `read-via-stream` is E6's.
 
 // randomBytesCap bounds one `get-random-bytes` or `get-insecure-random-bytes` request (ADR 0119). The WIT
 // lets a host return fewer than `max-len` bytes, and this is the figure wasmtime 49.0.3 returns for every
@@ -97,7 +98,69 @@ func (h *Host) monotonicNow(_ *interp.CanonCaller, args []interp.Value) ([]inter
 	if len(args) != 0 {
 		return nil, fmt.Errorf("component: monotonic-clock.now: got %d core args, want 0", len(args))
 	}
-	return []interp.Value{interp.I64(time.Since(h.start).Nanoseconds())}, nil
+	return []interp.Value{interp.I64(int64(h.mark()))}, nil
+}
+
+// mark is the monotonic clock's reading, a `mark`: the one clock `now` reads and the waits measure against.
+func (h *Host) mark() uint64 { return uint64(time.Since(h.start).Nanoseconds()) }
+
+// asyncSource is the production async imports (#1233, ADR 0121), WASI 0.3's two waits, registered for 0.3
+// only. Each is a factory the walk calls with the importing instance's async table, which holds the wait
+// while it is pending, so that instance's Close stops it.
+func (h *Host) asyncSource() map[string]asyncImplFor {
+	m := map[string]asyncImplFor{}
+	serve(m, wasiP3, "wasi:clocks/monotonic-clock::wait-for", h.waitFor)
+	serve(m, wasiP3, "wasi:clocks/monotonic-clock::wait-until", h.waitUntil)
+	return m
+}
+
+// waitFor implements `wait-for: async func(how-long: duration)`: its deadline is now plus how-long on the
+// monotonic clock, saturating at the largest mark.
+func (h *Host) waitFor(async *asyncHandles) asyncLowerImpl {
+	return func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+		args := onStart()
+		if len(args) != 1 {
+			return nil, fmt.Errorf("component: wait-for: got %d core args, want 1 (how-long)", len(args))
+		}
+		now := h.mark()
+		deadline := now + args[0].Bits
+		if deadline < now {
+			deadline = math.MaxUint64
+		}
+		return h.waitUntilMark(async, deadline, now, onResolve), nil
+	}
+}
+
+// waitUntil implements `wait-until: async func(when: mark)`: `when` is a mark on the clock `now` reads.
+func (h *Host) waitUntil(async *asyncHandles) asyncLowerImpl {
+	return func(_ *interp.CanonCaller, onStart func() []interp.Value, onResolve func(canon.Value)) (func(), error) {
+		args := onStart()
+		if len(args) != 1 {
+			return nil, fmt.Errorf("component: wait-until: got %d core args, want 1 (when)", len(args))
+		}
+		// NEUTER: read `when` against the wrong clock, as uint64(time.Now().UnixNano()) for h.mark(), and
+		// TestP3SleepMatchesWasmtime's sleep_until line reads false: the deadline reads as long past.
+		return h.waitUntilMark(async, args[0].Bits, h.mark(), onResolve), nil
+	}
+}
+
+// waitUntilMark resolves at `deadline`, a mark, read against `now`. **A deadline at or before now resolves
+// inline**, so the lower returns RETURNED (2) with no subtask registered, as wasmtime 49.0.3's does for
+// `wait-for(0)`, `wait-until(0)` and `wait-until(now())` (wait-cancel.reading). Otherwise a host wait is
+// started, and its onCancel is the subtask's.
+//
+// NEUTER: resolve inline whatever the deadline, and TestP3SleepMatchesWasmtime's sleep and sleep_until lines
+// both read false.
+func (h *Host) waitUntilMark(async *asyncHandles, deadline, now uint64, onResolve func(canon.Value)) func() {
+	if deadline <= now {
+		onResolve(canon.Value{})
+		return nil
+	}
+	d := deadline - now
+	if d > math.MaxInt64 {
+		d = math.MaxInt64 // a timer's duration is an int64: 292 years, which no guest outlives
+	}
+	return async.startHostWait(time.Duration(d), onResolve)
 }
 
 // clockGetResolution marshals both clocks' `get-resolution: func() -> duration`, one flat i64.

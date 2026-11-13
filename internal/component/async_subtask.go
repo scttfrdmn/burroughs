@@ -172,6 +172,20 @@ type asyncHandles struct {
 	// `liftsInFlight` is incremented and removed in the same deferred teardown, so the set and the count
 	// have one lifetime and a leak in either is visible as a disagreement between them.
 	cancellable map[*liftTask]struct{}
+
+	// hostWaits is this instance's pending host work: every `wait-for` and `wait-until` timer started and not
+	// yet fired, cancelled or stopped (hostwait.go, ADR 0121). Per instance and not per Host, because one Host
+	// serves many instances and only this one's Close may stop them. Guarded by mu.
+	hostWaits map[*hostWait]struct{}
+	// hostWaitsStopped is set by Close's stop (stopHostWaits), after which no wait starts or resolves. Guarded
+	// by mu.
+	hostWaitsStopped bool
+	// hostWaitsFiring counts timer callbacks past their claim, so Close can wait out one already resolving.
+	// Added to under mu, and only while hostWaitsStopped is false, so no Add follows Close's Wait.
+	hostWaitsFiring sync.WaitGroup
+	// hostWaitsResolving is the same count as a number the park bound can read under mu: a callback past its
+	// claim has left the registry and not yet resolved its subtask, and is still a waker. Guarded by mu.
+	hostWaitsResolving int
 }
 
 // requestCancelAll requests cancellation of every lift task this instance currently hosts, and is the
@@ -404,6 +418,7 @@ func newAsyncHandles() *asyncHandles {
 		entrySem:    make(chan struct{}, 1),
 		runSlot:     make(chan struct{}, 1),
 		cancellable: make(map[*liftTask]struct{}),
+		hostWaits:   make(map[*hostWait]struct{}),
 	}
 }
 
