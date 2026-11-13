@@ -1,0 +1,12 @@
+[package]
+name = "p3std"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# No dependencies: the guest is std alone, so its imports are exactly the ones Rust std and wasi-libc make
+# for a wasm32-wasip3 program (#1261, #1262, ADR 0120).
+[dependencies]
+
+[profile.release]
+opt-level = "s"

@@ -553,7 +553,24 @@ with `cargo --offline --locked` against the committed `Cargo.lock`, and takes th
 `/dev/null` and both outputs to files, so no stream is a terminal. The build is byte-reproducible (two runs,
 one sha256, recorded in `p3sys/PROVENANCE`). It needs the nightly named by its toolchain directory, because
 `rustc +nightly` resolves to Homebrew's 1.99.1 here, which has no `wasm32-wasip3` target. **The guest writes
-each channel once**, for the reason ADR 0119 records: `write-via-stream` consumes a single write.
+each channel once**, for the reason ADR 0119 records: `write-via-stream` consumed a single write. ADR 0120 repaired
+that (#1261), and `exit-with-code` now ends the run (#1262), so neither workaround is needed any more. They stay,
+because p3sys's subject is E4's rows and its reading is the oracle's as it stands.
+
+## A std guest's stdout and exit (#1261, #1262, ADR 0120)
+
+`p3std/p3std.wasm` (`TestP3StdMatchesWasmtime`) is an ordinary Rust `wasm32-wasip3` std program with no
+dependencies and no bindings, `p3std/src/main.rs`: three `println!`s, an `eprintln!`, a `print!("")` and a flush,
+a `print!` with no newline, and `std::process::exit(7)`. `p3std.reading` is wasmtime 49.0.3's stdout, stderr and
+exit code, 10 of 10, each channel's lines prefixed by its name, with a header saying whether each channel ends in
+a newline, since stdout does not: std flushes its buffered last line at `process::exit`. **`p3std/build.sh`
+rebuilds both**, offline and out of CI, as p3sys's does, and the build is byte-reproducible (`p3std/PROVENANCE`).
+Rust std never closes stdout, so the guest never drops its stream's writer: the drop, and the future read after it,
+are witnessed by `TestWriteViaStreamResolvesAtTheWritersDrop` instead.
+
+`run-result-err.wasm` and `run-result-ok.wasm` (`TestARunReturningErrExitsOne`) are `cli-run-trap.wat`'s shape
+with a `run` that returns `err` and `ok`. `run-result.reading` is wasmtime 49.0.3's exit code for each, 1 and 0,
+10 of 10. Hand-authored WAT, parsed with `wasm-tools parse` (1.258.0), validating with `--features all`.
 
 `realloc-context.wasm` (`TestReallocRunsWithItsOwnContext`) isolates the repair p3sys compelled: whose context
 a lower's realloc sees. `run` sets context slot 0 to 12345 and calls `get-random-bytes(4)`, whose realloc

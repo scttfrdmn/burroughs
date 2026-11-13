@@ -113,8 +113,10 @@ func TestSharedTrackEntriesStillServe(t *testing.T) {
 	if r.sync == nil {
 		t.Fatalf("wasi:cli/exit@0.3.2::exit is not served (servedFor %v); exit is the same in 0.2 and 0.3", r.servedFor)
 	}
-	if _, err := r.sync(nil, []interp.Value{interp.I32(1)}); err != nil {
-		t.Fatalf("exit: %v", err)
+	// An exit ends the run, so it returns its exitError rather than nil (#1262, ADR 0120).
+	var ee exitError
+	if _, err := r.sync(nil, []interp.Value{interp.I32(1)}); !errors.As(err, &ee) || ee.code != 1 {
+		t.Fatalf("exit returned %v, want the exitError for code 1 that ends the run", err)
 	}
 	if !h.Exited || h.ExitCode != 1 {
 		t.Errorf("exit@0.3.2 did not reach the host's exit: Exited=%v ExitCode=%d", h.Exited, h.ExitCode)

@@ -180,10 +180,23 @@ func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 		// is on, and every WASI 0.3 guest that writes stdout reaches it.
 		fe := &readableFutureEnd{payload: &okv}
 		fe.index = async.addLocked(fe)
-		// Register the host read: sink to the writer, resolve the future on completion. readN takes all the
-		// guest offers in a write.
+		// Register the host read: sink to the writer. readN takes all the guest offers in a write.
 		re.hostSink = func(b []byte) error { _, werr := w.Write(b); return werr }
-		re.onHostComplete = func(copyResult) {
+		// **The host reads until the writer drops** (#1261, ADR 0120). A guest keeps one stream open across
+		// its writes, as Rust std's stdout does, so a COMPLETED copy re-arms the read: the end stays COPYING
+		// with its read pending, and the next write is again the second arriver. That is the reference's
+		// owner-less End copying again after each event, until its event is DROPPED
+		// (def:StreamEnd.notify.stream_event:"result = CopyResult.DROPPED"), and it is when the future resolves.
+		// This resolved the future on the first copy, so a std guest's second println parked on a stream
+		// nobody read and trapped "cannot block a synchronous task before returning".
+		//
+		// NEUTER: resolve the future on every result, and TestP3StdMatchesWasmtime's second line traps, and
+		// TestWriteViaStreamResolvesAtTheWritersDrop's future resolves with the writer still open.
+		re.onHostComplete = func(r copyResult) {
+			if r == copyCompleted {
+				re.resolved, re.delivered, re.progress = false, false, 0
+				return
+			}
 			if cerr := fe.completeLocked(copyCompleted); cerr != nil {
 				fe.completeErr = cerr // deferred: onHostComplete cannot return; futureDrop surfaces it
 			}
@@ -192,7 +205,9 @@ func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 		re.hasRead = true
 		re.caller = c
 		re.state = copyStateCopying
-		// If the guest already wrote (guest-first), drive the copy now; otherwise its stream.write drives it.
+		// If the guest already wrote (guest-first), drive the copy now; otherwise its stream.write drives it. A
+		// parked write of 0 copies nothing and completes, and the read re-arms, so this read is left parked as
+		// the reference's zero-length arm leaves it (ADR 0120).
 		if re.conn != nil && re.conn.hasWrite && !re.conn.resolved {
 			progress, derr := driveStreamCopyLocked(re, re.conn)
 			if derr != nil {
@@ -500,14 +515,28 @@ func (h *Host) blockingFlush(_ *hostResources, c *interp.CanonCaller, _ *outputS
 	return nil, lowerResult(c, ret, v, verr)
 }
 
+// exitError is a guest's `wasi:cli/exit` call, carried out of the guest as the host function's error (#1262,
+// ADR 0120). A host function's error unwinds the interpreter, which is what an exit must do: the WIT's
+// `exit` does not return, and Rust std follows the call with `unreachable`. [Instantiated.CallRun] unwraps
+// it into the run's code, preview 1's `exitError` shape (internal/wasi), so an exit is neither a trap nor a
+// silent success. Unexported: an embedder's [Component.Call] sees it only as an error that names the exit.
+type exitError struct{ code int32 }
+
+func (e exitError) Error() string {
+	return fmt.Sprintf("component: the guest exited with code %d (wasi:cli/exit)", e.code)
+}
+
 // exit marshals cli/exit.exit: (status: result<_, _>) -> (), flattened to a single discriminant i32
-// (0 = ok/success, 1 = error). It records the exit rather than terminating the process.
+// (0 = ok/success, 1 = error). It records the exit and ends the run with it (ADR 0120).
+//
+// NEUTER: return nil, as before ADR 0120, and TestSharedTrackEntriesStillServe gets nil for the exitError.
+// No guest witness fails under it: Rust std's process::exit calls exit-with-code (exitWithCode), not this.
 func (h *Host) exit(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 	h.Exited = true
 	if len(args) == 1 && args[0].Int32() != 0 {
 		h.ExitCode = 1
 	}
-	return nil, nil
+	return nil, exitError{code: h.ExitCode}
 }
 
 // getArguments lowers the host's argv as a non-empty `list<string>` at the return pointer (its sole

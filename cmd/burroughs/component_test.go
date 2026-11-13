@@ -34,6 +34,33 @@ func TestRunAComponentThatTrapsExitsTrap(t *testing.T) {
 	}
 }
 
+// TestRunAComponentsExitIsTheProcesssExit: a component's exit code is this process's, with no diagnostic of
+// the CLI's own (#1262, ADR 0120). p3std calls std::process::exit(7), and run-result-err returns err from
+// run, which wasmtime 49.0.3 exits 1. stderr holds only what the guest wrote, because a guest's exit is its
+// verdict and not a failure of the run (decision 0081's wasiExit).
+func TestRunAComponentsExitIsTheProcesssExit(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "")
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	for _, c := range []struct {
+		file, stderr string
+		code         int
+	}{
+		{"p3std/p3std.wasm", "p3std: a line to stderr\n", 7},
+		{"run-result-err.wasm", "", 1},
+	} {
+		t.Run(c.file, func(t *testing.T) {
+			var out, errBuf bytes.Buffer
+			code := dispatch(&out, &errBuf, []string{"run", "../../internal/component/testdata/" + c.file})
+			if code != c.code {
+				t.Fatalf("`run %s` exited %d, want %d\nstderr: %q", c.file, code, c.code, errBuf.String())
+			}
+			if got := errBuf.String(); got != c.stderr {
+				t.Errorf("stderr = %q, want only the guest's own %q", got, c.stderr)
+			}
+		})
+	}
+}
+
 func TestRunRefusesAnAsyncComponentByName(t *testing.T) {
 	t.Setenv("BURROUGHS_COMPONENTS", "") // gate:components on (default)
 	t.Setenv("BURROUGHS_ASYNC", "0")     // gate:async OFF by explicit opt-out (on is the default since the flip)

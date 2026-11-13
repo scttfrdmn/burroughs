@@ -1,0 +1,14 @@
+# Committed readings for run-result-err.wasm and run-result-ok.wasm (ADR 0120).
+# Built:       wasm-tools parse run-result-<case>.wat -o run-result-<case>.wasm   (wasm-tools 1.258.0; validates
+#              with --features all)
+# Invocation:  wasmtime run run-result-<case>.wasm </dev/null
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64.
+#
+# reader                                      reading
+# wasmtime 49.0.3 on err, 10 of 10            1
+# wasmtime 49.0.3 on ok, 10 of 10             0
+# Burroughs at 2b1171d on err                 0
+# Burroughs with ADR 0120's build on err      1
+#
+# Meaning:     the process's exit code. Both runs wrote nothing to stdout or stderr: a run returning err is
+#              exit 1 with no diagnostic. Burroughs discarded run's result until ADR 0120, so err exited 0.
