@@ -120,6 +120,12 @@ func (h *asyncHandles) waitHostWaits() { h.hostWaitsFiring.Wait() }
 // hostWaitPendingLocked reports a pending host wait, which is a waker for any park in this instance: the park
 // bound must not end a wait something is still going to satisfy (ADR 0121). A callback past its claim and
 // still resolving counts: it has left the registry and not yet woken anyone. The caller holds h.mu.
+//
+// **A host stream producer's read in flight counts too** (ADR 0122): its delivery arms the reader's event, so
+// it is a waker for the same reason a timer is. A read blocked on a source that never returns keeps the bound
+// re-arming, which is the bound's purpose stated the other way round: that park is not one nothing can satisfy.
+//
+// NEUTER: drop the producer term, and TestAPendingProducerReadOutlivesTheParkBound reads ErrLiftParkExpired.
 func (h *asyncHandles) hostWaitPendingLocked() bool {
-	return len(h.hostWaits) > 0 || h.hostWaitsResolving > 0
+	return len(h.hostWaits) > 0 || h.hostWaitsResolving > 0 || h.producerReads > 0
 }

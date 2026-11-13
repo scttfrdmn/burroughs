@@ -61,6 +61,44 @@ func TestRunAComponentsExitIsTheProcesssExit(t *testing.T) {
 	}
 }
 
+// TestRunAComponentReadsStdin is E6 at the CLI (#1234, ADR 0122): `burroughs run p3cat.wasm < p3cat.stdin`
+// reads the process's stdin through WASI 0.3's read-via-stream and exits 0 with wasmtime 49.0.3's stdout, read
+// from the committed reading's stdout lines. The CLI hands the component host os.Stdin, so the test points
+// os.Stdin at the committed file for the run.
+func TestRunAComponentReadsStdin(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "")
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	reading, err := os.ReadFile("../../internal/component/testdata/p3cat.reading")
+	if err != nil {
+		t.Fatalf("the committed reading is missing: %v", err)
+	}
+	var want strings.Builder
+	for _, ln := range strings.Split(string(reading), "\n") {
+		if rest, ok := strings.CutPrefix(ln, "stdout: "); ok {
+			want.WriteString(rest + "\n")
+		}
+	}
+	f, err := os.Open("../../internal/component/testdata/p3cat.stdin")
+	if err != nil {
+		t.Fatalf("the committed stdin is missing: %v", err)
+	}
+	defer f.Close()
+	prev := os.Stdin
+	os.Stdin = f
+	defer func() { os.Stdin = prev }()
+	var out, errBuf bytes.Buffer
+	code := dispatch(&out, &errBuf, []string{"run", "../../internal/component/testdata/p3cat/p3cat.wasm"})
+	if code != exitOK {
+		t.Fatalf("`run p3cat.wasm < p3cat.stdin` exited %d, want 0\nstderr: %q", code, errBuf.String())
+	}
+	if got := out.String(); got != want.String() {
+		t.Errorf("stdout = %q, want wasmtime's %q", got, want.String())
+	}
+	if errBuf.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing", errBuf.String())
+	}
+}
+
 func TestRunRefusesAnAsyncComponentByName(t *testing.T) {
 	t.Setenv("BURROUGHS_COMPONENTS", "") // gate:components on (default)
 	t.Setenv("BURROUGHS_ASYNC", "0")     // gate:async OFF by explicit opt-out (on is the default since the flip)

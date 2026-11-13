@@ -1233,6 +1233,14 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 		if cn.Kind == CanonAsyncBuiltin && !isBuiltAsyncBuiltin(cn.AsyncOp) {
 			return fmt.Sprintf("an async canon built-in (%#x)", cn.AsyncOp), true
 		}
+		// **stream.read is built in its async form only** (ADR 0122). The sync form waits in the copy
+		// (def:copy:"end.wait_for_pending_event()"), a second waiting path no wasi-libc or Rust std guest
+		// emits, so it is refused here by name rather than bound to the async form's BLOCKED.
+		//
+		// NEUTER: drop this arm, and TestStreamReadIsBoundAndItsSyncFormRefused's sync read is permitted.
+		if cn.Kind == CanonAsyncBuiltin && cn.AsyncOp == 0x0f && !cn.AsyncForm {
+			return "a synchronous stream.read (0xf), which is built only in its async form", true
+		}
 	}
 	// Neither a future nor a stream value type is refused here anymore: future.read is built (increment 3)
 	// and stream.write is built (increment 3, write side), and both future and stream handles are direction
@@ -1258,9 +1266,13 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 //
 // The shape, which does not drift: the waitable-set loop, the stream and future operations the earlier
 // increments built, the subtask ops, task.return, and the context slots. What stays refused is the rest of
-// the 🔀 family — including stream.read, where the guest writes and the host reads over an internal path,
-// and task.cancel (0x05), which the committed suspending guest DOES import and is therefore slice 2's engine
-// work rather than a deferral waiting for a consumer.
+// the 🔀 family. stream.read (0x0f) was refused here while the guest only wrote and the host read over an
+// internal path; a guest reading the host's stdin binds it, so it is built in its async form (ADR 0122), and
+// its sync form is refused by unbuiltAsyncSurface.
+//
+// NEUTER: drop 0x0f, and TestP3CatMatchesWasmtime is refused at instantiate, naming 0xf.
+//
+// task.cancel (0x05) is in the list because the committed suspending guest imports it.
 //
 // # This predicate answers BOUND, not EXECUTES, and the two were conflated (#871)
 //
@@ -1276,7 +1288,7 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 // bound-but-refusing — distinct from built and from refused-at-bind.
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
-	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x05, 0x06, 0x0d, 0x0a, 0x0b, 0x09, 0x15, 0x17, 0x19:
+	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x0f, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x05, 0x06, 0x0d, 0x0a, 0x0b, 0x09, 0x15, 0x17, 0x19:
 		return true
 	}
 	return false

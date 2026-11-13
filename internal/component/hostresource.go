@@ -460,11 +460,28 @@ func (w *walker) checkConsumerPayload(lowerName string, sig *FuncType, sc *strea
 	if err != nil {
 		return err
 	}
-	if sig.Result == nil || sig.Result.Kind != VFuture || sig.Result.Elem == nil {
+	fut := sig.Result
+	// **A producer returns `tuple<stream<u8>, future<P>>`** (read-via-stream, ADR 0122), so its future is the
+	// tuple's second element, and its stream must be of bytes, since the host writes bytes into it. The guest
+	// reads the two handles at the offsets its own signature lays out, so a guest declaring any other shape is
+	// refused here rather than handed two i32s it reads as something else.
+	//
+	// NEUTER: drop the element test (`!= VU8`), and TestReadViaStreamMustBeDeclaredAsTheHostDeclaresIt's guest
+	// whose read-via-stream returns a stream<u32> instantiates.
+	if sc.produces {
+		r := sig.Result
+		if r == nil || r.Kind != VTuple || len(r.Elems) != 2 || r.Elems[0].Kind != VStream ||
+			r.Elems[0].Elem == nil || r.Elems[0].Elem.Kind != VU8 {
+			return fmt.Errorf("%w: import %s must return tuple<stream<u8>, future<%s>>, the host's declaration "+
+				"(ADR 0122)", ErrLinkRefused, lowerName, want)
+		}
+		fut = &r.Elems[1]
+	}
+	if fut == nil || fut.Kind != VFuture || fut.Elem == nil {
 		return fmt.Errorf("%w: import %s must return future<%s>, the host's declaration; the guest's signature "+
 			"returns no future payload (ADR 0118)", ErrLinkRefused, lowerName, want)
 	}
-	got, err := canonTypeIn(*sig.Result.Elem, w.hostRT)
+	got, err := canonTypeIn(*fut.Elem, w.hostRT)
 	if err != nil {
 		return fmt.Errorf("%w: import %s's future payload: %w", ErrLinkRefused, lowerName, err)
 	}

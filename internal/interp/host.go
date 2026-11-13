@@ -896,6 +896,11 @@ func (c *CanonCaller) MayLeave() bool { return c.st == nil || c.st.mayNotLeave =
 // its own decision doc. So H-1 holds unconditionally; H-3 holds at the wake for a returning read, on the
 // same terms as p1.
 //
+// WASI 0.3's stdin is that site (internal/component's stream producer, ADR 0122), and it does not read
+// through Blocking: its Read runs on a goroutine of its own, so the guest suspends on a waitable set instead,
+// and Close abandons a Read that never returns rather than waiting for it. What the abandoned goroutine reads
+// is discarded. WASI 0.2's `blockingRead` and preview 1 keep this bound.
+//
 // **The calling agent's own realloc and post-return must not run inside fn.** The adapter lifts before
 // Blocking and lowers after it returns; guest allocation *in the caller's instance* while the agent is in the
 // blocked state is the reentrancy-while-blocked hazard the Model-2 adapter avoids by never blocking during the

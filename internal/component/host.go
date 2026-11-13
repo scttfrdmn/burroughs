@@ -5,6 +5,7 @@ package component
 import (
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -93,6 +94,10 @@ type Host struct {
 	// stands still.
 	start time.Time
 	seed  [2]uint64
+	// stdinReads serialises the WASI 0.3 stdin producers' Reads of Stdin (ADR 0122), so two streams from two
+	// read-via-stream calls never Read one io.Reader concurrently. The WIT leaves concurrent streams
+	// "implementation-specific"; a reader that is not safe for concurrent use is not the guest's problem.
+	stdinReads sync.Mutex
 	// resourceTypeImpls and resourceImpls are test-only extra resource types and imports over them (ADR
 	// 0117), the resource half's counterpart of syncImpls, merged into resourceSource() under the same
 	// no-shadowing rule. Their keys are unversioned, so each is a wildcard (lookupHost).
@@ -144,17 +149,25 @@ type streamConsumer struct {
 	// consumer lowers its completion at (ADR 0116). The guest's own signature must declare the same type,
 	// checked at instantiate (ADR 0118), since the guest reads the bytes the host writes at that type.
 	payload func() (canon.Type, error)
+	// produces marks the stream PRODUCER (read-via-stream, ADR 0122), whose result is
+	// `tuple<stream<u8>, future<payload>>` rather than a consumer's `future<payload>`. It shares this table
+	// because it needs what a consumer needs, the instance's async table and a payload checked at instantiate.
+	produces bool
 }
 
-// streamConsumers maps an import identity, keyed by compatibility class like wasi()'s, to a stream-consuming
-// host import. stdout's and stderr's write-via-stream are served, only for WASI 0.3, where they replace
-// 0.2's `get-stdout` and `get-stderr`; an unlisted consumer reaches the refusing stub. The two are one
+// streamConsumers maps an import identity, keyed by compatibility class like wasi()'s, to a host import over a
+// stream. stdout's and stderr's write-via-stream are served, only for WASI 0.3, where they replace 0.2's
+// `get-stdout` and `get-stderr`; an unlisted consumer reaches the refusing stub. The two are one
 // implementation over two writers, read here, when an instantiate builds the host's tables (ADR 0119).
+//
+// stdin's read-via-stream is the one producer (ADR 0122): the host writes the stream from h.Stdin, read on
+// demand, and resolves its future when the source ends or the guest drops the stream.
 func (h *Host) streamConsumers() map[string]*streamConsumer {
 	m := map[string]*streamConsumer{}
 	serve(m, wasiP3, "wasi:cli/stdout::write-via-stream", &streamConsumer{bind: writeViaStream(h.Stdout), payload: stdioWriteResultType})
 	// NEUTER THIS (h.Stdout for h.Stderr), and TestP3SysMatchesWasmtime's stderr line lands on stdout.
 	serve(m, wasiP3, "wasi:cli/stderr::write-via-stream", &streamConsumer{bind: writeViaStream(h.Stderr), payload: stdioWriteResultType})
+	serve(m, wasiP3, "wasi:cli/stdin::read-via-stream", &streamConsumer{bind: h.readViaStream, payload: stdioWriteResultType, produces: true})
 	return m
 }
 
@@ -188,6 +201,12 @@ func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, fmt.Errorf("%w: write-via-stream on handle %d that is not a readable stream end", ErrLinkRefused, ri)
 		}
+		// A stream the host itself produces (read-via-stream's) has no guest writer to drive the copy, and a
+		// host-to-host copy is not built, so it is refused by name (ADR 0122).
+		if re.conn != nil && re.conn.producer != nil {
+			return nil, fmt.Errorf("%w: write-via-stream of a stream the host produces (a guest forwarding "+
+				"read-via-stream's stream without reading it); a host-to-host copy is not built (ADR 0122)", ErrUnsupportedForm)
+		}
 		// Mint the future the guest awaits; it resolves with `result::ok` when the consume completes.
 		//
 		// **The payload is typed, not a u32** (#1246). This was `readableFutureEnd{value: 0}`, and the
@@ -196,6 +215,22 @@ func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 		// is on, and every WASI 0.3 guest that writes stdout reaches it.
 		fe := &readableFutureEnd{payload: &okv}
 		fe.index = async.addLocked(fe)
+		// **The writer has already dropped** (#1264, ADR 0122): its drop unlinked this end and left DROPPED pending,
+		// so the host's read takes it and the future resolves `ok` inline, as the reference's host would find
+		// `other` gone at its read. The drop left `conn` set, so this parked a read on a writer that was gone, and
+		// the future never resolved.
+		//
+		// NEUTER: drop this arm, and TestAWritersDropUnlinksItsReader's write-via-stream after the drop never
+		// resolves its future.
+		if re.writerDropped {
+			re.state = copyStateCopying
+			re.pendingEventLocked() // DROPPED -> DONE; nothing pending if a read already took it
+			re.state = copyStateDone
+			if cerr := fe.completeLocked(copyCompleted); cerr != nil {
+				return nil, cerr
+			}
+			return []interp.Value{interp.I32(int32(fe.index))}, nil
+		}
 		// Register the host read: sink to the writer. readN takes all the guest offers in a write.
 		re.hostSink = func(b []byte) error { _, werr := w.Write(b); return werr }
 		// **The host reads until the writer drops** (#1261, ADR 0120). A guest keeps one stream open across

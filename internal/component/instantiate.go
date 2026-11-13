@@ -185,8 +185,8 @@ const (
 )
 
 // Canon is a canonical function definition. FuncIdx/Opts apply to lift and lower; TypeIdx is the
-// component function type (lift) or the resource type (resource built-ins); AsyncOp is the discriminant
-// of a CanonAsyncBuiltin.
+// component function type (lift), the resource type (resource built-ins), or the stream type (stream.read,
+// ADR 0122); AsyncOp is the discriminant of a CanonAsyncBuiltin.
 type Canon struct {
 	Kind    CanonKind
 	FuncIdx uint32
@@ -204,7 +204,8 @@ type Canon struct {
 	// which is where the table of thread entry points lives. Its own field because no other canon kind
 	// names a core table, and reusing `FuncIdx` would make a table index readable as a function's.
 	TableIdx uint32
-	// AsyncForm is the `async?` OPERAND some async built-ins carry — currently `subtask.cancel` (0x06).
+	// AsyncForm is the `async?` OPERAND some async built-ins carry — currently `subtask.cancel` (0x06) — and
+	// `stream.read`'s (0x0f) `async` canonopt, which selects its form the same way (ADR 0122).
 	// It is **not** `Opts.Async`, and the separation is load-bearing twice over: `Opts.Async` is the
 	// canonopt vec's `async` marker on a lift/lower, and `asyncSurface` keys the gate's refusal message
 	// on it — so setting it here would make a `subtask.cancel async` report as *"an async canon lower"*,
@@ -633,11 +634,43 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		}
 	case 0x0e, 0x13, 0x14, 0x15, 0x1a, 0x1b: // stream/future .new/.drop-*: typeidx
 		return c, readIdx()
-	case 0x0f, 0x10, 0x16, 0x17: // stream/future .read/.write: typeidx + opts
+	case 0x0f: // stream.read: typeidx + opts, both KEPT (ADR 0122)
+		// **The read writes guest memory, so its `(memory $m)` must survive the decode**: the binding's caller
+		// is bound to it, and the copy into the reader writes through that caller. The type index is kept so
+		// the walk can refuse an element that is not one byte. The `async` canonopt is the read's FORM — the
+		// pin's `copy` returns BLOCKED only for an async read (def:copy:"return [BLOCKED]") — so it lands in
+		// AsyncForm, `subtask.cancel`'s selector, and not in Opts.Async, which asyncSurface would report as an
+		// async canon lower this component may not contain.
+		ti, err := r.u32()
+		if err != nil {
+			return Canon{}, err
+		}
+		c.TypeIdx = ti
+		opts, err := r.canonOpts()
+		if err != nil {
+			return Canon{}, err
+		}
+		c.Opts.Memory = opts.Memory
+		c.AsyncForm = opts.Async
+		return c, nil
+	case 0x10, 0x16, 0x17: // stream.write, future .read/.write: typeidx + opts
 		if err := readIdx(); err != nil {
 			return Canon{}, err
 		}
-		return c, readOpts()
+		// **The `(memory $m)` is kept for these too** (ADR 0122). It was read and dropped, so each one's caller
+		// fell back to its declaring core instance's memory 0. A wit-component guest declares these built-ins in
+		// its shim's fixup instance, which has no memory, so the first future.read of a host future that resolves
+		// with a payload — read-via-stream's, at the end of stdin — failed its completion with "the instance
+		// that declared this host function has no memory 0". No guest had read a host future's payload before:
+		// std never drops stdout, so write-via-stream's future never resolves under it.
+		//
+		// NEUTER: drop the memory again, and TestP3CatMatchesWasmtime's future read at the end of input traps.
+		opts, err := r.canonOpts()
+		if err != nil {
+			return Canon{}, err
+		}
+		c.Opts.Memory = opts.Memory
+		return c, nil
 	case 0x11, 0x12, 0x18, 0x19: // stream/future .cancel-read/.cancel-write: typeidx + async?
 		if err := readIdx(); err != nil {
 			return Canon{}, err

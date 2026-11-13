@@ -249,12 +249,14 @@ func TestGateAsyncNarrowingPermitsLowerRefusesUnbuilt(t *testing.T) {
 		t.Errorf("gate on, future.cancel-read: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}
 
-	// Stream write side (increment 3): stream.write (0x10) is permitted; stream.read (0x0f) still refuses.
+	// Stream write side (increment 3): stream.write (0x10) is permitted. stream.read (0x0f) is built in its
+	// async form since ADR 0122, and this row is its SYNC form (AsyncForm false), which still refuses by name;
+	// TestStreamReadIsBoundAndItsSyncFormRefused asks both forms.
 	swrite := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x10}}}
 	if err := gateAsync(swrite); err != nil {
 		t.Errorf("gate on, stream.write: gateAsync refused (%v), want permit — stream.write is built", err)
 	}
-	sread := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x0f}}} // stream.read (unbuilt; guest doesn't bind it)
+	sread := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x0f}}} // stream.read's sync form
 	if err := gateAsync(sread); !errors.Is(err, ErrAsyncNotImplemented) {
 		t.Errorf("gate on, stream.read: err = %v, want ErrAsyncNotImplemented (refuse by name)", err)
 	}

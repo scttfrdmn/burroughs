@@ -376,6 +376,13 @@ func (w *walker) step(d Def) error {
 				// canonopts at decode (#903) is what makes the memory reach it — no new plumbing, only a
 				// field that had been thrown away. The result type is new, and is resolved here for
 				// `liftSignature`'s reason: a top-level VRef is an index-space ordinal.
+				//
+				// stream.read copies bytes, and the pin's stride is the element's size, so a read of any other
+				// element is refused here by name rather than copied at the wrong stride (ADR 0122).
+				if cn.AsyncOp == 0x0f && !w.streamOfBytes(cn.TypeIdx) {
+					return fmt.Errorf("%w: canon stream.read of type %d, whose element is not one byte; "+
+						"stream.read is built for stream<u8> and stream<s8> (ADR 0122)", ErrUnsupportedForm, cn.TypeIdx)
+				}
 				var resultT *ValType
 				if cn.Result != nil {
 					rt := resolveVal(*cn.Result, w.c.sectionTypeAt(), nil)
@@ -829,6 +836,15 @@ func (w *walker) close() {
 	// NEUTER THIS call, and TestCloseStopsAPendingWait finds the timer still pending after Close, and its
 	// forced fire resolves the subtask.
 	w.stopAllHostWaits()
+	// **So are the host stream producers** (#1234, ADR 0122), across the tree: no Read starts and no delivery
+	// stores after this, and a delivery waiting for the run slot gives up. **A goroutine blocked in Read is
+	// abandoned, never waited on**: a Read cannot be interrupted, and the reader is the process's, so it is not
+	// closed. What it reads after this is discarded. Nothing is waited out at the end for the same reason: a
+	// delivery that passed its check stored everything under the lock this stop takes.
+	//
+	// NEUTER THIS call, and TestCloseAbandonsAProducerBlockedInRead's late bytes are stored into the closed
+	// instance.
+	w.stopAllProducers()
 	for _, in := range w.toClose {
 		_ = in.Close()
 	}
@@ -843,6 +859,16 @@ func (w *walker) close() {
 	// reports back to a scheduler that is still there to receive it.
 	w.stopAllSchedulers()
 	w.waitAllHostWaits()
+}
+
+// stopAllProducers stops the host stream producers of this walker's table and every nested one's.
+func (w *walker) stopAllProducers() {
+	if w.async != nil {
+		w.async.stopProducers()
+	}
+	for _, c := range w.children {
+		c.stopAllProducers()
+	}
 }
 
 // stopAllHostWaits stops the pending host waits of this walker's table and every nested one's.
