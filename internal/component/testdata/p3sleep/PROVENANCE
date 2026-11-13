@@ -1,0 +1,24 @@
+The witness guest for E5 (#1233) and grave #1267 (ADR 0121) — provenance, per ADR 0114's rule for committed guest
+binaries. Like p3std, it is reproducible from this repository plus the pinned toolchain: p3sleep/build.sh
+rebuilds it offline.
+
+Source:       src/main.rs, Cargo.toml, Cargo.lock (this directory). No dependencies and no WIT of its own: its
+              imports are the ones Rust std and wasi-libc make for a wasm32-wasip3 program that sleeps. It
+              uses the nightly feature thread_sleep_until for std::thread::sleep_until.
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-13
+
+  p3sleep.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: a6119835f9d3a56ad42b174d65db97bb11a790731f15feb4f8719b8922e8e1c2
+    bytes:  124018
+    The same sha256 on a second build.
+    Its lowers of wasi:clocks/monotonic-clock@0.3.0's wait-for and wait-until carry the async option, and its
+    `run` is async-typed and lifted with no async option (wasm-tools print).
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on
+PATH. build.sh writes its reading to ../p3sleep.reading. Invocation: `wasmtime run p3sleep.wasm </dev/null`, with
+stdout and stderr to files. 10 of 10 runs gave the same stdout, an empty stderr and exit 0, which build.sh
+checks byte for byte before it writes the reading.

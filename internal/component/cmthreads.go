@@ -138,6 +138,10 @@ type cmThread struct {
 	index    uint32
 	state    threadState // guarded by threadTable.mu
 	implicit bool        // a lift's implicit Thread; resuming it ends the scheduler's chain (cmsched.go)
+	// asyncTyped says a sync lift's implicit Thread runs a function whose TYPE is async (`func async`), as a
+	// Rust wasm32-wasip3 std guest's `run` is. Set once at creation, before the Thread is shared. The sync tail
+	// judges only a sync-typed one, as the pin's loop sits inside `if not ft.async_` (grave #1267, ADR 0121).
+	asyncTyped bool
 
 	entry interp.TableFunc // resolved at creation, as `canon_thread_new_indirect` reads `ftbl.get(fi)`
 	arg   int32            // the `c` operand, passed to the entry
@@ -488,6 +492,17 @@ const errSyncTail = "cannot block a synchronous task before returning: it waits 
 // NEUTER THIS: drop the `waitJudged` test, and a sync `subtask.cancel` of a host impl traps (the
 // cancellation witnesses go red). Judge only with the gate on, and `TestASyncWaitOnAnotherInstancesEventTraps`
 // admits.
+//
+// # Which tasks are judged: a SYNC-TYPED one, not a sync-lifted one (grave #1267, ADR 0121)
+//
+// The reference's loop is inside `if not ft.async_` (def:canon_lift:"if not ft.async_:"), so the judgement is
+// keyed on the lifted function's TYPE. For an async-typed callee with nothing ready, `tick` does nothing and
+// the task does not progress, which ADR 0100 says in "Where the trap rule does apply". This tested the lift
+// form alone, so a sync-lifted, async-typed `run`, which is every Rust wasm32-wasip3 std guest's, trapped in
+// `thread::sleep` where the pin and wasmtime 49.0.3 block. Such a waiter now keeps waiting on its wake.
+//
+// NEUTER: drop the `!t.asyncTyped` test, and TestP3SleepMatchesWasmtime traps "cannot block a synchronous
+// task before returning", and TestAnAsyncTypedSyncWaitOnAHostEventBlocks traps in both gate states.
 func (tt *threadTable) syncTail(h *asyncHandles) []*cmThread {
 	tt.mu.Lock()
 	if len(tt.ready) > 0 {
@@ -503,7 +518,7 @@ func (tt *threadTable) syncTail(h *asyncHandles) []*cmThread {
 		if t.waitReady != nil {
 			readies = append(readies, t.waitReady)
 		}
-		if t.implicit && t.task == nil && t.waitJudged {
+		if t.implicit && t.task == nil && !t.asyncTyped && t.waitJudged {
 			syncWaiters = append(syncWaiters, t)
 		}
 	}

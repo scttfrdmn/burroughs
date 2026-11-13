@@ -1104,6 +1104,23 @@ func (h *asyncHandles) awaitEvent(task *liftTask, si uint32, bound time.Duration
 			// ends here, with the trap that locked the store.
 			return event{}, h.lock.locked()
 		case <-deadline.C:
+			// **A pending host wait is a waker, so the bound re-arms rather than expiring** (#1233, ADR 0121).
+			// The bound exists for a park nothing will ever satisfy. A guest's `wait-for(60s)` is a park
+			// something will, and expiring it would report a wait that is working as one that failed. With
+			// no host wait pending, the bound keeps that purpose.
+			//
+			// An event already pending re-arms it too. A wake and the deadline ready together are chosen
+			// between at random, and a park whose event has arrived has not expired.
+			//
+			// NEUTER: return the expiry unconditionally, and TestALongWaitOutlivesTheParkBound reads
+			// ErrLiftParkExpired.
+			h.mu.Lock()
+			waker := h.hostWaitPendingLocked() || set.hasPendingEventLocked()
+			h.mu.Unlock()
+			if waker {
+				deadline.Reset(bound)
+				continue
+			}
 			return event{}, fmt.Errorf("%w: waitable set %d produced nothing in %s — the host impl or "+
 				"guest that would resolve it never did", ErrLiftParkExpired, si, bound)
 		}

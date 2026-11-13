@@ -25,6 +25,39 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **WASI 0.3's `wait-for` and `wait-until` are served, the first production async host imports**
+  ([#1233](https://github.com/scttfrdmn/burroughs/issues/1233), ADR 0121). Rust std's `thread::sleep` and
+  `thread::sleep_until` reach them through wasi-libc, and they were refused at call.
+  - **The waits** are on the host's monotonic clock, the one `now` reads. A deadline at or before now resolves inside
+    the lower, which returns RETURNED, as wasmtime 49.0.3's does for `wait-for(0)`, `wait-until(0)` and
+    `wait-until(now())`. Otherwise a timer resolves the subtask when the deadline passes.
+  - **A cancel stops the timer and resolves the subtask before it returns,** so both forms of `subtask.cancel` read
+    CANCELLED_BEFORE_RETURNED (4) at once. A cancel that loses to the timer leaves it RETURNED (#1009's rule).
+  - **`Close` stops every pending wait**, across nested instances, and waits out a timer already resolving, so
+    nothing a wait started runs after `Close`.
+  - **The callback-lift park bound re-arms while a host wait is pending,** since that wait will wake the park. A
+    callback-lifted `wait-for` longer than the bound completes rather than ending in `ErrLiftParkExpired`.
+  - **A sync lower of `wait-for` or `wait-until` is refused at instantiate**, by name, where it reached the stub's
+    *"not provided"*. The pin's blocking sync lower of an async import is not built.
+  - **Three stated divergences from wasmtime 49.0.3**, each the pin's arm for a host whose cancel resolves before it
+    returns (ADR 0102):
+    - an async cancel reads 4 where wasmtime reads BLOCKED and delivers 4 as the next event;
+    - a sync cancel in a sync-typed function reads 20, STARTED then 4, where wasmtime traps;
+    - a sync lower is refused where wasmtime blocks in an async-typed function.
+  - **Witnesses:**
+    - `TestP3SleepMatchesWasmtime` runs `p3sleep.wasm`, a dependency-free Rust `wasm32-wasip3` program built offline
+      by `testdata/p3sleep/build.sh`, which sleeps, sleeps until a deadline, and sleeps for zero, and prints
+      properties of each. Its stdout, empty stderr and exit 0 equal wasmtime's reading, 10 of 10 runs there.
+    - `TestWaitCancelMatchesWasmtime` runs `wait-cancel.wasm`'s five rows against wasmtime's reading: the zero
+      waits, the order of two waits in one set, and the three cancels.
+    - `TestAHostWaitResolvesOnce`, `TestCloseStopsAPendingWait` (also under `-race`),
+      `TestALongWaitOutlivesTheParkBound` and `TestASyncLowerOfWaitForIsRefusedAtInstantiate`.
+  - **Neuters, run:** each fails its witness:
+    - the timer resolving inline, and `wait-until` read against the system clock;
+    - the cancel doing nothing, and the cancel without its claim;
+    - `Close` without the stop, and the park bound expiring unconditionally;
+    - the sync-lower refusal removed.
+
 - **WASI 0.3's random, both clocks and the rest of `wasi:cli` are served**
   ([#1232](https://github.com/scttfrdmn/burroughs/issues/1232), ADR 0119). A `wasm32-wasip3` std guest reaches them
   on startup, and each was refused at call.
@@ -203,6 +236,18 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A sync-lifted function is judged at the sync tail by its type, so an async-typed `run` blocks where it trapped**
+  ([#1267](https://github.com/scttfrdmn/burroughs/issues/1267), `type:grave`; ADR 0121).
+  - **The defect:** `syncTail` trapped every waiting sync-lifted task with no ready candidate, *"cannot block a
+    synchronous task before returning"*. The pin's trap is inside `canon_lift`'s `if not ft.async_`, and ADR 0100
+    says so, so the rule is about the function's type. A Rust `wasm32-wasip3` std guest's `run` is async-typed and
+    lifted plainly, and its `thread::sleep` trapped where wasmtime 49.0.3 blocks.
+  - **The repair:** a sync lift's implicit Thread records whether its function is async-typed, and the sync tail
+    judges only a sync-typed one. A sync-typed export keeps the trap in both gate states.
+  - **Witnesses:** `TestP3SleepMatchesWasmtime` (above), and `TestAnAsyncTypedSyncWaitOnAHostEventBlocks`, the
+    async-typed twin of `TestASyncWaitOnAnotherInstancesEventTraps`, which waits and returns 7 in both gate states.
+    The sync-typed fixtures and the cancel726 rows are unchanged.
+  - **Neuter, run:** the type test dropped traps p3sleep, the twin, and `wait-cancel`'s `order` row.
 - **WASI 0.3's `write-via-stream` reads until the writer drops, so a std guest prints more than once**
   ([#1261](https://github.com/scttfrdmn/burroughs/issues/1261), ADR 0120).
   - **The defect:** the host's read of the guest's stream resolved its future on the first copy and was never

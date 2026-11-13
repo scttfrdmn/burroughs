@@ -179,7 +179,8 @@ func (f *compFunc) invokeSync(ctx context.Context, params []interp.Value, pend [
 	// the stack dies with the call, and nothing frees the table entry. Measured: three calls on one
 	// instance read 1, 2, 3 where the reference gives 1, 1, 1.
 	// No task: a sync lift has none. Its own owner, so the Threads it creates are scoped to it (#970).
-	implicit := &cmThread{implicit: true}
+	// Its function's TYPE is recorded, since the sync tail judges a sync-typed function only (grave #1267).
+	implicit := &cmThread{implicit: true, asyncTyped: f.sig != nil && f.sig.Async}
 	implicit.owner = implicit
 	tid := f.threads.add(implicit)
 	defer f.threads.remove(tid)
@@ -843,7 +844,7 @@ func stubHost(name string) (compDef, bool) {
 // the gate was on or off, so the gate had no say at all. Putting the call here rather than fixing the
 // recursion's call site makes it structural: every component that gets walked gets gated, at every
 // depth, and a future third entry point cannot forget it. The entry points no longer call it.
-func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncLowerImpl, streamConsumers map[string]*streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
+func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncImplFor, streamConsumers map[string]*streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
 	if gerr := gateAsync(c); gerr != nil {
 		return nil, gerr
 	}

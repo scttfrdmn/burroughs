@@ -98,10 +98,12 @@ type Host struct {
 	// no-shadowing rule. Their keys are unversioned, so each is a wildcard (lookupHost).
 	resourceTypeImpls map[string]*hostResource
 	resourceImpls     map[string]resourceMethod
-	// asyncImpls is the async-lower impl source (gate:async 2a-i-A), kept SEPARATE from wasi(): an async
-	// impl has a distinct signature (asyncLowerImpl — it can signal would-block), so a single source
-	// returning both would let a wrong-source call site compile. Empty in production (no real async impls
-	// until 2b); populated by a synthesized-guest test that exercises the async-lower adapter.
+	// asyncImpls is the test-only extra async-lower impl source, kept SEPARATE from wasi(): an async impl
+	// has a distinct signature (asyncLowerImpl — it can leave its subtask pending), so a single source
+	// returning both would let a wrong-source call site compile. It is merged into asyncWasi() under
+	// wasi()'s no-shadowing rule, as syncImpls is into wasi(), and its keys are unversioned wildcards
+	// (lookupHost). This said "empty in production (no real async impls until 2b)" until the production
+	// async imports landed in asyncSource() (ADR 0121), when this stopped being the whole async source.
 	asyncImpls map[string]asyncLowerImpl
 	// syncImpls is the extra-sync-impl source, merged into wasi() (#863). Kept as its own field rather
 	// than by widening wasi()'s literal, so the WASI capability set stays one readable block and an extra
@@ -112,10 +114,24 @@ type Host struct {
 	syncImpls map[string]interp.CanonFunc
 }
 
+// asyncImplFor is an async host import as the walk binds it: a factory called with the importing
+// instance's async table, so the work an impl leaves pending is that instance's, and that instance's Close
+// stops it (ADR 0121). A stream consumer's bind has the same shape for the same reason.
+type asyncImplFor func(async *asyncHandles) asyncLowerImpl
+
 // asyncWasi is the async-lower impl source — SEPARATE from wasi() by type, so binding an async lower to a
-// sync impl (or vice versa) is a compile error, not a runtime surprise. Nil/empty until 2b lands real
-// async impls; a synthesized-guest test populates it to drive the async-lower adapter.
-func (h *Host) asyncWasi() map[string]asyncLowerImpl { return h.asyncImpls }
+// sync impl (or vice versa) is a compile error, not a runtime surprise. It is the production async imports
+// (asyncSource, ADR 0121) with the test-only asyncImpls merged in, each wrapped as a factory that ignores
+// the table. A name the production table serves is refused, never shadowed (mergeExtras).
+func (h *Host) asyncWasi() map[string]asyncImplFor {
+	m := h.asyncSource()
+	extras := make(map[string]asyncImplFor, len(h.asyncImpls))
+	for name, impl := range h.asyncImpls {
+		extras[name] = func(*asyncHandles) asyncLowerImpl { return impl }
+	}
+	mergeExtras(m, extras, "async import")
+	return m
+}
 
 // streamConsumer is a host import that CONSUMES a guest-provided stream — it needs the per-instance async
 // handle table (to reach the readable end the guest handed it) as well as the host's own resources (stdout),

@@ -187,8 +187,9 @@ type walker struct {
 	// wildcard) and read through lookupHost (ADR 0115).
 	wasiHost map[string]interp.CanonFunc
 	// asyncWasiHost is the async-lower impl source (gate:async 2a-i-A), SEPARATE from wasiHost by type so
-	// a wrong-source binding is a compile error. An async lower binds through it, not wasiHost.
-	asyncWasiHost map[string]asyncLowerImpl
+	// a wrong-source binding is a compile error. An async lower binds through it, not wasiHost, calling the
+	// factory with this instance's async table (ADR 0121).
+	asyncWasiHost map[string]asyncImplFor
 	// streamConsumers maps a class-keyed import identity to a host import that consumes a guest stream
 	// (write-via-stream). Threaded like asyncWasiHost; resolverFor binds it with this instance's async table.
 	streamConsumers map[string]*streamConsumer
@@ -303,11 +304,23 @@ func (w *walker) step(d Def) error {
 							}
 						}
 					}
+					r := w.resolveHost(cf.stubName, cn.Opts.Async)
+					// **A sync lower of an import the host serves only as async is refused here, by name** (ADR
+					// 0121). The pin admits it, blocking the caller until the callee resolves
+					// (def:canon_lower:"thread.wait_until(subtask.resolved)"), and that blocking sync lower is
+					// not built. wasi-libc and Rust std always lower `wait-for` and `wait-until` with `async`.
+					// NEUTER: drop this refusal, and TestASyncLowerOfWaitForIsRefusedAtInstantiate instantiates,
+					// its call reaching the stub's "not provided".
+					if r.asyncOnly {
+						return fmt.Errorf("%w: canon lower of %s has no async option, but the host serves it only "+
+							"as an async import (it is an async func in its WIT); lower it with the `async` option. "+
+							"The blocking sync lower of an async import is not built (ADR 0121)",
+							ErrUnsupportedForm, cf.stubName)
+					}
 					// The guest's declaration against the host's (ADR 0118), for every import a host table
 					// serves: its handles must be the host's resources, a method's self its own type, and a
 					// stream consumer's future payload the type the host lowers the completion at.
-					if r := w.resolveHost(cf.stubName, cn.Opts.Async); r.async != nil || r.consumer != nil ||
-						r.method != nil || r.sync != nil {
+					if r.async != nil || r.consumer != nil || r.method != nil || r.sync != nil {
 						sig := w.lowerSignature(cf.stubName)
 						if err := w.checkHostResources(cf.stubName, sig); err != nil {
 							return err
@@ -547,7 +560,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			sig := w.lowerSignature(d.lowerName)
 			hasResult := sig != nil && sig.Result != nil
 			aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
-			return w.lowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFunc(r.async, hasResult, w.async)), interp.CanonOptions{
+			return w.lowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFunc(r.async(w.async), hasResult, w.async)), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
@@ -589,11 +602,15 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 // hostResolution is what the host tables answer for one lowered import's identity: at most one of the
 // four implementation sources, or none and the classes some table serves the name under instead.
 type hostResolution struct {
-	async     asyncLowerImpl
+	async     asyncImplFor
 	consumer  *streamConsumer
 	method    resourceMethod
 	sync      interp.CanonFunc
 	servedFor []string
+	// asyncOnly reports a SYNC lower of a name the host serves only as an async import, for this class: every
+	// sync table missed, and the async one would have answered an async lower (ADR 0121). The walk refuses it
+	// at instantiate by name, where it reached the stub's *"not provided"*.
+	asyncOnly bool
 }
 
 // resolveHost consults the host tables in binding order — the async-impl source for an async lower, then
@@ -607,8 +624,8 @@ type hostResolution struct {
 func (w *walker) resolveHost(lowerName string, async bool) hostResolution {
 	var r hostResolution
 	// A canon lower carrying the `async` canonopt (gate:async 2a-i-A) binds to the async-lower adapter:
-	// its flat ABI is this sync signature plus a packed i32 return, and it executes the sync-resolving
-	// arm (the blocking arm refuses by name at runtime). Bound through the SEPARATE async-impl source
+	// its flat ABI is this sync signature plus a packed i32 return, and the callee resolves inline or leaves
+	// its subtask pending for the guest to wait on. Bound through the SEPARATE async-impl source
 	// (asyncWasiHost), so a wrong-source binding is a compile error, not a runtime surprise.
 	if async {
 		aimpl, ok, served := lookupHost(w.asyncWasiHost, lowerName)
@@ -617,9 +634,9 @@ func (w *walker) resolveHost(lowerName string, async bool) hostResolution {
 			return r
 		}
 		r.servedFor = append(r.servedFor, served...)
-		// An async lower with no async impl falls through: the guest's async lowers are refused at
-		// bind by gateAsync (they accompany async built-ins, 2b) before reaching here; this path is
-		// the synthesized-guest test's when its impl is absent.
+		// An async lower with no async impl falls through to the other tables, and one none of them serves
+		// reaches the stub. This said the guest's async lowers were refused at bind by gateAsync and the path
+		// was a synthesized-guest test's alone, which stopped being true when gate:async defaulted on.
 	}
 	f, ok, served := lookupHost(w.streamConsumers, lowerName)
 	if ok {
@@ -641,6 +658,12 @@ func (w *walker) resolveHost(lowerName string, async bool) hostResolution {
 		return r
 	}
 	r.servedFor = append(r.servedFor, served...)
+	// **A sync lower of an async-only import** (ADR 0121). The async table was consulted only for an async
+	// lower, so a sync lower of `wait-for` missed every table and bound the stub, whose *"not provided"* is
+	// false: the host provides it, as an async import. Asked here so the walk can refuse it by name.
+	if !async {
+		_, r.asyncOnly, _ = lookupHost(w.asyncWasiHost, lowerName)
+	}
 	return r
 }
 
@@ -797,6 +820,15 @@ func (w *walker) close() {
 	// children's core instances too, so a child's Thread still parked in a handoff would hold its instance's
 	// `Close` forever. That is how `cancel-suspended-control` first hung `Close` (grave #1010).
 	w.killAllParked()
+	// **Pending host work is stopped next** (#1233, ADR 0121), across the tree of nested instances: every
+	// `wait-for` and `wait-until` timer, so none fires after Close and resolves a subtask of a torn-down
+	// instance, which is ADR 0071 fact 4's hazard. A callback that claimed its wait first is waited out at the
+	// end, once the core instances have closed, since its store may be waiting for the run slot a guest
+	// still executing holds.
+	//
+	// NEUTER THIS call, and TestCloseStopsAPendingWait finds the timer still pending after Close, and its
+	// forced fire resolves the subtask.
+	w.stopAllHostWaits()
 	for _, in := range w.toClose {
 		_ = in.Close()
 	}
@@ -810,6 +842,28 @@ func (w *walker) close() {
 	// the instances closed — a Thread still running guest code is ended by its instance's `Close` and
 	// reports back to a scheduler that is still there to receive it.
 	w.stopAllSchedulers()
+	w.waitAllHostWaits()
+}
+
+// stopAllHostWaits stops the pending host waits of this walker's table and every nested one's.
+func (w *walker) stopAllHostWaits() {
+	if w.async != nil {
+		w.async.stopHostWaits()
+	}
+	for _, c := range w.children {
+		c.stopAllHostWaits()
+	}
+}
+
+// waitAllHostWaits waits out every timer callback, in this walker's table and every nested one's, that
+// claimed its wait before stopAllHostWaits ran.
+func (w *walker) waitAllHostWaits() {
+	if w.async != nil {
+		w.async.waitHostWaits()
+	}
+	for _, c := range w.children {
+		c.waitAllHostWaits()
+	}
 }
 
 // killAllParked ends the parked Threads of this walker and every nested one, waiting for each created

@@ -1,0 +1,26 @@
+# Committed wasmtime readings for wait-cancel.wasm: WASI 0.3's wait-for and wait-until, async-lowered (#1233, ADR 0121).
+# Built:       wasm-tools parse wait-cancel.wat -o wait-cancel.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y -S p3=y \
+#                --invoke '<export>()' wait-cancel.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical.
+#
+# Each line is `<export>: <wasmtime's reading>`, and the test reads them by export.
+zero: 131586
+order: 16843268
+cancel-sync: trap: cannot block a synchronous task before returning
+cancel-sync-async-typed: 20
+cancel-async: 33489156
+#
+# Meaning:
+#   zero                     0x020202: each of the three lowers returns RETURNED (2) inline, registering no subtask.
+#   order                    0x01010204: SUBTASK, naming the short wait's index, RETURNED; the long one's sync cancel 4.
+#   cancel-sync              the trap is at the sync subtask.cancel, in gm.
+#   cancel-sync-async-typed  STARTED (1) * 16 + CANCELLED_BEFORE_RETURNED (4).
+#   cancel-async             0x01FF0104: STARTED, BLOCKED (-1), then the event (SUBTASK, CANCELLED_BEFORE_RETURNED).
+#
+# Burroughs reads two rows differently, and each is a divergence ADR 0121 records (ADR 0102 makes the pin the
+# semantics). The pin's canon_subtask_cancel returns the subtask's state when on_cancel resolved it, which the
+# host's does before it returns, so neither form waits. wasmtime's host cancel does not resolve synchronously.
+#   cancel-sync              Burroughs: 20. wasmtime blocks, and a sync-typed task may not block.
+#   cancel-async             Burroughs: 17039360 = 0x01040000, STARTED, then 4 inline, and no event to wait for.
