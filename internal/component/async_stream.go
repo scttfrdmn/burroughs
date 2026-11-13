@@ -19,8 +19,10 @@ import (
 //  2. A COMPLETED stream write leaves the end IDLE (open for more writes); only DROPPED is DONE. Future's
 //     COMPLETED is DONE (single-shot) — opposite end state, so the write end tracks its own.
 //
-// The guest binds `stream.write` (stdout) but not `stream.read` (p3async-hello's bytes, #739), so this slice
-// builds the write side; `stream.read` is refused by name. The oracle is fixtures.json's `stream_writes`.
+// The guest bound `stream.write` (stdout) but not `stream.read` (p3async-hello's bytes, #739), so that slice
+// built the write side and refused `stream.read` by name. The oracle is fixtures.json's `stream_writes`. A
+// guest reading WASI 0.3's stdin binds `stream.read`, which is built in its async form since ADR 0122
+// (streamRead below), with the host producing the stream (hostproducer.go).
 
 // writableStreamEnd is the writable half of a stream<T>: a waitable whose write, once a consumer takes some
 // elements (COMPLETED) or the readable end drops (DROPPED), has a (STREAM_WRITE, index, result|progress<<4)
@@ -39,7 +41,14 @@ type writableStreamEnd struct {
 	srcPtr    uint32              // where a pending stream.write offered its elements
 	n         uint32              // how many elements the guest offered
 	hasWrite  bool                // a stream.write is pending on this end
-	caller    *interp.CanonCaller // the writing agent's caller (used by the inline copy to read src)
+	caller    *interp.CanonCaller // the writing agent's caller
+	// readerDropped records that the paired readable end was dropped (def:End.drop:"self.other.other = None").
+	// A flag and not `conn == nil`, because a writable end minted by an async lower's stream result has no
+	// conn from the start and is not a dropped one.
+	readerDropped bool
+	// producer, when set, makes this a HOST-held writer (ADR 0122): never in the guest's table, never parking
+	// a write, its source the producer's buffer of bytes read and not yet delivered.
+	producer *streamProducer
 }
 
 // pendingEventLocked delivers the write's (STREAM_WRITE, index, result|progress<<4) event once — progress
@@ -52,10 +61,19 @@ type writableStreamEnd struct {
 //
 // NEUTER: drop the clear, and TestAStreamWriteEndIsIdleOnceItsEventIsTaken's write after a taken guest-first
 // completion is refused.
+//
+// **A COMPLETED left untaken when the reader dropped is taken as DROPPED, with its progress** (ADR 0122): the
+// reference computes the result at the take, from whether `other` is still there
+// (def:StreamEnd.notify.stream_event:"if self.other is None:").
+//
+// NEUTER: drop the conversion, and TestAWritersDropUnlinksItsReader's writer takes its COMPLETED as COMPLETED.
 func (e *writableStreamEnd) pendingEventLocked() (event, bool) {
 	if e.resolved && !e.delivered {
 		e.delivered = true
 		e.hasWrite = false
+		if e.readerDropped && e.result == copyCompleted {
+			e.result, e.done = copyDropped, true
+		}
 		return event{code: eventStreamWrite, p1: uint32(e.index), p2: uint32(e.result) | (e.progress << 4)}, true
 	}
 	return event{}, false
@@ -109,8 +127,8 @@ func (e *writableStreamEnd) completeWriteLocked(progress uint32, r copyResult) {
 //     is min(read_n, write_n), the smaller side (fixtures.json stream_hostfirst: under-read and over-read
 //     both land min).
 //
-// `stream.read` (0x0f) is NOT built as a guest built-in (the guest does not bind it); the host reads the
-// readable end through hostReadLocked, an internal path. It refuses by name.
+// The reader is the host (write-via-stream, through hostReadLocked's internal path) or, since ADR 0122, a guest
+// reading through `stream.read` (streamRead).
 func streamWrite(h *asyncHandles) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 3 {
@@ -137,6 +155,27 @@ func streamWrite(h *asyncHandles) interp.CanonFunc {
 		e.srcPtr = ptr
 		e.n = n
 		e.caller = c
+		// **The reader has dropped, so the write completes DROPPED inline** (ADR 0122). The reference's copy
+		// finds `other` gone and its drop's notify already pending (def:End.copy:"assert(self.has_pending_event())").
+		// The drop left `conn` set, so this write parked for a reader that could never arrive.
+		//
+		// NEUTER: drop this arm, and TestAWritersDropUnlinksItsReader's write after the reader's drop parks BLOCKED.
+		if e.readerDropped {
+			e.completeWriteLocked(0, copyDropped)
+			ev, _ := e.pendingEventLocked()
+			return []interp.Value{interp.I32(int32(ev.p2))}, nil
+		}
+		// A guest read of 0 is pending: it is notified with progress 0 and this write parks, the reference's
+		// def:End.copy:"elif buffer.remain() > 0 or (is_read and self.other.buffer.remain() == 0):" arm seen from
+		// the writer (ADR 0122). Driving the copy completed both with 0. Unreachable while every reader was the
+		// host's, whose reads are never of 0.
+		//
+		// NEUTER: drop this arm, and TestAGuestStreamReadFollowsEndCopysArms's write of 3 completes inline.
+		if e.conn != nil && e.conn.hasRead && !e.conn.resolved && e.conn.readN == 0 && n > 0 {
+			e.conn.armLocked(0, copyCompleted)
+			e.hasWrite = true
+			return blockedResult(), nil
+		}
 		// Host-first: the paired readable end already has a pending read. Drive the copy now and complete
 		// inline — the write is the second arriver (def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:").
 		//
@@ -197,25 +236,30 @@ func (s copyState) name() string {
 }
 
 // readableStreamEnd is the readable half of a stream<T> — the FOURTH waitable kind. It is minted by
-// stream.new paired with a writable end over one shared stream (the `conn` back-pointers), and read by the
-// host consumer (hostReadLocked), NOT by a guest built-in: the guest does not bind stream.read (0x0f), so
-// that opcode stays refused; the host reads this end through an internal path when a lowered import hands
-// it the readable end (the p3async-hello write-via-stream flow). A pending read parks in COPYING; the write
+// stream.new paired with a writable end over one shared stream (the `conn` back-pointers), or by a host
+// producer paired with a host-held writer (read-via-stream, ADR 0122). It is read by the host consumer
+// (hostReadLocked) when a lowered import hands it the readable end (the p3async-hello write-via-stream flow),
+// or by the guest's own `stream.read` (streamRead, ADR 0122). A pending read parks in COPYING; the write
 // that arrives second drives the copy and arms this end's (STREAM_READ, index, result|progress<<4) event,
 // which stays COPYING until a waitable-set.wait consumes it. All fields are guarded by asyncHandles.mu.
 type readableStreamEnd struct {
-	index     int
-	set       *waitableSet       // the set it is joined to, if any
-	conn      *writableStreamEnd // the paired writable end of the same stream (set by stream.new)
-	state     copyState
-	resolved  bool // the copy has ended (COMPLETED or DROPPED)
-	delivered bool // the STREAM_READ event has been taken by a waitable-set.wait
-	result    copyResult
-	progress  uint32              // elements copied into the read buffer (min(read_n, write_n))
-	dstPtr    uint32              // where a pending read wants elements written (guest reader)
-	readN     uint32              // how many elements the read requested
-	hasRead   bool                // a read is pending on this end
-	caller    *interp.CanonCaller // the reader's caller, for the completion's memory write (guest reader)
+	index int
+	set   *waitableSet // the set it is joined to, if any
+	// conn is the paired writable end of the same stream, set at mint and cleared when the writer drops
+	// (def:End.drop:"self.other.other = None", #1264).
+	conn *writableStreamEnd
+	// writerDropped records that drop: the reference's `other is None`. A flag and not `conn == nil`, the
+	// writable end's `readerDropped`'s reason: an end built without a writer is not one whose writer dropped.
+	writerDropped bool
+	state         copyState
+	resolved      bool // the copy has ended (COMPLETED or DROPPED)
+	delivered     bool // the STREAM_READ event has been taken by a waitable-set.wait
+	result        copyResult
+	progress      uint32              // elements copied into the read buffer (min(read_n, write_n))
+	dstPtr        uint32              // where a pending read wants elements written (guest reader)
+	readN         uint32              // how many elements the read requested
+	hasRead       bool                // a read is pending on this end
+	caller        *interp.CanonCaller // the reader's caller, for the completion's memory write (guest reader)
 	// A HOST consumer (write-via-stream) reads into a host sink rather than guest memory — the #763
 	// divergence: hostReadLocked's guest-ptr destination was a stand-in for a guest-side reader, and the
 	// real consumer's sink is host-side. When hostSink != nil the copy hands the bytes here; onHostComplete
@@ -227,9 +271,19 @@ type readableStreamEnd struct {
 // pendingEventLocked delivers the read's (STREAM_READ, index, result|progress<<4) event once and, on
 // consumption, transitions the end out of COPYING (COMPLETED→IDLE, DROPPED→DONE) — the model's stream_event
 // runs at get_pending_event, not at arm. readableStreamEnd satisfies the waitable interface. Caller holds mu.
+//
+// **A COMPLETED left untaken when the writer dropped is taken as DROPPED, with its progress** (#1264, ADR
+// 0122): the reference computes the result at the take, from whether `other` is still there
+// (def:StreamEnd.notify.stream_event:"if self.other is None:"), and its drop does not notify an end whose event
+// is already pending. This delivered the COMPLETED, and the end went back to IDLE for a writer that was gone.
+//
+// NEUTER: drop the conversion, and TestAWritersDropUnlinksItsReader's untaken COMPLETED is taken as COMPLETED.
 func (e *readableStreamEnd) pendingEventLocked() (event, bool) {
 	if e.resolved && !e.delivered {
 		e.delivered = true
+		if e.writerDropped && e.result == copyCompleted {
+			e.result = copyDropped
+		}
 		if e.result == copyDropped {
 			e.state = copyStateDone
 		} else {
@@ -273,20 +327,22 @@ func (e *readableStreamEnd) armLocked(progress uint32, r copyResult) {
 // SharedStreamImpl's copy (def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:" / 1000–1005): the second arriver moves the bytes; each side supplies
 // its own buffer at its own ptr in its own memory. Caller holds asyncHandles.mu.
 func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, error) {
+	// A host-held writer's source is the producer's buffer, not guest memory (ADR 0122).
+	//
+	// NEUTER: drop this arm, and TestP3CatMatchesWasmtime reads no bytes.
+	if w.producer != nil {
+		return w.producer.copyIntoLocked(r)
+	}
 	n := w.n
 	if r.readN < n {
 		n = r.readN
 	}
 	if n > 0 {
-		// Both buffers live in the one guest memory 0. The writer's own caller (stream.write) carries no
-		// (memory) option in this component, so read the src through a caller that is memory-bound: for a
-		// host consumer that is the reader's caller (write-via-stream's, bound to the same guest memory);
-		// for a guest reader it is the writer's caller.
-		reader := w.caller
-		if r.hostSink != nil {
-			reader = r.caller
-		}
-		src, err := reader.Read(uint64(w.srcPtr), uint64(n))
+		// Both buffers live in the one guest memory 0, and the src is read through the READER's caller, which
+		// is memory-bound in both cases: write-via-stream's lower, or a guest `stream.read`, whose canonopts the
+		// decoder keeps (ADR 0122). The writer's own caller (stream.write) is not: the decoder drops its opts.
+		// This read the src through the writer's caller for a guest reader, which no reader was until ADR 0122.
+		src, err := r.caller.Read(uint64(w.srcPtr), uint64(n))
 		if err != nil {
 			return 0, fmt.Errorf("component: stream copy: reading %d elements from writer at %#x: %w", n, w.srcPtr, err)
 		}
@@ -302,7 +358,7 @@ func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, 
 }
 
 // hostReadLocked is the host consumer's read of a readable stream end — the internal counterpart to the
-// guest's stream.write, NOT the guest built-in stream.read (0x0f stays refused). Two orderings mirror
+// guest's stream.write, NOT the guest built-in stream.read (streamRead, ADR 0122). Two orderings mirror
 // stream.write's: if the paired writable end already has a pending write, drive the copy now (the read is
 // the second arriver) and complete both ends; otherwise park the read (state COPYING) for the write to
 // drive. Returns (progress, completed): completed=false means the read parked (the host-first case — the
@@ -406,6 +462,18 @@ func streamDropReadable(h *asyncHandles) interp.CanonFunc {
 		if e.conn != nil && e.conn.hasWrite && !e.conn.resolved {
 			e.conn.completeWriteLocked(0, copyDropped) // notify the pending writer: DROPPED, progress 0
 		}
+		// **The drop unlinks both ends** (def:End.drop:"self.other.other = None", ADR 0122), so the writer's next
+		// write completes DROPPED inline rather than parking for a reader that is gone. A host producer learns
+		// here that its reader is gone: it stops, and its future resolves `ok`, as `wasi:cli/stdin` states.
+		//
+		// NEUTER: drop the producer's notice, and TestAGuestDropOfTheProducedStreamResolvesTheFutureOK's future
+		// never resolves.
+		if w := e.conn; w != nil {
+			if w.producer != nil {
+				w.producer.readerDroppedLocked()
+			}
+			w.readerDropped, w.conn, e.conn = true, nil, nil
+		}
 		h.entries[i] = nil
 		return nil, nil
 	}
@@ -449,8 +517,8 @@ func streamCancelRead(h *asyncHandles) interp.CanonFunc {
 // streamDropWritable implements `canon stream.drop-writable` (0x14, definitions.py:canon_stream_drop_writable). Same guard as the
 // readable drop (a stream end drops from IDLE or DONE, traps mid-copy) — NOT the writable FUTURE end's rule,
 // which traps unless DONE (def:drop:"trap_if(isinstance(end, WritableFutureEnd) and end.state !="); a writable stream end may be dropped while IDLE. A pending write is the
-// writable end's COPYING (hasWrite && !resolved). Dropping notifies a pending read on the paired readable
-// end with DROPPED — the anti-hang guarantee in the other direction.
+// writable end's COPYING (hasWrite && !resolved). Dropping unlinks the paired readable end and notifies it
+// with DROPPED (dropWriterLocked) — the anti-hang guarantee in the other direction.
 func streamDropWritable(h *asyncHandles) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
@@ -466,11 +534,38 @@ func streamDropWritable(h *asyncHandles) interp.CanonFunc {
 		if e.hasWrite && !e.resolved {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.drop-writable: end %d is mid-copy (COPYING); a pending write must resolve before dropping", i)}
 		}
-		if e.conn != nil && e.conn.hasRead && !e.conn.resolved {
-			e.conn.armLocked(0, copyDropped) // notify the pending reader: DROPPED, progress 0, -> DONE on consume
-		}
+		dropWriterLocked(e)
 		h.entries[i] = nil
 		return nil, nil
+	}
+}
+
+// dropWriterLocked is a writer's drop, the guest's (stream.drop-writable) or a host producer's at the end of its
+// source: the reference's `End.drop` (def:End.drop) seen from the writable end. Caller holds asyncHandles.mu.
+//
+//   - **The reader is unlinked** (def:End.drop:"self.other.other = None", #1264). The writer's drop left `conn`
+//     set, so a read after it parked on a writer that was gone, and an untaken COMPLETED was taken as
+//     COMPLETED (readableStreamEnd.pendingEventLocked now computes DROPPED at the take).
+//   - **The reader is notified with progress 0 unless it is DONE or already has an event pending**
+//     (def:End.drop:"if self.other.state != End.State.DONE and not self.other.has_pending_event():"). That is
+//     an IDLE reader too, whose next `stream.read` then takes the DROPPED inline. Only a reader with a read
+//     pending was notified.
+//
+// NEUTER: leave `conn` set and notify only a pending read, as before, and TestAWritersDropUnlinksItsReader's
+// untaken COMPLETED is taken as COMPLETED, its read after the drop parks BLOCKED, and its write-via-stream after
+// the drop never resolves its future. TestP3CatMatchesWasmtime passes under it: p3cat's stream finishes with a read
+// pending, which the old notify reached.
+func dropWriterLocked(e *writableStreamEnd) {
+	r := e.conn
+	if r == nil {
+		return
+	}
+	r.conn, e.conn, r.writerDropped = nil, nil, true
+	if r.state != copyStateDone && !r.hasPendingEventLocked() {
+		// An IDLE reader may still carry its last copy's taken event (`delivered`), which a read clears as it
+		// starts. The notify is a new event, so it clears it here.
+		r.delivered = false
+		r.armLocked(0, copyDropped) // DROPPED, progress 0, -> DONE on consume
 	}
 }
 
@@ -491,5 +586,102 @@ func streamNew(h *asyncHandles) interp.CanonFunc {
 		we.conn = re
 		packed := uint64(uint32(re.index)) | uint64(uint32(we.index))<<32
 		return []interp.Value{interp.I64(int64(packed))}, nil
+	}
+}
+
+// bufferMaxLength is the reference's `Buffer.MAX_LENGTH` (def:Buffer:"MAX_LENGTH = 2**28 - 1"): a copy longer
+// than this traps, and a progress always fits in the 28 bits above an event's 4-bit result.
+const bufferMaxLength = 1<<28 - 1
+
+// blockedResult is an async copy's BLOCKED return as its core value: 0xffffffff, which as a signed i32 is -1.
+func blockedResult() []interp.Value {
+	bits := uint32(asyncBlocked)
+	return []interp.Value{interp.I32(int32(bits))}
+}
+
+// streamRead implements `canon stream.read` (0x0f, def:canon_stream_read) in its async form (ADR 0122). The
+// sync form is refused at instantiate (unbuiltAsyncSurface). It is `copy` (def:copy) with a writable guest
+// buffer, so its arms are `End.copy`'s from the reader's side:
+//
+//   - **It traps unless the end is IDLE**, and on a buffer outside memory or longer than MAX_LENGTH, before any
+//     state changes (def:copy:"trap_if(end.state != End.State.IDLE)", def:GuestBuffer).
+//   - **The writer has gone** (`writerDropped`): its drop left this end's DROPPED pending, and the read takes it
+//     inline (def:End.copy:"assert(self.has_pending_event())").
+//   - **A host producer's writer** serves the read from its buffer, or parks it and reads its source on demand
+//     (streamProducer.readLocked).
+//   - **A guest's parked write of 0** is completed with progress 0 and the read parks; **a read of 0 at a
+//     parked write** completes itself with 0 and leaves the write parked; **a read at a parked write** copies
+//     `min` of the two inline and completes both; **no write parked**: the read parks, BLOCKED.
+//
+// The read's caller is bound to the memory its canonopts name (the decoder keeps them), and the copy into the
+// reader writes through it, now or when the write that arrives second drives the copy.
+//
+// NEUTER: refuse 0x0f again (isBuiltAsyncBuiltin), and TestP3CatMatchesWasmtime is refused at instantiate.
+func streamRead(h *asyncHandles) interp.CanonFunc {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) < 3 {
+			return nil, fmt.Errorf("component: stream.read: got %d args, want (i, ptr, n)", len(args))
+		}
+		i, ptr, n := uint32(args[0].Bits), uint32(args[1].Bits), uint32(args[2].Bits)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		e, ok := handleAt[*readableStreamEnd](h, i)
+		if !ok {
+			return nil, fmt.Errorf("component: stream.read: handle %d is not a readable stream end", i)
+		}
+		if e.state != copyStateIdle {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.read: end %d is not IDLE (state %s)", i, e.state.name())}
+		}
+		if n > bufferMaxLength {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.read: a buffer of %d elements is longer than %d", n, bufferMaxLength)}
+		}
+		if n > 0 {
+			if err := c.CheckRange(uint64(ptr), uint64(n)); err != nil {
+				return nil, &interp.Trap{Reason: fmt.Sprintf("stream.read: a buffer of %d bytes at %#x is outside memory: %v", n, ptr, err)}
+			}
+		}
+		if e.writerDropped {
+			e.state = copyStateCopying
+			if !e.hasPendingEventLocked() { // unreachable: a writer's drop notifies every reader not DONE
+				e.delivered = false
+				e.armLocked(0, copyDropped)
+			}
+			ev, _ := e.pendingEventLocked()
+			return []interp.Value{interp.I32(int32(ev.p2))}, nil
+		}
+		// From IDLE, so the last copy's state is cleared, as streamWrite clears the writable end's (ADR 0120).
+		e.resolved, e.delivered, e.progress, e.result, e.hasRead = false, false, 0, copyCompleted, false
+		e.dstPtr, e.readN, e.caller, e.state = ptr, n, c, copyStateCopying
+		w := e.conn
+		if w != nil && w.producer != nil {
+			return w.producer.readLocked(e)
+		}
+		if w != nil && w.hasWrite && !w.resolved {
+			// The two zero-length arms, def:End.copy:"elif buffer.remain() > 0 or (is_read and
+			// self.other.buffer.remain() == 0):" and def:End.copy:"self.notify(progress = 0)", in that order.
+			//
+			// NEUTER: drop the first, and TestAGuestStreamReadFollowsEndCopysArms's read at a parked write of 0
+			// completes; drop the second, and its read of 0 completes the parked write too.
+			switch {
+			case w.n == 0:
+				w.completeWriteLocked(0, copyCompleted)
+				e.hasRead = true
+				return blockedResult(), nil
+			case n == 0:
+				e.armLocked(0, copyCompleted)
+				ev, _ := e.pendingEventLocked()
+				return []interp.Value{interp.I32(int32(ev.p2))}, nil
+			}
+			progress, err := driveStreamCopyLocked(e, w)
+			if err != nil {
+				return nil, err
+			}
+			w.completeWriteLocked(progress, copyCompleted)
+			e.armLocked(progress, copyCompleted)
+			ev, _ := e.pendingEventLocked()
+			return []interp.Value{interp.I32(int32(ev.p2))}, nil
+		}
+		e.hasRead = true
+		return blockedResult(), nil
 	}
 }

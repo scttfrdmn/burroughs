@@ -1,0 +1,31 @@
+The witness guest for E6 (#1234) and #1264 (ADR 0122) — provenance, per ADR 0114's rule for committed guest
+binaries. Like p3std and p3sleep, it is reproducible from this repository plus the pinned toolchain: p3cat/build.sh
+rebuilds it offline, and generates its stdin.
+
+Source:       src/main.rs, Cargo.toml, Cargo.lock (this directory). No dependencies and no WIT of its own: its
+              imports are the ones Rust std and wasi-libc make for a wasm32-wasip3 program that reads stdin to
+              its end.
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-13
+
+  p3cat.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: 368a3ce9b56c73fe103f8f85e945e4b93e821dd829c421e346b029f00e3561ab
+    bytes:  129288
+    The same sha256 on a second build.
+    Its lower of wasi:cli/stdin@0.3.0's read-via-stream is sync, with memory; its stream.read and future.read
+    carry the async option and memory; its `run` is async-typed and lifted with no async option (wasm-tools
+    print).
+
+  ../p3cat.stdin
+    build.sh   (awk: 310 lines of 67 bytes, "p3cat stdin line NNNN: the quick brown fox jumps over the lazy dog")
+    sha256: 386b406e7d0887c85986f83fa6c720ec629c39466cf5b36eb10d5a8ce17b13b1
+    bytes:  20770
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on
+PATH. build.sh writes its readings to ../p3cat.reading (`wasmtime run p3cat.wasm <p3cat.stdin`) and
+../p3cat-empty.reading (`wasmtime run p3cat.wasm </dev/null`), with stdout and stderr to files. 10 of 10 runs of
+each gave the same stdout, an empty stderr and exit 0, which build.sh checks byte for byte before it writes the
+reading.

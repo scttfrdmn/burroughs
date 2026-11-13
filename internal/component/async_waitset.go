@@ -447,6 +447,23 @@ type futureElem struct {
 	known   bool // the type resolved to a future at all
 }
 
+// streamOfBytes reports whether type `ti` is a stream whose element is one byte (`u8` or `s8`), the only
+// element `stream.read`'s byte copy is built for (ADR 0122). The pin's guest buffer strides by `elem_size`
+// (def:WritableGuestBuffer:"self.ptr += len(vs) * elem_size(self.t, self.cx.opts.memory.ptr_type())").
+func (w *walker) streamOfBytes(ti uint32) bool {
+	at := w.c.sectionTypeAt()
+	td, ok := at(ti)
+	if !ok || td.Kind != TDVal || td.Val.Kind != VStream || td.Val.Elem == nil {
+		return false
+	}
+	switch resolveVal(*td.Val.Elem, at, nil).Kind {
+	case VU8, VS8:
+		return true
+	default:
+		return false
+	}
+}
+
 // futureElemOf classifies future type `ti`'s element as the pin's `End.copy` does (2e7895c):
 //
 //		trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))
@@ -519,6 +536,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 		return subtaskDrop(w.async), true
 	case 0x0e: // stream.new (gate:async increment 4) — mints a connected readable+writable end pair
 		return streamNew(w.async), true
+	case 0x0f: // stream.read (ADR 0122), async form only: the sync form is refused by unbuiltAsyncSurface
+		return streamRead(w.async), true
 	case 0x10: // stream.write (gate:async increment 3, write side)
 		return streamWrite(w.async), true
 	case 0x11: // stream.cancel-read (gate:async increment 4) — first running production of CANCELLED

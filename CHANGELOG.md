@@ -25,6 +25,40 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **WASI 0.3's stdin is served: the host produces a stream, and a guest's `stream.read` is bound**
+  ([#1234](https://github.com/scttfrdmn/burroughs/issues/1234), ADR 0122). `wasi:cli/stdin`'s `read-via-stream`
+  returns `tuple<stream<u8>, future<result<_, error-code>>>`. Rust std reads it through wasi-libc, one async
+  `stream.read` per `read()`, and both were refused at instantiate.
+  - **`stream.read` is built in its async form,** following `End.copy`'s arms from the reader's side, the
+    zero-length ones included. Its sync form, and a read of a stream whose element is not one byte, are refused at
+    instantiate by name. It moves from refused to built in the canon built-in classification.
+  - **The host holds the writer.** Reads happen on demand: a `Read` of `Host.Stdin` starts only when a guest read is
+    pending and nothing is buffered, sized at the guest's request, one at a time. So no byte the guest never asked
+    for is consumed, and bytes a cancelled read leaves behind are served to the next read.
+  - **The `Read` runs on a goroutine of its own**, the one new site, authorised in the census. Its result reaches the
+    guest the way an async lower's result does (ADR 0101): queued while the run slot's holder is in host code,
+    otherwise stored under the slot.
+  - **The end of input resolves the future `ok`, and then drops the writer,** so the reader sees DROPPED. A failed
+    `Read` resolves it `err(io)`. A guest that drops the stream resolves it `ok`, as the WIT states. A nil
+    `Host.Stdin` is an empty stdin.
+  - **`Close` returns with a `Read` still blocked.** The goroutine is abandoned, and what it reads after `Close` is
+    discarded rather than stored. A `Read` in flight keeps the callback-lift park bound from expiring.
+  - **The guest's declaration is checked at instantiate:** its `read-via-stream` must return the host's
+    `tuple<stream<u8>, future<…>>`.
+  - **Witnesses:**
+    - `TestP3CatMatchesWasmtime` runs `p3cat.wasm`, a dependency-free Rust `wasm32-wasip3` program built offline by
+      `testdata/p3cat/build.sh`, which reads stdin to its end and prints its length, checksum, line count and first
+      line. On the committed 20770-byte `p3cat.stdin`, the same bytes through a pipe, and no stdin, its stdout,
+      empty stderr and exit 0 equal wasmtime 49.0.3's readings, 10 of 10 runs there.
+    - `TestReadParkMatchesWasmtime` runs `read-park.wasm`'s seven rows against wasmtime's reading. Each first read
+      returns BLOCKED, as wasmtime's does, and an empty stdin's is then DROPPED.
+    - `TestAStreamReadCancelledMidReadServesTheBufferedBytesNext`, `TestAGuestDropOfTheProducedStreamResolvesTheFutureOK`,
+      `TestCloseAbandonsAProducerBlockedInRead` (also under `-race`), `TestAPendingProducerReadOutlivesTheParkBound`,
+      `TestAGuestStreamReadFollowsEndCopysArms`, `TestStreamReadIsBoundAndItsSyncFormRefused` and
+      `TestReadViaStreamMustBeDeclaredAsTheHostDeclaresIt`.
+    - At the CLI, `TestRunAComponentReadsStdin`: `burroughs run p3cat.wasm < p3cat.stdin`.
+  - **Neuters, run:** each fails its witness, and ADR 0122 lists them.
+
 - **WASI 0.3's `wait-for` and `wait-until` are served, the first production async host imports**
   ([#1233](https://github.com/scttfrdmn/burroughs/issues/1233), ADR 0121). Rust std's `thread::sleep` and
   `thread::sleep_until` reach them through wasi-libc, and they were refused at call.
@@ -236,6 +270,28 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A stream end's drop unlinks the other end, so a read or write after it sees DROPPED instead of parking**
+  ([#1264](https://github.com/scttfrdmn/burroughs/issues/1264); ADR 0122).
+  - **The defect:** `stream.drop-writable` notified a pending read and left the ends linked. So a read after the
+    drop parked on a writer that was gone, a COMPLETED the reader had not yet taken was taken as COMPLETED, and
+    `write-via-stream` on a stream whose writer had already dropped never resolved its future. The pin's `End.drop`
+    unlinks both ends and notifies the other unless it is DONE or already has an event, and the event's result is
+    computed when it is taken.
+  - **The repair:** both drops unlink. The writer's drop notifies an idle reader too, an untaken COMPLETED is taken
+    as DROPPED with its progress, and `write-via-stream` after the writer's drop resolves its future at once. A
+    write after the reader's drop completes DROPPED inline.
+  - **Witness:** `TestAWritersDropUnlinksItsReader`, at the built-ins.
+  - **Neuter, run:** the drop leaving the ends linked fails three of its five rows. `TestP3CatMatchesWasmtime`
+    passes under it, since p3cat's stream ends with a read pending.
+- **`future.read`, `future.write` and `stream.write` keep their `(memory …)` option, so a future's completion
+  reaches the guest's memory** ([#1270](https://github.com/scttfrdmn/burroughs/issues/1270), `type:grave`;
+  ADR 0122).
+  - **The defect:** the decoder read their canonopts and dropped them, so each one's caller fell back to the memory
+    of the core instance that declared it. A wit-component guest declares these built-ins in its shim's fixup
+    instance, which has no memory, so the first `future.read` of a host future with a payload trapped, *"the
+    instance that declared this host function has no memory 0"*. No guest had read one: Rust std never drops
+    stdout, so `write-via-stream`'s future never resolves under it. stdin's does, at the end of input.
+  - **Witness:** `TestP3CatMatchesWasmtime`. **Neuter, run:** the memory dropped again traps p3cat's future read.
 - **A sync-lifted function is judged at the sync tail by its type, so an async-typed `run` blocks where it trapped**
   ([#1267](https://github.com/scttfrdmn/burroughs/issues/1267), `type:grave`; ADR 0121).
   - **The defect:** `syncTail` trapped every waiting sync-lifted task with no ready candidate, *"cannot block a

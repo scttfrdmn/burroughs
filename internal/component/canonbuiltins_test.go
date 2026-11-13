@@ -121,8 +121,9 @@ var canonStatus = map[string]canonBuiltinStatus{
 	"subtask.cancel": statusAsyncDemandedBuilt,
 	"subtask.drop":   statusAsyncDemandedBuilt,
 
-	"stream.new":           statusAsyncBuiltUndemanded,
-	"stream.read":          statusAsyncRefusedByName,
+	"stream.new": statusAsyncBuiltUndemanded,
+	// Built in its async form for the WASI 0.3 stdin reader (ADR 0122); its sync form is refused by name.
+	"stream.read":          statusAsyncBuiltUndemanded,
 	"stream.write":         statusAsyncBuiltUndemanded,
 	"stream.cancel-read":   statusAsyncBuiltUndemanded,
 	"stream.cancel-write":  statusAsyncBuiltUndemanded,

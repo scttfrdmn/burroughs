@@ -186,6 +186,18 @@ type asyncHandles struct {
 	// hostWaitsResolving is the same count as a number the park bound can read under mu: a callback past its
 	// claim has left the registry and not yet resolved its subtask, and is still a waker. Guarded by mu.
 	hostWaitsResolving int
+
+	// producerReads counts this instance's host stream producers' reads that have started and whose delivery
+	// has not yet been applied or discarded (hostproducer.go, ADR 0122). Each is a waker for any park in the
+	// instance, as a pending host wait is. Guarded by mu.
+	producerReads int
+	// producersStopped is set by Close's stop (stopProducers), after which no producer read starts and no
+	// delivery stores anything. A goroutine still blocked in its Read is abandoned, never waited on. Guarded by
+	// mu.
+	producersStopped bool
+	// producerStop is closed by that stop, so a delivery waiting for the run slot gives up rather than storing
+	// into a closed instance. Made with the table.
+	producerStop chan struct{}
 }
 
 // requestCancelAll requests cancellation of every lift task this instance currently hosts, and is the
@@ -414,11 +426,12 @@ func (st *subtask) currentSet() *waitableSet { return st.set }
 
 func newAsyncHandles() *asyncHandles {
 	return &asyncHandles{
-		entries:     []any{nil},
-		entrySem:    make(chan struct{}, 1),
-		runSlot:     make(chan struct{}, 1),
-		cancellable: make(map[*liftTask]struct{}),
-		hostWaits:   make(map[*hostWait]struct{}),
+		entries:      []any{nil},
+		entrySem:     make(chan struct{}, 1),
+		runSlot:      make(chan struct{}, 1),
+		cancellable:  make(map[*liftTask]struct{}),
+		hostWaits:    make(map[*hostWait]struct{}),
+		producerStop: make(chan struct{}),
 	}
 }
 

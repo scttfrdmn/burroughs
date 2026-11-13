@@ -143,6 +143,19 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"woken and the core instances closed, and waits for it " +
 				"(`TestCloseEndsAThreadParkedInsideAHandoff` exercises that path).",
 		},
+		{"internal/component/hostproducer.go", "(*streamProducer).startReadLocked"}: {
+			count: 1,
+			by: "ADR 0122 — a host stream producer's Read (WASI 0.3 stdin's read-via-stream), one " +
+				"goroutine per Read, at most one in flight per stream, started only when a guest read is " +
+				"pending and the producer's buffer is empty. It runs NO guest code. Its result reaches the " +
+				"guest by ADR 0101's result-store discipline, as an async lower's `onResolve` does (ADR " +
+				"0095's precedent): queued in `hostStores` while the slot's holder is in host code, otherwise " +
+				"stored under the run slot and `asyncHandles.mu` — what is new is who stores into the reader, " +
+				"not where the bytes land or what orders them. `walker.close` stops delivery and NEVER waits " +
+				"for it: a goroutine blocked in Read is abandoned and what it reads is discarded " +
+				"(`TestCloseAbandonsAProducerBlockedInRead`, under -race). It ends when its Read returns " +
+				"and its delivery is applied or discarded.",
+		},
 	}
 
 	seen := map[site]int{}
