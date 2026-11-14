@@ -123,14 +123,16 @@ func (p *tcpPeer) shut() {
 	}
 }
 
-// socketGoroutines lists the goroutines still running at a socket site (ADR 0123): a dial, a send writer, or a
-// producer's Read of a connection. A stdin producer abandoned by another test is not one of them.
+// socketGoroutines lists the goroutines still running at a socket site (ADR 0123): a dial, a send writer, a
+// producer's Read of a connection, or a listen stream's Accept (ADR 0125). A stdin producer abandoned by another test
+// is not one of them.
 func socketGoroutines() []string {
 	buf := make([]byte, 1<<22)
 	buf = buf[:runtime.Stack(buf, true)]
 	var out []string
 	for _, g := range strings.Split(string(buf), "\n\n") {
 		if strings.Contains(g, "(*sockSend).run") || strings.Contains(g, "(*Host).tcpConnect.func") ||
+			strings.Contains(g, "(*streamProducer).acceptOne") ||
 			(strings.Contains(g, "(*streamProducer).startReadLocked.func") && strings.Contains(g, "net.(*conn).Read")) {
 			out = append(out, g)
 		}

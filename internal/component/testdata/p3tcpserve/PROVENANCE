@@ -1,0 +1,26 @@
+The witness guest for E7b-2 (#1277, ADR 0125) — provenance, per ADR 0114's rule for committed guest binaries. Like
+p3tcp, it is reproducible from this repository plus the pinned toolchain: p3tcpserve/build.sh rebuilds it offline. It
+needs no peer: it listens, connects to itself and accepts.
+
+Source:       src/main.rs, Cargo.toml, Cargo.lock (this directory). No dependencies and no WIT of its own: its
+              imports are the ones Rust std and wasi-libc make for a wasm32-wasip3 program that is a TCP server and
+              client.
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-14
+
+  p3tcpserve.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: cf2ec0a7b956500b4a4e6c27547a2d430a8707ab407b83059d52d2905708172c
+    bytes:  184188
+    The same sha256 on a second build.
+    Its lowers of wasi:sockets/types@0.3.0 (wasm-tools print) include [method]tcp-socket.bind and
+    [method]tcp-socket.listen, sync with memory and realloc, and its stream.read of listen's
+    stream<own<tcp-socket>> carries the async option and memory. Its `run` is async-typed and lifted with no
+    async option, as p3tcp's is.
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on
+PATH. build.sh writes its readings to ../p3tcpserve.reading (`wasmtime run -S inherit-network p3tcpserve.wasm`)
+and ../p3tcpserve-denied.reading (no network flag), with stdout and stderr to files. 10 of 10 runs of each gave the
+same stdout, an empty stderr and exit 0, which build.sh checks byte for byte before it writes the reading.

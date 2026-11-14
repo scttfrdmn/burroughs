@@ -96,6 +96,8 @@ type Host struct {
 	InheritNetwork bool
 	// dial is connect's dialer, nil for net.Dialer's. Test-only, so a dial can be held in flight to be cancelled.
 	dial func(ctx context.Context, network, address string) (net.Conn, error)
+	// listen is bind's listener, nil for net.Listen (ADR 0125). Test-only, so an Accept can fail as a test needs.
+	listen func(network, address string) (net.Listener, error)
 	// start is the monotonic clock's origin and seed is `get-insecure-seed`'s pair (ADR 0119), both set by
 	// NewHost, the only constructor. A zero start is preview 1's #815: time.Since saturates, and the clock
 	// stands still.
@@ -166,6 +168,9 @@ type streamConsumer struct {
 	// `tuple<stream<u8>, future<payload>>` rather than a consumer's `future<payload>`. It shares this table
 	// because it needs what a consumer needs, the instance's async table and a payload checked at instantiate.
 	produces bool
+	// accepts marks `tcp-socket.listen` (ADR 0125), whose result is `result<stream<own<tcp-socket>>, error-code>`,
+	// with no future and so no payload: its signature has a check of its own (checkListenSignature).
+	accepts bool
 }
 
 // streamConsumers maps an import identity, keyed by compatibility class like wasi()'s, to a host import over a
@@ -185,6 +190,8 @@ func (h *Host) streamConsumers() map[string]*streamConsumer {
 	// consumer in stdout's, each lending its self from the instance's resource table.
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.receive", &streamConsumer{bindRes: h.tcpReceive, payload: sockFuturePayloadType, produces: true})
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.send", &streamConsumer{bindRes: h.tcpSend, payload: sockFuturePayloadType})
+	// listen returns a stream the host produces, of accepted sockets (ADR 0125): a producer with no future.
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.listen", &streamConsumer{bindRes: h.tcpListen, accepts: true})
 	return m
 }
 
@@ -384,9 +391,12 @@ func (h *Host) resourceSource() hostResourceSource {
 
 	serve(m, wasiP2, "wasi:io/error::[method]error.to-debug-string", method(errorResource, h.errorToDebugString))
 
-	// tcp-socket's sync methods (ADR 0123): its constructor and the getters Rust std reaches. connect is async
-	// (asyncSource), and send and receive take streams (streamConsumers). The rest reach the stub at their call.
+	// tcp-socket's sync methods (ADR 0123): its constructor and the getters Rust std reaches, and bind and the
+	// backlog setter (ADR 0125). connect is async (asyncSource), and send, receive and listen take or return
+	// streams (streamConsumers). The rest reach the stub at their call.
 	serve(m, wasiP3, "wasi:sockets/types::[static]tcp-socket.create", h.tcpCreate)
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.bind", method(tcpSocketResource, h.tcpBind))
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.set-listen-backlog-size", method(tcpSocketResource, h.tcpSetListenBacklogSize))
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-local-address", method(tcpSocketResource, h.tcpGetLocalAddress))
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-remote-address", method(tcpSocketResource, h.tcpGetRemoteAddress))
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-address-family", method(tcpSocketResource, h.tcpGetAddressFamily))
