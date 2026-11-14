@@ -965,6 +965,186 @@ func LoadVia(h ReadHeap, t Type, ptr int) (Value, error) {
 	}
 }
 
+// LoadFlat reads a value of type t from memory at ptr and returns it as the flat core words it would have
+// crossed as, each with its core type ("i32", "i64", "f32" or "f64"): the composition of def:load and
+// def:lower_flat without the value between them (ADR 0123). It is a spilled parameter list's load
+// (def:lift_flat_values), for a host import that reads its parameters as flat words whether or not they
+// spilled, so the words come in def:flatten_type's order, a variant's payload coerced to the joined types
+// and padded with zeros.
+//
+// **The two traps def:lift_flat_values raises on the tuple come first**: ptr must be aligned to t, and the
+// whole of t must lie in memory (def:lift_flat_values:"trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))").
+//
+// A `string` or `list` leaf yields its `(ptr, len)` pair as it lies in memory, and its bytes are not read: a
+// host that lifts it later reads them, and raises their traps, then. An `own` or `borrow` yields its index,
+// which the component layer lifts against its handle table. A leaf the codec cannot lay out is refused by
+// name.
+func LoadFlat(h ReadHeap, t Type, ptr int) (bits []uint64, types []string, err error) {
+	if k, bad := unflattenable(t, 0); bad {
+		return nil, nil, fmt.Errorf("canon: LoadFlat: kind %s has no flat load here", k)
+	}
+	if ptr < 0 || ptr != alignTo(ptr, alignment(t)) {
+		return nil, nil, fmt.Errorf("canon: LoadFlat: pointer %d is not aligned to %d (def:lift_flat_values)", ptr, alignment(t))
+	}
+	if rerr := h.CheckRange(ptr, size(t)); rerr != nil {
+		return nil, nil, fmt.Errorf("canon: LoadFlat: a %d-byte parameter tuple at %d: %w", size(t), ptr, rerr)
+	}
+	fv, err := loadFlatAt(h, t, ptr)
+	if err != nil {
+		return nil, nil, err
+	}
+	bits, types = make([]uint64, len(fv)), make([]string, len(fv))
+	for i, f := range fv {
+		bits[i], types[i] = f.bits, f.kind
+	}
+	return bits, types, nil
+}
+
+// unflattenable reports the first kind in t that LoadFlat cannot lay out.
+func unflattenable(t Type, depth int) (Kind, bool) {
+	if depth > 32 {
+		return t.Kind, true
+	}
+	t = despecialize(t)
+	switch t.Kind {
+	case KindBool, KindU8, KindU16, KindU32, KindU64, KindS8, KindS16, KindS32, KindS64, KindF32, KindF64,
+		KindChar, KindString, KindList, KindOwn, KindBorrow, KindFlags:
+		return 0, false
+	case KindVariant:
+		if len(t.Cases) == 0 {
+			return t.Kind, true
+		}
+		for _, c := range t.Cases {
+			if c.Type != nil {
+				if k, bad := unflattenable(*c.Type, depth+1); bad {
+					return k, true
+				}
+			}
+		}
+		return 0, false
+	case KindRecord:
+		if len(t.Fields) == 0 {
+			return t.Kind, true
+		}
+		for _, f := range t.Fields {
+			if k, bad := unflattenable(f.Type, depth+1); bad {
+				return k, true
+			}
+		}
+		return 0, false
+	default:
+		return t.Kind, true
+	}
+}
+
+// loadFlatAt is LoadFlat's walk over a type unflattenable has admitted.
+func loadFlatAt(h ReadHeap, t Type, ptr int) ([]flatVal, error) {
+	t = despecialize(t)
+	word := func(n int) (uint64, error) {
+		b, err := h.ReadBytes(ptr, n)
+		if err != nil {
+			return 0, fmt.Errorf("canon: LoadFlat: reading %d byte(s) at %d: %w", n, ptr, err)
+		}
+		var w uint64
+		for i := range n {
+			w |= uint64(b[i]) << (8 * i)
+		}
+		return w, nil
+	}
+	switch t.Kind {
+	case KindBool, KindU8, KindU16, KindU32, KindU64, KindS8, KindS16, KindS32, KindS64, KindF32, KindF64,
+		KindChar, KindFlags:
+		n := intBytes(t.Kind)
+		switch t.Kind {
+		case KindF32:
+			n = 4
+		case KindF64:
+			n = 8
+		case KindFlags:
+			n = flagsSize(len(t.Labels))
+		default:
+		}
+		w, err := word(n)
+		if err != nil {
+			return nil, err
+		}
+		// Through the lift, so bool's nonzero-is-true, char's traps and a float's NaN come from the one
+		// place that verifies them, then through the flat lowering's own encoding of the value.
+		v, err := LiftFlatScalar(t, w)
+		if err != nil {
+			return nil, err
+		}
+		kind := flattenType(t)[0]
+		switch t.Kind {
+		case KindS8, KindS16, KindS32:
+			return []flatVal{{kind, uint64(uint32(v.u))}}, nil
+		default:
+			return []flatVal{{kind, v.u}}, nil
+		}
+	case KindOwn, KindBorrow:
+		w, err := word(4)
+		if err != nil {
+			return nil, err
+		}
+		return []flatVal{{"i32", w}}, nil
+	case KindString, KindList:
+		p, err := word(4)
+		if err != nil {
+			return nil, err
+		}
+		ptr += 4
+		n, err := word(4)
+		if err != nil {
+			return nil, err
+		}
+		return []flatVal{{"i32", p}, {"i32", n}}, nil
+	case KindRecord:
+		var out []flatVal
+		at := ptr
+		for i := range t.Fields {
+			at = alignTo(at, alignment(t.Fields[i].Type))
+			fv, err := loadFlatAt(h, t.Fields[i].Type, at)
+			if err != nil {
+				return nil, fmt.Errorf("canon: LoadFlat: record field %q: %w", t.Fields[i].Name, err)
+			}
+			out = append(out, fv...)
+			at += size(t.Fields[i].Type)
+		}
+		return out, nil
+	case KindVariant:
+		discSize := size(Type{Kind: discriminantType(len(t.Cases))})
+		ci, err := word(discSize)
+		if err != nil {
+			return nil, err
+		}
+		if ci >= uint64(len(t.Cases)) {
+			return nil, fmt.Errorf("canon: LoadFlat: variant case index %d out of range", ci)
+		}
+		rest := flattenVariant(t.Cases)[1:]
+		out := []flatVal{{"i32", ci}}
+		if c := t.Cases[ci]; c.Type != nil {
+			payload, err := loadFlatAt(h, *c.Type, alignTo(ptr+discSize, maxCaseAlignment(t.Cases)))
+			if err != nil {
+				return nil, err
+			}
+			for i, fv := range payload {
+				cv, err := coerceFlat(fv.kind, rest[i], fv)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, cv)
+			}
+			rest = rest[len(payload):]
+		}
+		for _, want := range rest {
+			out = append(out, flatVal{want, 0})
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("canon: LoadFlat: kind %s has no flat load here", t.Kind)
+	}
+}
+
 // LoadListU8 lifts the elements of a `list<u8>` given its (pointer, count) — the one case where the
 // model's per-element load loop reduces to a contiguous read, because a `u8` is one byte at a one-byte
 // stride. It is the lifting counterpart of the framing [StoreList] owns.
