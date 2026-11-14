@@ -62,7 +62,7 @@ For where an accepted connection is registered: at its delivery (under the run s
 - **A connect to a bound port before `listen`** completes into the backlog (ok) where wasmtime 49.0.3 on darwin times out after about 7.8 s. It is the eager listen's cost, paid for an exact `get-local-address` at bind, which is wasmtime's reading; std's `TcpListener::bind` reads the address only after `listen`, so std cannot tell the two apart. `tcp-bind-listen`'s `connect-before-listen` row asserts Burroughs' value and names the divergence.
 - **The backlog is recorded and not applied.** The WIT permits it; whether wasmtime applies it was not measured.
 
-Unmeasured: IPv6 listeners; a fatal accept error other than a closed listener; `get-local-address` while connecting (still `invalid-state`, ADR 0123's recorded unmeasured case); other kernels' answer to the connect-before-listen row.
+Unmeasured: IPv6 listeners; a fatal accept error other than a closed listener; `get-local-address` while connecting (still `invalid-state`, ADR 0123's recorded unmeasured case); other kernels' answer to the connect-before-listen row. These, and whether wasmtime applies the backlog, are filed as #1285.
 
 ### Out of scope, recorded
 
