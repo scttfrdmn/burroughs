@@ -74,11 +74,40 @@ func startPeer(t *testing.T, mode int) *tcpPeer {
 					close(p.gotEOF)
 				}()
 			default:
+				// A silent peer holds as little as the kernel allows, so a writer to it blocks on the guest's bytes
+				// rather than on how far this runner's kernel autotunes its buffers (see smallSendBufferDial).
+				if tc, ok := c.(*net.TCPConn); ok {
+					_ = tc.SetReadBuffer(smallSocketBuffer)
+				}
 			}
 		}
 	}()
 	t.Cleanup(p.shut)
 	return p
+}
+
+// smallSocketBuffer is the socket buffer size the send-blocking witnesses ask for. The kernel rounds it up to its
+// own minimum, a few KiB on Linux, darwin and Windows, which is the point: far below the volume the guest writes.
+const smallSocketBuffer = 4096
+
+// smallSendBufferDial is the dial seam for a witness that needs a guest's send to block: the connection's send
+// buffer is shrunk as small as the kernel allows.
+//
+// **Why it exists:** the send row of TestCloseEndsASocketsGoroutines writes 4 MiB to a peer that never reads, and
+// assumed that was more than the kernel's buffers hold. That held locally, where darwin parked the guest at about
+// 750 KB. It failed on every CI runner (PR #1280's first run): Linux, darwin and Windows there autotune their
+// buffers past 4 MiB, so the Write never blocked and the guest never parked. A witness's premise must not rest on
+// a buffer size the runner chooses. With both ends shrunk, the premise is the guest's volume against a few KiB.
+func smallSendBufferDial(ctx context.Context, network, address string) (net.Conn, error) {
+	var d net.Dialer
+	c, err := d.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetWriteBuffer(smallSocketBuffer)
+	}
+	return c, nil
 }
 
 // shut closes the peer's listener and every connection it accepted.
@@ -253,8 +282,9 @@ func awaitPlace(t *testing.T, h *asyncHandles, what string, onFail func(), pred 
 //
 //   - **parked in receive**: the peer reads the 100 KiB to the guest's shutdown and then holds the connection open,
 //     so read_to_end waits with the producer's Read of the connection in flight;
-//   - **parked in send**: the peer never reads, and 4 MiB is more than the kernel's buffers hold, so a guest write
-//     parks with the writer goroutine's Write blocked.
+//   - **parked in send**: the peer never reads, and both ends' socket buffers are shrunk to the kernel's minimum
+//     (smallSendBufferDial), so 4 MiB is far more than they hold and a guest write parks with the writer
+//     goroutine's Write blocked, whatever the runner's kernel would otherwise autotune.
 //
 // Neutered, each run: walker.close without stopAllSockets, and the receive row's Close hangs, its Read never
 // returning; hostNet.stop returning before it closes the connections, the same; the send sink writing the bytes
@@ -293,8 +323,12 @@ func TestCloseEndsASocketsGoroutines(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			peer := startPeer(t, c.mode)
-			in, err := InstantiateWithHost(b, p3tcpHost(io.Discard, io.Discard, true,
-				strconv.Itoa(peer.port), strconv.Itoa(peer.closed), c.bytes))
+			host := p3tcpHost(io.Discard, io.Discard, true,
+				strconv.Itoa(peer.port), strconv.Itoa(peer.closed), c.bytes)
+			if c.mode == peerSilent {
+				host.dial = smallSendBufferDial
+			}
+			in, err := InstantiateWithHost(b, host)
 			if err != nil {
 				t.Fatalf("p3tcp did not instantiate: %v", err)
 			}
