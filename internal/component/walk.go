@@ -306,22 +306,20 @@ func (w *walker) step(d Def) error {
 						}
 					}
 					r := w.resolveHost(cf.stubName, cn.Opts.Async)
-					// **A sync lower of an import the host serves only as async is refused here, by name** (ADR
-					// 0121). The pin admits it, blocking the caller until the callee resolves
-					// (def:canon_lower:"thread.wait_until(subtask.resolved)"), and that blocking sync lower is
-					// not built. wasi-libc and Rust std always lower `wait-for` and `wait-until` with `async`.
-					// NEUTER: drop this refusal, and TestASyncLowerOfWaitForIsRefusedAtInstantiate instantiates,
-					// its call reaching the stub's "not provided".
-					if r.asyncOnly {
-						return fmt.Errorf("%w: canon lower of %s has no async option, but the host serves it only "+
-							"as an async import (it is an async func in its WIT); lower it with the `async` option. "+
-							"The blocking sync lower of an async import is not built (ADR 0121)",
-							ErrUnsupportedForm, cf.stubName)
-					}
+					// **A sync lower of an import the host serves only as async is bound, not refused** (ADR 0126,
+					// #1268). ADR 0121's choice 5 refused it here by name, and the pin admits it: the caller waits
+					// until the callee resolves (def:canon_lower:"thread.wait_until(subtask.resolved)"). wasi-libc's
+					// getaddrinfo lowers `resolve-addresses` this way, so the refusal refused every std guest that
+					// resolves a name. resolverFor binds it to the blocking sync lower (syncLowerOfAsync).
+					//
+					// NEUTER: restore the refusal here (r.blocking != nil returning ErrUnsupportedForm), and
+					// TestASyncLowerOfAnAsyncImportBlocksOrTrapsByType and TestP3LookupMatchesWasmtime are refused at
+					// instantiate.
+					//
 					// The guest's declaration against the host's (ADR 0118), for every import a host table
 					// serves: its handles must be the host's resources, a method's self its own type, and a
 					// stream consumer's future payload the type the host lowers the completion at.
-					if r.async != nil || r.consumer != nil || r.method != nil || r.sync != nil {
+					if r.async != nil || r.blocking != nil || r.consumer != nil || r.method != nil || r.sync != nil {
 						sig := w.lowerSignature(cf.stubName)
 						if err := w.checkHostResources(cf.stubName, sig); err != nil {
 							return err
@@ -572,13 +570,42 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			//
 			// NEUTER: bind with no spill, and TestP3TcpMatchesWasmtime's connect is handed the tuple's pointer, one
 			// word, and refuses it: "got 1 flat parameters, want 13".
-			spill, serr := w.asyncParamSpill(sig)
+			spill, serr := w.paramSpillTuple(sig, maxFlatAsyncParams)
 			if serr != nil {
 				return interp.HostExtern(ft, func(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) {
 					return nil, serr
 				}), true
 			}
 			return w.lowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFuncSpilled(r.async(w.async, w.hostRes), hasResult, spill, w.async)), interp.CanonOptions{
+				Memory:  d.lowerMem,
+				Realloc: d.lowerRealloc,
+			}), true
+		}
+		// **A sync lower of an async-only import blocks until the callee resolves** (ADR 0126, #1268): the pin's
+		// def:canon_lower sync arm. Its core signature is the guest's, the sync lower's: parameters past
+		// MAX_FLAT_PARAMS cross as one pointer to their tuple, and a result past MAX_FLAT_RESULTS is stored at a
+		// return pointer, the last core argument, which is the case when the guest's core type returns nothing.
+		if r.blocking != nil {
+			sig := w.lowerSignature(d.lowerName)
+			hasResult := sig != nil && sig.Result != nil
+			spill, serr := w.paramSpillTuple(sig, maxFlatParams)
+			if serr != nil {
+				return interp.HostExtern(ft, func(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) {
+					return nil, serr
+				}), true
+			}
+			// The result's width decides the return pointer (def:flatten_functype); one the walk cannot count is read
+			// from the guest's core type, which returns nothing exactly when the result is stored.
+			retptr := false
+			if hasResult {
+				if n, ok := flatWords(*sig.Result); ok {
+					retptr = n > maxFlatResults
+				} else {
+					retptr = len(ft.Results) == 0
+				}
+			}
+			form := syncLowerForm{name: d.lowerName, hasResult: hasResult, retptr: retptr, spill: spill}
+			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, syncLowerOfAsync(r.blocking(w.async, w.hostRes), form, w.async)), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
@@ -631,10 +658,10 @@ type hostResolution struct {
 	method    resourceMethod
 	sync      interp.CanonFunc
 	servedFor []string
-	// asyncOnly reports a SYNC lower of a name the host serves only as an async import, for this class: every
-	// sync table missed, and the async one would have answered an async lower (ADR 0121). The walk refuses it
-	// at instantiate by name, where it reached the stub's *"not provided"*.
-	asyncOnly bool
+	// blocking is the async impl a SYNC lower reaches when the host serves its name only as an async import, for
+	// this class: every sync table missed, and the async one answers (ADR 0126). It is bound to the blocking sync
+	// lower. ADR 0121 refused it at instantiate, where it had reached the stub's false *"not provided"*.
+	blocking asyncImplFor
 }
 
 // resolveHost consults the host tables in binding order — the async-impl source for an async lower, then
@@ -682,11 +709,16 @@ func (w *walker) resolveHost(lowerName string, async bool) hostResolution {
 		return r
 	}
 	r.servedFor = append(r.servedFor, served...)
-	// **A sync lower of an async-only import** (ADR 0121). The async table was consulted only for an async
-	// lower, so a sync lower of `wait-for` missed every table and bound the stub, whose *"not provided"* is
-	// false: the host provides it, as an async import. Asked here so the walk can refuse it by name.
+	// **A sync lower of an async-only import** (ADR 0121, ADR 0126). The async table was consulted only for an
+	// async lower, so a sync lower of `wait-for` missed every table and bound the stub, whose *"not provided"* is
+	// false: the host provides it, as an async import. Asked last, so a name a sync table serves keeps its sync
+	// impl, and bound to the blocking sync lower. Its cross-track classes are not gathered, as before ADR 0126:
+	// what a sync lower of an unserved class hears is unchanged.
 	if !async {
-		_, r.asyncOnly, _ = lookupHost(w.asyncWasiHost, lowerName)
+		if aimpl, ok, _ := lookupHost(w.asyncWasiHost, lowerName); ok {
+			r.blocking = aimpl
+			r.servedFor = nil
+		}
 	}
 	return r
 }

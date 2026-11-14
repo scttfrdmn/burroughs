@@ -3,7 +3,6 @@
 package component
 
 import (
-	"errors"
 	"io"
 	"os"
 	"strconv"
@@ -264,28 +263,6 @@ func TestALongWaitOutlivesTheParkBound(t *testing.T) {
 	}
 	if got, ok := res[0].U32(); !ok || got != 18 {
 		t.Fatalf("run() = %v, want 18 (SUBTASK, RETURNED)", res)
-	}
-}
-
-// TestASyncLowerOfWaitForIsRefusedAtInstantiate is ADR 0121's refusal: wait-for lowered without the async
-// option is refused at instantiate, by name, where it bound the stub and reported "not provided" at call.
-//
-// Neutered, run: the asyncOnly refusal dropped from the walk. The fixture instantiates, and its call reaches
-// the stub's "import … is not provided".
-func TestASyncLowerOfWaitForIsRefusedAtInstantiate(t *testing.T) {
-	b, err := os.ReadFile("testdata/sync-lower-wait-for.wasm")
-	if err != nil {
-		t.Fatalf("the committed fixture is missing: %v", err)
-	}
-	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
-	if err == nil {
-		_, cerr := in.CallValues("go")
-		in.Close()
-		t.Fatalf("a sync lower of wait-for instantiated, and its call returned %v; want it refused at instantiate", cerr)
-	}
-	if !errors.Is(err, ErrUnsupportedForm) || !strings.Contains(err.Error(), "wasi:clocks/monotonic-clock@0.3.0::wait-for") ||
-		!strings.Contains(err.Error(), "only as an async import") {
-		t.Fatalf("instantiate = %v; want ErrUnsupportedForm naming wait-for as served only async", err)
 	}
 }
 

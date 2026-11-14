@@ -1,0 +1,15 @@
+# Committed wasmtime readings for sync-lower-wait-for.wasm: wait-for lowered WITHOUT the async option (#1233, #1268, ADR 0121, ADR 0126).
+# Built:       wasm-tools parse sync-lower-wait-for.wat -o sync-lower-wait-for.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y -S p3=y \
+#                --invoke '<export>()' sync-lower-wait-for.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. First recorded in the fixture's header and ADR 0121 (2026-11-13),
+#              re-taken 2026-11-14.
+#
+# Each line is `<export>: <wasmtime's reading>`, and the test reads them by export.
+go: trap: cannot block a synchronous task before returning
+go-async-typed: 7
+#
+# Meaning: the pin's blocking sync lower (def:canon_lower:"thread.wait_until(subtask.resolved)"). A wait-for(10ms)
+# does not resolve inline, so the caller waits, and the wait meets the sync tail only when the lifted function is
+# sync-typed: `go` traps, and `go-async-typed` blocks until the timer fires and returns 7.

@@ -1,0 +1,12 @@
+[package]
+name = "p3lookup"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# No dependencies: the guest is std alone, so its imports are exactly the ones Rust std and wasi-libc make for a
+# wasm32-wasip3 program that resolves names (#1278 E7c, ADR 0126).
+[dependencies]
+
+[profile.release]
+opt-level = "s"

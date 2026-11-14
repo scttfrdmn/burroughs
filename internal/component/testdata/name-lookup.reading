@@ -1,0 +1,63 @@
+# Committed wasmtime readings for name-lookup.wasm: wasi:sockets/ip-name-lookup's resolve-addresses, sync-lowered (#1278 E7c, #1268, ADR 0126).
+# Built:       wasm-tools parse name-lookup.wat -o name-lookup.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run [-S allow-ip-name-lookup] -W component-model-async=y -S p3=y --invoke '<export>(<row>)' name-lookup.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. Taken 2026-11-14.
+#
+# Each line is `<export>(<row>) <grant>: <wasmtime's reading>`, and the test reads them by that key. `granted` is
+# `-S allow-ip-name-lookup`, and `off` is no lookup flag. Neither needs `-S inherit-network`: the lookup is its own
+# grant in wasmtime, as it is in Scott's stamp.
+run(0) granted: 16843008
+run(1) granted: 16843008
+run(2) granted: 16843008
+run(3) granted: 129
+run(4) granted: 129
+run(5) granted: 16843008
+run(6) granted: 16843008
+run(7) granted: 65792
+run(8) granted: 129
+run(0) off: 132
+run(1) off: 132
+run(3) off: 132
+run(5) off: 132
+run(8) off: 132
+run-sync(0) granted: trap: cannot block a synchronous task before returning
+run-sync(1) granted: 16843008
+run-sync(2) granted: 16843008
+run-sync(3) granted: 129
+run-sync(4) granted: 129
+run-sync(5) granted: 16843008
+run-sync(6) granted: 16843008
+run-sync(7) granted: 65792
+run-sync(8) granted: 129
+run-sync(0) off: 132
+run-sync(1) off: 132
+run-sync(3) off: 132
+run-sync(5) off: 132
+run-sync(8) off: 132
+run-async(0) granted: 16843008
+run-async(1) granted: 16843008
+run-async(2) granted: 16843008
+run-async(3) granted: 129
+run-async(4) granted: 129
+run-async(5) granted: 16843008
+run-async(6) granted: 16843008
+run-async(7) granted: 65792
+run-async(8) granted: 129
+run-async(0) off: 132
+run-async(1) off: 132
+run-async(3) off: 132
+run-async(5) off: 132
+run-async(8) off: 132
+#
+# Meaning: four bytes, byte 0 the low one (name-lookup.wat's header lists the rows).
+#   16843008 = 0x01010100: ok; the list is not empty; it holds the row's address; every address is loopback.
+#   65792    = 0x00010100: ok, not empty, holds ::ffff:127.0.0.1 as that IPv6 address; not "loopback" by the
+#              fixture's test, which counts only 127.0.0.0/8 and ::1.
+#   129      = 0x81: err(invalid-argument), for "a b", the empty name and a zoned literal, before any lookup.
+#   132      = 0x84: err(permanent-resolver-failure), for every name, the literals and the invalid ones too, with
+#              no lookup grant. The grant is checked first, and its code is not access-denied.
+#   trap     the sync-typed `run-sync` traps at localhost's lookup, which does not resolve inline: a sync-typed
+#            task may not block. Every other row resolves inline, so it returns as `run`'s does.
+# `run-async` lowers the lookup with the async option and reads every row as `run` does: the result is the same
+# through both lowers.

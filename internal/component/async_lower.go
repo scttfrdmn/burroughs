@@ -47,10 +47,11 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 // to their tuple in the caller's memory (def:flatten_functype).
 const maxFlatAsyncParams = 4
 
-// asyncParamSpill is the parameter tuple's type when an async lower's parameters flatten past
-// maxFlatAsyncParams, and nil otherwise (ADR 0123). A signature whose width cannot be counted keeps the
+// paramSpillTuple is the parameter tuple's type when a lower's parameters flatten past limit, and nil otherwise
+// (ADR 0123). limit is maxFlatAsyncParams for an async lower and maxFlatParams for the blocking sync lower of an
+// async import (ADR 0126), def:canon_lower's two thresholds. A signature whose width cannot be counted keeps the
 // passthrough it had, paramSpill's rule; one that spills and whose tuple the codec cannot type is an error.
-func (w *walker) asyncParamSpill(sig *FuncType) (*canon.Type, error) {
+func (w *walker) paramSpillTuple(sig *FuncType, limit int) (*canon.Type, error) {
 	if sig == nil {
 		return nil, nil
 	}
@@ -62,14 +63,14 @@ func (w *walker) asyncParamSpill(sig *FuncType) (*canon.Type, error) {
 		}
 		total += n
 	}
-	if total <= maxFlatAsyncParams {
+	if total <= limit {
 		return nil, nil
 	}
 	elems := make([]canon.Type, len(sig.Params))
 	for i, p := range sig.Params {
 		t, err := canonTypeIn(p.Type, w.hostRT)
 		if err != nil {
-			return nil, fmt.Errorf("%w: an async lower's parameter %q, past MAX_FLAT_ASYNC_PARAMS: %w", ErrUnsupportedForm, p.Name, err)
+			return nil, fmt.Errorf("%w: a lower's parameter %q, past its %d flat parameters: %w", ErrUnsupportedForm, p.Name, limit, err)
 		}
 		elems[i] = t
 	}
@@ -100,6 +101,11 @@ func loadSpilledParams(c *interp.CanonCaller, spill canon.Type, params []interp.
 	if err != nil {
 		return nil, &interp.Trap{Reason: fmt.Sprintf("async lower: loading its spilled parameters: %v", err)}
 	}
+	return flatValues(bits, types), nil
+}
+
+// flatValues is canon.LoadFlat's words as core values, each of the flat type LoadFlat names.
+func flatValues(bits []uint64, types []string) []interp.Value {
 	out := make([]interp.Value, len(bits))
 	for i, b := range bits {
 		switch types[i] {
@@ -113,7 +119,7 @@ func loadSpilledParams(c *interp.CanonCaller, spill canon.Type, params []interp.
 			out[i] = interp.I32(int32(uint32(b)))
 		}
 	}
-	return out, nil
+	return out
 }
 
 // asyncLowerFuncWith is the async lower itself, with an optional spilled parameter tuple.

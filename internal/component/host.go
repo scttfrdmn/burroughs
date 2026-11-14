@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -94,8 +95,15 @@ type Host struct {
 	// InheritNetwork grants wasi:sockets TCP any address (ADR 0123), wasmtime's `-S inherit-network`. False, the
 	// zero value, denies the network: `tcp-socket.create` answers `access-denied`.
 	InheritNetwork bool
+	// AllowNameLookup grants wasi:sockets/ip-name-lookup.resolve-addresses (ADR 0126), wasmtime's `-S
+	// allow-ip-name-lookup`. False, the zero value, denies it: every name is `permanent-resolver-failure`, the code
+	// wasmtime 49.0.3 answers without the flag. It is independent of InheritNetwork, as it is in wasmtime.
+	AllowNameLookup bool
 	// dial is connect's dialer, nil for net.Dialer's. Test-only, so a dial can be held in flight to be cancelled.
 	dial func(ctx context.Context, network, address string) (net.Conn, error)
+	// lookup is resolve-addresses' resolver, nil for net.DefaultResolver.LookupNetIP (ADR 0126). Test-only, so a
+	// lookup can be held in flight, or fail, without a DNS server.
+	lookup func(ctx context.Context, network, host string) ([]netip.Addr, error)
 	// listen is bind's listener, nil for net.Listen (ADR 0125). Test-only, so an Accept can fail as a test needs.
 	listen func(network, address string) (net.Listener, error)
 	// start is the monotonic clock's origin and seed is `get-insecure-seed`'s pair (ADR 0119), both set by

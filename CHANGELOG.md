@@ -25,6 +25,37 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **WASI 0.3's name lookup is served behind its own grant: `ComponentConfig.AllowNameLookup` and `burroughs run
+  --allow-ip-name-lookup`** ([#1278](https://github.com/scttfrdmn/burroughs/issues/1278), E7c, the last of
+  [#1235](https://github.com/scttfrdmn/burroughs/issues/1235)'s three slices; ADR 0126). Rust std's `to_socket_addrs`
+  and `TcpStream::connect` of a host name reach `wasi:sockets/ip-name-lookup@0.3`'s `resolve-addresses` through
+  wasi-libc's getaddrinfo, and a program using them was refused at instantiate.
+  - **The grant is public API, stamped by Scott on #1235:** one `ComponentConfig` field and one CLI flag, mirroring
+    wasmtime's `-S allow-ip-name-lookup`, and with E7a's two the whole of the stamp. **Its zero value denies the
+    lookup:** every name is `permanent-resolver-failure`, which is what wasmtime 49.0.3 answers without the flag,
+    measured. It is independent of `InheritNetwork`, as in wasmtime. A bare `LoadComponent` stays denied, and the
+    flag on a wasip1 command or a core module is refused by name.
+  - **An IP literal is answered inline, as given,** including an IPv6 address in brackets and the URL standard's
+    IPv4 forms (`127.1`), as wasmtime answers them; **a syntactically invalid name is `invalid-argument`** before any
+    lookup. Any other name is looked up on a goroutine, which a cancel or `Close` ends; the answers are unmapped, and
+    a resolver error maps to the WIT's codes by their POSIX equivalents.
+  - **Recorded divergences:** a non-ASCII name is `invalid-argument`, since the IDNA conversion the WIT asks for is
+    not in Go's standard library and the engine takes no dependency, and a percent sign is refused rather than
+    decoded.
+  - Witnessed by `p3lookup`, a dependency-free Rust std guest that resolves localhost, a literal and two invalid
+    names and connects to `localhost:<port>`, against wasmtime 49.0.3's readings granted and with the lookup denied,
+    and by `name-lookup.wasm`'s 42 rows through the sync lower and the async one. No reading needs a DNS server.
+
+- **A sync lower of an async host import blocks until the import resolves, as the pin's does**
+  ([#1268](https://github.com/scttfrdmn/burroughs/issues/1268); ADR 0126). wasi-libc lowers `resolve-addresses`, an
+  `async func`, with no async option, and ADR 0121 refused that form at instantiate.
+  - **The caller waits inside `c.Blocking`, judged by the sync tail by the lifted function's type:** a sync-typed
+    function traps *"cannot block a synchronous task before returning"*, and an async-typed one waits, which is
+    wasmtime 49.0.3's reading of `sync-lower-wait-for.wasm`, now committed as a reading. The result is lowered after
+    the wait through the lower's own options.
+  - **A pending sync-lowered call keeps the callback-lift park bound from expiring,** and `Close` ends it.
+  - ADR 0121's refusal is retired by a postscript; its text is unchanged.
+
 - **A WASI 0.3 guest is a TCP server: `wasi:sockets`' `bind`, `listen` and `set-listen-backlog-size` are served, with
   the stream of accepted sockets Rust std's `TcpListener` reads** ([#1277](https://github.com/scttfrdmn/burroughs/issues/1277),
   E7b-2, the second of its two slices; ADR 0125). They reached the stub, and `get-is-listening` was always false.

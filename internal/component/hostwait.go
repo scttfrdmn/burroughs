@@ -102,14 +102,25 @@ func (w *hostWait) cancel() {
 
 // stopHostWaits is Close's stop: no wait starts or resolves after it, and every pending timer is stopped. A
 // callback that claimed its wait before this is waited out by waitHostWaits.
+//
+// **Every pending blocking sync lower is woken too** (ADR 0126), with no resolution, so its call returns
+// errThreadKilled, and none starts after it. killAllParked has already aborted a waiter whose Thread holds the
+// run slot; this reaches one whose wait `suspending` ran without an abort channel.
+//
+// NEUTER: skip the wakes, and TestCloseWakesASyncLoweredCallWithNoThread's held op, called with no Thread record,
+// never returns, until its hang guard.
 func (h *asyncHandles) stopHostWaits() {
 	h.mu.Lock()
 	h.hostWaitsStopped = true
 	pending := h.hostWaits
 	h.hostWaits = map[*hostWait]struct{}{}
+	wakes := h.stopSyncLowersLocked()
 	h.mu.Unlock()
 	for w := range pending {
 		w.timer.Stop()
+	}
+	for _, w := range wakes {
+		close(w)
 	}
 }
 
@@ -131,6 +142,14 @@ func (h *asyncHandles) waitHostWaits() { h.hostWaitsFiring.Wait() }
 // guest waits on.
 //
 // NEUTER: drop the socket term, and TestAPendingDialOutlivesTheParkBound reads ErrLiftParkExpired.
+//
+// **And so does a pending blocking sync lower** (ADR 0126): its return resumes a Thread of the instance, which
+// may wake any park. It counts whether or not its impl's own work is counted above, since a test impl, or a
+// future host import, may hold a resolution no registry here knows of.
+//
+// NEUTER: drop the sync-lower term, and TestAPendingSyncLoweredCallOutlivesTheParkBound's park reads
+// ErrLiftParkExpired.
 func (h *asyncHandles) hostWaitPendingLocked() bool {
-	return len(h.hostWaits) > 0 || h.hostWaitsResolving > 0 || h.producerReads > 0 || h.sockPending > 0
+	return len(h.hostWaits) > 0 || h.hostWaitsResolving > 0 || h.producerReads > 0 || h.sockPending > 0 ||
+		len(h.syncLowerCalls) > 0
 }

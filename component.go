@@ -117,8 +117,9 @@ func resolveFeatures(fs []Feature) (bin.Features, error) {
 // Both are absences rather than defaults: a component gets no environment and no filesystem through
 // this type, and nothing here grants either.
 //
-// One field this has and a [WASIP1Config] does not: InheritNetwork, the grant of WASI 0.3's TCP sockets
-// (ADR 0123). Its zero value denies the network, so a configuration that does not name it grants none.
+// Two fields this has and a [WASIP1Config] does not: InheritNetwork, the grant of WASI 0.3's TCP sockets
+// (ADR 0123), and AllowNameLookup, the grant of its name lookup (ADR 0126). Each zero value denies, so a
+// configuration that names neither grants no network and no lookup.
 type ComponentConfig struct {
 	Args   []string  // the component's argv, lowered by wasi:cli/environment.get-arguments
 	Stdin  io.Reader // the component's stdin; nil means an empty stream (NOT os.Stdin — see above)
@@ -131,7 +132,8 @@ type ComponentConfig struct {
 	// refused by name rather than ignored.
 	Features []Feature
 
-	InheritNetwork bool // wasi:sockets TCP may reach any address; false, the default, denies the network
+	InheritNetwork  bool // wasi:sockets TCP may reach any address; false, the default, denies the network
+	AllowNameLookup bool // wasi:sockets/ip-name-lookup.resolve-addresses; false, the default, denies it
 }
 
 // Run instantiates the component against a preview-2 host over the configured streams, calls its
@@ -162,6 +164,8 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	h := component.NewHost(stdout, stderr, c.Stdin)
 	h.Args = c.Args
 	h.InheritNetwork = c.InheritNetwork
+	// NEUTER: drop this line, and TestAllowNameLookupReachesBothConfiguredPaths' Run row is denied.
+	h.AllowNameLookup = c.AllowNameLookup
 	feats, ferr := resolveFeatures(c.Features)
 	if ferr != nil {
 		return 0, ferr
@@ -239,8 +243,8 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 //
 // # The defaults are Run's, exactly
 //
-// `nil` Stdout and Stderr **discard**; a `nil` Stdin is an empty stream; `Args`, `Features` and
-// `InheritNetwork` are passed as given. That is not a choice made here — it is the same handling
+// `nil` Stdout and Stderr **discard**; a `nil` Stdin is an empty stream; `Args`, `Features`,
+// `InheritNetwork` and `AllowNameLookup` are passed as given. That is not a choice made here — it is the same handling
 // [ComponentConfig.Run] performs, because two methods on one configuration must mean the same thing
 // by that configuration. `TestAZeroConfigComponentWritesNowhereThroughBothPaths` holds them equal by
 // driving both.
@@ -278,6 +282,8 @@ func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
 	h := component.NewHost(stdout, stderr, c.Stdin)
 	h.Args = c.Args
 	h.InheritNetwork = c.InheritNetwork
+	// NEUTER: drop this line, and TestAllowNameLookupReachesBothConfiguredPaths' LoadComponent row is denied.
+	h.AllowNameLookup = c.AllowNameLookup
 	feats, ferr := resolveFeatures(c.Features)
 	if ferr != nil {
 		return nil, ferr

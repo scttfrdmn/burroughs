@@ -1,0 +1,28 @@
+The witness guest for E7c (#1278, ADR 0126) — provenance, per ADR 0114's rule for committed guest binaries. Like
+p3tcp, it is reproducible from this repository plus the pinned toolchain: p3lookup/build.sh rebuilds it offline, and
+builds its peer from ../p3tcp/echo/.
+
+Source:       src/main.rs, Cargo.toml, Cargo.lock (this directory). No dependencies and no WIT of its own: its
+              imports are the ones Rust std and wasi-libc make for a wasm32-wasip3 program that resolves names and
+              connects to one.
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-14
+
+  p3lookup.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: 2573f3b993d521a60f64f3c43b8e78f29f521cc194aa903aa7016875f9dc248c
+    bytes:  229859
+    The same sha256 on a second build.
+    Its lower of wasi:sockets/ip-name-lookup@0.3.0's resolve-addresses (wasm-tools print), an `async func` in its
+    WIT, carries NO async option: memory, realloc and string-encoding=utf8, its core type (i32 i32 i32) -> (), the
+    name's pointer and length and a return pointer. That is the pin's blocking sync lower (#1268). Its tcp-socket
+    lowers are p3tcp's: connect with the async option, the rest sync. Its `run` is async-typed and lifted with no
+    async option.
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on
+PATH. build.sh writes its readings to ../p3lookup.reading (`wasmtime run -S inherit-network -S
+allow-ip-name-lookup p3lookup.wasm <echo-port>`) and ../p3lookup-denied.reading (`-S inherit-network` alone), with
+stdout and stderr to files. 10 of 10 runs of each gave the same stdout, an empty stderr and exit 0, which build.sh
+checks byte for byte before it writes the reading. No name the guest resolves needs a DNS server.

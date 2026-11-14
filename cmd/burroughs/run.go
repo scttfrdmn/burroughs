@@ -373,10 +373,13 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	inheritNetwork := fs.Bool("inherit-network", false, "grant a component wasi:sockets TCP to any address, as "+
 		"wasmtime's -S inherit-network does. Without it a component's sockets are denied (ADR 0123); a wasip1 "+
 		"command or a core module refuses the flag")
+	allowNameLookup := fs.Bool("allow-ip-name-lookup", false, "grant a component wasi:sockets/ip-name-lookup, as "+
+		"wasmtime's -S allow-ip-name-lookup does. Without it every name a component resolves is refused (ADR 0126); "+
+		"a wasip1 command or a core module refuses the flag")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:/GUEST]]... "+
 			"[--scratch HOST[:/GUEST]]... [--env NAME[=VALUE]]... [--features NAME[,NAME]]... [--inherit-network] "+
-			"<file.wasm> [-- <arg>...] | [<func> [<value>...]]")
+			"[--allow-ip-name-lookup] <file.wasm> [-- <arg>...] | [<func> [<value>...]]")
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
 			"directory, capability-based: nothing is visible unless named.")
@@ -447,7 +450,8 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	// probe's error used to be returned as the answer: *"malformed module: unknown binary version: 65549"*, exit 3,
 	// for a well-formed component. Reading the preamble first routes a component whatever flags are given.
 	if isComp, cerr := burroughs.IsComponent(wasm); cerr == nil && isComp {
-		return runComponent(stdout, stderr, file, wasm, invokeArgs, guestArgs, dirs, envs, scratch, feats, *inheritNetwork)
+		return runComponent(stdout, stderr, file, wasm, invokeArgs, guestArgs, dirs, envs, scratch, feats,
+			networkGrant{inherit: *inheritNetwork, lookup: *allowNameLookup})
 	}
 	// **`--inherit-network` is a component's grant, refused by name anywhere else** (ADR 0123), #1128's rule: a
 	// wasip1 command's preview-1 host serves no sockets, and a core module takes no capabilities, so the flag
@@ -458,6 +462,15 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	if *inheritNetwork {
 		fmt.Fprintf(stderr, "%s--inherit-network applies to a component; this module is not one, and its host serves "+
 			"no sockets\n", prefix)
+		return errUsage
+	}
+	// **So is `--allow-ip-name-lookup`** (ADR 0126), for the same reason: a preview-1 host serves no name lookup.
+	//
+	// NEUTER: drop this refusal, and TestAllowIPNameLookupIsAComponentsFlag's wasip1 command runs with the flag
+	// ignored.
+	if *allowNameLookup {
+		fmt.Fprintf(stderr, "%s--allow-ip-name-lookup applies to a component; this module is not one, and its host "+
+			"serves no name lookup\n", prefix)
 		return errUsage
 	}
 	isCmd, derr := wasiCfg.IsCommand(wasm)
@@ -711,9 +724,10 @@ func exitCode(err error) int {
 // silently or mis-routed.
 //
 // `--inherit-network` reaches `ComponentConfig.InheritNetwork` (ADR 0123): without it, the component's sockets are
-// denied.
+// denied. `--allow-ip-name-lookup` reaches `ComponentConfig.AllowNameLookup` (ADR 0126): without it, every name the
+// component resolves is refused.
 func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs, guestArgs []string,
-	dirs preopenFlag, envs envFlag, scratch scratchFlag, feats featureFlag, inheritNetwork bool,
+	dirs preopenFlag, envs envFlag, scratch scratchFlag, feats featureFlag, grant networkGrant,
 ) error {
 	switch {
 	case len(invokeArgs) > 0:
@@ -736,7 +750,10 @@ func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs
 		Stderr:   stderr,
 		Features: feats.features(),
 		// NEUTER: drop this line, and TestRunAComponentWithInheritNetworkConnects' guest is denied.
-		InheritNetwork: inheritNetwork,
+		InheritNetwork: grant.inherit,
+		// NEUTER: drop this line, and TestRunAComponentWithAllowIPNameLookupResolves' granted row prints the denied
+		// reading.
+		AllowNameLookup: grant.lookup,
 	}.Run(wasm)
 	if rerr != nil {
 		return rerr
@@ -746,3 +763,6 @@ func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs
 	}
 	return nil
 }
+
+// networkGrant is a component's two network flags, `--inherit-network` and `--allow-ip-name-lookup`.
+type networkGrant struct{ inherit, lookup bool }
