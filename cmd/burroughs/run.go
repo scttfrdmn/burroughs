@@ -370,9 +370,12 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	var envs envFlag
 	fs.Var(&envs, "env", "pass NAME[=VALUE] into the guest's environment (repeatable). NOTHING is "+
 		"passed unless named (#830); a bare NAME is refused when unset in this environment")
+	inheritNetwork := fs.Bool("inherit-network", false, "grant a component wasi:sockets TCP to any address, as "+
+		"wasmtime's -S inherit-network does. Without it a component's sockets are denied (ADR 0123); a wasip1 "+
+		"command or a core module refuses the flag")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:/GUEST]]... "+
-			"[--scratch HOST[:/GUEST]]... [--env NAME[=VALUE]]... [--features NAME[,NAME]]... "+
+			"[--scratch HOST[:/GUEST]]... [--env NAME[=VALUE]]... [--features NAME[,NAME]]... [--inherit-network] "+
 			"<file.wasm> [-- <arg>...] | [<func> [<value>...]]")
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
@@ -444,7 +447,18 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	// probe's error used to be returned as the answer: *"malformed module: unknown binary version: 65549"*, exit 3,
 	// for a well-formed component. Reading the preamble first routes a component whatever flags are given.
 	if isComp, cerr := burroughs.IsComponent(wasm); cerr == nil && isComp {
-		return runComponent(stdout, stderr, file, wasm, invokeArgs, guestArgs, dirs, envs, scratch, feats)
+		return runComponent(stdout, stderr, file, wasm, invokeArgs, guestArgs, dirs, envs, scratch, feats, *inheritNetwork)
+	}
+	// **`--inherit-network` is a component's grant, refused by name anywhere else** (ADR 0123), #1128's rule: a
+	// wasip1 command's preview-1 host serves no sockets, and a core module takes no capabilities, so the flag
+	// would be dropped silently.
+	//
+	// NEUTER: drop this refusal, and TestInheritNetworkIsAComponentsFlag's wasip1 command runs with the flag
+	// ignored.
+	if *inheritNetwork {
+		fmt.Fprintf(stderr, "%s--inherit-network applies to a component; this module is not one, and its host serves "+
+			"no sockets\n", prefix)
+		return errUsage
 	}
 	isCmd, derr := wasiCfg.IsCommand(wasm)
 	// **A decode failure is reported, not folded into "not a command."** `derr != nil` and `!isCmd` are
@@ -695,8 +709,11 @@ func exitCode(err error) int {
 // **A flag that does not apply to a component is refused by name, not ignored** (#1128). A function name, `--dir`
 // (the preview-2 host serves no preopens), `--env` (its environment is empty) and `--scratch` all used to be dropped
 // silently or mis-routed.
+//
+// `--inherit-network` reaches `ComponentConfig.InheritNetwork` (ADR 0123): without it, the component's sockets are
+// denied.
 func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs, guestArgs []string,
-	dirs preopenFlag, envs envFlag, scratch scratchFlag, feats featureFlag,
+	dirs preopenFlag, envs envFlag, scratch scratchFlag, feats featureFlag, inheritNetwork bool,
 ) error {
 	switch {
 	case len(invokeArgs) > 0:
@@ -718,6 +735,8 @@ func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs
 		Stdout:   stdout,
 		Stderr:   stderr,
 		Features: feats.features(),
+		// NEUTER: drop this line, and TestRunAComponentWithInheritNetworkConnects' guest is denied.
+		InheritNetwork: inheritNetwork,
 	}.Run(wasm)
 	if rerr != nil {
 		return rerr

@@ -126,6 +126,11 @@ func (h *asyncHandles) waitHostWaits() { h.hostWaitsFiring.Wait() }
 // re-arming, which is the bound's purpose stated the other way round: that park is not one nothing can satisfy.
 //
 // NEUTER: drop the producer term, and TestAPendingProducerReadOutlivesTheParkBound reads ErrLiftParkExpired.
+//
+// **So does a socket's pending work** (ADR 0123): a dial, or a send's Write or finish, whose store arms what a
+// guest waits on.
+//
+// NEUTER: drop the socket term, and TestAPendingDialOutlivesTheParkBound reads ErrLiftParkExpired.
 func (h *asyncHandles) hostWaitPendingLocked() bool {
-	return len(h.hostWaits) > 0 || h.hostWaitsResolving > 0 || h.producerReads > 0
+	return len(h.hostWaits) > 0 || h.hostWaitsResolving > 0 || h.producerReads > 0 || h.sockPending > 0
 }

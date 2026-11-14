@@ -447,6 +447,15 @@ type futureElem struct {
 	known   bool // the type resolved to a future at all
 }
 
+// refusedNonByteStreamRead is the `stream.read` bound for a stream whose element is not one byte (ADR 0123): its
+// call is refused by name, as an unserved import's is, and touches no handle.
+func refusedNonByteStreamRead(ti uint32) interp.CanonFunc {
+	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+		return nil, fmt.Errorf("%w: canon stream.read of type %d, whose element is not one byte; stream.read is "+
+			"built for stream<u8> and stream<s8> (ADR 0122, ADR 0123; #1277 builds typed elements)", ErrUnsupportedForm, ti)
+	}
+}
+
 // streamOfBytes reports whether type `ti` is a stream whose element is one byte (`u8` or `s8`), the only
 // element `stream.read`'s byte copy is built for (ADR 0122). The pin's guest buffer strides by `elem_size`
 // (def:WritableGuestBuffer:"self.ptr += len(vs) * elem_size(self.t, self.cx.opts.memory.ptr_type())").
@@ -537,6 +546,17 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 	case 0x0e: // stream.new (gate:async increment 4) — mints a connected readable+writable end pair
 		return streamNew(w.async), true
 	case 0x0f: // stream.read (ADR 0122), async form only: the sync form is refused by unbuiltAsyncSurface
+		// **A read of a stream whose element is not one byte traps at its call, by name** (ADR 0123). The copy
+		// moves bytes and the pin strides by the element's size, so such a read is never served. It was refused
+		// at instantiate (ADR 0122), and that refused every program wasi-libc's socket code is linked into: its
+		// tcp object lowers `listen`'s `stream<own<tcp-socket>>` read whether or not the program listens (E7b,
+		// #1277, builds the read). An import the host does not serve is refused at its call for the same reason.
+		//
+		// NEUTER: bind streamRead whatever the element, and TestStreamReadIsBoundAndItsSyncFormRefused's read of a
+		// stream<u32> reaches the byte copy, refused for its handle rather than for its element.
+		if !w.streamOfBytes(slot) {
+			return refusedNonByteStreamRead(slot), true
+		}
 		return streamRead(w.async), true
 	case 0x10: // stream.write (gate:async increment 3, write side)
 		return streamWrite(w.async), true

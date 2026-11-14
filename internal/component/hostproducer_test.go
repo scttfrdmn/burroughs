@@ -440,39 +440,48 @@ func TestAGuestStreamReadFollowsEndCopysArms(t *testing.T) {
 }
 
 // TestStreamReadIsBoundAndItsSyncFormRefused is stream.read's binding (ADR 0122): its async form permits, its
-// sync form is refused by name, and so is a read of a stream whose element is not one byte.
+// sync form is refused by name, and so is a read of a stream whose element is not one byte, **at its call** since
+// ADR 0123, which moved that refusal out of instantiate: wasi-libc links a non-byte stream.read into every socket
+// program, whether or not it listens.
 //
-// Neutered, each run: unbuiltAsyncSurface's sync-form arm dropped, and stream-read-sync.wasm instantiates; the
-// walk's element check dropped, and stream-read-u32.wasm instantiates.
+// Neutered, each run: unbuiltAsyncSurface's sync-form arm dropped, and stream-read-sync.wasm instantiates;
+// asyncBuiltinFunc's element check dropped, and stream-read-u32.wasm's read reaches the byte copy, which refuses a
+// handle that is no stream end rather than the element.
 func TestStreamReadIsBoundAndItsSyncFormRefused(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
 	async := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x0f, AsyncForm: true}}}
 	if err := gateAsync(async); err != nil {
 		t.Errorf("an async stream.read was refused: %v", err)
 	}
-	for _, c := range []struct {
-		fixture string
-		target  error
-		names   string
-	}{
-		{"stream-read-sync", ErrAsyncNotImplemented, "synchronous stream.read"},
-		{"stream-read-u32", ErrUnsupportedForm, "not one byte"},
-	} {
-		t.Run(c.fixture, func(t *testing.T) {
-			b, err := os.ReadFile("testdata/" + c.fixture + ".wasm")
-			if err != nil {
-				t.Fatalf("the committed fixture is missing: %v", err)
-			}
-			in, err := Instantiate(b)
-			if err == nil {
-				in.Close()
-				t.Fatalf("%s instantiated; want it refused by name", c.fixture)
-			}
-			if !errors.Is(err, c.target) || !strings.Contains(err.Error(), c.names) {
-				t.Errorf("%s: err = %v, want %v naming %q", c.fixture, err, c.target, c.names)
-			}
-		})
+	fixture := func(t *testing.T, name string) []byte {
+		t.Helper()
+		b, err := os.ReadFile("testdata/" + name + ".wasm")
+		if err != nil {
+			t.Fatalf("the committed fixture is missing: %v", err)
+		}
+		return b
 	}
+	t.Run("stream-read-sync", func(t *testing.T) {
+		in, err := Instantiate(fixture(t, "stream-read-sync"))
+		if err == nil {
+			in.Close()
+			t.Fatal("stream-read-sync instantiated; want it refused by name")
+		}
+		if !errors.Is(err, ErrAsyncNotImplemented) || !strings.Contains(err.Error(), "synchronous stream.read") {
+			t.Errorf("err = %v, want ErrAsyncNotImplemented naming the synchronous stream.read", err)
+		}
+	})
+	t.Run("stream-read-u32", func(t *testing.T) {
+		in, err := Instantiate(fixture(t, "stream-read-u32"))
+		if err != nil {
+			t.Fatalf("stream-read-u32 was refused at instantiate (ADR 0123 moved the refusal to the call): %v", err)
+		}
+		defer in.Close()
+		_, err = in.CallValues("read")
+		if !errors.Is(err, ErrUnsupportedForm) || !strings.Contains(err.Error(), "not one byte") {
+			t.Errorf("read() err = %v, want ErrUnsupportedForm naming the element", err)
+		}
+	})
 }
 
 // TestReadViaStreamMustBeDeclaredAsTheHostDeclaresIt is the producer's half of ADR 0118's agreement (ADR 0122):

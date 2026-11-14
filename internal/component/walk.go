@@ -378,11 +378,10 @@ func (w *walker) step(d Def) error {
 				// `liftSignature`'s reason: a top-level VRef is an index-space ordinal.
 				//
 				// stream.read copies bytes, and the pin's stride is the element's size, so a read of any other
-				// element is refused here by name rather than copied at the wrong stride (ADR 0122).
-				if cn.AsyncOp == 0x0f && !w.streamOfBytes(cn.TypeIdx) {
-					return fmt.Errorf("%w: canon stream.read of type %d, whose element is not one byte; "+
-						"stream.read is built for stream<u8> and stream<s8> (ADR 0122)", ErrUnsupportedForm, cn.TypeIdx)
-				}
+				// element binds a refusal at its call rather than copying at the wrong stride (asyncBuiltinFunc,
+				// ADR 0123). It was refused here, at instantiate (ADR 0122), which refused every program that links
+				// wasi-libc's socket code. The type index rides in asyncBuiltinSlot, which stream.read does not
+				// otherwise use.
 				var resultT *ValType
 				if cn.Result != nil {
 					rt := resolveVal(*cn.Result, w.c.sectionTypeAt(), nil)
@@ -567,7 +566,19 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			sig := w.lowerSignature(d.lowerName)
 			hasResult := sig != nil && sig.Result != nil
 			aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
-			return w.lowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFunc(r.async(w.async), hasResult, w.async)), interp.CanonOptions{
+			// **Parameters past MAX_FLAT_ASYNC_PARAMS cross as one pointer to their tuple** (ADR 0123,
+			// def:flatten_functype), and the lower loads them flat before the impl starts. A signature the walk
+			// cannot type keeps the flat passthrough, as before.
+			//
+			// NEUTER: bind with no spill, and TestP3TcpMatchesWasmtime's connect is handed the tuple's pointer, one
+			// word, and refuses it: "got 1 flat parameters, want 13".
+			spill, serr := w.asyncParamSpill(sig)
+			if serr != nil {
+				return interp.HostExtern(ft, func(_ *interp.Caller, _ []interp.Value) ([]interp.Value, error) {
+					return nil, serr
+				}), true
+			}
+			return w.lowerExtern(aft, mayLeaveGuard(d.lowerName, asyncLowerFuncSpilled(r.async(w.async, w.hostRes), hasResult, spill, w.async)), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
@@ -575,8 +586,14 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// A stream-consuming host import (write-via-stream) binds through the SEPARATE stream-consumer source,
 		// which needs this instance's async handle table (to reach the readable end the guest hands it). The
 		// factory is called with w.async to produce the marshaling impl, bound to the lower's memory/realloc.
+		// A stream method of a host resource (ADR 0123) is handed the resource table too.
 		if r.consumer != nil {
-			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, r.consumer.bind(w.async)), interp.CanonOptions{
+			bound := r.consumer.bind
+			if r.consumer.bindRes != nil {
+				res := w.hostRes
+				bound = func(async *asyncHandles) interp.CanonFunc { return r.consumer.bindRes(async, res) }
+			}
+			return w.lowerExtern(ft, mayLeaveGuard(d.lowerName, bound(w.async)), interp.CanonOptions{
 				Memory:  d.lowerMem,
 				Realloc: d.lowerRealloc,
 			}), true
@@ -845,6 +862,13 @@ func (w *walker) close() {
 	// NEUTER THIS call, and TestCloseAbandonsAProducerBlockedInRead's late bytes are stored into the closed
 	// instance.
 	w.stopAllProducers()
+	// **And the sockets** (ADR 0123), across the tree, after the producers so a socket's receive delivers
+	// nothing more: no socket goroutine starts after this, every pending dial is cancelled with its lend
+	// released, and every connection is closed, which ends each Read and Write in flight. Unlike stdin's Read, a
+	// socket goroutine is **waited out**, at the end, once the core instances have closed.
+	//
+	// NEUTER THIS call, and TestCloseEndsASocketsGoroutines' Close hangs, its receive reader blocked in Read.
+	w.stopAllSockets()
 	for _, in := range w.toClose {
 		_ = in.Close()
 	}
@@ -859,6 +883,28 @@ func (w *walker) close() {
 	// reports back to a scheduler that is still there to receive it.
 	w.stopAllSchedulers()
 	w.waitAllHostWaits()
+	w.waitAllSockets()
+}
+
+// stopAllSockets stops the sockets of this walker's table and every nested one's. hostRes is nil for a walker
+// built without the component walk.
+func (w *walker) stopAllSockets() {
+	if w.hostRes != nil {
+		w.hostRes.net.stop()
+	}
+	for _, c := range w.children {
+		c.stopAllSockets()
+	}
+}
+
+// waitAllSockets waits out every socket goroutine of this walker's table and every nested one's.
+func (w *walker) waitAllSockets() {
+	if w.hostRes != nil {
+		w.hostRes.net.wait()
+	}
+	for _, c := range w.children {
+		c.waitAllSockets()
+	}
 }
 
 // stopAllProducers stops the host stream producers of this walker's table and every nested one's.

@@ -1,0 +1,32 @@
+The witness guest for E7a (#1235, ADR 0123) — provenance, per ADR 0114's rule for committed guest binaries. Like
+p3cat, it is reproducible from this repository plus the pinned toolchain: p3tcp/build.sh rebuilds it offline, and
+builds its peer from echo/.
+
+Source:       src/main.rs, Cargo.toml, Cargo.lock (this directory). No dependencies and no WIT of its own: its
+              imports are the ones Rust std and wasi-libc make for a wasm32-wasip3 program that is a TCP client.
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-13
+
+  p3tcp.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: 8edae1697944a615ff6a41b0127d4250b5839f7d5d37c12556e51d445ab2d93f
+    bytes:  197471
+    The same sha256 on a second build.
+    Its lowers of wasi:sockets/types@0.3.0 (wasm-tools print): [static]tcp-socket.create sync, with memory and
+    realloc; [method]tcp-socket.connect with the async option, memory and realloc, its core type (i32 i32) ->
+    i32, the parameter tuple's pointer and the return pointer; receive sync, with memory; send sync, with no
+    memory option; the getters sync, with memory and realloc. Its stream.read of send's and receive's
+    stream<u8> and of listen's stream<own<tcp-socket>> carry the async option and memory. Its `run` is
+    async-typed and lifted with no async option.
+
+  echo/main.go
+    The peer build.sh starts, built with the repository's Go: an echo listener on 127.0.0.1:0 that prints its
+    port and the port of a listener it bound and closed.
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on
+PATH. build.sh writes its readings to ../p3tcp.reading (`wasmtime run -S inherit-network p3tcp.wasm <echo-port>
+<closed-port>`) and ../p3tcp-denied.reading (no network flag), with stdout and stderr to files. 10 of 10 runs of
+each gave the same stdout, an empty stderr and exit 0, which build.sh checks byte for byte before it writes the
+reading.

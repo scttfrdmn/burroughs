@@ -33,7 +33,7 @@ The plan forecast the grant-off code at connect, under `-S tcp`. Measured under 
 For the spilled parameters:
 
 1. **Load the tuple's flat words** from memory: the alignment and bounds traps of def:lift_flat_values, then each leaf read at its offset and laid out as its flat form, so the impl gets the 13 words it would get unspilled. A new codec function, `canon.LoadFlat`.
-2. **Load the tuple with `canon.LoadVia`**, which gains `own`/`borrow` arms, and hand the impl values. *Costs:* every async impl takes flat words today (40 sites), so either the impl signature changes or the values are re-flattened; a re-flattened string would have to be stored again, through the guest's realloc, from host code.
+2. **Load the tuple with `canon.LoadVia`**, which gains `own`/`borrow` arms, and hand the impl values. This is what the plan named. *Costs:* every async impl takes flat words today (40 sites), so either the impl signature changes or the values are re-flattened; a re-flattened string would have to be stored again, through the guest's realloc, from host code; and the impl would need value accessors (variant case, `u16`, `u8`) the codec does not export. So `LoadVia` is unchanged, and `own` stays its one documented asymmetry.
 
 For send's sink:
 
@@ -69,29 +69,57 @@ For the grant off: refuse at `create` (wasmtime's reading with no network flag) 
 9. **Getters:** `get-local-address`, `get-remote-address` (`invalid-state` until connected), `get-address-family` and `get-is-listening` (false: E7a never listens). The other twenty methods are left unserved and reach the stub at their call.
 10. **Error mapping:** a Go `net` error maps to `error-code` by its errno: `connection-refused`, `connection-reset`, `connection-aborted`, `connection-broken` (EPIPE), `timeout`, `remote-unreachable`, `address-in-use` and `access-denied`, with Windows' WSA numbers mapped beside the POSIX ones. Anything else is **`other(none)`**: a string payload would be lowered through the guest's realloc from a goroutine's store, and the future payloads stay realloc-free.
 11. **The grant.** `Host.InheritNetwork`, set from `ComponentConfig.InheritNetwork` by `Run` and `LoadComponent`, and by `burroughs run --inherit-network`. **Off, `create` is `err(access-denied)`**, wasmtime 49.0.3's reading with no network flag (measured above), and `connect` checks the grant again. A bare `LoadComponent` stays denied. `--inherit-network` on a wasip1 command or a core module is refused by name, as #1128 refuses the other component-only flags.
-12. **Close** (`walker.close`) stops the sockets of every instance in the tree right after the producers: under the registry's lock it marks the registry stopped, so no socket goroutine starts after it, claims every pending dial (cancelling its context and releasing its lend), and closes every connection, which unblocks each reader's `Read` and each writer's `Write`. Every socket goroutine — dial, send writer, receive reader — is counted in the registry, and **`Close` waits for all of them at its end**, after the core instances have closed, as it waits for a host wait's callback. A delivery stopped by the stop discards what it carried.
+12. **Close** (`walker.close`) stops the sockets of every instance in the tree right after the producers: under the registry's lock it marks the registry stopped, so no socket goroutine starts after it, claims every pending dial (cancelling its context and releasing its lend), and closes every connection, which unblocks each reader's `Read` and each writer's `Write`. Every socket goroutine — dial, send writer, receive reader — is counted in the registry, and **`Close` waits for all of them at its end**, after the core instances have closed, as it waits for a host wait's callback. A delivery stopped by the stop discards what it carried. A send writer waiting for bytes waits on a condition over `asyncHandles.mu` (`hostIO`), which the producers' stop broadcasts, so no channel operation is made under the engine lock.
+13. **`wasi:filesystem/preopens`' `get-directories` is served for 0.3 too**, and `descriptor` is declared for it. It was 0.2 only (ADR 0119), and p3tcp reached it: wasi-libc looks up the preopens when a program that has used a socket closes one, which wasmtime's trace of the same guest shows (`get-directories` between the first socket's getters and the second's `create`). The 0.3 WIT is the 0.2 shape, `list<tuple<descriptor, string>>`, and nothing is granted, so the list is empty, as wasmtime's is with no `--dir`.
 
 **Lock order:** `asyncHandles.mu` may be held while the registry's lock or a socket's is taken, and never the reverse. A resource lend is taken and released with neither held.
 
+**Names added below the public boundary.** `canon.LoadFlat` (internal codec) and `component.Host.InheritNetwork` (internal; `ComponentConfig` sets it, as it sets `Host.Args`). Neither is importable from outside the module. The public surface is the stamped field and flag only.
+
 ### Divergences from wasmtime 49.0.3, recorded
 
-None measured on the witness's paths. Unmeasured: an error mapped to `other(none)` that wasmtime maps to a specific code, or carries a string for; the twenty unserved getters and setters; IPv6.
+None measured on the witness's paths. Unmeasured: an error mapped to `other(none)` that wasmtime maps to a specific code, or carries a string for; `get-local-address` while connecting (this host answers `invalid-state` until connected); the twenty unserved getters and setters; IPv6.
 
 ### Out of scope, recorded
 
 - `bind`, `listen` and the accept stream, typed stream elements and the lock order they need (E7b, #1277).
 - `ip-name-lookup` and `AllowNameLookup` (E7c, #1278).
 - UDP, and the keep-alive, hop-limit and buffer-size options.
+- A check that an async import's result type agrees with the host's, as `checkConsumerPayload` checks a stream import's future: connect's `result<_, error-code>` is lowered at the host's declaration, which is the guest's when both come from one WIT, and nothing compares them.
 
 ## Consequences
 
-- **Witnesses:** `TestP3TcpMatchesWasmtime` (a dependency-free Rust std guest, `testdata/p3tcp/`, against `p3tcp.reading` and `p3tcp-denied.reading`, with an in-test echo listener), the harness tests for a cancelled dial, `Close` with a connection open and a guest parked in receive, the shared-ownership refcount and the spilled parameters, and the CLI's `--inherit-network`. Each neuter is named at its site.
-- **New goroutine sites** in the census, naming this ADR: the dial, the send writer, and the producer's read for a socket source (the same site as stdin's).
+- **Witnesses:**
+  - `TestP3TcpMatchesWasmtime`, in both gate states: `testdata/p3tcp/p3tcp.wasm`, a dependency-free Rust `wasm32-wasip3` std program (nightly 1.100.0, built offline by `p3tcp/build.sh`, the same sha256 on a second build), connects to an in-test echo peer, checks its local and remote addresses, writes 100 KiB, shuts its write half, reads the echo to the end, and connects to a closed port. Granted, its stdout, empty stderr and exit 0 equal `p3tcp.reading`; denied, `p3tcp-denied.reading`. Both readings are wasmtime 49.0.3's, 10 of 10 runs byte-identical (also 6 of 6 in the measurement above). The guest prints properties, never a port. After `Close` no socket goroutine remains.
+  - `TestTcpConnectParkMatchesWasmtime`: `tcp-connect-park.wasm`, a hand-written callback-lifted task that connects through the spilled async lower and waits for the subtask, reads 66048 against a listening port and 66049 against a closed one, wasmtime's `tcp-connect-park.reading` (10 of 10 per row).
+  - `TestCloseEndsASocketsGoroutines`, also under `-race`: p3tcp parked in receive (the peer drains and holds the connection open) and parked in send (a peer that never reads, 4 MiB); `Close` returns, the run ends, and no socket goroutine remains.
+  - `TestACancelledConnectResolvesCancelledAndItsDialEnds`, also under `-race`: a held dial, cancelled by the async `subtask.cancel`, reads CANCELLED_BEFORE_RETURNED inline, its context is cancelled, its goroutine ends, and the socket can be dropped.
+  - `TestTheConnectionOutlivesTheHandleWhileAStreamHoldsIt`, `TestAReceiveDropShutsTheReadHalf`, `TestTheNetworkIsDeniedAtCreateWithoutTheGrant`, `TestAPendingDialOutlivesTheParkBound` (`tcp-connect-park.wasm` with the bound at 5 ms and a 60 ms dial), `TestAnAsyncLowerLoadsItsSpilledParameters` (`async-spill-params.wasm`, five flat words of four types, and its two traps) and, in the codec, `TestLoadFlatIsLoadThenLowerFlat` (LoadFlat against the model's `lowerFlat`).
+  - At the public boundary `TestInheritNetworkReachesBothConfiguredPaths` (Run and LoadComponent); at the CLI `TestRunAComponentWithInheritNetworkConnects` and `TestInheritNetworkIsAComponentsFlag`.
+- **Neuters, run**, each named at its site:
+  - `tcpCreate`'s grant check dropped: `TestTheNetworkIsDeniedAtCreateWithoutTheGrant`'s create returns ok. **p3tcp's denied rows pass under it**: connect's own check answers access-denied, and std maps both to PermissionDenied.
+  - the walk binding connect with no spill: p3tcp fails, *"tcp-socket.connect: got 1 flat parameters, want 13"*, and the spill fixture's impl is handed one word. The lower skipping its load: the same fixture result.
+  - the dial's lend never released: p3tcp traps dropping its socket, *"handle has 1 active lends"*.
+  - the writer's `CloseWrite` skipped: p3tcp's `read_to_end` waits until the 20 s hang guard.
+  - `get-directories` served for 0.2 only: p3tcp fails at the first socket's close, the cross-track refusal, before the closed-port line.
+  - **the send sink writing inline: p3tcp passes**, which the plan forecast as a deadlock. 100 KiB fits the loopback's kernel buffers both ways (about 750 KB to a silent peer on this machine, measured), so the inline Write never blocks. `TestCloseEndsASocketsGoroutines`' send row fails: the guest never parks, its `stream.write` blocked in the Write with `asyncHandles.mu` held.
+  - `walker.close` without `stopAllSockets`, and `hostNet.stop` returning before it closes the connections: the receive row's `Close` hangs. The send row passes both, because the guest parks once the host's 64 KiB buffer fills, before the kernel's do, so the Write in flight returns by itself.
+  - `cancelSubtask` returning without claiming: the cancel reads BLOCKED and the dial is never cancelled.
+  - `hostNet.release` closing at every release: the read after the handle's drop is DROPPED with nothing.
+  - the receive drop's `CloseRead` dropped: the Read waits out its 2 s deadline.
+  - `hostWaitPendingLocked` without the socket term: `ErrLiftParkExpired`. p3tcp cannot witness this one: its `run` is sync-lifted, and the bound is the callback loop's, which is why `tcp-connect-park.wasm` exists.
+  - `asyncBuiltinFunc`'s element check dropped: `stream-read-u32.wasm`'s read reaches the byte copy and is refused for its handle, not its element.
+  - `LoadFlat`'s coercion skipped: a `u32` case of an i32-and-i64 join reads i32; its padding dropped: the ipv4 address reads 6 words of 12.
+  - `runComponent` not passing the flag: the CLI's granted row prints the denied reading; the CLI refusal dropped: both of its rows exit 0; either root path's `h.InheritNetwork` dropped: that row is denied.
+- **Tests changed** (pre-existing):
+  - `TestStreamReadIsBoundAndItsSyncFormRefused` (`hostproducer_test.go`): `stream-read-u32.wasm` now instantiates, and its new `read` export's call is refused naming the element. The fixture gains that export (`stream-read-u32.wat`, reassembled).
+  - `internal/testenv/observer_test.go`: the census gains the dial's and the send writer's sites, and the producer's entry names its socket source.
+  - Every other suite passes unchanged, with and without `-race`: p3cat, p3std, p3sleep, p3sys, p3async-hello, p3hello and p3echo, and the stream, future, cancel, waitable-set, liftpark and runslot suites. stdin's readings are unchanged.
 - **What a guest sees.** A WASI 0.3 std guest's `TcpStream::connect`, `write_all`, `shutdown` and `read_to_end` work against a reachable peer when the embedder grants the network, and fail `PermissionDenied` when it does not.
-- **Public surface:** `ComponentConfig.InheritNetwork` and `--inherit-network`, as stamped.
+- **Public surface:** `ComponentConfig.InheritNetwork` and `--inherit-network`, as stamped, and nothing else.
 
 ## Rollback
 
-- Dropping the grant check at `create` lets a guest reach the network without `InheritNetwork`.
-- Writing the send sink inline brings back a deadlock against an echoing peer.
-- Dropping `stopAllSockets` from `walker.close` leaves socket goroutines running after `Close`.
+- Dropping the grant check at `create` and at `connect` lets a guest reach the network without `InheritNetwork`.
+- Writing the send sink inline lets a peer that does not read hold the instance's lock, and `Close` with it.
+- Dropping `stopAllSockets` from `walker.close` leaves a socket's `Read` holding `Close`.

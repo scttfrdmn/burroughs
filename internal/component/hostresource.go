@@ -97,10 +97,13 @@ type hostResources struct {
 	// types maps each RT this table has minted an own of to its type, so teardown can find the destructor of
 	// an own the guest never dropped (closeAll).
 	types map[int]*hostResource
+	// net is this instance's sockets (ADR 0123, hostsock.go): its connections, pending dials and socket
+	// goroutines, which Close stops and waits out. It has its own lock, never taken with mu held.
+	net *hostNet
 }
 
 func newHostResources() *hostResources {
-	return &hostResources{table: canon.NewHandleTable(), objs: map[uint32]any{}, types: map[int]*hostResource{}}
+	return &hostResources{table: canon.NewHandleTable(), objs: map[uint32]any{}, types: map[int]*hostResource{}, net: newHostNet()}
 }
 
 // closeAll destroys every own the guest still holds, once, when its instance closes (#1252, ADR 0118): a

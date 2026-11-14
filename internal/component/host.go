@@ -3,8 +3,10 @@
 package component
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -89,6 +91,11 @@ type Host struct {
 	Args     []string // the guest's argv, lowered by get-arguments
 	Exited   bool
 	ExitCode int32
+	// InheritNetwork grants wasi:sockets TCP any address (ADR 0123), wasmtime's `-S inherit-network`. False, the
+	// zero value, denies the network: `tcp-socket.create` answers `access-denied`.
+	InheritNetwork bool
+	// dial is connect's dialer, nil for net.Dialer's. Test-only, so a dial can be held in flight to be cancelled.
+	dial func(ctx context.Context, network, address string) (net.Conn, error)
 	// start is the monotonic clock's origin and seed is `get-insecure-seed`'s pair (ADR 0119), both set by
 	// NewHost, the only constructor. A zero start is preview 1's #815: time.Since saturates, and the clock
 	// stands still.
@@ -122,7 +129,10 @@ type Host struct {
 // asyncImplFor is an async host import as the walk binds it: a factory called with the importing
 // instance's async table, so the work an impl leaves pending is that instance's, and that instance's Close
 // stops it (ADR 0121). A stream consumer's bind has the same shape for the same reason.
-type asyncImplFor func(async *asyncHandles) asyncLowerImpl
+//
+// **It is handed the instance's resource table too** (ADR 0123), so an async method of a host resource,
+// `tcp-socket.connect`, can lend its `self` for the subtask's life. An impl over no resource ignores it.
+type asyncImplFor func(async *asyncHandles, res *hostResources) asyncLowerImpl
 
 // asyncWasi is the async-lower impl source — SEPARATE from wasi() by type, so binding an async lower to a
 // sync impl (or vice versa) is a compile error, not a runtime surprise. It is the production async imports
@@ -132,7 +142,7 @@ func (h *Host) asyncWasi() map[string]asyncImplFor {
 	m := h.asyncSource()
 	extras := make(map[string]asyncImplFor, len(h.asyncImpls))
 	for name, impl := range h.asyncImpls {
-		extras[name] = func(*asyncHandles) asyncLowerImpl { return impl }
+		extras[name] = func(*asyncHandles, *hostResources) asyncLowerImpl { return impl }
 	}
 	mergeExtras(m, extras, "async import")
 	return m
@@ -145,6 +155,9 @@ func (h *Host) asyncWasi() map[string]asyncImplFor {
 // takes an *asyncHandles, an unexported type, so it cannot appear on the exported API (gate:async #739).
 type streamConsumer struct {
 	bind func(async *asyncHandles) interp.CanonFunc
+	// bindRes, when set, is bound instead of bind, with the instance's resource table as well (ADR 0123): a
+	// stream method of a host resource, `tcp-socket.send` or `.receive`, lends its `self` from it.
+	bindRes func(async *asyncHandles, res *hostResources) interp.CanonFunc
 	// payload is the type of the future the consumer returns, as the host's interface declares it and the
 	// consumer lowers its completion at (ADR 0116). The guest's own signature must declare the same type,
 	// checked at instantiate (ADR 0118), since the guest reads the bytes the host writes at that type.
@@ -168,6 +181,10 @@ func (h *Host) streamConsumers() map[string]*streamConsumer {
 	// NEUTER THIS (h.Stdout for h.Stderr), and TestP3SysMatchesWasmtime's stderr line lands on stdout.
 	serve(m, wasiP3, "wasi:cli/stderr::write-via-stream", &streamConsumer{bind: writeViaStream(h.Stderr), payload: stdioWriteResultType})
 	serve(m, wasiP3, "wasi:cli/stdin::read-via-stream", &streamConsumer{bind: h.readViaStream, payload: stdioWriteResultType, produces: true})
+	// tcp-socket's two stream methods (ADR 0123, hostsock.go): receive is a producer in stdin's shape and send a
+	// consumer in stdout's, each lending its self from the instance's resource table.
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.receive", &streamConsumer{bindRes: h.tcpReceive, payload: sockFuturePayloadType, produces: true})
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.send", &streamConsumer{bindRes: h.tcpSend, payload: sockFuturePayloadType})
 	return m
 }
 
@@ -328,7 +345,7 @@ type inputStream struct{ r io.Reader }
 // resourceSource is the host's resource half (ADR 0117): the resource types it implements and the imports
 // over them, each keyed by name and compatibility class through serve, with the test-only extras merged.
 //
-// Four types are WASI 0.2's and two are 0.3's terminals. `descriptor` is declared although nothing mints one: `get-directories`
+// Four types are WASI 0.2's, two are 0.3's terminals, and one is 0.3's TCP socket (ADR 0123). `descriptor` is declared although nothing mints one: `get-directories`
 // grants an empty list, and a guest's `[resource-drop]descriptor` must still name a host type rather than
 // fall back to dropNoop.
 func (h *Host) resourceSource() hostResourceSource {
@@ -336,7 +353,8 @@ func (h *Host) resourceSource() hostResourceSource {
 	serve(types, wasiP2, "wasi:io/streams::output-stream", outputStreamResource)
 	serve(types, wasiP2, "wasi:io/streams::input-stream", inputStreamResource)
 	serve(types, wasiP2, "wasi:io/error::error", errorResource)
-	serve(types, wasiP2, "wasi:filesystem/types::descriptor", descriptorResource)
+	// For 0.3 too since ADR 0123, because get-directories is: its own<descriptor> must name a host type.
+	serve(types, wasiP2P3, "wasi:filesystem/types::descriptor", descriptorResource)
 	// WASI 0.3's terminal types (ADR 0119), declared because the `get-terminal-*` getters in wasi() are
 	// served: each returns `option<own<…>>`, and checkHostResources refuses a served import whose own names no
 	// host resource (ADR 0118). So without these, every std guest that lowers the getters, p3async-hello
@@ -346,6 +364,9 @@ func (h *Host) resourceSource() hostResourceSource {
 	// TestP3SysMatchesWasmtime are refused at instantiate, naming get-terminal-stdin's terminal-input.
 	serve(types, wasiP3, "wasi:cli/terminal-input::terminal-input", terminalInputResource)
 	serve(types, wasiP3, "wasi:cli/terminal-output::terminal-output", terminalOutputResource)
+	// wasi:sockets' TCP socket (ADR 0123, hostsock.go). UDP's is not declared, so a guest's drop of one keeps
+	// dropNoop, as it did: nothing mints one.
+	serve(types, wasiP3, "wasi:sockets/types::tcp-socket", tcpSocketResource)
 
 	m := map[string]resourceMethod{}
 	// The stdio getters mint an own of their stream (def:lower_own), built at the call so a Stdout set
@@ -362,6 +383,14 @@ func (h *Host) resourceSource() hostResourceSource {
 	serve(m, wasiP2, "wasi:io/streams::[method]input-stream.blocking-read", method(inputStreamResource, h.blockingRead))
 
 	serve(m, wasiP2, "wasi:io/error::[method]error.to-debug-string", method(errorResource, h.errorToDebugString))
+
+	// tcp-socket's sync methods (ADR 0123): its constructor and the getters Rust std reaches. connect is async
+	// (asyncSource), and send and receive take streams (streamConsumers). The rest reach the stub at their call.
+	serve(m, wasiP3, "wasi:sockets/types::[static]tcp-socket.create", h.tcpCreate)
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-local-address", method(tcpSocketResource, h.tcpGetLocalAddress))
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-remote-address", method(tcpSocketResource, h.tcpGetRemoteAddress))
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-address-family", method(tcpSocketResource, h.tcpGetAddressFamily))
+	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-is-listening", method(tcpSocketResource, h.tcpGetIsListening))
 
 	mergeExtras(types, h.resourceTypeImpls, "resource type")
 	mergeExtras(m, h.resourceImpls, "resource import")
@@ -410,9 +439,16 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 	serve(m, wasiP2P3, "wasi:cli/environment::get-arguments", h.getArguments)
 	serve(m, wasiP2P3, "wasi:cli/environment::get-environment", h.emptyListOf(
 		canon.TupleType(canon.Type{Kind: canon.KindString}, canon.Type{Kind: canon.KindString})))
-	// 0.2 only: `get-directories`' 0.3 descriptor differs and is unverified, and no 0.3 fixture imports it.
 	// The element names the host's descriptor type; it named RT 0, which was `errorRT` too (ADR 0117).
-	serve(m, wasiP2, "wasi:filesystem/preopens::get-directories", h.emptyListOf(
+	//
+	// **Served for 0.3 too** (ADR 0123). It was 0.2 only, *"no 0.3 fixture imports it"*, until p3tcp: wasi-libc
+	// asks for the preopens when a program that has used a socket closes one, as wasmtime 49.0.3's trace of the
+	// same guest shows, and the 0.3 WIT's `list<tuple<descriptor, string>>` is the 0.2 shape. Nothing is granted,
+	// so the list is empty on both tracks, as wasmtime's is with no `--dir`.
+	//
+	// NEUTER: serve it for 0.2 only again, and TestP3TcpMatchesWasmtime's closed-port line is never printed:
+	// the call reaches the cross-track refusal.
+	serve(m, wasiP2P3, "wasi:filesystem/preopens::get-directories", h.emptyListOf(
 		canon.TupleType(canon.OwnType(descriptorResource.rt), canon.Type{Kind: canon.KindString})))
 
 	// WASI 0.3's synchronous system rows (#1232, ADR 0119; hostsys.go), 0.3 only: 0.2's random and clocks

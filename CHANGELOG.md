@@ -25,13 +25,55 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **WASI 0.3's TCP client is served behind a network grant: `ComponentConfig.InheritNetwork` and `burroughs run
+  --inherit-network`** ([#1235](https://github.com/scttfrdmn/burroughs/issues/1235), E7a, the first of its three
+  slices; ADR 0123). Rust std's `TcpStream::connect`, `write_all`, `shutdown` and `read_to_end` reach
+  `wasi:sockets/types@0.3`'s `tcp-socket` through wasi-libc, and a program using them was refused at instantiate.
+  - **The grant is public API, stamped by Scott on #1235:** one `ComponentConfig` field and one CLI flag, mirroring
+    wasmtime's `-S inherit-network`. **Its zero value denies the network:** `tcp-socket.create` answers
+    `access-denied`, which is what wasmtime 49.0.3 answers with no network flag, measured. A bare `LoadComponent`
+    stays denied, and `--inherit-network` on a wasip1 command or a core module is refused by name.
+  - **`tcp-socket` is a host resource over one shared connection,** reference-counted across the handle and the
+    streams derived from it, so a stream outlives a dropped handle and the connection closes with the last of
+    them, as `sockets.wit` states.
+  - **`connect` is an async method.** Its 13 flat parameters spill to a pointer, and any async lower past
+    `MAX_FLAT_ASYNC_PARAMS` now loads its parameter tuple flat (`canon.LoadFlat`), with the pin's alignment and
+    bounds traps. The dial runs on a goroutine and resolves through ADR 0101's path; a cancel resolves it
+    CANCELLED_BEFORE_RETURNED, and a pending dial keeps the callback-lift park bound from expiring.
+  - **`receive` is stdin's producer, generalised;** dropping its stream shuts the read half. **`send` drains through
+    a writer goroutine** over a bounded host buffer, so a guest write never blocks the instance on `conn.Write`;
+    the writer's drop is `shutdown(SHUT_WR)`. `get-local-address`, `get-remote-address`, `get-address-family` and
+    `get-is-listening` are served. An error maps to its `error-code` by errno, Windows' WSA numbers included, and
+    anything else to `other(none)`.
+  - **`Close` ends every socket goroutine and waits for it,** closing each connection rather than abandoning a
+    blocked `Read` as stdin's must. Two new goroutine sites, the dial and the send writer, are authorised in the
+    census.
+  - **A `stream.read` of a stream whose element is not one byte is refused at its call, by name, not at
+    instantiate:** wasi-libc links `listen`'s `stream<own<tcp-socket>>` read into every socket program, so ADR
+    0122's refusal at instantiate refused them all. E7b ([#1277](https://github.com/scttfrdmn/burroughs/issues/1277))
+    builds the read.
+  - **`wasi:filesystem/preopens`' `get-directories` is served for 0.3 too,** an empty list: wasi-libc asks for it
+    when a socket program closes a socket, as wasmtime's trace of the same guest shows.
+  - **Witnesses:** `TestP3TcpMatchesWasmtime` runs `p3tcp.wasm`, a dependency-free Rust `wasm32-wasip3` TCP client
+    built offline by `testdata/p3tcp/build.sh`, against an in-test echo peer; granted and denied, its stdout, empty
+    stderr and exit 0 equal wasmtime 49.0.3's readings, 10 of 10 runs there. `TestTcpConnectParkMatchesWasmtime`
+    reads connect below std. `TestCloseEndsASocketsGoroutines` (also under `-race`),
+    `TestACancelledConnectResolvesCancelledAndItsDialEnds`, `TestTheConnectionOutlivesTheHandleWhileAStreamHoldsIt`,
+    `TestAReceiveDropShutsTheReadHalf`, `TestTheNetworkIsDeniedAtCreateWithoutTheGrant`,
+    `TestAnAsyncLowerLoadsItsSpilledParameters`, `TestAPendingDialOutlivesTheParkBound`,
+    `TestLoadFlatIsLoadThenLowerFlat` and `TestInheritNetworkReachesBothConfiguredPaths`; at the CLI,
+    `TestRunAComponentWithInheritNetworkConnects` and `TestInheritNetworkIsAComponentsFlag`.
+  - **Neuters, run:** each fails its witness, and ADR 0123 lists them, with the two the plan forecast that did not
+    fail p3tcp.
+
 - **WASI 0.3's stdin is served: the host produces a stream, and a guest's `stream.read` is bound**
   ([#1234](https://github.com/scttfrdmn/burroughs/issues/1234), ADR 0122). `wasi:cli/stdin`'s `read-via-stream`
   returns `tuple<stream<u8>, future<result<_, error-code>>>`. Rust std reads it through wasi-libc, one async
   `stream.read` per `read()`, and both were refused at instantiate.
   - **`stream.read` is built in its async form,** following `End.copy`'s arms from the reader's side, the
-    zero-length ones included. Its sync form, and a read of a stream whose element is not one byte, are refused at
-    instantiate by name. It moves from refused to built in the canon built-in classification.
+    zero-length ones included. Its sync form is refused at instantiate by name, and so is a read of a stream whose
+    element is not one byte, at its call since ADR 0123 (above). It moves from refused to built in the canon
+    built-in classification.
   - **The host holds the writer.** Reads happen on demand: a `Read` of `Host.Stdin` starts only when a guest read is
     pending and nothing is buffered, sized at the guest's request, one at a time. So no byte the guest never asked
     for is consumed, and bytes a cancelled read leaves behind are served to the next read.

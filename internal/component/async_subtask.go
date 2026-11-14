@@ -198,6 +198,14 @@ type asyncHandles struct {
 	// producerStop is closed by that stop, so a delivery waiting for the run slot gives up rather than storing
 	// into a closed instance. Made with the table.
 	producerStop chan struct{}
+
+	// sockPending counts this instance's socket work whose result has not yet been stored (hostsock.go, ADR
+	// 0123): a dial, a send's Write in flight, a send's finish after its writer dropped. Each is a waker, as a
+	// producer's read is. Guarded by mu.
+	sockPending int
+	// hostIO is the condition a send's writer goroutine waits on for bytes, over mu, made by the first send.
+	// stopProducers broadcasts it, so a waiting writer sees the stop.
+	hostIO *sync.Cond
 }
 
 // requestCancelAll requests cancellation of every lift task this instance currently hosts, and is the

@@ -60,11 +60,12 @@ import (
 const producerReadCap = 1 << 16
 
 // streamProducer is one host-produced stream: its source, the host-held writer, the guest's two ends, and the
-// bytes read and not yet delivered. Every field but src and srcMu is guarded by h.mu.
+// bytes read and not yet delivered. Every field but src and srcMu is guarded by h.mu, and the three hooks are
+// set before the producer is shared and never written after.
 type streamProducer struct {
 	h      *asyncHandles
 	src    io.Reader   // nil: an immediate end of input, with no goroutine
-	srcMu  *sync.Mutex // the Host's lock over src, so two producers never Read it concurrently
+	srcMu  *sync.Mutex // the Host's lock over src, so two producers never Read it concurrently; nil for none
 	writer *writableStreamEnd
 	reader *readableStreamEnd
 	future *readableFutureEnd
@@ -75,6 +76,16 @@ type streamProducer struct {
 	reading bool
 	final   *canon.Value
 	done    bool
+
+	// The three hooks a socket's receive sets (ADR 0123). stdin sets none, and reads as it did under ADR 0122.
+	//
+	// mapErr is the future's value for a Read that failed other than at the end of input; nil is stdin's
+	// `err(io)`. track is asked before each goroutine starts, and returns the call that marks it ended, or false
+	// once the source's owner has stopped; nil starts it untracked. onDone runs once, under h.mu, when the
+	// producer is done: its stream finished, or its reader dropped (readerDropped).
+	mapErr func(error) canon.Value
+	track  func() (ended func(), ok bool)
+	onDone func(readerDropped bool)
 }
 
 // readViaStream is `wasi:cli/stdin@0.3::read-via-stream`'s bind (ADR 0122): sync-lowered with a return pointer,
@@ -184,8 +195,9 @@ func (p *streamProducer) copyIntoLocked(r *readableStreamEnd) (uint32, error) {
 // table. A read of 0 asks for the cap. The caller holds p.h.mu.
 //
 // It is the producer's one goroutine site, authorised by ADR 0122 in the census
-// (TestEveryEngineGoroutineIsAtASiteADecisionAuthorises). The goroutine ends when its Read returns and its
-// delivery is applied or discarded. A Read that never returns leaves it blocked, abandoned by Close.
+// (TestEveryEngineGoroutineIsAtASiteADecisionAuthorises), and by ADR 0123 for a socket's source. The goroutine
+// ends when its Read returns and its delivery is applied or discarded. A Read that never returns leaves it
+// blocked, abandoned by Close; a socket's Close closes its source, so its Read returns and it is waited out.
 func (p *streamProducer) startReadLocked(n uint32) {
 	if p.reading || p.done || p.h.producersStopped {
 		return
@@ -193,16 +205,34 @@ func (p *streamProducer) startReadLocked(n uint32) {
 	if n == 0 || n > producerReadCap {
 		n = producerReadCap
 	}
+	// A tracked source's goroutine is counted by its owner before it starts, so the owner's Close can wait it
+	// out (a socket's, ADR 0123). An owner that has stopped starts none: its Close has closed the source.
+	ended := func() {}
+	if p.track != nil {
+		e, ok := p.track()
+		if !ok {
+			return
+		}
+		ended = e
+	}
 	p.reading = true
 	p.h.producerReads++
-	go p.read(make([]byte, n))
+	buf := make([]byte, n)
+	go func() {
+		defer ended()
+		p.read(buf)
+	}()
 }
 
 // read is the goroutine's body: one Read, then its delivery.
 func (p *streamProducer) read(buf []byte) {
-	p.srcMu.Lock()
+	if p.srcMu != nil {
+		p.srcMu.Lock()
+	}
 	n, err := p.src.Read(buf)
-	p.srcMu.Unlock()
+	if p.srcMu != nil {
+		p.srcMu.Unlock()
+	}
 	p.deliver(buf[:n], err)
 }
 
@@ -257,9 +287,14 @@ func (p *streamProducer) apply(data []byte, rerr error) {
 	if rerr != nil && p.final == nil {
 		p.final = &p.ok
 		if !errors.Is(rerr, io.EOF) {
-			v, err := ioErrorResult()
-			if err != nil {
-				v = p.ok // unreachable: the constant label is declared
+			var v canon.Value
+			if p.mapErr != nil {
+				v = p.mapErr(rerr) // a socket's error-code (ADR 0123)
+			} else {
+				var err error
+				if v, err = ioErrorResult(); err != nil {
+					v = p.ok // unreachable: the constant label is declared
+				}
 			}
 			p.final = &v
 		}
@@ -297,6 +332,9 @@ func (p *streamProducer) finishLocked() {
 		p.future.completeErr = err // surfaced at the future's drop, as write-via-stream's is
 	}
 	dropWriterLocked(p.writer)
+	if p.onDone != nil {
+		p.onDone(false)
+	}
 }
 
 // readerDroppedLocked is the guest's drop of the readable end: the producer stops and the future resolves
@@ -311,6 +349,9 @@ func (p *streamProducer) readerDroppedLocked() {
 	p.future.payload = &p.ok
 	if err := p.future.completeLocked(copyCompleted); err != nil {
 		p.future.completeErr = err
+	}
+	if p.onDone != nil {
+		p.onDone(true)
 	}
 }
 
@@ -341,6 +382,11 @@ func (h *asyncHandles) stopProducers() {
 	h.mu.Lock()
 	first := !h.producersStopped
 	h.producersStopped = true
+	// A send's writer waiting for bytes sees the stop (ADR 0123). A condition, not a channel: no channel
+	// operation under an engine lock.
+	if h.hostIO != nil {
+		h.hostIO.Broadcast()
+	}
 	h.mu.Unlock()
 	if first {
 		close(h.producerStop)

@@ -154,7 +154,30 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"not where the bytes land or what orders them. `walker.close` stops delivery and NEVER waits " +
 				"for it: a goroutine blocked in Read is abandoned and what it reads is discarded " +
 				"(`TestCloseAbandonsAProducerBlockedInRead`, under -race). It ends when its Read returns " +
-				"and its delivery is applied or discarded.",
+				"and its delivery is applied or discarded. ADR 0123 extends it to a socket's receive: the " +
+				"same site, counted in the instance's socket registry before it starts, and WAITED OUT by " +
+				"Close, which closes the connection so the Read returns (`TestCloseEndsASocketsGoroutines`).",
+		},
+		{"internal/component/hostsock.go", "(*Host).tcpConnect"}: {
+			count: 1,
+			by: "ADR 0123 — a wasi:sockets connect's dial, one goroutine per connect, counted in the " +
+				"instance's socket registry before it starts. It runs NO guest code. Its result reaches the " +
+				"guest through the async lower's `onResolve`, ADR 0101's discipline (ADR 0095's precedent), " +
+				"and one claim decides who resolves: the dial's return, the guest's cancel, or Close, E5's " +
+				"pattern. It ends when DialContext returns, which a cancel or Close makes prompt by " +
+				"cancelling its context, and Close waits it out " +
+				"(`TestACancelledConnectResolvesCancelledAndItsDialEnds`, under -race).",
+		},
+		{"internal/component/hostsock.go", "(*Host).tcpSend"}: {
+			count: 1,
+			by: "ADR 0123 — a wasi:sockets send's writer, one goroutine per send, counted in the " +
+				"instance's socket registry before it starts. It runs NO guest code: it waits for bytes the " +
+				"guest's writes copied into a bounded host buffer, on a condition over `asyncHandles.mu`, " +
+				"writes them to the connection with no lock held, and delivers what the Write freed under " +
+				"ADR 0101's discipline, which is where a parked guest write's copy runs, under the run " +
+				"slot. It ends when the stream is finished, a Write fails, or Close stops it; Close closes " +
+				"the connection so a Write in flight returns, and waits it out " +
+				"(`TestCloseEndsASocketsGoroutines`, under -race).",
 		},
 	}
 

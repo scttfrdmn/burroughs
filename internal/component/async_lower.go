@@ -5,6 +5,7 @@ package component
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -42,9 +43,81 @@ func asyncLowerFunc(impl asyncLowerImpl, hasResult bool, h *asyncHandles) interp
 	return asyncLowerFuncFor(func(*subtask) asyncLowerImpl { return impl }, hasResult, h)
 }
 
+// maxFlatAsyncParams is def:MAX_FLAT_ASYNC_PARAMS: past it, an async lower's parameters cross as one pointer
+// to their tuple in the caller's memory (def:flatten_functype).
+const maxFlatAsyncParams = 4
+
+// asyncParamSpill is the parameter tuple's type when an async lower's parameters flatten past
+// maxFlatAsyncParams, and nil otherwise (ADR 0123). A signature whose width cannot be counted keeps the
+// passthrough it had, paramSpill's rule; one that spills and whose tuple the codec cannot type is an error.
+func (w *walker) asyncParamSpill(sig *FuncType) (*canon.Type, error) {
+	if sig == nil {
+		return nil, nil
+	}
+	total := 0
+	for _, p := range sig.Params {
+		n, ok := flatWords(p.Type)
+		if !ok {
+			return nil, nil
+		}
+		total += n
+	}
+	if total <= maxFlatAsyncParams {
+		return nil, nil
+	}
+	elems := make([]canon.Type, len(sig.Params))
+	for i, p := range sig.Params {
+		t, err := canonTypeIn(p.Type, w.hostRT)
+		if err != nil {
+			return nil, fmt.Errorf("%w: an async lower's parameter %q, past MAX_FLAT_ASYNC_PARAMS: %w", ErrUnsupportedForm, p.Name, err)
+		}
+		elems[i] = t
+	}
+	tt := canon.TupleType(elems...)
+	return &tt, nil
+}
+
+// asyncLowerFuncSpilled is asyncLowerFunc for a lower whose parameters may have spilled: with spill set, the
+// one parameter word is a pointer to a tuple of that type, loaded flat before the impl starts (ADR 0123).
+func asyncLowerFuncSpilled(impl asyncLowerImpl, hasResult bool, spill *canon.Type, h *asyncHandles) interp.CanonFunc {
+	return asyncLowerFuncWith(func(*subtask) asyncLowerImpl { return impl }, hasResult, spill, h)
+}
+
 // asyncLowerFuncFor is asyncLowerFunc with the impl made per call, from the call's subtask, so that the
 // cross-component adapter can attach its cancellation hand-back (`subtask.cancelTransfer`, #726).
 func asyncLowerFuncFor(implFor func(*subtask) asyncLowerImpl, hasResult bool, h *asyncHandles) interp.CanonFunc {
+	return asyncLowerFuncWith(implFor, hasResult, nil, h)
+}
+
+// loadSpilledParams is def:lift_flat_values' spilled arm for a host callee that reads flat words (ADR 0123):
+// the one parameter word is a pointer to the tuple, which must be aligned and lie in memory, and the tuple is
+// loaded as the flat words it would have crossed as unspilled (canon.LoadFlat). A refusal is the guest's trap.
+func loadSpilledParams(c *interp.CanonCaller, spill canon.Type, params []interp.Value) ([]interp.Value, error) {
+	if len(params) != 1 {
+		return nil, fmt.Errorf("component: async lower: a spilled parameter list crosses as 1 pointer, got %d core args", len(params))
+	}
+	bits, types, err := canon.LoadFlat(guestHeap{c}, spill, int(uint32(params[0].Bits)))
+	if err != nil {
+		return nil, &interp.Trap{Reason: fmt.Sprintf("async lower: loading its spilled parameters: %v", err)}
+	}
+	out := make([]interp.Value, len(bits))
+	for i, b := range bits {
+		switch types[i] {
+		case "i64":
+			out[i] = interp.I64(int64(b))
+		case "f32":
+			out[i] = interp.F32(math.Float32frombits(uint32(b)))
+		case "f64":
+			out[i] = interp.F64(math.Float64frombits(b))
+		default:
+			out[i] = interp.I32(int32(uint32(b)))
+		}
+	}
+	return out, nil
+}
+
+// asyncLowerFuncWith is the async lower itself, with an optional spilled parameter tuple.
+func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, spill *canon.Type, h *asyncHandles) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		// A result-returning async lower's flat args end in a retptr; an empty-result one has none (the
 		// fixture's empty case: flat_params []). `hasResult` gates the split.
@@ -56,6 +129,18 @@ func asyncLowerFuncFor(implFor func(*subtask) asyncLowerImpl, hasResult bool, h 
 			}
 			params = args[:len(args)-1]
 			retptr = uint64(uint32(args[len(args)-1].Bits))
+		}
+		// **Spilled parameters are loaded before the impl starts** (ADR 0123). The pin loads them in on_start
+		// (def:lift_flat_values); a host callee calls onStart first, so loading here traps where a guest could
+		// see it, and onStart stays the error-free call every impl makes.
+		//
+		// NEUTER: skip the load, and TestAnAsyncLowerLoadsItsSpilledParameters' impl is handed the pointer.
+		if spill != nil {
+			loaded, lerr := loadSpilledParams(c, *spill, params)
+			if lerr != nil {
+				return nil, lerr
+			}
+			params = loaded
 		}
 
 		st := &subtask{state: subtaskStarting}

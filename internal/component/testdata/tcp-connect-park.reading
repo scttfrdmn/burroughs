@@ -1,0 +1,14 @@
+# Committed wasmtime readings for tcp-connect-park.wasm: a wasi:sockets connect waited for by a callback-lifted task (#1235 E7a, ADR 0123).
+# Built:       wasm-tools parse tcp-connect-park.wat -o tcp-connect-park.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -S inherit-network -W component-model-async=y -S p3=y --invoke 'run(<port>)' tcp-connect-park.wasm
+# Peer:        p3tcp/echo on 127.0.0.1: its listening port, and the port of a listener it bound and closed.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical.
+#
+# Each line is `<row>: <wasmtime's reading>`, and the test reads them by row.
+listening: 66048
+closed: 66049
+#
+# Meaning: SUBTASK (1) << 16 | the subtask's state << 8 | the result's discriminant.
+#   listening  0x10200: RETURNED (2), ok (0).
+#   closed     0x10201: RETURNED (2), error (1): connection-refused, whose case the guest does not read.
