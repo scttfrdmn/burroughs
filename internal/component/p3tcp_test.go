@@ -93,11 +93,14 @@ const smallSocketBuffer = 4096
 // smallSendBufferDial is the dial seam for a witness that needs a guest's send to block: the connection's send
 // buffer is shrunk as small as the kernel allows.
 //
-// **Why it exists:** the send row of TestCloseEndsASocketsGoroutines writes 4 MiB to a peer that never reads, and
-// assumed that was more than the kernel's buffers hold. That held locally, where darwin parked the guest at about
-// 750 KB. It failed on every CI runner (PR #1280's first run): Linux, darwin and Windows there autotune their
-// buffers past 4 MiB, so the Write never blocked and the guest never parked. A witness's premise must not rest on
-// a buffer size the runner chooses. With both ends shrunk, the premise is the guest's volume against a few KiB.
+// **Why it exists:** the send row of TestCloseEndsASocketsGoroutines needs the guest's write to park, which needs
+// the kernel's buffers full. It wrote 4 MiB on the premise that this was more than the buffers hold, a size the
+// runner chooses. PR #1280's first CI run failed the row on all four runners. The cause **measured** is the
+// volume's other cost: the guest builds its payload in an interpreted loop before its first write, and under
+// `-race`, with the whole package in parallel, building 4 MiB took most of the 10 s hang guard (reproduced in
+// `make ci` locally, where the row alone passes). Buffers autotuned past 4 MiB on CI is plausible and not measured.
+// Shrinking both ends' buffers retires both: the premise is now the guest's volume against a few KiB of kernel
+// buffer and the host's 64 KiB, so a 512 KiB volume is ample and an eighth of the build.
 func smallSendBufferDial(ctx context.Context, network, address string) (net.Conn, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, network, address)
@@ -283,7 +286,7 @@ func awaitPlace(t *testing.T, h *asyncHandles, what string, onFail func(), pred 
 //   - **parked in receive**: the peer reads the 100 KiB to the guest's shutdown and then holds the connection open,
 //     so read_to_end waits with the producer's Read of the connection in flight;
 //   - **parked in send**: the peer never reads, and both ends' socket buffers are shrunk to the kernel's minimum
-//     (smallSendBufferDial), so 4 MiB is far more than they hold and a guest write parks with the writer
+//     (smallSendBufferDial), so 512 KiB is far more than they hold and a guest write parks with the writer
 //     goroutine's Write blocked, whatever the runner's kernel would otherwise autotune.
 //
 // Neutered, each run: walker.close without stopAllSockets, and the receive row's Close hangs, its Read never
@@ -310,7 +313,7 @@ func TestCloseEndsASocketsGoroutines(t *testing.T) {
 				}
 			}
 		}},
-		{"parked in send", peerSilent, "4194304", func(_ *tcpPeer, h *asyncHandles) (string, func() bool) {
+		{"parked in send", peerSilent, "524288", func(_ *tcpPeer, h *asyncHandles) (string, func() bool) {
 			return "a guest write parked on the send stream", func() bool {
 				for _, e := range h.entries {
 					if w, ok := e.(*writableStreamEnd); ok && w.hasWrite && !w.resolved && w.conn != nil && w.conn.hostSink != nil {
