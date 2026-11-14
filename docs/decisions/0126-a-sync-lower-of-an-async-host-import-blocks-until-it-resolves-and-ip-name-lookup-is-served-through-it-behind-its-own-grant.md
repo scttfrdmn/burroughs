@@ -84,7 +84,7 @@ For a name that is an IP address: parse it on the host and answer inline, or han
 
 ### Divergences from wasmtime 49.0.3, recorded
 
-- **A non-ASCII name is `invalid-argument`.** The WIT converts it with IDNA, which wasmtime does through the `url` crate. Go's standard library has no IDNA, and the engine's `go.mod` stays dependency-free, so the name is refused before any lookup rather than sent unconverted. Unmeasured on the oracle, because the converted name would need a DNS server.
+- **A non-ASCII name is `invalid-argument`.** The WIT converts it with IDNA, which wasmtime does through the `url` crate. Go's standard library has no IDNA, and the engine's `go.mod` stays dependency-free, so the name is refused before any lookup rather than sent unconverted. Unmeasured on the oracle, because the converted name would need a DNS server. Filed as #1287, together with the percent-decoding, the sync-lowered stream or future result, and the unmeasured resolver-error codes.
 - **A percent sign is `invalid-argument`.** The URL standard's host parser percent-decodes before it validates; this host does not decode. Unmeasured.
 - **Error codes from a real resolver are unmeasured**: no reading may need a DNS server. The mapping follows the WIT's POSIX equivalents.
 
