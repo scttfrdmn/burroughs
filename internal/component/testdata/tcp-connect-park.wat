@@ -48,7 +48,7 @@
     (import "" "wsnew" (func $wsnew (result i32)))
     (import "" "wsjoin" (func $wsjoin (param i32 i32)))
     (import "" "ret" (func $ret (param i32)))
-    (func (export "run") (param $port i32) (result i32) (local $set i32)
+    (func (export "run") (param $port i32) (result i32) (local $set i32) (local $st i32)
       (call $create (i32.const 0) (i32.const 0)) ;; result<own, error-code> at 0: the handle at 4
       ;; tuple<borrow, ip-socket-address> at 64: the borrow at 64, the variant at 68 (ipv4), its record at 72
       (i32.store (i32.const 64) (i32.load (i32.const 4)))
@@ -58,8 +58,17 @@
       (i32.store8 (i32.const 75) (i32.const 0))
       (i32.store8 (i32.const 76) (i32.const 0))
       (i32.store8 (i32.const 77) (i32.const 1))
+      (local.set $st (call $connect (i32.const 64) (i32.const 128)))
+      ;; A connect that resolved before the lower returned comes back RETURNED (2) with no subtask to wait on
+      ;; (def:canon_lower:"return [Subtask.State.RETURNED]"). Which path a run takes is a race between the dial and
+      ;; the lower's return: a loopback dial on Linux can win it. Both are the pin's, so this reports the inline
+      ;; path as the event path reports it, SUBTASK (1) and RETURNED (2), and the reading is the same either way.
+      (if (i32.eq (i32.and (local.get $st) (i32.const 0xf)) (i32.const 2))
+        (then
+          (call $ret (i32.or (i32.const 0x10200) (i32.load8_u (i32.const 128))))
+          (return (i32.const 0)))) ;; EXIT
       (local.set $set (call $wsnew))
-      (call $wsjoin (i32.shr_u (call $connect (i32.const 64) (i32.const 128)) (i32.const 4)) (local.get $set))
+      (call $wsjoin (i32.shr_u (local.get $st) (i32.const 4)) (local.get $set))
       (i32.or (i32.const 2) (i32.shl (local.get $set) (i32.const 4)))) ;; WAIT on the set
     (func (export "cb") (param $code i32) (param i32) (param $state i32) (result i32)
       (call $ret (i32.or (i32.or (i32.shl (local.get $code) (i32.const 16)) (i32.shl (local.get $state) (i32.const 8)))

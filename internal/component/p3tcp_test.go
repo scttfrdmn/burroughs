@@ -737,7 +737,10 @@ func TestTcpConnectParkMatchesWasmtime(t *testing.T) {
 	for _, c := range []struct {
 		row  string
 		port int
-	}{{"listening", peer.port}, {"closed", peer.closed}} {
+	}{{"listening", peer.port}, {"closed", peer.closed}, {"port-zero", 0}} {
+		// port-zero resolves before connect's lower returns, so it is the fixture's inline-RETURNED arm, every run.
+		// NEUTER: the fixture as first committed (join the packed result's index unconditionally), and this row
+		// traps "waitable.join: handle 0 is not a waitable", as PR #1280's second CI run did by chance on Linux.
 		h := NewHost(io.Discard, io.Discard, nil)
 		h.InheritNetwork = true
 		if got := runConnectPark(t, h, c.port); got != tcpConnectParkReading(t, c.row) {
