@@ -74,6 +74,7 @@ For floats: the pin's deterministic outcome (canonical NaN) or wasmtime's preser
 - The pin's sync `stream.read` and `stream.write` (#1272), `stream.forward` and `future.forward`.
 - `stream.cancel-write` on a write whose copy has completed but whose event is untaken: the pin returns the event (def:cancel_copy, `has_pending_event`), this engine traps "no write in flight". Found, not touched.
 - A stream end's kind check (a handle that is not a readable or writable stream end) answers a Go error where the pin traps (def:copy:"trap_if(not isinstance(end, EndT))"). Found, not touched.
+- The future end's type, this cancel-write case and the kind check are filed together as #1282. A host consumer's `data: stream<T>` parameter, refused at the copy here rather than at instantiate, is recorded on #1279. Whether a cross-component call passes a handle as a raw index into the wrong instance's table, which was suspected while this slice was built and not confirmed, is #1281.
 
 ## Consequences
 
