@@ -85,7 +85,7 @@ None measured on the witness's paths. Unmeasured: an error mapped to `other(none
 - `bind`, `listen` and the accept stream, typed stream elements and the lock order they need (E7b, #1277).
 - `ip-name-lookup` and `AllowNameLookup` (E7c, #1278).
 - UDP, and the keep-alive, hop-limit and buffer-size options.
-- A check that an async import's result type agrees with the host's, as `checkConsumerPayload` checks a stream import's future: connect's `result<_, error-code>` is lowered at the host's declaration, which is the guest's when both come from one WIT, and nothing compares them.
+- A check that an async import's result type agrees with the host's, as `checkConsumerPayload` checks a stream import's future: connect's `result<_, error-code>` is lowered at the host's declaration, which is the guest's when both come from one WIT, and nothing compares them. Filed as #1279.
 
 ## Consequences
 
