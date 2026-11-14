@@ -26,7 +26,7 @@ wasmtime 49.0.3 (`.oracle/wasmtime-49.0.3/wasmtime`, never the 50.0.1 on PATH), 
   - `bind` twice: `invalid-state`; a bind to 224.0.0.1 `invalid-argument`; `get-local-address` on an unbound socket `invalid-state`;
   - `connect` from bound ok, **keeping the bound port**; `connect` on a listener `invalid-state`; `get-remote-address` on a listener `invalid-state`;
   - one `stream.read` of the listen stream after a client's connect: COMPLETED with progress 1, the accepted handle not listening and its remote address ok;
-  - **a second socket's connect to a bound port before any listen: `timeout`, after about 7.8 s.** That is darwin's answer to a SYN at a socket that is bound and not listening (Linux refuses at once). It is the one row the choice below diverges on.
+  - **a second socket's connect to a bound port before any listen: `timeout`, after about 7.8 s.** That is darwin's answer to a SYN at a socket that is bound and not listening; other kernels were not measured. It is the one row the choice below diverges on.
 
 ## Options
 
@@ -50,7 +50,7 @@ For where an accepted connection is registered: at its delivery (under the run s
    - **Accept happens on demand**: one `Accept` in flight, started by `startReadLocked` when a guest read is pending and nothing is queued, counted in `producerReads` so it is a park waker, and in `hostNet` so `Close` waits it out. It is the census site ADR 0122 authorised, with ADR 0123's extension; this ADR extends it again.
    - **Each accepted connection is adopted into `hostNet` at once**, on the accept goroutine, and built into a connected `tcp-socket` with its local and remote addresses and the listener's family. It is then queued under ADR 0101's discipline (the run slot, then `asyncHandles.mu`), as a Read's bytes are.
    - **Delivery is the copy's `own` arm**: for an element descriptor whose `own` is set, `copyIntoLocked` mints each queued socket as a fresh own in the reading instance's table (def:lower_own, `hostResources.mint`) and stores its i32 at `dstPtr + 4*i`, which is def:WritableGuestBuffer.write's store of an own. `min(read_n, queued)` are delivered and the rest stay queued.
-   - **A transient Accept error is skipped** (`ECONNABORTED`, `ECONNRESET`, `EHOSTUNREACH`/`ENETUNREACH`, `EPROTO`, `ENOPROTOOPT`, `ENETDOWN`, `EHOSTDOWN`, `EOPNOTSUPP`, `EINTR`, the Linux manual's list the WIT quotes), and the pending read accepts again. Anything else is fatal: the stream finishes, its writer dropping, so the reader sees DROPPED.
+   - **A transient Accept error is skipped**, and the pending read accepts again: the Linux manual's list the WIT quotes (`ENETDOWN`, `EPROTO`, `ENOPROTOOPT`, `EHOSTDOWN`, `EHOSTUNREACH`, `EOPNOTSUPP`, `ENETUNREACH`; not `ENONET`, which only Linux defines), with `ECONNABORTED`, `ECONNRESET` and `EINTR`. `ECONNABORTED`, `ECONNRESET`, `EHOSTUNREACH` and `ENETUNREACH` are read through ADR 0123's table, so Windows' WSA numbers for them count too. Anything else is fatal: the stream finishes, its writer dropping, so the reader sees DROPPED.
    - **The nil-future arms**: `finishLocked` and `readerDroppedLocked` resolve a future only when there is one.
    - **The reader's drop** releases every queued socket (its connection reference) and the stream's reference to the listener; so does the stream's finish.
 6. **`hostNet` holds listeners**, reference-counted by `hostNet.mu` as a connection is: the handle holds one from bind, the listen stream one from listen, and the last release closes it. `stop` closes every listener, which ends an `Accept` in flight, so `Close` waits the accept goroutine out with the dials, readers and writers. A connection accepted after the stop is closed by its adoption, and one accepted before it is closed by the stop with every other connection, delivered or not.
@@ -59,10 +59,10 @@ For where an accepted connection is registered: at its delivery (under the run s
 
 ### Divergences from wasmtime 49.0.3, recorded
 
-- **A connect to a bound port before `listen`** completes into the backlog (ok) where wasmtime on darwin times out after about 7.8 s and on Linux is refused. It is the eager listen's cost, chosen for an exact `get-local-address` at bind, which std and wasi-libc read and no witnessed program depends on the reverse of. `tcp-bind-listen`'s `connect-before-listen` row asserts Burroughs' value and names the divergence.
-- **The backlog is ignored**, where wasmtime applies it. The WIT permits it; nothing observable differs below the backlog's size.
+- **A connect to a bound port before `listen`** completes into the backlog (ok) where wasmtime 49.0.3 on darwin times out after about 7.8 s. It is the eager listen's cost, paid for an exact `get-local-address` at bind, which is wasmtime's reading; std's `TcpListener::bind` reads the address only after `listen`, so std cannot tell the two apart. `tcp-bind-listen`'s `connect-before-listen` row asserts Burroughs' value and names the divergence.
+- **The backlog is recorded and not applied.** The WIT permits it; whether wasmtime applies it was not measured.
 
-Unmeasured: IPv6 listeners; a fatal accept error (only a closed listener is one this engine can produce); `get-local-address` while connecting (still `invalid-state`, ADR 0123's recorded unmeasured case).
+Unmeasured: IPv6 listeners; a fatal accept error other than a closed listener; `get-local-address` while connecting (still `invalid-state`, ADR 0123's recorded unmeasured case); other kernels' answer to the connect-before-listen row.
 
 ### Out of scope, recorded
 
@@ -72,7 +72,30 @@ Unmeasured: IPv6 listeners; a fatal accept error (only a closed listener is one 
 
 ## Consequences
 
-To be completed in the implementing commit, with each witness and each neuter as run.
+- **Witnesses** (`p3tcpserve_test.go`), every one also run 12 times under `-race`:
+  - `TestP3TcpServeMatchesWasmtime`, in both gate states: `testdata/p3tcpserve/p3tcpserve.wasm`, a dependency-free, single-threaded Rust `wasm32-wasip3` std program (nightly 1.100.0, built offline by `p3tcpserve/build.sh`, the same sha256 on a second build), binds 127.0.0.1:0, connects to itself, accepts and echoes 1 KiB each way. Granted, its stdout, empty stderr and exit 0 equal `p3tcpserve.reading`; denied, `p3tcpserve-denied.reading`. It prints properties, never a port. After `Close` no socket goroutine remains.
+  - `TestTcpBindListenMatchesWasmtime`: `tcp-bind-listen.wasm`'s twelve measured rows against `tcp-bind-listen.reading`, eleven equal to wasmtime's and `connect-before-listen` asserting Burroughs' value, the recorded divergence.
+  - `TestCloseEndsAGuestParkedInAccept`: the fixture's `accept-park` row parks in `waitable-set.wait` with the Accept in flight; `Close` returns, the run ends, and no socket goroutine remains.
+  - `TestAnAcceptedConnectionNeverDeliveredIsClosedAtClose`: a read cancelled while its Accept is in flight leaves the accepted connection queued; the registry's stop closes it, and the client's read returns at once.
+  - `TestTheListenerOutlivesTheHandleWhileItsStreamHoldsIt`: the handle dropped, the stream still accepts the client that connected before the drop, minted as a connected socket whose remote address is the client's.
+  - `TestATransientAcceptErrorDoesNotEndTheStream`: an Accept failing with `ECONNABORTED` is skipped and the read completes with the next connection; a fatal error, the control, drops the stream.
+  - `TestListenMustBeDeclaredAsTheHostDeclaresIt`: `tcp-listen-mistyped.wasm`, whose listen returns `stream<u32>`, is refused at instantiate, as wasmtime 49.0.3 refuses it at link.
+- **Neuters, run**, each named at its site:
+  - the own arm storing each socket's queue position rather than its minted index: p3tcpserve traps at the accepted socket's `receive` and `accept-one` at its `get-is-listening`, both *"handle index 0 is not live"*.
+  - the accepted connection built unadopted: `TestAnAcceptedConnectionNeverDeliveredIsClosedAtClose`'s client waits out its 2 s deadline. **p3tcpserve passes under it**, which the plan forecast as a leak at `Close`: every connection it accepts is delivered and dropped by the guest, and the drop's release closes it whether or not the registry holds it.
+  - the local address answered for a connected socket only, as E7a did: p3tcpserve prints `listener address: NotConnected`, and `local-between`, `listen-unbound`, `connect-bound` and `connect-before-listen` read `invalid-state`; `accept-one` hangs to the guard, its client connecting to the port `get-local-address` did not report, so nobody reaches the listener.
+  - `readerDroppedLocked` resolving the future unconditionally: p3tcpserve panics on the nil future at the listener's drop. `finishLocked` the same: the fatal row of the transient test panics.
+  - `hostNet.stop` skipping the listeners' close: `TestCloseEndsAGuestParkedInAccept`'s `Close` hangs to the guard.
+  - `releaseListener` closing at every release: the read after the handle's drop is DROPPED.
+  - `acceptTransient` returning false: the transient row's read is DROPPED.
+  - `checkListenSignature` returning nil: the mistyped guest instantiates.
+  - bind's state check dropped: `bind-refusals` reads its second bind ok (0x85820000).
+- **Tests changed** (pre-existing):
+  - `socketGoroutines` (`p3tcp_test.go`), the helper every socket witness's `requireNoSocketGoroutines` reads, also lists a goroutine in `(*streamProducer).acceptOne`, so a leaked Accept is caught.
+  - `internal/testenv/observer_test.go`: the producer's census entry names the listener's source under this ADR; the count stays 1, since the Accept runs on the same `go` statement.
+  - Every other suite passes unchanged, with and without `-race`: p3tcp, p3cat, p3std, p3sleep, p3sys, p3async-hello, p3hello and p3echo, and the typed-stream, stream, future, cancel and producer suites. No std guest's reading changed.
+- **What a guest sees.** A WASI 0.3 std guest's `TcpListener::bind`, `local_addr`, `accept` and the accepted stream's reads and writes work when the embedder grants the network, and `bind` fails `PermissionDenied` when it does not.
+- **Public surface:** none added. `Host.listen` is an unexported test seam beside `Host.dial`.
 
 ## Rollback
 

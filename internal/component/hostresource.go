@@ -456,6 +456,9 @@ func eachHandle(vt ValType, f func(ValType), depth int) {
 // NEUTER THIS (return nil), and TestWriteViaStreamPayloadMustAgreeWithTheHosts instantiates a guest whose
 // `error-code` has other labels, which would read the host's discriminants as its own.
 func (w *walker) checkConsumerPayload(lowerName string, sig *FuncType, sc *streamConsumer) error {
+	if sig != nil && sc.accepts {
+		return w.checkListenSignature(lowerName, sig)
+	}
 	if sig == nil || sc.payload == nil {
 		return nil
 	}
@@ -491,6 +494,31 @@ func (w *walker) checkConsumerPayload(lowerName string, sig *FuncType, sc *strea
 	if !canon.TypeEqual(got, want) {
 		return fmt.Errorf("%w: import %s returns future<%s> in the guest's signature and future<%s> in the "+
 			"host's declaration, which the host lowers its completion at (ADR 0118)", ErrLinkRefused, lowerName, got, want)
+	}
+	return nil
+}
+
+// checkListenSignature is `tcp-socket.listen`'s own rule (ADR 0125): the guest must declare `result<stream<own<
+// tcp-socket>>, error-code>`, the own naming the host's tcp-socket and the error the host's error-code, since the
+// host lowers the result at that layout and mints each element as an own of that type. checkConsumerPayload's
+// producer arm, which wants `tuple<stream<u8>, future<P>>`, does not describe it.
+//
+// NEUTER: return nil, and TestListenMustBeDeclaredAsTheHostDeclaresIt's guest whose listen returns a stream<u32>
+// instantiates.
+func (w *walker) checkListenSignature(lowerName string, sig *FuncType) error {
+	ec := sockErrorCodeType()
+	refuse := func() error {
+		return fmt.Errorf("%w: import %s must return result<stream<own<tcp-socket>>, %s>, the host's declaration "+
+			"(ADR 0125)", ErrLinkRefused, lowerName, ec)
+	}
+	r := sig.Result
+	if r == nil || r.Kind != VResult || r.Ok == nil || r.Err == nil || r.Ok.Kind != VStream || r.Ok.Elem == nil ||
+		r.Ok.Elem.Kind != VOwn || w.hostResourceNamed(r.Ok.Elem.Resource) != tcpSocketResource {
+		return refuse()
+	}
+	got, err := canonTypeIn(*r.Err, w.hostRT)
+	if err != nil || !canon.TypeEqual(got, ec) {
+		return refuse()
 	}
 	return nil
 }

@@ -1,0 +1,49 @@
+# Committed wasmtime readings for tcp-bind-listen.wasm: wasi:sockets' bind, listen and set-listen-backlog-size at the ABI (#1277 E7b-2, ADR 0125).
+# Built:       wasm-tools parse tcp-bind-listen.wat -o tcp-bind-listen.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -S inherit-network -W component-model-async=y -S p3=y --invoke 'run(<row>, <port>)' tcp-bind-listen.wasm
+# Peer:        p3tcp/echo on 127.0.0.1, its listening port, for the rows that connect.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. Taken 2026-11-14.
+#
+# Each line is `<row>: <wasmtime's reading>`, and the test reads them by row.
+local-between: 16842752
+backlog-zero: 33280
+listen-twice: 25493504
+listen-connected: 8750336
+listen-unbound: 16842752
+bind-refusals: 2239923456
+connect-bound: 16777216
+listening-getters: 2189754368
+backlog-connected: 33280
+connect-listening: 25493504
+connect-before-listen: 8650752
+accept-one: 4096
+#
+# Meaning: four bytes, byte 0 the low one. An operation's byte is 0 for ok and 0x80 | its error-code case for an
+# error (0x82 invalid-argument, 0x85 invalid-state); a property's is 0 or 1.
+#   local-between      0x01010000: bind ok; get-local-address between bind and listen ok; its port nonzero; its
+#                      address 127.0.0.1.
+#   backlog-zero       0x00008200: bind ok; set-listen-backlog-size(0) invalid-argument; (1) ok; not listening.
+#   listen-twice       0x01850000: bind ok; listen ok; listen again invalid-state; listening.
+#   listen-connected   0x00858500: connect ok; listen invalid-state; set-listen-backlog-size(1) invalid-state; not
+#                      listening.
+#   listen-unbound     0x01010000: listen with no bind ok (the implicit bind); get-local-address ok; its port
+#                      nonzero; listening.
+#   bind-refusals      0x85828500: bind ok; bind again invalid-state; a bind to 224.0.0.1 invalid-argument;
+#                      get-local-address on an unbound socket invalid-state.
+#   connect-bound      0x01000000: bind ok; connect from bound ok; get-local-address ok; its port the bound one.
+#   listening-getters  0x82850000: bind ok; listen ok; get-remote-address on a listener invalid-state;
+#                      set-listen-backlog-size(0) on a listener invalid-argument.
+#   backlog-connected  0x00008200: connect ok; set-listen-backlog-size(0) on a connected socket invalid-argument,
+#                      so the zero is refused before the state.
+#   connect-listening  0x01850000: bind ok; listen ok; connect on a listener invalid-state; still listening.
+#   connect-before-listen  0x00840000: bind ok; get-local-address ok; a second socket's connect to the bound port
+#                      before any listen `timeout` (case 4), after about 7.8 s, darwin's answer to a SYN at a socket
+#                      that is bound and not listening; listen ok. **Burroughs diverges here by decision** (ADR 0125):
+#                      its bind listens eagerly, so the kernel completes that connect into the backlog and it is ok.
+#                      The test asserts Burroughs' own value for this row, 0x00000000, and names the divergence.
+#   accept-one         0x00001000: a second socket's connect to the listener ok; one stream.read of the listen
+#                      stream COMPLETED with progress 1 (0x10); the accepted handle not listening; its
+#                      get-remote-address ok.
+# Row 12 (accept-park) is the harness's: it parks in waitable-set.wait for a connect nobody makes, so wasmtime's run
+# never returns (still parked after 3 s, measured) and no reading of it is taken.

@@ -25,6 +25,26 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A WASI 0.3 guest is a TCP server: `wasi:sockets`' `bind`, `listen` and `set-listen-backlog-size` are served, with
+  the stream of accepted sockets Rust std's `TcpListener` reads** ([#1277](https://github.com/scttfrdmn/burroughs/issues/1277),
+  E7b-2, the second of its two slices; ADR 0125). They reached the stub, and `get-is-listening` was always false.
+  No new public surface: `ComponentConfig.InheritNetwork` and `--inherit-network` already grant the network, and
+  bind and listen are inside that grant.
+  - **`bind` listens at once,** so `get-local-address` between bind and listen reports the bound port, as wasmtime
+    49.0.3 does, and `address-in-use` is bind's. `listen` binds implicitly when unbound, and returns a
+    `stream<own<tcp-socket>>`.
+  - **The stream accepts on demand,** one `Accept` at a time while a guest read is pending, and each accepted
+    connection becomes a connected `tcp-socket` minted in the guest's table when the read is served. A transient
+    accept error is skipped, as the WIT asks; the stream stays open.
+  - **The handle and the stream share the listener,** which closes when both have gone, and `Close` closes it,
+    ends the `Accept` in flight, closes every connection accepted and not yet delivered, and waits the accept out.
+  - **`connect` works from a bound socket,** keeping the bound port, and `set-listen-backlog-size` follows the WIT's
+    rules and records the value without applying it, which the WIT permits.
+  - **One divergence is recorded:** a connect to a bound port before `listen` completes, because the bind already
+    listens, where wasmtime 49.0.3 on darwin times out.
+  - Witnessed by `p3tcpserve`, a dependency-free Rust std guest that listens, connects to itself, accepts and
+    echoes, against wasmtime 49.0.3's readings granted and denied, and by `tcp-bind-listen.wasm`'s rows.
+
 - **A stream carries its element type, and a guest's copy through its own stream strides by the element**
   ([#1277](https://github.com/scttfrdmn/burroughs/issues/1277), E7b-1, the first of its two slices; ADR 0124).
   Streams were byte streams: a non-byte `stream.read` was refused at its call (ADR 0123), and `stream.write` did not

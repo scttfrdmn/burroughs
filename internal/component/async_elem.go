@@ -34,8 +34,8 @@ type elemType struct {
 	// none_or_number_type(self.t))").
 	numeric bool
 	// own is the host resource an `own<R>` element names, resolved as resource.drop resolves its type
-	// (hostResourceNamed), or nil. Nothing reads it yet: the accept stream E7b-2 builds (#1277) lowers each element
-	// it produces through it, the pin's def:lower_own for an end with no owner.
+	// (hostResourceNamed), or nil. A host producer whose element has one mints each element it delivers as an own of
+	// it, the pin's def:lower_own: listen's stream of accepted sockets (copyOwnsLocked, ADR 0125).
 	own *hostResource
 }
 

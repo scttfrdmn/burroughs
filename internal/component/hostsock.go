@@ -18,29 +18,34 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
-// WASI 0.3's TCP client (#1235's E7a, ADR 0123): `wasi:sockets/types@0.3`'s `tcp-socket` as a host resource,
-// its async `connect`, `send` and `receive` over streams, and the getters Rust std reaches. `bind`, `listen` and
-// name lookup are E7b's and E7c's (#1277, #1278).
+// WASI 0.3's TCP (#1235's E7a, ADR 0123; #1277's E7b-2, ADR 0125): `wasi:sockets/types@0.3`'s `tcp-socket` as a
+// host resource, its async `connect`, `send` and `receive` over streams, `bind`, `listen` and its stream of
+// accepted sockets, `set-listen-backlog-size`, and the getters Rust std reaches. Name lookup is E7c's (#1278).
 //
 // # One OS socket, shared
 //
 // `sockets.wit` gives the handle and the streams derived from it one OS socket, which closes only when the last
 // of them goes. So the connection is reference-counted (`sockConn`): connect's success gives the handle one
 // reference, `receive` and `send` take one each and release it when their stream is finished, and the last
-// release closes the `net.Conn`.
+// release closes the `net.Conn`. **A listener is counted the same way** (`sockListener`, ADR 0125): bind gives the
+// handle one reference, listen's stream takes one, and the last release closes it. An accepted socket holds none.
 //
 // # Goroutines, and Close
 //
-// Three kinds run per socket: the dial, the send writer, and the receive producer's Read (hostproducer.go).
-// Each is counted in the instance's registry (`hostNet`) before it starts, and the registry refuses to count one
-// after `Close` has stopped it. `Close` cancels every pending dial and closes every connection, which unblocks
-// every Read and Write, and then **waits for every one of them** (walker.close). This is where a socket differs
-// from stdin, whose Read is abandoned (#1274): a socket is the instance's own to close.
+// Four kinds run per socket: the dial, the send writer, the receive producer's Read, and the listen stream's
+// Accept (hostproducer.go). Each is counted in the instance's registry (`hostNet`) before it starts, and the
+// registry refuses to count one after `Close` has stopped it. `Close` cancels every pending dial and closes every
+// connection and every listener, which unblocks every Read, Write and Accept, and then **waits for every one of
+// them** (walker.close). This is where a socket differs from stdin, whose Read is abandoned (#1274): a socket is
+// the instance's own to close.
 //
 // # Locks
 //
-// `asyncHandles.mu` may be held while the registry's lock or a socket's is taken, never the reverse. A resource
-// lend is taken and released with neither held.
+// The order is: the run slot → `asyncHandles.mu` → { `hostResources.mu`, a leaf; `tcpSocket.mu` → `hostNet.mu` }
+// (ADR 0125). `asyncHandles.mu` may be held while a socket's lock or the registry's is taken, never the reverse.
+// The listen stream's copy mints an own under `asyncHandles.mu`, which is acyclic because `hostResources.mu` is a
+// leaf: nothing is taken under it, and no destructor runs under it. A resource lend is taken and released with
+// none of the others held.
 
 // tcpSocketResource is `wasi:sockets/types@0.3::tcp-socket`. Its destructor releases the handle's reference to
 // the connection, which closes it if no stream holds one.
@@ -55,26 +60,42 @@ const (
 	familyIPv6 = 1
 )
 
+// tcpState is sockets.wit's states. bound and listening are ADR 0125's: bind listens at once, so a bound socket
+// has an OS listener, and listen only flips the state and returns the stream.
 type tcpState int
 
 const (
 	tcpUnbound tcpState = iota
+	tcpBound
+	tcpListening
 	tcpConnecting
 	tcpConnected
 	tcpClosed
 )
 
-// tcpSocket is the object behind a `tcp-socket` handle. Its fields are guarded by mu, a leaf lock.
+// tcpSocket is the object behind a `tcp-socket` handle. Its fields are guarded by mu, which is taken before the
+// registry's lock and never with a lock other than `asyncHandles.mu` held outside it (ADR 0125's order).
 type tcpSocket struct {
 	net    *hostNet
 	family int
 	mu     sync.Mutex
 	state  tcpState
-	conn   *sockConn // the handle's reference, once connected
+	conn   *sockConn     // the handle's reference, once connected
+	ln     *sockListener // the handle's reference, once bound, until a connect from bound releases it
 	local  netip.AddrPort
 	remote netip.AddrPort
 	// received and sent record that receive and send were called: each may be called once.
 	received, sent bool
+	// backlog is set-listen-backlog-size's last value: recorded, and not applied (ADR 0125), which the WIT permits.
+	backlog uint64
+}
+
+// sockListener is one OS listener and its reference count, guarded by the registry's lock: sockConn's shape for
+// the handle and the listen stream (ADR 0125).
+type sockListener struct {
+	l      net.Listener
+	refs   int
+	closed bool
 }
 
 // sockConn is one OS connection and its reference count, guarded by the registry's lock.
@@ -94,18 +115,62 @@ type sockDial struct {
 	resolve func(canon.Value)
 }
 
-// hostNet is one component instance's sockets: its live connections and pending dials, and every socket
-// goroutine it has started. It lives in the instance's hostResources, so a nested instance has its own.
+// hostNet is one component instance's sockets: its live connections, listeners and pending dials, and every
+// socket goroutine it has started. It lives in the instance's hostResources, so a nested instance has its own.
 type hostNet struct {
-	mu      sync.Mutex
-	conns   map[*sockConn]struct{}
-	dials   map[*sockDial]struct{}
-	stopped bool
-	wg      sync.WaitGroup
+	mu        sync.Mutex
+	conns     map[*sockConn]struct{}
+	listeners map[*sockListener]struct{}
+	dials     map[*sockDial]struct{}
+	stopped   bool
+	wg        sync.WaitGroup
 }
 
 func newHostNet() *hostNet {
-	return &hostNet{conns: map[*sockConn]struct{}{}, dials: map[*sockDial]struct{}{}}
+	return &hostNet{conns: map[*sockConn]struct{}{}, listeners: map[*sockListener]struct{}{}, dials: map[*sockDial]struct{}{}}
+}
+
+// adoptListener registers a new listener with one reference, the handle's. After stop it is closed instead.
+func (n *hostNet) adoptListener(l net.Listener) (*sockListener, bool) {
+	n.mu.Lock()
+	if n.stopped {
+		n.mu.Unlock()
+		_ = l.Close() // the instance is closing; nobody reads the close's error
+		return nil, false
+	}
+	sl := &sockListener{l: l, refs: 1}
+	n.listeners[sl] = struct{}{}
+	n.mu.Unlock()
+	return sl, true
+}
+
+// retainListener takes another reference to a live listener, the listen stream's.
+func (n *hostNet) retainListener(sl *sockListener) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if sl.closed {
+		return false
+	}
+	sl.refs++
+	return true
+}
+
+// releaseListener drops one reference, and the last closes the listener, with the lock released.
+//
+// NEUTER: close at every release, and TestTheListenerOutlivesTheHandleWhileItsStreamHoldsIt's read after the
+// handle's drop is DROPPED with no socket.
+func (n *hostNet) releaseListener(sl *sockListener) {
+	n.mu.Lock()
+	sl.refs--
+	last := sl.refs <= 0 && !sl.closed
+	if last {
+		sl.closed = true
+		delete(n.listeners, sl)
+	}
+	n.mu.Unlock()
+	if last {
+		_ = sl.l.Close() // a close's error has no reader: every holder has gone
+	}
 }
 
 // track counts a socket goroutine about to start, and returns the call that marks it ended. After stop, none is
@@ -187,7 +252,8 @@ func (n *hostNet) release(sc *sockConn) {
 }
 
 // stop is Close's: no socket goroutine starts after it, every pending dial is cancelled and its lend released,
-// and every connection is closed, which ends every Read and Write in flight. wait then waits them out.
+// and every listener and connection is closed, which ends every Accept, Read and Write in flight. wait then waits
+// them out. A connection accepted and not yet delivered to the guest is one of the connections (ADR 0125).
 //
 // NEUTER: return before closing the connections, and TestCloseEndsASocketsGoroutines' Close hangs on the
 // receive reader blocked in Read.
@@ -202,7 +268,18 @@ func (n *hostNet) stop() {
 		conns = append(conns, sc)
 	}
 	n.conns = map[*sockConn]struct{}{}
+	lns := make([]*sockListener, 0, len(n.listeners))
+	for sl := range n.listeners {
+		sl.closed = true
+		lns = append(lns, sl)
+	}
+	n.listeners = map[*sockListener]struct{}{}
 	n.mu.Unlock()
+	// NEUTER: skip the listeners' close, and TestCloseEndsAGuestParkedInAccept's Close hangs, waiting for an Accept
+	// that never returns.
+	for _, sl := range lns {
+		_ = sl.l.Close() // the instance is closing
+	}
 	for d := range dials {
 		d.cancel()
 		d.release()
@@ -218,18 +295,23 @@ func (n *hostNet) stop() {
 // wait returns once every socket goroutine has ended.
 func (n *hostNet) wait() { n.wg.Wait() }
 
-// destroyTCPSocket is the handle's destructor: the socket is closed, and its reference to the connection goes.
+// destroyTCPSocket is the handle's destructor: the socket is closed, and its references to the connection and the
+// listener go. It also releases an accepted socket that was never delivered (ADR 0125). It takes the socket's
+// lock and then the registry's, so it never runs under `hostResources.mu`.
 func destroyTCPSocket(obj any) error {
 	s, ok := obj.(*tcpSocket)
 	if !ok {
 		return fmt.Errorf("component: a tcp-socket handle held a %T", obj)
 	}
 	s.mu.Lock()
-	sc := s.conn
-	s.conn, s.state = nil, tcpClosed
+	sc, sl := s.conn, s.ln
+	s.conn, s.ln, s.state = nil, nil, tcpClosed
 	s.mu.Unlock()
 	if sc != nil {
 		s.net.release(sc)
+	}
+	if sl != nil {
+		s.net.releaseListener(sl)
 	}
 	return nil
 }
@@ -362,10 +444,10 @@ func socketAddressValue(ap netip.AddrPort) (canon.Value, error) {
 
 // decodeSocketAddress reads an `ip-socket-address` from its 12 flat words: the discriminant, then the case's
 // fields as def:flatten_type lays them out, every word an i32 (ipv4: port, four octets; ipv6: port, flow-info,
-// eight segments, scope-id).
-func decodeSocketAddress(w []interp.Value) (family int, ap netip.AddrPort, err error) {
+// eight segments, scope-id). op names the method whose argument it is, connect's or bind's, for the messages.
+func decodeSocketAddress(op string, w []interp.Value) (family int, ap netip.AddrPort, err error) {
 	if len(w) != 12 {
-		return 0, netip.AddrPort{}, fmt.Errorf("component: tcp-socket.connect: an ip-socket-address is 12 flat words, got %d", len(w))
+		return 0, netip.AddrPort{}, fmt.Errorf("component: tcp-socket.%s: an ip-socket-address is 12 flat words, got %d", op, len(w))
 	}
 	word := func(i int) uint32 { return uint32(w[i].Bits) }
 	switch word(0) {
@@ -383,7 +465,7 @@ func decodeSocketAddress(w []interp.Value) (family int, ap netip.AddrPort, err e
 		}
 		return familyIPv6, netip.AddrPortFrom(a, uint16(word(1))), nil
 	default:
-		return 0, netip.AddrPort{}, &interp.Trap{Reason: fmt.Sprintf("tcp-socket.connect: ip-socket-address case %d out of range", word(0))}
+		return 0, netip.AddrPort{}, &interp.Trap{Reason: fmt.Sprintf("tcp-socket.%s: ip-socket-address case %d out of range", op, word(0))}
 	}
 }
 
@@ -474,7 +556,7 @@ func (h *Host) tcpConnect(async *asyncHandles, res *hostResources) asyncLowerImp
 		if err != nil {
 			return nil, err
 		}
-		fam, addr, err := decodeSocketAddress(args[1:])
+		fam, addr, err := decodeSocketAddress("connect", args[1:])
 		if err != nil {
 			release()
 			return nil, err
@@ -488,21 +570,36 @@ func (h *Host) tcpConnect(async *asyncHandles, res *hostResources) asyncLowerImp
 		if !h.InheritNetwork {
 			return fail("access-denied") // unreachable while create refuses: the grant is checked at both
 		}
+		// **A connect from bound is allowed** (sockets.wit's connect: "If the socket was not already explicitly
+		// bound"; ADR 0125). Bound means listening on the OS (bind listens eagerly), so the listener is released
+		// once the arguments are accepted, and the dial is made from its address, which keeps the bound port as
+		// wasmtime 49.0.3 does (tcp-bind-listen.reading's connect-bound).
 		sock.mu.Lock()
-		state, sfam := sock.state, sock.family
-		if state == tcpUnbound {
+		state, sfam, local := sock.state, sock.family, sock.local
+		if state == tcpUnbound || state == tcpBound {
 			sock.state = tcpConnecting
 		}
 		sock.mu.Unlock()
-		if state != tcpUnbound {
+		if state != tcpUnbound && state != tcpBound {
 			return fail("invalid-state")
 		}
 		ip := addr.Addr()
 		if fam != sfam || addr.Port() == 0 || ip.IsUnspecified() || ip.Is4In6() || ip.IsMulticast() {
 			sock.mu.Lock()
-			sock.state = tcpUnbound // an argument refused before any attempt leaves the socket as it was
+			sock.state = state // an argument refused before any attempt leaves the socket as it was
 			sock.mu.Unlock()
 			return fail("invalid-argument")
+		}
+		var from *net.TCPAddr
+		if state == tcpBound {
+			sock.mu.Lock()
+			sl := sock.ln
+			sock.ln = nil
+			sock.mu.Unlock()
+			if sl != nil {
+				res.net.releaseListener(sl) // the handle's is the only reference: no stream exists until listen
+			}
+			from = net.TCPAddrFromAddrPort(local)
 		}
 		network := "tcp4"
 		if fam == familyIPv6 {
@@ -520,7 +617,10 @@ func (h *Host) tcpConnect(async *asyncHandles, res *hostResources) asyncLowerImp
 		async.mu.Unlock()
 		dial := h.dial
 		if dial == nil {
-			var dialer net.Dialer
+			dialer := net.Dialer{}
+			if from != nil {
+				dialer.LocalAddr = from
+			}
 			dial = dialer.DialContext
 		}
 		go func() {
@@ -600,25 +700,37 @@ func (d *sockDial) cancelSubtask(n *hostNet) func() {
 }
 
 // tcpGetLocalAddress and tcpGetRemoteAddress are `get-local-address` and `get-remote-address: func() ->
-// result<ip-socket-address, error-code>`, flattened to (self, ret): `invalid-state` until connected.
+// result<ip-socket-address, error-code>`, flattened to (self, ret). The local address is a bound, listening or
+// connected socket's (ADR 0125: bind listens at once, so the port is exact from bind, as wasmtime 49.0.3 reads it
+// between bind and listen), and the remote address a connected socket's; anything else is `invalid-state`.
+//
+// NEUTER: answer the local address for a connected socket only, as E7a did, and TestP3TcpServeMatchesWasmtime's
+// listener address line reads NotConnected (std's invalid-state) rather than the property;
+// TestTcpBindListenMatchesWasmtime's local-between, listen-unbound and connect-bound rows read invalid-state too.
 func (h *Host) tcpGetLocalAddress(_ *hostResources, c *interp.CanonCaller, self *tcpSocket, args []interp.Value) ([]interp.Value, error) {
-	return tcpAddressGetter(c, self, args, "get-local-address", func(s *tcpSocket) netip.AddrPort { return s.local })
+	return tcpAddressGetter(c, self, args, "get-local-address", func(s *tcpSocket) (netip.AddrPort, bool) {
+		return s.local, s.state == tcpBound || s.state == tcpListening || s.state == tcpConnected
+	})
 }
 
 func (h *Host) tcpGetRemoteAddress(_ *hostResources, c *interp.CanonCaller, self *tcpSocket, args []interp.Value) ([]interp.Value, error) {
-	return tcpAddressGetter(c, self, args, "get-remote-address", func(s *tcpSocket) netip.AddrPort { return s.remote })
+	return tcpAddressGetter(c, self, args, "get-remote-address", func(s *tcpSocket) (netip.AddrPort, bool) {
+		return s.remote, s.state == tcpConnected
+	})
 }
 
-func tcpAddressGetter(c *interp.CanonCaller, self *tcpSocket, args []interp.Value, name string, which func(*tcpSocket) netip.AddrPort) ([]interp.Value, error) {
+// tcpAddressGetter lowers which's address, or `invalid-state` when which reports the socket has none. which runs
+// under the socket's lock.
+func tcpAddressGetter(c *interp.CanonCaller, self *tcpSocket, args []interp.Value, name string, which func(*tcpSocket) (netip.AddrPort, bool)) ([]interp.Value, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("component: tcp-socket.%s: got %d core args, want 2 (self, ret)", name, len(args)+1)
 	}
 	ret := uint64(uint32(args[0].Bits))
 	addrT := ipSocketAddressType()
 	self.mu.Lock()
-	connected, ap := self.state == tcpConnected, which(self)
+	ap, has := which(self)
 	self.mu.Unlock()
-	if !connected {
+	if !has {
 		return nil, lowerResult(c, ret, sockErr(&addrT, "invalid-state"), nil)
 	}
 	av, err := socketAddressValue(ap)
@@ -634,9 +746,256 @@ func (h *Host) tcpGetAddressFamily(_ *hostResources, _ *interp.CanonCaller, self
 	return []interp.Value{interp.I32(int32(self.family))}, nil
 }
 
-// tcpGetIsListening is `get-is-listening: func() -> bool`: false, since E7a never listens.
-func (h *Host) tcpGetIsListening(_ *hostResources, _ *interp.CanonCaller, _ *tcpSocket, _ []interp.Value) ([]interp.Value, error) {
+// tcpGetIsListening is `get-is-listening: func() -> bool`: whether the socket is in the listening state.
+func (h *Host) tcpGetIsListening(_ *hostResources, _ *interp.CanonCaller, self *tcpSocket, _ []interp.Value) ([]interp.Value, error) {
+	self.mu.Lock()
+	listening := self.state == tcpListening
+	self.mu.Unlock()
+	if listening {
+		return []interp.Value{interp.I32(1)}, nil
+	}
 	return []interp.Value{interp.I32(0)}, nil
+}
+
+// tcpUnicastBindable reports whether ip may be bound by a socket of family fam: its family, and a unicast address
+// that is not IPv4-mapped (sockets.wit's bind: `invalid-argument` otherwise). The unspecified address is allowed.
+func tcpUnicastBindable(fam int, ap netip.AddrPort) bool {
+	ip := ap.Addr()
+	if (fam == familyIPv4) != ip.Is4() || ip.Is4In6() || ip.IsMulticast() {
+		return false
+	}
+	return ip != netip.AddrFrom4([4]byte{255, 255, 255, 255})
+}
+
+// wsaEADDRNOTAVAIL is Windows' WSAEADDRNOTAVAIL. A POSIX kernel never returns the number, so one table serves both.
+const wsaEADDRNOTAVAIL syscall.Errno = 10049
+
+// bindErrorLabel is a bind's `error-code`: an address the host has no interface for is `address-not-bindable`,
+// where ADR 0123's table, written for connect, says `address-in-use`; every other error maps by that table.
+func bindErrorLabel(err error) string {
+	var errno syscall.Errno
+	if errors.As(err, &errno) && (errno == syscall.EADDRNOTAVAIL || errno == wsaEADDRNOTAVAIL) {
+		return "address-not-bindable"
+	}
+	return sockErrorLabel(err)
+}
+
+// bindLocked binds the socket to addr by listening on it at once (ADR 0125's eager listen): one portable call,
+// and Go sets SO_REUSEADDR on a POSIX listener, as sockets.wit's implementor note asks. The socket is bound, with
+// the listener registered and the handle holding its one reference, or it is left unbound with the error's code,
+// so the bind may be retried. The caller holds s.mu and has checked the state and the address.
+func (h *Host) bindLocked(s *tcpSocket, addr netip.AddrPort) (label string) {
+	network := "tcp4"
+	if s.family == familyIPv6 {
+		network = "tcp6"
+	}
+	listen := h.listen
+	if listen == nil {
+		listen = net.Listen
+	}
+	l, err := listen(network, addr.String())
+	if err != nil {
+		return bindErrorLabel(err)
+	}
+	local, perr := netip.ParseAddrPort(l.Addr().String())
+	if perr != nil {
+		_ = l.Close() // unreachable: a TCP listener's address parses
+		return "other"
+	}
+	sl, ok := s.net.adoptListener(l)
+	if !ok {
+		return "invalid-state" // Close has stopped the instance's sockets
+	}
+	s.state, s.ln, s.local = tcpBound, sl, local
+	return ""
+}
+
+// tcpBind is `[method]tcp-socket.bind: func(local-address: ip-socket-address) -> result<_, error-code>`, flattened
+// to (self, the address's 12 words, ret). A socket that is not unbound is `invalid-state`; an address of another
+// family, multicast, broadcast or IPv4-mapped is `invalid-argument`, as tcp-bind-listen.reading reads them.
+//
+// NEUTER: drop the state check, and TestTcpBindListenMatchesWasmtime's bind-refusals row reads its second bind ok.
+func (h *Host) tcpBind(_ *hostResources, c *interp.CanonCaller, self *tcpSocket, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 13 {
+		return nil, fmt.Errorf("component: tcp-socket.bind: got %d core args, want 14 (self, local-address, ret)", len(args)+1)
+	}
+	fam, addr, err := decodeSocketAddress("bind", args[:12])
+	if err != nil {
+		return nil, err
+	}
+	ret := uint64(uint32(args[12].Bits))
+	label := ""
+	switch {
+	case !h.InheritNetwork:
+		label = "access-denied" // unreachable while create refuses: the grant is checked at both
+	case fam != self.family || !tcpUnicastBindable(fam, addr):
+		label = "invalid-argument"
+	}
+	if label == "" {
+		self.mu.Lock()
+		if self.state != tcpUnbound {
+			label = "invalid-state"
+		} else {
+			label = h.bindLocked(self, addr)
+		}
+		self.mu.Unlock()
+	}
+	if label != "" {
+		return nil, lowerResult(c, ret, sockErr(nil, label), nil)
+	}
+	return nil, lowerResult(c, ret, sockOK(), nil)
+}
+
+// unspecifiedAddr is the address an implicit bind takes: the family's unspecified address, port 0.
+func unspecifiedAddr(fam int) netip.AddrPort {
+	if fam == familyIPv6 {
+		return netip.AddrPortFrom(netip.IPv6Unspecified(), 0)
+	}
+	return netip.AddrPortFrom(netip.IPv4Unspecified(), 0)
+}
+
+// acceptElem is the listen stream's element, `own<tcp-socket>` at the host's RT, as ADR 0124's descriptor with its
+// own arm set: what both of the stream's ends carry, and what a guest's `stream.read` of its declared
+// `stream<own<tcp-socket>>` is compared with, structurally (checkStreamEndType).
+var acceptElem = func() *elemType {
+	t := canon.OwnType(tcpSocketResource.rt)
+	return &elemType{known: true, modeled: true, t: &t, size: canon.ElemSize(t), align: canon.Alignment(t), own: tcpSocketResource}
+}()
+
+// tcpListen is `[method]tcp-socket.listen: func() -> result<stream<tcp-socket>, error-code>`, flattened to (self,
+// ret), served by ADR 0122's producer with an accept source (ADR 0125). An unbound socket is bound implicitly to
+// its family's unspecified address, port 0, as the WIT requires. A socket that is not then bound (listening,
+// connecting, connected or closed) is `invalid-state`. Otherwise it is listening, the stream takes a reference to
+// the listener, and the stream's readable end is the result, lowered as `result<u32, error-code>`, whose layout is
+// the stream's: receive's hand-lowered handles' shape, through the codec.
+func (h *Host) tcpListen(async *asyncHandles, res *hostResources) interp.CanonFunc {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("component: tcp-socket.listen: got %d core args, want 2 (self, ret)", len(args))
+		}
+		sock, release, err := lendAs[*tcpSocket](res, tcpSocketResource, args[0].Int32())
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		ret := uint64(uint32(args[1].Bits))
+		u := u32T()
+		label := ""
+		var sl *sockListener
+		if !h.InheritNetwork {
+			label = "access-denied" // unreachable while create refuses: the grant is checked at both
+		} else {
+			sock.mu.Lock()
+			if sock.state == tcpUnbound {
+				label = h.bindLocked(sock, unspecifiedAddr(sock.family))
+			}
+			switch {
+			case label != "":
+			case sock.state != tcpBound || sock.ln == nil || !res.net.retainListener(sock.ln):
+				label = "invalid-state"
+			default:
+				sock.state, sl = tcpListening, sock.ln
+			}
+			sock.mu.Unlock()
+		}
+		if label != "" {
+			return nil, lowerResult(c, ret, sockErr(&u, label), nil)
+		}
+		n := res.net
+		p := &streamProducer{h: async, accept: &sockAccept{ln: sl, net: n, res: res, family: sock.family}, track: n.track}
+		p.onDone = func(bool) { n.releaseListener(sl) }
+		async.mu.Lock()
+		ri := p.mintAcceptLocked()
+		async.mu.Unlock()
+		idx := canon.U32(uint32(ri))
+		v, verr := canon.Variant(sockResultType(&u), "ok", &idx)
+		return nil, lowerResult(c, ret, v, verr)
+	}
+}
+
+// sockAccept is a listen stream's source (ADR 0125): the stream's reference to the listener, the registry its
+// accepted connections are adopted into, the table they are minted in, and the family they inherit.
+type sockAccept struct {
+	ln     *sockListener
+	net    *hostNet
+	res    *hostResources
+	family int
+}
+
+// accept is one Accept, on the producer's goroutine with no lock held. A connection is adopted into the registry
+// at once, so Close closes it whether or not it is ever delivered, and built into a connected socket with its two
+// addresses and the listener's family, holding the adoption's reference.
+//
+// NEUTER: build the socket over an unadopted connection (a sockConn the registry does not hold), and
+// TestAnAcceptedConnectionNeverDeliveredIsClosedAtClose's client reads nothing until its deadline.
+func (a *sockAccept) accept() (*tcpSocket, error) {
+	c, err := a.ln.l.Accept()
+	if err != nil {
+		return nil, err
+	}
+	tc, ok := c.(*net.TCPConn)
+	if !ok {
+		_ = c.Close() // unreachable: a TCP listener accepts a *net.TCPConn
+		return nil, fmt.Errorf("component: tcp-socket.listen: accepted a %T", c)
+	}
+	sc, ok := a.net.adopt(tc)
+	if !ok {
+		return nil, net.ErrClosed // Close has stopped the instance's sockets, and adopt closed it
+	}
+	s := &tcpSocket{net: a.net, family: a.family, state: tcpConnected, conn: sc}
+	s.local, _ = netip.ParseAddrPort(tc.LocalAddr().String())   //nolint:errcheck // a TCP address parses
+	s.remote, _ = netip.ParseAddrPort(tc.RemoteAddr().String()) //nolint:errcheck // a TCP address parses
+	return s, nil
+}
+
+// acceptTransient reports an Accept error the listen stream skips (sockets.wit's listen: *"skip over non-fatal
+// errors returned by accept"*): the Linux manual's list the WIT quotes, but ENONET, which only Linux defines, with
+// ECONNABORTED, ECONNRESET and EINTR. The four ADR 0123's table labels are read through it, so Windows' numbers count.
+// Anything else, a closed listener first, is fatal and ends the stream.
+//
+// NEUTER: return false, and TestATransientAcceptErrorDoesNotEndTheStream's read is DROPPED.
+func acceptTransient(err error) bool {
+	switch sockErrorLabel(err) {
+	case "connection-aborted", "connection-reset", "remote-unreachable":
+		return true
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && acceptTransientErrnos[errno]
+}
+
+// acceptTransientErrnos are the transient errnos ADR 0123's table has no label for.
+var acceptTransientErrnos = map[syscall.Errno]bool{
+	syscall.EPROTO: true, syscall.ENOPROTOOPT: true, syscall.ENETDOWN: true, syscall.EHOSTDOWN: true,
+	syscall.EOPNOTSUPP: true, syscall.EINTR: true,
+}
+
+// tcpSetListenBacklogSize is `[method]tcp-socket.set-listen-backlog-size: func(value: u64) -> result<_,
+// error-code>`, flattened to (self, value, ret). 0 is `invalid-argument` before any state is asked, a connecting,
+// connected or closed socket `invalid-state`, and anything else is recorded and ok: the value is not applied (ADR
+// 0125), which the WIT permits. wasi-libc's listen() calls it with max(backlog, 1) on every path, and fails if it
+// does, so it is ok on a listening socket too.
+func (h *Host) tcpSetListenBacklogSize(_ *hostResources, c *interp.CanonCaller, self *tcpSocket, args []interp.Value) ([]interp.Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("component: tcp-socket.set-listen-backlog-size: got %d core args, want 3 (self, value, ret)", len(args)+1)
+	}
+	v, ret := args[0].Bits, uint64(uint32(args[1].Bits))
+	label := ""
+	if v == 0 {
+		label = "invalid-argument"
+	} else {
+		self.mu.Lock()
+		switch self.state {
+		case tcpConnecting, tcpConnected, tcpClosed:
+			label = "invalid-state"
+		default:
+			self.backlog = v
+		}
+		self.mu.Unlock()
+	}
+	if label != "" {
+		return nil, lowerResult(c, ret, sockErr(nil, label), nil)
+	}
+	return nil, lowerResult(c, ret, sockOK(), nil)
 }
 
 // takeStream marks a socket's receive or send taken, and returns its connection with a reference for the stream,

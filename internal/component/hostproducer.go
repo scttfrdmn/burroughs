@@ -18,6 +18,11 @@ import (
 // The guest holds the readable end and the future; the writable end is the HOST's, held here and never put in
 // the guest's table (`writableStreamEnd.producer`).
 //
+// **A socket's listen stream is one too** (ADR 0125): `stream<own<tcp-socket>>`, with no future, its source a
+// listener and its elements accepted sockets, each minted as an own when it is delivered (copyOwnsLocked). The rules
+// below hold for it with an Accept for a Read and a queue of sockets for the buffer of bytes, except at the end: it
+// has no future to resolve, a transient Accept error is skipped, and Close closes the listener and waits it out.
+//
 // # Reads happen on demand
 //
 // A `Read` of the source starts only when a guest read is pending and the producer's buffer is empty, sized
@@ -86,6 +91,25 @@ type streamProducer struct {
 	mapErr func(error) canon.Value
 	track  func() (ended func(), ok bool)
 	onDone func(readerDropped bool)
+
+	// accept, when set, makes this listen's stream<own<tcp-socket>> (ADR 0125): its source is a listener, its
+	// elements accepted sockets, and it has **no future**. src, srcMu, buf and mapErr are unused, and socks holds
+	// what buf holds for bytes: sockets accepted, adopted into the registry, and not yet delivered.
+	accept *sockAccept
+	socks  []*tcpSocket
+}
+
+// queuedLocked reports something read and not yet delivered: bytes, or accepted sockets. The caller holds p.h.mu.
+func (p *streamProducer) queuedLocked() bool { return len(p.buf) > 0 || len(p.socks) > 0 }
+
+// dropQueueLocked discards what was read and not delivered. An accepted socket's connection reference is released,
+// so the connection closes (asyncHandles.mu → tcpSocket.mu → hostNet.mu, ADR 0125's order). The caller holds p.h.mu.
+func (p *streamProducer) dropQueueLocked() {
+	p.buf = nil
+	for _, s := range p.socks {
+		_ = destroyTCPSocket(s) //nolint:errcheck // a *tcpSocket's destructor returns no error
+	}
+	p.socks = nil
 }
 
 // readViaStream is `wasi:cli/stdin@0.3::read-via-stream`'s bind (ADR 0122): sync-lowered with a return pointer,
@@ -131,12 +155,23 @@ func (p *streamProducer) mintLocked() (ri, fi int) {
 	return p.reader.index, p.future.index
 }
 
+// mintAcceptLocked makes a listen stream's ends, with no future, and adds the readable end to the table (ADR 0125).
+// Both carry acceptElem, `own<tcp-socket>`; the guest's declared listen result was checked at instantiate
+// (checkListenSignature), so its stream.read names that type. The caller holds p.h.mu.
+func (p *streamProducer) mintAcceptLocked() int {
+	p.writer = &writableStreamEnd{producer: p, elem: acceptElem}
+	p.reader = &readableStreamEnd{state: copyStateIdle, conn: p.writer, elem: acceptElem}
+	p.writer.conn = p.reader
+	p.reader.index = p.h.addLocked(p.reader)
+	return p.reader.index
+}
+
 // readLocked is a guest `stream.read` of this stream, called by streamRead with the end already COPYING and its
 // buffer recorded. It is served from the buffer inline, or parks and starts a Read, or, with the source ended
 // and the buffer empty, parks and finishes the stream. The caller holds p.h.mu.
 func (p *streamProducer) readLocked(e *readableStreamEnd) ([]interp.Value, error) {
 	switch {
-	case len(p.buf) > 0:
+	case p.queuedLocked():
 		// The writer's buffer is there, so the read is the second arriver and copies inline (def:End.copy:"elif
 		// buffer.remain() > 0 and self.other.buffer.remain() > 0:"). A read of 0 copies nothing and completes
 		// itself with progress 0 (def:End.copy:"self.notify(progress = 0)").
@@ -172,6 +207,9 @@ func (p *streamProducer) readLocked(e *readableStreamEnd) ([]interp.Value, error
 // NEUTER: drop the rest after a copy, and TestAStreamReadCancelledMidReadServesTheBufferedBytesNext's read after
 // the 4-byte one parks BLOCKED, "ef" lost.
 func (p *streamProducer) copyIntoLocked(r *readableStreamEnd) (uint32, error) {
+	if own := p.writer.elem.own; own != nil {
+		return p.copyOwnsLocked(r, own)
+	}
 	n := uint32(len(p.buf))
 	if r.readN < n {
 		n = r.readN
@@ -192,13 +230,54 @@ func (p *streamProducer) copyIntoLocked(r *readableStreamEnd) (uint32, error) {
 	return n, nil
 }
 
+// copyOwnsLocked is the copy's `own` arm (ADR 0125, the element descriptor's own, ADR 0124): `min(readN, queued)`
+// accepted sockets are delivered, each minted as a fresh own of `own` in the reading instance's table
+// (def:lower_own, through hostResources.mint) and its i32 index stored at `dstPtr + 4*i`, which is
+// def:WritableGuestBuffer.write's store of an own element. The rest stay queued. The mint takes
+// `hostResources.mu` under `asyncHandles.mu`, the order ADR 0125 states, acyclic because that lock is a leaf. The
+// reader's buffer was checked as def:GuestBuffer checks it when its stream.read was called. The caller holds p.h.mu
+// and the run slot.
+//
+// NEUTER: store each socket's queue position rather than its minted index, and TestP3TcpServeMatchesWasmtime's
+// accept reads a handle the guest's table does not hold, and its receive traps.
+func (p *streamProducer) copyOwnsLocked(r *readableStreamEnd, own *hostResource) (uint32, error) {
+	n := uint32(len(p.socks))
+	if r.readN < n {
+		n = r.readN
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if r.hostSink != nil { // unreachable: a host consumer is refused a produced stream before it reads
+		return 0, fmt.Errorf("component: stream copy: a host-produced stream read by a host consumer")
+	}
+	if p.accept == nil { // unreachable: only listen's stream carries an own element
+		return 0, fmt.Errorf("component: stream copy: a host stream of %s has no source of owns", p.writer.elem)
+	}
+	out := make([]byte, 4*n)
+	for i := range n {
+		idx := p.accept.res.mint(own, p.socks[i])
+		binary.LittleEndian.PutUint32(out[4*i:], uint32(idx))
+	}
+	p.socks = p.socks[n:]
+	if len(p.socks) == 0 {
+		p.socks = nil
+	}
+	if err := r.caller.Write(uint64(r.dstPtr), out); err != nil {
+		return 0, fmt.Errorf("component: stream copy: writing %d handles to reader at %#x: %w", n, r.dstPtr, err)
+	}
+	return n, nil
+}
+
 // startReadLocked starts one Read of up to n bytes, capped, unless one is in flight or Close has stopped the
 // table. A read of 0 asks for the cap. The caller holds p.h.mu.
 //
 // It is the producer's one goroutine site, authorised by ADR 0122 in the census
-// (TestEveryEngineGoroutineIsAtASiteADecisionAuthorises), and by ADR 0123 for a socket's source. The goroutine
-// ends when its Read returns and its delivery is applied or discarded. A Read that never returns leaves it
-// blocked, abandoned by Close; a socket's Close closes its source, so its Read returns and it is waited out.
+// (TestEveryEngineGoroutineIsAtASiteADecisionAuthorises), by ADR 0123 for a socket's source, and by ADR 0125 for a
+// listener's: the same goroutine runs one Accept rather than one Read, n unused. The goroutine ends when its Read
+// or Accept returns and its delivery is applied or discarded. A Read that never returns leaves it blocked,
+// abandoned by Close; a socket's Close closes its source, connection or listener, so its Read or Accept returns and
+// it is waited out.
 func (p *streamProducer) startReadLocked(n uint32) {
 	if p.reading || p.done || p.h.producersStopped {
 		return
@@ -218,11 +297,28 @@ func (p *streamProducer) startReadLocked(n uint32) {
 	}
 	p.reading = true
 	p.h.producerReads++
-	buf := make([]byte, n)
+	var buf []byte
+	if p.accept == nil {
+		buf = make([]byte, n)
+	}
 	go func() {
 		defer ended()
+		if p.accept != nil {
+			p.acceptOne()
+			return
+		}
 		p.read(buf)
 	}()
+}
+
+// acceptOne is a listen stream's goroutine body (ADR 0125): one Accept, then its delivery, as read's is.
+func (p *streamProducer) acceptOne() {
+	s, err := p.accept.accept()
+	p.deliverStore(func() { p.applyAccept(s, err) }, func() {
+		if s != nil {
+			_ = destroyTCPSocket(s) //nolint:errcheck // a *tcpSocket's destructor returns no error
+		}
+	})
 }
 
 // read is the goroutine's body: one Read, then its delivery.
@@ -241,15 +337,27 @@ func (p *streamProducer) read(buf []byte) {
 // queued for the run slot's holder while it is in host code, and otherwise applied under the slot, taken on a
 // chain of its own and given up if Close stops the table meanwhile.
 func (p *streamProducer) deliver(data []byte, rerr error) {
+	p.deliverStore(func() { p.apply(data, rerr) }, nil)
+}
+
+// deliverStore is deliver over any store: a Read's apply, or an Accept's (ADR 0125). discard, when set, runs with
+// no lock held if the store is given up, so what the store carried is released: an accepted socket's connection.
+func (p *streamProducer) deliverStore(store, discard func()) {
 	h := p.h
+	discarded := func() {
+		if discard != nil {
+			discard()
+		}
+	}
 	h.mu.Lock()
 	if h.producersStopped {
 		h.producerReads--
 		h.mu.Unlock()
+		discarded()
 		return
 	}
 	if h.inHost > 0 {
-		h.hostStores = append(h.hostStores, func() { p.apply(data, rerr) })
+		h.hostStores = append(h.hostStores, store)
 		h.mu.Unlock()
 		return
 	}
@@ -259,10 +367,11 @@ func (p *streamProducer) deliver(data []byte, rerr error) {
 		h.mu.Lock()
 		h.producerReads--
 		h.mu.Unlock()
+		discarded()
 		return
 	}
 	defer h.releaseRunFor(ch)
-	p.apply(data, rerr)
+	store()
 }
 
 // apply is the delivery's store, run under the run slot or on its holder's goroutine as it leaves host code. It
@@ -300,14 +409,21 @@ func (p *streamProducer) apply(data []byte, rerr error) {
 			p.final = &v
 		}
 	}
+	p.settleLocked()
+}
+
+// settleLocked serves what a delivery left: a pending read is copied into from the queue, or finishes the stream
+// once its source has ended, or starts the next Read or Accept; with no read pending, an ended source and an empty
+// queue finish the stream. The caller holds p.h.mu and the run slot.
+func (p *streamProducer) settleLocked() {
 	e := p.reader
 	pending := e.conn == p.writer && e.hasRead && !e.resolved
 	switch {
-	case pending && len(p.buf) > 0:
+	case pending && p.queuedLocked():
 		progress, err := driveStreamCopyLocked(e, p.writer)
 		if err != nil { // unreachable: the read's range was checked when it was issued
 			p.final = &p.ok
-			p.buf = nil
+			p.dropQueueLocked()
 			p.finishLocked()
 			return
 		}
@@ -315,22 +431,55 @@ func (p *streamProducer) apply(data []byte, rerr error) {
 	case pending && p.final != nil:
 		p.finishLocked()
 	case pending:
-		p.startReadLocked(e.readN) // a Read of 0 bytes with no error: read again
-	case len(p.buf) == 0 && p.final != nil:
+		p.startReadLocked(e.readN) // a Read of 0 bytes with no error, or a skipped Accept: read again
+	case !p.queuedLocked() && p.final != nil:
 		p.finishLocked() // no read pending: the idle reader is notified DROPPED
 	}
 }
 
+// applyAccept is an Accept's store (ADR 0125), apply's shape: under the run slot and h.mu, an accepted socket is
+// queued, a transient error is skipped, and a fatal one ends the stream; then settleLocked serves a pending read.
+// A socket that arrives after Close's stop or the reader's drop is released, its connection closed.
+func (p *streamProducer) applyAccept(s *tcpSocket, aerr error) {
+	h := p.h
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.producerReads--
+	p.reading = false
+	if h.producersStopped || p.done {
+		if s != nil {
+			_ = destroyTCPSocket(s) //nolint:errcheck // a *tcpSocket's destructor returns no error
+		}
+		return
+	}
+	switch {
+	case aerr == nil:
+		p.socks = append(p.socks, s)
+	case acceptTransient(aerr):
+		// Skipped: the stream is perpetual (sockets.wit's listen), and a pending read accepts again.
+	case p.final == nil:
+		p.final = &p.ok // fatal: the stream finishes, its writer dropping; it has no future to carry a code
+	}
+	p.settleLocked()
+}
+
 // finishLocked ends the stream: the future resolves to the final value, then the host-held writer drops, which
 // notifies the reader with DROPPED (dropWriterLocked). The caller holds p.h.mu.
+//
+// **A listen stream has no future** (ADR 0125), so only its writer drops.
+//
+// NEUTER: resolve the future unconditionally, and TestATransientAcceptErrorDoesNotEndTheStream's fatal row panics on
+// the nil future.
 func (p *streamProducer) finishLocked() {
 	if p.done {
 		return
 	}
 	p.done = true
-	p.future.payload = p.final
-	if err := p.future.completeLocked(copyCompleted); err != nil {
-		p.future.completeErr = err // surfaced at the future's drop, as write-via-stream's is
+	if p.future != nil {
+		p.future.payload = p.final
+		if err := p.future.completeLocked(copyCompleted); err != nil {
+			p.future.completeErr = err // surfaced at the future's drop, as write-via-stream's is
+		}
 	}
 	dropWriterLocked(p.writer)
 	if p.onDone != nil {
@@ -341,15 +490,23 @@ func (p *streamProducer) finishLocked() {
 // readerDroppedLocked is the guest's drop of the readable end: the producer stops and the future resolves
 // `ok`, as `wasi:cli/stdin` states (*"If the stream's readable end is dropped the future will resolve to
 // success"*). A Read in flight is discarded when it returns. The caller holds p.h.mu.
+//
+// **A listen stream has no future, and its queue holds sockets** (ADR 0125): each queued socket's connection is
+// released, and onDone releases the stream's reference to the listener.
+//
+// NEUTER: resolve the future unconditionally, and TestP3TcpServeMatchesWasmtime's run panics at the listener's
+// drop on the nil future.
 func (p *streamProducer) readerDroppedLocked() {
 	if p.done {
 		return
 	}
 	p.done = true
-	p.buf = nil
-	p.future.payload = &p.ok
-	if err := p.future.completeLocked(copyCompleted); err != nil {
-		p.future.completeErr = err
+	p.dropQueueLocked()
+	if p.future != nil {
+		p.future.payload = &p.ok
+		if err := p.future.completeLocked(copyCompleted); err != nil {
+			p.future.completeErr = err
+		}
 	}
 	if p.onDone != nil {
 		p.onDone(true)

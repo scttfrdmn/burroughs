@@ -156,7 +156,12 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"(`TestCloseAbandonsAProducerBlockedInRead`, under -race). It ends when its Read returns " +
 				"and its delivery is applied or discarded. ADR 0123 extends it to a socket's receive: the " +
 				"same site, counted in the instance's socket registry before it starts, and WAITED OUT by " +
-				"Close, which closes the connection so the Read returns (`TestCloseEndsASocketsGoroutines`).",
+				"Close, which closes the connection so the Read returns (`TestCloseEndsASocketsGoroutines`). " +
+				"ADR 0125 extends it to a listener: the same site runs one Accept of listen's stream rather " +
+				"than one Read, on demand and at most one in flight, counted in the socket registry; the " +
+				"accepted connection is adopted into the registry on this goroutine, and minted as an own " +
+				"only by the delivery, under the run slot and `asyncHandles.mu`. Close closes the listener so " +
+				"the Accept returns, and waits it out (`TestCloseEndsAGuestParkedInAccept`, under -race).",
 		},
 		{"internal/component/hostsock.go", "(*Host).tcpConnect"}: {
 			count: 1,
