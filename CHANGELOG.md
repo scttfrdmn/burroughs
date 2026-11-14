@@ -25,6 +25,24 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A stream carries its element type, and a guest's copy through its own stream strides by the element**
+  ([#1277](https://github.com/scttfrdmn/burroughs/issues/1277), E7b-1, the first of its two slices; ADR 0124).
+  Streams were byte streams: a non-byte `stream.read` was refused at its call (ADR 0123), and `stream.write` did not
+  check its element.
+  - **Both ends carry the element `stream.new` names,** and every stream built-in traps unless it names the same type,
+    compared structurally as the pin compares it, so two type indices naming `stream u32` are one type.
+  - **A copy moves `n` elements of the element's size,** with a float's NaN canonicalised as the future copy's is. A
+    copy between two ends of one instance traps unless the element is a number, at the copy, whichever side arrives
+    second, as the pin's `End.copy` and wasmtime 49.0.3 both do.
+  - **`stream.read` and `stream.write` check their buffers as the pin's `GuestBuffer` does:** longer than
+    MAX_LENGTH, not aligned to the element, or past the end of memory, each a trap. **wasmtime 49.0.3 does not
+    check the alignment;** the pin's answer is taken and the divergence recorded.
+  - **ADR 0123's refusal of a non-byte `stream.read` is retired.** A stream of an element the codec does not lay out
+    (a stream, a future or an error-context) is still refused at its call, by name. A host consumer
+    (`write-via-stream`, a socket's `send`) refuses a stream whose element is not one byte, which nothing checked.
+  - **Witness:** `TestTypedStreamElementsMatchTheOracle`, every row of two new fixtures' readings, wasmtime 49.0.3's
+    (10 of 10 each) with the pin's answer where it differs, in both gate states. Each check's neuter, run, fails
+    its rows; the MAX_LENGTH check's row still traps for its range and fails on its phrase only.
 - **WASI 0.3's TCP client is served behind a network grant: `ComponentConfig.InheritNetwork` and `burroughs run
   --inherit-network`** ([#1235](https://github.com/scttfrdmn/burroughs/issues/1235), E7a, the first of its three
   slices; ADR 0123). Rust std's `TcpStream::connect`, `write_all`, `shutdown` and `read_to_end` reach
@@ -312,6 +330,22 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **`stream.write` copies elements, not a count of bytes** ([#1275](https://github.com/scttfrdmn/burroughs/issues/1275);
+  ADR 0124).
+  - **The defect:** `stream.write` did not check its element, so a guest's `stream<u32>` write copied its count as
+    bytes, a quarter of the data, and its buffer was checked by none of the pin's `GuestBuffer` traps.
+  - **The repair:** the issue's fix shape was a refusal by name, as `stream.read`'s was, until element sizes were
+    modelled. ADR 0124 models them instead (above), so the write copies at its element's stride.
+  - **Witness:** `TestTypedStreamElementsMatchTheOracle`'s `u32` rows, in both orderings. **Neuter, run:** a byte
+    copy reads `0x00223344` for the first word and 0 for the next two.
+- **`future.write` classifies the element of the type it names, not type 0's**
+  ([#1271](https://github.com/scttfrdmn/burroughs/issues/1271); ADR 0124).
+  - **The defect:** the decoder handled `stream.write`, `future.read` and `future.write` in one case that dropped
+    the type index, so `future.write`'s element was always type 0's. A `future<bool>` behind a `future<u8>` copied
+    its byte within one instance, where the pin traps a copy of a non-number.
+  - **The repair:** every stream and future built-in keeps its type index at decode.
+  - **Witness:** `TestAFutureCopyWithinAnInstanceFollowsThePinsElementRule`'s `bool-type1` row, on a new fixture.
+    **Neuter, run:** the index dropped again reads 262146, type 0's byte copy.
 - **A stream end's drop unlinks the other end, so a read or write after it sees DROPPED instead of parking**
   ([#1264](https://github.com/scttfrdmn/burroughs/issues/1264); ADR 0122).
   - **The defect:** `stream.drop-writable` notified a pending read and left the ends linked. So a read after the

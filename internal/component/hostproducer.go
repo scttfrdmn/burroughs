@@ -119,10 +119,11 @@ func (h *Host) readViaStream(async *asyncHandles) interp.CanonFunc {
 }
 
 // mintLocked makes the stream's ends and its future, and adds the guest's two to the table: the readable end,
-// then the future. The caller holds p.h.mu.
+// then the future. The caller holds p.h.mu. Both ends carry byteElem (ADR 0124): the host writes bytes, and the
+// guest's declared stream<u8> was checked at instantiate (checkConsumerPayload), so its stream.read names that type.
 func (p *streamProducer) mintLocked() (ri, fi int) {
-	p.writer = &writableStreamEnd{producer: p}
-	p.reader = &readableStreamEnd{state: copyStateIdle, conn: p.writer}
+	p.writer = &writableStreamEnd{producer: p, elem: byteElem}
+	p.reader = &readableStreamEnd{state: copyStateIdle, conn: p.writer, elem: byteElem}
 	p.writer.conn = p.reader
 	p.future = &readableFutureEnd{payload: &p.ok}
 	p.reader.index = p.h.addLocked(p.reader)

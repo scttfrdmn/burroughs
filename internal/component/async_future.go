@@ -301,7 +301,10 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 //
 // **Only this direction is built**: a READ arriving at a pending write still parks, which no guest has yet
 // driven.
-func futureWrite(h *asyncHandles, elem futureElem) interp.CanonFunc {
+//
+// `elem` is the element of the type future.write names, which the decoder keeps since #1271 (ADR 0124); it classified
+// type 0's for every future.
+func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("component: future.write: got %d args, want (i, ptr)", len(args))
@@ -330,12 +333,7 @@ func futureWrite(h *asyncHandles, elem futureElem) interp.CanonFunc {
 				if rerr != nil {
 					return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: reading the value at %d: %v", ptr, rerr)}
 				}
-				switch elem.float {
-				case 32:
-					binary.LittleEndian.PutUint32(buf, canon.CanonicalizeNaN32(binary.LittleEndian.Uint32(buf)))
-				case 64:
-					binary.LittleEndian.PutUint64(buf, canon.CanonicalizeNaN64(binary.LittleEndian.Uint64(buf)))
-				}
+				canonicalizeFloats(buf, elem.float)
 				if werr := r.caller.Write(uint64(r.readPtr), buf); werr != nil {
 					return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: storing the value at the read's %d: %v",
 						r.readPtr, werr)}

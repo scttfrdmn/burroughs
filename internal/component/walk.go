@@ -113,7 +113,8 @@ type coreDef struct {
 	// branch — which a conforming guest's synchronous drop glue cannot handle.
 	asyncBuiltinForm bool
 	// asyncBuiltinSlot is the static slot index a context.get/set built-in names (its u32 operand,
-	// captured at decode into Canon.TypeIdx). Unused by the other async built-ins.
+	// captured at decode into Canon.TypeIdx), or the type index a stream or future built-in names (ADR 0124).
+	// Unused by the other async built-ins.
 	asyncBuiltinSlot uint32
 	// threadBuiltin marks a MODELED 🧵 built-in core func and carries its opcode (ADR 0100 phase 1).
 	// Its own pair of fields rather than a reuse of `asyncBuiltin`/`asyncBuiltinOp`, for `Canon.ThreadOp`'s
@@ -377,11 +378,10 @@ func (w *walker) step(d Def) error {
 				// field that had been thrown away. The result type is new, and is resolved here for
 				// `liftSignature`'s reason: a top-level VRef is an index-space ordinal.
 				//
-				// stream.read copies bytes, and the pin's stride is the element's size, so a read of any other
-				// element binds a refusal at its call rather than copying at the wrong stride (asyncBuiltinFunc,
-				// ADR 0123). It was refused here, at instantiate (ADR 0122), which refused every program that links
-				// wasi-libc's socket code. The type index rides in asyncBuiltinSlot, which stream.read does not
-				// otherwise use.
+				// A stream or future built-in's type index rides in asyncBuiltinSlot (ADR 0124): asyncBuiltinFunc
+				// resolves it to the element the built-in names, which its end's type is checked against and a copy
+				// strides by. Only stream.read's survived the decode, and it bound a refusal of any element but a
+				// byte (ADR 0123), which ADR 0124 retires.
 				var resultT *ValType
 				if cn.Result != nil {
 					rt := resolveVal(*cn.Result, w.c.sectionTypeAt(), nil)
@@ -390,7 +390,7 @@ func (w *walker) step(d Def) error {
 				w.appendCore(SpaceCoreFunc, coreDef{
 					asyncBuiltin:       true,
 					asyncBuiltinOp:     cn.AsyncOp,
-					asyncBuiltinSlot:   cn.TypeIdx, // context.get/set's static slot (captured at decode)
+					asyncBuiltinSlot:   cn.TypeIdx, // context.get/set's static slot, or a stream or future's type (captured at decode)
 					asyncBuiltinForm:   cn.AsyncForm,
 					asyncBuiltinResult: resultT,
 					lowerMem:           w.lowerMemory(cn),

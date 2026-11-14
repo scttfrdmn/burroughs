@@ -571,7 +571,7 @@ func TestTheConnectionOutlivesTheHandleWhileAStreamHoldsIt(t *testing.T) {
 		t.Fatalf("the peer's write: %v", err)
 	}
 	_ = c.(*net.TCPConn).CloseWrite()
-	if got := uint32(mustRet(t)(streamRead(s.h)(s.cc, []interp.Value{interp.I32(int32(ri)), interp.I32(512), interp.I32(8)}))); got != asyncBlocked {
+	if got := uint32(mustRet(t)(streamRead(s.h, byteElem)(s.cc, []interp.Value{interp.I32(int32(ri)), interp.I32(512), interp.I32(8)}))); got != asyncBlocked {
 		t.Fatalf("the first read = %#x, want BLOCKED: nothing has been read yet", got)
 	}
 	var re *readableStreamEnd
@@ -601,7 +601,7 @@ func TestAReceiveDropShutsTheReadHalf(t *testing.T) {
 	}
 	conn := obj.conn.c
 	release()
-	if _, err := streamDropReadable(s.h)(s.cc, []interp.Value{interp.I32(int32(ri))}); err != nil {
+	if _, err := streamDropReadable(s.h, byteElem)(s.cc, []interp.Value{interp.I32(int32(ri))}); err != nil {
 		t.Fatalf("stream.drop-readable: %v", err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second)) // the neuter's bound, not a measurement

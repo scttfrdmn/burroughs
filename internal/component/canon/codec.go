@@ -1626,6 +1626,15 @@ func CanonicalizeNaN32(bits uint32) uint32 { return canonicalizeNaN32(bits) }
 // CanonicalizeNaN64 is CanonicalizeNaN32 for f64.
 func CanonicalizeNaN64(bits uint64) uint64 { return canonicalizeNaN64(bits) }
 
+// ElemSize is the codec's own layout of a type, `size`, for a caller that moves elements without a Value: a stream
+// copy strides by its element's size (def:ReadableGuestBuffer.read, ADR 0124). One layout, so the stride a copy takes
+// is the one a list's lift takes. It panics on a type the codec does not model, as `size` does, so the caller builds
+// t through the codec's type bridge, which refuses one.
+func ElemSize(t Type) int { return size(t) }
+
+// Alignment is ElemSize's alignment, `alignment`: a stream buffer's pointer is checked against it (def:GuestBuffer).
+func Alignment(t Type) int { return alignment(t) }
+
 // storeInt writes the low nbytes of v little-endian at ptr. A signed value is held in Value.u as its
 // two's-complement bits, so the same low-byte copy serves signed and unsigned.
 func (h *heap) storeInt(v uint64, ptr, nbytes int) {

@@ -1,0 +1,50 @@
+# Committed readings for stream-typed-copy.wasm: a guest's copy of typed elements through its own stream (#1275, ADR 0124).
+# Built:       wasm-tools parse stream-typed-copy.wat -o stream-typed-copy.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y --invoke '<export>()' stream-typed-copy.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical.
+#
+# Each line is `<export>: <wasmtime's reading>`. A `pin <export>:` line is the pin's answer where it is not
+# wasmtime's (ADR 0102: the pin defines the semantics), and the test asserts it instead.
+u32-wf-result: 48
+u32-wf-w0: 287454020
+u32-wf-w1: 1432778632
+u32-wf-w2: 2578103244
+u32-wf-w3: 0
+u32-rf-result: 48
+u32-rf-w0: 287454020
+u32-rf-w2: 2578103244
+u32-rf-w3: 0
+u32-partial-result: 32
+u32-partial-w2: 0
+u32-equal-type-result: 48
+f32-wf-w0: 2143289345
+pin f32-wf-w0: 2143289344
+f32-wf-w1: 1069547520
+f32-rf-w0: 2143289345
+pin f32-rf-w0: 2143289344
+f64-wf-lo: 1
+pin f64-wf-lo: 0
+f64-wf-hi: 2146959360
+u8-wf-result: 48
+u8-wf-w0: 2241348
+#
+# Meaning. `wf`: the write of 3 parks, then a read of 4 copies (the read is the second arriver). `rf`: the read of 4
+# parks, then the write of 3 copies. The written words are 0x11223344, 0x55667788, 0x99aabbcc at 64; the reader's
+# buffer is at 128.
+#   *-result 48       COMPLETED (0) with progress 3, in elements: 3 << 4.
+#   u32-*-w0..w2      the three words, each whole; w3 is 0, so no fourth element was written.
+#   u32-partial       a read of 2: progress 2 (32), and the third word of the buffer is untouched.
+#   u32-equal-type    the read names type 2, `stream u32` like the end's type 1: one type to the pin
+#                     (def:copy:"trap_if(end.t != stream_or_future_t.t)" compares types, not indices).
+#   f32-*-w0          the NaN 0x7fc00001. wasmtime preserves its payload (2143289345); the pin's lift
+#                     canonicalises it under DETERMINISTIC_PROFILE (0x7fc00000, 2143289344) and randomises it
+#                     otherwise, so wasmtime's reading is inside the pin's set. Burroughs takes the deterministic
+#                     outcome, as future-self-copy-elems.reading's floats do.
+#   f32-wf-w1         1.5 (0x3fc00000), unchanged.
+#   f64-wf-lo/hi      the NaN 0x7ff8000000000001's two words: wasmtime keeps the low 1, the pin's deterministic
+#                     outcome is 0x7ff8000000000000.
+#   u8-wf-*           the control: 3 bytes, 0x44 0x33 0x22, progress 3.
+#
+# Burroughs before ADR 0124 (main at 7ffc135): every u32, f32 and f64 row is refused at its read, "canon
+# stream.read of type 1, whose element is not one byte" (ADR 0123); the u8 rows agree.

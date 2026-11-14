@@ -46,7 +46,7 @@ func TestStreamWriteDeliversTheOracleOutcomes(t *testing.T) {
 	for _, fx := range loadStreamWrites(t) {
 		t.Run(fx.Name, func(t *testing.T) {
 			h := newAsyncHandles()
-			se := &writableStreamEnd{}
+			se := &writableStreamEnd{elem: byteElem}
 			se.index = h.addLocked(se)
 
 			cc, err := interp.NewCanonCallerForTest(1)
@@ -54,7 +54,7 @@ func TestStreamWriteDeliversTheOracleOutcomes(t *testing.T) {
 				t.Fatalf("harness caller: %v", err)
 			}
 			const ptr = 32
-			writeRet, err := streamWrite(h)(cc, []interp.Value{interp.I32(int32(se.index)), interp.I32(ptr), interp.I32(int32(fx.N))})
+			writeRet, err := streamWrite(h, byteElem)(cc, []interp.Value{interp.I32(int32(se.index)), interp.I32(ptr), interp.I32(int32(fx.N))})
 			if err != nil {
 				t.Fatalf("stream.write: %v", err)
 			}
@@ -144,7 +144,7 @@ func TestStreamHostFirstCompletesInline(t *testing.T) {
 			}
 
 			// stream.new mints a connected (ri, wi) pair over one shared stream.
-			newRet, err := streamNew(h)(cc, nil)
+			newRet, err := streamNew(h, byteElem)(cc, nil)
 			if err != nil {
 				t.Fatalf("stream.new: %v", err)
 			}
@@ -178,7 +178,7 @@ func TestStreamHostFirstCompletesInline(t *testing.T) {
 			}
 
 			// Guest writes SECOND — it drives the copy and completes INLINE, returning the packed payload.
-			writeRet, err := streamWrite(h)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(int32(srcPtr)), interp.I32(int32(fx.WriteN))})
+			writeRet, err := streamWrite(h, byteElem)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(int32(srcPtr)), interp.I32(int32(fx.WriteN))})
 			if err != nil {
 				t.Fatalf("stream.write: %v", err)
 			}
@@ -284,9 +284,9 @@ func TestStreamDropsAuditEndStates(t *testing.T) {
 	readableStates := map[string]copyState{"IDLE": copyStateIdle, "COPYING": copyStateCopying, "DONE": copyStateDone}
 	for state, want := range fx.TrapMatrix.StreamReadable {
 		h := newAsyncHandles()
-		re := &readableStreamEnd{state: readableStates[state]}
+		re := &readableStreamEnd{state: readableStates[state], elem: byteElem}
 		re.index = h.addLocked(re)
-		if got := dropOutcome(t, streamDropReadable(h), cc, re.index); got != want {
+		if got := dropOutcome(t, streamDropReadable(h, byteElem), cc, re.index); got != want {
 			t.Errorf("drop-readable in %s = %s, want %s (oracle trap matrix)", state, got, want)
 		}
 	}
@@ -294,15 +294,15 @@ func TestStreamDropsAuditEndStates(t *testing.T) {
 	// (1) Trap guard, writable end: the model's COPYING is a pending unresolved write; IDLE is fresh or a
 	// resolved-open write; DONE is a dropped end. The oracle says IDLE/DONE ok, COPYING traps.
 	writableStates := map[string]*writableStreamEnd{
-		"IDLE":    {},
-		"COPYING": {hasWrite: true},
-		"DONE":    {done: true},
+		"IDLE":    {elem: byteElem},
+		"COPYING": {hasWrite: true, elem: byteElem},
+		"DONE":    {done: true, elem: byteElem},
 	}
 	for state, want := range fx.TrapMatrix.StreamWritable {
 		h := newAsyncHandles()
 		we := writableStates[state]
 		we.index = h.addLocked(we)
-		if got := dropOutcome(t, streamDropWritable(h), cc, we.index); got != want {
+		if got := dropOutcome(t, streamDropWritable(h, byteElem), cc, we.index); got != want {
 			t.Errorf("drop-writable in %s = %s, want %s (oracle trap matrix)", state, got, want)
 		}
 	}
@@ -310,7 +310,7 @@ func TestStreamDropsAuditEndStates(t *testing.T) {
 	// (2) Anti-hang notification: stream.new -> join ri -> host read (pends) -> drop wi -> the reader's
 	// STREAM_READ event fires DROPPED (progress 0) and the end goes DONE.
 	h := newAsyncHandles()
-	newRet, err := streamNew(h)(cc, nil)
+	newRet, err := streamNew(h, byteElem)(cc, nil)
 	if err != nil {
 		t.Fatalf("stream.new: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestStreamDropsAuditEndStates(t *testing.T) {
 		t.Fatalf("host read: err=%v completed=%v, want parked", rerr, completed)
 	}
 
-	dropRet, derr := streamDropWritable(h)(cc, []interp.Value{interp.I32(int32(wi))})
+	dropRet, derr := streamDropWritable(h, byteElem)(cc, []interp.Value{interp.I32(int32(wi))})
 	if derr != nil {
 		t.Fatalf("drop-writable of an idle writer trapped, want ok: %v", derr)
 	}
@@ -398,7 +398,7 @@ func TestStreamCancelReadProducesCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("harness caller: %v", err)
 	}
-	newRet, err := streamNew(h)(cc, nil)
+	newRet, err := streamNew(h, byteElem)(cc, nil)
 	if err != nil {
 		t.Fatalf("stream.new: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestStreamCancelReadProducesCancelled(t *testing.T) {
 		t.Fatalf("host read: err=%v completed=%v, want parked", rerr, completed)
 	}
 
-	cancelRet, cerr := streamCancelRead(h)(cc, []interp.Value{interp.I32(int32(ri))})
+	cancelRet, cerr := streamCancelRead(h, byteElem)(cc, []interp.Value{interp.I32(int32(ri))})
 	if cerr != nil {
 		t.Fatalf("stream.cancel-read: %v", cerr)
 	}
@@ -477,7 +477,7 @@ func TestStreamCancelWriteProducesCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("harness caller: %v", err)
 	}
-	newRet, err := streamNew(h)(cc, nil)
+	newRet, err := streamNew(h, byteElem)(cc, nil)
 	if err != nil {
 		t.Fatalf("stream.new: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestStreamCancelWriteProducesCancelled(t *testing.T) {
 
 	// A guest-first write parks (no reader yet) -> COPYING.
 	const srcPtr = 32
-	writeRet, werr := streamWrite(h)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(srcPtr), interp.I32(4)})
+	writeRet, werr := streamWrite(h, byteElem)(cc, []interp.Value{interp.I32(int32(wi)), interp.I32(srcPtr), interp.I32(4)})
 	if werr != nil {
 		t.Fatalf("stream.write: %v", werr)
 	}
@@ -493,7 +493,7 @@ func TestStreamCancelWriteProducesCancelled(t *testing.T) {
 		t.Errorf("write = %#x, want %#x (BLOCKED)", uint32(writeRet[0].Int32()), uint32(fx.WriteRet[0]))
 	}
 
-	cancelRet, cerr := streamCancelWrite(h)(cc, []interp.Value{interp.I32(int32(wi))})
+	cancelRet, cerr := streamCancelWrite(h, byteElem)(cc, []interp.Value{interp.I32(int32(wi))})
 	if cerr != nil {
 		t.Fatalf("stream.cancel-write: %v", cerr)
 	}

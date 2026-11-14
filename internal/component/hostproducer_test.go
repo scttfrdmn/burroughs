@@ -101,7 +101,7 @@ func newProducerHarness(t *testing.T) producerHarness {
 
 func (p producerHarness) read(t *testing.T, ptr, n uint32) uint32 {
 	t.Helper()
-	ret, err := streamRead(p.h)(p.cc, []interp.Value{interp.I32(int32(p.ri)), interp.I32(int32(ptr)), interp.I32(int32(n))})
+	ret, err := streamRead(p.h, byteElem)(p.cc, []interp.Value{interp.I32(int32(p.ri)), interp.I32(int32(ptr)), interp.I32(int32(n))})
 	if err != nil {
 		t.Fatalf("stream.read(%d, %d): %v", ptr, n, err)
 	}
@@ -133,7 +133,7 @@ func TestAStreamReadCancelledMidReadServesTheBufferedBytesNext(t *testing.T) {
 	if n := p.src.awaitRead(t); n != 8 {
 		t.Errorf("the producer's Read asked for %d bytes, want the read's 8: it reads on demand", n)
 	}
-	ret, err := streamCancelRead(p.h)(p.cc, []interp.Value{interp.I32(int32(p.ri))})
+	ret, err := streamCancelRead(p.h, byteElem)(p.cc, []interp.Value{interp.I32(int32(p.ri))})
 	if err != nil {
 		t.Fatalf("stream.cancel-read: %v", err)
 	}
@@ -187,10 +187,10 @@ func TestAGuestDropOfTheProducedStreamResolvesTheFutureOK(t *testing.T) {
 		t.Fatalf("the first read = %#x, want BLOCKED", got)
 	}
 	p.src.awaitRead(t)
-	if _, err := streamCancelRead(p.h)(p.cc, []interp.Value{interp.I32(int32(p.ri))}); err != nil {
+	if _, err := streamCancelRead(p.h, byteElem)(p.cc, []interp.Value{interp.I32(int32(p.ri))}); err != nil {
 		t.Fatalf("stream.cancel-read: %v", err)
 	}
-	if _, err := streamDropReadable(p.h)(p.cc, []interp.Value{interp.I32(int32(p.ri))}); err != nil {
+	if _, err := streamDropReadable(p.h, byteElem)(p.cc, []interp.Value{interp.I32(int32(p.ri))}); err != nil {
 		t.Fatalf("stream.drop-readable: %v", err)
 	}
 	const fptr = 200
@@ -238,7 +238,7 @@ func TestAWritersDropUnlinksItsReader(t *testing.T) {
 		if err != nil {
 			t.Fatalf("harness caller: %v", err)
 		}
-		ret, err := streamNew(h)(cc, nil)
+		ret, err := streamNew(h, byteElem)(cc, nil)
 		if err != nil {
 			t.Fatalf("stream.new: %v", err)
 		}
@@ -248,13 +248,13 @@ func TestAWritersDropUnlinksItsReader(t *testing.T) {
 		}
 		return pair{h: h, cc: cc, ri: uint32(packed & 0xffffffff), wi: uint32(packed >> 32)}
 	}
-	call := func(t *testing.T, p pair, fn func(*asyncHandles) interp.CanonFunc, args ...uint32) uint32 {
+	call := func(t *testing.T, p pair, fn func(*asyncHandles, *elemType) interp.CanonFunc, args ...uint32) uint32 {
 		t.Helper()
 		vs := make([]interp.Value, len(args))
 		for i, a := range args {
 			vs[i] = interp.I32(int32(a))
 		}
-		ret, err := fn(p.h)(p.cc, vs)
+		ret, err := fn(p.h, byteElem)(p.cc, vs)
 		if err != nil {
 			t.Fatalf("built-in(%v): %v", args, err)
 		}
@@ -300,7 +300,7 @@ func TestAWritersDropUnlinksItsReader(t *testing.T) {
 	t.Run("write-via-stream after the drop resolves its future", func(t *testing.T) {
 		p := newPair(t)
 		call(t, p, streamDropWritable, p.wi)
-		fi := call(t, p, func(h *asyncHandles) interp.CanonFunc { return writeViaStreamTo(io.Discard, h) }, p.ri)
+		fi := call(t, p, func(h *asyncHandles, _ *elemType) interp.CanonFunc { return writeViaStreamTo(io.Discard, h) }, p.ri)
 		p.h.mu.Lock()
 		fe, _ := handleAt[*readableFutureEnd](p.h, fi)
 		resolved := fe != nil && fe.resolved && fe.result == copyCompleted
@@ -362,7 +362,7 @@ func TestAGuestStreamReadFollowsEndCopysArms(t *testing.T) {
 		if err != nil {
 			t.Fatalf("harness caller: %v", err)
 		}
-		ret, err := streamNew(h)(cc, nil)
+		ret, err := streamNew(h, byteElem)(cc, nil)
 		if err != nil {
 			t.Fatalf("stream.new: %v", err)
 		}
@@ -372,13 +372,13 @@ func TestAGuestStreamReadFollowsEndCopysArms(t *testing.T) {
 		packed := uint64(ret[0].Int64())
 		return h, cc, uint32(packed & 0xffffffff), uint32(packed >> 32)
 	}
-	op := func(t *testing.T, h *asyncHandles, cc *interp.CanonCaller, fn func(*asyncHandles) interp.CanonFunc, a ...uint32) uint32 {
+	op := func(t *testing.T, h *asyncHandles, cc *interp.CanonCaller, fn func(*asyncHandles, *elemType) interp.CanonFunc, a ...uint32) uint32 {
 		t.Helper()
 		vs := make([]interp.Value, len(a))
 		for i, x := range a {
 			vs[i] = interp.I32(int32(x))
 		}
-		ret, err := fn(h)(cc, vs)
+		ret, err := fn(h, byteElem)(cc, vs)
 		if err != nil {
 			t.Fatalf("built-in(%v): %v", a, err)
 		}
@@ -439,14 +439,13 @@ func TestAGuestStreamReadFollowsEndCopysArms(t *testing.T) {
 	})
 }
 
-// TestStreamReadIsBoundAndItsSyncFormRefused is stream.read's binding (ADR 0122): its async form permits, its
-// sync form is refused by name, and so is a read of a stream whose element is not one byte, **at its call** since
-// ADR 0123, which moved that refusal out of instantiate: wasi-libc links a non-byte stream.read into every socket
-// program, whether or not it listens.
+// TestStreamReadIsBoundAndItsSyncFormRefused is stream.read's binding (ADR 0122): its async form permits, and its
+// sync form is refused by name. **A read of a stream whose element is not one byte is bound as a read** since ADR
+// 0124, which retired ADR 0123's refusal of it at its call: stream-read-u32.wasm's read of handle 1, which its
+// instance does not hold, reaches the handle's check rather than a refusal of its element. Its copies are
+// TestTypedStreamElementsMatchTheOracle's.
 //
-// Neutered, each run: unbuiltAsyncSurface's sync-form arm dropped, and stream-read-sync.wasm instantiates;
-// asyncBuiltinFunc's element check dropped, and stream-read-u32.wasm's read reaches the byte copy, which refuses a
-// handle that is no stream end rather than the element.
+// Neutered, each run: unbuiltAsyncSurface's sync-form arm dropped, and stream-read-sync.wasm instantiates.
 func TestStreamReadIsBoundAndItsSyncFormRefused(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
 	async := &Component{Canons: []Canon{{Kind: CanonAsyncBuiltin, AsyncOp: 0x0f, AsyncForm: true}}}
@@ -478,8 +477,9 @@ func TestStreamReadIsBoundAndItsSyncFormRefused(t *testing.T) {
 		}
 		defer in.Close()
 		_, err = in.CallValues("read")
-		if !errors.Is(err, ErrUnsupportedForm) || !strings.Contains(err.Error(), "not one byte") {
-			t.Errorf("read() err = %v, want ErrUnsupportedForm naming the element", err)
+		if errors.Is(err, ErrUnsupportedForm) || err == nil || !strings.Contains(err.Error(), "handle 1 is not a readable stream end") {
+			t.Errorf("read() err = %v, want the read bound, failing for its handle and not refused for its element "+
+				"(ADR 0124)", err)
 		}
 	})
 }
