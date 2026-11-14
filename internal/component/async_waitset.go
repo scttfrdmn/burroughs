@@ -438,76 +438,39 @@ func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
 	}
 }
 
-// futureElem describes future type `ti`'s element for the intra-instance copy a `future.write` makes into a
-// pending read (#1006).
-type futureElem struct {
-	size    int  // bytes moved: 0 for a future with no payload
-	float   int  // 32 or 64 for a float, whose NaN is canonicalized; 0 otherwise
-	numeric bool // the pin's `none_or_number_type`: the copy is allowed within one instance
-	known   bool // the type resolved to a future at all
+// A stream or future built-in's element is described by elemType (async_elem.go, ADR 0124), which replaced
+// futureElem and stream.read's one-byte test (`streamOfBytes`) with one descriptor for both.
+
+// streamBuiltins are the stream built-ins 0x0e to 0x14, in opcode order, each a constructor over the instance's
+// async table and the element its type index names.
+var streamBuiltins = [...]struct {
+	name string
+	bind func(*asyncHandles, *elemType) interp.CanonFunc
+}{
+	{"stream.new", streamNew},                    // 0x0e (gate:async increment 4): a connected end pair
+	{"stream.read", streamRead},                  // 0x0f (ADR 0122)
+	{"stream.write", streamWrite},                // 0x10 (gate:async increment 3, write side)
+	{"stream.cancel-read", streamCancelRead},     // 0x11 (gate:async increment 4): first running CANCELLED
+	{"stream.cancel-write", streamCancelWrite},   // 0x12 (gate:async increment 4): cancel-read's twin
+	{"stream.drop-readable", streamDropReadable}, // 0x13 (gate:async increment 4)
+	{"stream.drop-writable", streamDropWritable}, // 0x14 (gate:async increment 4)
 }
 
-// refusedNonByteStreamRead is the `stream.read` bound for a stream whose element is not one byte (ADR 0123): its
-// call is refused by name, as an unserved import's is, and touches no handle.
-func refusedNonByteStreamRead(ti uint32) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
-		return nil, fmt.Errorf("%w: canon stream.read of type %d, whose element is not one byte; stream.read is "+
-			"built for stream<u8> and stream<s8> (ADR 0122, ADR 0123; #1277 builds typed elements)", ErrUnsupportedForm, ti)
-	}
-}
-
-// streamOfBytes reports whether type `ti` is a stream whose element is one byte (`u8` or `s8`), the only
-// element `stream.read`'s byte copy is built for (ADR 0122). The pin's guest buffer strides by `elem_size`
-// (def:WritableGuestBuffer:"self.ptr += len(vs) * elem_size(self.t, self.cx.opts.memory.ptr_type())").
-func (w *walker) streamOfBytes(ti uint32) bool {
-	at := w.c.sectionTypeAt()
-	td, ok := at(ti)
-	if !ok || td.Kind != TDVal || td.Val.Kind != VStream || td.Val.Elem == nil {
-		return false
-	}
-	switch resolveVal(*td.Val.Elem, at, nil).Kind {
-	case VU8, VS8:
-		return true
-	default:
-		return false
-	}
-}
-
-// futureElemOf classifies future type `ti`'s element as the pin's `End.copy` does (2e7895c):
+// streamBuiltinFunc binds stream built-in op (0x0e to 0x14) over the element type index ti names (ADR 0124).
 //
-//		trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))
-//
-//	  - **No payload, or an integer:** the lift then lower is a byte copy.
-//	  - **A float:** a byte copy with the NaN canonicalized, as the codec's lift does under the deterministic
-//	    profile.
-//	  - **Anything else** (`bool`, `char`, `string`, a list or record, and so on): the copy TRAPS within one
-//	    instance. wasmtime 49.0.2 traps the same, *"cannot read from and write to intra-component future/stream
-//	    with non-numeric payload"*, on `bool` and `char`.
-func (w *walker) futureElemOf(ti uint32) futureElem {
-	at := w.c.sectionTypeAt()
-	td, ok := at(ti)
-	if !ok || td.Kind != TDVal || td.Val.Kind != VFuture {
-		return futureElem{}
+// **A stream of any element the codec lays out is bound**, and the refusal of a `stream.read` whose element is not
+// one byte (ADR 0123) is retired: the copy strides by the element and traps as the pin does. That refusal was the
+// interim ADR 0123 said E7b would replace; it was moved to the call because wasi-libc's tcp object lowers `listen`'s
+// `stream<own<tcp-socket>>` read into every socket program. **A type index naming no stream, or a stream of an
+// element the codec does not lay out** (a stream, a future, an error-context), is still refused at the call, by
+// name: there is no stride to copy at.
+func (w *walker) streamBuiltinFunc(op byte, ti uint32) interp.CanonFunc {
+	b := streamBuiltins[op-0x0e]
+	el := w.streamElemOf(ti)
+	if !el.modeled {
+		return refusedStreamElem(b.name, ti, el)
 	}
-	if td.Val.Elem == nil {
-		return futureElem{numeric: true, known: true}
-	}
-	switch resolveVal(*td.Val.Elem, at, nil).Kind {
-	case VS8, VU8:
-		return futureElem{size: 1, numeric: true, known: true}
-	case VS16, VU16:
-		return futureElem{size: 2, numeric: true, known: true}
-	case VS32, VU32:
-		return futureElem{size: 4, numeric: true, known: true}
-	case VS64, VU64:
-		return futureElem{size: 8, numeric: true, known: true}
-	case VF32:
-		return futureElem{size: 4, float: 32, numeric: true, known: true}
-	case VF64:
-		return futureElem{size: 8, float: 64, numeric: true, known: true}
-	default: // not a number: the pin traps the copy within one instance
-		return futureElem{known: true}
-	}
+	return b.bind(w.async, el)
 }
 
 // asyncBuiltinFunc maps a waitable-set canon built-in opcode to its Go impl over this instance's async
@@ -543,31 +506,10 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 		return subtaskCancel(w.async, asyncForm), true
 	case 0x0d: // subtask.drop (gate:async increment 4)
 		return subtaskDrop(w.async), true
-	case 0x0e: // stream.new (gate:async increment 4) — mints a connected readable+writable end pair
-		return streamNew(w.async), true
-	case 0x0f: // stream.read (ADR 0122), async form only: the sync form is refused by unbuiltAsyncSurface
-		// **A read of a stream whose element is not one byte traps at its call, by name** (ADR 0123). The copy
-		// moves bytes and the pin strides by the element's size, so such a read is never served. It was refused
-		// at instantiate (ADR 0122), and that refused every program wasi-libc's socket code is linked into: its
-		// tcp object lowers `listen`'s `stream<own<tcp-socket>>` read whether or not the program listens (E7b,
-		// #1277, builds the read). An import the host does not serve is refused at its call for the same reason.
-		//
-		// NEUTER: bind streamRead whatever the element, and TestStreamReadIsBoundAndItsSyncFormRefused's read of a
-		// stream<u32> reaches the byte copy, refused for its handle rather than for its element.
-		if !w.streamOfBytes(slot) {
-			return refusedNonByteStreamRead(slot), true
-		}
-		return streamRead(w.async), true
-	case 0x10: // stream.write (gate:async increment 3, write side)
-		return streamWrite(w.async), true
-	case 0x11: // stream.cancel-read (gate:async increment 4) — first running production of CANCELLED
-		return streamCancelRead(w.async), true
-	case 0x12: // stream.cancel-write (gate:async increment 4) — cancel-read's symmetric twin
-		return streamCancelWrite(w.async), true
-	case 0x13: // stream.drop-readable (gate:async increment 4)
-		return streamDropReadable(w.async), true
-	case 0x14: // stream.drop-writable (gate:async increment 4)
-		return streamDropWritable(w.async), true
+	case 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14:
+		// The stream built-ins, each bound over the element its type index names (ADR 0124). stream.read is bound
+		// in its async form only: the sync form is refused by unbuiltAsyncSurface (ADR 0122).
+		return w.streamBuiltinFunc(op, slot), true
 	case 0x0a: // context.get (gate:async increment 4) — reads the agent's own context slot
 		return contextGet(w.async, slot), true
 	case 0x0b: // context.set

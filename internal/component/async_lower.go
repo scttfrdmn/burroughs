@@ -227,7 +227,9 @@ func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, s
 					fe.index = h.addLocked(fe)
 					handle = fe.index
 				case canon.KindStream:
-					se := &writableStreamEnd{}
+					// byteElem (ADR 0124): no host import returns a stream through an async lower, and the
+					// synthetic one that does (async_stream_synth_test.go) returns a stream<u8>.
+					se := &writableStreamEnd{elem: byteElem}
 					se.index = h.addLocked(se)
 					handle = se.index
 				default:

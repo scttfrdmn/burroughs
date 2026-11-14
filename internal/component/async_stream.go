@@ -49,6 +49,9 @@ type writableStreamEnd struct {
 	// producer, when set, makes this a HOST-held writer (ADR 0122): never in the guest's table, never parking
 	// a write, its source the producer's buffer of bytes read and not yet delivered.
 	producer *streamProducer
+	// elem is the stream's element (ADR 0124), stamped at the mint (stream.new's type, or byteElem for a host's):
+	// every stream built-in on this end checks its own element against it, and a copy strides by it.
+	elem *elemType
 }
 
 // pendingEventLocked delivers the write's (STREAM_WRITE, index, result|progress<<4) event once — progress
@@ -129,7 +132,13 @@ func (e *writableStreamEnd) completeWriteLocked(progress uint32, r copyResult) {
 //
 // The reader is the host (write-via-stream, through hostReadLocked's internal path) or, since ADR 0122, a guest
 // reading through `stream.read` (streamRead).
-func streamWrite(h *asyncHandles) interp.CanonFunc {
+//
+// **`elem` is the element the built-in names** (ADR 0124). It must be the end's (checkStreamEndType), and the buffer
+// is `n` elements of it, checked as def:GuestBuffer checks a buffer (checkGuestBuffer), in def:copy's order: the
+// end's type, its state, then the buffer. A write on an end that is not IDLE is a trap
+// (def:copy:"trap_if(end.state != End.State.IDLE)"); it was a Go error. Before ADR 0124 the write had no element and
+// none of these checks, so a `stream<u32>` write copied a count of bytes (#1275).
+func streamWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 3 {
 			return nil, fmt.Errorf("component: stream.write: got %d args, want (i, ptr, n)", len(args))
@@ -141,8 +150,14 @@ func streamWrite(h *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, fmt.Errorf("component: stream.write: handle %d is not a writable stream end", i)
 		}
+		if err := checkStreamEndType("stream.write", i, e.elem, elem); err != nil {
+			return nil, err
+		}
 		if e.done || e.hasWrite {
-			return nil, fmt.Errorf("component: stream.write: end %d is not writable (done or write pending)", i)
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.write: end %d is not IDLE (done or write pending)", i)}
+		}
+		if err := checkGuestBuffer(c, "stream.write", elem, ptr, n); err != nil {
+			return nil, err
 		}
 		// **A write starts from IDLE, so the last copy's state is cleared here** (ADR 0120). Reaching this line
 		// means no write is pending and any completed write's event has been taken, the reference's IDLE
@@ -266,6 +281,8 @@ type readableStreamEnd struct {
 	// fires when the read resolves, so the consumer can finish (write to stdout, resolve its future).
 	hostSink       func([]byte) error
 	onHostComplete func(result copyResult)
+	// elem is the stream's element (ADR 0124), the writable end's: stamped at the mint with it.
+	elem *elemType
 }
 
 // pendingEventLocked delivers the read's (STREAM_READ, index, result|progress<<4) event once and, on
@@ -326,6 +343,13 @@ func (e *readableStreamEnd) armLocked(progress uint32, r copyResult) {
 // readable end's destination buffer, returning the count (the shared progress both ends report). This is
 // SharedStreamImpl's copy (def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:" / 1000–1005): the second arriver moves the bytes; each side supplies
 // its own buffer at its own ptr in its own memory. Caller holds asyncHandles.mu.
+//
+// **The copy strides by the element** (ADR 0124, #1275): `n` elements are `n * size` bytes
+// (def:ReadableGuestBuffer.read, def:load_list_from_valid_range). It moved `n` bytes, a quarter of a `stream<u32>`.
+// Both ends' buffers were checked as def:GuestBuffer checks them when their built-ins were called.
+//
+// NEUTER: move `n` bytes, and TestTypedStreamElementsMatchTheOracle's u32-wf-w0 reads 0x00223344 and u32-wf-w1 0, in
+// both orderings.
 func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, error) {
 	// A host-held writer's source is the producer's buffer, not guest memory (ADR 0122).
 	//
@@ -333,26 +357,57 @@ func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, 
 	if w.producer != nil {
 		return w.producer.copyIntoLocked(r)
 	}
-	n := w.n
-	if r.readN < n {
-		n = r.readN
+	n := min(w.n, r.readN)
+	if n == 0 {
+		return 0, nil
 	}
-	if n > 0 {
-		// Both buffers live in the one guest memory 0, and the src is read through the READER's caller, which
-		// is memory-bound in both cases: write-via-stream's lower, or a guest `stream.read`, whose canonopts the
-		// decoder keeps (ADR 0122). The writer's own caller (stream.write) is not: the decoder drops its opts.
-		// This read the src through the writer's caller for a guest reader, which no reader was until ADR 0122.
-		src, err := r.caller.Read(uint64(w.srcPtr), uint64(n))
-		if err != nil {
-			return 0, fmt.Errorf("component: stream copy: reading %d elements from writer at %#x: %w", n, w.srcPtr, err)
+	el := w.elem
+	if r.hostSink != nil {
+		// **A host consumer reads bytes** (ADR 0124). Its `data: stream<u8>` parameter is not checked at instantiate,
+		// which a producer's result is (checkConsumerPayload), so a guest declaring a stream of anything else
+		// reaches here, and its words would reach stdout as bytes.
+		//
+		// NEUTER: drop this check, and TestAHostConsumerReadsOnlyAStreamOfBytes's stream<u32> write hands its 8 bytes
+		// to the sink.
+		if el.size != 1 {
+			return 0, fmt.Errorf("%w: a host consumer reads a stream<u8>, and this stream's element is %s (ADR 0124)",
+				ErrUnsupportedForm, el)
 		}
-		if r.hostSink != nil { // a host consumer: hand the bytes to its sink (stdout), not guest memory
-			if err := r.hostSink(src); err != nil {
-				return 0, fmt.Errorf("component: stream copy: host sink: %w", err)
-			}
-		} else if err := r.caller.Write(uint64(r.dstPtr), src); err != nil {
-			return 0, fmt.Errorf("component: stream copy: writing %d elements to reader at %#x: %w", n, r.dstPtr, err)
+	} else if !el.numeric {
+		// **Two guest ends are one instance's** (ADR 0124): stream.new mints both in one instance's table and no
+		// built-in or lift moves an end out of it. So a copy between them traps unless the element is a number, at
+		// the copy, whichever side arrives second; the write that parks before it does not.
+		//
+		// NEUTER: drop this arm, and TestTypedStreamElementsMatchTheOracle's string-copy, string-copy-read-first and
+		// own-copy complete, progress 1.
+		return 0, &interp.Trap{Reason: fmt.Sprintf("stream copy: cannot read from and write to an intra-instance "+
+			"stream with a non-numeric payload, %s (the pin's End.copy: trap_if(... not none_or_number_type))", el)}
+	}
+	nb := uint64(n) * uint64(el.size)
+	if nb == 0 { // a stream with no element: n unit values, and no bytes
+		return n, nil
+	}
+	// Both buffers live in the one guest memory, and the src is read through the READER's caller, which is
+	// memory-bound in both cases: write-via-stream's lower, or a guest `stream.read`, whose canonopts the decoder
+	// keeps (ADR 0122). stream.write's are kept too since grave #1270, and its buffer was checked through them.
+	src, err := r.caller.Read(uint64(w.srcPtr), nb)
+	if err != nil {
+		return 0, fmt.Errorf("component: stream copy: reading %d elements from writer at %#x: %w", n, w.srcPtr, err)
+	}
+	if r.hostSink != nil { // a host consumer: hand the bytes to its sink (stdout), not guest memory
+		if err := r.hostSink(src); err != nil {
+			return 0, fmt.Errorf("component: stream copy: host sink: %w", err)
 		}
+		return n, nil
+	}
+	// A float's NaN is canonicalised per element, as futureWrite's is: within one instance the copy is a lift then a
+	// lower in the pin, and the codec's lift takes the deterministic profile's canonical NaN.
+	//
+	// NEUTER: skip this, and TestTypedStreamElementsMatchTheOracle's f32-wf-w0, f32-rf-w0 and f64-wf-lo read
+	// wasmtime's preserved payload.
+	canonicalizeFloats(src, el.float)
+	if err := r.caller.Write(uint64(r.dstPtr), src); err != nil {
+		return 0, fmt.Errorf("component: stream copy: writing %d elements to reader at %#x: %w", n, r.dstPtr, err)
 	}
 	return n, nil
 }
@@ -412,7 +467,9 @@ func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32)
 // write). The event is consumed INLINE and its packed payload returned. A CANCELLED write leaves the end
 // IDLE (open) — only DROPPED is DONE. Built as its own op (0x12), not folded into cancel-read's shared
 // cancel_copy: the guest binds both, and each refuses/permits by name.
-func streamCancelWrite(h *asyncHandles) interp.CanonFunc {
+//
+// `elem` is the element the built-in names, which must be the end's (def:cancel_copy, ADR 0124).
+func streamCancelWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: stream.cancel-write: got %d args, want (i)", len(args))
@@ -423,6 +480,9 @@ func streamCancelWrite(h *asyncHandles) interp.CanonFunc {
 		e, ok := handleAt[*writableStreamEnd](h, i)
 		if !ok {
 			return nil, fmt.Errorf("component: stream.cancel-write: handle %d is not a writable stream end", i)
+		}
+		if err := checkStreamEndType("stream.cancel-write", i, e.elem, elem); err != nil {
+			return nil, err
 		}
 		if !e.hasWrite || e.resolved {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-write: end %d has no write in flight (COPYING)", i)}
@@ -444,7 +504,9 @@ func streamCancelWrite(h *asyncHandles) interp.CanonFunc {
 // a waiting writer with DROPPED rather than orphaning it. The COPYING guard is the end-state audit — a
 // readable end stays COPYING from the read until its event is consumed, so a drop before the host consumer
 // takes the STREAM_READ event traps rather than silently discarding a completed copy.
-func streamDropReadable(h *asyncHandles) interp.CanonFunc {
+//
+// `elem` is the element the built-in names, which must be the end's (def:drop, ADR 0124).
+func streamDropReadable(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: stream.drop-readable: got %d args, want (i)", len(args))
@@ -455,6 +517,9 @@ func streamDropReadable(h *asyncHandles) interp.CanonFunc {
 		e, ok := handleAt[*readableStreamEnd](h, i)
 		if !ok {
 			return nil, fmt.Errorf("component: stream.drop-readable: handle %d is not a readable stream end", i)
+		}
+		if err := checkStreamEndType("stream.drop-readable", i, e.elem, elem); err != nil {
+			return nil, err
 		}
 		if e.state == copyStateCopying {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.drop-readable: end %d is mid-copy (COPYING); consume its event before dropping", i)}
@@ -487,7 +552,9 @@ func streamDropReadable(h *asyncHandles) interp.CanonFunc {
 // reusable); only DROPPED is DONE. This is the FIRST running production of CANCELLED: it has been pinned in
 // the codec since the future oracle (#752) but only ever injected synthetically (future.cancel-read is
 // refused); the test asserts this running path delivers the SAME encoding the fixture asserted.
-func streamCancelRead(h *asyncHandles) interp.CanonFunc {
+//
+// `elem` is the element the built-in names, which must be the end's (def:cancel_copy, ADR 0124).
+func streamCancelRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: stream.cancel-read: got %d args, want (i)", len(args))
@@ -498,6 +565,9 @@ func streamCancelRead(h *asyncHandles) interp.CanonFunc {
 		e, ok := handleAt[*readableStreamEnd](h, i)
 		if !ok {
 			return nil, fmt.Errorf("component: stream.cancel-read: handle %d is not a readable stream end", i)
+		}
+		if err := checkStreamEndType("stream.cancel-read", i, e.elem, elem); err != nil {
+			return nil, err
 		}
 		if e.state != copyStateCopying {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-read: end %d has no copy in flight (state %s)", i, e.state.name())}
@@ -519,7 +589,9 @@ func streamCancelRead(h *asyncHandles) interp.CanonFunc {
 // which traps unless DONE (def:drop:"trap_if(isinstance(end, WritableFutureEnd) and end.state !="); a writable stream end may be dropped while IDLE. A pending write is the
 // writable end's COPYING (hasWrite && !resolved). Dropping unlinks the paired readable end and notifies it
 // with DROPPED (dropWriterLocked) — the anti-hang guarantee in the other direction.
-func streamDropWritable(h *asyncHandles) interp.CanonFunc {
+//
+// `elem` is the element the built-in names, which must be the end's (def:drop, ADR 0124).
+func streamDropWritable(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: stream.drop-writable: got %d args, want (i)", len(args))
@@ -530,6 +602,9 @@ func streamDropWritable(h *asyncHandles) interp.CanonFunc {
 		e, ok := handleAt[*writableStreamEnd](h, i)
 		if !ok {
 			return nil, fmt.Errorf("component: stream.drop-writable: handle %d is not a writable stream end", i)
+		}
+		if err := checkStreamEndType("stream.drop-writable", i, e.elem, elem); err != nil {
+			return nil, err
 		}
 		if e.hasWrite && !e.resolved {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.drop-writable: end %d is mid-copy (COPYING); a pending write must resolve before dropping", i)}
@@ -574,12 +649,15 @@ func dropWriterLocked(e *writableStreamEnd) {
 // `ri | (wi << 32)` as an i64. The two ends are added in that order (ri before wi), so ri is the lower index
 // — matching the oracle (fixtures.json stream_new: ri=1, wi=2, both IDLE). This is the guest→host inversion:
 // the guest keeps wi (stream.write) and hands ri to the host, whose read drives the guest's write to done.
-func streamNew(h *asyncHandles) interp.CanonFunc {
+//
+// **Both ends carry the element stream.new names** (ADR 0124), as the pin's `new_stream(stream_t.t, owner = inst)`
+// gives both its `t`: every later built-in on either end is checked against it.
+func streamNew(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		re := &readableStreamEnd{state: copyStateIdle}
-		we := &writableStreamEnd{}
+		re := &readableStreamEnd{state: copyStateIdle, elem: elem}
+		we := &writableStreamEnd{elem: elem}
 		re.index = h.addLocked(re)
 		we.index = h.addLocked(we)
 		re.conn = we
@@ -617,7 +695,11 @@ func blockedResult() []interp.Value {
 // reader writes through it, now or when the write that arrives second drives the copy.
 //
 // NEUTER: refuse 0x0f again (isBuiltAsyncBuiltin), and TestP3CatMatchesWasmtime is refused at instantiate.
-func streamRead(h *asyncHandles) interp.CanonFunc {
+//
+// **`elem` is the element the built-in names** (ADR 0124): it must be the end's, and the buffer is `n` elements of
+// it, so its range is `n * size` bytes and its pointer must be aligned to the element (def:GuestBuffer). The range
+// was `n` bytes and the alignment unchecked, while a read of any element but a byte was refused (ADR 0123).
+func streamRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 3 {
 			return nil, fmt.Errorf("component: stream.read: got %d args, want (i, ptr, n)", len(args))
@@ -629,16 +711,14 @@ func streamRead(h *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, fmt.Errorf("component: stream.read: handle %d is not a readable stream end", i)
 		}
+		if err := checkStreamEndType("stream.read", i, e.elem, elem); err != nil {
+			return nil, err
+		}
 		if e.state != copyStateIdle {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.read: end %d is not IDLE (state %s)", i, e.state.name())}
 		}
-		if n > bufferMaxLength {
-			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.read: a buffer of %d elements is longer than %d", n, bufferMaxLength)}
-		}
-		if n > 0 {
-			if err := c.CheckRange(uint64(ptr), uint64(n)); err != nil {
-				return nil, &interp.Trap{Reason: fmt.Sprintf("stream.read: a buffer of %d bytes at %#x is outside memory: %v", n, ptr, err)}
-			}
+		if err := checkGuestBuffer(c, "stream.read", elem, ptr, n); err != nil {
+			return nil, err
 		}
 		if e.writerDropped {
 			e.state = copyStateCopying

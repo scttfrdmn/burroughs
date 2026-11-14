@@ -65,19 +65,28 @@ func TestAFutureWriteCompletesAPendingReadInItsOwnInstance(t *testing.T) {
 //	f32one    1069809664 (1.5)                        1069809664                    1069809664
 //	f32       2143551489 (NaN payload preserved)      {2143551488, any NaN}          2143551488 (canonical)
 //	f64       262145 (NaN payload preserved)          {262144, any NaN}              262144 (canonical)
+//	bool-type1  trap (wasmtime 49.0.3), non-numeric    trap at the copy              trap
 //
-// The floats take the pin's deterministic-profile outcome, the codec's own NaN rule.
+// The floats take the pin's deterministic-profile outcome, the codec's own NaN rule. `bool-type1` is #1271's row
+// (ADR 0124): the future<bool> is type 1, behind a future<u8> at type 0, so the element is classified by the type
+// future.write names rather than by type 0.
 //
 // **Neuters, run:**
 //   - without the non-numeric trap, `bool` copies and reads its byte;
-//   - without the NaN canonicalization, `f32` reads 2143551489.
+//   - without the NaN canonicalization, `f32` reads 2143551489;
+//   - future.write's type index dropped at decode again: `bool-type1` reads 262146, type 0's byte copy.
 func TestAFutureCopyWithinAnInstanceFollowsThePinsElementRule(t *testing.T) {
 	for _, gate := range []string{"0", "1"} {
 		for _, tc := range []struct {
 			fixture string
 			want    uint32 // 0: the trap
 		}{
-			{"bool", 0}, {"char", 0}, {"f32one", 1069809664}, {"f32", 2143551488}, {"f64", 262144},
+			{"bool", 0},
+			{"char", 0},
+			{"f32one", 1069809664},
+			{"f32", 2143551488},
+			{"f64", 262144},
+			{"bool-type1", 0},
 		} {
 			t.Run(tc.fixture+"/gate="+gate, func(t *testing.T) {
 				t.Setenv(asyncGateEnv, "1")

@@ -124,7 +124,7 @@ func TestWriteViaStreamResolvesAtTheWritersDrop(t *testing.T) {
 		t.Fatalf("seeding the read buffer: %v", werr)
 	}
 	h := newAsyncHandles()
-	ret, err := streamNew(h)(cc, nil)
+	ret, err := streamNew(h, byteElem)(cc, nil)
 	if err != nil {
 		t.Fatalf("stream.new: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestWriteViaStreamResolvesAtTheWritersDrop(t *testing.T) {
 	fe, _ := handleAt[*readableFutureEnd](h, uint32(fi))
 
 	for k, src := range []int32{srcPtr, srcPtr + 4} {
-		wret, werr := streamWrite(h)(cc, []interp.Value{interp.I32(wi), interp.I32(src), interp.I32(4)})
+		wret, werr := streamWrite(h, byteElem)(cc, []interp.Value{interp.I32(wi), interp.I32(src), interp.I32(4)})
 		if werr != nil {
 			t.Fatalf("stream.write %d: %v", k+1, werr)
 		}
@@ -151,7 +151,7 @@ func TestWriteViaStreamResolvesAtTheWritersDrop(t *testing.T) {
 			t.Fatalf("the future resolved after write %d, with the writer still open", k+1)
 		}
 	}
-	if _, derr := streamDropWritable(h)(cc, []interp.Value{interp.I32(wi)}); derr != nil {
+	if _, derr := streamDropWritable(h, byteElem)(cc, []interp.Value{interp.I32(wi)}); derr != nil {
 		t.Fatalf("stream.drop-writable: %v", derr)
 	}
 	if !fe.resolved {

@@ -1,0 +1,53 @@
+# Committed readings for stream-typed-traps.wasm: the pin's traps on a typed stream (#1275, ADR 0124).
+# Built:       wasm-tools parse stream-typed-traps.wat -o stream-typed-traps.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y --invoke '<export>()' stream-typed-traps.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical.
+#
+# Each line is `<export>: <wasmtime's reading>`, a trap's last line of stderr and its exit status. A `pin <export>:`
+# line is the pin's answer where it is not wasmtime's (ADR 0102), and the test asserts it instead. The pin's
+# GuestBuffer rows were read from definitions.py directly, by constructing the buffer the export makes.
+misaligned-read: 4294967295
+pin misaligned-read: trap
+misaligned-read-zero: 4294967295
+misaligned-write: 4294967295
+pin misaligned-write: trap
+aligned-read: 4294967295
+out-of-range-write: trap: read pointer out of bounds of memory (exit 1)
+out-of-range-read: trap: read pointer out of bounds of memory (exit 1)
+in-range-write: 4294967295
+in-range-read: 4294967295
+max-length-write: trap: wasm trap: stream read/write count too large (exit 134)
+mismatch-write: trap: handle is a stream of a different type (exit 1)
+mismatch-read: trap: handle is a stream of a different type (exit 1)
+mismatch-cancel-write: trap: handle is a stream of a different type (exit 1)
+mismatch-drop-writable: trap: handle is a stream of a different type (exit 1)
+mismatch-drop-readable: trap: handle is a stream of a different type (exit 1)
+string-write: 4294967295
+string-copy: trap: cannot read from and write to intra-component future/stream with non-numeric payload (exit 1)
+string-copy-read-first: trap: cannot read from and write to intra-component future/stream with non-numeric payload (exit 1)
+own-write: 4294967295
+own-copy: trap: cannot read from and write to intra-component future/stream with non-numeric payload (exit 1)
+#
+# Meaning. 4294967295 is BLOCKED: the copy parked, no trap.
+#   misaligned-*      a stream<u32> buffer at 2, of 1 element. The pin traps (def:GuestBuffer:"trap_if(ptr !=
+#                     align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))"); wasmtime 49.0.3 does not check the
+#                     alignment and parks. A divergence, and the pin's answer is taken. A buffer of 0 elements is
+#                     not checked by either ("if t and length > 0:"); aligned-read is the control.
+#   out-of-range-*    2 elements at 65532 end 4 bytes past the one page (def:GuestBuffer:"trap_if(ptr + length *
+#                     elem_size(t, cx.opts.memory.ptr_type()) > len(cx.opts.memory))"); at 65528, the in-range
+#                     controls, they end at it. A range of n bytes rather than n elements passes both.
+#   max-length-write  2^28 elements, one past def:Buffer:"MAX_LENGTH = 2**28 - 1". The range check traps it too.
+#   mismatch-*        a stream<u32> end through a stream<u8> built-in: every copy, cancel and drop compares the end's
+#                     type (def:copy, def:cancel_copy, def:drop: "trap_if(end.t != stream_or_future_t.t)").
+#   string-*, own-*   a copy between two ends of one instance of a non-numeric element traps at the copy, from
+#                     whichever side arrives second (def:End.copy:"trap_if(self.owner and self.owner is
+#                     self.other.owner and not none_or_number_type(self.t))"); the write that parks before it does
+#                     not.
+#
+# Burroughs before ADR 0124 (main at 7ffc135): every stream<u32>, stream<string> and stream<own> read is refused at
+# its call, "canon stream.read of type N, whose element is not one byte" (ADR 0123), so misaligned-read,
+# out-of-range-read, the string and own copies, and the controls misaligned-read-zero, aligned-read and
+# in-range-read fail; misaligned-write, out-of-range-write, max-length-write, mismatch-write and mismatch-read
+# (a u8 read, so not refused) park unchecked, BLOCKED; mismatch-cancel-write returns CANCELLED (2) and the two
+# mismatched drops succeed. in-range-write, string-write and own-write agree.

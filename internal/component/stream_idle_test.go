@@ -41,7 +41,7 @@ func TestAStreamWriteEndIsIdleOnceItsEventIsTaken(t *testing.T) {
 		if err != nil {
 			t.Fatalf("harness caller: %v", err)
 		}
-		ret, err := streamNew(h)(cc, nil)
+		ret, err := streamNew(h, byteElem)(cc, nil)
 		if err != nil {
 			t.Fatalf("stream.new: %v", err)
 		}
@@ -57,7 +57,7 @@ func TestAStreamWriteEndIsIdleOnceItsEventIsTaken(t *testing.T) {
 	}
 	write := func(t *testing.T, p pair, n uint32) uint32 {
 		t.Helper()
-		ret, err := streamWrite(p.h)(p.cc, []interp.Value{interp.I32(int32(p.wi)), interp.I32(int32(p.srcPtr)), interp.I32(int32(n))})
+		ret, err := streamWrite(p.h, byteElem)(p.cc, []interp.Value{interp.I32(int32(p.wi)), interp.I32(int32(p.srcPtr)), interp.I32(int32(n))})
 		if err != nil {
 			t.Fatalf("stream.write of %d: %v", n, err)
 		}
@@ -107,7 +107,7 @@ func TestAStreamWriteEndIsIdleOnceItsEventIsTaken(t *testing.T) {
 		if !ok || ev.p2 != 3<<4 {
 			t.Fatalf("the writer's event = %+v (taken %v), want COMPLETED with progress 3", ev, ok)
 		}
-		ret, err := streamWrite(p.h)(p.cc, []interp.Value{interp.I32(int32(p.wi)), interp.I32(int32(p.srcPtr)), interp.I32(1)})
+		ret, err := streamWrite(p.h, byteElem)(p.cc, []interp.Value{interp.I32(int32(p.wi)), interp.I32(int32(p.srcPtr)), interp.I32(1)})
 		if err != nil {
 			t.Fatalf("a write after the event was taken was refused: %v", err)
 		}

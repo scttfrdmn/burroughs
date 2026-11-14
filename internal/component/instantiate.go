@@ -583,7 +583,19 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		}
 		return nil
 	}
-	readIdx := func() error { _, err := r.u32(); return err }
+	// **A stream or future built-in's type index is KEPT** (#1271, ADR 0124), in TypeIdx, which the walk carries to
+	// the binding: the element the built-in names is what its end's type is checked against (def:copy:"trap_if(end.t
+	// != stream_or_future_t.t)"), what a copy strides by, and what decides whether a copy within one instance traps
+	// (def:End.copy). It was read and dropped for every one of them but stream.read, so future.write classified its
+	// element as type 0's.
+	//
+	// NEUTER: drop it again (read the u32, leave TypeIdx 0), and TestAFutureCopyWithinAnInstanceFollowsThePinsElementRule's
+	// bool-type1 copies type 0's u8 rather than trapping.
+	keepIdx := func() error {
+		ti, err := r.u32()
+		c.TypeIdx = ti
+		return err
+	}
 	readOpts := func() error { _, err := r.canonOpts(); return err }
 	switch op {
 	case 0x05, 0x0d, 0x1e, 0x1f, 0x22, 0x23, 0x24, 0x25:
@@ -632,12 +644,12 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		if b != 0x00 {
 			return Canon{}, fmt.Errorf("canon thread.yield not followed by 0x00 (got %#x)", b)
 		}
-	case 0x0e, 0x13, 0x14, 0x15, 0x1a, 0x1b: // stream/future .new/.drop-*: typeidx
-		return c, readIdx()
+	case 0x0e, 0x13, 0x14, 0x15, 0x1a, 0x1b: // stream/future .new/.drop-*: typeidx, KEPT
+		return c, keepIdx()
 	case 0x0f: // stream.read: typeidx + opts, both KEPT (ADR 0122)
 		// **The read writes guest memory, so its `(memory $m)` must survive the decode**: the binding's caller
-		// is bound to it, and the copy into the reader writes through that caller. The type index is kept so
-		// the walk can refuse an element that is not one byte. The `async` canonopt is the read's FORM — the
+		// is bound to it, and the copy into the reader writes through that caller. The type index is kept as
+		// every stream built-in's is (keepIdx above). The `async` canonopt is the read's FORM — the
 		// pin's `copy` returns BLOCKED only for an async read (def:copy:"return [BLOCKED]") — so it lands in
 		// AsyncForm, `subtask.cancel`'s selector, and not in Opts.Async, which asyncSurface would report as an
 		// async canon lower this component may not contain.
@@ -653,8 +665,8 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		c.Opts.Memory = opts.Memory
 		c.AsyncForm = opts.Async
 		return c, nil
-	case 0x10, 0x16, 0x17: // stream.write, future .read/.write: typeidx + opts
-		if err := readIdx(); err != nil {
+	case 0x10, 0x16, 0x17: // stream.write, future .read/.write: typeidx (KEPT) + opts
+		if err := keepIdx(); err != nil {
 			return Canon{}, err
 		}
 		// **The `(memory $m)` is kept for these too** (grave #1270, ADR 0122). It was read and dropped, so each one's caller
@@ -671,8 +683,8 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		}
 		c.Opts.Memory = opts.Memory
 		return c, nil
-	case 0x11, 0x12, 0x18, 0x19: // stream/future .cancel-read/.cancel-write: typeidx + async?
-		if err := readIdx(); err != nil {
+	case 0x11, 0x12, 0x18, 0x19: // stream/future .cancel-read/.cancel-write: typeidx (KEPT) + async?
+		if err := keepIdx(); err != nil {
 			return Canon{}, err
 		}
 		return c, readAsyncQ()

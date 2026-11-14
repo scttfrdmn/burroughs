@@ -24,3 +24,13 @@
 # none_or_number_type(self.t))`: within one instance only integers and floats copy. A float's lift
 # canonicalizes NaN in the deterministic profile and randomizes it otherwise, so wasmtime's preserved payload
 # is inside the pin's set. Burroughs takes the deterministic outcome, which is the codec's own NaN rule.
+#
+# Added for #1271 (ADR 0124): future-self-copy-bool-type1.wasm, future-self-copy-bool with a future<u8> declared
+# first, so its future<bool> is type 1. wasmtime 49.0.3 (f96eabaa1 2026-10-14, .oracle/wasmtime-49.0.3), 10 of 10:
+#
+# bool-type1  byte 2                   trap: cannot read from and write to         trap at future.write's copy
+#                                      intra-component future/stream with          (the element is bool's,
+#                                      non-numeric payload                         whatever its index)
+#
+# Burroughs before #1271's fix read 262146 (0x40002): the decoder dropped future.write's type index, so the element
+# was classified as type 0's, a u8, and the byte copied.
