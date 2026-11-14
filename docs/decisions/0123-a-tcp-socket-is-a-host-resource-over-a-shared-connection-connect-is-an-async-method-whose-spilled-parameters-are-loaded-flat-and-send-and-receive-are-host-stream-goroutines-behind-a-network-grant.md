@@ -123,3 +123,7 @@ None measured on the witness's paths. Unmeasured: an error mapped to `other(none
 - Dropping the grant check at `create` and at `connect` lets a guest reach the network without `InheritNetwork`.
 - Writing the send sink inline lets a peer that does not read hold the instance's lock, and `Close` with it.
 - Dropping `stopAllSockets` from `walker.close` leaves a socket's `Read` holding `Close`.
+
+## Postscript, 2026-11-14 — choice 7 is retired, and this is a postscript rather than an edit
+
+Choice 7's refusal of a non-byte `stream.read` at its call was the interim it said E7b would replace. [ADR 0124](0124-a-stream-end-carries-its-element-type-a-copy-strides-by-the-element-and-traps-as-the-pins-guestbuffer-and-end-copy-do-and-every-stream-and-future-built-in-keeps-its-type-index.md) replaces it: a stream's copy strides by its element and traps as the pin does, so the read is bound for every element the codec lays out. The choice's text above is unchanged, as the record of what was decided on 2026-11-13.
