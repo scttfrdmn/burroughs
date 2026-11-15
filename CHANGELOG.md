@@ -381,6 +381,17 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A component declaring `flags` with no labels, or with more than 32, is refused at decode**
+  ([#1247](https://github.com/scttfrdmn/burroughs/issues/1247)).
+  - **The defect:** the decoder admitted either form. The pin gives flags a layout only for 1 to 32 labels
+    (`alignment_flags` and `elem_size_flags` assert `0 < n <= 32`), so `canon.FlagsType` refused them, but a
+    layer late.
+  - **The repair:** the type reader refuses both, in `wasm-tools validate`'s own words: "flags must have at least
+    one entry" and "cannot have more than 32 flags". This follows #928's empty-record and empty-tuple refusal.
+  - **Witness:** two rows of `TestTheReferencesEmptyFormRejectionIsMatched`, on committed fixtures that
+    `wasm-tools validate --features all` (1.258.0) refuses at offset 0xb. The anti-vacuity half is
+    `TestAThirtyTwoLabelFlagsStillLoads`, whose 32-label fixture the validator accepts.
+  - **Neuter, run:** without both checks, the two refusal rows load.
 - **`stream.write` copies elements, not a count of bytes** ([#1275](https://github.com/scttfrdmn/burroughs/issues/1275);
   ADR 0124).
   - **The defect:** `stream.write` did not check its element, so a guest's `stream<u32>` write copied its count as

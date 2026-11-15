@@ -59,6 +59,21 @@ func TestTheReferencesEmptyFormRejectionIsMatched(t *testing.T) {
 			"tuple type must have at least one type",
 			"error: tuple type must have at least one type (at offset 0xb)",
 		},
+		// flags' bound (#1247), the same rule from the same two authorities: the pin gives flags a layout
+		// only for 1 to 32 labels (definitions.py:alignment_flags:"assert(0 < n <= 32)"), and the validator
+		// refuses either side.
+		{
+			"flags with no labels",
+			"testdata/flags-no-labels-type.wasm",
+			"flags must have at least one entry",
+			"error: flags must have at least one entry (at offset 0xb)",
+		},
+		{
+			"flags with 33 labels",
+			"testdata/flags-33-labels-type.wasm",
+			"cannot have more than 32 flags",
+			"error: cannot have more than 32 flags (at offset 0xb)",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			wasm, err := os.ReadFile(c.file)
@@ -80,6 +95,21 @@ func TestTheReferencesEmptyFormRejectionIsMatched(t *testing.T) {
 					err, c.refMsg)
 			}
 		})
+	}
+}
+
+// TestAThirtyTwoLabelFlagsStillLoads is the flags bound's anti-vacuity half (#1247): the committed
+// specimen with exactly 32 labels, which `wasm-tools validate --features all` accepts, still loads. A
+// decoder arm that refused every flags type, or counted the bound off by one, would pass the two refusal
+// rows above and fail this.
+func TestAThirtyTwoLabelFlagsStillLoads(t *testing.T) {
+	wasm, err := os.ReadFile("testdata/flags-32-labels-type.wasm")
+	if err != nil {
+		t.Fatalf("the committed specimen is missing: %v", err)
+	}
+	if _, err := InstantiateWithHost(wasm, NewHost(nil, nil, nil)); err != nil {
+		t.Errorf("a component declaring flags with 32 labels, which the reference validator accepts, was "+
+			"refused: %v", err)
 	}
 }
 
