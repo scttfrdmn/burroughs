@@ -1128,7 +1128,23 @@ func valTypeFromOpcode(r *reader, op byte) (ValType, error) {
 		return ValType{Kind: VVariant, Cases: cases}, err
 	case 0x6e: // flags
 		labels, err := r.labelVec()
-		return ValType{Kind: VFlags, Labels: labels}, err
+		if err != nil {
+			return ValType{}, err
+		}
+		// **The record arm's rule, for flags' bound** (#1247): the pin gives flags a layout only for 1 to 32
+		// labels (definitions.py:alignment_flags:"assert(0 < n <= 32)"), and `wasm-tools validate` refuses
+		// either side with these words: "flags must have at least one entry" and "cannot have more than 32
+		// flags". The codec's FlagsType already refused both, one layer late; this refuses them where the
+		// type is read, as #928 does for an empty record.
+		//
+		// NEUTER: drop both checks, and TestTheReferencesEmptyFormRejectionIsMatched's two flags rows load.
+		if len(labels) == 0 {
+			return ValType{}, fmt.Errorf("flags must have at least one entry")
+		}
+		if len(labels) > 32 {
+			return ValType{}, fmt.Errorf("cannot have more than 32 flags")
+		}
+		return ValType{Kind: VFlags, Labels: labels}, nil
 	case 0x6d: // enum
 		labels, err := r.labelVec()
 		return ValType{Kind: VEnum, Labels: labels}, err
