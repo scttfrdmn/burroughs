@@ -1,0 +1,12 @@
+# Committed wasmtime readings for waitable-drop.wasm (grave #1296): a dropped waitable leaves its waitable set.
+# Built:       wasm-tools parse waitable-drop.wat -o waitable-drop.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' waitable-drop.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. Taken 2026-11-15.
+#
+# Each line is `<export>: <wasmtime's reading>`. A u32 is the export's result; `trap: …` is wasmtime's message.
+stream-readable: 1
+stream-writable: 1
+future-readable: 1
+subtask: 1
+still-joined: trap: resource has children

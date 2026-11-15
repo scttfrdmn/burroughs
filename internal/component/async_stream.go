@@ -539,6 +539,10 @@ func streamDropReadable(h *asyncHandles, elem *elemType) interp.CanonFunc {
 			}
 			w.readerDropped, w.conn, e.conn = true, nil, nil
 		}
+		// A dropped end leaves its waitable set, as def:Waitable.drop does (grave #1296).
+		//
+		// NEUTER: drop this line, and TestADroppedWaitableLeavesItsSet's readable-stream row traps at the set's drop.
+		joinWaitableLocked(e, nil)
 		h.entries[i] = nil
 		return nil, nil
 	}
@@ -610,6 +614,10 @@ func streamDropWritable(h *asyncHandles, elem *elemType) interp.CanonFunc {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.drop-writable: end %d is mid-copy (COPYING); a pending write must resolve before dropping", i)}
 		}
 		dropWriterLocked(e)
+		// A dropped end leaves its waitable set, as def:Waitable.drop does (grave #1296).
+		//
+		// NEUTER: drop this line, and TestADroppedWaitableLeavesItsSet's writable-stream row traps at the set's drop.
+		joinWaitableLocked(e, nil)
 		h.entries[i] = nil
 		return nil, nil
 	}

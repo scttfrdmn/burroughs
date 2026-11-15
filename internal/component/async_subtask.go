@@ -801,6 +801,10 @@ func subtaskDrop(h *asyncHandles) interp.CanonFunc {
 		if !st.delivered {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("subtask.drop: subtask %d is not resolve-delivered; dropping it would silently discard its resolution", i)}
 		}
+		// A dropped subtask leaves its waitable set, as def:Waitable.drop does (grave #1296).
+		//
+		// NEUTER: drop this line, and TestADroppedWaitableLeavesItsSet's subtask row traps at the set's drop.
+		joinWaitableLocked(st, nil)
 		h.entries[i] = nil
 		return nil, nil
 	}
