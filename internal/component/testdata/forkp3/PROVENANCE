@@ -33,7 +33,7 @@ from two directories gave identical bytes.
     bytes:   1825340
     core:    1824664 bytes, sha256 8aeab8ea40abbe6853f5038949b65ad2d032a123d29032525ce11efefeba8f32
 
-  p3panic.wasm
+  p3panic.wasm (F1's build, REPLACED in this directory by F3a's, below)
     sha256: 9499cea739f16e79f419161bb0f6dc323139dca37b3f9bc6c75a212d87538336
     bytes:   1825476
     core:    1824800 bytes, sha256 101cabab52937eab392210880337bb79d2af4b6205b89ed67be5323d4290a0da
@@ -93,3 +93,67 @@ and every differing byte is the toolchain's identity: the Go build ID's hashes a
 string. Rebuilt once more with a VERSION file forcing F1's version string, only the build ID's first 20 bytes
 differ (17 for p3panic), and those hash the toolchain's own binaries. The code and every other section are
 unchanged, because a program that links no bindings gets the linker's stand-in exactly as before.
+
+F3a's witness components (#1238, ADR 0114): p3panic rebuilt, p3print and p3time new, the fork's runtime on real
+WASI 0.3.0 imports. Same recipe and same pins as F1's, except:
+
+Fork SHA:     9d31147d5fdff96e462c7dfe52d940430c069334 (branch wasip3/f3a; its design note, phase4/wasip3-f3a.md,
+              is the commit after it, ff09a03102, which changes no code)
+Toolchain:    go version go1.28-devel_9d31147d5f Sun Nov 15 13:21:18 2026 -0800 darwin/arm64
+              (the fork's bin/go, from src/make.bash at the SHA above, bootstrapped by go1.26.9)
+Built on:     darwin/arm64, 2026-11-15
+Guest source: p3panic.go.txt (F1's, unchanged), p3print.go.txt and p3time.go.txt, each the only file of its
+              module: go.mod is "module p3panic" (or p3print, p3time) and "go 1.28". p3print and p3time reach
+              the runtime through its own push linknames (runtime.write, runtime.nanotime, time.now,
+              syscall.Exit), because the fork's syscall and os do not build for wasip3 until F3b.
+Recipe:       phase4/buildp3.sh, whose check [2] now also admits exactly the four $root waitable-set built-ins
+              ([waitable-set-new], [waitable-join], [waitable-set-wait], [waitable-set-drop]).
+
+  p3panic.wasm
+    sha256: 4c61330d1011a213c711c255b8140702f9220057a041eb34a9d7987c105ce3b9
+    bytes:   1845543
+    core:    1840606 bytes, sha256 8b1cf02e68830b28e19972c6d28790fd7368d0d737ef32e52b4e51521ec21eee
+
+  p3print.wasm
+    sha256: d7ab98ac122120819c8021fa87f7caa305f5b1cfa6fed1bcdd0973d473a53ba7
+    bytes:   1846683
+    core:    1841746 bytes, sha256 d6916c7194bce197359f60d09a61ebaea6ce4a31b249fe9a9eca92d512b6af58
+
+  p3time.wasm
+    sha256: a9559f050012311f5e78c0157eaccaba13124f6d9a3a4576061fd5821b257082
+    bytes:   1846595
+    core:    1841658 bytes, sha256 e977380a8f98b931ef15caf4f64bd71edfdebc751d27ebb5c7c98e03ca61e470
+
+Each built twice into two directories: identical bytes. All three core modules import the same 22 names, the
+runtime's whole host boundary, since every program links exit, the clocks, usleep, readRandom and write1:
+
+    (import "wasi:cli/exit@0.3.0" "exit" (func (;0;) (type 1)))
+    (import "wasi:cli/exit@0.3.0" "exit-with-code" (func (;1;) (type 1)))
+    (import "wasi:clocks/monotonic-clock@0.3.0" "now" (func (;2;) (type 2)))
+    (import "wasi:clocks/system-clock@0.3.0" "now" (func (;3;) (type 1)))
+    (import "wasi:clocks/monotonic-clock@0.3.0" "wait-for" (func (;4;) (type 3)))
+    (import "wasi:random/random@0.3.0" "get-random-u64" (func (;5;) (type 2)))
+    (import "$root" "[waitable-set-new]" (func (;6;) (type 4)))
+    (import "$root" "[waitable-join]" (func (;7;) (type 5)))
+    (import "$root" "[waitable-set-wait]" (func (;8;) (type 6)))
+    (import "$root" "[waitable-set-drop]" (func (;9;) (type 1)))
+    (import "wasi:cli/stdout@0.3.0" "[stream-new-0]write-via-stream" (func (;10;) (type 2)))
+    (import "wasi:cli/stdout@0.3.0" "write-via-stream" (func (;11;) (type 0)))
+    (import "wasi:cli/stdout@0.3.0" "[async-lower][stream-write-0]write-via-stream" (func (;12;) (type 7)))
+    (import "wasi:cli/stdout@0.3.0" "[stream-drop-writable-0]write-via-stream" (func (;13;) (type 1)))
+    (import "wasi:cli/stdout@0.3.0" "[async-lower][future-read-1]write-via-stream" (func (;14;) (type 6)))
+    (import "wasi:cli/stdout@0.3.0" "[future-drop-readable-1]write-via-stream" (func (;15;) (type 1)))
+    (import "wasi:cli/stderr@0.3.0" "[stream-new-0]write-via-stream" (func (;16;) (type 2)))
+    (import "wasi:cli/stderr@0.3.0" "write-via-stream" (func (;17;) (type 0)))
+    (import "wasi:cli/stderr@0.3.0" "[async-lower][stream-write-0]write-via-stream" (func (;18;) (type 7)))
+    (import "wasi:cli/stderr@0.3.0" "[stream-drop-writable-0]write-via-stream" (func (;19;) (type 1)))
+    (import "wasi:cli/stderr@0.3.0" "[async-lower][future-read-1]write-via-stream" (func (;20;) (type 6)))
+    (import "wasi:cli/stderr@0.3.0" "[future-drop-readable-1]write-via-stream" (func (;21;) (type 1)))
+
+p3print's memory is (memory (;0;) 33), p3panic's and p3time's 32; each exports run, the linker's cabi_realloc
+stand-in and memory, as F1's do.
+
+p3exit0.wasm and p3bind.wasm are NOT rebuilt here. On this toolchain their core modules import the same 22 names,
+so they cannot be byte-identical to the committed ones modulo the build ID; rebuilt, p3exit0 exits 0 and p3bind
+(with its token) exits 127 on both engines, as their committed readings record. The committed bytes stay F1's and
+F2's witnesses.
