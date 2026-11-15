@@ -1,0 +1,51 @@
+F1's witness components (#1236, ADR 0114): the fork's first GOOS=wasip3 builds. Provenance, per clause 1's.
+Not reproducible from this repository alone: they are built by the Phase 4 fork, then formed by wasm-tools.
+
+Fork tree:    github.com/scttfrdmn/wp-phase4 (local, unpublished), branch wasip3/f1
+Fork SHA:     a6e590e7564d2532b2763ba6905d4db3d5942643
+Toolchain:    go version go1.28-devel_a6e590e756 Sat Nov 14 21:55:13 2026 -0800 darwin/arm64
+              (the fork's bin/go, from src/make.bash at the SHA above, bootstrapped by go1.26.9)
+wasm-tools:   1.258.0
+WIT:          WASI 0.3.0, the fork's phase4/wit-wasi-0.3.0 (copied verbatim from the wasip3 crate
+              0.8.0+wasi-0.3.0); world wasi:cli/command@0.3.0
+Built on:     darwin/arm64, 2026-11-14
+Guest source: p3exit0.go.txt and p3panic.go.txt, each the only file of its module. go.mod is
+              "module p3exit0" (or "module p3panic") and "go 1.28".
+
+Recipe, the fork's phase4/buildp3.sh run from the fork's root:
+
+    phase4/buildp3.sh <guest-dir> <out>/<case>.wasm
+
+which is, after checking the core module (no wasi_snapshot_preview1 import, only wasi: imports, the
+three exports, an unshared memory):
+
+    GOOS=wasip3 GOARCH=wasm bin/go -C <guest-dir> build -trimpath -o <case>.core.wasm .
+    wasm-tools component embed --world wasi:cli/command@0.3.0 phase4/wit-wasi-0.3.0 <case>.core.wasm \
+        -o <case>.embedded.wasm
+    wasm-tools component new <case>.embedded.wasm -o <case>.wasm
+    wasm-tools validate --features all <case>.wasm
+
+No adapter. -trimpath makes the bytes independent of where the guest directory lives: the same source built
+from two directories gave identical bytes.
+
+  p3exit0.wasm
+    sha256: 9306d1ac459210a92354a60402217bf0013d5abd1902aaec07d581dd859aca1d
+    bytes:   1825340
+    core:    1824664 bytes, sha256 8aeab8ea40abbe6853f5038949b65ad2d032a123d29032525ce11efefeba8f32
+
+  p3panic.wasm
+    sha256: 9499cea739f16e79f419161bb0f6dc323139dca37b3f9bc6c75a212d87538336
+    bytes:   1825476
+    core:    1824800 bytes, sha256 101cabab52937eab392210880337bb79d2af4b6205b89ed67be5323d4290a0da
+
+The core module's whole host boundary, read with wasm-tools print:
+
+    (import "wasi:cli/exit@0.3.0" "exit" (func (;0;) (type 1)))
+    (memory (;0;) 31)
+    (export "wasi:cli/run@0.3.0#run" (func $_rt0_wasm_wasip3))
+    (export "cabi_realloc" (func $cabi_realloc))
+    (export "memory" (memory 0))
+
+TWO ENGINES. Burroughs runs in CI: forkp3_test.go, against the bytes above. wasmtime cannot run in this
+repository's CI, so its readings are committed instead, in forkp3.reading, taken with the pinned
+.oracle/wasmtime-49.0.3 (10 runs each). Re-running it is the invocation recorded there.

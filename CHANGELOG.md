@@ -25,6 +25,18 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **The fork's first `GOOS=wasip3` components run on Burroughs as on wasmtime 49.0.3**
+  ([#1236](https://github.com/scttfrdmn/burroughs/issues/1236), F1 of v0.14.0's fork track; ADR 0114). The Phase 4
+  fork now has a `GOOS=wasip3` target on `GOARCH=wasm`. Its linker emits a core module that `wasm-tools component new`
+  forms into a WASI 0.3 component with no adapter. That module exports `wasi:cli/run@0.3.0#run` (sync-lifted),
+  `cabi_realloc` (a trap stand-in for now) and `memory`. Its only import is `wasi:cli/exit@0.3.0`'s `exit`.
+  - **Two components are committed with their PROVENANCE** in `internal/component/testdata/forkp3`. `func main() {}`
+    exits 0. `panic("x")` traps `unreachable`, because F1 lowers no stdout or clock. Both match the committed
+    wasmtime readings, 10 of 10 each. `TestForkWasip3MatchesWasmtime` asserts both outcomes from those readings, and
+    that the Go core module imports only `wasi:` names.
+  - **No engine code changed.** The fork's bytes ran on the engine as it stood. std, the syscall layer and stdout
+    are F2/F3's work.
+
 - **WASI 0.3's name lookup is served behind its own grant: `ComponentConfig.AllowNameLookup` and `burroughs run
   --allow-ip-name-lookup`** ([#1278](https://github.com/scttfrdmn/burroughs/issues/1278), E7c, the last of
   [#1235](https://github.com/scttfrdmn/burroughs/issues/1235)'s three slices; ADR 0126). Rust std's `to_socket_addrs`

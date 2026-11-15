@@ -1,0 +1,39 @@
+# Committed readings for p3exit0.wasm and p3panic.wasm, the fork's first GOOS=wasip3 components (#1236, F1).
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run <case>.wasm   (no -W flag: the memory is unshared)
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, 2026-11-14.
+#
+# reader                                      reading
+# wasmtime 49.0.3 on p3exit0, 10 of 10        exit 0
+# wasmtime 49.0.3 on p3panic, 10 of 10        trap unreachable
+# Burroughs at d32b0eb on p3exit0, 10 of 10   exit 0
+# Burroughs at d32b0eb on p3panic, 10 of 10   trap unreachable
+#
+# Meaning:     "exit N" is the process's exit code with a run that ended by wasi:cli/exit@0.3.0's exit;
+#              "trap R" is a trap whose kind is R. Neither case wrote a byte to stdout or stderr from the
+#              guest: F1 lowers no stdout, so p3panic's message is never printed.
+# Burroughs:   `burroughs run <case>.wasm`, a binary built from cmd/burroughs at d32b0eb: p3exit0 exited 0;
+#              p3panic exited 4 and printed "burroughs: trap: unreachable" to stderr, 10 of 10 each.
+#
+# wasmtime's p3panic stderr, identical in all 10 runs (sha256 of each run's stderr compared). The innermost Go
+# frame names the refusal: usleep, called by freezetheworld before the panic's first write, which is why the
+# trap is usleep's and not write1's.
+#
+#   Error: failed to run main module `p3panic.wasm`
+#
+#   Caused by:
+#       0: error while executing at wasm backtrace:
+#       0: 0x113481 - <unknown>!runtime.abort
+#       1:  0x8c788 - <unknown>!runtime.usleep
+#       2:  0x9b84a - <unknown>!runtime.freezetheworld
+#       3:  0x91743 - <unknown>!runtime.startpanic_m
+#       4: 0x101059 - <unknown>!runtime.fatalpanic.func1
+#       5: 0x113424 - <unknown>!runtime.systemstack
+#       6:  0x91208 - <unknown>!runtime.fatalpanic
+#       7: 0x10c157 - <unknown>!runtime.gopanic
+#       8: 0x11565a - <unknown>!main.main
+#       9:  0x96d10 - <unknown>!runtime.main
+#      10: 0x113767 - <unknown>!wasm_pc_f_loop
+#      11: 0x113822 - <unknown>!_rt0_wasm_wasip3
+#       1: wasm trap: wasm `unreachable` instruction executed
+#
+# wasmtime exited 134 on each p3panic run.
