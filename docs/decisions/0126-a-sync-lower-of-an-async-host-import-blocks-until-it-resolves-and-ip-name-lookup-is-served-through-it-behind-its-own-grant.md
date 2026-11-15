@@ -49,7 +49,7 @@ wasmtime 49.0.3 (`.oracle/wasmtime-49.0.3/wasmtime`, never the 50.0.1 on PATH), 
 For the blocking sync lower:
 
 1. **A waiting path in the sync lower** (#1268's fix shape): start the impl as the async lower does, and if it has not resolved, wait inside `c.Blocking(h.suspending(…))`, judged by the sync tail, the way the sync `subtask.cancel` waits; then lower the result through the sync lower's own options, on the caller's goroutine.
-2. **A sync impl of `resolve-addresses` that blocks in `c.Blocking`** (#1278's alternative). *Costs:* a second implementation of the lookup, one per lowering form; it never meets the sync tail, so a sync-typed caller blocks where the pin and wasmtime trap; and #1268 stays open for `wait-for`.
+2. **A sync impl of `resolve-addresses` that blocks in `c.Blocking`** (#1278's alternative). *Costs:* a second implementation of the lookup, one per lowering form; it never meets the sync tail, so a sync-typed caller blocks where the pin and wasmtime trap; and it would have left #1268's form unbuilt for `wait-for`.
 
 For where the sync lower's result is stored: **on the caller's goroutine, after the wait**, or by the resolver, as the async lower's `onResolve` stores. The second needs the run slot from a goroutine and stores through a caller that is blocked; the first stores where a sync impl stores, outside every engine lock, and can return a one-word result as a core value.
 
