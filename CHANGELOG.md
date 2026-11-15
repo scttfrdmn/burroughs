@@ -409,6 +409,20 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A dropped stream end, future end or subtask leaves its waitable set, so the set can be dropped afterwards**
+  ([#1296](https://github.com/scttfrdmn/burroughs/issues/1296), `type:grave`).
+  - **The defect:** only the `waitable.join` built-in ever took a waitable out of its set. `stream.drop-readable`,
+    `stream.drop-writable`, `future.drop-readable` and `subtask.drop` cleared the handle and left the set's member
+    list as it was. A later `waitable-set.drop` then trapped "still has N joined waitable(s)", where the pin
+    (`def:Waitable.drop`, `self.join(None)`) and wasmtime 49.0.3 both succeed.
+  - **How it was found:** the fork's F3a runtime (#1238) joins its stdio ends to one set and drops the set after
+    flushing at exit, so its panic and print guests trapped there on Burroughs and not on wasmtime.
+  - **The repair:** each of the four drops calls `joinWaitableLocked(w, nil)` before clearing the handle.
+  - **Witness:** `TestADroppedWaitableLeavesItsSet` on `waitable-drop.wasm`, whose five rows match wasmtime 49.0.3
+    10 of 10. Four rows drop one kind of waitable and then its set. The fifth is a control that drops a set with its
+    member still joined, and traps on both engines.
+  - **Neuters, run:** with the future and subtask lines removed, exactly those two rows trap at the set's drop. With
+    all four removed, all four rows trap, and the control still traps as it should.
 - **A component declaring `flags` with no labels, or with more than 32, is refused at decode**
   ([#1247](https://github.com/scttfrdmn/burroughs/issues/1247)).
   - **The defect:** the decoder admitted either form. The pin gives flags a layout only for 1 to 32 labels

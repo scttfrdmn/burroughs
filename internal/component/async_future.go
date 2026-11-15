@@ -200,6 +200,12 @@ func futureDrop(h *asyncHandles) interp.CanonFunc {
 		if fe.completeErr != nil { // a deferred host-completion failure surfaces here rather than being lost
 			return nil, fmt.Errorf("component: future.drop-readable: end %d had a failed completion: %w", i, fe.completeErr)
 		}
+		// **A dropped end leaves its waitable set** (grave #1296): every drop is def:Waitable.drop, which is
+		// `self.join(None)`. Without it the set kept the end as a member, and a later waitable-set.drop trapped
+		// "still has N joined waitable(s)" where the pin and wasmtime 49.0.3 succeed.
+		//
+		// NEUTER: drop this line, and TestADroppedWaitableLeavesItsSet's future row traps at the set's drop.
+		joinWaitableLocked(fe, nil)
 		h.entries[i] = nil
 		return nil, nil
 	}
