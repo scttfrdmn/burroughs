@@ -37,3 +37,48 @@
 #       1: wasm trap: wasm `unreachable` instruction executed
 #
 # wasmtime exited 134 on each p3panic run.
+
+# Committed readings for p3bind.wasm, F2's witness (#1237): a GOOS=wasip3 guest calling the fork's generated
+# WASI 0.3 bindings directly.
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run p3bind.wasm f2-bindings-token   (from this directory)
+#              burroughs run p3bind.wasm -- f2-bindings-token
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, 2026-11-15.
+#
+# reader                                      reading
+# p3bind argv                                 p3bind.wasm f2-bindings-token
+# wasmtime 49.0.3 on p3bind, 10 of 10         exit 127
+# Burroughs at 3175bdb on p3bind, 10 of 10    exit 127
+#
+# Meaning:     the exit code is the bitmask of properties p3bind observed (p3bind.go.txt), reported through
+#              wasi:cli/exit@0.3.0's exit-with-code because F2 lowers no stdout. 127 is all seven:
+#                0x01 argv[1] is the token            (get-arguments: a list<string> through cabi_realloc)
+#                0x02 monotonic now does not decrease  (one flat i64 result, twice)
+#                0x04 system-clock now's nanoseconds < 1e9   (the u32 at offset 8 of a 16-byte return area)
+#                0x08 its seconds > 1.6e9                    (the s64 at offset 0)
+#                0x10 get-random-bytes(16): 1 to 16 bytes, not all zero  (a list<u8> through cabi_realloc)
+#                0x20 two get-random-u64 results differ
+#                0x40 two get-insecure-seed results are equal  (a tuple<u64, u64> through a return area)
+#              Neither engine wrote a byte to stdout or stderr. The argv is the same on both: wasmtime passes
+#              the path it was given, and burroughs run passes the file's base name, so run from this
+#              directory both are "p3bind.wasm".
+#
+# The neuters, each run 10 of 10 on both engines, with the builds kept out of this tree:
+#   argv[1] "f2-bindings-wrong":                    wasmtime exit 126, Burroughs exit 126 (0x01 clears).
+#   instant.nanoseconds read at offset 0, not 8     wasmtime exit 123, Burroughs exit 123 (0x04 clears:
+#   (the generated system_clock.go edited):         the low word of the seconds is above 1e9).
+#   the linker's trap stand-in forced, internal/wasi's cabi_realloc left unexported: wasmtime exit 134,
+#   Burroughs `trap: unreachable` exit 4. wasmtime's stderr, identical in all 10 runs, names the stand-in:
+#
+#     Error: failed to run main module `p3bind-fallback.wasm`
+#
+#     Caused by:
+#         0: error while executing at wasm backtrace:
+#         0: 0x117644 - <unknown>!cabi_realloc
+#         1: 0x1c1669 - wit-component:shim!indirect-wasi:cli/environment@0.3.0-get-arguments
+#         2: 0x115fb2 - <unknown>!internal_wasi_generated_cli.wasmimportGetArguments
+#         3: 0x1163c6 - <unknown>!internal_wasi_generated_cli.GetArguments
+#         4: 0x117233 - <unknown>!main.main
+#         5:  0x9707c - <unknown>!runtime.main
+#         6: 0x113c2b - <unknown>!wasm_pc_f_loop
+#         7: 0x113d3e - <unknown>!_rt0_wasm_wasip3
+#         1: wasm trap: wasm `unreachable` instruction executed
