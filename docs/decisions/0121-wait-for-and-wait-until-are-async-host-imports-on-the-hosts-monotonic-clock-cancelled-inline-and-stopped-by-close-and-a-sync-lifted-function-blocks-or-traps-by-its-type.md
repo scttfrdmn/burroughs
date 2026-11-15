@@ -127,3 +127,7 @@ Each of the following restores its defect, and each is a neuter run against its 
 - restoring the lift-form judgement in `syncTail` brings back #1267's trap;
 - dropping the registry stop from `walker.close` brings back the post-Close resolution;
 - restoring the unconditional park-bound expiry brings back `ErrLiftParkExpired` for a long wait.
+
+## Postscript, 2026-11-14 — choice 5 is retired, and this is a postscript rather than an edit
+
+Choice 5's refusal at instantiate of a sync lower of an async-only host import was the interim its *"Out of scope"* named as a follow-up (#1268). [ADR 0126](0126-a-sync-lower-of-an-async-host-import-blocks-until-it-resolves-and-ip-name-lookup-is-served-through-it-behind-its-own-grant.md) replaces it with the pin's blocking sync lower (def:canon_lower:"thread.wait_until(subtask.resolved)"), judged by the sync tail by the lifted function's type, which is choice 3's rule. `sync-lower-wait-for.wasm` now reads wasmtime 49.0.3's two values, the trap in `go` and 7 in `go-async-typed`, and the third divergence recorded above is closed. The reason the refusal was cheap, that *"neither wasi-libc nor std emits"* the form, was true of `wait-for` and `wait-until` and is false of `wasi:sockets/ip-name-lookup.resolve-addresses`, which wasi-libc's getaddrinfo lowers with no async option. The choice's text above is unchanged, as the record of what was decided on 2026-11-13.

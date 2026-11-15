@@ -1,7 +1,8 @@
-;; sync-lower-wait-for (#1233, ADR 0121): wait-for lowered WITHOUT the async option. Burroughs refuses it at
-;; instantiate, by name: the host serves wait-for only as an async import, and the pin's blocking sync lower of an
-;; async import is not built. Measured on wasmtime 49.0.3 (`--invoke`, flags as wait-cancel.reading's), 10 of 10:
-;; `go` (sync-typed) traps "cannot block a synchronous task before returning"; `go-async-typed` blocks and returns 7.
+;; sync-lower-wait-for (#1233, ADR 0121; #1268, ADR 0126): wait-for lowered WITHOUT the async option, the pin's
+;; blocking sync lower of an async import. ADR 0121 refused it at instantiate; ADR 0126 builds it, and Burroughs
+;; reads it as wasmtime does. Measured on wasmtime 49.0.3 (`--invoke`, flags as wait-cancel.reading's), 10 of 10,
+;; committed as sync-lower-wait-for.reading: `go` (sync-typed) traps "cannot block a synchronous task before
+;; returning"; `go-async-typed` blocks and returns 7.
 (component
   (import "wasi:clocks/monotonic-clock@0.3.0" (instance $mc
     (export "wait-for" (func async (param "how-long" u64)))))

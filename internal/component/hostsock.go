@@ -115,19 +115,47 @@ type sockDial struct {
 	resolve func(canon.Value)
 }
 
-// hostNet is one component instance's sockets: its live connections, listeners and pending dials, and every
-// socket goroutine it has started. It lives in the instance's hostResources, so a nested instance has its own.
+// hostNet is one component instance's sockets: its live connections, listeners, pending dials and pending name
+// lookups (ADR 0126), and every socket goroutine it has started. It lives in the instance's hostResources, so a
+// nested instance has its own.
 type hostNet struct {
 	mu        sync.Mutex
 	conns     map[*sockConn]struct{}
 	listeners map[*sockListener]struct{}
 	dials     map[*sockDial]struct{}
+	lookups   map[*nameLookup]struct{}
 	stopped   bool
 	wg        sync.WaitGroup
 }
 
 func newHostNet() *hostNet {
-	return &hostNet{conns: map[*sockConn]struct{}{}, listeners: map[*sockListener]struct{}{}, dials: map[*sockDial]struct{}{}}
+	return &hostNet{
+		conns: map[*sockConn]struct{}{}, listeners: map[*sockListener]struct{}{}, dials: map[*sockDial]struct{}{},
+		lookups: map[*nameLookup]struct{}{},
+	}
+}
+
+// startLookup registers a pending name lookup and counts its goroutine, startDial's shape.
+func (n *hostNet) startLookup(l *nameLookup) (ended func(), ok bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.stopped {
+		return nil, false
+	}
+	n.lookups[l] = struct{}{}
+	n.wg.Add(1)
+	return n.wg.Done, true
+}
+
+// claimLookup removes l from the registry and reports whether this caller removed it.
+func (n *hostNet) claimLookup(l *nameLookup) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if _, ok := n.lookups[l]; !ok {
+		return false
+	}
+	delete(n.lookups, l)
+	return true
 }
 
 // adoptListener registers a new listener with one reference, the handle's. After stop it is closed instead.
@@ -274,6 +302,8 @@ func (n *hostNet) stop() {
 		lns = append(lns, sl)
 	}
 	n.listeners = map[*sockListener]struct{}{}
+	lookups := n.lookups
+	n.lookups = map[*nameLookup]struct{}{}
 	n.mu.Unlock()
 	// NEUTER: skip the listeners' close, and TestCloseEndsAGuestParkedInAccept's Close hangs, waiting for an Accept
 	// that never returns.
@@ -286,6 +316,17 @@ func (n *hostNet) stop() {
 		d.h.mu.Lock()
 		d.h.sockPending--
 		d.h.mu.Unlock()
+	}
+	// A pending name lookup is cancelled and resolves nothing (ADR 0126), as a dial is: its goroutine returns
+	// promptly, unclaimed, and wait waits it out.
+	//
+	// NEUTER: skip the cancel, and TestCloseEndsAPendingLookupAndItsGoroutine's Close waits on the held lookup until
+	// the hang guard.
+	for l := range lookups {
+		l.cancel()
+		l.h.mu.Lock()
+		l.h.sockPending--
+		l.h.mu.Unlock()
 	}
 	for _, sc := range conns {
 		_ = sc.c.Close() // the instance is closing

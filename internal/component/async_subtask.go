@@ -206,6 +206,11 @@ type asyncHandles struct {
 	// hostIO is the condition a send's writer goroutine waits on for bytes, over mu, made by the first send.
 	// stopProducers broadcasts it, so a waiting writer sees the stop.
 	hostIO *sync.Cond
+
+	// syncLowerCalls is this instance's pending blocking sync lowers of an async host import (async_synclower.go,
+	// ADR 0126), each from its impl's start to the lower's return. Each is a waker, since its return resumes a
+	// Thread of the instance, and Close's stop wakes each one's waiter. Guarded by mu.
+	syncLowerCalls map[*syncLowerCall]struct{}
 }
 
 // requestCancelAll requests cancellation of every lift task this instance currently hosts, and is the
@@ -434,12 +439,13 @@ func (st *subtask) currentSet() *waitableSet { return st.set }
 
 func newAsyncHandles() *asyncHandles {
 	return &asyncHandles{
-		entries:      []any{nil},
-		entrySem:     make(chan struct{}, 1),
-		runSlot:      make(chan struct{}, 1),
-		cancellable:  make(map[*liftTask]struct{}),
-		hostWaits:    make(map[*hostWait]struct{}),
-		producerStop: make(chan struct{}),
+		entries:        []any{nil},
+		entrySem:       make(chan struct{}, 1),
+		runSlot:        make(chan struct{}, 1),
+		cancellable:    make(map[*liftTask]struct{}),
+		hostWaits:      make(map[*hostWait]struct{}),
+		producerStop:   make(chan struct{}),
+		syncLowerCalls: make(map[*syncLowerCall]struct{}),
 	}
 }
 

@@ -184,6 +184,18 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"the connection so a Write in flight returns, and waits it out " +
 				"(`TestCloseEndsASocketsGoroutines`, under -race).",
 		},
+		{"internal/component/hostlookup.go", "(*Host).resolveAddresses"}: {
+			count: 1,
+			by: "ADR 0126 — a wasi:sockets/ip-name-lookup resolve-addresses lookup, one goroutine per name that " +
+				"is neither a literal nor invalid, counted in the instance's socket registry before it starts. " +
+				"It runs NO guest code. Its result reaches the guest through the lower's `onResolve`: the async " +
+				"lower's, ADR 0101's discipline (ADR 0095's precedent), or the blocking sync lower's, which " +
+				"writes no guest memory and only resolves the subtask under `asyncHandles.mu`, the caller " +
+				"lowering the result after its wait. One claim decides who resolves: the lookup's return, the " +
+				"guest's cancel, or Close, E5's pattern. It ends when LookupNetIP returns, which a cancel or Close " +
+				"makes prompt by cancelling its context, and Close waits it out " +
+				"(`TestCloseEndsAPendingLookupAndItsGoroutine`, under -race).",
+		},
 	}
 
 	seen := map[site]int{}

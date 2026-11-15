@@ -104,9 +104,10 @@ func (h *Host) monotonicNow(_ *interp.CanonCaller, args []interp.Value) ([]inter
 // mark is the monotonic clock's reading, a `mark`: the one clock `now` reads and the waits measure against.
 func (h *Host) mark() uint64 { return uint64(time.Since(h.start).Nanoseconds()) }
 
-// asyncSource is the production async imports (#1233, ADR 0121), WASI 0.3's two waits and tcp-socket's
-// connect (ADR 0123), registered for 0.3 only. Each is a factory the walk calls with the importing instance's
-// async and resource tables, which hold the work while it is pending, so that instance's Close stops it.
+// asyncSource is the production async imports (#1233, ADR 0121), WASI 0.3's two waits, tcp-socket's connect
+// (ADR 0123) and name lookup (ADR 0126), registered for 0.3 only. Each is a factory the walk calls with the
+// importing instance's async and resource tables, which hold the work while it is pending, so that instance's
+// Close stops it. A sync lower of any of them is the blocking sync lower (ADR 0126).
 func (h *Host) asyncSource() map[string]asyncImplFor {
 	m := map[string]asyncImplFor{}
 	serve(m, wasiP3, "wasi:clocks/monotonic-clock::wait-for", h.waitFor)
@@ -114,6 +115,9 @@ func (h *Host) asyncSource() map[string]asyncImplFor {
 	// wasi:sockets' one async tcp method (ADR 0123, hostsock.go): a method, so its factory lends self from the
 	// instance's resource table.
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.connect", h.tcpConnect)
+	// wasi:sockets/ip-name-lookup's one function (ADR 0126, hostlookup.go), whose pending lookups are the
+	// instance's socket registry's.
+	serve(m, wasiP3, "wasi:sockets/ip-name-lookup::resolve-addresses", h.resolveAddresses)
 	return m
 }
 
