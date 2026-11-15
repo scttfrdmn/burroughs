@@ -1,0 +1,27 @@
+package main
+
+import "unsafe"
+
+//go:linkname write runtime.write
+func write(fd uintptr, p unsafe.Pointer, n int32) int32
+
+//go:linkname exit syscall.Exit
+func exit(code int)
+
+// big is written to fd 1 in one runtime.write: long enough that a host taking a stream write in pieces
+// leaves a partial copy, which write1 must loop on.
+var big [70 << 10]byte
+
+func main() {
+	println("hello")
+	for i := range big {
+		if i%64 == 63 {
+			big[i] = '\n'
+		} else {
+			big[i] = 'a' + byte(i%26)
+		}
+	}
+	n := write(1, unsafe.Pointer(&big[0]), int32(len(big)))
+	println("wrote", n, "of", len(big))
+	exit(3)
+}

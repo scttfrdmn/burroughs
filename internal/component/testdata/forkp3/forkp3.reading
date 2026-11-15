@@ -4,9 +4,14 @@
 #
 # reader                                      reading
 # wasmtime 49.0.3 on p3exit0, 10 of 10        exit 0
-# wasmtime 49.0.3 on p3panic, 10 of 10        trap unreachable
+# F1's p3panic, wasmtime 49.0.3, 10 of 10     trap unreachable
 # Burroughs at d32b0eb on p3exit0, 10 of 10   exit 0
-# Burroughs at d32b0eb on p3panic, 10 of 10   trap unreachable
+# F1's p3panic, Burroughs at d32b0eb, 10 of 10   trap unreachable
+#
+# REPLACED by F3a (#1238): p3panic.wasm was rebuilt from the same source on the F3a toolchain, whose runtime
+# gives usleep a disposition that returns and lowers stderr, so the panic now prints and exits 2. Its current
+# reading is in F3a's section below. The two F1 lines above are kept as the record of what F1's bytes did,
+# relabelled so that no test reads them; F1's p3panic.wasm is no longer in this directory.
 #
 # Meaning:     "exit N" is the process's exit code with a run that ended by wasi:cli/exit@0.3.0's exit;
 #              "trap R" is a trap whose kind is R. Neither case wrote a byte to stdout or stderr from the
@@ -82,3 +87,56 @@
 #         6: 0x113c2b - <unknown>!wasm_pc_f_loop
 #         7: 0x113d3e - <unknown>!_rt0_wasm_wasip3
 #         1: wasm trap: wasm `unreachable` instruction executed
+
+# Committed readings for p3panic.wasm (rebuilt), p3print.wasm and p3time.wasm, F3a's witnesses (#1238): the fork's
+# runtime on real WASI 0.3.0 imports, exit-with-code, both clocks, stdout and stderr over write-via-stream, and a
+# usleep that waits rather than traps.
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run <case>.wasm   (from this directory; no flag, no argv)
+#              burroughs run <case>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, 2026-11-15.
+#
+# reader                                        reading
+# wasmtime 49.0.3 on p3panic, 10 of 10          exit 2
+# wasmtime 49.0.3 on p3panic stdout             0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# wasmtime 49.0.3 on p3panic stderr             69 bytes, sha256 71459a2b8ad68421e1112acb547607b71ba1fce8cf620aa1c1204b0fc02ecd5d
+# wasmtime 49.0.3 on p3print, 10 of 10          exit 3
+# wasmtime 49.0.3 on p3print stdout             71680 bytes, sha256 8b378ad7265e58b1006e6b89366fe0c03ffc6788d0fe5c49919d4e3458986082
+# wasmtime 49.0.3 on p3print stderr             27 bytes, sha256 568a93ade3c233382b21184ba6ab6286945f603d24c18e2d782a2d1eafd83a06
+# wasmtime 49.0.3 on p3time, 10 of 10           exit 7
+# wasmtime 49.0.3 on p3time stdout              0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# wasmtime 49.0.3 on p3time stderr              0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# Burroughs at cf7fdf6 on each, 10 of 10        the same exit code, stdout and stderr, byte for byte
+#
+# Meaning:     the exit code is the process's, through wasi:cli/exit@0.3.0's exit-with-code (exit(ok) for 0).
+#              Each run's stdout and stderr were hashed, and all 10 wasmtime runs and all 10 Burroughs runs of
+#              a case gave one stdout hash and one stderr hash, the ones above.
+#   p3panic:   2 is the runtime's fatal-panic code. Its stderr, verbatim (the last line starts with a tab):
+#
+#     panic: x
+#
+#     goroutine 1 [running]:
+#     main.main()
+#     	p3panic/main.go:3 +0x2
+#
+#   p3print:   stdout is the 70 KiB buffer of p3print.go.txt, written by ONE runtime.write(1, ...); stderr is
+#
+#     hello
+#     wrote 71680 of 71680
+#
+#   p3time:    7 is every bit: 0x01 monotonic now advanced across a busy loop, 0x02 the wall clock's
+#              nanoseconds are below 1e9, 0x04 its seconds are at or past 2026-01-01T00:00:00Z.
+#
+# Burroughs at bca78b4, before grave #1296's repair (cf7fdf6), printed the same stdout and stderr and then trapped
+# at the exit flush's waitable-set.drop, "set 4 still has 1 joined waitable(s)" (2 for p3print): a dropped stream
+# or future end stayed in its waitable set. wasmtime dropped the set clean.
+#
+# Neither engine returned BLOCKED or a partial copy for any write (throwaway builds counting them; a 16 MiB write
+# was one copy on both, and on wasmtime also with stdout piped to a slow reader), so write1's wait and its
+# partial-copy loop are NOT witnessed by these readings (the fork's phase4/wasip3-f3a.md, "The known gap").
+#
+# The neuters, each run 10 of 10 on both engines, with the builds kept out of this tree:
+#   usleep restored to F1's trap:          p3panic traps before printing anything. wasmtime exit 134, its
+#                                          backtrace runtime.abort <- runtime.usleep <- runtime.freezetheworld;
+#                                          Burroughs `trap: unreachable`, exit 4. Both stdouts and both
+#                                          guest-written stderrs are empty.
+#   F1's fictional counter clock restored: p3time exits 3 on both (0x04 clears: the wall clock reads 1970).

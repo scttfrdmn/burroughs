@@ -25,6 +25,28 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **The fork's `GOOS=wasip3` runtime prints, exits with its code, and reads real clocks, on Burroughs as on
+  wasmtime 49.0.3** ([#1238](https://github.com/scttfrdmn/burroughs/issues/1238), F3a, the first of F3's two
+  slices; ADR 0114). The Phase 4 fork's runtime moves off F1's stand-ins onto WASI 0.3.0 imports it declares
+  itself:
+  - `exit` goes through `exit-with-code`, and the clocks through monotonic and system-clock `now`, which retires
+    the fictional counter clock;
+  - `usleep` is a sync-lowered `wait-for` (ADR 0126's form), and `readRandom` uses `get-random-u64`;
+  - `write1` writes fds 1 and 2 through one long-lived stream each, over `write-via-stream`, and flushes them at
+    exit.
+  - **A fatal panic now prints.** F1's `p3panic` trapped in `usleep` before its first write. Rebuilt, it prints the
+    panic and its goroutine trace on stderr and exits 2, and its reading is replaced, with the reason recorded
+    beside it.
+  - **Three components are committed with their PROVENANCE** in `internal/component/testdata/forkp3`: `p3panic`,
+    rebuilt, and two new ones. `p3print` writes stderr and a 70 KiB stdout, then exits 3. `p3time` reports three
+    clock properties as an exit bitmask, 7. Each matches wasmtime's exit code, stdout and stderr byte for byte,
+    10 of 10 on both engines, and `TestForkWasip3RuntimeMatchesWasmtime` asserts it.
+  - **It found grave [#1296](https://github.com/scttfrdmn/burroughs/issues/1296)**, repaired below: on Burroughs,
+    the exit flush's `waitable-set.drop` trapped, because a dropped stream end stayed in its set.
+  - **Not witnessed:** `write1`'s wait on a BLOCKED write and its partial-copy loop. Neither engine ever returns
+    either for a stdio write (a 16 MiB write is one copy on both, measured), so no neuter of them can fail
+    through stdout.
+
 - **A fork-built Go guest calls generated WASI 0.3 bindings, and runs on Burroughs as on wasmtime 49.0.3**
   ([#1237](https://github.com/scttfrdmn/burroughs/issues/1237), F2 of v0.14.0's fork track; ADR 0114). The Phase 4
   fork now generates Go bindings for `wasi:cli`, `wasi:clocks`, `wasi:random` and `wasi:sockets` from the pinned

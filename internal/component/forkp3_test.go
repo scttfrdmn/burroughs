@@ -3,7 +3,10 @@
 package component
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,7 +17,7 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
-// forkP3Dir holds F1's components, their sources, their wasmtime readings and their PROVENANCE. The bytes
+// forkP3Dir holds the fork's components (F1, F2, F3a), their sources, their wasmtime readings and their PROVENANCE. The bytes
 // are committed, so this test needs no fork and runs wherever the package's other tests do.
 const forkP3Dir = "testdata/forkp3"
 
@@ -23,26 +26,31 @@ const forkP3Dir = "testdata/forkp3"
 // Burroughs as they run on wasmtime 49.0.3.
 //
 //   - p3exit0, `func main() {}`, exits 0: main returns, the runtime calls wasi:cli/exit@0.3.0's exit with ok.
-//   - p3panic, `func main() { panic("x") }`, traps `unreachable`: F1 lowers no stdout and no clock, so the
-//     runtime's fatal path traps at its first refused host call (forkp3.reading names the frame).
+//
+// F1's second case, p3panic, trapped `unreachable` in the runtime's usleep before printing anything. F3a
+// (#1238) rebuilt it on a runtime that sleeps and writes stderr, so it now prints and exits 2, and
+// TestForkWasip3RuntimeMatchesWasmtime asks about it, stdout and stderr included. F1's reading of it is kept
+// in forkp3.reading, relabelled.
 //
 // The expected outcomes are wasmtime's, read from the committed forkp3.reading, not chosen here. The runs go
 // through CallRun, the call ComponentConfig.Run makes. The core-module subtest asserts F1's other claim:
 // the Go module imports only Canonical ABI `wasi:` names, so no adapter stands between it and the host.
 //
 // Neutered, each run:
-//   - p3exit0.wasm replaced by p3panic.wasm: p3exit0's run traps `unreachable` where wasmtime's reading is
-//     exit 0.
+//   - p3exit0.wasm replaced by F3a's p3panic.wasm: p3exit0 exits 2 where wasmtime's reading is exit 0 (with
+//     F1's p3panic.wasm it trapped `unreachable`). The core-module subtest fails too, on 3 core modules: an
+//     F3a build carries wit-component's shim and fixup modules beside the Go module, for the imports lowered
+//     with the memory option, as F2's p3bind already does. Neither is an adapter, so "one core module" is
+//     the no-adapter shape only for F1's single-import builds, which is all this subtest is asked about.
 //   - p3exit0.wasm replaced by a component built from the fork's wasip1 `_start` (GOEXPERIMENT=componentabi,
 //     the same source) under an empty world: its run is refused, "no wasi:cli/run export", and its core
 //     module imports nothing, which the core-module subtest refuses as vacuous. `wasm-tools component new`
 //     refuses that module against wasi:cli/command@0.3.0 outright: "failed to find export of interface
 //     `wasi:cli/run@0.3.0` function `run`".
-//   - p3panic.wasm replaced by p3exit0.wasm: p3panic's run returns (0, nil) where wasmtime traps.
 //   - the prefix asked of each import narrowed to "wasi:http": the subtest names "wasi:cli/exit@0.3.0"
 //     "exit", so the loop reads the import it is about.
 func TestForkWasip3MatchesWasmtime(t *testing.T) {
-	for _, c := range []string{"p3exit0", "p3panic"} {
+	for _, c := range []string{"p3exit0"} {
 		t.Run(c, func(t *testing.T) {
 			want := readingLine(t, filepath.Join(forkP3Dir, "forkp3.reading"), "wasmtime 49.0.3 on "+c+", 10 of 10")
 			in, err := InstantiateWithHost(readForkP3(t, c), NewHost(io.Discard, io.Discard, nil))
@@ -156,6 +164,89 @@ func TestForkWasip3BindingsMatchWasmtime(t *testing.T) {
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Errorf("p3bind wrote %q to stdout and %q to stderr; wasmtime's runs wrote nothing", stdout.String(), stderr.String())
 	}
+}
+
+// p3timeAllProperties is every bit p3time.go.txt can set: its three clock properties, each held.
+const p3timeAllProperties = 0x07
+
+// TestForkWasip3RuntimeMatchesWasmtime is F3a's witness (#1238, ADR 0114). The fork's runtime now makes its own host
+// calls through WASI 0.3.0 imports: exit-with-code, monotonic and system-clock now, a sync-lowered wait-for for
+// usleep, get-random-u64, and write1 for fds 1 and 2, which writes one long-lived stream per fd through
+// write-via-stream and flushes it at exit (writer dropped, future read, future dropped, waitable set dropped).
+//
+//   - p3panic, F1's `panic("x")` rebuilt: it prints the panic and its goroutine trace on stderr and exits 2.
+//   - p3print: println to stderr, one 70 KiB runtime.write to stdout, exit 3 through runtime.exit.
+//   - p3time: exits with a bitmask of three clock properties, which must be every one of them.
+//
+// Each run's exit code, stdout and stderr must equal wasmtime 49.0.3's byte for byte. The readings are the
+// committed forkp3.reading's, each stream recorded as its length and sha256 (p3print's stdout is 70 KiB).
+//
+// Grave #1296 is the defect this found: before cf7fdf6, p3panic and p3print printed the same bytes and then
+// trapped at the flush's waitable-set.drop, because a dropped stream or future end stayed in its set.
+//
+// NOT witnessed here: write1's wait on a BLOCKED stream.write and its loop over a partial copy. Neither engine
+// returns BLOCKED or a partial copy for a stdio write (a 16 MiB write is one copy on both, measured), so a
+// neuter of either cannot fail through stdout. The fork's phase4/wasip3-f3a.md records the gap.
+//
+// NEUTER: usleep restored to F1's trap (fork runtime, p3panic rebuilt): p3panic's run traps `unreachable`
+// before printing anything, where wasmtime's reading is exit 2 with a 69-byte stderr; wasmtime traps too.
+// NEUTER: F1's fictional counter clock restored (fork runtime, p3time rebuilt): p3time exits 3 (0x04 clear,
+// the wall clock reads 1970) where wasmtime's reading is 7; it exits 3 on wasmtime too.
+func TestForkWasip3RuntimeMatchesWasmtime(t *testing.T) {
+	reading := filepath.Join(forkP3Dir, "forkp3.reading")
+	for _, c := range []string{"p3panic", "p3print", "p3time"} {
+		t.Run(c, func(t *testing.T) {
+			want := readingLine(t, reading, "wasmtime 49.0.3 on "+c+", 10 of 10")
+			wantCode, err := strconv.Atoi(strings.TrimPrefix(want, "exit "))
+			if !strings.HasPrefix(want, "exit ") || err != nil {
+				t.Fatalf("forkp3.reading's %s line %q is not an exit code", c, want)
+			}
+			if c == "p3time" && wantCode != p3timeAllProperties {
+				t.Fatalf("wasmtime's reading is exit %d (%03b), not every property (%03b): the oracle itself saw a clock fail",
+					wantCode, wantCode, p3timeAllProperties)
+			}
+			wantOut := readingStream(t, reading, "wasmtime 49.0.3 on "+c+" stdout")
+			wantErr := readingStream(t, reading, "wasmtime 49.0.3 on "+c+" stderr")
+
+			var stdout, stderr strings.Builder
+			in, err := InstantiateWithHost(readForkP3(t, c), NewHost(&stdout, &stderr, nil))
+			if err != nil {
+				t.Fatalf("%s did not instantiate: %v", c, err)
+			}
+			defer in.Close()
+			code, err := in.CallRun()
+			if err != nil {
+				t.Fatalf("%s's run failed where wasmtime exits %d: %v (stderr so far %q)", c, wantCode, err, stderr.String())
+			}
+			if code != wantCode {
+				t.Errorf("%s exited %d, want wasmtime's %d", c, code, wantCode)
+			}
+			if got := streamDigest(stdout.String()); got != wantOut {
+				t.Errorf("%s's stdout is %s, want wasmtime's %s", c, got, wantOut)
+			}
+			if got := streamDigest(stderr.String()); got != wantErr {
+				t.Errorf("%s's stderr is %s (%q), want wasmtime's %s", c, got, stderr.String(), wantErr)
+			}
+		})
+	}
+}
+
+// readingStream returns a stream's recorded "N bytes, sha256 H", refusing a line of any other shape so that a
+// malformed reading cannot compare equal to a malformed digest.
+func readingStream(t *testing.T, path, reader string) string {
+	t.Helper()
+	s := readingLine(t, path, reader)
+	n, h, ok := strings.Cut(s, " bytes, sha256 ")
+	if _, err := strconv.Atoi(n); !ok || err != nil || len(h) != 64 {
+		t.Fatalf("%s's %q reading %q is not \"N bytes, sha256 H\"", path, reader, s)
+	}
+	return s
+}
+
+// streamDigest renders b in readingStream's shape.
+func streamDigest(b string) string {
+	sum := sha256.Sum256([]byte(b))
+	return fmt.Sprintf("%d bytes, sha256 %s", len(b), hex.EncodeToString(sum[:]))
 }
 
 func readForkP3(t *testing.T, name string) []byte {
