@@ -25,6 +25,22 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A fork-built Go guest calls generated WASI 0.3 bindings, and runs on Burroughs as on wasmtime 49.0.3**
+  ([#1237](https://github.com/scttfrdmn/burroughs/issues/1237), F2 of v0.14.0's fork track; ADR 0114). The Phase 4
+  fork now generates Go bindings for `wasi:cli`, `wasi:clocks`, `wasi:random` and `wasi:sockets` from the pinned
+  0.3.0 WIT. They come from an in-tree generator that reads `wasm-tools component wit --json`. Every value crosses at
+  explicit 32-bit Canonical ABI offsets, and an async function is sync-lowered. Its `[async-lower]` form and the
+  stream and future built-ins are raw imports, left for F5.
+  - **The bindings bring the first real `cabi_realloc`.** It allocates nothing from the Go heap: it bumps through an
+    arena armed around one import call, and traps by name when it runs out. A program without the bindings still
+    exports the linker's trap stand-in. A build linking all 151 generated imports is checked by `component new`
+    against the WIT.
+  - **`p3bind` is committed with its PROVENANCE** in `internal/component/testdata/forkp3`. It calls get-arguments,
+    both clocks, the random u64 and bytes, and the insecure seed, and reports seven properties as an exit-code
+    bitmask. Both engines exit 127, every property, 10 of 10. `TestForkWasip3BindingsMatchWasmtime` asserts the
+    committed reading's code with the reading's argv, and that the code is every property.
+  - **No engine code changed.** Burroughs already served every import p3bind makes.
+
 - **The fork's first `GOOS=wasip3` components run on Burroughs as on wasmtime 49.0.3**
   ([#1236](https://github.com/scttfrdmn/burroughs/issues/1236), F1 of v0.14.0's fork track; ADR 0114). The Phase 4
   fork now has a `GOOS=wasip3` target on `GOARCH=wasm`. Its linker emits a core module that `wasm-tools component new`

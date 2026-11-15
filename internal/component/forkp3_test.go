@@ -99,6 +99,65 @@ func TestForkWasip3MatchesWasmtime(t *testing.T) {
 	})
 }
 
+// p3bindAllProperties is every bit p3bind.go.txt can set: its seven properties, each held.
+const p3bindAllProperties = 0x7f
+
+// TestForkWasip3BindingsMatchWasmtime is F2's witness (#1237, ADR 0114). p3bind is a GOOS=wasip3 guest that calls
+// the fork's generated WASI 0.3 bindings directly: get-arguments and get-random-bytes, whose lists the host places
+// through the bindings' own cabi_realloc; monotonic-clock now, a flat i64; system-clock now, a 16-byte record through
+// a return area; get-random-u64; and get-insecure-seed, a tuple through a return area. It reports each property it
+// observed as one bit of the exit code, through exit-with-code, because F2 lowers no stdout.
+//
+// Run with the argv the committed reading records, it exits here with the code wasmtime 49.0.3 exits with, read
+// from forkp3.reading, and neither engine writes a byte. That code is also checked to be every property, so a
+// reading in which wasmtime itself observed a failure cannot pass as an agreement.
+//
+// Neutered, each run:
+//   - the argv's token replaced by "f2-bindings-wrong": p3bind exits 126 (0x01 clear) where wasmtime's reading is 127.
+//   - p3bind.wasm replaced by a build whose generated system_clock.go reads instant.nanoseconds at offset 0 rather
+//     than 8: it exits 123 (0x04 clear), as it does on wasmtime.
+//   - p3bind.wasm replaced by a build with the linker's trap stand-in forced and internal/wasi's cabi_realloc left
+//     unexported: its run fails, trap `unreachable`, at the host's first allocation, where wasmtime's reading is
+//     exit 127. wasmtime's backtrace for that build names the stand-in, cabi_realloc (forkp3.reading).
+//   - wasmtime's reading edited to 126, with the token wrong as above: the run agrees with it, and the
+//     every-property check refuses the reading.
+func TestForkWasip3BindingsMatchWasmtime(t *testing.T) {
+	reading := filepath.Join(forkP3Dir, "forkp3.reading")
+	argv := strings.Fields(readingLine(t, reading, "p3bind argv"))
+	if len(argv) != 2 {
+		t.Fatalf("forkp3.reading's p3bind argv is %q, want the program name and the token", argv)
+	}
+	want := readingLine(t, reading, "wasmtime 49.0.3 on p3bind, 10 of 10")
+	wantCode, err := strconv.Atoi(strings.TrimPrefix(want, "exit "))
+	if !strings.HasPrefix(want, "exit ") || err != nil {
+		t.Fatalf("forkp3.reading's p3bind line %q is not an exit code", want)
+	}
+	if wantCode != p3bindAllProperties {
+		t.Fatalf("wasmtime's reading is exit %d (%07b), not every property (%07b): the oracle itself saw a property fail",
+			wantCode, wantCode, p3bindAllProperties)
+	}
+
+	var stdout, stderr strings.Builder
+	h := NewHost(&stdout, &stderr, nil)
+	h.Args = argv
+	in, err := InstantiateWithHost(readForkP3(t, "p3bind"), h)
+	if err != nil {
+		t.Fatalf("p3bind did not instantiate: %v", err)
+	}
+	defer in.Close()
+	code, err := in.CallRun()
+	if err != nil {
+		t.Fatalf("p3bind's run failed where wasmtime exits %d: %v", wantCode, err)
+	}
+	if code != wantCode {
+		t.Errorf("p3bind exited %d (%07b), want wasmtime's %d (%07b): bits %07b were observed there and not here",
+			code, code, wantCode, wantCode, wantCode&^code)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Errorf("p3bind wrote %q to stdout and %q to stderr; wasmtime's runs wrote nothing", stdout.String(), stderr.String())
+	}
+}
+
 func readForkP3(t *testing.T, name string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(forkP3Dir, name+".wasm"))

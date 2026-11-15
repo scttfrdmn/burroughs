@@ -1,0 +1,74 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build wasip3
+
+// P3bind is F2's witness guest (Burroughs #1237; phase4/wasip3-f2.md). It calls the generated
+// bindings directly and reports what it observed as a bitmask through wasi:cli/exit's
+// exit-with-code, because stdout is F3's. Every property holding is exit 127.
+//
+//	0x01  argv is [anything, Token]: get-arguments, a list<string> placed through cabi_realloc
+//	0x02  two monotonic-clock now readings do not decrease: one flat i64 result each
+//	0x04  system-clock now's nanoseconds is below 1e9: a 16-byte record at alignment 8, through a
+//	      return pointer, the u32 at offset 8
+//	0x08  its seconds is after 2020-09-13 (1.6e9): the s64 at offset 0
+//	0x10  get-random-bytes(16) returns 1 to 16 bytes, not all zero: a list<u8> through cabi_realloc
+//	0x20  two get-random-u64 results differ
+//	0x40  two get-insecure-seed results are equal: a tuple<u64, u64> through a return pointer
+//
+// Built from GOROOT, because the bindings are internal packages:
+//
+//	phase4/buildp3.sh src/internal/wasi/cmd/p3bind <out>/p3bind.wasm
+//	wasmtime run <out>/p3bind.wasm f2-bindings-token
+package main
+
+import (
+	"internal/wasi/generated/cli"
+	"internal/wasi/generated/clocks"
+	"internal/wasi/generated/random"
+)
+
+// Token is the argv[1] the 0x01 bit asks for. The readings run p3bind with it.
+const Token = "f2-bindings-token"
+
+func main() {
+	var mask uint8
+
+	if args := cli.GetArguments(); len(args) == 2 && args[1] == Token {
+		mask |= 0x01
+	}
+
+	t1 := clocks.MonotonicClockNow()
+	t2 := clocks.MonotonicClockNow()
+	if t2 >= t1 {
+		mask |= 0x02
+	}
+
+	now := clocks.SystemClockNow()
+	if now.Nanoseconds < 1_000_000_000 {
+		mask |= 0x04
+	}
+	if now.Seconds > 1_600_000_000 {
+		mask |= 0x08
+	}
+
+	if b := random.GetRandomBytes(16); len(b) >= 1 && len(b) <= 16 {
+		for _, c := range b {
+			if c != 0 {
+				mask |= 0x10
+				break
+			}
+		}
+	}
+
+	if random.GetRandomU64() != random.GetRandomU64() {
+		mask |= 0x20
+	}
+
+	if random.GetInsecureSeed() == random.GetInsecureSeed() {
+		mask |= 0x40
+	}
+
+	cli.ExitWithCode(mask)
+}
