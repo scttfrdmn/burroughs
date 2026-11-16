@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -35,9 +36,11 @@ import (
 // Four kinds run per socket: the dial, the send writer, the receive producer's Read, and the listen stream's
 // Accept (hostproducer.go). Each is counted in the instance's registry (`hostNet`) before it starts, and the
 // registry refuses to count one after `Close` has stopped it. `Close` cancels every pending dial and closes every
-// connection and every listener, which unblocks every Read, Write and Accept, and then **waits for every one of
-// them** (walker.close). This is where a socket differs from stdin, whose Read is abandoned (#1274): a socket is
-// the instance's own to close.
+// listener and every connection without a live send writer, which unblocks every Read and Accept, and then **waits
+// for every one of them** (walker.close). A connection with a live send writer is left to that writer (ADR 0127,
+// grave #1308): it writes the bytes the guest was told were complete, under a write deadline of sendFlushBound,
+// and then closes the connection, which ends that connection's Read. This is where a socket differs from stdin,
+// whose Read is abandoned (#1274): a socket is the instance's own to close.
 //
 // # Locks
 //
@@ -53,6 +56,13 @@ var tcpSocketResource = newHostResource("wasi:sockets/types::tcp-socket", destro
 
 // sendBufCap bounds the bytes a send holds that the guest has written and the connection has not yet taken.
 const sendBufCap = 64 << 10
+
+// sendFlushBound is how long, from Close's stop, a send writer has to write the bytes a guest's writes were told
+// were complete (ADR 0127, grave #1308): at most sendBufCap of them, the write in flight and the buffer behind it.
+// It is the connection's write deadline, so it bounds Close. A peer reading at 32 KiB/s or faster receives every
+// byte. It is reached only when the peer has stopped reading and the kernel's buffers are full, and then the bytes
+// the deadline cuts off are lost, which is the price of a Close that returns.
+const sendFlushBound = 2 * time.Second
 
 // The address families, in `ip-address-family`'s case order, which is its flat encoding.
 const (
@@ -103,6 +113,9 @@ type sockConn struct {
 	c      *net.TCPConn
 	refs   int
 	closed bool
+	// writer is a send writer's goroutine live on the connection: at most one, since send may be called once.
+	// leftToWriter is Close's stop having left the connection's close to that writer, for after its flush (ADR 0127).
+	writer, leftToWriter bool
 }
 
 // sockDial is one pending connect, in its instance's registry until its dial returns, the guest cancels it, or
@@ -213,6 +226,29 @@ func (n *hostNet) track() (ended func(), ok bool) {
 	return n.wg.Done, true
 }
 
+// trackWriter is track for a send's writer goroutine over sc: it also marks the connection as having a live writer,
+// so that Close's stop leaves its close to the writer (ADR 0127). The call it returns ends the goroutine, and closes
+// the connection first if the stop left it so. The caller may hold asyncHandles.mu, the permitted order.
+func (n *hostNet) trackWriter(sc *sockConn) (ended func(), ok bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.stopped {
+		return nil, false
+	}
+	n.wg.Add(1)
+	sc.writer = true
+	return func() {
+		n.mu.Lock()
+		sc.writer = false
+		left := sc.leftToWriter
+		n.mu.Unlock()
+		if left {
+			_ = sc.c.Close() // the instance is closing, and the flush has ended; nobody reads the close's error
+		}
+		n.wg.Done()
+	}, true
+}
+
 // startDial registers a pending dial and counts its goroutine.
 func (n *hostNet) startDial(d *sockDial) (ended func(), ok bool) {
 	n.mu.Lock()
@@ -280,8 +316,15 @@ func (n *hostNet) release(sc *sockConn) {
 }
 
 // stop is Close's: no socket goroutine starts after it, every pending dial is cancelled and its lend released,
-// and every listener and connection is closed, which ends every Accept, Read and Write in flight. wait then waits
-// them out. A connection accepted and not yet delivered to the guest is one of the connections (ADR 0125).
+// and every listener and every connection without a live send writer is closed, which ends every Accept and Read
+// in flight. wait then waits them out. A connection accepted and not yet delivered to the guest is one of the
+// connections (ADR 0125).
+//
+// **A connection with a live send writer is not closed here** (ADR 0127, grave #1308). Its writer may hold bytes
+// the guest's writes were told were complete, in its buffer or in a Write in flight, and a close would discard the
+// one and abort the other where wasmtime 49.0.3 delivers both. So the connection gets a write deadline of
+// sendFlushBound, which bounds that Write and the flush after it, and its close is left to the writer, which
+// closes it when it ends (trackWriter). That close ends the connection's Read, and wait waits for the writer.
 //
 // NEUTER: return before closing the connections, and TestCloseEndsASocketsGoroutines' Close hangs on the
 // receive reader blocked in Read.
@@ -291,8 +334,18 @@ func (n *hostNet) stop() {
 	dials := n.dials
 	n.dials = map[*sockDial]struct{}{}
 	conns := make([]*sockConn, 0, len(n.conns))
+	var flushing []*sockConn
 	for sc := range n.conns {
 		sc.closed = true
+		// NEUTER: close a writer's connection here too, as before grave #1308, and both of
+		// TestCloseDeliversTheBytesASendWriterHolds' peers read short, tcp-send-tail's 266240 of wasmtime's 294912 and
+		// p3tcp's 200704 of 262144, the Write in flight aborted; TestTheStopsFlushEndsAtItsDeadline's wait returns
+		// before the bound.
+		if sc.writer {
+			sc.leftToWriter = true
+			flushing = append(flushing, sc)
+			continue
+		}
 		conns = append(conns, sc)
 	}
 	n.conns = map[*sockConn]struct{}{}
@@ -330,6 +383,14 @@ func (n *hostNet) stop() {
 	}
 	for _, sc := range conns {
 		_ = sc.c.Close() // the instance is closing
+	}
+	// NEUTER: skip the deadline, and TestTheStopsFlushEndsAtItsDeadline's wait does not return within its hang guard:
+	// the flush to a peer that never reads never ends. TestP3TcpMatchesWasmtime, TestCloseEndsASocketsGoroutines and
+	// TestCloseDeliversTheBytesASendWriterHolds pass under it: their peers read, or their writers hold nothing the
+	// kernel will not take.
+	deadline := time.Now().Add(sendFlushBound)
+	for _, sc := range flushing {
+		_ = sc.c.SetWriteDeadline(deadline) //nolint:errcheck // fails only on a closed connection: nothing left to bound
 	}
 }
 
@@ -1184,7 +1245,7 @@ func (h *Host) tcpSend(async *asyncHandles, res *hostResources) interp.CanonFunc
 		fe.index = async.addLocked(fe)
 		var ended func()
 		if sc != nil {
-			if e, tok := res.net.track(); tok {
+			if e, tok := res.net.trackWriter(sc); tok {
 				ended = e
 			} else {
 				res.net.release(sc)
@@ -1258,7 +1319,7 @@ func unlinkHostReadLocked(re *readableStreamEnd) {
 }
 
 // run is the writer goroutine's body: wait for bytes, write them with no lock held, deliver what the Write freed,
-// and at the writer's drop CloseWrite and resolve the future.
+// and at the writer's drop CloseWrite and resolve the future. At Close's stop it flushes what the buffer holds.
 func (s *sockSend) run() {
 	h := s.h
 	for {
@@ -1267,8 +1328,23 @@ func (s *sockSend) run() {
 			h.hostIO.Wait()
 		}
 		if h.producersStopped {
+			// Close (grave #1308, ADR 0127): every byte in the buffer is one a guest's write was told was complete,
+			// so it is written, as wasmtime 49.0.3, whose kernel already holds such bytes, delivers them. A Write in
+			// flight at the stop was let finish, since the stop does not close a writer's connection, and its
+			// delivery was dropped. The flush delivers nothing to the guest and holds no lock. The stop has left the
+			// connection's close to this goroutine (trackWriter), and its write deadline (hostNet.stop) bounds the
+			// Write.
+			//
+			// NEUTER: return without the flush, and TestCloseDeliversTheBytesASendWriterHolds' tcp-send-tail peer reads
+			// 278528 of wasmtime's 294912, its last 16 KiB lost from the buffer, and TestTheStopsFlushEndsAtItsDeadline's
+			// wait returns before the bound. Its p3tcp row passes: std's one write loop leaves the buffer empty.
+			pending := s.buf
+			s.buf = nil
 			h.mu.Unlock()
-			return // Close: it closes the connection
+			if len(pending) > 0 {
+				_, _ = s.conn.c.Write(pending) //nolint:errcheck // the guest has gone: nobody is left to tell of a loss
+			}
+			return
 		}
 		if len(s.buf) == 0 { // closing, and drained
 			h.sockPending++ // a waker until the future's resolution is stored

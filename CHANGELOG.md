@@ -546,6 +546,27 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **Close writes the bytes a guest's `tcp-socket.send` writes were told were complete before it closes the
+  connection** ([#1308](https://github.com/scttfrdmn/burroughs/issues/1308), `type:grave`; ADR 0127, amending ADR
+  0123's choice 12 on Scott's ruling).
+  - **The defect:** a send write completes once its bytes are in the writer's 64 KiB buffer (ADR 0123 choice 8). A
+    guest that wrote and then exited at once could leave bytes there, or in a `Write` in flight. `Close` discarded
+    the first, since the writer returned at the stop, and aborted the second by closing every connection. wasmtime
+    49.0.3 delivers both.
+  - **How it was found:** C2's tail row (#1242), a 96 KiB echo read after the server exits, read 69651 bytes of
+    98405 in about 20% of runs.
+  - **The repair:** the stop leaves a connection with a live send writer to that writer. The writer writes what its
+    buffer holds, with no lock held and nothing delivered to the guest, under a write deadline of `sendFlushBound`
+    (2 s) from the stop, and then closes the connection. `Close` still waits for it. Completions addressed to the
+    exited guest are still dropped, and choice 8's write-behind is unchanged.
+  - **Witnesses:** `TestCloseDeliversTheBytesASendWriterHolds`, also under `-race`. A new hand-written guest,
+    `tcp-send-tail.wasm`, and p3tcp each write to a peer slower than they are and exit, and the peer's count after
+    `Close` matches wasmtime 49.0.3's `tcp-send-tail.reading`, 10 of 10 per row. `TestTheStopsFlushEndsAtItsDeadline`
+    checks the bound. C2's tail row, with the repair applied to a scratch copy of its branch, read 20 of 20 and 5 of 5
+    under `-race`.
+  - **Neuters, run:** with the flush removed, tcp-send-tail's peer reads 278528 of 294912, 50 of 50. With a writer's
+    connection closed at the stop, tcp-send-tail's reads 266240 and p3tcp's 200704 of 262144, 20 of 20. With the
+    deadline skipped, the bound's witness never returns.
 - **A sync `stream.cancel-read` or `stream.cancel-write` on an end joined to a waitable set traps**
   ([#1301](https://github.com/scttfrdmn/burroughs/issues/1301), `type:grave`).
   - **The defect:** the decoder kept the cancel's `async?` operand, but nothing read it for the stream cancels. A

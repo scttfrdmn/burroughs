@@ -566,8 +566,10 @@ func TestForkWasip3NetMatchesWasmtime(t *testing.T) {
 // asks. p3nettail listens on the port its argv names, serves one connection from a peer outside the instance, writes
 // 256 KiB, closes the connection and exits. Every Write returns once the host has taken the bytes, so what the peer
 // counts is what the host did with them after the guest closed and the instance was closed: here the write-behind is
-// Burroughs' 64 KiB send sink, which ADR 0123 (choices 8 and 12) drains at the writer's drop and discards at
-// walker.close. The peer's count must equal wasmtime's (forkp3.reading), as must the exit code and both streams.
+// Burroughs' 64 KiB send sink, which ADR 0123 (choice 8) drains at the writer's drop and ADR 0127 (grave #1308)
+// flushes at walker.close. It discarded them there until #1308, which this test could not see: the guest's single
+// write loop leaves the sink empty when it exits (TestCloseDeliversTheBytesASendWriterHolds is #1308's witness).
+// The peer's count must equal wasmtime's (forkp3.reading), as must the exit code and both streams.
 func TestForkWasip3NetTailMatchesWasmtime(t *testing.T) {
 	reading := filepath.Join(forkP3Dir, "forkp3.reading")
 	want := readingLine(t, reading, "wasmtime 49.0.3 on p3nettail, the peer received")

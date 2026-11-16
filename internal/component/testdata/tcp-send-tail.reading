@@ -1,0 +1,26 @@
+# Committed wasmtime readings for grave #1308's witness (ADR 0127): a guest's last writes to a tcp-socket's send
+# stream, told complete, then the guest's exit at once, read by a peer that is slower than the guest.
+# Built:       wasm-tools parse tcp-send-tail.wat -o tcp-send-tail.wasm   (wasm-tools 1.258.0; validates --features all)
+#              p3tcp.wasm is p3tcp/build.sh's, unchanged.
+# Invocation:  wasmtime run -S inherit-network -W component-model-async=y -S p3=y \
+#                --invoke 'run(<port>, 65536, 262144, 16384)' tcp-send-tail.wasm
+#              wasmtime run -S inherit-network p3tcp.wasm <port> <closed-port> 262144
+# Peer:        on 127.0.0.1, accepting one connection: it asks for a 4096-byte receive buffer, shuts its write half at
+#              once (so p3tcp's read_to_end ends with nothing echoed), then reads 4096 bytes at a time with 4 ms between
+#              reads until the end of the stream, and counts. <closed-port> is a port bound and closed.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per row, each identical: exit 0, empty stderr, and the lines below. Taken 2026-11-16.
+#
+# Each line is `<row>: <wasmtime's reading>`, and the test reads them by row.
+tcp-send-tail result: 294912
+tcp-send-tail peer: 294912
+p3tcp peer: 262144
+p3tcp stdout: p3tcp: connect: ok
+p3tcp stdout: p3tcp: local address is v4 loopback: true
+p3tcp stdout: p3tcp: remote is v4 loopback at argv's port: true
+p3tcp stdout: p3tcp: echoed 0 of 262144 bytes, match: false
+p3tcp stdout: p3tcp: closed port: ConnectionRefused
+#
+# Meaning: every byte each guest wrote reached the peer, after the guest had exited. tcp-send-tail writes 256 KiB in
+# 64 KiB pieces and then two pieces of 16 KiB, 294912 bytes, and returns the count it was told was accepted; p3tcp
+# writes 256 KiB with write_all and shuts its write half. wasmtime's kernel holds what each write was told it took.

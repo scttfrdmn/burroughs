@@ -31,14 +31,26 @@ type tcpPeer struct {
 	mu     sync.Mutex
 	conns  []net.Conn
 	gotEOF chan struct{} // closed when a drain peer has read its connection to the end
+	// received carries a paced peer's count of the bytes it read, once its read has ended.
+	received chan int64
 }
 
 // The peers' behaviours: echo is build.sh's (echo until the peer's write half shuts, then close), drain reads to the
-// end and then holds the connection open without writing, and silent accepts and never reads.
+// end and then holds the connection open without writing, silent accepts and never reads, and paced is
+// tcp-send-tail.reading's peer: a small receive buffer, its write half shut at once, then reads of pacedReadSize
+// bytes with pacedReadGap between them, to the end, counted.
 const (
 	peerEcho = iota
 	peerDrain
 	peerSilent
+	peerPaced
+)
+
+// The paced peer's read size and gap, tcp-send-tail.reading's: at most 1 MB/s, slower than the guests that write
+// to it, so the host still holds bytes the guest was told it wrote when the guest exits.
+const (
+	pacedReadSize = 4096
+	pacedReadGap  = 4 * time.Millisecond
 )
 
 func startPeer(t *testing.T, mode int) *tcpPeer {
@@ -51,7 +63,10 @@ func startPeer(t *testing.T, mode int) *tcpPeer {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	p := &tcpPeer{ln: ln, port: ln.Addr().(*net.TCPAddr).Port, closed: gone.Addr().(*net.TCPAddr).Port, gotEOF: make(chan struct{})}
+	p := &tcpPeer{
+		ln: ln, port: ln.Addr().(*net.TCPAddr).Port, closed: gone.Addr().(*net.TCPAddr).Port,
+		gotEOF: make(chan struct{}), received: make(chan int64, 1),
+	}
 	_ = gone.Close()
 	go func() {
 		for {
@@ -72,6 +87,23 @@ func startPeer(t *testing.T, mode int) *tcpPeer {
 				go func() {
 					_, _ = io.Copy(io.Discard, c)
 					close(p.gotEOF)
+				}()
+			case peerPaced:
+				go func() {
+					tc, _ := c.(*net.TCPConn)
+					_ = tc.SetReadBuffer(smallSocketBuffer)
+					_ = tc.CloseWrite()
+					buf := make([]byte, pacedReadSize)
+					var n int64
+					for {
+						k, err := tc.Read(buf)
+						n += int64(k)
+						if err != nil {
+							break
+						}
+						time.Sleep(pacedReadGap) // the peer's pace, the reading's; nothing is asserted on it
+					}
+					p.received <- n
 				}()
 			default:
 				// A silent peer holds as little as the kernel allows, so a writer to it blocks on the guest's bytes
@@ -357,6 +389,192 @@ func TestCloseEndsASocketsGoroutines(t *testing.T) {
 			requireNoSocketGoroutines(t)
 		})
 	}
+}
+
+// tcpSendTailReading returns every value of one row of testdata/tcp-send-tail.reading, in order.
+func tcpSendTailReading(t *testing.T, row string) []string {
+	t.Helper()
+	b, err := os.ReadFile("testdata/tcp-send-tail.reading")
+	if err != nil {
+		t.Fatalf("the committed reading is missing, so this witness has no oracle: %v", err)
+	}
+	var vs []string
+	for _, ln := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(ln, row+": "); ok {
+			vs = append(vs, rest)
+		}
+	}
+	if len(vs) == 0 {
+		t.Fatalf("tcp-send-tail.reading has no row %q", row)
+	}
+	return vs
+}
+
+// closeAndCount closes in, then returns what the paced peer read to its end, each under a harness hang guard.
+func closeAndCount(t *testing.T, in *Instantiated, peer *tcpPeer) int64 {
+	t.Helper()
+	closed := make(chan struct{})
+	go func() { in.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second): // a harness hang guard, not a measurement
+		peer.shut()
+		t.Fatal("Close did not return within the 10s hang guard")
+	}
+	select {
+	case n := <-peer.received:
+		return n
+	case <-time.After(10 * time.Second): // a harness hang guard, not a measurement
+		peer.shut()
+		t.Fatal("the peer's read did not end within 10s of Close")
+		return 0
+	}
+}
+
+// TestCloseDeliversTheBytesASendWriterHolds is grave #1308's witness (ADR 0127): a guest writes to a tcp-socket's
+// send stream and exits at once, and every byte its writes were told were complete reaches the peer, as wasmtime
+// 49.0.3's do (tcp-send-tail.reading, 10 of 10 per row). The peer is slower than the guest (peerPaced) and both
+// ends' socket buffers are shrunk (smallSendBufferDial), so when the guest exits the host still holds bytes the
+// guest was told it wrote, and Close is what must write them:
+//
+//   - **tcp-send-tail**, a hand-written callback-lifted guest: 256 KiB in 64 KiB writes, then two 16 KiB writes and
+//     the exit. A 64 KiB write fills the send buffer, so each completes once the writer has taken the one before.
+//     The first 16 KiB completes the same way and the writer takes it; the second then completes at once, into
+//     the buffer, behind the first's Write, which the slow peer keeps blocked. So at the exit the writer holds a
+//     Write in flight **and** bytes in its buffer, C2's specimen (#1308) made certain rather than a race;
+//   - **p3tcp**, Rust std's write_all of 256 KiB, shutdown, and a read_to_end the peer ends at once: std's one write
+//     loop never leaves bytes in the buffer, so at the exit the writer holds a Write in flight only.
+//
+// Repaired, it passed 50 of 50 runs and 10 of 10 under -race (darwin/arm64). Neutered, each measured there:
+//   - the flush removed (run returning at the stop): tcp-send-tail's peer reads 278528, short the second 16 KiB,
+//     50 of 50 runs and 10 of 10 under -race. p3tcp's row passes, its writer's buffer being empty at the stop;
+//   - hostNet.stop closing a writer's connection, its Write in flight aborted: tcp-send-tail's peer reads 266240,
+//     20 of 20 and 10 of 10 under -race, and p3tcp's 200704, 20 of 20, and 200704 to 208896 under -race, 10 of 10;
+//   - both, which is the tree before #1308: the same figures, 50 of 50 and 10 of 10 for each row.
+func TestCloseDeliversTheBytesASendWriterHolds(t *testing.T) {
+	t.Setenv(asyncGateEnv, "1")
+	t.Run("tcp-send-tail", func(t *testing.T) {
+		b, err := os.ReadFile("testdata/tcp-send-tail.wasm")
+		if err != nil {
+			t.Fatalf("the committed fixture is missing: %v", err)
+		}
+		peer := startPeer(t, peerPaced)
+		h := NewHost(io.Discard, io.Discard, nil)
+		h.InheritNetwork = true
+		h.dial = smallSendBufferDial
+		in, err := InstantiateWithHost(b, h)
+		if err != nil {
+			t.Fatalf("instantiate: %v", err)
+		}
+		type out struct {
+			res []canon.Value
+			err error
+		}
+		done := make(chan out, 1)
+		go func() {
+			r, e := in.CallValues("run", canon.U32(uint32(peer.port)), canon.U32(64<<10), canon.U32(256<<10), canon.U32(16<<10))
+			done <- out{r, e}
+		}()
+		var got string
+		select {
+		case o := <-done:
+			if o.err != nil {
+				t.Fatalf("run = %v", o.err)
+			}
+			v, _ := o.res[0].U32()
+			got = fmtU32(v)
+		case <-time.After(20 * time.Second): // a harness hang guard, not a measurement
+			peer.shut()
+			t.Fatal("run did not return within the 20s hang guard")
+		}
+		if want := tcpSendTailReading(t, "tcp-send-tail result")[0]; got != want {
+			t.Errorf("run = %s, want wasmtime's %s", got, want)
+		}
+		if n, want := strconv.FormatInt(closeAndCount(t, in, peer), 10), tcpSendTailReading(t, "tcp-send-tail peer")[0]; n != want {
+			t.Errorf("the peer read %s bytes after Close, want wasmtime's %s", n, want)
+		}
+		requireNoSocketGoroutines(t)
+	})
+	t.Run("p3tcp", func(t *testing.T) {
+		peer := startPeer(t, peerPaced)
+		var stdout, stderr bytes.Buffer
+		host := p3tcpHost(&stdout, &stderr, true, strconv.Itoa(peer.port), strconv.Itoa(peer.closed), "262144")
+		host.dial = smallSendBufferDial
+		in, err := InstantiateWithHost(readP3Tcp(t), host)
+		if err != nil {
+			t.Fatalf("p3tcp did not instantiate: %v", err)
+		}
+		code, err := runP3Tcp(t, in)
+		if err != nil || code != 0 || stderr.Len() != 0 {
+			t.Errorf("p3tcp's run = (%d, %v), stderr %q; want wasmtime's exit 0 and empty stderr", code, err, stderr.String())
+		}
+		if got, want := stdout.String(), strings.Join(tcpSendTailReading(t, "p3tcp stdout"), "\n")+"\n"; got != want {
+			t.Errorf("p3tcp's stdout is %q, want wasmtime's %q", got, want)
+		}
+		if n, want := strconv.FormatInt(closeAndCount(t, in, peer), 10), tcpSendTailReading(t, "p3tcp peer")[0]; n != want {
+			t.Errorf("the peer read %s bytes after Close, want wasmtime's %s", n, want)
+		}
+		requireNoSocketGoroutines(t)
+	})
+}
+
+// flushPastTheKernel is the bytes TestTheStopsFlushEndsAtItsDeadline puts in a writer's buffer: more than a loopback
+// kernel takes from a writer whose peer never reads. darwin's grows its buffers as it waits (measured on
+// darwin/arm64 with both ends shrunk as smallSendBufferDial shrinks them: 528384 bytes accepted in 2 s, in 64 KiB
+// writes), so the volume is well past it, and past the 2.2 MB the issue measured on Linux.
+const flushPastTheKernel = 16 << 20
+
+// TestTheStopsFlushEndsAtItsDeadline is the bound on ADR 0127's flush, at the registry: a send writer that is
+// holding more than the kernel will take, to a peer that never reads, when the stop comes. The stop leaves the
+// connection to the writer, whose flush ends at the write deadline, sendFlushBound; the writer then closes the
+// connection, and wait returns. So wait takes at least the bound, and returns: the flush cannot end sooner, the
+// peer never reading. It is white-box because the case needs more bytes than the 64 KiB a guest can leave in the
+// buffer: a guest cannot fill a darwin kernel that keeps taking bytes from a writer to a peer that never reads.
+//
+// Repaired, it passed 10 of 10 runs and 10 of 10 under -race (darwin/arm64). Neutered, each measured there:
+// hostNet.stop skipping the deadline, and wait does not return within the 10s hang guard (1 of 1, the guard's cost);
+// stop closing a writer's connection, as before #1308, and wait returns before the bound, the flush cut off at once,
+// 20 of 20 and 10 of 10 under -race; the flush removed, and wait returns at once, 20 of 20.
+func TestTheStopsFlushEndsAtItsDeadline(t *testing.T) {
+	peer := startPeer(t, peerSilent)
+	c, err := smallSendBufferDial(context.Background(), "tcp4", "127.0.0.1:"+strconv.Itoa(peer.port))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	n := newHostNet()
+	sc, ok := n.adopt(c.(*net.TCPConn))
+	if !ok {
+		t.Fatal("adopt refused a connection before any stop")
+	}
+	ended, ok := n.trackWriter(sc)
+	if !ok {
+		t.Fatal("trackWriter refused before any stop")
+	}
+	h := newAsyncHandles()
+	h.hostIO = sync.NewCond(&h.mu)
+	s := &sockSend{h: h, net: n, conn: sc, buf: make([]byte, flushPastTheKernel)}
+	start := time.Now()
+	// walker.close's order: the producers' stop, which the writer reads, then the sockets'. The writer starts after
+	// the first, so it finds the stop and its buffer full at once, and what it writes is the flush.
+	h.stopProducers()
+	go func() {
+		defer ended()
+		s.run()
+	}()
+	n.stop()
+	waited := make(chan struct{})
+	go func() { n.wait(); close(waited) }()
+	select {
+	case <-waited:
+	case <-time.After(10 * time.Second): // a harness hang guard, not a measurement
+		peer.shut()
+		t.Fatal("wait did not return within the 10s hang guard with a writer flushing to a peer that never reads")
+	}
+	if took := time.Since(start); took < sendFlushBound {
+		t.Errorf("wait returned after %v, before the flush's deadline of %v: the writer's connection was closed under it",
+			took, sendFlushBound)
+	}
+	requireNoSocketGoroutines(t)
 }
 
 // sockHarness drives the socket host functions directly, at the built-ins, in the producer harness's shape: one async
