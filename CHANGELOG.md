@@ -477,6 +477,21 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A sync `stream.cancel-read` or `stream.cancel-write` on an end joined to a waitable set traps**
+  ([#1301](https://github.com/scttfrdmn/burroughs/issues/1301), `type:grave`).
+  - **The defect:** the decoder kept the cancel's `async?` operand, but nothing read it for the stream cancels. A
+    sync cancel on a joined end cancelled and returned, where `def:cancel_copy`'s `trap_if(end.in_waitable_set()
+    and not async_)` and wasmtime 49.0.3 both trap: "waitable cannot be used synchronously while added to a
+    waitable set".
+  - **How it was found:** the fork's F5 netpoller (#1240) unjoins its ends before cancelling them, and a neuter
+    that left one joined trapped on wasmtime and not on Burroughs.
+  - **The repair:** the two sync cancels are wrapped in `syncCancelGuard`, which traps on a joined end. The async
+    form is unguarded, as in the pin.
+  - **Witness:** `TestASyncCancelOfAJoinedEndTraps` on `cancel-joined.wasm`, whose four rows match wasmtime 49.0.3
+    10 of 10. The two joined rows trap, and the two unjoined rows, the control, return 2.
+  - **Neuter, run:** without the guard, exactly the two joined rows return 2, and the controls still pass.
+  - **Not covered:** the async form, because wasmtime refuses an async stream cancel at validation unless its
+    "more async builtins" feature is on.
 - **A dropped stream end, future end or subtask leaves its waitable set, so the set can be dropped afterwards**
   ([#1296](https://github.com/scttfrdmn/burroughs/issues/1296), `type:grave`).
   - **The defect:** only the `waitable.join` built-in ever took a waitable out of its set. `stream.drop-readable`,
