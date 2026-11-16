@@ -1,0 +1,118 @@
+// p3poll is F5's witness (Burroughs #1240): goroutines that block on their own. Built for the fork's
+// GOOS=wasip3, an os.Pipe is one guest-to-guest stream<u8>, and a read or write that must wait parks
+// only its goroutine in the runtime's netpoller. It prints properties, and one order, never a time.
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"time"
+)
+
+func main() {
+	r, w, err := os.Pipe()
+	if err != nil {
+		fmt.Println("pipe:", err)
+		os.Exit(1)
+	}
+
+	// Phase 1: A parks reading; B sleeps, then writes "ping".
+	aStarted := make(chan struct{})
+	aGot := make(chan string)
+	aDone := false
+	go func() {
+		close(aStarted)
+		buf := make([]byte, 512)
+		n, err := r.Read(buf)
+		aDone = true
+		aGot <- fmt.Sprint(string(buf[:n]), err)
+	}()
+	<-aStarted
+	bSaw := make(chan bool)
+	var slept time.Duration
+	go func() {
+		parked := !aDone
+		t0 := time.Now()
+		time.Sleep(10 * time.Millisecond)
+		slept = time.Since(t0)
+		parked = parked && !aDone
+		if _, err := w.Write([]byte("ping")); err != nil {
+			fmt.Println("write ping:", err)
+		}
+		bSaw <- parked
+	}()
+	got := <-aGot
+	parked := <-bSaw
+	fmt.Println("A got ping:", got == "ping<nil>")
+	fmt.Println("B ran while A was parked:", parked)
+	fmt.Println("slept >= 10ms:", slept >= 10*time.Millisecond)
+
+	// Phase 2: B writes "pong" with no read pending, so its write parks; A sleeps, then reads it.
+	aRead := false
+	bWrote := make(chan bool)
+	go func() {
+		_, err := w.Write([]byte("pong"))
+		bWrote <- err == nil && aRead
+	}()
+	time.Sleep(10 * time.Millisecond)
+	buf := make([]byte, 512)
+	n, err := r.Read(buf)
+	aRead = true
+	fmt.Println("A read pong:", string(buf[:n]) == "pong" && err == nil)
+	fmt.Println("B's write returned after A read:", <-bWrote)
+
+	// Phase 3: B closes its end, and A reads the end of input.
+	w.Close()
+	n, err = r.Read(buf)
+	fmt.Println("A read EOF after B closed:", n == 0 && err == io.EOF)
+	r.Close()
+
+	// Phase 4: two readers parked on two pipes; both writes complete at once, so two events are ready
+	// together, and the order the readers run in is the netpoller's. Each pipe is used once first, so
+	// that its buffers exist: a first read or write allocates, and an allocation can yield, which would
+	// let a reader miss the write it was meant to be parked for.
+	r1, w1, _ := os.Pipe()
+	r2, w2, _ := os.Pipe()
+	started := make(chan struct{})
+	order := make(chan string, 2)
+	for i, rr := range []*os.File{r1, r2} {
+		go func() {
+			b := make([]byte, 16)
+			rr.Read(b) // the warm-up byte
+			started <- struct{}{}
+			n, _ := rr.Read(b)
+			order <- fmt.Sprintf("%d:%s", i+1, b[:n])
+		}()
+	}
+	w1.Write([]byte("a"))
+	w2.Write([]byte("b"))
+	<-started
+	<-started
+	w1.Write([]byte("one"))
+	w2.Write([]byte("two"))
+	fmt.Println("readers ran:", <-order, <-order)
+
+	// Phase 5: a read abandoned at its deadline stays in flight, and the next read collects what it
+	// read later, as net/http's abortPendingRead needs.
+	r3, w3, _ := os.Pipe()
+	r3.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
+	n, err = r3.Read(buf)
+	fmt.Println("read timed out:", n == 0 && os.IsTimeout(err))
+	w3.Write([]byte("late"))
+	r3.SetReadDeadline(time.Time{})
+	n, err = r3.Read(buf)
+	fmt.Println("next read got the late bytes:", string(buf[:n]) == "late" && err == nil)
+	r3.Close()
+	w3.Close()
+
+	// Phase 6: closing a read end with its read still in flight cancels the read before dropping
+	// the end, and the writer then sees a broken pipe.
+	r4, w4, _ := os.Pipe()
+	r4.SetReadDeadline(time.Now().Add(time.Millisecond))
+	r4.Read(buf)
+	fmt.Println("closed a read end mid-read:", r4.Close() == nil)
+	_, err = w4.Write([]byte("x"))
+	fmt.Println("write after the reader closed fails:", err != nil)
+	w4.Close()
+}

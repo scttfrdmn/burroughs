@@ -1,0 +1,43 @@
+// p3stdin is F5's stdin witness (Burroughs #1240): an ordinary Go program that reads all of os.Stdin.
+// Built for the fork's GOOS=wasip3, os.Stdin is read-via-stream read through the runtime's netpoller.
+// It prints what p3cat (a Rust wasm32-wasip3 std program) prints for the same bytes: the byte count, a
+// checksum, the line count and the first line.
+//
+// The first read waits with no timer pending, so the runtime's wait is netpoll's unbounded one. A
+// goroutine that sleeps for an hour is then started, so every later read waits in netpoll with a timer
+// in the set, and stdin's event ends that wait before the timer does.
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"time"
+)
+
+func main() {
+	first := make([]byte, 4096)
+	n, err := os.Stdin.Read(first)
+	if err != nil && err != io.EOF {
+		fail(err)
+	}
+	go time.Sleep(time.Hour)
+	rest, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fail(err)
+	}
+	buf := append(first[:n], rest...)
+	var sum uint32
+	for _, b := range buf {
+		sum = sum*31 + uint32(b)
+	}
+	fmt.Printf("p3stdin: read %d bytes, checksum %08x, %d lines\n", len(buf), sum, bytes.Count(buf, []byte("\n")))
+	line, _, _ := bytes.Cut(buf, []byte("\n"))
+	fmt.Printf("p3stdin: first line: %s\n", line)
+}
+
+func fail(err error) {
+	fmt.Fprintln(os.Stderr, "p3stdin: reading stdin failed:", err)
+	os.Exit(1)
+}

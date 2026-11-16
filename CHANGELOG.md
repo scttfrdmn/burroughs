@@ -25,6 +25,44 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **Goroutines in a fork-built `GOOS=wasip3` program block one at a time, and `os.Stdin` reads, on Burroughs as on
+  wasmtime 49.0.3** ([#1240](https://github.com/scttfrdmn/burroughs/issues/1240), F5; ADR 0114). The Phase 4 fork's
+  runtime now has a single-M netpoller over one waitable set, separate from `write1`'s. Until now every wasip3 wait
+  blocked the whole instance, and a wait with no deadline trapped. F5 comes before F4's `net`
+  ([#1239](https://github.com/scttfrdmn/burroughs/issues/1239)), which needs it.
+  - **How the netpoller waits:**
+    - an operation the host has not finished is armed by its waitable handle, and its goroutine parks;
+    - `netpoll(0)` drains the set with `waitable-set.poll`;
+    - `netpoll(-1)` waits on it with the sync `waitable-set.wait`, then drains;
+    - a timed poll joins an async-lowered `wait-for` beside the armed operations. A timer that does not fire is
+      unjoined, sync-cancelled and dropped.
+  - **The fork's `syscall` uses a completion model.** Each read or write is issued into a buffer the fd owns, so its
+    completion is the readiness. A zero-length read is no readiness signal: a probe found wasmtime answers it at once.
+    - A deadline leaves the operation in flight, for the next call to collect.
+    - `Close` cancels an operation before dropping its end.
+  - **What a program now gets:**
+    - `os.Stdin` is `read-via-stream`, with the future read at the end of input;
+    - `os.Pipe` is a guest-to-guest `stream<u8>`.
+  - **`p3poll` and `p3stdin` are committed** in `internal/component/testdata/forkp3`, with their sources, readings and
+    PROVENANCE. Both are ordinary Go programs with no linkname.
+    - `p3poll` shows a reader parked while a sleeper runs, a parked write, the end of input after a writer's `Close`,
+      two readers made ready together, a read collected after its deadline, and a `Close` mid-read.
+    - `p3stdin` reads the committed `p3cat.stdin` and an empty stdin, and prints what Rust's `p3cat` prints.
+    - Both engines give the same exit code, stdout and stderr, byte for byte, 10 of 10. `TestForkWasip3PollMatchesWasmtime`
+      and `TestForkWasip3StdinMatchesWasmtime` assert it, behind a hang guard.
+  - **The neuters that fail, and the two that cannot:**
+    - netpoll returning nothing hangs both programs;
+    - removing the drain changes `p3poll`'s order line;
+    - restoring the old trap, or making stdin EBADF again, fails `p3stdin`;
+    - the drain neuter cannot fail `p3stdin`, whose events come one at a time;
+    - the trap neuter cannot fail `p3poll`, which never waits without a deadline.
+  - **Four engine findings, reported and not repaired here:**
+    - Burroughs blocks a zero-length stdin read where wasmtime completes it at once;
+    - Burroughs' sync `stream.cancel-read` does not trap on an end in a waitable set, where the pin and wasmtime do;
+    - `future.cancel-read` is refused by name, so the fork abandons that read at `Close` instead;
+    - a wait nothing can satisfy ends the `burroughs` process with Go's deadlock error, where wasmtime blocks.
+  - **No engine code changed.** The earlier fork fixtures, rebuilt on this toolchain, gave their committed readings.
+
 - **An ordinary Go program built by the fork for `GOOS=wasip3` reads its argv, clocks, random and environment, and
   sleeps, on Burroughs as on wasmtime 49.0.3: checkpoint C1** ([#1241](https://github.com/scttfrdmn/burroughs/issues/1241)),
   delivered by F3b ([#1295](https://github.com/scttfrdmn/burroughs/issues/1295)), the second of F3's two slices

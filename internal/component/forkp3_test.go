@@ -3,6 +3,7 @@
 package component
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -13,11 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
-// forkP3Dir holds the fork's components (F1, F2, F3a, F3b), their sources, their wasmtime readings and their PROVENANCE. The bytes
+// forkP3Dir holds the fork's components (F1, F2, F3a, F3b, F5), their sources, their wasmtime readings and their PROVENANCE. The bytes
 // are committed, so this test needs no fork and runs wherever the package's other tests do.
 const forkP3Dir = "testdata/forkp3"
 
@@ -308,6 +310,167 @@ func TestForkWasip3C1MatchesWasmtime(t *testing.T) {
 		if !strings.HasSuffix(ln, ": true") {
 			t.Errorf("p3c1 printed %q: that property does not hold", ln)
 		}
+	}
+}
+
+// forkP3HangGuard bounds one run of an F5 witness. A goroutine the fork's netpoller never readies leaves the run
+// parked or spinning for good, and the guard turns that into a failure. It is a harness bound, not a measurement.
+const forkP3HangGuard = 20 * time.Second
+
+// runForkP3 runs name's `run` export with stdin under forkP3HangGuard, and returns its exit code, stdout and stderr.
+func runForkP3(t *testing.T, name string, stdin io.Reader) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	in, err := InstantiateWithHost(readForkP3(t, name), NewHost(&out, &errb, stdin))
+	if err != nil {
+		t.Fatalf("%s did not instantiate: %v", name, err)
+	}
+	defer in.Close()
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() { c, e := in.CallRun(); done <- result{c, e} }()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("%s's run failed where wasmtime's exits: %v (stdout %q, stderr %q)", name, r.err, out.String(), errb.String())
+		}
+		return r.code, out.String(), errb.String()
+	case <-time.After(forkP3HangGuard):
+		t.Fatalf("%s's run did not return within %v: a goroutine parked in the fork's netpoller was never readied",
+			name, forkP3HangGuard)
+	}
+	return 0, "", ""
+}
+
+// matchForkP3Reading compares one run with the reading recorded under key: "<key>, 10 of 10" is the exit code, and
+// "<key> stdout" and "<key> stderr" the two streams' digests.
+func matchForkP3Reading(t *testing.T, key string, code int, stdout, stderr string) {
+	t.Helper()
+	reading := filepath.Join(forkP3Dir, "forkp3.reading")
+	want := readingLine(t, reading, key+", 10 of 10")
+	wantCode, err := strconv.Atoi(strings.TrimPrefix(want, "exit "))
+	if !strings.HasPrefix(want, "exit ") || err != nil {
+		t.Fatalf("forkp3.reading's %q line %q is not an exit code", key, want)
+	}
+	if code != wantCode {
+		t.Errorf("%s: exited %d, want wasmtime's %d (stderr %q)", key, code, wantCode, stderr)
+	}
+	if got, want := streamDigest(stdout), readingStream(t, reading, key+" stdout"); got != want {
+		t.Errorf("%s: stdout is %s (%q), want wasmtime's %s", key, got, stdout, want)
+	}
+	if got, want := streamDigest(stderr), readingStream(t, reading, key+" stderr"); got != want {
+		t.Errorf("%s: stderr is %s (%q), want wasmtime's %s", key, got, stderr, want)
+	}
+}
+
+// p3pollProperties is the number of p3poll's stdout lines that print ": true" when their property holds; its one
+// other line is the netpoller's order.
+const p3pollProperties = 10
+
+// TestForkWasip3PollMatchesWasmtime is F5's witness (#1240, ADR 0114). The fork's runtime has a single-M netpoller over
+// one waitable set: a stream operation the host has not finished is armed by its handle, its goroutine parks alone, and
+// netpoll(0) drains the set with waitable-set.poll, netpoll(-1) waits on it, and netpoll(delay) joins an async-lowered
+// wait-for timer beside the armed operations. p3poll is an ordinary Go program on it: os.Pipe is a guest-to-guest
+// stream<u8>, so a reader parks while a sleeper runs, a writer parks until its reader reads, two readers become ready
+// together, a read abandoned at its deadline is collected by the next one, and a read end closed mid-read cancels the
+// read before the drop.
+//
+// Its exit code, stdout and stderr must equal wasmtime 49.0.3's byte for byte (forkp3.reading). Its stdout is also
+// checked to be every property holding, so a reading in which wasmtime itself saw one fail cannot pass as an agreement.
+// The order line, "readers ran: 2:two 1:one", is the drain's: one poll takes both readers' events, and the runtime runs
+// the last one readied first.
+//
+// NEUTER: netpoll returns at once with nothing (fork runtime; p3poll rebuilt): the run never returns, and this test
+// fails at forkP3HangGuard; wasmtime hangs too.
+// NEUTER: the waitable-set.poll drain removed (fork runtime; p3poll rebuilt): the stdout digest differs, the order line
+// reading "readers ran: 1:one 2:two", since each wait readies one reader; wasmtime prints the same line.
+// NEUTER: netpoll(-1) restored to F3b's trap (fork runtime; p3poll rebuilt): SURVIVES. Every wait p3poll makes has a
+// timer pending or finds its event already ready; TestForkWasip3StdinMatchesWasmtime witnesses the unbounded wait.
+// NEUTER: Close drops a read end without cancelling its read (fork syscall; p3poll rebuilt): the run traps at the drop,
+// "stream.drop-readable: end 17 is mid-copy"; wasmtime refuses it too, "cannot remove busy stream".
+func TestForkWasip3PollMatchesWasmtime(t *testing.T) {
+	code, stdout, stderr := runForkP3(t, "p3poll", strings.NewReader(""))
+	matchForkP3Reading(t, "wasmtime 49.0.3 on p3poll", code, stdout, stderr)
+
+	var props int
+	for _, ln := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(ln, "readers ran: "):
+		case strings.HasSuffix(ln, ": true"):
+			props++
+		default:
+			t.Errorf("p3poll printed %q: that property does not hold", ln)
+		}
+	}
+	if props != p3pollProperties {
+		t.Errorf("p3poll printed %d holding properties, want %d", props, p3pollProperties)
+	}
+}
+
+// TestForkWasip3StdinMatchesWasmtime is F5's stdin witness (#1240). os.Stdin on the fork's GOOS=wasip3 is
+// read-via-stream, registered with the netpoller because fd 0 reports FDFLAG_NONBLOCK, and read in the completion
+// model: each Read is a real async stream.read into a buffer the fd owns, armed when it returns BLOCKED, and the
+// retry collects it; at DROPPED the future is read, and ok is the end of input. p3stdin reads all of it and prints
+// p3cat's four facts. Its first read waits with no timer pending (netpoll(-1)); then a goroutine sleeps an hour, so
+// every later read waits with a timer in the set, which is cancelled when stdin's event comes first.
+//
+// It is fed what wasmtime was fed: p3cat's committed stdin, the same bytes through an io.Pipe in 1000-byte pieces (so
+// every host Read is short, read against the same reading), and an empty reader for /dev/null. Each run's exit code,
+// stdout and stderr must equal wasmtime 49.0.3's (forkp3.reading), and its stdout must also be p3cat's on the same
+// stdin, a Rust std program's on wasmtime (p3cat.reading, p3cat-empty.reading), with p3stdin's name.
+//
+// NEUTER: netpoll returns at once with nothing (fork runtime; p3stdin rebuilt): every case fails at forkP3HangGuard;
+// wasmtime hangs too.
+// NEUTER: netpoll(-1) restored to F3b's trap (fork runtime; p3stdin rebuilt): every case's run fails, trap
+// `unreachable` at the first read; wasmtime traps in runtime.netpoll.
+// NEUTER: stdin's Read answers EBADF, F3b's (fork syscall; p3stdin rebuilt): every case exits 1 with "read /dev/stdin:
+// Bad file number" on stderr; wasmtime the same.
+// NEUTER: the waitable-set.poll drain removed: SURVIVES. stdin's events come one at a time, so a drain never finds a
+// second; TestForkWasip3PollMatchesWasmtime witnesses the drain.
+func TestForkWasip3StdinMatchesWasmtime(t *testing.T) {
+	stdin, err := os.ReadFile("testdata/p3cat.stdin")
+	if err != nil {
+		t.Fatalf("p3cat's stdin is missing (it is committed): %v", err)
+	}
+	piped := func() io.Reader {
+		pr, pw := io.Pipe()
+		go func() {
+			for rest := stdin; len(rest) > 0; {
+				n := min(1000, len(rest))
+				if _, werr := pw.Write(rest[:n]); werr != nil {
+					return
+				}
+				rest = rest[n:]
+			}
+			_ = pw.Close()
+		}()
+		return pr
+	}
+	for _, c := range []struct {
+		name, key, p3cat string
+		stdin            func() io.Reader
+	}{
+		{
+			"p3cat.stdin", "wasmtime 49.0.3 on p3stdin < p3cat.stdin", "testdata/p3cat.reading",
+			func() io.Reader { return bytes.NewReader(stdin) },
+		},
+		{"p3cat.stdin-piped", "wasmtime 49.0.3 on p3stdin < p3cat.stdin", "testdata/p3cat.reading", piped},
+		{
+			"empty", "wasmtime 49.0.3 on p3stdin < /dev/null", "testdata/p3cat-empty.reading",
+			func() io.Reader { return strings.NewReader("") },
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, stdout, stderr := runForkP3(t, "p3stdin", c.stdin())
+			matchForkP3Reading(t, c.key, code, stdout, stderr)
+			p3cat, _ := readP3CatReading(t, c.p3cat)
+			if want := strings.ReplaceAll(p3cat, "p3cat: ", "p3stdin: "); stdout != want {
+				t.Errorf("p3stdin's stdout is %q, want p3cat's on the same bytes (%s), %q", stdout, c.p3cat, want)
+			}
+		})
 	}
 }
 
