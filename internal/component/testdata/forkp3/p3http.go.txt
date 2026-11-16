@@ -1,0 +1,96 @@
+// p3http is C2's witness (Burroughs #1242): an ordinary, single-threaded net/http server, driven by a client outside
+// the process or instance that runs it. The same source is built two ways: by stock Go for a host process, whose
+// responses are the committed reading, and by the Phase 4 fork for GOOS=wasip3, whose responses must equal it byte for
+// byte on wasmtime 49.0.3 and on `burroughs run`.
+//
+// It listens on 127.0.0.1:0 and prints "READY <port>", then serves:
+//
+//	GET  /hello       "hello, wasip3\n"
+//	GET  /work?id=N   for N in 0..63, a 256-step h = sha256(h) chain from sha256("c2/work/" + N), in hex and a newline,
+//	                  answered after a 1 ms sleep, so a request only a timer can wake; any other id is a 400
+//	POST /echo        the request body, through io.Copy, full duplex, with the request's Content-Length
+//	GET  /quit        "bye\n", then a graceful Shutdown: main returns once Serve and Shutdown both have, and prints
+//	                  "stopped"
+//
+// Every response's Date header is suppressed, so a response is a function of its request. No linkname.
+//
+// With no network grant, the listen is refused at tcp-socket.create (access-denied, which the fork's syscall maps to
+// EACCES): p3http prints that and exits 1.
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"syscall"
+	"time"
+)
+
+func main() {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Println("listen refused, EACCES:", errors.Is(err, syscall.EACCES))
+		os.Exit(1)
+	}
+	fmt.Printf("READY %d\n", ln.Addr().(*net.TCPAddr).Port)
+
+	srv := &http.Server{}
+	shut := make(chan error, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "hello, wasip3\n")
+	})
+	mux.HandleFunc("/work", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil || id < 0 || id > 63 {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		h := sha256.Sum256([]byte("c2/work/" + strconv.Itoa(id)))
+		for range 256 {
+			h = sha256.Sum256(h[:])
+		}
+		time.Sleep(time.Millisecond)
+		io.WriteString(w, hex.EncodeToString(h[:])+"\n")
+	})
+	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.ContentLength < 0 {
+			http.Error(w, "POST with a Content-Length", http.StatusBadRequest)
+			return
+		}
+		// An HTTP/1 handler that writes before it has read its body has the rest discarded unless it asks for full
+		// duplex; an echo's response is its body, so it must.
+		if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+			http.Error(w, "full duplex: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// The length declared, so the response is not chunked, whose chunk boundaries would be the body reads'.
+		w.Header().Set("Content-Length", strconv.FormatInt(r.ContentLength, 10))
+		io.Copy(w, r.Body)
+	})
+	mux.HandleFunc("/quit", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "bye\n")
+		go func() { shut <- srv.Shutdown(context.Background()) }()
+	})
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header()["Date"] = nil
+		mux.ServeHTTP(w, r)
+	})
+
+	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		fmt.Println("serve:", err)
+		os.Exit(1)
+	}
+	if err := <-shut; err != nil {
+		fmt.Println("shutdown:", err)
+		os.Exit(1)
+	}
+	fmt.Println("stopped")
+}
