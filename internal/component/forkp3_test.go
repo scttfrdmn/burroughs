@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,7 +21,7 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
-// forkP3Dir holds the fork's components (F1, F2, F3a, F3b, F5), their sources, their wasmtime readings and their PROVENANCE. The bytes
+// forkP3Dir holds the fork's components (F1, F2, F3a, F3b, F5, F4), their sources, their wasmtime readings and their PROVENANCE. The bytes
 // are committed, so this test needs no fork and runs wherever the package's other tests do.
 const forkP3Dir = "testdata/forkp3"
 
@@ -320,8 +322,15 @@ const forkP3HangGuard = 20 * time.Second
 // runForkP3 runs name's `run` export with stdin under forkP3HangGuard, and returns its exit code, stdout and stderr.
 func runForkP3(t *testing.T, name string, stdin io.Reader) (code int, stdout, stderr string) {
 	t.Helper()
+	return runForkP3Host(t, name, forkP3HangGuard, func(out, errb io.Writer) *Host { return NewHost(out, errb, stdin) })
+}
+
+// runForkP3Host is runForkP3 with the Host newHost makes over the run's stdout and stderr, under guard: F4's witnesses
+// set argv and the network grant on it. The instance is closed before it returns.
+func runForkP3Host(t *testing.T, name string, guard time.Duration, newHost func(out, errb io.Writer) *Host) (code int, stdout, stderr string) {
+	t.Helper()
 	var out, errb bytes.Buffer
-	in, err := InstantiateWithHost(readForkP3(t, name), NewHost(&out, &errb, stdin))
+	in, err := InstantiateWithHost(readForkP3(t, name), newHost(&out, &errb))
 	if err != nil {
 		t.Fatalf("%s did not instantiate: %v", name, err)
 	}
@@ -338,9 +347,9 @@ func runForkP3(t *testing.T, name string, stdin io.Reader) (code int, stdout, st
 			t.Fatalf("%s's run failed where wasmtime's exits: %v (stdout %q, stderr %q)", name, r.err, out.String(), errb.String())
 		}
 		return r.code, out.String(), errb.String()
-	case <-time.After(forkP3HangGuard):
+	case <-time.After(guard):
 		t.Fatalf("%s's run did not return within %v: a goroutine parked in the fork's netpoller was never readied",
-			name, forkP3HangGuard)
+			name, guard)
 	}
 	return 0, "", ""
 }
@@ -472,6 +481,145 @@ func TestForkWasip3StdinMatchesWasmtime(t *testing.T) {
 			}
 		})
 	}
+}
+
+// p3netProperties is the number of p3net's granted stdout lines that print ": true" when their property holds; its one
+// other line is the HTTP response, which must be p3netHTTPLine.
+const p3netProperties = 7
+
+// p3netHTTPLine is the line p3net prints for its HTTP request: the status, the body, the content length and the read.
+const p3netHTTPLine = `http: 200 OK, body "hello, wasip3\n", length 14, read ok: true`
+
+// p3netHangGuard bounds one p3net run, which interprets 1 MiB through an echo, its sha256 and an HTTP exchange in an
+// 11 MB module, where forkP3HangGuard bounds F5's small ones. A harness bound, not a measurement.
+const p3netHangGuard = 300 * time.Second
+
+// TestForkWasip3NetMatchesWasmtime is F4's witness (#1239, ADR 0114). Go's net on the fork's GOOS=wasip3 takes its stock
+// POSIX path over wasi:sockets' tcp-socket: Socket makes no host socket until Bind or Connect creates one, Connect is
+// the async lower whose subtask is armed for the fd's pollDesc so net's own connect loop waits on it, Accept reads one
+// element of listen's stream<tcp-socket>, and a connection's Read and Write are F5's completion-model stream halves
+// over receive's stream and the one handed to send. p3net is an ordinary Go program on it, with no peer outside the
+// instance: it listens, echoes 1 MiB through io.Copy and reads it back after CloseWrite, times a read out at 5 ms and
+// then reads the late bytes, dials a closed port, closes a listener under a parked Accept, and serves and gets one
+// HTTP request. It prints properties, never a port.
+//
+// Both gate states, read as p3tcp's are (TestP3TcpMatchesWasmtime):
+//   - **granted** (InheritNetwork, wasmtime's -S inherit-network): every property holds and the HTTP line is the one
+//     the handler wrote;
+//   - **denied** (the zero Host, wasmtime with no network flag): the listen and a dial are each refused EACCES, which
+//     is create's access-denied.
+//
+// Each run's exit code, stdout and stderr must equal wasmtime 49.0.3's byte for byte (forkp3.reading), and after Close
+// no socket goroutine is left running.
+//
+// NEUTER: Connect returns success without waiting (fork syscall; p3net rebuilt): the echo's sha256 line is false on
+// both engines, and the run then fails differently on each (wasmtime panics on a nil LocalAddr, exit 2; Burroughs
+// exits 1 at the HTTP request, "Socket is not connected"), where wasmtime's reading is exit 0 with every property.
+// NEUTER: netpollopen's re-bind of an operation armed before its pollDesc removed (fork runtime; p3net rebuilt): the
+// first dial never returns, on both engines, after the listen line; this test fails at p3netHangGuard.
+// NEUTER: Close drops a listen stream with its accept read in flight, without the cancel (fork syscall; p3net
+// rebuilt): the run traps at the parked Accept's Close, "stream.drop-readable: end 32 is mid-copy"; wasmtime refuses
+// it too, "cannot remove busy stream".
+func TestForkWasip3NetMatchesWasmtime(t *testing.T) {
+	for _, c := range []struct {
+		name, key string
+		grant     bool
+	}{
+		{"granted", "wasmtime 49.0.3 on p3net", true},
+		{"denied", "wasmtime 49.0.3 on p3net, denied", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, stdout, stderr := runForkP3Host(t, "p3net", p3netHangGuard, func(out, errb io.Writer) *Host {
+				h := NewHost(out, errb, nil)
+				h.InheritNetwork = c.grant
+				return h
+			})
+			matchForkP3Reading(t, c.key, code, stdout, stderr)
+			requireNoSocketGoroutines(t)
+
+			lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+			if !c.grant {
+				if want := []string{"listen refused, EACCES: true", "dial refused, EACCES: true"}; !slices.Equal(lines, want) {
+					t.Errorf("p3net's denied stdout is %q, want %q", lines, want)
+				}
+				return
+			}
+			var props int
+			for _, ln := range lines {
+				switch {
+				case ln == p3netHTTPLine:
+				case strings.HasSuffix(ln, ": true"):
+					props++
+				default:
+					t.Errorf("p3net printed %q: that property does not hold", ln)
+				}
+			}
+			if props != p3netProperties || lines[len(lines)-1] != p3netHTTPLine {
+				t.Errorf("p3net printed %d holding properties and last line %q, want %d and %q",
+					props, lines[len(lines)-1], p3netProperties, p3netHTTPLine)
+			}
+		})
+	}
+}
+
+// TestForkWasip3NetTailMatchesWasmtime is F4's measurement of a server's tail (#1239), the question C2's (#1242) /quit
+// asks. p3nettail listens on the port its argv names, serves one connection from a peer outside the instance, writes
+// 256 KiB, closes the connection and exits. Every Write returns once the host has taken the bytes, so what the peer
+// counts is what the host did with them after the guest closed and the instance was closed: here the write-behind is
+// Burroughs' 64 KiB send sink, which ADR 0123 (choices 8 and 12) drains at the writer's drop and discards at
+// walker.close. The peer's count must equal wasmtime's (forkp3.reading), as must the exit code and both streams.
+func TestForkWasip3NetTailMatchesWasmtime(t *testing.T) {
+	reading := filepath.Join(forkP3Dir, "forkp3.reading")
+	want := readingLine(t, reading, "wasmtime 49.0.3 on p3nettail, the peer received")
+
+	free, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := free.Addr().(*net.TCPAddr).Port
+	_ = free.Close()
+
+	type count struct {
+		n   int64
+		err error
+	}
+	got := make(chan count, 1)
+	go func() {
+		deadline := time.Now().Add(forkP3HangGuard) // a harness hang guard, not a measurement
+		for {
+			c, err := net.Dial("tcp4", "127.0.0.1:"+strconv.Itoa(port))
+			if err == nil {
+				n, rerr := io.Copy(io.Discard, c)
+				_ = c.Close()
+				got <- count{n, rerr}
+				return
+			}
+			if time.Now().After(deadline) {
+				got <- count{0, err}
+				return
+			}
+			time.Sleep(10 * time.Millisecond) // the guest has not listened yet: poll, as a peer outside it must
+		}
+	}()
+	code, stdout, stderr := runForkP3Host(t, "p3nettail", forkP3HangGuard, func(out, errb io.Writer) *Host {
+		h := NewHost(out, errb, nil)
+		h.Args = []string{"p3nettail.wasm", strconv.Itoa(port)}
+		h.InheritNetwork = true
+		return h
+	})
+	matchForkP3Reading(t, "wasmtime 49.0.3 on p3nettail", code, stdout, stderr)
+	select {
+	case c := <-got:
+		if c.err != nil {
+			t.Fatalf("the peer's read ended in %v after %d bytes", c.err, c.n)
+		}
+		if g := fmt.Sprintf("%d bytes", c.n); g != want {
+			t.Errorf("the peer received %s from Burroughs, want wasmtime's %s", g, want)
+		}
+	case <-time.After(forkP3HangGuard):
+		t.Fatal("the peer's read did not end after the instance was closed")
+	}
+	requireNoSocketGoroutines(t)
 }
 
 // readingStream returns a stream's recorded "N bytes, sha256 H", refusing a line of any other shape so that a

@@ -1,0 +1,146 @@
+// p3net is F4's witness (Burroughs #1239): Go's net package on the fork's GOOS=wasip3, over
+// wasi:sockets' tcp-socket. It listens, dials itself, echoes 1 MiB, times a read out, dials a closed
+// port, closes a listener under a parked Accept, and serves and gets one HTTP request, all inside one
+// instance with no peer outside it. It prints properties, never a port, an address or error text.
+//
+// With no network grant, the listen is refused at tcp-socket.create (access-denied), and p3net prints
+// that and what a dial gets, and stops.
+package main
+
+import (
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"syscall"
+	"time"
+)
+
+const echoBytes = 1 << 20
+
+func main() {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Println("listen refused, EACCES:", errors.Is(err, syscall.EACCES))
+		_, err = net.Dial("tcp", "127.0.0.1:9")
+		fmt.Println("dial refused, EACCES:", errors.Is(err, syscall.EACCES))
+		return
+	}
+	la, ok := ln.Addr().(*net.TCPAddr)
+	fmt.Println("listening on 127.0.0.1 with a port:", ok && la.IP.Equal(net.IPv4(127, 0, 0, 1)) && la.Port != 0)
+
+	// 1 MiB through an io.Copy echo, written and read concurrently, then CloseWrite and read to EOF.
+	served := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			fmt.Println("accept:", err)
+			os.Exit(1)
+		}
+		served <- c
+		io.Copy(c, c)
+		c.Close()
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		fmt.Println("dial:", err)
+		os.Exit(1)
+	}
+	sc := <-served
+	payload := make([]byte, echoBytes)
+	for i := range payload {
+		payload[i] = byte(i*7 + i>>8)
+	}
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := c.Write(payload)
+		if err == nil {
+			err = c.(*net.TCPConn).CloseWrite()
+		}
+		wrote <- err
+	}()
+	h := sha256.New()
+	n, err := io.Copy(h, c)
+	werr := <-wrote
+	fmt.Println("echoed 1 MiB, sha256 matches:", err == nil && werr == nil && n == echoBytes &&
+		string(h.Sum(nil)) == string(sha(payload)))
+	fmt.Println("addresses cross-match:", c.LocalAddr().String() == sc.RemoteAddr().String() &&
+		c.RemoteAddr().String() == sc.LocalAddr().String() && sc.LocalAddr().String() == ln.Addr().String())
+	c.Close()
+
+	// A read with a 5 ms deadline times out; the bytes written after it are then read.
+	late := make(chan struct{})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			fmt.Println("accept:", err)
+			os.Exit(1)
+		}
+		<-late
+		c.Write([]byte("late"))
+		c.Close()
+	}()
+	c, err = net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		fmt.Println("dial:", err)
+		os.Exit(1)
+	}
+	c.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
+	buf := make([]byte, 16)
+	_, err = c.Read(buf)
+	fmt.Println("read deadline, os.ErrDeadlineExceeded:", errors.Is(err, os.ErrDeadlineExceeded))
+	close(late)
+	c.SetReadDeadline(time.Time{})
+	got, err := io.ReadAll(c)
+	fmt.Println("late bytes read after the deadline:", err == nil && string(got) == "late")
+	c.Close()
+
+	// A dial to a port nobody listens on is refused.
+	gone, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Println("listen:", err)
+		os.Exit(1)
+	}
+	closed := gone.Addr().String()
+	gone.Close()
+	_, err = net.Dial("tcp", closed)
+	fmt.Println("dial to a closed port, ECONNREFUSED:", errors.Is(err, syscall.ECONNREFUSED))
+
+	// Close of a listener with an Accept parked on it ends that Accept with net.ErrClosed.
+	parked, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Println("listen:", err)
+		os.Exit(1)
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := parked.Accept()
+		accepted <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+	parked.Close()
+	fmt.Println("parked Accept after Close, net.ErrClosed:", errors.Is(<-accepted, net.ErrClosed))
+
+	// One HTTP request, served in-process on the first listener.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "hello, wasip3\n")
+	})
+	go http.Serve(ln, mux)
+	resp, err := http.Get("http://" + ln.Addr().String() + "/hello")
+	if err != nil {
+		fmt.Println("http get:", err)
+		os.Exit(1)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	fmt.Printf("http: %s, body %q, length %d, read ok: %v\n", resp.Status, body, resp.ContentLength, err == nil)
+}
+
+func sha(b []byte) []byte {
+	s := sha256.Sum256(b)
+	return s[:]
+}
