@@ -25,6 +25,34 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **An ordinary Go program built by the fork for `GOOS=wasip3` reads its argv, clocks, random and environment, and
+  sleeps, on Burroughs as on wasmtime 49.0.3: checkpoint C1** ([#1241](https://github.com/scttfrdmn/burroughs/issues/1241)),
+  delivered by F3b ([#1295](https://github.com/scttfrdmn/burroughs/issues/1295)), the second of F3's two slices
+  ([#1238](https://github.com/scttfrdmn/burroughs/issues/1238); ADR 0114). The Phase 4 fork's `syscall`, `os` and
+  `internal/poll` now build for wasip3, so `GOOS=wasip3 go build std` and `go vet std` pass and the port is no longer
+  marked broken.
+  - **How the fork's layer answers:**
+    - fds 1 and 2 write through the runtime's one `write-via-stream` stream per fd;
+    - argv and the environment come from `get-arguments` and `get-environment`, pushed into the runtime from
+      `syscall`'s init;
+    - `crypto/rand` reads `get-random-bytes`;
+    - `time.Sleep` waits on `wait-for`;
+    - files and sockets answer ENOSYS, and other fds EBADF.
+  - **`p3c1` is committed with its source, readings and PROVENANCE** in `internal/component/testdata/forkp3`. It uses
+    `fmt`, `os`, `time` and `crypto/rand`, with no linkname, and prints six properties and three interleaved stderr
+    lines, then exits 7. Both engines give the same exit code, stdout and stderr, byte for byte, 10 of 10.
+    `TestForkWasip3C1MatchesWasmtime` asserts it, and checks that the reading is every property holding.
+  - **Three of the neuters fail as they should:** argv not pushed, `RandomGet` returning zeros, and a blocking
+    `netpoll` restored to its trap.
+  - **Two cannot fail on either engine:**
+    - `netpoll(delay)` returning at once: the scheduler spins to the deadline, so only host CPU differs;
+    - stdout through a second stream: each engine writes every copy through at once.
+
+    So one stream per fd is built but not witnessed, like F3a's wait.
+  - **Deferred:** stdin reads (F5's driver), sockets (F4), and files (past v0.14.0).
+  - **No engine code changed.** Burroughs already served every import `p3c1` makes. The F1, F2 and F3a fixtures,
+    rebuilt on this toolchain, gave their committed readings unchanged.
+
 - **The fork's `GOOS=wasip3` runtime prints, exits with its code, and reads real clocks, on Burroughs as on
   wasmtime 49.0.3** ([#1238](https://github.com/scttfrdmn/burroughs/issues/1238), F3a, the first of F3's two
   slices; ADR 0114). The Phase 4 fork's runtime moves off F1's stand-ins onto WASI 0.3.0 imports it declares
