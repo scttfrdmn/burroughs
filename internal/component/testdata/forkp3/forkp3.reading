@@ -140,3 +140,50 @@
 #                                          Burroughs `trap: unreachable`, exit 4. Both stdouts and both
 #                                          guest-written stderrs are empty.
 #   F1's fictional counter clock restored: p3time exits 3 on both (0x04 clears: the wall clock reads 1970).
+
+# Committed readings for p3c1.wasm, checkpoint C1 (#1241), delivered by F3b (#1295): an ordinary Go program (fmt, os,
+# time, crypto/rand; no linkname) whose argv, clocks, sleep, random and environment reach it through the fork's
+# wasip3 syscall and os.
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run p3c1.wasm c1-one c1-two   (from this directory; no --env)
+#              burroughs run p3c1.wasm -- c1-one c1-two
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, 2026-11-15.
+#
+# reader                                        reading
+# p3c1 argv                                     p3c1.wasm c1-one c1-two
+# wasmtime 49.0.3 on p3c1, 10 of 10             exit 7
+# wasmtime 49.0.3 on p3c1 stdout                139 bytes, sha256 b4a78277843594e61509403d02d609a8712c1119acb1578c1967e2d19768d041
+# wasmtime 49.0.3 on p3c1 stderr                49 bytes, sha256 5d2983a925ff0e3672b246f3fda15b1481bf8a50453e3ca9a61e84f57a3be702
+# Burroughs at 1ed1a87 on p3c1, 10 of 10        the same exit code, stdout and stderr, byte for byte
+#
+# Meaning:     7 is os.Exit(7), through exit-with-code. All 10 wasmtime runs and all 10 Burroughs runs gave one stdout
+#              hash and one stderr hash, the ones above. stdout, verbatim, is every property holding:
+#
+#     args: [c1-one c1-two]
+#     monotonic delta > 0: true
+#     year >= 2026: true
+#     slept >= 10ms: true
+#     crypto/rand not all zero: true
+#     getenv X empty: true
+#
+#              and stderr is the runtime's println and os.Stderr, interleaved through one stream:
+#
+#     stderr 1: runtime
+#     stderr 2: os
+#     stderr 3: runtime
+#
+#              With --env X=hi, wasmtime's getenv line reads false, so the environment is read, not assumed empty.
+#
+# The neuters, each a temporary edit of the fork, rebuilt, run 10 of 10 on both engines, builds kept out of this tree:
+#   argv not pushed (runtimeSetArgsEnvs(nil, ...)): os.Args is empty, so os.Args[1:] panics. Exit 2 on both, no
+#                                          stdout, stderr "panic: runtime error: slice bounds out of range [1:0]".
+#   RandomGet fills zeros:                 exit 7 on both, the rand line false (140 bytes, sha256 eea34440...).
+#   any blocking netpoll traps (F3a's):    the sleep traps after three lines. wasmtime exit 134, its backtrace
+#                                          runtime.abort <- netpollBlockRefused <- netpoll <- findRunnable;
+#                                          Burroughs `trap: unreachable`, exit 4.
+#   netpoll(delay) returns at once:        SURVIVES, byte-identical, exit 7. findRunnable spins to the deadline, so
+#                                          the sleep still lasts 10 ms; only host CPU differs (a throwaway 1 s sleep:
+#                                          Burroughs 0.07 s user with the wait, 1.12 s with the neuter).
+#   fds 1 and 2 through a second stream    SURVIVES, byte-identical, exit 7. Both engines write each COMPLETED copy
+#   each, opened in syscall.Write and      through at once and lose nothing left unflushed at exit, F3a's known gap
+#   never flushed:                         again: one stream per fd is built, not witnessed (the fork's
+#                                          phase4/wasip3-f3b.md).

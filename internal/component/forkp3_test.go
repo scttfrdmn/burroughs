@@ -17,7 +17,7 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
-// forkP3Dir holds the fork's components (F1, F2, F3a), their sources, their wasmtime readings and their PROVENANCE. The bytes
+// forkP3Dir holds the fork's components (F1, F2, F3a, F3b), their sources, their wasmtime readings and their PROVENANCE. The bytes
 // are committed, so this test needs no fork and runs wherever the package's other tests do.
 const forkP3Dir = "testdata/forkp3"
 
@@ -228,6 +228,86 @@ func TestForkWasip3RuntimeMatchesWasmtime(t *testing.T) {
 				t.Errorf("%s's stderr is %s (%q), want wasmtime's %s", c, got, stderr.String(), wantErr)
 			}
 		})
+	}
+}
+
+// p3c1Properties is the number of stdout lines after p3c1's args line, each a property that prints ": true" when it
+// holds: the monotonic delta, the year, the sleep, crypto/rand and the unset X.
+const p3c1Properties = 5
+
+// TestForkWasip3C1MatchesWasmtime is checkpoint C1 (#1241), delivered by F3b (#1295, ADR 0114). p3c1 is an ordinary
+// Go program, fmt, os, time and crypto/rand with no linkname, built by the fork for GOOS=wasip3. Its argv and
+// environment come from get-arguments and get-environment, which the fork's syscall.init calls and pushes into the
+// runtime; its clocks are monotonic and system-clock now; time.Sleep waits in the runtime's netpoll on wait-for;
+// crypto/rand reads get-random-bytes through syscall.RandomGet; and os.Stdout and os.Stderr write through the
+// runtime's one write-via-stream stream per fd. It prints properties, never raw values, interleaves the runtime's
+// println with os.Stderr, and exits 7.
+//
+// Run with the argv the committed reading records, its exit code, stdout and stderr must equal wasmtime 49.0.3's
+// byte for byte. Its stdout is also checked to be every property holding, with the args line naming the reading's
+// argv, so a reading in which wasmtime itself saw a property fail cannot pass as an agreement.
+//
+// NEUTER: argv not pushed (the fork's syscall.init passes nil args to the runtime; p3c1 rebuilt): os.Args is empty,
+// so os.Args[1:] panics and the run exits 2 with no stdout, where wasmtime's reading is exit 7; it exits 2 on wasmtime
+// too.
+// NEUTER: RandomGet fills zeros (fork syscall; p3c1 rebuilt): the stdout digest differs and the property check names
+// the rand line, false; wasmtime prints the same false line.
+// NEUTER: netpoll(delay) returns at once (fork runtime; p3c1 rebuilt): SURVIVES. findRunnable spins to the timer's
+// deadline, so the sleep still lasts 10 ms and every byte matches; only host CPU differs. The netpoll path is
+// witnessed by a second neuter, any blocking netpoll restored to F3a's trap: the run traps `unreachable` after three
+// stdout lines, where wasmtime's reading is exit 7.
+// NEUTER: fds 1 and 2 written through a second stream each, opened in the fork's syscall.Write and never flushed
+// (p3c1 rebuilt): SURVIVES. Both engines write every completed stream.write through at once and lose nothing left
+// unflushed at exit, so one stream per fd is built and not witnessed here, as F3a's wait and partial-copy loop are
+// not (the fork's phase4/wasip3-f3b.md).
+func TestForkWasip3C1MatchesWasmtime(t *testing.T) {
+	reading := filepath.Join(forkP3Dir, "forkp3.reading")
+	argv := strings.Fields(readingLine(t, reading, "p3c1 argv"))
+	if len(argv) < 2 {
+		t.Fatalf("forkp3.reading's p3c1 argv is %q, want the program name and at least one argument", argv)
+	}
+	want := readingLine(t, reading, "wasmtime 49.0.3 on p3c1, 10 of 10")
+	wantCode, err := strconv.Atoi(strings.TrimPrefix(want, "exit "))
+	if !strings.HasPrefix(want, "exit ") || err != nil {
+		t.Fatalf("forkp3.reading's p3c1 line %q is not an exit code", want)
+	}
+	wantOut := readingStream(t, reading, "wasmtime 49.0.3 on p3c1 stdout")
+	wantErr := readingStream(t, reading, "wasmtime 49.0.3 on p3c1 stderr")
+
+	var stdout, stderr strings.Builder
+	h := NewHost(&stdout, &stderr, nil)
+	h.Args = argv
+	in, err := InstantiateWithHost(readForkP3(t, "p3c1"), h)
+	if err != nil {
+		t.Fatalf("p3c1 did not instantiate: %v", err)
+	}
+	defer in.Close()
+	code, err := in.CallRun()
+	if err != nil {
+		t.Fatalf("p3c1's run failed where wasmtime exits %d: %v (stdout so far %q, stderr %q)",
+			wantCode, err, stdout.String(), stderr.String())
+	}
+	if code != wantCode {
+		t.Errorf("p3c1 exited %d, want wasmtime's %d (stderr %q)", code, wantCode, stderr.String())
+	}
+	if got := streamDigest(stdout.String()); got != wantOut {
+		t.Errorf("p3c1's stdout is %s (%q), want wasmtime's %s", got, stdout.String(), wantOut)
+	}
+	if got := streamDigest(stderr.String()); got != wantErr {
+		t.Errorf("p3c1's stderr is %s (%q), want wasmtime's %s", got, stderr.String(), wantErr)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")
+	if len(lines) != 1+p3c1Properties {
+		t.Fatalf("p3c1 printed %d stdout lines, want the args line and %d properties: %q", len(lines), p3c1Properties, lines)
+	}
+	if wantArgs := "args: [" + strings.Join(argv[1:], " ") + "]"; lines[0] != wantArgs {
+		t.Errorf("p3c1's args line is %q, want %q, the reading's argv", lines[0], wantArgs)
+	}
+	for _, ln := range lines[1:] {
+		if !strings.HasSuffix(ln, ": true") {
+			t.Errorf("p3c1 printed %q: that property does not hold", ln)
+		}
 	}
 }
 

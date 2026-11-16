@@ -1,0 +1,42 @@
+// p3c1 is checkpoint C1 (Burroughs #1241): an ordinary Go program, built by the fork for GOOS=wasip3, whose
+// argv, clock, sleep, random and environment reach it through syscall and os. It prints properties, never
+// raw values, so its output is the same on every run and on every engine.
+package main
+
+import (
+	"crypto/rand"
+	"fmt"
+	"os"
+	"time"
+)
+
+var sink uint64
+
+func main() {
+	fmt.Println("args:", os.Args[1:])
+
+	t0 := time.Now()
+	for i := uint64(0); i < 1<<20; i++ {
+		sink += i * i
+	}
+	fmt.Println("monotonic delta > 0:", time.Since(t0) > 0)
+
+	fmt.Println("year >= 2026:", time.Now().Year() >= 2026)
+
+	t1 := time.Now()
+	time.Sleep(10 * time.Millisecond)
+	fmt.Println("slept >= 10ms:", time.Since(t1) >= 10*time.Millisecond)
+
+	var b [16]byte
+	rand.Read(b[:])
+	fmt.Println("crypto/rand not all zero:", b != [16]byte{})
+
+	fmt.Println("getenv X empty:", os.Getenv("X") == "")
+
+	// stderr from the runtime and from os, interleaved: one stream per fd keeps them in this order.
+	println("stderr 1: runtime")
+	fmt.Fprintln(os.Stderr, "stderr 2: os")
+	println("stderr 3: runtime")
+
+	os.Exit(7)
+}

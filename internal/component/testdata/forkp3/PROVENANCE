@@ -157,3 +157,33 @@ p3exit0.wasm and p3bind.wasm are NOT rebuilt here. On this toolchain their core 
 so they cannot be byte-identical to the committed ones modulo the build ID; rebuilt, p3exit0 exits 0 and p3bind
 (with its token) exits 127 on both engines, as their committed readings record. The committed bytes stay F1's and
 F2's witnesses.
+
+F3b's witness component (#1295, ADR 0114), checkpoint C1 (#1241): p3c1, an ordinary Go program on the fork's wasip3
+syscall, os and internal/poll. Same recipe and same pins as F1's, except:
+
+Fork SHA:     96eadd09dbe29df1b0bfe6e72275efc686183d8f (branch wasip3/f3b; its design note, phase4/wasip3-f3b.md,
+              is the commit after it, f3256bddd0, which changes no code)
+Toolchain:    go version go1.28-devel_96eadd09db Sun Nov 15 19:16:17 2026 -0800 darwin/arm64
+              (the fork's bin/go, from src/make.bash at the SHA above, bootstrapped by go1.26.9, built in a detached
+              worktree of the fork on the external disk because the fork checkout's disk was full)
+Built on:     darwin/arm64, 2026-11-15
+Guest source: p3c1.go.txt, the only file of its module: go.mod is "module p3c1" and "go 1.28". It imports fmt, os,
+              time and crypto/rand, and uses no linkname.
+
+  p3c1.wasm
+    sha256: 8ec25e5bdbfc49ab76e5d24ade3856783e9582a821bed7b66aac5a7a992439ca
+    bytes:   2756708
+    core:    2750644 bytes, sha256 3a850b4c31e897e00976f425eb59dcbc1f255e9cbc220f91dddafe1e9b36b6e6
+
+Built twice into two directories: identical bytes. Its core module imports F3a's 22 names and three more, through
+the fork's syscall and the generated bindings, and exports run, internal/wasi's cabi_realloc and memory:
+
+    (import "wasi:cli/environment@0.3.0" "get-environment" (func (;22;) (type 1)))
+    (import "wasi:cli/environment@0.3.0" "get-arguments" (func (;23;) (type 1)))
+    (import "wasi:random/random@0.3.0" "get-random-bytes" (func (;24;) (type 8)))
+    (memory (;0;) 39)
+
+F1's, F2's and F3a's components are NOT rebuilt here. Rebuilt on this toolchain from their committed sources, each
+gave its committed reading on both engines, 10 of 10: p3exit0 exit 0, p3panic exit 2, p3print exit 3, p3time exit 7
+(each with the recorded stdout and stderr hashes), and p3bind with its token exit 127. None is byte-identical to the
+committed one, because the runtime's netpoll changed, so the committed bytes stay those slices' witnesses.
