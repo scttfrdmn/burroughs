@@ -456,6 +456,41 @@ var streamBuiltins = [...]struct {
 	{"stream.drop-writable", streamDropWritable}, // 0x14 (gate:async increment 4)
 }
 
+// syncCancelGuard is def:cancel_copy's `trap_if(end.in_waitable_set() and not async_)` for the sync form of
+// stream.cancel-read (0x11) and stream.cancel-write (0x12) (grave #1301). A sync cancel waits for its end's own
+// event, which a waitable set would deliver to a set waiter instead, so the pin refuses it while the end is joined.
+// wasmtime 49.0.3 traps the same: "waitable cannot be used synchronously while added to a waitable set". Burroughs
+// cancelled and returned. The async form is unguarded, as the pin's is.
+//
+// NEUTER: return fn unwrapped, and TestASyncCancelOfAJoinedEndTraps' joined rows return CANCELLED where the oracle
+// traps.
+func syncCancelGuard(h *asyncHandles, op byte, fn interp.CanonFunc) interp.CanonFunc {
+	name := "stream.cancel-read"
+	if op == 0x12 {
+		name = "stream.cancel-write"
+	}
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) >= 1 {
+			i := uint32(args[0].Bits)
+			h.mu.Lock()
+			var joined bool
+			if op == 0x11 {
+				if e, ok := handleAt[*readableStreamEnd](h, i); ok {
+					joined = e.currentSet() != nil
+				}
+			} else if e, ok := handleAt[*writableStreamEnd](h, i); ok {
+				joined = e.currentSet() != nil
+			}
+			h.mu.Unlock()
+			if joined {
+				return nil, &interp.Trap{Reason: fmt.Sprintf("%s: end %d is joined to a waitable set, so its sync "+
+					"form cannot wait for its own event (def:cancel_copy); unjoin it first, or cancel with async", name, i)}
+			}
+		}
+		return fn(c, args)
+	}
+}
+
 // streamBuiltinFunc binds stream built-in op (0x0e to 0x14) over the element type index ti names (ADR 0124).
 //
 // **A stream of any element the codec lays out is bound**, and the refusal of a `stream.read` whose element is not
@@ -509,7 +544,11 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 	case 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14:
 		// The stream built-ins, each bound over the element its type index names (ADR 0124). stream.read is bound
 		// in its async form only: the sync form is refused by unbuiltAsyncSurface (ADR 0122).
-		return w.streamBuiltinFunc(op, slot), true
+		fn := w.streamBuiltinFunc(op, slot)
+		if (op == 0x11 || op == 0x12) && !asyncForm {
+			fn = syncCancelGuard(w.async, op, fn)
+		}
+		return fn, true
 	case 0x0a: // context.get (gate:async increment 4) — reads the agent's own context slot
 		return contextGet(w.async, slot), true
 	case 0x0b: // context.set

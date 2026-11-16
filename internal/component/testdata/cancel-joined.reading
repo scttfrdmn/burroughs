@@ -1,0 +1,13 @@
+# Committed wasmtime readings for cancel-joined.wasm (grave #1301): a sync stream.cancel-read or cancel-write on an end
+# joined to a waitable set traps.
+# Built:       wasm-tools parse cancel-joined.wat -o cancel-joined.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' cancel-joined.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. Taken 2026-11-15.
+#
+# Each line is `<export>: <wasmtime's reading>`. A u32 is the cancel's result (2: CANCELLED, progress 0); `trap: …`
+# is wasmtime's message, exit 134.
+read-joined-sync: trap: waitable cannot be used synchronously while added to a waitable set
+read-unjoined-sync: 2
+write-joined-sync: trap: waitable cannot be used synchronously while added to a waitable set
+write-unjoined-sync: 2
