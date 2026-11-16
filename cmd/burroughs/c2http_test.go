@@ -29,8 +29,10 @@ import (
 const c2Dir = "../../internal/component/testdata/forkp3"
 
 const (
-	c2Source  = c2Dir + "/p3http.go.txt"
-	c2Reading = c2Dir + "/p3http.reading"
+	c2Source        = c2Dir + "/p3http.go.txt"
+	c2Reading       = c2Dir + "/p3http.reading"
+	c2DeniedReading = c2Dir + "/p3http-denied.reading"
+	c2Wasm          = c2Dir + "/p3http.wasm"
 )
 
 // updateC2HTTP regenerates p3http.reading from arm N instead of checking it: the gate-census and watref shape, a
@@ -558,4 +560,95 @@ func writeC2Reading(t *testing.T, goVersion string, lines []string) {
 		t.Fatal(err)
 	}
 	t.Logf("wrote %s: %d lines", c2Reading, len(lines))
+}
+
+// startC2Dispatch runs `burroughs run [flags] p3http.wasm` in-process, through dispatch in a goroutine, its stdout a
+// pipe the driver reads as the guest writes it, and its exit delivered once dispatch has returned.
+func startC2Dispatch(flags ...string) c2Server {
+	pr, pw := io.Pipe()
+	exited := make(chan c2Exit, 1)
+	go func() {
+		var errBuf bytes.Buffer
+		code := dispatch(pw, &errBuf, append(append([]string{"run"}, flags...), c2Wasm))
+		_ = pw.Close()
+		exited <- c2Exit{code, errBuf.String()}
+	}()
+	return c2Server{stdout: pr, exited: exited}
+}
+
+// TestC2BurroughsRunMatchesTheHostReading is C2's arm B1 (#1242), v0.14.0's outcome witness: p3http.wasm, the fork's
+// GOOS=wasip3 build of p3http.go.txt, run by `burroughs run`, with a client outside the instance. Both gate states:
+//   - **granted** (`--inherit-network`): every response, the stdout after READY and the exit must equal p3http.reading,
+//     which arm N (TestC2HostServerMatchesItsReading) took from stock Go's net/http before the wasm was built, and
+//     which wasmtime 49.0.3 also gives, 10 of 10 (PROVENANCE);
+//   - **denied** (no flag): the listen is refused at tcp-socket.create, and the stdout and exit must equal
+//     p3http-denied.reading, wasmtime's with no network flag.
+//
+// dispatch's own exit is the guest's, and once it has returned no socket goroutine is left running.
+//
+// The tail row found grave #1308. Until ADR 0127 it was short here in a share of runs: 69651 bytes where arm N and
+// wasmtime read 98405, 10 of 10 each. The guest's last 28754 bytes were taken into the 64 KiB send sink (ADR 0123), so
+// its write completed and it went on to exit. The sink's writer goroutine was parked in acquireRun, delivering its
+// previous Write's completion, until Close stopped it, and Close discarded what the sink held. The row was kept as the
+// reading says, never relaxed. With the repair it passes 20 of 20, and 5 of 5 under -race (PROVENANCE has the counts),
+// so reverting #1308's flush neuters this row too.
+//
+// NEUTER: the grant withheld (the granted row run with no flag): the server prints no READY line, and the granted
+// row's 138 lines read as the denied row's 2, `stdout, with no READY line: "listen refused, EACCES: true\n"` and
+// `exit: 1`; dispatch exits 1.
+// NEUTER: a dropped byte (hostsock.go's receive producer skips one byte of what it reads from the host connection,
+// once, past 512 KiB): the 1 MiB echo's body reaches the server one byte short, the server's io.Copy ends at the
+// client's half-close, and the echo line's length and sha256 differ and its body line reads false.
+// NEUTER: the monotonic clock's wait-for never resolves (hostsys.go): /work's 1 ms sleep never wakes, and the drive
+// fails at its place, "parked at /work?id=0 after 1 answered", at c2RequestGuard rather than at the test timeout.
+func TestC2BurroughsRunMatchesTheHostReading(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "")
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	for _, c := range []struct {
+		name    string
+		flags   []string
+		reading string
+	}{
+		{"granted", []string{"--inherit-network"}, c2Reading},
+		{"denied", nil, c2DeniedReading},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := startC2Dispatch(c.flags...)
+			got, err := driveC2(srv)
+			if err != nil {
+				t.Fatalf("arm B1: %v", err)
+			}
+			matchC2Reading(t, c.reading, "burroughs run", got)
+			// driveC2 has received the exit; the code it recorded is the reading's last line, and dispatch returns the
+			// guest's code verbatim (ADR 0081), so the line is dispatch's own.
+			requireNoHostSocketGoroutines(t)
+		})
+	}
+}
+
+// requireNoHostSocketGoroutines is internal/component's requireNoSocketGoroutines (p3tcp_test.go), whose predicate
+// is copied here because a test helper does not cross packages: it fails if a goroutine is still running at one of
+// the host's socket sites, after a hang guard for one that has called its ended and not yet returned.
+func requireNoHostSocketGoroutines(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second) // a harness hang guard, not a measurement
+	for {
+		buf := make([]byte, 1<<22)
+		buf = buf[:runtime.Stack(buf, true)]
+		var live []string
+		for _, g := range strings.Split(string(buf), "\n\n") {
+			if strings.Contains(g, "(*sockSend).run") || strings.Contains(g, "(*Host).tcpConnect.func") ||
+				strings.Contains(g, "(*streamProducer).acceptOne") || strings.Contains(g, "(*Host).resolveAddresses.func") ||
+				(strings.Contains(g, "(*streamProducer).startReadLocked.func") && strings.Contains(g, "net.(*conn).Read")) {
+				live = append(live, g)
+			}
+		}
+		if len(live) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d socket goroutine(s) outlived the run:\n%s", len(live), strings.Join(live, "\n\n"))
+		}
+		runtime.Gosched()
+	}
 }
