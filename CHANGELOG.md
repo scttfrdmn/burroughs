@@ -25,6 +25,37 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **Go's `net` in a fork-built `GOOS=wasip3` program listens, dials, accepts and reads and writes real TCP sockets, on
+  Burroughs as on wasmtime 49.0.3** ([#1239](https://github.com/scttfrdmn/burroughs/issues/1239), F4; ADR 0114). Until
+  now `net` on wasip3 was an in-memory fake that never reached the host, and the fork's `syscall` answered ENOSYS for
+  every socket call. F4 is the precursor to C2's `net/http` server
+  ([#1242](https://github.com/scttfrdmn/burroughs/issues/1242)).
+  - **How the fork does it:**
+    - `net` takes its stock POSIX path (`sock_posix.go`, `fd_unix.go`) over `wasi:sockets`' `tcp-socket`;
+    - `Connect` is the async lower of `connect`. Its subtask is armed for the fd's pollDesc and it answers
+      EINPROGRESS, so Go's own connect loop waits, with the dial's deadline and context;
+    - `Accept` reads one element of `listen`'s `stream<tcp-socket>`;
+    - a connection's reads and writes are F5's completion-model stream halves, over `receive`'s stream and the one
+      handed to `send`;
+    - `Close` cancels before it drops, end before future, and drops the `tcp-socket` last. `future.cancel-read` is
+      never linked.
+  - **`p3net` and `p3nettail` are committed** in `internal/component/testdata/forkp3`, with their sources, readings and
+    PROVENANCE. Both are ordinary Go programs with no linkname.
+    - `p3net` has no peer outside the instance. It listens, echoes 1 MiB through `io.Copy`, reads a deadline out and
+      then the late bytes, dials a closed port (ECONNREFUSED), closes a listener under a parked `Accept`
+      (`net.ErrClosed`), and serves and gets one HTTP request. With no network grant, both engines refuse it EACCES.
+    - `p3nettail` serves one connection from a peer outside it, writes 256 KiB, closes and exits. The peer received
+      all of it from both engines, 10 of 10. So Burroughs' send sink did not lose a server's tail here, the question
+      C2's `/quit` asks.
+    - Both engines give the same exit code, stdout and stderr, byte for byte, 10 of 10, granted and denied.
+      `TestForkWasip3NetMatchesWasmtime` and `TestForkWasip3NetTailMatchesWasmtime` assert it, and that no socket
+      goroutine outlives `Close`.
+  - **The three neuters fail on both engines:**
+    - a `Connect` that returns at once garbles the echo;
+    - without the runtime's re-bind of an operation armed before its pollDesc, the first dial hangs;
+    - without the accept read's cancel, `Close` of a listener traps at the drop.
+  - **No engine code changed.** Every earlier fork fixture, rebuilt on this toolchain, gave its committed reading.
+
 - **Goroutines in a fork-built `GOOS=wasip3` program block one at a time, and `os.Stdin` reads, on Burroughs as on
   wasmtime 49.0.3** ([#1240](https://github.com/scttfrdmn/burroughs/issues/1240), F5; ADR 0114). The Phase 4 fork's
   runtime now has a single-M netpoller over one waitable set, separate from `write1`'s. Until now every wasip3 wait

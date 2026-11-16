@@ -242,3 +242,69 @@ each gave its committed reading on both engines, 10 of 10: p3exit0 exit 0, p3pan
 7, p3c1 (c1-one c1-two) exit 7, each with the recorded stdout and stderr hashes, and p3bind with its token exit 127.
 None is byte-identical to the committed one: the runtime's netpoll changed, and a program that links os now links
 stdin's imports too (p3c1's core module imports 38 names), so the committed bytes stay those slices' witnesses.
+
+F4's witness components (#1239, ADR 0114): p3net and p3nettail, ordinary Go programs whose net takes its stock POSIX
+path over wasi:sockets' tcp-socket. Same recipe and same pins as F1's, except:
+
+Fork SHA:     85ca7c58146bbc863969800ecd5edaa103ef5fba (branch wasip3/f4; its design note, phase4/wasip3-f4.md, is the
+              commit after it, which changes no code)
+Toolchain:    go version go1.28-devel_85ca7c5814 Mon Nov 16 09:33:05 2026 -0800 darwin/arm64
+              (the fork's bin/go, from src/make.bash at the SHA above, bootstrapped by go1.26.9)
+Built on:     darwin/arm64, 2026-11-16
+Guest source: p3net.go.txt and p3nettail.go.txt, each the only file of its module: go.mod is "module p3net" (or
+              p3nettail) and "go 1.28". p3net imports crypto/sha256, errors, fmt, io, net, net/http, os, syscall and
+              time; p3nettail fmt, net and os. Neither uses a linkname.
+Recipe:       phase4/buildp3.sh, unchanged: its check [2]'s seven $root built-ins already admit the two that syscall now
+              imports beside the runtime's, [subtask-cancel] and [subtask-drop].
+Runs:         p3net with no argv and no peer outside the instance; p3nettail with one argv, a port, which a peer outside
+              the instance dials until it connects, then counts what it reads to EOF (forkp3.reading).
+
+  p3net.wasm
+    sha256: b7937259f854c733db5492a467c92d53eaf5b226776aa75f3a31b92f0cf6116c
+    bytes:   11376226
+    core:    11362068 bytes, sha256 2c0792cd9412479e5c7c115a7bf1162e718a0b8cb2ae75be27b5bdca7de2753e
+
+  p3nettail.wasm
+    sha256: 60dd79737892f2e4aa4fc3e1780e7e9bcbeec16f2ccdc40b15c4a5a1aa148388
+    bytes:   3686569
+    core:    3672738 bytes, sha256 9a6d90e249df9e6b9e4fc5ac0f36ca0e9b4262f5cf486e6b69e8e900a74dcead
+
+Each built three times, from two directories: identical bytes. p3net is 11 MB because it links net/http. Its core module
+imports 63 names and p3nettail's 62; the difference is get-random-bytes, which net/http reaches. Beside p3stdin's 37 they
+import two duplicates, syscall's own [subtask-cancel] and [subtask-drop] beside the runtime's, and 23 wasi:sockets/types
+names (p3net's numbering):
+
+    (import "wasi:sockets/types@0.3.0" "[resource-drop]tcp-socket" (func (;26;) (type 2)))
+    (import "wasi:sockets/types@0.3.0" "[static]tcp-socket.create" (func (;27;) (type 6)))
+    (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.bind" (func (;28;) (type 9)))
+    (import "wasi:sockets/types@0.3.0" "[async-lower][method]tcp-socket.connect" (func (;29;) (type 7)))
+    (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.listen" (func (;30;) (type 6)))
+    (import "wasi:sockets/types@0.3.0" "[async-lower][stream-read-0][method]tcp-socket.listen" (func (;31;) (type 8)))
+    (import "wasi:sockets/types@0.3.0" "[stream-cancel-read-0][method]tcp-socket.listen" (func (;32;) (type 0)))
+    (import "wasi:sockets/types@0.3.0" "[stream-drop-readable-0][method]tcp-socket.listen" (func (;33;) (type 2)))
+    (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.send" (func (;34;) (type 7)))
+    (import "wasi:sockets/types@0.3.0" "[stream-new-0][method]tcp-socket.send" (func (;35;) (type 3)))
+    (import "wasi:sockets/types@0.3.0" "[async-lower][stream-write-0][method]tcp-socket.send" (func (;36;) (type 8)))
+    (import "wasi:sockets/types@0.3.0" "[stream-cancel-write-0][method]tcp-socket.send" (func (;37;) (type 0)))
+    (import "wasi:sockets/types@0.3.0" "[stream-drop-writable-0][method]tcp-socket.send" (func (;38;) (type 2)))
+    (import "wasi:sockets/types@0.3.0" "[future-drop-readable-1][method]tcp-socket.send" (func (;39;) (type 2)))
+    (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.receive" (func (;40;) (type 6)))
+    (import "wasi:sockets/types@0.3.0" "[async-lower][stream-read-0][method]tcp-socket.receive" (func (;41;) (type 8)))
+    (import "wasi:sockets/types@0.3.0" "[stream-cancel-read-0][method]tcp-socket.receive" (func (;42;) (type 0)))
+    (import "wasi:sockets/types@0.3.0" "[stream-drop-readable-0][method]tcp-socket.receive" (func (;43;) (type 2)))
+    (import "wasi:sockets/types@0.3.0" "[async-lower][future-read-1][method]tcp-socket.receive" (func (;44;) (type 7)))
+    (import "wasi:sockets/types@0.3.0" "[future-drop-readable-1][method]tcp-socket.receive" (func (;45;) (type 2)))
+    (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.get-local-address" (func (;46;) (type 6)))
+    (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.get-remote-address" (func (;47;) (type 6)))
+    (import "wasi:sockets/types@0.3.0" "[method]tcp-socket.set-listen-backlog-size" (func (;48;) (type 10)))
+
+No future.cancel-read is imported, and no send-future read. p3net's memory is (memory 96) and p3nettail's (memory 46),
+both unshared. Each exports run, internal/wasi's cabi_realloc and memory.
+
+F1's through F5's components are NOT rebuilt here. Rebuilt on this toolchain from their committed sources, each gave
+its committed reading on both engines, 10 of 10, with no network flag: p3exit0 exit 0, p3panic exit 2, p3print exit 3,
+p3time exit 7, p3bind with its token exit 127, p3c1 (c1-one c1-two) exit 7, p3poll exit 0, and p3stdin on p3cat.stdin
+and /dev/null exit 0, each with the recorded stdout and stderr hashes. Their core modules import what they imported on
+F5's toolchain (p3c1 and p3poll 38 names, p3stdin 37), none of them a wasi:sockets name: a socket is held behind an
+interface only Socket and Accept convert to, so a program that makes none links none. None is byte-identical to the
+committed one, because syscall's stream code moved into a reusable half.

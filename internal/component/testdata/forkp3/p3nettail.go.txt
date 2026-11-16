@@ -1,0 +1,39 @@
+// p3nettail is F4's measurement of a server's tail (Burroughs #1239): Go's net on the fork's
+// GOOS=wasip3 listens on the port its argv names, serves one connection from a peer outside the
+// instance, writes 256 KiB to it, closes it and exits. The peer counts what reached it. Every Write
+// here returns once the host has taken the bytes, so what the peer counts is what the host did with
+// them after the guest closed and exited. It prints what it wrote, never the port.
+package main
+
+import (
+	"fmt"
+	"net"
+	"os"
+)
+
+const tailBytes = 256 << 10
+
+func main() {
+	if len(os.Args) != 2 {
+		fmt.Println("usage: p3nettail <port>")
+		os.Exit(2)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:"+os.Args[1])
+	if err != nil {
+		fmt.Println("listen:", err)
+		os.Exit(1)
+	}
+	c, err := ln.Accept()
+	if err != nil {
+		fmt.Println("accept:", err)
+		os.Exit(1)
+	}
+	payload := make([]byte, tailBytes)
+	for i := range payload {
+		payload[i] = byte(i*7 + i>>8)
+	}
+	n, werr := c.Write(payload)
+	cerr := c.Close()
+	ln.Close()
+	fmt.Println("wrote", n, "bytes, write and close ok:", werr == nil && cerr == nil)
+}

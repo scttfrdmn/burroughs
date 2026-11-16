@@ -263,3 +263,61 @@
 #                                          (def:cancel_copy). Burroughs at 954c0b1 does NOT trap: exit 0, p3poll's
 #                                          reading byte for byte. Its stream.cancel-read has no in-a-waitable-set check.
 #                                          Found here, reported to the owner, not repaired in this slice.
+
+# Committed readings for p3net.wasm and p3nettail.wasm, F4's witnesses (#1239): Go's net on the fork's GOOS=wasip3,
+# over wasi:sockets' tcp-socket, through net's stock POSIX path.
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -S inherit-network p3net.wasm < /dev/null   (from this directory)
+#              .oracle/wasmtime-49.0.3/wasmtime run p3net.wasm < /dev/null                      (denied: no flag)
+#              .oracle/wasmtime-49.0.3/wasmtime run -S inherit-network p3nettail.wasm <port>, with a peer outside the
+#              instance that dials <port> until it connects and counts what it reads to EOF
+#              burroughs run [--inherit-network] <case>.wasm [-- <port>], the same
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, 2026-11-16.
+#
+# reader                                                  reading
+# wasmtime 49.0.3 on p3net, 10 of 10                      exit 0
+# wasmtime 49.0.3 on p3net stdout                         341 bytes, sha256 ac814468ee8bcd43eb9800f30f7ed48cd64f0cb387020789c66e4384bf1aa96a
+# wasmtime 49.0.3 on p3net stderr                         0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# wasmtime 49.0.3 on p3net, denied, 10 of 10              exit 0
+# wasmtime 49.0.3 on p3net, denied stdout                 56 bytes, sha256 93525d6b2720e6efd8f80c1990c2eb512b039d19edc840bd679e40eaf3049b37
+# wasmtime 49.0.3 on p3net, denied stderr                 0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# wasmtime 49.0.3 on p3nettail, 10 of 10                  exit 0
+# wasmtime 49.0.3 on p3nettail stdout                     45 bytes, sha256 399bed75ed98f851e5af2b0fc574e75015806affcb245a5d09264ff61d58f980
+# wasmtime 49.0.3 on p3nettail stderr                     0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# wasmtime 49.0.3 on p3nettail, the peer received         262144 bytes
+# Burroughs at a54b95c on each, 10 of 10                  the same exit code, stdout and stderr, byte for byte, and
+#                                                         the peer received 262144 bytes from p3nettail
+#
+# Meaning:     all 10 wasmtime runs and all 10 `burroughs run` runs of each row gave one stdout hash and one stderr
+#              hash, the ones above. p3net's granted stdout, verbatim, is every property holding and the HTTP response:
+#
+#     listening on 127.0.0.1 with a port: true
+#     echoed 1 MiB, sha256 matches: true
+#     addresses cross-match: true
+#     read deadline, os.ErrDeadlineExceeded: true
+#     late bytes read after the deadline: true
+#     dial to a closed port, ECONNREFUSED: true
+#     parked Accept after Close, net.ErrClosed: true
+#     http: 200 OK, body "hello, wasip3\n", length 14, read ok: true
+#
+#              Denied, "listen refused, EACCES: true" and "dial refused, EACCES: true": both engines refuse
+#              tcp-socket.create with access-denied, which the fork's syscall maps to EACCES. The guest cannot tell
+#              create's refusal from a later call's, as p3tcp's denied reading cannot.
+#              p3nettail prints "wrote 262144 bytes, write and close ok: true". The peer's count is what reached the
+#              kernel and the peer after the guest closed the connection and exited: on both engines all of it, 10 of
+#              10, with a peer that reads at once and, measured once more 3 of 3 each, with one that reads nothing for
+#              500 ms after it connects. Burroughs' 64 KiB send sink is drained at the writer's drop, the guest's
+#              Close, before walker.close discards what a stopped delivery carried (ADR 0123, choices 8 and 12).
+#
+# The neuters, each a temporary edit of the fork, rebuilt, run on both engines (10 of 10, or 3 of 3 where the run
+# hangs, under a 20 s timeout), builds kept out of this tree:
+#   Connect returns success without        the echo line is false on both. wasmtime exit 2 after two lines, a nil
+#   waiting (no EINPROGRESS, no arm):      pointer panic at p3net's address comparison (stdout 77 bytes, 10 of 10):
+#                                          its get-local-address answers an error while the connect is still running.
+#                                          Burroughs exit 1 after all seven property lines, four of them false, at
+#                                          the HTTP request: "read: Socket is not connected". Its host dial had
+#                                          resolved by the time the guest asked for the address.
+#   netpollopen's re-bind removed:         the first dial never returns on both, after the listen line (timeout, exit
+#                                          124): the connect's event readies no pollDesc.
+#   Close drops the listen stream with     the parked Accept's Close traps on both, after six lines. wasmtime exit 1,
+#   its read in flight, no cancel:         "cannot remove busy stream" in TcpSocketListenStream0DropReadable;
+#                                          Burroughs exit 4, "stream.drop-readable: end 32 is mid-copy (COPYING)".
