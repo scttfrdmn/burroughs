@@ -176,6 +176,8 @@ RULES: tuple[tuple[str, str], ...] = (
     ("subst1-chained", "runs whatever its exit status was"),
     ("publish-chained", "whatever the last one's exit status was"),
     ("memory-git", "touches session memory"),
+    ("fork-search", "without the standing rule's exclusions"),
+    ("fork-excluded-file", "which the standing rule says is never read"),
     ("sleep-as-wait", "a duration is not a signal"),
     ("detach-backgrounded", "backgrounded with a trailing `&`"),
     ("inline-write", "an inline interpreter opens"),
@@ -921,6 +923,76 @@ def memory_command_runs_git(tokens: list[str]) -> str | None:
     return None
 
 
+# --- route 11: a fork tree is searched only through safegrep.sh, and its excluded files are never named --------
+#
+# Scott's standing rule for the fork's v0.14.0 track: nothing from the fork's preemption files is read. A brief
+# carried it three times, and three times an agent's recursive grep missed it (F1, F2, F3b, 2026-11-14 to 15):
+# once with three of the four exclusions left out, once with none, and once with the exclusions passed through
+# an unquoted variable that zsh does not split. Each grep read those files' contents. A breach of a no-read rule
+# cannot be undone, so the rule is a route here rather than a sentence in a brief (Scott, 2026-11-15: "both").
+#
+# The subject is any command or tool call aimed at one of the fork's trees:
+#   - a recursive search there (`grep -r`/`-R`, `rg`, `git grep`, a `find` that runs a command) is refused unless
+#     its program word is `safegrep.sh`, the fork's wrapper with the exclusions built in;
+#   - a path naming an excluded file is refused whatever the program, since reading one is the breach;
+#   - the Read tool on an excluded file, and the Grep tool anywhere in a fork tree, are refused the same way.
+# A bare pattern such as `preempt` in `git diff --name-only | grep -c preempt` names no file and is not refused,
+# because counting excluded paths in a diff is how the rule is checked.
+FORK_TREES = ("wp-phase4", "wp-poll", "wp-mt", "wp-liveness", "wp-docs", "wasmpreempt")
+FORK_TREE_PATH = re.compile(r"(^|[/~])(" + "|".join(FORK_TREES) + r")(/|$)")
+EXCLUDED_FILE = re.compile(
+    r"(?i)(preempt[^/\s'\"]*\.(go|s)$|/[^/\s'\"]*preempt[^/\s'\"]*/|"
+    r"(^|/)(wasmsafepoint_wasm|wasmstw_wasm|wasmpoll_wasm)\.go$)"
+)
+SEARCHERS = ("grep", "egrep", "fgrep", "rg", "ag", "ack")
+
+
+def in_fork_tree(path: str) -> bool:
+    """Whether a path, or a working directory, is inside one of the fork's trees."""
+    return bool(path) and bool(FORK_TREE_PATH.search(os.path.expanduser(path)))
+
+
+def fork_search_refusal(tokens: list[str], cwd: str) -> str | None:
+    """The refusal for a command that searches a fork tree around safegrep.sh or names an excluded file."""
+    aimed = in_fork_tree(cwd) or any(in_fork_tree(t) for t in tokens)
+    if not aimed:
+        return None
+    for t in tokens:
+        if EXCLUDED_FILE.search(t.strip("'\"")):
+            return (
+                f"the command names the fork file {t!r}, which the standing rule says is never read (its "
+                "preemption work, or one of wasmsafepoint_wasm.go, wasmstw_wasm.go, wasmpoll_wasm.go). Name "
+                "the path only in a count or a listing, never as something to open"
+            )
+    for cmdv in simple_commands(tokens):
+        head = 0
+        while head < len(cmdv) and (cmdv[head] in SHELL_KEYWORDS or ENV_ASSIGNMENT.match(cmdv[head])):
+            head += 1
+        if head >= len(cmdv):
+            continue
+        prog = basename(cmdv[head])
+        args = cmdv[head + 1 :]
+        if prog == "safegrep.sh":
+            continue
+        recursive = (
+            (prog in ("grep", "egrep", "fgrep") and any(
+                a in ("-r", "-R", "--recursive", "--dereference-recursive")
+                or (a.startswith("-") and not a.startswith("--") and ("r" in a or "R" in a))
+                or a.startswith("--directories=recurse") or a == "recurse"
+                for a in args))
+            or prog in ("rg", "ag", "ack")
+            or (prog == "git" and "grep" in args)
+            or (prog == "find" and any(a in ("-exec", "-execdir", "-ok", "-okdir") for a in args))
+            or (prog == "xargs" and any(basename(a) in SEARCHERS for a in args))
+        )
+        if recursive:
+            return (
+                f"`{prog}` searches a fork tree recursively without the standing rule's exclusions. Use the "
+                "fork's `phase4/safegrep.sh`, which builds them in, instead of grep, rg, git grep or find -exec"
+            )
+    return None
+
+
 # --- route 8: a merge needs a green verdict for the PR's head, and a watched, green main ------------------------
 #
 # The chair's ruling of 2026-10-23. #1087 was merged while `ciwatch` printed `FAIL not green`, because the actor
@@ -1083,6 +1155,14 @@ def findings(cmd: str, root: str, cwd: str) -> list[str]:
     memory_git = memory_command_runs_git(tokens)
     if memory_git:
         reasons.append(memory_git)
+
+    # Route 11, judged here for the same reason.
+    #
+    # NEUTER: return None from fork_search_refusal, and TestEditRouteHookRefusesBashEditsOfTrackedFiles' four
+    # fork deny rows pass a raw recursive grep and an excluded-file read.
+    fork_search = fork_search_refusal(tokens, cwd)
+    if fork_search:
+        reasons.append(fork_search)
 
     # subst1.py's own invocation is the one explicit exemption: it IS a permitted route, and it
     # writes its target by design. But the exemption is conditional on the route still being the route.
@@ -1406,6 +1486,29 @@ def main() -> int:
             return 2
         return 0
 
+    # Route 11's tool arms: the Read tool on an excluded fork file, and the Grep tool anywhere in a fork tree, which
+    # has no way to carry safegrep.sh's exclusions.
+    #
+    # NEUTER: drop this block, and TestEditRouteHookRefusesBashEditsOfTrackedFiles' Read and Grep deny rows are
+    # admitted, and nothing else.
+    if tool in ("Read", "Grep"):
+        path = inp.get("file_path") or inp.get("path") or ""
+        refusal = None
+        if tool == "Read" and in_fork_tree(path) and EXCLUDED_FILE.search(path):
+            refusal = (
+                f"the Read tool names the fork file {path!r}, which the standing rule says is never read"
+            )
+        elif tool == "Grep" and (in_fork_tree(path) or (not path and in_fork_tree(cwd))):
+            refusal = (
+                "the Grep tool searches a fork tree without the standing rule's exclusions. Run the fork's "
+                "`phase4/safegrep.sh` from Bash instead"
+            )
+        if refusal:
+            log_refusal([refusal], tool + " " + path, root)
+            print(f"editroute: REFUSED.\n\n  * {refusal}\n", file=sys.stderr)
+            return 2
+        return 0
+
     if tool != "Bash":
         return 0
     cmd = inp.get("command") or ""
@@ -1445,8 +1548,11 @@ def main() -> int:
     remembering = [r for r in reasons if r.startswith("the command touches session memory")]
     # Route 10 carries its own advice in the reason, and is about launching, not editing.
     launching = [r for r in reasons if r.startswith("`scripts/detach.sh` is backgrounded")]
+    # Route 11 carries its own advice in the reason, and is about reading the fork, not editing.
+    guarding = [r for r in reasons if "the standing rule" in r]
     editing = [r for r in reasons if r not in sleeping and r not in discarding and r not in publishing
-               and r not in merging and r not in unparsed and r not in remembering and r not in launching]
+               and r not in merging and r not in unparsed and r not in remembering and r not in launching
+               and r not in guarding]
 
     msg = "editroute: REFUSED.\n\n" + "".join(f"  * {r}\n" for r in reasons) + "\n"
     if editing:

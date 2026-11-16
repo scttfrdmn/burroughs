@@ -193,6 +193,8 @@ func TestEveryRefusalReasonHasARule(t *testing.T) {
 		{"subst1_chained", "python3 scripts/subst1.py CHANGELOG.md /tmp/o /tmp/n ; git commit", "subst1-chained"},
 		{"publish_chained", "make fmt ; gh pr create -t t", "publish-chained"},
 		{"memory_git", "cat ~/.claude/projects/x/memory/MEMORY.md && git checkout -q main", "memory-git"},
+		{"fork_search", "cd ~/src/wp-phase4 && grep -rn wasip3 src", "fork-search"},
+		{"fork_excluded_file", "cat ~/src/wp-phase4/src/runtime/preempt.go", "fork-excluded-file"},
 	} {
 		t.Run(a.name, func(t *testing.T) {
 			_ = os.Remove(logPath)
