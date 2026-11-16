@@ -320,6 +320,24 @@ says what it now requires and what it gives up.
 
 ### Changed
 
+- **The editroute hook guards the fork's no-read rule: a fork tree is searched only through `safegrep.sh`, and its
+  excluded files are never named** (route 11; Scott, 2026-11-15).
+  - **Why:** the standing rule for the fork's v0.14.0 track says nothing from the fork's preemption work is read.
+    Three agents' recursive greps broke it despite briefs that carried the flags (F1, F2, F3b): one left three
+    exclusions off, one left all of them off, and one passed them through an unquoted variable that zsh doesn't
+    split. A no-read breach can't be undone, so the rule became a route.
+  - **What is refused:**
+    - any recursive `grep`, `rg`, `git grep` or `find -exec` aimed at a fork tree other than through the fork's
+      `phase4/safegrep.sh`, which has the exclusions built in;
+    - any command that names an excluded file;
+    - the Read tool on an excluded file;
+    - the Grep tool anywhere in a fork tree. The hook's matcher in `.claude/settings.json` now includes Read and
+      Grep for this.
+  - **What is admitted:** a bare pattern in a count, such as `git diff --name-only … | grep -c preempt`. That is
+    how the rule is checked, and it names no file.
+  - **Witness:** seven deny rows and three allow rows in `TestEditRouteHookRefusesBashEditsOfTrackedFiles`, and two
+    rows in `TestEveryRefusalReasonHasARule`. **Neuters, run:** the Bash arm returning nothing admits exactly the
+    five Bash deny rows and the two rule rows. Dropping the tool block admits exactly the Read and Grep rows.
 - **A type a guest `use`s from an imported instance decodes as its definition, a handle in a guest's signature
   carries its resource's identity and is checked against the host's, and `Close` destroys the owns a guest still
   holds** ([#1248](https://github.com/scttfrdmn/burroughs/issues/1248),

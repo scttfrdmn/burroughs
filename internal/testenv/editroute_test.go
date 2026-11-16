@@ -456,6 +456,83 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			cmd:  "git status --short && git log --oneline -1 && cat ~/.claude/settings.json",
 			deny: false,
 		},
+		// Route 11 (Scott, 2026-11-15): a fork tree is searched only through safegrep.sh, and its excluded files
+		// are never named. Three agents' recursive greps read those files' contents despite briefs carrying the
+		// rule. The third specimen is verbatim in shape: the exclusions passed through an unquoted variable,
+		// which zsh does not split.
+		// **Neuter, run:** fork_search_refusal returning None admits the five Bash deny arms below, and nothing
+		// else; dropping the Read/Grep block in main admits the two tool arms.
+		{
+			name:   "a_raw_recursive_grep_in_the_fork_is_refused",
+			cmd:    "cd ~/src/wp-phase4 && grep -rn wasip3 src",
+			deny:   true,
+			want:   "`grep` searches a fork tree recursively",
+			routes: []string{"safegrep.sh"},
+		},
+		{
+			name:   "exclusions_passed_through_a_variable_are_still_refused",
+			cmd:    "EX='--exclude=*preempt*'; grep -rn $EX wasip3 ~/src/wp-phase4/src",
+			deny:   true,
+			want:   "`grep` searches a fork tree recursively",
+			routes: []string{"safegrep.sh"},
+		},
+		{
+			name:   "rg_and_git_grep_in_the_fork_are_refused",
+			cmd:    "cd ~/src/wp-phase4 && rg wasip3 && git -C ~/src/wp-phase4 grep wasip3",
+			deny:   true,
+			want:   "searches a fork tree recursively",
+			routes: []string{"safegrep.sh"},
+		},
+		{
+			name:   "naming_a_preemption_file_is_refused",
+			cmd:    "cat ~/src/wp-phase4/src/runtime/preempt.go",
+			deny:   true,
+			want:   "which the standing rule says is never read",
+			routes: []string{"count or a listing"},
+		},
+		{
+			name:   "naming_a_listed_wasm_file_is_refused",
+			cmd:    "head ~/src/wp-phase4/src/runtime/wasmstw_wasm.go",
+			deny:   true,
+			want:   "which the standing rule says is never read",
+			routes: []string{"count or a listing"},
+		},
+		{
+			name:      "the_read_tool_on_a_preemption_file_is_refused",
+			tool:      "Read",
+			deny:      true,
+			want:      "which the standing rule says is never read",
+			routes:    []string{"never read"},
+			editInput: map[string]any{"file_path": "/Users/u/src/wp-phase4/src/runtime/preempt_wasm.s"},
+		},
+		{
+			name:      "the_grep_tool_in_the_fork_is_refused",
+			tool:      "Grep",
+			deny:      true,
+			want:      "the Grep tool searches a fork tree",
+			routes:    []string{"safegrep.sh"},
+			editInput: map[string]any{"pattern": "wasip3", "path": "/Users/u/src/wp-phase4/src"},
+		},
+		{
+			// The allow arms: the wrapper itself, a count of excluded paths in a diff (how the rule is checked), a
+			// single named file that is not excluded, a recursive grep outside the fork, and a Read of an ordinary
+			// fork file.
+			name: "safegrep_and_a_diff_count_in_the_fork_are_permitted",
+			cmd: "cd ~/src/wp-phase4 && phase4/safegrep.sh -n wasip3 src && " +
+				"git diff --name-only a b | grep -c preempt && grep -n wasip3 src/runtime/os_wasip3.go",
+			deny: false,
+		},
+		{
+			name: "a_recursive_grep_outside_the_fork_is_permitted",
+			cmd:  "grep -rn wasip3 internal/component",
+			deny: false,
+		},
+		{
+			name:      "the_read_tool_on_an_ordinary_fork_file_is_permitted",
+			tool:      "Read",
+			deny:      false,
+			editInput: map[string]any{"file_path": "/Users/u/src/wp-phase4/src/runtime/os_wasip3.go"},
+		},
 		{
 			// The allow arms. `&&` throughout, including after a pipe, is what the rule asks for.
 			name: "publishing_steps_chained_with_and_are_permitted",
