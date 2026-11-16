@@ -187,3 +187,79 @@
 #   each, opened in syscall.Write and      through at once and lose nothing left unflushed at exit, F3a's known gap
 #   never flushed:                         again: one stream per fd is built, not witnessed (the fork's
 #                                          phase4/wasip3-f3b.md).
+
+# Committed readings for p3poll.wasm and p3stdin.wasm, F5's witnesses (#1240): the fork's single-M netpoller over one
+# waitable set, so a goroutine blocks alone; os.Pipe as a guest-to-guest stream<u8>; and os.Stdin read through it.
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run p3poll.wasm < /dev/null        (from this directory; no flag)
+#              .oracle/wasmtime-49.0.3/wasmtime run p3stdin.wasm < ../p3cat.stdin  (and < /dev/null)
+#              burroughs run <case>.wasm, with the same stdin
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, 2026-11-15.
+#
+# reader                                                  reading
+# wasmtime 49.0.3 on p3poll, 10 of 10                     exit 0
+# wasmtime 49.0.3 on p3poll stdout                        312 bytes, sha256 613ea0b8c6bffa7dde211e824d1b738f97f566b5d97c87f74189b09269fed8df
+# wasmtime 49.0.3 on p3poll stderr                        0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# wasmtime 49.0.3 on p3stdin < p3cat.stdin, 10 of 10      exit 0
+# wasmtime 49.0.3 on p3stdin < p3cat.stdin stdout         144 bytes, sha256 4be28a9625ac0a0126378663245926f1b0716e3c4a78a5f9861907401ad0e62b
+# wasmtime 49.0.3 on p3stdin < p3cat.stdin stderr         0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# wasmtime 49.0.3 on p3stdin < /dev/null, 10 of 10        exit 0
+# wasmtime 49.0.3 on p3stdin < /dev/null stdout           72 bytes, sha256 136a033d3d0f6aaa9c9ce4da74188b700172b0a0564a7fc14df3076b1eaa0bbc
+# wasmtime 49.0.3 on p3stdin < /dev/null stderr           0 bytes, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+# Burroughs at 954c0b1 on each, 10 of 10                  the same exit code, stdout and stderr, byte for byte
+#
+# Meaning:     all 10 wasmtime runs and all 10 Burroughs runs of each row gave one stdout hash and one stderr hash, the
+#              ones above. p3poll's stdout, verbatim, is every property holding and one order:
+#
+#     A got ping: true
+#     B ran while A was parked: true
+#     slept >= 10ms: true
+#     A read pong: true
+#     B's write returned after A read: true
+#     A read EOF after B closed: true
+#     readers ran: 2:two 1:one
+#     read timed out: true
+#     next read got the late bytes: true
+#     closed a read end mid-read: true
+#     write after the reader closed fails: true
+#
+#              "readers ran: 2:two 1:one" is the netpoller's order: both readers' events are ready together, one
+#              waitable-set.poll drain takes reader 1's and then reader 2's, and the runtime runs the last readied
+#              first. p3stdin's stdout on ../p3cat.stdin (20770 bytes) is p3cat's on the same bytes (../p3cat.reading),
+#              with p3stdin's name:
+#
+#     p3stdin: read 20770 bytes, checksum c1c68b27, 310 lines
+#     p3stdin: first line: p3cat stdin line 0001: the quick brown fox jumps over the lazy dog
+#
+#              and on /dev/null "p3stdin: read 0 bytes, checksum 00000000, 0 lines" and "p3stdin: first line: " (the
+#              line is empty, the colon followed by one space).
+#
+# The neuters, each a temporary edit of the fork, rebuilt, run on both engines (10 of 10, or 3 of 3 where the run
+# hangs, under a 10 s timeout), builds kept out of this tree:
+#   netpoll returns at once with nothing:  p3poll and p3stdin hang on both, with no stdout (timeout, exit 124).
+#   the waitable-set.poll drain removed:   p3poll exit 0 on both, its order line "readers ran: 1:one 2:two" (312 bytes,
+#                                          sha256 5a0125ec...): each wait readies one reader, in the set's order.
+#                                          p3stdin SURVIVES, byte-identical: its events come one at a time.
+#   an unbounded netpoll traps (F3b's):    p3stdin traps at its first read on both stdins. wasmtime exit 134, its
+#                                          backtrace runtime.abort <- runtime.netpoll <- runtime.findRunnable;
+#                                          Burroughs `trap: unreachable`, exit 4. p3poll SURVIVES, byte-identical:
+#                                          every wait it makes has a timer or finds its event already ready.
+#   stdin's Read answers EBADF (F3b's):    p3stdin exit 1 on both stdins and both engines, stderr "p3stdin: reading stdin
+#                                          failed: read /dev/stdin: Bad file number".
+#   stdin reports no FDFLAG_NONBLOCK:      os.Stdin is not registered with the poller, so EAGAIN reaches the program:
+#                                          exit 1 on both, "read /dev/stdin: Try again".
+#   Close drops a read end mid-read        p3poll's sixth phase traps at the drop on both. wasmtime exit 1, "cannot
+#   without cancelling it:                 remove busy stream" in syscall.(*streamFD).close; Burroughs exit 4,
+#                                          "stream.drop-readable: end 17 is mid-copy (COPYING)".
+#   netpoll's timer cancelled while still  p3stdin traps at its second read on both. wasmtime exit 134 in
+#   joined to the set:                     runtime.wasip3SubtaskCancel; Burroughs exit 4, "subtask.cancel: subtask 4 is
+#                                          joined to a waitable set".
+#   a Write's retry not recognised:        the parked "pong" write is issued twice. p3poll stops after its four
+#                                          first lines on both: wasmtime blocks in its waitable-set.wait until the
+#                                          timeout (exit 124); the burroughs process exits 2 with Go's "all goroutines
+#                                          are asleep - deadlock!" and its own goroutine dump, goroutine 1 parked in
+#                                          the guest's waitable-set.wait (waitableSetWait).
+#   Close's release leaves a cancelled     wasmtime traps at the sync stream.cancel-read, exit 134, "waitable cannot be
+#   read end joined to the set:            used synchronously while added to a waitable set", as the pin does
+#                                          (def:cancel_copy). Burroughs at 954c0b1 does NOT trap: exit 0, p3poll's
+#                                          reading byte for byte. Its stream.cancel-read has no in-a-waitable-set check.
+#                                          Found here, reported to the owner, not repaired in this slice.
