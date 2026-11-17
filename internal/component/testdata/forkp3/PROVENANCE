@@ -308,3 +308,106 @@ and /dev/null exit 0, each with the recorded stdout and stderr hashes. Their cor
 F5's toolchain (p3c1 and p3poll 38 names, p3stdin 37), none of them a wasi:sockets name: a socket is held behind an
 interface only Socket and Accept convert to, so a program that makes none links none. None is byte-identical to the
 committed one, because syscall's stream code moved into a reusable half.
+
+C2's witness component (#1242, ADR 0114): p3http, an ordinary single-threaded net/http server driven by a client outside
+the instance. Same recipe and same pins as F4's, on F4's toolchain, unchanged:
+
+Fork SHA:     85ca7c58146bbc863969800ecd5edaa103ef5fba (branch wasip3/f4; the checkout at f578869fa8, its design note,
+              which changes no code)
+Toolchain:    go version go1.28-devel_85ca7c5814 Mon Nov 16 09:33:05 2026 -0800 darwin/arm64
+Built on:     darwin/arm64, 2026-11-16
+Guest source: p3http.go.txt, the only file of its module. go.mod is "module p3http" and "go 1.26", NOT "go 1.28": the
+              same go.mod arm N's stock-Go build has (cmd/burroughs/c2http_test.go's c2GoMod), so both builds take the
+              same language version's GODEBUG defaults. It imports context, crypto/sha256, encoding/hex, errors, fmt,
+              io, net, net/http, os, strconv, syscall and time, and uses no linkname.
+Order:        the reading came first. p3http.reading was generated from arm N, the source built by stock Go (go1.27.4
+              darwin/arm64) and run as a host process, by `go test ./cmd/burroughs/ -run
+              TestC2HostServerMatchesItsReading -update-c2http`, and committed on its own before this wasm was built:
+              the second of C2's three commits, which its PR lists in order (the squash merge keeps one).
+
+  p3http.wasm
+    sha256: a42741f6c9d3951d8ff9937f1cddeb4daf2cccaee2fb567e555083f24673f800
+    bytes:   10010557
+    core:    9996399 bytes, sha256 045f7c27a0efd29efdafa0fea2a87af55c291dd08e0a7f19a4826b5b59d00a47
+
+Built twice, from two directories: identical bytes. Its core module imports the same 63 names p3net's does, compared
+name for name against p3net rebuilt from p3net.go.txt on this toolchain, which gave p3net.wasm's committed bytes
+exactly (sha256 b7937259...). Its memory is (memory 87), unshared, and it exports run, internal/wasi's cabi_realloc and
+memory.
+
+THREE ARMS, one client: driveC2 in cmd/burroughs/c2http_test.go, raw TCP and HTTP/1.1, which records each response's
+raw bytes (p3http.reading's header gives the format). Its rows are a keep-alive sequence (/hello, /work?id=0..63, a 404,
+two 400s), 8 concurrent connections over disjoint /work ids, a 1 MiB echo written while it is read and then
+half-closed, and the tail: 96 KiB echoed and left unread, of whose response one byte is read so that /quit follows the
+handler's start, then /quit on a second connection, then the server's exit, and only then the first connection read
+to EOF.
+
+  N:  TestC2HostServerMatchesItsReading: the source built by the Go running the test, CGO_ENABLED=0, -trimpath, run as a
+      host process. 10 of 10 on go1.27.4, 3 of 3 under -race, 3 of 3 on go1.26.9 (CI's toolchain), darwin/arm64.
+  O:  wasmtime 49.0.3 (f96eabaa1 2026-10-14), offline, not in CI: CI has no wasmtime. Through driveC2, by this throwaway
+      test in cmd/burroughs, run with -count=1 ten times and never committed:
+
+          func TestC2OracleScratch(t *testing.T) {
+              const wasmtime = "<the main checkout>/.oracle/wasmtime-49.0.3/wasmtime"
+              for _, c := range []struct{ name string; flags []string }{
+                  {"granted", []string{"-S", "inherit-network"}}, {"denied", nil},
+              } {
+                  t.Run(c.name, func(t *testing.T) {
+                      args := append(append([]string{"run"}, c.flags...), c2Wasm)
+                      got, err := driveC2(startC2Process(t, wasmtime, args...))
+                      if err != nil {
+                          t.Fatalf("arm O: %v", err)
+                      }
+                      // granted: matchC2Reading(t, c2Reading, ...); denied: the lines, written out
+                  })
+              }
+          }
+
+      Granted: p3http.reading, line for line, 10 of 10. Denied (no network flag): 10 of 10 identical, the two lines of
+      p3http-denied.reading, `stdout, with no READY line: "listen refused, EACCES: true\n"` and `exit: 1`. Arm N has no
+      denied state, so that reading is wasmtime's, taken after the build.
+  B1: TestC2BurroughsRunMatchesTheHostReading: `burroughs run [--inherit-network] p3http.wasm` through dispatch,
+      in-process, its stdout a pipe. Denied: every run matched. Granted: before grave #1308's repair, every row matched
+      in every run except the tail's last line, which was sometimes short (below). Since it, every row matches.
+
+REPAIRED by grave #1308 (#1309, main 925428e, ADR 0127: Close writes what a send writer holds before it closes the
+connection). With this branch rebased onto 925428e, on darwin/arm64, 2026-11-16: `go test ./cmd/burroughs/ -run
+TestC2 -count=20` passed 20 of 20 (both arms N and B1), and TestC2BurroughsRunMatchesTheHostReading under -race passed
+5 of 5. The measurement below is the dated record of the defect as this slice found it.
+
+THE TAIL ROW DIVERGED, measured before the repair. Its last line, "tail POST /echo (96 KiB, unread), read after the
+server exited", read in batches of 10, darwin/arm64, Burroughs' engine at 343be3d (this slice changes none of it):
+
+  arm N, stock Go                          10 of 10   98405 bytes, sha256 d6ece565da667b49...
+  arm O, wasmtime 49.0.3                   10 of 10   98405 bytes
+  Burroughs in-process (dispatch)           9 of 10   98405 bytes; 1 of 10 69651 bytes, sha256 38a200ac09e577ec...
+  the burroughs binary, a host process      8 of 10   98405 bytes; 2 of 10 69651 bytes
+
+and more widely: B1 as committed, 16 of 20 (4 short); in-process, 20 of 25 (5 short); under -race, 1 of 3 (2 short).
+Every short reading was 69651 bytes, the same digest. Once in 20 in-process runs /quit's own response was lost, its
+connection reaching EOF with no bytes. Both happen on the sink, not the kernel: a writer to an unread loopback
+connection had 871304 bytes or more accepted within 1 ms on this darwin/arm64 (net.inet.tcp.sendspace and recvspace
+131072, autotuned to 4 MiB), and 2244608 or more on janus.local's Linux 5.14 (tcp_rmem 4096 131072 6291456, tcp_wmem
+4096 16384 4194304), measured with a stock-Go probe through janus's pueue build group. So 96 KiB fits each OS's
+default with room to spare; Windows is not measured.
+
+The mechanism, read from a goroutine dump taken as the guest printed "stopped" in each short run (5 of 5), with
+temporary prints in sockSend.run that were reverted: the response's writes reached the host as 613, 3502, 32768, 32768
+and 28754 bytes. The first four were written to the connection, which is 69651 bytes. The last was taken into the
+64 KiB send sink (sendBufCap), so the guest's write completed and its handler, Shutdown and exit went on. The writer
+goroutine was parked in asyncHandles.acquireRun, called by sockSend.deliver from sockSend.run, delivering its fourth
+Write's completion. It got no run slot before Close's producerStop, and then found producersStopped with 28754 bytes
+still in its buffer, which Close discards. wasmtime's write completes only once its host has taken the bytes, so the
+guest cannot exit ahead of them there.
+
+Reproducer, before the repair: on this branch at 343be3d, `go test ./cmd/burroughs/ -run
+TestC2BurroughsRunMatchesTheHostReading -count=20` failed at line 136 in a share of runs, and more often under -race.
+
+The neuters, each a temporary edit of Burroughs, run against TestC2BurroughsRunMatchesTheHostReading, never committed:
+  the grant withheld (the granted row run      the granted row's 138 lines read as the denied row's 2, the EACCES line
+  with no flag):                               and exit: 1.
+  hostsock.go's receive producer drops one     lines 133 and 134 differ: the echo reads 1048678 bytes (sha256
+  byte, once, past 512 KiB (its src wrapped):  279da93e...) where the reading has 1048679, and its body line false.
+  the monotonic clock's wait-for never          the drive fails "parked at /work?id=0 after 1 answered", at the
+  resolves (hostsys.go's deadline forced to     120 s guard (c2RequestGuard).
+  the largest mark):

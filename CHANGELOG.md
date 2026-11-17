@@ -25,6 +25,43 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A fork-built, single-threaded `net/http` server answers a client outside the instance byte for byte as stock Go's
+  does, on wasmtime 49.0.3 and under `burroughs run`**
+  ([#1242](https://github.com/scttfrdmn/burroughs/issues/1242), C2; ADR 0114). This is v0.14.0's outcome witness
+  ([#1140](https://github.com/scttfrdmn/burroughs/issues/1140)). F4 served one HTTP request inside one instance. C2 is
+  a real server on a port, run by the CLI with `--inherit-network`.
+  - **The server is `p3http.go.txt`**, an ordinary `net/http` program with no linkname. Its endpoints are `/hello`,
+    `/work?id=0..63` (a 256-step sha256 chain, answered after a 1 ms sleep), `POST /echo` (full duplex, through
+    `io.Copy`) and `/quit` (a graceful `Shutdown`, then `stopped` and exit 0). Every response's `Date` is suppressed.
+    One source is built two ways:
+    - by stock Go, as a host process. This is arm N, whose reading `p3http.reading` was committed before any wasip3
+      build;
+    - by the Phase 4 fork, as `p3http.wasm`.
+  - **The client is `driveC2`**, in `cmd/burroughs/c2http_test.go`. It speaks raw TCP and HTTP/1.1, so it records
+    each response's raw bytes. It drives four rows:
+    - a keep-alive sequence;
+    - 8 concurrent connections;
+    - a 1 MiB echo;
+    - the tail: 96 KiB echoed and left unread, then `/quit`, then the server's exit, and only then the read.
+
+    Every wait has a per-request guard, so a run that parks fails at a place: `parked at <request> after <k>
+    answered`.
+  - **Arm N** (`TestC2HostServerMatchesItsReading`) builds the source with the Go running the test, so the reading
+    stays honest wherever CI runs. It matched on go1.27.4 and on go1.26.9, CI's toolchain.
+  - **Arm O**, wasmtime 49.0.3 with `-S inherit-network`, matched the reading 10 of 10, offline. With no network flag
+    it gives `p3http-denied.reading`: the listen is refused EACCES and the server exits 1.
+  - **Arm B1** (`TestC2BurroughsRunMatchesTheHostReading`) runs `burroughs run` in-process, granted and denied. Every
+    row matches: 20 of 20 runs, and 5 of 5 under `-race`.
+  - **The three neuters each fail where the test says:**
+    - with the grant withheld, the granted row reads as the denied row;
+    - a byte dropped in the receive producer makes the echo's digest differ;
+    - a `wait-for` that never resolves fails `parked at /work?id=0 after 1 answered`.
+  - **The tail row found grave [#1308](https://github.com/scttfrdmn/burroughs/issues/1308)**, repaired before this
+    landed. Before the repair the row was sometimes short under Burroughs: 69651 bytes where N and wasmtime read 98405.
+    The guest's last bytes were in the 64 KiB send sink, and `Close` discarded them while the sink's writer waited for
+    the run slot. The row was kept as the reading has it, never relaxed. It passes since ADR 0127's flush.
+  - **No engine code changed in this entry.** The repair is #1308's own entry.
+
 - **Go's `net` in a fork-built `GOOS=wasip3` program listens, dials, accepts and reads and writes real TCP sockets, on
   Burroughs as on wasmtime 49.0.3** ([#1239](https://github.com/scttfrdmn/burroughs/issues/1239), F4; ADR 0114). Until
   now `net` on wasip3 was an in-memory fake that never reached the host, and the fork's `syscall` answered ENOSYS for

@@ -1,0 +1,12 @@
+# Committed reading of p3http.wasm with the network denied, C2's denied row (#1242): arm O, wasmtime 49.0.3 run with
+# no network flag, driven by cmd/burroughs/c2http_test.go's driveC2.
+# Invocation: .oracle/wasmtime-49.0.3/wasmtime run p3http.wasm   (from cmd/burroughs, as ../../internal/component/...)
+# Engine:     wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, 2026-11-16.
+# Runs:       10 of 10 identical, through the offline harness PROVENANCE records.
+#
+# Arm N has no denied state: a host process's listen is not refused. So this row's reading is the oracle's, taken
+# after p3http.wasm was built, where p3http.reading's is arm N's, taken before. wasmtime refuses tcp-socket.create
+# with access-denied, which the fork's syscall maps to EACCES; p3http prints that and exits 1. Same format as
+# p3http.reading: with no READY line, the whole stdout is recorded.
+stdout, with no READY line: "listen refused, EACCES: true\n"
+exit: 1
