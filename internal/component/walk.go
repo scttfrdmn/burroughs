@@ -896,8 +896,10 @@ func (w *walker) close() {
 	w.stopAllProducers()
 	// **And the sockets** (ADR 0123), across the tree, after the producers so a socket's receive delivers
 	// nothing more: no socket goroutine starts after this, every pending dial is cancelled with its lend
-	// released, and every connection is closed, which ends each Read and Write in flight. Unlike stdin's Read, a
-	// socket goroutine is **waited out**, at the end, once the core instances have closed.
+	// released, and every connection is closed, which ends each Read in flight. A connection with a live send writer
+	// is closed by that writer once it has written the bytes the guest was told were complete, under a deadline
+	// (ADR 0127, grave #1308); the producers' stop above is what the writer reads as its signal to flush. Unlike
+	// stdin's Read, a socket goroutine is **waited out**, at the end, once the core instances have closed.
 	//
 	// NEUTER THIS call, and TestCloseEndsASocketsGoroutines' Close hangs, its receive reader blocked in Read.
 	w.stopAllSockets()
