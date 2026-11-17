@@ -423,6 +423,22 @@ func closeAndCount(t *testing.T, in *Instantiated, peer *tcpPeer) int64 {
 	}
 	select {
 	case n := <-peer.received:
+		// The count is the first connection's to end, so it is the guest's only if the guest's is the only one. A
+		// paced peer listens on an ephemeral port that another process on the runner can reach, and once, in `make
+		// ci` with the whole tree's packages in parallel (C2's gate, 2026-11-16), this read 10 bytes where wasmtime's
+		// reading is 262144, the row taking 0.31s: the shape of a stray client's connection ending first. It did not
+		// recur in 0 of 100 runs alone, 0 of 3 under that run's shuffle seed, or 0 of 60 beside cmd/burroughs' tests.
+		// So a stray is named rather than counted as the guest's.
+		peer.mu.Lock()
+		conns := make([]string, len(peer.conns))
+		for i, c := range peer.conns {
+			conns[i] = c.RemoteAddr().String()
+		}
+		peer.mu.Unlock()
+		if len(conns) != 1 {
+			t.Fatalf("the paced peer accepted %d connections, from %v, where the guest makes one; the first to end "+
+				"read %d bytes, and it may not be the guest's", len(conns), conns, n)
+		}
 		return n
 	case <-time.After(10 * time.Second): // a harness hang guard, not a measurement
 		peer.shut()
