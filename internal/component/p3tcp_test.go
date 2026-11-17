@@ -550,6 +550,31 @@ func TestTheStopsFlushEndsAtItsDeadline(t *testing.T) {
 	if !ok {
 		t.Fatal("trackWriter refused before any stop")
 	}
+	// The kernel is filled first, until a write is measured to block, so the case is read rather than assumed: a
+	// Windows send is accepted whole, whatever its size, when the socket's buffer had room as it started. Against an
+	// empty kernel this test's 16 MiB flush ended in 1.749ms on windows-latest (PR #1309's run 43979627783), the
+	// kernel holding every byte, which is the right outcome there, and not the case this test is about.
+	//
+	// NEUTER: skip the fill, and on windows-latest wait returns at once, before the bound; darwin and Linux pass,
+	// their kernels refusing 16 MiB.
+	fill := make([]byte, 64<<10)
+	for i := 0; ; i++ {
+		if i == 4096 { // 256 MiB: a harness bound, not a measurement
+			t.Fatal("the kernel took 256 MiB from a writer whose peer never reads, so no flush can reach its deadline here")
+		}
+		if err := c.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+			t.Fatalf("setting the fill's deadline: %v", err)
+		}
+		if _, err := c.Write(fill); err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				break // full: a write blocked for 100ms with the peer reading nothing
+			}
+			t.Fatalf("filling the kernel: %v", err)
+		}
+	}
+	if err := c.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatalf("clearing the fill's deadline: %v", err)
+	}
 	h := newAsyncHandles()
 	h.hostIO = sync.NewCond(&h.mu)
 	s := &sockSend{h: h, net: n, conn: sc, buf: make([]byte, flushPastTheKernel)}
