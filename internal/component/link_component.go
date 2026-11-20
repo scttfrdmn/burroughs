@@ -972,10 +972,29 @@ func (w *walker) funcStep(d Def) error {
 			return err
 		}
 		w.compFuncs = append(w.compFuncs, cd)
+	case SectionExport:
+		cd, err := exportedEntry(w.c.Exports[d.Item], w.compFuncs)
+		if err != nil {
+			return err
+		}
+		w.compFuncs = append(w.compFuncs, cd)
 	default:
 		// no other section contributes to the func space
 	}
 	return nil
+}
+
+// exportedEntry is the entry an export's new index aliases: the definition it exports, already in the space
+// (#1258). The space grew by nothing for an export until then, so each entry after one sat an ordinal early and
+// a reference past it named the next definition. NEUTER, run: drop funcStep's export arm (with the loader's
+// export Def kept), and TestAnExportAddsAnIndexToItsSort's `inc2` is no callable export, since the index it
+// re-exports names past the end of the func space.
+func exportedEntry[T any](e Export, space []T) (T, error) {
+	if int(e.Index) >= len(space) {
+		var zero T
+		return zero, fmt.Errorf("component: export %q names %s %d of %d", e.Name, e.Kind, e.Index, len(space))
+	}
+	return space[e.Index], nil
 }
 
 // instanceStep grows the component instance space: a component instance (recursive instantiate, or
@@ -1001,6 +1020,12 @@ func (w *walker) instanceStep(d Def) error {
 			return err
 		}
 		w.compInstances = append(w.compInstances, cd)
+	case SectionExport:
+		cd, err := exportedEntry(w.c.Exports[d.Item], w.compInstances)
+		if err != nil {
+			return err
+		}
+		w.compInstances = append(w.compInstances, cd)
 	default:
 		// no other section contributes to the instance space
 	}
@@ -1010,6 +1035,14 @@ func (w *walker) instanceStep(d Def) error {
 // componentStep records a nested component's parsed form (Load'd from its stored bytes) for a later
 // instantiate to recurse into.
 func (w *walker) componentStep(d Def) error {
+	if d.Section == SectionExport { // an exported component's new index aliases it (#1258)
+		nc, err := exportedEntry(w.c.Exports[d.Item], w.nested)
+		if err != nil {
+			return err
+		}
+		w.nested = append(w.nested, nc)
+		return nil
+	}
 	nc, err := Load(w.c.NestedComponents[d.Item])
 	if err != nil {
 		return fmt.Errorf("component: nested component %d: %w", d.Item, err)

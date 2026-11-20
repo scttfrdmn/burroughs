@@ -67,6 +67,10 @@ type coreDef struct {
 	// lowerName is the wasi identity ("module::export") of a canon-lowered func — the host resolves it
 	// to a real marshaling impl (PR C) or, absent one, the refusing stub.
 	lowerName string
+	// lowerSig is that lower's component signature, resolved through this component's own import that the
+	// lowered func came from (lowerSignatureOf, #1257), so a nested component's lower has one too. nil when it
+	// does not resolve.
+	lowerSig *FuncType
 	// lowerCallee is the component func a canon lower targets when that func is a REAL definition rather
 	// than an unfilled import — which is the guest-to-guest case: a composed sibling's lift (#888).
 	//
@@ -273,11 +277,21 @@ func (w *walker) step(d Def) error {
 					return nil
 				}
 				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName != "" {
+					// **The signature is resolved through the func this lower names, in this component** (#1257).
+					// Every check below read `w.lowerSignature(cf.stubName)`, which finds the import by the stub's
+					// name, and a nested component's stub carries its parent's import name
+					// (`test:res/things@0.1.0::make`) while its own import is `things`. So it found nothing,
+					// returned nil, and every refusal below skipped silently for a nested lower.
+					//
+					// NEUTER, run: resolve it by `w.lowerSignature(cf.stubName)` again, and
+					// TestANestedLowerIsCheckedAsATopLevelOneIs's nested guest, whose error-code has other labels
+					// than the host's, instantiates.
+					sig := w.lowerSignatureOf(cn.FuncIdx, cf.stubName)
 					// An unresolved outer type alias (#753) in the lowered signature can never be marshaled —
 					// refuse by name at instantiate, for any lower (sync or async), rather than binding a core
 					// func over a type the engine did not resolve. Distinct from the unmodeled-kind refusal
 					// below (keyed on the sync impl source): this fires regardless of which impl fills it.
-					if sig := w.lowerSignature(cf.stubName); sigHasUnresolvedAlias(sig) {
+					if sigHasUnresolvedAlias(sig) {
 						return fmt.Errorf("%w: canon lower of %s carries %s, which this engine does not resolve "+
 							"(#753) — refused at instantiate rather than bound over an unresolved type",
 							ErrUnsupportedForm, cf.stubName, valKindName(VUnresolvedAlias))
@@ -297,7 +311,7 @@ func (w *walker) step(d Def) error {
 						_, implemented, _ = lookupHost(w.resourceSrc.methods, cf.stubName)
 					}
 					if implemented {
-						if sig := w.lowerSignature(cf.stubName); sig != nil {
+						if sig != nil {
 							if k, bad := unmodeledInSig(sig); bad {
 								return fmt.Errorf("%w: canon lower of %s carries %s, which this engine's "+
 									"Canonical ABI does not model — refused at instantiate rather than mis-lowered",
@@ -320,7 +334,6 @@ func (w *walker) step(d Def) error {
 					// serves: its handles must be the host's resources, a method's self its own type, and a
 					// stream consumer's future payload the type the host lowers the completion at.
 					if r.async != nil || r.blocking != nil || r.consumer != nil || r.method != nil || r.sync != nil {
-						sig := w.lowerSignature(cf.stubName)
 						if err := w.checkHostResources(cf.stubName, sig); err != nil {
 							return err
 						}
@@ -336,6 +349,7 @@ func (w *walker) step(d Def) error {
 					}
 					w.appendCore(SpaceCoreFunc, coreDef{
 						lowerName:    cf.stubName,
+						lowerSig:     sig,
 						lowerMem:     w.lowerMemory(cn),
 						lowerRealloc: realloc,
 						async:        cn.Opts.Async,
@@ -561,7 +575,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// signature plus a packed i32 return.
 		r := w.resolveHost(d.lowerName, d.async)
 		if r.async != nil {
-			sig := w.lowerSignature(d.lowerName)
+			sig := d.lowerSig // the step's resolution, which a nested lower has too (#1257)
 			hasResult := sig != nil && sig.Result != nil
 			aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
 			// **Parameters past MAX_FLAT_ASYNC_PARAMS cross as one pointer to their tuple** (ADR 0123,
@@ -586,7 +600,7 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 		// MAX_FLAT_PARAMS cross as one pointer to their tuple, and a result past MAX_FLAT_RESULTS is stored at a
 		// return pointer, the last core argument, which is the case when the guest's core type returns nothing.
 		if r.blocking != nil {
-			sig := w.lowerSignature(d.lowerName)
+			sig := d.lowerSig // as the async arm's (#1257)
 			hasResult := sig != nil && sig.Result != nil
 			spill, serr := w.paramSpillTuple(sig, maxFlatParams)
 			if serr != nil {
@@ -1016,9 +1030,122 @@ func (w *walker) stopAllSchedulers() {
 // FuncType (C.1-resolved). Returns nil when the resolution has no answer — an unresolved outer VRef in a
 // checked signature would be a gap, but the guests' implemented lowers resolve fully (a stub host's
 // export names never reach here, only real imports do).
+//
+// It finds the import **by name**, which is right only in the component whose imports the name is of: the
+// outermost one. The walk resolves a lower through lowerSignatureOf, which a nested component's lower
+// needs (#1257); both read the import through importSignature.
 func (w *walker) lowerSignature(lowerName string) *FuncType {
 	mod, export, found := strings.Cut(lowerName, "::")
-	if !found {
+	for i := range w.c.Imports {
+		imp := &w.c.Imports[i]
+		if !found && imp.Name == lowerName && imp.Kind == ExternFunc {
+			return w.importSignature(imp, "", "")
+		}
+		if found && imp.Name == mod && imp.Kind == ExternInstance {
+			return w.importSignature(imp, export, mod)
+		}
+	}
+	return nil
+}
+
+// lowerSignatureOf resolves a canon lower's signature through the func-space ordinal it lowers, in this
+// component: a func import is its own functype, and an alias export of an instance import is that import's
+// instance type's export. stubName is the identity the host serves the import under.
+//
+// **It is the name lowerSignature looks the import up by that a nested component does not have** (#1257). A
+// nested component's import is its own (`things`), bound to its parent's instance, whose stub carries the
+// parent's name (`test:res/things@0.1.0::make`). So the import is found by following the lowered func back to
+// the import it came from.
+//
+// **Its resource identities are then renamed to the instances the imports are bound to** (boundAs). The child's
+// types name its resources by its own imports (`things::thing`, or `streams::output-stream` for a type `use`d
+// from another import), and the host knows them by the parent's. Without the rename, the checks this resolution
+// lets run refused a nested guest wasmtime 49.0.3 runs. At the outermost component every import is bound to a
+// stub of its own name, so nothing is renamed.
+//
+// A func that does not lead back to an import of this component (one aliased out of an instance it
+// instantiated, re-exporting its child's import) falls back to the name, which answers at the outermost
+// component as it did before.
+func (w *walker) lowerSignatureOf(funcIdx uint32, stubName string) *FuncType {
+	if sig := w.importedFuncSignature(funcIdx, stubName); sig != nil {
+		return sig
+	}
+	return w.lowerSignature(stubName)
+}
+
+// importedFuncSignature is lowerSignatureOf's resolution through the import the func came from, or nil.
+func (w *walker) importedFuncSignature(funcIdx uint32, stubName string) *FuncType {
+	d, _, ok := w.c.spaceDef(SpaceFunc, funcIdx)
+	if !ok {
+		return nil
+	}
+	var sig *FuncType
+	lowered := ""
+	switch d.Section {
+	case SectionImport:
+		imp := &w.c.Imports[d.Item]
+		if imp.Kind != ExternFunc {
+			return nil
+		}
+		sig = w.importSignature(imp, "", "")
+	case SectionAlias:
+		a := w.c.Aliases[d.Item]
+		if a.Kind != AliasExport || a.Sort != SortFunc {
+			return nil
+		}
+		id, _, ok := w.c.spaceDef(SpaceInstance, a.InstanceIdx)
+		if !ok || id.Section != SectionImport {
+			return nil
+		}
+		imp := &w.c.Imports[id.Item]
+		if imp.Kind != ExternInstance {
+			return nil
+		}
+		sig, lowered = w.importSignature(imp, a.Name, imp.Name), imp.Name
+	default:
+		return nil
+	}
+	if sig == nil {
+		return nil
+	}
+	// NEUTER, run: return sig unrenamed here, and TestANestedLowerOfAUsedResourceRuns' child, whose types name the
+	// output-stream by its own import `streams`, is refused as returning a resource the host does not implement. So
+	// is host-resource-nested's, as `own<things::thing>`, which fails TestCloseReachesTheOwnsANestedInstanceHolds.
+	if to := w.boundAs(lowered, stubName); len(to) > 0 {
+		return rebindFunc(sig, to)
+	}
+	return sig
+}
+
+// boundAs maps each of this component's instance imports to the name of the instance it is bound to, where the
+// two differ: a nested component's `things`, bound to its parent's `test:res/things@0.1.0` (#1257). A host stub
+// carries its import's name, and an import bound to anything else is named by the stub the lower calls, when the
+// import is the lowered func's own (`lowered`). Empty at the outermost component.
+func (w *walker) boundAs(lowered, stubName string) map[string]string {
+	to := map[string]string{}
+	var ord int
+	for _, d := range w.c.Defs {
+		if d.Space != SpaceInstance {
+			continue
+		}
+		if d.Section == SectionImport && ord < len(w.compInstances) {
+			name := w.c.Imports[d.Item].Name
+			if ci := w.compInstances[ord].inst; ci != nil && ci.stub && ci.name != "" && ci.name != name {
+				to[name] = ci.name
+			}
+		}
+		ord++
+	}
+	if iface, _, qualified := strings.Cut(stubName, "::"); qualified && lowered != "" && iface != lowered {
+		to[lowered] = iface
+	}
+	return to
+}
+
+// importSignature is the component signature of one import: a func import's functype, or for an instance
+// import its instance type's func export named export, its unbound resource identities completed by iface.
+func (w *walker) importSignature(imp *Import, export, iface string) *FuncType {
+	if imp.Kind == ExternFunc {
 		// **A BARE name is a world-level function import** (#870), not a malformed key. Returning nil here
 		// meant the lowering had no signature to marshal against — and the signature is needed on both
 		// sides of the call, so the type has to come through for a bare import exactly as it does for an
@@ -1027,44 +1154,31 @@ func (w *walker) lowerSignature(lowerName string) *FuncType {
 		// The import's own `TypeIndex` carries it. Mapped through `typeSpaceToTypes` for the same reason
 		// the instance branch below does: `TypeIndex` is a type index-SPACE ordinal while `c.Types` is the
 		// compacted section.
-		for i := range w.c.Imports {
-			imp := &w.c.Imports[i]
-			if imp.Name != lowerName || imp.Kind != ExternFunc {
-				continue
-			}
-			ct := w.c.typeSpaceToTypes(imp.TypeIndex)
-			if ct < 0 || ct >= len(w.c.Types) {
-				return nil
-			}
-			// Resolved for `liftSignature`'s reason (#903), and through the section lookup for the same
-			// reason: this is a *top-level* import's functype, so its VRefs are index-space ordinals. The
-			// instance branch below needs no resolution — those signatures were already inlined against the
-			// instance's own local space when the instance type was decoded.
-			if td := w.c.Types[ct]; td.Kind == TDFunc && td.Func != nil {
-				return resolveFunc(td.Func, w.c.sectionTypeAt())
-			}
+		ct := w.c.typeSpaceToTypes(imp.TypeIndex)
+		if ct < 0 || ct >= len(w.c.Types) {
 			return nil
+		}
+		// Resolved for `liftSignature`'s reason (#903), and through the section lookup for the same
+		// reason: this is a *top-level* import's functype, so its VRefs are index-space ordinals. The
+		// instance branch below needs no resolution — those signatures were already inlined against the
+		// instance's own local space when the instance type was decoded.
+		if td := w.c.Types[ct]; td.Kind == TDFunc && td.Func != nil {
+			return resolveFunc(td.Func, w.c.sectionTypeAt())
 		}
 		return nil
 	}
-	for i := range w.c.Imports {
-		imp := &w.c.Imports[i]
-		if imp.Name != mod || imp.Kind != ExternInstance {
-			continue
-		}
-		// The import's TypeIndex is a component type-index-*space* ordinal; c.Types is the compacted type
-		// *section*, a subset (aliases and instance-local sub-types also grow the space, so a guest-driven
-		// import like filesystem/types sits at a space ordinal well past its c.Types position). Map through.
-		td, ok := w.c.sectionTypeAt()(imp.TypeIndex)
-		if !ok || td.Kind != TDInstance || td.Inst == nil {
-			return nil
-		}
-		for _, e := range td.Inst.Exports {
-			if e.Name == export && e.Func != nil {
-				// The resources the instance type declares itself are this import's (ADR 0118):
-				// `[method]output-stream.write`'s self is `borrow<wasi:io/streams@0.2.3::output-stream>`.
-				return qualifyFunc(e.Func, mod)
-			}
+	// The import's TypeIndex is a component type-index-*space* ordinal; c.Types is the compacted type
+	// *section*, a subset (aliases and instance-local sub-types also grow the space, so a guest-driven
+	// import like filesystem/types sits at a space ordinal well past its c.Types position). Map through.
+	td, ok := w.c.sectionTypeAt()(imp.TypeIndex)
+	if !ok || td.Kind != TDInstance || td.Inst == nil {
+		return nil
+	}
+	for _, e := range td.Inst.Exports {
+		if e.Name == export && e.Func != nil {
+			// The resources the instance type declares itself are this import's (ADR 0118):
+			// `[method]output-stream.write`'s self is `borrow<wasi:io/streams@0.2.3::output-stream>`.
+			return qualifyFunc(e.Func, iface)
 		}
 	}
 	return nil
@@ -1075,19 +1189,12 @@ func (w *walker) lowerSignature(lowerName string) *FuncType {
 // the full index space (the loader records every space contribution as a SpaceType def; only the section
 // entries append to c.Types), so a raw index into c.Types is wrong for any ordinal past the first
 // interleaved alias — which is why a guest-driven import resolved to nil before this map.
+//
+// Through spaceDef, so an exported type's ordinal maps to the section type it exports (#1258).
 func (c *Component) typeSpaceToTypes(ord uint32) int {
-	var seen uint32
-	for i := range c.Defs {
-		if c.Defs[i].Space != SpaceType {
-			continue
-		}
-		if seen == ord {
-			if c.Defs[i].Section == SectionType {
-				return c.Defs[i].Item
-			}
-			return -1
-		}
-		seen++
+	d, _, ok := c.spaceDef(SpaceType, ord)
+	if !ok || d.Section != SectionType {
+		return -1
 	}
-	return -1
+	return d.Item
 }

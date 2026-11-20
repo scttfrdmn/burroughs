@@ -298,13 +298,20 @@ type hostResourceSource struct {
 // because its instance argument is the parent's host-filled instance.
 func (w *walker) typeStep(d Def) {
 	ident := ""
-	if d.Section == SectionAlias {
+	switch d.Section {
+	case SectionAlias:
 		a := w.c.Aliases[d.Item]
 		if a.Kind == AliasExport && a.Sort == SortType && int(a.InstanceIdx) < len(w.compInstances) {
 			if ci := w.compInstances[a.InstanceIdx].inst; ci != nil && ci.stub && ci.name != "" {
 				ident = ci.name + "::" + a.Name
 			}
 		}
+	case SectionExport:
+		// An exported type's new index aliases the type it exports (#1258), so it is that type's identity.
+		if idx := w.c.Exports[d.Item].Index; int(idx) < len(w.typeIdents) {
+			ident = w.typeIdents[idx]
+		}
+	default:
 	}
 	w.typeIdents = append(w.typeIdents, ident)
 }

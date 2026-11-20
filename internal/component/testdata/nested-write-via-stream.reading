@@ -1,0 +1,12 @@
+# Committed wasmtime readings for the two nested-write-via-stream fixtures (#1257): a nested component's canon lower of
+# the parent's `wasi:cli/stdout@0.3.0` write-via-stream, whose `error-code` is the host's or has other labels.
+# Built:       wasm-tools parse <fixture>.wat -o <fixture>.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y -S p3=y --invoke 'seven()' <fixture>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. Taken 2026-11-20.
+#
+# Each line is `<fixture>: <wasmtime's reading>`. A u32 is what `seven()` printed, exit 0; `refused: …` is the last
+# line of wasmtime's link error, exit 1, whose first line is "component imports instance `wasi:cli/stdout@0.3.0`, but
+# a matching implementation was not found in the linker".
+nested-write-via-stream-error-code: 7
+nested-write-via-stream-other-error-code: refused: expected enum of 3 names, found 2 names

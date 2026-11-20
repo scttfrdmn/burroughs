@@ -68,6 +68,9 @@ func (c *Component) refsOf(d Def) []ref {
 			}
 		}
 		return rs
+	case SectionExport:
+		// An export names an earlier definition of its own sort, and adds a new index to that sort (#1258).
+		return []ref{{d.Space, c.Exports[d.Item].Index}}
 	default: // core:module and import make no index-space references
 		return nil
 	}

@@ -583,6 +583,56 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **An export adds an index to its sort, so a definition after an export is the ordinal it is everywhere else**
+  ([#1258](https://github.com/scttfrdmn/burroughs/issues/1258)).
+  - **The defect:** Binary.md says *"All exports (of all `sort`s) introduce a new index that aliases the exported
+    definition"*, and `parseExports` recorded no definition for one. So every ordinal of a sort after an export was
+    one short: a type exported and then used, as wit-component emits an exported resource type, resolved the
+    definition after the one named.
+  - **The repair:** `parseExports` records each export's definition in its sort. The consumers of `Defs` follow an
+    export's ordinal to what it exports: `spaceDef`, and through it `typeOrdinal`, `importedInstanceType` and
+    `typeSpaceToTypes`. The walk's func, instance, component and type steps each have an export arm, and the
+    forward-reference check reads an export's reference. An export of a core sort other than `core module`, which
+    Binary.md's validation disallows, is refused at load.
+  - **Witnesses:** `TestAnExportAddsAnIndexToItsSort` on a new `export-index.wasm`, whose three rows match wasmtime
+    49.0.3's `export-index.reading`, 10 of 10. `TestAnExportOfACoreFuncIsRefused` checks the core-sort refusal on
+    patched bytes, with no wasmtime reading.
+  - **Neuters, run:** with no export definition, all three rows fail: `inc 5` is refused as taking no parameters,
+    `k` has no resolved signature, and `inc2` is not a callable export. With funcStep's export arm dropped, `inc2`
+    alone fails. Without the core-sort refusal, the patched component loads.
+  - **Not covered:** the walk resolves a core instance's module positionally in `c.CoreModules`, not through the
+    core-module index space, so an exported core module still shifts nothing there. The same is already true of a
+    core module's import or alias.
+- **A nested component's `canon lower` gets the signature checks a top-level one gets**
+  ([#1257](https://github.com/scttfrdmn/burroughs/issues/1257)).
+  - **The defect:** the walk read a lower's signature by looking up the stub's name among the component's imports.
+    A nested component's stub carries its parent's import name (`test:res/things@0.1.0::make`) while the child's
+    own import is another (`things`). So the signature was nil, and the unmodeled-kind refusal, #753's
+    unresolved-alias refusal, and ADR 0118's resource-identity, method-self and consumer-payload checks all
+    skipped. The async and blocking lower bindings read the same nil signature.
+  - **The repair:** `lowerSignatureOf` follows the lowered func back to the child's own import and reads that
+    import's type. A func that does not lead to an import falls back to the name, as before. The lower keeps the
+    signature it was checked against (`coreDef.lowerSig`) for its binding.
+  - **What the repair needed beyond the issue:** the child's types name its resources by its own imports
+    (`things::thing`, or `streams::output-stream` for a type `use`d from another import), and the host knows them by
+    the parent's. With the checks running, those names refused nested guests that wasmtime 49.0.3 runs, the
+    specimen among them. So the signature's identities are renamed to the instances the child's imports are bound
+    to (`boundAs`, `rebindFunc`). At the outermost component nothing is renamed.
+  - **Witnesses:** `TestANestedLowerIsCheckedAsATopLevelOneIs` on two new nested fixtures, whose rows match
+    wasmtime 49.0.3's `nested-write-via-stream.reading`, 10 of 10. The control returns 7. The one whose `error-code`
+    has other labels is refused by name at instantiate, where wasmtime refuses it at link.
+    `TestANestedLowerOfAUsedResourceRuns` runs a new `nested-used-resource.wasm` to wasmtime's 7, and its lower
+    returns `own<wasi:io/streams@0.2.3::output-stream>`. `TestHostResourceNestedLowerHasItsSignature` checks that
+    the specimen's nested lower resolves to `own<test:res/things@0.1.0::thing>`.
+    `TestCloseReachesTheOwnsANestedInstanceHolds` still passes.
+  - **Neuters, run:** with the lookup by name restored, the other-error-code row instantiates and returns 7, and
+    the specimen's signature is nil. The controls still pass. With the rename dropped, nested-used-resource and
+    the specimen are both refused at instantiate for a resource the host does not implement.
+  - **Not covered, and a new refusal:** the rename maps instance imports only. A nested component that imports a
+    resource as a `sub resource` type, bound by its parent's `(with "os" (type $output-stream))`, still names it
+    by the child's import (`os`). A lower over it was unchecked before and is now refused as a resource the host
+    does not implement, where wasmtime 49.0.3 runs it. Probed, not committed; renaming it needs an instantiation
+    argument of the type sort, which the walk does not read.
 - **Close writes the bytes a guest's `tcp-socket.send` writes were told were complete before it closes the
   connection** ([#1308](https://github.com/scttfrdmn/burroughs/issues/1308), `type:grave`; ADR 0127, amending ADR
   0123's choice 12 on Scott's ruling).
