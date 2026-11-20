@@ -76,6 +76,12 @@ func TestAnExportAddsAnIndexToItsSort(t *testing.T) {
 // rather than counted into a core space the walk does not grow for it. export-core-module exports a core module,
 // which loads; the same bytes with the export's core sort patched to func are refused, naming the sort.
 //
+// **No wasmtime reading exists, and the patch is in memory, because no committed bytes could be made.**
+// `wasm-tools parse` 1.258.0 refuses the text before it assembles anything: `(export "f" (core func $f))` and
+// `(export "f" (core func 0))` both fail with "expected keyword `module`", since its grammar admits only a core
+// module after `core` in an export. A scratch file patched by an inline interpreter was refused by the editroute
+// hook, and that route was not pursued.
+//
 // Neutered, run: the refusal dropped from parseExports, and the patched component loads.
 func TestAnExportOfACoreFuncIsRefused(t *testing.T) {
 	b, err := os.ReadFile("testdata/export-core-module.wasm")
