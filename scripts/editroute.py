@@ -246,7 +246,9 @@ ALLOWED_ROUTES = (
 
 def repo_root() -> str:
     root = os.environ.get("CLAUDE_PROJECT_DIR")
-    if root and os.path.isdir(os.path.join(root, ".git")):
+    # `exists`, not `isdir`: in a git worktree `.git` is a file naming the common directory, and a
+    # project directory that is a worktree must still be its own root (#1315).
+    if root and os.path.exists(os.path.join(root, ".git")):
         return root
     try:
         out = subprocess.run(
@@ -465,7 +467,61 @@ def is_tracked(path: str, root: str, cwds: list[str], moved: bool = False) -> bo
             if base:
                 cands.append(path_key(os.path.join(base, path)))
     t = tracked_set(root)
-    return any(c in t for c in cands)
+    if any(c in t for c in cands):
+        return True
+    return any(tracked_in_a_worktree(c, root) for c in cands)
+
+
+# Each directory's answer to "which worktree of this repository, if any, am I in": its common git
+# directory, resolved, or "" for none. Cached because one command can name many paths in one directory.
+_common_dir: dict[str, str] = {}
+
+
+def _git_common_dir(d: str) -> str:
+    if d not in _common_dir:
+        _common_dir[d] = ""
+        try:
+            out = subprocess.run(
+                ["git", "-C", d, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            if out.returncode == 0:
+                _common_dir[d] = os.path.realpath(out.stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _common_dir[d]
+
+
+def tracked_in_a_worktree(path: str, root: str) -> bool:
+    """True when `path` is tracked by another worktree of the repository at `root`.
+
+    **The tracked set alone made this hook inert for every worktree but the main checkout (#1315).**
+    `tracked_set` lists the files of `root`, which is `CLAUDE_PROJECT_DIR`, the main checkout, so a
+    file in `~/.xtmp/wt-1281/...` was never in it, and the Bash-edit routes refused nothing there. Every
+    slice agent works in such a worktree. A `sed -i` on a tracked test file in one ran unrefused and was
+    caught only because the agent reported it.
+
+    The question goes to the file's own worktree, and only a worktree of *this* repository counts: its
+    common git directory must be `root`'s. A file another repository tracks, such as the private fork,
+    is that repository's business, and widening this hook to it is not this repair. Git answers by
+    `ls-files --error-unmatch` in the file's directory, so no path is compared by spelling. A symlinked
+    scratch root (`~/.xtmp` is one) resolves differently in `rev-parse --show-toplevel` than in the
+    command's text, which is why the tracked set's keyed comparison is not reused here.
+    """
+    d = os.path.dirname(path)
+    if not d or not os.path.isdir(d) or not root:
+        return False  # a tracked file's directory exists; one being created is not tracked
+    mine = _git_common_dir(root)
+    if not mine or _git_common_dir(d) != mine:
+        return False
+    try:
+        out = subprocess.run(
+            ["git", "-C", d, "ls-files", "--error-unmatch", "--", os.path.basename(path)],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        return out.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def lift_heredocs(cmd: str) -> tuple[str, list[str]]:
