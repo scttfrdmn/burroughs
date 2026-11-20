@@ -186,10 +186,10 @@ type walker struct {
 	children []*walker
 	// Component-space resolutions (link_component.go): component funcs (canon lifts, func imports,
 	// aliased exports), component instances (recursive instantiations, instance imports, aliased
-	// exports), and Load'd nested components. host supplies this component's imports.
+	// exports), and the component index space (componentStep, #1258). host supplies this component's imports.
 	compFuncs     []compDef
 	compInstances []compDef
-	nested        []*Component
+	nested        []nestedDef
 	host          host
 	// wasiHost maps a canon-lowered func's "module::export" identity to a real marshaling impl (PR C.2).
 	// A lowered func with no entry here reaches the refusing stub — an unexercised import stays refused.

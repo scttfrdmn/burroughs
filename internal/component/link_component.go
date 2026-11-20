@@ -1041,22 +1041,54 @@ func (w *walker) instanceStep(d Def) error {
 	return nil
 }
 
-// componentStep records a nested component's parsed form (Load'd from its stored bytes) for a later
-// instantiate to recurse into.
+// nestedDef is one entry of the component index space: a parsed component, and the walker of the component that
+// defines it, whose spaces its outer aliases name. A nil c is an entry this engine does not resolve.
+type nestedDef struct {
+	c     *Component
+	scope *walker
+}
+
+// componentStep grows the component index space in stream order (#1258): a nested component section entry is
+// itself (Load'd from its stored bytes, in this scope), an export is the component it exports, and an outer alias
+// is the enclosing walker's component it names, scope and all. An import, or an alias out of an instance, records
+// nil, which an instantiation naming it refuses by name.
+//
+// **It read every entry as a nested component section entry**, so an import's or alias's item, a position in
+// c.Imports or c.Aliases, indexed c.NestedComponents. A middle component that outer-aliased its parent's component
+// after two outer-aliased core modules indexed past the end and panicked, where wasmtime 49.0.3 runs it.
+//
+// NEUTER, run: `Load(w.c.NestedComponents[d.Item])` for every entry but an export again, and both of
+// TestAComponentIsNamedByItsIndexSpace's rows panic with an index out of range.
 func (w *walker) componentStep(d Def) error {
-	if d.Section == SectionExport { // an exported component's new index aliases it (#1258)
-		nc, err := exportedEntry(w.c.Exports[d.Item], w.nested)
+	var nd nestedDef
+	switch d.Section {
+	case SectionComponent:
+		nc, err := Load(w.c.NestedComponents[d.Item])
+		if err != nil {
+			return fmt.Errorf("component: nested component %d: %w", d.Item, err)
+		}
+		nd = nestedDef{c: nc, scope: w}
+	case SectionExport:
+		ed, err := exportedEntry(w.c.Exports[d.Item], w.nested)
 		if err != nil {
 			return err
 		}
-		w.nested = append(w.nested, nc)
-		return nil
+		nd = ed
+	case SectionAlias:
+		if a := w.c.Aliases[d.Item]; a.Kind == AliasOuter {
+			scope := w
+			for range a.Count {
+				if scope = scope.parent; scope == nil {
+					break
+				}
+			}
+			if scope != nil && int(a.Index) < len(scope.nested) {
+				nd = scope.nested[a.Index]
+			}
+		}
+	default:
 	}
-	nc, err := Load(w.c.NestedComponents[d.Item])
-	if err != nil {
-		return fmt.Errorf("component: nested component %d: %w", d.Item, err)
-	}
-	w.nested = append(w.nested, nc)
+	w.nested = append(w.nested, nd)
 	return nil
 }
 
@@ -1075,7 +1107,12 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		return compDef{inst: &compInstance{exports: exports}}, nil
 	}
 	if int(in.ComponentIdx) >= len(w.nested) {
-		return compDef{}, fmt.Errorf("component: instance names component %d of %d", in.ComponentIdx, len(w.nested))
+		return compDef{}, fmt.Errorf("%w: instance names component %d of %d", ErrLinkRefused, in.ComponentIdx, len(w.nested))
+	}
+	nd := w.nested[in.ComponentIdx]
+	if nd.c == nil {
+		return compDef{}, fmt.Errorf("%w: instance names component %d, an import or alias of a component this engine "+
+			"does not resolve", ErrLinkRefused, in.ComponentIdx)
 	}
 	// Recurse: the nested component's imports are supplied by the args (name -> the outer def).
 	argHost := func(name string) (compDef, bool) {
@@ -1086,7 +1123,10 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		}
 		return compDef{}, false
 	}
-	nw, err := w.nested[in.ComponentIdx].walkComponentIn(w, argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers, w.resourceSrc)
+	// The parent is the scope that defines the component, not the one instantiating it, so an outer alias inside a
+	// component that was itself outer-aliased names its own enclosing component (#1258). NEUTER, run: pass w, and
+	// TestAComponentIsNamedByItsIndexSpace's component-outer-scope reads the middle component's module, 5, not 7.
+	nw, err := nd.c.walkComponentIn(nd.scope, argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers, w.resourceSrc)
 	if err != nil {
 		return compDef{}, err
 	}

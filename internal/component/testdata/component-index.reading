@@ -1,0 +1,11 @@
+# Committed wasmtime readings for component-outer.wasm and component-outer-scope.wasm (#1258): a component instance
+# names its component by an ordinal of the component index space, which an outer alias grows, and an outer alias
+# names the scope that defines the component holding it.
+# Built:       wasm-tools parse <fixture>.wat -o <fixture>.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run --invoke 'g()' <fixture>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical, exit 0. Taken 2026-11-20.
+#
+# Each line is `<fixture>: <the u32 g() printed>`.
+component-outer: 7
+component-outer-scope: 7

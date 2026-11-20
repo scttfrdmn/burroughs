@@ -115,7 +115,27 @@ func TestAnExportOfACoreFuncIsRefused(t *testing.T) {
 // core-module-export as naming module 2 of 2 and core-module-outer as naming module 1 of 1. With coreModuleStep's
 // outer-alias arm dropped, core-module-outer alone is refused, as an alias this engine does not resolve.
 func TestACoreInstanceNamesItsModuleByIndexSpace(t *testing.T) {
-	raw, err := os.ReadFile("testdata/core-module-index.reading")
+	gRowsMatchTheOracle(t, "core-module-index.reading", 2)
+}
+
+// TestAComponentIsNamedByItsIndexSpace is #1258 on the component side: a component instance's `instantiate N`
+// names an ordinal of the component index space, which an outer alias grows, and an outer alias inside a component
+// names the scope that defines that component. Each row of component-index.reading is wasmtime 49.0.3's, 10 of 10:
+// both fixtures' `g` is 7.
+//
+// Neutered, run: componentStep reading every entry as a nested component section entry again (and origin/main,
+// which does), and both rows panic with an index out of range, which this test reports as failures. With
+// the defining scope replaced by the instantiating walker, component-outer-scope's `g` is 5, the middle
+// component's module.
+func TestAComponentIsNamedByItsIndexSpace(t *testing.T) {
+	gRowsMatchTheOracle(t, "component-index.reading", 2)
+}
+
+// gRowsMatchTheOracle runs each row of a reading, `<fixture>: <u32>`, as testdata/<fixture>.wasm's `g()`. A panic
+// on the way is a failure of the row, not of the test binary.
+func gRowsMatchTheOracle(t *testing.T, reading string, wantRows int) {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/" + reading)
 	if err != nil {
 		t.Fatalf("the committed reading is missing, so this witness has no oracle: %v", err)
 	}
@@ -124,20 +144,25 @@ func TestACoreInstanceNamesItsModuleByIndexSpace(t *testing.T) {
 		if ln == "" || strings.HasPrefix(ln, "#") {
 			continue
 		}
-		fx, reading, ok := strings.Cut(ln, ": ")
+		fx, val, ok := strings.Cut(ln, ": ")
 		if !ok {
-			t.Fatalf("core-module-index.reading: row %q has no `: `", ln)
+			t.Fatalf("%s: row %q has no `: `", reading, ln)
 		}
 		rows++
 		t.Run(fx, func(t *testing.T) {
-			want, perr := strconv.ParseUint(reading, 10, 32)
+			want, perr := strconv.ParseUint(val, 10, 32)
 			if perr != nil {
-				t.Fatalf("core-module-index.reading: reading %q is not a u32", reading)
+				t.Fatalf("%s: reading %q is not a u32", reading, val)
 			}
 			b, err := os.ReadFile("testdata/" + fx + ".wasm")
 			if err != nil {
 				t.Fatalf("the committed fixture is missing: %v", err)
 			}
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("panicked: %v; the oracle reads g() = %d", p, want)
+				}
+			}()
 			in, err := InstantiateWithHost(b, NewHost(nil, nil, nil))
 			if err != nil {
 				t.Fatalf("instantiate: %v; the oracle reads g() = %d", err, want)
@@ -148,7 +173,7 @@ func TestACoreInstanceNamesItsModuleByIndexSpace(t *testing.T) {
 			}
 		})
 	}
-	if rows != 2 {
-		t.Fatalf("core-module-index.reading has %d rows, want 2", rows)
+	if rows != wantRows {
+		t.Fatalf("%s has %d rows, want %d", reading, rows, wantRows)
 	}
 }

@@ -599,16 +599,27 @@ says what it now requires and what it gives up.
     order (`coreModuleStep`): an exported module is the module it exports, and an outer alias is the enclosing
     component's module, read through a new `parent` link. A core-module import, or an alias out of a component
     instance, is an entry this engine does not resolve, and a core instance naming one is refused by name.
+  - **The component side, which panicked:** the walk read every entry of the component index space as a nested
+    component section entry, so an outer alias's item, a position in `c.Aliases`, indexed `c.NestedComponents`. A
+    middle component that outer-aliased two core modules and then its parent's component panicked with an index out
+    of range, where wasmtime 49.0.3 runs it. `componentStep` now grows the space as `coreModuleStep` does: a section
+    entry is itself, an export the component it exports, and an outer alias the enclosing component's entry. Each
+    entry keeps the walker of the component that defines it, so an outer alias inside an outer-aliased component
+    names its defining scope, not the one instantiating it. An unresolved entry is refused with `ErrLinkRefused`.
   - **Witnesses:** `TestAnExportAddsAnIndexToItsSort` on a new `export-index.wasm`, whose three rows match wasmtime
     49.0.3's `export-index.reading`, 10 of 10. `TestACoreInstanceNamesItsModuleByIndexSpace` runs the new
     `core-module-export.wasm` and `core-module-outer.wasm` to wasmtime's `g() = 7`, 10 of 10
-    (`core-module-index.reading`). `TestAnExportOfACoreFuncIsRefused` checks the core-sort refusal on patched bytes,
-    with no wasmtime reading, because `wasm-tools parse` 1.258.0 cannot spell a core func export.
+    (`core-module-index.reading`). `TestAComponentIsNamedByItsIndexSpace` does the same for `component-outer.wasm`
+    and `component-outer-scope.wasm` (`component-index.reading`). `TestAnExportOfACoreFuncIsRefused` checks the
+    core-sort refusal on patched bytes, with no wasmtime reading, because `wasm-tools parse` 1.258.0 cannot spell a
+    core func export.
   - **Neuters, run:** with no export definition, all three rows fail: `inc 5` is refused as taking no parameters,
     `k` has no resolved signature, and `inc2` is not a callable export. With funcStep's export arm dropped, `inc2`
     alone fails. With the positional module lookup restored, both core-module rows are refused at instantiate, as
     naming module 2 of 2 and module 1 of 1. With the outer-alias arm dropped, core-module-outer alone is refused.
-    Without the core-sort refusal, the patched component loads.
+    With the positional component lookup restored, both component rows panic, as both do on origin/main. With
+    the instantiating walker as the scope, component-outer-scope's `g` is 5. Without the
+    core-sort refusal, the patched component loads.
 - **A nested component's `canon lower` gets the signature checks a top-level one gets**
   ([#1257](https://github.com/scttfrdmn/burroughs/issues/1257)).
   - **The defect:** the walk read a lower's signature by looking up the stub's name among the component's imports.
