@@ -105,3 +105,9 @@ For #1262:
 ## Rollback
 
 Restoring `onHostComplete`'s single completion restores #1261's trap at the second write. Returning nil from `exit` and `exit-with-code` restores #1262's `unreachable`. Each is a neuter above, run.
+
+## Postscript, 2026-11-20 — the Thread-exit line is corrected, and this is a postscript rather than an edit
+
+The out-of-scope line above, *"`exitError` is not an `interp.InstanceEnder` … so it ends the agent that calls it"*, named the wrong mechanism. `interp.InstanceEnder` is read only by `world.retire`, which runs only for an agent spawned over a shared memory. A component-model Thread runs on its instance's host agent (`TableFunc.InvokeCMThread`), so it never reaches `retire`. Its exit already reaches the run through the scheduler's fault routing and ADR 0105's store lock, and on main it already ended a run that waits, as wasmtime 49.0.3's does.
+
+What it did not end was a run whose callback YIELDs. That arm of the scheduler had no store-lock check, so the run spun on where wasmtime exits. [#1265](https://github.com/scttfrdmn/burroughs/issues/1265) repairs it there, at ADR 0105's suspension-point rule. `exitError` gains no method. The line's text above is unchanged, as the record of what was believed on 2026-11-12.
