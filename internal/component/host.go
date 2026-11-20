@@ -4,6 +4,7 @@ package component
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -625,10 +626,48 @@ func (h *Host) blockingFlush(_ *hostResources, c *interp.CanonCaller, _ *outputS
 // `exit` does not return, and Rust std follows the call with `unreachable`. [Instantiated.CallRun] unwraps
 // it into the run's code, preview 1's `exitError` shape (internal/wasi), so an exit is neither a trap nor a
 // silent success. Unexported: an embedder's [Component.Call] sees it only as an error that names the exit.
+//
+// **It is not an [interp.InstanceEnder], and a created Thread's exit does not need it to be** (#1265). That
+// declaration is read only by the interpreter's `world.retire`, for an agent spawned over a shared memory, and
+// a component-model Thread is not one: it runs on its instance's host agent, so its exit returns through
+// `InvokeCMThread` to the scheduler, which routes it to the Thread's owner and locks the store
+// (`threadTable.routeFault`). The run ends at the lock. Where it did not, the YIELD arm had no lock case
+// (`threadTable.yieldPoint`).
 type exitError struct{ code int32 }
 
 func (e exitError) Error() string {
 	return fmt.Sprintf("component: the guest exited with code %d (wasi:cli/exit)", e.code)
+}
+
+// exitReport is an export call's error when the guest exited during it (#1265). The interpreter wraps the host
+// function's exitError as interp.ErrHostTrap, so the call's error read *"host function trapped: component: the
+// guest exited with code N"*, and an exit is not a trap. This says only what exitError says, and unwraps to the
+// whole chain: errors.As still reaches the exitError, errors.Is still reaches ErrHostTrap (which `isTrap` reads
+// to lock the store), and nothing that matched the call's error before stops matching.
+//
+// An internal type and no exported one: whether [Component.Call] gives an embedder an exit to match is public
+// API, and Scott's question.
+type exitReport struct {
+	err  error // the call's error, which holds the exitError
+	code int32
+}
+
+func (e *exitReport) Error() string { return exitError{code: e.code}.Error() }
+func (e *exitReport) Unwrap() error { return e.err }
+
+// reportExit is err as an exitReport when the guest exited during the call, and err unchanged otherwise. A call
+// another Thread's exit ended in flight is reported as that exit, and still matches ErrInstanceLocked through the
+// chain. A call refused at entry never reaches here.
+//
+// NEUTER: return err, and TestAComponentCallReportsAnExitAsAnExit and TestAnExportCallsExitKeepsItsChain get
+// "host function trapped: component: the guest exited with code 7 (wasi:cli/exit)". Return nil from Unwrap, and
+// the second loses errors.As to the exitError and errors.Is to interp.ErrHostTrap.
+func reportExit(err error) error {
+	var ee exitError
+	if err == nil || !errors.As(err, &ee) {
+		return err
+	}
+	return &exitReport{err: err, code: ee.code}
 }
 
 // exit marshals cli/exit.exit: (status: result<_, _>) -> (), flattened to a single discriminant i32

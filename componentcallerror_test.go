@@ -62,3 +62,45 @@ func TestAMistypedComponentCallArgumentIsTheCallersError(t *testing.T) {
 		})
 	}
 }
+
+// TestAComponentCallReportsAnExitAsAnExit is #1265's `Call` arm. `p3std.wasm`'s `run` ends in
+// `std::process::exit(7)`, which wasmtime 49.0.3 exits 7 on (`internal/component/testdata/p3std.reading`).
+// `Run` already reports it as code 7. Through `Component.Call` the error read *"host function trapped:
+// component: the guest exited with code 7 (wasi:cli/exit)"*, because the interpreter carries a host function's
+// error as a host trap, and an exit is not a trap.
+//
+// The error is the same chain under a message that names the exit, so what matched it before still does. It is
+// no `*burroughs.Trap` and no `ErrInstanceLocked`, and the next call is still refused with `ErrInstanceLocked`,
+// because the exit locks the store (ADR 0120).
+//
+// **Neuter, run:** `reportExit` returning err (`internal/component/host.go`). The message arm fails with the
+// "host function trapped" text.
+func TestAComponentCallReportsAnExitAsAnExit(t *testing.T) {
+	w, err := os.ReadFile("internal/component/testdata/p3std/p3std.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	c, err := burroughs.LoadComponent(w)
+	if err != nil {
+		t.Fatalf("LoadComponent: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	_, err = c.Call(context.Background(), "wasi:cli/run@0.3.0#run")
+	if err == nil {
+		t.Fatal("run returned no error; its guest exits 7, which Call reports as its error")
+	}
+	if msg := err.Error(); strings.Contains(msg, "trapped") || !strings.Contains(msg, "exited with code 7") {
+		t.Errorf("Call's error reads %q; want the exit and its code, and no trap", msg)
+	}
+	var trap *burroughs.Trap
+	if errors.As(err, &trap) {
+		t.Errorf("Call's error is a *burroughs.Trap (%v); an exit is not one", trap)
+	}
+	if errors.Is(err, burroughs.ErrInstanceLocked) {
+		t.Errorf("Call's error is ErrInstanceLocked: %v; the exiting call is not refused, it exits", err)
+	}
+	if _, again := c.Call(context.Background(), "wasi:cli/run@0.3.0#run"); !errors.Is(again, burroughs.ErrInstanceLocked) {
+		t.Errorf("the next call returned %v; want ErrInstanceLocked, since the exit locked the store", again)
+	}
+}

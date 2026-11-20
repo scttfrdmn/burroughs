@@ -69,7 +69,9 @@ func (in *Instantiated) CallValuesCtx(ctx context.Context, name string, args ...
 	startedLocked := in.w.lock.trap() != nil
 	res, callErr := in.callValues(ctx, name, args...)
 	if err := in.w.lock.finish(startedLocked, callErr); err != nil {
-		return nil, err
+		// An exit is reported as an exit, not as the host trap the interpreter carried it in (#1265). After
+		// `finish`, so the lock is set from the call's own error.
+		return nil, reportExit(err)
 	}
 	return res, nil
 }

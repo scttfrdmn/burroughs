@@ -652,6 +652,38 @@ says what it now requires and what it gives up.
     the specimen's signature is nil. The controls still pass. With the rename dropped, nested-used-resource and
     the specimen are both refused at instantiate for a resource the host does not implement. With `compArgRef`'s
     type arm dropped, nested-type-import is refused for `own<os>`.
+- **A created component-model Thread's `wasi:cli/exit` ends a run that YIELDs, and `Component.Call` reports an exit
+  as an exit, not a trap** ([#1265](https://github.com/scttfrdmn/burroughs/issues/1265); ADR 0105, ADR 0120).
+  - **The defect:** a run whose callback YIELDs and calls no built-in did not end when the store locked. A Thread's
+    exit, and any Thread's trap, reach the run through the store lock. The WAIT arm selects on that lock, but the
+    YIELD arm had no lock case. So when a composed child's Thread exited, the run re-entered forever, whether the
+    Thread's own task had already returned or was still YIELDing. wasmtime 49.0.3 exits with the Thread's code.
+  - **The issue's diagnosis did not hold.** It named the cause as the component's `exitError` not being an
+    `interp.InstanceEnder`. Only `world.retire` reads that interface, for an agent spawned over a shared memory. A
+    component-model Thread runs on its instance's host agent, so it never reaches `retire`. An exit from a Thread
+    whose own task was the run already ended the run, through the owner routing.
+  - **The repair:** the YIELD arm (`threadTable.yieldPoint`) returns the store lock's error after its scheduling
+    point, as ADR 0105 has every suspension point do. It leaves the task's own trap to the callback loop, so the
+    trapping call still returns that trap unchanged.
+  - **`Call`'s wording:** the interpreter carries a host function's error as `interp.ErrHostTrap`, so an exit
+    through `Component.Call` read *"host function trapped: component: the guest exited with code 7
+    (wasi:cli/exit)"*. `CallValuesCtx` now reports it with the exit's own text. The error is the same chain, so
+    `errors.As` and `errors.Is` match what they matched before, and the next call is still refused with
+    `ErrInstanceLocked`. No symbol is exported. Whether `Call` gets an exit type an embedder can match is a
+    public-API question for Scott.
+  - **Witnesses:**
+    - `TestAThreadsExitEndsARunThatYields`, on three new hand-written guests in `testdata/cmthreads`, each
+      exiting 9 as in wasmtime 49.0.3's `exit-from-thread.reading`, 10 of 10 each:
+      - `exit-from-thread`: the child's task has returned;
+      - `exit-from-thread-live`: the child's task is still YIELDing;
+      - `exit-from-thread-wait`: the control, whose run WAITs. It already exited 9 before the repair.
+    - `TestAThreadsTrapAtItsTasksYieldIsTheCallsOwn`, on `yield-own-trap.wasm`: the call's own trap, not a lockdown.
+    - `TestAComponentCallReportsAnExitAsAnExit` (public) and `TestAnExportCallsExitKeepsItsChain`, both on p3std.
+  - **Neuters, run:**
+    - without the YIELD arm's lock check, the two YIELD guests hang and the control still exits 9;
+    - without its own-fault test, the trapping call returns `ErrInstanceLocked`;
+    - without the rewording, both wording tests read "host function trapped";
+    - with `Unwrap` returning nil, `errors.As` and `errors.Is` lose the chain.
 - **Close writes the bytes a guest's `tcp-socket.send` writes were told were complete before it closes the
   connection** ([#1308](https://github.com/scttfrdmn/burroughs/issues/1308), `type:grave`; ADR 0127, amending ADR
   0123's choice 12 on Scott's ruling).

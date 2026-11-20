@@ -337,6 +337,33 @@ opta thread-context 0
 # orphan-trap has no wasmtime reading: its trap lands after its call returned (ADR 0100). Parsed only.
 "$WASM_TOOLS" parse "$here/orphan-trap.wat" -o "$here/orphan-trap.wasm"
 
+# #1265: a created Thread's `wasi:cli/exit` ends the run, whether the run YIELDs (exit-from-thread, and -live with
+# the Thread's task unresolved) or WAITs (exit-from-thread-wait, the control). Each must exit 9 and write nothing.
+for f in exit-from-thread exit-from-thread-live exit-from-thread-wait; do
+	"$WASM_TOOLS" parse "$here/$f.wat" -o "$here/$f.wasm"
+	rc=0
+	out=$(timeout 30 "$WASMTIME" run -W component-model-threading=y "$here/$f.wasm" </dev/null 2>&1) || rc=$?
+	[ "$rc" = "9" ] && [ -z "$out" ] || {
+		echo "build.sh: $f expected exit 9 with no output, got exit $rc and '$out'." >&2
+		exit 1
+	}
+	echo "build.sh: $f exits 9, as recorded" >&2
+done
+# #1265's own-trap arm: a Thread traps while its task YIELDs, and the call traps in T, matched by frame and content.
+"$WASM_TOOLS" parse "$here/yield-own-trap.wat" -o "$here/yield-own-trap.wasm"
+if yot=$("$WASMTIME" run -W component-model-threading=y --invoke 'run()' "$here/yield-own-trap.wasm" 2>&1); then
+	echo "build.sh: yield-own-trap RETURNED where a trap is expected: '$yot'" >&2
+	exit 1
+fi
+case "$yot" in
+*"tmod!"*"unreachable"*) echo "build.sh: yield-own-trap trapped in T, as expected" >&2 ;;
+*)
+	echo "build.sh: yield-own-trap failed, but not with T's trap:" >&2
+	echo "$yot" >&2
+	exit 1
+	;;
+esac
+
 # A recorded LIMIT of the oracle (#999): wasmtime's "BUG: delivering non-present event", on 49.0.2 and still on
 # 49.0.3 (concurrent.rs:948). Asserted, so
 # a wasmtime that fixes it fails here and the fixtures that route around it are re-read. Parsed to a temp

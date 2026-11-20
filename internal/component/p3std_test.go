@@ -4,11 +4,15 @@ package component
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
 // readP3StdReading parses testdata/p3std.reading: each channel's bytes and the exit code. A channel's last
@@ -132,5 +136,41 @@ func TestARunReturningErrExitsOne(t *testing.T) {
 				t.Errorf("run returning %s exited %d, want wasmtime's %d", c.name, code, want)
 			}
 		})
+	}
+}
+
+// TestAnExportCallsExitKeepsItsChain is #1265's wording repair seen from inside: `CallValues` on p3std's `run`
+// reports the exit by its own text, and the error is still the chain the interpreter built. errors.As reaches the
+// exitError with p3std's code, and errors.Is reaches interp.ErrHostTrap, which `isTrap` reads to lock the store.
+// The public arm is TestAComponentCallReportsAnExitAsAnExit.
+//
+// **Neuters, run:** exitReport's Unwrap returning nil, and the errors.As and errors.Is arms fail; the next call is
+// still refused, since `finish` sets the lock before the wrap. reportExit returning err, and the message arm
+// fails with the "host function trapped" text.
+func TestAnExportCallsExitKeepsItsChain(t *testing.T) {
+	want := readP3StdReading(t)
+	b, err := os.ReadFile("testdata/p3std/p3std.wasm")
+	if err != nil {
+		t.Fatalf("p3std fixture missing (it is committed): %v", err)
+	}
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+	if err != nil {
+		t.Fatalf("p3std did not instantiate: %v", err)
+	}
+	defer in.Close()
+	_, err = in.CallValues("wasi:cli/run@0.3.0#run")
+	if got, wantMsg := fmt.Sprint(err), (exitError{code: int32(want.exit)}).Error(); got != wantMsg {
+		t.Errorf("the call's error reads %q; want the exit's own text %q", got, wantMsg)
+	}
+	var ee exitError
+	if !errors.As(err, &ee) || int(ee.code) != want.exit {
+		t.Errorf("errors.As does not reach an exitError with code %d in %v", want.exit, err)
+	}
+	if !errors.Is(err, interp.ErrHostTrap) {
+		t.Errorf("errors.Is does not reach interp.ErrHostTrap in %v, which it reached before the wording repair", err)
+	}
+	if _, again := in.CallValues("wasi:cli/run@0.3.0#run"); !errors.Is(again, ErrInstanceLocked) || !errors.As(again, &ee) {
+		t.Errorf("the next call returned %v; want ErrInstanceLocked wrapping the exit", again)
 	}
 }
