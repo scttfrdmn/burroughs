@@ -1,0 +1,13 @@
+# Committed wasmtime readings for tag-as-instance.wasm and its control tag-inline-export.wasm (#1258): a core tag
+# alias is a tag, not a core instance.
+# Built:       wasm-tools parse <fixture>.wat -o <fixture>.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run <fixture>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical, exit 1. Taken 2026-11-20.
+#
+# Each line is `<fixture>: <wasmtime's reading>`. `refused: …` is the last line of a parse-time refusal, whose
+# first line is "failed to parse WebAssembly module". `parsed: …` is a component wasmtime parsed and validated and
+# refused only for having no `wasi:cli/run` export, the last line of its error; `wasm-tools validate --features all`
+# accepts it.
+tag-as-instance: refused: unknown core instance 1: instance index out of bounds (at offset 0x66)
+tag-inline-export: parsed: no exported instance named `wasi:cli/run@0.2.12`

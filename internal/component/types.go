@@ -456,7 +456,7 @@ func (c *Component) typeOrdinal(ord uint32, depth int) (TypeDef, bool) {
 	if depth > maxTypeChase {
 		return TypeDef{}, false
 	}
-	d, ok := c.spaceDef(SpaceType, ord)
+	d, ord, ok := c.spaceDef(SpaceType, ord) // ord is now the definition's own, an exported type's (#1258)
 	if !ok {
 		return TypeDef{}, false
 	}
@@ -509,7 +509,7 @@ func (c *Component) typeOrdinal(ord uint32, depth int) (TypeDef, bool) {
 // importedInstanceType resolves an instance-index-space ordinal that names an instance import to that
 // import's instance type and its name, the interface its unbound resource identities belong to.
 func (c *Component) importedInstanceType(ord uint32, depth int) (*InstanceType, string, bool) {
-	d, ok := c.spaceDef(SpaceInstance, ord)
+	d, _, ok := c.spaceDef(SpaceInstance, ord)
 	if !ok || d.Section != SectionImport || d.Item >= len(c.Imports) {
 		return nil, "", false
 	}
@@ -524,8 +524,32 @@ func (c *Component) importedInstanceType(ord uint32, depth int) (*InstanceType, 
 	return td.Inst, imp.Name, true
 }
 
-// spaceDef is the definition that contributed ordinal ord of one index space.
-func (c *Component) spaceDef(s Space, ord uint32) (Def, bool) {
+// spaceDef is the definition that contributed ordinal ord of one index space, and that definition's own
+// ordinal.
+//
+// **An export's ordinal is followed to the definition it exports** (#1258), since the export's new index
+// aliases it (Binary.md), so a caller is handed the definition and never the export. An export names an
+// earlier ordinal of its sort, so the chase ends; one naming its own or a later ordinal is malformed and
+// resolves to nothing.
+func (c *Component) spaceDef(s Space, ord uint32) (Def, uint32, bool) {
+	for {
+		d, ok := c.spaceDefAt(s, ord)
+		if !ok {
+			return Def{}, 0, false
+		}
+		if d.Section != SectionExport {
+			return d, ord, true
+		}
+		next := c.Exports[d.Item].Index
+		if next >= ord {
+			return Def{}, 0, false
+		}
+		ord = next
+	}
+}
+
+// spaceDefAt is the definition at ordinal ord of one index space, an export included.
+func (c *Component) spaceDefAt(s Space, ord uint32) (Def, bool) {
 	var seen uint32
 	for _, d := range c.Defs {
 		if d.Space != s {
@@ -850,8 +874,36 @@ func qualifyTypeDef(td TypeDef, iface string) TypeDef {
 }
 
 // qualifyFunc is qualifyTypeDef over a function type's parameters and result. The input is not mutated.
-func qualifyFunc(ft *FuncType, iface string) *FuncType {
-	q := newQualifier(iface)
+func qualifyFunc(ft *FuncType, iface string) *FuncType { return newQualifier(iface).fn(ft) }
+
+// rebindFunc renames a function type's resource identities whose interface is a key of `to` to that key's value,
+// so a nested component's identities name the instances its imports are bound to (#1257). The input is not
+// mutated.
+func rebindFunc(ft *FuncType, to map[string]string) *FuncType {
+	return (&qualifier{rename: to, done: map[*ValType]*ValType{}}).fn(ft)
+}
+
+// qualifier is one qualification of resolved value types (qualifyTypeDef). It rebuilds only what carries an
+// unbound identity, sharing every resolved subtree that does not (ValType.selfRes), and it rebuilds each
+// shared subtree once, keyed by where the subtree is stored, so a subtree reached by many paths is
+// qualified once and shared again (grave #1256). Without both, qualifying a chain of shared types would
+// rebuild it at every use, which is the expansion resolveVal's sharing exists to avoid. A qualification
+// changes no shape, so the sizes stay as they were.
+//
+// With `rename` set it is rebindFunc's instead (#1257): a bound identity is renamed rather than an unbound one
+// completed, so no resolved subtree can be shared unvisited, and the memo alone keeps the work linear.
+type qualifier struct {
+	iface  string
+	rename map[string]string
+	done   map[*ValType]*ValType
+}
+
+func newQualifier(iface string) *qualifier {
+	return &qualifier{iface: iface, done: map[*ValType]*ValType{}}
+}
+
+// fn applies the qualifier to a function type's parameters and result.
+func (q *qualifier) fn(ft *FuncType) *FuncType {
 	out := &FuncType{Params: make([]NamedVal, len(ft.Params)), Async: ft.Async}
 	for i, p := range ft.Params {
 		out.Params[i] = NamedVal{Name: p.Name, Type: q.val(p.Type)}
@@ -863,24 +915,33 @@ func qualifyFunc(ft *FuncType, iface string) *FuncType {
 	return out
 }
 
-// qualifier is one qualification of resolved value types (qualifyTypeDef). It rebuilds only what carries an
-// unbound identity, sharing every resolved subtree that does not (ValType.selfRes), and it rebuilds each
-// shared subtree once, keyed by where the subtree is stored, so a subtree reached by many paths is
-// qualified once and shared again (grave #1256). Without both, qualifying a chain of shared types would
-// rebuild it at every use, which is the expansion resolveVal's sharing exists to avoid. A qualification
-// changes no shape, so the sizes stay as they were.
-type qualifier struct {
-	iface string
-	done  map[*ValType]*ValType
+// shares reports that vt is shared as it is: resolved, with nothing this qualification rewrites.
+func (q *qualifier) shares(vt *ValType) bool {
+	return q.rename == nil && vt.size > 0 && !vt.selfRes
 }
 
-func newQualifier(iface string) *qualifier {
-	return &qualifier{iface: iface, done: map[*ValType]*ValType{}}
+// resource is one own's or borrow's identity, qualified or renamed. A rename maps an identity's interface
+// (`things::thing`), or a whole identity with none, which is a type import's bare name (`os`).
+func (q *qualifier) resource(id string) string {
+	if q.rename == nil {
+		return qualifyResourceID(id, q.iface)
+	}
+	iface, res, ok := strings.Cut(id, "::")
+	if !ok {
+		if to, bound := q.rename[id]; bound {
+			return to
+		}
+		return id
+	}
+	if to, bound := q.rename[iface]; bound {
+		return to + "::" + res
+	}
+	return id
 }
 
 // child qualifies the subtree stored at p.
 func (q *qualifier) child(p *ValType) *ValType {
-	if p == nil || (p.size > 0 && !p.selfRes) {
+	if p == nil || q.shares(p) {
 		return p
 	}
 	if r, ok := q.done[p]; ok {
@@ -893,12 +954,12 @@ func (q *qualifier) child(p *ValType) *ValType {
 
 // val qualifies one value type. The input is not mutated: the decoded slices are shared by every reader.
 func (q *qualifier) val(vt ValType) ValType {
-	if vt.size > 0 && !vt.selfRes {
+	if q.shares(&vt) {
 		return vt
 	}
 	switch vt.Kind {
 	case VOwn, VBorrow:
-		vt.Resource = qualifyResourceID(vt.Resource, q.iface)
+		vt.Resource = q.resource(vt.Resource)
 	case VList, VOption, VFuture, VStream:
 		vt.Elem = q.child(vt.Elem)
 	case VResult:
@@ -923,7 +984,9 @@ func (q *qualifier) val(vt ValType) ValType {
 		vt.Elems = es
 	default:
 	}
-	vt.selfRes = false
+	if q.rename == nil { // a rename completes nothing, so an unbound identity stays one
+		vt.selfRes = false
+	}
 	return vt
 }
 

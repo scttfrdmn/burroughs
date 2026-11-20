@@ -22,6 +22,9 @@ const (
 	SpaceType
 	SpaceComponent
 	SpaceInstance
+	// SpaceCoreTag is the core tag space (exception handling). It was missing, so coreSortSpace counted a tag into
+	// the core instance space (#1258); it is last so that no other space's value moves.
+	SpaceCoreTag
 )
 
 // Def is one definition in stream order: the index space it adds an entry to, the section that defined
@@ -53,6 +56,13 @@ func coreSortSpace(s CoreSort) Space {
 		return SpaceCoreType
 	case CoreSortModule:
 		return SpaceCoreModule
+	case CoreSortTag:
+		// A tag is its own space (#1258). It fell to the default and counted as a core instance, so the load-time
+		// forward-reference check admitted a core instance ordinal that only tag aliases made exist.
+		//
+		// NEUTER, run: drop this case, and TestATagIsNotCountedAsACoreInstance's tag-as-instance loads, to fail at
+		// instantiate as an unknown import.
+		return SpaceCoreTag
 	default: // CoreSortInstance
 		return SpaceCoreInstance
 	}

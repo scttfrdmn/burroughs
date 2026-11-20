@@ -1,0 +1,10 @@
+# Committed wasmtime reading for nested-type-import.wasm (#1257): a nested component's lower of the parent's
+# get-stdout, whose result names a resource the child takes as a type import its parent binds.
+# Built:       wasm-tools parse nested-type-import.wat -o nested-type-import.wasm   (wasm-tools 1.258.0; validates
+#              --features all)
+# Invocation:  wasmtime run --invoke 'seven()' nested-type-import.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10, each identical, exit 0. Taken 2026-11-20.
+#
+# The line is `seven: <the u32 wasmtime prints>`.
+seven: 7

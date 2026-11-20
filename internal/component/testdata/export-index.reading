@@ -1,0 +1,11 @@
+# Committed wasmtime readings for export-index.wasm (#1258): an export adds an index to its sort, so a type defined
+# after an exported type is the ordinal wasm-tools prints for it.
+# Built:       wasm-tools parse export-index.wat -o export-index.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run --invoke '<call>' export-index.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical, exit 0. Taken 2026-11-20.
+#
+# Each line is `<export> <u32 argument, if any>: <the u32 wasmtime prints>`.
+inc 5: 6
+k: 42
+inc2 5: 6

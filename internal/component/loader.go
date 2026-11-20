@@ -395,9 +395,19 @@ func (c *Component) parseExports(body []byte) error {
 		}
 		// `sortIdxFull`, not `sortIdx`: the latter discards the index, which is what made every export
 		// name resolve to the last definition of its sort (#903, see Export.Index).
-		sort, _, idx, err := r.sortIdxFull()
+		sort, cs, idx, err := r.sortIdxFull()
 		if err != nil {
 			return fmt.Errorf("component: export %d (%q) sortidx: %w", i, name, err)
+		}
+		// A core sort other than `core module` has no externtype, and Binary.md's validation requires an
+		// exported sortidx to have one (*"which disallows core sorts other than `core module`"*), so it is
+		// refused here. It would otherwise add an index to a core space the walk does not grow for an export
+		// (#1258). wasm-tools 1.258.0's text parser cannot spell one; no wasmtime reading has been taken.
+		//
+		// NEUTER, run: drop this refusal, and TestAnExportOfACoreFuncIsRefused loads the patched component.
+		if sort == SortCore && cs != CoreSortModule {
+			return fmt.Errorf("component: export %d (%q) names core sort %#x; only a core module may be exported",
+				i, name, uint8(cs))
 		}
 		present, err := r.byte()
 		if err != nil {
@@ -414,6 +424,20 @@ func (c *Component) parseExports(body []byte) error {
 			return fmt.Errorf("component: export %d (%q): type-ascription flag %#x is not 0x00/0x01", i, name, present)
 		}
 		c.Exports = append(c.Exports, Export{Name: name, Kind: sort, Index: idx})
+		// **An export introduces a new index in its sort** (#1258; Binary.md: *"All exports (of all `sort`s)
+		// introduce a new index that aliases the exported definition and can be used by all subsequent
+		// definitions just like an alias"*). It recorded none, so every ordinal of the sort after an export was
+		// one short: a type exported and then used resolved the next definition, the wrong-type-that-exists
+		// `typeAt` names. The consumers follow the new index to the definition it aliases (spaceDef, and the
+		// walk's export arms).
+		//
+		// NEUTER, run: record no Def here, and TestAnExportAddsAnIndexToItsSort's `inc 5` is refused as taking no
+		// parameters, since its lift's type 2 resolves to the `func() -> u32` defined after it.
+		space := sortSpace(sort)
+		if sort == SortCore {
+			space = coreSortSpace(cs)
+		}
+		c.def(space, SectionExport, len(c.Exports)-1)
 	}
 	if r.pos != len(body) {
 		return fmt.Errorf("component: export section: consumed %d of %d bytes", r.pos, len(body))

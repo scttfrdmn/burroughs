@@ -813,6 +813,9 @@ func (ci *compInstance) export(name string) (compDef, bool) {
 type compDef struct {
 	fn   *compFunc
 	inst *compInstance
+	// typeIdent is a type argument's: the host-resource identity of the parent's type it binds a nested
+	// component's type import to ("" for none), so the child knows the resource by its parent's name (#1257).
+	typeIdent string
 }
 
 // host supplies a component's imports by name (the stub host for the outer component's wasi instances;
@@ -845,6 +848,12 @@ func stubHost(name string) (compDef, bool) {
 // recursion's call site makes it structural: every component that gets walked gets gated, at every
 // depth, and a future third entry point cannot forget it. The entry points no longer call it.
 func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncImplFor, streamConsumers map[string]*streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
+	return c.walkComponentIn(nil, h, wasiHost, asyncWasiHost, streamConsumers, resourceSrc)
+}
+
+// walkComponentIn is walkComponent for a component nested in parent's, whose walker an outer alias of a core
+// module reads (#1258); parent is nil at the outermost component.
+func (c *Component) walkComponentIn(parent *walker, h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncImplFor, streamConsumers map[string]*streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
 	if gerr := gateAsync(c); gerr != nil {
 		return nil, gerr
 	}
@@ -859,7 +868,7 @@ func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, 
 	// walks through this function too, so it gets a table of its own rather than its parent's. NEUTER THIS by
 	// sharing one table across walkers, and TestHostResourceHandleIsRefusedInAnotherInstance resolves
 	// instance a's index in instance b (#1137's R-4).
-	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, resourceSrc: resourceSrc, hostRes: newHostResources(), async: newAsyncHandles(), threads: newThreadTable()}
+	w := &walker{c: c, parent: parent, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, resourceSrc: resourceSrc, hostRes: newHostResources(), async: newAsyncHandles(), threads: newThreadTable()}
 	w.async.threads = w.threads // a suspension point finds its caller's chain through the table (runslot.go)
 	w.threads.h = w.async       // the append assertion reads the slot's holder (ADR 0101, Option A, point 5)
 	for _, d := range c.Defs {
@@ -874,7 +883,8 @@ func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, 
 // stepAll dispatches a definition to the core-space step (walk.go) or the component-space step.
 func (w *walker) stepAll(d Def) error {
 	switch d.Space {
-	case SpaceCoreModule, SpaceCoreInstance, SpaceCoreFunc, SpaceCoreTable, SpaceCoreMemory, SpaceCoreGlobal:
+	case SpaceCoreModule, SpaceCoreInstance, SpaceCoreFunc, SpaceCoreTable, SpaceCoreMemory, SpaceCoreGlobal,
+		SpaceCoreTag: // a tag alias, resolved into its own space since #1258
 		return w.step(d)
 	case SpaceFunc:
 		return w.funcStep(d)
@@ -972,10 +982,29 @@ func (w *walker) funcStep(d Def) error {
 			return err
 		}
 		w.compFuncs = append(w.compFuncs, cd)
+	case SectionExport:
+		cd, err := exportedEntry(w.c.Exports[d.Item], w.compFuncs)
+		if err != nil {
+			return err
+		}
+		w.compFuncs = append(w.compFuncs, cd)
 	default:
 		// no other section contributes to the func space
 	}
 	return nil
+}
+
+// exportedEntry is the entry an export's new index aliases: the definition it exports, already in the space
+// (#1258). The space grew by nothing for an export until then, so each entry after one sat an ordinal early and
+// a reference past it named the next definition. NEUTER, run: drop funcStep's export arm (with the loader's
+// export Def kept), and TestAnExportAddsAnIndexToItsSort's `inc2` is no callable export, since the index it
+// re-exports names past the end of the func space.
+func exportedEntry[T any](e Export, space []T) (T, error) {
+	if int(e.Index) >= len(space) {
+		var zero T
+		return zero, fmt.Errorf("component: export %q names %s %d of %d", e.Name, e.Kind, e.Index, len(space))
+	}
+	return space[e.Index], nil
 }
 
 // instanceStep grows the component instance space: a component instance (recursive instantiate, or
@@ -1001,20 +1030,66 @@ func (w *walker) instanceStep(d Def) error {
 			return err
 		}
 		w.compInstances = append(w.compInstances, cd)
+	case SectionExport:
+		cd, err := exportedEntry(w.c.Exports[d.Item], w.compInstances)
+		if err != nil {
+			return err
+		}
+		w.compInstances = append(w.compInstances, cd)
 	default:
 		// no other section contributes to the instance space
 	}
 	return nil
 }
 
-// componentStep records a nested component's parsed form (Load'd from its stored bytes) for a later
-// instantiate to recurse into.
+// nestedDef is one entry of the component index space: a parsed component, and the walker of the component that
+// defines it, whose spaces its outer aliases name. A nil c is an entry this engine does not resolve.
+type nestedDef struct {
+	c     *Component
+	scope *walker
+}
+
+// componentStep grows the component index space in stream order (#1258): a nested component section entry is
+// itself (Load'd from its stored bytes, in this scope), an export is the component it exports, and an outer alias
+// is the enclosing walker's component it names, scope and all. An import, or an alias out of an instance, records
+// nil, which an instantiation naming it refuses by name.
+//
+// **It read every entry as a nested component section entry**, so an import's or alias's item, a position in
+// c.Imports or c.Aliases, indexed c.NestedComponents. A middle component that outer-aliased its parent's component
+// after two outer-aliased core modules indexed past the end and panicked, where wasmtime 49.0.3 runs it.
+//
+// NEUTER, run: `Load(w.c.NestedComponents[d.Item])` for every entry but an export again, and both of
+// TestAComponentIsNamedByItsIndexSpace's rows panic with an index out of range.
 func (w *walker) componentStep(d Def) error {
-	nc, err := Load(w.c.NestedComponents[d.Item])
-	if err != nil {
-		return fmt.Errorf("component: nested component %d: %w", d.Item, err)
+	var nd nestedDef
+	switch d.Section {
+	case SectionComponent:
+		nc, err := Load(w.c.NestedComponents[d.Item])
+		if err != nil {
+			return fmt.Errorf("component: nested component %d: %w", d.Item, err)
+		}
+		nd = nestedDef{c: nc, scope: w}
+	case SectionExport:
+		ed, err := exportedEntry(w.c.Exports[d.Item], w.nested)
+		if err != nil {
+			return err
+		}
+		nd = ed
+	case SectionAlias:
+		if a := w.c.Aliases[d.Item]; a.Kind == AliasOuter {
+			scope := w
+			for range a.Count {
+				if scope = scope.parent; scope == nil {
+					break
+				}
+			}
+			if scope != nil && int(a.Index) < len(scope.nested) {
+				nd = scope.nested[a.Index]
+			}
+		}
+	default:
 	}
-	w.nested = append(w.nested, nc)
+	w.nested = append(w.nested, nd)
 	return nil
 }
 
@@ -1033,7 +1108,12 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		return compDef{inst: &compInstance{exports: exports}}, nil
 	}
 	if int(in.ComponentIdx) >= len(w.nested) {
-		return compDef{}, fmt.Errorf("component: instance names component %d of %d", in.ComponentIdx, len(w.nested))
+		return compDef{}, fmt.Errorf("%w: instance names component %d of %d", ErrLinkRefused, in.ComponentIdx, len(w.nested))
+	}
+	nd := w.nested[in.ComponentIdx]
+	if nd.c == nil {
+		return compDef{}, fmt.Errorf("%w: instance names component %d, an import or alias of a component this engine "+
+			"does not resolve", ErrLinkRefused, in.ComponentIdx)
 	}
 	// Recurse: the nested component's imports are supplied by the args (name -> the outer def).
 	argHost := func(name string) (compDef, bool) {
@@ -1044,7 +1124,10 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		}
 		return compDef{}, false
 	}
-	nw, err := w.nested[in.ComponentIdx].walkComponent(argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers, w.resourceSrc)
+	// The parent is the scope that defines the component, not the one instantiating it, so an outer alias inside a
+	// component that was itself outer-aliased names its own enclosing component (#1258). NEUTER, run: pass w, and
+	// TestAComponentIsNamedByItsIndexSpace's component-outer-scope reads the middle component's module, 5, not 7.
+	nw, err := nd.c.walkComponentIn(nd.scope, argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers, w.resourceSrc)
 	if err != nil {
 		return compDef{}, err
 	}
@@ -1066,6 +1149,15 @@ func (w *walker) compArgRef(a InstantiateArg) (compDef, bool) {
 	case SortInstance:
 		if int(a.Idx) < len(w.compInstances) {
 			return w.compInstances[a.Idx], true
+		}
+	case SortType:
+		// `(with "os" (type $output-stream))` binds the child's type import to the parent's type, so the child's
+		// resource is the parent's (#1257). Not read until then: a type import never asked the host.
+		//
+		// NEUTER, run: drop this arm, and TestANestedTypeImportOfAHostResourceRuns' child is refused at
+		// instantiate, its get-stdout returning `own<os>`, "a resource the host does not implement".
+		if int(a.Idx) < len(w.typeIdents) {
+			return compDef{typeIdent: w.typeIdents[a.Idx]}, true
 		}
 	default:
 	}
