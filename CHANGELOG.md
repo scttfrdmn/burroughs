@@ -616,23 +616,22 @@ says what it now requires and what it gives up.
   - **What the repair needed beyond the issue:** the child's types name its resources by its own imports
     (`things::thing`, or `streams::output-stream` for a type `use`d from another import), and the host knows them by
     the parent's. With the checks running, those names refused nested guests that wasmtime 49.0.3 runs, the
-    specimen among them. So the signature's identities are renamed to the instances the child's imports are bound
-    to (`boundAs`, `rebindFunc`). At the outermost component nothing is renamed.
+    specimen among them. So the signature's identities are renamed to what the child's imports are bound to
+    (`boundAs`, `rebindFunc`): an instance import to the parent's instance, and a `sub resource` type import to the
+    parent's type, which the walk now reads from a type-sort instantiation argument (`(with "os" (type
+    $output-stream))`, `compArgRef`). At the outermost component nothing is renamed.
   - **Witnesses:** `TestANestedLowerIsCheckedAsATopLevelOneIs` on two new nested fixtures, whose rows match
     wasmtime 49.0.3's `nested-write-via-stream.reading`, 10 of 10. The control returns 7. The one whose `error-code`
     has other labels is refused by name at instantiate, where wasmtime refuses it at link.
     `TestANestedLowerOfAUsedResourceRuns` runs a new `nested-used-resource.wasm` to wasmtime's 7, and its lower
-    returns `own<wasi:io/streams@0.2.3::output-stream>`. `TestHostResourceNestedLowerHasItsSignature` checks that
-    the specimen's nested lower resolves to `own<test:res/things@0.1.0::thing>`.
-    `TestCloseReachesTheOwnsANestedInstanceHolds` still passes.
+    returns `own<wasi:io/streams@0.2.3::output-stream>`. `TestANestedTypeImportOfAHostResourceRuns` does the same
+    for a new `nested-type-import.wasm`, whose child takes output-stream as a type import. Both match wasmtime
+    49.0.3, 10 of 10. `TestHostResourceNestedLowerHasItsSignature` checks that the specimen's nested lower resolves
+    to `own<test:res/things@0.1.0::thing>`. `TestCloseReachesTheOwnsANestedInstanceHolds` still passes.
   - **Neuters, run:** with the lookup by name restored, the other-error-code row instantiates and returns 7, and
     the specimen's signature is nil. The controls still pass. With the rename dropped, nested-used-resource and
-    the specimen are both refused at instantiate for a resource the host does not implement.
-  - **Not covered, and a new refusal:** the rename maps instance imports only. A nested component that imports a
-    resource as a `sub resource` type, bound by its parent's `(with "os" (type $output-stream))`, still names it
-    by the child's import (`os`). A lower over it was unchecked before and is now refused as a resource the host
-    does not implement, where wasmtime 49.0.3 runs it. Probed, not committed; renaming it needs an instantiation
-    argument of the type sort, which the walk does not read.
+    the specimen are both refused at instantiate for a resource the host does not implement. With `compArgRef`'s
+    type arm dropped, nested-type-import is refused for `own<os>`.
 - **Close writes the bytes a guest's `tcp-socket.send` writes were told were complete before it closes the
   connection** ([#1308](https://github.com/scttfrdmn/burroughs/issues/1308), `type:grave`; ADR 0127, amending ADR
   0123's choice 12 on Scott's ruling).

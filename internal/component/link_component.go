@@ -813,6 +813,9 @@ func (ci *compInstance) export(name string) (compDef, bool) {
 type compDef struct {
 	fn   *compFunc
 	inst *compInstance
+	// typeIdent is a type argument's: the host-resource identity of the parent's type it binds a nested
+	// component's type import to ("" for none), so the child knows the resource by its parent's name (#1257).
+	typeIdent string
 }
 
 // host supplies a component's imports by name (the stub host for the outer component's wasi instances;
@@ -1099,6 +1102,15 @@ func (w *walker) compArgRef(a InstantiateArg) (compDef, bool) {
 	case SortInstance:
 		if int(a.Idx) < len(w.compInstances) {
 			return w.compInstances[a.Idx], true
+		}
+	case SortType:
+		// `(with "os" (type $output-stream))` binds the child's type import to the parent's type, so the child's
+		// resource is the parent's (#1257). Not read until then: a type import never asked the host.
+		//
+		// NEUTER, run: drop this arm, and TestANestedTypeImportOfAHostResourceRuns' child is refused at
+		// instantiate, its get-stdout returning `own<os>`, "a resource the host does not implement".
+		if int(a.Idx) < len(w.typeIdents) {
+			return compDef{typeIdent: w.typeIdents[a.Idx]}, true
 		}
 	default:
 	}

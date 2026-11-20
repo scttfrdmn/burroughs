@@ -111,11 +111,32 @@ func TestHostResourceNestedLowerHasItsSignature(t *testing.T) {
 // Neutered, run: importedFuncSignature returning the signature unrenamed, and the child is refused at instantiate,
 // its get-stdout returning `own<streams::output-stream>`, "a resource the host does not implement".
 func TestANestedLowerOfAUsedResourceRuns(t *testing.T) {
-	b, err := os.ReadFile("testdata/nested-used-resource.wasm")
+	in := runsSevenAsTheOracleDoes(t, "nested-used-resource")
+	childLowerReturnsOwnOf(t, in, "wasi:cli/stdout@0.2.3::get-stdout", "wasi:io/streams@0.2.3::output-stream")
+}
+
+// TestANestedTypeImportOfAHostResourceRuns is #1257's rename for a type import: nested-type-import's child takes
+// output-stream as `(import "os" (type (sub resource)))`, which the parent binds with `(with "os" (type
+// $output-stream))`. wasmtime 49.0.3 runs its `seven()` to 7, 10 of 10 (nested-type-import.reading). Burroughs
+// instantiates it, its `seven()` is 7, and the lower's result is an own of the host's
+// `wasi:io/streams@0.2.3::output-stream`, so the child's `os` was read as the parent's type.
+//
+// Neutered, run: compArgRef without its type arm, and the child is refused at instantiate, its get-stdout returning
+// `own<os>`, "a resource the host does not implement". That is also what 4920e7f, which had no type arm, does.
+func TestANestedTypeImportOfAHostResourceRuns(t *testing.T) {
+	in := runsSevenAsTheOracleDoes(t, "nested-type-import")
+	childLowerReturnsOwnOf(t, in, "wasi:cli/stdout@0.2.3::get-stdout", "wasi:io/streams@0.2.3::output-stream")
+}
+
+// runsSevenAsTheOracleDoes instantiates testdata/<fixture>.wasm on a WASI 0.2 host and checks that its `seven()`
+// returns what <fixture>.reading's one row says wasmtime printed.
+func runsSevenAsTheOracleDoes(t *testing.T, fixture string) *Instantiated {
+	t.Helper()
+	b, err := os.ReadFile("testdata/" + fixture + ".wasm")
 	if err != nil {
 		t.Fatalf("the committed fixture is missing: %v", err)
 	}
-	raw, err := os.ReadFile("testdata/nested-used-resource.reading")
+	raw, err := os.ReadFile("testdata/" + fixture + ".reading")
 	if err != nil {
 		t.Fatalf("the committed reading is missing, so this witness has no oracle: %v", err)
 	}
@@ -127,15 +148,15 @@ func TestANestedLowerOfAUsedResourceRuns(t *testing.T) {
 		}
 		reading, ok := strings.CutPrefix(ln, "seven: ")
 		if !ok {
-			t.Fatalf("nested-used-resource.reading: row %q is not `seven: <u32>`", ln)
+			t.Fatalf("%s.reading: row %q is not `seven: <u32>`", fixture, ln)
 		}
 		if want, err = strconv.ParseUint(reading, 10, 32); err != nil {
-			t.Fatalf("nested-used-resource.reading: reading %q is not a u32", reading)
+			t.Fatalf("%s.reading: reading %q is not a u32", fixture, reading)
 		}
 		rows++
 	}
 	if rows != 1 {
-		t.Fatalf("nested-used-resource.reading has %d rows, want 1", rows)
+		t.Fatalf("%s.reading has %d rows, want 1", fixture, rows)
 	}
 	in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
 	if err != nil {
@@ -145,7 +166,7 @@ func TestANestedLowerOfAUsedResourceRuns(t *testing.T) {
 	if got, err := callU32(in, "seven"); err != nil || uint64(got) != want {
 		t.Fatalf("seven() = %d, %v; the oracle reads %d", got, err, want)
 	}
-	childLowerReturnsOwnOf(t, in, "wasi:cli/stdout@0.2.3::get-stdout", "wasi:io/streams@0.2.3::output-stream")
+	return in
 }
 
 // childLowerReturnsOwnOf checks that the one nested instance's one lower is of stub, and that the signature it was

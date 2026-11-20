@@ -920,13 +920,20 @@ func (q *qualifier) shares(vt *ValType) bool {
 	return q.rename == nil && vt.size > 0 && !vt.selfRes
 }
 
-// resource is one own's or borrow's identity, qualified or renamed.
+// resource is one own's or borrow's identity, qualified or renamed. A rename maps an identity's interface
+// (`things::thing`), or a whole identity with none, which is a type import's bare name (`os`).
 func (q *qualifier) resource(id string) string {
 	if q.rename == nil {
 		return qualifyResourceID(id, q.iface)
 	}
 	iface, res, ok := strings.Cut(id, "::")
-	if to, bound := q.rename[iface]; ok && bound {
+	if !ok {
+		if to, bound := q.rename[id]; bound {
+			return to
+		}
+		return id
+	}
+	if to, bound := q.rename[iface]; bound {
 		return to + "::" + res
 	}
 	return id

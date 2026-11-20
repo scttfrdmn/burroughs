@@ -311,6 +311,12 @@ func (w *walker) typeStep(d Def) {
 		if idx := w.c.Exports[d.Item].Index; int(idx) < len(w.typeIdents) {
 			ident = w.typeIdents[idx]
 		}
+	case SectionImport:
+		// A nested component's type import is the parent's type its instantiation binds it to (#1257). The
+		// outermost component's host answers with no type, so its type imports keep "".
+		if cd, ok := w.host(w.c.Imports[d.Item].Name); ok {
+			ident = cd.typeIdent
+		}
 	default:
 	}
 	w.typeIdents = append(w.typeIdents, ident)

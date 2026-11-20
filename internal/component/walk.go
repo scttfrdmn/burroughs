@@ -1120,21 +1120,31 @@ func (w *walker) importedFuncSignature(funcIdx uint32, stubName string) *FuncTyp
 // boundAs maps each of this component's instance imports to the name of the instance it is bound to, where the
 // two differ: a nested component's `things`, bound to its parent's `test:res/things@0.1.0` (#1257). A host stub
 // carries its import's name, and an import bound to anything else is named by the stub the lower calls, when the
-// import is the lowered func's own (`lowered`). Empty at the outermost component.
+// import is the lowered func's own (`lowered`). A type import bound to a parent's host resource maps its whole
+// identity, which is its bare name (`os`), to that resource's (`wasi:io/streams@0.2.3::output-stream`). Empty at
+// the outermost component.
 func (w *walker) boundAs(lowered, stubName string) map[string]string {
 	to := map[string]string{}
-	var ord int
+	var inst, typ int
 	for _, d := range w.c.Defs {
-		if d.Space != SpaceInstance {
-			continue
-		}
-		if d.Section == SectionImport && ord < len(w.compInstances) {
-			name := w.c.Imports[d.Item].Name
-			if ci := w.compInstances[ord].inst; ci != nil && ci.stub && ci.name != "" && ci.name != name {
-				to[name] = ci.name
+		switch d.Space {
+		case SpaceInstance:
+			if d.Section == SectionImport && inst < len(w.compInstances) {
+				name := w.c.Imports[d.Item].Name
+				if ci := w.compInstances[inst].inst; ci != nil && ci.stub && ci.name != "" && ci.name != name {
+					to[name] = ci.name
+				}
 			}
+			inst++
+		case SpaceType:
+			if d.Section == SectionImport && typ < len(w.typeIdents) {
+				if name, id := w.c.Imports[d.Item].Name, w.typeIdents[typ]; id != "" && id != name {
+					to[name] = id
+				}
+			}
+			typ++
+		default:
 		}
-		ord++
 	}
 	if iface, _, qualified := strings.Cut(stubName, "::"); qualified && lowered != "" && iface != lowered {
 		to[lowered] = iface
