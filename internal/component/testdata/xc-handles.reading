@@ -1,0 +1,31 @@
+# Committed readings for the cross-component handle fixtures (#1281): xc-own-param, xc-own-result,
+# xc-borrow-param, xc-stream-param, xc-future-param and xc-stream-async-param. Each passes a handle from one
+# instance to a sibling whose table holds a different live handle at the same index.
+# Built:       wasm-tools parse <name>.wat -o <name>.wasm   (wasm-tools 1.258.0; each validates --features all)
+# Invocation:  the three WASI 0.2 guests: wasmtime run <name>.wasm
+#              the three async guests:   wasmtime run -W component-model-async=y --invoke 'run()' <name>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+#
+# A WASI guest's reading is `out=<stdout> err=<stderr>`, each newline written as `|`. An async guest's is run()'s
+# u32, own*1000000 + r*10000 + x*100 + status, with 99 standing for BLOCKED (each .wat says what the terms are).
+#
+# reader                                                  reading
+# xc-own-param, wasmtime 49.0.3, 10 of 10                 out=child|1 1 2| err=
+# xc-own-param, Burroughs at 2c4371d, 3 of 3              out=1 1 1| err=child|
+# xc-own-result, wasmtime 49.0.3, 10 of 10                out=parent|1 2 3| err=
+# xc-own-result, Burroughs at 2c4371d, 3 of 3             out=1 2 2| err=parent| then a trap at the parent's last drop
+# xc-borrow-param, wasmtime 49.0.3, 10 of 10              out=child|1 1 2| err=
+# xc-borrow-param, Burroughs at 2c4371d, 3 of 3           out=1 1 1| err=child|
+# xc-stream-param, wasmtime 49.0.3, 10 of 10              1010301
+# xc-stream-param, Burroughs at 2c4371d, 3 of 3           1010199
+# xc-future-param, wasmtime 49.0.3, 10 of 10              1010301
+# xc-future-param, Burroughs at 2c4371d, 3 of 3           1010199
+# xc-stream-async-param, wasmtime 49.0.3, 10 of 10        1010301
+# xc-stream-async-param, Burroughs at 2c4371d, 3 of 3     1010199
+#
+# Meaning:     at 2c4371d every handle crossed as its index. The child read the parent's index in its own table, so
+#              it wrote to its own stderr handle (child index 1) where wasmtime writes to the stdout handle the parent
+#              passed, and dropped its own handle or stream end. For the result, the parent read the child's index 2 in
+#              its table, its second stderr handle. With #1281's slice an own of a host resource moves between the
+#              two tables, and both own fixtures read as wasmtime does. The borrow, stream, future and async-arm
+#              fixtures are refused by name at the call that would cross, because the boundary does not move them.
