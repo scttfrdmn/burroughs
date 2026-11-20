@@ -111,6 +111,8 @@ func spaceName(s Space) string {
 		return "core:module"
 	case SpaceCoreInstance:
 		return "core:instance"
+	case SpaceCoreTag:
+		return "core:tag"
 	case SpaceFunc:
 		return "func"
 	case SpaceInstance:

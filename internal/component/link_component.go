@@ -883,7 +883,8 @@ func (c *Component) walkComponentIn(parent *walker, h host, wasiHost map[string]
 // stepAll dispatches a definition to the core-space step (walk.go) or the component-space step.
 func (w *walker) stepAll(d Def) error {
 	switch d.Space {
-	case SpaceCoreModule, SpaceCoreInstance, SpaceCoreFunc, SpaceCoreTable, SpaceCoreMemory, SpaceCoreGlobal:
+	case SpaceCoreModule, SpaceCoreInstance, SpaceCoreFunc, SpaceCoreTable, SpaceCoreMemory, SpaceCoreGlobal,
+		SpaceCoreTag: // a tag alias, resolved into its own space since #1258
 		return w.step(d)
 	case SpaceFunc:
 		return w.funcStep(d)

@@ -610,7 +610,10 @@ says what it now requires and what it gives up.
     49.0.3's `export-index.reading`, 10 of 10. `TestACoreInstanceNamesItsModuleByIndexSpace` runs the new
     `core-module-export.wasm` and `core-module-outer.wasm` to wasmtime's `g() = 7`, 10 of 10
     (`core-module-index.reading`). `TestAComponentIsNamedByItsIndexSpace` does the same for `component-outer.wasm`
-    and `component-outer-scope.wasm` (`component-index.reading`). `TestAnExportOfACoreFuncIsRefused` checks the
+    and `component-outer-scope.wasm` (`component-index.reading`). `TestATagIsNotCountedAsACoreInstance` loads the
+    new `tag-as-instance.wasm`, which wasmtime refuses at parse 10 of 10 (`tag-as-instance.reading`) and Burroughs
+    refuses at load as a forward reference, and walks its control, `tag-inline-export.wasm`, which wasmtime parses.
+    `TestAnExportOfACoreFuncIsRefused` checks the
     core-sort refusal on patched bytes, with no wasmtime reading, because `wasm-tools parse` 1.258.0 cannot spell a
     core func export.
   - **Neuters, run:** with no export definition, all three rows fail: `inc 5` is refused as taking no parameters,
@@ -618,8 +621,8 @@ says what it now requires and what it gives up.
     alone fails. With the positional module lookup restored, both core-module rows are refused at instantiate, as
     naming module 2 of 2 and module 1 of 1. With the outer-alias arm dropped, core-module-outer alone is refused.
     With the positional component lookup restored, both component rows panic, as both do on origin/main. With
-    the instantiating walker as the scope, component-outer-scope's `g` is 5. Without the
-    core-sort refusal, the patched component loads.
+    the instantiating walker as the scope, component-outer-scope's `g` is 5. Without the tag case, tag-as-instance
+    loads, to fail at instantiate as an unknown import. Without the core-sort refusal, the patched component loads.
 - **A nested component's `canon lower` gets the signature checks a top-level one gets**
   ([#1257](https://github.com/scttfrdmn/burroughs/issues/1257)).
   - **The defect:** the walk read a lower's signature by looking up the stub's name among the component's imports.

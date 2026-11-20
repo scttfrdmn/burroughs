@@ -8,7 +8,64 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	bin "github.com/scttfrdmn/burroughs/internal/binary"
 )
+
+// TestATagIsNotCountedAsACoreInstance is #1258's core tag space: a core tag alias adds to the tag space, not the
+// core instance space. Both fixtures decode with exception handling on, which the default feature set gates off.
+// tag-as-instance names `(instance 1)` where one core instance precedes it, and wasmtime 49.0.3 refuses it at parse,
+// 10 of 10 (tag-as-instance.reading); Burroughs refuses it at load, as a forward reference. tag-inline-export, the
+// control, hands the aliased tag over through an inline-export instance; wasmtime parses it, and Burroughs walks it.
+//
+// Neutered, run: coreSortSpace without its tag case (the branch before the fix), and tag-as-instance loads, the tag
+// counted as core instance 1, to fail at instantiate as `unknown import: "x" "t"`. The control still walks.
+func TestATagIsNotCountedAsACoreInstance(t *testing.T) {
+	raw, err := os.ReadFile("testdata/tag-as-instance.reading")
+	if err != nil {
+		t.Fatalf("the committed reading is missing, so this witness has no oracle: %v", err)
+	}
+	feats := bin.DefaultFeatures()
+	feats.ExceptionHandling = true
+	rows := 0
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		fx, reading, ok := strings.Cut(ln, ": ")
+		if !ok {
+			t.Fatalf("tag-as-instance.reading: row %q has no `: `", ln)
+		}
+		rows++
+		t.Run(fx, func(t *testing.T) {
+			b, err := os.ReadFile("testdata/" + fx + ".wasm")
+			if err != nil {
+				t.Fatalf("the committed fixture is missing: %v", err)
+			}
+			c, err := LoadWithFeatures(b, feats)
+			switch {
+			case strings.HasPrefix(reading, "refused: "):
+				if err == nil || !strings.Contains(err.Error(), "references core:instance index 1") {
+					t.Fatalf("Load = %v; want the forward reference to core:instance 1 refused (the oracle: %s)", err, reading)
+				}
+			case strings.HasPrefix(reading, "parsed: "):
+				if err != nil {
+					t.Fatalf("Load: %v; the oracle parses it", err)
+				}
+				w, werr := c.walkComponent(stubHost, nil, nil, nil, hostResourceSource{})
+				if werr != nil {
+					t.Fatalf("walk: %v; the oracle parses it", werr)
+				}
+				w.close()
+			default:
+				t.Fatalf("tag-as-instance.reading: reading %q is neither refused nor parsed", reading)
+			}
+		})
+	}
+	if rows != 2 {
+		t.Fatalf("tag-as-instance.reading has %d rows, want 2", rows)
+	}
+}
 
 // TestAnExportAddsAnIndexToItsSort is #1258's witness: an export introduces a new index in its sort, so every
 // ordinal after it counts it. export-index exports a type and then defines two function types after it, and
