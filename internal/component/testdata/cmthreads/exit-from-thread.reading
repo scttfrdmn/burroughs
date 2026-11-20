@@ -1,0 +1,19 @@
+# Committed readings for exit-from-thread.wasm, exit-from-thread-live.wasm and exit-from-thread-wait.wasm (#1265).
+# Built:       wasm-tools parse <name>.wat -o <name>.wasm   (wasm-tools 1.258.0; validates with --features all)
+# Invocation:  wasmtime run -W component-model-threading=y <name>.wasm </dev/null
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, taken 2026-11-20T20:07:36Z.
+#
+# reader                                              reading
+# wasmtime 49.0.3 on exit-from-thread, 10 of 10       9
+# wasmtime 49.0.3 on exit-from-thread-live, 10 of 10  9
+# wasmtime 49.0.3 on exit-from-thread-wait, 10 of 10  9
+# Burroughs at 2c4371d on exit-from-thread            no exit: hung, 2 of 2 runs ended by a 10s timeout
+# Burroughs at 2c4371d on exit-from-thread-live       no exit: hung, 2 of 2 runs ended by a 10s timeout
+# Burroughs at 2c4371d on exit-from-thread-wait       9, 10 of 10
+# Burroughs with #1265's build, each fixture          9, 10 of 10
+#
+# Meaning:     the process's exit code, the code the created Thread passed to `exit-with-code`. Every run wrote
+#              nothing to stdout or stderr. The two that hung at 2c4371d YIELD; the one that exited WAITs, and the
+#              WAIT arm already had the store lock's case (ADR 0105).
+# Gate off:    wasmtime -W component-model-threading=n refuses exit-from-thread.wasm at parse, exit 1:
+#              "`thread.new-indirect` requires the component model threading feature".

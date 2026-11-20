@@ -662,9 +662,33 @@ func (tt *threadTable) unreadyLocked(t *cmThread) {
 	}
 }
 
-// yieldPoint is the callback loop's YIELD arm as a scheduling point: hand the ready queue to the scheduler,
-// which takes the run slot for it, and wait for the chain to end. It takes no slot itself (ADR 0101's
-// Option A, point 3; see the body).
+// yieldPoint is the callback loop's YIELD arm: the scheduling point (`yieldWait`), then the store lockdown's
+// check, which makes the arm a suspension point that a locked store ends (#1265, ADR 0105).
+//
+// ADR 0105 ends a call in flight when the store locks "at a suspension point, through a lock case in the async
+// waits", and the WAIT arm's `awaitEvent` has that case. This arm had none. A callback that YIELDs and calls no
+// built-in therefore re-entered forever on a store another call's trap or exit had locked: a composed child's
+// created Thread calling `wasi:cli/exit` after its own task had returned locked the store as an orphan, and the
+// run's YIELD loop never saw it. wasmtime 49.0.3 exits with the Thread's code (`cmthreads/exit-from-thread`).
+//
+// **This task's own fault is not answered here.** A trap routed to it is reported by the loop's next pass as
+// that trap, unchanged, which ADR 0105 requires of the trapping call. The lock that the same routing set would
+// otherwise be reported in its place, wrapped as ErrInstanceLocked.
+//
+// NEUTER: return `yieldWait`'s result alone, and TestAThreadsExitEndsARunThatYields's two YIELD arms hang where
+// wasmtime exits 9: the run's callback YIELDs forever. Drop the `faultOf` test, and
+// TestAThreadsTrapAtItsTasksYieldIsTheCallsOwn's call returns ErrInstanceLocked wrapping its own trap.
+func (tt *threadTable) yieldPoint(task *liftTask) error {
+	err := tt.yieldWait(task)
+	if err == nil && tt.faultOf(tt.get(task.threadIdx)) == nil {
+		err = tt.lock.locked()
+	}
+	return err
+}
+
+// yieldWait is the YIELD arm as a scheduling point: hand the ready queue to the scheduler, which takes the
+// run slot for it, and wait for the chain to end. It takes no slot itself (ADR 0101's Option A, point 3; see
+// the body).
 //
 // The reference's YIELD arm is
 //
@@ -682,7 +706,7 @@ func (tt *threadTable) unreadyLocked(t *cmThread) {
 //
 // Nothing to do, and no slot taken, when no Thread is ready — including on every instance that has never
 // executed `thread.new-indirect`, which has no scheduler to ask.
-func (tt *threadTable) yieldPoint(task *liftTask) error {
+func (tt *threadTable) yieldWait(task *liftTask) error {
 	// **The entry handed the slot over at YIELD** (`yieldHandoff`): its chain is already running, and the
 	// arm waits for that chain's reply. No request is sent. Checked first, because the queue may already be
 	// empty by now, and the reply is owed either way.
