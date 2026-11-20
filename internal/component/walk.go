@@ -175,7 +175,12 @@ type walker struct {
 	// aliased core funcs), and memory/global/table (aliased core exports, by reference). Each grows in
 	// stream order, so an inline export or module import resolves against earlier definitions.
 	coreSpace map[Space][]coreDef
-	toClose   []*interp.Instance
+	// coreModules is the core-module index space in stream order (coreModuleStep, #1258); nil for an entry this
+	// engine does not resolve. parent is the enclosing component's walker, which an outer alias names; nil at the
+	// outermost component.
+	coreModules []*bin.Module
+	parent      *walker
+	toClose     []*interp.Instance
 	// children are the nested component instances this walker instantiated, whose core instances it adopted
 	// into toClose, so `close` can end their parked Threads and schedulers too.
 	children []*walker
@@ -240,7 +245,45 @@ func (c *Component) instantiate() (*walker, error) {
 	return w, nil
 }
 
+// coreModuleStep grows the core-module index space (#1258): a module section entry is itself, an export the
+// module it exports, and an outer alias the enclosing component's module it names. An import, or an alias out of
+// a component instance, records nil, which a core instance naming it refuses by name.
+//
+// NEUTER, run: drop the outer-alias arm, and TestACoreInstanceNamesItsModuleByIndexSpace's core-module-outer is
+// refused as naming an alias this engine does not resolve.
+func (w *walker) coreModuleStep(d Def) error {
+	var m *bin.Module
+	switch d.Section {
+	case SectionCoreModule:
+		m = w.c.CoreModules[d.Item]
+	case SectionExport:
+		em, err := exportedEntry(w.c.Exports[d.Item], w.coreModules)
+		if err != nil {
+			return err
+		}
+		m = em
+	case SectionAlias:
+		if a := w.c.Aliases[d.Item]; a.Kind == AliasOuter {
+			scope := w
+			for range a.Count {
+				if scope = scope.parent; scope == nil {
+					break
+				}
+			}
+			if scope != nil && int(a.Index) < len(scope.coreModules) {
+				m = scope.coreModules[a.Index]
+			}
+		}
+	default:
+	}
+	w.coreModules = append(w.coreModules, m)
+	return nil
+}
+
 func (w *walker) step(d Def) error {
+	if d.Space == SpaceCoreModule {
+		return w.coreModuleStep(d)
+	}
 	switch d.Section {
 	case SectionCoreInstance:
 		return w.coreInstanceStep(w.c.CoreInstances[d.Item])
@@ -436,10 +479,20 @@ func (w *walker) coreInstanceStep(ci CoreInstance) error {
 		w.coreInstances = append(w.coreInstances, synthInst{exports: exports})
 		return nil
 	}
-	if int(ci.ModuleIdx) >= len(w.c.CoreModules) {
-		return fmt.Errorf("%w: core instance names module %d of %d", ErrUnsupportedForm, ci.ModuleIdx, len(w.c.CoreModules))
+	// **The module is an ordinal of the core-module index space** (#1258), which this read as a position in
+	// c.CoreModules, the section's modules alone. An export, import or alias of a core module adds an index
+	// too, so `instantiate 2` after an exported module named past the end, or the wrong module.
+	//
+	// NEUTER, run: index w.c.CoreModules again, and TestACoreInstanceNamesItsModuleByIndexSpace's `instantiate 2`
+	// after an exported module is refused as naming module 2 of 2.
+	if int(ci.ModuleIdx) >= len(w.coreModules) {
+		return fmt.Errorf("%w: core instance names module %d of %d", ErrUnsupportedForm, ci.ModuleIdx, len(w.coreModules))
 	}
-	m := w.c.CoreModules[ci.ModuleIdx]
+	m := w.coreModules[ci.ModuleIdx]
+	if m == nil {
+		return fmt.Errorf("%w: core instance names core module %d, an import or alias of a core module this engine "+
+			"does not resolve", ErrUnsupportedForm, ci.ModuleIdx)
+	}
 	in, trap, err := interp.InstantiateLinked(m, w.resolverFor(m, ci.Args))
 	if err != nil {
 		return fmt.Errorf("component: instantiate core module %d: %w", ci.ModuleIdx, err)

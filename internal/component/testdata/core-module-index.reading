@@ -1,0 +1,10 @@
+# Committed wasmtime readings for core-module-export.wasm and core-module-outer.wasm (#1258): a core instance's
+# module is an ordinal of the core-module index space, which an exported or outer-aliased core module grows.
+# Built:       wasm-tools parse <fixture>.wat -o <fixture>.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run --invoke 'g()' <fixture>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical, exit 0. Taken 2026-11-20.
+#
+# Each line is `<fixture>: <the u32 g() printed>`.
+core-module-export: 7
+core-module-outer: 7

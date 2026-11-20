@@ -99,3 +99,50 @@ func TestAnExportOfACoreFuncIsRefused(t *testing.T) {
 		t.Fatalf("Load of a core func export = %v; want the refusal naming the sort", err)
 	}
 }
+
+// TestACoreInstanceNamesItsModuleByIndexSpace is #1258 on the core side: a core instance's `instantiate N` names an
+// ordinal of the core-module index space, which an exported core module and an outer alias of one grow, and not a
+// position among the section's modules. Each row of core-module-index.reading is wasmtime 49.0.3's, 10 of 10: both
+// fixtures' `g` is 7, the module the index space names, where the section position names another or none.
+//
+// Neutered, run: coreInstanceStep indexing w.c.CoreModules again, and both rows are refused at instantiate,
+// core-module-export as naming module 2 of 2 and core-module-outer as naming module 1 of 1. With coreModuleStep's
+// outer-alias arm dropped, core-module-outer alone is refused, as an alias this engine does not resolve.
+func TestACoreInstanceNamesItsModuleByIndexSpace(t *testing.T) {
+	raw, err := os.ReadFile("testdata/core-module-index.reading")
+	if err != nil {
+		t.Fatalf("the committed reading is missing, so this witness has no oracle: %v", err)
+	}
+	rows := 0
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		fx, reading, ok := strings.Cut(ln, ": ")
+		if !ok {
+			t.Fatalf("core-module-index.reading: row %q has no `: `", ln)
+		}
+		rows++
+		t.Run(fx, func(t *testing.T) {
+			want, perr := strconv.ParseUint(reading, 10, 32)
+			if perr != nil {
+				t.Fatalf("core-module-index.reading: reading %q is not a u32", reading)
+			}
+			b, err := os.ReadFile("testdata/" + fx + ".wasm")
+			if err != nil {
+				t.Fatalf("the committed fixture is missing: %v", err)
+			}
+			in, err := InstantiateWithHost(b, NewHost(nil, nil, nil))
+			if err != nil {
+				t.Fatalf("instantiate: %v; the oracle reads g() = %d", err, want)
+			}
+			t.Cleanup(in.Close)
+			if got, err := callU32(in, "g"); err != nil || uint64(got) != want {
+				t.Fatalf("g() = %d, %v; the oracle reads %d", got, err, want)
+			}
+		})
+	}
+	if rows != 2 {
+		t.Fatalf("core-module-index.reading has %d rows, want 2", rows)
+	}
+}

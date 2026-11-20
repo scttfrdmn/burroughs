@@ -594,15 +594,21 @@ says what it now requires and what it gives up.
     `typeSpaceToTypes`. The walk's func, instance, component and type steps each have an export arm, and the
     forward-reference check reads an export's reference. An export of a core sort other than `core module`, which
     Binary.md's validation disallows, is refused at load.
+  - **The core side:** a core instance's `instantiate N` was read as a position in `c.CoreModules`, the module
+    section's entries alone. It is now an ordinal of the core-module index space, which the walk grows in stream
+    order (`coreModuleStep`): an exported module is the module it exports, and an outer alias is the enclosing
+    component's module, read through a new `parent` link. A core-module import, or an alias out of a component
+    instance, is an entry this engine does not resolve, and a core instance naming one is refused by name.
   - **Witnesses:** `TestAnExportAddsAnIndexToItsSort` on a new `export-index.wasm`, whose three rows match wasmtime
-    49.0.3's `export-index.reading`, 10 of 10. `TestAnExportOfACoreFuncIsRefused` checks the core-sort refusal on
-    patched bytes, with no wasmtime reading.
+    49.0.3's `export-index.reading`, 10 of 10. `TestACoreInstanceNamesItsModuleByIndexSpace` runs the new
+    `core-module-export.wasm` and `core-module-outer.wasm` to wasmtime's `g() = 7`, 10 of 10
+    (`core-module-index.reading`). `TestAnExportOfACoreFuncIsRefused` checks the core-sort refusal on patched bytes,
+    with no wasmtime reading, because `wasm-tools parse` 1.258.0 cannot spell a core func export.
   - **Neuters, run:** with no export definition, all three rows fail: `inc 5` is refused as taking no parameters,
     `k` has no resolved signature, and `inc2` is not a callable export. With funcStep's export arm dropped, `inc2`
-    alone fails. Without the core-sort refusal, the patched component loads.
-  - **Not covered:** the walk resolves a core instance's module positionally in `c.CoreModules`, not through the
-    core-module index space, so an exported core module still shifts nothing there. The same is already true of a
-    core module's import or alias.
+    alone fails. With the positional module lookup restored, both core-module rows are refused at instantiate, as
+    naming module 2 of 2 and module 1 of 1. With the outer-alias arm dropped, core-module-outer alone is refused.
+    Without the core-sort refusal, the patched component loads.
 - **A nested component's `canon lower` gets the signature checks a top-level one gets**
   ([#1257](https://github.com/scttfrdmn/burroughs/issues/1257)).
   - **The defect:** the walk read a lower's signature by looking up the stub's name among the component's imports.

@@ -848,6 +848,12 @@ func stubHost(name string) (compDef, bool) {
 // recursion's call site makes it structural: every component that gets walked gets gated, at every
 // depth, and a future third entry point cannot forget it. The entry points no longer call it.
 func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncImplFor, streamConsumers map[string]*streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
+	return c.walkComponentIn(nil, h, wasiHost, asyncWasiHost, streamConsumers, resourceSrc)
+}
+
+// walkComponentIn is walkComponent for a component nested in parent's, whose walker an outer alias of a core
+// module reads (#1258); parent is nil at the outermost component.
+func (c *Component) walkComponentIn(parent *walker, h host, wasiHost map[string]interp.CanonFunc, asyncWasiHost map[string]asyncImplFor, streamConsumers map[string]*streamConsumer, resourceSrc hostResourceSource) (*walker, error) {
 	if gerr := gateAsync(c); gerr != nil {
 		return nil, gerr
 	}
@@ -862,7 +868,7 @@ func (c *Component) walkComponent(h host, wasiHost map[string]interp.CanonFunc, 
 	// walks through this function too, so it gets a table of its own rather than its parent's. NEUTER THIS by
 	// sharing one table across walkers, and TestHostResourceHandleIsRefusedInAnotherInstance resolves
 	// instance a's index in instance b (#1137's R-4).
-	w := &walker{c: c, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, resourceSrc: resourceSrc, hostRes: newHostResources(), async: newAsyncHandles(), threads: newThreadTable()}
+	w := &walker{c: c, parent: parent, coreSpace: map[Space][]coreDef{}, host: h, wasiHost: wasiHost, asyncWasiHost: asyncWasiHost, streamConsumers: streamConsumers, resourceSrc: resourceSrc, hostRes: newHostResources(), async: newAsyncHandles(), threads: newThreadTable()}
 	w.async.threads = w.threads // a suspension point finds its caller's chain through the table (runslot.go)
 	w.threads.h = w.async       // the append assertion reads the slot's holder (ADR 0101, Option A, point 5)
 	for _, d := range c.Defs {
@@ -1080,7 +1086,7 @@ func (w *walker) componentInstance(in Instance) (compDef, error) {
 		}
 		return compDef{}, false
 	}
-	nw, err := w.nested[in.ComponentIdx].walkComponent(argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers, w.resourceSrc)
+	nw, err := w.nested[in.ComponentIdx].walkComponentIn(w, argHost, w.wasiHost, w.asyncWasiHost, w.streamConsumers, w.resourceSrc)
 	if err != nil {
 		return compDef{}, err
 	}
