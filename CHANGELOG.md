@@ -684,6 +684,31 @@ says what it now requires and what it gives up.
     - without its own-fault test, the trapping call returns `ErrInstanceLocked`;
     - without the rewording, both wording tests read "host function trapped";
     - with `Unwrap` returning nil, `errors.As` and `errors.Is` lose the chain.
+- **A handle crossing a cross-component call moves between the two instances' tables, or is refused by name**
+  ([#1281](https://github.com/scttfrdmn/burroughs/issues/1281)).
+  - **The defect:** `bindCrossComponent` passed `own`, `borrow`, `stream` and `future` values through as flat
+    words, with the scalars. Each nested instance has its own tables, so the callee read the caller's index in its
+    own table. Nothing refused such a signature earlier: the binding refusal covers host-served lowers only. With
+    the callee's table holding another live handle at that index, the callee used that handle instead. A child
+    handed the parent's stdout handle wrote to its own stderr handle and then dropped it, and a parent handed the
+    child's stdout handle wrote to its own stderr handle. A child given a stream end dropped its own end, so the
+    parent's write parked where wasmtime 49.0.3's reads DROPPED. This held on the sync arm and on the async arm.
+  - **The repair:** a top-level `own` of a host resource, as a parameter or as the result of a sync call, now moves
+    out of the sender's table and is minted into the receiver's, as `def:lift_own` and `def:lower_own` do. The
+    call refuses by name, citing #1281, if a signature carries a `borrow`, a `stream`, a `future`, an
+    `error-context`, a guest resource's `own`, or a handle inside an aggregate. It also refuses any handle in a
+    signature crossing through the adapter or an async lower. A borrow would need a borrow scope, which is not
+    modelled. A moved stream or future end would leave its two ends' copy state under two tables' locks. A
+    signature with no handle is unchanged.
+  - **Witnesses:** `TestACrossComponentOwnMovesBetweenTables` on `xc-own-param.wasm` and `xc-own-result.wasm`
+    matches wasmtime 49.0.3's `xc-handles.reading`, 10 of 10.
+    `TestACrossComponentHandleThatDoesNotMoveIsRefusedByName` covers `xc-borrow-param`, `xc-stream-param`,
+    `xc-future-param` and `xc-stream-async-param`, which wasmtime runs. `TestCrossHandlesOfMovesOnlyATopLevelHostOwn`
+    covers the plan's predicate.
+  - **Neuters, run:** with the words passed through again, `xc-own-param` reads `out=1 1 1| err=child|`, and
+    `xc-own-result` writes "parent" to stderr and traps at its last drop. With the plan emptied, the four refused
+    fixtures run and read the raw-index results: the child's line on stderr, and 1010199 where wasmtime reads
+    1010301.
 - **Close writes the bytes a guest's `tcp-socket.send` writes were told were complete before it closes the
   connection** ([#1308](https://github.com/scttfrdmn/burroughs/issues/1308), `type:grave`; ADR 0127, amending ADR
   0123's choice 12 on Scott's ruling).

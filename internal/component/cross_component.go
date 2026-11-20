@@ -52,6 +52,18 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 		return interp.Extern{}, false
 	}
 
+	// **A handle crosses by moving between the two instances' tables, or not at all** (#1281,
+	// cross_handles.go). Every arm below passed it as a word, so the callee read the caller's index in its own
+	// table: `xc-own-param.wasm`'s child wrote to its own stderr where wasmtime 49.0.3 writes to the stdout
+	// handle the parent passed. An own of a host resource moves on the sync arm; every other handle, and an
+	// own on any other arm, is refused here by name.
+	handles, herr := crossHandlesOf(callee)
+	refuseHandles := func(ft bin.FuncType, err error) (interp.Extern, bool) {
+		return w.lowerExtern(ft, func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
+			return nil, err
+		}, opts), true
+	}
+
 	if !d.async {
 		// A sync cross-component call: the caller blocks for the callee, which is what sync means, so no
 		// goroutine and no subtask. `invokeWith` dispatches on the callee's own `async` flag, so a sync
@@ -98,6 +110,17 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 					"spilled-parameter lowering (ADR 0103)", ErrUnsupportedForm, form)
 			}, opts), true
 		}
+		if herr != nil {
+			return refuseHandles(ft, herr)
+		}
+		if handles.moves() && syncNeedsAdapter(callee.sig) {
+			return refuseHandles(ft, crossHandleRefusal("signature", VOwn, "it crosses through the adapter, "+
+				"which lifts and lowers values and moves no handle"))
+		}
+		if handles.moves() && (callee.res == nil || w.hostRes == nil) {
+			return refuseHandles(ft, crossHandleRefusal("signature", VOwn, "one side has no table of host "+
+				"resources to move it between"))
+		}
 		// **A value that carries a pointer, or a result that spills, crosses through the adapter** (ADR 0103,
 		// #995). Its words point into one component's memory, so passing them through had the other side read
 		// its own memory at that address: 120 where wasmtime reads 97 (`sync-string-param.wasm`), or an
@@ -136,15 +159,36 @@ func (w *walker) bindCrossComponent(d coreDef, m *bin.Module, mod, name string) 
 			// **And the caller's agent is passed, so the callee runs under its blocked mark** (ADR 0104's
 			// amendment of 2026-10-18). This arm said "there is nothing to mark", and for SP-1 that was false:
 			// unmarked, a `Stop` of the caller waited for the callee to return.
+			//
+			// **An own moves between the two tables on the way in and on the way out** (#1281): the caller's
+			// handle leaves its table and is minted into the callee's before the callee runs, and an own result
+			// takes the reverse trip. NEUTER THIS by passing `args` and `res.flat` through, and
+			// TestACrossComponentOwnMovesBetweenTables reads the child writing to its own stderr.
+			args, merr := handles.moveParams(w.hostRes, callee.res, args)
+			if merr != nil {
+				return nil, merr
+			}
 			res, cerr := callee.invokeWithCaller(w.callerChainContext(c), args, c)
-			return res.flat, cerr
+			if cerr != nil {
+				return nil, cerr
+			}
+			return handles.moveResult(callee.res, w.hostRes, res.flat)
 		}), opts), true
+	}
+
+	// Neither async arm moves a handle (#1281): an own parameter would move in `onStart` and an own result in
+	// the resolution, and neither is built.
+	if herr == nil && handles.moves() {
+		herr = crossHandleRefusal("signature", VOwn, "an async cross-component lower moves no handle")
 	}
 
 	// The async arm: the flat ABI is the sync signature's params plus a packed i32 return, exactly as the
 	// host-impl async arm builds it, and the subtask protocol is reused whole.
 	hasResult := callee.sig != nil && callee.sig.Result != nil
 	aft := bin.FuncType{Params: ft.Params, Results: []bin.ValType{bin.I32}}
+	if herr != nil {
+		return refuseHandles(aft, herr)
+	}
 	if !callee.async {
 		// **An async lower of a SYNC lift runs the callee inline** (#1050). `liftAsAsyncImpl` drives a callback
 		// lift's loop, and it read a sync callee's return value as a packed callback code: 42 decoded to
@@ -345,7 +389,9 @@ func (w *walker) syncAdapter(callee *compFunc) interp.CanonFunc {
 
 // carriesPointer reports whether a value of this type flattens to words that include a pointer into linear
 // memory: a `string` or a `list`, anywhere inside it. Handles (own, borrow, stream, future, error-context) are
-// table indices, not pointers, so they are not counted here.
+// table indices, not pointers, so they are not counted here. **That does not make them words that mean the same on
+// both sides**: an index names an entry in its holder's table, so a handle moves or is refused (`crossHandlesOf`,
+// #1281) before any arm passes words through.
 func carriesPointer(vt ValType) bool {
 	switch vt.Kind {
 	case VString, VList:

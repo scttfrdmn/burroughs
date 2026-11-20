@@ -42,6 +42,13 @@ type compFunc struct {
 	// `exit_implicit_thread` in the reference.
 	threads *threadTable
 
+	// res is the instance's table of host-resource handles (ADR 0117), so a cross-component call can move an
+	// own<R> into it and out of it rather than pass the caller's index (#1281, cross_handles.go). resAt is the
+	// instance's walker's `hostResourceAt`: a handle in `sig` names its resource by an ordinal of this
+	// instance's type index space, which only this instance's walk can resolve.
+	res   *hostResources
+	resAt func(typeIdx uint32) *hostResource
+
 	// The lift's own `(memory $m)` and `(realloc $f)` canonopts, for lowering an argument that does not
 	// fit in flat words — a `string` today (#902).
 	//
@@ -918,7 +925,7 @@ func (w *walker) funcStep(d Def) error {
 		// the async handles.
 		lf := &compFunc{
 			core: w.coreSpace[SpaceCoreFunc][cn.FuncIdx], sig: w.liftSignature(cn),
-			threads: w.threads, h: w.async,
+			threads: w.threads, h: w.async, res: w.hostRes, resAt: w.hostResourceAt,
 		}
 		// The lift's memory and realloc (#902). Captured for every lift, used only by an argument that
 		// needs guest memory; a lift carrying neither canonopt leaves them zero and the lowering refuses
