@@ -362,14 +362,14 @@ func TestTaskReturnCoversEveryKindCrossComponentValueDoes(t *testing.T) {
 	t.Logf("EAGER-LIFT-COVERS %d of %d ValKind(s): %v", len(carried), n, carried)
 }
 
-// TestTaskReturnRefusesAResultKindItCannotLift pins the refusal side, because the eager lift's scope is
-// narrower than the bridge's: a flat lift carries the scalars, `string` and `list`, and the rest needs a
-// composable load for the kind — `canon.LoadVia`, where that limit now lives for both directions at once.
+// TestTaskReturnRefusesAResultKindItCannotLift pins the refusal side: a kind the bridge carries and
+// `liftFlatValue` has no arm for is refused by name rather than approximated. Its first sentence said the flat
+// lift carried "the scalars, `string` and `list`", which the record and then the variant family (#1320)
+// falsified, so it names no list.
 //
 // Asserted on the lift helper directly rather than through a guest, for the reason
-// `TestACrossComponentResultShapeRefusesByName` gives one level over: no committed artefact returns a
-// variant or a record from a `task.return`, and *a negative claim buys a branch an exemption only if
-// something checks the exemption*.
+// `TestACrossComponentResultShapeRefusesByName` gives one level over: *a negative claim buys a branch an
+// exemption only if something checks the exemption*.
 //
 // # `list` was in this table and had to come out, and the way it would have stayed green is the lesson
 //
@@ -385,8 +385,9 @@ func TestTaskReturnCoversEveryKindCrossComponentValueDoes(t *testing.T) {
 //
 //   - Each case supplies **well-formed flat values for its own shape**, so the arity guard is satisfied
 //     and the refusal under test is the one that fires.
-//   - The refusal is matched on the mechanism it names (`LoadVia`), not just on the kind's name, which
-//     an arity message also carries.
+//   - The refusal is matched on its own wording ("no arm for kind"), not just on the kind's name, which
+//     an arity message also carries. (It read `LoadVia`, the mechanism an earlier message named, until that
+//     message stopped naming one.)
 func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -394,29 +395,14 @@ func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 		flat []interp.Value
 		want string
 	}{
-		// Carryable by the bridge, not by a flat lift — the distinction this refusal draws. A variant
-		// flattens to a discriminant plus its widest case, so one word is a legitimate arity for a
-		// payload-less single case; the refusal must be about the KIND, not the count.
+		// Carryable by the bridge, not by a flat lift — the distinction this refusal draws. An `own` is one
+		// i32, the handle's index, so one word is its arity and the refusal must be about the KIND. Its lift
+		// moves the handle out of the guest's table (def:lift_own), and `liftFlatValue` has no table.
 		{
-			"variant",
-			ValType{Kind: VVariant, Cases: []VarCase{{Name: "a"}}},
-			[]interp.Value{interp.I32(0)},
-			"no arm for kind variant",
-		},
-		// ADR 0116's enum and option despecialize to a variant, so they reach the same refusal, named as
-		// themselves because the bridge keeps their kinds. (`want` was "LoadVia" until ADR 0116 gave
-		// `LoadVia` a variant arm, which made the message it matched false; see the message's comment.)
-		{
-			"enum",
-			ValType{Kind: VEnum, Labels: []string{"a", "b"}},
-			[]interp.Value{interp.I32(0)},
-			"no arm for kind enum",
-		},
-		{
-			"option",
-			ValType{Kind: VOption, Elem: &ValType{Kind: VU32}},
-			[]interp.Value{interp.I32(0), interp.I32(0)},
-			"no arm for kind option",
+			"own",
+			ValType{Kind: VOwn},
+			[]interp.Value{interp.I32(1)},
+			"no arm for kind own",
 		},
 		// **`record` was here and has gone, which is the FOURTH time this campaign a specimen chosen
 		// because it happened to be unimplemented has expired** — and this table's own repair predicted
@@ -424,10 +410,11 @@ func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 		// (`TestTaskReturnLiftsARecordFromItsFieldsWords`), so asserting it is refused would assert the
 		// opposite of the engine.
 		//
-		// The table is the variant family, and that is the honest state rather than a gap: `variant` and
-		// the two kinds that despecialize to it are the ones the bridge carries and the flat lift does
-		// not. When a variant arm lands, this table becomes empty — at which point it should be
-		// **deleted**, not kept with a comment, since a refusal table over no kinds asserts nothing.
+		// **The variant family went the same way with #1320**: `variant`, `enum` and `option` were the
+		// three rows here, and they now lift (TestTaskReturnLiftsAVariantAsWasmtimeDoes). This comment said
+		// the table would then be empty and should be deleted. It was not empty: `own` is carried by the
+		// bridge and has no arm here, and the table had never listed it, so the prediction counted only the
+		// rows already written. `own` is the row now, until a handle-moving lift gives it an arm.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := liftTaskReturnValue(nil, c.vt, c.flat)

@@ -1,0 +1,26 @@
+# Committed wasmtime readings for task-return-variant.wasm (#1320): task.return of a variant-family value.
+# Built:       wasm-tools parse task-return-variant.wat -o task-return-variant.wasm   (wasm-tools 1.258.0; validates
+#              --features all)
+# Invocation:  wasmtime run -W component-model-async=y --invoke '<export>()' task-return-variant.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. Taken 2026-11-21.
+#
+# Each line is `<export>: <wasmtime's reading>`: the result as wasmtime prints it, or `trap: …` with the last
+# line of its error. The test reads them by export.
+opt-some: some(4294967298)
+opt-none: none
+mixed-a: a(3735928559)
+mixed-b: b(3.141592653589793)
+mixed-c: c("burroughs")
+nested-ok-some: ok(some(42))
+nested-ok-none: ok(none)
+nested-err: err("burroughs")
+enum-y: y
+bad-case: trap: discriminant 3 out of range [0..3)
+#
+# The pin agrees on every row: definitions.py @ 2e7895c's lift_flat over the same flat words gives
+# {'some': 4294967298}, {'none': None}, {'a': 3735928559}, {'b': 3.141592653589793}, {'c': 'burroughs'},
+# {'ok': {'some': 42}}, {'ok': {'none': None}}, {'error': 'burroughs'}, {'y': None}, and a Trap for bad-case.
+#
+# Burroughs at d8076a1, every row: trap "task.return declares a <type> value, which this engine does not lift
+# from flat values: liftFlatValue has no arm for kind variant" (option for the opt-* rows, enum for enum-y).

@@ -656,11 +656,10 @@ func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
 //
 // Every one-word kind — `bool`, the eight integers, `f32`/`f64`, `char` — is lifted by the codec's one
 // scalar flat lift, and a `string` is a `(ptr, len)` pair whose bytes are read through the codec's one
-// string lift. Everything compound — a list, a variant, a record — needs a per-element load the way
-// `canon.StoreList` needs a per-element store, and no such lift exists yet (`canon.LoadListU8` is the one
-// reduced case, and it reduces only because a u8 is one byte at a one-byte stride). So those refuse
-// **by name** here rather than being approximated, which is the same discipline the bridge applies one
-// level up.
+// string lift. This paragraph went on to say that a list, a variant and a record refuse by name, for want of
+// a per-element load. Each has since gained an arm in `liftFlatValue` over the codec's own framing (the
+// variant last, #1320), so what still refuses by name is what that function's default arm reaches: any kind
+// with no arm there.
 //
 // # Why every scalar, and not just the one a fixture drives
 //
@@ -850,9 +849,46 @@ func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp
 		}
 		return rv, used, nil
 
+	case canon.KindVariant, canon.KindOption, canon.KindEnum:
+		// A variant, and so a `result`, and ADR 0116's `option` and `enum`, which despecialize to one (#1320).
+		// This arm was missing, so a `result` from an async-lifted export trapped at its `task.return` where
+		// wasmtime 49.0.3 runs it: wasi:cli/run@0.3.0's own `run` returns one.
+		//
+		// **The framing is the codec's**: `canon.LiftFlatVariant` reads the case index, coerces each joined slot
+		// back to the payload's own flat type (def:lift_flat_variant, over def:join's slot types) and drains the
+		// slots the case does not fill, and the model heap's flat lift goes through it too, so the differential
+		// against definitions.py verifies it. The payload is lifted by this function, recursively, so a payload
+		// that is a string, a list, a record or another variant reads guest memory **now**, as those arms do.
+		//
+		// Witnessed by TestTaskReturnLiftsAVariantAsWasmtimeDoes (task-return-variant.reading) and
+		// TestARunReturningAResultThroughTaskReturnExitsAsWasmtimeDoes (task-return-run.reading). NEUTER this
+		// arm and the run specimen traps "liftFlatValue has no arm for kind variant" again.
+		bits := make([]uint64, len(args))
+		for i := range args {
+			bits[i] = args[i].Bits
+		}
+		v, used, lerr := canon.LiftFlatVariant(ct, bits, func(pt canon.Type, ws []uint64) (canon.Value, int, error) {
+			pw := make([]interp.Value, len(ws))
+			for i, w := range ws {
+				pw[i] = interp.Value{Bits: w}
+			}
+			return liftFlatValue(h, label, pt, pw)
+		})
+		if lerr != nil {
+			// A payload's own trap is already a trap naming the payload; anything else is the framing's, which
+			// is a guest fault for the reachable cases (a case index past the cases, too few words) and is
+			// reported as one, as the record arm's constructor failure is.
+			var tr *interp.Trap
+			if errors.As(lerr, &tr) {
+				return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf("%s's %s value: %s", label, ct, tr.Reason)}
+			}
+			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf("%s's %s value: %v", label, ct, lerr)}
+		}
+		return v, used, nil
+
 	default:
-		// Everything left is compound and not a list or a record: variant (and so result, and ADR 0116's
-		// option and enum, which despecialize to one) and own/borrow.
+		// Reached by a kind with no arm above. The variant family left this arm with #1320, so the sentence
+		// that stood here naming it is gone, for the reason the rest of this comment gives.
 		//
 		// **This message has now been wrong twice, in opposite directions, and both are worth naming.**
 		// It first said "this engine lifts scalars and string" while only `u32` was handled, which made

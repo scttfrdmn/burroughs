@@ -1,0 +1,13 @@
+# Committed readings for task-return-run-ok.wasm and task-return-run-err.wasm (#1320).
+# Built:       wasm-tools parse task-return-run-<case>.wat -o task-return-run-<case>.wasm   (wasm-tools 1.258.0;
+#              validates with --features all)
+# Invocation:  wasmtime run task-return-run-<case>.wasm </dev/null
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+#
+# reader                                      reading
+# wasmtime 49.0.3 on ok, 10 of 10             0
+# wasmtime 49.0.3 on err, 10 of 10            1
+#
+# Meaning:     the process's exit code; neither run wrote to stdout or stderr. Burroughs at d8076a1 trapped on
+#              both at the task.return: "task.return declares a variant{ok, error} value, which this engine
+#              does not lift from flat values: liftFlatValue has no arm for kind variant".
