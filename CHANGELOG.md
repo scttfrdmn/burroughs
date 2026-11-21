@@ -583,6 +583,21 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **The editroute hook's tracked-file routes guard every worktree of the repository, not only the main checkout**
+  ([#1315](https://github.com/scttfrdmn/burroughs/issues/1315)).
+  - **The defect:** the hook's tracked set was the files of `CLAUDE_PROJECT_DIR`, the main checkout. A file tracked
+    only in another worktree (`~/.xtmp/wt-*`, where every slice agent works) was never "tracked", so the Bash-edit
+    routes refused nothing there. A `sed -i` on a tracked test file in one ran unrefused (#1281's slice), and the same
+    kind of slip earlier in the cycle was only ever self-reported. Separately, `repo_root` required `.git` to be a
+    directory, which in a worktree is a file, so `TestEditRouteHookRefusesBashEditsOfTrackedFiles` failed in every
+    worktree. Agents read those 13 failing subtests as environmental, when they were this defect's own witness.
+  - **The repair:** `repo_root` accepts a `.git` file. `is_tracked` also asks the file's own directory whether git
+    tracks it, through `ls-files --error-unmatch`, when that directory belongs to a worktree of the same repository,
+    judged by a shared common git directory. Another repository's files, such as the private fork's, are left alone.
+  - **Witness:** `TestEditRouteRefusesABashEditOfAFileAnotherWorktreeTracks`, on a throwaway repository with a
+    worktree. The hook refuses the worktree's tracked file and allows an untracked one and another repository's.
+    Neutered, with the worktree question answering no, the first row is allowed. `internal/testenv` now passes in a
+    worktree.
 - **An export adds an index to its sort, so a definition after an export is the ordinal it is everywhere else**
   ([#1258](https://github.com/scttfrdmn/burroughs/issues/1258)).
   - **The defect:** Binary.md says *"All exports (of all `sort`s) introduce a new index that aliases the exported
