@@ -756,10 +756,25 @@ func (r *reader) canonOpts() (CanonOpts, error) {
 		return CanonOpts{}, err
 	}
 	opts := CanonOpts{StringEncoding: "utf8"}
+	seen := map[string]bool{}
 	for range n {
 		disc, err := r.byte()
 		if err != nil {
 			return CanonOpts{}, err
+		}
+		// **Each option at most once** (#1314; CanonicalABI.md's canonopt validation: *"can be specified at most
+		// once in any particular list of options"*, and string-encoding *"at most once, regardless of N"*). The
+		// list was folded into the struct, so a second `memory` silently replaced the first and two encodings
+		// kept the last. wasm-tools 1.258.0 and wasmtime 49.0.3 refuse both at parse. Refused here, at decode,
+		// because it is a property of the list alone and the struct cannot express it afterwards.
+		//
+		// NEUTER, run: drop this refusal, and TestACanonOptionTheModelRefusesIsInvalid's repeated-option rows load.
+		if name := canonOptName(disc); name != "" {
+			if seen[name] {
+				return CanonOpts{}, fmt.Errorf("%w: canonical option `%s` is specified more than once",
+					ErrCanonOptionInvalid, name)
+			}
+			seen[name] = true
 		}
 		switch disc {
 		case 0x00:
@@ -790,6 +805,120 @@ func (r *reader) canonOpts() (CanonOpts, error) {
 		}
 	}
 	return opts, nil
+}
+
+// canonOptName is the option a canonopt discriminant spells, the three encodings being one option, or "" for an
+// undefined discriminant (which canonOpts refuses as such).
+func canonOptName(disc byte) string {
+	switch disc {
+	case 0x00, 0x01, 0x02:
+		return "string-encoding"
+	case 0x03:
+		return "memory"
+	case 0x04:
+		return "realloc"
+	case 0x05:
+		return "post-return"
+	case 0x06:
+		return "async"
+	case 0x07:
+		return "callback"
+	default:
+		return ""
+	}
+}
+
+// checkCanonOpts applies the canonopt validation rules that need no resolved index space to every lift and
+// lower, once the whole definition stream is in (#1314). Each is CanonicalABI.md's `canonopt` validation at
+// CANON_PIN, and wasm-tools 1.258.0 and wasmtime 49.0.3 refuse each at parse, with the message quoted:
+//
+//   - `async` *"is only allowed when used with an `async` function type in canon lift or canon lower"*
+//     ("the `async` canonical option requires an async function type"). The lift's half is here, where its
+//     type index resolves; the lower's needs its callee's type and is in the walk (walk.go).
+//   - `async` *"cannot be present with `post-return`"* ("cannot specify post-return function in async").
+//   - `callback` *"cannot be present without `async` and is only allowed with canon lift"* ("cannot specify
+//     callback without async"; "canonical option `callback` cannot be specified for lowerings").
+//   - `post-return` *"only allowed on canon lift"* ("canonical option `post-return` cannot be specified for
+//     lowerings").
+//   - *"if `realloc` is present then `memory` must be present"* ("canonical option `realloc` requires `memory`
+//     to also be specified").
+//
+// The pinned reference has none of these as a `trap_if`: def:canon_lift reads `opts.async_` and never compares
+// it with `ft.async_`, so a sync-typed async lift ran there and here. That it ran is the defect, and the rule
+// is validation's, so it is refused at load as ErrCanonOptionInvalid, which the public doors report as
+// ErrInvalid. A lift whose type index does not resolve to a function type here is not judged by the first
+// rule, which is the one case it skips.
+//
+// NEUTER, run: return nil at the top, and the six rows of TestACanonOptionTheModelRefusesIsInvalid these rules
+// refuse load, the specimen among them. Drop only the type arm, and the specimen is the one row that loads.
+func (c *Component) checkCanonOpts() error {
+	for i, cn := range c.Canons {
+		if cn.Kind != CanonLift && cn.Kind != CanonLower {
+			continue
+		}
+		o := cn.Opts
+		var rule string
+		switch {
+		case cn.Kind == CanonLower && o.PostReturn != nil:
+			rule = "`post-return` is only allowed on canon lift"
+		case cn.Kind == CanonLower && o.Callback != nil:
+			rule = "`callback` is only allowed on canon lift"
+		case o.Callback != nil && !o.Async:
+			rule = "`callback` cannot be present without `async`"
+		case o.Async && o.PostReturn != nil:
+			rule = "`async` cannot be present with `post-return`"
+		case o.Realloc != nil && o.Memory == nil:
+			rule = "`realloc` requires `memory` to also be present"
+		case cn.Kind == CanonLift && o.Async && !c.liftTypeIsAsync(cn):
+			// The specimen: wasi:cli/run@0.2.x's `run`, `func() -> result`, lifted async with a callback.
+			rule = "the `async` option requires an async function type, and its type is not async"
+		default:
+			continue
+		}
+		return fmt.Errorf("%w: %s: %s (CanonicalABI.md, canonopt validation)", ErrCanonOptionInvalid,
+			c.canonSite(i), rule)
+	}
+	return nil
+}
+
+// liftTypeIsAsync reports whether a lift's function type is async, and true when its type index does not
+// resolve to a function type here, which checkCanonOpts does not judge.
+func (c *Component) liftTypeIsAsync(cn Canon) bool {
+	td, ok := c.sectionTypeAt()(cn.TypeIdx)
+	if !ok || td.Kind != TDFunc || td.Func == nil {
+		return true
+	}
+	return td.Func.Async
+}
+
+// canonSite names the canon at c.Canons[i] for a refusal: a lift by the export that exports the function it
+// defines, or the instance export that does (wasi:cli/run's `run` is one), and otherwise by its index.
+func (c *Component) canonSite(i int) string {
+	if c.Canons[i].Kind != CanonLift {
+		return fmt.Sprintf("canon %d, a lower", i)
+	}
+	var ord uint32
+	for _, d := range c.Defs {
+		if d.Section == SectionCanon && d.Item == i {
+			break
+		}
+		if d.Space == SpaceFunc {
+			ord++
+		}
+	}
+	for _, e := range c.Exports {
+		if e.Kind == SortFunc && e.Index == ord {
+			return fmt.Sprintf("the canon lift exported as %q", e.Name)
+		}
+	}
+	for _, in := range c.Instances {
+		for _, e := range in.InlineExports {
+			if e.Sort == SortFunc && e.Idx == ord {
+				return fmt.Sprintf("the canon lift an instance exports as %q", e.Name)
+			}
+		}
+	}
+	return fmt.Sprintf("canon %d, a lift defining func %d", i, ord)
 }
 
 func (c *Component) parseInstances(body []byte) error {

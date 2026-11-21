@@ -583,6 +583,32 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A `canon lift` with the `async` option of a function type that is not async is refused at load, as wasmtime
+  49.0.3 refuses it at parse, and so are nine more canonopt rules** ([#1314](https://github.com/scttfrdmn/burroughs/issues/1314)).
+  - **The defect:** CanonicalABI.md's canonopt validation allows `async` *"only ... when used with an `async`
+    function type in canon lift or canon lower"*. Burroughs read the option and never compared it with the type, so
+    a `wasi:cli/run@0.2.x` `run` (`func() -> result`) lifted `async` with a callback loaded and ran. wasm-tools
+    1.258.0 and wasmtime 49.0.3 refuse it: *"the `async` canonical option requires an async function type"*. The
+    pinned reference has no `trap_if` for it, because it is a validation rule.
+  - **The neighbours, each refused by both tools at parse and loaded by Burroughs:** the same rule on a lower; a
+    `callback` without `async`; `async` with `post-return`; a `callback` or `post-return` on a lower; a `realloc`
+    without `memory`; any option given twice, two string encodings included; and a lift's `callback` or `realloc` of
+    the wrong core type (#1134 class C had checked only a lower's `realloc`).
+  - **The repair:** a repeated option is refused as the option list is decoded. The rules that need no resolved
+    space are refused in `checkCanonOpts`, at load, and a lift's refusal names the export it is exported as. The
+    lower's type rule and the two type checks are in the walk, where the callee's signature and the core function
+    space are resolved. All are `ErrCanonOptionInvalid`, reported as `ErrInvalid` at all three doors.
+  - **Not refused, and each needs the Canonical ABI's flattening at load:** a `post-return` whose type does not match
+    the lift's flattened results; a lift's core function whose type is not `flatten_functype` of its component type;
+    and a `memory` or `realloc` that a string or list in the signature requires, which is still refused only when an
+    argument needs it. wasm-tools and wasmtime refuse all three at parse.
+  - **Witness:** `TestACanonOptionTheModelRefusesIsInvalid`, over 13 new `canonopt-*` fixtures, each carrying both
+    tools' refusals of its bytes, and two controls that both tools accept. The specimen's control lifts the same
+    `run` over an async type, and wasmtime runs it to exit 0. None of the 212 components committed before this
+    change changed its load verdict.
+  - **Neuters, run:** with `checkCanonOpts` returning nil, its six rows load. With only its type arm dropped, the
+    specimen alone loads. Without the repeated-option refusal, the three `twice` rows load. With the lower's type
+    rule off, both async-lower rows load. With the lift-option type check off, both mistyped rows load.
 - **The editroute hook's tracked-file routes guard every worktree of the repository, not only the main checkout**
   ([#1315](https://github.com/scttfrdmn/burroughs/issues/1315)).
   - **The defect:** the hook's tracked set was the files of `CLAUDE_PROJECT_DIR`, the main checkout. A file tracked

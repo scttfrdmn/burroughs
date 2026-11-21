@@ -350,6 +350,11 @@ func LoadWithFeatures(b []byte, feats bin.Features) (*Component, error) {
 	if err := c.checkForwardRefs(); err != nil {
 		return nil, err
 	}
+	// The canonopt rules that need no resolved space (#1314), after the ordering rule so every type index a
+	// lift names is one that precedes it.
+	if err := c.checkCanonOpts(); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
