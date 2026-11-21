@@ -23,14 +23,18 @@ type unwakeableRun struct {
 	name    string
 	args    []string
 	reading string // the .reading file, read by name
-	frame   string // the frame a hang's goroutine dump must show
+	// frame is a substring of the frame a hang's goroutine dump must show. It is the function's bare name, not a
+	// package-qualified one: a closure's printed name differs by toolchain. go1.27.4 printed
+	// `component.waitableSetWait`, and go1.26.9, CI's, prints `component.(*walker).asyncBuiltinFunc.waitableSetWait.func2`
+	// (the first `make ci` of #1303's PR read the second and failed on the first).
+	frame string
 }
 
 var unwakeableRuns = []unwakeableRun{
 	{
 		"unwakeable-wait",
 		[]string{"run", "../../internal/component/testdata/unwakeable-wait.wasm"},
-		"../../internal/component/testdata/unwakeable-wait.reading", "component.waitableSetWait",
+		"../../internal/component/testdata/unwakeable-wait.reading", "waitableSetWait",
 	},
 	{
 		"unwakeable-wait-woken",

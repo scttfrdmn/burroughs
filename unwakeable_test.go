@@ -17,14 +17,17 @@ const unwakeableLibPeriod = 2 * time.Second
 
 // unwakeableLibRun is one of #1303's guests driven through a library entry point.
 type unwakeableLibRun struct {
-	name, wasm, reading, frame string
-	export                     string // "" runs the component through ComponentConfig.Run; else Instance.Call
+	name, wasm, reading string
+	// frame is a substring of the frame the dump must show, the function's bare name, because a closure's printed
+	// name differs by toolchain (cmd/burroughs/unwakeable_test.go's unwakeableRun.frame has the two readings).
+	frame  string
+	export string // "" runs the component through ComponentConfig.Run; else Instance.Call
 }
 
 var unwakeableLibRuns = []unwakeableLibRun{
 	{
 		"unwakeable-wait", "internal/component/testdata/unwakeable-wait.wasm",
-		"internal/component/testdata/unwakeable-wait.reading", "component.waitableSetWait", "",
+		"internal/component/testdata/unwakeable-wait.reading", "waitableSetWait", "",
 	},
 	{
 		"unwakeable-wait-woken", "internal/component/testdata/unwakeable-wait-woken.wasm",
