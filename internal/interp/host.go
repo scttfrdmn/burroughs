@@ -910,9 +910,20 @@ func (c *CanonCaller) MayLeave() bool { return c.st == nil || c.st.mayNotLeave =
 // at its first frame.
 // The crossing/blocked pair here is balanced (leaveGuest+enterBlocked … enterGuest+leaveBlocked), the
 // same order `callHost` uses, so `callAdapter`'s own accounting is untouched.
+//
+// **The excursion holds a timer that never fires** (#1303, ADR 0128), so a wait nothing can ever wake leaves
+// the host blocked, as the pin and wasmtime 49.0.3 do, rather than ended by Go's deadlock detector. It is held
+// here rather than at each wait because every canon function's wait is inside this call (H-1), so a wait added
+// later holds it without anyone having to remember it. It changes nothing about how fn waits or wakes. A defer
+// stops it, so the sentinel panic a termination raises from the poll in `leaveBlocked` stops it too.
+//
+// NEUTER: drop the two lines below, and the unwakeable-wait arm of TestAnUnwakeableWaitHangsThroughBurroughsRun,
+// and of the library test, ends with exit 2 and "fatal error: all goroutines are asleep - deadlock!" on stderr.
 func (c *CanonCaller) Blocking(fn func() error) error {
 	leaveGuest()
 	c.t.enterBlocked()
+	awake := holdHostAwake()
+	defer awake.Stop()
 	err := fn()
 	enterGuest()
 	c.t.leaveBlocked()

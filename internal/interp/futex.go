@@ -167,6 +167,18 @@ func (m *memory) wait(t *thread, ea uint64, c atomicCell, expected uint64, timeo
 		timer := time.NewTimer(time.Duration(timeout))
 		defer timer.Stop()
 		expiry = timer.C
+	} else {
+		// **An infinite wait holds a timer that never fires** (#1303, ADR 0128). When no other agent will notify
+		// it, nothing in the process can run again, and Go's deadlock detector would end the host at once with
+		// "all goroutines are asleep - deadlock!". The proposal leaves the agent suspended for ever, and wasmtime
+		// 49.0.3 hangs, so the host must stay blocked. A finite wait needs nothing: its own timer is in a heap
+		// while the select below is blocked on it.
+		//
+		// NEUTER: drop the two lines below, and the forever and forever64 arms of
+		// TestAnUnwakeableWaitHangsThroughBurroughsRun, and of the library test, end with exit 2 and "fatal
+		// error: all goroutines are asleep - deadlock!" on stderr.
+		awake := holdHostAwake()
+		defer awake.Stop()
 	}
 	select {
 	case <-w.ch:

@@ -609,6 +609,30 @@ says what it now requires and what it gives up.
   - **Neuters, run:** with `checkCanonOpts` returning nil, its six rows load. With only its type arm dropped, the
     specimen alone loads. Without the repeated-option refusal, the three `twice` rows load. With the lower's type
     rule off, both async-lower rows load. With the lift-option type check off, both mistyped rows load.
+- **A guest wait that nothing can wake leaves the host blocked, as the pin and wasmtime 49.0.3 do, instead of ending it
+  with Go's deadlock fatal** ([#1303](https://github.com/scttfrdmn/burroughs/issues/1303),
+  [ADR 0128](docs/decisions/0128-a-guest-wait-holds-a-timer-that-never-fires-so-gos-deadlock-detector-cannot-end-the-host-and-a-wait-nothing-can-wake-blocks-for-ever.md),
+  on Scott's ruling).
+  - **The defect:** a stackful `waitable-set.wait` on an empty set ended `burroughs run`, `ComponentConfig.Run` and
+    `Component.Call` alike with *"fatal error: all goroutines are asleep - deadlock!"* and exit 2, 60 s after the guest
+    reached the wait. An infinite `memory.atomic.wait32` or `wait64` with no other agent did the same at once. A host
+    process ended because of a guest's choice. The 60 s was Go's crypto/rand: its first read in a process leaves a
+    stopped one-minute timer behind, and Go's deadlock detector stays quiet while any timer is in a heap.
+  - **The repair:** a guest wait holds a timer that never fires, so the detector can never end the host. It is held in
+    `interp.CanonCaller.Blocking`, which every canon function's wait runs inside, and in the infinite arm of
+    `memory.wait`. The wait itself is unchanged: it blocks until it is woken, or for ever, and nothing is reported.
+    `burroughs run` on such a guest now runs until a signal ends it, as wasmtime does, and Go's default SIGINT and
+    SIGTERM handling ends it. A library call blocks the way a guest in an infinite loop already blocks it.
+  - **Witnesses:** `TestAnUnwakeableWaitHangsThroughBurroughsRun` (through `dispatch`) and
+    `TestAnUnwakeableWaitHangsThroughTheLibrary` (through `ComponentConfig.Run` and `Instance.Call`). Each runs every
+    guest in a child process, at GOMAXPROCS=1 so the crypto/rand timer cannot defer the fatal, and judges it against
+    wasmtime's committed readings (`unwakeable-wait.reading`, `wait-forever.reading`): the three unwakeable waits must
+    still be parked in their wait 2 s after starting, read from the child's goroutine dump, and the two controls, a
+    stackful wait a host timer wakes and a 10 ms futex wait, must end by themselves. With the timer removed, every hang
+    arm ends with the fatal 3 to 5 ms after starting the guest, with and without `-race`.
+  - **Known limit:** a stopped timer stays in its P's heap until that P next checks its timers, so after a wait ends, a
+    process that later blocks every goroutine outside any guest wait, such as an embedder's own deadlock, can hang
+    where it would have died with the fatal. ADR 0128 records it and the bounded shape not taken.
 - **The editroute hook's tracked-file routes guard every worktree of the repository, not only the main checkout**
   ([#1315](https://github.com/scttfrdmn/burroughs/issues/1315)).
   - **The defect:** the hook's tracked set was the files of `CLAUDE_PROJECT_DIR`, the main checkout. A file tracked

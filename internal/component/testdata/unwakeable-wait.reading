@@ -1,0 +1,16 @@
+# Committed wasmtime readings for unwakeable-wait.wasm and its control, unwakeable-wait-woken.wasm (#1303, ADR 0128).
+# Built:       wasm-tools parse <name>.wat -o <name>.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  timeout 2 wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y -S p3=y <name>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical, taken 2026-11-21.
+#
+# Each line is `<fixture>: <wasmtime's reading>`, and the tests read them by fixture. `hangs` is: still running at the
+# 2 s bound, ended there by timeout(1)'s SIGTERM (exit 124), nothing on stdout or stderr, and idle while it waited
+# (0.00 s user and system time over the bound, read with /usr/bin/time). `exit N` is the process's own exit
+# status, with nothing on stdout or stderr.
+unwakeable-wait: hangs
+unwakeable-wait-woken: exit 0
+#
+# Meaning: the pin leaves an async-typed waiter blocked when nothing is ready (def:Store.tick), and its own test
+# driver, run_tests.py's lift_and_run, loops `while inst.store.waiting: inst.store.tick()` for as long as one waits.
+# So the empty set's wait is a hang, and the control's wait ends when its wait-for(10ms) timer resolves.
