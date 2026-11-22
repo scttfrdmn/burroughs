@@ -532,9 +532,12 @@ func (h *asyncHandles) beginSubtaskCancel(i uint32, asyncForm bool) (
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// def:canon_subtask_cancel:"trap_if(not isinstance(subtask, Subtask))" (#1282).
+	//
+	// NEUTER: return a Go error, and TestAWrongKindHandleTraps's subtask-cancel-end row fails.
 	st, ok := handleAt[*subtask](h, i)
 	if !ok {
-		return nil, nil, nil, nil, fmt.Errorf("component: subtask.cancel: handle %d is not a subtask", i)
+		return nil, nil, nil, nil, wrongKindTrap("subtask.cancel", i, "a subtask", "def:canon_subtask_cancel")
 	}
 	// The model's three traps, in its order (def:canon_subtask_cancel:"trap_if(subtask.resolve_delivered())").
 	switch {
@@ -794,9 +797,12 @@ func subtaskDrop(h *asyncHandles) interp.CanonFunc {
 		i := uint32(args[0].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:canon_subtask_drop:"trap_if(not isinstance(s, Subtask))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's subtask-drop-end row fails.
 		st, ok := handleAt[*subtask](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: subtask.drop: handle %d is not a subtask", i)
+			return nil, wrongKindTrap("subtask.drop", i, "a subtask", "def:canon_subtask_drop")
 		}
 		if !st.delivered {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("subtask.drop: subtask %d is not resolve-delivered; dropping it would silently discard its resolution", i)}

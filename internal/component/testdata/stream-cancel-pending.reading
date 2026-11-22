@@ -1,0 +1,42 @@
+# Committed readings for stream-cancel-pending.wasm (#1282, item 2): a cancel of a stream copy that completed before
+# its event was taken.
+# Built:       wasm-tools parse stream-cancel-pending.wat -o stream-cancel-pending.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' stream-cancel-pending.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. Taken 2026-11-21.
+#
+# Each line is `<export>: <wasmtime's reading>`; a trap is its last line of stderr and its exit status. The pin agrees
+# on every row: its End state machine (2e7895c), driven through the same copies and cancels with unit elements,
+# reads each u32 below, `none` for the two poll-after-cancel rows' pending event, and a trap for cancel-write-idle.
+inline-read: 32
+cancel-write-after-copy: 34
+poll-after-cancel-write: 0
+poll-without-cancel-write: 8195
+cancel-write-after-copy-reader-dropped: 33
+write-after-cancel-write: 4294967295
+inline-write: 32
+cancel-read-after-copy: 34
+poll-after-cancel-read: 0
+poll-without-cancel-read: 8194
+cancel-read-after-copy-writer-dropped: 33
+cancel-write-idle: trap: stream or future write cancelled when no write is pending (exit 1)
+#
+# Meaning. An event payload is result | (progress << 4), with COMPLETED 0, DROPPED 1, CANCELLED 2.
+#   inline-*          32 is COMPLETED, progress 2: the second arriver's copy of min(4, 2), taken inline.
+#   cancel-*-after-copy  34 is CANCELLED, progress 2. The cancel finds the end COPYING, as it is until its event is
+#                     taken, so it does not trap (def:cancel_copy:"trap_if(end.state != End.State.COPYING)"); its
+#                     End.cancel notifies nothing, the event being pending already, and the event computes its result
+#                     at the take, from CANCELLING_COPY:
+#                     def:StreamEnd.notify.stream_event:"result = CopyResult.CANCELLED".
+#                     Not COMPLETED: the copy's progress survives, its result does not.
+#   *-dropped         33 is DROPPED, progress 2: the other end has gone, which the take checks first
+#                     (def:StreamEnd.notify.stream_event:"if self.other is None:").
+#   poll-after-cancel-*  0 is NONE with payload 0: the cancel took the event, so the set has nothing to deliver.
+#   poll-without-cancel-*  the control: the same poll, no cancel, takes STREAM_WRITE (3) or STREAM_READ (2) with
+#                     payload 32, so the poll rows are not reading 0 for want of an event.
+#   write-after-cancel-write  BLOCKED: the cancelled end is IDLE, and the write parks, the reader not reading.
+#   cancel-write-idle the control on the state check: a cancel with no write started traps.
+#
+# Burroughs before #1282 (main at d8076a1): cancel-write-after-copy, cancel-write-after-copy-reader-dropped,
+# poll-after-cancel-write and write-after-cancel-write trap "stream.cancel-write: end 2 has no write in flight
+# (COPYING)"; cancel-read-after-copy reads 32, COMPLETED where both oracles read CANCELLED; the other rows agree.

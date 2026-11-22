@@ -148,9 +148,13 @@ func futureRead(h *asyncHandles) interp.CanonFunc {
 		i, ptr := uint32(args[0].Bits), uint32(args[1].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's future-read-writable and future-read-stream
+		// rows fail.
 		fe, ok := handleAt[*readableFutureEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: future.read: handle %d is not a readable future end", i)
+			return nil, wrongKindTrap("future.read", i, "a readable future end", "def:copy")
 		}
 		// **A read of a future the host has already completed is the second arriver, and completes inline**
 		// (ADR 0120). The host's completion parked its value on the future first, as the reference's writer
@@ -193,9 +197,12 @@ func futureDrop(h *asyncHandles) interp.CanonFunc {
 		i := uint32(args[0].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:drop:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's future-drop-readable-writable row fails.
 		fe, ok := handleAt[*readableFutureEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: future.drop-readable: handle %d is not a readable future end", i)
+			return nil, wrongKindTrap("future.drop-readable", i, "a readable future end", "def:drop")
 		}
 		if fe.completeErr != nil { // a deferred host-completion failure surfaces here rather than being lost
 			return nil, fmt.Errorf("component: future.drop-readable: end %d had a failed completion: %w", i, fe.completeErr)
@@ -318,9 +325,12 @@ func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
 		i, ptr := uint32(args[0].Bits), uint32(args[1].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's future-write-readable row fails.
 		e, ok := handleAt[*writableFutureEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: future.write: handle %d is not a writable future end", i)
+			return nil, wrongKindTrap("future.write", i, "a writable future end", "def:copy")
 		}
 		if e.done || e.hasWrite || e.resolved {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: end %d is not writable (done, write pending, or resolved)", i)}
@@ -367,9 +377,12 @@ func futureCancelWrite(h *asyncHandles) interp.CanonFunc {
 		i := uint32(args[0].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:cancel_copy:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's future-cancel-write-readable row fails.
 		e, ok := handleAt[*writableFutureEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: future.cancel-write: handle %d is not a writable future end", i)
+			return nil, wrongKindTrap("future.cancel-write", i, "a writable future end", "def:cancel_copy")
 		}
 		if !e.hasWrite || e.resolved {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-write: end %d has no write in flight (COPYING)", i)}
