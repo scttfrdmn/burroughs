@@ -49,6 +49,14 @@ var ErrUnsupportedForm = errors.New("component: unsupported instantiation form")
 // in the walk, where the core function index space is resolved, so it is refused at instantiation, before
 // anything runs. The public doors report it as `ErrInvalid`, as they report an invalid core module.
 //
+// #1314 added more of the canonopt rules. Those that need no resolved space are refused at load: a repeated
+// option in canonOpts, and the rest in checkCanonOpts, among them the `async` option on a lift whose function type
+// is not async. Those that need the walk are here: the same rule for a lower (refuseAsyncLowerOfSyncType), and the
+// type of a lift's `realloc` and `callback` (refuseMistypedLiftOption). Not refused at load, though wasm-tools
+// 1.258.0 and wasmtime 49.0.3 refuse each at parse: a `post-return` whose type does not match the lift's flattened
+// results; a lift's core function whose type is not `flatten_functype` of its component type; and a `memory` or
+// `realloc` that a string or list in the signature requires, which is refused only when an argument needs it.
+//
 // A `realloc` that is a host function has a valid type and is not refused here. The spec allows it, and this
 // engine cannot call one, so `CanonCaller.Realloc` reports it as unsupported when it is reached.
 var ErrCanonOptionInvalid = errors.New("component: canon option is invalid")
@@ -307,6 +315,9 @@ func (w *walker) step(d Def) error {
 				// rather than an impl: the binding happens in `resolverFor`, where the module's own import
 				// type is in hand. What changes is only that the lower no longer forgets its callee.
 				if cf := w.compFuncs[cn.FuncIdx].fn; cf != nil && cf.stubName == "" && cf.core.inst != nil {
+					if err := refuseAsyncLowerOfSyncType(cn, cf.sig, fmt.Sprintf("func %d", cn.FuncIdx)); err != nil {
+						return err
+					}
 					realloc, err := w.lowerRealloc(cn)
 					if err != nil {
 						return err
@@ -330,6 +341,9 @@ func (w *walker) step(d Def) error {
 					// TestANestedLowerIsCheckedAsATopLevelOneIs's nested guest, whose error-code has other labels
 					// than the host's, instantiates.
 					sig := w.lowerSignatureOf(cn.FuncIdx, cf.stubName)
+					if err := refuseAsyncLowerOfSyncType(cn, sig, cf.stubName); err != nil {
+						return err
+					}
 					// An unresolved outer type alias (#753) in the lowered signature can never be marshaled —
 					// refuse by name at instantiate, for any lower (sync or async), rather than binding a core
 					// func over a type the engine did not resolve. Distinct from the unmodeled-kind refusal
@@ -858,7 +872,17 @@ func (w *walker) lowerRealloc(cn Canon) (*interp.Extern, error) {
 
 // isReallocType reports whether ft is `cabi_realloc`'s type, `(i32 i32 i32 i32) -> i32`.
 func isReallocType(ft bin.FuncType) bool {
-	if len(ft.Params) != 4 || len(ft.Results) != 1 || ft.Results[0] != bin.I32 {
+	return isI32Type(ft, 4)
+}
+
+// isCallbackType reports whether ft is an async lift's callback type, `(i32 i32 i32) -> i32` (#1314).
+func isCallbackType(ft bin.FuncType) bool {
+	return isI32Type(ft, 3)
+}
+
+// isI32Type reports whether ft takes n i32 params and returns one i32.
+func isI32Type(ft bin.FuncType, n int) bool {
+	if len(ft.Params) != n || len(ft.Results) != 1 || ft.Results[0] != bin.I32 {
 		return false
 	}
 	for _, p := range ft.Params {
@@ -867,6 +891,39 @@ func isReallocType(ft bin.FuncType) bool {
 		}
 	}
 	return true
+}
+
+// refuseAsyncLowerOfSyncType is the lower's half of the `async` option's type rule (#1314): CanonicalABI.md's
+// canonopt validation allows `async` *"only ... when used with an `async` function type in canon lift or canon
+// lower"*, and the type a lower answers to is its callee's, which only the walk has. wasm-tools 1.258.0 and
+// wasmtime 49.0.3 refuse it at parse: *"the `async` canonical option requires an async function type"*. The
+// lift's half is checkCanonOpts, at load. A callee whose signature did not resolve (nil) is not judged.
+//
+// NEUTER, run: return nil here, and TestACanonOptionTheModelRefusesIsInvalid's async-lower-of-a-sync-import
+// row loads.
+func refuseAsyncLowerOfSyncType(cn Canon, sig *FuncType, callee string) error {
+	if !cn.Opts.Async || sig == nil || sig.Async {
+		return nil
+	}
+	return fmt.Errorf("%w: the canon lower of %s: the `async` option requires an async function type, and its "+
+		"type is not async (CanonicalABI.md, canonopt validation)", ErrCanonOptionInvalid, callee)
+}
+
+// refuseMistypedLiftOption is the type rule for a lift's `realloc` and `callback` (#1314), which CanonicalABI.md's
+// canonopt validation types as `(i32 i32 i32 i32) -> i32` and `(i32 i32 i32) -> i32`. wasm-tools 1.258.0 and
+// wasmtime 49.0.3 refuse either at parse: *"canonical option `callback` uses a core function with an incorrect
+// signature"*, and the same for `realloc`. An entry whose extern is not yet bound answers !ok and is not judged,
+// as in lowerRealloc.
+//
+// NEUTER, run: return nil here, and TestACanonOptionTheModelRefusesIsInvalid's two mistyped-lift-option rows
+// load.
+func refuseMistypedLiftOption(d coreDef, option, want string, ok func(bin.FuncType) bool) error {
+	ft, _, bound := d.extern.FuncSignature()
+	if !bound || ok(ft) {
+		return nil
+	}
+	return fmt.Errorf("%w: a canon lift's %s is a core function with %d params and %d results; the component "+
+		"model wants %s", ErrCanonOptionInvalid, option, len(ft.Params), len(ft.Results), want)
 }
 
 // funcImportType finds a module's declared type for a function import.

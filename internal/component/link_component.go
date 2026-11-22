@@ -933,6 +933,10 @@ func (w *walker) funcStep(d Def) error {
 		lf.mem = w.lowerMemory(cn)
 		if cn.Opts.Realloc != nil && int(*cn.Opts.Realloc) < len(w.coreSpace[SpaceCoreFunc]) {
 			lf.reallocCore = w.coreSpace[SpaceCoreFunc][*cn.Opts.Realloc]
+			// A lift's realloc has the type a lower's must (#1314): lowerRealloc checked only the lower's.
+			if err := refuseMistypedLiftOption(lf.reallocCore, "realloc", "(i32 i32 i32 i32) -> i32", isReallocType); err != nil {
+				return err
+			}
 		}
 		// The lift's `post-return` (#1058): decoded since the canonopts were, and read by nothing until now,
 		// so it never ran. A sync lift calls it after its result is lifted (`invokeWith`).
@@ -955,6 +959,9 @@ func (w *walker) funcStep(d Def) error {
 			}
 			lf.async = true
 			lf.cb = w.coreSpace[SpaceCoreFunc][cbIdx]
+			if err := refuseMistypedLiftOption(lf.cb, "callback", "(i32 i32 i32) -> i32", isCallbackType); err != nil {
+				return err
+			}
 		}
 		w.compFuncs = append(w.compFuncs, compDef{fn: lf})
 	case SectionImport:

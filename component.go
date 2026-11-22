@@ -174,7 +174,8 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	if err != nil {
 		// A core module the validator refuses or declines (#1162): the same two verdicts core `Instantiate`
 		// reports, classified the same way at all three component doors.
-		// A canon option the component model refuses, a mistyped `realloc` (#1134 class C), is the same verdict.
+		// A canon option the component model refuses, a mistyped `realloc` (#1134 class C) or a sync-typed function
+		// lifted `async` (#1314), is the same verdict.
 		if errors.Is(err, component.ErrCoreModuleInvalid) || errors.Is(err, component.ErrCanonOptionInvalid) {
 			return 0, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
