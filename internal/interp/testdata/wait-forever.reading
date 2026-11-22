@@ -1,0 +1,16 @@
+# Committed wasmtime readings for wait-forever.wasm (#1303, ADR 0128).
+# Built:       wasm-tools parse wait-forever.wat -o wait-forever.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  timeout 2 wasmtime run -W threads=y,shared-memory=y --invoke <export> wait-forever.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical, taken 2026-11-21.
+#
+# Each line is `<export>: <wasmtime's reading>`, and the tests read them by export. `hangs` is: still running at the
+# 2 s bound, ended there by timeout(1)'s SIGTERM (exit 124), nothing on stdout or stderr, and idle while it waited
+# (0.00 s user and system time over the bound, read with /usr/bin/time). A number is what wasmtime printed on
+# stdout, with exit 0. Its only stderr is the warning that `--invoke` of a function returning values is
+# experimental.
+forever: hangs
+forever64: hangs
+brief: 2
+#
+# Meaning: an infinite wait with no other agent to notify it is suspended for ever, and the 10 ms wait times out (2).
