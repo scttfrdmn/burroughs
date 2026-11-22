@@ -23,6 +23,106 @@ says what it now requires and what it gives up.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-22
+*Implements contract v0.1.*
+
+**What this release is: WASI 0.3 for a single-threaded component, and Go programs built for it.** The milestone's
+outcome witness is C2 ([#1242](https://github.com/scttfrdmn/burroughs/issues/1242)): a `net/http` server built by
+the Phase 4 fork for `GOOS=wasip3` serves a client outside the instance under `burroughs run --inherit-network`.
+Every response is byte-identical to what the same source built by stock Go serves, and to what wasmtime 49.0.3
+serves. The plan and its rulings are on [#1140](https://github.com/scttfrdmn/burroughs/issues/1140). WASI 0.3
+across more than one thread is v0.15.0's.
+
+**What changes by default:**
+- **WASI 0.3 is served to a component that imports it:**
+  - `wasi:cli` (stdin, stdout, stderr, environment, exit);
+  - `wasi:clocks` and `wasi:random`;
+  - `wait-for` and `wait-until`;
+  - `wasi:sockets` TCP;
+  - `ip-name-lookup`.
+
+  A WASI 0.2 import and a 0.3 import of the same interface are told apart by name and semver class.
+- **The network is denied unless granted.** `ComponentConfig.InheritNetwork` and `burroughs run --inherit-network`
+  grant TCP. `ComponentConfig.AllowNameLookup` and `--allow-ip-name-lookup` grant name lookup. With neither, a
+  socket's `create` is `access-denied`, as wasmtime's is with no network flag.
+- **Input the spec rejects is refused at load where it used to run** ([#1314](https://github.com/scttfrdmn/burroughs/issues/1314)):
+  - an `async` canon option on a function type that is not async;
+  - `callback` without `async`;
+  - `async` with `post-return`;
+  - `callback` or `post-return` on a lower;
+  - `realloc` without `memory`;
+  - a repeated option;
+  - a lift's `callback` or `realloc` of the wrong core type;
+  - a component declaring `flags` with no labels or more than 32.
+- **A guest wait that nothing can wake now blocks, as the pin and wasmtime 49.0.3 do,** instead of ending the
+  host process with Go's deadlock fatal ([#1303](https://github.com/scttfrdmn/burroughs/issues/1303), ADR 0128).
+  `burroughs run` on such a guest runs until a signal ends it.
+- **A cross-component call carrying a handle no longer passes it as a raw table index**
+  ([#1281](https://github.com/scttfrdmn/burroughs/issues/1281)). An `own` of a host resource moves between the
+  two instances' tables. Every other handle kind is refused by name, where the callee used to read whatever sat
+  at that index in its own table.
+- **Index spaces resolve by ordinal** ([#1258](https://github.com/scttfrdmn/burroughs/issues/1258)). An export
+  adds an index to its sort, and a core module, a component and a core tag are each named by their own space.
+  So a definition after an export is no longer off by one. A component that outer-aliases a component no
+  longer panics.
+- **A nested component's canon lower gets the signature checks a top-level one gets**
+  ([#1257](https://github.com/scttfrdmn/burroughs/issues/1257)). It used to skip all of them.
+- **A wrong-kind handle given to a stream, future, waitable or subtask built-in traps**, as the pin's
+  `trap_if(not isinstance(...))` does. It used to return a Go error
+  ([#1282](https://github.com/scttfrdmn/burroughs/issues/1282)).
+- **`Close` writes the bytes a guest's socket send was told were complete** before closing the connection
+  ([grave #1308](https://github.com/scttfrdmn/burroughs/issues/1308), ADR 0127).
+
+Fixed and Changed below have the detail.
+
+**Instruments:**
+- C2's three-arm witness: stock Go as the reading, wasmtime run offline, and `burroughs run` in CI;
+- the `forkp3` fixtures, F1–F5, C1 and C2;
+- `testenv.RunHangChild`, for a guest that must hang;
+- editroute route 11, the fork-search guard, with the fork's `safegrep.sh`;
+- the editroute hook guarding every worktree, not only the main checkout ([#1315](https://github.com/scttfrdmn/burroughs/issues/1315));
+- `ciwatch` re-listing a SHA's runs after its wait ([#1306](https://github.com/scttfrdmn/burroughs/issues/1306));
+- ADR 0113's placement controls establishing a free range first, since Go 1.26 randomizes the heap base
+  ([#1284](https://github.com/scttfrdmn/burroughs/issues/1284)).
+
+**Platforms:** unchanged. 64-bit Linux and macOS are built and tested. Windows is measured and unsupported, with
+each recurring failure mapped to an open issue in the triage map.
+
+**The contract:** unchanged. v0.1 has no appends since v0.13.0.
+
+**Board** (`make conformance`): unchanged from v0.13.0.
+- **Core:** 63769 pass, 0 fail, 0 unsupported, 1368 gated, 0 unimplemented, over 256 files.
+- **All gates on:** 65109 pass, 0 fail, 0 gated.
+- **Threads lane:** 576 pass, 41 fail, 2 bound, over 4 files. All 41 failures are superseded-corpus rows, with 0
+  engine defects.
+
+**Known limits, open on default-on paths, each with its issue:**
+- **WASI 0.3 gaps:**
+  - **Guest-defined resources:** `resource.new` and `resource.rep` refuse at call ([#1251](https://github.com/scttfrdmn/burroughs/issues/1251)).
+  - **Sync `stream.read`:** refused at instantiate ([#1272](https://github.com/scttfrdmn/burroughs/issues/1272)).
+  - **Host-to-host copy:** a host-produced stream handed to `write-via-stream` is refused at call ([#1273](https://github.com/scttfrdmn/burroughs/issues/1273)).
+  - **Async host import results:** the result type isn't checked against the host's declaration ([#1279](https://github.com/scttfrdmn/burroughs/issues/1279)).
+  - **Zero-length reads:** a zero-length read of a host-produced stream diverges from wasmtime ([#1302](https://github.com/scttfrdmn/burroughs/issues/1302)).
+- **Sockets:** IPv6 and wildcard listeners, the listen backlog, and the remaining accept errors are unmeasured
+  ([#1285](https://github.com/scttfrdmn/burroughs/issues/1285)). Name lookup does no IDNA or percent-decoding
+  ([#1287](https://github.com/scttfrdmn/burroughs/issues/1287)).
+- **Cross-component handles:** borrow, stream, future, nested and async-arm handles are refused by name rather than
+  moved ([#1317](https://github.com/scttfrdmn/burroughs/issues/1317)).
+- **Futures:**
+  - Future ends carry no type, and `future.write`'s `def:GuestBuffer` traps aren't modelled ([#1282](https://github.com/scttfrdmn/burroughs/issues/1282), item 1).
+  - A future read that meets a parked write parks, and `futureDrop` doesn't notify the other end ([#1325](https://github.com/scttfrdmn/burroughs/issues/1325)).
+- **Canonopt validation:** three rules that need flattening at load are unenforced: the post-return type, the lift
+  callee's type, and memory or realloc required by the signature
+  ([#1321](https://github.com/scttfrdmn/burroughs/issues/1321)).
+- **Stdin:** a stdin producer blocked in `Read` at `Close` consumes one more chunk of the reader. A cancellable
+  reader is a public-API question ([#1274](https://github.com/scttfrdmn/burroughs/issues/1274)).
+- **ADR 0128's limit:** after a guest wait ends, an embedder program that later deadlocks outside any guest wait
+  may hang where it would have died with Go's fatal, because the wait's stopped timer stays in a P's heap for a
+  while.
+- **Carried from earlier releases, still open:**
+  - a Phase 4 fork guest whose goroutine spins without allocating is never preempted ([#1064](https://github.com/scttfrdmn/burroughs/issues/1064));
+  - a Go runtime fatal on CI's arm64 runner in `internal/spec`, specific to that runner's CPU so far as anything has measured ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)).
+
 ### Added
 
 - **A fork-built, single-threaded `net/http` server answers a client outside the instance byte for byte as stock Go's
@@ -21443,7 +21543,8 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/scttfrdmn/burroughs/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/scttfrdmn/burroughs/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/scttfrdmn/burroughs/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/scttfrdmn/burroughs/compare/v0.10.0...v0.11.0
