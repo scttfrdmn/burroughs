@@ -29,8 +29,15 @@ import (
 // [0113]: ../../docs/decisions/0113-a-reservation-is-mapped-at-a-high-base-address-because-under-race-the-heap-must-live-in-a-fixed-band-that-a-kernel-placed-mapping-can-occupy.md
 const hintedPlacement = true
 
-// reservationBase is 16 TiB. It sits above the race heap's band, and above where a normal heap grows, which is
-// from 256 GiB on arm64 and from 768 GiB on amd64, in 1 TiB strides.
+// reservationBase is 16 TiB. It sits above the race heap's band, which is the only heap whose place it has to
+// avoid.
+//
+// **A non-race heap can be anywhere, including here** (#1284). This said the base was also above where a normal
+// heap grows, from 256 GiB on arm64 and 768 GiB on amd64. That stopped being true with Go 1.26, which randomizes
+// the heap's base address by default outside `-race` (`runtime/malloc.go:mallocinit`, `randomizeHeapBase`), over
+// the low 64 TiB on amd64 and the low 128 TiB on arm64. So in up to about one process in a hundred the heap sits
+// where the cursor walks. Every reservation from there on is a stray, counted and kept, which is harmless: without
+// `-race` there is no band to keep out of.
 const reservationBase uintptr = 1 << 44
 
 var (
@@ -38,8 +45,9 @@ var (
 	placeNext = reservationBase
 
 	// reservationOffHint counts mappings the kernel placed anywhere but the hint. It is a total, read by the
-	// placement control: zero on a kernel that honours hints, which darwin and linux were measured to do (decision
-	// 0113). It was `reservationBelowBase` and counted only placements below the cursor (grave #1254).
+	// placement control. It is zero on a kernel that honours hints, which darwin and linux were measured to do
+	// (decision 0113), **while nothing else holds the cursor's range**, which a non-race heap can (#1284). It was
+	// `reservationBelowBase` and counted only placements below the cursor (grave #1254).
 	reservationOffHint atomic.Uint64
 
 	// mmapAt is the hinted anonymous mmap: the syscall, and a seam so a test can stand in for a kernel that
@@ -68,6 +76,10 @@ func mapPlaced(n int) ([]byte, bool) {
 	// cursor moved it there. Linux's own placement is top-down from about 0x7f…, so one ignored hint sent the
 	// cursor to the top of the address space and every later reservation off-hint. A stray is counted and kept,
 	// as decision 0113 says, and the cursor stays where the next hint should go.
+	//
+	// **When something holds that range for good, every later reservation is a stray** (#1284). The occupant on
+	// CI was Go's randomized heap. Stepping the cursor past it is not done here, because the stall costs nothing:
+	// the heap is randomized only outside `-race`, and only `-race` has a band to keep reservations out of.
 	//
 	// NEUTER: restore the `addr < placeNext` test, and TestOneIgnoredHintDoesNotMoveTheCursor fails.
 	if addr == placeNext {

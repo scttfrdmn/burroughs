@@ -70,3 +70,13 @@ Holding the mappings reproduces the rare fatal deterministically. Placing the sa
 ## Rollback
 
 Reverting the change to `reserve_unix.go` restores kernel placement exactly. Nothing else depends on the base address. The witness's neuter is that revert, run.
+
+## Postscript, 2026-11-22 — a non-race heap can sit at the cursor, and this is a postscript rather than an edit
+
+The Choice says *"a process would need terabytes of Go heap to reach 16 TiB"*, and that 16 TiB sits above where a normal heap grows. Both were true of Go before 1.26, and neither is true of the Go 1.26.9 this decision cites. Go 1.26 randomizes the heap's base address outside `-race` (`runtime/malloc.go:mallocinit`, `randomizeHeapBase`, on by default). Measured over 4,000 processes each, the base was uniform over the low 64 TiB on linux/amd64 (janus), and spread over the low 128 TiB on darwin/arm64.
+
+So in up to about one process in a hundred the heap sits where the cursor walks: 0.8% on amd64 and 0.35% on darwin put it within the 512 GiB above the base that `internal/interp`'s test run walks through. The kernel refuses that hint and every later one, and every later reservation is a stray, counted and kept as the Choice says. That was [#1284](https://github.com/scttfrdmn/burroughs/issues/1284)'s four CI failures of the placement control, on linux/arm64, darwin/arm64 ([#1292](https://github.com/scttfrdmn/burroughs/issues/1292)) and linux/amd64.
+
+**This decision's guarantee is unchanged.** The heap is randomized only outside `-race`, and only `-race` has a band to keep reservations out of. The mechanism is unchanged too. Stepping the cursor past an occupant was considered and not taken, because the stall costs nothing outside `-race`.
+
+What changed is the control's premise. *"A kernel measured to honour the hint"* now reads as a kernel that honours a **free** hint, at a range the control first establishes is free. Both controls in `internal/interp/reserve_place_test.go` do that, and `TestThePlacementControlsHoldWhenSomethingElseHoldsTheCursor` holds them to it. The text above is unchanged, as the record of what was decided on 2026-11-09.

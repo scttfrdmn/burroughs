@@ -583,6 +583,32 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **ADR 0113's placement controls establish a free range at the cursor before asserting on it, because Go's
+  randomized heap can sit there** ([#1284](https://github.com/scttfrdmn/burroughs/issues/1284),
+  [#1292](https://github.com/scttfrdmn/burroughs/issues/1292)).
+  - **The defect:** `TestAReservationIsPlacedAtOrAboveTheBase` and `TestOneIgnoredHintDoesNotMoveTheCursor` failed
+    four times in CI, on linux/arm64, darwin/arm64 and linux/amd64, with every hint in the process ignored. A rerun
+    passed, and replaying the run's `-shuffle` seed did not reproduce it.
+  - **The cause:** Go 1.26 randomizes the heap's base address outside `-race` (`runtime/malloc.go:mallocinit`,
+    `randomizeHeapBase`). Measured with go1.26.9 over 4,000 processes each, the base is uniform over the low 64 TiB on
+    linux/amd64, and spread over the low 128 TiB on darwin/arm64. In 0.8% of amd64 processes and 0.35% of darwin
+    ones it lands within the 512 GiB above the 16 TiB base that `internal/interp`'s run walks the cursor through. The
+    kernel then refuses the hint, and because only an honoured hint moves the cursor (grave #1254), every later
+    reservation is a stray. With the cursor put at the process's own heap arena, both controls fail in CI's exact
+    shape, and `/proc/self/maps` shows the arena at the hint.
+  - **Not an engine defect:** a stray is counted and kept, as ADR 0113 says. The race band ADR 0113 protects is
+    untouched, because the heap is not randomized under `-race`. ADR 0113 carries a postscript recording that its
+    *"terabytes of Go heap to reach 16 TiB"* premise holds only under `-race`.
+  - **The repair:** each control first probes the cursor's range with the engine's own `mmapAt`. If something the
+    package did not place holds it, the control moves the cursor up past it, which the engine's only-moves-up rule
+    permits, and logs the occupant (from `/proc/self/maps` on linux). It then asserts exactly as before.
+    `TestOneIgnoredHintDoesNotMoveTheCursor`'s failure now says which cause it saw: a refused hint or a moved cursor
+    (#1292).
+  - **Witness:** `TestThePlacementControlsHoldWhenSomethingElseHoldsTheCursor` puts a 64 MiB stand-in for a heap
+    arena inside each control's range and runs the control.
+  - **Neuter, run:** with the probe removed, the witness fails on every run, on darwin/arm64 and on janus
+    (linux/amd64). Both controls then fail in CI's exact shape.
+
 - **A `canon lift` with the `async` option of a function type that is not async is refused at load, as wasmtime
   49.0.3 refuses it at parse, and so are nine more canonopt rules** ([#1314](https://github.com/scttfrdmn/burroughs/issues/1314)).
   - **The defect:** CanonicalABI.md's canonopt validation allows `async` *"only ... when used with an `async`
