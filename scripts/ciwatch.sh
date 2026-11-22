@@ -125,6 +125,13 @@ fetch_runs() {
 				return
 			fi
 		fi
+		# `runs.after.json`, if present, is the list every call after the first non-empty one returns: a run
+		# that GitHub creates after the first listing, which is the shape #1306 is about.
+		if [ -f "$CIWATCH_FIXTURE/runs.after.json" ] && [ -f "$prefix.listed" ]; then
+			python3 -c "$keep_watched" "$CIWATCH_FIXTURE/runs.after.json"
+			return
+		fi
+		: >"$prefix.listed"
 		python3 -c "$keep_watched" "$CIWATCH_FIXTURE/runs.json"
 		return
 	fi
@@ -280,7 +287,27 @@ else
 	job_wait=${CIWATCH_JOB_WAIT:-4200}
 	job_poll=${CIWATCH_JOB_POLL:-15}
 fi
-for id in $runs; do
+# **The run list is re-read after every wait, until a listing names no run not yet waited on (#1306).** It was
+# read once, as soon as it was non-empty, and GitHub creates a SHA's runs over several seconds. So a run created
+# after that listing was never waited on, and never read. Three times on 2026-11-20 and 21 that gave a false red:
+#   - main a54b95c: only `windows` was listed, so the tree class read as uncovered;
+#   - PR #1323: the same;
+#   - PR #1322: a body edit's run (#839's sequence) was created after the listing, so `citations` was judged on
+#     the push run, which had read the old body.
+# A wait takes minutes, so by the time the first run completes every run the push or edit created exists. The
+# loop below re-lists after each pass and waits on any newcomer.
+#
+# NEUTER: drop the re-list (leave `runs` as first listed), and TestCIWatchTakesEachJobClassFromItsOwnRun's
+# late_run arm reports `FAIL body-subject … citations` from the push run alone, where its verdict is GREEN.
+waited_ids=" "
+while :; do
+	pending=""
+	for id in $runs; do
+		case "$waited_ids" in *" $id "*) ;; *) pending="$pending $id" ;; esac
+	done
+	[ -z "${pending// /}" ] && break
+for id in $pending; do
+	waited_ids="$waited_ids$id "
 	jwaited=0
 	while :; do
 		st=$(fetch_run "$id" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
@@ -307,6 +334,10 @@ UNFINISHED
 		jwaited=$((jwaited + job_poll))
 	done
 	[ "$jwaited" -gt 0 ] && echo "ciwatch: run $id completed after ${jwaited}s" >&2
+done
+	relisted=$(fetch_runs)
+	[ -n "${relisted// /}" ] && runs=$relisted
+	echo "ciwatch: runs for this SHA after the wait: $runs" >&2
 done
 
 # --- TWO classes, TWO runs, because one rule cannot serve both ---------------------------------------------

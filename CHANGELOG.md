@@ -662,6 +662,19 @@ says what it now requires and what it gives up.
   - **Witnesses:** `TestACancelTakesACompletedCopysEvent` over `stream-cancel-pending.wasm` and
     `TestAWrongKindHandleTraps` over `wrong-kind-traps.wasm`, both with wasmtime 49.0.3's readings, 10 of 10, in both
     gate states. Wasmtime and the pin agree on every row. Neutered, each fix's rows fail, as named at its site.
+- **`ciwatch.sh` re-lists a SHA's runs after its wait, so a run created after the first listing is waited on
+  and read** ([#1306](https://github.com/scttfrdmn/burroughs/issues/1306)).
+  - **The defect:** it listed the runs once, as soon as the list was non-empty, and GitHub creates a SHA's runs
+    over several seconds. A run created after that listing was never waited on or read. That produced three false
+    reds on 2026-11-20 and 21:
+    - main a54b95c and PR #1323 had only `windows` listed, so the tree class read as uncovered;
+    - PR #1322's body-edit run (#839's sequence) was created after the listing, so `citations` was judged on the
+      push run, which had read the old body.
+  - **The repair:** after waiting on every listed run, the script re-lists, and waits on any run it hasn't seen,
+    until a listing turns up no new run.
+  - **The witness:** `TestCIWatchTakesEachJobClassFromItsOwnRun/late_run`. The fixture's first listing has only
+    the push run, and `runs.after.json` holds the later listings. Without the re-list it reports `FAIL body-subject
+    … citations`, which is #1322's false red.
 - **The editroute hook's tracked-file routes guard every worktree of the repository, not only the main checkout**
   ([#1315](https://github.com/scttfrdmn/burroughs/issues/1315)).
   - **The defect:** the hook's tracked set was the files of `CLAUDE_PROJECT_DIR`, the main checkout. A file tracked

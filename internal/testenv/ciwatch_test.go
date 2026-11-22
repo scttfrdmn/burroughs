@@ -137,6 +137,27 @@ func TestCIWatchTakesEachJobClassFromItsOwnRun(t *testing.T) {
 		}
 	})
 
+	// #1306: the run list was read once, as soon as it was non-empty, and GitHub creates a SHA's runs over several
+	// seconds. Here the first listing has only the push run, whose citations failed against an old body. The
+	// body edit's run appears from the second listing on. Read once, the verdict was FAIL body-subject; re-read
+	// after the wait, it is the same GREEN as each_class_from_its_own_run's.
+	t.Run("late_run", func(t *testing.T) {
+		dir := t.TempDir()
+		write(dir, "runs.json", `[{"databaseId": 1}]`)
+		write(dir, "runs.after.json", runsJSON)
+		write(dir, "1.json", pushRun)
+		write(dir, "2.json", editRun)
+
+		code, out := run(t, dir)
+		if code != 0 {
+			t.Errorf("exit %d, want 0: the edit's run was created after the first listing and passed citations, so "+
+				"the re-list after the wait must find it and read the body class from it:\n%s", code, out)
+		}
+		if !strings.Contains(out, "body-subject from run 2") {
+			t.Errorf("the body class was not read from the late run:\n%s", out)
+		}
+	})
+
 	t.Run("a_failing_body_job_in_the_newest_run_is_still_a_failure", func(t *testing.T) {
 		// The mirror of the first arm: if the CURRENT body is bad, the newest run says so and the watcher
 		// must not reach past it to an older run that passed. Without this, "take the newest" could be
