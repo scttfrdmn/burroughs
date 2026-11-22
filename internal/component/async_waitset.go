@@ -245,9 +245,15 @@ func waitableJoin(h *asyncHandles) interp.CanonFunc {
 		wi, si := uint32(args[0].Bits), uint32(args[1].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// Either handle of the wrong kind traps (#1282):
+		// def:canon_waitable_join:"trap_if(not isinstance(w, Waitable))", and, for a nonzero si,
+		// def:canon_waitable_join:"trap_if(not isinstance(wset, WaitableSet))".
+		//
+		// NEUTER: return a Go error from either, and TestAWrongKindHandleTraps's join-set-as-waitable or
+		// join-end-as-set row fails.
 		w, ok := handleWaitable(h, wi)
 		if !ok {
-			return nil, fmt.Errorf("component: waitable.join: handle %d is not a waitable", wi)
+			return nil, wrongKindTrap("waitable.join", wi, "a waitable", "def:canon_waitable_join")
 		}
 		// si == 0 unjoins; any other index must name a real set. The order matters: a zero index is NOT
 		// looked up, because handle 0 is the table's reserved nil sentinel and would fail the type check.
@@ -255,7 +261,7 @@ func waitableJoin(h *asyncHandles) interp.CanonFunc {
 		if si != 0 {
 			set, ok = handleAt[*waitableSet](h, si)
 			if !ok {
-				return nil, fmt.Errorf("component: waitable.join: handle %d is not a waitable set", si)
+				return nil, wrongKindTrap("waitable.join", si, "a waitable set", "def:canon_waitable_join")
 			}
 		}
 		joinWaitableLocked(w, set)
@@ -277,8 +283,11 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 		h.mu.Lock()
 		set, ok := handleAt[*waitableSet](h, si)
 		h.mu.Unlock()
+		// def:canon_waitable_set_wait:"trap_if(not isinstance(wset, WaitableSet))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's wait-end row fails.
 		if !ok {
-			return nil, fmt.Errorf("component: waitable-set.wait: handle %d is not a waitable set", si)
+			return nil, wrongKindTrap("waitable-set.wait", si, "a waitable set", "def:canon_waitable_set_wait")
 		}
 
 		// num_waiting (def:WaitableSet.wait): counted for the whole park, so waitable-set.drop traps on a set this
@@ -370,9 +379,12 @@ func waitableSetPoll(h *asyncHandles) interp.CanonFunc {
 		si, ptr := uint32(args[0].Bits), uint32(args[1].Bits)
 		h.mu.Lock()
 		set, ok := handleAt[*waitableSet](h, si)
+		// def:canon_waitable_set_poll:"trap_if(not isinstance(wset, WaitableSet))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's poll-end row fails.
 		if !ok {
 			h.mu.Unlock()
-			return nil, fmt.Errorf("component: waitable-set.poll: handle %d is not a waitable set", si)
+			return nil, wrongKindTrap("waitable-set.poll", si, "a waitable set", "def:canon_waitable_set_poll")
 		}
 		ev, ready := set.pendingEventLocked() // the SAME readiness path wait uses
 		h.mu.Unlock()
@@ -420,8 +432,11 @@ func waitableSetDrop(h *asyncHandles) interp.CanonFunc {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		set, ok := handleAt[*waitableSet](h, si)
+		// def:canon_waitable_set_drop:"trap_if(not isinstance(wset, WaitableSet))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's set-drop-end row fails.
 		if !ok {
-			return nil, fmt.Errorf("component: waitable-set.drop: handle %d is not a waitable set", si)
+			return nil, wrongKindTrap("waitable-set.drop", si, "a waitable set", "def:canon_waitable_set_drop")
 		}
 		if n := len(set.members); n > 0 {
 			return nil, &interp.Trap{Reason: fmt.Sprintf(
@@ -582,6 +597,16 @@ func handleAt[T any](h *asyncHandles, i uint32) (T, bool) {
 	}
 	v, ok := h.entries[i].(T)
 	return v, ok
+}
+
+// wrongKindTrap is a built-in's answer to a handle that is not of the kind it takes, or that names no entry (#1282).
+// The pin traps on both: `Table.get` on an index with no entry (def:Table.get:"trap_if(self.array[i] is None)"), and
+// every built-in on an entry of another kind, as def:copy's `trap_if(not isinstance(end, EndT))` does. It was a Go
+// error, which an embedder cannot tell from the engine failing. `kind` reads as "a writable stream end", and `cite`
+// is the built-in's own symbol in the pin.
+func wrongKindTrap(op string, i uint32, kind, cite string) error {
+	return &interp.Trap{Reason: fmt.Sprintf("%s: handle %d is not %s (the pin's %s: trap_if(not isinstance(...)))",
+		op, i, kind, cite)}
 }
 
 // `refuseAtCall` lived here and is DELETED, because implementing `waitable-set.drop` above left it with no

@@ -146,9 +146,13 @@ func streamWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		i, ptr, n := uint32(args[0].Bits), uint32(args[1].Bits), uint32(args[2].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's stream-write-readable and stream-write-no-handle
+		// rows fail.
 		e, ok := handleAt[*writableStreamEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: stream.write: handle %d is not a writable stream end", i)
+			return nil, wrongKindTrap("stream.write", i, "a writable stream end", "def:copy")
 		}
 		if err := checkStreamEndType("stream.write", i, e.elem, elem); err != nil {
 			return nil, err
@@ -461,14 +465,18 @@ func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32)
 }
 
 // streamCancelWrite implements `canon stream.cancel-write` (0x12, definitions.py:canon_stream_cancel_write → cancel_copy) — the
-// symmetric twin of streamCancelRead on the writable end. The end must be mid-copy (a pending write:
-// hasWrite && !resolved) or it traps; if the copy already completed (an event is armed) the cancel delivers
-// that event, otherwise it resolves the write to CANCELLED with the progress made (0 for an undriven pending
-// write). The event is consumed INLINE and its packed payload returned. A CANCELLED write leaves the end
-// IDLE (open) — only DROPPED is DONE. Built as its own op (0x12), not folded into cancel-read's shared
-// cancel_copy: the guest binds both, and each refuses/permits by name.
+// symmetric twin of streamCancelRead on the writable end. The end must be mid-copy (a pending write, whose
+// event has not been taken) or it traps; if the copy already completed (an event is armed) the cancel takes
+// that event (takeCancelledCopyLocked), otherwise it resolves the write to CANCELLED with the progress made (0
+// for an undriven pending write). The event is consumed INLINE and its packed payload returned. A CANCELLED
+// write leaves the end IDLE (open) — only DROPPED is DONE. Built as its own op (0x12), not folded into
+// cancel-read's shared cancel_copy: the guest binds both, and each refuses/permits by name.
 //
 // `elem` is the element the built-in names, which must be the end's (def:cancel_copy, ADR 0124).
+//
+// NEUTER (#1282): trap on `e.resolved` again, and TestACancelTakesACompletedCopysEvent's cancel-write-after-copy,
+// cancel-write-after-copy-reader-dropped, poll-after-cancel-write and write-after-cancel-write rows trap "no write
+// in flight".
 func streamCancelWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
@@ -477,19 +485,29 @@ func streamCancelWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		i := uint32(args[0].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:cancel_copy:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's stream-cancel-write-readable row fails.
 		e, ok := handleAt[*writableStreamEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: stream.cancel-write: handle %d is not a writable stream end", i)
+			return nil, wrongKindTrap("stream.cancel-write", i, "a writable stream end", "def:cancel_copy")
 		}
 		if err := checkStreamEndType("stream.cancel-write", i, e.elem, elem); err != nil {
 			return nil, err
 		}
-		if !e.hasWrite || e.resolved {
+		// The end is COPYING from the write until its event is taken, so a write whose copy completed is still
+		// cancellable (#1282): def:cancel_copy:"trap_if(end.state != End.State.COPYING)". This trapped "no write in
+		// flight" on `e.resolved`.
+		if !e.hasWrite {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-write: end %d has no write in flight (COPYING)", i)}
 		}
-		e.completeWriteLocked(e.progress, copyCancelled) // progress is 0 for an undriven pending write
-		e.hasWrite = false                               // the pending write is cancelled, not outstanding
-		ev, ok := e.pendingEventLocked()                 // consume inline -> IDLE (CANCELLED)
+		if e.resolved {
+			takeCancelledCopyLocked(&e.result, e.readerDropped)
+		} else {
+			e.completeWriteLocked(e.progress, copyCancelled) // progress is 0 for an undriven pending write
+		}
+		e.hasWrite = false               // the pending write is cancelled, not outstanding
+		ev, ok := e.pendingEventLocked() // consume inline -> IDLE (CANCELLED), or DONE (DROPPED)
 		if !ok {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-write: end %d had no deliverable event after cancel", i)}
 		}
@@ -514,9 +532,12 @@ func streamDropReadable(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		i := uint32(args[0].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:drop:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's stream-drop-readable-writable row fails.
 		e, ok := handleAt[*readableStreamEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: stream.drop-readable: handle %d is not a readable stream end", i)
+			return nil, wrongKindTrap("stream.drop-readable", i, "a readable stream end", "def:drop")
 		}
 		if err := checkStreamEndType("stream.drop-readable", i, e.elem, elem); err != nil {
 			return nil, err
@@ -548,9 +569,28 @@ func streamDropReadable(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	}
 }
 
+// takeCancelledCopyLocked is the result a cancel takes from a copy that completed before it, whose event was not
+// yet taken (#1282). The pin's cancel moves the end to CANCELLING_COPY and, finding an event already pending,
+// notifies nothing (def:End.cancel:"if (not self.has_pending_event()"); the event's result is computed when it is
+// taken, and from CANCELLING_COPY that is CANCELLED, with the progress the copy made
+// (def:StreamEnd.notify.stream_event:"result = CopyResult.CANCELLED"). The one exception is checked first there:
+// an end whose other end has gone takes DROPPED (def:StreamEnd.notify.stream_event:"if self.other is None:"),
+// which the end's pendingEventLocked computes from `otherDropped`, so a COMPLETED is left for it. A result that
+// is already DROPPED stays DROPPED. wasmtime 49.0.3 agrees: stream-cancel-pending.reading.
+//
+// NEUTER: leave the result COMPLETED, and TestACancelTakesACompletedCopysEvent's cancel-write-after-copy and
+// cancel-read-after-copy read 32 (COMPLETED, progress 2) where the oracle reads 34 (CANCELLED, progress 2); its
+// two dropped rows still pass.
+func takeCancelledCopyLocked(r *copyResult, otherDropped bool) {
+	if *r == copyCompleted && !otherDropped {
+		*r = copyCancelled
+	}
+}
+
 // streamCancelRead implements `canon stream.cancel-read` (0x11, definitions.py:canon_stream_cancel_read → cancel_copy). It
 // cancels a pending read: the end must be mid-copy (COPYING) or it traps; if the copy already completed (an
-// event is armed), the cancel delivers that event (the copy won); otherwise it resolves the read to
+// event is armed), the cancel takes that event as CANCELLED with the copy's progress (takeCancelledCopyLocked,
+// #1282), where it took it as COMPLETED; otherwise it resolves the read to
 // CANCELLED with whatever progress was made (0 for an undriven pending read). Either way the event is
 // consumed INLINE and its packed payload returned — not BLOCKED. A CANCELLED read leaves the end IDLE (open,
 // reusable); only DROPPED is DONE. This is the FIRST running production of CANCELLED: it has been pinned in
@@ -566,9 +606,12 @@ func streamCancelRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		i := uint32(args[0].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:cancel_copy:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's stream-cancel-read-writable row fails.
 		e, ok := handleAt[*readableStreamEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: stream.cancel-read: handle %d is not a readable stream end", i)
+			return nil, wrongKindTrap("stream.cancel-read", i, "a readable stream end", "def:cancel_copy")
 		}
 		if err := checkStreamEndType("stream.cancel-read", i, e.elem, elem); err != nil {
 			return nil, err
@@ -576,7 +619,9 @@ func streamCancelRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		if e.state != copyStateCopying {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-read: end %d has no copy in flight (state %s)", i, e.state.name())}
 		}
-		if !e.resolved {
+		if e.resolved {
+			takeCancelledCopyLocked(&e.result, e.writerDropped)
+		} else {
 			e.armLocked(e.progress, copyCancelled) // progress is 0 for an undriven pending read
 			e.hasRead = false                      // the pending read is cancelled, not outstanding
 		}
@@ -603,9 +648,12 @@ func streamDropWritable(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		i := uint32(args[0].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:drop:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's stream-drop-writable-readable row fails.
 		e, ok := handleAt[*writableStreamEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: stream.drop-writable: handle %d is not a writable stream end", i)
+			return nil, wrongKindTrap("stream.drop-writable", i, "a writable stream end", "def:drop")
 		}
 		if err := checkStreamEndType("stream.drop-writable", i, e.elem, elem); err != nil {
 			return nil, err
@@ -715,9 +763,12 @@ func streamRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		i, ptr, n := uint32(args[0].Bits), uint32(args[1].Bits), uint32(args[2].Bits)
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
+		//
+		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's stream-read-writable row fails.
 		e, ok := handleAt[*readableStreamEnd](h, i)
 		if !ok {
-			return nil, fmt.Errorf("component: stream.read: handle %d is not a readable stream end", i)
+			return nil, wrongKindTrap("stream.read", i, "a readable stream end", "def:copy")
 		}
 		if err := checkStreamEndType("stream.read", i, e.elem, elem); err != nil {
 			return nil, err

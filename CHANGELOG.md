@@ -650,6 +650,18 @@ says what it now requires and what it gives up.
     out-of-range case index. Each row matches wasmtime 49.0.3's `--invoke` reading, and the pin agrees on every row.
     Neutered, with the arm removed, every row traps again. With the i64→f64 coercion converting rather than
     reinterpreting, the f64 case lifts 4.614256656552046e+18 and the differential's `variant-mixed-flat` fails.
+- **A stream cancel takes the event of a copy that completed before it, and a wrong-kind handle traps**
+  ([#1282](https://github.com/scttfrdmn/burroughs/issues/1282), items 2 and 3; item 1 stays open there).
+  - **Cancel after a completed copy:** a stream end is COPYING until its event is taken, so def:cancel_copy accepts it
+    and takes the pending event, which reads CANCELLED with the copy's progress, or DROPPED when the other end has
+    gone. `stream.cancel-write` trapped "no write in flight" there, and `stream.cancel-read` returned COMPLETED.
+    `future.cancel-write` has no such state to reach: nothing but its own cancel resolves a parked future write.
+  - **A handle of the wrong kind traps:** every stream, future, waitable-set, `waitable.join` and `subtask` built-in
+    given a handle of another kind, or an index with no entry, now traps, as the pin's `trap_if(not isinstance(...))`
+    does at each. It returned a Go error.
+  - **Witnesses:** `TestACancelTakesACompletedCopysEvent` over `stream-cancel-pending.wasm` and
+    `TestAWrongKindHandleTraps` over `wrong-kind-traps.wasm`, both with wasmtime 49.0.3's readings, 10 of 10, in both
+    gate states. Wasmtime and the pin agree on every row. Neutered, each fix's rows fail, as named at its site.
 - **The editroute hook's tracked-file routes guard every worktree of the repository, not only the main checkout**
   ([#1315](https://github.com/scttfrdmn/burroughs/issues/1315)).
   - **The defect:** the hook's tracked set was the files of `CLAUDE_PROJECT_DIR`, the main checkout. A file tracked

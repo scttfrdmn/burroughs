@@ -1,0 +1,45 @@
+# Committed readings for wrong-kind-traps.wasm (#1282, item 3): each built-in given a handle that is not of its kind.
+# Built:       wasm-tools parse wrong-kind-traps.wat -o wrong-kind-traps.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' wrong-kind-traps.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, darwin/arm64.
+# Runs:        10 of 10 per line, each identical. Taken 2026-11-21.
+#
+# Each line is `<export>: <wasmtime's reading>`, a trap's last line of stderr and its exit status. Every row traps in
+# the pin too, at the built-in's own `trap_if(not isinstance(...))`, or at def:Table.get for an index with no entry.
+stream-read-writable: trap: wasm trap: cannot have concurrent operations active on a future/stream (exit 134)
+stream-write-readable: trap: wasm trap: cannot have concurrent operations active on a future/stream (exit 134)
+stream-cancel-read-writable: trap: passed write end to `{stream|future}.cancel-read` (exit 1)
+stream-cancel-write-readable: trap: passed read end to `{stream|future}.cancel-write` (exit 1)
+stream-drop-readable-writable: trap: handle is not a readable end of a stream (exit 1)
+stream-drop-writable-readable: trap: passed read end to `stream.drop-writable` (exit 1)
+stream-write-no-handle: trap: unknown handle index 99 (exit 1)
+future-read-writable: trap: wasm trap: cannot have concurrent operations active on a future/stream (exit 134)
+future-read-stream: trap: handle is not a future (exit 1)
+future-write-readable: trap: wasm trap: cannot have concurrent operations active on a future/stream (exit 134)
+future-cancel-write-readable: trap: passed read end to `{stream|future}.cancel-write` (exit 1)
+future-drop-readable-writable: trap: handle is not a readable end of a future (exit 1)
+join-set-as-waitable: trap: handle is not a waitable (exit 1)
+join-end-as-set: trap: handle is not an waitable-set (exit 1)
+wait-end: trap: handle is not an waitable-set (exit 1)
+poll-end: trap: handle is not an waitable-set (exit 1)
+set-drop-end: trap: handle is not a waitable-set (exit 1)
+subtask-cancel-end: trap: handle is not a subtask (exit 1)
+subtask-drop-end: trap: handle is not a subtask (exit 1)
+#
+# Meaning, with the pin's line for each.
+#   stream-*, future-*  def:copy, def:cancel_copy and def:drop each open with "trap_if(not isinstance(end, EndT))",
+#                     so the other end of the same stream or future traps, as does a stream end given to a future
+#                     built-in (future-read-stream). wasmtime's four copy rows trap with a different reason,
+#                     "cannot have concurrent operations active", which is where its read and write of the wrong end
+#                     stop; it is a trap, as the pin's is.
+#   stream-write-no-handle  index 99 names no entry, def:Table.get:"trap_if(i >= len(self.array))".
+#   join-*            def:canon_waitable_join: "trap_if(not isinstance(w, Waitable))" for a waitable set as `wi`, and
+#                     "trap_if(not isinstance(wset, WaitableSet))" for a stream end as `si`.
+#   wait-, poll-, set-drop-end  def:canon_waitable_set_wait, def:canon_waitable_set_poll and
+#                     def:canon_waitable_set_drop: "trap_if(not isinstance(wset, WaitableSet))".
+#   subtask-*         def:canon_subtask_cancel:"trap_if(not isinstance(subtask, Subtask))" and
+#                     def:canon_subtask_drop:"trap_if(not isinstance(s, Subtask))".
+#
+# Burroughs before #1282 (main at d8076a1): every row returns a Go error rather than a trap, "component: <built-in>:
+# handle N is not a <kind>". Burroughs since: a trap reading "<built-in>: handle N is not a <kind> (the pin's
+# def:<symbol>: trap_if(not isinstance(...)))".
