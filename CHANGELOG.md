@@ -633,6 +633,23 @@ says what it now requires and what it gives up.
   - **Known limit:** a stopped timer stays in its P's heap until that P next checks its timers, so after a wait ends, a
     process that later blocks every goroutine outside any guest wait, such as an embedder's own deadlock, can hang
     where it would have died with the fatal. ADR 0128 records it and the bounded shape not taken.
+- **An async-lifted export's `task.return` of a `result`, `variant`, `option` or `enum` lifts, as on wasmtime 49.0.3**
+  ([#1320](https://github.com/scttfrdmn/burroughs/issues/1320)).
+  - **The defect:** `liftFlatValue`, which lifts `task.return`'s flat parameters, had no arm for a variant or the
+    kinds that despecialize to one. So wasi:cli/run@0.3.0's `run: async func() -> result`, lifted async with a
+    callback, trapped at its `task.return` with *"liftFlatValue has no arm for kind variant"*, where wasmtime exits 0
+    on ok and 1 on err.
+  - **The repair:** `canon.LiftFlatVariant` is def:lift_flat_variant: the case index (an index past the cases
+    traps), the payload read from the joined slot types (def:join) coerced back to its own, and the unused slots
+    drained. The payload lift is injected, as `LoadVariant`'s is. The model heap's flat lift goes through it, so the
+    differential against definitions.py verifies it, and `liftFlatValue`'s new arm calls it with itself as the
+    payload lift. `own` stays refused by name.
+  - **Witnesses:** `TestARunReturningAResultThroughTaskReturnExitsAsWasmtimeDoes` (task-return-run-ok/err.wasm, exit
+    0 and 1), and `TestTaskReturnLiftsAVariantAsWasmtimeDoes`, ten exports of task-return-variant.wasm: an
+    `option<u64>`, a variant with `u32`/`f64`/`string` cases, a `result<option<u8>, string>`, an enum, and an
+    out-of-range case index. Each row matches wasmtime 49.0.3's `--invoke` reading, and the pin agrees on every row.
+    Neutered, with the arm removed, every row traps again. With the i64→f64 coercion converting rather than
+    reinterpreting, the f64 case lifts 4.614256656552046e+18 and the differential's `variant-mixed-flat` fails.
 - **The editroute hook's tracked-file routes guard every worktree of the repository, not only the main checkout**
   ([#1315](https://github.com/scttfrdmn/burroughs/issues/1315)).
   - **The defect:** the hook's tracked set was the files of `CLAUDE_PROJECT_DIR`, the main checkout. A file tracked

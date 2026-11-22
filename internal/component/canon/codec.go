@@ -1425,6 +1425,91 @@ func LoadVariant(h ReadHeap, t Type, ptr int, loadElem func(Type, int) (Value, e
 	return Variant(t, c.Name, payload)
 }
 
+// LiftFlatVariant lifts a `variant` from the head of a flat core-value sequence (def:lift_flat_variant), and an
+// `enum`, an `option` or a `result` too, since each despecializes to one (def:despecialize). It returns the
+// value and the count of words it consumed, which is the variant's whole flat width (def:flatten_variant)
+// whichever case was chosen. The payload lift is injected, as [LoadVariant]'s payload load is, so the framing
+// is the codec's and a caller lifts the payload over its own memory. Each word is a core value's bits in its
+// own slot's type, a float as its bit pattern.
+//
+// # The rule, as the pin states it
+//
+// The case index is the first word, and an index past the cases traps
+// (def:lift_flat_variant:"trap_if(case_index >= len(cases))"). The payload is lifted from the slots after it,
+// and **each slot has the joined type of every case's flat type at that position** (def:join), not the chosen
+// case's own. So a slot is coerced back to the type the payload wants before the payload sees it, the four
+// coercions of def:lift_flat_variant's `CoerceValueIter`: an i32 slot read as an f32 is its bits reinterpreted
+// (def:lift_flat_variant:"case ('i32', 'f32') : return decode_i32_as_float(x)"), an i64 slot read as an i32 or
+// an f32 is wrapped to its low 32 bits (def:lift_flat_variant:"case ('i64', 'i32') : return wrap_i64_to_i32(x)"),
+// and an i64 slot read as an f64 is its bits reinterpreted
+// (def:lift_flat_variant:"case ('i64', 'f64') : return decode_i64_as_float(x)"). Here a word already is its
+// bits, so a reinterpretation keeps them and a wrap masks them: that is `coerce`, which the model heap's own
+// flat lift reached through its iterator before this was extracted. The slots the chosen case does not fill
+// are drained unread (def:lift_flat_variant:"_ = vi.next(have)"), which is why the count is the variant's.
+//
+// # Why exported, and why the model heap goes through it (#1320)
+//
+// The component layer's `task.return` lifts its flat parameters over guest memory, and had no variant arm, so
+// a `result` from an async-lifted export trapped where wasmtime 49.0.3 runs it. The model heap's `liftFlat`
+// had the arm, as a method over its own iterator and memory. The join and the coercions are the part a second
+// copy would get wrong, so they are extracted here and `liftFlat`'s variant arm calls this: the differential
+// against definitions.py over gen/cases.json (`variant-mixed-flat`'s u32/f64 join among them) then verifies
+// the framing the component layer runs.
+//
+// **Neuters, run.** `coerce`'s i64→f64 arm converting the integer rather than reinterpreting its bits
+// (`math.Float64bits(float64(int64(bits)))`): the differential's `variant-mixed-flat` fails, and the component
+// layer's mixed-b row (task-return-variant.reading) lifts b(4.614256656552046e+18) where wasmtime 49.0.3 reads
+// b(3.141592653589793). Skipping the coercion outright (`coerced[i] = words[1+i]`) fails nothing, and that is
+// a property of this representation rather than a gap: a word is already its bits, so a reinterpretation is
+// the identity, and every consumer of a 32-bit slot masks to its low 32 bits, so the wrap is too. The
+// case-index check removed: bad-case indexes past the cases and panics.
+func LiftFlatVariant(t Type, words []uint64, liftPayload func(payload Type, words []uint64) (Value, int, error)) (Value, int, error) {
+	vt := despecialize(t)
+	if vt.Kind != KindVariant {
+		return Value{}, 0, fmt.Errorf("canon: LiftFlatVariant on non-variant type %s", t.Kind)
+	}
+	// The flat form is computed by `flattenType`, which panics on a kind it has no flat type for, so a type
+	// LoadFlat would refuse is refused here by the same predicate and named. A variant with no cases is one.
+	if k, bad := unflattenable(vt, 0); bad {
+		return Value{}, 0, fmt.Errorf("canon: lift_flat_variant: kind %s has no flat form here", k)
+	}
+	flat := flattenVariant(vt.Cases)
+	if len(words) < len(flat) {
+		return Value{}, 0, fmt.Errorf("canon: lift_flat_variant: a %s has %d flat value(s) left, want %d",
+			t, len(words), len(flat))
+	}
+	// An i32 slot's word is the unsigned 32-bit value (the model's iterator yields one), so the index is read
+	// from the low 32 bits and compared unsigned.
+	ci := uint64(uint32(words[0]))
+	if ci >= uint64(len(vt.Cases)) {
+		return Value{}, 0, fmt.Errorf("canon: lift_flat_variant: case index %d out of range [0, %d)",
+			ci, len(vt.Cases))
+	}
+	c := vt.Cases[ci]
+	var payload *Value
+	if c.Type != nil {
+		want := flattenType(*c.Type)
+		coerced := make([]uint64, len(want))
+		for i, w := range want {
+			coerced[i] = coerce(flat[1+i], w, words[1+i])
+		}
+		pv, n, err := liftPayload(*c.Type, coerced)
+		if err != nil {
+			return Value{}, 0, err
+		}
+		if n != len(want) {
+			return Value{}, 0, fmt.Errorf("canon: lift_flat_variant: case %q's %s payload consumed %d flat "+
+				"value(s) of its %d", c.Name, *c.Type, n, len(want))
+		}
+		payload = &pv
+	}
+	v, err := Variant(vt, c.Name, payload)
+	if err != nil {
+		return Value{}, 0, err
+	}
+	return respecialize(t, v), len(flat), nil
+}
+
 // ResourceHandle is one entry in a component instance's handle table (def:ResourceHandle): the resource
 // type it names, the representation the type's implementation chose, whether the entry owns it, and how
 // many borrows of it are lent out. The reference's `borrow_scope` is not carried, because nothing here
@@ -2060,23 +2145,20 @@ func (h *heap) liftFlat(it *coreValueIter, t Type) (Value, error) {
 		}
 		return List(*t.Elem, vals...)
 	case KindVariant:
-		total := flattenVariant(t.Cases)
-		start := it.i
-		ci := int(it.next("i32"))
-		if ci >= len(t.Cases) {
-			return Value{}, fmt.Errorf("canon: lift_flat_variant: case index %d out of range", ci)
+		// Through [LiftFlatVariant] (#1320), which owns the case index, the join's coercions and the drain, so
+		// this differential verifies the framing the component layer's `task.return` runs. The payload is
+		// lifted from a sub-iterator over the coerced words, typed with the payload's own flat types, so its
+		// `next` coerces nothing further: the coercion happened once, in the framing.
+		v, n, err := LiftFlatVariant(t, it.vals[it.i:], func(pt Type, ws []uint64) (Value, int, error) {
+			sub := &coreValueIter{types: flattenType(pt), vals: ws}
+			pv, perr := h.liftFlat(sub, pt)
+			return pv, sub.i, perr
+		})
+		if err != nil {
+			return Value{}, err
 		}
-		c := t.Cases[ci]
-		var payload *Value
-		if c.Type != nil {
-			pv, err := h.liftFlat(it, *c.Type)
-			if err != nil {
-				return Value{}, err
-			}
-			payload = &pv
-		}
-		it.i = start + len(total) // drain the unused joined slots
-		return Variant(t, c.Name, payload)
+		it.i += n
+		return v, nil
 	case KindRecord:
 		// `lift_flat_record`: each field lifted in declared order from the same iterator, so the fields
 		// consume consecutive slots. **No draining**, unlike the variant arm above — a record has no

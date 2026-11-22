@@ -87,3 +87,7 @@ So a component value is the only thing that crosses. Nothing in either memory is
 - **A kind the callee-side lowering has no arm for.** `lowerOneArg` lowers `u32`, `string`, `list` and `record`. Any other scalar inside a pointer-carrying signature, such as a `bool` beside a `string`, is refused by name. This is narrower than the lift, and it is the next obvious widening.
 - **A spilled result `canon.LoadVia` cannot load.** That refusal is the codec's own.
 - **A one-word sync result other than `u32` returned to an embedder** (`liftFlatCoreResult`). It is not a pointer and not a spill, so ADR 0103 does not reach it. The refusal's text, which named `post-return` and a return pointer as the missing pieces, is corrected to say what remains.
+
+## Postscript, 2026-11-21: the caller-side lift's variant refusal moved, and this is a postscript rather than an edit
+
+[#1320](https://github.com/scttfrdmn/burroughs/issues/1320) gave `liftFlatValue` arms for variant, `option`, `result` and `enum`, through the codec's `canon.LiftFlatVariant`. The as-built list's first limit above no longer holds for those kinds. A variant argument inside a pointer-carrying sync signature now lifts at the caller. It is refused one step later, by name, as `ErrUnsupportedForm`, in `lowerOneArg`, whose own limit, the list's second, still lists every kind but `u32`, `string`, `list` and `record`. `flags` and handles are still refused at the caller's lift. The list's text above is unchanged, as the record of what was built on its date.

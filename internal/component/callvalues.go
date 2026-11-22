@@ -146,9 +146,10 @@ func liftFlatResult(name string, sig *FuncType, res liftResult) ([]canon.Value, 
 				ErrUnsupportedForm, name, werr)
 		}
 		// **Structural, like the parameter check** — this was `Kind != want.Kind` until the same defect
-		// was noticed in the same file in the other direction. Nothing reaches it today that a kind
-		// comparison would miss, because the eager lift refuses every compound result, so this is a
-		// repair made while the arm is still unreachable rather than after a wrong value crossed.
+		// was noticed in the same file in the other direction. It was written while the eager lift refused
+		// every compound result, as a repair made before a wrong value could cross. The lift now has list,
+		// record and variant arms (the last with #1320), so the compound results it was written for reach it,
+		// and TestTaskReturnLiftsAVariantAsWasmtimeDoes's rows pass through it.
 		//
 		// That is the whole argument for doing it now: when the lift arm lands, a `list<string>` lifted
 		// against a declared `list<u32>` is a real engine bug, and a check that compared kinds would pass
