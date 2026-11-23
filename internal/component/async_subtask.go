@@ -428,7 +428,7 @@ func (st *subtask) resolveLocked(state subtaskState) {
 	st.state = state
 	st.resolved = true
 	if st.set != nil { // wake any agent parked on the set this subtask was joined to
-		st.set.signalLocked()
+		st.set.signalLocked(st) // and queued for the set's take (#1338, R-1's O(1) per event)
 	}
 	if st.resolveWake != nil { // wake a sync subtask.cancel waiting for exactly this (grave #892)
 		close(st.resolveWake)

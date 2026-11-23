@@ -94,7 +94,7 @@ func (e *readableFutureEnd) resolveLocked(r copyResult) {
 	e.resolved = true
 	e.result = r
 	if e.set != nil {
-		e.set.signalLocked()
+		e.set.signalLocked(e) // queued for the set's take (#1338, R-1's O(1) per event)
 	}
 }
 
@@ -328,7 +328,7 @@ func (e *writableFutureEnd) completeWriteLocked(progress uint32, r copyResult) {
 		e.done = true
 	}
 	if e.set != nil {
-		e.set.signalLocked()
+		e.set.signalLocked(e) // queued for the set's take (#1338, R-1's O(1) per event)
 	}
 }
 

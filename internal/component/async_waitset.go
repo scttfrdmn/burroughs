@@ -85,7 +85,23 @@ type waitable interface {
 // fields are guarded by the owning asyncHandles' mutex.
 type waitableSet struct {
 	members []waitable
-	wake    chan struct{}
+	// ready is the members that became ready, in the order they did: what a take reads, so that draining the set by
+	// `waitable-set.poll` until NONE costs O(1) per event and not a scan of every member per poll (#1338, contract
+	// §6 R-1 as amended on #1334: "repeated `waitable-set.poll` until it reports none, at O(1) per event").
+	//
+	// **An entry is a hint, re-checked at the take**, so it may be stale: its member left the set, or its event was
+	// taken another way (a cancel or a read takes its own end's event inline). A take discards a stale entry, and
+	// every member that becomes ready while joined, or is joined while ready, is appended again (`signalLocked`,
+	// `joinWaitableLocked`), so a discarded entry loses nothing. A member may appear twice; its event is taken once,
+	// because taking it clears it. `compactLocked` bounds the queue at twice the members.
+	//
+	// **The order is readiness, not join order.** The scan took the first ready member in join order, so a member
+	// joined early and ready often was always taken first and a later one could wait behind it without bound. The
+	// pin's `get_pending_event` shuffles its members (def:WaitableSet.get_pending_event:"random.shuffle(self.elems)"),
+	// so no order is the pin's, and readiness order is the one in which no ready member waits behind another's later
+	// event.
+	ready []waitable
+	wake  chan struct{}
 	// waiting counts the agents and lift loops currently parked on this set — the model's
 	// `WaitableSet.num_waiting` (def:WaitableSet.num_waiting), which `WaitableSet.drop` traps on (def:WaitableSet.drop:"trap_if(self.num_waiting > 0)").
 	//
@@ -96,11 +112,24 @@ type waitableSet struct {
 	waiting int
 }
 
-// pendingEventLocked returns the first ready member's deliverable event, or (event{}, false) if none is
+// pendingEventLocked returns the earliest-ready member's deliverable event, or (event{}, false) if none is
 // ready. The caller holds asyncHandles.mu. Mirrors WaitableSet.get_pending_event (def:WaitableSet.get_pending_event) — kind
 // -agnostic: whichever member kind is ready supplies its own (code, p1, p2).
+//
+// **It reads the ready queue, not the members** (#1338, R-1's O(1) per event). It scanned every member, so a guest
+// draining k events from a set of m members by `waitable-set.poll` paid O(k·m), which a netpoller's set of many
+// idle sockets and one ready one makes O(m) per event.
+//
+// NEUTER, run: scan s.members as before, and TestDrainingASetCostsOnePerEventNotOnePerMember reads 36836 member
+// inspections for 8 events from 4096 members, where it allows 16, and 4096 for the take that finds none.
 func (s *waitableSet) pendingEventLocked() (event, bool) {
-	for _, m := range s.members {
+	for len(s.ready) > 0 {
+		m := s.ready[0]
+		s.ready[0] = nil
+		s.ready = s.ready[1:]
+		if m.currentSet() != s {
+			continue // it left the set after it became ready
+		}
 		if e, ok := m.pendingEventLocked(); ok {
 			return e, true
 		}
@@ -110,14 +139,39 @@ func (s *waitableSet) pendingEventLocked() (event, bool) {
 
 // hasPendingEventLocked reports whether some member has an event to deliver, without taking it: the
 // reference's `WaitableSet.has_pending_event`, which is a waiting Thread's `ready_func` (#1005). The caller
-// holds asyncHandles.mu.
+// holds asyncHandles.mu. It discards the stale entries at the queue's head, as a take would, and no others.
 func (s *waitableSet) hasPendingEventLocked() bool {
-	for _, m := range s.members {
-		if m.hasPendingEventLocked() {
+	for len(s.ready) > 0 {
+		if m := s.ready[0]; m.currentSet() == s && m.hasPendingEventLocked() {
 			return true
 		}
+		s.ready[0] = nil
+		s.ready = s.ready[1:]
 	}
 	return false
+}
+
+// readySlack is how far the ready queue may outgrow twice the members before it is compacted: enough that a set of
+// one or two members is not compacted at every event.
+const readySlack = 8
+
+// compactLocked drops the ready queue's stale entries and its duplicates, keeping each live member's first place.
+// It runs only once the queue holds more than twice the members (plus readySlack), and afterwards it holds at most
+// one entry per member, so at least as many entries are dropped as kept and its cost is O(1) per entry appended. It
+// is what bounds the queue of a set whose members' events are taken inline and that nobody polls. The caller holds
+// asyncHandles.mu.
+func (s *waitableSet) compactLocked() {
+	seen := make(map[waitable]struct{}, len(s.members))
+	kept := s.ready[:0]
+	for _, m := range s.ready {
+		if _, dup := seen[m]; dup || m.currentSet() != s || !m.hasPendingEventLocked() {
+			continue
+		}
+		seen[m] = struct{}{}
+		kept = append(kept, m)
+	}
+	clear(s.ready[len(kept):])
+	s.ready = kept
 }
 
 // waitTake is a sync `waitable-set.wait`'s readiness, as the sync tail reads it.
@@ -153,9 +207,26 @@ func (w *waitTake) takeLocked() (event, bool) {
 	return e, ok
 }
 
-// signalLocked wakes any agent parked on the set. The caller holds mu and has just resolved a member (the
-// member reaches its set through the joinTo back-pointer, where its own kind is known).
-func (s *waitableSet) signalLocked() {
+// signalLocked records that member w has an event, and wakes every agent and lift loop parked on the set. The
+// caller holds mu and has just resolved w (the member reaches its set through the joinTo back-pointer, where its
+// own kind is known).
+//
+// **The wake is a broadcast, and it reaches a waiter on any agent** (#1338, contract §6 R-1 as amended on #1334: a
+// wait on one agent returns when another agent of the instance makes an event ready on its set). A waiter reads
+// `wake` under mu in the same critical section in which it finds no event, and waits on the channel it read. An
+// event made ready before that section is found by it; one made ready after it closes the channel the waiter holds.
+// So no wake falls between a waiter's check and its park, whichever agent makes the event ready, and the agents need
+// no waiter count: every waiter wakes, one takes the event, and the others look again.
+//
+// NEUTER, run: drop the close, and all six rows of TestAWaitOnOneAgentIsWokenByAnotherAgentsEvent fail in their
+// first run at run's 5s join, each naming its waiter parked in waitableSetWait. NEUTER, run: drop the append, and
+// the waiters wake to an empty queue: the future row fails the same way, and so does
+// TestPollAndWaitOnOneSetAcrossAgentsNeitherLoseNorDuplicate, naming its two waiters.
+func (s *waitableSet) signalLocked(w waitable) {
+	s.ready = append(s.ready, w)
+	if len(s.ready) > 2*len(s.members)+readySlack {
+		s.compactLocked()
+	}
 	close(s.wake)
 	s.wake = make(chan struct{})
 }
@@ -208,6 +279,23 @@ func (s *waitableSet) removeLocked(w waitable) {
 // implement `join` while implementing a third of it is the testimony defect this corpus keeps paying for.
 //
 // The caller holds asyncHandles.mu.
+//
+// # A waitable joined while ready makes its new set ready (#1338)
+//
+// **Joining an already-ready waitable signals the set**, as a member becoming ready does. The pin's waiter re-reads
+// `has_pending_event` at every tick (def:WaitableSet.wait:"current_thread().wait_until(self.has_pending_event)"), so
+// a join that makes it true is seen. Here a waiter re-reads only when its set is signalled, and the join signalled
+// nothing: a member's own resolution signals only the set it was in when it resolved. So an agent that waited on a
+// set while another agent joined a ready waitable to it waited for ever, which contract §6 R-1's amendment names as
+// a wake that must arrive ("a join"). It was not reachable with one agent: a lone agent that joins a ready waitable
+// and then waits finds the event at its first check.
+//
+// **And since the take reads the ready queue, this is also how a waitable joined while ready is found at all**, by
+// any waiter, on any agent.
+//
+// NEUTER, run: drop the signal, and TestAWaitOnOneAgentIsWokenByAnotherAgentsEvent's join row fails in its first
+// run, at run's 5s join, naming its waiter parked in waitableSetWait; and
+// TestDrainingASetCostsOnePerEventNotOnePerMember's take after a ready join finds nothing.
 func joinWaitableLocked(w waitable, set *waitableSet) {
 	if old := w.currentSet(); old != nil {
 		old.removeLocked(w)
@@ -215,6 +303,9 @@ func joinWaitableLocked(w waitable, set *waitableSet) {
 	w.joinTo(set)
 	if set != nil {
 		set.members = append(set.members, w)
+		if w.hasPendingEventLocked() {
+			set.signalLocked(w)
+		}
 	}
 }
 

@@ -113,7 +113,7 @@ func (e *writableStreamEnd) completeWriteLocked(progress uint32, r copyResult) {
 		e.done = true
 	}
 	if e.set != nil {
-		e.set.signalLocked()
+		e.set.signalLocked(e) // queued for the set's take (#1338, R-1's O(1) per event)
 	}
 }
 
@@ -336,7 +336,7 @@ func (e *readableStreamEnd) armLocked(progress uint32, r copyResult) {
 	e.result = r
 	e.resolved = true
 	if e.set != nil {
-		e.set.signalLocked()
+		e.set.signalLocked(e) // queued for the set's take (#1338, R-1's O(1) per event)
 	}
 	if e.onHostComplete != nil { // a host consumer: let it finish (write to stdout, resolve its future)
 		e.onHostComplete(r)
