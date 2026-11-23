@@ -72,6 +72,10 @@ var raceWitnessFixtures = []string{
 	"future-write-then-read-cancel.wasm",
 	"future-write-then-read-bool.wasm",
 	"future-read-then-write.wasm",
+	// #1338's cross-agent wake and shutdown witnesses (crossagentwake_test.go): one agent's write into another's
+	// read buffer is what -race must see
+	"cross-agent-wake.wasm",
+	"cross-agent-shutdown.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,
