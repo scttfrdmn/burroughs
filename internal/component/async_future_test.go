@@ -4,10 +4,118 @@ package component
 
 import (
 	"encoding/binary"
+	"os"
+	"runtime"
 	"testing"
+	"time"
 
+	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
 )
+
+// TestAFutureReadCompletesAParkedWriteInItsOwnInstance is #1325 item 1: one async callback task meets itself at a
+// future, in either order, and the second operation completes the rendezvous. Each u8 fixture returns the tuple
+// (write status, read status, byte read, event code, event index, event payload, wi, second poll's code), and each
+// row was read on both oracles first (`testdata/future-rendezvous.reading`, `refread.reading`):
+//
+//	fixture                         wasmtime 49.0.3 (5 of 5)                 pin 2e7895c (16 of 16)
+//	write-then-read                 (4294967295, 0, 7, 5, 2, 0, 2, 0)        the same
+//	write-then-read-cancel          (4294967295, 0, 7, 51966, 0, 0, 2, 0)    the same
+//	write-then-read-bool            trap at the read, non-numeric payload    trap in future.read
+//	read-then-write (the control)   (0, 4294967295, 7, 4, 1, 0, 2, 0)        the same
+//
+// So, writing first: the write parks BLOCKED, the read completes inline with COMPLETED and the byte, and the
+// write's event is (FUTURE_WRITE, wi, COMPLETED), the bare result with no progress packed into it. The poll after
+// the event reads NONE with both ends joined, so neither end has a second event. A cancel after the read takes
+// the COMPLETED, and leaves nothing behind. Burroughs before the fix read write-then-read as
+// (4294967295, 4294967295, 0, 0xdead, ...): the read parked too.
+//
+// **The sync write is not a row**, because both oracles hang on it: a sync `future.write` with no reader waits for
+// an event only a later operation of the same task could cause (def:copy:"end.wait_for_pending_event()"). Burroughs
+// binds the sync form as the async one, so it does not hang, and that is a separate divergence (the reading file).
+//
+// **Neuters, run:**
+//   - futureRead's #1325 arm dropped: write-then-read and write-then-read-cancel read field 3 as 0xdead, the place
+//     the fixture reports a read that parked, and write-then-read-bool returns (4294967295, 0xdead), no trap;
+//   - the writable future end's event packing `progress << 4` again: write-then-read reads the payload as 16, and
+//     write-then-read-cancel reads the cancel's return as 16;
+//   - futureCancelWrite trapping on `e.resolved` again: write-then-read-cancel traps "no write in flight".
+func TestAFutureReadCompletesAParkedWriteInItsOwnInstance(t *testing.T) {
+	const blocked = 0xffffffff
+	for _, gate := range []string{"0", "1"} {
+		for _, tc := range []struct {
+			fixture string
+			want    []uint32 // nil: the trap
+		}{
+			{"future-write-then-read", []uint32{blocked, 0, 7, 5, 2, 0, 2, 0}},
+			{"future-write-then-read-cancel", []uint32{blocked, 0, 7, 0xcafe, 0, 0, 2, 0}},
+			{"future-write-then-read-bool", nil},
+			{"future-read-then-write", []uint32{0, blocked, 7, 4, 1, 0, 2, 0}},
+		} {
+			t.Run(tc.fixture+"/gate="+gate, func(t *testing.T) {
+				t.Setenv(asyncGateEnv, "1")
+				t.Setenv(cmThreadsGateEnv, gate)
+				res, err := callFutureFixtureBounded(t, tc.fixture)
+				if tc.want == nil {
+					wantTrapContaining(t, tc.fixture, err, "future.read: cannot read from and write to an intra-instance "+
+						"future with a non-numeric payload")
+					return
+				}
+				if err != nil {
+					t.Fatalf("run(): %v", err)
+				}
+				fields, ok := res[0].Record()
+				if !ok || len(fields) != len(tc.want) {
+					t.Fatalf("run() = %v, want a tuple of %d u32", res, len(tc.want))
+				}
+				got := make([]uint32, len(fields))
+				for i, f := range fields {
+					got[i], _ = f.U32()
+				}
+				if got[3] == 0xdead {
+					t.Fatalf("run() = %v: the second operation did not complete the rendezvous, so both ends are "+
+						"parked (the fixture's 0xdead place); both oracles read %v", got, tc.want)
+				}
+				for i := range got {
+					if got[i] != tc.want[i] {
+						t.Fatalf("run() = %v, want %v (field %d differs)", got, tc.want, i)
+					}
+				}
+			})
+		}
+	}
+}
+
+// callFutureFixtureBounded instantiates testdata/<fixture>.wasm under the gates the caller set, calls `run`, and
+// fails the test, with every goroutine's stack, if the call does not return within the bound.
+func callFutureFixtureBounded(t *testing.T, fixture string) ([]canon.Value, error) {
+	t.Helper()
+	b, err := os.ReadFile("testdata/" + fixture + ".wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	in, err := Instantiate(b)
+	if err != nil {
+		t.Fatalf("instantiate %s: %v", fixture, err)
+	}
+	t.Cleanup(in.Close)
+	type out struct {
+		res []canon.Value
+		err error
+	}
+	ch := make(chan out, 1)
+	go func() { r, e := in.CallValues("run"); ch <- out{r, e} }()
+	select {
+	case o := <-ch:
+		return o.res, o.err
+	case <-time.After(10 * time.Second):
+		buf := make([]byte, 1<<22)
+		buf = buf[:runtime.Stack(buf, true)]
+		t.Logf("%s: every goroutine at the bound:\n%s", fixture, buf)
+		t.Fatalf("%s: run() did not return within 10s", fixture)
+		return nil, nil
+	}
+}
 
 type futureReadFixture struct {
 	Name      string `json:"name"`

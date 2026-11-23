@@ -67,6 +67,11 @@ var raceWitnessFixtures = []string{
 	"run-slot-sync-entry.wasm",
 	// #1006's default-path witness (TestAFutureWriteCompletesAPendingReadInItsOwnInstance)
 	"future-self-copy.wasm",
+	// #1325's rendezvous witnesses (TestAFutureReadCompletesAParkedWriteInItsOwnInstance)
+	"future-write-then-read.wasm",
+	"future-write-then-read-cancel.wasm",
+	"future-write-then-read-bool.wasm",
+	"future-read-then-write.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

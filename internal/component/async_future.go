@@ -64,6 +64,9 @@ type readableFutureEnd struct {
 	// stream-copy path (write-via-stream's onHostComplete, which cannot return an error), a guest-memory
 	// write failure lands here and is surfaced when the guest next touches the end (futureDrop).
 	completeErr error
+	// writer is the paired writable end, when future.new minted both (the pin's `other`); nil for a future a
+	// host resolves. A read that finds its write parked drives the copy through it (#1325).
+	writer *writableFutureEnd
 }
 
 // pendingEventLocked delivers the future read's (FUTURE_READ, index, result) event once. readableFutureEnd
@@ -181,9 +184,57 @@ func futureRead(h *asyncHandles) interp.CanonFunc {
 		fe.readPtr = ptr
 		fe.hasRead = true
 		fe.caller = c
+		// **A read that finds the guest's write parked is the second arriver, and drives the copy** (#1325).
+		// The pin has one rendezvous for both orders: whichever end's `copy` finds the other's buffer moves the
+		// value and notifies both, def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:"
+		// then def:End.copy:"self.notify(buffer.progress)" and def:End.copy:"self.other.notify(self.other.buffer.progress)".
+		// So the read takes its own COMPLETED inline (def:copy:"code,index,payload = end.get_pending_event()")
+		// and the write's FUTURE_WRITE COMPLETED is left pending for its wait. Only futureWrite's direction was
+		// built, so writing first and then reading left both ends parked. wasmtime 49.0.3 and the pin both read
+		// future-write-then-read as the read COMPLETED and the write's event COMPLETED.
+		//
+		// NEUTER: drop this arm, and TestAFutureReadCompletesAParkedWriteInItsOwnInstance's write-then-read and
+		// write-then-read-cancel rows read the read as BLOCKED, the fixture's 0xdead place, and its
+		// write-then-read-bool row does not trap.
+		if w := fe.writer; w != nil && w.hasWrite && !w.resolved {
+			if err := copyFutureValueLocked(w.elem, w.caller, w.srcPtr, c, ptr, "future.read"); err != nil {
+				return nil, err
+			}
+			w.completeWriteLocked(1, copyCompleted)
+			fe.resolved, fe.result = true, copyCompleted
+			ev, _ := fe.pendingEventLocked()
+			return []interp.Value{interp.I32(int32(ev.p2))}, nil
+		}
 		bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
 		return []interp.Value{interp.I32(int32(bits))}, nil
 	}
+}
+
+// copyFutureValueLocked is the rendezvous's copy, the second arriver's, whichever end it is: one value of `elem`
+// from the writer's buffer at srcPtr to the reader's at dstPtr, each through its own end's caller
+// (def:End.copy). An element that is not a number traps at the copy, as both ends are this instance's
+// (def:End.copy:"trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))"),
+// and a float's NaN takes the canonical one. `op` names the built-in that arrived second. The caller holds mu.
+func copyFutureValueLocked(elem elemType, src *interp.CanonCaller, srcPtr uint32, dst *interp.CanonCaller, dstPtr uint32, op string) error {
+	if !elem.known {
+		return fmt.Errorf("%w: %s's copy: the future's element type did not resolve (#1006)", ErrUnsupportedForm, op)
+	}
+	if !elem.numeric {
+		return &interp.Trap{Reason: op + ": cannot read from and write to an intra-instance future " +
+			"with a non-numeric payload (the pin's End.copy: trap_if(... not none_or_number_type))"}
+	}
+	if elem.size == 0 {
+		return nil
+	}
+	buf, err := src.Read(uint64(srcPtr), uint64(elem.size))
+	if err != nil {
+		return &interp.Trap{Reason: fmt.Sprintf("%s: reading the value at the write's %d: %v", op, srcPtr, err)}
+	}
+	canonicalizeFloats(buf, elem.float)
+	if err := dst.Write(uint64(dstPtr), buf); err != nil {
+		return &interp.Trap{Reason: fmt.Sprintf("%s: storing the value at the read's %d: %v", op, dstPtr, err)}
+	}
+	return nil
 }
 
 // futureDrop implements `canon future.drop-readable` (definitions.py:canon_future_drop_readable): remove the readable end from the
@@ -227,19 +278,32 @@ type writableFutureEnd struct {
 	set       *waitableSet // the set it is joined to, if any
 	resolved  bool         // this write has an event to deliver
 	delivered bool         // the FUTURE_WRITE event has been taken by a waitable-set.wait
-	done      bool         // DONE (dropped); a COMPLETED/CANCELLED write leaves it IDLE (open)
+	done      bool         // DONE (dropped, or COMPLETED: a future is one value); a CANCELLED write leaves it IDLE
 	result    copyResult
-	progress  uint32             // 0 or 1 (a future is one value); packed into the event as progress<<4
+	progress  uint32             // 0 or 1 (a future is one value); NOT in the event, which is the bare result
 	hasWrite  bool               // a future.write is pending on this end
 	peer      *readableFutureEnd // the paired readable end (future.new)
+	// The parked write's buffer, for the read that arrives second to copy from (#1325): where the value is, the
+	// writing agent's caller (whose memory it is in), and the element future.write named.
+	srcPtr uint32
+	caller *interp.CanonCaller
+	elem   elemType
 }
 
-// pendingEventLocked delivers the write's (FUTURE_WRITE, index, result|progress<<4) event once. The caller
-// holds asyncHandles.mu.
+// pendingEventLocked delivers the write's (FUTURE_WRITE, index, result) event once. The caller holds
+// asyncHandles.mu.
+//
+// **A future's event payload is the bare CopyResult** (#1325): def:FutureEnd.notify.future_event+ returns
+// `(self.event_code, self.index, result)`, where a stream's packs `result | (progress << 4)`. This packed the
+// progress, which no path reached while every write event was a cancel's, of progress 0. The read that completes
+// a parked write is a progress of 1. wasmtime 49.0.3 reads that event's payload as 0.
+//
+// NEUTER: pack `e.progress << 4` again, and TestAFutureReadCompletesAParkedWriteInItsOwnInstance's write-then-read
+// row reads the event payload as 16, and its write-then-read-cancel row reads the cancel's return as 16.
 func (e *writableFutureEnd) pendingEventLocked() (event, bool) {
 	if e.resolved && !e.delivered {
 		e.delivered = true
-		return event{code: eventFutureWrite, p1: uint32(e.index), p2: uint32(e.result) | (e.progress << 4)}, true
+		return event{code: eventFutureWrite, p1: uint32(e.index), p2: uint32(e.result)}, true
 	}
 	return event{}, false
 }
@@ -252,14 +316,15 @@ func (e *writableFutureEnd) joinTo(s *waitableSet) { e.set = s }
 // currentSet reports the set this end is joined to, so `waitable.join` can remove it before re-joining.
 func (e *writableFutureEnd) currentSet() *waitableSet { return e.set }
 
-// completeWriteLocked ends a pending future.write with result r (CANCELLED for a cancel; DROPPED if the read
-// end drops), arms the event, and wakes the set. Mirrors writableStreamEnd.completeWriteLocked. DROPPED goes
-// DONE; CANCELLED/COMPLETED stay IDLE. Caller holds mu.
+// completeWriteLocked ends a pending future.write with result r (COMPLETED when a read copied its value, #1325;
+// CANCELLED for a cancel; DROPPED if the read end drops), arms the event, and wakes the set. DROPPED and a
+// COMPLETED of progress 1 go DONE, as def:FutureEnd.notify.future_event+ sets `End.State.DONE` for both (a future
+// is one value); CANCELLED stays IDLE. Caller holds mu.
 func (e *writableFutureEnd) completeWriteLocked(progress uint32, r copyResult) {
 	e.progress = progress
 	e.result = r
 	e.resolved = true
-	if r == copyDropped {
+	if r == copyDropped || (r == copyCompleted && progress == 1) {
 		e.done = true
 	}
 	if e.set != nil {
@@ -276,6 +341,7 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 		defer h.mu.Unlock()
 		re := &readableFutureEnd{}
 		we := &writableFutureEnd{peer: re} // the pin's one `SharedFutureImpl` behind both ends (#1006)
+		re.writer = we                     // and the way back, for a read that arrives second (#1325)
 		re.index = h.addLocked(re)
 		we.index = h.addLocked(we)
 		packed := uint64(uint32(re.index)) | uint64(uint32(we.index))<<32
@@ -312,8 +378,8 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 // The floats take the pin's deterministic-profile outcome, which is the codec's own rule
 // (`canon.CanonicalizeNaN32`/`64`). wasmtime's preserved payload is also inside the pin's set.
 //
-// **Only this direction is built**: a READ arriving at a pending write still parks, which no guest has yet
-// driven.
+// **The other direction is futureRead's** (#1325): a READ arriving at a parked write drives the same copy
+// (copyFutureValueLocked). This paragraph read *"only this direction is built"* until it was.
 //
 // `elem` is the element of the type future.write names, which the decoder keeps since #1271 (ADR 0124); it classified
 // type 0's for every future.
@@ -336,29 +402,15 @@ func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: end %d is not writable (done, write pending, or resolved)", i)}
 		}
 		if r := e.peer; r != nil && r.hasRead && !r.resolved {
-			if !elem.known {
-				return nil, fmt.Errorf("%w: future.write's copy into a pending read: the future's element type "+
-					"did not resolve (#1006)", ErrUnsupportedForm)
-			}
-			if !elem.numeric {
-				return nil, &interp.Trap{Reason: "future.write: cannot read from and write to an intra-instance future " +
-					"with a non-numeric payload (the pin's End.copy: trap_if(... not none_or_number_type))"}
-			}
-			if elem.size > 0 {
-				buf, rerr := c.Read(uint64(ptr), uint64(elem.size))
-				if rerr != nil {
-					return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: reading the value at %d: %v", ptr, rerr)}
-				}
-				canonicalizeFloats(buf, elem.float)
-				if werr := r.caller.Write(uint64(r.readPtr), buf); werr != nil {
-					return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: storing the value at the read's %d: %v",
-						r.readPtr, werr)}
-				}
+			if err := copyFutureValueLocked(elem, c, ptr, r.caller, r.readPtr, "future.write"); err != nil {
+				return nil, err
 			}
 			r.resolveLocked(copyCompleted)
 			e.done = true // a future is one value: the writable end is DONE after COMPLETED
 			return []interp.Value{interp.I32(int32(copyCompleted))}, nil
 		}
+		// The write parks with its buffer, which the read that arrives second copies from (futureRead, #1325).
+		e.srcPtr, e.caller, e.elem = ptr, c, elem
 		e.hasWrite = true
 		bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
 		return []interp.Value{interp.I32(int32(bits))}, nil
@@ -384,10 +436,20 @@ func futureCancelWrite(h *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, wrongKindTrap("future.cancel-write", i, "a writable future end", "def:cancel_copy")
 		}
-		if !e.hasWrite || e.resolved {
+		// **A write a read has completed is still COPYING until its event is taken, so it is cancellable, and the
+		// cancel takes the COMPLETED** (#1325). The pin's cancel finds the event pending and notifies nothing
+		// (def:End.cancel:"if (not self.has_pending_event()"), and the event it takes is the progress-1 arm of
+		// def:FutureEnd.notify.future_event+, COMPLETED, ahead of the CANCELLING_COPY arm. wasmtime 49.0.3 reads 0.
+		// Before the read drove the copy, no write could be resolved with its event untaken except by this cancel.
+		//
+		// NEUTER: trap on `e.resolved` again, and TestAFutureReadCompletesAParkedWriteInItsOwnInstance's
+		// write-then-read-cancel row traps "no write in flight".
+		if !e.hasWrite || e.delivered {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-write: end %d has no write in flight (COPYING)", i)}
 		}
-		e.completeWriteLocked(e.progress, copyCancelled) // progress 0 for an undriven pending write
+		if !e.resolved {
+			e.completeWriteLocked(e.progress, copyCancelled) // progress 0 for an undriven pending write
+		}
 		e.hasWrite = false
 		ev, ok := e.pendingEventLocked() // consume inline -> IDLE (CANCELLED)
 		if !ok {
