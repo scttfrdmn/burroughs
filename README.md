@@ -85,13 +85,18 @@ it does not show.
 
 ## Status
 
-*Written against `v0.13.0`.*
+*Written against `v0.14.0`.*
 
 - **The threads phase**, v1 (decision 0099). The MVP core suite is green.
 - **On by default:** threads, SIMD, relaxed SIMD, extended constant expressions, tail calls, multi-memory, memory64,
   and the component model. Exception handling and GC stay off.
 - **WASI preview 1** runs, with explicit preopens and no default grant. A guest can start its own threads on that
   path.
+- **WASI 0.3** is served to a single-threaded component: `wasi:cli`, `wasi:clocks`, `wasi:random`, and
+  `wasi:sockets` TCP and name lookup. The network is denied unless granted with `--inherit-network` or
+  `--allow-ip-name-lookup`. A Go program built by the Phase 4 fork for `GOOS=wasip3` runs on it, up to a `net/http`
+  server whose responses match stock Go's and wasmtime 49.0.3's byte for byte. WASI 0.3 across more than one thread
+  is the next release's.
 - **Platforms:** 64-bit Linux and macOS are built and tested. Windows is measured and unsupported: a non-gating lane
   runs the suite, and each recurring failure is mapped to an open issue in the
   [triage map](.github/windows-triage.tsv).
