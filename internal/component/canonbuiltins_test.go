@@ -134,10 +134,10 @@ var canonStatus = map[string]canonBuiltinStatus{
 	"future.new":           statusAsyncBuiltUndemanded,
 	"future.read":          statusAsyncBuiltUndemanded,
 	"future.write":         statusAsyncBuiltUndemanded,
-	"future.cancel-read":   statusAsyncRefusedByName,
+	"future.cancel-read":   statusAsyncBuiltUndemanded, // #1362
 	"future.cancel-write":  statusAsyncBuiltUndemanded,
 	"future.drop-readable": statusAsyncBuiltUndemanded,
-	"future.drop-writable": statusAsyncRefusedByName,
+	"future.drop-writable": statusAsyncBuiltUndemanded, // #1362
 	"future.forward":       statusForward,
 
 	"error-context.new":           statusErrorContext,

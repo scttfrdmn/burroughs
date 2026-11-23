@@ -19,11 +19,14 @@ import (
 // discriminator rather than two examples:
 //
 //	starting-wat-parent/composed.wasm  nested     backpressure.inc (0x24)
-//	p3async-cancel.wasm                top-level  future.cancel-read (0x18) + future.drop-writable (0x1b)
+//	starting-wat-child/child.wasm      top-level  backpressure.inc (0x24)
 //
 // Both carry a built-in from the no-lowering set; only the first was misreported. The second is the control
 // for the *repair*: it refused correctly before this fix and must still refuse the same way after it, or the
-// move changed the top-level path while claiming only to add the nested one.
+// move changed the top-level path while claiming only to add the nested one. The control was
+// `p3async-cancel.wasm` (future.cancel-read 0x18 and future.drop-writable 0x1b) when #952 landed; #1362 bound both,
+// so that guest instantiates and the control is the composed fixture's own child, which holds the built-in fixed
+// as well as the class.
 //
 // **The class is not a list in this comment.** `TestEveryUnloweredBuiltinIsRefusedByNameNotAsAnUnknownImport`
 // below derives it from the decoder's own `case` list and from `isBuiltAsyncBuiltin`, because a hand-kept
@@ -100,8 +103,10 @@ func TestANestedComponentIsGatedByName(t *testing.T) {
 		// #884's artefact: the child's `canon backpressure.inc` is reachable only through the nesting.
 		// Its committed wasmtime reading is held by TestTheRefusedFixtureIsTheOneWasmtimeMeasured.
 		{path: "testdata/asynclift/starting-wat-parent/composed.wasm", nested: true, op: "0x24"},
-		// The control, top-level, same class of built-in.
-		{path: "testdata/p3async-cancel.wasm", nested: false, op: "0x18"},
+		// The control, top-level, same class of built-in: the same child, unnested. It was p3async-cancel.wasm
+		// (future.cancel-read, 0x18) until #1362 bound that built-in and the guest instantiated, so the control
+		// moved to the one built-in this pair is already about. The neuterings above were run on p3async-cancel.
+		{path: "testdata/asynclift/starting-wat-child/child.wasm", nested: false, op: "0x24"},
 	}
 
 	for _, fx := range fixtures {

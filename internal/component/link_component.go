@@ -1356,9 +1356,10 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 	}
 	// Neither a future nor a stream value type is refused here anymore: future.read is built (increment 3)
 	// and stream.write is built (increment 3, write side), and both future and stream handles are direction
-	// -agnostic value types. The unbuilt *operations* on them — future.write/new/cancel-read, stream.read/
-	// new/cancel/drop — refuse at the built-in check above (isBuiltAsyncBuiltin), and an async lift refuses
-	// there too. A value type using an unbuilt op is caught where the op is, not at the type.
+	// -agnostic value types. An unbuilt *operation* on them refuses at the built-in check above
+	// (isBuiltAsyncBuiltin), and an async lift refuses there too. A value type using an unbuilt op is caught where
+	// the op is, not at the type. (This named future.write/new/cancel-read and stream.read/new/cancel/drop as the
+	// unbuilt ones until #1362 bound the last of them, future.cancel-read and future.drop-writable.)
 	return "", false
 }
 
@@ -1400,7 +1401,7 @@ func unbuiltAsyncSurface(c *Component) (string, bool) {
 // bound-but-refusing — distinct from built and from refused-at-bind.
 func isBuiltAsyncBuiltin(op byte) bool {
 	switch op {
-	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x0f, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x05, 0x06, 0x0d, 0x0a, 0x0b, 0x09, 0x15, 0x17, 0x19:
+	case 0x1f, 0x20, 0x21, 0x22, 0x23, 0x16, 0x1a, 0x0f, 0x10, 0x0e, 0x11, 0x12, 0x13, 0x14, 0x05, 0x06, 0x0d, 0x0a, 0x0b, 0x09, 0x15, 0x17, 0x18, 0x19, 0x1b:
 		return true
 	}
 	return false

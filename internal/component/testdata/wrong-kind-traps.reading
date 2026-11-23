@@ -18,6 +18,8 @@ future-read-stream: trap: handle is not a future (exit 1)
 future-write-readable: trap: wasm trap: cannot have concurrent operations active on a future/stream (exit 134)
 future-cancel-write-readable: trap: passed read end to `{stream|future}.cancel-write` (exit 1)
 future-drop-readable-writable: trap: handle is not a readable end of a future (exit 1)
+future-cancel-read-writable: trap: passed write end to `{stream|future}.cancel-read` (exit 1)
+future-drop-writable-readable: trap: passed read end to `future.drop-writable` (exit 1)
 join-set-as-waitable: trap: handle is not a waitable (exit 1)
 join-end-as-set: trap: handle is not an waitable-set (exit 1)
 wait-end: trap: handle is not an waitable-set (exit 1)
@@ -43,3 +45,8 @@ subtask-drop-end: trap: handle is not a subtask (exit 1)
 # Burroughs before #1282 (main at d8076a1): every row returns a Go error rather than a trap, "component: <built-in>:
 # handle N is not a <kind>". Burroughs since: a trap reading "<built-in>: handle N is not a <kind> (the pin's
 # def:<symbol>: trap_if(not isinstance(...)))".
+#
+# future-cancel-read-writable and future-drop-writable-readable were added by #1362, which bound future.cancel-read
+# (0x18) and future.drop-writable (0x1b): measured the same way, 10 of 10, on 2026-11-23, the wasm rebuilt with the
+# two imports added. The pin traps at def:cancel_copy's and def:drop's isinstance check. Burroughs before #1362 refused
+# the whole rebuilt fixture at instantiate, gateAsync naming "an async canon built-in (0x18)".

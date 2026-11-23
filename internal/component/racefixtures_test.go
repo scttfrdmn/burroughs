@@ -83,6 +83,9 @@ var raceWitnessFixtures = []string{
 	// #1339's cross-agent payload witness (crossagentpayload_test.go): B's memory.fill and the stream copy's write,
 	// racing A's loads if nothing orders them, are what -race must see
 	"cross-agent-payload.wasm",
+	// #1362's witness (TestFutureDropWritableAndCancelReadMatchTheOracles): the copies after a cancel or a drop
+	"future-drop-cancel.wasm",
+	"future-cancel-read-async.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,
