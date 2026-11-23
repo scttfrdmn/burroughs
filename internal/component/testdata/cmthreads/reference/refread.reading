@@ -37,3 +37,21 @@ future-write-then-read, sync write (#1325; wasmtime 49.0.3: hang): HANG
 future-write-then-read-cancel (#1325; wasmtime 49.0.3: (4294967295, 0, 7, 51966, 0, 0, 2, 0)): value (4294967295, 0, 7, 51966, 0, 0, 2, 0)
 future-write-then-read-bool (#1325; wasmtime 49.0.3: trap, non-numeric payload): trap future.read
 future-read-then-write (#1325's control; wasmtime 49.0.3: (0, 4294967295, 7, 4, 1, 0, 2, 0)): value (0, 4294967295, 7, 4, 1, 0, 2, 0)
+future-drop-cancel drop-writable-after-write (#1362; wasmtime 49.0.3: 117506052): value 117506052
+future-drop-cancel drop-writable-after-write-event-taken (#1362; wasmtime 49.0.3: 117571589): value 117571589
+future-drop-cancel drop-writable-event-untaken (#1362; wasmtime 49.0.3: trap, busy): trap future.drop-writable
+future-drop-cancel drop-writable-write-pending (#1362; wasmtime 49.0.3: trap, busy): trap future.drop-writable
+future-drop-cancel drop-writable-idle (#1362; wasmtime 49.0.3: trap, without first writing a value): trap future.drop-writable
+future-drop-cancel drop-writable-idle-reader-parked (#1362; wasmtime 49.0.3: trap, without first writing a value): trap future.drop-writable
+future-drop-cancel cancel-read-parked (#1362; wasmtime 49.0.3: 2): value 2
+future-drop-cancel poll-after-cancel-read (#1362; wasmtime 49.0.3: 0): value 0
+future-drop-cancel write-after-cancel-read (#1362; wasmtime 49.0.3: 4294967295): value 4294967295
+future-drop-cancel read-after-cancel-read (#1362; wasmtime 49.0.3: 1792): value 1792
+future-drop-cancel cancel-read-after-copy (#1362; wasmtime 49.0.3: 1792): value 1792
+future-drop-cancel poll-after-cancel-read-after-copy (#1362; wasmtime 49.0.3: 117440512): value 117440512
+future-drop-cancel cancel-read-idle (#1362; wasmtime 49.0.3: trap, no read is pending): trap future.cancel-read
+future-drop-cancel cancel-read-after-event-taken (#1362; wasmtime 49.0.3: trap, no read is pending): trap future.cancel-read
+future-drop-cancel cancel-read-sync-joined (#1362; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap future.cancel-read
+future-drop-cancel drop-writable-after-reader-dropped (#1362; wasmtime 49.0.3: 1): value 1
+future-drop-cancel cancel-read-async-parked (#1362; wasmtime 49.0.3: 2): value 2
+future-drop-cancel cancel-read-async-joined (#1362; wasmtime 49.0.3: 2): value 2

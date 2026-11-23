@@ -1,0 +1,83 @@
+# Committed readings for future-drop-cancel.wasm (#1362): future.drop-writable (0x1b) and future.cancel-read (0x18)
+# on one future<u8> per export, in each state the pin distinguishes. The async cancel-read's two rows are
+# future-cancel-read-async.reading's.
+# Built:       wasm-tools parse future-drop-cancel.wat -o future-drop-cancel.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' future-drop-cancel.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken 2026-11-23.
+# Reference:   refread.py's future_drop_cancel rows (cmthreads/reference/refread.reading), pin 2e7895c, uv-managed
+#              3.14.8, 16 of 16 runs per line (DETERMINISTIC_PROFILE x 8 seeds). The two oracles agree on every row.
+#
+# Each line is `<export>: <wasmtime's reading>`; a trap is its last line of stderr, the error chain's `1: ` dropped,
+# and its exit status. A poll reads the event code | (payload << 8) | (index << 16) | (the read buffer's byte << 24).
+drop-writable-after-write: 117506052
+drop-writable-after-write-event-taken: 117571589
+drop-writable-event-untaken: trap: cannot drop busy future (exit 1)
+drop-writable-write-pending: trap: cannot drop busy future (exit 1)
+drop-writable-idle: trap: cannot drop future write end without first writing a value (exit 1)
+drop-writable-idle-reader-parked: trap: cannot drop future write end without first writing a value (exit 1)
+cancel-read-parked: 2
+poll-after-cancel-read: 0
+write-after-cancel-read: 4294967295
+read-after-cancel-read: 1792
+cancel-read-after-copy: 1792
+poll-after-cancel-read-after-copy: 117440512
+cancel-read-idle: trap: stream or future read cancelled when no read is pending (exit 1)
+cancel-read-after-event-taken: trap: stream or future read cancelled when no read is pending (exit 1)
+cancel-read-sync-joined: trap: wasm trap: waitable cannot be used synchronously while added to a waitable set (exit 134)
+drop-writable-after-reader-dropped: 1
+#
+# The pin, row by row (refread.reading):
+#
+#   export                               pin 2e7895c
+#   drop-writable-after-write            value 117506052
+#   drop-writable-after-write-event-taken value 117571589
+#   drop-writable-event-untaken          trap future.drop-writable
+#   drop-writable-write-pending          trap future.drop-writable
+#   drop-writable-idle                   trap future.drop-writable
+#   drop-writable-idle-reader-parked     trap future.drop-writable
+#   cancel-read-parked                   value 2
+#   poll-after-cancel-read               value 0
+#   write-after-cancel-read              value 4294967295
+#   read-after-cancel-read               value 1792
+#   cancel-read-after-copy               value 1792
+#   poll-after-cancel-read-after-copy    value 117440512
+#   cancel-read-idle                     trap future.cancel-read
+#   cancel-read-after-event-taken        trap future.cancel-read
+#   cancel-read-sync-joined              trap future.cancel-read
+#   drop-writable-after-reader-dropped   value 1
+#
+# Meaning, with the pin's line for each.
+#   drop-writable-after-write  117506052 is FUTURE_READ (4), COMPLETED (0), ri 1, byte 7: the write completed the
+#                     parked read inline and took its own COMPLETED, so the writer is DONE and drops; the reader's
+#                     event survives the drop. The drop notifies nothing: def:End.drop notifies the other end only
+#                     "if self.other.state != End.State.DONE and not self.other.has_pending_event()", and the reader
+#                     has its event pending.
+#   drop-writable-after-write-event-taken  117571589 is FUTURE_WRITE (5), COMPLETED (0), wi 2, byte 7: the poll took
+#                     the writer's event, which is what makes it DONE (def:FutureEnd.notify.future_event+'s progress-1
+#                     arm), and the drop after it succeeds.
+#   drop-writable-event-untaken, -write-pending  the writer is COPYING, its event not taken or its write not
+#                     completed: def:drop:"trap_if(end.copying_or_cancelling())". wasmtime: "busy".
+#   drop-writable-idle, -idle-reader-parked  the writer never wrote, so it is IDLE, not DONE:
+#                     def:drop:"trap_if(isinstance(end, WritableFutureEnd) and end.state !=". So a parked reader is
+#                     never handed a DROPPED by its writer's drop: a writable future end that may drop is one whose
+#                     value was taken or whose reader is gone.
+#   cancel-read-parked  2 is CANCELLED: def:End.cancel notifies inline, as `self.other.owner is not None` (the writer
+#                     is this instance's), and def:cancel_copy takes that event. The reader is IDLE after it
+#                     (def:FutureEnd.notify.future_event+'s CANCELLING_COPY arm).
+#   poll-after-cancel-read  0 is NONE: the cancel took the event, so the set has nothing.
+#   write-after-cancel-read  BLOCKED: the cancelled reader is IDLE with no buffer, so the write parks.
+#   read-after-cancel-read  1792 is COMPLETED (0) | (7 << 8): the second read finds the write parked and copies it.
+#   cancel-read-after-copy  1792 is COMPLETED | (7 << 8): the write completed the read, whose event is untaken, so
+#                     the reader is still COPYING and cancellable; def:End.cancel notifies nothing, the event being
+#                     pending, and the event the cancel takes is the progress-1 arm's COMPLETED, ahead of the
+#                     CANCELLING_COPY arm. future.cancel-write's twin (future-rendezvous.reading's -cancel row).
+#   poll-after-cancel-read-after-copy  117440512 is NONE with byte 7: the cancel took the COMPLETED, nothing remains.
+#   cancel-read-idle, -after-event-taken  the reader is IDLE (no read) or DONE (its event taken):
+#                     def:cancel_copy:"trap_if(end.state != End.State.COPYING)".
+#   cancel-read-sync-joined  def:cancel_copy:"trap_if(end.in_waitable_set() and not async_)".
+#   drop-writable-after-reader-dropped  1 is DROPPED: the reader's drop notified the IDLE writer (def:End.drop), so its
+#                     write takes the pending DROPPED inline (def:End.copy's `self.other is None` arm) and is DONE,
+#                     and its drop then succeeds.
+#
+# Burroughs before #1362 (main at d5e9a80), both gate:cm-threads states: every row refused at instantiate, gateAsync's
+# "an async canon built-in (0x18) ... is not yet implemented", ErrAsyncNotImplemented.

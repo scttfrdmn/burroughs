@@ -1130,6 +1130,189 @@ def future_rendezvous(write_first, sync_write=False, cancel=False, elem="u8"):
     return body
 
 
+def future_drop_cancel(row):
+    """#1362's fixtures, `future-drop-cancel.wat` and `future-cancel-read-async.wat`: future.drop-writable and
+    future.cancel-read on one future<u8> minted by future.new, in each state the pin distinguishes. `row` is the WAT
+    export's name, and the body mirrors that export step for step, including its packing: a poll reads the event code
+    | (payload << 8) | (index << 16) | (the read buffer's byte << 24). Each export is async-typed and lifted sync, as
+    the WAT's are. The trap site names the built-in that was running."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        opts = d.CanonicalOptions(async_=True, memory=mem)
+        ft = d.FutureType(d.U8Type())
+        st = {}
+
+        def call(name, f, *args):
+            site["name"] = name
+            return f(*args)
+
+        def split():
+            [p] = call("future.new", d.canon_future_new, ft)
+            st["r"], st["w"] = p & 0xffffffff, p >> 32
+            mem.bytes[64] = 7
+            mem.bytes[128] = 0
+
+        def read():
+            return call("future.read", d.canon_future_read, ft, opts, st["r"], 128)[0]
+
+        def write():
+            return call("future.write", d.canon_future_write, ft, opts, st["w"], 64)[0]
+
+        def cr(async_=False):
+            return call("future.cancel-read", d.canon_future_cancel_read, ft, async_, st["r"])[0]
+
+        def dropw():
+            call("future.drop-writable", d.canon_future_drop_writable, ft, st["w"])
+
+        def dropr():
+            call("future.drop-readable", d.canon_future_drop_readable, ft, st["r"])
+
+        def joinnew(h):
+            [s] = call("waitable-set.new", d.canon_waitable_set_new)
+            call("waitable.join", d.canon_waitable_join, h, s)
+            return s
+
+        def pollset(s):
+            [code] = call("waitable-set.poll", d.canon_waitable_set_poll, mem, s, 256)
+            return code | (u32(mem, 260) << 8) | (u32(mem, 256) << 16) | (mem.bytes[128] << 24)
+
+        def pollone(h):
+            return pollset(joinnew(h))
+
+        def rfirst():
+            split()
+            read()
+            return write()
+
+        def wfirst():
+            split()
+            write()
+            return read()
+
+        def run_row():
+            if row == "drop-writable-after-write":
+                rfirst()
+                dropw()
+                return pollone(st["r"])
+            if row == "drop-writable-after-write-event-taken":
+                wfirst()
+                p = pollone(st["w"])
+                dropw()
+                return p
+            if row == "drop-writable-event-untaken":
+                wfirst()
+                dropw()
+                return 7
+            if row == "drop-writable-write-pending":
+                split()
+                write()
+                dropw()
+                return 7
+            if row == "drop-writable-idle":
+                split()
+                dropw()
+                return 7
+            if row == "drop-writable-idle-reader-parked":
+                split()
+                read()
+                dropw()
+                return 7
+            if row == "cancel-read-parked":
+                split()
+                read()
+                return cr()
+            if row == "poll-after-cancel-read":
+                split()
+                read()
+                cr()
+                return pollone(st["r"])
+            if row == "write-after-cancel-read":
+                split()
+                read()
+                cr()
+                return write()
+            if row == "read-after-cancel-read":
+                split()
+                read()
+                cr()
+                write()
+                return read() | (mem.bytes[128] << 8)
+            if row == "cancel-read-after-copy":
+                rfirst()
+                return cr() | (mem.bytes[128] << 8)
+            if row == "poll-after-cancel-read-after-copy":
+                rfirst()
+                cr()
+                return pollone(st["r"])
+            if row == "cancel-read-idle":
+                split()
+                return cr()
+            if row == "cancel-read-after-event-taken":
+                rfirst()
+                pollone(st["r"])
+                return cr()
+            if row == "cancel-read-sync-joined":
+                split()
+                joinnew(st["r"])
+                read()
+                return cr()
+            if row == "drop-writable-after-reader-dropped":
+                split()
+                dropr()
+                wr = write()
+                dropw()
+                return wr
+            if row == "cancel-read-async-parked":
+                split()
+                read()
+                return cr(async_=True)
+            if row == "cancel-read-async-joined":
+                split()
+                s = joinnew(st["r"])
+                read()
+                c = cr(async_=True)
+                [code] = call("waitable-set.poll", d.canon_waitable_set_poll, mem, s, 256)
+                return c | (code << 8)
+            raise AssertionError("no such row: " + row)
+
+        def run(args):
+            v = run_row()
+            site["name"] = "after the row"
+            return [v & 0xffffffff]
+
+        rft = d.FuncType([], [d.U32Type()], async_=True)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
+# Each row with wasmtime 49.0.3's reading of the same export (future-drop-cancel.reading), so a line reads both.
+FUTURE_DROP_CANCEL_ROWS = [
+    ("drop-writable-after-write", "117506052"),
+    ("drop-writable-after-write-event-taken", "117571589"),
+    ("drop-writable-event-untaken", "trap, busy"),
+    ("drop-writable-write-pending", "trap, busy"),
+    ("drop-writable-idle", "trap, without first writing a value"),
+    ("drop-writable-idle-reader-parked", "trap, without first writing a value"),
+    ("cancel-read-parked", "2"),
+    ("poll-after-cancel-read", "0"),
+    ("write-after-cancel-read", "4294967295"),
+    ("read-after-cancel-read", "1792"),
+    ("cancel-read-after-copy", "1792"),
+    ("poll-after-cancel-read-after-copy", "117440512"),
+    ("cancel-read-idle", "trap, no read is pending"),
+    ("cancel-read-after-event-taken", "trap, no read is pending"),
+    ("cancel-read-sync-joined", "trap, synchronously while added to a waitable set"),
+    ("drop-writable-after-reader-dropped", "1"),
+    ("cancel-read-async-parked", "2"),
+    ("cancel-read-async-joined", "2"),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1172,6 +1355,8 @@ def battery():
          future_rendezvous(True, elem="bool"))
     read("future-read-then-write (#1325's control; wasmtime 49.0.3: (0, 4294967295, 7, 4, 1, 0, 2, 0))",
          future_rendezvous(False))
+    for row, wt in FUTURE_DROP_CANCEL_ROWS:
+        read("future-drop-cancel %s (#1362; wasmtime 49.0.3: %s)" % (row, wt), future_drop_cancel(row))
 
 
 if __name__ == "__main__":

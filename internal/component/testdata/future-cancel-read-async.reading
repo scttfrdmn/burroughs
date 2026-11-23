@@ -1,0 +1,19 @@
+# Committed readings for future-cancel-read-async.wasm (#1362): future.cancel-read (0x18) in its ASYNC form.
+# Built:       wasm-tools parse future-cancel-read-async.wat -o future-cancel-read-async.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y,component-model-more-async-builtins=y -S p3=y
+#              --invoke '<export>()' future-cancel-read-async.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken 2026-11-23.
+#              Without `component-model-more-async-builtins` it does not load, 10 of 10: "async `future.cancel-read`
+#              requires the component model more async builtins feature (at offset 0x4b)" (exit 1).
+# Reference:   refread.py's future_drop_cancel rows cancel-read-async-parked and cancel-read-async-joined, pin 2e7895c,
+#              16 of 16: value 2 and value 2. The two oracles agree.
+cancel-read-async-parked: 2
+cancel-read-async-joined: 2
+#
+# Meaning. 2 is CANCELLED, inline rather than BLOCKED: def:End.cancel notifies at once when `self.other.owner is not
+# None`, and the writer is this instance's. The joined row is the sync form's trapping case
+# (future-drop-cancel.reading's cancel-read-sync-joined), which the async form does not trap on; its poll's code,
+# shifted 8, is 0, so the cancel left the set no event.
+#
+# Burroughs before #1362 (main at d5e9a80), both gate:cm-threads states: refused at instantiate, gateAsync's
+# "an async canon built-in (0x18) ... is not yet implemented", ErrAsyncNotImplemented.
