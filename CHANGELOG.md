@@ -79,6 +79,29 @@ says what it now requires and what it gives up.
   - **The witness:** `spawn-door.wasm` starts two agents, which do their work at once with their own globals, and
     prints what each did. It runs through `burroughs run`, `ComponentConfig.Run` and the engine, which reads three
     agents executing at once.
+- **A `waitable-set.wait` blocked on one agent returns when another agent of the instance makes an event ready on its
+  set, and draining a set by `waitable-set.poll` costs O(1) per event** ([#1338](https://github.com/scttfrdmn/burroughs/issues/1338),
+  contract §6 R-1 as amended on [#1334](https://github.com/scttfrdmn/burroughs/issues/1334), which discharges
+  [#1048](https://github.com/scttfrdmn/burroughs/issues/1048)). Agents run in parallel only with
+  `gate:cm-shared-memory` on, which is off by default, so this is not a flip.
+  - **Already true, now witnessed:** a stream write, a future write and a subtask resolution by another agent wake
+    the waiter, by the set's broadcast wake, which a waiter reads in the same critical section as its emptiness check.
+    So is F8's netpollBreak: a breaker agent's future write wakes a poller whose set also holds an idle socket, and a
+    break written before the poller reads completes at the read (#1325) and wakes the breaker's own wait.
+  - **Fixed: a join.** `waitable.join` of an already-ready waitable into a set signalled nothing, so an agent waiting
+    on that set while another agent joined it waited for ever. One agent could not reach it: it finds the event at
+    its first check.
+  - **Fixed: the batch's cost.** A take scanned every member, so draining k events from a set of m members cost
+    O(k·m). A set now keeps a queue of its members in the order they became ready, so a take, and a poll that reports
+    none, inspects O(1) members per event. Delivery order is readiness order where it was join order; the pin
+    shuffles, so neither is the pin's.
+  - **Shutdown:** an agent blocked in `waitable-set.wait`, and one blocked in `memory.atomic.wait32`, each with
+    nothing to wake it, end at `Close`. With no call in flight `Component.Close` returns nil. With the run call still
+    in flight in an unbounded wait, it returns `ErrCloseIncomplete` at its bound, as ADR 0128 recorded for one agent,
+    and tears down: the call returns T-5.4's *"thread terminated by shutdown"*, and no engine goroutine survives.
+  - **The witnesses:** `cross-agent-wake.wasm`, one row per event kind and both netpoll orders, 100 fresh instances
+    each, and its batch, 64 events drained by two waiters and a poller at once, each taken exactly once.
+    `cross-agent-shutdown.wasm` for shutdown, through the engine and through `Component.Close`.
 
 ### Changed
 

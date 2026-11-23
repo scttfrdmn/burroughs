@@ -29,8 +29,12 @@ func TestASyncWaitWithNoCandidateTrapsAtTheSyncTail(t *testing.T) {
 	}
 }
 
-// oneEvent is a waitable holding one deliverable event until it is taken.
-type oneEvent struct{ pending bool }
+// oneEvent is a waitable holding one deliverable event until it is taken. It records its set, because a set's take
+// reads its ready queue and checks each entry is still a member (#1338).
+type oneEvent struct {
+	pending bool
+	set     *waitableSet
+}
 
 func (e *oneEvent) pendingEventLocked() (event, bool) {
 	if !e.pending {
@@ -40,8 +44,8 @@ func (e *oneEvent) pendingEventLocked() (event, bool) {
 	return event{code: 1}, true
 }
 func (e *oneEvent) hasPendingEventLocked() bool { return e.pending }
-func (e *oneEvent) joinTo(*waitableSet)         {}
-func (e *oneEvent) currentSet() *waitableSet    { return nil }
+func (e *oneEvent) joinTo(s *waitableSet)       { e.set = s }
+func (e *oneEvent) currentSet() *waitableSet    { return e.set }
 
 // TestASyncTailCountsAWaiterThatHasTakenItsEvent is #1031's witness, as a unit: a sync waiter that has taken
 // its event while still marked waiting is a candidate, so `syncTail` aborts nothing.
@@ -63,7 +67,9 @@ func TestASyncTailCountsAWaiterThatHasTakenItsEvent(t *testing.T) {
 		tt := newThreadTable()
 		tt.h = h
 		member := &oneEvent{pending: take}
-		wt := &waitTake{set: &waitableSet{members: []waitable{member}, wake: make(chan struct{})}}
+		set := &waitableSet{wake: make(chan struct{})}
+		joinWaitableLocked(member, set) // a member joined while ready is queued for the take (#1338)
+		wt := &waitTake{set: set}
 		if take {
 			h.mu.Lock()
 			if _, ok := wt.takeLocked(); !ok {
