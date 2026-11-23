@@ -12,8 +12,10 @@
 ;;                get-random-u64, and waits on its own set for a wait-for(1ms) subtask. Agent 1 then makes a
 ;;                stream<u8> and a future<u32> and writes "hello-from-1" into the stream; agent 2 reads it and
 ;;                writes 0xc0ffee into the future, which agent 1 reads. Cross-agent events are taken by polling.
-;;                The future's read is ordered first (296): a read arriving after a parked write of the same
-;;                instance's future is not driven by `futureRead`, so both would park.
+;;                The future's read is ordered first (296). It was ordered so when a read arriving after a
+;;                parked write of the same instance's future was not driven, and both parked (#1325 item 1).
+;;                Since #1354 the reverse order completes too, and `future-write-then-read` witnesses it; the
+;;                order is kept so this fixture's reading is unchanged.
 ;;                run joins both through memory.atomic.wait32 and reports memory[1024..4096) to the test.
 ;;   sync-tail    sync-TYPED: spawns agent 3, reads a future (BLOCKED), and waits for it while agent 3 executes;
 ;;                agent 3 spins, then writes 0x7a11. Returns the value read.
@@ -182,8 +184,8 @@
           (call $wsjoin (i32.load (i32.const 272)) (local.get $s))
           (local.set $r (call $pollfor (local.get $s) (local.get $a) (i32.const 3)))))
       (if (i32.ne (local.get $r) (i32.const 0xc0)) (then (call $fail (local.get $a) (i32.const 8))))
-      ;; the read goes first, and says so: an intra-instance future's read that arrives after a parked write is
-      ;; not driven here (it parks too), so the consumer's write waits for this flag
+      ;; the read goes first, and says so, so the consumer's write waits for this flag. The order is the
+      ;; fixture's choice, not a workaround: since #1354 a read arriving after a parked write completes both
       (local.set $r (call $fread (i32.load (i32.const 276)) (i32.add (local.get $a) (i32.const 64))))
       (i32.atomic.store (i32.const 296) (i32.const 1))
       (if (i32.eq (local.get $r) (i32.const -1))
