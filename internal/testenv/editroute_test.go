@@ -484,6 +484,30 @@ func TestEditRouteHookRefusesBashEditsOfTrackedFiles(t *testing.T) {
 			routes: []string{"safegrep.sh"},
 		},
 		{
+			// #1340's slice, verbatim in shape: a non-recursive grep whose `*.go` the shell expanded over the
+			// excluded files in src/runtime before any exclusion could apply.
+			// **Neuter, run:** the glob check removed from fork_search_refusal admits this arm and the cat arm.
+			name:   "a_glob_to_a_reader_in_the_fork_is_refused",
+			cmd:    "cd ~/src/wp-phase4/src/runtime && grep -n 'func minit' *.go",
+			deny:   true,
+			want:   "is handed a shell glob in a fork tree",
+			routes: []string{"safegrep.sh"},
+		},
+		{
+			name:   "a_glob_to_cat_in_the_fork_is_refused",
+			cmd:    "cat ~/src/wp-phase4/src/runtime/os_*.go",
+			deny:   true,
+			want:   "is handed a shell glob in a fork tree",
+			routes: []string{"safegrep.sh"},
+		},
+		{
+			// A glob in grep's pattern or sed's script is not a file operand, and a listing names paths only.
+			name: "a_glob_in_a_pattern_or_a_listing_in_the_fork_is_permitted",
+			cmd: "cd ~/src/wp-phase4 && grep -n 'wasip3.*spawn' src/runtime/os_wasip3.go && " +
+				"sed -n 's/a*/b/p' src/runtime/os_wasip3.go && ls src/runtime/*.go",
+			deny: false,
+		},
+		{
 			name:   "naming_a_preemption_file_is_refused",
 			cmd:    "cat ~/src/wp-phase4/src/runtime/preempt.go",
 			deny:   true,
