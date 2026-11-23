@@ -1395,12 +1395,17 @@ func (s *sockSend) deliver(f func()) {
 		h.mu.Unlock()
 		return
 	}
-	if h.inHost > 0 {
-		h.hostStores = append(h.hostStores, apply)
+	if h.window.inHost > 0 {
+		h.window.hostStores = append(h.window.hostStores, apply)
 		h.mu.Unlock()
 		return
 	}
 	h.mu.Unlock()
+	// A free instance's delivery takes no slot (#1336, ADR 0130's §3), as a producer's does (`deliverStore`).
+	if h.agentsRunFree {
+		apply()
+		return
+	}
 	ch := &runChain{}
 	if !h.acquireRun(ch, nil, h.producerStop) {
 		h.mu.Lock()

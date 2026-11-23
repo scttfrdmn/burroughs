@@ -116,7 +116,24 @@ Recorded here, as the plan directs, unless the chair rules otherwise.
 - **A late store that needs `cabi_realloc` is refused in a free instance**, as its owner's trap, naming this record. No WASI 0.3 import that Burroughs serves resolves late with a string or a list result through an async lower. `resolve-addresses`' list is lowered by its blocking sync lower on the caller's own goroutine (ADR 0126). A guest or a test impl that does this sees the refusal.
 - **A spawned agent cannot use the 🧵 switching forms.** A Go guest does not use them.
 - **A trap in the run task ends its spawned agents' waits** and locks the store (ADR 0105). An agent executing guest code then ends at its next built-in, at the lock guard, or at `Close`. That is §2 T-5's rule: there is no kill aimed at one thread.
-- **A cross-agent wake works by the existing mechanism** (`waitableSet.signalLocked` closes the set's wake under `asyncHandles.mu`, whichever agent changes a member). E2's witnesses avoid depending on it: their cross-agent events are taken by `waitable-set.poll`. Its claim, witness and shutdown arm are E4's.
+- **A cross-agent wake works by the existing mechanism** (`waitableSet.signalLocked` closes the set's wake under `asyncHandles.mu`, whichever agent changes a member). E2's main witness takes its cross-agent events by `waitable-set.poll`, so it does not depend on it. The sync-tail witness's wait is woken by another agent's `future.write`, so it does exercise it, once. Its claim, its neuter and its shutdown arm are E4's.
+
+## The build, as measured
+
+On darwin/arm64, in the worktree of #1336's branch. Each witness is in `internal/component/agents_test.go`, over `testdata/agents-shared.wat` (a free instance) or `testdata/agents-unshared-canon.wat` (its twin, whose canonical memory is unshared). Both memories declare max = min, so they are Go-heap backed and `-race` sees guest memory.
+
+- **`TestAgentsOfASharedMemoryInstanceExecuteAtOnce`**: the executing count `interp.Instance.ExecutingAgents` read 3 while both spawned agents spun and run's agent was inside `probe`, 10 of 10. Both agents then ran every built-in the row names, at once, and every check passed. 20 of 20 under `-race`, with no report.
+- **`TestAgentsOfAnUnsharedCanonMemoryInstanceKeepTheRunSlot`**: the twin read 1, with both spawned agents parked at the slot at their entry.
+- **The neuters, each run, each reverted:**
+  - spawned agents take the slot in a free instance (the rollback): the peak read 1, and the failure named both agents parked at `spawnAgent`'s Enter in `acquireRun`;
+  - a free instance's store takes the slot (the plan's proposal as written): the peak read 3, and `run` then never returned. The failure named both `wait-for` stores parked in `acquireRun` under `onResolve`, behind run's agent in `memory.atomic.wait32`. **That is §3's deadlock, observed**;
+  - a free agent opens the instance's window: run's store waited behind agent 4's host code;
+  - the sync tail without its agent term: the sync-typed wait trapped *"cannot block a synchronous task before returning"*;
+  - `offAgentHeap.Realloc` returning a pointer: the late string was stored, and the call returned 4;
+  - a spawned thread's globals not its own: agent 2 read 1, and run read 1;
+  - an agent carrying index 0: the agents trapped at `thread.index`, and the failure named that trap.
+- **Not witnessed, argued:** rows 4, 6, 7 and 10 of §5's table, row 9 as a neuter, and `waitableSetWait`'s single critical section, whose window no fixture holds open.
+- **Found, not repaired here:** `futureRead` does not drive a guest write already parked on the same instance's future, so a write that arrives first and a read that arrives second both park. A single agent can reach it by writing first. The witness orders its future's read first and says so.
 
 ## Rollback
 

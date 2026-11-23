@@ -48,6 +48,21 @@ says what it now requires and what it gives up.
     stdout, and an embedder calls the child directly. Its output is byte-identical to wasmtime 49.0.3's reading of its
     unshared twin, 10 of 10. That twin differs only in the word `shared`, and it is the shared fixture's only oracle,
     since no external engine can read the shared fixture.
+- **The engine can run several agents of one component instance at once, when its canonical memory is shared**
+  ([#1336](https://github.com/scttfrdmn/burroughs/issues/1336), ADR 0130, on Scott's ruling 1 on
+  [#1332](https://github.com/scttfrdmn/burroughs/issues/1332): spawned Ms are threads of the run task). With
+  `gate:cm-shared-memory` off, which is the default, nothing changes, so this is not a flip.
+  - **What changes, in such an instance only.** A spawned agent is a thread of its spawner's task, with its own
+    Thread index, context and globals. It executes guest code outside ADR 0101's run slot, which keeps serialising
+    tasks (lift entries, the 🧵 scheduler, the current task) and no longer serialises result stores: a store is
+    applied at once, or queued in its own agent's in-host window. A late store that would need `cabi_realloc` off
+    its agent's goroutine is refused by name. A spawned agent cannot call the 🧵 switching forms.
+  - **What does not.** An instance whose canonical memory is unshared keeps ADR 0101 exactly, and its spawned agent
+    takes the run slot. No guest can start an agent yet: the spawn door is E3
+    ([#1337](https://github.com/scttfrdmn/burroughs/issues/1337)). E2's witnesses start agents from the test harness.
+  - **Also fixed on the way:** `waitable-set.wait` looked its set up and counted itself waiting in two critical
+    sections, so another agent's `waitable-set.drop` between them went untrapped. They are one now (R-4's
+    linearizable handle operations).
 
 ### Changed
 

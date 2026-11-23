@@ -280,8 +280,19 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 			return nil, fmt.Errorf("component: waitable-set.wait: got %d args, want (si, ptr)", len(args))
 		}
 		si, ptr := uint32(args[0].Bits), uint32(args[1].Bits)
+		// num_waiting (def:WaitableSet.wait): counted for the whole park, so waitable-set.drop traps on a set this
+		// agent is parked on. Decremented however the park ends, including the context-cancelled exit —
+		// a leaked count would make the set permanently undroppable.
+		//
+		// **Counted in the critical section that looks the set up** (#1336, ADR 0130's §6). They were two, which
+		// one agent at a time could not tell apart. With several, another agent's `waitable-set.drop` between them
+		// removed a set this one then waited on, and neither call trapped: the two operations were not
+		// linearizable, as R-4's append requires of a handle table its agents share.
 		h.mu.Lock()
 		set, ok := handleAt[*waitableSet](h, si)
+		if ok {
+			set.waiting++
+		}
 		h.mu.Unlock()
 		// def:canon_waitable_set_wait:"trap_if(not isinstance(wset, WaitableSet))" (#1282).
 		//
@@ -289,13 +300,6 @@ func waitableSetWait(h *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, wrongKindTrap("waitable-set.wait", si, "a waitable set", "def:canon_waitable_set_wait")
 		}
-
-		// num_waiting (def:WaitableSet.wait): counted for the whole park, so waitable-set.drop traps on a set this
-		// agent is parked on. Decremented however the park ends, including the context-cancelled exit —
-		// a leaked count would make the set permanently undroppable.
-		h.mu.Lock()
-		set.waiting++
-		h.mu.Unlock()
 		defer func() {
 			h.mu.Lock()
 			set.waiting--

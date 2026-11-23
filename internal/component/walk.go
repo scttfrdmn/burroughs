@@ -849,12 +849,20 @@ func (w *walker) lowerMemory(cn Canon) *interp.Extern {
 // **Still `ErrUnsupportedForm`, not `ErrCanonOptionInvalid`,** though the pin calls the component invalid. The
 // gate-off path is today's exactly, and this build can run the component when the extension is turned on, so
 // "not admitted in this configuration" is what the refusal says (ADR 0129).
+//
+// **Every canonical memory it admits is noted** (`walker.noteCanonMemory`, #1336), shared or not, because whether
+// the instance's spawned agents run outside the run slot is derived from them (ADR 0130's §1).
 func (w *walker) refuseSharedCanonMemory(cn Canon) error {
 	ext := w.lowerMemory(cn)
-	if ext == nil || !ext.SharedMemory() {
+	if ext == nil {
+		return nil
+	}
+	if !ext.SharedMemory() {
+		w.noteCanonMemory(false)
 		return nil
 	}
 	if cmSharedMemoryEnabled() {
+		w.noteCanonMemory(true)
 		return nil // the Burroughs-only extension, ADR 0129 (#1335)
 	}
 	return fmt.Errorf("%w: a canon's (memory %d) option names a shared memory, which this engine refuses: "+

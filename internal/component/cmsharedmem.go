@@ -20,9 +20,11 @@ import "os"
 // # What the gate admits, and what it does not yet claim
 //
 // With the gate on, the canonical memory may be shared, and the Canonical ABI reads and writes it as it does
-// an unshared one. That is all: guest code still runs on one agent at a time through ADR 0101's run slot, so
-// nothing lifts or lowers through a memory another agent is writing. Several agents (E2, #1336) and a spawn
-// door for components (E3, #1337) are later rows of the v0.15.0 plan (#1332), each with its own ADR.
+// an unshared one. An instance whose canonical memory is shared is also **free** (E2, #1336, ADR 0130): its
+// spawned agents run guest code outside ADR 0101's run slot, as threads of their spawner's task (`agents.go`).
+// This paragraph said until #1336 that guest code still ran on one agent at a time, which was true while
+// nothing could start a second one. Nothing a guest can call starts one yet: the spawn door for components is
+// E3 (#1337), a later row of the v0.15.0 plan (#1332).
 //
 // # Off by default, and an opt-in
 //
