@@ -45,7 +45,7 @@ const cursorProbes = 64
 // requireAFreeRangeAtTheCursor makes the next `size` bytes at the cursor free. If it cannot, it fails, saying the
 // kernel did not honour a free hint, which is the half of the premise decision 0113 measured.
 //
-// It probes with the same `mmapAt` the engine uses, and releases the probe. If the range is free, nothing
+// It probes with probeAt, an address-only mapping, and releases the probe. If the range is free, nothing
 // changes. If something this package did not place holds it (#1284: Go's randomized heap), the cursor moves up by
 // cursorStep until a probe is honoured. **That move is one the engine's own rule permits**: placeNext only moves
 // up, and every address it skips was unavailable to the engine anyway. The move and the occupant are logged, so a
@@ -54,6 +54,21 @@ const cursorProbes = 64
 // The probe and the control's reservations cannot be one critical section, because the reservations take placeMu
 // themselves. Nothing in this package maps at the cursor in between, and no test here runs in parallel. The one
 // gap left is the heap growing into the probed range in that window.
+// probeAt maps n bytes at hint with no access and no commit, so it asks only whether that address range is free.
+//
+// **It is not `mmapAt`** (#1348). The probe used the engine's own mapping, which is `PROT_READ|PROT_WRITE` and
+// committed, so a 16 GiB probe was subject to the kernel's overcommit accounting. A runner with little memory
+// refused it with ENOMEM before the address was ever considered (PR #1347's run 45126427018, ubuntu-24.04), and
+// the control failed for a reason unrelated to its subject. `PROT_NONE` with `MAP_NORESERVE` commits nothing, so
+// a refusal here is about the address space, which is what the probe means to read.
+//
+// NEUTER: probe with `mmapAt` again, and TestTheCursorProbeAsksOnlyAboutTheAddress fails on its ENOMEM stand-in.
+func probeAt(hint, n uintptr) (uintptr, syscall.Errno) {
+	addr, _, errno := syscall.Syscall6(syscall.SYS_MMAP, hint, n,
+		syscall.PROT_NONE, syscall.MAP_ANON|syscall.MAP_PRIVATE|syscall.MAP_NORESERVE, ^uintptr(0), 0)
+	return addr, errno
+}
+
 func requireAFreeRangeAtTheCursor(t *testing.T, size uintptr) {
 	t.Helper()
 	placeMu.Lock()
@@ -62,9 +77,9 @@ func requireAFreeRangeAtTheCursor(t *testing.T, size uintptr) {
 	var occupied []string
 	for range cursorProbes {
 		hint := placeNext
-		addr, errno := mmapAt(hint, size)
+		addr, errno := probeAt(hint, size)
 		if errno != 0 {
-			t.Fatalf("a probe of %#x bytes at the cursor %#x was refused outright: %v", size, hint, errno)
+			t.Fatalf("an address-only probe of %#x bytes at the cursor %#x was refused outright: %v", size, hint, errno)
 		}
 		p := *(*unsafe.Pointer)(unsafe.Pointer(&addr))
 		if err := unmapPlaced(unsafe.Slice((*byte)(p), size)); err != nil {
@@ -258,5 +273,26 @@ func TestThePlacementControlsHoldWhenSomethingElseHoldsTheCursor(t *testing.T) {
 		if after < at+arena {
 			t.Errorf("%s left the cursor at %#x, not above the occupant at [%#x, %#x)", name, after, at, at+arena)
 		}
+	}
+}
+
+// TestTheCursorProbeAsksOnlyAboutTheAddress is #1348's witness. The engine's mapping seam is replaced by a kernel
+// that refuses, with ENOMEM, any mapping over 1 GiB, as a runner short of memory refused #1284's 16 GiB probe on
+// CI. The probe must still read the cursor's range, because it asks about the address and commits nothing. So
+// requireAFreeRangeAtTheCursor returns rather than failing.
+//
+// It runs the helper in a subtest, so a Fatalf there is a failed subtest, not this test's own exit.
+func TestTheCursorProbeAsksOnlyAboutTheAddress(t *testing.T) {
+	kernel := mmapAt
+	t.Cleanup(func() { mmapAt = kernel })
+	mmapAt = func(hint, size uintptr) (uintptr, syscall.Errno) {
+		if size > 1<<30 {
+			return 0, syscall.ENOMEM
+		}
+		return kernel(hint, size)
+	}
+	if !t.Run("probe", func(t *testing.T) { requireAFreeRangeAtTheCursor(t, 16<<30) }) {
+		t.Errorf("the cursor probe failed when committed mappings over 1 GiB are refused: it read the commit " +
+			"limit, not the address range (#1348)")
 	}
 }
