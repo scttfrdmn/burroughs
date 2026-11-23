@@ -178,6 +178,7 @@ RULES: tuple[tuple[str, str], ...] = (
     ("memory-git", "touches session memory"),
     ("fork-search", "without the standing rule's exclusions"),
     ("fork-excluded-file", "which the standing rule says is never read"),
+    ("fork-glob", "is handed a shell glob in a fork tree"),
     ("sleep-as-wait", "a duration is not a signal"),
     ("detach-backgrounded", "backgrounded with a trailing `&`"),
     ("inline-write", "an inline interpreter opens"),
@@ -1002,6 +1003,20 @@ EXCLUDED_FILE = re.compile(
 )
 SEARCHERS = ("grep", "egrep", "fgrep", "rg", "ag", "ack")
 
+# The programs that print a file's contents. A shell glob handed to one of them in a fork tree expands before any
+# exclusion can apply, so `grep -n 'func minit' *.go` run in src/runtime reads every excluded file there. F6's slice
+# (#1340, 2026-11-23) did exactly that; no excluded line was printed, but only because its filter happened to drop
+# them. Listing names (`ls`) is not here: a name is not a content, and naming a path in a listing is permitted.
+CONTENT_READERS = SEARCHERS + (
+    "cat", "head", "tail", "less", "more", "sed", "awk", "gawk", "strings", "xxd", "od", "hexdump", "nl", "cut",
+    "sort", "uniq", "diff", "cmp", "wc", "perl", "python", "python3", "bat",
+)
+
+
+def has_glob(arg: str) -> bool:
+    """True when the argument, as the shell sees it, carries an unquoted-looking glob character."""
+    return any(c in arg for c in "*?[")
+
 
 def in_fork_tree(path: str) -> bool:
     """Whether a path, or a working directory, is inside one of the fork's trees."""
@@ -1046,6 +1061,20 @@ def fork_search_refusal(tokens: list[str], cwd: str) -> str | None:
                 f"`{prog}` searches a fork tree recursively without the standing rule's exclusions. Use the "
                 "fork's `phase4/safegrep.sh`, which builds them in, instead of grep, rg, git grep or find -exec"
             )
+        # A glob is refused for a content reader even when it is not recursive: the shell expands it before the
+        # program runs, so no exclusion flag can reach the files it names (#1340's slice). A pattern argument to
+        # grep can carry `*` too, so only arguments after the pattern, the file operands, are judged for grep;
+        # for the others every argument is a file operand or an option.
+        if prog in CONTENT_READERS:
+            operands = [a for a in args if not a.startswith("-")]
+            if prog in SEARCHERS + ("sed", "awk", "gawk", "perl", "python", "python3") and operands:
+                operands = operands[1:]  # a pattern or a script, not a file
+            if any(has_glob(a) for a in operands):
+                return (
+                    f"`{prog}` is handed a shell glob in a fork tree, and the shell expands it over the files the "
+                    "standing rule excludes before any exclusion can apply. Use the fork's `phase4/safegrep.sh` "
+                    "for a search, or name each file you mean to read"
+                )
     return None
 
 

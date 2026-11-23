@@ -195,6 +195,7 @@ func TestEveryRefusalReasonHasARule(t *testing.T) {
 		{"memory_git", "cat ~/.claude/projects/x/memory/MEMORY.md && git checkout -q main", "memory-git"},
 		{"fork_search", "cd ~/src/wp-phase4 && grep -rn wasip3 src", "fork-search"},
 		{"fork_excluded_file", "cat ~/src/wp-phase4/src/runtime/preempt.go", "fork-excluded-file"},
+		{"fork_glob", "cd ~/src/wp-phase4/src/runtime && grep -n x *.go", "fork-glob"},
 	} {
 		t.Run(a.name, func(t *testing.T) {
 			_ = os.Remove(logPath)

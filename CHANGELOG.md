@@ -74,6 +74,13 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **editroute's route 11 refuses a shell glob handed to a content reader in a fork tree**, such as `grep -n x *.go`
+  in `src/runtime`. The shell expands the glob over the fork's excluded files before any exclusion flag can apply.
+  F6's slice (#1340) ran exactly that. No excluded line was printed, only because its own filter dropped them.
+  - **What counts:** a glob in grep's pattern or sed's script is not a file operand, and a listing (`ls`) names
+    paths only, so neither is refused.
+  - **Witnesses:** two deny rows and one allow row in `TestEditRouteHookRefusesBashEditsOfTrackedFiles`, and the
+    `fork-glob` slug in `TestEveryRefusalReasonHasARule`. Neutered, both deny rows are admitted.
 - **#1284's cursor probe asks only whether the address range is free, so a runner short of memory no longer fails
   the placement controls** ([#1348](https://github.com/scttfrdmn/burroughs/issues/1348)).
   - **The defect:** the probe mapped through the engine's own `mmapAt`, which is read-write and committed. A 16 GiB
