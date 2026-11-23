@@ -1121,7 +1121,7 @@ func TestASpawnEntryPanicLeavesNoCallerCounted(t *testing.T) {
 					"than its assertion failing")
 			}
 		}()
-		_ = in.runEntry(th, c.fn, c.ft, 0, 0)
+		_ = in.runEntry(th, c.fn, c.ft, 0, 0, 0)
 	}()
 
 	in.world.mu.Lock()
