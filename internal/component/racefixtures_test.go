@@ -80,6 +80,9 @@ var raceWitnessFixtures = []string{
 	"agent-ends-run-exit.wasm",
 	"agent-ends-run-trap.wasm",
 	"agent-ends-run-control.wasm",
+	// #1339's cross-agent payload witness (crossagentpayload_test.go): B's memory.fill and the stream copy's write,
+	// racing A's loads if nothing orders them, are what -race must see
+	"cross-agent-payload.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

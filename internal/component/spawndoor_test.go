@@ -76,10 +76,10 @@ func engineGoroutines() []string {
 // **Three agents executing at once is asserted by a place, not by a sample.** `released=00000001` is that place: an
 // agent prints it only from its spin, and run releases only after meeting both agents while itself in guest code, so
 // all three were executing guest code at that moment. The engine's own count, `interp.Instance.ExecutingAgents`, is
-// sampled every 200µs across run's 50ms hold and **logged, not asserted**. #1359's macOS run read a peak of 2 with
-// the output byte-identical: on a 3-vCPU runner shared with every other test package, the sampler's thread can miss a
-// 50ms window, so the sample measured the runner. 20 of 20 local runs read 3 at -cpu 8, 3 and 2 alike, because the
-// count is a mark and a descheduled agent keeps it. The count under a place is E2's witness,
+// sampled every 200µs across run's 50ms hold and **logged, not asserted** (grave #1360). #1359's macOS run read a
+// peak of 2 with the output byte-identical: on a 3-vCPU runner shared with every other test package, the sampler's
+// thread can miss a 50ms window, so the sample measured the runner. 20 of 20 local runs read 3 at -cpu 8, 3 and 2
+// alike, because the count is a mark and a descheduled agent keeps it. The count under a place is E2's witness,
 // TestAgentsOfASharedMemoryInstanceExecuteAtOnce, whose agents spin until its probe has read 3.
 //
 // **NEUTER, run:** with the door invoking `mstart` on the caller's own goroutine (`core.Invoke` in `spawnDoor.call`

@@ -102,6 +102,21 @@ says what it now requires and what it gives up.
   - **The witnesses:** `cross-agent-wake.wasm`, one row per event kind and both netpoll orders, 100 fresh instances
     each, and its batch, 64 events drained by two waiters and a poller at once, each taken exactly once.
     `cross-agent-shutdown.wasm` for shutdown, through the engine and through `Component.Close`.
+- **An event one agent takes carries the payload another agent wrote, witnessed** ([#1339](https://github.com/scttfrdmn/burroughs/issues/1339),
+  contract §6 R-3 and R-4's append stamped on [#1334](https://github.com/scttfrdmn/burroughs/issues/1334), which
+  discharges [#1227](https://github.com/scttfrdmn/burroughs/issues/1227)). This adds a witness, not a mechanism, and
+  no gate flips: agents run in parallel only with `gate:cm-shared-memory` on.
+  - **Already true, now witnessed:** agent B fills memory with plain stores and completes a stream or future write.
+    Agent A armed the read, takes the event by `waitable-set.wait` or `waitable-set.poll`, and finds every byte and
+    word B wrote. A future carries the offset of a region B filled, the common way a guest publishes a buffer.
+  - **What orders it.** The handle table's mutex covers B's stores to every address, because a mutex release
+    publishes all of B's earlier writes. It is not the only edge. The wait's wake channel and B-MM-1's boundary
+    counter (ADR 0052) each order the payload alone, and the neuters record which edge carries what.
+  - **The witness:** `cross-agent-payload.wasm`, three rows (a stream read after a wait, a future read after a wait,
+    a future read after a poll loop), 1000 iterations per instance, through the engine and through `Component.Call`.
+    B also writes with `memory.fill`, which the engine performs as a plain Go write (ADR 0064), so `-race` can see
+    a missing edge. An aligned `i32.store` is atomic in the engine (ADR 0054), so `-race` cannot see one between
+    two of those.
 
 ### Changed
 
