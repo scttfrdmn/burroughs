@@ -49,6 +49,14 @@ says what it now requires and what it gives up.
     unshared twin, 10 of 10. That twin differs only in the word `shared`, and it is the shared fixture's only oracle,
     since no external engine can read the shared fixture.
 
+### Changed
+
+- **The contract gains v0.15.0's three texts for WASI 0.3 across more than one thread** ([#1334](https://github.com/scttfrdmn/burroughs/issues/1334), on Scott's stamp; the plan is [#1332](https://github.com/scttfrdmn/burroughs/issues/1332)). Each is a dated paragraph, and the text it follows stays visible:
+  - **§6 R-1 is amended.** A WASI 0.3 guest reaches readiness only through `waitable-set.wait` and `.poll`, so `poll_ready` is discharged by them: "batch" means draining `waitable-set.poll` until it reports none. The wake requirement stands in that vocabulary. A wait blocked on one agent returns when another agent of the instance makes an event ready on its set, and at instance or engine shutdown.
+  - **§6 R-4 is appended.** An instance's agents running in parallel share its handle table. Handle operations are linearizable, and a delivered event observes B-MM-1 for another agent's payload.
+  - **§2 T-1 is appended.** A component's door to the spawn primitive is the import `burroughs:threads/spawn@0.1.0#spawn: func(arg: u32)`, whose entry is the core export `mstart`. A component importing it is Burroughs-only by construction.
+  - **The contract stays v0.1.** It is appended to, not re-versioned. No engine code changes here; E3 and E4 build to these texts.
+
 ## [0.14.0] - 2026-11-22
 *Implements contract v0.1.*
 

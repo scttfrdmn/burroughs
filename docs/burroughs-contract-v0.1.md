@@ -58,6 +58,21 @@ wasmtime is for.
   #1122, v0.12.0). It names the guest-facing door to the primitive above and
   changes nothing T-1 already required, so it is an append rather than an
   amendment.*
+  In a component, T-1's primitive is the import
+  `burroughs:threads/spawn@0.1.0#spawn: func(arg: u32)`, whose entry is the
+  core export `mstart` of type `(i32) -> ()`, resolved by the engine. The new
+  agent shares the component's shared canonical memory and is a thread of the
+  task that called the import. No second engine supplies the import, so a
+  component importing it is Burroughs-only by construction. A component that
+  imports it without exporting `mstart` is refused at link. A shared canonical
+  memory is itself a Burroughs extension: the Canonical ABI requires the
+  canonical memory to be unshared (canonopt validation), and Burroughs admits a
+  shared one only behind its gate (ADR 0129), so a component using either is
+  valid to no other engine.
+  *Appended by Scott's stamp on #1334, dated 2026-11-22 (the v0.15.0 plan,
+  #1332, ruling 2). It names the component's door to the primitive above, as
+  the preview-1 paragraph names the module's, so it is an append rather than an
+  amendment.*
 - **T-2.** There is **no main-thread special case**. Every thread, including
   the first, MUST be permitted to block in `memory.atomic.wait` and in
   blocking host calls. No agent is forbidden from sleeping.
@@ -299,6 +314,19 @@ commits to that reading.*
   futures/streams up to `max`; `deadline_ns = 0` is non-blocking; a blocked
   `poll_ready` MUST be wakeable by `spawn`, by wake primitives, and by
   engine shutdown (the netpoller-break analog).
+  *Amended by Scott's stamp on #1334, dated 2026-11-22. A WASI 0.3 guest
+  reaches readiness only through the Canonical ABI surface R-5 names, so R-1's
+  `poll_ready` is discharged by that surface rather than by a separate engine
+  API. "Batch" is satisfied when a guest can drain every currently ready event
+  without blocking: repeated `waitable-set.poll` until it reports none, at O(1)
+  per event. **The wake requirement stands, restated in that vocabulary:** a
+  `waitable-set.wait` blocked on one agent MUST return when another agent of
+  the same instance makes an event ready on a waitable joined to that set (a
+  stream or future write, a subtask resolution, a join). It MUST also return
+  when the instance or engine is shut down, as §2 T-5 shuts down any blocked
+  agent. The guest's netpoller-break is a waitable the breaking agent writes;
+  the engine supplies no separate wake primitive. The text above stays as the
+  record of what was required before WASI 0.3 fixed the guest's surface.*
 - **R-2.** Readiness is **pulled by the guest scheduler**, never pushed by
   callback into guest code. The integration point is `findRunnable`, not an
   event handler.
@@ -307,6 +335,12 @@ commits to that reading.*
   further synchronization.
 - **R-4.** The loop MUST be shareable across component instances per the
   0.3 model, with per-instance isolation of handle tables.
+  *Appended by Scott's stamp on #1334, dated 2026-11-22. Where an instance's
+  agents run in parallel (§2 T-1 inside a component), its handle table is
+  shared by those agents, not per agent. Handle operations are linearizable
+  with respect to each other, and an event delivered to one agent observes
+  B-MM-1 (R-3) for the payload another agent wrote. Isolation between
+  instances is unchanged, so this is an append rather than an amendment.*
 - **R-5.** `waitable-set.wait` and `waitable-set.poll` are the guest-facing
   surface of the R-1 readiness substrate: a return from either is the guest
   pulling readiness, not the host pushing an event. The async tier introduces no
