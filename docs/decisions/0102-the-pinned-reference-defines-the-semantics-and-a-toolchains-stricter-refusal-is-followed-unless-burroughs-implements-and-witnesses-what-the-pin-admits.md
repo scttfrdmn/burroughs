@@ -159,3 +159,19 @@ This is the negative-claim sweep of #1040, by the chair's ruling of 2026-10-21. 
   `def@2e7895c:canon_lift:"trap_if(not candidates)"`, and the claim it supports holds.
 - **The form `symbol:NNNN` passes `make refcite`'s line rule,** which fires only on the `def:` and `definitions.py:`
   prefixes. #1078 records that half.
+
+## Postscript, 2026-11-22 — a divergence from the pin itself is outside this rule, and this is a postscript rather than an edit
+
+#1141's refusal of a shared memory named as a canon's `(memory …)` option was recorded as this rule applied: a
+toolchain (wasm-tools 1.258.0) stricter than a pin taken to be silent. E1 ([#1335](https://github.com/scttfrdmn/burroughs/issues/1335))
+found the pin is not silent. CanonicalABI.md's "`canonopt` Validation" requires the memory to be a subtype of
+`(memory 0)`, which is unshared, and the toolchains implement that sentence. So that refusal was never a case
+of this rule. It was the pin's own rule, enforced.
+
+Scott's revised ruling 4 ([#1332](https://github.com/scttfrdmn/burroughs/issues/1332#issuecomment-7092909150))
+admits the shared canonical memory anyway, as a deliberate, named, Burroughs-only extension behind
+`gate:cm-shared-memory`, off by default. That is a divergence from the pin itself, which this rule's first
+point does not license and its second does not describe. It is recorded in
+[ADR 0129](0129-a-shared-canonical-memory-is-admitted-behind-gate-cm-shared-memory-as-a-burroughs-only-extension-that-departs-from-the-pins-canonopt-rule-and-with-the-gate-off-the-rule-is-enforced-as-before.md),
+on that ruling, and not here. This rule's text above is unchanged, and it still governs every case it was
+written for.
