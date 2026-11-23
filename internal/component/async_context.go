@@ -29,7 +29,8 @@ import (
 // not an unremarked change. The storage split lives in async_lift.go's liftTask.
 
 // callerStorage is the calling Thread's context storage, the reference's `current_thread().storage` (#1013):
-//   - a created Thread's own;
+//   - a created Thread's own, and a spawned agent's own (#1336, ADR 0130's §2: it is a Thread of its task, and
+//     the reference keeps storage per Thread), touched only by that agent;
 //   - an implicit Thread's task's, under an async lift;
 //   - nil for a sync lift, whose context is the stack's.
 //

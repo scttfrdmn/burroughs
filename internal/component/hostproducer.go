@@ -356,12 +356,18 @@ func (p *streamProducer) deliverStore(store, discard func()) {
 		discarded()
 		return
 	}
-	if h.inHost > 0 {
-		h.hostStores = append(h.hostStores, store)
+	if h.window.inHost > 0 {
+		h.window.hostStores = append(h.window.hostStores, store)
 		h.mu.Unlock()
 		return
 	}
 	h.mu.Unlock()
+	// **A free instance's delivery takes no slot** (#1336, ADR 0130's §3), for `onResolve`'s reasons. A delivery
+	// calls no guest code, so it is addressed to no agent's window, and the instance's above is kept as before.
+	if h.agentsRunFree {
+		store()
+		return
+	}
 	ch := &runChain{}
 	if !h.acquireRun(ch, nil, h.producerStop) {
 		h.mu.Lock()

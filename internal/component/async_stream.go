@@ -354,6 +354,12 @@ func (e *readableStreamEnd) armLocked(progress uint32, r copyResult) {
 //
 // NEUTER: move `n` bytes, and TestTypedStreamElementsMatchTheOracle's u32-wf-w0 reads 0x00223344 and u32-wf-w1 0, in
 // both orderings.
+//
+// **It copies through a stored caller from another goroutine, and stays sound with several agents** (#1336, ADR
+// 0130's §5, row 9). The stored `CanonCaller` is used only for `Caller.Read` and `Caller.Write`, which touch its
+// memory and not its agent's stack, so the copy may run on whichever agent arrives second while the other
+// executes. It is under `asyncHandles.mu`, which the first arriver released after its buffer was written and
+// which its event is taken under, so both buffers' accesses are ordered against both agents' (R-3, B-MM-1).
 func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, error) {
 	// A host-held writer's source is the producer's buffer, not guest memory (ADR 0122).
 	//

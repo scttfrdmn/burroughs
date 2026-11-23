@@ -325,8 +325,13 @@ type stack struct {
 	// **Per stack rather than per instance.** The reference's flag is the instance's. But a `realloc`
 	// runs on the calling agent's own stack (`CanonCaller.Realloc` invokes it on `c.st`), and every
 	// built-in it calls is dispatched by `callAdapter` from that same stack. So the stack carries the
-	// flag to exactly the calls the reference checks. And one agent of a component instance executes at a
-	// time (ADR 0101's run slot), so no other agent of the instance can be calling built-ins meanwhile.
+	// flag to exactly the calls the reference checks.
+	//
+	// **Per stack is per agent, and that is the argument now** (#1336, ADR 0130). This said the per-stack flag
+	// was sound because one agent of a component instance executes at a time (ADR 0101's run slot). In an
+	// instance whose canonical memory is shared, several do. The flag stays right without that premise: a
+	// realloc runs on its caller's own stack, so it marks exactly that agent's calls, and another agent's
+	// built-ins are inside no realloc. The reference's instance-wide flag has no parallel agents to scope.
 	mayNotLeave int
 }
 

@@ -104,16 +104,44 @@ func (h *asyncHandles) acquireRun(ch *runChain, rec *cmThread, abort <-chan stru
 	return true
 }
 
-// enterHost and leaveHost bracket host code the run slot's holder runs on its own goroutine — an async
-// lower's impl, a subtask's onCancel — during which a result store needs no slot (`asyncHandles.inHost`).
-func (h *asyncHandles) enterHost() {
+// hostWindow is one agent's in-host window (ADR 0101's result-store amendment): how deep it is inside an async
+// lower's impl or a subtask's onCancel — HOST code, run on its own goroutine — and the result stores that arrived
+// meanwhile, queued for it to apply as it leaves, on its own goroutine, before its guest resumes. Guarded by
+// asyncHandles.mu.
+//
+// While `inHost` is above zero a store addressed to the window's agent must not wait for the slot (the agent may
+// be the one resolving, and would wait for itself), and must not write at once: writing at once let a store from
+// another goroutine land under the agent's own host code (#983's follow-up).
+//
+// **The instance's window is the run slot's holder's** (`asyncHandles.window`): one agent held the slot, so one
+// window served every task. **A spawned agent of a free instance has its own** (`cmThread.window`, #1336, ADR
+// 0130), because it holds no slot and runs while the holder does, so a store for it queued in the holder's window
+// would be applied on the holder's goroutine, and a store for the holder queued in its window would wait for it.
+type hostWindow struct {
+	inHost     int
+	hostStores []func()
+}
+
+// windowLocked is the in-host window a store addressed to agent `a` is queued in: a free agent's own, or the
+// instance's for nil (`asyncHandles.freeAgent`). The caller holds h.mu.
+func (h *asyncHandles) windowLocked(a *cmThread) *hostWindow {
+	if a != nil {
+		return &a.window
+	}
+	return &h.window
+}
+
+// enterHost and leaveHost bracket host code an agent runs on its own goroutine — an async lower's impl, a
+// subtask's onCancel — during which a result store addressed to it is queued rather than applied. `a` is the free
+// agent running it, or nil for the run slot's holder (`asyncHandles.freeAgent`).
+func (h *asyncHandles) enterHost(a *cmThread) {
 	h.mu.Lock()
-	h.inHost++
+	h.windowLocked(a).inHost++
 	h.mu.Unlock()
 }
 
 // leaveHost lowers the count, and on the way out of the outermost host call applies every result store
-// queued meanwhile (`asyncHandles.hostStores`), here, on the holder's goroutine, before its guest resumes.
+// queued meanwhile (`hostWindow.hostStores`), here, on the agent's goroutine, before its guest resumes.
 // That is the reference's order: another thread's resolution cannot run during this thread's host call,
 // and does run before this thread executes guest code again.
 //
@@ -121,13 +149,14 @@ func (h *asyncHandles) enterHost() {
 // guest code, and guest code must not run under an engine lock (`asyncLowerFunc`'s `apply`). So the queue
 // is popped under the lock and each store applied outside it. A store that arrives meanwhile finds
 // `inHost` at zero and takes the run slot, which this holder still has, so it waits its turn rather than
-// joining this queue.
-func (h *asyncHandles) leaveHost() {
+// joining this queue. In a free instance it is applied at once instead (ADR 0130).
+func (h *asyncHandles) leaveHost(a *cmThread) {
 	h.mu.Lock()
-	h.inHost--
-	for h.inHost == 0 && len(h.hostStores) > 0 {
-		apply := h.hostStores[0]
-		h.hostStores = h.hostStores[1:]
+	win := h.windowLocked(a)
+	win.inHost--
+	for win.inHost == 0 && len(win.hostStores) > 0 {
+		apply := win.hostStores[0]
+		win.hostStores = win.hostStores[1:]
 		h.mu.Unlock()
 		apply() // takes h.mu for its own bookkeeping, never across its guest-memory work
 		h.mu.Lock()
@@ -170,6 +199,10 @@ func (h *asyncHandles) releaseRunFor(ch *runChain) {
 // **No wakeup is lost**: every append to the ready queue is made under the slot, so a queue that is
 // non-empty when the slot is freed is seen here, and one appended to later is seen by that holder's own
 // free. The scheduler's own free does not kick (`cmScheduler.free`), so a stale kick cannot re-arm itself.
+//
+// **A spawned agent of a free instance holds no slot, and that leaves the argument intact** (#1336, ADR 0130):
+// the 🧵 forms that append or hand off are refused from any spawned agent (`refuseFromAgent`), so every
+// append is still made by a slot holder. `threadTable.assertSlotHeld` is the instrument, unchanged.
 func (h *asyncHandles) kick() {
 	tt := h.threads
 	if tt == nil {
@@ -232,6 +265,12 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, judg
 	tt := h.threads
 	if tt != nil {
 		rec = tt.current(c)
+	}
+	// **A spawned agent of a free instance holds no slot, so it gives none up** (#1336, ADR 0130). Its wait is
+	// still the reference's `wait_until`, marked so the sync tail reads it and a trap or Close ends it
+	// (`threadTable.agentWait`). Before #1336 no agent but a slot holder reached here with a record.
+	if a := h.freeAgent(rec); a != nil {
+		return func() error { return tt.agentWait(h, a, ready, judged, fn) }
 	}
 	return func() error {
 		// The wait is a `block()` in the reference, so it ends this task's first segment (F0).

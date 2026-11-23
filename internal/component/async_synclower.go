@@ -115,9 +115,10 @@ func syncLowerOfAsync(impl asyncLowerImpl, form syncLowerForm, h *asyncHandles) 
 			}
 			h.mu.Unlock()
 		}
-		h.enterHost()
+		agent := h.freeAgentOf(c) // a free agent's own window (#1336, ADR 0130), nil for a slot holder
+		h.enterHost(agent)
 		_, err = impl(c, onStart, onResolve)
-		h.leaveHost()
+		h.leaveHost(agent)
 		if err != nil {
 			return nil, err
 		}

@@ -97,6 +97,10 @@ type asyncHandles struct {
 	// flight, not executing in parallel:** one task executes at a time, and they interleave only at
 	// suspension points (ADR 0101's run slot, #975). This said "may run concurrently", which read as
 	// parallel execution once #975 showed the sync path really did execute in parallel.
+	//
+	// **Still one task executes at a time in a free instance; its spawned agents are not tasks** (#1336, ADR
+	// 0130). They execute in parallel with the task that holds the slot, and never read or write this field:
+	// each finds its task through its own record (`callerTask`). Only slot holders write it.
 	lift *liftTask
 
 	// liftsInFlight counts the lift tasks this instance hosts — **a count, not a flag** (#869).
@@ -141,25 +145,29 @@ type asyncHandles struct {
 	schedHolds bool
 	// threads is this instance's Thread table, so a suspension point can find its caller's chain.
 	threads *threadTable
-	// inHost counts how deep the run slot's holder is inside an async lower's impl or a subtask's
-	// onCancel — HOST code, run on the holder's goroutine with the slot held. While it is above zero no
-	// guest code of the instance can execute, so a result store from any goroutine is safe, and must not
-	// wait for the slot: the holder may be the one resolving, and would be waiting for itself. Guarded by
-	// mu. ADR 0101's result-store amendment.
+	// window is the run slot's holder's in-host window (`hostWindow`): its depth inside host code, and the
+	// result stores queued meanwhile. Guarded by mu. ADR 0101's result-store amendment.
 	//
 	// **Per instance, not per subtask, and a measurement put it here.** The first draft flagged the
 	// subtask whose impl was running. `TestASiblingWaitsForABlockingImportAndDoesNotTrap`'s impl for task B
 	// resolves task A's subtask from inside B's own impl call, and A's flag was clear, so A's store waited
 	// for the slot B's goroutine held. Three liftpark tests deadlocked that way.
-	inHost int
+	//
+	// **Per instance for the slot's holders, and per agent for a spawned agent of a free instance** (#1336,
+	// ADR 0130): such an agent holds no slot, so it opens a window of its own (`cmThread.window`).
+	window hostWindow
+	// agentsRunFree says this instance's spawned agents execute outside the run slot, as threads of their
+	// spawner's task (#1336, ADR 0130, on Scott's ruling 1 on #1332): its walk admitted a shared canonical
+	// memory, which `gate:cm-shared-memory` must be on to do, and named no unshared one. Written by the walk
+	// (`walker.noteCanonMemory`) before the instance can run, and read only after. False keeps ADR 0101
+	// exactly, which is every instance whose canonical memory is unshared.
+	agentsRunFree bool
+	// canonMemories counts the walk's canonical memory options, shared and unshared, from which
+	// agentsRunFree is derived. Written by the walk alone.
+	canonMemories struct{ shared, unshared int }
 	// fence orders this instance's guest execution against its cross-component callees' segments (ADR
 	// 0095's amendment, F1; fence.go). Guarded by mu.
 	fence fence
-	// hostStores are result stores that arrived while inHost was raised, queued for the holder to apply as
-	// it leaves host code, on its own goroutine, before its guest resumes. Guarded by mu. Writing them at
-	// once let a store from another goroutine land under the holder's own host code (ADR 0101's
-	// result-store amendment, #983's follow-up).
-	hostStores []func()
 
 	// cancellable holds every lift task this instance currently hosts, which is what a cancellation
 	// request is aimed at (ADR 0094). It is a SET and not the `lift` slot, because those answer
@@ -588,9 +596,10 @@ func subtaskCancel(h *asyncHandles, asyncForm bool) interp.CanonFunc {
 			// onCancel is host code on this agent's goroutine, under the run slot it holds, so a resolution
 			// made meanwhile must not wait for that slot (`asyncHandles.inHost`, ADR 0101's result-store
 			// amendment): waiting would be this goroutine waiting for itself.
-			h.enterHost()
+			agent := h.freeAgentOf(c) // a free agent's own window (#1336, ADR 0130), nil for a slot holder
+			h.enterHost(agent)
 			onCancel() // may call onResolve (which locks); must run without the table lock held
-			h.leaveHost()
+			h.leaveHost(agent)
 		}
 
 		// **Upstream #726's hand-back, for a guest callee** (`cancelTransfer`). A callee waiting in its event

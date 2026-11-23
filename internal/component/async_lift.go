@@ -72,6 +72,12 @@ type liftTask struct {
 	// touched only from a built-in running inside the entered task. The slice that models
 	// `thread.new-indirect` adds Threads that run while this task is parked, and it owes a re-reading of
 	// that argument rather than an inheritance of it.
+	//
+	// **Re-read for spawned agents, which run while this task executes** (#1336, ADR 0130's §5, row 6). The
+	// argument that holds is `threadIndex`'s: the field is written once in `newLiftTask`, before the task is
+	// published to another goroutine, and read only by the task's own loop to pass into `InvokeCMThread` and
+	// by `yieldPoint`, on that loop's goroutine. A spawned agent reads its own index from its stack and never
+	// reads this, so no reader is added.
 	threadIdx uint32
 
 	// firstSeg is closed when this task's first segment ends, for a cross-component caller waiting in its
@@ -598,6 +604,10 @@ func taskCancel(h *asyncHandles) interp.CanonFunc {
 // `yield-admits-entry`: a waiter's re-take restored a stale `h.lift` between another entry's `enterTask` and
 // its slot, and that entry's `task.return` resolved a task already resolved. Only a caller with no Thread
 // record (a core-level call bypassing the component) falls back to `h.lift`. Called without `h.mu` held.
+//
+// **A spawned agent's task is its record's** (#1336, ADR 0130's §5, row 2): its spawner's, because it is a thread
+// of that task, found through the index its own stack carries. It never reads `h.lift`, which only slot holders
+// write, so several agents executing at once each act on their own task and none on the instance's current one.
 func callerTask(h *asyncHandles, c *interp.CanonCaller) *liftTask {
 	if h.threads != nil {
 		if rec := h.threads.current(c); rec != nil {

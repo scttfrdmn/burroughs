@@ -165,9 +165,13 @@ func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, s
 		// that task's trap (the chair's ruling of 2026-10-18 on #994). Nil only for a handle table built
 		// without a Thread table, which the walker never does.
 		var owner *cmThread
+		// agent is the free agent this lower runs on, nil for a slot holder (#1336, ADR 0130): a store addressed
+		// to this lower is queued in that agent's own in-host window, never in the slot holder's.
+		var agent *cmThread
 		if h.threads != nil {
 			if rec := h.threads.current(c); rec != nil {
 				owner = rec.owner
+				agent = h.freeAgent(rec)
 			}
 		}
 		// apply is the store itself — lower the result, then resolve — run under the run slot, or on the slot
@@ -195,7 +199,10 @@ func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, s
 		//
 		// NEUTER THIS by holding `h.mu` across step 2 again, and the realloc witness sees the lock held for the
 		// realloc's duration.
-		apply := func(v canon.Value) {
+		//
+		// `heap` is the lowering agent's guest heap: `guestHeap` on its own goroutine, or `offAgentHeap` for a store
+		// a free instance applies off it, which refuses a realloc by name (#1336, ADR 0130).
+		apply := func(v canon.Value, heap canon.Heap) {
 			h.mu.Lock()
 			// **The cancel arm is chosen by the resolution, not by the request** (#1009). The reference's
 			// `on_resolve` branches on `result is None`, and `cancellation_requested` chooses nothing on the
@@ -254,7 +261,7 @@ func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, s
 						err = fmt.Errorf("component: async lower: writing %s handle to retptr: %w", kind, werr)
 					}
 				default:
-					if serr := canon.StoreVia(guestHeap{c}, v, int(uint32(retptr))); serr != nil {
+					if serr := canon.StoreVia(heap, v, int(uint32(retptr))); serr != nil {
 						err = fmt.Errorf("component: async lower: lowering result to retptr: %w", serr)
 					}
 				}
@@ -312,12 +319,25 @@ func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, s
 		// `TestAResultStoreDoesNotLandWhileTheHolderIsInHostCode`.
 		onResolve := func(v canon.Value) {
 			h.mu.Lock()
-			if h.inHost > 0 {
-				h.hostStores = append(h.hostStores, func() { apply(v) })
+			if win := h.windowLocked(agent); win.inHost > 0 {
+				win.hostStores = append(win.hostStores, func() { apply(v, guestHeap{c}) })
 				h.mu.Unlock()
 				return
 			}
 			h.mu.Unlock()
+			// **In a free instance a store takes no slot** (#1336, ADR 0130's §3). Its agents never hold the slot,
+			// so the slot orders the store against nothing they do, and the run task's own agent holds it across a
+			// futex wait, which is not a suspension point: a store waiting for it there waits for an agent that may
+			// be waiting for this store's event on another agent. The write lands in a buffer the guest handed over,
+			// and the event that publishes it is taken under `h.mu`. Off its agent's goroutine, a realloc is
+			// refused (`offAgentHeap`).
+			//
+			// NEUTER: drop this arm, and TestAgentsOfASharedMemoryInstanceExecuteAtOnce's wait-for stores park in
+			// acquireRun behind run's agent, which waits in memory.atomic.wait for agents waiting on those stores.
+			if h.agentsRunFree {
+				apply(v, offAgentHeap{guestHeap{c}})
+				return
+			}
 			// A cross-component callee's store runs on its last segment's chain, so the fence that segment
 			// holds admits it (ADR 0095's amendment, F1); every other store starts a chain of its own.
 			ch := st.storeChain
@@ -326,15 +346,18 @@ func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, s
 			}
 			h.acquireRun(ch, nil, nil)
 			defer h.releaseRunFor(ch)
-			apply(v) // takes h.mu for its bookkeeping only, never across its guest-memory work
+			apply(v, guestHeap{c}) // takes h.mu for its bookkeeping only, never across its guest-memory work
 		}
 
 		// The impl is host code on this agent's goroutine, under the run slot it holds: while it runs, a
-		// resolution of ANY subtask writes without waiting for the slot (`asyncHandles.inHost`). Lowered
-		// under `h.mu` before the guest resumes (see `onResolve`).
-		h.enterHost()
+		// resolution of ANY subtask writes without waiting for the slot (`hostWindow`). Lowered under `h.mu`
+		// before the guest resumes (see `onResolve`). A free agent opens its own window (#1336, ADR 0130).
+		//
+		// NEUTER (#1336): open the instance's window, nil, from a free agent too, and
+		// TestAStoreForOneAgentIsNotHeldBehindAnothersHostCode's run waits for agent 4's impl to return.
+		h.enterHost(agent)
 		onCancel, err := implFor(st)(c, onStart, onResolve)
-		h.leaveHost()
+		h.leaveHost(agent)
 		if err != nil {
 			return nil, err
 		}

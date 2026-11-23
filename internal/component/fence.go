@@ -21,6 +21,12 @@ package component
 // segment's chain, and a writer whose chain is an in-flight segment's is admitted (the re-entry rule): in
 // the reference that is the same thread.
 //
+// **A free instance's spawned agents are not writers** (#1336, ADR 0130's §5, row 10), though they are its guest
+// execution. The fence orders the reference's single runner against a callee's segment, and an agent runs in
+// parallel with the runner by construction. Counted as a writer for its life, an agent would hold every callee's
+// segment for that life. What a segment writes into this instance's memory is its result stores, which a free
+// instance orders by their events under `asyncHandles.mu`, not by the slot.
+//
 // All of it is under `asyncHandles.mu`, and `wake` is closed and replaced on every change that could
 // admit someone, the waitable set's `wake` idiom.
 type fence struct {

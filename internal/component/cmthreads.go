@@ -142,6 +142,12 @@ type cmThread struct {
 	// Rust wasm32-wasip3 std guest's `run` is. Set once at creation, before the Thread is shared. The sync tail
 	// judges only a sync-typed one, as the pin's loop sits inside `if not ft.async_` (grave #1267, ADR 0121).
 	asyncTyped bool
+	// agent says this is a spawned agent (agents.go, #1336, ADR 0130): an `interp` thread that is a thread of its
+	// spawner's task, never resumed by the scheduler. Set once at creation, before the record is shared.
+	agent bool
+	// window is a spawned agent's own in-host window in a free instance (`hostWindow`), guarded by
+	// asyncHandles.mu. Unused by every other record, whose window is the instance's.
+	window hostWindow
 
 	entry interp.TableFunc // resolved at creation, as `canon_thread_new_indirect` reads `ftbl.get(fi)`
 	arg   int32            // the `c` operand, passed to the entry
@@ -468,7 +474,8 @@ const errSyncTail = "cannot block a synchronous task before returning: it waits 
 //
 // An event another instance produces never counts. While the scheduler holds the slot, no cross-instance
 // result store can land (`onResolve` takes the slot), so the test sees what the reference's single thread
-// would.
+// would. In a free instance a store takes no slot (ADR 0130), so one can land during the test; it can only make
+// a waiter ready, so the test errs towards admitting, as it does for an in-flight async lift.
 //
 // With no candidate, every waiting sync task is ended with the trap, and the aborted waiters are returned.
 //
@@ -511,7 +518,18 @@ func (tt *threadTable) syncTail(h *asyncHandles) []*cmThread {
 	}
 	var syncWaiters []*cmThread
 	var readies []func() bool
+	// **A spawned agent that is not waiting is a candidate** (#1336, ADR 0130's §5, row 5). It is executing, or
+	// about to (an ADR 0101 instance's agent waiting for the slot), so it can make a waiter's event ready, which is
+	// what a candidate is. The reference has one runner and no such thread; this was the one-runner test. A waiting
+	// agent contributes its `ready_func` below, as any waiting Thread does.
+	//
+	// NEUTER: drop this term, and TestASyncWaitOnAnExecutingAgentDoesNotTrap's sync-typed wait traps "cannot
+	// block a synchronous task" while its agent is executing the write that would wake it.
+	agentRunning := false
 	for _, t := range tt.array {
+		if t != nil && t.agent && t.state == threadRunning {
+			agentRunning = true
+		}
 		if t == nil || t.state != threadWaiting {
 			continue
 		}
@@ -527,7 +545,7 @@ func (tt *threadTable) syncTail(h *asyncHandles) []*cmThread {
 		return nil
 	}
 	h.mu.Lock()
-	candidate := h.liftsInFlight > 0
+	candidate := h.liftsInFlight > 0 || agentRunning
 	for _, r := range readies {
 		if candidate {
 			break
@@ -561,6 +579,9 @@ func (tt *threadTable) syncTail(h *asyncHandles) []*cmThread {
 // assertSlotHeld is the lost-wakeup argument as an instrument (ADR 0101's Option A, point 5): in a test
 // binary, an append to the ready queue panics unless the run slot is held, by an executing Thread or by the
 // scheduler. Only the two appending sites call it.
+//
+// **A free instance's spawned agents hold no slot and leave it true** (#1336, ADR 0130): neither appending site is
+// reachable from one, because `refuseFromAgent` refuses `thread.resume-later` and the switching forms there.
 func (tt *threadTable) assertSlotHeld(site string) {
 	if !testing.Testing() || tt.h == nil {
 		return
@@ -692,6 +713,9 @@ func threadNewIndirect(h *asyncHandles, tt *threadTable, tbl interp.Extern) inte
 				"did not enter through a lift, so there is no task for the new Thread to belong to",
 				ErrUnsupportedForm)
 		}
+		if err := refuseFromAgent(caller, "thread.new-indirect"); err != nil {
+			return nil, err // #1336, ADR 0130: the scheduler's handoffs are the slot's
+		}
 		entry, err := interp.ResolveTableFunc(tbl, uint32(args[0].Bits))
 		if err != nil {
 			return nil, err
@@ -759,9 +783,13 @@ func (t *cmThread) run(s *cmScheduler) {
 // threadResumeLater implements `canon thread.resume-later` (0x28): `trap_if(not other_thread.suspended())`,
 // then `resume_later()` — the named Thread joins the ready queue and runs at the next scheduling point.
 func threadResumeLater(tt *threadTable) interp.CanonFunc {
-	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: thread.resume-later: got %d args, want (i)", len(args))
+		}
+		// An append to the ready queue, which a spawned agent holds no slot to make (#1336, ADR 0130).
+		if err := refuseFromAgent(tt.current(c), "thread.resume-later"); err != nil {
+			return nil, err
 		}
 		if err := tt.markReady(uint32(args[0].Bits)); err != nil {
 			return nil, err
@@ -804,6 +832,9 @@ func threadSwitch(op byte, h *asyncHandles, tt *threadTable) interp.CanonFunc {
 		if self == nil {
 			return nil, fmt.Errorf("%w: %s outside any component-model Thread — the call did not enter "+
 				"through a lift, so there is no Thread to suspend", ErrUnsupportedForm, name)
+		}
+		if err := refuseFromAgent(self, name); err != nil {
+			return nil, err // a handoff carries the slot, which a spawned agent does not hold (#1336, ADR 0130)
 		}
 		var target uint32
 		if op != 0x29 {

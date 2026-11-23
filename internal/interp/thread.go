@@ -578,7 +578,43 @@ func (in *Instance) hasSharedMemory() bool {
 // [0073]: ../../docs/decisions/0073-grow-refuses-to-relocate-when-a-sibling-agent-could-hold-the-old-image-and-the-boundary-accessors-take-the-growth-lock.md
 // [662]: https://github.com/scttfrdmn/burroughs/issues/662
 func (in *Instance) Spawn(entry uint32, arg int32, stackHint int) (ThreadID, error) {
-	t, err := in.spawn(entry, arg, stackHint)
+	t, err := in.spawn(entry, arg, stackHint, AgentHooks{})
+	if err != nil {
+		return 0, err
+	}
+	return t.id, nil
+}
+
+// AgentHooks is what a component's core instance adds to a spawn (#1336, [ADR 0130]): the agent is a thread of
+// its spawner's task, so the component package must find its record from its stack and bracket its life.
+//
+//   - **CMThread** is the component-model Thread index the agent's stack carries, as [Instance.InvokeCMThread]
+//     carries an entry's. A carrier and nothing more: this package allocates, frees and reads no index.
+//   - **Enter**, when set, runs on the agent's goroutine before its first guest instruction, with the agent's
+//     context, which `Close` cancels. An error ends the agent with that error, having run no guest code. An
+//     instance that keeps ADR 0101's run slot takes the slot here.
+//   - **Exit**, when set, runs on the agent's goroutine after its entry returns, or after Enter failed, with the
+//     error the agent ends with, and before `world.retire` records it. So a `Join` or a `Close` that returns has
+//     seen it run.
+//
+// [ADR 0130]: ../../docs/decisions/0130-in-an-instance-whose-canonical-memory-is-shared-a-spawned-agent-is-a-thread-of-its-spawners-task-and-executes-outside-the-run-slot-which-keeps-serialising-tasks-and-stops-serialising-result-stores.md
+type AgentHooks struct {
+	CMThread uint32
+	Enter    func(ctx context.Context) error
+	Exit     func(err error)
+}
+
+// SpawnAgent is [Instance.Spawn] for a component's core instance (#1336, [ADR 0130]): the entry is named by its
+// export, and the hooks bracket the agent's life. Every refusal is Spawn's, and so is the agent: an OS-locked
+// thread with its own T-6 globals, a member of this instance's world, ended by `Close`.
+//
+// [ADR 0130]: ../../docs/decisions/0130-in-an-instance-whose-canonical-memory-is-shared-a-spawned-agent-is-a-thread-of-its-spawners-task-and-executes-outside-the-run-slot-which-keeps-serialising-tasks-and-stops-serialising-result-stores.md
+func (in *Instance) SpawnAgent(export string, arg int32, hooks AgentHooks) (ThreadID, error) {
+	idx, ok := in.exportedFunc(export)
+	if !ok {
+		return 0, fmt.Errorf("%w: no exported function %q to start an agent at", ErrThreadEntry, export)
+	}
+	t, err := in.spawn(idx, arg, 0, hooks)
 	if err != nil {
 		return 0, err
 	}
@@ -596,7 +632,10 @@ func (in *Instance) Spawn(entry uint32, arg int32, stackHint int) (ThreadID, err
 // held after its record was consumed — that a bounded record does not have. So the object stays inside
 // the package, where the engine's own code and this package's tests use it, and the exported surface is
 // the narrowest rendering of the stamped words.
-func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, error) {
+//
+// `hooks` are a component's (`AgentHooks`, #1336), zero for a core spawn. They ride this function rather than a
+// wrapper of it, so the one goroutine ADR 0068 rules on stays the one `go` statement here.
+func (in *Instance) spawn(entry uint32, arg int32, stackHint int, hooks AgentHooks) (*thread, error) {
 	if !in.hasSharedMemory() {
 		return nil, fmt.Errorf("%w: this instance reaches no shared memory, so a spawned thread "+
 			"would share nothing with its parent", ErrNotShared)
@@ -670,7 +709,18 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 			in.world.retire(t, t.err)
 			close(t.done)
 		}()
-		t.err = in.runEntry(t, fn, ft, arg, stackHint)
+		// A component's hooks (#1336, ADR 0130): Enter before the first guest instruction, Exit after the entry,
+		// both before the retire above, so a joiner sees the agent's whole bracket. Neither is a guest frame, and
+		// the agent is no caller while either runs, so a `Stop` reads it at a safepoint then.
+		if hooks.Enter != nil {
+			t.err = hooks.Enter(t.context())
+		}
+		if t.err == nil {
+			t.err = in.runEntry(t, fn, ft, arg, stackHint, hooks.CMThread)
+		}
+		if hooks.Exit != nil {
+			hooks.Exit(t.err)
+		}
 	}()
 	return t, nil
 }
@@ -698,7 +748,10 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int) (*thread, erro
 // This is stack creation site 4 of 4, and the only one that does not hand over `&in.host`: a spawned
 // thread runs on its own. `TestEveryStackCreationSiteCarriesAThread` partitions the sites on exactly
 // that distinction rather than listing them.
-func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, arg int32, stackHint int) (err error) {
+//
+// `cmThread` is the component-model Thread index the stack carries (`AgentHooks.CMThread`, #1336), zero for a
+// core spawn, which the reference's reserved index 0 makes an unambiguous "none".
+func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, arg int32, stackHint int, cmThread uint32) (err error) {
 	// §4 B-MM-1, at the enclosing function of the `stack` literal below, same as the other three
 	// sites (`boundary.go`, decision 0052, #516). **This is the site where the edge stops being
 	// bookkeeping.** At the other three the host and the guest are the same thread, so the acquire
@@ -752,6 +805,8 @@ func (in *Instance) runEntry(t *thread, fn *binary.Func, ft *binary.FuncType, ar
 	st := &stack{
 		t:   t,
 		num: make([]uint64, 0, max(stackHint, len(fn.Body))),
+		// A component agent's Thread index (#1336, ADR 0130), so its canon calls find its own record.
+		cmThreadIdx: cmThread,
 	}
 	// T-1's single i32 argument, as the operand `buildFrame` will pop into local 0. Through
 	// `pushI32` rather than written into the frame directly, so a negative arg gets the same
