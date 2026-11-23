@@ -68,6 +68,26 @@ says what it now requires and what it gives up.
     `mapPlaced` is unchanged, and an ENOMEM there was already the allocator fallback.
   - **Witness:** `TestTheCursorProbeAsksOnlyAboutTheAddress`, with a stand-in kernel that refuses committed mappings
     over 1 GiB. Neutered (probing through `mmapAt` again), it fails with CI's ENOMEM.
+- **A `future.read` that finds its future's guest write parked now completes the rendezvous, so writing first and
+  then reading no longer leaves both ends parked** ([#1325](https://github.com/scttfrdmn/burroughs/issues/1325),
+  item 1).
+  - **The defect:** only `future.write` drove the copy, when it arrived at a pending read (#1006). A read arriving
+    second parked, and so did the write, forever. One agent reached it: a task that writes its own future and then
+    reads it.
+  - **The fix:** the read copies the parked write's value, takes its own COMPLETED inline, and leaves the write's
+    `(FUTURE_WRITE, wi, COMPLETED)` event pending. This is the pin's one rendezvous for both orders, `def:End.copy`.
+    The non-numeric-element trap is at the read when the read is second, as the pin places it.
+  - **Two repairs the fix made reachable.** A future write's event packed `progress << 4` into its payload, which the
+    pin's `future_event` does not do. No path reached it while every write event was a cancel's, of progress 0. And
+    `future.cancel-write` trapped on a write that a read had completed and whose event had not been taken. That write
+    is still COPYING in the pin, so the cancel takes its COMPLETED.
+  - **The witnesses:** `future-write-then-read`, `-cancel`, `-bool`, and the `future-read-then-write` control, each
+    with wasmtime 49.0.3's and the pin's reading. They agree on every row. Before the fix, Burroughs read the read as
+    BLOCKED.
+  - **Not fixed here:** a synchronous `future.read` or `future.write` is still bound as the async form. Both oracles
+    hang on a sync write with no reader, and Burroughs returns BLOCKED to it ([#1352](https://github.com/scttfrdmn/burroughs/issues/1352)).
+    A second `future.write` after a cancelled one traps where the pin allows it ([#1353](https://github.com/scttfrdmn/burroughs/issues/1353)).
+    Items 2 and 3 of #1325 stand.
 
 ## [0.14.0] - 2026-11-22
 *Implements contract v0.1.*
