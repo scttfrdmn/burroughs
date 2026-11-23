@@ -1,0 +1,40 @@
+# Committed readings for #1325 item 1, the future rendezvous within one instance, in both orders:
+# future-write-then-read{,-cancel,-bool}.wasm and the future-read-then-write.wasm control. Default path for each
+# Go row: gate:async on, gate:cm-threads both off and on.
+# Built:       wasm-tools parse <f>.wat -o <f>.wasm   (wasm-tools 1.258.0)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y --invoke 'run()' <f>.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 5 of 5 per line.
+# Reference:   refread.py's future_rendezvous rows (cmthreads/reference/refread.reading), pin 2e7895c,
+#              uv-managed 3.14.8, 16 of 16 runs per line (DETERMINISTIC_PROFILE x 8 seeds).
+#
+# u8 tuple: (write status, read status, byte read, event code, event index, event payload, wi, second poll's code)
+#
+# fixture                        wasmtime 49.0.3                                           pin 2e7895c
+# future-write-then-read         (4294967295, 0, 7, 5, 2, 0, 2, 0)                          the same
+# future-write-then-read-cancel  (4294967295, 0, 7, 51966, 0, 0, 2, 0)                      the same
+# future-write-then-read-bool    trap in run: "cannot read from and write to               trap future.read
+#                                intra-component future/stream with non-numeric payload"
+# future-read-then-write         (0, 4294967295, 7, 4, 1, 0, 2, 0)                          the same
+#
+# Meaning:
+#   - write first: the write returns BLOCKED; the read, arriving second, copies 7 and returns COMPLETED (0) inline;
+#     the write's event is FUTURE_WRITE (5) on wi = 2 with payload COMPLETED (0), the bare result. The poll after
+#     it, with both ends joined, reads NONE (0): no duplicate event on either end.
+#   - -cancel: future.cancel-write after the read (event not taken) returns COMPLETED (0), and the poll reads NONE.
+#   - -bool: the trap is at the READ. A write-only variant (scratch, not committed) returned (4294967295, 99) on
+#     wasmtime: the parked bool write does not trap.
+#   - read first (the control, #1006's direction): the read is BLOCKED, the write COMPLETED inline, and the read's
+#     event is FUTURE_READ (4) on ri = 1, payload 0.
+#
+# Burroughs before the fix (9a057c5), both gate states:
+#   future-write-then-read       (4294967295, 4294967295, 0, 57005, 0, 0, 2, 0): the read BLOCKED, the 0xdead place
+#
+# The SYNC write, write first (future-write-then-read with the write's `async` dropped; scratch, not committed):
+#   wasmtime 49.0.3   needs -W component-model-async=y,component-model-more-async-builtins=y to load (a sync
+#                     future.write is a 🚝 built-in there); then no output and no exit within 20s, 3 of 3: a hang.
+#   pin 2e7895c       HANG, 16 of 16 (refread.reading's "sync write" row): def:copy waits in
+#                     end.wait_for_pending_event() for an event only the same task's later read could cause.
+#   Burroughs         before the fix (4294967295, 4294967295, 0, 57005, 0, 0, 2, 0); after it
+#                     (4294967295, 0, 7, 5, 2, 0, 2, 0), the async row's reading. Either way the sync write returns
+#                     BLOCKED to a sync caller: the decoder keeps future.write's memory but not its `async`, so the
+#                     sync form is bound as the async one. A divergence #1325 item 1 does not fix.

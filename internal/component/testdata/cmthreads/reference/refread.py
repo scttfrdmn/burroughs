@@ -1055,6 +1055,81 @@ def parked_threads_and_a_runner(n, k, release=True):
     return body
 
 
+def future_rendezvous(write_first, sync_write=False, cancel=False, elem="u8"):
+    """#1325's fixtures, `future-{write-then-read,read-then-write}*.wat`: one async callback task meets itself at a
+    future, in either order. Mirrors the WAT step for step, including its 0xdead arm (the second operation did not
+    complete inline) and, with `cancel`, the cancel-write after the read and 0xcafe. The u8 rows read the tuple
+    (write status, read status, byte read, event code, event index, event payload, wi, the second poll's code); the
+    bool row reads (write status, read status). `sync_write` drops the write's `async`, the shape whose wasmtime
+    49.0.3 reading is a hang. The trap site names the built-in that was running."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        opts = d.CanonicalOptions(async_=True, memory=mem)
+        wopts = d.CanonicalOptions(async_=not sync_write, memory=mem)
+        ft = d.FutureType(d.BoolType() if elem == "bool" else d.U8Type())
+        tup = d.TupleType([d.U32Type()] * (2 if elem == "bool" else 8))
+        st = {}
+
+        def ret(vals):
+            d.canon_task_return([tup], d.LiftOptions(memory=mem), [v & 0xffffffff for v in vals])
+
+        def finish(ev, p1, p2):
+            pc = d.canon_waitable_set_poll(mem, st["s"], 96)[0]
+            ret([st["wr"], st["rd"], mem.bytes[64], ev, p1, p2, st["w"], pc])
+
+        def write():
+            site["name"] = "future.write"
+            mem.bytes[80] = 1 if elem == "bool" else 7
+            [st["wr"]] = d.canon_future_write(ft, wopts, st["w"], 80)
+
+        def read():
+            site["name"] = "future.read"
+            [st["rd"]] = d.canon_future_read(ft, opts, st["r"], 64)
+
+        def run(args):
+            [p] = d.canon_future_new(ft)
+            st["r"], st["w"] = p & 0xffffffff, p >> 32
+            (write, read)[0 if write_first else 1]()
+            (write, read)[1 if write_first else 0]()
+            site["name"] = "after both"
+            if elem == "bool":
+                ret([st["wr"], 0xdead if st["rd"] == d.BLOCKED else st["rd"]])
+                return [0]
+            if cancel:
+                [st["cw"]] = d.canon_future_cancel_write(ft, False, st["w"])
+            [s] = d.canon_waitable_set_new()
+            st["s"] = s
+            d.canon_waitable_join(st["w"], s)
+            d.canon_waitable_join(st["r"], s)
+            second = st["rd"] if write_first else st["wr"]
+            if second == d.BLOCKED or (not write_first and st["rd"] != d.BLOCKED):
+                finish(0xdead, st.get("cw", 0), 0)
+                return [0]
+            if cancel:
+                finish(0xcafe, st["cw"], 0)
+                return [0]
+            return [2 | (s << 4)]  # WAIT
+
+        def cb(args):
+            finish(args[0], args[1], args[2])
+            return [0]
+
+        rft = d.FuncType([], [tup], async_=True)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(async_=True, callback=cb, memory=mem), inst)
+        got = []
+        host_invoke(store, run_fi, lambda r: got.append(r))
+        while not got:
+            store.tick()
+        v = got[0][0]
+        out.value = "value (%s)" % ", ".join(str(v[k]) for k in sorted(v, key=int))
+        out.done.set()
+
+    return body
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1088,6 +1163,15 @@ def battery():
     read("parked-threads-and-a-runner, N=4 (#771's sp5 shape)", parked_threads_and_a_runner(4, 1000))
     read("parked-threads-and-a-runner, N=1 (#771's h4 shape)", parked_threads_and_a_runner(1, 1000))
     read("parked-threads-and-a-runner control (never released; must HANG)", parked_threads_and_a_runner(4, 1000, False))
+    read("future-write-then-read (#1325; wasmtime 49.0.3: (4294967295, 0, 7, 5, 2, 0, 2, 0))",
+         future_rendezvous(True))
+    read("future-write-then-read, sync write (#1325; wasmtime 49.0.3: hang)", future_rendezvous(True, sync_write=True))
+    read("future-write-then-read-cancel (#1325; wasmtime 49.0.3: (4294967295, 0, 7, 51966, 0, 0, 2, 0))",
+         future_rendezvous(True, cancel=True))
+    read("future-write-then-read-bool (#1325; wasmtime 49.0.3: trap, non-numeric payload)",
+         future_rendezvous(True, elem="bool"))
+    read("future-read-then-write (#1325's control; wasmtime 49.0.3: (0, 4294967295, 7, 4, 1, 0, 2, 0))",
+         future_rendezvous(False))
 
 
 if __name__ == "__main__":

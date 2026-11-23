@@ -32,3 +32,8 @@ trap-then-call control (T returns): call 1 value 1; is_locked_down False; call 2
 parked-threads-and-a-runner, N=4 (#771's sp5 shape): value 1000
 parked-threads-and-a-runner, N=1 (#771's h4 shape): value 1000
 parked-threads-and-a-runner control (never released; must HANG): HANG
+future-write-then-read (#1325; wasmtime 49.0.3: (4294967295, 0, 7, 5, 2, 0, 2, 0)): value (4294967295, 0, 7, 5, 2, 0, 2, 0)
+future-write-then-read, sync write (#1325; wasmtime 49.0.3: hang): HANG
+future-write-then-read-cancel (#1325; wasmtime 49.0.3: (4294967295, 0, 7, 51966, 0, 0, 2, 0)): value (4294967295, 0, 7, 51966, 0, 0, 2, 0)
+future-write-then-read-bool (#1325; wasmtime 49.0.3: trap, non-numeric payload): trap future.read
+future-read-then-write (#1325's control; wasmtime 49.0.3: (0, 4294967295, 7, 4, 1, 0, 2, 0)): value (0, 4294967295, 7, 4, 1, 0, 2, 0)
