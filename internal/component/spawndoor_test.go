@@ -71,12 +71,20 @@ func engineGoroutines() []string {
 //     own T-6 global (it starts at the initializer 0, not run's 0x77, and reads back its argument; run reads back
 //     0x77), and `released=00000001`, which an agent prints only if it saw run's release, issued after run met both
 //     agents while itself executing;
-//   - **a peak of at least 3 agents executing at once** (`interp.Instance.ExecutingAgents`, sampled every 200µs):
-//     run's and both spawned agents', which run holds executing for 50ms;
 //   - **no engine goroutine surviving Close**: neither an agent's nor any socket's or producer's.
 //
+// **Three agents executing at once is asserted by a place, not by a sample.** `released=00000001` is that place: an
+// agent prints it only from its spin, and run releases only after meeting both agents while itself in guest code, so
+// all three were executing guest code at that moment. The engine's own count, `interp.Instance.ExecutingAgents`, is
+// sampled every 200µs across run's 50ms hold and **logged, not asserted**. #1359's macOS run read a peak of 2 with
+// the output byte-identical: on a 3-vCPU runner shared with every other test package, the sampler's thread can miss a
+// 50ms window, so the sample measured the runner. 20 of 20 local runs read 3 at -cpu 8, 3 and 2 alike, because the
+// count is a mark and a descheduled agent keeps it. The count under a place is E2's witness,
+// TestAgentsOfASharedMemoryInstanceExecuteAtOnce, whose agents spin until its probe has read 3.
+//
 // **NEUTER, run:** with the door invoking `mstart` on the caller's own goroutine (`core.Invoke` in `spawnDoor.call`
-// in place of `spawnAgent`), the peak reads 1, the agents print `released=00000000`, and they share run's globals.
+// in place of `spawnAgent`), the peak reads 1, the agents print `released=00000000`, and they share run's globals:
+// the output assertion fails on its own.
 // **NEUTER, run:** with `finishSpawnDoors`' free check dropped, TestTheSpawnDoorIsRefusedByName's unshared row
 // instantiates.
 func TestAComponentStartsItsOwnAgentsThroughTheSpawnDoor(t *testing.T) {
@@ -134,12 +142,9 @@ func TestAComponentStartsItsOwnAgentsThroughTheSpawnDoor(t *testing.T) {
 	if r.err != nil || r.code != 0 {
 		t.Fatalf("run: exit %d, %v (stderr %q)", r.code, r.err, errOut.String())
 	}
-	t.Logf("peak executing agents: %d", peak)
+	t.Logf("peak executing agents, sampled (logged, not asserted): %d", peak)
 	if got, want := out.String(), spawnDoorWant(); got != want {
 		t.Errorf("stdout\n%s\nwant\n%s", got, want)
-	}
-	if peak < 3 {
-		t.Errorf("at most %d agents executed guest code at once, want 3 (run's and both spawned agents')", peak)
 	}
 	in.Close()
 	closed = true

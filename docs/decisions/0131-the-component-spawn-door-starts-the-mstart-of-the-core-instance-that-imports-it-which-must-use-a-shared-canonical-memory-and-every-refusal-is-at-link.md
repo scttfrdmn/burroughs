@@ -68,3 +68,13 @@ On darwin/arm64, in the worktree of #1337's branch, stacked on #1336's.
 ## Rollback
 
 `spawnDoors` empty: the door's identity reaches the host tables, which do not serve it, and a call meets the refusing stub, as before #1337.
+
+## Postscript (#1338, PR #1359): the sampled peak is logged, not asserted
+
+The first reading above was true when it was taken. Since then, #1359's macOS CI run read a peak of **2**, with the output byte-identical.
+- **Why:** on a 3-vCPU runner shared with every other test package, the sampler's thread can miss run's whole 50 ms hold.
+- **Not P starvation:** 20 of 20 local runs read 3 at `-cpu` 8, 3 and 2 alike, because the count is a mark and a descheduled agent keeps it.
+
+So the witness now asserts the overlap by its place. `released=00000001` is printed only from an agent's spin, after run met both agents while itself executing. The sampled count is logged. The first neuter above still fails the place.
+
+The engine's count under a place is E2's `TestAgentsOfASharedMemoryInstanceExecuteAtOnce`, whose agents spin until its probe has read 3.
