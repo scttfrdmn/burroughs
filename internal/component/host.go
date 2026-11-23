@@ -635,6 +635,11 @@ func (h *Host) blockingFlush(_ *hostResources, c *interp.CanonCaller, _ *outputS
 // `InvokeCMThread` to the scheduler, which routes it to the Thread's owner and locks the store
 // (`threadTable.routeFault`). The run ends at the lock. Where it did not, the YIELD arm had no lock case
 // (`threadTable.yieldPoint`).
+//
+// **A spawned agent is one** (ADR 0130), and its exit still does not need this type to declare it (#1357, ADR
+// 0132). The agent's Exit hook, `threadTable.agentEnded`, routes the exit as it routes a trap, and returns either
+// as an agentEndsInstance, which is the declaration: one rule for both, because a trap on an agent leaves a run
+// parked in `memory.atomic.wait32` on a locked store exactly as an exit does.
 type exitError struct{ code int32 }
 
 func (e exitError) Error() string {

@@ -113,6 +113,22 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A component's run ends when a spawned agent exits or traps while run is parked in `memory.atomic.wait32`**
+  ([#1357](https://github.com/scttfrdmn/burroughs/issues/1357),
+  [ADR 0132](docs/decisions/0132-an-agents-exit-or-trap-that-locks-the-store-ends-every-agent-of-its-core-instance-through-adr-0090s-teardown-declared-by-the-component-rather-than-inferred-by-interp.md)).
+  It hung for ever after printing its full output, under `gate:cm-shared-memory`.
+  - **The defect:** the agent's exit or trap locked the store and was routed to run, but a futex wait is neither a
+    canon built-in nor a component-model wait, so nothing woke it. An exit from run's own agent ended the run, so
+    which agent exited decided whether the run ended (contract §2 T-2).
+  - **The repair:** an agent's end that is routed as a fault is returned to `interp` declared instance-ending, and
+    ADR 0090's teardown traps every agent of the core instance out of its wait. The run returns the exit code, or
+    the agent's trap as its own. `interp` still infers nothing from a trap, so a core instance keeps ADR 0071's answer.
+  - **Witnesses:** `agent-ends-run-{exit,trap,control}.wasm`, through `CallRun`, `ComponentConfig.Run` and
+    `burroughs run`. Before the repair, the exit and trap rows hung in every run. After it, they end with code 7 and
+    with the trap, and the control still exits 7. No engine goroutine survives `Close`. Neutered, both rows hang
+    again.
+  - **Named limit:** the teardown reaches the agent's own core instance. A run lifted from another core instance
+    and parked inside this one's code is not reached.
 - **editroute's route 11 refuses a shell glob handed to a content reader in a fork tree**, such as `grep -n x *.go`
   in `src/runtime`. The shell expands the glob over the fork's excluded files before any exclusion flag can apply.
   F6's slice (#1340) ran exactly that. No excluded line was printed, only because its own filter dropped them.
