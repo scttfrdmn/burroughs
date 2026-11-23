@@ -572,6 +572,11 @@ var streamBuiltins = [...]struct {
 // wasmtime 49.0.3 traps the same: "waitable cannot be used synchronously while added to a waitable set". Burroughs
 // cancelled and returned. The async form is unguarded, as the pin's is.
 //
+// **This wrapper checks the join before the end's state, which the pin does not**: def:cancel_copy traps a reader
+// that is not COPYING first. Both are traps, so only the reason differs, and future.cancel-read (#1362) checks the
+// join inside the built-in, after the state, because a joined reader whose event a poll took is one of its rows
+// (future-drop-cancel's cancel-read-after-event-taken, which both oracles trap as having no read pending).
+//
 // NEUTER: return fn unwrapped, and TestASyncCancelOfAJoinedEndTraps' joined rows return CANCELLED where the oracle
 // traps.
 func syncCancelGuard(h *asyncHandles, op byte, fn interp.CanonFunc) interp.CanonFunc {
@@ -622,9 +627,10 @@ func (w *walker) streamBuiltinFunc(op byte, ti uint32) interp.CanonFunc {
 // handle table. Only the four the blocking-arm round trip needs are bound (gate:async 2a-i-B-2); any other
 // async built-in is refused at bind by gateAsync and never reaches here. waitable-set.wait writes its event
 // through the memory bound into its CanonOptions at the call site, so no memory is threaded here.
-// `asyncForm` is the built-in's `async?` operand, which only `subtask.cancel` carries today and which is
-// a **function selector** rather than a flag: the model's sync form waits for the cancellation to resolve
-// and the async form returns BLOCKED (grave #892).
+// `asyncForm` is the built-in's `async?` operand, which is a **function selector** rather than a flag: the model's
+// sync form waits for the cancellation to resolve and the async form returns BLOCKED (grave #892). This said only
+// `subtask.cancel` carries it; the stream and future cancels (0x11, 0x12, 0x18) read it too, and stream.read's
+// refusal of its sync form reads it at the gate.
 func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT *ValType) (interp.CanonFunc, bool) {
 	switch op {
 	case 0x1f: // waitable-set.new
@@ -647,6 +653,10 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 		return futureWrite(w.async, w.futureElemOf(slot)), true
 	case 0x19: // future.cancel-write (2nd async guest) — the future write arm's running CANCELLED
 		return futureCancelWrite(w.async), true
+	case 0x18: // future.cancel-read (#1362) — cancel-write's twin; its sync form traps on a joined end
+		return futureCancelRead(w.async, asyncForm), true
+	case 0x1b: // future.drop-writable (#1362) — drops only a DONE writer
+		return futureDropWritable(w.async), true
 	case 0x06: // subtask.cancel (gate:async increment 4) — the subtask substrate's cancel path
 		return subtaskCancel(w.async, asyncForm), true
 	case 0x0d: // subtask.drop (gate:async increment 4)

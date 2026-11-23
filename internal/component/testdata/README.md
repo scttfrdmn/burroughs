@@ -93,7 +93,9 @@ and returns EXIT — lifted `(canon lift ... async (callback ...))`. Its committ
 `p3async-cancel`**, for the same reason as the EXIT-only oracle: `run()`'s cancel path executes only
 `future.new` + `future.write` + `future.cancel-write`, but the Rust guest's wit-bindgen surface *imports* the
 whole future family (cancel-read, drop-writable, task.cancel) it never calls — building four unexercised
-built-ins to instantiate one importer is the drag declined one level up. The `async` canonopt is on
+built-ins to instantiate one importer is the drag declined one level up. (**That "never calls" was wrong for
+`future.drop-writable`**, found when #1362 bound it and `p3async-cancel` ran: its `run()` calls it on the way to
+returning 1, and hangs if a reader's drop does not notify its writer. `TestP3AsyncCancelMatchesWasmtime` runs it now.) The `async` canonopt is on
 `future.write` (a sync future.write needs a wasmtime feature flag); `future.cancel-write` is sync (matching
 `p3async-cancel`'s own emission). Authored via `wasm-tools parse` (1.258.0; validates `--features all`):
 

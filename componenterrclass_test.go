@@ -92,7 +92,9 @@ func TestEveryEntryPointClassifiesARefusalTheSameWay(t *testing.T) {
 		},
 		{
 			refusal: "gate:async on, an async surface whose execution is not built",
-			fixture: "internal/component/testdata/p3async-cancel.wasm",
+			// backpressure.inc (0x24). This was p3async-cancel.wasm, the fixture the defect above was measured
+			// on, until #1362 bound its future.cancel-read and future.drop-writable and it instantiated.
+			fixture: "internal/component/testdata/asynclift/starting-wat-child/child.wasm",
 			async:   "1",
 			want:    burroughs.ErrUnsupported,
 			because: "execution is not yet implemented",

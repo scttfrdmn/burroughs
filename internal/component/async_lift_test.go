@@ -542,25 +542,51 @@ func TestFutureWriteDroppedStaysFixtureOnly(t *testing.T) {
 	}
 }
 
-// TestP3AsyncCancelStillRefusedByName witnesses the boundary honestly (#785, #732): p3async-cancel — the Rust
-// guest whose wit-bindgen surface DRAGS future built-ins its run() never calls — still refuses at instantiate
-// by name, because the unexercised ones (future.cancel-read 0x18, future.drop-writable 0x1b) stay unbuilt. Read on
-// 2026-10-26, the refusal names 0x18. `task.cancel` (0x05) was listed here until #771's build, and has been built
-// since #862. The refusal fires on its own bytes: the boundary is a named refusal, not a gap. It
-// stays the standing end-to-end candidate (blocker = those unbuilt built-ins); when a later guest drives
-// them, the Rust end-to-end lands.
-func TestP3AsyncCancelStillRefusedByName(t *testing.T) {
-	t.Setenv("BURROUGHS_ASYNC", "1")
+// TestP3AsyncCancelMatchesWasmtime is the Rust end-to-end the refusal it replaces was waiting for (#1362):
+// p3async-cancel, the Rust guest whose wit-bindgen surface drags in future built-ins its run() never calls, now
+// instantiates and its run() returns 1, the `FutureWriteCancel::Cancelled` branch, as p3async-cancel.reading records
+// on wasmtime 48.0.2 and as wasmtime 49.0.3 reads it (5 of 5, 2026-11-23). Both gate:cm-threads states.
+//
+// It was TestP3AsyncCancelStillRefusedByName, which held the guest refused at instantiate by name while
+// future.cancel-read (0x18) and future.drop-writable (0x1b) stayed unbuilt; its comment named the expiry, *"when a
+// later guest drives them, the Rust end-to-end lands"*. No guest drives them: binding them is what removed the
+// refusal, so the end-to-end lands on this guest instead, and the two built-ins' own witness is
+// TestFutureDropWritableAndCancelReadMatchTheOracles.
+func TestP3AsyncCancelMatchesWasmtime(t *testing.T) {
 	b, err := os.ReadFile("testdata/p3async-cancel.wasm")
 	if err != nil {
 		t.Fatalf("fixture: %v", err)
 	}
-	_, err = InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
-	if err == nil {
-		t.Fatal("p3async-cancel instantiated — its unexercised future built-ins should still refuse by name")
-	}
-	if !errors.Is(err, ErrAsyncNotImplemented) {
-		t.Fatalf("refusal is not ErrAsyncNotImplemented (a named gate-on-unbuilt refusal): %v", err)
+	for _, gate := range []string{"0", "1"} {
+		t.Run("gate="+gate, func(t *testing.T) {
+			t.Setenv(asyncGateEnv, "1")
+			t.Setenv(cmThreadsGateEnv, gate)
+			in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+			if err != nil {
+				t.Fatalf("p3async-cancel must instantiate now that its future built-ins are bound: %v", err)
+			}
+			t.Cleanup(in.Close)
+			type out struct {
+				res []canon.Value
+				err error
+			}
+			ch := make(chan out, 1)
+			go func() { r, e := in.CallValues("run"); ch <- out{r, e} }()
+			select {
+			case o := <-ch:
+				if o.err != nil {
+					t.Fatalf("run(): %v; wasmtime reads 1", o.err)
+				}
+				if len(o.res) != 1 {
+					t.Fatalf("run() = %v; wasmtime reads 1", o.res)
+				}
+				if v, ok := o.res[0].U32(); !ok || v != 1 {
+					t.Fatalf("run() = %v; wasmtime reads 1 (the Cancelled branch)", o.res)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("run() did not return within 10s")
+			}
+		})
 	}
 }
 

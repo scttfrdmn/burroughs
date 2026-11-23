@@ -128,6 +128,26 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **`future.drop-writable` (0x1b) and `future.cancel-read` (0x18) are bound, so a component importing either links**
+  ([#1362](https://github.com/scttfrdmn/burroughs/issues/1362)). Both were refused at instantiate by name, so a guest
+  that mints a future per operation could not release its writable ends.
+  - **Read on both oracles before the code:** `future-drop-cancel.wasm` (16 rows) and `future-cancel-read-async.wasm`
+    (2 rows), on wasmtime 49.0.3 (10 of 10) and on the pin 2e7895c (`refread.py`, 16 of 16). The two agree on every
+    row.
+  - **`future.drop-writable` drops only a DONE writer**, as the pin's `drop` requires: one whose value was taken, or
+    whose reader dropped. A writer that never wrote traps, with or without a read parked, and so does one mid-copy.
+    So the drop never hands a parked reader DROPPED.
+  - **A reader's drop now notifies its writer DROPPED**, as the pin's `End.drop` does, so that writer's next write
+    returns DROPPED inline and the writer can then be dropped. Without it the write parked for a reader that was gone.
+  - **`future.cancel-read` returns CANCELLED for a parked read and leaves the reader IDLE**, so a later read can
+    complete. A read that a write already completed is taken as COMPLETED. A reader not mid-copy traps, and so does
+    the sync form on a reader joined to a set.
+  - **`p3async-cancel`, the Rust guest, now runs**: `run()` returns 1, as wasmtime 49.0.3 reads it. It calls
+    `future.drop-writable` and depends on the reader-drop notify. `TestP3AsyncCancelStillRefusedByName` became
+    `TestP3AsyncCancelMatchesWasmtime`, and the refusal witnesses that used this guest now use `backpressure.inc`.
+  - **Witnesses:** `TestFutureDropWritableAndCancelReadMatchTheOracles`, in both `gate:cm-threads` states, and two
+    new rows in `TestAWrongKindHandleTraps`. Each load-bearing line was neutered and run, and its site records the
+    result.
 - **A component's run ends when a spawned agent exits or traps while run is parked in `memory.atomic.wait32`**
   ([#1357](https://github.com/scttfrdmn/burroughs/issues/1357),
   [ADR 0132](docs/decisions/0132-an-agents-exit-or-trap-that-locks-the-store-ends-every-agent-of-its-core-instance-through-adr-0090s-teardown-declared-by-the-component-rather-than-inferred-by-interp.md)).

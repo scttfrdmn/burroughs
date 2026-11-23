@@ -43,6 +43,8 @@ var wrongKindNeedles = map[string]string{
 	"future-write-readable":         "future.write: handle 1 is not a writable future end",
 	"future-cancel-write-readable":  "future.cancel-write: handle 1 is not a writable future end",
 	"future-drop-readable-writable": "future.drop-readable: handle 2 is not a readable future end",
+	"future-cancel-read-writable":   "future.cancel-read: handle 2 is not a readable future end",
+	"future-drop-writable-readable": "future.drop-writable: handle 1 is not a writable future end",
 	"join-set-as-waitable":          "waitable.join: handle 1 is not a waitable",
 	"join-end-as-set":               "waitable.join: handle 2 is not a waitable set",
 	"wait-end":                      "waitable-set.wait: handle 1 is not a waitable set",
@@ -57,12 +59,13 @@ var wrongKindNeedles = map[string]string{
 // (def:copy, def:cancel_copy, def:drop, def:canon_waitable_join, def:canon_waitable_set_wait,
 // def:canon_waitable_set_poll, def:canon_waitable_set_drop, def:canon_subtask_cancel, def:canon_subtask_drop), and an
 // index with no entry traps as def:Table.get does. Every row of wrong-kind-traps.reading is wasmtime 49.0.3's, 10 of
-// 10, a trap. They were Go errors. Both gate states.
+// 10, a trap. They were Go errors. Both gate states. future.cancel-read and future.drop-writable joined the registry
+// when #1362 bound them, so it covers def:cancel_copy and def:drop on both future ends.
 //
 // **Neuters, run:** any one site's wrongKindTrap replaced by the Go error it was, and that site's rows fail on the
 // error not being an *interp.Trap, while the others pass. Each site names its rows.
 func TestAWrongKindHandleTraps(t *testing.T) {
-	runKindRows(t, "wrong-kind-traps", 19, wrongKindNeedles)
+	runKindRows(t, "wrong-kind-traps", 21, wrongKindNeedles)
 }
 
 // runKindRows runs every row of testdata/<fixture>.reading in both gate states: a trap row must trap with its needle,
