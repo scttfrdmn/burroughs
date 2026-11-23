@@ -884,6 +884,12 @@ func (c *Component) walkComponentIn(parent *walker, h host, wasiHost map[string]
 			return nil, err
 		}
 	}
+	// The spawn door is judged once every canon is seen, since a later one can still make the instance unfree, and
+	// opened only then (#1337, ADR 0131).
+	if err := w.finishSpawnDoors(); err != nil {
+		w.close()
+		return nil, err
+	}
 	return w, nil
 }
 

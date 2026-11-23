@@ -96,6 +96,23 @@ func (e Extern) SharedMemory() bool {
 	return e.Kind == binary.ExternMemory && e.mem != nil && e.mem.limits.Shared
 }
 
+// UsesMemory reports whether one of in's memories, defined or imported, is the memory e names. The component walk
+// asks it of the core instance a spawn door starts agents in (#1337, ADR 0131), because contract §2 T-1 says the new
+// agent shares the component's canonical memory, and an agent's memories are its instance's. An imported memory is
+// the supplier's allocation (`InstantiateLinked` stores it by reference), so identity is the test. Read at link,
+// where `in.mems` is fixed.
+func (in *Instance) UsesMemory(e Extern) bool {
+	if e.Kind != binary.ExternMemory || e.mem == nil {
+		return false
+	}
+	for _, m := range in.mems {
+		if m == e.mem {
+			return true
+		}
+	}
+	return false
+}
+
 // FuncSignature resolves a function extern to the function a call through it reaches, and reports that
 // function's type and whether it is a host function. ok is false for a non-function extern, or one whose index
 // resolves to nothing.

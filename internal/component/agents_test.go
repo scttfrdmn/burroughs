@@ -18,8 +18,9 @@ import (
 )
 
 // E2's witnesses (#1336, ADR 0130): several agents of one instance whose canonical memory is shared, executing
-// guest code at once as threads of the run task. No guest can start an agent yet (the door is E3's, #1337), so
-// each fixture's exports call `test:e2/ops.spawn`, which this file serves with `asyncHandles.spawnAgent`.
+// guest code at once as threads of the run task. Each fixture's exports call `test:e2/ops.spawn`, which this file
+// serves with `asyncHandles.spawnAgent`, so the probes and holds it needs stay the test's. A guest's own door is
+// E3's (#1337, spawndoor_test.go); this said until then that no guest could start an agent.
 //
 // The fixtures are `testdata/agents-shared.wat`, a free instance, and `testdata/agents-unshared-canon.wat`, its
 // peak half in an instance that keeps ADR 0101. Their memories declare max = min, so they are Go-heap backed and
@@ -55,8 +56,7 @@ func newAgentFixture(t *testing.T, name string) *agentFixture {
 	h := NewHost(io.Discard, io.Discard, nil)
 	h.syncImpls = map[string]interp.CanonFunc{
 		"test:e2/ops::spawn": func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-			_, err := f.in.w.async.spawnAgent(c, f.core, "mstart", int32(uint32(args[0].Bits)))
-			return nil, err
+			return nil, f.in.w.async.spawnAgent(c, f.core, "mstart", int32(uint32(args[0].Bits)))
 		},
 		"test:e2/ops::probe": func(*interp.CanonCaller, []interp.Value) ([]interp.Value, error) {
 			deadline := time.Now().Add(agentsProbeBound)

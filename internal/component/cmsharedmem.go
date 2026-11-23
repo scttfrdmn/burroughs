@@ -23,8 +23,9 @@ import "os"
 // an unshared one. An instance whose canonical memory is shared is also **free** (E2, #1336, ADR 0130): its
 // spawned agents run guest code outside ADR 0101's run slot, as threads of their spawner's task (`agents.go`).
 // This paragraph said until #1336 that guest code still ran on one agent at a time, which was true while
-// nothing could start a second one. Nothing a guest can call starts one yet: the spawn door for components is
-// E3 (#1337), a later row of the v0.15.0 plan (#1332).
+// nothing could start a second one. A guest starts one through the component spawn door,
+// `burroughs:threads/spawn@0.1.0` (spawndoor.go, #1337, ADR 0131), which is offered only with this gate on. This
+// said until #1337 that nothing a guest could call started one.
 //
 // # Off by default, and an opt-in
 //

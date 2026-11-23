@@ -121,6 +121,21 @@ func (h *Host) asyncSource() map[string]asyncImplFor {
 	return m
 }
 
+// spawnDoorName is the component spawn door's identity, version-free: contract §2 T-1's component paragraph names
+// the import `burroughs:threads/spawn@0.1.0#spawn: func(arg: u32)` (#1337, ADR 0131).
+const spawnDoorName = "burroughs:threads/spawn::spawn"
+
+// spawnDoors is the door's one key, registered for the 0.1 class only (ADR 0115), so `@0.1.0` and any `0.1.x` meet
+// it, and another class reaches the cross-track refusal naming 0.1. **It is the engine's, not the Host's**: no Host
+// field configures it and no second engine supplies it, so every walk offers it, whichever host the walk was
+// given. Its binding needs the walk itself (the importing core instance, the instance's async table), so the walk
+// binds it (`walker.spawnDoorStep`, spawndoor.go) and this table only says which identities it answers.
+var spawnDoors = func() map[string]bool {
+	m := map[string]bool{}
+	serve(m, []string{"0.1"}, spawnDoorName, true)
+	return m
+}()
+
 // waitFor implements `wait-for: async func(how-long: duration)`: its deadline is now plus how-long on the
 // monotonic clock, saturating at the largest mark.
 func (h *Host) waitFor(async *asyncHandles, _ *hostResources) asyncLowerImpl {

@@ -516,6 +516,8 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 		name, _, _ := cutVersion(k)
 		served[name] = true
 	}
+	// So does the engine's spawn door (#1337), which the lower step binds before any table is asked.
+	served[spawnDoorName] = true
 	for name, fn := range h.syncImpls {
 		if base, _, _ := cutVersion(name); served[base] {
 			panic("component: syncImpls would shadow the WASI impl for " + name +
