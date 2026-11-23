@@ -66,7 +66,10 @@ func TestComponentCloseEndsAgentsBlockedInAWaitAndInAFutexWait(t *testing.T) {
 					t.Fatalf("%s: %v, %v; want 1, nil (both agents published)", c.export, o.res, o.err)
 				}
 			}
-			if !parkedAtLeast("component.waitableSetWait", 1) || !parkedAtLeast("interp.(*memory).wait", c.futexes) {
+			// The wait's name is bare: under the pinned go1.26.9 `waitableSetWait` is inlined into its walker, so its
+			// parked closure is `component.(*walker).asyncBuiltinFunc.waitableSetWait.func2.2` (see parkFrames in
+			// internal/component/crossagentwake_test.go).
+			if !parkedAtLeast("waitableSetWait", 1) || !parkedAtLeast("interp.(*memory).wait", c.futexes) {
 				place := enginePlaces()
 				_ = comp.Close()
 				t.Fatalf("the agents never parked in waitable-set.wait (1) and memory.atomic.wait32 (%d). %s", c.futexes, place)
@@ -149,9 +152,9 @@ func parkedAtLeast(frame string, n int) bool {
 	}
 }
 
-// enginePlaces names where every engine goroutine is, by its status line and its four innermost engine frames, for a
-// failure that cannot be reproduced on demand and so must name its place the first time it happens (#1338's first
-// `make ci` failed this test once, with "never parked" as the whole of its evidence).
+// enginePlaces names where every engine goroutine is, by its status line and its four innermost engine frames, so a
+// failure names its place the first time it happens. #1338's first `make ci` failed this test with "never parked" as
+// the whole of its evidence. This listing then showed the waiter parked under a name inlining had changed.
 func enginePlaces() string {
 	gs := engineGoroutineStacks()
 	var b strings.Builder
@@ -181,7 +184,11 @@ func engineGoroutineStacks() []string {
 			continue
 		}
 		lines := strings.SplitN(created, "\n", 3)
-		if len(lines) >= 2 && strings.Contains(lines[1], "/burroughs/internal/") && !strings.Contains(lines[1], "_test.go") {
+		// The creator's function line, which carries the module path, and not its file line, which carries the
+		// checkout's: in a checkout not named burroughs every goroutine was filtered out, and the survivor check
+		// below passed with nothing to count.
+		if len(lines) >= 2 && strings.HasPrefix(lines[0], "github.com/scttfrdmn/burroughs/internal/") &&
+			!strings.Contains(lines[1], "_test.go") {
 			out = append(out, g)
 		}
 	}

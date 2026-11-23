@@ -38,7 +38,13 @@ const closeEndsBound = 5 * time.Second
 
 // The frames a parked waiter's goroutine is in: a `waitable-set.wait`'s select (kind 0), and a
 // `memory.atomic.wait32`'s (kind 1).
-var parkFrames = [...]string{"component.waitableSetWait", "interp.(*memory).wait"}
+//
+// **The wait's name is bare, without its package**, as `unwakeable_test.go`'s is. Under the pinned go1.26.9,
+// `waitableSetWait` is inlined into `(*walker).asyncBuiltinFunc`, so its parked closure is named
+// `component.(*walker).asyncBuiltinFunc.waitableSetWait.func2.2`, and `component.waitableSetWait` matches nothing.
+// go1.27.4 does not inline it, so the qualified name passed locally and failed every row under `make ci`'s
+// GOTOOLCHAIN. A frame name the compiler chooses is not one a test can qualify.
+var parkFrames = [...]string{"waitableSetWait", "interp.(*memory).wait"}
 
 // goroutineStacks is every goroutine's stack, as `runtime.Stack` writes it, in a buffer grown until it fits.
 func goroutineStacks() string {
@@ -92,9 +98,10 @@ func placeOf(stacks string) string {
 }
 
 // agentsPlace names where every goroutine an engine file started is, by its status and innermost engine frames.
-// It is what a failure reports when the waiter is not where the row expects it: #1338's first `make ci` failed every
-// row of both packages once, with no reproduction in 6x3 stressed runs, and "no goroutine is parked" was the whole
-// of its evidence. A failure that cannot be reproduced on demand must name its place the first time it happens.
+// It is what a failure reports when the waiter is not where the row expects it. #1338's first `make ci` failed
+// every row of both packages, with "no goroutine is parked" as the whole of its evidence. Every local reproduction
+// passed, because each ran on the shell's go1.27.4 and not the pinned toolchain. This listing found the waiter
+// parked under the inlined name parkFrames now matches. A failure must name its place the first time it happens.
 func agentsPlace(stacks string) string {
 	var b strings.Builder
 	n := 0
@@ -104,7 +111,10 @@ func agentsPlace(stacks string) string {
 			continue
 		}
 		lines := strings.SplitN(created, "\n", 3)
-		if len(lines) < 2 || !strings.Contains(lines[1], "/burroughs/internal/") || strings.Contains(lines[1], "_test.go") {
+		// The creator's function line carries the module path; its file line carries the checkout's, which need not
+		// be named burroughs.
+		if len(lines) < 2 || !strings.HasPrefix(lines[0], "github.com/scttfrdmn/burroughs/internal/") ||
+			strings.Contains(lines[1], "_test.go") {
 			continue
 		}
 		n++
