@@ -145,6 +145,9 @@ type coreDef struct {
 	// difference is invisible for a `u32` — the value *is* the word — and decisive for anything whose
 	// payload lives in guest memory behind a pointer the guest may reuse on resumption.
 	asyncBuiltinResult *ValType
+	// spawnDoor marks a canon lower of the component spawn door (#1337, ADR 0131), which the resolver binds to the
+	// importing core instance's `mstart` rather than to a host table's impl.
+	spawnDoor bool
 }
 
 func (d coreDef) isStub() bool { return d.stub }
@@ -233,6 +236,16 @@ type walker struct {
 	// lock is the store lockdown, shared by every walker of one `Instantiated` (lockdown.go, #1040). Nil
 	// until `shareLock` installs it after the walk, so the guards read it at call time.
 	lock *storeLock
+	// The spawn door's walk state (spawndoor.go, #1337, ADR 0131). canonMems is every canonical memory option the
+	// walk admitted, which an importer of the door must use one of. doorLowered is the first lowered door's
+	// identity, "" when the component lowers none. pendingDoors are the doors bound while the core module being
+	// linked was resolved, adopted by its instance once it exists; doors are the adopted ones, opened when the walk
+	// ends. doorErr is a binding refusal the resolver could only decline, reported by coreInstanceStep.
+	canonMems    []interp.Extern
+	doorLowered  string
+	pendingDoors []*spawnDoor
+	doors        []*spawnDoor
+	doorErr      error
 }
 
 func (w *walker) appendCore(s Space, d coreDef) { w.coreSpace[s] = append(w.coreSpace[s], d) }
@@ -343,6 +356,11 @@ func (w *walker) step(d Def) error {
 					sig := w.lowerSignatureOf(cn.FuncIdx, cf.stubName)
 					if err := refuseAsyncLowerOfSyncType(cn, sig, cf.stubName); err != nil {
 						return err
+					}
+					// The component spawn door is the engine's, bound to the importer's `mstart` (#1337, ADR 0131),
+					// so it is recognised before any host table is asked.
+					if isSpawnDoor(cf.stubName) {
+						return w.spawnDoorStep(cf.stubName, sig)
 					}
 					// An unresolved outer type alias (#753) in the lowered signature can never be marshaled —
 					// refuse by name at instantiate, for any lower (sync or async), rather than binding a core
@@ -508,15 +526,22 @@ func (w *walker) coreInstanceStep(ci CoreInstance) error {
 			"does not resolve", ErrUnsupportedForm, ci.ModuleIdx)
 	}
 	in, trap, err := interp.InstantiateLinked(m, w.resolverFor(m, ci.Args))
+	if derr := w.doorErr; derr != nil && err != nil {
+		w.doorErr, w.pendingDoors = nil, nil
+		return derr // the resolver declined the spawn door's import, and this is why (#1337)
+	}
 	if err != nil {
+		w.pendingDoors = nil
 		return fmt.Errorf("component: instantiate core module %d: %w", ci.ModuleIdx, err)
 	}
 	if trap != nil {
+		w.pendingDoors = nil
 		return fmt.Errorf("component: instantiate core module %d trapped: %w", ci.ModuleIdx, trap)
 	}
 	w.toClose = append(w.toClose, in)
 	w.coreInstances = append(w.coreInstances, realInst{in: in})
-	return nil
+	// The spawn door's importer must export its `mstart` (#1337, ADR 0131), refused here, at link.
+	return w.adoptSpawnDoors(in, len(w.coreInstances)-1)
 }
 
 // coreExportRef resolves an inline export's core:sortidx to a core def against the matching core space
@@ -637,6 +662,10 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 			}
 			return interp.Extern{}, false
 		}
+		// The component spawn door (#1337, ADR 0131), bound to the instance being linked, whose `mstart` it starts.
+		if d.spawnDoor {
+			return w.bindSpawnDoor(ft, d.lowerName)
+		}
 		// The host tables are asked once, keyed by name and compatibility class (resolveHost, ADR 0115). An
 		// async lower with an async impl binds to the async-lower adapter: its flat ABI is this sync
 		// signature plus a packed i32 return.
@@ -755,6 +784,10 @@ type hostResolution struct {
 // would call it *"not provided"* when the host does provide it, for 0.3.
 func (w *walker) resolveHost(lowerName string, async bool) hostResolution {
 	var r hostResolution
+	// The spawn door's classes, so `burroughs:threads/spawn@0.2.0` hears that 0.1 is served (#1337). A door of the
+	// served class never reaches here: the lower step binds it (spawnDoorStep).
+	_, _, doorServed := lookupHost(spawnDoors, lowerName)
+	r.servedFor = append(r.servedFor, doorServed...)
 	// A canon lower carrying the `async` canonopt (gate:async 2a-i-A) binds to the async-lower adapter:
 	// its flat ABI is this sync signature plus a packed i32 return, and the callee resolves inline or leaves
 	// its subtask pending for the guest to wait on. Bound through the SEPARATE async-impl source
@@ -857,6 +890,7 @@ func (w *walker) refuseSharedCanonMemory(cn Canon) error {
 	if ext == nil {
 		return nil
 	}
+	w.canonMems = append(w.canonMems, *ext) // which memories a spawn door's importer may use (#1337, ADR 0131)
 	if !ext.SharedMemory() {
 		w.noteCanonMemory(false)
 		return nil

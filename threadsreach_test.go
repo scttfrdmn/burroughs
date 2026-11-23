@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -39,6 +40,11 @@ import (
 // are cooperative: one executes at a time per component instance, under the run slot (ADR 0101,
 // `TestTwoCallsIntoOneInstanceNeverExecuteAtOnce`). They are not agents over a shared memory, which is
 // what the v0.10.0 threads claim is about.
+//
+// **Nor the component spawn door** (#1337, ADR 0131). With `gate:cm-shared-memory` on, which is off by default, a
+// component whose canonical memory is shared starts agents over it through `burroughs:threads/spawn@0.1.0`.
+// `TestAComponentStartsAgentsThroughComponentConfigRun` below is that answer, and with the gate off it is refused by
+// name. This arm's components import no door.
 func TestNoPublicPathRunsASecondSharedMemoryThread(t *testing.T) {
 	encode := func(t *testing.T, src string) []byte {
 		t.Helper()
@@ -202,5 +208,54 @@ func TestAGuestStartsASecondThreadThroughWASIP1ConfigRun(t *testing.T) {
 	}
 	if code != 42 {
 		t.Fatalf("exit %d, want 42: mstart did not run on a second agent concurrently with _start", code)
+	}
+}
+
+// spawnDoorChain is internal/component's spawn-door guest's `chain(k)`, repeated because the two test packages
+// cannot share a function, and recomputed here so the expected output does not come from the guest.
+func spawnDoorChain(k uint64) uint64 {
+	x := k*0x9E3779B97F4A7C15 + 1
+	for i := range uint64(100000) {
+		x ^= x >> 33
+		x *= 0xFF51AFD7ED558CCD
+		x ^= x >> 29
+		x += i
+	}
+	return x
+}
+
+// TestAComponentStartsAgentsThroughComponentConfigRun is the library's arm of E3 (#1337, ADR 0131): through
+// `ComponentConfig.Run`, a component that imports `burroughs:threads/spawn@0.1.0` starts two agents of its own over
+// its shared canonical memory, with BURROUGHS_CM_SHARED_MEMORY=1. Its stdout says each agent did its work with its
+// own globals and saw run's release, which run issues only after meeting both agents while itself executing, so an
+// agent run inline would print `released=00000000`. The executing-agent peak is read in internal/component's
+// witness, which can reach the core instance. **With the gate off** the same component is refused by name, as
+// ErrUnsupported.
+func TestAComponentStartsAgentsThroughComponentConfigRun(t *testing.T) {
+	wasm, err := os.ReadFile("internal/component/testdata/spawn-door.wasm")
+	if err != nil {
+		t.Fatalf("the committed fixture is missing, so this witness has no subject: %v", err)
+	}
+	var want strings.Builder
+	for k := uint64(1); k <= 2; k++ {
+		fmt.Fprintf(&want, "agent %d chain=%016x entry-global=%08x global=%08x released=%08x\n", k, spawnDoorChain(k), 0, k, 1)
+	}
+	fmt.Fprintf(&want, "run global=%08x\n", 0x77)
+
+	t.Setenv("BURROUGHS_CM_SHARED_MEMORY", "1")
+	var out, errOut bytes.Buffer
+	code, err := burroughs.ComponentConfig{Stdout: &out, Stderr: &errOut}.Run(wasm)
+	if err != nil || code != 0 {
+		t.Fatalf("Run: exit %d, %v (stderr: %s)", code, err, errOut.String())
+	}
+	if out.String() != want.String() {
+		t.Errorf("stdout\n%s\nwant\n%s", out.String(), want.String())
+	}
+
+	t.Setenv("BURROUGHS_CM_SHARED_MEMORY", "")
+	_, err = burroughs.ComponentConfig{}.Run(wasm)
+	if !errors.Is(err, burroughs.ErrUnsupported) || !strings.Contains(err.Error(), "burroughs:threads/spawn@0.1.0") ||
+		!strings.Contains(err.Error(), "gate:cm-shared-memory") {
+		t.Errorf("with the gate off, Run = %v, want ErrUnsupported naming the door and the gate", err)
 	}
 }

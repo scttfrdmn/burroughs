@@ -40,8 +40,8 @@ says what it now requires and what it gives up.
     admits the extension. It said before that the pin set no rule, and that the refusal followed a toolchain under
     ADR 0102. Both were wrong, and ADR 0102 carries a postscript saying so.
   - **With it set to `1`, the canon is admitted**, and the Canonical ABI reads and writes the memory as it does an
-    unshared one. Guest code still runs on one agent at a time (ADR 0101's run slot is unchanged), and no component
-    can start a second agent yet. Those are E2 ([#1336](https://github.com/scttfrdmn/burroughs/issues/1336)) and E3
+    unshared one. This change alone leaves guest code on one agent at a time (ADR 0101's run slot unchanged), and
+    gives no component a way to start a second agent. Those are E2 ([#1336](https://github.com/scttfrdmn/burroughs/issues/1336)) and E3
     ([#1337](https://github.com/scttfrdmn/burroughs/issues/1337)).
   - **The witness:** `shmem-canon-roundtrip.wasm` moves strings through shared canonical memories in every
     direction. The host lowers into the guest, a nested child is called with a string both ways, the guest writes to
@@ -58,11 +58,27 @@ says what it now requires and what it gives up.
     applied at once, or queued in its own agent's in-host window. A late store that would need `cabi_realloc` off
     its agent's goroutine is refused by name. A spawned agent cannot call the 🧵 switching forms.
   - **What does not.** An instance whose canonical memory is unshared keeps ADR 0101 exactly, and its spawned agent
-    takes the run slot. No guest can start an agent yet: the spawn door is E3
-    ([#1337](https://github.com/scttfrdmn/burroughs/issues/1337)). E2's witnesses start agents from the test harness.
+    takes the run slot. This change alone gives a guest no way to start an agent: that is the spawn door, E3
+    ([#1337](https://github.com/scttfrdmn/burroughs/issues/1337), below). E2's witnesses start agents from the test
+    harness.
   - **Also fixed on the way:** `waitable-set.wait` looked its set up and counted itself waiting in two critical
     sections, so another agent's `waitable-set.drop` between them went untrapped. They are one now (R-4's
     linearizable handle operations).
+- **A component can start its own agents through the component spawn door, `burroughs:threads/spawn@0.1.0`**
+  ([#1337](https://github.com/scttfrdmn/burroughs/issues/1337), ADR 0131; contract §2 T-1's component paragraph,
+  on Scott's stamp on [#1334](https://github.com/scttfrdmn/burroughs/issues/1334)). It is offered only with
+  `gate:cm-shared-memory` on, which is off by default, so this is not a flip.
+  - **What it does.** A call to `spawn(arg)` starts an OS-locked agent running `mstart(arg)`, with its own globals,
+    as a thread of the calling task (ADR 0130). `mstart` is the core export of the core instance that imports the
+    door, which must use the component's shared canonical memory. A spawn the engine refuses is the caller's trap.
+  - **Refused by name, at link:** the gate off; a canonical memory that is unshared, or none; no `mstart`, or one
+    whose type is not `(i32) -> ()`; the door imported at a type other than `func(arg: u32)`; and an importer that
+    uses none of the canonical memories.
+  - **The door is Burroughs-only by construction**, as T-1 says: no other engine supplies it, and a shared canonical
+    memory is itself an extension (ADR 0129).
+  - **The witness:** `spawn-door.wasm` starts two agents, which do their work at once with their own globals, and
+    prints what each did. It runs through `burroughs run`, `ComponentConfig.Run` and the engine, which reads three
+    agents executing at once.
 
 ### Changed
 

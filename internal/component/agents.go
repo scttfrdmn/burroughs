@@ -30,8 +30,10 @@ import (
 //
 // # Who starts one
 //
-// `asyncHandles.spawnAgent` is the mechanism, and no guest reaches it in E2. E3 (#1337) binds the
-// `burroughs:threads/spawn` import to it; E2's witnesses call it from a test host import.
+// `asyncHandles.spawnAgent` is the mechanism. A guest reaches it through the component spawn door,
+// `burroughs:threads/spawn@0.1.0#spawn` (spawndoor.go, #1337, ADR 0131), which starts the importing core instance's
+// `mstart`. This said until #1337 that no guest reached it, which was true while E2's witnesses, which call it from a
+// test host import, were its only callers.
 
 // freeAgent returns rec when it is a spawned agent of a free instance, which holds no slot and has its own in-host
 // window, and nil otherwise: for a slot holder, for no record, and for every agent of an instance that keeps ADR
@@ -69,7 +71,8 @@ func (w *walker) noteCanonMemory(shared bool) {
 }
 
 // spawnAgent starts an agent at the core export `entry` of `core`, with argument `arg`, as a thread of the
-// calling Thread's task (ADR 0130's §2). It returns the agent's `interp` thread id.
+// calling Thread's task (ADR 0130's §2). It returned the agent's `interp` thread id until #1337, whose door, its one
+// production caller, returns none (`func(arg: u32)`), so nothing read it.
 //
 // **Refused by name with no caller record**: a core-level call that bypassed the component has no task for the
 // agent to join, for `thread.new-indirect`'s reason. **And on a locked store**: no thread of a trapped instance
@@ -77,18 +80,18 @@ func (w *walker) noteCanonMemory(shared bool) {
 //
 // The record is registered before the agent's goroutine starts, so the agent is a sync-tail candidate from the
 // moment it exists, and a spawn the interp refuses leaves the table as it found it.
-func (h *asyncHandles) spawnAgent(c *interp.CanonCaller, core *interp.Instance, entry string, arg int32) (interp.ThreadID, error) {
+func (h *asyncHandles) spawnAgent(c *interp.CanonCaller, core *interp.Instance, entry string, arg int32) error {
 	tt := h.threads
 	var parent *cmThread
 	if tt != nil {
 		parent = tt.current(c)
 	}
 	if parent == nil {
-		return 0, fmt.Errorf("%w: an agent spawned outside any component-model Thread: the call did not enter "+
+		return fmt.Errorf("%w: an agent spawned outside any component-model Thread: the call did not enter "+
 			"through a lift, so there is no task for the agent to be a thread of (ADR 0130)", ErrUnsupportedForm)
 	}
 	if err := h.lock.locked(); err != nil {
-		return 0, err
+		return err
 	}
 	rec := &cmThread{agent: true, state: threadRunning, task: parent.task, owner: parent.owner}
 	rec.chain = &rec.ownChain
@@ -113,12 +116,11 @@ func (h *asyncHandles) spawnAgent(c *interp.CanonCaller, core *interp.Instance, 
 			return nil
 		}
 	}
-	tid, err := core.SpawnAgent(entry, arg, hooks)
-	if err != nil {
+	if _, err := core.SpawnAgent(entry, arg, hooks); err != nil {
 		tt.remove(idx)
-		return 0, err
+		return err
 	}
-	return tid, nil
+	return nil
 }
 
 // agentEnded is an agent's Exit hook, on its own goroutine: release a slot its chain holds (an ADR 0101 instance's),

@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -67,5 +68,53 @@ func TestRunStartsAGuestsSecondThread(t *testing.T) {
 	if code := exitCode(runCmd(&out, &errOut, []string{cmd})); code != 42 {
 		t.Fatalf("burroughs run exited %d, want 42: mstart did not run on a second agent (stderr: %s)",
 			code, errOut.String())
+	}
+}
+
+// spawnDoorChain is internal/component's spawn-door guest's `chain(k)`, repeated because the two test packages
+// cannot share a function, and recomputed here so the expected output does not come from the guest.
+func spawnDoorChain(k uint64) uint64 {
+	x := k*0x9E3779B97F4A7C15 + 1
+	for i := range uint64(100000) {
+		x ^= x >> 33
+		x *= 0xFF51AFD7ED558CCD
+		x ^= x >> 29
+		x += i
+	}
+	return x
+}
+
+// TestRunStartsAComponentsAgentsThroughItsSpawnDoor is `burroughs run`'s arm of E3 (#1337, ADR 0131): a component
+// that imports `burroughs:threads/spawn@0.1.0` starts two agents of its own through `dispatch`, with
+// BURROUGHS_CM_SHARED_MEMORY=1. Its stdout says each agent did its work with its own globals and saw run's
+// release, which run issues only after meeting both agents while itself executing, so an agent run inline would
+// print `released=00000000`. The executing-agent peak is read in internal/component's witness, which can reach the
+// core instance. **With the gate off** the same component is refused by name, at exit 5.
+func TestRunStartsAComponentsAgentsThroughItsSpawnDoor(t *testing.T) {
+	const fixture = "../../internal/component/testdata/spawn-door.wasm"
+	var want strings.Builder
+	for k := uint64(1); k <= 2; k++ {
+		fmt.Fprintf(&want, "agent %d chain=%016x entry-global=%08x global=%08x released=%08x\n", k, spawnDoorChain(k), 0, k, 1)
+	}
+	fmt.Fprintf(&want, "run global=%08x\n", 0x77)
+
+	t.Setenv("BURROUGHS_CM_SHARED_MEMORY", "1")
+	var out, errOut bytes.Buffer
+	if code := dispatch(&out, &errOut, []string{"run", fixture}); code != exitOK {
+		t.Fatalf("burroughs run exited %d, want %d (stderr: %s)", code, exitOK, errOut.String())
+	}
+	if out.String() != want.String() {
+		t.Errorf("stdout\n%s\nwant\n%s", out.String(), want.String())
+	}
+
+	t.Setenv("BURROUGHS_CM_SHARED_MEMORY", "")
+	out.Reset()
+	errOut.Reset()
+	if code := dispatch(&out, &errOut, []string{"run", fixture}); code != exitUnsupported {
+		t.Errorf("with the gate off, burroughs run exited %d, want %d (stderr: %s)", code, exitUnsupported, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "burroughs:threads/spawn@0.1.0") ||
+		!strings.Contains(errOut.String(), "gate:cm-shared-memory") {
+		t.Errorf("with the gate off, the refusal does not name the door and the gate: %s", errOut.String())
 	}
 }
