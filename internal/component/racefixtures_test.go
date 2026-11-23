@@ -76,6 +76,10 @@ var raceWitnessFixtures = []string{
 	// read buffer is what -race must see
 	"cross-agent-wake.wasm",
 	"cross-agent-shutdown.wasm",
+	// #1357's witnesses (agentendsrun_test.go): run and its agent share the memory one of them parks in
+	"agent-ends-run-exit.wasm",
+	"agent-ends-run-trap.wasm",
+	"agent-ends-run-control.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,
