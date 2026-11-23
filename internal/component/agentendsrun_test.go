@@ -18,8 +18,20 @@ import (
 // `testdata/agent-ends-run-{exit,trap,control}.wat`, each a `wasi:cli/run` component whose agent is started through
 // the spawn door (ADR 0131). Their memories declare max = min, so they are Go-heap backed and `-race` sees them.
 
-// agentEndsRuns is how many fresh instances each row runs.
+// agentEndsRuns is how many runs each row must EXERCISE: runs whose futex waiter was seen parked before the run ended.
+// A row runs fresh instances until that many have, or agentEndsAttempts have run.
+//
+// **Counted by the place, not by the attempt** (#1361's Windows run). The fixture's agent gives run 100ms to reach
+// its wait before it exits or traps. That is a bound, and a slow runner outran it: in 1 of 10 runs the trap came first,
+// the run still ended with the trap, and the waiter was never seen parked, so that run witnessed nothing. The guest
+// cannot see another agent parked, but the test can, so the count is of runs the test saw parked. A run that never
+// parked is still checked for its outcome; it just does not count. The guard keeps its teeth: a fixture that never
+// parks reaches agentEndsAttempts with 0 exercised and fails. This is grave #1360's shape, a timing witness that
+// needs a place.
 const agentEndsRuns = 10
+
+// agentEndsAttempts caps a row's fresh instances, at three per run it must exercise.
+const agentEndsAttempts = 3 * agentEndsRuns
 
 // agentEndsBound is how long a run may take to return once its futex waiter has been seen parked. The fixture's
 // agent ends the run 100ms after run publishes that it is about to wait, so only a run nothing ends waits it out.
@@ -68,8 +80,8 @@ func futexPlace(stacks string) string {
 	return b.String()
 }
 
-// TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait is #1357's witness (ADR 0132). Each row runs agentEndsRuns fresh
-// instances through CallRun, as `burroughs run` does, and asserts, per run:
+// TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait is #1357's witness (ADR 0132). Each row runs fresh instances through
+// CallRun, as `burroughs run` does, until agentEndsRuns have been exercised (see agentEndsRuns), and asserts, per run:
 //   - **the futex waiter was seen parked** in `interp.(*memory).wait` before the run ended: run in rows (a) and (b),
 //     the agent in row (c). A run that never parked did not exercise its row;
 //   - **the run returned within agentEndsBound**, with exit code 7 for (a) and (c), and with the agent's trap for
@@ -83,9 +95,10 @@ func TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait(t *testing.T) {
 	t.Setenv(cmSharedMemoryGateEnv, "1")
 	for _, row := range agentEndsRows {
 		t.Run(strings.TrimSuffix(row.fixture, ".wasm"), func(t *testing.T) {
-			var ended, hung, unparked int
+			var ended, hung, unparked, exercised, attempts int
 			firstHang := ""
-			for i := range agentEndsRuns {
+			for i := 0; exercised < agentEndsRuns && i < agentEndsAttempts; i++ {
+				attempts++
 				baseline := len(engineCreated(goroutineStacks()))
 				in := instantiateFixtureWithHost(t, row.fixture, NewHost(io.Discard, io.Discard, nil))
 				type out struct {
@@ -97,7 +110,10 @@ func TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait(t *testing.T) {
 					code, err := in.CallRun()
 					done <- out{code, err}
 				}()
-				if !awaitParked(parkFrames[1], 1, wakeProbeBound) {
+				// NEUTER, run: with this naming no frame, row (b) reads 30 of 30 attempts never seen parked and 0
+				// exercised, and fails at agentEndsAttempts.
+				parked := awaitParked(parkFrames[1], 1, wakeProbeBound)
+				if !parked {
 					unparked++
 				}
 				var o out
@@ -130,6 +146,9 @@ func TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait(t *testing.T) {
 				} else {
 					ended++
 					checkAgentEndsOutcome(t, i, row.what, row.wantCode, row.wantTrap, o.code, o.err)
+					if parked {
+						exercised++
+					}
 				}
 				deadline := time.Now().Add(5 * time.Second)
 				for len(engineCreated(goroutineStacks())) > baseline && time.Now().Before(deadline) {
@@ -140,15 +159,15 @@ func TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait(t *testing.T) {
 						baseline, strings.Join(left, "\n\n"))
 				}
 			}
-			t.Logf("%s: %d of %d runs ended within %v, %d hung, %d never seen parked", row.what, ended, agentEndsRuns,
-				agentEndsBound, hung, unparked)
+			t.Logf("%s: %d of %d runs ended within %v, %d hung, %d never seen parked, %d exercised", row.what, ended,
+				attempts, agentEndsBound, hung, unparked, exercised)
 			if hung > 0 {
-				t.Errorf("%s: %d of %d runs did not return within %v. The first: %s", row.what, hung, agentEndsRuns,
+				t.Errorf("%s: %d of %d runs did not return within %v. The first: %s", row.what, hung, attempts,
 					agentEndsBound, firstHang)
 			}
-			if unparked > 0 {
-				t.Errorf("%s: in %d of %d runs the futex waiter was never seen parked, so those runs did not exercise "+
-					"the row", row.what, unparked, agentEndsRuns)
+			if exercised < agentEndsRuns {
+				t.Errorf("%s: only %d of %d attempts exercised the row (the futex waiter seen parked, then the run "+
+					"ended); %d never parked", row.what, exercised, attempts, unparked)
 			}
 		})
 	}
