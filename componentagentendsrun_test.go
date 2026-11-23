@@ -67,7 +67,9 @@ func TestComponentConfigRunEndsWhenAnAgentExitsOrTraps(t *testing.T) {
 				}
 				if c.wantTrap {
 					var trap *Trap
-					if !errors.As(o.err, &trap) || !strings.Contains(trap.Reason, "unreachable") {
+					// run's own routed trap (ADR 0132), not ErrInstanceLocked's refusal of a call that overlapped one
+					if !errors.As(o.err, &trap) || !strings.Contains(trap.Reason, "unreachable") ||
+						errors.Is(o.err, ErrInstanceLocked) {
 						t.Errorf("run %d: Run = %d, %v; want the agent's unreachable as a *Trap", i, o.code, o.err)
 					} else if i == 0 {
 						t.Logf("Run returned %v", o.err)

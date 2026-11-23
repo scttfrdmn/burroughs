@@ -169,6 +169,12 @@ func checkAgentEndsOutcome(t *testing.T, i int, what string, wantCode int, wantT
 		t.Errorf("run %d: %s: CallRun = %d, %v; want the agent's unreachable trap", i, what, code, err)
 		return
 	}
+	// The agent is a thread of run's task (ADR 0130), and routeFault records its trap on run as its owner, so run
+	// reports the trap as its own, as an owner parked in a component-model wait does, and not as the lock refusal a
+	// call that merely overlapped another task's trap gets.
+	if errors.Is(err, ErrInstanceLocked) {
+		t.Errorf("run %d: %s: CallRun = %v; want the agent's trap as run's own, not ErrInstanceLocked", i, what, err)
+	}
 	if i == 0 {
 		t.Logf("%s: the run returned %v", what, err)
 	}

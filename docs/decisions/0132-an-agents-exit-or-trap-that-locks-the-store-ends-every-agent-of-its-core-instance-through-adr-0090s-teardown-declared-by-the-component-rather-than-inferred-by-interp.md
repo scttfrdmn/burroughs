@@ -71,6 +71,17 @@ Three fixtures, `testdata/agent-ends-run-{exit,trap,control}.wat`, each a `wasi:
 
 Read at `internal/component` (`CallRun`), at the root package (`ComponentConfig.Run`), and at `burroughs run` (its exit code). The neuter of the declaration (the hook returning the routed error unwrapped) must turn (a) and (b) back into a hang that the witness names as a place within its bound.
 
+## The build, as measured
+
+On darwin/arm64, go1.26.9, in the worktree of #1357's branch, stacked on #1338's (b71b22d).
+
+- **Before the repair** (`TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait`, 10 runs per row): (a) and (b) hung in 10 of 10 runs each, with run parked in `interp.(*memory).wait` and no engine goroutine left, and `Close` ended each hung run. (c) exited 7 in 10 of 10. `ComponentConfig.Run` did not return in 5 of 5 runs of (a) and of (b), and returned 7 in 5 of 5 of (c). `burroughs run` did not end (a) or (b) within 10s, and exited 7 for (c).
+- **After it**: (a) exited 7 in 10 of 10 and (b) returned the agent's trap in 10 of 10 (*"a thread of this instance ended in a trap: thread 2: unreachable (trap)"*), each with run seen parked first. (c) was unchanged. No engine goroutine survived `Close`, and the same held under `-race` with no report. `ComponentConfig.Run` returned 7, a `*Trap`, and 7, in 5 of 5 each, and `burroughs run` exited 7, 4 and 7.
+- **The neuters, each run, each reverted:**
+  - `agentEnded` returning the routed error unwrapped: (a) and (b) hang in 10 of 10 again, and in 5 of 5 through `ComponentConfig.Run`, and `burroughs run` ends neither;
+  - `interp`'s spawn calling the hook and keeping its own error: (a) and (b) hang in 10 of 10;
+  - `agentEndsInstance.Unwrap` returning nil: (a) and (c) still exit 7, and (b) reads *"component instance is locked: an earlier trap ended it …"* in 10 of 10, because `storeLock.finish` no longer finds the lock's trap in run's error and relabels run's own routed trap as a lock refusal.
+
 ## Rollback
 
 `agentEnded` returns the routed error unwrapped: no agent's end declares the teardown, and a parked `run` hangs on a locked store, as before #1357.

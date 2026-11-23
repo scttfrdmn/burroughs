@@ -595,13 +595,17 @@ func (in *Instance) Spawn(entry uint32, arg int32, stackHint int) (ThreadID, err
 //     instance that keeps ADR 0101's run slot takes the slot here.
 //   - **Exit**, when set, runs on the agent's goroutine after its entry returns, or after Enter failed, with the
 //     error the agent ends with, and before `world.retire` records it. So a `Join` or a `Close` that returns has
-//     seen it run.
+//     seen it run. **What it returns is the error the agent retires with** (#1357, [ADR 0132]), so the component
+//     can declare an end it has routed as a fault to be the instance's ([InstanceEnder]), which `world.retire`
+//     reads to request the teardown. This package still infers nothing from a trap: the declaration is the
+//     component's, and a hook that returns its argument changes nothing.
 //
 // [ADR 0130]: ../../docs/decisions/0130-in-an-instance-whose-canonical-memory-is-shared-a-spawned-agent-is-a-thread-of-its-spawners-task-and-executes-outside-the-run-slot-which-keeps-serialising-tasks-and-stops-serialising-result-stores.md
+// [ADR 0132]: ../../docs/decisions/0132-an-agents-exit-or-trap-that-locks-the-store-ends-every-agent-of-its-core-instance-through-adr-0090s-teardown-declared-by-the-component-rather-than-inferred-by-interp.md
 type AgentHooks struct {
 	CMThread uint32
 	Enter    func(ctx context.Context) error
-	Exit     func(err error)
+	Exit     func(err error) error
 }
 
 // SpawnAgent is [Instance.Spawn] for a component's core instance (#1336, [ADR 0130]): the entry is named by its
@@ -719,7 +723,9 @@ func (in *Instance) spawn(entry uint32, arg int32, stackHint int, hooks AgentHoo
 			t.err = in.runEntry(t, fn, ft, arg, stackHint, hooks.CMThread)
 		}
 		if hooks.Exit != nil {
-			hooks.Exit(t.err)
+			// NEUTER, run: call the hook and keep t.err, and TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait's rows
+			// (a) and (b) hang in 10 of 10 runs each, run parked in interp.(*memory).wait.
+			t.err = hooks.Exit(t.err)
 		}
 	}()
 	return t, nil

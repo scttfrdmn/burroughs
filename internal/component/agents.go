@@ -101,7 +101,7 @@ func (h *asyncHandles) spawnAgent(c *interp.CanonCaller, core *interp.Instance, 
 		// NEUTER, run: carry 0, and TestAgentsOfASharedMemoryInstanceExecuteAtOnce's agents trap at thread.index
 		// ("no component-model Thread is registered for this agent"), so run never joins them.
 		CMThread: idx,
-		Exit:     func(err error) { tt.agentEnded(h, rec, free, err) },
+		Exit:     func(err error) error { return tt.agentEnded(h, rec, free, err) },
 	}
 	if !free {
 		// ADR 0101 exactly: the agent is one more chain of the instance, and takes the slot before its first guest
@@ -125,26 +125,64 @@ func (h *asyncHandles) spawnAgent(c *interp.CanonCaller, core *interp.Instance, 
 
 // agentEnded is an agent's Exit hook, on its own goroutine: release a slot its chain holds (an ADR 0101 instance's),
 // unregister it, and route a trap to its owner, as a created Thread's trap is routed (ADR 0101's Option A, point
-// 7), which locks the store (ADR 0105).
+// 7), which locks the store (ADR 0105). It returns the error the agent's thread retires with.
 //
 // **An end Close caused is not a trap**: the agent was ended, and an instance being closed has nobody to report
-// to.
-func (tt *threadTable) agentEnded(h *asyncHandles, rec *cmThread, free bool, err error) {
+// to. It is returned as it came.
+//
+// **An end it routes ends the core instance's agents** (#1357, ADR 0132). The store is locked by then, so the instance
+// is over, but a thread parked in `memory.atomic.wait32` is reached by neither the lock nor `routeFault`'s abort of a
+// component-model wait: run, parked so, never returned after an agent's `wasi:cli/exit` or trap. The routed error is
+// returned as an agentEndsInstance, which declares the end the instance's, so `interp`'s `world.retire` requests ADR
+// 0090's teardown: every live thread of the agent's core instance is cancelled, and a parked wait is trapped out of.
+// An exit comes here too, because a host function's error is a host trap.
+func (tt *threadTable) agentEnded(h *asyncHandles, rec *cmThread, free bool, err error) error {
 	if !free {
 		h.releaseRunFor(rec.chain) // releases only a slot this chain holds (Option A)
 	}
 	tt.remove(rec.index)
 	if !isTrap(err) || agentEndedByTeardown(err) {
-		return
+		return err
 	}
 	h.mu.Lock()
 	closing := h.hostWaitsStopped
 	h.mu.Unlock()
 	if closing {
-		return
+		return err
 	}
 	tt.routeFault(rec.owner, err)
+	// NEUTER, run: return err, and TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait's rows (a) and (b) hang in 10 of
+	// 10 runs each, run parked in interp.(*memory).wait. The root package's
+	// TestComponentConfigRunEndsWhenAnAgentExitsOrTraps reads 5 of 5 Runs not returning in each of the same rows, and
+	// cmd/burroughs's TestRunEndsWhenAComponentsAgentExitsOrTraps reads neither run ending within 10s.
+	return agentEndsInstance{err: err}
 }
+
+// agentEndsInstance is an agent's end that agentEnded routed as a fault, as the error its `interp` thread retires
+// with (#1357, ADR 0132). It declares interp.InstanceEnder, which is what `world.retire` reads to request the
+// teardown, so the declaration is this package's and `interp` infers nothing from a trap: a core instance outside a
+// component keeps ADR 0071's answer to a spawned thread's trap.
+//
+// Its text is the routed error's and it unwraps to it, so the fault `interp.Instance.Fault` reports, and the error
+// a call the teardown ended returns (`world.guestExitCause`), keep their chains: errors.As still finds the exitError
+// or the *interp.Trap, and errors.Is still finds interp.ErrHostTrap. That chain is also what lets `storeLock.finish`
+// read the cause as the call's own trap, which it is: the agent's trap was routed to run as its owner.
+type agentEndsInstance struct{ err error }
+
+func (e agentEndsInstance) Error() string { return e.err.Error() }
+
+// Unwrap is the routed error.
+//
+// NEUTER, run: return nil, and TestAnAgentsExitOrTrapEndsARunParkedInAFutexWait's row (b) reads
+// "component instance is locked: an earlier trap ended it, …: unreachable (trap)" in 10 of 10 runs: `storeLock.finish`
+// no longer finds the lock's trap in run's error, so it relabels run's own routed trap as a lock refusal. Rows (a)
+// and (c) still exit 7, because the lock refusal wraps the trap, which holds the exitError.
+func (e agentEndsInstance) Unwrap() error { return e.err }
+
+// EndsInstance declares that the agent's end ends its core instance (interp.InstanceEnder).
+func (agentEndsInstance) EndsInstance() {}
+
+var _ interp.InstanceEnder = agentEndsInstance{}
 
 // agentEndedByTeardown reports an agent's end that Close, a wake, or another call's trap caused, rather than a trap
 // of its own.
