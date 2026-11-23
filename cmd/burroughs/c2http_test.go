@@ -483,30 +483,38 @@ func startC2Process(t *testing.T, name string, args ...string) c2Server {
 // go.mod the fork's build of it also has.
 func buildC2Host(t *testing.T) (bin, goVersion string) {
 	t.Helper()
+	return buildForkSourceForHost(t, c2Source, c2GoMod, "p3http")
+}
+
+// buildForkSourceForHost builds a fork witness's committed source with the Go running this test, for the host, as
+// the only file of a module whose go.mod the fork's build of it also has, with -trimpath and any extra build flags
+// that build also passes. It returns the binary and the toolchain's GOVERSION.
+func buildForkSourceForHost(t *testing.T, source, goMod, name string, flags ...string) (bin, goVersion string) {
+	t.Helper()
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatalf("no go on PATH, which go test puts its own GOROOT/bin at the head of: %v", err)
 	}
-	src, err := os.ReadFile(c2Source)
+	src, err := os.ReadFile(source)
 	if err != nil {
-		t.Fatalf("p3http's source is missing (it is committed): %v", err)
+		t.Fatalf("%s's source is missing (it is committed): %v", name, err)
 	}
 	dir := t.TempDir()
-	for name, b := range map[string][]byte{"main.go": src, "go.mod": []byte(c2GoMod)} {
-		if werr := os.WriteFile(filepath.Join(dir, name), b, 0o600); werr != nil {
+	for fn, b := range map[string][]byte{"main.go": src, "go.mod": []byte(goMod)} {
+		if werr := os.WriteFile(filepath.Join(dir, fn), b, 0o600); werr != nil {
 			t.Fatal(werr)
 		}
 	}
-	bin = filepath.Join(dir, "p3http")
+	bin = filepath.Join(dir, name)
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
 	env := append(os.Environ(), "GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0", "GOFLAGS=",
 		"GOWORK=off", "GOTOOLCHAIN=local")
-	build := exec.Command(goBin, "build", "-trimpath", "-o", bin, ".")
+	build := exec.Command(goBin, append(append([]string{"build", "-trimpath"}, flags...), "-o", bin, ".")...)
 	build.Dir, build.Env = dir, env
 	if out, berr := build.CombinedOutput(); berr != nil {
-		t.Fatalf("go build of p3http.go.txt failed: %v\n%s", berr, out)
+		t.Fatalf("go build of %s failed: %v\n%s", filepath.Base(source), berr, out)
 	}
 	ver := exec.Command(goBin, "env", "GOVERSION")
 	ver.Dir, ver.Env = dir, env
