@@ -57,6 +57,18 @@ says what it now requires and what it gives up.
   - **§2 T-1 is appended.** A component's door to the spawn primitive is the import `burroughs:threads/spawn@0.1.0#spawn: func(arg: u32)`, whose entry is the core export `mstart`. A component importing it is Burroughs-only by construction.
   - **The contract stays v0.1.** It is appended to, not re-versioned. No engine code changes here; E3 and E4 build to these texts.
 
+### Fixed
+
+- **#1284's cursor probe asks only whether the address range is free, so a runner short of memory no longer fails
+  the placement controls** ([#1348](https://github.com/scttfrdmn/burroughs/issues/1348)).
+  - **The defect:** the probe mapped through the engine's own `mmapAt`, which is read-write and committed. A 16 GiB
+    probe was therefore subject to the kernel's overcommit accounting, and a CI runner refused it with ENOMEM
+    (PR #1347's run 45126427018, ubuntu-24.04). The control failed for a reason unrelated to its subject.
+  - **The repair:** a test-only `probeAt` maps `PROT_NONE` with `MAP_NORESERVE`, which commits nothing. Production
+    `mapPlaced` is unchanged, and an ENOMEM there was already the allocator fallback.
+  - **Witness:** `TestTheCursorProbeAsksOnlyAboutTheAddress`, with a stand-in kernel that refuses committed mappings
+    over 1 GiB. Neutered (probing through `mmapAt` again), it fails with CI's ENOMEM.
+
 ## [0.14.0] - 2026-11-22
 *Implements contract v0.1.*
 
