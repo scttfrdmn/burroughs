@@ -6,6 +6,7 @@ package burroughs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -66,8 +67,9 @@ func TestComponentCloseEndsAgentsBlockedInAWaitAndInAFutexWait(t *testing.T) {
 				}
 			}
 			if !parkedAtLeast("component.waitableSetWait", 1) || !parkedAtLeast("interp.(*memory).wait", c.futexes) {
+				place := enginePlaces()
 				_ = comp.Close()
-				t.Fatalf("the agents never parked in waitable-set.wait (1) and memory.atomic.wait32 (%d)", c.futexes)
+				t.Fatalf("the agents never parked in waitable-set.wait (1) and memory.atomic.wait32 (%d). %s", c.futexes, place)
 			}
 			start := time.Now()
 			closeErr := comp.Close()
@@ -145,6 +147,28 @@ func parkedAtLeast(frame string, n int) bool {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// enginePlaces names where every engine goroutine is, by its status line and its four innermost engine frames, for a
+// failure that cannot be reproduced on demand and so must name its place the first time it happens (#1338's first
+// `make ci` failed this test once, with "never parked" as the whole of its evidence).
+func enginePlaces() string {
+	gs := engineGoroutineStacks()
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d engine goroutine(s):", len(gs))
+	for _, g := range gs {
+		head, _, _ := strings.Cut(g, "\n")
+		b.WriteString("\n  " + head)
+		frames := 0
+		for _, ln := range strings.Split(g, "\n") {
+			if frames < 4 && strings.Contains(ln, "burroughs/internal/") && !strings.HasPrefix(ln, "\t") {
+				fn, _, _ := strings.Cut(ln, "(0x")
+				b.WriteString("\n    " + strings.TrimPrefix(fn, "github.com/scttfrdmn/burroughs/internal/"))
+				frames++
+			}
+		}
+	}
+	return b.String()
 }
 
 // engineGoroutineStacks is every goroutine an engine file started: its `created by` frame is in internal/, and not

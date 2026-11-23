@@ -81,27 +81,54 @@ func awaitParked(frame string, n int, bound time.Duration) bool {
 func placeOf(stacks string) string {
 	parked := parkedIn(stacks, parkFrames[0])
 	if len(parked) == 0 {
-		return "no goroutine is parked in waitable-set.wait"
+		return "no goroutine is parked in waitable-set.wait; " + agentsPlace(stacks)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d goroutine(s) parked in waitable-set.wait's select:", len(parked))
 	for _, g := range parked {
-		head, _, _ := strings.Cut(g, "\n")
-		b.WriteString("\n  " + head)
-		frames := 0
-		for _, ln := range strings.Split(g, "\n") {
-			if frames < 4 && strings.Contains(ln, "burroughs/internal/") && !strings.HasPrefix(ln, "\t") {
-				fn, _, _ := strings.Cut(ln, "(0x")
-				b.WriteString("\n    " + strings.TrimPrefix(fn, "github.com/scttfrdmn/burroughs/internal/"))
-				frames++
-			}
-		}
-		if _, created, ok := strings.Cut(g, "\ncreated by "); ok {
-			site, _, _ := strings.Cut(created, " in goroutine")
-			b.WriteString("\n    created by " + strings.TrimPrefix(site, "github.com/scttfrdmn/burroughs/internal/"))
-		}
+		describeGoroutine(&b, g)
 	}
 	return b.String()
+}
+
+// agentsPlace names where every goroutine an engine file started is, by its status and innermost engine frames.
+// It is what a failure reports when the waiter is not where the row expects it: #1338's first `make ci` failed every
+// row of both packages once, with no reproduction in 6x3 stressed runs, and "no goroutine is parked" was the whole
+// of its evidence. A failure that cannot be reproduced on demand must name its place the first time it happens.
+func agentsPlace(stacks string) string {
+	var b strings.Builder
+	n := 0
+	for _, g := range strings.Split(stacks, "\n\n") {
+		_, created, ok := strings.Cut(g, "\ncreated by ")
+		if !ok {
+			continue
+		}
+		lines := strings.SplitN(created, "\n", 3)
+		if len(lines) < 2 || !strings.Contains(lines[1], "/burroughs/internal/") || strings.Contains(lines[1], "_test.go") {
+			continue
+		}
+		n++
+		describeGoroutine(&b, g)
+	}
+	return fmt.Sprintf("%d engine goroutine(s):%s", n, b.String())
+}
+
+// describeGoroutine writes g's status line, its four innermost engine frames, and its creation site.
+func describeGoroutine(b *strings.Builder, g string) {
+	head, _, _ := strings.Cut(g, "\n")
+	b.WriteString("\n  " + head)
+	frames := 0
+	for _, ln := range strings.Split(g, "\n") {
+		if frames < 4 && strings.Contains(ln, "burroughs/internal/") && !strings.HasPrefix(ln, "\t") {
+			fn, _, _ := strings.Cut(ln, "(0x")
+			b.WriteString("\n    " + strings.TrimPrefix(fn, "github.com/scttfrdmn/burroughs/internal/"))
+			frames++
+		}
+	}
+	if _, created, ok := strings.Cut(g, "\ncreated by "); ok {
+		site, _, _ := strings.Cut(created, " in goroutine")
+		b.WriteString("\n    created by " + strings.TrimPrefix(site, "github.com/scttfrdmn/burroughs/internal/"))
+	}
 }
 
 // countingMember is a waitable that counts how often a set inspects it, for the batch's cost witness.
@@ -539,7 +566,8 @@ func TestCloseEndsAgentsBlockedInAWaitAndInAFutexWait(t *testing.T) {
 					st := goroutineStacks()
 					in.Close()
 					t.Fatalf("run %d: the agents never parked: %d in waitable-set.wait, %d in memory.atomic.wait32, want 1 "+
-						"and %d", i, len(parkedIn(st, parkFrames[0])), len(parkedIn(st, parkFrames[1])), c.futexes)
+						"and %d. %s", i, len(parkedIn(st, parkFrames[0])), len(parkedIn(st, parkFrames[1])), c.futexes,
+						agentsPlace(st))
 				}
 				start := time.Now()
 				closed := make(chan struct{})
