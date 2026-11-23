@@ -23,6 +23,32 @@ says what it now requires and what it gives up.
 
 ## [Unreleased]
 
+### Added
+
+- **`gate:cm-shared-memory` (`BURROUGHS_CM_SHARED_MEMORY`), default off: a shared memory as a component's
+  canonical memory, as a Burroughs-only extension that departs from the pin** ([#1335](https://github.com/scttfrdmn/burroughs/issues/1335),
+  ADR 0129, on Scott's revised ruling 4 on [#1332](https://github.com/scttfrdmn/burroughs/issues/1332#issuecomment-7092909150)).
+  This adds a gate and does not flip one.
+  - **What it is for.** A multi-threaded Go component's heap is a shared memory, and it is the memory the
+    Canonical ABI lifts from and lowers into. That is v0.15.0's subject.
+  - **Why it is an extension and not conformance.** CanonicalABI.md's "`canonopt` Validation" requires the
+    canonical memory to be a subtype of `(memory 0)`, which is unshared. A shared and an unshared memory type never
+    match, so the pin calls such a component invalid. wasm-tools 1.258.0 and wasmtime 49.0.3 refuse it for that rule,
+    and no other engine or validator will accept a component that uses the extension.
+  - **With the gate off, nothing changes.** The canon is refused by name, as since [#1141](https://github.com/scttfrdmn/burroughs/issues/1141),
+    with the same sentinel and CLI exit 5. Its message now says the rule is the pin's and names the variable that
+    admits the extension. It said before that the pin set no rule, and that the refusal followed a toolchain under
+    ADR 0102. Both were wrong, and ADR 0102 carries a postscript saying so.
+  - **With it set to `1`, the canon is admitted**, and the Canonical ABI reads and writes the memory as it does an
+    unshared one. Guest code still runs on one agent at a time (ADR 0101's run slot is unchanged), and no component
+    can start a second agent yet. Those are E2 ([#1336](https://github.com/scttfrdmn/burroughs/issues/1336)) and E3
+    ([#1337](https://github.com/scttfrdmn/burroughs/issues/1337)).
+  - **The witness:** `shmem-canon-roundtrip.wasm` moves strings through shared canonical memories in every
+    direction. The host lowers into the guest, a nested child is called with a string both ways, the guest writes to
+    stdout, and an embedder calls the child directly. Its output is byte-identical to wasmtime 49.0.3's reading of its
+    unshared twin, 10 of 10. That twin differs only in the word `shared`, and it is the shared fixture's only oracle,
+    since no external engine can read the shared fixture.
+
 ## [0.14.0] - 2026-11-22
 *Implements contract v0.1.*
 

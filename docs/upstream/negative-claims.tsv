@@ -55,3 +55,4 @@
 0104	is silent on preemption	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: preempt, interrupt, timer; Threads switch only through yield_, suspend_then_resume, wait_until
 0105	Every other parked Thread is never resumed	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	Store.tick asserts not lockdown; the cancel on_cancel asserts it too; no other path wakes a waiting Thread
 0105	the pin leaves an in-flight call unresolved	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	a trap reaches only its resumer chain (resume re-raises it); no on_resolve fires for other tasks
+0129	definitions.py at the pin never mentions shared	2e7895c76905cd3fb7e6be4ac632258972b1f688	holds	-	absent: shared (case-insensitive); MemInst is bytes and addrtype; the canonopt rule is CanonicalABI.md prose

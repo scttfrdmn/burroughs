@@ -1,0 +1,18 @@
+# Committed readings for shmem-canon-roundtrip-unshared.wasm and shmem-canon-roundtrip.wasm (#1335; ADR 0129).
+# Built:       wasm-tools parse <name>.wat -o <name>.wasm   (wasm-tools 1.258.0). The unshared twin validates with
+#              --features all; the shared one is refused, "mismatch in the shared flag for memories (at offset 0x14b)".
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, .oracle/wasmtime-49.0.3/wasmtime.
+# Fixtures:    sha1 e8dbfa3dff2da62d39a9e300bd5352d2fcbd336d (unshared), 7506fd455322d3ce21f420178554f36498692175 (shared).
+#
+# The shared fixture has no external reader: wasmtime 49.0.3 run -W threads=y,shared-memory=y refuses it, with and
+# without --invoke, with the same message, exit 1. Its oracle is the unshared twin's readings below, byte for byte.
+#
+# reader                                      reading (as a Go string literal)
+# run, wasmtime 49.0.3, 10 of 10              "HELLO\nWöRLD-42\n\nABC\n"
+# shout, wasmtime 49.0.3, 10 of 10            "HELLO WöRLD-42"
+#
+# run:         wasmtime run shmem-canon-roundtrip-unshared.wasm hello 'Wörld-42' '' abc
+#              stdout: each argument after argv[0], upper-cased (ASCII a-z) by the nested child and written with a
+#              newline. Its sha1 was 40112632a94291202c6e53146187b3b04b9fdae6 in all ten runs, exit 0 in all ten.
+# shout:       wasmtime run --invoke 'shout("hello Wörld-42")' shmem-canon-roundtrip-unshared.wasm
+#              the result printed, exit 0 in all ten.

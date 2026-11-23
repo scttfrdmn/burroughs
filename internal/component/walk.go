@@ -829,21 +829,38 @@ func (w *walker) lowerMemory(cn Canon) *interp.Extern {
 	return &ext
 }
 
-// refuseSharedCanonMemory refuses a canon whose `(memory …)` option names a SHARED memory (#1141; the chair's
-// ruling of 2026-10-27). wasm-tools 1.258.0 refuses that component (*"mismatch in the shared flag for
-// memories"*). The pinned reference sets no shared/unshared rule for the option, and nothing witnesses what lifting
-// or lowering through a memory other agents write does. ADR 0102's posture is that a toolchain's stricter refusal
-// is followed unless Burroughs implements and witnesses what the pin admits, so this is refused by name and not
-// admitted unwitnessed. A shared memory a component uses in any OTHER way is untouched. Threaded Go components
-// depend on this case, so the WASI 0.3 design (#1140) has to resolve it; until then, it is a refusal.
+// refuseSharedCanonMemory refuses a canon whose `(memory …)` option names a SHARED memory, unless
+// `gate:cm-shared-memory` admits it as a Burroughs-only extension (ADR 0129, #1335). Both call sites, the core
+// func step (lowers and built-ins) and the lift step, reach it at every depth of the walk.
+//
+// **The refusal is the pin's own rule.** CanonicalABI.md's "`canonopt` Validation", at the pin, says *"`memory`
+// - this is a subtype of `(memory 0)`"*, which is unshared, and a shared memory type matches only a shared one
+// (`internal/interp/link.go:matchMemoryType`). wasm-tools 1.258.0 refuses the component for that rule
+// (*"mismatch in the shared flag for memories"*). This comment said until #1335 that *"the pinned reference
+// sets no shared/unshared rule for the option"*, and that ADR 0102 made this a toolchain refusal followed
+// pending a witness. Both were wrong: `definitions.py` does not model the rule, and the validation prose
+// states it, so this is not a case of a toolchain stricter than the pin.
+//
+// **With the gate on, the canon is admitted as a named departure from the pin** (Scott's revised ruling 4 on
+// #1332). A component that relies on it is valid to no other engine and no validator. With the gate off,
+// nothing changed when the gate was added: the refusal, its sentinel and its #1141 name are as before. A
+// shared memory a component uses in any OTHER way is untouched in both states.
+//
+// **Still `ErrUnsupportedForm`, not `ErrCanonOptionInvalid`,** though the pin calls the component invalid. The
+// gate-off path is today's exactly, and this build can run the component when the extension is turned on, so
+// "not admitted in this configuration" is what the refusal says (ADR 0129).
 func (w *walker) refuseSharedCanonMemory(cn Canon) error {
 	ext := w.lowerMemory(cn)
 	if ext == nil || !ext.SharedMemory() {
 		return nil
 	}
+	if cmSharedMemoryEnabled() {
+		return nil // the Burroughs-only extension, ADR 0129 (#1335)
+	}
 	return fmt.Errorf("%w: a canon's (memory %d) option names a shared memory, which this engine refuses: "+
-		"the Canonical ABI's memory option is not admitted shared (wasm-tools refuses it, and no witness covers "+
-		"lifting or lowering through a memory other agents write; #1141, ADR 0102)", ErrUnsupportedForm, *cn.Opts.Memory)
+		"the Canonical ABI requires an unshared canonical memory (canonopt validation: memory is a subtype of "+
+		"(memory 0); #1141). Set %s=1 to admit it as a Burroughs-only extension that no other engine or validator "+
+		"accepts (gate:cm-shared-memory, ADR 0129)", ErrUnsupportedForm, *cn.Opts.Memory, cmSharedMemoryGateEnv)
 }
 
 // lowerRealloc resolves a canon lower's `(realloc $f)` option to the core `cabi_realloc` func extern it
