@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,7 +25,16 @@ import (
 const (
 	c3Source  = c2Dir + "/p3multim.go.txt"
 	c3Reading = c2Dir + "/p3multim.reading"
+	// c3Wasm is the fork's GOEXPERIMENT=burroughsspawnp3 build: the spawn door, `mstart` and a shared memory, so it
+	// runs on several agents, behind gate:cm-shared-memory.
+	c3Wasm = c2Dir + "/p3multim.wasm"
+	// c3Wasm1M is the fork's stock GOOS=wasip3 build of the same source: no door, an unshared memory, GOMAXPROCS
+	// clamped to 1.
+	c3Wasm1M = c2Dir + "/p3multim-1m.wasm"
 )
+
+// c3GateEnv is gate:cm-shared-memory's variable (internal/component's cmSharedMemoryGateEnv, ADR 0129).
+const c3GateEnv = "BURROUGHS_CM_SHARED_MEMORY"
 
 // c3GoMod is p3multim's go.mod, for every build of it, so every build takes the same language version's GODEBUG
 // defaults (C2's reason, c2GoMod).
@@ -335,4 +345,88 @@ func writeC3Reading(t *testing.T, goVersion string, lines []string) {
 		t.Fatal(err)
 	}
 	t.Logf("wrote %s: %d lines", c3Reading, len(lines))
+}
+
+// startC3Dispatch runs `burroughs run [flags] wasm` in-process, through dispatch in a goroutine, as startC2Dispatch
+// does p3http.
+func startC3Dispatch(wasm string, flags ...string) c2Server {
+	pr, pw := io.Pipe()
+	exited := make(chan c2Exit, 1)
+	go func() {
+		var errBuf bytes.Buffer
+		code := dispatch(pw, &errBuf, append(append([]string{"run"}, flags...), wasm))
+		_ = pw.Close()
+		exited <- c2Exit{code, errBuf.String()}
+	}()
+	return c2Server{stdout: pr, exited: exited}
+}
+
+// TestC3BurroughsRunMatchesTheHostReading is C3's `burroughs run` arms (#1345), v0.15.0's outcome witness: the
+// fork's two GOOS=wasip3 builds of p3multim.go.txt, run by `burroughs run --inherit-network` through dispatch, with a
+// client outside the instance.
+//   - **multi-M**: p3multim.wasm, the burroughsspawnp3 build, with gate:cm-shared-memory on. Its responses, stdout and
+//     exit must equal p3multim.reading, which arm N (TestC3HostServerMatchesItsReading) took from stock Go, and its
+//     stderr must place the rendezvous at **4 of 4**: four participants met while all four were spinning in guest
+//     code, which only four agents executing at once can do. The program's own lines on how many Ms ran its jobs
+//     and handlers are logged, not asserted;
+//   - **single-M**: p3multim-1m.wasm, the fork's stock wasip3 build, GOMAXPROCS clamped to 1, gate left unset: the
+//     same reading, and a rendezvous of 1 of 1;
+//   - **gate off**: p3multim.wasm with gate:cm-shared-memory unset. Its canonical memory is shared, which the
+//     Canonical ABI's canonopt rule refuses and only the gate admits, so it is refused before any guest code runs:
+//     exit 5 (exitUnsupported), the refusal naming the gate and the spawn door.
+//
+// The engine's own count, PeakLiveAgents, is read in-process by internal/component's
+// TestC3MultiMRunsOnAtLeastFourAgents, since `burroughs run` prints no such figure.
+//
+// NEUTER, run (#1345): the run-slot relaxation off (agents.go's spawnAgent: its `!free` Enter arm set for a free
+// instance too, ADR 0130's rollback): multi-M fails "parked at READY after 0 answered"; the agents' place is
+// TestC3MultiMRunsOnAtLeastFourAgents', which reads it in-process.
+// NEUTER, run: the fork's netpollBreak a no-op (a scratch build of p3multim.wasm, never committed): multi-M fails
+// "parked at /work?id=0 after 1 answered", 5 of 5: the handler's 1 ms timer, set on one M, never wakes the M blocked in
+// the poller, and no other event arrives to wake it.
+// NEUTER, run: the spawn door unserved (internal/component's spawnDoors left empty): the import is bound to the stub
+// host, the runtime's first spawn traps naming it, and multi-M reads no READY line and exit 1.
+func TestC3BurroughsRunMatchesTheHostReading(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "")
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	for _, c := range []struct {
+		name, wasm, gate, rendezvous string
+	}{
+		{"multi-M", c3Wasm, "1", "4 of 4"},
+		{"single-M", c3Wasm1M, "", "1 of 1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv(c3GateEnv, c.gate)
+			got, exit, err := driveC3(startC3Dispatch(c.wasm, "--inherit-network"))
+			if err != nil {
+				t.Fatalf("burroughs run %s: %v (stderr %q)", c.name, err, exit.stderr)
+			}
+			matchC2Reading(t, c3Reading, "burroughs run ("+c.name+")", got)
+			rendezvous, ms := c3Places(exit.stderr)
+			t.Logf("%s: rendezvous %s; %s (the Ms logged, not asserted)", c.name, rendezvous, strings.Join(ms, "; "))
+			if rendezvous != c.rendezvous {
+				t.Errorf("%s: the guest's rendezvous reads %q, want %q (stderr %q)", c.name, rendezvous, c.rendezvous,
+					exit.stderr)
+			}
+			requireNoHostSocketGoroutines(t)
+		})
+	}
+	t.Run("gate off", func(t *testing.T) {
+		t.Setenv(c3GateEnv, "")
+		var out, errOut bytes.Buffer
+		code := dispatch(&out, &errOut, []string{"run", "--inherit-network", c3Wasm})
+		if code != exitUnsupported {
+			t.Fatalf("burroughs run with gate:cm-shared-memory off exited %d, want %d (stdout %q, stderr %q)", code,
+				exitUnsupported, out.String(), errOut.String())
+		}
+		if out.Len() != 0 {
+			t.Errorf("stdout = %q, want nothing: no guest code may run", out.String())
+		}
+		for _, want := range []string{"gate:cm-shared-memory", c3GateEnv} {
+			if !strings.Contains(errOut.String(), want) {
+				t.Errorf("the refusal does not name %q: %q", want, errOut.String())
+			}
+		}
+		t.Logf("gate off: exit %d, %s", code, strings.TrimSpace(errOut.String()))
+	})
 }

@@ -117,6 +117,32 @@ says what it now requires and what it gives up.
     B also writes with `memory.fill`, which the engine performs as a plain Go write (ADR 0064), so `-race` can see
     a missing edge. An aligned `i32.store` is atomic in the engine (ADR 0054), so `-race` cannot see one between
     two of those.
+- **A fork-built Go program at GOMAXPROCS 4 runs on four agents at once under `burroughs run --inherit-network`, and its
+  `net/http` server answers a client outside the instance byte for byte as stock Go's does**
+  ([#1345](https://github.com/scttfrdmn/burroughs/issues/1345), C3). This is v0.15.0's witness, on the plan
+  [#1332](https://github.com/scttfrdmn/burroughs/issues/1332). It adds a witness, not a mechanism, and no gate flips: the
+  multi-M arm runs with `gate:cm-shared-memory` on, and with it off the same artifact is refused (exit 5).
+  - **The program is `p3multim.go.txt`.** It sets GOMAXPROCS 4 itself, then runs a rendezvous of four participants
+    spinning in guest code, 64 SHA-256 jobs over 8 workers (hashed in 4 KiB writes, so a stop-the-world waits for one
+    write), a `net/http` server, and a forced `runtime.GC()` while 8 requests are parked inside their handlers. It
+    prints only from main, and stdout carries only what is the same in every build. Its per-M lines go to stderr.
+  - **One source, three builds.** Stock go1.26.9 natively gives the reading `p3multim.reading`, committed before
+    either wasm was built. The fork builds `p3multim.wasm` (multi-M: the spawn door, `mstart`, a shared memory) and
+    `p3multim-1m.wasm` (stock wasip3, GOMAXPROCS clamped to 1). The client is `driveC3`
+    (`cmd/burroughs/c3multim_test.go`): 152 requests over a keep-alive row, 8 concurrent connections with bodies up to
+    128 KiB, the 8 held requests and `/quit`.
+  - **The readings.** The multi-M arm matched the reading 10 of 10, and its rendezvous closed 4 of 4 every time, a
+    place only four agents executing at once can reach. The single-M arm matched 10 of 10 with a rendezvous of 1 of 1,
+    and so did wasmtime 49.0.3 on the single-M build, offline. Under `-race`, both Burroughs arms passed 3 of 3.
+  - **The engine's count.** `TestC3MultiMRunsOnAtLeastFourAgents` runs the multi-M artifact through the engine, not
+    the CLI, and reads `PeakLiveAgents` after run returns: 5 or 6, at least 4 required, 10 of 10. It is a high-water
+    mark, not a sample. `ExecutingAgents` is sampled and only logged, by grave
+    [#1360](https://github.com/scttfrdmn/burroughs/issues/1360)'s rule. `burroughs run` prints no such figure and gains
+    no flag for one.
+  - **The neuters.** With ADR 0130's rollback (spawned agents take the run slot), the run parks before the program's
+    first line, with two agents waiting for the slot, `PeakLiveAgents` 3 and none executing. With the fork's
+    `netpollBreak` a no-op, the drive parks at `/work?id=0 after 1 answered`: the handler's 1 ms timer never wakes the
+    M blocked in the poller. With the spawn door unserved, the first spawn traps, naming the import.
 
 ### Changed
 
