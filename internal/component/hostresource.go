@@ -65,7 +65,8 @@ var (
 	outputStreamResource = newHostResource("wasi:io/streams::output-stream", nil)
 	inputStreamResource  = newHostResource("wasi:io/streams::input-stream", nil)
 	errorResource        = newHostResource("wasi:io/error::error", nil)
-	descriptorResource   = newHostResource("wasi:filesystem/types::descriptor", nil)
+	// Minted by WASI 0.3's get-directories and open-at (ADR 0133, hostfs.go); its destructor closes what it holds.
+	descriptorResource = newHostResource("wasi:filesystem/types::descriptor", destroyFSDescriptor)
 	// WASI 0.3's terminal types (ADR 0119). Nothing mints one: every `get-terminal-*` answers none.
 	terminalInputResource  = newHostResource("wasi:cli/terminal-input::terminal-input", nil)
 	terminalOutputResource = newHostResource("wasi:cli/terminal-output::terminal-output", nil)
@@ -100,10 +101,16 @@ type hostResources struct {
 	// net is this instance's sockets (ADR 0123, hostsock.go): its connections, pending dials and socket
 	// goroutines, which Close stops and waits out. It has its own lock, never taken with mu held.
 	net *hostNet
+	// fs is this instance's open files and file goroutines (ADR 0133, hostfs.go), which Close stops and waits out.
+	// It has its own lock, never taken with mu held.
+	fs *hostFS
 }
 
 func newHostResources() *hostResources {
-	return &hostResources{table: canon.NewHandleTable(), objs: map[uint32]any{}, types: map[int]*hostResource{}, net: newHostNet()}
+	return &hostResources{
+		table: canon.NewHandleTable(), objs: map[uint32]any{}, types: map[int]*hostResource{}, net: newHostNet(),
+		fs: newHostFS(),
+	}
 }
 
 // closeAll destroys every own the guest still holds, once, when its instance closes (#1252, ADR 0118): a

@@ -35,6 +35,12 @@ func TestRunRoutesAComponentWhateverFlagsAreGiven(t *testing.T) {
 	}{
 		{"guest_args_after_--", []string{p3hello, "--", "a", "b"}},
 		{"--features", []string{"--features=threads", p3hello}},
+		// `--dir` and `--scratch` are a component's grants since ADR 0133 (Scott's ruling 2 on #1374), and were
+		// refused here, "takes no --dir or --scratch", until E1a. p3hello is a WASI 0.2 guest, granted nothing by
+		// either, and its run is unchanged. An explicit HOST:/GUEST mapping, not a bare host path: a bare `C:\…` is
+		// refused at flag parsing on Windows, before routing is reached (found on #1149's Windows run).
+		{"--dir", []string{"--dir", t.TempDir() + ":/g", p3hello}},
+		{"--scratch", []string{"--scratch", t.TempDir() + ":/g", p3hello}},
 	} {
 		t.Run("routes_"+c.name, func(t *testing.T) {
 			code, out, errOut := run(c.argv...)
@@ -52,11 +58,6 @@ func TestRunRoutesAComponentWhateverFlagsAreGiven(t *testing.T) {
 		argv       []string
 	}{
 		{"a_function_name", "takes no function name", []string{p3hello, "run"}},
-		// An explicit HOST:/GUEST mapping, not a bare host path. A bare `C:\…` is refused at flag parsing on
-		// Windows, before routing is reached, so the arm would test the flag's grammar rather than the refusal
-		// (found on #1149's Windows run). The parser's drive-letter rule handles `C:\…:/g`.
-		{"--dir", "takes no --dir or --scratch", []string{"--dir", t.TempDir() + ":/g", p3hello}},
-		{"--scratch", "takes no --dir or --scratch", []string{"--scratch", t.TempDir() + ":/g", p3hello}},
 		{"--env", "takes no --env", []string{"--env", "X=1", p3hello}},
 	} {
 		t.Run("refuses_"+c.name+"_by_name", func(t *testing.T) {

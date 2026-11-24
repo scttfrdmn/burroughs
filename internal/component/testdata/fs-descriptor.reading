@@ -1,0 +1,77 @@
+# Committed readings for fs-descriptor.wasm: wasi:filesystem@0.3's preopen, descriptor, open-at, stat, stat-at, get-flags,
+# get-type, read-via-stream and write-via-stream at the ABI (#1374 E1a, ADR 0133). Default path for each Go row: gate:async
+# on, gate:cm-threads both off and on.
+# Built:       wasm-tools parse fs-descriptor.wat -o fs-descriptor.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
+#                -S p3=y --dir <tree>::/ --invoke 'run(<row>)' fs-descriptor.wasm
+# Tree:        made fresh before every run: hello.txt "hello world", w.txt "0123456789", sub/inner.txt "inner",
+#              in-link -> hello.txt, out-link -> /etc. No row reads a directory, so host directory order is never read.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken
+#              2026-11-24.
+#
+# Each line is `<row>: <reading>`, and the test reads them by row. The row's number is its line's position, from 0.
+preopens: 19857665
+open-read: 110592
+content: 1819043176
+offset: 1684828783
+stat: 184877058
+stat-at: 184877058
+stat-at-kinds: 67109376
+stat-fields: 16843009
+get-flags: 289
+get-type: 328194
+write-at: 302051328
+write-content: 1093808432
+write-read-only-fd: 8519936
+escapes: 2661195422
+symlinks: 262286
+in-grant: 184549376
+errors: 2543032211
+nested: 43909120
+sync-lower: 184877056
+create: 33562624
+#
+# The two read-only rows come from the WIT's text, not from wasmtime: wasmtime 49.0.3's `--dir` always grants
+# read|mutate-directory (Burroughs' `--scratch`), so its CLI has no read-only grant to read them on. Burroughs runs them
+# on a read-only preopen and the test asserts these values. open-at's text: "If `flags` contains `write` or
+# `mutate-directory`, or `open-flags` contains `truncate` or `create`, and the base descriptor doesn't have
+# `descriptor-flags::mutate-directory` set, `open-at` fails with `error-code::read-only`."
+read-only-opens: 2694881281
+read-only-truncate: 721056
+#
+# Meaning: four bytes, byte 0 the low one. An operation's byte is 0 for ok and 0x80 | its error-code case for an error
+# (0x82 bad-descriptor, 0x8e loop, 0x93 no-entry, 0x97 not-directory, 0x9e not-permitted, 0xa0 read-only). A stream
+# copy's byte is its payload, progress << 4 | COMPLETED (0) or DROPPED (1).
+#   preopens           0x012f0101: one preopen; its name is 1 byte, "/"; its handle is nonzero.
+#   open-read          0x0001b000: open-at hello.txt ok; the first read COMPLETED with 11; the second DROPPED with 0; the
+#                      future ok.
+#   content            0x6c6c6568: "hell", the first four bytes read.
+#   offset             0x646c726f: "orld", read-via-stream(7) to the end.
+#   stat               0x0b050002: the async lower RETURNED (2) inline; ok; regular-file (5); size 11.
+#   stat-at            the same, through stat-at(symlink-follow, hello.txt) on the grant.
+#   stat-at-kinds      0x04000200: stat-at sub ok, directory (2); stat-at in-link unfollowed ok, symbolic-link (4).
+#   stat-fields        0x01010101: hello.txt's link-count 1; its access, modification and status-change times all some.
+#   get-flags          0x00000121: the grant reads 33 (read|mutate-directory); hello.txt opened read reads 1.
+#   get-type           0x00050202: the async lower RETURNED; the grant is a directory (2); hello.txt a regular-file (5).
+#   write-at           0x1200f000: w.txt opened read|write ok; write-via-stream(3)'s write COMPLETED with 15; the future
+#                      ok; 18 bytes read back. The host's w.txt reads "012ABCDEFGHIJKLMNO" after the run.
+#   write-content      0x41323130: "012A", the read-back's first four bytes.
+#   write-read-only-fd 0x00820100: hello.txt opened read ok; the write DROPPED with 0; the future err(bad-descriptor).
+#                      hello.txt is unchanged after the run.
+#   escapes            0x9e9e9e9e: open-at ../x, /etc, sub/../../x and out-link followed are each not-permitted.
+#   symlinks           0x0004008e: open-at out-link unfollowed is loop; stat-at out-link unfollowed ok, symbolic-link;
+#                      open-at in-link followed ok.
+#   in-grant           0x0b000000: open-at sub/../hello.txt ok; sub/inner.txt ok; stat-at in-link followed ok, size 11.
+#   errors             0x97939793: open-at missing.txt no-entry; hello.txt/x not-directory; stat-at missing.txt no-entry;
+#                      open-at hello.txt with open-flags directory not-directory.
+#   nested             0x029e0000: open-at sub with open-flags directory ok; inner.txt from it ok; ../hello.txt from it
+#                      not-permitted, since the base is sub; sub is a directory.
+#   sync-lower         0x0b050000: open-at and stat through their sync lowers: ok, ok, regular-file, size 11.
+#   create             0x02002000: new.txt opened create|truncate, read|write ok; a write COMPLETED with 2; the future
+#                      ok; its size 2. The host's new.txt reads "AB" after the run.
+#   read-only-opens    0xa0a0a001: on a read-only grant, the grant's flags are read (1); open-at hello.txt with write,
+#                      new.txt with create, and sub with mutate-directory are each read-only. On wasmtime's
+#                      read|mutate-directory grant the row reads 33: flags 33 and three oks, and new.txt is created.
+#   read-only-truncate 0x000b00a0: on a read-only grant, open-at hello.txt with truncate is read-only; hello.txt read to its
+#                      end has its future ok and 11 bytes, so nothing was truncated. On wasmtime's grant the row reads 0:
+#                      the truncate is ok, and 0 bytes are read back.

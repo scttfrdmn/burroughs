@@ -1532,6 +1532,10 @@ func InstantiateWithHostFeatures(bytes []byte, h *Host, feats bin.Features) (*In
 	if err != nil {
 		return nil, err
 	}
+	// A preopen that names no directory is the embedder's mistake, refused before anything runs (ADR 0133).
+	if perr := h.checkPreopens(); perr != nil {
+		return nil, perr
+	}
 	// gateAsync is not called here: it lives in walkComponent, so nested components are gated too (#952).
 	w, err := c.walkComponent(stubHost, h.wasi(), h.asyncWasi(), h.streamConsumers(), h.resourceSource())
 	if err != nil {
