@@ -180,8 +180,17 @@ func futureRead(h *asyncHandles) interp.CanonFunc {
 			ev, _ := fe.pendingEventLocked()
 			return []interp.Value{interp.I32(int32(ev.p2))}, nil
 		}
+		// **A reader that is not IDLE traps** (#1364 item 5): a read pending, or completed with its event untaken, is
+		// COPYING, and one whose COMPLETED was taken is DONE, and def:copy:"trap_if(end.state != End.State.IDLE)" traps
+		// both. wasmtime 49.0.3 traps the same. This was a Go error, which an embedder cannot tell from the engine
+		// failing.
+		//
+		// NEUTER, run: return the Go error it was, and TestFutureAndStreamChecksMatchThePin's read-after-read-pending,
+		// read-after-read-event-untaken and read-after-read-done rows (both gate states) fail on the error not being a
+		// trap.
 		if fe.resolved || fe.hasRead {
-			return nil, fmt.Errorf("component: future.read: end %d already read (a future is single-shot)", i)
+			return nil, &interp.Trap{Reason: fmt.Sprintf("future.read: end %d is not IDLE: a read is pending, or its "+
+				"value was taken (def:copy: trap_if(end.state != End.State.IDLE))", i)}
 		}
 		fe.readPtr = ptr
 		fe.hasRead = true
@@ -242,8 +251,8 @@ func copyFutureValueLocked(elem elemType, src *interp.CanonCaller, srcPtr uint32
 // futureDrop implements `canon future.drop-readable` (definitions.py:canon_future_drop_readable): remove the readable end from the
 // table. The guest drops after its read has delivered; slice-1 removes the entry (the end's lifetime is the
 // instance's, freed at Close) without the model's writable-side DONE trap, which is a future.write concern. Since
-// #1362 the drop notifies the paired writer (dropReaderOfWriterLocked), as def:End.drop does. It still does not trap a
-// reader that is mid-copy (def:drop:"trap_if(end.copying_or_cancelling())"), where the pin does.
+// #1362 the drop notifies the paired writer (dropReaderOfWriterLocked), as def:End.drop does. Since #1364 it traps a
+// reader that is mid-copy (def:drop:"trap_if(end.copying_or_cancelling())"), as the pin does; this said it did not.
 func futureDrop(h *asyncHandles) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
@@ -258,6 +267,16 @@ func futureDrop(h *asyncHandles) interp.CanonFunc {
 		fe, ok := handleAt[*readableFutureEnd](h, i)
 		if !ok {
 			return nil, wrongKindTrap("future.drop-readable", i, "a readable future end", "def:drop")
+		}
+		// **A reader mid-copy does not drop** (#1364 item 1): it is COPYING from its read until its event is taken,
+		// whether or not a write has completed it, and def:drop:"trap_if(end.copying_or_cancelling())" traps it.
+		// wasmtime 49.0.3 traps the same, "cannot remove busy future". This dropped it.
+		//
+		// NEUTER, run: drop this check, and TestFutureAndStreamChecksMatchThePin's drop-readable-read-pending and
+		// drop-readable-event-untaken rows (both gate states) return 7 where both oracles trap; the two control rows pass.
+		if fe.hasRead && !fe.delivered {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("future.drop-readable: end %d is mid-copy (COPYING): its read's "+
+				"event has not been taken (def:drop: trap_if(end.copying_or_cancelling()))", i)}
 		}
 		if fe.completeErr != nil { // a deferred host-completion failure surfaces here rather than being lost
 			return nil, fmt.Errorf("component: future.drop-readable: end %d had a failed completion: %w", i, fe.completeErr)
@@ -421,8 +440,9 @@ func futureCancelRead(h *asyncHandles, async bool) interp.CanonFunc {
 		// CANCELLING_COPY arm); a COMPLETED leaves it DONE, the delivered event standing.
 		//
 		// NEUTER, run: drop this reset, and TestFutureDropWritableAndCancelReadMatchTheOracles' read-after-cancel-read
-		// rows (both gate states) fail on "component: future.read: end 1 already read (a future is single-shot)" where
-		// both oracles read 1792. write-after-cancel-read and poll-after-cancel-read still pass under it.
+		// rows (both gate states) trap "future.read: end 1 is not IDLE" where both oracles read 1792 (re-run under #1364,
+		// which made the second read a trap; it was the Go error "already read (a future is single-shot)").
+		// write-after-cancel-read and poll-after-cancel-read still pass under it.
 		if e.result == copyCancelled {
 			e.resolved, e.delivered, e.hasRead, e.caller = false, false, false, nil
 		}
@@ -605,7 +625,10 @@ func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
 // a write in flight, resolving it to CANCELLED inline and returning the packed `result|progress<<4`. The
 // future analog of stream.cancel-write, through the same cancel_copy substrate. Pinned by fixtures.json
 // future_cancel_write (the future WRITE arm's running CANCELLED; progress 0; the end left IDLE).
-func futureCancelWrite(h *asyncHandles) interp.CanonFunc {
+//
+// `async` is the built-in's form (#1364 item 2), as futureCancelRead's is: the sync form traps on a writer joined to a
+// set, after the state check, in def:cancel_copy's order. One binding served both forms, unguarded.
+func futureCancelWrite(h *asyncHandles, async bool) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: future.cancel-write: got %d args, want (i)", len(args))
@@ -630,6 +653,17 @@ func futureCancelWrite(h *asyncHandles) interp.CanonFunc {
 		// write-then-read-cancel row traps "no write in flight".
 		if !e.hasWrite || e.delivered {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-write: end %d has no write in flight (COPYING)", i)}
+		}
+		// A sync cancel waits for the end's own event, which a set would deliver to its waiter instead (grave #1301):
+		// def:cancel_copy:"trap_if(end.in_waitable_set() and not async_)", after the state check above, so a joined
+		// writer with no write traps as having none, as both oracles read it.
+		//
+		// NEUTER, run: drop this check, and TestFutureAndStreamChecksMatchThePin's cancel-write-sync-joined rows (both
+		// gate states) return 2 where both oracles trap; cancel-write-idle-joined and the async rows pass either way.
+		if !async && e.set != nil {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-write: end %d is joined to a waitable set, so its "+
+				"sync form cannot wait for its own event (def:cancel_copy: trap_if(end.in_waitable_set() and not "+
+				"async_)); unjoin it first, or cancel with async", i)}
 		}
 		if !e.resolved {
 			e.completeWriteLocked(e.progress, copyCancelled) // progress 0 for an undriven pending write

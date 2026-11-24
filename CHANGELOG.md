@@ -51,6 +51,24 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **Four future and stream built-in checks now match the pin** (items 1, 2, 3 and 5 of
+  [#1364](https://github.com/scttfrdmn/burroughs/issues/1364); item 4 is the typed-future entry). Each one let a call
+  through, or trapped for another reason, where the reference traps.
+  - **Read on both oracles before the code:** `future-stream-checks.wasm` (11 rows) and
+    `future-cancel-write-async.wasm` (2 rows), on wasmtime 49.0.3 (10 of 10) and on the pin 2e7895c (`refread.py`,
+    16 of 16). The two agree on every row, and the pin's traceback names the check behind each trap.
+  - **`future.drop-readable` traps a reader mid-copy**: a read pending, or one a write completed whose event is not
+    yet taken. It dropped it.
+  - **The sync `future.cancel-write` traps a writer joined to a waitable set**, after its state check, as the sync
+    `future.cancel-read` already did. One binding served both forms.
+  - **The sync stream cancels check the end's state before the join**, so a joined end with no copy in flight traps as
+    having none, as both oracles read it. `syncCancelGuard`, which checked the join first, is gone; the check is now
+    in each built-in, after the state's.
+  - **A `future.read` on a reader that is not idle traps.** It returned a Go error.
+  - **`future-read-synth.wasm` no longer drops its reader mid-read**, which the first item now traps; its WAT, in the
+    testdata README, is the fixture's source.
+  - **Witnesses:** `TestFutureAndStreamChecksMatchThePin`, in both `gate:cm-threads` states. Each new check was
+    neutered and run, and its site records the result.
 - **A `future.write` after a cancelled one is admitted, where it trapped "not writable"**
   ([#1353](https://github.com/scttfrdmn/burroughs/issues/1353)). A cancelled write leaves its writable end IDLE, as
   the pin's `FutureEnd.notify` does, so a second write parks with no reader and a read then completes it.

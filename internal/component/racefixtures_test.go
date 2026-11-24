@@ -88,6 +88,9 @@ var raceWitnessFixtures = []string{
 	"future-cancel-read-async.wasm",
 	// #1353's witness (TestAFutureWriteAfterACancelledOneMatchesTheOracles): the copy of a second write
 	"future-write-after-cancel.wasm",
+	// #1364's witness (TestFutureAndStreamChecksMatchThePin): the copies its rows complete before each check
+	"future-stream-checks.wasm",
+	"future-cancel-write-async.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,
