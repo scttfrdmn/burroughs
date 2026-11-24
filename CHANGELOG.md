@@ -154,6 +154,13 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **The Windows `-race` job runs `internal/spec` alone, under its own bound**
+  ([#1358](https://github.com/scttfrdmn/burroughs/issues/1358)).
+  - **The defect:** `windows.yml`'s 30m bound was justified as "~3x the slowest observed package", but `internal/spec`, running beside the other packages, had grown to 1349 s, a headroom of 1.3x.
+  - **The effect:** a slow runner timed it out on #1355 with nothing hung. #1366 timed it out again, once C3's arms had doubled the packages running beside it.
+  - **The repair:** the other packages keep the 30m bound, and `internal/spec` runs in a step of its own, with `if: always()` and a 60m bound.
+  - **C3's READY guard is scaled 4x under `-race`** (`raceGuardScale`). Its single-M CPU phase outran the 120 s guard on CI's macOS and linux runners. A skip would not have helped: CI's workflow-wide `BURROUGHS_NO_SKIP=1` revokes every licensed skip, by design.
+  - **C3's two tests are in the Windows triage map under #1165 and #674.** On a port without a reservation, a shared memory cannot grow past 128 pages, so the Go guest runs out of memory there.
 - **`future.drop-writable` (0x1b) and `future.cancel-read` (0x18) are bound, so a component importing either links**
   ([#1362](https://github.com/scttfrdmn/burroughs/issues/1362)). Both were refused at instantiate by name, so a guest
   that mints a future per operation could not release its writable ends.

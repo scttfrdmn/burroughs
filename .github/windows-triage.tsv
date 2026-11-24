@@ -19,4 +19,6 @@ TestShellAndGoAgreeOnTheSuitePopulation	944	POSIX exec and permission semantics
 TestStopBringsATailCallLoopToASafepoint	946	the wait after Resume, 60s since #1113; amd64 under race was #896, settled as contention by that bound
 TestStopRefusesASecondConcurrentStop	946	the same wait after Resume, 60s since #1113; seen once at 30s (run 40035281003, 2026-10-23), not on re-run
 TestGoRuntimeTortureSuite	1165	c1alloc: a shared memory on the fallback path cannot grow past 128 pages, so the Go guest runs out of memory (run 40743299337)
+TestC3BurroughsRunMatchesTheHostReading	1165,674	C3's multi-M Go guest: its shared memory on the fallback path cannot grow past 128 pages, "out of memory: cannot allocate 1572864-byte block" (run 45299544136)
+TestC3MultiMRunsOnAtLeastFourAgents	1165,674	the same guest, in-process: the same out-of-memory at the 128-page cap (run 45299544136)
 TestTheStopsFlushEndsAtItsDeadline	1310	the 16 MiB flush ends before its 2s deadline even after a measured block (1.19s, run 43988768803): unclassified, likely buffer autotuning

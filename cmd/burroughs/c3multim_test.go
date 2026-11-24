@@ -71,6 +71,11 @@ var c3Sizes = []int{0, 1, 63, 4095, 4096, 4097, 40000, 131072}
 //
 // It returns the reading's lines: one per request, the server's stdout after READY, and its exit code; and the exit,
 // whose stderr places the Ms. Every wait has c2RequestGuard, and a failure is returned at its place.
+// c3ReadyGuard bounds the wait for READY, which comes after the rendezvous and the CPU phase. It is c2RequestGuard
+// scaled by raceGuardScale, because under -race the single-M build's CPU phase outran c2RequestGuard on CI's macOS
+// and linux runners (#1366's CI). It is a hang guard, and the reading is still asked of every row.
+const c3ReadyGuard = c2RequestGuard * raceGuardScale
+
 func driveC3(srv c2Server) ([]string, c2Exit, error) {
 	lines, d, err := driveC3Rows(srv)
 	if d != nil && d.exit != nil {
@@ -93,7 +98,7 @@ func driveC3Rows(srv c2Server) ([]string, *c2Driver, error) {
 	var first string
 	select {
 	case first = <-ready:
-	case <-time.After(c2RequestGuard):
+	case <-time.After(c3ReadyGuard):
 		return nil, d, d.failed("READY", os.ErrDeadlineExceeded)
 	}
 	var lines []string
