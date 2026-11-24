@@ -188,9 +188,31 @@ jobs:
         # re-scoping them again later.
         #
         # 30m rather than 0 (no limit): a real hang must still end the job rather than burn the runner's
-        # six-hour ceiling, and 30m is ~3x the slowest observed package. If a package ever reaches it,
-        # that is a hang to diagnose and not a bound to raise.
-        run: go test -race -timeout 30m ./...
+        # six-hour ceiling. If a package ever reaches it, that is a hang to diagnose and not a bound to raise.
+        #
+        # ## `internal/spec` is not in this step (#1358)
+        #
+        # This comment said 30m was "~3x the slowest observed package", and that stopped being true without
+        # the number moving. `internal/spec` grew to 1349 s under -race while the other packages ran beside it
+        # (main c99f1a9), a headroom of 1.3x. A slow runner then timed it out with nothing hung: on #1355 the
+        # running test was 51 s in. #1366's run timed it out again, because C3's arms had doubled
+        # `cmd/burroughs` and `internal/component` (616 s and 837 s) and those packages ran beside it.
+        #
+        # So the slowest package no longer shares the runner. It runs alone in the next step, and the
+        # rule above holds again for every package left in this one: the slowest here was `internal/component`
+        # at 837 s on #1366, against 30m.
+        run: go test -race -timeout 30m $(go list ./... | grep -v '/internal/spec$')
+
+      - name: go test -race (internal/spec, alone)
+        # **`if: always()`**, so a failure in the step above does not hide this package's result, which is the
+        # one the previous form timed out.
+        #
+        # Its bound is the rule's, restated for a package alone on the runner: a hang must end the job, and the
+        # bound is about 3x the package's time. Beside the other packages it took 1349–1375 s. Alone, on #1366's
+        # run 45299544136, it took 1324.7 s, so contention was never most of its time and the runner's speed is.
+        # 60m is 2.7x that reading. If it ever reaches 60m, that is a hang to diagnose, not a bound to raise.
+        if: always()
+        run: go test -race -timeout 60m ./internal/spec/
 
       - name: the confinement witness — a scratch grant is not escapable through a junction
         id: witness

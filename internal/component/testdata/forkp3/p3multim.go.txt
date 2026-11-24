@@ -1,0 +1,348 @@
+// p3multim is C3's witness (Burroughs #1345), v0.15.0's: an ordinary Go program at GOMAXPROCS 4 that runs on
+// several Ms at once, driven by a client outside the process or instance that runs it. The same source is built
+// three ways: by stock Go for a host process, whose responses and stdout are the committed reading; by the Phase 4
+// fork for GOOS=wasip3 under GOEXPERIMENT=burroughsspawnp3 (multi-M); and by the fork for stock GOOS=wasip3, whose
+// GOMAXPROCS is clamped to 1. Every arm's responses and stdout must equal the reading byte for byte.
+//
+//	p3multim [procs]      procs defaults to 4; the program sets it itself, since the GOMAXPROCS environment
+//	                      variable cannot reach schedinit on wasip3 (Burroughs #1341)
+//
+// Its phases, in order, all printing from main only:
+//
+//  1. RENDEZVOUS: GOMAXPROCS(0) participants, main and the rest goroutines, each spinning while CALLING a non-leaf
+//     until all have arrived, bounded. Nothing preempts a goroutine on wasm before its first stop-the-world, so all
+//     meeting at 4 means four Ms ran guest code at the same moment. stderr: "rendezvous M of N".
+//  2. CPU: 64 SHA-256 jobs over 8 worker goroutines, each hashing 32 KiB in 4 KiB writes, then 64 rounds. On wasm
+//     sha256's block function loops with no call, so a stop-the-world waits for one Write; hashing in chunks bounds
+//     that wait (Burroughs #1344). stdout: the digests; stderr: how many Ms ran jobs, and their shares.
+//  3. HTTP: it listens on 127.0.0.1:0, prints "READY <port>", and serves the driver's clients (below).
+//  4. GC: once all 8 /hold requests are inside their handlers, main forces runtime.GC() while they are in flight,
+//     then releases them. stdout: whether NumGC advanced.
+//  5. EXIT: main prints the CPU and GC lines and "stopped", and returns. Its goroutine may be on any M.
+//
+// The server's endpoints:
+//
+//	GET  /hello       "hello, multi-M\n"
+//	GET  /work?id=N   for N in 0..127, a 256-step h = sha256(h) chain from sha256("c3/work/" + N), in hex and a
+//	                  newline, answered after a 1 ms sleep, so a request only a timer can wake; any other id is a 400
+//	POST /echo        the request body, through io.Copy, full duplex, with the request's Content-Length
+//	POST /sum         the body's length and sha256, the body read in 4 KiB pieces
+//	GET  /hold?id=N   for N in 0..7: parks until main's forced GC has returned; the 8th to arrive tells main
+//	GET  /quit        "bye\n", then main shuts the server down gracefully
+//
+// Every response's Date header is suppressed, so a response is a function of its request. stdout carries only what
+// is identical whatever the build, the engine or GOMAXPROCS; stderr carries what differs (the Ms). The M a job or a
+// handler ran on is read through a linkname to runtime.acquirem, used as an identity only, so every build of it
+// passes -ldflags=-checklinkname=0.
+//
+// With no network grant, the listen is refused at tcp-socket.create (EACCES): p3multim prints that and exits 1.
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"runtime"
+	"slices"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+	"unsafe"
+)
+
+//go:linkname acquirem runtime.acquirem
+func acquirem() unsafe.Pointer
+
+//go:linkname releasem runtime.releasem
+func releasem(mp unsafe.Pointer)
+
+// mid is the M the caller is running on, as an identity.
+func mid() uintptr {
+	mp := acquirem()
+	releasem(mp)
+	return uintptr(mp)
+}
+
+// perM counts what ran on each M.
+type perM struct {
+	mu sync.Mutex
+	n  map[uintptr]int
+}
+
+func (p *perM) note() {
+	id := mid()
+	p.mu.Lock()
+	if p.n == nil {
+		p.n = map[uintptr]int{}
+	}
+	p.n[id]++
+	p.mu.Unlock()
+}
+
+// shares is how many Ms ran anything, and their counts, largest first.
+func (p *perM) shares() (int, []int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var s []int
+	for _, c := range p.n {
+		s = append(s, c)
+	}
+	slices.Sort(s)
+	slices.Reverse(s)
+	return len(s), s
+}
+
+// ---- 1. the rendezvous ----
+
+const rendezvousBound = 10_000_000
+
+var (
+	arrived, met atomic.Int32
+	sink         atomic.Uint64
+)
+
+//go:noinline
+func deeper(x uint64) uint64 { return x*0x9E3779B97F4A7C15 + 1 }
+
+// work is a non-leaf with a small frame: its prologue carries the stack check.
+//
+//go:noinline
+func work(x uint64) uint64 {
+	y := deeper(x)
+	return y ^ (y >> 29)
+}
+
+// meet arrives, then spins calling work until all n have arrived or the bound runs out. It reports whether it met.
+func meet(n int32) bool {
+	arrived.Add(1)
+	x := uint64(1)
+	ok := false
+	for i := 0; i < rendezvousBound; i++ {
+		if arrived.Load() == n {
+			met.Add(1)
+			ok = true
+			break
+		}
+		x = work(x)
+	}
+	sink.Add(x)
+	return ok
+}
+
+// ---- 2. the CPU phase ----
+
+const (
+	cpuJobs    = 64
+	cpuWorkers = 8
+	cpuBytes   = 32 << 10
+	cpuChunk   = 4 << 10
+	cpuRounds  = 64
+)
+
+// cpuJob hashes job j's 32 KiB, generated and written 4 KiB at a time, then chains cpuRounds more rounds.
+func cpuJob(j int) [32]byte {
+	h := sha256.New()
+	var chunk [cpuChunk]byte
+	x := uint64(j)*0x51ED27 + 1345
+	for off := 0; off < cpuBytes; off += cpuChunk {
+		for i := range chunk {
+			x = x*6364136223846793005 + 1442695040888963407
+			chunk[i] = byte(x >> 56)
+		}
+		h.Write(chunk[:])
+	}
+	var d [32]byte
+	h.Sum(d[:0])
+	for range cpuRounds {
+		d = sha256.Sum256(d[:])
+	}
+	return d
+}
+
+// ---- 3. the server ----
+
+// workChain is /work's answer for id.
+func workChain(id int) string {
+	h := sha256.Sum256([]byte("c3/work/" + strconv.Itoa(id)))
+	for range 256 {
+		h = sha256.Sum256(h[:])
+	}
+	return hex.EncodeToString(h[:]) + "\n"
+}
+
+const holds = 8
+
+func main() {
+	procs := 4
+	if len(os.Args) > 1 {
+		if n, err := strconv.Atoi(os.Args[1]); err == nil && n > 0 {
+			procs = n
+		}
+	}
+	runtime.GOMAXPROCS(procs)
+	np := int32(runtime.GOMAXPROCS(0))
+	fmt.Fprintf(os.Stderr, "gomaxprocs %d\n", np)
+
+	// 1. The rendezvous.
+	var rw sync.WaitGroup
+	for range np - 1 {
+		rw.Add(1)
+		go func() { defer rw.Done(); meet(np) }()
+	}
+	mainMet := meet(np)
+	fmt.Fprintf(os.Stderr, "rendezvous: main's spin ended, met %v, %d of %d arrived\n", mainMet, arrived.Load(), np)
+	rw.Wait()
+	fmt.Fprintf(os.Stderr, "rendezvous %d of %d\n", met.Load(), np)
+
+	// 2. The CPU phase.
+	var cpuM perM
+	digests := make([][32]byte, cpuJobs)
+	jobs := make(chan int)
+	var cw sync.WaitGroup
+	for range cpuWorkers {
+		cw.Add(1)
+		go func() {
+			defer cw.Done()
+			for j := range jobs {
+				digests[j] = cpuJob(j)
+				cpuM.note()
+			}
+		}()
+	}
+	for j := range cpuJobs {
+		jobs <- j
+	}
+	close(jobs)
+	cw.Wait()
+	all := sha256.New()
+	for _, d := range digests {
+		all.Write(d[:])
+	}
+	nm, sh := cpuM.shares()
+	fmt.Fprintf(os.Stderr, "cpu: ms ran jobs %d %v\n", nm, sh)
+
+	// 3. The server.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Println("listen refused, EACCES:", errors.Is(err, syscall.EACCES))
+		os.Exit(1)
+	}
+	fmt.Printf("READY %d\n", ln.Addr().(*net.TCPAddr).Port)
+
+	var httpM perM
+	var held atomic.Int32
+	allHeld := make(chan struct{})
+	gcDone := make(chan struct{})
+	quit := make(chan struct{}, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "hello, multi-M\n")
+	})
+	mux.HandleFunc("/work", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil || id < 0 || id > 127 {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		s := workChain(id)
+		time.Sleep(time.Millisecond)
+		io.WriteString(w, s)
+	})
+	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.ContentLength < 0 {
+			http.Error(w, "POST with a Content-Length", http.StatusBadRequest)
+			return
+		}
+		// An HTTP/1 handler that writes before it has read its body has the rest discarded unless it asks for full
+		// duplex; an echo's response is its body, so it must.
+		if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+			http.Error(w, "full duplex: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// The length declared, so the response is not chunked, whose chunk boundaries would be the body reads'.
+		w.Header().Set("Content-Length", strconv.FormatInt(r.ContentLength, 10))
+		io.Copy(w, r.Body)
+	})
+	mux.HandleFunc("/sum", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST", http.StatusBadRequest)
+			return
+		}
+		h := sha256.New()
+		var buf [cpuChunk]byte
+		n := 0
+		for {
+			k, err := r.Body.Read(buf[:])
+			h.Write(buf[:k])
+			n += k
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				http.Error(w, "read: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		fmt.Fprintf(w, "%d bytes, sha256 %x\n", n, h.Sum(nil))
+	})
+	mux.HandleFunc("/hold", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil || id < 0 || id >= holds {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		if held.Add(1) == holds {
+			close(allHeld)
+		}
+		<-gcDone
+		fmt.Fprintf(w, "hold %d: in flight through the forced GC\n", id)
+	})
+	mux.HandleFunc("/quit", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "bye\n")
+		quit <- struct{}{}
+	})
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpM.note()
+		w.Header()["Date"] = nil
+		mux.ServeHTTP(w, r)
+	})}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ln) }()
+
+	// 4. The forced GC, with every /hold request inside its handler.
+	<-allHeld
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	before := ms.NumGC
+	runtime.GC()
+	runtime.ReadMemStats(&ms)
+	advanced := ms.NumGC > before
+	close(gcDone)
+
+	// 5. Shut down at /quit, then print.
+	<-quit
+	if err := srv.Shutdown(context.Background()); err != nil {
+		fmt.Println("shutdown:", err)
+		os.Exit(1)
+	}
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+		fmt.Println("serve:", err)
+		os.Exit(1)
+	}
+	nm, sh = httpM.shares()
+	fmt.Fprintf(os.Stderr, "http: ms ran handlers %d %v\n", nm, sh)
+	fmt.Printf("cpu: %d jobs over %d workers, %d KiB each in %d KiB writes then %d rounds\n",
+		cpuJobs, cpuWorkers, cpuBytes>>10, cpuChunk>>10, cpuRounds)
+	fmt.Printf("cpu: job 0 %x\ncpu: job %d %x\n", digests[0], cpuJobs-1, digests[cpuJobs-1])
+	fmt.Printf("cpu: the digests in job order, sha256 %x\n", all.Sum(nil))
+	fmt.Printf("gc: forced with %d requests in flight inside their handlers, NumGC advanced: %v\n", held.Load(), advanced)
+	fmt.Println("stopped")
+}

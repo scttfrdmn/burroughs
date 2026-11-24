@@ -411,3 +411,106 @@ The neuters, each a temporary edit of Burroughs, run against TestC2BurroughsRunM
   the monotonic clock's wait-for never          the drive fails "parked at /work?id=0 after 1 answered", at the
   resolves (hostsys.go's deadline forced to     120 s guard (c2RequestGuard).
   the largest mark):
+
+C3's witness components (#1345), v0.15.0's: p3multim, one Go source at GOMAXPROCS 4 with a net/http server driven by a
+client outside the instance, in two builds. Same recipe and pins as F4's, except:
+
+Fork SHA:     78205cfa32d117371ed7121e909f3d6921e8e10b (branch wasip3/c3, from wasip3/f10 at a3f66ea6b4; its design note,
+              phase4/wasip3-c3.md, is the commit after it, fed3c3b43a, which changes no code). It changes no runtime,
+              compiler or syscall code (git diff wasip3/f10 -- src is empty): it adds the source and a buildp3.sh knob
+Toolchain:    go version go1.28-devel_4aefd4e529 Mon Nov 23 13:30:52 2026 -0800 darwin/arm64
+              (F10's, unchanged: the fork's bin/go from src/make.bash at 4aefd4e529 with F10's wasmobj.go change, the
+              tree F10's code commit c6aec60d72 records; bootstrapped by go1.26.9)
+Built on:     darwin/arm64, 2026-11-23
+Guest source: p3multim.go.txt, the only file of its module. go.mod is "module p3multim" and "go 1.26", the go.mod arm N's
+              build has (cmd/burroughs/c3multim_test.go's c3GoMod). It imports context, crypto/sha256, encoding/hex, errors,
+              fmt, io, net, net/http, os, runtime, slices, strconv, sync, sync/atomic, syscall, time and unsafe. It uses
+              two linknames, runtime.acquirem and runtime.releasem, for an M's identity only, so every build of it,
+              arm N's included, passes -ldflags=-checklinkname=0.
+Recipe:       buildp3.sh, whose new BUILDP3_LDFLAGS passes -ldflags (F7 and F9 passed it through a GO wrapper):
+                  BUILDP3_LDFLAGS=-checklinkname=0 BUILDP3_SPAWN=1 phase4/buildp3.sh <dir> <out>/p3multim.wasm
+                  BUILDP3_LDFLAGS=-checklinkname=0 phase4/buildp3.sh <dir> <out>/p3multim-1m.wasm
+              <dir> holds p3multim.go.txt as main.go beside the go.mod, OUTSIDE any VCS checkout: built inside a git
+              checkout, go build stamps vcs.revision, vcs.time and vcs.modified into the module (127 bytes more,
+              measured), and the bytes then name a checkout rather than this source.
+Order:        the reading came first. p3multim.reading was generated from arm N, the source built by stock go1.26.9
+              darwin/arm64 and run as a host process at GOMAXPROCS 4, by `go test ./cmd/burroughs/ -run
+              TestC3HostServerMatchesItsReading -update-c3multim`, and committed on its own before either wasm was built.
+
+  p3multim.wasm       (GOEXPERIMENT=burroughsspawnp3: the spawn door, mstart, a shared memory)
+    sha256: bde4c1a15407d918f45874a858d4d6b3df90ba271e71260acb2dcc45ba9c70ee
+    bytes:   10081606
+    core:    10066950 bytes, sha256 0322b9815ffa48b6c8022908beab44b87765126a3bb5de8162ff88945aa1384a
+
+  p3multim-1m.wasm    (stock GOOS=wasip3: no door, an unshared memory, GOMAXPROCS clamped to 1)
+    sha256: dd9c6eb68fa0c26e47dcfb8685c18c60736126dfb848ecaff329cebbaa72c569
+    bytes:   10066683
+    core:    10052525 bytes, sha256 123a91b4d0f9f2cef8b3bcad54fc565e600a0f5a8b6cb2f10b9893c54ca582ae
+
+Each built twice, from two scratch directories: identical bytes, component and core. p3multim-1m's core module imports 63
+names; p3multim's imports the same 63 and two more, the door and the break stream's read (the fork's F8):
+
+    (import "wasi:cli/stdout@0.3.0" "[async-lower][stream-read-0]write-via-stream" ...)
+    (import "burroughs:threads/spawn@0.1.0" "spawn" ...)
+    (memory (;0;) 88 65536 shared)              p3multim-1m: (memory (;0;) 88)
+
+p3multim exports run, internal/wasi's cabi_realloc, mstart and memory; p3multim-1m the same less mstart.
+memory.atomic.wait32 and memory.atomic.notify appear once each in p3multim's core, and not in p3multim-1m's.
+
+The fork's two standing checks (its phase4/wasip3-f10.md) on these cores and this toolchain:
+  checkstw.sh p3multim.core.wasm p3multim-1m.core.wasm   each: 0 poll sites, slow path not linked, 0 wrapping
+                                                         large-frame checks, 1046 widened. STW PASS: 2 module(s)
+  checkstw.sh (its own four probes)                      STW PASS: 4 probes
+  checkfileset.sh                                        180 and 182 files, the allow-list exactly. FILESET PASS
+
+ARMS, one client: driveC3 in cmd/burroughs/c3multim_test.go, raw TCP and HTTP/1.1 (C2's captures, p3multim.reading's header
+has the format): a keep-alive row of 13 requests, 8 concurrent connections of 16 requests each (/work, /hello, POST /echo
+and POST /sum with bodies of 0 to 131072 bytes), the GC row (8 connections each sending /hold?id=i before any response is
+read; the program forces runtime.GC() once all 8 are inside their handlers), and /quit. 152 request lines, the stdout after
+READY, and the exit. stderr is not compared; the arms read its rendezvous line, and log its per-M lines.
+
+Darwin/arm64 (Apple M4 Pro), 2026-11-23, Burroughs aa0a0e4 plus this slice's test commits (no engine file changed):
+
+  N:  TestC3HostServerMatchesItsReading: the source built by go1.26.9, -trimpath -ldflags=-checklinkname=0,
+      CGO_ENABLED=0, run as a host process at GOMAXPROCS 4 (no argv) and 1 (argv "1"). 10 of 10, each at both, and 3 of 3
+      under -race. Rendezvous logged, not asserted (a host process is preempted asynchronously): 4 of 4 and 1 of 1.
+  B4: TestC3BurroughsRunMatchesTheHostReading/multi-M: `burroughs run --inherit-network p3multim.wasm` through dispatch,
+      BURROUGHS_CM_SHARED_MEMORY=1. 10 of 10 line for line, and the rendezvous 4 of 4 in all 10, 2.5 s each. Logged:
+      4 Ms ran the CPU jobs every run (e.g. [17 16 16 15], [16 16 16 16]); 5 or 6 Ms ran the 150 handlers
+      (e.g. [43 39 37 24 7], [45 35 34 32 3 1]). 3 of 3 under -race, about 36 s each.
+  B1: TestC3BurroughsRunMatchesTheHostReading/single-M: `burroughs run --inherit-network p3multim-1m.wasm`, the gate
+      unset. 10 of 10, rendezvous 1 of 1, 1 M [64] and [150]; about 6.7 s each, and 3 of 3 under -race, about 97 s each.
+  G:  TestC3BurroughsRunMatchesTheHostReading/gate off: p3multim.wasm with the gate unset: exit 5, nothing on stdout,
+      refused at the spawn door's lower before any guest code runs, naming gate:cm-shared-memory and
+      BURROUGHS_CM_SHARED_MEMORY ("...the component imports burroughs:threads/spawn@0.1.0::spawn, which is offered
+      only with gate:cm-shared-memory on: its agents share the component's shared canonical memory..."). The door's
+      refusal is the one the walk returns; whether the shared canon's own refusal (ADR 0129) would follow it was not
+      asked.
+  P:  internal/component's TestC3MultiMRunsOnAtLeastFourAgents: p3multim.wasm through InstantiateWithHost and CallRun,
+      with its own smaller client (64 /work, the 8 /hold, /quit), the gate on. PeakLiveAgents read after run returned,
+      on the core instance exporting mstart: 5 or 6 in each of 12 runs (at least 4 asserted), and 5, 5, 6 under -race.
+      Its stdout equals the reading's, and the rendezvous reads 4 of 4. ExecutingAgents sampled every 200 us, logged
+      only (grave #1360): 4 or 5.
+  O:  wasmtime 49.0.3 (f96eabaa1 2026-10-14), `run -S inherit-network p3multim-1m.wasm`, offline, not in CI, through
+      driveC3 by a throwaway test in cmd/burroughs, C2's arm O shape, never committed: 10 of 10 line for line,
+      rendezvous 1 of 1. wasmtime cannot run p3multim.wasm: its shared canonical memory breaks the canonopt rule, which
+      buildp3.sh asserts wasm-tools refuses it for.
+
+The neuters, each a temporary edit, made and reverted with the editor, never committed:
+  ADR 0130's rollback (agents.go's spawnAgent:     multi-M: "parked at READY after 0 answered". P: no line on stderr
+  the `!free` Enter arm set for a free instance   at all, PeakLiveAgents 3, ExecutingAgents 0, two spawned agents
+  too, so spawned agents take the run slot):      in acquireRun at their entry, one goroutine in memory.atomic.wait32:
+                                                  the runtime's first Ms wait for the slot its first agent holds while
+                                                  it waits for them, before the program's first line. 1 run each.
+  the fork's netpollBreak a no-op (its            multi-M: "parked at /work?id=0 after 1 answered", 5 of 5 at the 120 s
+  netpoll_wasip3.go; a scratch p3multim.wasm,     guard: the 1 ms timer a handler sets on one M never wakes the M
+  sha256 cf8e3436..., reverted before any run):   blocked in the poller. P, whose client differs: every request
+                                                  answered, then run does not return after /quit, stderr stopping
+                                                  after the CPU line, PeakLiveAgents 5: Shutdown's poll timer, the same
+                                                  shape. 1 run. A parked request reads its place; none hung silently.
+  the gate off:                                   G above, a committed row.
+  the spawn door unserved (hostsys.go's           multi-M: no READY line, exit 1, stderr "host function trapped:
+  spawnDoors left empty):                         component: link refused: import burroughs:threads/spawn@0.1.0::spawn
+                                                  is not provided (stub host; ...)". Refused by name at the runtime's
+                                                  first spawn, not at instantiation: an import no table serves is bound
+                                                  to the stub host, as every unserved import is. P: no READY line.
