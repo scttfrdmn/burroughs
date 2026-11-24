@@ -14,3 +14,9 @@ package component
 // opened, which any unrelated hang would also do. A count fixed per build leaves the case's own assertion to
 // catch the neuter.
 const raceCountScale = 20
+
+// raceGuardScale stretches a hang guard under `-race`, as `cmd/burroughs`'s does (#1366). A guard turns a hang into a
+// reported place and is not a measurement, so it may be as long as a slow build needs. TestC3MultiMRunsOnAtLeastFourAgents
+// reads it. On #1390's macOS race run, its CPU phase outran the 2-minute READY guard: the rendezvous had closed 4 of 4
+// and ExecutingAgents read 4, so the guest was computing, not parked, with the race job at 81% of its budget.
+const raceGuardScale = 4
