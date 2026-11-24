@@ -76,7 +76,8 @@ whose output `go test` asserts.
 Three things make the experimental apparatus:
 - **Burroughs**, the engine.
 - **The Phase 4 Go fork**, a modified Go toolchain whose `wasip1` port starts real threads through Burroughs' spawn
-  import. Stock Go's `wasip1` port is single-threaded. The fork is not published.
+  import, and whose `wasip3` port does the same inside a component through Burroughs' component spawn door. Stock
+  Go's `wasip1` port is single-threaded. The fork is not published.
 - **The Go-runtime torture suite** ([#406](https://github.com/scttfrdmn/burroughs/issues/406)): Go programs built
   with the fork, each of whose observable results must match the same program built with stock Go.
 
@@ -85,18 +86,22 @@ it does not show.
 
 ## Status
 
-*Written against `v0.14.0`.*
+*Written against `v0.15.0`.*
 
 - **The threads phase**, v1 (decision 0099). The MVP core suite is green.
 - **On by default:** threads, SIMD, relaxed SIMD, extended constant expressions, tail calls, multi-memory, memory64,
   and the component model. Exception handling and GC stay off.
 - **WASI preview 1** runs, with explicit preopens and no default grant. A guest can start its own threads on that
   path.
-- **WASI 0.3** is served to a single-threaded component: `wasi:cli`, `wasi:clocks`, `wasi:random`, and
-  `wasi:sockets` TCP and name lookup. The network is denied unless granted with `--inherit-network` or
-  `--allow-ip-name-lookup`. A Go program built by the Phase 4 fork for `GOOS=wasip3` runs on it, up to a `net/http`
-  server whose responses match stock Go's and wasmtime 49.0.3's byte for byte. WASI 0.3 across more than one thread
-  is the next release's.
+- **WASI 0.3** is served to a component: `wasi:cli`, `wasi:clocks`, `wasi:random`, and `wasi:sockets` TCP and name
+  lookup. The network is denied unless granted with `--inherit-network` or `--allow-ip-name-lookup`. A Go program
+  built by the Phase 4 fork for `GOOS=wasip3` runs on it, up to a `net/http` server whose responses match stock Go's
+  and wasmtime 49.0.3's byte for byte. By default a component executes guest code on one agent at a time.
+- **WASI 0.3 across more than one thread** is behind `gate:cm-shared-memory`, off by default
+  (`BURROUGHS_CM_SHARED_MEMORY=1`). With it on, a fork-built Go program at GOMAXPROCS 4 runs inside a component on
+  four agents at once, and its output matches stock Go's byte for byte. It is a Burroughs-only extension: the
+  Canonical ABI requires an unshared canonical memory, so no other engine accepts such a component. It does not run
+  on Windows ([#1165](https://github.com/scttfrdmn/burroughs/issues/1165)).
 - **Platforms:** 64-bit Linux and macOS are built and tested. Windows is measured and unsupported: a non-gating lane
   runs the suite, and each recurring failure is mapped to an open issue in the
   [triage map](.github/windows-triage.tsv).
