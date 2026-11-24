@@ -301,9 +301,9 @@ func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 		// **The future is typed by its payload** (#1282 item 1), which the link checked is the guest's declared one, so
 		// the guest's future.read names the same type and passes checkFutureEndType.
 		//
-		// NEUTER, run: leave it untyped, and these fail: TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes, TestWriteViaStreamResolvesAtTheWritersDrop, the six
-		// TestForkWasip3*MatchesWasmtime tests and TestC3MultiMRunsOnAtLeastFourAgents fail. TestP3StdMatchesWasmtime
-		// passes: Rust std never reads that future.
+		// NEUTER, run: leave it untyped, and these fail: TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes,
+		// TestWriteViaStreamResolvesAtTheWritersDrop, six of the fork guests' wasmtime differentials in forkp3_test.go,
+		// and TestC3MultiMRunsOnAtLeastFourAgents. TestP3StdMatchesWasmtime passes: Rust std never reads that future.
 		fe := &readableFutureEnd{payload: &okv, elem: elemOfPayload(&okv)}
 		fe.index = async.addLocked(fe)
 		// **The writer has already dropped** (#1264, ADR 0122): its drop unlinked this end and left DROPPED pending,
