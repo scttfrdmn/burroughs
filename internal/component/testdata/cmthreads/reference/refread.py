@@ -1439,6 +1439,58 @@ FUTURE_WRITE_AFTER_CANCEL_ROWS = [
 ]
 
 
+def _rfirst(x):
+    x.split()
+    x.read()
+    return x.write()
+
+
+def _poll_code(x, s):
+    return x.call("waitable-set.poll", d.canon_waitable_set_poll, x.mem, s, 256)[0]
+
+
+def _drop_readable_after_event_taken(x):
+    _rfirst(x)
+    p = x.pollone(x.r)
+    x.drop_readable()
+    return p
+
+
+def _cancel_write_async_joined(x):
+    x.split()
+    s = x.joinnew(x.w)
+    x.write()
+    c = x.cancel_write(async_=True)
+    return c | (_poll_code(x, s) << 8)
+
+
+# #1364, future-stream-checks.wat (items 1, 2, 3 and 5) and future-cancel-write-async.wat (item 2's async control).
+# Each row with wasmtime 49.0.3's reading.
+FUTURE_STREAM_CHECKS_ROWS = [
+    ("drop-readable-read-pending", "trap, busy",
+     _then(lambda x: x.split(), lambda x: x.read(), lambda x: x.drop_readable(), lambda x: 7)),
+    ("drop-readable-event-untaken", "trap, busy", _then(_rfirst, lambda x: x.drop_readable(), lambda x: 7)),
+    ("drop-readable-after-event-taken", "117506052", _drop_readable_after_event_taken),
+    ("drop-readable-idle", "7", _then(lambda x: x.split(), lambda x: x.drop_readable(), lambda x: 7)),
+    ("cancel-write-sync-joined", "trap, synchronously while added to a waitable set",
+     _then(lambda x: x.split(), lambda x: x.joinnew(x.w), lambda x: x.write(), lambda x: x.cancel_write())),
+    ("cancel-write-idle-joined", "trap, no write is pending",
+     _then(lambda x: x.split(), lambda x: x.joinnew(x.w), lambda x: x.cancel_write())),
+    ("stream-cancel-read-idle-joined", "trap, no read is pending",
+     _then(lambda x: x.ssplit(), lambda x: x.joinnew(x.r), lambda x: x.stream_cancel_read())),
+    ("stream-cancel-write-idle-joined", "trap, no write is pending",
+     _then(lambda x: x.ssplit(), lambda x: x.joinnew(x.w), lambda x: x.stream_cancel_write())),
+    ("read-after-read-pending", "trap, concurrent operations",
+     _then(lambda x: x.split(), lambda x: x.read(), lambda x: x.read())),
+    ("read-after-read-event-untaken", "trap, concurrent operations", _then(_rfirst, lambda x: x.read())),
+    ("read-after-read-done", "trap, after previous read succeeded",
+     _then(_rfirst, lambda x: x.pollone(x.r), lambda x: x.read())),
+    ("cancel-write-async-parked", "2",
+     _then(lambda x: x.split(), lambda x: x.write(), lambda x: x.cancel_write(async_=True))),
+    ("cancel-write-async-joined", "2", _cancel_write_async_joined),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1485,6 +1537,8 @@ def battery():
         read("future-drop-cancel %s (#1362; wasmtime 49.0.3: %s)" % (row, wt), future_drop_cancel(row))
     for row, wt, steps in FUTURE_WRITE_AFTER_CANCEL_ROWS:
         read("future-write-after-cancel %s (#1353; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
+    for row, wt, steps in FUTURE_STREAM_CHECKS_ROWS:
+        read("future-stream-checks %s (#1364; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
 
 
 if __name__ == "__main__":
