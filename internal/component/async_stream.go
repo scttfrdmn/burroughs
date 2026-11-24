@@ -378,7 +378,9 @@ func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, 
 		// reaches here, and its words would reach stdout as bytes.
 		//
 		// NEUTER: drop this check, and TestAHostConsumerReadsOnlyAStreamOfBytes's stream<u32> write hands its 8 bytes
-		// to the sink.
+		// to the sink. **Since #1367 that write is not reached**: write-via-stream and tcp-socket.send lift their stream
+		// through liftStreamArgLocked, which traps a stream<u32> at the call, so this neuter is vacuous through both and
+		// the check stays as the copy's own guard.
 		if el.size != 1 {
 			return 0, fmt.Errorf("%w: a host consumer reads a stream<u8>, and this stream's element is %s (ADR 0124)",
 				ErrUnsupportedForm, el)

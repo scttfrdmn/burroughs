@@ -51,6 +51,19 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A host import's stream argument lifts as the pin's does, and traps where it returned `ErrLinkRefused`**
+  ([#1367](https://github.com/scttfrdmn/burroughs/issues/1367)). `write-via-stream` and `tcp-socket.send` take their
+  `stream<u8>` through one lift, which traps a handle that is not a readable stream end, as it returned a link
+  refusal, and three cases it did not check: a stream of another element, an end joined to a waitable set, and an
+  end not idle.
+  - **Read on both oracles before the code:** `host-stream-arg-kind.wasm` (7 rows), on wasmtime 49.0.3 (10 of 10)
+    and on the pin 2e7895c (`refread.py`, 16 of 16, its host a Python callee whose `on_start` lifts the arguments).
+    The two agree on every row.
+  - **A stream of another element now traps at the call**, where it reached the copy's refusal by name;
+    `TestAHostConsumerReadsOnlyAStreamOfBytes` asserts the trap.
+  - **The passed handle is still not removed from the guest's table**, as the pin's lift removes it.
+  - **Witness:** `TestAHostStreamArgumentLiftsAsThePinDoes`, in both `gate:cm-threads` states, over `NewHost`. Each
+    check was neutered and run, and its site records the result.
 - **A sync `future.read` or `future.write` waits for its own event, where it returned BLOCKED to a caller that cannot
   take it** ([#1352](https://github.com/scttfrdmn/burroughs/issues/1352)). The decoder kept the two built-ins' memory
   but dropped their `async`, so the sync form was bound as the async one.

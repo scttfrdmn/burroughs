@@ -47,7 +47,7 @@ func TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes(t *testing.T) {
 	}
 
 	async := newAsyncHandles()
-	re := &readableStreamEnd{}
+	re := &readableStreamEnd{state: copyStateIdle, elem: byteElem} // a stream<u8> end stream.new mints (#1367's lift)
 	ri := async.addLocked(re)
 	ret, err := writeViaStream(io.Discard)(async)(cc, []interp.Value{interp.I32(int32(ri))})
 	if err != nil {
