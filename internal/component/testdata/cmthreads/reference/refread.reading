@@ -74,3 +74,14 @@ future-stream-checks read-after-read-event-untaken (#1364; wasmtime 49.0.3: trap
 future-stream-checks read-after-read-done (#1364; wasmtime 49.0.3: trap, after previous read succeeded): trap future.read
 future-stream-checks cancel-write-async-parked (#1364; wasmtime 49.0.3: 2): value 2
 future-stream-checks cancel-write-async-joined (#1364; wasmtime 49.0.3: 2): value 2
+future-typed-traps mismatch-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.read
+future-typed-traps mismatch-write (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.write
+future-typed-traps mismatch-cancel-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.cancel-read
+future-typed-traps mismatch-cancel-write (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.cancel-write
+future-typed-traps mismatch-drop-readable (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.drop-readable
+future-typed-traps mismatch-drop-writable (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.drop-writable
+future-typed-traps same-structure-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: 4294967295): value 4294967295
+future-typed-traps same-structure-write (#1282 item 1, #1364 item 4; wasmtime 49.0.3: 1792): value 1792
+future-typed-traps mismatch-new32-read8 (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.read
+future-typed-traps nested-same-structure-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: 4294967295): value 4294967295
+future-typed-traps nested-mismatch-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.read

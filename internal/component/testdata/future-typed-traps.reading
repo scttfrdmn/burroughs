@@ -1,0 +1,49 @@
+# Committed readings for future-typed-traps.wasm (#1282 item 1, #1364 item 4): a future end's element type against
+# the type its built-in names.
+# Built:       wasm-tools parse future-typed-traps.wat -o future-typed-traps.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' future-typed-traps.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken 2026-11-24.
+# Reference:   refread.py's future-typed-traps rows (cmthreads/reference/refread.reading), pin 2e7895c, uv-managed
+#              3.14.8, 16 of 16 runs per line (DETERMINISTIC_PROFILE x 8 seeds). The two oracles agree on every row.
+#
+# Each line is `<export>: <wasmtime's reading>`; a trap is its last line of stderr, the error chain's `1: ` dropped,
+# and its exit status.
+mismatch-read: trap: handle is a future of a different type (exit 1)
+mismatch-write: trap: handle is a future of a different type (exit 1)
+mismatch-cancel-read: trap: handle is a future of a different type (exit 1)
+mismatch-cancel-write: trap: handle is a future of a different type (exit 1)
+mismatch-drop-readable: trap: handle is a future of a different type (exit 1)
+mismatch-drop-writable: trap: handle is a future of a different type (exit 1)
+same-structure-read: 4294967295
+same-structure-write: 1792
+mismatch-new32-read8: trap: handle is a future of a different type (exit 1)
+nested-same-structure-read: 4294967295
+nested-mismatch-read: trap: handle is a future of a different type (exit 1)
+#
+# The pin, row by row (refread.reading), with the trap_if that raised each trap, read from the Trap's traceback with a
+# scratch script over the same rows:
+#
+#   export                   pin 2e7895c                 the trapping line
+#   mismatch-read            trap future.read            def:copy:"trap_if(end.t != stream_or_future_t.t)"
+#   mismatch-write           trap future.write           def:copy:"trap_if(end.t != stream_or_future_t.t)"
+#   mismatch-cancel-read     trap future.cancel-read     def:cancel_copy:"trap_if(end.t != stream_or_future_t.t)"
+#   mismatch-cancel-write    trap future.cancel-write    def:cancel_copy:"trap_if(end.t != stream_or_future_t.t)"
+#   mismatch-drop-readable   trap future.drop-readable   def:drop:"trap_if(end.t != stream_or_future_t.t)"
+#   mismatch-drop-writable   trap future.drop-writable   def:drop:"trap_if(end.t != stream_or_future_t.t)"
+#   same-structure-read      value 4294967295
+#   same-structure-write     value 1792
+#   mismatch-new32-read8     trap future.read            def:copy:"trap_if(end.t != stream_or_future_t.t)"
+#   nested-same-structure-read value 4294967295
+#   nested-mismatch-read     trap future.read            def:copy:"trap_if(end.t != stream_or_future_t.t)"
+#
+# Meaning. Each mismatch row's end is in a state its built-in would accept through the end's own type (a copy parked
+# before each cancel, the writer DONE before its drop), so the type is the only difference, and each traps at its
+# built-in's type check, which the pin makes right after the kind's. The two same-structure rows use a second type
+# index naming future<u8>: the pin compares ValTypes, which are dataclasses and so structural, and wasmtime agrees, so
+# the read parks (BLOCKED) and the write then completes it, COMPLETED | (7 << 8). The nested rows are the same rule for
+# a future<future<u8>>, whose element Burroughs's codec does not lay out: an end of one is still minted, so it is still
+# typed, and compared as the walk resolved it.
+#
+# Burroughs before #1282 item 1 (main at 4a30c4f), both gate:cm-threads states: no row traps. mismatch-read,
+# mismatch-write, mismatch-new32-read8 and nested-mismatch-read park (4294967295), the two cancels return CANCELLED
+# (2), and the two drops succeed (7). The three same-structure rows agree.

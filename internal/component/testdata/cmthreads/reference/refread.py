@@ -1385,10 +1385,10 @@ class Ends:
         return code | (u32(self.mem, 260) << 8) | (u32(self.mem, 256) << 16) | (self.mem.bytes[128] << 24)
 
 
-def ends_row(steps):
+def ends_row(steps, sync_typed=False):
     """A D1 fixture's row (#1373): `steps(x)`, over an Ends, is the WAT export's body step for step, and returns its
-    u32. The export is async-typed and lifted sync, as the WATs' are. The trap site names the built-in that was
-    running."""
+    u32. The export is async-typed and lifted sync, as the WATs' are, or sync-typed with `sync_typed`. The trap site
+    names the built-in that was running."""
 
     def body(out, site):
         store = d.Store()
@@ -1400,7 +1400,7 @@ def ends_row(steps):
             site["name"] = "after the row"
             return [v & 0xffffffff]
 
-        rft = d.FuncType([], [d.U32Type()], async_=True)
+        rft = d.FuncType([], [d.U32Type()], async_=not sync_typed)
         run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
         run_to_resolution(store, run_fi, out)
 
@@ -1491,6 +1491,37 @@ FUTURE_STREAM_CHECKS_ROWS = [
 ]
 
 
+def _split32(x):
+    x.split(x.fu32)
+
+
+# #1282 item 1 and #1364 item 4, future-typed-traps.wat: a future end's element type against its built-in's. `fu32`
+# is the mismatched type, and a fresh FutureType(U8Type()) is the second type index naming future<u8>, which the pin's
+# dataclass equality compares by structure. Each row with wasmtime 49.0.3's reading.
+FUTURE_TYPED_TRAPS_ROWS = [
+    ("mismatch-read", "trap, of a different type", _then(lambda x: x.split(), lambda x: x.read(x.fu32))),
+    ("mismatch-write", "trap, of a different type", _then(lambda x: x.split(), lambda x: x.write(x.fu32))),
+    ("mismatch-cancel-read", "trap, of a different type",
+     _then(lambda x: x.split(), lambda x: x.read(), lambda x: x.cancel_read(x.fu32))),
+    ("mismatch-cancel-write", "trap, of a different type",
+     _then(lambda x: x.split(), lambda x: x.write(), lambda x: x.cancel_write(x.fu32))),
+    ("mismatch-drop-readable", "trap, of a different type",
+     _then(lambda x: x.split(), lambda x: x.drop_readable(x.fu32), lambda x: 7)),
+    ("mismatch-drop-writable", "trap, of a different type",
+     _then(_rfirst, lambda x: x.drop_writable(x.fu32), lambda x: 7)),
+    ("same-structure-read", "4294967295",
+     _then(lambda x: x.split(), lambda x: x.read(d.FutureType(d.U8Type())))),
+    ("same-structure-write", "1792",
+     _then(lambda x: x.split(), lambda x: x.read(d.FutureType(d.U8Type())),
+           lambda x: x.write(d.FutureType(d.U8Type())) | (x.mem.bytes[128] << 8))),
+    ("mismatch-new32-read8", "trap, of a different type", _then(_split32, lambda x: x.read())),
+    ("nested-same-structure-read", "4294967295",
+     _then(lambda x: x.split(d.FutureType(x.fu8)), lambda x: x.read(d.FutureType(d.FutureType(d.U8Type()))))),
+    ("nested-mismatch-read", "trap, of a different type",
+     _then(lambda x: x.split(d.FutureType(x.fu8)), lambda x: x.read(d.FutureType(x.fu32)))),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1539,6 +1570,8 @@ def battery():
         read("future-write-after-cancel %s (#1353; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
     for row, wt, steps in FUTURE_STREAM_CHECKS_ROWS:
         read("future-stream-checks %s (#1364; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
+    for row, wt, steps in FUTURE_TYPED_TRAPS_ROWS:
+        read("future-typed-traps %s (#1282 item 1, #1364 item 4; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
 
 
 if __name__ == "__main__":
