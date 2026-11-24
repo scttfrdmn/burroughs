@@ -72,6 +72,8 @@ type readableFutureEnd struct {
 	// elem is the end's element type, the pin's `End.t` (#1282 item 1): future.new's, or a host future's payload
 	// type. Every future built-in checks the type it names against it (checkFutureEndType).
 	elem *elemType
+	// sync is a sync future.read waiting on this end (#1352).
+	sync syncWait
 }
 
 // pendingEventLocked delivers the future read's (FUTURE_READ, index, result) event once. readableFutureEnd
@@ -98,6 +100,11 @@ func (e *readableFutureEnd) currentSet() *waitableSet { return e.set }
 func (e *readableFutureEnd) resolveLocked(r copyResult) {
 	e.resolved = true
 	e.result = r
+	// A sync read waiting on this end has its event (#1352).
+	//
+	// NEUTER, run: drop this line, and TestASyncFutureCopyBlocksAsThePinDoes' sync-read-own-thread row does not return
+	// within its 10 s bound: T's write completed the read, and nothing woke run's wait.
+	e.sync.signalLocked()
 	if e.set != nil {
 		e.set.signalLocked(e) // queued for the set's take (#1338, R-1's O(1) per event)
 	}
@@ -146,87 +153,209 @@ func (e *readableFutureEnd) storeValueLocked() error {
 // read (the dst ptr + the reading agent's caller) and return BLOCKED. The value is not present yet; the
 // host completes the future later (completeLocked), which arms the (FUTURE_READ, index, result) event that
 // the existing waitable-set.wait delivers — no second wait mechanism. A read of an already-resolved end
-// traps (a future is single-shot). This slice binds only the async read; a synchronous read would park
-// here directly, which no #734 stdio import needs.
+// traps (a future is single-shot).
 //
 // `elem` is the element the built-in names, which must be the end's (def:copy, #1282 item 1).
-func futureRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
+//
+// **`async` is the read's form** (#1352). A sync read that does not complete inline waits for its own event
+// (def:copy:"end.wait_for_pending_event()", awaitFutureCopy) where the async form returns BLOCKED, and a sync read of an
+// end joined to a set traps. The decoder dropped the form, so a sync read returned BLOCKED to a caller that cannot
+// take it. This said only the async read was bound.
+func futureRead(h *asyncHandles, elem *elemType, async bool) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("component: future.read: got %d args, want (i, ptr)", len(args))
 		}
 		i, ptr := uint32(args[0].Bits), uint32(args[1].Bits)
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
-		//
-		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's future-read-writable and future-read-stream
-		// rows fail.
-		fe, ok := handleAt[*readableFutureEnd](h, i)
-		if !ok {
-			return nil, wrongKindTrap("future.read", i, "a readable future end", "def:copy")
+		ret, fe, wake, err := futureReadLocked(h, elem, async, c, i, ptr)
+		if err != nil || wake == nil {
+			return ret, err
 		}
-		if err := checkFutureEndType("future.read", i, fe.elem, elem); err != nil {
-			return nil, err
-		}
-		// **A read of a future the host has already completed is the second arriver, and completes inline**
-		// (ADR 0120). The host's completion parked its value on the future first, as the reference's writer
-		// parks its buffer, and the read that arrives after it copies the value and takes its own event in the
-		// same call (def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:"). A guest that
-		// drops its stream's writer before it reads write-via-stream's future has the host resolve the future
-		// first, and this refused that read as single-shot.
-		//
-		// NEUTER: drop this arm, and TestWriteViaStreamResolvesAtTheWritersDrop's read after the drop is
-		// refused. p3std does not reach it: Rust std never closes stdout, so its writer is never dropped.
-		if fe.resolved && !fe.hasRead && !fe.delivered && fe.result == copyCompleted {
-			fe.readPtr = ptr
-			fe.hasRead = true
-			fe.caller = c
-			if err := fe.storeValueLocked(); err != nil {
-				return nil, err
-			}
-			ev, _ := fe.pendingEventLocked()
-			return []interp.Value{interp.I32(int32(ev.p2))}, nil
-		}
-		// **A reader that is not IDLE traps** (#1364 item 5): a read pending, or completed with its event untaken, is
-		// COPYING, and one whose COMPLETED was taken is DONE, and def:copy:"trap_if(end.state != End.State.IDLE)" traps
-		// both. wasmtime 49.0.3 traps the same. This was a Go error, which an embedder cannot tell from the engine
-		// failing.
-		//
-		// NEUTER, run: return the Go error it was, and TestFutureAndStreamChecksMatchThePin's read-after-read-pending,
-		// read-after-read-event-untaken and read-after-read-done rows (both gate states) fail on the error not being a
-		// trap.
-		if fe.resolved || fe.hasRead {
-			return nil, &interp.Trap{Reason: fmt.Sprintf("future.read: end %d is not IDLE: a read is pending, or its "+
-				"value was taken (def:copy: trap_if(end.state != End.State.IDLE))", i)}
-		}
+		return h.awaitFutureCopy(c, "future.read", i, fe, &fe.sync, wake)
+	}
+}
+
+// futureReadLocked is futureRead under asyncHandles.mu. It returns the read's result, or, for a sync read that did not
+// complete inline, the end and the wake its event will close, for the caller to wait on with the lock released.
+func futureReadLocked(h *asyncHandles, elem *elemType, async bool, c *interp.CanonCaller, i, ptr uint32) (
+	[]interp.Value, *readableFutureEnd, chan struct{}, error,
+) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
+	//
+	// NEUTER: return a Go error, and TestAWrongKindHandleTraps's future-read-writable and future-read-stream
+	// rows fail.
+	fe, ok := handleAt[*readableFutureEnd](h, i)
+	if !ok {
+		return nil, nil, nil, wrongKindTrap("future.read", i, "a readable future end", "def:copy")
+	}
+	if err := checkFutureEndType("future.read", i, fe.elem, elem); err != nil {
+		return nil, nil, nil, err
+	}
+	// **A read of a future the host has already completed is the second arriver, and completes inline**
+	// (ADR 0120). The host's completion parked its value on the future first, as the reference's writer
+	// parks its buffer, and the read that arrives after it copies the value and takes its own event in the
+	// same call (def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:"). A guest that
+	// drops its stream's writer before it reads write-via-stream's future has the host resolve the future
+	// first, and this refused that read as single-shot. The reader is IDLE in the pin's terms, so the state check
+	// below passes it, and the join check applies to it.
+	hostFirst := fe.resolved && !fe.hasRead && !fe.delivered && fe.result == copyCompleted
+	// **A reader that is not IDLE traps** (#1364 item 5): a read pending, or completed with its event untaken, is
+	// COPYING, and one whose COMPLETED was taken is DONE, and def:copy:"trap_if(end.state != End.State.IDLE)" traps
+	// both. wasmtime 49.0.3 traps the same. This was a Go error, which an embedder cannot tell from the engine
+	// failing.
+	//
+	// NEUTER, run: return the Go error it was, and TestFutureAndStreamChecksMatchThePin's read-after-read-pending,
+	// read-after-read-event-untaken and read-after-read-done rows (both gate states) fail on the error not being a
+	// trap.
+	if !hostFirst && (fe.resolved || fe.hasRead) {
+		return nil, nil, nil, &interp.Trap{Reason: fmt.Sprintf("future.read: end %d is not IDLE: a read is pending, "+
+			"or its value was taken (def:copy: trap_if(end.state != End.State.IDLE))", i)}
+	}
+	if err := syncCopyOfJoinedEnd("future.read", i, async, fe.set); err != nil {
+		return nil, nil, nil, err
+	}
+	// NEUTER: drop this arm, and TestWriteViaStreamResolvesAtTheWritersDrop's read after the drop is
+	// refused. p3std does not reach it: Rust std never closes stdout, so its writer is never dropped.
+	if hostFirst {
 		fe.readPtr = ptr
 		fe.hasRead = true
 		fe.caller = c
-		// **A read that finds the guest's write parked is the second arriver, and drives the copy** (#1325).
-		// The pin has one rendezvous for both orders: whichever end's `copy` finds the other's buffer moves the
-		// value and notifies both, def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:"
-		// then def:End.copy:"self.notify(buffer.progress)" and def:End.copy:"self.other.notify(self.other.buffer.progress)".
-		// So the read takes its own COMPLETED inline (def:copy:"code,index,payload = end.get_pending_event()")
-		// and the write's FUTURE_WRITE COMPLETED is left pending for its wait. Only futureWrite's direction was
-		// built, so writing first and then reading left both ends parked. wasmtime 49.0.3 and the pin both read
-		// future-write-then-read as the read COMPLETED and the write's event COMPLETED.
-		//
-		// NEUTER: drop this arm, and TestAFutureReadCompletesAParkedWriteInItsOwnInstance's write-then-read and
-		// write-then-read-cancel rows read the read as BLOCKED, the fixture's 0xdead place, and its
-		// write-then-read-bool row does not trap.
-		if w := fe.writer; w != nil && w.hasWrite && !w.resolved {
-			if err := copyFutureValueLocked(fe.elem, w.caller, w.srcPtr, c, ptr, "future.read"); err != nil {
-				return nil, err
-			}
-			w.completeWriteLocked(1, copyCompleted)
-			fe.resolved, fe.result = true, copyCompleted
-			ev, _ := fe.pendingEventLocked()
-			return []interp.Value{interp.I32(int32(ev.p2))}, nil
+		if err := fe.storeValueLocked(); err != nil {
+			return nil, nil, nil, err
 		}
-		bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
-		return []interp.Value{interp.I32(int32(bits))}, nil
+		ev, _ := fe.pendingEventLocked()
+		return []interp.Value{interp.I32(int32(ev.p2))}, nil, nil, nil
 	}
+	fe.readPtr = ptr
+	fe.hasRead = true
+	fe.caller = c
+	// **A read that finds the guest's write parked is the second arriver, and drives the copy** (#1325).
+	// The pin has one rendezvous for both orders: whichever end's `copy` finds the other's buffer moves the
+	// value and notifies both, def:End.copy:"elif buffer.remain() > 0 and self.other.buffer.remain() > 0:"
+	// then def:End.copy:"self.notify(buffer.progress)" and def:End.copy:"self.other.notify(self.other.buffer.progress)".
+	// So the read takes its own COMPLETED inline (def:copy:"code,index,payload = end.get_pending_event()")
+	// and the write's FUTURE_WRITE COMPLETED is left pending for its wait. Only futureWrite's direction was
+	// built, so writing first and then reading left both ends parked. wasmtime 49.0.3 and the pin both read
+	// future-write-then-read as the read COMPLETED and the write's event COMPLETED.
+	//
+	// NEUTER: drop this arm, and TestAFutureReadCompletesAParkedWriteInItsOwnInstance's write-then-read and
+	// write-then-read-cancel rows read the read as BLOCKED, the fixture's 0xdead place, and its
+	// write-then-read-bool row does not trap.
+	if w := fe.writer; w != nil && w.hasWrite && !w.resolved {
+		if err := copyFutureValueLocked(fe.elem, w.caller, w.srcPtr, c, ptr, "future.read"); err != nil {
+			return nil, nil, nil, err
+		}
+		w.completeWriteLocked(1, copyCompleted)
+		fe.resolved, fe.result = true, copyCompleted
+		ev, _ := fe.pendingEventLocked()
+		return []interp.Value{interp.I32(int32(ev.p2))}, nil, nil, nil
+	}
+	if !async {
+		return nil, fe, fe.sync.armLocked(), nil
+	}
+	bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
+	return []interp.Value{interp.I32(int32(bits))}, nil, nil, nil
+}
+
+// syncWait is a future end's sync waiter (#1352): the pin's `has_sync_waiter` (def:Waitable.wait_for_pending_event),
+// and the wake the end's own event closes when it is armed. Embedded in both future end kinds; guarded by
+// asyncHandles.mu.
+type syncWait struct {
+	waiter bool
+	wake   chan struct{}
+}
+
+// armLocked marks a sync copy waiting on the end and returns the wake its event will close.
+func (s *syncWait) armLocked() chan struct{} {
+	s.waiter, s.wake = true, make(chan struct{})
+	return s.wake
+}
+
+// signalLocked closes the wake, once, when the end's event is armed: a sync copy waiting on it has its event.
+func (s *syncWait) signalLocked() {
+	if s.wake != nil {
+		close(s.wake)
+		s.wake = nil
+	}
+}
+
+// syncWaiterLocked reports a sync copy waiting on the end, which def:cancel_copy and def:canon_waitable_join trap
+// (`trap_if(end.has_sync_waiter)`): the waiter is waiting for this end's event, and a cancel or a set would take it.
+func (s *syncWait) syncWaiterLocked() bool { return s.waiter }
+
+// syncWaiterLocked is the end's syncWait's, for waitable.join, which reads it of any waitable that has one.
+func (e *readableFutureEnd) syncWaiterLocked() bool { return e.sync.syncWaiterLocked() }
+
+// syncWaiterTrap is `trap_if(end.has_sync_waiter)` (def:cancel_copy, def:canon_waitable_join; `cite` names which) for
+// a future end a sync copy is waiting on (#1352): only another Thread of the instance can reach it while the copy
+// waits, and a cancel or a join would take the event the waiter is waiting for. wasmtime 49.0.3 traps both, naming
+// the joined-set rule. Caller holds asyncHandles.mu.
+//
+// NEUTER, run: return nil, and TestASyncFutureCopyBlocksAsThePinDoes' sync-read-cancelled-by-thread row traps at run's
+// sync tail instead of in T: T's cancel took the read's event and left the reader IDLE, so run's wait had nothing to
+// wake it. waitable.join's check is its own, and sync-read-joined-by-thread passes under this one.
+func syncWaiterTrap(op string, i uint32, sw *syncWait, cite string) error {
+	if !sw.syncWaiterLocked() {
+		return nil
+	}
+	return &interp.Trap{Reason: fmt.Sprintf("%s: end %d has a sync copy waiting on it, so another Thread may not take "+
+		"its event (%s: trap_if(end.has_sync_waiter))", op, i, cite)}
+}
+
+// syncCopyOfJoinedEnd is def:copy's `trap_if(end.in_waitable_set() and not opts.async_)` for a future copy (#1352): a
+// sync copy waits for its end's own event, which a set would deliver to its waiter instead. `set` is the end's, nil
+// when it is not joined. Caller holds asyncHandles.mu.
+//
+// NEUTER, run: return nil, and TestASyncFutureCopyBlocksAsThePinDoes' sync-write-joined and sync-read-joined rows (both
+// gate states) do not return within the row's 10 s bound where both oracles trap.
+func syncCopyOfJoinedEnd(op string, i uint32, async bool, set *waitableSet) error {
+	if async || set == nil {
+		return nil
+	}
+	return &interp.Trap{Reason: fmt.Sprintf("%s: end %d is joined to a waitable set, so its sync form cannot wait for "+
+		"its own event (def:copy: trap_if(end.in_waitable_set() and not opts.async_)); unjoin it first, or copy with "+
+		"async", op, i)}
+}
+
+// awaitFutureCopy is a sync future copy's wait for its own event, def:copy's `end.wait_for_pending_event()` (#1352): a
+// block, as waitable-set.wait's is, inside a Blocking excursion that gives up the run slot (h.suspending), so another
+// Thread of the instance may make the other copy meanwhile. The sync tail judges it, as it judges the pin's
+// `wait_until`: a sync-typed task with no Thread able to wake it traps. Otherwise a wait nothing wakes blocks for ever,
+// as both oracles' do (ADR 0128), and Close ends it. On waking it takes the event and returns its payload, as def:copy
+// does. `wake` is the one armLocked returned, captured under the lock, since signalLocked clears the field.
+//
+// NEUTER, run: return BLOCKED here instead of waiting, and TestASyncFutureCopyBlocksAsThePinDoes' two hang rows return
+// 4294967295 without parking, and its sync-typed row and all five thread rows return 4294967295, none judged, woken
+// or reached by T's cancel or join, in both gate states where they run.
+func (h *asyncHandles) awaitFutureCopy(c *interp.CanonCaller, op string, i uint32, end waitable, sw *syncWait,
+	wake chan struct{},
+) ([]interp.Value, error) {
+	ready := end.hasPendingEventLocked // the pin's wait_until predicate, read under h.mu by the sync tail
+	err := c.Blocking(h.suspending(c, ready, true, func(abort <-chan struct{}) error {
+		select {
+		case <-wake: // the end's event is armed
+			return nil
+		case <-c.Context().Done(): // Close: tear the agent down (H-3)
+			return c.Context().Err()
+		case <-abort: // a trap in this Thread's task ended it (ADR 0101's Option A, point 7)
+			return nil // `suspending` returns the abort's error
+		case <-h.lock.wait(): // another call's trap locked the store (#1040): end at this suspension
+			return h.lock.locked()
+		}
+	}))
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sw.waiter = false
+	if err != nil {
+		return nil, err
+	}
+	ev, ok := end.pendingEventLocked()
+	if !ok {
+		return nil, fmt.Errorf("component: %s: end %d's sync wait ended with no event", op, i)
+	}
+	return []interp.Value{interp.I32(int32(ev.p2))}, nil
 }
 
 // copyFutureValueLocked is the rendezvous's copy, the second arriver's, whichever end it is: one value of `elem`
@@ -441,6 +570,9 @@ func futureCancelRead(h *asyncHandles, elem *elemType, async bool) interp.CanonF
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-read: end %d has no read in flight (not COPYING) "+
 				"(def:cancel_copy: trap_if(end.state != End.State.COPYING))", i)}
 		}
+		if err := syncWaiterTrap("future.cancel-read", i, &e.sync, "def:cancel_copy"); err != nil {
+			return nil, err
+		}
 		// A sync cancel waits for the end's own event, which a set would deliver to its waiter instead (grave #1301).
 		//
 		// NEUTER, run: drop this check, and TestFutureDropWritableAndCancelReadMatchTheOracles' cancel-read-sync-joined
@@ -492,6 +624,8 @@ type writableFutureEnd struct {
 	// elem is the end's element type, future.new's (#1282 item 1), which every future built-in checks and the copy
 	// classifies by. It was the element the parked future.write named, which the check now makes the same.
 	elem *elemType
+	// sync is a sync future.write waiting on this end (#1352).
+	sync syncWait
 }
 
 // pendingEventLocked delivers the write's (FUTURE_WRITE, index, result) event once. The caller holds
@@ -520,6 +654,9 @@ func (e *writableFutureEnd) joinTo(s *waitableSet) { e.set = s }
 // currentSet reports the set this end is joined to, so `waitable.join` can remove it before re-joining.
 func (e *writableFutureEnd) currentSet() *waitableSet { return e.set }
 
+// syncWaiterLocked is the end's syncWait's, readableFutureEnd's twin (#1352).
+func (e *writableFutureEnd) syncWaiterLocked() bool { return e.sync.syncWaiterLocked() }
+
 // completeWriteLocked ends a pending future.write with result r (COMPLETED when a read copied its value, #1325;
 // CANCELLED for a cancel; DROPPED if the read end drops), arms the event, and wakes the set. DROPPED and a
 // COMPLETED of progress 1 go DONE, as def:FutureEnd.notify.future_event+ sets `End.State.DONE` for both (a future
@@ -531,6 +668,7 @@ func (e *writableFutureEnd) completeWriteLocked(progress uint32, r copyResult) {
 	if r == copyDropped || (r == copyCompleted && progress == 1) {
 		e.done = true
 	}
+	e.sync.signalLocked() // a sync write waiting on this end has its event (#1352)
 	if e.set != nil {
 		e.set.signalLocked(e) // queued for the set's take (#1338, R-1's O(1) per event)
 	}
@@ -602,53 +740,76 @@ func futureNew(h *asyncHandles, elem *elemType) interp.CanonFunc {
 // `elem` is the element of the type future.write names, which the decoder keeps since #1271 (ADR 0124); it classified
 // type 0's for every future. Since #1282 item 1 it must be the end's own (def:copy), so the copy classifies by the
 // end's, which is the same type.
-func futureWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
+//
+// `async` is the write's form (#1352), as futureRead's is: a sync write that does not complete inline waits for its
+// own event (awaitFutureCopy), and a sync write of a joined end traps.
+func futureWrite(h *asyncHandles, elem *elemType, async bool) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("component: future.write: got %d args, want (i, ptr)", len(args))
 		}
 		i, ptr := uint32(args[0].Bits), uint32(args[1].Bits)
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
-		//
-		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's future-write-readable row fails.
-		e, ok := handleAt[*writableFutureEnd](h, i)
-		if !ok {
-			return nil, wrongKindTrap("future.write", i, "a writable future end", "def:copy")
+		ret, e, wake, err := futureWriteLocked(h, elem, async, c, i, ptr)
+		if err != nil || wake == nil {
+			return ret, err
 		}
-		if err := checkFutureEndType("future.write", i, e.elem, elem); err != nil {
-			return nil, err
-		}
-		// **A write after the reader's drop takes the DROPPED the drop left pending, inline** (#1362): the reader's drop
-		// notified this IDLE writer (dropReaderOfWriterLocked), and the pin's copy, finding no other end, takes that
-		// event (def:End.copy:"if self.other is None:" then def:copy:"code,index,payload = end.get_pending_event()"),
-		// which leaves the writer DONE. wasmtime 49.0.3 reads the write as 1.
-		//
-		// NEUTER, run: drop this arm, and TestFutureDropWritableAndCancelReadMatchTheOracles'
-		// drop-writable-after-reader-dropped rows (both gate states) trap "future.write: end 2 is not writable" where both
-		// oracles read 1. TestP3AsyncCancelMatchesWasmtime still passes under it, so the Rust guest does not reach it.
-		if e.resolved && !e.delivered && !e.hasWrite && e.result == copyDropped {
-			ev, _ := e.pendingEventLocked()
-			return []interp.Value{interp.I32(int32(ev.p2))}, nil
-		}
-		if e.done || e.hasWrite || e.resolved {
-			return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: end %d is not writable (done, write pending, or resolved)", i)}
-		}
-		if r := e.peer; r != nil && r.hasRead && !r.resolved {
-			if err := copyFutureValueLocked(e.elem, c, ptr, r.caller, r.readPtr, "future.write"); err != nil {
-				return nil, err
-			}
-			r.resolveLocked(copyCompleted)
-			e.done = true // a future is one value: the writable end is DONE after COMPLETED
-			return []interp.Value{interp.I32(int32(copyCompleted))}, nil
-		}
-		// The write parks with its buffer, which the read that arrives second copies from (futureRead, #1325).
-		e.srcPtr, e.caller = ptr, c
-		e.hasWrite = true
-		bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
-		return []interp.Value{interp.I32(int32(bits))}, nil
+		return h.awaitFutureCopy(c, "future.write", i, e, &e.sync, wake)
 	}
+}
+
+// futureWriteLocked is futureWrite under asyncHandles.mu, futureReadLocked's twin.
+func futureWriteLocked(h *asyncHandles, elem *elemType, async bool, c *interp.CanonCaller, i, ptr uint32) (
+	[]interp.Value, *writableFutureEnd, chan struct{}, error,
+) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
+	//
+	// NEUTER: return a Go error, and TestAWrongKindHandleTraps's future-write-readable row fails.
+	e, ok := handleAt[*writableFutureEnd](h, i)
+	if !ok {
+		return nil, nil, nil, wrongKindTrap("future.write", i, "a writable future end", "def:copy")
+	}
+	if err := checkFutureEndType("future.write", i, e.elem, elem); err != nil {
+		return nil, nil, nil, err
+	}
+	// **A write after the reader's drop takes the DROPPED the drop left pending, inline** (#1362): the reader's drop
+	// notified this IDLE writer (dropReaderOfWriterLocked), and the pin's copy, finding no other end, takes that
+	// event (def:End.copy:"if self.other is None:" then def:copy:"code,index,payload = end.get_pending_event()"),
+	// which leaves the writer DONE. wasmtime 49.0.3 reads the write as 1. The writer is IDLE in the pin's terms, so the
+	// join check applies to it.
+	//
+	// NEUTER, run: drop this arm, and TestFutureDropWritableAndCancelReadMatchTheOracles'
+	// drop-writable-after-reader-dropped rows (both gate states) trap "future.write: end 2 is not writable" where both
+	// oracles read 1. TestP3AsyncCancelMatchesWasmtime still passes under it, so the Rust guest does not reach it.
+	droppedFirst := e.resolved && !e.delivered && !e.hasWrite && e.result == copyDropped
+	if !droppedFirst && (e.done || e.hasWrite || e.resolved) {
+		return nil, nil, nil, &interp.Trap{Reason: fmt.Sprintf("future.write: end %d is not writable (done, write "+
+			"pending, or resolved)", i)}
+	}
+	if err := syncCopyOfJoinedEnd("future.write", i, async, e.set); err != nil {
+		return nil, nil, nil, err
+	}
+	if droppedFirst {
+		ev, _ := e.pendingEventLocked()
+		return []interp.Value{interp.I32(int32(ev.p2))}, nil, nil, nil
+	}
+	if r := e.peer; r != nil && r.hasRead && !r.resolved {
+		if err := copyFutureValueLocked(e.elem, c, ptr, r.caller, r.readPtr, "future.write"); err != nil {
+			return nil, nil, nil, err
+		}
+		r.resolveLocked(copyCompleted)
+		e.done = true // a future is one value: the writable end is DONE after COMPLETED
+		return []interp.Value{interp.I32(int32(copyCompleted))}, nil, nil, nil
+	}
+	// The write parks with its buffer, which the read that arrives second copies from (futureRead, #1325).
+	e.srcPtr, e.caller = ptr, c
+	e.hasWrite = true
+	if !async {
+		return nil, e, e.sync.armLocked(), nil
+	}
+	bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
+	return []interp.Value{interp.I32(int32(bits))}, nil, nil, nil
 }
 
 // futureCancelWrite implements `canon future.cancel-write` (0x19, definitions.py:canon_future_cancel_write -> cancel_copy): cancel
@@ -687,6 +848,9 @@ func futureCancelWrite(h *asyncHandles, elem *elemType, async bool) interp.Canon
 		// write-then-read-cancel row traps "no write in flight".
 		if !e.hasWrite || e.delivered {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-write: end %d has no write in flight (COPYING)", i)}
+		}
+		if err := syncWaiterTrap("future.cancel-write", i, &e.sync, "def:cancel_copy"); err != nil {
+			return nil, err
 		}
 		// A sync cancel waits for the end's own event, which a set would deliver to its waiter instead (grave #1301):
 		// def:cancel_copy:"trap_if(end.in_waitable_set() and not async_)", after the state check above, so a joined

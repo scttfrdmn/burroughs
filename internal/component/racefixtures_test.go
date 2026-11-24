@@ -93,6 +93,9 @@ var raceWitnessFixtures = []string{
 	"future-cancel-write-async.wasm",
 	// #1282 item 1's witness (TestTypedFutureEndsMatchTheOracles): the same-structure write's copy
 	"future-typed-traps.wasm",
+	// #1352's witness (TestASyncFutureCopyBlocksAsThePinDoes): a sync copy's wait and the Thread copy that wakes it
+	"future-sync.wasm",
+	"cmthreads/sync-future-own-thread.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

@@ -692,6 +692,19 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 			return Canon{}, err
 		}
 		c.Opts.Memory = opts.Memory
+		// **A future copy's `async` canonopt is its FORM, and is kept** (#1352), as stream.read's is: the pin's copy
+		// returns BLOCKED only for an async copy and waits for its own event otherwise (def:copy). It was dropped, so a
+		// sync future.read or future.write was bound as the async form and returned BLOCKED to a caller that cannot
+		// take it. stream.write's (0x10) is still dropped: its sync form is bound as the async one, which is not this
+		// issue's.
+		//
+		// NEUTER, run: drop it again, and every future copy is bound as the SYNC form, since the binding now reads it:
+		// TestASyncFutureCopyBlocksAsThePinDoes' sync-write-to-parked-read and sync-read-of-parked-write rows (both gate
+		// states) fail at their 10 s bound, the async copy each parks first now a sync wait nothing wakes. The package
+		// run under it was stopped, as every guest that parks a future copy hangs.
+		if op != 0x10 {
+			c.AsyncForm = opts.Async
+		}
 		return c, nil
 	case 0x11, 0x12, 0x18, 0x19: // stream/future .cancel-read/.cancel-write: typeidx (KEPT) + async?
 		if err := keepIdx(); err != nil {

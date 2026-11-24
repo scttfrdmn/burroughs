@@ -182,7 +182,7 @@ func TestFutureReadDeliversTheOracleOutcomes(t *testing.T) {
 				t.Fatalf("harness caller: %v", err)
 			}
 			const ptr = 32
-			readRet, err := futureRead(h, u32Elem)(cc, []interp.Value{interp.I32(int32(fe.index)), interp.I32(ptr)})
+			readRet, err := futureRead(h, u32Elem, true)(cc, []interp.Value{interp.I32(int32(fe.index)), interp.I32(ptr)})
 			if err != nil {
 				t.Fatalf("future.read: %v", err)
 			}

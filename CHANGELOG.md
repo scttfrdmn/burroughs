@@ -51,6 +51,25 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A sync `future.read` or `future.write` waits for its own event, where it returned BLOCKED to a caller that cannot
+  take it** ([#1352](https://github.com/scttfrdmn/burroughs/issues/1352)). The decoder kept the two built-ins' memory
+  but dropped their `async`, so the sync form was bound as the async one.
+  - **Read on both oracles before the code:** `future-sync.wasm` (8 rows) and `cmthreads/sync-future-own-thread.wasm`
+    (5 rows), on wasmtime 49.0.3 (10 of 10, the two hang rows 3 of 3, with `component-model-more-async-builtins`) and
+    on the pin 2e7895c (`refread.py`, 16 of 16). The two agree on every row.
+  - **A sync copy that finds the other end's copy parked completes inline.** One that does not waits inside a blocking
+    excursion that gives up the run slot, so another Thread of the instance can make the other copy and wake it. A
+    sync-typed task with nothing able to wake it traps at the sync tail; an async-typed one blocks until `Close`, as
+    both oracles hang (ADR 0128).
+  - **A sync copy on an end joined to a waitable set traps**, and so does another Thread's `future.cancel-read`,
+    `future.cancel-write` or `waitable.join` of an end a sync copy is waiting on.
+  - **`future-read-synth.wasm`'s read is now `async`**: its sync read relied on the BLOCKED, and now waits on a future
+    nothing resolves.
+  - The sync `stream.write` is still bound as the async form, and the sync `stream.read` is still refused
+    ([#1272](https://github.com/scttfrdmn/burroughs/issues/1272)).
+  - **Witness:** `TestASyncFutureCopyBlocksAsThePinDoes`, the future-sync rows in both `gate:cm-threads` states and the
+    thread rows with it on. A hang row asserts the place, the call parked in the copy's wait, and that `Close` ends it.
+    Each load-bearing line was neutered and run, and its site records the result.
 - **A future end carries its element type, and a future built-in naming another type traps**
   ([#1282](https://github.com/scttfrdmn/burroughs/issues/1282) item 1, and item 4 of
   [#1364](https://github.com/scttfrdmn/burroughs/issues/1364)), as stream ends have since ADR 0124. Future ends carried
