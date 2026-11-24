@@ -37,23 +37,83 @@ type elemType struct {
 	// (hostResourceNamed), or nil. A host producer whose element has one mints each element it delivers as an own of
 	// it, the pin's def:lower_own: listen's stream of accepted sockets (copyOwnsLocked, ADR 0125).
 	own *hostResource
+	// vt is the element as the walk resolved it, for an element the codec does not lay out, so two descriptors of one
+	// can still be compared (same); nil otherwise. A future of one is minted, unlike a stream of one (#1282).
+	vt *ValType
 }
 
 // byteElem is `u8`'s descriptor, the element every host-minted stream end carries: a producer's (stdin, a socket's
 // receive) and an async lower's stream result. A host consumer reads only a stream of it (driveStreamCopyLocked).
 var byteElem = &elemType{known: true, modeled: true, t: &canon.Type{Kind: canon.KindU8}, size: 1, align: 1, numeric: true}
 
+// u32Elem is `u32`'s descriptor, the element of the future an async lower mints for a KindFuture result: canon.Future
+// carries a u32, which is the only future a host returns through that path (#1282).
+var u32Elem = &elemType{known: true, modeled: true, t: &canon.Type{Kind: canon.KindU32}, size: 4, align: 4, numeric: true}
+
+// elemOfPayload is the descriptor of the element a host-minted future delivers, its payload's type (#1282 item 1): a
+// host future is typed by what it lowers on completion, write-via-stream's `result<_, error-code>` and the others',
+// which the link checked against the guest's declaration (checkConsumerPayload), so the guest's future built-ins name
+// the same type. The payload types are records, variants and enums, none a number.
+func elemOfPayload(v *canon.Value) *elemType {
+	t := v.Type
+	return &elemType{known: true, modeled: true, t: &t, size: canon.ElemSize(t), align: canon.Alignment(t)}
+}
+
 // same reports whether two descriptors are one element type, structurally, as the pin's `end.t !=
-// stream_or_future_t.t` compares two ValTypes: two type indices naming `stream u32` are one type. An unmodeled
-// descriptor is never the same as anything, since no end of one is ever made.
+// stream_or_future_t.t` compares two ValTypes: two type indices naming `stream u32` are one type. Two descriptors of
+// an element the codec does not lay out are compared as the walk resolved them (sameVal): no stream end of one is ever
+// made, and a future end of one is (#1282).
 func (e *elemType) same(o *elemType) bool {
-	if e == nil || o == nil || !e.modeled || !o.modeled {
+	if e == nil || o == nil || !e.known || !o.known || e.modeled != o.modeled {
 		return false
+	}
+	// NEUTER, run: return false here, and TestTypedFutureEndsMatchTheOracles' nested-same-structure-read rows (both gate
+	// states) trap "of a different type" where both oracles read 4294967295; nothing else in the package fails.
+	if !e.modeled {
+		return e.vt != nil && o.vt != nil && sameVal(*e.vt, *o.vt)
 	}
 	if e.t == nil || o.t == nil {
 		return e.t == nil && o.t == nil
 	}
 	return canon.TypeEqual(*e.t, *o.t)
+}
+
+// sameVal is structural equality over two resolved ValTypes, for an element the codec does not lay out (same). A
+// handle is compared by its resource identity, and by its local index only when it has none (a guest-defined
+// resource, selfResourceID's case).
+func sameVal(a, b ValType) bool {
+	if a.Kind != b.Kind || a.Resource != b.Resource || len(a.Fields) != len(b.Fields) || len(a.Cases) != len(b.Cases) ||
+		len(a.Elems) != len(b.Elems) || len(a.Labels) != len(b.Labels) {
+		return false
+	}
+	if (a.Kind == VOwn || a.Kind == VBorrow) && a.Resource == "" && a.Ref != b.Ref {
+		return false
+	}
+	samePtr := func(x, y *ValType) bool { return (x == nil) == (y == nil) && (x == nil || sameVal(*x, *y)) }
+	if !samePtr(a.Elem, b.Elem) || !samePtr(a.Ok, b.Ok) || !samePtr(a.Err, b.Err) {
+		return false
+	}
+	for i := range a.Fields {
+		if a.Fields[i].Name != b.Fields[i].Name || !sameVal(a.Fields[i].Type, b.Fields[i].Type) {
+			return false
+		}
+	}
+	for i := range a.Cases {
+		if a.Cases[i].Name != b.Cases[i].Name || !samePtr(a.Cases[i].Type, b.Cases[i].Type) {
+			return false
+		}
+	}
+	for i := range a.Elems {
+		if !sameVal(a.Elems[i], b.Elems[i]) {
+			return false
+		}
+	}
+	for i := range a.Labels {
+		if a.Labels[i] != b.Labels[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // String renders the element as a WIT type, or "no element".
@@ -96,6 +156,7 @@ func (w *walker) elemOf(ti uint32, kind ValKind) elemType {
 	}
 	ct, err := canonTypeIn(vt, w.hostRT)
 	if err != nil {
+		e.vt = &vt // compared as resolved, since a future end of it is minted (#1282)
 		return e
 	}
 	e.t, e.modeled = &ct, true
@@ -120,8 +181,27 @@ func (w *walker) streamElemOf(ti uint32) *elemType {
 //	    instance. wasmtime 49.0.2 traps the same, *"cannot read from and write to intra-component future/stream
 //	    with non-numeric payload"*, on `bool` and `char`.
 //
-// `ti` is the type future.write names, which the decoder keeps since #1271 (ADR 0124); it was always 0.
-func (w *walker) futureElemOf(ti uint32) elemType { return w.elemOf(ti, VFuture) }
+// `ti` is the type a future built-in names, which the decoder keeps since #1271 (ADR 0124); it was always 0. Since
+// #1282 item 1 every future built-in reads it, and future.new stamps it on both ends it mints.
+func (w *walker) futureElemOf(ti uint32) *elemType {
+	e := w.elemOf(ti, VFuture)
+	return &e
+}
+
+// checkFutureEndType is def:copy's, def:cancel_copy's and def:drop's `trap_if(end.t != stream_or_future_t.t)` for a
+// future end (#1282 item 1, #1364 item 4): the built-in's element must be its end's, as checkStreamEndType's must be
+// for a stream end. Future ends carried no type, so every mismatched built-in went ahead.
+//
+// NEUTER, run: return nil, and TestTypedFutureEndsMatchTheOracles' eight mismatch rows (both gate states) do not trap:
+// the three reads, the nested read and the write park (4294967295), the two cancels return 2, and the two drops
+// return 7. The three same-structure rows pass under it.
+func checkFutureEndType(op string, i uint32, end, named *elemType) error {
+	if end.same(named) {
+		return nil
+	}
+	return &interp.Trap{Reason: fmt.Sprintf("%s: end %d is a future of a different type: its element is %s, and the "+
+		"built-in names %s (def:copy: trap_if(end.t != stream_or_future_t.t))", op, i, end, named)}
+}
 
 // canonicalizeFloats canonicalises each float element's NaN in buf, in place, as the codec's lift does under the
 // deterministic profile (canon.CanonicalizeNaN32/64): a copy within one instance is a lift then a lower in the pin.

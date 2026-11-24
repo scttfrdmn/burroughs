@@ -254,7 +254,14 @@ func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 		// completion wrote `value` as 4 bytes at the reader's pointer where `result<_, error-code>` is 2,
 		// zeroing two guest bytes past the result on every completion. It is a default-on path: gate:async
 		// is on, and every WASI 0.3 guest that writes stdout reaches it.
-		fe := &readableFutureEnd{payload: &okv}
+		//
+		// **The future is typed by its payload** (#1282 item 1), which the link checked is the guest's declared one, so
+		// the guest's future.read names the same type and passes checkFutureEndType.
+		//
+		// NEUTER, run: leave it untyped, and these fail: TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes, TestWriteViaStreamResolvesAtTheWritersDrop, the six
+		// TestForkWasip3*MatchesWasmtime tests and TestC3MultiMRunsOnAtLeastFourAgents fail. TestP3StdMatchesWasmtime
+		// passes: Rust std never reads that future.
+		fe := &readableFutureEnd{payload: &okv, elem: elemOfPayload(&okv)}
 		fe.index = async.addLocked(fe)
 		// **The writer has already dropped** (#1264, ADR 0122): its drop unlinked this end and left DROPPED pending,
 		// so the host's read takes it and the future resolves `ok` inline, as the reference's host would find

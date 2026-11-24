@@ -197,7 +197,7 @@ func TestAGuestDropOfTheProducedStreamResolvesTheFutureOK(t *testing.T) {
 	if err := p.cc.Write(fptr, []byte{0xAA, 0xAA}); err != nil {
 		t.Fatalf("seeding the future's result: %v", err)
 	}
-	ret, err := futureRead(p.h)(p.cc, []interp.Value{interp.I32(int32(p.fi)), interp.I32(fptr)})
+	ret, err := futureRead(p.h, futureElemAt(p.h, int32(p.fi)))(p.cc, []interp.Value{interp.I32(int32(p.fi)), interp.I32(fptr)})
 	if err != nil {
 		t.Fatalf("future.read: %v", err)
 	}

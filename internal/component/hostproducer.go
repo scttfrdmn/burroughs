@@ -149,7 +149,7 @@ func (p *streamProducer) mintLocked() (ri, fi int) {
 	p.writer = &writableStreamEnd{producer: p, elem: byteElem}
 	p.reader = &readableStreamEnd{state: copyStateIdle, conn: p.writer, elem: byteElem}
 	p.writer.conn = p.reader
-	p.future = &readableFutureEnd{payload: &p.ok}
+	p.future = &readableFutureEnd{payload: &p.ok, elem: elemOfPayload(&p.ok)} // typed by its payload (#1282 item 1)
 	p.reader.index = p.h.addLocked(p.reader)
 	p.future.index = p.h.addLocked(p.future)
 	return p.reader.index, p.future.index

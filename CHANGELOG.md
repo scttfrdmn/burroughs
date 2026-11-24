@@ -51,6 +51,20 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **A future end carries its element type, and a future built-in naming another type traps**
+  ([#1282](https://github.com/scttfrdmn/burroughs/issues/1282) item 1, and item 4 of
+  [#1364](https://github.com/scttfrdmn/burroughs/issues/1364)), as stream ends have since ADR 0124. Future ends carried
+  no type, so a read, write, cancel or drop through a future of another element went ahead.
+  - **Read on both oracles before the code:** `future-typed-traps.wasm` (11 rows), on wasmtime 49.0.3 (10 of 10) and
+    on the pin 2e7895c (`refread.py`, 16 of 16). The two agree on every row.
+  - **`future.new` stamps the type it names on both ends**, and a host-minted future is typed by its payload, which
+    the link already checks against the guest's declaration. An async lower's future is a `future<u32>`.
+  - **Two type indices naming one type are one type**, as the pin compares them structurally, including a future of
+    an element the codec does not lay out.
+  - `future.write`'s alignment and range traps (`def:GuestBuffer`), the other half of #1282's item 1, are not
+    modelled yet.
+  - **Witness:** `TestTypedFutureEndsMatchTheOracles`, in both `gate:cm-threads` states. The check, the structural
+    comparison and a host future's type were each neutered and run, and each site records the result.
 - **Four future and stream built-in checks now match the pin** (items 1, 2, 3 and 5 of
   [#1364](https://github.com/scttfrdmn/burroughs/issues/1364); item 4 is the typed-future entry). Each one let a call
   through, or trapped for another reason, where the reference traps.

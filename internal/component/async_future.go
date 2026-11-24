@@ -69,6 +69,9 @@ type readableFutureEnd struct {
 	// writer is the paired writable end, when future.new minted both (the pin's `other`); nil for a future a
 	// host resolves. A read that finds its write parked drives the copy through it (#1325).
 	writer *writableFutureEnd
+	// elem is the end's element type, the pin's `End.t` (#1282 item 1): future.new's, or a host future's payload
+	// type. Every future built-in checks the type it names against it (checkFutureEndType).
+	elem *elemType
 }
 
 // pendingEventLocked delivers the future read's (FUTURE_READ, index, result) event once. readableFutureEnd
@@ -145,7 +148,9 @@ func (e *readableFutureEnd) storeValueLocked() error {
 // the existing waitable-set.wait delivers — no second wait mechanism. A read of an already-resolved end
 // traps (a future is single-shot). This slice binds only the async read; a synchronous read would park
 // here directly, which no #734 stdio import needs.
-func futureRead(h *asyncHandles) interp.CanonFunc {
+//
+// `elem` is the element the built-in names, which must be the end's (def:copy, #1282 item 1).
+func futureRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("component: future.read: got %d args, want (i, ptr)", len(args))
@@ -160,6 +165,9 @@ func futureRead(h *asyncHandles) interp.CanonFunc {
 		fe, ok := handleAt[*readableFutureEnd](h, i)
 		if !ok {
 			return nil, wrongKindTrap("future.read", i, "a readable future end", "def:copy")
+		}
+		if err := checkFutureEndType("future.read", i, fe.elem, elem); err != nil {
+			return nil, err
 		}
 		// **A read of a future the host has already completed is the second arriver, and completes inline**
 		// (ADR 0120). The host's completion parked its value on the future first, as the reference's writer
@@ -208,7 +216,7 @@ func futureRead(h *asyncHandles) interp.CanonFunc {
 		// write-then-read-cancel rows read the read as BLOCKED, the fixture's 0xdead place, and its
 		// write-then-read-bool row does not trap.
 		if w := fe.writer; w != nil && w.hasWrite && !w.resolved {
-			if err := copyFutureValueLocked(w.elem, w.caller, w.srcPtr, c, ptr, "future.read"); err != nil {
+			if err := copyFutureValueLocked(fe.elem, w.caller, w.srcPtr, c, ptr, "future.read"); err != nil {
 				return nil, err
 			}
 			w.completeWriteLocked(1, copyCompleted)
@@ -226,8 +234,8 @@ func futureRead(h *asyncHandles) interp.CanonFunc {
 // (def:End.copy). An element that is not a number traps at the copy, as both ends are this instance's
 // (def:End.copy:"trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))"),
 // and a float's NaN takes the canonical one. `op` names the built-in that arrived second. The caller holds mu.
-func copyFutureValueLocked(elem elemType, src *interp.CanonCaller, srcPtr uint32, dst *interp.CanonCaller, dstPtr uint32, op string) error {
-	if !elem.known {
+func copyFutureValueLocked(elem *elemType, src *interp.CanonCaller, srcPtr uint32, dst *interp.CanonCaller, dstPtr uint32, op string) error {
+	if elem == nil || !elem.known {
 		return fmt.Errorf("%w: %s's copy: the future's element type did not resolve (#1006)", ErrUnsupportedForm, op)
 	}
 	if !elem.numeric {
@@ -253,7 +261,8 @@ func copyFutureValueLocked(elem elemType, src *interp.CanonCaller, srcPtr uint32
 // instance's, freed at Close) without the model's writable-side DONE trap, which is a future.write concern. Since
 // #1362 the drop notifies the paired writer (dropReaderOfWriterLocked), as def:End.drop does. Since #1364 it traps a
 // reader that is mid-copy (def:drop:"trap_if(end.copying_or_cancelling())"), as the pin does; this said it did not.
-func futureDrop(h *asyncHandles) interp.CanonFunc {
+// `elem` is the element the built-in names, which must be the end's (def:drop, #1282 item 1).
+func futureDrop(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: future.drop-readable: got %d args, want (i)", len(args))
@@ -267,6 +276,9 @@ func futureDrop(h *asyncHandles) interp.CanonFunc {
 		fe, ok := handleAt[*readableFutureEnd](h, i)
 		if !ok {
 			return nil, wrongKindTrap("future.drop-readable", i, "a readable future end", "def:drop")
+		}
+		if err := checkFutureEndType("future.drop-readable", i, fe.elem, elem); err != nil {
+			return nil, err
 		}
 		// **A reader mid-copy does not drop** (#1364 item 1): it is COPYING from its read until its event is taken,
 		// whether or not a write has completed it, and def:drop:"trap_if(end.copying_or_cancelling())" traps it.
@@ -336,7 +348,9 @@ func dropReaderOfWriterLocked(w *writableFutureEnd) {
 // **The drop notifies nothing.** def:End.drop notifies the other end only if it is not DONE and has no event pending,
 // and a DONE writer's reader always has one or the other, or is gone: the reader the write completed holds that
 // COMPLETED until it takes it, and is DONE after. So the unlink is all that is left of End.drop here.
-func futureDropWritable(h *asyncHandles) interp.CanonFunc {
+//
+// `elem` is the element the built-in names, which must be the end's (def:drop, #1282 item 1).
+func futureDropWritable(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: future.drop-writable: got %d args, want (i)", len(args))
@@ -351,6 +365,9 @@ func futureDropWritable(h *asyncHandles) interp.CanonFunc {
 		e, ok := handleAt[*writableFutureEnd](h, i)
 		if !ok {
 			return nil, wrongKindTrap("future.drop-writable", i, "a writable future end", "def:drop")
+		}
+		if err := checkFutureEndType("future.drop-writable", i, e.elem, elem); err != nil {
+			return nil, err
 		}
 		// A write is COPYING until its event is taken, whether or not a read has completed it (#1325).
 		//
@@ -396,8 +413,9 @@ func futureDropWritable(h *asyncHandles) interp.CanonFunc {
 //
 // `async` is the built-in's form. The sync form traps on a reader joined to a set, after the state check, as
 // def:cancel_copy orders them; no sync cancel waits, as every cancel here resolves inline. The may-leave guard is the
-// walker's, as for every built-in it binds.
-func futureCancelRead(h *asyncHandles, async bool) interp.CanonFunc {
+// walker's, as for every built-in it binds. `elem` is the element the built-in names, which must be the end's
+// (def:cancel_copy, #1282 item 1).
+func futureCancelRead(h *asyncHandles, elem *elemType, async bool) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: future.cancel-read: got %d args, want (i)", len(args))
@@ -412,6 +430,9 @@ func futureCancelRead(h *asyncHandles, async bool) interp.CanonFunc {
 		e, ok := handleAt[*readableFutureEnd](h, i)
 		if !ok {
 			return nil, wrongKindTrap("future.cancel-read", i, "a readable future end", "def:cancel_copy")
+		}
+		if err := checkFutureEndType("future.cancel-read", i, e.elem, elem); err != nil {
+			return nil, err
 		}
 		// NEUTER, run: drop `|| e.delivered`, and TestFutureDropWritableAndCancelReadMatchTheOracles'
 		// cancel-read-after-event-taken rows (both gate states) trap at the joined-set check below instead, the poll
@@ -464,11 +485,13 @@ type writableFutureEnd struct {
 	progress  uint32             // 0 or 1 (a future is one value); NOT in the event, which is the bare result
 	hasWrite  bool               // a future.write is pending on this end
 	peer      *readableFutureEnd // the paired readable end (future.new)
-	// The parked write's buffer, for the read that arrives second to copy from (#1325): where the value is, the
-	// writing agent's caller (whose memory it is in), and the element future.write named.
+	// The parked write's buffer, for the read that arrives second to copy from (#1325): where the value is, and the
+	// writing agent's caller (whose memory it is in).
 	srcPtr uint32
 	caller *interp.CanonCaller
-	elem   elemType
+	// elem is the end's element type, future.new's (#1282 item 1), which every future built-in checks and the copy
+	// classifies by. It was the element the parked future.write named, which the check now makes the same.
+	elem *elemType
 }
 
 // pendingEventLocked delivers the write's (FUTURE_WRITE, index, result) event once. The caller holds
@@ -527,13 +550,16 @@ func (e *writableFutureEnd) writerDoneLocked() bool {
 // futureNew implements `canon future.new` (0x15, definitions.py:canon_future_new): mint a connected readable+writable
 // future end pair, return `ri | (wi<<32)` — the same packed shape as stream.new. The cancellation path uses
 // the writable end (write then cancel); the readable end is the pair the model always mints.
-func futureNew(h *asyncHandles) interp.CanonFunc {
+//
+// **Both ends carry the type future.new names** (#1282 item 1), as def:new_future gives each End its `t`, and every
+// future built-in checks the type it names against it.
+func futureNew(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, _ []interp.Value) ([]interp.Value, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		re := &readableFutureEnd{}
-		we := &writableFutureEnd{peer: re} // the pin's one `SharedFutureImpl` behind both ends (#1006)
-		re.writer = we                     // and the way back, for a read that arrives second (#1325)
+		re := &readableFutureEnd{elem: elem}
+		we := &writableFutureEnd{peer: re, elem: elem} // the pin's one `SharedFutureImpl` behind both ends (#1006)
+		re.writer = we                                 // and the way back, for a read that arrives second (#1325)
 		re.index = h.addLocked(re)
 		we.index = h.addLocked(we)
 		packed := uint64(uint32(re.index)) | uint64(uint32(we.index))<<32
@@ -574,8 +600,9 @@ func futureNew(h *asyncHandles) interp.CanonFunc {
 // (copyFutureValueLocked). This paragraph read *"only this direction is built"* until it was.
 //
 // `elem` is the element of the type future.write names, which the decoder keeps since #1271 (ADR 0124); it classified
-// type 0's for every future.
-func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
+// type 0's for every future. Since #1282 item 1 it must be the end's own (def:copy), so the copy classifies by the
+// end's, which is the same type.
+func futureWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("component: future.write: got %d args, want (i, ptr)", len(args))
@@ -589,6 +616,9 @@ func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
 		e, ok := handleAt[*writableFutureEnd](h, i)
 		if !ok {
 			return nil, wrongKindTrap("future.write", i, "a writable future end", "def:copy")
+		}
+		if err := checkFutureEndType("future.write", i, e.elem, elem); err != nil {
+			return nil, err
 		}
 		// **A write after the reader's drop takes the DROPPED the drop left pending, inline** (#1362): the reader's drop
 		// notified this IDLE writer (dropReaderOfWriterLocked), and the pin's copy, finding no other end, takes that
@@ -606,7 +636,7 @@ func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.write: end %d is not writable (done, write pending, or resolved)", i)}
 		}
 		if r := e.peer; r != nil && r.hasRead && !r.resolved {
-			if err := copyFutureValueLocked(elem, c, ptr, r.caller, r.readPtr, "future.write"); err != nil {
+			if err := copyFutureValueLocked(e.elem, c, ptr, r.caller, r.readPtr, "future.write"); err != nil {
 				return nil, err
 			}
 			r.resolveLocked(copyCompleted)
@@ -614,7 +644,7 @@ func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
 			return []interp.Value{interp.I32(int32(copyCompleted))}, nil
 		}
 		// The write parks with its buffer, which the read that arrives second copies from (futureRead, #1325).
-		e.srcPtr, e.caller, e.elem = ptr, c, elem
+		e.srcPtr, e.caller = ptr, c
 		e.hasWrite = true
 		bits := uint32(asyncBlocked) // 0xffffffff; as a signed i32 core value this is -1 (same 32 bits)
 		return []interp.Value{interp.I32(int32(bits))}, nil
@@ -627,8 +657,9 @@ func futureWrite(h *asyncHandles, elem elemType) interp.CanonFunc {
 // future_cancel_write (the future WRITE arm's running CANCELLED; progress 0; the end left IDLE).
 //
 // `async` is the built-in's form (#1364 item 2), as futureCancelRead's is: the sync form traps on a writer joined to a
-// set, after the state check, in def:cancel_copy's order. One binding served both forms, unguarded.
-func futureCancelWrite(h *asyncHandles, async bool) interp.CanonFunc {
+// set, after the state check, in def:cancel_copy's order. One binding served both forms, unguarded. `elem` is the
+// element the built-in names, which must be the end's (def:cancel_copy, #1282 item 1).
+func futureCancelWrite(h *asyncHandles, elem *elemType, async bool) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: future.cancel-write: got %d args, want (i)", len(args))
@@ -642,6 +673,9 @@ func futureCancelWrite(h *asyncHandles, async bool) interp.CanonFunc {
 		e, ok := handleAt[*writableFutureEnd](h, i)
 		if !ok {
 			return nil, wrongKindTrap("future.cancel-write", i, "a writable future end", "def:cancel_copy")
+		}
+		if err := checkFutureEndType("future.cancel-write", i, e.elem, elem); err != nil {
+			return nil, err
 		}
 		// **A write a read has completed is still COPYING until its event is taken, so it is cancellable, and the
 		// cancel takes the COMPLETED** (#1325). The pin's cancel finds the event pending and notifies nothing

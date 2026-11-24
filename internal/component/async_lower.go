@@ -236,7 +236,7 @@ func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, s
 				kind = v.Type.Kind
 				switch kind {
 				case canon.KindFuture:
-					fe := &readableFutureEnd{value: v.FutureValue()}
+					fe := &readableFutureEnd{value: v.FutureValue(), elem: u32Elem} // canon.Future's u32 (#1282 item 1)
 					fe.index = h.addLocked(fe)
 					handle = fe.index
 				case canon.KindStream:

@@ -1241,7 +1241,7 @@ func (h *Host) tcpSend(async *asyncHandles, res *hostResources) interp.CanonFunc
 				"(ADR 0122)", ErrUnsupportedForm)
 		}
 		okv := sockOK()
-		fe := &readableFutureEnd{payload: &okv}
+		fe := &readableFutureEnd{payload: &okv, elem: elemOfPayload(&okv)} // typed by its payload (#1282 item 1)
 		fe.index = async.addLocked(fe)
 		var ended func()
 		if sc != nil {

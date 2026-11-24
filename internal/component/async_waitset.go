@@ -630,20 +630,22 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 		return waitableSetDrop(w.async), true
 	case 0x23: // waitable.join
 		return waitableJoin(w.async), true
+	// The six future built-ins are each bound over the element their type index names, which future.new stamps on the
+	// ends it mints and the other five check (#1282 item 1).
 	case 0x16: // future.read (gate:async increment 3)
-		return futureRead(w.async), true
+		return futureRead(w.async, w.futureElemOf(slot)), true
 	case 0x1a: // future.drop-readable
-		return futureDrop(w.async), true
+		return futureDrop(w.async, w.futureElemOf(slot)), true
 	case 0x15: // future.new (2nd async guest) — mints a readable+writable future end pair
-		return futureNew(w.async), true
+		return futureNew(w.async, w.futureElemOf(slot)), true
 	case 0x17: // future.write (2nd async guest) — single-value write; parks with no reader, copies to a pending one
 		return futureWrite(w.async, w.futureElemOf(slot)), true
 	case 0x19: // future.cancel-write (2nd async guest) — its sync form traps on a joined end (#1364)
-		return futureCancelWrite(w.async, asyncForm), true
+		return futureCancelWrite(w.async, w.futureElemOf(slot), asyncForm), true
 	case 0x18: // future.cancel-read (#1362) — cancel-write's twin; its sync form traps on a joined end
-		return futureCancelRead(w.async, asyncForm), true
+		return futureCancelRead(w.async, w.futureElemOf(slot), asyncForm), true
 	case 0x1b: // future.drop-writable (#1362) — drops only a DONE writer
-		return futureDropWritable(w.async), true
+		return futureDropWritable(w.async, w.futureElemOf(slot)), true
 	case 0x06: // subtask.cancel (gate:async increment 4) — the subtask substrate's cancel path
 		return subtaskCancel(w.async, asyncForm), true
 	case 0x0d: // subtask.drop (gate:async increment 4)
