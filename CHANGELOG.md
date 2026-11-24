@@ -23,6 +23,148 @@ says what it now requires and what it gives up.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-24
+*Implements contract v0.1.*
+
+**What this release is: WASI 0.3 across more than one thread, behind `gate:cm-shared-memory`, which is off by
+default.** With `BURROUGHS_CM_SHARED_MEMORY=1`, a component's canonical memory may be shared (ADR 0129), the agents
+of such an instance execute guest code at once, each a thread of its spawner's task (ADR 0130), and the component
+starts them itself through the spawn door `burroughs:threads/spawn@0.1.0` (ADR 0131). The gate is added, not flipped. The
+milestone's outcome witness is C3 ([#1345](https://github.com/scttfrdmn/burroughs/issues/1345), PR
+[#1366](https://github.com/scttfrdmn/burroughs/pull/1366)): `p3multim.go.txt`, a Go program at GOMAXPROCS 4 built by
+the Phase 4 fork, runs inside a component under `burroughs run --inherit-network`. Its output, and its `net/http`
+server's answers to a client outside the instance, match stock Go's native reading byte for byte, 10 of 10. So does
+the fork's single-threaded build of the same source, under Burroughs 10 of 10, and under wasmtime 49.0.3 offline.
+The program's 4-way rendezvous of spinning goroutines closed 4 of 4 in every run, a place only four agents executing
+at once can reach, and the engine's `PeakLiveAgents` read 5 or 6 against a floor of 4. **A component using the gate
+is Burroughs-only:** the Canonical ABI requires an unshared canonical memory, so no other engine or validator accepts
+one. With the gate off, the same artifact is refused by name (exit 5). The plan and its rulings are on
+[#1332](https://github.com/scttfrdmn/burroughs/issues/1332).
+
+**What changes by default:**
+- **A future's rendezvous completes in both orders** ([#1354](https://github.com/scttfrdmn/burroughs/pull/1354)). A
+  `future.read` that finds its guest write parked completes both ends, where both parked for ever. Two repairs ride
+  with it:
+  - a future write's event payload is the bare result, where it packed `progress << 4`;
+  - `future.cancel-write` on a write a read has completed, whose event is not yet taken, returns COMPLETED where it
+    trapped.
+- **`future.drop-writable` and `future.cancel-read` are bound** ([#1362](https://github.com/scttfrdmn/burroughs/issues/1362)),
+  so a component importing either links, where it was refused at instantiate by name.
+  - A reader's drop notifies its writer DROPPED, so the writer's next write returns at once.
+  - The Rust guest `p3async-cancel`, refused before, now runs, and `run()` returns 1 as on wasmtime 49.0.3.
+- **A waitable set delivers events in the order they became ready, at O(1) per event**
+  ([#1338](https://github.com/scttfrdmn/burroughs/issues/1338)). It delivered them in join order, by scanning every
+  member. The pin shuffles, so neither order is the pin's.
+- **With the gate off, a shared canonical memory's refusal names the pin's rule and the variable that admits the
+  extension** ([#1335](https://github.com/scttfrdmn/burroughs/issues/1335)). It said the pin set no rule. The
+  sentinel and exit 5 are unchanged.
+- **No public API or CLI change:** no non-test file in the root package or in `cmd/burroughs` changed since v0.14.0.
+
+Every other engine change in Added and Fixed is behind `gate:cm-shared-memory`, or reachable only across agents: the
+admission of a shared canonical memory (E1), the run slot per agent (E2), the spawn door (E3), the cross-agent wake
+(E4), and the teardown when an agent's exit or trap ends the run
+([#1357](https://github.com/scttfrdmn/burroughs/issues/1357), ADR 0132). In a component, a second agent exists only
+through the spawn door, which only the gate offers. E5 and C3 add witnesses, not mechanisms.
+
+**Instruments:**
+- C3's three-build witness: stock go1.26.9's reading, committed before either wasm was built, and the fork's multi-M
+  and single-M builds under `burroughs run`, driven by `driveC3`;
+- `TestC3MultiMRunsOnAtLeastFourAgents`, which reads `PeakLiveAgents` in-process as a high-water mark. A sampled count
+  of executing agents is logged and never asserted, by grave [#1360](https://github.com/scttfrdmn/burroughs/issues/1360)'s
+  rule;
+- the cross-agent fixtures: `shmem-canon-roundtrip`, `spawn-door`, `cross-agent-wake`, `cross-agent-payload`,
+  `cross-agent-shutdown` and `agent-ends-run-{exit,trap,control}`;
+- the future fixtures, each read on wasmtime 49.0.3 and on the pin before the code: `future-write-then-read` and its
+  siblings, `future-drop-cancel` and `future-cancel-read-async`;
+- editroute route 11 refusing a shell glob handed to a content reader in a fork tree;
+- the Windows `-race` job running `internal/spec` alone under a 60m bound
+  ([#1358](https://github.com/scttfrdmn/burroughs/issues/1358)), and C3's two tests in the triage map;
+- `raceGuardScale`, which scales C3's READY guard 4x under `-race`;
+- #1284's cursor probe asking only whether the address range is free
+  ([#1348](https://github.com/scttfrdmn/burroughs/issues/1348)).
+
+**Platforms:** 64-bit Linux and macOS are built and tested. Windows is measured and unsupported, with each recurring
+failure mapped to an open issue in the triage map. **A multi-threaded Go component does not run on Windows:** on a
+port without an address-space reservation, a shared memory cannot grow past 128 pages, and C3's guest runs out of
+memory there ([#1165](https://github.com/scttfrdmn/burroughs/issues/1165), with
+[#674](https://github.com/scttfrdmn/burroughs/issues/674) as its repair). Both C3 tests are mapped to those issues.
+
+**The contract:** v0.1, with three dated texts added on Scott's stamp on
+[#1334](https://github.com/scttfrdmn/burroughs/issues/1334), of 2026-11-22 (C0, PR
+[#1349](https://github.com/scttfrdmn/burroughs/pull/1349)). Each text it follows stays visible.
+- **§6 R-1 is amended.** `poll_ready` is discharged by `waitable-set.wait` and `.poll`, and the wake requirement
+  stands in that vocabulary: across agents of one instance, and at shutdown.
+- **§6 R-4 is appended.** An instance's parallel agents share its handle table, handle operations are linearizable,
+  and a delivered event observes B-MM-1 for another agent's payload.
+- **§2 T-1 is appended.** A component's door to the spawn primitive is `burroughs:threads/spawn@0.1.0#spawn`,
+  entering at the core export `mstart`.
+
+The contract is appended to and amended in place, not re-versioned (ADR 0004), so this release implements v0.1 as of
+that stamp.
+
+**Board** (`make conformance`): unchanged from v0.14.0.
+- **Core:** 63769 pass, 0 fail, 0 unsupported, 1368 gated, 0 unimplemented, over 256 files.
+- **All gates on:** 65109 pass, 0 fail, 0 gated.
+- **Threads lane:** 576 pass, 41 fail, 2 bound, over 4 files. All 41 failures are superseded-corpus rows, with 0
+  engine defects.
+
+The board's harness does not reach component code, so this release's subject is not on it. C3 and the cross-agent
+witnesses are its readings.
+
+**Known limits, open on default-on paths, each with its issue:**
+- **WASI 0.3 gaps:**
+  - **Guest-defined resources:** `resource.new` and `resource.rep` refuse at call ([#1251](https://github.com/scttfrdmn/burroughs/issues/1251)).
+  - **Sync `stream.read`:** refused at instantiate ([#1272](https://github.com/scttfrdmn/burroughs/issues/1272)).
+  - **Host-to-host copy:** a host-produced stream handed to `write-via-stream` is refused at call ([#1273](https://github.com/scttfrdmn/burroughs/issues/1273)).
+  - **Async host import results:** the result type isn't checked against the host's declaration ([#1279](https://github.com/scttfrdmn/burroughs/issues/1279)).
+  - **Zero-length reads:** a zero-length read of a host-produced stream diverges from wasmtime ([#1302](https://github.com/scttfrdmn/burroughs/issues/1302)).
+- **Sockets:** IPv6 and wildcard listeners, the listen backlog, and the remaining accept errors are unmeasured
+  ([#1285](https://github.com/scttfrdmn/burroughs/issues/1285)). Name lookup does no IDNA or percent-decoding
+  ([#1287](https://github.com/scttfrdmn/burroughs/issues/1287)).
+- **Cross-component handles:** borrow, stream, future, nested and async-arm handles are refused by name rather than
+  moved ([#1317](https://github.com/scttfrdmn/burroughs/issues/1317)).
+- **Futures and streams.** v0.14.0's limit that a future read meeting a parked write parks, and that a drop does not
+  notify the other end, is fixed (above). Open:
+  - Future ends carry no type, and `future.write`'s `def:GuestBuffer` traps aren't modelled ([#1282](https://github.com/scttfrdmn/burroughs/issues/1282), item 1).
+  - Five built-in checks diverge from the pin: `future.drop-readable` mid-copy, the sync `future.cancel-write` on a
+    joined writer, the stream sync-cancel's check order, the element type, and a read of an already-read future end
+    ([#1364](https://github.com/scttfrdmn/burroughs/issues/1364)).
+  - A sync `future.read` or `future.write` is bound as the async form, so it returns BLOCKED where the pin and
+    wasmtime 49.0.3 block ([#1352](https://github.com/scttfrdmn/burroughs/issues/1352)).
+  - A second `future.write` after a CANCELLED one traps where the pin returns the end to IDLE
+    ([#1353](https://github.com/scttfrdmn/burroughs/issues/1353)).
+  - A host import given a stream argument of the wrong kind is refused with `ErrLinkRefused` where the pin's lift
+    traps ([#1367](https://github.com/scttfrdmn/burroughs/issues/1367)).
+- **Canonopt validation:** three rules that need flattening at load are unenforced: the post-return type, the lift
+  callee's type, and memory or realloc required by the signature
+  ([#1321](https://github.com/scttfrdmn/burroughs/issues/1321)).
+- **Error classes:** a `flags` type with no labels or more than 32, and a cross-component handle refusal, reach an
+  embedder unclassified through some doors, so `burroughs run` exits 1 for the first
+  ([#1331](https://github.com/scttfrdmn/burroughs/issues/1331)). `ErrUnsupportedForm`'s doc says it is unreachable
+  from outside, and `burroughs run` reaches it ([#1346](https://github.com/scttfrdmn/burroughs/issues/1346)).
+- **Stdin:** a stdin producer blocked in `Read` at `Close` consumes one more chunk of the reader. A cancellable
+  reader is a public-API question ([#1274](https://github.com/scttfrdmn/burroughs/issues/1274)).
+- **ADR 0128's limit:** after a guest wait ends, an embedder program that later deadlocks outside any guest wait
+  may hang where it would have died with Go's fatal, because the wait's stopped timer stays in a P's heap for a
+  while.
+- **Carried from earlier releases, still open:**
+  - a Phase 4 fork guest whose goroutine spins without allocating is never preempted ([#1064](https://github.com/scttfrdmn/burroughs/issues/1064));
+  - a Go runtime fatal on CI's arm64 runner in `internal/spec`, specific to that runner's CPU so far as anything has measured ([#1089](https://github.com/scttfrdmn/burroughs/issues/1089)).
+- **Behind `gate:cm-shared-memory`, which is off by default.** These are not on a default-on path, and are listed
+  because the gate is this release's subject:
+  - **Windows:** a multi-threaded Go component runs out of memory at the 128-page cap
+    ([#1165](https://github.com/scttfrdmn/burroughs/issues/1165); repair [#674](https://github.com/scttfrdmn/burroughs/issues/674)).
+  - **A loop with no call holds off a stop-the-world** in a multi-threaded wasip3 guest until it ends, as in a
+    wasip1 one: Go's wasm `blockGeneric`, hashing one large write, is such a loop, and C3 hashes in 4 KiB writes for
+    that reason ([#1064](https://github.com/scttfrdmn/burroughs/issues/1064)).
+  - **Refused by name, not built** (ADR 0130): a spawned agent's late result store that would need `cabi_realloc`
+    off its own goroutine, and a spawned agent's `thread.new-indirect`, `thread.resume-later`, `thread.suspend` and
+    switching calls.
+  - **The spawn door must be imported by the core module that exports `mstart`**; another shape is refused at link
+    (ADR 0131).
+  - **ADR 0132's named limit:** an agent's exit or trap tears down its own core instance's agents. A run lifted from
+    another core instance and parked inside this one's code is not reached. No committed guest has that shape.
+
 ### Added
 
 - **`gate:cm-shared-memory` (`BURROUGHS_CM_SHARED_MEMORY`), default off: a shared memory as a component's
@@ -21754,7 +21896,8 @@ conformance claim is made for this version.*
   different condition (duplicate or misordered sections), now named as such
   and tracked as not-yet-enforced.
 
-[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/burroughs/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/scttfrdmn/burroughs/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/scttfrdmn/burroughs/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/scttfrdmn/burroughs/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/scttfrdmn/burroughs/compare/v0.11.0...v0.12.0
