@@ -55,3 +55,9 @@ future-drop-cancel cancel-read-sync-joined (#1362; wasmtime 49.0.3: trap, synchr
 future-drop-cancel drop-writable-after-reader-dropped (#1362; wasmtime 49.0.3: 1): value 1
 future-drop-cancel cancel-read-async-parked (#1362; wasmtime 49.0.3: 2): value 2
 future-drop-cancel cancel-read-async-joined (#1362; wasmtime 49.0.3: 2): value 2
+future-write-after-cancel cancel-write-parked (#1353; wasmtime 49.0.3: 2): value 2
+future-write-after-cancel write-after-cancel-write (#1353; wasmtime 49.0.3: 4294967295): value 4294967295
+future-write-after-cancel read-after-write-after-cancel-write (#1353; wasmtime 49.0.3: 1792): value 1792
+future-write-after-cancel poll-after-write-after-cancel-write (#1353; wasmtime 49.0.3: 117571589): value 117571589
+future-write-after-cancel write-to-parked-read-after-cancel-write (#1353; wasmtime 49.0.3: 0): value 0
+future-write-after-cancel drop-writable-after-cancel-write (#1353; wasmtime 49.0.3: trap, without first writing a value): trap future.drop-writable

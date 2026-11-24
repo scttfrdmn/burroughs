@@ -87,7 +87,14 @@ def watch(body):
     return out.value
 
 
+# REFREAD_ONLY reads only the lines whose name starts with it, to take one fixture's rows while writing them. The
+# committed reading is always the whole battery, regenerated with it unset.
+ONLY = os.environ.get("REFREAD_ONLY")
+
+
 def read(name, body):
+    if ONLY and not name.startswith(ONLY):
+        return
     seen = set()
     for det in (False, True):
         d.DETERMINISTIC_PROFILE = det
@@ -1313,6 +1320,125 @@ FUTURE_DROP_CANCEL_ROWS = [
 ]
 
 
+class Ends:
+    """The built-ins a D1 fixture's row calls (#1373), over one future or stream minted per row, a 64 KiB memory and
+    the WAT's buffers: 64 the write buffer (7), 128 the read buffer, 256 a poll's (index, payload). Each call names its
+    built-in in `site` first, so a trap reads as the built-in that raised it. `fu8` is the fixtures' future<u8>, `fu32`
+    a future of another element, and `su8` their stream<u8>."""
+
+    def __init__(self, site, mem):
+        self.site, self.mem = site, mem
+        self.fu8 = d.FutureType(d.U8Type())
+        self.fu32 = d.FutureType(d.U32Type())
+        self.su8 = d.StreamType(d.U8Type())
+        self.r = self.w = None
+
+    def opts(self, async_):
+        return d.CanonicalOptions(async_=async_, memory=self.mem)
+
+    def call(self, name, f, *args):
+        self.site["name"] = name
+        return f(*args)
+
+    def split(self, t=None):
+        [p] = self.call("future.new", d.canon_future_new, t or self.fu8)
+        self.r, self.w = p & 0xffffffff, p >> 32
+        self.mem.bytes[64] = 7
+        self.mem.bytes[128] = 0
+
+    def ssplit(self):
+        [p] = self.call("stream.new", d.canon_stream_new, self.su8)
+        self.r, self.w = p & 0xffffffff, p >> 32
+
+    def read(self, t=None, async_=True):
+        return self.call("future.read", d.canon_future_read, t or self.fu8, self.opts(async_), self.r, 128)[0]
+
+    def write(self, t=None, async_=True):
+        return self.call("future.write", d.canon_future_write, t or self.fu8, self.opts(async_), self.w, 64)[0]
+
+    def cancel_read(self, t=None, async_=False):
+        return self.call("future.cancel-read", d.canon_future_cancel_read, t or self.fu8, async_, self.r)[0]
+
+    def cancel_write(self, t=None, async_=False):
+        return self.call("future.cancel-write", d.canon_future_cancel_write, t or self.fu8, async_, self.w)[0]
+
+    def drop_readable(self, t=None):
+        self.call("future.drop-readable", d.canon_future_drop_readable, t or self.fu8, self.r)
+
+    def drop_writable(self, t=None):
+        self.call("future.drop-writable", d.canon_future_drop_writable, t or self.fu8, self.w)
+
+    def stream_cancel_read(self):
+        return self.call("stream.cancel-read", d.canon_stream_cancel_read, self.su8, False, self.r)[0]
+
+    def stream_cancel_write(self):
+        return self.call("stream.cancel-write", d.canon_stream_cancel_write, self.su8, False, self.w)[0]
+
+    def joinnew(self, h):
+        [s] = self.call("waitable-set.new", d.canon_waitable_set_new)
+        self.call("waitable.join", d.canon_waitable_join, h, s)
+        return s
+
+    def pollone(self, h):
+        s = self.joinnew(h)
+        [code] = self.call("waitable-set.poll", d.canon_waitable_set_poll, self.mem, s, 256)
+        return code | (u32(self.mem, 260) << 8) | (u32(self.mem, 256) << 16) | (self.mem.bytes[128] << 24)
+
+
+def ends_row(steps):
+    """A D1 fixture's row (#1373): `steps(x)`, over an Ends, is the WAT export's body step for step, and returns its
+    u32. The export is async-typed and lifted sync, as the WATs' are. The trap site names the built-in that was
+    running."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        x = Ends(site, d.MemInst(bytearray(65536), "i32"))
+
+        def run(args):
+            v = steps(x)
+            site["name"] = "after the row"
+            return [v & 0xffffffff]
+
+        rft = d.FuncType([], [d.U32Type()], async_=True)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
+def _then(*fs):
+    """Each f in turn over the same Ends; the row's result is the last one's."""
+
+    def steps(x):
+        v = None
+        for f in fs:
+            v = f(x)
+        return v
+
+    return steps
+
+
+def _wcancel(x):
+    x.split()
+    x.write()
+    return x.cancel_write()
+
+
+# #1353, future-write-after-cancel.wat: a future.write after a cancelled one. Each row with wasmtime 49.0.3's reading.
+FUTURE_WRITE_AFTER_CANCEL_ROWS = [
+    ("cancel-write-parked", "2", _wcancel),
+    ("write-after-cancel-write", "4294967295", _then(_wcancel, lambda x: x.write())),
+    ("read-after-write-after-cancel-write", "1792",
+     _then(_wcancel, lambda x: x.write(), lambda x: x.read() | (x.mem.bytes[128] << 8))),
+    ("poll-after-write-after-cancel-write", "117571589",
+     _then(_wcancel, lambda x: x.write(), lambda x: x.read(), lambda x: x.pollone(x.w))),
+    ("write-to-parked-read-after-cancel-write", "0", _then(_wcancel, lambda x: x.read(), lambda x: x.write())),
+    ("drop-writable-after-cancel-write", "trap, without first writing a value",
+     _then(_wcancel, lambda x: x.drop_writable(), lambda x: 7)),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1357,6 +1483,8 @@ def battery():
          future_rendezvous(False))
     for row, wt in FUTURE_DROP_CANCEL_ROWS:
         read("future-drop-cancel %s (#1362; wasmtime 49.0.3: %s)" % (row, wt), future_drop_cancel(row))
+    for row, wt, steps in FUTURE_WRITE_AFTER_CANCEL_ROWS:
+        read("future-write-after-cancel %s (#1353; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
 
 
 if __name__ == "__main__":

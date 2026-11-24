@@ -1,0 +1,44 @@
+# Committed readings for future-write-after-cancel.wasm (#1353): a future.write after a future.cancel-write, on one
+# future<u8> per export.
+# Built:       wasm-tools parse future-write-after-cancel.wat -o future-write-after-cancel.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' future-write-after-cancel.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken 2026-11-24.
+# Reference:   refread.py's future-write-after-cancel rows (cmthreads/reference/refread.reading), pin 2e7895c, uv-managed
+#              3.14.8, 16 of 16 runs per line (DETERMINISTIC_PROFILE x 8 seeds). The two oracles agree on every row.
+#
+# Each line is `<export>: <wasmtime's reading>`; a trap is its last line of stderr, the error chain's `1: ` dropped,
+# and its exit status. A poll reads the event code | (payload << 8) | (index << 16) | (the read buffer's byte << 24).
+cancel-write-parked: 2
+write-after-cancel-write: 4294967295
+read-after-write-after-cancel-write: 1792
+poll-after-write-after-cancel-write: 117571589
+write-to-parked-read-after-cancel-write: 0
+drop-writable-after-cancel-write: trap: cannot drop future write end without first writing a value (exit 1)
+#
+# The pin, row by row (refread.reading):
+#
+#   export                                    pin 2e7895c
+#   cancel-write-parked                       value 2
+#   write-after-cancel-write                  value 4294967295
+#   read-after-write-after-cancel-write       value 1792
+#   poll-after-write-after-cancel-write       value 117571589
+#   write-to-parked-read-after-cancel-write   value 0
+#   drop-writable-after-cancel-write          trap future.drop-writable
+#
+# Meaning, with the pin's line for each.
+#   cancel-write-parked  2 is CANCELLED: def:End.cancel notifies inline, the reader being this instance's, and the
+#                     event's CANCELLING_COPY arm leaves the writer IDLE (def:FutureEnd.notify.future_event+:
+#                     `self.state = End.State.IDLE`).
+#   write-after-cancel-write  BLOCKED: the writer is IDLE, so def:copy's `trap_if(end.state != End.State.IDLE)` admits
+#                     the write, and with no read parked it parks (def:End.copy: `self.buffer = buffer`).
+#   read-after-write-after-cancel-write  1792 is COMPLETED (0) | (7 << 8): the read finds the second write parked and
+#                     copies it (def:End.copy's both-buffers arm).
+#   poll-after-write-after-cancel-write  117571589 is FUTURE_WRITE (5), COMPLETED (0), wi 2, byte 7.
+#   write-to-parked-read-after-cancel-write  0 is COMPLETED: a read parked after the cancel, and the second write
+#                     completes it inline.
+#   drop-writable-after-cancel-write  the cancelled writer is IDLE, not DONE:
+#                     def:drop:"trap_if(isinstance(end, WritableFutureEnd) and end.state !=".
+#
+# Burroughs before #1353 (main at 4a30c4f), both gate:cm-threads states: cancel-write-parked 2 and
+# drop-writable-after-cancel-write's trap agree; the four rows with a second write trap at it, "future.write: end 2 is
+# not writable (done, write pending, or resolved)": the cancel took its event but left the end resolved.
