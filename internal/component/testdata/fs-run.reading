@@ -1,0 +1,23 @@
+# Committed readings for fs-run.wasm: a wasi:cli/run@0.3.0 component that reads and writes through its first preopen,
+# for the public paths (#1374 E1a, ADR 0133): ComponentConfig.Run and `burroughs run --dir`/`--scratch`.
+# Built:       wasm-tools parse fs-run.wat -o fs-run.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
+#                -S p3=y [--dir <tree>::/] fs-run.wasm
+# Tree:        fs-descriptor.reading's, made fresh before every run (fs-run reads only hello.txt and w.txt).
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken
+#              2026-11-24, after E1a's engine code and before the public paths that run it.
+#
+# Each line is `<grant>: <exit code>`, and the tests read them by grant.
+writable: 61
+none: 3
+#
+# The read-only line comes from the WIT's text, as fs-descriptor.reading's read-only rows do: wasmtime 49.0.3's `--dir`
+# is always read|mutate-directory, so its CLI has no read-only grant. open-at of w.txt for read|write on a base without
+# mutate-directory "fails with `error-code::read-only`".
+read-only: 111
+#
+# Meaning: the exit code is the count of bytes read from hello.txt (11), plus 100 for a read-only refusal of w.txt's
+# open for read|write, or 50 for a write-via-stream of "XY" at 0 that resolves ok. With no grant it is 3.
+#   writable   61: 11 read, the write ok; the host's w.txt reads "XY23456789" after the run.
+#   none        3: get-directories answers an empty list.
+#   read-only 111: 11 read, the open for write refused read-only; w.txt unchanged.
