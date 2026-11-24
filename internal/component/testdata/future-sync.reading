@@ -1,0 +1,63 @@
+# Committed readings for future-sync.wasm and cmthreads/sync-future-own-thread.wasm (#1352): future.read and
+# future.write in their SYNC form. The thread rows are the last five.
+# Built:       wasm-tools parse <f>.wat -o <f>.wasm   (wasm-tools 1.258.0; each validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y,component-model-more-async-builtins=y -S p3=y
+#              --invoke '<export>()' future-sync.wasm
+#              .oracle/wasmtime-49.0.3/wasmtime run -W component-model-threading=y
+#              -W component-model-async=y,component-model-more-async-builtins=y --invoke '<export>()' cmthreads/sync-future-own-thread.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical, but for the
+#              two hang rows, 3 of 3, each killed by timeout(1) at 10 s (exit 124) with nothing on stdout or stderr.
+#              Taken 2026-11-24. Without `component-model-more-async-builtins`, future-sync.wasm does not load:
+#              "synchronous `future.read` requires the component model more async builtins feature (at offset 0x51)"
+#              (exit 1).
+# Reference:   refread.py's future-sync and sync-future-own-thread rows (cmthreads/reference/refread.reading), pin
+#              2e7895c, uv-managed 3.14.8, 16 of 16 runs per line (DETERMINISTIC_PROFILE x 8 seeds). The two oracles agree
+#              on every row.
+#
+# Each line is `<export>: <wasmtime's reading>`; a trap is its last line of stderr, the error chain's `1: ` dropped,
+# and its exit status. `hang` is no result and no trap, killed at the bound.
+sync-write-to-parked-read: 0
+sync-read-of-parked-write: 1792
+sync-write-after-reader-dropped: 1
+sync-write-joined: trap: wasm trap: waitable cannot be used synchronously while added to a waitable set (exit 134)
+sync-read-joined: trap: wasm trap: waitable cannot be used synchronously while added to a waitable set (exit 134)
+sync-write-no-reader: hang
+sync-read-no-writer: hang
+sync-write-no-reader-sync-typed: trap: wasm trap: cannot block a synchronous task before returning (exit 134)
+sync-read-own-thread: 1792
+sync-write-own-thread: 1792
+sync-read-own-thread-control: trap: wasm trap: cannot block a synchronous task before returning (exit 134)
+sync-read-cancelled-by-thread: trap: wasm trap: waitable cannot be used synchronously while added to a waitable set (exit 134)
+sync-read-joined-by-thread: trap: wasm trap: waitable cannot be used synchronously while added to a waitable set (exit 134)
+#
+# The pin, row by row (refread.reading), with the trap_if that raised each trap where a traceback names it:
+#
+#   export                            pin 2e7895c                        the trapping line
+#   sync-write-to-parked-read         value 0
+#   sync-read-of-parked-write         value 1792
+#   sync-write-after-reader-dropped   value 1
+#   sync-write-joined                 trap future.write                  def:copy:"trap_if(end.in_waitable_set() and not opts.async_)"
+#   sync-read-joined                  trap future.read                   def:copy:"trap_if(end.in_waitable_set() and not opts.async_)"
+#   sync-write-no-reader              HANG
+#   sync-read-no-writer               HANG
+#   sync-write-no-reader-sync-typed   trap future.write                  def:canon_lift:"trap_if(not candidates)"
+#   sync-read-own-thread              value 1792
+#   sync-write-own-thread             value 1792
+#   sync-read-own-thread-control      trap run's sync future.read        def:canon_lift:"trap_if(not candidates)"
+#   sync-read-cancelled-by-thread     trap T's future.cancel-read        def:cancel_copy:"trap_if(end.has_sync_waiter)"
+#   sync-read-joined-by-thread        trap T's waitable.join             def:canon_waitable_join:"trap_if(w.has_sync_waiter)"
+#
+# Meaning.
+#   - A sync copy that finds the other end's copy parked completes inline, as the async form does, and returns its
+#     payload: COMPLETED, or the DROPPED a reader's drop left. A sync copy never returns BLOCKED.
+#   - A sync copy that does not complete inline waits for its own event (def:copy:"end.wait_for_pending_event()"). In
+#     an async-typed export nothing judges the wait, so with nothing to wake it both oracles hang (ADR 0128's rule);
+#     in a sync-typed one the sync tail traps it when no Thread could wake it. A Thread of the instance that makes the
+#     other copy wakes it, and it returns COMPLETED | (7 << 8).
+#   - A sync copy on an end joined to a set traps, and so does another Thread's cancel or join of an end whose sync
+#     copy is waiting. wasmtime names the last two with the joined-set message.
+#
+# Burroughs before #1352 (main at 4a30c4f), both gate:cm-threads states (the thread rows with the gate on): the three
+# inline rows agree. Every other row returns 4294967295, BLOCKED, to its sync caller: the decoder kept the future
+# built-ins' memory but dropped their `async`, so the sync form was bound as the async one. The joined rows do not
+# trap, the hang rows return at once, the sync-typed row is not judged, and the thread rows never wait for T.

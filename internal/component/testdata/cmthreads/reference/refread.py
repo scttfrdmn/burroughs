@@ -1522,6 +1522,101 @@ FUTURE_TYPED_TRAPS_ROWS = [
 ]
 
 
+def _join(x, h):
+    x.joinnew(h)
+
+
+# #1352, future-sync.wat: future.read and future.write in their SYNC form. Each row with wasmtime 49.0.3's reading,
+# and whether its export is sync-typed.
+FUTURE_SYNC_ROWS = [
+    ("sync-write-to-parked-read", "0", False,
+     _then(lambda x: x.split(), lambda x: x.read(), lambda x: x.write(async_=False))),
+    ("sync-read-of-parked-write", "1792", False,
+     _then(lambda x: x.split(), lambda x: x.write(), lambda x: x.read(async_=False) | (x.mem.bytes[128] << 8))),
+    ("sync-write-after-reader-dropped", "1", False,
+     _then(lambda x: x.split(), lambda x: x.drop_readable(), lambda x: x.write(async_=False))),
+    ("sync-write-joined", "trap, synchronously while added to a waitable set", False,
+     _then(lambda x: x.split(), lambda x: _join(x, x.w), lambda x: x.write(async_=False))),
+    ("sync-read-joined", "trap, synchronously while added to a waitable set", False,
+     _then(lambda x: x.split(), lambda x: _join(x, x.r), lambda x: x.read(async_=False))),
+    ("sync-write-no-reader", "hang", False, _then(lambda x: x.split(), lambda x: x.write(async_=False))),
+    ("sync-read-no-writer", "hang", False, _then(lambda x: x.split(), lambda x: x.read(async_=False))),
+    ("sync-write-no-reader-sync-typed", "trap, cannot block a synchronous task", True,
+     _then(lambda x: x.split(), lambda x: x.write(async_=False))),
+]
+
+
+def sync_future_own_thread(slot):
+    """#1352's cmthreads/sync-future-own-thread.wat: a sync-typed, sync-lifted `run` creates a future<u8>, readies a
+    Thread T, and makes a SYNC copy, which waits. `slot` is T's body as the WAT's table has it: 0 writes 7 (so run's
+    sync read waits for it), 1 reads (so run's sync write of 7 waits for it), 2 does nothing (the control, which the
+    sync tail traps), 3 cancels run's waiting read and 4 joins its reader to a set (each traps in T, the reader having
+    a sync waiter). The result is the sync copy's | (the read buffer's byte << 8)."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        fut = d.FutureType(d.U8Type())
+        aopts = d.CanonicalOptions(async_=True, memory=mem)
+        sopts = d.CanonicalOptions(async_=False, memory=mem)
+
+        def t(args):
+            if slot == 0:
+                mem.bytes[64] = 7
+                site["name"] = "T's future.write"
+                d.canon_future_write(fut, aopts, u32(mem, 20), 64)
+            elif slot == 1:
+                site["name"] = "T's future.read"
+                d.canon_future_read(fut, aopts, u32(mem, 16), 128)
+            elif slot == 3:
+                site["name"] = "T's future.cancel-read"
+                d.canon_future_cancel_read(fut, False, u32(mem, 16))
+            elif slot == 4:
+                [s] = d.canon_waitable_set_new()
+                site["name"] = "T's waitable.join"
+                d.canon_waitable_join(u32(mem, 16), s)
+            return []
+
+        tbl = d.Table()
+        fi = tbl.add(d.CoreFuncRef(BODYT, t))
+
+        def run(args):
+            [packed] = d.canon_future_new(fut)
+            mem.bytes[16:20] = (packed & 0xFFFFFFFF).to_bytes(4, "little")
+            mem.bytes[20:24] = (packed >> 32).to_bytes(4, "little")
+            mem.bytes[128] = 0
+            [ti] = d.canon_thread_new_indirect(BODYT, tbl, fi, 0)
+            d.canon_thread_resume_later(ti)
+            if slot == 1:
+                mem.bytes[64] = 7
+                site["name"] = "run's sync future.write"
+                [r] = d.canon_future_write(fut, sopts, u32(mem, 20), 64)
+            else:
+                site["name"] = "run's sync future.read"
+                [r] = d.canon_future_read(fut, sopts, u32(mem, 16), 128)
+            site["name"] = "after the copy"
+            return [r | (mem.bytes[128] << 8)]
+
+        rft = d.FuncType([], [d.U32Type()])
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
+        got = []
+        host_invoke(store, run_fi, lambda r: got.append(r))
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
+SYNC_FUTURE_OWN_THREAD_ROWS = [
+    ("sync-read-own-thread", "1792", 0),
+    ("sync-write-own-thread", "1792", 1),
+    ("sync-read-own-thread-control", "trap, cannot block a synchronous task", 2),
+    ("sync-read-cancelled-by-thread", "trap, synchronously while added to a waitable set", 3),
+    ("sync-read-joined-by-thread", "trap, synchronously while added to a waitable set", 4),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1572,6 +1667,10 @@ def battery():
         read("future-stream-checks %s (#1364; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
     for row, wt, steps in FUTURE_TYPED_TRAPS_ROWS:
         read("future-typed-traps %s (#1282 item 1, #1364 item 4; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
+    for row, wt, sync_typed, steps in FUTURE_SYNC_ROWS:
+        read("future-sync %s (#1352; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps, sync_typed))
+    for row, wt, slot in SYNC_FUTURE_OWN_THREAD_ROWS:
+        read("sync-future-own-thread %s (#1352; wasmtime 49.0.3: %s)" % (row, wt), sync_future_own_thread(slot))
 
 
 if __name__ == "__main__":

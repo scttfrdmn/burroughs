@@ -85,3 +85,16 @@ future-typed-traps same-structure-write (#1282 item 1, #1364 item 4; wasmtime 49
 future-typed-traps mismatch-new32-read8 (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.read
 future-typed-traps nested-same-structure-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: 4294967295): value 4294967295
 future-typed-traps nested-mismatch-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.read
+future-sync sync-write-to-parked-read (#1352; wasmtime 49.0.3: 0): value 0
+future-sync sync-read-of-parked-write (#1352; wasmtime 49.0.3: 1792): value 1792
+future-sync sync-write-after-reader-dropped (#1352; wasmtime 49.0.3: 1): value 1
+future-sync sync-write-joined (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap future.write
+future-sync sync-read-joined (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap future.read
+future-sync sync-write-no-reader (#1352; wasmtime 49.0.3: hang): HANG
+future-sync sync-read-no-writer (#1352; wasmtime 49.0.3: hang): HANG
+future-sync sync-write-no-reader-sync-typed (#1352; wasmtime 49.0.3: trap, cannot block a synchronous task): trap future.write
+sync-future-own-thread sync-read-own-thread (#1352; wasmtime 49.0.3: 1792): value 1792
+sync-future-own-thread sync-write-own-thread (#1352; wasmtime 49.0.3: 1792): value 1792
+sync-future-own-thread sync-read-own-thread-control (#1352; wasmtime 49.0.3: trap, cannot block a synchronous task): trap run's sync future.read
+sync-future-own-thread sync-read-cancelled-by-thread (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap T's future.cancel-read
+sync-future-own-thread sync-read-joined-by-thread (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap T's waitable.join
