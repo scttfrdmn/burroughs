@@ -39,7 +39,7 @@ For the async methods:
 
 - **`Host.Preopens`, an internal `[]Preopen{Host, Guest, Writable}`,** is set from `ComponentConfig.Preopens`, which reuses `burroughs.Preopen` unchanged. A `Guest` left empty is the host path, as wasip1's is. The zero value grants nothing, and `get-directories` stays an empty list (`TestP3TcpMatchesWasmtime` relies on it).
 - **Each preopen is checked at instantiate:** it must name an existing directory, or instantiate fails naming it, as wasip1's `initFDs` fails the run.
-- **`get-directories` moves from `Host.wasi` to `Host.resourceSource`,** so it can mint owns, as `tcpCreate` does. Each call mints one fresh `own<descriptor>` per preopen, each over an `os.Root` of its own (`os.OpenRoot` of the host path), and lowers the list through the caller's realloc. Two calls give two descriptors, each closed by its own drop, as wasmtime's two calls give two handles.
+- **0.3's `get-directories` moves from `Host.wasi` to `Host.resourceSource`,** so it can mint owns, as `tcpCreate` does. 0.2's stays in `Host.wasi`, an empty list, since none of 0.2's descriptor methods is served. Each call mints one fresh `own<descriptor>` per preopen, each over an `os.Root` of its own (`os.OpenRoot` of the host path), and lowers the list through the caller's realloc. Two calls give two descriptors, each closed by its own drop, as wasmtime's two calls give two handles.
 - **A preopen's flags:** `Writable` false is `read`, and true is `read|mutate-directory`.
 
 ### The descriptor
@@ -57,7 +57,7 @@ For the async methods:
 ### `open-at`
 
 - **The read-only rule is checked first,** on the base's flags, exactly as the WIT states it, and answers `read-only`.
-- **Flags map to `os.OpenFile`'s:** `read|write` is `O_RDWR`, `write` alone `O_WRONLY`, anything else `O_RDONLY`; `create`, `exclusive` and `truncate` are `O_CREATE`, `O_EXCL` and `O_TRUNC`. A new file's mode is 0666 before the umask, as wasmtime's.
+- **Flags map to `os.OpenFile`'s:** `read|write` is `O_RDWR`, `write` alone `O_WRONLY`, anything else `O_RDONLY`; `create`, `exclusive` and `truncate` are `O_CREATE`, `O_EXCL` and `O_TRUNC`. A new file's mode is 0666 before the umask, `os.Create`'s.
 - **A directory is opened as a nested root.** The path is opened, and if the result is a directory it is closed and reopened with `Root.OpenRoot`. `open-flags.directory` on anything else is `not-directory`.
 - **The new descriptor's flags are the ones asked for,** so a child opened without `mutate-directory` cannot create beneath itself.
 
@@ -71,7 +71,7 @@ For the async methods:
 
 - **`read-via-stream` is ADR 0122's producer** over an `io.SectionReader` of the file from the offset, its goroutine counted in the file registry (`track`) and waited out by `Close`. The end of the file is `ok`, and a Read error maps through the error table. A descriptor without `read` gets a finished stream and `err(bad-descriptor)`, and a directory gets `err(is-directory)`. Neither is measured on wasmtime.
 - **`write-via-stream` is `tcp-socket.send`'s shape** (ADR 0123): the guest's writes are copied into a bounded host buffer under `asyncHandles.mu`, and a writer goroutine writes them with `WriteAt` at an advancing offset with no lock held. The future resolves `ok` once the guest's writer has dropped and every byte is written. A descriptor without `write`, a directory included, resolves `err(bad-descriptor)` inline, and the stream is unlinked, so the guest's write completes DROPPED with 0 bytes. That is wasmtime 49.0.3's reading on a read-only fd.
-- **The writer goroutine is a new site,** authorised by this ADR in the census (`TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`). It runs no guest code. Its deliveries follow ADR 0101's discipline, as the send writer's do, and it is counted in the file registry and waited out by `Close`. **At `Close` it writes what its buffer holds**, ADR 0127's reason: the guest was told those writes were complete.
+- **The writer goroutine is a new site,** authorised by this ADR in the census (`TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`). It runs no guest code and touches no guest memory, so §4's boundary model and the table twin (#662) are not engaged by it: the guest's bytes are copied into the host buffer under the run slot, by the guest's own `stream.write` or by a delivery, and the goroutine writes only the host buffer to the file. Its deliveries follow ADR 0101's discipline, as the send writer's do, and it is counted in the file registry and waited out by `Close`. **At `Close` it writes what its buffer holds**, ADR 0127's reason: the guest was told those writes were complete.
 - **The pending write is a waker for the park bound** (`asyncHandles.filePending`), as a socket's is (`sockPending`).
 
 ### The error table
@@ -88,6 +88,18 @@ For the async methods:
   - A descriptor's relative path goes stale if a parent directory is renamed. Nothing in E1a reads it.
   - The escape mapping is tied to Go's error string, which the witness pins.
   - Opening a FIFO blocks in `open-at` until a writer appears, as `openat` does.
+
+## The build, as measured
+
+On darwin/arm64, in the worktree of #1374's branch. The readings were committed before the engine code (`fs-descriptor.reading`); `fs-run.reading` was taken after it and before the public paths that run it.
+
+- **`TestFSDescriptorMatchesWasmtime`** (`internal/component/hostfs_test.go`, over `testdata/fs-descriptor.wat`): all twenty wasmtime rows and both read-only rows matched, with `gate:cm-threads` off and on, plain and under `-race`, and no file goroutine survived `Close`. The host's tree read as wasmtime's did after each row that writes.
+- **The public paths:** `TestPreopensReachBothConfiguredPaths` (Run and LoadComponent) and `TestRunAComponentWithDirAndScratch` (`burroughs run`) matched `fs-run.reading`: 111 on `--dir`, 61 on `--scratch`, 3 on neither.
+- **What the neuters showed** (each run, each reverted; the full list is at the sites as `NEUTER, run:` comments):
+  - **The read-only rule is the whole of read-only.** Dropped, a read-only grant opened hello.txt for write, created new.txt and truncated hello.txt on the host: the grant's `os.Root` confines, and does not refuse a write.
+  - **`os.Root` is the confinement.** Replaced by path arithmetic, `../x` and `sub/../../x` reached outside the grant, and `../hello.txt` opened from `sub` reached the grant's file.
+  - **The absolute-path refusal is invisible through the fixture**, since `os.Root` refuses `/etc` too; its witness is the function's table test. Dropping the escape mapping instead turned three of the four escapes into `other`, and left `/etc` `not-permitted`, which is that refusal holding.
+  - **Inline resolution is what makes the lower return RETURNED.** Resolved from a goroutine, the async lowers of `stat`, `stat-at` and `get-type` returned STARTED with a subtask.
 
 ## Rollback
 

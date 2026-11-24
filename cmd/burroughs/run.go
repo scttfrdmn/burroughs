@@ -357,16 +357,16 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	strict := fs.Bool("strict", false,
 		"refuse a module the validator could not fully check, instead of running it")
 	var dirs preopenFlag
-	fs.Var(&dirs, "dir", "grant a wasip1 command a directory as HOST[:/GUEST], ONE colon (repeatable); "+
-		"no directory is visible unless named (decision 0083). GUEST must be absolute; a relative one, and "+
-		"wasmtime's HOST::GUEST, are refused (#828)")
+	fs.Var(&dirs, "dir", "grant a wasip1 command or a component a READ-ONLY directory as HOST[:/GUEST], ONE "+
+		"colon (repeatable); no directory is visible unless named (decision 0083). GUEST must be absolute; a "+
+		"relative one, and wasmtime's HOST::GUEST, are refused (#828)")
 	var feats featureFlag
 	fs.Var(&feats, "features", "proposal capabilities the guest requires, comma-separated "+
 		"(repeatable); currently: threads. An unrecognized name is refused (ADR 0088)")
 	var scratch scratchFlag
-	fs.Var(&scratch, "scratch", "grant a wasip1 command a WRITABLE directory as HOST[:/GUEST] "+
+	fs.Var(&scratch, "scratch", "grant a wasip1 command or a component a WRITABLE directory as HOST[:/GUEST] "+
 		"(repeatable). The only flag that lets a guest change the host's filesystem; writes are confined "+
-		"beneath it, and --dir stays read-only (ADR 0091)")
+		"beneath it, and --dir stays read-only (ADR 0091, ADR 0133)")
 	var envs envFlag
 	fs.Var(&envs, "env", "pass NAME[=VALUE] into the guest's environment (repeatable). NOTHING is "+
 		"passed unless named (#830); a bare NAME is refused when unset in this environment")
@@ -383,6 +383,8 @@ func run(stdout, stderr io.Writer, argv []string) error {
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
 			"directory, capability-based: nothing is visible unless named.")
+		fmt.Fprintln(stderr, "\nA component (exports wasi:cli/run) runs the same way, and --dir and --scratch grant it "+
+			"directories\nthrough WASI 0.3's wasi:filesystem, read-only and writable as for a command (ADR 0133).")
 		fmt.Fprintln(stderr, "\n--dir's separator is ONE colon: --dir /host/path:/guest/path, and the guest "+
 			"path must be absolute.\nA bare --dir /host/path maps it under its own resolved name. A relative "+
 			"guest path and wasmtime's TWO-colon form (--dir host::guest) are both refused by name (#828): "+
@@ -719,9 +721,13 @@ func exitCode(err error) int {
 // `wasi:cli/environment.get-arguments`. **`--features` reaches this path too, and before #813 it reached NEITHER.**
 // ADR 0088 added `ComponentConfig.Features` on 2026-09-18, and the CLI never passed it.
 //
-// **A flag that does not apply to a component is refused by name, not ignored** (#1128). A function name, `--dir`
-// (the preview-2 host serves no preopens), `--env` (its environment is empty) and `--scratch` all used to be dropped
-// silently or mis-routed.
+// **A flag that does not apply to a component is refused by name, not ignored** (#1128). A function name and `--env`
+// (its environment is empty) are; both used to be dropped silently or mis-routed.
+//
+// **`--dir` and `--scratch` reach `ComponentConfig.Preopens`** (ADR 0133, Scott's ruling 2 on #1374), with wasip1's
+// one-colon `HOST[:/GUEST]` grammar and its refusals: `--dir` a read-only grant, `--scratch` a writable one, both
+// served through WASI 0.3's wasi:filesystem. They were refused here, *"this build's component host grants no
+// directories"*, until E1a.
 //
 // `--inherit-network` reaches `ComponentConfig.InheritNetwork` (ADR 0123): without it, the component's sockets are
 // denied. `--allow-ip-name-lookup` reaches `ComponentConfig.AllowNameLookup` (ADR 0126): without it, every name the
@@ -733,10 +739,6 @@ func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs
 	case len(invokeArgs) > 0:
 		fmt.Fprintf(stderr, "%sa component runs its wasi:cli/run world; it takes no function name (its arguments "+
 			"go after --)\n", prefix)
-		return errUsage
-	case len(dirs) > 0 || len(scratch.inner) > 0:
-		fmt.Fprintf(stderr, "%sa component takes no --dir or --scratch: this build's component host grants no "+
-			"directories\n", prefix)
 		return errUsage
 	case len(envs) > 0:
 		fmt.Fprintf(stderr, "%sa component takes no --env: this build's component host serves an empty environment\n",
@@ -754,6 +756,8 @@ func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs
 		// NEUTER: drop this line, and TestRunAComponentWithAllowIPNameLookupResolves' granted row prints the denied
 		// reading.
 		AllowNameLookup: grant.lookup,
+		// NEUTER, run: drop this line, and TestRunAComponentWithDirAndScratch's granted rows exit 3, granted nothing.
+		Preopens: append(dirs.preopens(), scratch.preopens()...),
 	}.Run(wasm)
 	if rerr != nil {
 		return rerr

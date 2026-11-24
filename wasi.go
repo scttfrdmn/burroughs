@@ -55,6 +55,11 @@ type WASIP1Config struct {
 // Preopen grants the guest one directory: Host on the host, Guest the name the guest sees. **There is
 // no default grant** (decision 0083's capability model) — a guest with no Preopen reaches no
 // filesystem, and a `..`, symlink, or absolute path cannot escape a granted directory's resolved root.
+//
+// **A component takes the same value** ([ComponentConfig.Preopens], ADR 0133), through WASI 0.3's
+// `wasi:filesystem`: Writable false grants `descriptor-flags.read`, and true `read|mutate-directory`. The
+// preview-1 function lists in Writable's documentation below are preview 1's; a component's are in
+// [ComponentConfig]'s.
 type Preopen struct {
 	Host  string
 	Guest string

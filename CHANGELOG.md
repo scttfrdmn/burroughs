@@ -23,6 +23,32 @@ says what it now requires and what it gives up.
 
 ## [Unreleased]
 
+### Added
+
+- **`wasi:filesystem@0.3` for components, its first slice: a component reads, writes and stats files beneath a
+  directory it is granted** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1a of the v0.16.0 plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0133). **Public API**, on Scott's two rulings on #1374:
+  - **`ComponentConfig.Preopens []Preopen`**, reusing `burroughs.Preopen{Host, Guest, Writable}` unchanged, honoured by
+    `ComponentConfig.Run` and `ComponentConfig.LoadComponent`. The zero value grants nothing, and there is no feature
+    gate: like `InheritNetwork`, it is a grant that denies by default. A Host that is not an existing directory fails
+    the run or the load, naming it.
+  - **`burroughs run --dir HOST[:/GUEST]` and `--scratch HOST[:/GUEST]` now reach a component**, in wasip1's one-colon
+    grammar and with its refusals: `--dir` is read-only (`descriptor-flags.read`), `--scratch` writable
+    (`read|mutate-directory`). Both were refused for a component, *"this build's component host grants no
+    directories"*, until this change.
+  - **What is served:** `get-directories`, which mints a descriptor per grant at each call, and `descriptor`'s
+    `open-at`, `stat`, `stat-at`, `get-flags`, `get-type`, `read-via-stream` and `write-via-stream`. Every grant,
+    read-only ones too, resolves paths through an `os.Root` of its own, so `..`, a symlink pointing out, or an absolute
+    path fails `not-permitted`, as the WIT says. A read-only grant refuses a write, a create or a truncate with
+    `read-only`. The async methods resolve inline, as wasmtime 49.0.3's do. Every other `descriptor` method is still
+    refused by name at its call: `read-directory` is E1b's, the mutations E1c's.
+  - **Witnesses:** `fs-descriptor.wasm`'s twenty rows match wasmtime 49.0.3's readings, 10 of 10 each, and its two
+    read-only rows the WIT's text, since wasmtime's CLI has no read-only grant (`fs-descriptor.reading`), with
+    `gate:cm-threads` off and on. `fs-run.wasm` exits with wasmtime's reading through `ComponentConfig.Run` and
+    `burroughs run --scratch`, and with the WIT's through `--dir` (`fs-run.reading`).
+  - **Not yet reached:** WASI 0.2's `wasi:filesystem` (its `get-directories` still answers an empty list), and a Go
+    program, until the Phase 4 fork binds its `os` package to this interface (F11).
+
 ## [0.15.0] - 2026-11-24
 *Implements contract v0.1.*
 
