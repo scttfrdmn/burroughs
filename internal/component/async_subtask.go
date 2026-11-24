@@ -211,6 +211,9 @@ type asyncHandles struct {
 	// 0123): a dial, a send's Write in flight, a send's finish after its writer dropped. Each is a waker, as a
 	// producer's read is. Guarded by mu.
 	sockPending int
+	// filePending is the same count for a write-via-stream's file write (hostfs.go, ADR 0133): a write in flight, or
+	// the finish after the guest's writer dropped. Guarded by mu.
+	filePending int
 	// hostIO is the condition a send's writer goroutine waits on for bytes, over mu, made by the first send.
 	// stopProducers broadcasts it, so a waiting writer sees the stop.
 	hostIO *sync.Cond

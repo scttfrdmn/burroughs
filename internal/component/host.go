@@ -100,6 +100,10 @@ type Host struct {
 	// allow-ip-name-lookup`. False, the zero value, denies it: every name is `permanent-resolver-failure`, the code
 	// wasmtime 49.0.3 answers without the flag. It is independent of InheritNetwork, as it is in wasmtime.
 	AllowNameLookup bool
+	// Preopens are the directories WASI 0.3's get-directories grants (ADR 0133), wasmtime's `--dir`: each a descriptor
+	// over an os.Root of its own, read-only unless Writable. Empty, the zero value, grants nothing, and get-directories
+	// answers an empty list. Each must name an existing directory, or instantiate fails naming it.
+	Preopens []Preopen
 	// dial is connect's dialer, nil for net.Dialer's. Test-only, so a dial can be held in flight to be cancelled.
 	dial func(ctx context.Context, network, address string) (net.Conn, error)
 	// lookup is resolve-addresses' resolver, nil for net.DefaultResolver.LookupNetIP (ADR 0126). Test-only, so a
@@ -201,6 +205,10 @@ func (h *Host) streamConsumers() map[string]*streamConsumer {
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.send", &streamConsumer{bindRes: h.tcpSend, payload: sockFuturePayloadType})
 	// listen returns a stream the host produces, of accepted sockets (ADR 0125): a producer with no future.
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.listen", &streamConsumer{bindRes: h.tcpListen, accepts: true})
+	// descriptor's two stream methods (ADR 0133, hostfs.go): read-via-stream a producer in receive's shape, and
+	// write-via-stream a consumer in send's, each lending its self from the instance's resource table.
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.read-via-stream", &streamConsumer{bindRes: h.fsReadViaStream, payload: fsFuturePayloadType, produces: true})
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.write-via-stream", &streamConsumer{bindRes: h.fsWriteViaStream, payload: fsFuturePayloadType})
 	return m
 }
 
@@ -361,9 +369,10 @@ type inputStream struct{ r io.Reader }
 // resourceSource is the host's resource half (ADR 0117): the resource types it implements and the imports
 // over them, each keyed by name and compatibility class through serve, with the test-only extras merged.
 //
-// Four types are WASI 0.2's, two are 0.3's terminals, and one is 0.3's TCP socket (ADR 0123). `descriptor` is declared although nothing mints one: `get-directories`
-// grants an empty list, and a guest's `[resource-drop]descriptor` must still name a host type rather than
-// fall back to dropNoop.
+// Four types are WASI 0.2's, two are 0.3's terminals, and one is 0.3's TCP socket (ADR 0123). `descriptor` is
+// minted by 0.3's `get-directories` and `open-at` (ADR 0133). For 0.2 it is declared although nothing mints one:
+// 0.2's `get-directories` grants an empty list, and a guest's `[resource-drop]descriptor` must still name a host
+// type rather than fall back to dropNoop.
 func (h *Host) resourceSource() hostResourceSource {
 	types := map[string]*hostResource{}
 	serve(types, wasiP2, "wasi:io/streams::output-stream", outputStreamResource)
@@ -410,6 +419,10 @@ func (h *Host) resourceSource() hostResourceSource {
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-remote-address", method(tcpSocketResource, h.tcpGetRemoteAddress))
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-address-family", method(tcpSocketResource, h.tcpGetAddressFamily))
 	serve(m, wasiP3, "wasi:sockets/types::[method]tcp-socket.get-is-listening", method(tcpSocketResource, h.tcpGetIsListening))
+
+	// WASI 0.3's preopens (ADR 0133, hostfs.go): each call mints an own<descriptor> per granted directory, so it is
+	// here rather than in wasi(), as tcp-socket.create is. 0.2's stays in wasi(), an empty list.
+	serve(m, wasiP3, "wasi:filesystem/preopens::get-directories", h.getDirectories)
 
 	mergeExtras(types, h.resourceTypeImpls, "resource type")
 	mergeExtras(m, h.resourceImpls, "resource import")
@@ -460,14 +473,14 @@ func (h *Host) wasi() map[string]interp.CanonFunc {
 		canon.TupleType(canon.Type{Kind: canon.KindString}, canon.Type{Kind: canon.KindString})))
 	// The element names the host's descriptor type; it named RT 0, which was `errorRT` too (ADR 0117).
 	//
-	// **Served for 0.3 too** (ADR 0123). It was 0.2 only, *"no 0.3 fixture imports it"*, until p3tcp: wasi-libc
-	// asks for the preopens when a program that has used a socket closes one, as wasmtime 49.0.3's trace of the
-	// same guest shows, and the 0.3 WIT's `list<tuple<descriptor, string>>` is the 0.2 shape. Nothing is granted,
-	// so the list is empty on both tracks, as wasmtime's is with no `--dir`.
+	// **0.2 only since ADR 0133.** It was served for 0.3 here as well (ADR 0123), as an empty list, because
+	// wasi-libc asks for the preopens when a program that has used a socket closes one, as wasmtime 49.0.3's trace of
+	// p3tcp shows. 0.3's is now resourceSource's, which mints the granted directories, and with none granted its list
+	// is empty too, as wasmtime's is with no `--dir`. 0.2's descriptor methods are not served, so 0.2 grants nothing.
 	//
-	// NEUTER: serve it for 0.2 only again, and TestP3TcpMatchesWasmtime's closed-port line is never printed:
-	// the call reaches the cross-track refusal.
-	serve(m, wasiP2P3, "wasi:filesystem/preopens::get-directories", h.emptyListOf(
+	// NEUTER, run: register resourceSource's entry for another class than 0.3, and TestP3TcpMatchesWasmtime's
+	// closed-port line is never printed: the call reaches the cross-track refusal.
+	serve(m, wasiP2, "wasi:filesystem/preopens::get-directories", h.emptyListOf(
 		canon.TupleType(canon.OwnType(descriptorResource.rt), canon.Type{Kind: canon.KindString})))
 
 	// WASI 0.3's synchronous system rows (#1232, ADR 0119; hostsys.go), 0.3 only: 0.2's random and clocks

@@ -105,7 +105,7 @@ func (h *Host) monotonicNow(_ *interp.CanonCaller, args []interp.Value) ([]inter
 func (h *Host) mark() uint64 { return uint64(time.Since(h.start).Nanoseconds()) }
 
 // asyncSource is the production async imports (#1233, ADR 0121), WASI 0.3's two waits, tcp-socket's connect
-// (ADR 0123) and name lookup (ADR 0126), registered for 0.3 only. Each is a factory the walk calls with the
+// (ADR 0123), name lookup (ADR 0126) and five of descriptor's methods (ADR 0133), registered for 0.3 only. Each is a factory the walk calls with the
 // importing instance's async and resource tables, which hold the work while it is pending, so that instance's
 // Close stops it. A sync lower of any of them is the blocking sync lower (ADR 0126).
 func (h *Host) asyncSource() map[string]asyncImplFor {
@@ -118,6 +118,13 @@ func (h *Host) asyncSource() map[string]asyncImplFor {
 	// wasi:sockets/ip-name-lookup's one function (ADR 0126, hostlookup.go), whose pending lookups are the
 	// instance's socket registry's.
 	serve(m, wasiP3, "wasi:sockets/ip-name-lookup::resolve-addresses", h.resolveAddresses)
+	// wasi:filesystem's descriptor methods E1a serves (ADR 0133, hostfs.go). Each lends its self and resolves inline,
+	// so the async lower returns RETURNED, and the sync lower (ADR 0126) finds the subtask resolved.
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.open-at", h.fsOpenAt())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.stat", h.fsStat())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.stat-at", h.fsStatAt())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.get-flags", h.fsGetFlags())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.get-type", h.fsGetType())
 	return m
 }
 

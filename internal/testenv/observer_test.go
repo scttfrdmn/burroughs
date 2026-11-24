@@ -161,7 +161,21 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"than one Read, on demand and at most one in flight, counted in the socket registry; the " +
 				"accepted connection is adopted into the registry on this goroutine, and minted as an own " +
 				"only by the delivery, under the run slot and `asyncHandles.mu`. Close closes the listener so " +
-				"the Accept returns, and waits it out (`TestCloseEndsAGuestParkedInAccept`, under -race).",
+				"the Accept returns, and waits it out (`TestCloseEndsAGuestParkedInAccept`, under -race). " +
+				"ADR 0133 extends it to a file's read-via-stream: the same site, one Read of an io.SectionReader " +
+				"of the file, counted in the instance's file registry before it starts and waited out by Close, " +
+				"which closes the file first (`TestFSDescriptorMatchesWasmtime`, under -race).",
+		},
+		{"internal/component/hostfs.go", "(*Host).fsWriteViaStream"}: {
+			count: 1,
+			by: "ADR 0133 — a wasi:filesystem write-via-stream's writer, one goroutine per call, tcp-socket.send's " +
+				"shape (ADR 0123), counted in the instance's file registry before it starts. It runs NO guest " +
+				"code and touches no guest memory: it waits for bytes the guest's writes copied into a bounded " +
+				"host buffer, on a condition over `asyncHandles.mu`, writes them to the file with WriteAt and no " +
+				"lock held, and delivers what the write freed under ADR 0101's discipline, which is where a parked " +
+				"guest write's copy runs, under the run slot. It ends when the stream is finished, a write fails, " +
+				"or Close stops it, after writing what its buffer holds; Close waits it out " +
+				"(`TestFSDescriptorMatchesWasmtime`, under -race, which finds no writer left after Close).",
 		},
 		{"internal/component/hostsock.go", "(*Host).tcpConnect"}: {
 			count: 1,

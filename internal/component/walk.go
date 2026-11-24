@@ -1086,6 +1086,10 @@ func (w *walker) close() {
 	//
 	// NEUTER THIS call, and TestCloseEndsASocketsGoroutines' Close hangs, its receive reader blocked in Read.
 	w.stopAllSockets()
+	// **And the files** (ADR 0133), across the tree, for the sockets' reasons: no file goroutine starts after this,
+	// and every open file is closed but one a write-via-stream writer holds, which that writer closes once it has
+	// written what its buffer holds. Waited out at the end, as the sockets are.
+	w.stopAllFiles()
 	for _, in := range w.toClose {
 		_ = in.Close()
 	}
@@ -1101,6 +1105,27 @@ func (w *walker) close() {
 	w.stopAllSchedulers()
 	w.waitAllHostWaits()
 	w.waitAllSockets()
+	w.waitAllFiles()
+}
+
+// stopAllFiles stops the files of this walker's table and every nested one's (ADR 0133).
+func (w *walker) stopAllFiles() {
+	if w.hostRes != nil {
+		w.hostRes.fs.stop()
+	}
+	for _, c := range w.children {
+		c.stopAllFiles()
+	}
+}
+
+// waitAllFiles waits out every file goroutine of this walker's table and every nested one's.
+func (w *walker) waitAllFiles() {
+	if w.hostRes != nil {
+		w.hostRes.fs.wait()
+	}
+	for _, c := range w.children {
+		c.waitAllFiles()
+	}
 }
 
 // stopAllSockets stops the sockets of this walker's table and every nested one's. hostRes is nil for a walker

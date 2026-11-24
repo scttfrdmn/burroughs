@@ -143,6 +143,10 @@ func (h *asyncHandles) waitHostWaits() { h.hostWaitsFiring.Wait() }
 //
 // NEUTER: drop the socket term, and TestAPendingDialOutlivesTheParkBound reads ErrLiftParkExpired.
 //
+// **So does a file write's** (ADR 0133): a write-via-stream's write in flight, or its finish, whose store completes
+// a parked guest write or resolves the future it waits on. It has no witness of its own: a file write returns in
+// far less than the park's bound.
+//
 // **And so does a pending blocking sync lower** (ADR 0126): its return resumes a Thread of the instance, which
 // may wake any park. It counts whether or not its impl's own work is counted above, since a test impl, or a
 // future host import, may hold a resolution no registry here knows of.
@@ -151,5 +155,5 @@ func (h *asyncHandles) waitHostWaits() { h.hostWaitsFiring.Wait() }
 // ErrLiftParkExpired.
 func (h *asyncHandles) hostWaitPendingLocked() bool {
 	return len(h.hostWaits) > 0 || h.hostWaitsResolving > 0 || h.producerReads > 0 || h.sockPending > 0 ||
-		len(h.syncLowerCalls) > 0
+		h.filePending > 0 || len(h.syncLowerCalls) > 0
 }
