@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -114,14 +115,15 @@ func TestAPreopenThatIsNotADirectoryFailsTheRun(t *testing.T) {
 	}
 	file := filepath.Join(fsRunTree(t), "hello.txt")
 	cfg := burroughs.ComponentConfig{Preopens: []burroughs.Preopen{{Host: file, Guest: "/"}}}
-	if _, err = cfg.Run(wasm); err == nil || !strings.Contains(err.Error(), file) {
+	// The refusal quotes the path (%q), which on Windows doubles every backslash, so it is matched quoted.
+	if _, err = cfg.Run(wasm); err == nil || !strings.Contains(err.Error(), strconv.Quote(file)) {
 		t.Errorf("Run over a file preopen: err = %v, want one naming %s", err, file)
 	}
 	comp, err := cfg.LoadComponent(wasm)
 	if err == nil {
 		comp.Close()
 	}
-	if err == nil || !strings.Contains(err.Error(), file) {
+	if err == nil || !strings.Contains(err.Error(), strconv.Quote(file)) {
 		t.Errorf("LoadComponent over a file preopen: err = %v, want one naming %s", err, file)
 	}
 }

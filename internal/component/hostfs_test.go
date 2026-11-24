@@ -284,7 +284,18 @@ func fsTestDir(t *testing.T, res *hostResources, dir string, flags uint8) *fsDes
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Closed before TempDir's RemoveAll, which runs later (cleanups run last-registered first): Windows refuses to
+	// delete a directory a handle is open on, so the grant root this helper opens would fail the test's cleanup.
+	t.Cleanup(func() { _ = r.Close() })
 	return &fsDescriptor{fs: res.fs, path: ".", flags: flags, dir: r}
+}
+
+// fileClosed reports whether f has been closed, by closing it again: a second Close returns os.ErrClosed on every
+// platform, while a first one returns nil. (*os.File).Stat cannot ask this portably. On Windows it does not check the
+// file's closed state, and calls GetFileType on the stale handle, answering "The handle is invalid" for a file that
+// was closed (#1388's first CI run). Closing an open file here is harmless, since the witness has already failed.
+func fileClosed(f *os.File) bool {
+	return errors.Is(f.Close(), os.ErrClosed)
 }
 
 // TestADroppedDescriptorClosesItsFile is the descriptor's destructor (ADR 0133), a leak witness: a guest's drop of a
@@ -304,8 +315,8 @@ func TestADroppedDescriptorClosesItsFile(t *testing.T) {
 	if err := res.drop(descriptorResource, fi); err != nil {
 		t.Fatalf("drop of the file descriptor: %v", err)
 	}
-	if _, err := file.file.f.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Errorf("after the drop the file's Stat = %v, want os.ErrClosed: the destructor left it open", err)
+	if !fileClosed(file.file.f) {
+		t.Errorf("after the drop the file is open: the destructor left it open")
 	}
 	if err := res.drop(descriptorResource, si); err != nil {
 		t.Fatalf("drop of the directory descriptor: %v", err)
@@ -338,8 +349,8 @@ func TestAStreamOutlivesItsDroppedDescriptor(t *testing.T) {
 		t.Fatalf("after the descriptor's drop the stream's file reads %q, %v; want \"hello\", nil", buf[:n], err)
 	}
 	res.fs.release(d.file)
-	if _, err := d.file.f.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Errorf("after the last release the file's Stat = %v, want os.ErrClosed", err)
+	if !fileClosed(d.file.f) {
+		t.Errorf("after the last release the file is still open")
 	}
 }
 
@@ -362,15 +373,15 @@ func TestCloseClosesTheFilesTheGuestLeftOpen(t *testing.T) {
 		t.Fatal("trackWriter refused before stop")
 	}
 	res.fs.stop()
-	if _, err := held.file.f.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Errorf("after stop the held file's Stat = %v, want os.ErrClosed", err)
+	if !fileClosed(held.file.f) {
+		t.Errorf("after stop the held file is still open")
 	}
 	if _, err := written.file.f.Stat(); err != nil {
 		t.Errorf("after stop the writer's file's Stat = %v: stop closed a file its writer still holds", err)
 	}
 	ended()
-	if _, err := written.file.f.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Errorf("after its writer ended the file's Stat = %v, want os.ErrClosed", err)
+	if !fileClosed(written.file.f) {
+		t.Errorf("after its writer ended the file is still open")
 	}
 	res.fs.wait()
 	if _, ok := res.fs.track(); ok {
@@ -395,7 +406,9 @@ func TestAPreopenThatIsNotADirectoryIsRefusedAtInstantiate(t *testing.T) {
 			t.Errorf("preopen %s: instantiate succeeded", host)
 			continue
 		}
-		if !strings.Contains(err.Error(), host) {
+		// The refusal quotes the path (%q), so it is matched quoted: on Windows %q doubles every backslash, and the
+		// raw path is not a substring of it (#1388's first CI run).
+		if !strings.Contains(err.Error(), strconv.Quote(host)) {
 			t.Errorf("preopen %s: the refusal does not name it: %v", host, err)
 		}
 	}
