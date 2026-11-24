@@ -49,6 +49,17 @@ says what it now requires and what it gives up.
   - **Not yet reached:** WASI 0.2's `wasi:filesystem` (its `get-directories` still answers an empty list), and a Go
     program, until the Phase 4 fork binds its `os` package to this interface (F11).
 
+### Fixed
+
+- **A `future.write` after a cancelled one is admitted, where it trapped "not writable"**
+  ([#1353](https://github.com/scttfrdmn/burroughs/issues/1353)). A cancelled write leaves its writable end IDLE, as
+  the pin's `FutureEnd.notify` does, so a second write parks with no reader and a read then completes it.
+  - **Read on both oracles before the code:** `future-write-after-cancel.wasm` (6 rows), on wasmtime 49.0.3 (10 of
+    10) and on the pin 2e7895c (`refread.py`, 16 of 16). The two agree on every row.
+  - **The cancelled writer is still not DONE**, so its drop traps, as both oracles read.
+  - **Witness:** `TestAFutureWriteAfterACancelledOneMatchesTheOracles`, in both `gate:cm-threads` states. The reset
+    was neutered and run, and its site records the result.
+
 ## [0.15.0] - 2026-11-24
 *Implements contract v0.1.*
 

@@ -639,6 +639,19 @@ func futureCancelWrite(h *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("future.cancel-write: end %d had no deliverable event after cancel", i)}
 		}
+		// **A CANCELLED write leaves the writer IDLE, so it may write again** (#1353): def:FutureEnd.notify.future_event+'s
+		// CANCELLING_COPY arm sets `self.state = End.State.IDLE`, and def:copy admits an IDLE end. The taken event left
+		// the end resolved, which futureWrite reads as not writable, so every second write trapped where wasmtime 49.0.3
+		// and the pin park it. A COMPLETED the cancel took leaves the writer DONE, the delivered event standing, as
+		// futureCancelRead's twin reset does.
+		//
+		// NEUTER, run: drop this reset, and TestAFutureWriteAfterACancelledOneMatchesTheOracles' write-after-cancel-write,
+		// read-after-write-after-cancel-write, poll-after-write-after-cancel-write and
+		// write-to-parked-read-after-cancel-write rows (both gate states) trap "future.write: end 2 is not writable"; the
+		// cancel-write-parked and drop-writable-after-cancel-write rows pass under it.
+		if e.result == copyCancelled {
+			e.resolved, e.delivered, e.progress, e.caller = false, false, 0, nil
+		}
 		return []interp.Value{interp.I32(int32(ev.p2))}, nil
 	}
 }
