@@ -38,6 +38,7 @@ import os
 import random
 import sys
 import threading
+import time
 
 PIN = "2e7895c76905cd3fb7e6be4ac632258972b1f688"  # the Makefile's CANON_PIN (from 2bed77e, 2026-10-17)
 VENDOR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "canon", "gen", "vendor")
@@ -127,10 +128,20 @@ def host_invoke(store, fi, on_resolve):
 
 
 def run_to_resolution(store, fi, out):
-    """The embedder: invoke fi (from a host Thread, see host_invoke) and tick the store until it resolves."""
+    """The embedder: invoke fi (from a host Thread, see host_invoke) and tick the store until it resolves.
+
+    **The ticking stops a second after the watch's bound** (#1367). A scenario that never resolves is HANG once the
+    watch's BOUND_S has passed, so ticking after that observes nothing, and a ticking thread holds the GIL against every
+    later scenario: with #1352's two future-sync HANG rows, 32 such threads spun for the rest of the battery, and later
+    rows that resolve in milliseconds alone read `HANG | value N` in a whole run (sync-future-own-thread's
+    sync-read-own-thread, and host-stream-arg-kind's wvs-readable-end). Stopping changes no reading: the watch has
+    already reported."""
     got = []
     host_invoke(store, fi, lambda r: got.append(r))
+    deadline = time.monotonic() + BOUND_S + 1
     while not got:
+        if time.monotonic() > deadline:
+            return
         store.tick()
     out.value = "value %d" % got[0][0]
     out.done.set()
@@ -1617,6 +1628,81 @@ SYNC_FUTURE_OWN_THREAD_ROWS = [
 ]
 
 
+def host_stream_arg(row):
+    """#1367's host-stream-arg-kind.wat: wasi:cli/stdout's write-via-stream, a host import `func(data: stream<u8>) ->
+    future<result<_, error-code>>` lowered sync, called with the handle each row names. The host here is the pin's own
+    shape of one: its on_start lifts the arguments (def:canon_lower's on_start, def:lift_async_value), and it resolves
+    with a host-owned future. Each export is sync-typed and lifted sync, and returns 7 after the call."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        su8, su32 = d.StreamType(d.U8Type()), d.StreamType(d.U32Type())
+        res_t = d.ResultType(None, d.EnumType(["io", "illegal-byte-sequence", "pipe"]))
+        ft = d.FuncType([("data", su8)], [d.FutureType(res_t)])
+
+        def wvs(on_start, on_resolve):
+            on_start()
+            (r, _w) = d.new_future(res_t, None)
+            on_resolve([r])
+            return lambda: None
+
+        def call(name, f, *args):
+            site["name"] = name
+            return f(*args)
+
+        def ends(t):
+            [p] = call("stream.new", d.canon_stream_new, t)
+            return p & 0xffffffff, p >> 32
+
+        def handle():
+            if row == "wvs-readable-end":
+                return ends(su8)[0]
+            if row == "wvs-writable-end":
+                return ends(su8)[1]
+            if row == "wvs-future-end":
+                [p] = call("future.new", d.canon_future_new, d.FutureType(d.U8Type()))
+                return p & 0xffffffff
+            if row == "wvs-no-handle":
+                return 99
+            if row == "wvs-u32-stream":
+                return ends(su32)[0]
+            if row == "wvs-joined-end":
+                r = ends(su8)[0]
+                [s] = call("waitable-set.new", d.canon_waitable_set_new)
+                call("waitable.join", d.canon_waitable_join, r, s)
+                return r
+            if row == "wvs-reading-end":
+                r = ends(su8)[0]
+                call("stream.read", d.canon_stream_read, su8, d.CanonicalOptions(async_=True, memory=mem), r, 128, 4)
+                return r
+            raise AssertionError("no such row: " + row)
+
+        def run(args):
+            h = handle()
+            call("write-via-stream's lift", d.canon_lower, wvs, ft, d.CanonicalOptions(memory=mem), [h])
+            site["name"] = "after the call"
+            return [7]
+
+        rft = d.FuncType([], [d.U32Type()])
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
+HOST_STREAM_ARG_ROWS = [
+    ("wvs-readable-end", "7"),
+    ("wvs-writable-end", "trap, not a readable end of a stream"),
+    ("wvs-future-end", "trap, not a stream"),
+    ("wvs-no-handle", "trap, unknown handle index 99"),
+    ("wvs-u32-stream", "trap, a stream of a different type"),
+    ("wvs-joined-end", "trap, in a waitable set"),
+    ("wvs-reading-end", "trap, busy stream"),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1671,6 +1757,8 @@ def battery():
         read("future-sync %s (#1352; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps, sync_typed))
     for row, wt, slot in SYNC_FUTURE_OWN_THREAD_ROWS:
         read("sync-future-own-thread %s (#1352; wasmtime 49.0.3: %s)" % (row, wt), sync_future_own_thread(slot))
+    for row, wt in HOST_STREAM_ARG_ROWS:
+        read("host-stream-arg-kind %s (#1367; wasmtime 49.0.3: %s)" % (row, wt), host_stream_arg(row))
 
 
 if __name__ == "__main__":

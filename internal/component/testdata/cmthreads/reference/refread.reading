@@ -98,3 +98,10 @@ sync-future-own-thread sync-write-own-thread (#1352; wasmtime 49.0.3: 1792): val
 sync-future-own-thread sync-read-own-thread-control (#1352; wasmtime 49.0.3: trap, cannot block a synchronous task): trap run's sync future.read
 sync-future-own-thread sync-read-cancelled-by-thread (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap T's future.cancel-read
 sync-future-own-thread sync-read-joined-by-thread (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap T's waitable.join
+host-stream-arg-kind wvs-readable-end (#1367; wasmtime 49.0.3: 7): value 7
+host-stream-arg-kind wvs-writable-end (#1367; wasmtime 49.0.3: trap, not a readable end of a stream): trap write-via-stream's lift
+host-stream-arg-kind wvs-future-end (#1367; wasmtime 49.0.3: trap, not a stream): trap write-via-stream's lift
+host-stream-arg-kind wvs-no-handle (#1367; wasmtime 49.0.3: trap, unknown handle index 99): trap write-via-stream's lift
+host-stream-arg-kind wvs-u32-stream (#1367; wasmtime 49.0.3: trap, a stream of a different type): trap write-via-stream's lift
+host-stream-arg-kind wvs-joined-end (#1367; wasmtime 49.0.3: trap, in a waitable set): trap write-via-stream's lift
+host-stream-arg-kind wvs-reading-end (#1367; wasmtime 49.0.3: trap, busy stream): trap write-via-stream's lift
