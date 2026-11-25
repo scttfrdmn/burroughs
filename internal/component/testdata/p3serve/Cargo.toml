@@ -1,0 +1,20 @@
+[package]
+name = "p3serve"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A reactor: the handler is the only export, and there is no `main` (#1385, ADR 0137). `serve` never calls
+# wasi:cli/run, so a command's main would never run under it.
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+# wit-bindgen at the version the nightly's std vendors for its own wasip3 bindings, p3http's choice (ADR 0135), with
+# async-spawn as well: a handler returns its response and then writes the body from a spawned future, the shape of
+# the vendored wasip3 crate's examples/http-proxy.rs.
+[dependencies]
+wit-bindgen = { version = "=0.61.1", default-features = false, features = ["macros", "realloc", "async", "async-spawn"] }
+
+[profile.release]
+opt-level = "s"

@@ -1,0 +1,31 @@
+E2-in-b's witness guest (#1385, ADR 0137) — provenance, per ADR 0114's rule for committed guest binaries. Like
+p3http, it is reproducible from this repository plus the pinned toolchain: p3serve/build.sh rebuilds it offline, and
+takes its reading with the Go test that checks it.
+
+Source:       src/lib.rs, wit/world.wit, Cargo.toml, Cargo.lock (this directory)
+WIT:          the nightly's vendored WASI 0.3.0 WIT, library/vendor/wasip3-0.8.0+wasi-0.3.0/wit/deps
+              (random, clocks, cli, filesystem, sockets, http), staged by build.sh, not committed
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Bindings:     wit-bindgen 0.61.1 (features macros, realloc, async, async-spawn), resolved offline from the local
+              registry; async-spawn adds futures 0.3.34, which Cargo.lock pins
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-25
+
+  p3serve.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: 6366ee37bd7e40a9c42c03851c9bff26bab60088e6b6354bf448847eb88f7ccc
+    bytes:  288787
+    A cdylib: its one export is wasi:http/handler@0.3.0, whose handle is async-lifted with a callback, and it has no
+    wasi:cli/run. Each row is a path; most return their response first and write its body from a spawned future,
+    the vendored wasip3 crate's examples/http-proxy.rs shape. What only the guest can see, a reader gone or a
+    handler entered, it writes to stderr as one line beginning with the row's name.
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on PATH.
+build.sh writes its reading to ../p3serve.reading through p3serve_test.go's driver (-update-p3serve): `wasmtime serve
+--addr 127.0.0.1:0 --no-logging-prefix --max-instance-reuse-count 1 p3serve.wasm`, its address read from the line it
+prints, every row a raw HTTP/1.1 exchange on 127.0.0.1. 10 of 10 drives, each against a fresh server, gave the same
+lines, which the driver checks before it writes the reading. --max-instance-reuse-count 1 is the oracle setting: with
+wasmtime's default reuse, a burst of 32 concurrent requests failed 4 of 32 (/hello) and 15 of 32 (/big), each a panic
+in wit-bindgen's start_task (`assertion failed: task_state::get().is_null()`), and with
+--max-instance-concurrent-reuse-count 1 it failed 10 and 16 of 32 the same way (ADR 0137).
