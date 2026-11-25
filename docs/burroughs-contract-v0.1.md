@@ -366,6 +366,18 @@ commits to that reading.*
   #1135, the chair's amended text). It reads R-2's words where R-5 had only
   followed from them, which is why it says so: an interpretation of normative
   text is the owner's stamp, not the actor's inference.*
+  *Appended by Scott's stamp on #1382, dated 2026-11-24 (the v0.16.0 plan,
+  #1370; ruling 4 on #1375). A host-initiated call of a component export, such
+  as `wasi:http/handler#handle` once per request or `wasi:cli/run#run`, is a
+  call, not a delivery of readiness, so R-2's "never pushed by callback into
+  guest code" does not reach it. A guest that runs its own scheduler inside a
+  stackless (callback) lift, as a Go program does when the lift's callback
+  drives the Go scheduler, is a stackless lift, whose `findRunnable` consumes
+  only the events the callback loop delivers at the guest's returns (`WAIT`
+  naming a waitable set, or `YIELD`). That is the pull R-5 already names. R-2's
+  text is unchanged, so this is an append rather than an amendment. It reads
+  R-2's words where the reading above read them, which is why it is the
+  owner's stamp, not the actor's inference.*
 
 ## §7. Stacks
 

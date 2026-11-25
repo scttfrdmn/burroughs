@@ -49,6 +49,21 @@ says what it now requires and what it gives up.
   - **Not yet reached:** WASI 0.2's `wasi:filesystem` (its `get-directories` still answers an empty list), and a Go
     program, until the Phase 4 fork binds its `os` package to this interface (F11).
 
+### Changed
+
+- **The contract gains v0.16.0's §6 R-5 append, for serving `wasi:http` from a Go guest**
+  ([#1382](https://github.com/scttfrdmn/burroughs/issues/1382), on Scott's stamp of 2026-11-24; ruling 4 on
+  [#1375](https://github.com/scttfrdmn/burroughs/issues/1375); the plan is
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370)).
+  - **A host-initiated call of a component export is a call, not readiness delivery.** Examples are
+    `wasi:http/handler#handle` once per request and `wasi:cli/run#run`. R-2's "never pushed by callback into guest
+    code" does not reach such a call.
+  - **A guest that runs its own scheduler inside a stackless (callback) lift is a stackless lift.** A Go program whose
+    lift callback drives the Go scheduler is one. Its `findRunnable` consumes only the events the callback loop
+    delivers at the guest's returns (`WAIT` or `YIELD`), which is the pull R-5 already names.
+  - **R-2's text is unchanged, so this is an append, not an amendment.** The contract stays v0.1. No engine code
+    changes here; E2-in (#1384, #1385) builds to this text.
+
 ### Fixed
 
 - **A host import's stream argument lifts as the pin's does, and traps where it returned `ErrLinkRefused`**
