@@ -1,0 +1,23 @@
+# Committed readings for fs-readdir-run.wasm: a wasi:cli/run@0.3.0 component that lists its first preopen through
+# read-directory, for the public paths (#1374 E1b, ADR 0134): ComponentConfig.Run and `burroughs run --dir`/`--scratch`.
+# Built:       wasm-tools parse fs-readdir-run.wat -o fs-readdir-run.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
+#                -S p3=y [--dir <tree>::/] fs-readdir-run.wasm
+# Tree:        fs-run.reading's, made fresh before every run: hello.txt and w.txt.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken
+#              2026-11-24, before the engine code.
+#
+# Each line is `<grant>: <exit code>`, and the tests read them by grant.
+writable: 134
+none: 3
+#
+# The read-only line comes from the WIT's text, as fs-run.reading's does: wasmtime 49.0.3's `--dir` is always
+# read|mutate-directory. Listing writes nothing, and the WIT's read-only rule is open-at's, so a read-only grant lists
+# as a writable one does.
+read-only: 134
+#
+# Meaning: the exit code is the sum of the entries' names' lengths, 10 for each regular file, and 100 for a future that
+# resolves ok. With no grant it is 3.
+#   writable  134: hello.txt (9) and w.txt (5), both regular files, and the future ok.
+#   none        3: get-directories answers an empty list.
+#   read-only 134: as writable.

@@ -1703,6 +1703,376 @@ HOST_STREAM_ARG_ROWS = [
 ]
 
 
+# #1374 E1b, fs-readdir.wat: descriptor.read-directory's stream<directory-entry>, a host-produced stream whose element
+# is a record carrying a string, read by the guest's async stream.read and lowered through its realloc (ADR 0134). The
+# pin is the oracle for the stream's CM layer only: the copy, the event and its packing, the record's layout in the
+# reader's buffer, and the realloc's calls. Which entries the host offers, in what batches and when it drops its
+# writer, is the host's, so the host here is Burroughs' producer as ADR 0134 states it, and the pin is asked whether
+# that host's interleaving reads as wasmtime 49.0.3 does.
+FS_DT = d.VariantType([d.CaseType(l, None) for l in ("block-device", "character-device", "directory", "fifo",
+                                                     "symbolic-link", "regular-file", "socket")]
+                      + [d.CaseType("other", d.OptionType(d.StringType()))])
+FS_DE = d.RecordType([d.FieldType("type", FS_DT), d.FieldType("name", d.StringType())])
+FS_EC_LABELS = [
+    "access", "already", "bad-descriptor", "busy", "deadlock", "quota", "exist", "file-too-large",
+    "illegal-byte-sequence", "in-progress", "interrupted", "invalid", "io", "is-directory", "loop", "too-many-links",
+    "message-size", "name-too-long", "no-device", "no-entry", "no-lock", "insufficient-memory", "insufficient-space",
+    "not-directory", "not-empty", "not-recoverable", "unsupported", "no-tty", "no-such-device", "overflow",
+    "not-permitted", "pipe", "read-only", "invalid-seek", "text-file-busy", "cross-device",
+]
+FS_EC = d.VariantType([d.CaseType(l, None) for l in FS_EC_LABELS] + [d.CaseType("other", d.OptionType(d.StringType()))])
+FS_RES = d.ResultType(None, FS_EC)
+# The fixture's tree, each directory's entries in the order this host offers them. No row's reading depends on it.
+FS_TREE = {
+    "empty": [],
+    "one": [("regular-file", "a.txt")],
+    "many": [("regular-file", n) for n in ("a", "bb", "ccc", "dddd", "eeeee")],
+    "three": [("regular-file", n) for n in ("p", "q", "r")],
+    "kinds": [("regular-file", "f"), ("directory", "d"), ("symbolic-link", "l")],
+    "names": [("regular-file", n) for n in ("x", "é.txt", "n" * 40, "L" * 100)],
+}
+
+
+class HostValues(d.ReadableBuffer):
+    """A host writer's buffer of values. The pin has no host buffer of its own; this is ReadableGuestBuffer's shape over
+    a list."""
+
+    def __init__(self, t, vs):
+        self.t, self.vs, self.progress = t, list(vs), 0
+
+    def remain(self):
+        return len(self.vs) - self.progress
+
+    def read(self, n):
+        out = self.vs[self.progress:self.progress + n]
+        self.progress += n
+        return out
+
+
+class HostDir:
+    """One read-directory's host side, Burroughs' producer (ADR 0134): the guest's readable end and future are lowered
+    into its instance, and the writable ends stay the host's (owner None). At a read of n > 0, a listing with nothing
+    left has its stream ended first, so the read takes DROPPED inline. Otherwise the read parks, and the host writes the
+    next min(n, left) entries into it; a short batch is the end of the listing, so the host then ends the stream: its
+    future is written and its writer dropped, and the read's event is taken as DROPPED with the batch's progress. A read
+    of 0 meets a write the host has offered and withdraws after it, so it completes inline with progress 0, and the
+    listing is not read. A reader that drops before the end has the future written ok."""
+
+    def __init__(self, inst, mem, entries, final=None):
+        self.entries, self.pos, self.final, self.ended = entries, 0, final, False
+        self.offered = False
+        reader, self.writer = d.new_stream(FS_DE, None)
+        fr, self.fw = d.new_future(FS_RES, None)
+        cx = d.LiftLowerContext(d.CanonicalOptions(memory=mem), inst)
+        self.ri = d.lower_async_value(d.ReadableStreamEnd, cx, reader, FS_DE)
+        self.fi = d.lower_async_value(d.ReadableFutureEnd, cx, fr, FS_RES)
+
+    def end(self, drop=True):
+        self.ended = True
+        self.fw.copy(HostValues(FS_RES, [self.final or {"ok": None}]))
+        if drop:
+            self.writer.drop()
+
+    def before_read(self, n):
+        if self.ended:
+            return
+        if n == 0:
+            self.writer.copy(HostValues(FS_DE, [{"type": {"regular-file": None}, "name": ("-", "utf8", 1)}]))
+            self.offered = True
+        elif self.pos == len(self.entries) or self.final is not None:
+            self.end()
+
+    def after_inline(self):
+        if self.offered:
+            self.writer.cancel()
+            self.writer.get_pending_event()
+            self.offered = False
+
+    def reader_dropped(self):
+        if not self.ended:
+            self.end(drop=False)  # the guest's drop has unlinked the writer, and the future resolves ok
+
+    def after_blocked(self, n):
+        k = min(n, len(self.entries) - self.pos)
+        vs = [{"type": {kind: None}, "name": (name, "utf8", len(name.encode("utf-8")))}
+              for kind, name in self.entries[self.pos:self.pos + k]]
+        self.writer.copy(HostValues(FS_DE, vs))
+        self.writer.get_pending_event()  # the host takes its write's completion, so its writer is IDLE to drop
+        self.pos += k
+        if k < n:
+            self.end()
+
+
+class FsGuest:
+    """fs-readdir.wat's guest, function for function: a 64 KiB memory, a read's entries at 1024, the realloc's log at
+    2048 and its heap from 8192, a waitable set's event at 192 and a future's result at 208."""
+
+    def __init__(self, site, inst):
+        self.site, self.inst = site, inst
+        self.mem = d.MemInst(bytearray(65536), "i32")
+        self.heap = 8192
+        self.opts = d.CanonicalOptions(async_=True, memory=self.mem, realloc=self.realloc)
+        self.st, self.ft = d.StreamType(FS_DE), d.FutureType(FS_RES)
+        self.set, self.imm = None, 0
+        self.count = self.sumlen = self.sumbytes = 0
+        self.inheap = 1
+        self.kf = self.kd = self.kl = 0xff
+
+    def realloc(self, args):
+        op, os_, align, size = args
+        n = u32(self.mem, 2048)
+        if n < 64:
+            at = 2052 + 16 * n
+            for i, v in enumerate((op, os_, align, size)):
+                self.mem.bytes[at + 4 * i:at + 4 * i + 4] = v.to_bytes(4, "little")
+        self.mem.bytes[2048:2052] = (n + 1).to_bytes(4, "little")
+        p = (self.heap + align - 1) & -align
+        self.heap = p + size
+        return [p]
+
+    def call(self, name, f, *args):
+        self.site["name"] = name
+        return f(*args)
+
+    def readdir(self, entries, final=None):
+        self.mem.bytes[2048:2052] = bytes(4)
+        return HostDir(self.inst, self.mem, entries, final)
+
+    def await_(self, w, r):
+        if r != d.BLOCKED:
+            return r
+        if self.set is None:
+            [self.set] = self.call("waitable-set.new", d.canon_waitable_set_new)
+        self.call("waitable.join", d.canon_waitable_join, w, self.set)
+        self.call("waitable-set.wait", d.canon_waitable_set_wait, self.mem, self.set, 192)
+        self.call("waitable.join", d.canon_waitable_join, w, 0)
+        return u32(self.mem, 196)
+
+    def read(self, hd, n):
+        hd.before_read(n)
+        [r] = self.call("stream.read", d.canon_stream_read, self.st, self.opts, hd.ri, 1024, n)
+        self.imm = r & 0xff
+        self.site["name"] = "the host's write"
+        if r == d.BLOCKED:
+            hd.after_blocked(n)
+        else:
+            hd.after_inline()
+        return self.await_(hd.ri, r)
+
+    def fold(self, k):
+        b = self.mem.bytes
+        for i in range(k):
+            e = 1024 + 24 * i
+            p, n = u32(self.mem, e + 16), u32(self.mem, e + 20)
+            self.count += 1
+            self.sumlen += n
+            if p < 8192:
+                self.inheap = 0
+            self.sumbytes += sum(b[p:p + n])
+            if n == 1:
+                c = b[p]
+                if c == 0x66:
+                    self.kf = b[e]
+                if c == 0x64:
+                    self.kd = b[e]
+                if c == 0x6c:
+                    self.kl = b[e]
+
+    def drain(self, hd, n, first=None):
+        r = self.read(hd, n) if first is None else first
+        reads = 0
+        while True:
+            reads += 1
+            self.fold(r >> 4)
+            if r & 0xf or reads >= 64:
+                return reads
+            r = self.read(hd, n)
+
+    def res4(self, ret):
+        return 0 if self.mem.bytes[ret] == 0 else 0x80 | self.mem.bytes[ret + 4]
+
+    def close(self, hd):
+        self.call("stream.drop-readable", d.canon_stream_drop_readable, self.st, hd.ri)
+        hd.reader_dropped()
+        [r] = self.call("future.read", d.canon_future_read, self.ft, self.opts, hd.fi, 208)
+        self.await_(hd.fi, r)
+        self.call("future.drop-readable", d.canon_future_drop_readable, self.ft, hd.fi)
+        return self.res4(208)
+
+    def log(self):
+        n = min(u32(self.mem, 2048), 64)
+        calls = [[u32(self.mem, 2052 + 16 * i + 4 * j) for j in range(4)] for i in range(n)]
+        align = size = orig = 0
+        for op, os_, al, sz in calls:
+            align |= al
+            size += sz
+            orig |= op | os_
+        return u32(self.mem, 2048), align, size, orig
+
+
+def pack(b0, b1, b2, b3):
+    return (b0 & 0xff) | (b1 & 0xff) << 8 | (b2 & 0xff) << 16 | b3 << 24
+
+
+def fs_readdir_steps(row, g):
+    """fs-readdir.wat's `run(row)`, step for step. The open-at bytes (empty's and file-fd's first) are the host's, not
+    the CM layer's, so they are 0 here, wasmtime's ok."""
+    t = FS_TREE
+    if row == "empty":
+        hd = g.readdir(t["empty"])
+        b = g.read(hd, 8)
+        c = g.imm
+        g.drain(hd, 8, b)
+        return pack(0, c, b, g.close(hd))
+    if row == "one":
+        hd = g.readdir(t["one"])
+        b = g.read(hd, 8)
+        a = pack(g.imm, b, g.mem.bytes[1024], u32(g.mem, 1044))
+        if b & 0xf == 0:
+            g.drain(hd, 8)
+        g.close(hd)
+        return a
+    if row == "one-name":
+        hd = g.readdir(t["one"])
+        b = g.read(hd, 8)
+        a = u32(g.mem, u32(g.mem, 1040))
+        if b & 0xf == 0:
+            g.drain(hd, 8)
+        g.close(hd)
+        return a
+    if row == "one-drain":
+        hd = g.readdir(t["one"])
+        reads = g.drain(hd, 8)
+        f = g.close(hd)
+        return pack(g.count, reads, f, u32(g.mem, 2048))
+    if row in ("many", "many-bytes"):
+        hd = g.readdir(t["many"])
+        reads = g.drain(hd, 8)
+        f = g.close(hd)
+        return pack(g.count, g.sumlen, reads, f) if row == "many" else g.sumbytes
+    if row == "kinds":
+        hd = g.readdir(t["kinds"])
+        g.drain(hd, 8)
+        g.close(hd)
+        return pack(g.kf, g.kd, g.kl, g.count)
+    if row == "names-realloc":
+        hd = g.readdir(t["names"])
+        g.drain(hd, 8)
+        a, b, c, e = g.log()
+        g.close(hd)
+        return pack(a, b, c, e)
+    if row == "names-content":
+        hd = g.readdir(t["names"])
+        g.drain(hd, 8)
+        g.close(hd)
+        return pack(g.sumlen, g.sumbytes, g.sumbytes >> 8, g.inheap)
+    if row in ("one-at-a-time", "one-at-a-time-imm"):
+        hd = g.readdir(t["three"])
+        e = i = 0
+        while True:
+            b = g.read(hd, 1)
+            c = b if row == "one-at-a-time" else g.imm
+            e |= (c & 0xff) << (8 * i)
+            i += 1
+            if b & 0xf or i >= 4:
+                break
+        if b & 0xf == 0:
+            g.drain(hd, 1)
+        g.close(hd)
+        return e
+    if row == "batch":
+        hd = g.readdir(t["three"])
+        a = g.read(hd, 8)
+        b = g.imm
+        c = e = 0
+        if a & 0xf == 0:
+            c = g.read(hd, 8)
+            e = g.imm
+            if c & 0xf == 0:
+                g.drain(hd, 8)
+        g.close(hd)
+        return pack(b, a, e, c)
+    if row in ("file-fd", "no-read-flag"):
+        # The flags are the host's: a directory opened with none is listed as `one` is.
+        hd = g.readdir([], {"error": {"not-directory": None}}) if row == "file-fd" else g.readdir(t["one"])
+        b = g.read(hd, 8)
+        c = g.imm
+        if b & 0xf == 0:
+            g.drain(hd, 8)
+        return pack(0, c, b, g.close(hd))
+    if row == "read-zero":
+        hd = g.readdir(t["three"])
+        a = g.read(hd, 0)
+        b = g.imm
+        c = g.read(hd, 0)
+        e = g.imm
+        g.drain(hd, 8)
+        g.close(hd)
+        return pack(b, a, e, c)
+    if row == "early-drop":
+        hd = g.readdir(t["three"])
+        b = g.read(hd, 1)
+        c = g.imm
+        return pack(c, b, g.close(hd), 0)
+    if row == "writer-first":
+        # Not a fixture row: the host offers its one entry before the guest reads, so the read is the second arriver
+        # and copies inline. The pin's copy takes the event in the same step, with the writer still there, so an inline
+        # return is COMPLETED with its progress, and the end is a second read's DROPPED. That is why DROPPED with
+        # progress comes only to a read that parked (ADR 0134).
+        hd = g.readdir(t["one"])
+        hd.writer.copy(HostValues(FS_DE, [{"type": {"regular-file": None}, "name": ("a.txt", "utf8", 5)}]))
+        hd.pos = 1
+        [a] = g.call("stream.read", d.canon_stream_read, g.st, g.opts, hd.ri, 1024, 8)
+        hd.writer.get_pending_event()
+        hd.end()
+        [c] = g.call("stream.read", d.canon_stream_read, g.st, g.opts, hd.ri, 1024, 8)
+        g.close(hd)
+        return pack(a & 0xff, a, c & 0xff, c)
+    raise AssertionError("no such row: " + row)
+
+
+def fs_readdir(row):
+    """A fs-readdir.wat row over FsGuest, its export async-typed and lifted sync as the WAT's is."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        g = FsGuest(site, inst)
+
+        def run(args):
+            v = fs_readdir_steps(row, g)
+            site["name"] = "after the row"
+            return [v & 0xffffffff]
+
+        rft = d.FuncType([], [d.U32Type()], async_=True)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
+# Each row with wasmtime 49.0.3's reading (fs-readdir.reading), and writer-first with none.
+FS_READDIR_ROWS = [
+    ("empty", "65792"),
+    ("one", "84218367"),
+    ("one-name", "2020879969"),
+    ("one-drain", "16777473"),
+    ("many", "69381"),
+    ("many-bytes", "1495"),
+    ("kinds", "50594309"),
+    ("names-realloc", "9634052"),
+    ("names-content", "20075155"),
+    ("one-at-a-time", "17829904"),
+    ("one-at-a-time-imm", "33554431"),
+    ("batch", "12799"),
+    ("file-fd", "2533425408"),
+    ("no-read-flag", "1179392"),
+    ("read-zero", "0"),
+    ("early-drop", "4351"),
+    ("writer-first", "no row"),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1759,6 +2129,8 @@ def battery():
         read("sync-future-own-thread %s (#1352; wasmtime 49.0.3: %s)" % (row, wt), sync_future_own_thread(slot))
     for row, wt in HOST_STREAM_ARG_ROWS:
         read("host-stream-arg-kind %s (#1367; wasmtime 49.0.3: %s)" % (row, wt), host_stream_arg(row))
+    for row, wt in FS_READDIR_ROWS:
+        read("fs-readdir %s (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: %s)" % (row, wt), fs_readdir(row))
 
 
 if __name__ == "__main__":
