@@ -104,12 +104,15 @@ type hostResources struct {
 	// fs is this instance's open files and file goroutines (ADR 0133, hostfs.go), which Close stops and waits out.
 	// It has its own lock, never taken with mu held.
 	fs *hostFS
+	// http is this instance's outgoing HTTP (ADR 0135, hosthttpsend.go): its Transport, its sends and their bodies,
+	// which Close stops and waits out. It has its own lock, never taken with mu held.
+	http *hostHTTP
 }
 
 func newHostResources() *hostResources {
 	return &hostResources{
 		table: canon.NewHandleTable(), objs: map[uint32]any{}, types: map[int]*hostResource{}, net: newHostNet(),
-		fs: newHostFS(),
+		fs: newHostFS(), http: newHostHTTP(),
 	}
 }
 
@@ -295,6 +298,9 @@ func mints(t *hostResource, build func() any) resourceMethod {
 type hostResourceSource struct {
 	types   map[string]*hostResource
 	methods map[string]resourceMethod
+	// sigs are the imports whose whole type the host declares (ADR 0135), wasi:http's: the guest's declared signature
+	// must equal it, checked at instantiate for every import a host table serves (walker.checkDeclaredSignature).
+	sigs map[string]*declaredSig
 }
 
 // typeStep records the host-resource identity of one entry of the component type index space (ADR 0117),

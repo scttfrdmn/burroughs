@@ -59,12 +59,12 @@ Every getter and setter is a sync resource method (`method`), so it is marshalle
 
 ### The carrier binding
 
-**`streamConsumer.carries`** is the host's declaration of a function's whole type, as `carrierType`s: a codec type, a `stream<u8>`, a `future<P>` with a codec payload, or an option or tuple of those. At instantiate the guest's declared signature must match it parameter by parameter and in its result (`checkCarrierSignature`), handles resolved through the host's RTs and payloads compared with `canon.TypeEqual`; anything else is `ErrLinkRefused` naming the host's type. The four functions bind with both tables through `bindRes`, as `tcp-socket.send` does.
+**`hostResourceSource.sigs`** is the host's declaration of a function's whole type, as `sigType`s: a codec type, a `stream<u8>`, a `future<P>` with a codec payload, or an option or tuple of those (`httpSignatures`). It covers every `wasi:http` import, not only the four, since every one is lowered at a layout the host fixes. At instantiate the guest's declared signature must match it parameter by parameter and in its result (`walker.checkDeclaredSignature`), with handles resolved through the host's RTs and payloads compared with `canon.TypeEqual`. Anything else is `ErrLinkRefused` naming the import. The four functions are stream consumers bound with both tables through `bindRes`, as `tcp-socket.send` is, and stream consumers are not refused by `unmodeledInSig`.
 
-- **A stream argument lifts as write-via-stream's does** (`liftStreamArgLocked`), with the pin's four traps.
-- **A future argument lifts by the same rule** (`liftFutureArgLocked`): it must be a readable future end of the parameter's payload type, IDLE and joined to no set, and each is a trap in def:lift_async_value's order.
+- **A stream argument lifts as write-via-stream's does** (`liftStreamArgLocked`), with the pin's four traps. The registry holds it for its message (`hostHTTP.hold`), so one end handed to two messages traps the second.
+- **A future argument lifts by the same rule** (`liftFutureArgLocked`): it must be a readable future end of the parameter's payload type, IDLE and joined to no set, and each is a trap in def:lift_async_value's order. One already handed to the host traps as an index the guest no longer holds, def:Table.get's.
 - **Neither handle is removed from the guest's table,** which is the existing divergence `liftStreamArgLocked` names, now named for futures too. That is what lets `consume-body` hand a guest's own end back at its own index.
-- **The results are minted under `asyncHandles.mu`** and their i32s written at the return pointer, as receive's are. Every host-minted future is typed by its payload (`elemOfPayload`).
+- **The results are minted under `asyncHandles.mu`** and their i32s written at the return pointer, as receive's are. Every host-minted future is typed by its payload (`elemOfCanon`, `elemOfPayload`'s twin for a type).
 
 ### The host reads a guest future
 
@@ -92,7 +92,7 @@ Every getter and setter is a sync resource method (`method`), so it is marshalle
 
 **Ungranted, it resolves `err(HTTP-request-denied)` inline,** before it reads anything else, and the request's transmission future resolves the same, which is Scott's ruling. Two errors are inline too, each RETURNED with no goroutine: no authority or no path-with-query is `HTTP-request-URI-invalid`, and a scheme other than HTTP or HTTPS is `HTTP-protocol-error`. A scheme of none is `https`, wasmtime's default.
 
-Otherwise it builds an `http.Request` and starts one goroutine, the new site this ADR authorises in the census (`TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`). The goroutine runs `RoundTrip` on the instance's `Transport`. It runs no guest code and touches no guest memory, and its outcome reaches the guest through `onResolve`, ADR 0101's discipline. One claim decides who resolves, E5's pattern: the round trip's return, the guest's cancel, or Close. A response's own is minted only by the claimant.
+Otherwise it builds an `http.Request` and starts one goroutine, the new site this ADR authorises in the census (`TestEveryEngineGoroutineIsAtASiteADecisionAuthorises`). The goroutine runs `RoundTrip` on the instance's `Transport`. It runs no guest code and touches no guest memory, so §4's boundary model and the table twin (#662) are not engaged by it. Its outcome reaches the guest through `onResolve`, ADR 0101's discipline. One claim decides who resolves, E5's pattern: the round trip's return, the guest's cancel, or Close. A response's own is minted only by the claimant, in the instance's resource table under that table's lock, which is a host table and no guest memory.
 
 **The request on the wire:**
 
@@ -155,6 +155,18 @@ The request body's Read sees the producers' stop on the host-I/O condition and f
   - **The `res` future's value is not acted on** for a host response.
   - **Field-size limits are not imposed,** so `size-exceeded` is never answered; wasmtime answered none on the rows measured.
   - **A request's body Read runs on `net/http`'s goroutine.** A guest that never writes or drops its body stream holds that request open until Close, as a socket send's writer does.
+
+## The build, as measured
+
+On darwin/arm64, in the worktree of #1383's branch. The reading was committed before the engine code (`p3http.reading`, its guest's source, build script and peer beside it in `testdata/p3http`).
+
+- **`TestP3HTTPMatchesWasmtime`** (`internal/component/p3http_test.go`): all 34 rows matched wasmtime 49.0.3's stdout and exit code, with `gate:cm-threads` off and on, plain and under `-race`. The two rows wasmtime ends with a trap trapped here, naming the same non-numeric-payload rule. No send or response-body goroutine survived any row's Close.
+- **The grant:** `TestASendIsDeniedAtTheCallWithoutTheGrant` reads the deny-at-call and the reading's link failure. `TestAllowHTTPReachesBothConfiguredPaths` and `TestRunAComponentWithAllowHTTPSends` read the field and the flag on each public path.
+- **What the neuters showed** (each run, each reverted; the full list is at the sites as `NEUTER, run:` comments):
+  - **The host's read of a guest future is the whole of the bodies' end.** With the take dropped from `future.write`, sixteen rows hang: every one whose guest writes a trailers future or `res` the host is reading. With a write parked before the arming left untaken, twelve hang.
+  - **Each wasmtime rule the rows read is load-bearing on its own row.** These are the swap-remove, the lowercasing, the value and path validators, `content-length`'s re-rendering, immutability, the declared-trailers filter, the suppressed user-agent and accept-encoding, the restored `trailer` header, and the timeout's code.
+  - **One rule p3http cannot see:** a request body's end waiting for its trailers. Its guest writes them before net/http's Read reaches the end, so the fixture passes with the wait neutered, and `TestARequestBodysEndWaitsForItsTrailers` witnesses it by the place the Read parks.
+  - **Close and the cancel** each hang their witnesses with their own lines neutered.
 
 ## Rollback
 

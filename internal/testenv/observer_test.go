@@ -164,7 +164,23 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"the Accept returns, and waits it out (`TestCloseEndsAGuestParkedInAccept`, under -race). " +
 				"ADR 0133 extends it to a file's read-via-stream: the same site, one Read of an io.SectionReader " +
 				"of the file, counted in the instance's file registry before it starts and waited out by Close, " +
-				"which closes the file first (`TestFSDescriptorMatchesWasmtime`, under -race).",
+				"which closes the file first (`TestFSDescriptorMatchesWasmtime`, under -race). " +
+				"ADR 0135 extends it to an HTTP response's body: the same site, one Read of the body, counted in the " +
+				"instance's HTTP registry before it starts and waited out by Close, which cancels the send's " +
+				"context first so the Read returns; the trailers are minted as an own only by the delivery that " +
+				"sees the end, under the run slot and `asyncHandles.mu` (`TestP3HTTPMatchesWasmtime`, under -race).",
+		},
+		{"internal/component/hosthttpsend.go", "(*Host).httpSend"}: {
+			count: 1,
+			by: "ADR 0135 — a wasi:http send's round trip, one goroutine per send that reaches the network, " +
+				"counted in the instance's HTTP registry before it starts. It runs NO guest code and touches no " +
+				"guest memory: it runs the instance's Transport's RoundTrip, and its outcome reaches the guest " +
+				"through the async lower's `onResolve`, ADR 0101's discipline (ADR 0095's precedent), and the " +
+				"request's transmission future through the same discipline. One claim decides who resolves: the " +
+				"round trip's return, the guest's cancel, or Close, E5's pattern. It ends when RoundTrip returns, " +
+				"which a cancel or Close makes prompt by cancelling its context, and Close waits it out " +
+				"(`TestCloseEndsASendInFlightAndItsGoroutine`, `TestACancelledSendResolvesCancelledAndItsGoroutineEnds`, " +
+				"under -race).",
 		},
 		{"internal/component/hostfs.go", "(*Host).fsWriteViaStream"}: {
 			count: 1,

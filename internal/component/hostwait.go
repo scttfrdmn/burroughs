@@ -147,6 +147,11 @@ func (h *asyncHandles) waitHostWaits() { h.hostWaitsFiring.Wait() }
 // a parked guest write or resolves the future it waits on. It has no witness of its own: a file write returns in
 // far less than the park's bound.
 //
+// **So does a send's** (ADR 0135): a round trip not yet resolved, or a request body's delivery, whose store resolves
+// the subtask a guest waits on or completes its parked body write. It has no witness of its own: p3http's run is
+// sync-lifted, so it parks in waitable-set.wait, which this bound does not reach, and no fixture callback-lifts a wait
+// on a send.
+//
 // **And so does a pending blocking sync lower** (ADR 0126): its return resumes a Thread of the instance, which
 // may wake any park. It counts whether or not its impl's own work is counted above, since a test impl, or a
 // future host import, may hold a resolution no registry here knows of.
@@ -155,5 +160,5 @@ func (h *asyncHandles) waitHostWaits() { h.hostWaitsFiring.Wait() }
 // ErrLiftParkExpired.
 func (h *asyncHandles) hostWaitPendingLocked() bool {
 	return len(h.hostWaits) > 0 || h.hostWaitsResolving > 0 || h.producerReads > 0 || h.sockPending > 0 ||
-		h.filePending > 0 || len(h.syncLowerCalls) > 0
+		h.filePending > 0 || h.httpPending > 0 || len(h.syncLowerCalls) > 0
 }

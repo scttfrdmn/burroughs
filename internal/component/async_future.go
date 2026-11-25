@@ -74,6 +74,11 @@ type readableFutureEnd struct {
 	elem *elemType
 	// sync is a sync future.read waiting on this end (#1352).
 	sync syncWait
+	// hostHeld is this guest end handed to the host as an argument (liftFutureArgLocked, ADR 0135), and hostTake, when
+	// set, the host's read of it: a guest future.write that finds it runs it in place of the intra-instance copy, with
+	// the writer's caller and buffer, and completes COMPLETED (futureWriteLocked).
+	hostHeld bool
+	hostTake func(c *interp.CanonCaller, ptr uint32) error
 }
 
 // pendingEventLocked delivers the future read's (FUTURE_READ, index, result) event once. readableFutureEnd
@@ -793,6 +798,24 @@ func futureWriteLocked(h *asyncHandles, elem *elemType, async bool, c *interp.Ca
 	if droppedFirst {
 		ev, _ := e.pendingEventLocked()
 		return []interp.Value{interp.I32(int32(ev.p2))}, nil, nil, nil
+	}
+	// **A reader that is the host takes the value in the write** (ADR 0135): its read is armed (armHostTakeLocked), so
+	// the write is the second arriver and completes COMPLETED inline, the value lifted from the writer's memory, an own
+	// transferring by def:lift_own. wasmtime 49.0.3 completes a write to `res` at once (p3http's res-first row).
+	//
+	// NEUTER, run: drop this arm, and sixteen of TestP3HTTPMatchesWasmtime's rows do not return within the hang guard
+	// (get, head, purge, dump, the six posts, bigresp, early-drop, res-first, consume-empty and the two consume-*-res
+	// rows): each writes a trailers future or `res` the host is already reading, the write parks, and nothing takes it.
+	// The rows after them fail only the goroutine check, on the goroutines the hung rows left.
+	if r := e.peer; r != nil && r.hostTake != nil && !r.resolved {
+		take := r.hostTake
+		r.hostTake = nil
+		if err := take(c, ptr); err != nil {
+			return nil, nil, nil, err
+		}
+		r.resolved, r.delivered, r.result = true, true, copyCompleted
+		e.done = true // a future is one value: the writable end is DONE after COMPLETED
+		return []interp.Value{interp.I32(int32(copyCompleted))}, nil, nil, nil
 	}
 	if r := e.peer; r != nil && r.hasRead && !r.resolved {
 		if err := copyFutureValueLocked(e.elem, c, ptr, r.caller, r.readPtr, "future.write"); err != nil {

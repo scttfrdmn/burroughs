@@ -91,6 +91,10 @@ type streamProducer struct {
 	mapErr func(error) canon.Value
 	track  func() (ended func(), ok bool)
 	onDone func(readerDropped bool)
+	// atEnd, when set, is the future's value at the end of input in place of ok, computed then, under h.mu and the run
+	// slot: an HTTP response body's trailers, which arrive after its last byte (ADR 0135). ok stays the value a reader's
+	// drop resolves with.
+	atEnd func() canon.Value
 
 	// accept, when set, makes this listen's stream<own<tcp-socket>> (ADR 0125): its source is a listener, its
 	// elements accepted sockets, and it has **no future**. src, srcMu, buf and mapErr are unused, and socks holds
@@ -427,6 +431,12 @@ func (p *streamProducer) apply(data []byte, rerr error) {
 	// error" and exits 1. Its no-stdin rows never Read, so they are unaffected.
 	if rerr != nil && p.final == nil {
 		p.final = &p.ok
+		// NEUTER, run: skip atEnd, and TestP3HTTPMatchesWasmtime's five posts that reach a response (and only they) read
+		// "trailers: none" where wasmtime reads the peer's x-sum.
+		if p.atEnd != nil && errors.Is(rerr, io.EOF) {
+			v := p.atEnd()
+			p.final = &v
+		}
 		if !errors.Is(rerr, io.EOF) {
 			var v canon.Value
 			if p.mapErr != nil {

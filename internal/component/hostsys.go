@@ -125,6 +125,8 @@ func (h *Host) asyncSource() map[string]asyncImplFor {
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.stat-at", h.fsStatAt())
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.get-flags", h.fsGetFlags())
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.get-type", h.fsGetType())
+	// wasi:http/client's send (ADR 0135, hosthttpsend.go), behind AllowHTTP and denied at the call without it.
+	serve(m, wasiP3, "wasi:http/client::send", h.httpSend)
 	return m
 }
 

@@ -417,6 +417,10 @@ func (w *walker) step(d Def) error {
 								return err
 							}
 						}
+						// An import whose whole type the host declares, wasi:http's (ADR 0135), is checked whole.
+						if err := w.checkDeclaredSignature(cf.stubName, sig); err != nil {
+							return err
+						}
 					}
 					realloc, err := w.lowerRealloc(cn)
 					if err != nil {
@@ -1105,6 +1109,12 @@ func (w *walker) close() {
 	// and every open file is closed but one a write-via-stream writer holds, which that writer closes once it has
 	// written what its buffer holds. Waited out at the end, as the sockets are.
 	w.stopAllFiles()
+	// **And the sends** (ADR 0135), across the tree: no send starts after this, every round trip and response body is
+	// cancelled, and the idle connections are closed. Waited out at the end, as the sockets are.
+	//
+	// NEUTER, run: skip this call, and TestCloseEndsASendInFlightAndItsGoroutine's Close does not return within the hang
+	// guard, waiting for the round trip stalled at the peer.
+	w.stopAllHTTP()
 	for _, in := range w.toClose {
 		_ = in.Close()
 	}
@@ -1121,6 +1131,27 @@ func (w *walker) close() {
 	w.waitAllHostWaits()
 	w.waitAllSockets()
 	w.waitAllFiles()
+	w.waitAllHTTP()
+}
+
+// stopAllHTTP stops the sends of this walker's table and every nested one's (ADR 0135).
+func (w *walker) stopAllHTTP() {
+	if w.hostRes != nil {
+		w.hostRes.http.stop()
+	}
+	for _, c := range w.children {
+		c.stopAllHTTP()
+	}
+}
+
+// waitAllHTTP waits out every send goroutine and response body Read of this walker's table and every nested one's.
+func (w *walker) waitAllHTTP() {
+	if w.hostRes != nil {
+		w.hostRes.http.wait()
+	}
+	for _, c := range w.children {
+		c.waitAllHTTP()
+	}
 }
 
 // stopAllFiles stops the files of this walker's table and every nested one's (ADR 0133).
