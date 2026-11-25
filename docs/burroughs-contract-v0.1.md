@@ -366,7 +366,7 @@ commits to that reading.*
   #1135, the chair's amended text). It reads R-2's words where R-5 had only
   followed from them, which is why it says so: an interpretation of normative
   text is the owner's stamp, not the actor's inference.*
-  *Appended by Scott's stamp on #1382, dated YYYY-MM-DD (the v0.16.0 plan,
+  *Appended by Scott's stamp on #1382, dated 2026-11-24 (the v0.16.0 plan,
   #1370; ruling 4 on #1375). A host-initiated call of a component export, such
   as `wasi:http/handler#handle` once per request or `wasi:cli/run#run`, is a
   call, not a delivery of readiness, so R-2's "never pushed by callback into
