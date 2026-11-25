@@ -105,3 +105,20 @@ host-stream-arg-kind wvs-no-handle (#1367; wasmtime 49.0.3: trap, unknown handle
 host-stream-arg-kind wvs-u32-stream (#1367; wasmtime 49.0.3: trap, a stream of a different type): trap write-via-stream's lift
 host-stream-arg-kind wvs-joined-end (#1367; wasmtime 49.0.3: trap, in a waitable set): trap write-via-stream's lift
 host-stream-arg-kind wvs-reading-end (#1367; wasmtime 49.0.3: trap, busy stream): trap write-via-stream's lift
+fs-readdir empty (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 65792): value 65792
+fs-readdir one (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 84218367): value 84218367
+fs-readdir one-name (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 2020879969): value 2020879969
+fs-readdir one-drain (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 16777473): value 16777473
+fs-readdir many (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 69381): value 69381
+fs-readdir many-bytes (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 1495): value 1495
+fs-readdir kinds (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 50594309): value 50594309
+fs-readdir names-realloc (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 9634052): value 9634052
+fs-readdir names-content (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 20075155): value 20075155
+fs-readdir one-at-a-time (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 17829904): value 17829904
+fs-readdir one-at-a-time-imm (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 33554431): value 33554431
+fs-readdir batch (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 12799): value 12799
+fs-readdir file-fd (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 2533425408): value 2533425408
+fs-readdir no-read-flag (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 1179392): value 1179392
+fs-readdir read-zero (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 0): value 0
+fs-readdir early-drop (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 4351): value 4351
+fs-readdir writer-first (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: no row): value 16846864

@@ -106,6 +106,58 @@ func TestPreopensReachBothConfiguredPaths(t *testing.T) {
 	})
 }
 
+// fsReaddirRunReading is fs-readdir-run.reading's exit code for a grant.
+func fsReaddirRunReading(t *testing.T, grant string) int {
+	t.Helper()
+	b, err := os.ReadFile("internal/component/testdata/fs-readdir-run.reading")
+	if err != nil {
+		t.Fatalf("the committed reading is missing, so this witness has no oracle: %v", err)
+	}
+	for _, ln := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(ln, grant+": "); ok {
+			n, err := strconv.Atoi(rest)
+			if err != nil {
+				t.Fatalf("fs-readdir-run.reading's %s line reads %q", grant, rest)
+			}
+			return n
+		}
+	}
+	t.Fatalf("fs-readdir-run.reading has no %s line", grant)
+	return 0
+}
+
+// TestAComponentListsTheDirectoryItIsGranted is read-directory at the public boundary (ADR 0134): ComponentConfig.Run
+// threads Preopens to a component that lists its grant, and its exit code is fs-readdir-run.reading's: 134 on a
+// writable grant, wasmtime 49.0.3's, and on a read-only one, the WIT's, since listing writes nothing; 3 on none.
+//
+// NEUTER, run: read-directory's line in streamConsumers dropped, and the read-only grant's Run fails at the call,
+// "import wasi:filesystem/types@0.3.0::[method]descriptor.read-directory is not provided".
+func TestAComponentListsTheDirectoryItIsGranted(t *testing.T) {
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	wasm, err := os.ReadFile("internal/component/testdata/fs-readdir-run.wasm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name  string
+		grant func(dir string) []burroughs.Preopen
+	}{
+		{"read-only", func(dir string) []burroughs.Preopen { return []burroughs.Preopen{{Host: dir, Guest: "/"}} }},
+		{"writable", func(dir string) []burroughs.Preopen {
+			return []burroughs.Preopen{{Host: dir, Guest: "/", Writable: true}}
+		}},
+		{"none", func(string) []burroughs.Preopen { return nil }},
+	} {
+		code, err := burroughs.ComponentConfig{Preopens: c.grant(fsRunTree(t))}.Run(wasm)
+		if err != nil {
+			t.Fatalf("%s: Run: %v", c.name, err)
+		}
+		if want := fsReaddirRunReading(t, c.name); code != want {
+			t.Errorf("%s: Run exited %d, want %d", c.name, code, want)
+		}
+	}
+}
+
 // TestAPreopenThatIsNotADirectoryFailsTheRun is ADR 0133's grant check at the public boundary: a Host that names a file
 // fails Run and LoadComponent, naming it, before the component runs.
 func TestAPreopenThatIsNotADirectoryFailsTheRun(t *testing.T) {

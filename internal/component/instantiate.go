@@ -674,6 +674,14 @@ func (r *reader) canonAsyncBuiltin(op byte) (Canon, error) {
 		}
 		c.Opts.Memory = opts.Memory
 		c.AsyncForm = opts.Async
+		// **Its `(realloc $f)` is kept too** (ADR 0134): a host stream whose element carries a string, read-directory's
+		// `stream<directory-entry>`, lowers each name through the reader's `cabi_realloc`, on the reader's own call. It
+		// was read and dropped, so the read's caller had no realloc to call.
+		//
+		// NEUTER, run: drop it again, and TestFSReadDirectoryMatchesBothOracles' fifteen rows that lower an entry trap at
+		// their first name, in both gate states, "this canon lower declared no realloc option"; only empty and file-fd,
+		// which lower none, pass.
+		c.Opts.Realloc = opts.Realloc
 		return c, nil
 	case 0x10, 0x16, 0x17: // stream.write, future .read/.write: typeidx (KEPT) + opts
 		if err := keepIdx(); err != nil {

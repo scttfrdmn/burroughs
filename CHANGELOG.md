@@ -25,6 +25,30 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A component lists a directory it is granted: `wasi:filesystem@0.3`'s `descriptor.read-directory`**
+  ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1b of the v0.16.0 plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0134). No public API changes: the grant is ADR 0133's
+  `ComponentConfig.Preopens` and `burroughs run --dir`/`--scratch`, and a read-only grant lists too.
+  - **The one new Canonical-ABI mechanism E1 needs:** a host stream whose element carries a string,
+    `stream<directory-entry>`. Each entry is lowered inside the guest's own `stream.read`, on the reader's goroutine,
+    through the reader's `cabi_realloc`, with no engine lock held. `stream.read`'s `realloc` canonopt now survives the
+    decode and is bound into the built-in. Under `gate:cm-shared-memory` the lowering still runs on the reader's own
+    goroutine, so the off-agent realloc refusal is never reached. The copy under the handle table's lock refuses such an
+    element by name.
+  - **Reads follow wasmtime 49.0.3, which the pin admits:** a read that finds entries returns BLOCKED, and its event
+    carries them; a batch that ends the listing carries DROPPED with its progress (`0x31` for three entries), and a read
+    that finds nothing left takes DROPPED inline. Batches are `File.ReadDir(n)` in host order, and a read of 1 is never
+    told the end early.
+  - **The guest must declare `directory-entry` as the host does**, or the import is refused at instantiate. A cancel of
+    a read the host is serving traps by name, and is reachable only from a second agent of a shared-memory instance.
+  - **Witnesses:** `fs-readdir.wasm`'s 16 wasmtime rows match wasmtime 49.0.3's readings, 10 of 10 each. They also
+    match the pin 2e7895c's readings through `refread.py`, 16 of 16, its host Burroughs' producer. The read-only row
+    matches the WIT's reading (`fs-readdir.reading`). Every row was run with `gate:cm-threads` off and on.
+    `fs-readdir-run.wasm` exits with its reading through `ComponentConfig.Run` and `burroughs run --dir`/`--scratch`
+    (`fs-readdir-run.reading`). `TestADirectoryReadIsLoweredWithNoEngineLockHeld` stands inside each realloc call and
+    finds no engine lock held there.
+  - **Not yet reached:** a Go program's `os.ReadDir`, until the Phase 4 fork binds it (F11b).
+
 - **`wasi:filesystem@0.3` for components, its first slice: a component reads, writes and stats files beneath a
   directory it is granted** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1a of the v0.16.0 plan
   [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0133). **Public API**, on Scott's two rulings on #1374:
@@ -40,8 +64,8 @@ says what it now requires and what it gives up.
     `open-at`, `stat`, `stat-at`, `get-flags`, `get-type`, `read-via-stream` and `write-via-stream`. Every grant,
     read-only ones too, resolves paths through an `os.Root` of its own, so `..`, a symlink pointing out, or an absolute
     path fails `not-permitted`, as the WIT says. A read-only grant refuses a write, a create or a truncate with
-    `read-only`. The async methods resolve inline, as wasmtime 49.0.3's do. Every other `descriptor` method is still
-    refused by name at its call: `read-directory` is E1b's, the mutations E1c's.
+    `read-only`. The async methods resolve inline, as wasmtime 49.0.3's do. `read-directory` came in E1b (above).
+    Every other `descriptor` method is still refused by name at its call: the mutations are E1c's.
   - **Witnesses:** `fs-descriptor.wasm`'s twenty rows match wasmtime 49.0.3's readings, 10 of 10 each, and its two
     read-only rows the WIT's text, since wasmtime's CLI has no read-only grant (`fs-descriptor.reading`), with
     `gate:cm-threads` off and on. `fs-run.wasm` exits with wasmtime's reading through `ComponentConfig.Run` and

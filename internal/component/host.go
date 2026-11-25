@@ -181,6 +181,9 @@ type streamConsumer struct {
 	// `tuple<stream<u8>, future<payload>>` rather than a consumer's `future<payload>`. It shares this table
 	// because it needs what a consumer needs, the instance's async table and a payload checked at instantiate.
 	produces bool
+	// elem is a producer's stream element as the host declares it, which the guest's declaration must match
+	// (checkConsumerPayload); nil is `u8`. read-directory's is `directory-entry` (ADR 0134).
+	elem func() canon.Type
 	// accepts marks `tcp-socket.listen` (ADR 0125), whose result is `result<stream<own<tcp-socket>>, error-code>`,
 	// with no future and so no payload: its signature has a check of its own (checkListenSignature).
 	accepts bool
@@ -209,6 +212,8 @@ func (h *Host) streamConsumers() map[string]*streamConsumer {
 	// write-via-stream a consumer in send's, each lending its self from the instance's resource table.
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.read-via-stream", &streamConsumer{bindRes: h.fsReadViaStream, payload: fsFuturePayloadType, produces: true})
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.write-via-stream", &streamConsumer{bindRes: h.fsWriteViaStream, payload: fsFuturePayloadType})
+	// read-directory is a producer of directory entries (ADR 0134), each lowered inside the reader's own stream.read.
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.read-directory", &streamConsumer{bindRes: h.fsReadDirectory, payload: fsFuturePayloadType, produces: true, elem: fsDirEntryType})
 	return m
 }
 

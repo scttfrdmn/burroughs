@@ -53,3 +53,39 @@ func TestRunAComponentWithDirAndScratch(t *testing.T) {
 		})
 	}
 }
+
+const fsReaddirRun = "../../internal/component/testdata/fs-readdir-run.wasm"
+
+// TestRunAComponentThatListsItsDir is read-directory through `burroughs run` (ADR 0134): fs-readdir-run.wasm lists its
+// grant and exits with fs-readdir-run.reading's code, 134 for fs-run's two files on `--dir` (the WIT's: listing writes
+// nothing) and on `--scratch` (wasmtime 49.0.3's), and 3 with neither flag.
+//
+// Neutered, run: read-directory's line in streamConsumers dropped, and the --dir and --scratch rows exit 1, the import
+// refused at its call.
+func TestRunAComponentThatListsItsDir(t *testing.T) {
+	t.Setenv("BURROUGHS_COMPONENTS", "")
+	t.Setenv("BURROUGHS_ASYNC", "1")
+	for _, c := range []struct {
+		name  string
+		flags func(dir string) []string
+		code  int
+	}{
+		{"--dir", func(dir string) []string { return []string{"--dir", dir + ":/"} }, 134},
+		{"--scratch", func(dir string) []string { return []string{"--scratch", dir + ":/"} }, 134},
+		{"neither", func(string) []string { return nil }, 3},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, body := range map[string]string{"hello.txt": "hello world", "w.txt": "0123456789"} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out, errBuf bytes.Buffer
+			argv := append(append([]string{"run"}, c.flags(dir)...), fsReaddirRun)
+			if code := dispatch(&out, &errBuf, argv); code != c.code {
+				t.Fatalf("exited %d, want %d\nstderr: %q", code, c.code, errBuf.String())
+			}
+		})
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
 	"github.com/scttfrdmn/burroughs/internal/interp"
@@ -22,8 +23,9 @@ import (
 
 // WASI 0.3's filesystem (#1374's E1a, ADR 0133): `wasi:filesystem/preopens@0.3`'s `get-directories` and
 // `wasi:filesystem/types@0.3`'s `descriptor`, with `open-at`, `stat`, `stat-at`, `get-flags`, `get-type`,
-// `read-via-stream` and `write-via-stream`. Every other method of `descriptor` meets the refusing stub, by name:
-// `read-directory` is E1b's, the mutations E1c's.
+// `read-via-stream` and `write-via-stream`, and E1b's `read-directory` (ADR 0134), whose stream of entries is lowered
+// inside the reader's own stream.read. Every other method of `descriptor` meets the refusing stub, by name: the
+// mutations are E1c's.
 //
 // # Confinement is os.Root's
 //
@@ -40,7 +42,8 @@ import (
 //
 // # Locks
 //
-// `asyncHandles.mu` → `hostFS.mu`, a leaf. A resource lend is taken and released with neither held.
+// `asyncHandles.mu` → `hostFS.mu`, a leaf. A resource lend is taken and released with neither held. A directory's
+// entries are read and lowered with neither held (ADR 0134).
 
 // Preopen is one directory a component is granted (ADR 0133): Host on the host, Guest the name get-directories
 // gives it, and Writable for `mutate-directory`. A Guest left empty is the host path, as preview 1's is.
@@ -1065,4 +1068,229 @@ func (s *fsSend) finishLocked(err error) {
 		s.future.completeErr = cerr // surfaced at the future's drop, as write-via-stream's is
 	}
 	s.fs.release(s.file)
+}
+
+// fsDirEntryType is `directory-entry`: `record { type: descriptor-type, name: string }`, 24 bytes aligned to 4.
+func fsDirEntryType() canon.Type {
+	return canon.RecordType(
+		canon.Field{Name: "type", Type: fsDescriptorTypeType()},
+		canon.Field{Name: "name", Type: canon.Type{Kind: canon.KindString}},
+	)
+}
+
+// dirEntryElem is read-directory's stream element (ADR 0134), as ADR 0124's descriptor: what both of the stream's
+// ends carry, what a guest's `stream.read` of its declared `stream<directory-entry>` is compared with (checked at the
+// link by checkConsumerPayload, and at each read by checkStreamEndType), and what the read's buffer strides by.
+var dirEntryElem = func() *elemType {
+	t := fsDirEntryType()
+	return &elemType{known: true, modeled: true, t: &t, size: canon.ElemSize(t), align: canon.Alignment(t)}
+}()
+
+// dirLowerHeap is a test seam, nil outside tests: it wraps the heap a directory's entries are lowered through, so a
+// witness can stand inside each realloc call and ask which engine locks are held there (ADR 0134).
+var dirLowerHeap func(canon.Heap) canon.Heap
+
+// fsDirSource is a read-directory stream's source (ADR 0134): the directory, opened afresh for the stream, and its
+// reference in the instance's file registry. Only the reader's own stream.read reads it, one read at a time, since
+// the end is COPYING while one is served, so it needs no lock of its own.
+type fsDirSource struct {
+	file *fsFile // nil for a stream finished before its first read: a file descriptor's
+}
+
+// readBatch reads up to n > 0 entries, asking again while it is short of n, so **a short batch is the end of the
+// listing** and a full one is not probed past. ended reports the end, or err; err is nil at the end of the listing.
+// It runs on the reader's goroutine with no lock held.
+//
+// NEUTER, run: return after the first ReadDir, short or not, and ended only at io.EOF, and
+// TestFSReadDirectoryMatchesBothOracles' one, one-drain, many, batch, read-only-one and no-read-flag rows fail in both
+// gate states: the entries come COMPLETED (batch's 0x30) and the end is a second read's DROPPED (one-drain's and
+// many's two reads), where both oracles read DROPPED with the entries in one event.
+func (s *fsDirSource) readBatch(n int) (entries []fs.DirEntry, ended bool, err error) {
+	for len(entries) < n {
+		more, rerr := s.file.f.ReadDir(n - len(entries))
+		entries = append(entries, more...)
+		switch {
+		case errors.Is(rerr, io.EOF), rerr == nil && len(more) == 0:
+			return entries, true, nil
+		case rerr != nil:
+			return entries, true, rerr
+		}
+	}
+	return entries, false, nil
+}
+
+// fsDirEntryValue is a `directory-entry` for a name and the type bits a DirEntry reports, which are the link's own and
+// never its target's. A name that is not UTF-8, which a component string may not be, is `illegal-byte-sequence`.
+//
+// NEUTER, run: drop the UTF-8 check, and TestADirectoryEntryNameMustBeUTF8's "caf\xe9" gives no label: it would be
+// lowered as a string.
+func fsDirEntryValue(name string, mode fs.FileMode) (entry canon.Value, label string) {
+	if !utf8.ValidString(name) {
+		return canon.Value{}, "illegal-byte-sequence"
+	}
+	v, err := canon.Record(*dirEntryElem.t, map[string]canon.Value{
+		"type": fsLabelledValue(fsDescriptorTypeType(), fsTypeLabel(mode)),
+		"name": canon.Str(name),
+	})
+	if err != nil {
+		panic(err) // unreachable: a constant type and values of its fields' types
+	}
+	return v, ""
+}
+
+// dirReadLocked is a guest `stream.read` of a directory's stream (ADR 0134), called by streamRead with the end
+// already COPYING and its buffer recorded, and the lock held. Two reads are answered here, inline:
+//
+//   - **A listing that has ended**, a file descriptor's before its first read, finishes the stream, and the read
+//     takes its DROPPED inline: both oracles' empty and file-fd rows.
+//   - **A read of 0** completes with progress 0 and reads nothing, End.copy's last arm
+//     (def:End.copy:"self.notify(progress = 0)"): both oracles' read-zero row.
+//
+// Every other read is served by the function returned, which streamRead calls once it has released the lock. The
+// caller holds p.h.mu.
+//
+// NEUTER, run: drop the read-of-0 arm, and TestFSReadDirectoryMatchesBothOracles' read-zero row traps in both gate
+// states: its first read of 0 reaches the end of nothing read and finishes the stream, so its second traps "not IDLE
+// (state DONE)". Drop the ended arm, and file-fd's read panics, serving a listing that has no file.
+func (p *streamProducer) dirReadLocked(e *readableStreamEnd) (inline []interp.Value, serve func() ([]interp.Value, error)) {
+	switch {
+	case p.final != nil:
+		p.finishLocked()
+		ev, _ := e.pendingEventLocked()
+		return []interp.Value{interp.I32(int32(ev.p2))}, nil
+	case e.readN == 0:
+		e.armLocked(0, copyCompleted)
+		ev, _ := e.pendingEventLocked()
+		return []interp.Value{interp.I32(int32(ev.p2))}, nil
+	}
+	e.hasRead = true
+	p.serving = true
+	c, dst, n := e.caller, e.dstPtr, e.readN
+	return nil, func() ([]interp.Value, error) { return p.serveDirRead(e, c, dst, n) }
+}
+
+// serveDirRead is the read's guest-code half (ADR 0134), entered with no lock held on the reader's goroutine:
+//
+//  1. no lock: a batch of up to n entries (readBatch), and each lowered at dst + 24·i through canon.StoreVia over the
+//     reader's own guestHeap, so each name's realloc is the reader's `cabi_realloc`, called here;
+//  2. under p.h.mu: the copy armed COMPLETED with its progress, and, if the batch ended the listing, the stream
+//     finished behind it, which makes that event DROPPED at its take
+//     (def:StreamEnd.notify.stream_event:"if self.other is None:"). The read returns BLOCKED with the event pending,
+//     wasmtime 49.0.3's reading, which the pin admits for a read that parked. A read that lowered nothing found the
+//     end, and takes its DROPPED inline.
+//
+// A Close in between finds the producers stopped, and the read returns BLOCKED with nothing armed. A store that fails,
+// a trap in the realloc or a pointer outside memory, is the read's own failure.
+//
+// NEUTER, run: hold p.h.mu across step 1, and TestADirectoryReadIsLoweredWithNoEngineLockHeld finds asyncHandles.mu
+// held inside all four realloc calls, in both gate states.
+func (p *streamProducer) serveDirRead(e *readableStreamEnd, c *interp.CanonCaller, dst, n uint32) ([]interp.Value, error) {
+	entries, ended, rerr := p.dir.readBatch(int(n))
+	var heap canon.Heap = guestHeap{c}
+	if dirLowerHeap != nil {
+		heap = dirLowerHeap(heap)
+	}
+	var lowered uint32
+	var lerr error
+	label := "" // the error-code the stream ends with, if any
+	if rerr != nil {
+		label = fsErrorLabel(rerr)
+	}
+	for _, de := range entries {
+		v, bad := fsDirEntryValue(de.Name(), de.Type())
+		if bad != "" {
+			label, ended = bad, true
+			break
+		}
+		if err := canon.StoreVia(heap, v, int(dst)+int(lowered)*e.elem.size); err != nil {
+			lerr = fmt.Errorf("component: stream.read of a directory: lowering entry %d: %w", lowered, err)
+			break
+		}
+		lowered++
+	}
+	h := p.h
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	p.serving = false
+	if lerr != nil {
+		return nil, lerr
+	}
+	if h.producersStopped || p.done {
+		return blockedResult(), nil // Close stopped the instance: nothing is armed
+	}
+	if ended {
+		v := p.ok
+		if label != "" {
+			v = fsErr(nil, label)
+		}
+		p.final = &v
+	}
+	// **DROPPED with progress, and only to a read that parked** (ADR 0134). The batch that ends the listing finishes the
+	// stream behind its copy, so the event is taken as DROPPED with the batch's progress, and the read returns BLOCKED.
+	//
+	// NEUTER, run: take the event inline instead of returning BLOCKED, and TestFSReadDirectoryMatchesBothOracles' one,
+	// one-at-a-time-imm, batch, read-only-one, no-read-flag and early-drop rows fail in both gate states, a read that
+	// finds entries returning its payload inline (one's 0x11, batch's 0x31), which the pin's copy cannot return with the
+	// writer gone. Not finishing here instead (ADR 0122's byte rule, option (a)), and the one, one-drain, many, batch,
+	// read-only-one and no-read-flag rows fail: the entries come COMPLETED and the end is the next read's DROPPED.
+	if lowered > 0 {
+		e.armLocked(lowered, copyCompleted)
+		if ended {
+			p.finishLocked()
+		}
+		return blockedResult(), nil
+	}
+	p.finishLocked() // nothing lowered: readBatch found the end, since a batch of n > 0 short of n is one
+	ev, _ := e.pendingEventLocked()
+	return []interp.Value{interp.I32(int32(ev.p2))}, nil
+}
+
+// fsReadDirectory is `[method]descriptor.read-directory: func() -> tuple<stream<directory-entry>, future<result<_,
+// error-code>>>`, flattened to (self, ret): a producer with a directory source (ADR 0134). Each call opens the
+// directory afresh, so each stream starts at the beginning and two do not share an offset, as the WIT says; the file
+// joins the instance's registry, and the stream's finish or its reader's drop releases it. A file descriptor's stream
+// is finished at its first read with `err(not-directory)`, wasmtime 49.0.3's reading. The descriptor's flags are not
+// consulted, as wasmtime's are not (fs-readdir.reading's no-read-flag row).
+//
+// NEUTER, run: an onDone that does not release the listing, and TestFSReadDirectoryMatchesBothOracles' sixteen rows
+// that list fail their registry count in both gate states, the listing's file held after the stream ended.
+func (h *Host) fsReadDirectory(async *asyncHandles, res *hostResources) interp.CanonFunc {
+	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("component: descriptor.read-directory: got %d core args, want 2 (self, ret)", len(args))
+		}
+		d, release, err := lendAs[*fsDescriptor](res, descriptorResource, args[0].Int32())
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		src := &fsDirSource{}
+		p := &streamProducer{h: async, ok: fsOK(nil, nil), dir: src}
+		label := ""
+		if d.dir == nil {
+			label = "not-directory"
+		} else if f, oerr := d.dir.Open("."); oerr != nil {
+			label = fsErrorLabel(oerr)
+		} else if ff, ok := res.fs.adopt(f); !ok {
+			label = "io" // the instance is closing
+		} else {
+			reg := res.fs
+			src.file = ff
+			p.onDone = func(bool) { reg.release(ff) }
+		}
+		if label != "" {
+			bad := fsErr(nil, label)
+			p.final = &bad
+		}
+		async.mu.Lock()
+		ri, fi := p.mintLocked()
+		async.mu.Unlock()
+		var buf [8]byte
+		binary.LittleEndian.PutUint32(buf[0:], uint32(ri))
+		binary.LittleEndian.PutUint32(buf[4:], uint32(fi))
+		if werr := c.Write(uint64(uint32(args[1].Bits)), buf[:]); werr != nil {
+			return nil, fmt.Errorf("component: descriptor.read-directory: writing the stream and future handles: %w", werr)
+		}
+		return nil, nil
+	}
 }

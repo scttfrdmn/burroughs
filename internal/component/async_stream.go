@@ -649,6 +649,20 @@ func streamCancelReadForm(h *asyncHandles, elem *elemType, async bool) interp.Ca
 		if err := syncCancelOfJoinedEnd("stream.cancel-read", i, async, e.set); err != nil {
 			return nil, err
 		}
+		// **A read the host is serving cannot be cancelled into** (ADR 0134): its entries are being lowered, with no lock
+		// held, by the reader's own call, and the pin traps a cancel of an end a read is waiting in,
+		// def:cancel_copy:"trap_if(end.has_sync_waiter)". Only a second agent of a shared-memory instance can reach it:
+		// otherwise the reader holds the run slot for the call, and its realloc may not leave.
+		//
+		// NEUTER, run: drop this check, and TestADirectoryReadIsLoweredWithNoEngineLockHeld's cancel from inside the
+		// realloc returns CANCELLED with the read still being lowered. That leaves the end IDLE, so its drop then
+		// succeeds and removes the handle, and the guest's wait for the read it made traps, in both gate states:
+		// "waitable.join: handle 1 is not a waitable".
+		if w := e.conn; w != nil && w.producer != nil && w.producer.serving {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-read: end %d's read is being served by the "+
+				"host on the reader's own call, and cannot be cancelled into (ADR 0134; the pin's cancel_copy: "+
+				"trap_if(end.has_sync_waiter))", i)}
+		}
 		if e.resolved {
 			takeCancelledCopyLocked(&e.result, e.writerDropped)
 		} else {
@@ -792,7 +806,13 @@ func streamRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		}
 		i, ptr, n := uint32(args[0].Bits), uint32(args[1].Bits), uint32(args[2].Bits)
 		h.mu.Lock()
-		defer h.mu.Unlock()
+		// locked is cleared by the one arm that returns with the lock released, a directory's (ADR 0134).
+		locked := true
+		defer func() {
+			if locked {
+				h.mu.Unlock()
+			}
+		}()
 		// def:copy:"trap_if(not isinstance(end, EndT))" (#1282).
 		//
 		// NEUTER: return a Go error, and TestAWrongKindHandleTraps's stream-read-writable row fails.
@@ -822,6 +842,18 @@ func streamRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		e.resolved, e.delivered, e.progress, e.result, e.hasRead = false, false, 0, copyCompleted, false
 		e.dstPtr, e.readN, e.caller, e.state = ptr, n, c, copyStateCopying
 		w := e.conn
+		// **A directory's read is served by this call, with the lock released for its guest code** (ADR 0134): its
+		// entries carry a string, lowered through this reader's realloc on this goroutine, so the lowering runs after
+		// the unlock below and takes the lock again only to arm the copy.
+		if w != nil && w.producer != nil && w.producer.dir != nil {
+			out, serve := w.producer.dirReadLocked(e)
+			if serve == nil {
+				return out, nil
+			}
+			locked = false
+			h.mu.Unlock()
+			return serve()
+		}
 		if w != nil && w.producer != nil {
 			return w.producer.readLocked(e)
 		}

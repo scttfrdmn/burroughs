@@ -1,0 +1,68 @@
+# Committed readings for fs-readdir.wasm: wasi:filesystem@0.3's descriptor.read-directory at the ABI, a host-produced
+# stream<directory-entry> read by the guest's async stream.read and lowered through its realloc (#1374 E1b, ADR 0134).
+# Default path for each Go row: gate:async on, gate:cm-threads both off and on.
+# Built:       wasm-tools parse fs-readdir.wat -o fs-readdir.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
+#                -S p3=y --dir <tree>::/ --invoke 'run(<row>)' fs-readdir.wasm
+# Tree:        made fresh before every run: hello.txt "hello world"; empty/; one/a.txt "hello"; many/{a, bb, ccc, dddd,
+#              eeeee}; three/{p, q, r}; kinds/{f, d/, l -> f}; names/{x, é.txt, 40 n's, 100 L's}; every other file "x".
+#              No row reads the host's directory order: each reads a one-entry directory, folds every entry into sums,
+#              or keys an entry by its name.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken
+#              2026-11-24, before the engine code.
+# The pin:     refread.py's `fs-readdir` rows, at 2e7895c, read every line but read-only-one alike, 16 of 16 each
+#              (refread.reading). Their host is Burroughs' producer as ADR 0134 states it, and an open-at's byte, which
+#              is the host's and not the CM layer's, is 0 there.
+#
+# Each line is `<row>: <reading>`, and the test reads them by row. The row's number is its line's position, from 0.
+empty: 65792
+one: 84218367
+one-name: 2020879969
+one-drain: 16777473
+many: 69381
+many-bytes: 1495
+kinds: 50594309
+names-realloc: 9634052
+names-content: 20075155
+one-at-a-time: 17829904
+one-at-a-time-imm: 33554431
+batch: 12799
+file-fd: 2533425408
+#
+# The read-only row is the WIT's: wasmtime 49.0.3's `--dir` always grants read|mutate-directory, so its CLI has no
+# read-only grant. Burroughs runs it on a read-only grant and asserts wasmtime's reading of the same row on its grant,
+# which is row 1's: the WIT's read-only rule is open-at's ("If `flags` contains `write` or `mutate-directory`, or
+# `open-flags` contains `truncate` or `create`, and the base descriptor doesn't have `descriptor-flags::mutate-directory`
+# set, `open-at` fails with `error-code::read-only`"), and read-directory writes nothing.
+read-only-one: 84218367
+#
+no-read-flag: 1179392
+read-zero: 0
+early-drop: 4351
+#
+# Meaning: four bytes, byte 0 the low one. An operation's byte is 0 for ok and 0x80 | its error-code case for an error
+# (0x97 not-directory). A read's payload byte is progress << 4 | COMPLETED (0) or DROPPED (1); its immediate byte is
+# its return's low byte, the payload when it completed inline and 0xff when it returned BLOCKED.
+#   empty             0x00010100: open-at empty ok; the read of 8 DROPPED with 0, inline; the future ok.
+#   one               0x050511ff: the read of 8 BLOCKED, then DROPPED with 1 in its event; the entry is a regular-file
+#                     (5) whose name is 5 bytes.
+#   one-name          0x78742e61: "a.tx", the name's first four bytes, read at the pointer the entry holds.
+#   one-drain         0x01000101: one entry, in one read; the future ok; one realloc call.
+#   many              0x00010f05: five entries, their names 15 bytes in all, in one read; the future ok.
+#   many-bytes        1495: the sum of every name's bytes, a + bb + ccc + dddd + eeeee.
+#   kinds             0x03040205: f is a regular-file (5), d a directory (2), and l a symbolic-link (4), never its
+#                     target's type; three entries.
+#   names-realloc     0x00930104: four realloc calls, every one at alignment 1, for 147 bytes in all (1 + 6 + 40 + 100,
+#                     é being two bytes), and every one with original pointer and size 0.
+#   names-content     0x01325293: the names are 147 bytes, their bytes sum to 12882 (0x3252), and every name lies in
+#                     the realloc's heap.
+#   one-at-a-time     0x01101010: three reads of 1 each COMPLETED with 1, and a fourth DROPPED with 0.
+#   one-at-a-time-imm 0x01ffffff: the three returned BLOCKED, and the fourth DROPPED inline.
+#   batch             0x000031ff: one read of 8 BLOCKED, then DROPPED with 3 in its event; no second read.
+#   file-fd           0x97010100: open-at hello.txt ok; its read DROPPED with 0, inline; the future err(not-directory).
+#   read-only-one     0x050511ff: row 1, on a read-only grant.
+#   no-read-flag      0x0011ff00: one opened with no descriptor flags ok; the read BLOCKED, then DROPPED with 1; the
+#                     future ok.
+#   read-zero         0x00000000: two reads of 0 each COMPLETED with 0, inline.
+#   early-drop        0x000010ff: a read of 1 BLOCKED, then COMPLETED with 1; the stream dropped before its end, and
+#                     the future ok.

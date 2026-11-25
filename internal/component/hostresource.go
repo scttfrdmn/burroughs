@@ -494,12 +494,32 @@ func (w *walker) checkConsumerPayload(lowerName string, sig *FuncType, sc *strea
 	//
 	// NEUTER: drop the element test (`!= VU8`), and TestReadViaStreamMustBeDeclaredAsTheHostDeclaresIt's guest
 	// whose read-via-stream returns a stream<u32> instantiates.
+	//
+	// **A producer of another element names it** (`sc.elem`, ADR 0134): read-directory's stream is of `directory-entry`,
+	// a record the host lowers each entry at and the guest reads at its own declaration's layout, so the guest's must be
+	// the host's, structurally, as the future's payload is below.
+	//
+	// NEUTER, run: accept any element when `sc.elem` is set, and TestReadDirectoryMustBeDeclaredAsTheHostDeclaresIt's
+	// guest whose entry has its two fields swapped instantiates.
 	if sc.produces {
 		r := sig.Result
-		if r == nil || r.Kind != VTuple || len(r.Elems) != 2 || r.Elems[0].Kind != VStream ||
-			r.Elems[0].Elem == nil || r.Elems[0].Elem.Kind != VU8 {
-			return fmt.Errorf("%w: import %s must return tuple<stream<u8>, future<%s>>, the host's declaration "+
-				"(ADR 0122)", ErrLinkRefused, lowerName, want)
+		elem := "u8"
+		if sc.elem != nil {
+			elem = sc.elem().String()
+		}
+		refuse := fmt.Errorf("%w: import %s must return tuple<stream<%s>, future<%s>>, the host's declaration "+
+			"(ADR 0122, ADR 0134)", ErrLinkRefused, lowerName, elem, want)
+		if r == nil || r.Kind != VTuple || len(r.Elems) != 2 || r.Elems[0].Kind != VStream || r.Elems[0].Elem == nil {
+			return refuse
+		}
+		if sc.elem == nil && r.Elems[0].Elem.Kind != VU8 {
+			return refuse
+		}
+		if sc.elem != nil {
+			got, gerr := canonTypeIn(*r.Elems[0].Elem, w.hostRT)
+			if gerr != nil || !canon.TypeEqual(got, sc.elem()) {
+				return refuse
+			}
 		}
 		fut = &r.Elems[1]
 	}
