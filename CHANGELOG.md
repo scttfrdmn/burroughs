@@ -49,6 +49,35 @@ says what it now requires and what it gives up.
     finds no engine lock held there.
   - **Not yet reached:** a Go program's `os.ReadDir`, until the Phase 4 fork binds it (F11b).
 
+- **`wasi:http@0.3`'s outgoing half for components: a component builds requests and sends them over Go's
+  `net/http`, behind a grant denied at the call** ([#1383](https://github.com/scttfrdmn/burroughs/issues/1383), E2-out
+  of the v0.16.0 plan [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0135). **Public API**, on Scott's
+  ruling on [#1375](https://github.com/scttfrdmn/burroughs/issues/1375):
+  - **`ComponentConfig.AllowHTTP bool`**, honoured by `ComponentConfig.Run` and `ComponentConfig.LoadComponent`, and
+    **`burroughs run --allow-http`**, ADR 0126's shape. Its zero value denies the call and not the link: a component
+    importing `wasi:http` instantiates, its resources work, and `send` answers `HTTP-request-denied`. **wasmtime 49.0.3
+    refuses to link such a component without `-S http`, which is a named divergence.** A wasip1 command or a core
+    module refuses `--allow-http` by name.
+  - **What is served:** `wasi:http/types@0.3.0`'s `fields`, `request`, `request-options` and `response`, every method,
+    `request.new`, `response.new` and both `consume-body`s with their streams and futures, and
+    `wasi:http/client@0.3.0#send`. A request's body is read from the guest's stream, and its trailers from its
+    future, of which only the ones a `trailer` header declares are sent, as wasmtime's are. A response's body is a
+    host-produced stream and its trailers a future, and a request's transmission future resolves with the send's
+    outcome. The four functions that carry streams and futures are bound with their whole type declared and checked
+    at instantiate. Each request gets a context that Close cancels, and the instance's `Transport` closes its idle
+    connections at Close.
+  - **Witnesses:** `p3http`, a Rust `wasm32-wasip3` guest on wit-bindgen 0.61.1, matches wasmtime 49.0.3's reading on
+    all 34 of its rows (`p3http.reading`, 10 of 10 per row). The rows cover the fields' validation, case and order;
+    the request's and response's accessors; the options; and GET, HEAD, POST with a body and trailers, a 256 KiB
+    request and a 1 MiB response. They also cover connection-refused, a `.invalid` name's DNS-error, TLS against a
+    plain peer, a first-byte timeout, and a guest-made message's `consume-body`, whose trailers read traps as
+    wasmtime's does. They pass with `gate:cm-threads` off and on, plain and under `-race`.
+  - **Named divergences:** the deny-at-call above. A `DNS-error`'s payload is none where wasmtime's `rcode` carries a
+    string. A response's headers come in sorted order, since Go's `Header` is a map. A value carried through a
+    transmission future has its strings made none.
+  - **Not yet reached:** incoming `handler.handle` and a serve loop (E2-in), and a Go program, until the Phase 4 fork
+    binds a `RoundTripper` to `send` (F12-out).
+
 - **`wasi:filesystem@0.3` for components, its first slice: a component reads, writes and stats files beneath a
   directory it is granted** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1a of the v0.16.0 plan
   [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0133). **Public API**, on Scott's two rulings on #1374:
