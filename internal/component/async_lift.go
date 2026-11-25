@@ -93,6 +93,23 @@ type liftTask struct {
 	fenceCaller *asyncHandles
 	fenced      atomic.Bool
 
+	// onReturn is the caller's **on-return hook** (ADR 0136, E2-in-a): called once, by the `task.return` that
+	// resolves this task, with the result it lifted and the Thread record of the agent that called it, after the
+	// resolution is recorded and with no engine lock held. The caller is answered there, as the pin's
+	// `Task.return_` calls `on_resolve` (def:Task.return_:"self.on_resolve(result)"), and the task runs on to its
+	// exit afterwards. nil for a caller that takes the result at the exit: an embedder's `CallValues`.
+	//
+	// It runs on the agent executing the callee, inside its `task.return` and so inside its entry, which holds this
+	// instance's run slot. So it must not wait on anything the callee's progress decides, and must not enter this
+	// instance. Set before the task's goroutine starts and only read after, so it needs no lock.
+	onReturn func(res liftResult, from *cmThread)
+
+	// held is the host's own table of host-resource handles for a host call of this export (ADR 0136): an
+	// `own<R>` in the result `task.return` lifts leaves this instance's table and enters this one
+	// (def:lift_own, then the host's def:lower_own). nil for every other caller, which then cannot carry an own
+	// out. Set before the task's goroutine starts and only read after.
+	held *hostResources
+
 	// lifted is the result `task.return` lifted **eagerly**, when its canonopts gave it a result type to
 	// lift against. nil when the export declares no result, or when the type is one the flat lift cannot
 	// carry (in which case `task.return` has already refused).
@@ -619,8 +636,18 @@ func callerTask(h *asyncHandles, c *interp.CanonCaller) *liftTask {
 	return h.lift
 }
 
-func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
+// taskReturn's `res` and `resAt` are the instance's table of host-resource handles and its walker's type
+// resolver, for an `own<R>` in the result (ADR 0136): the lift moves it out of `res` into the caller's table.
+func taskReturn(h *asyncHandles, resultT *ValType, res *hostResources, resAt func(uint32) *hostResource) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+		// The CALLER's task, the reference's `current_task()` (#1013), looked up before h.mu. **Before the lift
+		// now** (ADR 0136), which is the reference's order too (def:canon_task_return:"task = current_task()"):
+		// an own in the result moves into the table of the task's caller, so the lift needs the task.
+		task := callerTask(h, c)
+		if task == nil {
+			return nil, &interp.Trap{Reason: "task.return called with no async lift task in flight"}
+		}
+
 		// **The lift happens here, before the lock and before `Task.return_`'s equivalent** — the order the
 		// model uses (definitions.py:canon_task_return:"result = lift_flat_values(cx, MAX_FLAT_PARAMS," lifts, then def:canon_task_return:"task.return_(result)" calls `task.return_`). It reads guest memory,
 		// so it must not hold `h.mu`: a read can fail, and §4 B-MM-3's rule is that a critical section
@@ -631,32 +658,78 @@ func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
 		// guest's heap. Here it could not lift its own argument.
 		var lifted *canon.Value
 		if resultT != nil {
-			v, err := liftTaskReturnValue(c, *resultT, args)
+			v, err := liftTaskReturnValue(c, *resultT, args, ownsInto(task.held, res, resAt))
 			if err != nil {
 				return nil, err
 			}
 			lifted = &v
 		}
 
-		// The CALLER's task, the reference's `current_task()` (#1013), looked up before h.mu.
-		task := callerTask(h, c)
 		h.mu.Lock()
-		defer h.mu.Unlock()
-		if task == nil {
-			return nil, &interp.Trap{Reason: "task.return called with no async lift task in flight"}
-		}
 		// definitions.py `Task.return_` traps on an already-resolved task (def:Task.return_). Burroughs had no such
 		// check, because with no cancellation a task reached RESOLVED exactly once — through here. A
 		// cancelled task is resolved by `task.cancel`, so a `task.return` after it is now reachable and is
 		// a guest error: the guest was told its task was cancelled and returned a value anyway.
 		if task.state == liftResolved {
+			h.mu.Unlock()
 			return nil, &interp.Trap{Reason: "task.return called on a task that is already resolved"}
 		}
 		task.result = append([]interp.Value(nil), args...)
 		task.lifted = lifted
 		task.cancelledResolution = false
 		task.state = liftResolved
+		hook, resolved := task.onReturn, liftResult{flat: task.result, lifted: lifted}
+		h.mu.Unlock()
+		// **The caller is answered here, at the return, not at the task's exit** (ADR 0136): `Task.return_`
+		// calls `on_resolve` before it marks the task RESOLVED (def:Task.return_), and the callee then runs on in
+		// the same callback. The resolution is recorded first, under h.mu, so a second `task.return` from
+		// another agent traps above rather than answering twice. The hook runs with no engine lock held, since
+		// a cross-component caller's result store may wait for its instance's run slot.
+		//
+		// NEUTER, run: skip the hook, and TestACrossComponentCallerIsResolvedAtTaskReturn's early and later rows
+		// hang in both gate states, as on main, while at-exit still reads 69895, and
+		// TestAHostCallIsAnsweredAtTaskReturnWhileTheTaskRuns is never answered.
+		if hook != nil {
+			hook(resolved, h.callerRecord(c))
+		}
 		return nil, nil
+	}
+}
+
+// callerRecord is the Thread record of the agent making a canon call, or nil for an instance with no Thread
+// table or a caller with no record.
+func (h *asyncHandles) callerRecord(c *interp.CanonCaller) *cmThread {
+	if h.threads == nil {
+		return nil
+	}
+	return h.threads.current(c)
+}
+
+// ownLift lifts an `own<R>` a flat value carries at handle index idx, returning the value the lift produces
+// (def:lift_own). ct is the own's type as canonTypeOf gives it, whose RT is the resource's type index.
+type ownLift func(ct canon.Type, idx int32) (canon.Value, error)
+
+// ownsInto is the own lift for a task whose caller holds the table `to`, over the callee's table `from`
+// (ADR 0136): the handle leaves `from` with the pin's four traps (def:lift_own, which `give` applies) and is
+// minted into `to` (def:lower_own), and the value carries its index there, the guest heap's convention for
+// an own (canon.StoreVia's KindOwn). nil when `to` is: a caller with no table cannot be handed an own, and
+// liftFlatValue refuses one by name.
+func ownsInto(to, from *hostResources, resAt func(uint32) *hostResource) ownLift {
+	if to == nil || from == nil || resAt == nil {
+		return nil
+	}
+	return func(ct canon.Type, idx int32) (canon.Value, error) {
+		t := resAt(uint32(ct.RT))
+		if t == nil {
+			return canon.Value{}, fmt.Errorf("%w: task.return's result carries an own of type %d, which this "+
+				"engine did not resolve to a host resource type; only a host resource's own crosses to the host "+
+				"(a guest-defined resource is #1251's)", ErrUnsupportedForm, ct.RT)
+		}
+		moved, err := from.give(t, idx, to)
+		if err != nil {
+			return canon.Value{}, err
+		}
+		return canon.Own(ct.RT, uint32(moved)), nil
 	}
 }
 
@@ -687,7 +760,10 @@ func taskReturn(h *asyncHandles, resultT *ValType) interp.CanonFunc {
 // It deliberately does not build a second lift path: every indirect read goes through
 // `canon.LoadStringFromRange`, which is the function the codec's own two arms call and the differential's
 // string fixtures verify.
-func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value) (canon.Value, error) {
+//
+// `owns` is the own lift (ADR 0136): an `own<R>` anywhere in the result is lifted through it, and refused by name
+// when it is nil.
+func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value, owns ownLift) (canon.Value, error) {
 	ct, err := canonTypeOf(vt)
 	if err != nil {
 		return canon.Value{}, &interp.Trap{Reason: fmt.Sprintf(
@@ -699,7 +775,7 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 	// many words it consumed and this compares that to what arrived — which is a stronger check than the
 	// old per-kind `want(n)`: it catches a record whose fields consumed too few words as well as a
 	// scalar handed too many.
-	v, used, err := liftFlatValue(guestHeap{c}, "task.return", ct, args)
+	v, used, err := liftFlatValue(guestHeap{c}, "task.return", ct, args, owns)
 	if err != nil {
 		return canon.Value{}, err
 	}
@@ -735,7 +811,9 @@ func liftTaskReturnValue(c *interp.CanonCaller, vt ValType, args []interp.Value)
 // **Everything here reads guest memory NOW.** The guest resumes after `task.return` and may reuse
 // anything a field points at, which is the whole reason the lift is eager — and it compounds for a
 // record, where several fields may point into memory independently.
-func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp.Value) (canon.Value, int, error) {
+//
+// `owns` lifts an `own<R>` (ADR 0136), and is nil for a caller that has no table to move one into.
+func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp.Value, owns ownLift) (canon.Value, int, error) {
 	want := func(n int) error {
 		if len(words) < n {
 			return &interp.Trap{Reason: fmt.Sprintf(
@@ -834,7 +912,7 @@ func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp
 		fields := make(map[string]canon.Value, len(ct.Fields))
 		used := 0
 		for i := range ct.Fields {
-			fv, n, ferr := liftFlatValue(h, label, ct.Fields[i].Type, args[used:])
+			fv, n, ferr := liftFlatValue(h, label, ct.Fields[i].Type, args[used:], owns)
 			if ferr != nil {
 				// Wrapped with the field's name, so a trap several fields in says which one rather than
 				// just naming the record.
@@ -882,7 +960,7 @@ func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp
 			for i, w := range ws {
 				pw[i] = interp.Value{Bits: w}
 			}
-			return liftFlatValue(h, label, pt, pw)
+			return liftFlatValue(h, label, pt, pw, owns)
 		})
 		if lerr != nil {
 			// A payload's own trap is already a trap naming the payload; anything else is the framing's, which
@@ -895,6 +973,29 @@ func liftFlatValue(h canon.ReadHeap, label string, ct canon.Type, words []interp
 			return canon.Value{}, 0, &interp.Trap{Reason: fmt.Sprintf("%s's %s value: %v", label, ct, lerr)}
 		}
 		return v, used, nil
+
+	case canon.KindOwn:
+		// One flat word, the handle's index in the callee's table (ADR 0136, E2-in-a). `owns` moves it to its
+		// caller's table, so it is lifted where the pin lifts it, inside `task.return` (def:lift_own:"h =
+		// cx.inst.handles.remove(i)"), and a `result<own<R>, E>` reaches a host caller with its own already
+		// out of the guest's hands. A caller with no table is refused by name rather than handed the guest's
+		// index, which would name whatever its own table holds there: CallValues refuses such a signature
+		// before the call, and the cross-component adapter refuses it at bind (#1281), so this is a guard.
+		//
+		// NEUTER, run: refuse every own here, and TestAHostCallIsAnsweredAtTaskReturnWhileTheTaskRuns' call ends
+		// before it is answered, its task.return trapping on this refusal (the variant arm makes it a trap).
+		if err := want(1); err != nil {
+			return canon.Value{}, 0, err
+		}
+		if owns == nil {
+			return canon.Value{}, 0, fmt.Errorf("%w: %s carries an own<%d>, and its caller has no table to move it "+
+				"into: an own leaves a task.return only for a host call (ADR 0136)", ErrUnsupportedForm, label, ct.RT)
+		}
+		v, err := owns(ct, args[0].Int32())
+		if err != nil {
+			return canon.Value{}, 0, err
+		}
+		return v, 1, nil
 
 	default:
 		// Reached by a kind with no arm above. The variant family left this arm with #1320, so the sentence

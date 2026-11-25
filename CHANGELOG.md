@@ -25,6 +25,26 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **The engine can call an async export as the host and be answered at its `task.return`, with an own carried each
+  way: the engine half of serving incoming `wasi:http`** ([#1384](https://github.com/scttfrdmn/burroughs/issues/1384),
+  E2-in-a of the v0.16.0 plan [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0136). No public API
+  changes: E2-in-b's `Component.Handler()` is the surface that will use it.
+  - **Answered at the return, run to the exit:** the host's hook is called inside the `task.return` that resolves the
+    task, with the lifted result, and the call returns when the task exits, with a trap after the return included.
+    `handle`'s shape needs both: a handler returns its response and then writes its body.
+  - **An own crosses each way through a host table of its own:** a top-level `own<R>` argument moves into the callee's
+    table on its entry, and an `own<R>` anywhere in the result, such as `result<own<response>, error-code>`'s, moves out
+    of it inside `task.return`, as def:lift_own does, with the pin's traps on the guest's handle.
+  - **`CallValues`, and so `Component.Call`, refuse an async export whose result carries an own**, by name and before
+    the guest runs, since they have no table to take it into. Such a call used to run the guest and trap its
+    `task.return`, which had no own arm, locking the store. Both still return at the task's exit.
+  - **Witnesses:** `host-call-own.wasm`'s `handle` takes an `own<thing>` of a test resource and returns
+    `result<own<thing>, u32>`. The host is answered with its own object while the guest is parked on a future only
+    its `release` writes, so the call has not returned and its `exited` reads 0. After `release` the task exits and
+    the call returns. Both gate states pass, plain and under `-race`.
+  - **Not yet reached:** `task.cancel` still resolves a caller at the task's exit, where the pin resolves at the call.
+    Only a top-level own argument crosses, and no borrow, stream or future.
+
 - **A component lists a directory it is granted: `wasi:filesystem@0.3`'s `descriptor.read-directory`**
   ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1b of the v0.16.0 plan
   [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0134). No public API changes: the grant is ADR 0133's
@@ -126,6 +146,22 @@ says what it now requires and what it gives up.
   toolchain bump is, so the advisory fix and the feature can be reviewed and reverted apart.
 
 ### Fixed
+
+- **A composed component's caller is resolved at its callee's `task.return`, not at the callee's exit, and a callee's
+  trap ends the call** ([#1384](https://github.com/scttfrdmn/burroughs/issues/1384), ADR 0136). A parent that
+  async-lowered a sibling's async export was resolved only when the sibling's callback loop ended. A sibling that
+  returned and then waited for its parent deadlocked, where the pin resolves the caller inside `Task.return_` and the
+  callee runs on.
+  - **A callee's trap now locks the store**, as the pin's trap does. It used to resolve the caller's subtask RETURNED
+    with nothing, so the caller read a result of 0 and ran on, or waited on work that would never come.
+  - **Read on both oracles before the code:** `task-return-early.wasm` has seven rows: a return in the first segment
+    and then a wait for the parent, a return in a later callback, a trap after the return, a return twice, an EXIT with
+    no return, a return at the exit, and a return on TASK_CANCELLED while an async canceller polls. They were read on
+    wasmtime 49.0.3 (10 of 10) and on the pin 2e7895c (`refread.py`, `task-return-early.reading`). Burroughs hung on
+    four rows and read 70144, a RETURNED with no value, on the fifth. The first six now match wasmtime's reading and
+    fall in the pin's sets, with `gate:cm-threads` off and on, plain and under `-race`. The return-at-exit row read
+    right before and still does. The cancel row reads the pin's 4615 as before; wasmtime 49.0.3's canceller spins on
+    it, since wasmtime runs the callee only when its canceller suspends.
 
 - **A host import's stream argument lifts as the pin's does, and traps where it returned `ErrLinkRefused`**
   ([#1367](https://github.com/scttfrdmn/burroughs/issues/1367)). `write-via-stream` and `tcp-socket.send` take their

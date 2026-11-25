@@ -109,8 +109,9 @@ def u32(mem, p):
     return int.from_bytes(mem.bytes[p:p + 4], "little")
 
 
-def host_invoke(store, fi, on_resolve):
-    """Invoke fi from inside a HOST Thread, as upstream's own `mk_host_func` drives host-side work.
+def host_invoke(store, fi, on_resolve, args=()):
+    """Invoke fi from inside a HOST Thread, as upstream's own `mk_host_func` drives host-side work. `args` are the
+    component values the call passes, which `on_start` hands the callee's lift (task-return-early's row).
 
     The embedder's Python thread has no current Thread. The pin never asked for one, but head's `trap()`
     does (`current_instance().store.lock_down()`, upstream a25fc0b37), so a sync-tail trap raised there was
@@ -121,14 +122,14 @@ def host_invoke(store, fi, on_resolve):
     task = d.Task(d.FuncType([], []), d.CanonicalOptions(), host, lambda: [], lambda _: None)
 
     def body():
-        store.invoke(fi, lambda: [], on_resolve)
+        store.invoke(fi, lambda: list(args), on_resolve)
         return None  # head reads a Thread function's result as the Thread to switch to; there is none
 
     d.Thread(task, body).resume()
 
 
-def run_to_resolution(store, fi, out):
-    """The embedder: invoke fi (from a host Thread, see host_invoke) and tick the store until it resolves.
+def run_to_resolution(store, fi, out, args=()):
+    """The embedder: invoke fi with args (from a host Thread, see host_invoke) and tick the store until it resolves.
 
     **The ticking stops a second after the watch's bound** (#1367). A scenario that never resolves is HANG once the
     watch's BOUND_S has passed, so ticking after that observes nothing, and a ticking thread holds the GIL against every
@@ -137,7 +138,7 @@ def run_to_resolution(store, fi, out):
     sync-read-own-thread, and host-stream-arg-kind's wvs-readable-end). Stopping changes no reading: the watch has
     already reported."""
     got = []
-    host_invoke(store, fi, lambda r: got.append(r))
+    host_invoke(store, fi, lambda r: got.append(r), args)
     deadline = time.monotonic() + BOUND_S + 1
     while not got:
         if time.monotonic() > deadline:
@@ -1139,7 +1140,13 @@ def future_rendezvous(write_first, sync_write=False, cancel=False, elem="u8"):
         run_fi = store.lift(run, rft, d.CanonicalOptions(async_=True, callback=cb, memory=mem), inst)
         got = []
         host_invoke(store, run_fi, lambda r: got.append(r))
+        # Bounded as run_to_resolution's loop is (#1367): the sync-write row is HANG, and its 16 tickers spun for
+        # the rest of the battery, which put HANG into task-return-early's early and later lines (#1384) where
+        # they read none alone. Stopping changes no reading: the watch has already reported.
+        deadline = time.monotonic() + BOUND_S + 1
         while not got:
+            if time.monotonic() > deadline:
+                return
             store.tick()
         v = got[0][0]
         out.value = "value (%s)" % ", ".join(str(v[k]) for k in sorted(v, key=int))
@@ -2073,6 +2080,155 @@ FS_READDIR_ROWS = [
 ]
 
 
+def task_return_early(row):
+    """`task-return-early.wat` (E2-in-a, #1384), one row: a cross-component callee resolves its caller at task.return
+    and runs on to its exit after it. The child's async `g(row)` and its sync `release` and `exited` share the four
+    cells the fixture's child memory holds; the parent's async `go(row)` lowers `g`, reads its result when its subtask
+    is RETURNED, asks `exited`, and packs result | state << 8 | exited-at-result << 12 | exited-at-end << 16. The row
+    numbers and every return code are the fixture's."""
+
+    def body(out, site):
+        store = d.Store()
+        U = d.U32Type()
+        child = d.ComponentInstance(store)
+        cm = {"released": 0, "exited": 0, "row": 0, "first": 0}
+
+        def ret(v):
+            d.canon_task_return([U], d.LiftOptions(), [v])
+
+        def exit_():
+            cm["exited"] = 1
+            return [0]  # EXIT
+
+        def g(args):
+            cm["row"] = r = args[0]
+            if r in (0, 2):
+                ret(7)
+                return [1]  # YIELD
+            if r == 3:
+                ret(7)
+                site["name"] = "g's second task.return"
+                ret(8)
+                return exit_()
+            if r == 4:
+                site["name"] = "g's EXIT without task.return"
+                return exit_()
+            return [1]  # rows 1 and 5: YIELD
+
+        def g_cb(args):
+            r = cm["row"]
+            if r == 2:
+                site["name"] = "g's callback (unreachable)"
+                d.trap()
+            if r == 5:
+                ret(7)
+                return exit_()
+            if r == 6:
+                if args[0] == d.EventCode.TASK_CANCELLED:
+                    ret(7)
+                    return exit_()
+                return [1]
+            if r == 1 and not cm["first"]:
+                cm["first"] = 1
+                ret(7)
+                return [1]
+            if cm["released"]:
+                return exit_()
+            return [1]
+
+        def release(args):
+            cm["released"] = 1
+            return []
+
+        gft = d.FuncType([U], [U], async_=True)
+        relft = d.FuncType([], [])
+        exft = d.FuncType([], [U])
+        g_fi = store.lift(g, gft, d.CanonicalOptions(async_=True, callback=g_cb), child)
+        rel_fi = store.lift(release, relft, d.CanonicalOptions(), child)
+        ex_fi = store.lift(lambda args: [cm["exited"]], exft, d.CanonicalOptions(), child)
+
+        parent = d.ComponentInstance(store)
+        pmem = d.MemInst(bytearray(65536), "i32")
+        glow = store.lower(g_fi, gft, d.CanonicalOptions(async_=True, memory=pmem), parent)
+        rellow = store.lower(rel_fi, relft, d.CanonicalOptions(), parent)
+        exlow = store.lower(ex_fi, exft, d.CanonicalOptions(), parent)
+        p = {"row": row, "state": 0, "at_result": 0, "phase": 0}
+
+        def result():  # g's result is in hand
+            [p["at_result"]] = exlow([])
+            if p["row"] == 2:
+                [s] = d.canon_waitable_set_new()
+                return [2 | (s << 4)]  # WAIT on an empty set
+            rellow([])
+            p["phase"] = 1
+            return [1]  # YIELD, then poll exited
+
+        def cancel_poll(packed):  # row 6
+            [c] = d.canon_subtask_cancel(True, packed >> 4)
+            # The fixture polls without bound. Bounded here, reporting 0xdead0 where the fixture would spin, so a
+            # spinning row cannot hold the GIL against the rest of the battery (run_to_resolution's reason).
+            for _ in range(10000):
+                if exlow([])[0]:
+                    break
+            else:
+                ret(0xDEAD0)
+                return [0]
+            if c == 2:
+                ret(u32(pmem, 0) | 0x1200)
+                return [0]
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(packed >> 4, s)
+            p["phase"] = 2
+            return [2 | (s << 4)]  # WAIT on g's subtask
+
+        def go(args):
+            [packed] = glow([args[0], 0])
+            p["state"] = packed & 0xF
+            if args[0] == 6:
+                return cancel_poll(packed)
+            if packed & 0xF == 2:
+                return result()
+            [s] = d.canon_waitable_set_new()
+            d.canon_waitable_join(packed >> 4, s)
+            return [2 | (s << 4)]  # WAIT on g's subtask
+
+        def go_cb(args):
+            _, _, p2 = args
+            if p["phase"] == 2:  # row 6: g's subtask event
+                if p2 != 2:
+                    ret(0xBAD00 | p2)
+                    return [0]
+                ret(u32(pmem, 0) | 0x1200)
+                return [0]
+            if p["phase"] == 0:
+                if p2 != 2:
+                    ret(0xBAD00 | p2)
+                    return [0]
+                return result()
+            [e] = exlow([])
+            if e:
+                ret(u32(pmem, 0) | (p["state"] << 8) | (p["at_result"] << 12) | 0x10000)
+                return [0]
+            return [1]
+
+        go_fi = store.lift(go, gft, d.CanonicalOptions(async_=True, callback=go_cb), parent)
+        run_to_resolution(store, go_fi, out, [row])
+
+    return body
+
+
+# Each row with wasmtime 49.0.3's reading (task-return-early.reading).
+TASK_RETURN_EARLY_ROWS = [
+    (0, "early", "66055"),
+    (1, "later", "65799"),
+    (2, "trap-after", "trap, unreachable"),
+    (3, "twice", "trap, task.return or task.cancel called more than once"),
+    (4, "no-return", "trap, async-lifted export failed to produce a result"),
+    (5, "at-exit", "69895"),
+    (6, "cancel-poll", "hang, its canceller spinning"),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -2131,6 +2287,8 @@ def battery():
         read("host-stream-arg-kind %s (#1367; wasmtime 49.0.3: %s)" % (row, wt), host_stream_arg(row))
     for row, wt in FS_READDIR_ROWS:
         read("fs-readdir %s (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: %s)" % (row, wt), fs_readdir(row))
+    for row, name, wt in TASK_RETURN_EARLY_ROWS:
+        read("task-return-early %s (#1384 E2-in-a; wasmtime 49.0.3: %s)" % (name, wt), task_return_early(row))
 
 
 if __name__ == "__main__":

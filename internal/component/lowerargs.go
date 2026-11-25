@@ -203,6 +203,11 @@ type pendingLower struct {
 	val     canon.Value
 	ptrSlot int
 	lenSlot int
+	// own, when set, makes this the lowering of a top-level `own<R>` of that host resource (ADR 0136): the
+	// handle at val's index in held leaves it and is minted into the callee's table (def:lift_own from the
+	// host's table, def:lower_own into the callee's), and the callee's index lands at ptrSlot. lenSlot is unused.
+	own  *hostResource
+	held *hostResources
 }
 
 // lowerPending performs the pending lowerings and patches `flat` in place.
@@ -220,6 +225,29 @@ type pendingLower struct {
 func (f *compFunc) lowerPending(pend []pendingLower, flat []interp.Value, caller *interp.CanonCaller) error {
 	for i := range pend {
 		p := &pend[i]
+		// **An own moves on this entry, inside the callee's task**, where the model's def:canon_lift lowers its
+		// parameters (`lower_flat_values` after `task.start()`): def:lower_own adds the handle to the callee's
+		// table there, so no sibling entry can observe the index before the callee runs (ADR 0136). It needs no
+		// memory and no realloc, and a call that ends before its entry leaves the handle in the host's table.
+		//
+		// NEUTER, run: patch the host's index into the slot without moving it, and
+		// TestAHostCallIsAnsweredAtTaskReturnWhileTheTaskRuns' guest borrows an index its table does not hold.
+		if p.own != nil {
+			idx, ok := p.val.OwnHandle()
+			if !ok || p.ptrSlot >= len(flat) {
+				return fmt.Errorf("%w: own argument %q does not read as a handle at slot %d of %d",
+					ErrUnsupportedForm, p.param, p.ptrSlot, len(flat))
+			}
+			moved, err := p.held.give(p.own, int32(idx), f.res)
+			if err != nil {
+				// The host's own handle, so a caller's mistake (#1129), and its text rather than the error:
+				// give's refusal is the trap a guest's would be, and a host's bad handle must not lock the store
+				// as a guest's trap does (isTrap would find a wrapped one).
+				return fmt.Errorf("component: own argument %q: %s", p.param, err.Error())
+			}
+			flat[p.ptrSlot] = interp.I32(moved)
+			continue
+		}
 		// The heap carries the ARGUMENT's kind, so every allocation the codec makes while lowering it —
 		// including a `list<string>`'s per-element string allocations — is capped by the rule that
 		// belongs to the argument rather than by one guessed per realloc.

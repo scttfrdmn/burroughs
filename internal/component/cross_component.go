@@ -5,6 +5,7 @@ package component
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	bin "github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/component/canon"
@@ -353,7 +354,7 @@ func (w *walker) syncAdapter(callee *compFunc) interp.CanonFunc {
 				return nil, fmt.Errorf("%w: a sync cross-component call's parameter %q: %w",
 					ErrUnsupportedForm, p.Name, err)
 			}
-			v, used, err := liftFlatValue(adapterHeap{c}, "a sync cross-component argument", ct, words)
+			v, used, err := liftFlatValue(adapterHeap{c}, "a sync cross-component argument", ct, words, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -574,9 +575,46 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask, caller *asyncHandles) asyncL
 		task.fenceCaller = caller
 		implicit := callee.threads.get(task.threadIdx)
 
+		// **The parent is resolved at the child's `task.return`, not at its exit** (ADR 0136, E2-in-a). The pin's
+		// `Task.return_` calls the lower's `on_resolve` there (def:Task.return_:"self.on_resolve(result)"), and the
+		// child runs on in the same callback. This resolved the parent only after `runLiftTask` returned, so a
+		// child that returned and then waited on its parent deadlocked: task-return-early's early and later rows
+		// hung, 3 of 3 per gate state, where wasmtime 49.0.3 and the pin read the result with the child running.
+		//
+		// The hook runs inside the child's `task.return`, on the agent executing it. The store's chain is that
+		// agent's held reader (F1), so the caller's fence admits the store as it admitted the store at the exit;
+		// in a first segment it holds none, and the store is queued for the caller, which is in host code inside
+		// this lower. `answered` is read after `runLiftTask` returns, which the hook's call happens before.
+		//
+		// **Except inside upstream #726's hand-back window**, where the child runs a TASK_CANCELLED callback outside
+		// the caller's fence: an async canceller is released at once and runs on (#999's divergence), so a store
+		// waiting there for the caller's slot, inside the child's entry, could wait on a caller that calls back
+		// into the child. There the hook answers nothing, and the exit resolves the parent as before, which is
+		// also what a sync canceller's judgement after the hand-back already reads (`subtaskCancel`).
+		//
+		// NEUTER, run: answer inside the window too, and TestAReturnInsideTheCancelHandBackIsResolvedAtTheExit's
+		// first run deadlocks past Close: the child's taskReturn waits in onResolve's acquireRun for the parent's
+		// slot, holding its own, while the parent's sync call of `exited` waits in invokeSync's for the child's.
+		var answered atomic.Bool
+		task.onReturn = func(r liftResult, from *cmThread) {
+			callee.h.mu.Lock()
+			handingBack := task.inHandBackLocked()
+			callee.h.mu.Unlock()
+			if handingBack {
+				return
+			}
+			answered.Store(true)
+			if from == nil {
+				from = implicit
+			}
+			st.storeChain = from.fenceKey
+			crossComponentResolve(onResolve, callee.sig, r, nil)
+		}
+
 		go func() {
 			// However the task ends, its first segment has ended by now. The deferral runs after
-			// `crossComponentResolve`, so a resolution in the first segment is queued before the lower wakes.
+			// `crossComponentResolve`, and after a trap has locked the store, so a resolution in the first
+			// segment is queued, and a trap in it is visible, before the lower wakes.
 			defer task.endFirstSegment()
 			// **The result store is the last step of the callee's last segment** (F1). An entry that returned
 			// EXIT kept its reader (`fenceEntryEnd`), so the store below runs under it, on the segment's
@@ -586,13 +624,31 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask, caller *asyncHandles) asyncL
 			// caller's own `canon lower` into the caller's memory and read across by the adapter. Nothing
 			// on this path builds a value the host must place in the callee's memory.
 			res, err := callee.runLiftTask(task, params, nil)
+			switch {
+			case isTrap(err):
+				// **A child's trap locks the store** (def:trap:"current_instance().store.lock_down()", ADR 0105),
+				// whether or not it had returned. It resolved the parent's subtask RETURNED with nothing, so the
+				// parent read a result of 0 and ran on: task-return-early's no-return row read 70144 on main, and
+				// its trap-after and twice rows hung, where both oracles trap. The parent's waits and built-ins
+				// end with the lock's error (lockdown.go), which wraps this trap.
+				//
+				// NEUTER, run: skip this arm, so the trap sets no lock and a child that never returned is resolved
+				// with nothing as before, and TestACrossComponentCalleesTrapEndsTheCall's three rows read a hang, a
+				// hang and 70144 again, in both gate states.
+				callee.h.lock.set(err)
+				return
+			case answered.Load():
+				// Answered at its task.return; the exit adds nothing, and a cancellation request after it is
+				// answered by the resolved subtask (beginSubtaskCancel's inline arm).
+				return
+			}
 			// The store's chain is the held reader's, so the caller's fence admits it (nil when unfenced).
 			st.storeChain = implicit.fenceKey
 			if err != nil {
-				// A child that trapped or was cancelled resolves the parent's subtask as a cancellation
-				// rather than a result. **The parent gets a terminal state either way**: leaving the
-				// subtask unresolved would park the parent forever on a child that is already gone, which
-				// is the one outcome worse than a wrong status.
+				// A child that was cancelled, or that failed with no trap of its own (a park's bound, a refusal),
+				// resolves the parent's subtask as a cancellation rather than a result. **The parent gets a
+				// terminal state either way**: leaving the subtask unresolved would park the parent forever on a
+				// child that is already gone, which is the one outcome worse than a wrong status.
 				//
 				// `onResolve`'s cancel arm is reached only when `cancellationRequested` is set, so a
 				// child that failed WITHOUT the parent asking is a different case — see the note in
@@ -681,9 +737,9 @@ func crossComponentResolve(onResolve func(canon.Value), sig *FuncType, res liftR
 	if callErr != nil {
 		// The model's `on_resolve(None)` (def:canon_lower.on_resolve:"if result is None:") — no result. Burroughs' `onResolve` reads
 		// `cancellationRequested` to choose the terminal state, so this is the cancel arm when the parent
-		// asked. When it did not ask, this is a RETURNED carrying nothing, which is **not ideal and not
-		// this slice's to invent**: there is no ABI status for "the callee trapped", the model traps the
-		// whole store instead, and a status no reading has would be worse than a thin one.
+		// asked. When it did not ask, this is a RETURNED carrying nothing. **A child's trap no longer reaches
+		// here** (ADR 0136): it locks the store, as the model's trap does, so what remains is a failure that is no
+		// trap of the guest's, such as a park's bound expiring, for which there is no ABI status at all.
 		//
 		// **`NoResolution`, the model's `on_resolve(None)`, named** (#1009). This was the zero Value, which is
 		// `bool` false, so the store could not tell "no result" from a result and chose by the cancel request

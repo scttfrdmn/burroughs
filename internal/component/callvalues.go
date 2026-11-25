@@ -107,6 +107,17 @@ func (in *Instantiated) callValues(ctx context.Context, name string, args ...can
 		return nil, fmt.Errorf("%w: export %q carries %s, which this engine's Canonical ABI does not model",
 			ErrUnsupportedForm, name, valKindName(k))
 	}
+	// **An own in an async export's result is refused before the call** (ADR 0136). Its `task.return` moves the
+	// own out of the guest's table into its caller's, and this caller has none (a host call has one, through
+	// callReturning). Before ADR 0136 the lift had no arm for an own, so such a call ran the guest and trapped it
+	// at its `task.return` — blaming the guest for the host's limit, and locking the store — and the public
+	// `Component.Call` documents a resource handle as refused by name.
+	//
+	// NEUTER, run: drop this, and TestAnOwnResultIsRefusedWithoutAHostTable's `make` runs and its task.return traps.
+	if fn.async && fn.sig.Result != nil && carriesOwn(*fn.sig.Result) {
+		return nil, fmt.Errorf("%w: export %q returns an own, which a task.return moves to its caller's table; "+
+			"this call has none to move it into (ADR 0136)", ErrUnsupportedForm, name)
+	}
 
 	// `pend` is the arguments whose bytes must land in guest memory. They are **not** lowered here: the
 	// model lowers a lift's parameters inside the callee's task, on the entry the callee runs on, and
@@ -257,6 +268,16 @@ func (in *Instantiated) ValueExportNames() []string {
 // placed here: the model lowers a lift's parameters inside the callee's task, on the entry the callee then
 // runs on (definitions.py:canon_lift.thread_func), and nothing holds that entry at this point. See `lowerargs.go`.
 func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Value, []pendingLower, error) {
+	return lowerFlatArgsWith(name, sig, args, nil)
+}
+
+// ownArg plans one top-level `own<R>` parameter (ADR 0136): it checks the value and returns the pending lowering
+// that moves the handle into the callee's table on its entry, for the one flat slot it occupies.
+type ownArg func(p NamedVal, v canon.Value, slot int) (pendingLower, error)
+
+// lowerFlatArgsWith is lowerFlatArgs with a plan for each top-level `own<R>` parameter, which a host call of an
+// export makes (ADR 0136). With own nil an own parameter is refused, as lowerOneArg refuses one.
+func lowerFlatArgsWith(name string, sig *FuncType, args []canon.Value, own ownArg) ([]interp.Value, []pendingLower, error) {
 	// **A caller's argument mistake carries no engine sentinel** (#1129), as core `Instance.Call`'s arity and type
 	// checks carry none. It is not a feature this engine lacks, so it is not `ErrUnsupportedForm`. That sentinel
 	// made it read as one, *"feature not implemented in this phase … unsupported instantiation form"*, and mapped
@@ -269,6 +290,18 @@ func lowerFlatArgs(name string, sig *FuncType, args []canon.Value) ([]interp.Val
 	flat := make([]interp.Value, 0, len(args))
 	var pend []pendingLower
 	for i, p := range sig.Params {
+		// **A top-level own is the host's handle, moved on the callee's entry** (ADR 0136). Its type is checked by
+		// the plan against the host resource the declared own names, not structurally below: a declared own's RT
+		// is the callee's own type index (canonTypeOf), which the host has no way to spell.
+		if p.Type.Kind == VOwn && own != nil {
+			pl, err := own(p, args[i], len(flat))
+			if err != nil {
+				return nil, nil, err
+			}
+			flat = append(flat, interp.I32(0))
+			pend = append(pend, pl)
+			continue
+		}
 		// **The value's whole type must equal the declared type, structurally** — checked here, for every
 		// parameter, before any arm looks at the kind.
 		//

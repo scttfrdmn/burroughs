@@ -724,6 +724,16 @@ func BorrowType(rt int) Type { return Type{Kind: KindBorrow, RT: rt} }
 
 func Own(rt int, rep uint32) Value { return Value{Type: OwnType(rt), u: uint64(rep)} }
 
+// OwnHandle returns the number a KindOwn carries, and whether it is one. Against guest memory that number is a
+// handle index (StoreVia's KindOwn), which is how the component layer's host call of an export reads an own it
+// passed or was handed (ADR 0136). Kind-checked for [Value.U32]'s reason.
+func (v Value) OwnHandle() (uint32, bool) {
+	if v.Type.Kind != KindOwn {
+		return 0, false
+	}
+	return uint32(v.u), true
+}
+
 // MaxFlagsLabels is the most labels a `flags` type may declare: the model asserts `0 < n <= 32` in every
 // flags rule (def:alignment_flags:"assert(0 < n <= 32)"), and Binary.md's grammar admits `(flags l+)`
 // only under the same bound. So a 33-label flags has no layout to match, and is refused rather than given

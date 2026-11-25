@@ -1,0 +1,45 @@
+# Committed readings for task-return-early.wasm (E2-in-a, #1384): a cross-component callee resolves its caller at
+# task.return and runs on to its exit after it. Default path: gate:async on, no host, no Threads.
+# Built:       wasm-tools parse task-return-early.wat -o task-return-early.wasm   (wasm-tools 1.258.0)
+# Invocation:  wasmtime run -W component-model-async=y,component-model-more-async-builtins=y --invoke 'go(ROW)' \
+#                task-return-early.wasm
+#              (row 6's async subtask.cancel needs the second flag; rows 0 to 5 read the same without it, 10 of 10)
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64, 10 of 10 per row (row 6: 3 of 3, 10s each).
+# Reference:   pin 2e7895c (refread.reading, `task-return-early` lines), DETERMINISTIC_PROFILE in {False, True} x 8 seeds.
+# Burroughs:   before the on-return hook (main f358ff8), gate:cm-threads off and on, 3 of 3 each (row 6 and rows 4
+#              and 5 re-read 5 of 5 on the final fixture); "hang" is a call that had not returned in 10s (optionABound).
+#
+# row  name         wasmtime 49.0.3                                                 reference           Burroughs before
+# 0    early        66055                                                           {66055}             hang
+# 1    later        65799                                                           {65799, 66055}      hang
+# 2    trap-after   trap: wasm `unreachable` instruction executed (exit 134)        {trap in g's cb}    hang
+# 3    twice        trap: `task.return` or `task.cancel` called more than once      {trap at g's 2nd    hang
+#                   for current task (exit 134)                                      task.return}
+# 4    no-return    trap: async-lifted export failed to produce a result (exit 134)  {trap at g's EXIT}  70144
+# 5    at-exit      69895                                                           {69895, 70151}      69895
+# 6    cancel-poll  no result in 10s, spinning (killed, exit 142)                    {4615}              4615
+#
+# Meaning:     go's value is g's result | (go's lower state << 8) | (g's `exited` when go read the result << 12) |
+#              (`exited` at the end << 16).
+#              - 66055 = 7 | 2<<8 | 0<<12 | 1<<16: g called task.return in its first segment, so go's lower returned
+#                RETURNED with 7 at its retptr, and g had NOT exited when go read it; go then released g and saw it
+#                exit. 65799 is the same with the result arriving by go's WAIT (state 1, STARTED). Both are the
+#                caller resolved at the callee's task.return, with the callee still running.
+#              - 69895 = 7 | 1<<8 | 1<<12 | 1<<16: g returned and EXITed in one callback, so it had exited by the
+#                time go read the result. That is the case Burroughs already read right.
+#              - The reference's second value in rows 1 and 5 (66055, 70151) is its random profile: wait_until in
+#                g's YIELD arm may return at once, so g's callback, and its task.return, run inside go's lower.
+#                Burroughs ends a YIELD arm's segment as the deterministic profile does (ADR 0095's amendment, F0).
+#              - Rows 2 to 4 trap on both oracles: a trap anywhere in the store ends it (def:trap's lockdown), so the
+#                caller is not resolved, even when it already holds the callee's result (row 2).
+#              - Row 6 packs g's result | (the subtask's final state << 8) | 1 << 12 = 4615. The pin's async cancel
+#                resumes g inside it (upstream #726), so g's TASK_CANCELLED callback returns before go's poll begins.
+#                wasmtime 49.0.3 runs g only when go suspends, and go's poll never suspends, so go spins. Burroughs
+#                returns BLOCKED from the cancel and runs g's callback beside go (#999), so the row is the one place
+#                a callee's return runs while its caller executes, inside the hand-back window.
+#              Burroughs before the hook resolved a cross-component caller only when the callee's callback loop
+#              ended (liftAsAsyncImpl, after runLiftTask returned), so rows 0 and 1 deadlocked: g waits for go's
+#              release, and go waits for a result g has already returned. A callee's trap resolved the caller's
+#              subtask RETURNED with nothing (crossComponentResolve's NoResolution) rather than locking the store,
+#              so rows 2 and 3 hung (go read a result of 0 and waited for an exit, or an event, that never came)
+#              and row 4 read 70144 = 0 | 2<<8 | 1<<12 | 1<<16, a RETURNED with no value.

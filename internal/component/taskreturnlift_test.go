@@ -200,7 +200,7 @@ func TestTaskReturnLiftsEveryScalarKind(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := liftTaskReturnValue(nil, c.vt, []interp.Value{{Bits: c.word}})
+			got, err := liftTaskReturnValue(nil, c.vt, []interp.Value{{Bits: c.word}}, nil)
 			if err != nil {
 				t.Fatalf("lifting a %s from word %#x: %v", c.name, c.word, err)
 			}
@@ -226,7 +226,7 @@ func TestTaskReturnLiftsEveryScalarKind(t *testing.T) {
 		{"f64", ValType{Kind: VF64}, canon.KindF64},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := liftTaskReturnValue(nil, c.vt, []interp.Value{{Bits: 0x3ff0000000000000}})
+			got, err := liftTaskReturnValue(nil, c.vt, []interp.Value{{Bits: 0x3ff0000000000000}}, nil)
 			if err != nil {
 				t.Fatalf("lifting a %s: %v", c.name, err)
 			}
@@ -282,7 +282,7 @@ func TestTaskReturnTrapsOnACharOutsideTheUnicodeScalarRange(t *testing.T) {
 		{"high-surrogate-end", 0xDFFF},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := liftTaskReturnValue(nil, ValType{Kind: VChar}, []interp.Value{{Bits: c.word}}); err == nil {
+			if _, err := liftTaskReturnValue(nil, ValType{Kind: VChar}, []interp.Value{{Bits: c.word}}, nil); err == nil {
 				t.Fatalf("a char of %#x lifted successfully; the model traps there", c.word)
 			}
 		})
@@ -290,7 +290,7 @@ func TestTaskReturnTrapsOnACharOutsideTheUnicodeScalarRange(t *testing.T) {
 	// And the values either side of the surrogate block are fine, so the refusal is a range and not a
 	// blanket.
 	for _, ok := range []uint64{0xD7FF, 0xE000, 0x10FFFF} {
-		if _, err := liftTaskReturnValue(nil, ValType{Kind: VChar}, []interp.Value{{Bits: ok}}); err != nil {
+		if _, err := liftTaskReturnValue(nil, ValType{Kind: VChar}, []interp.Value{{Bits: ok}}, nil); err != nil {
 			t.Fatalf("a char of %#x was refused: %v", ok, err)
 		}
 	}
@@ -341,7 +341,7 @@ func TestTaskReturnCoversEveryKindCrossComponentValueDoes(t *testing.T) {
 			continue // not carried by the sync path, so the eager lift owes nothing for it
 		}
 		carried = append(carried, valKindName(vt.Kind))
-		if _, err := liftTaskReturnValue(nil, vt, []interp.Value{{Bits: 1}}); err != nil {
+		if _, err := liftTaskReturnValue(nil, vt, []interp.Value{{Bits: 1}}, nil); err != nil {
 			missing = append(missing, valKindName(vt.Kind))
 		}
 	}
@@ -395,14 +395,16 @@ func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 		flat []interp.Value
 		want string
 	}{
-		// Carryable by the bridge, not by a flat lift — the distinction this refusal draws. An `own` is one
-		// i32, the handle's index, so one word is its arity and the refusal must be about the KIND. Its lift
-		// moves the handle out of the guest's table (def:lift_own), and `liftFlatValue` has no table.
+		// Carryable by the bridge, and lifted only with a table to move it into — the distinction this
+		// refusal draws. An `own` is one i32, the handle's index, so one word is its arity and the refusal
+		// must be about the KIND. Its lift moves the handle out of the guest's table (def:lift_own), and ADR
+		// 0136 gave it an arm that does, for a host caller with a table; `liftTaskReturnValue` passes none.
+		// This row named "no arm for kind own" until that arm landed, as its own comment below predicted.
 		{
 			"own",
 			ValType{Kind: VOwn},
 			[]interp.Value{interp.I32(1)},
-			"no arm for kind own",
+			"its caller has no table to move it into",
 		},
 		// **`record` was here and has gone, which is the FOURTH time this campaign a specimen chosen
 		// because it happened to be unimplemented has expired** — and this table's own repair predicted
@@ -414,10 +416,12 @@ func TestTaskReturnRefusesAResultKindItCannotLift(t *testing.T) {
 		// three rows here, and they now lift (TestTaskReturnLiftsAVariantAsWasmtimeDoes). This comment said
 		// the table would then be empty and should be deleted. It was not empty: `own` is carried by the
 		// bridge and has no arm here, and the table had never listed it, so the prediction counted only the
-		// rows already written. `own` is the row now, until a handle-moving lift gives it an arm.
+		// rows already written. `own` is the row now, until a handle-moving lift gives it an arm. **ADR 0136
+		// gave it one**, and the row stayed, because the arm refuses when its caller has no table: the
+		// refusal moved from "no arm" to "no table", which is the row's wording now.
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := liftTaskReturnValue(nil, c.vt, c.flat)
+			_, err := liftTaskReturnValue(nil, c.vt, c.flat, nil)
 			if err == nil {
 				t.Fatalf("a %s result lifted successfully from flat values", c.name)
 			}
@@ -458,7 +462,7 @@ func TestTaskReturnLiftsARecordFromItsFieldsWords(t *testing.T) {
 
 	// Two u32 fields are two words, and a record of scalars needs no memory — so this lifts with a nil
 	// caller, which is itself the assertion that nothing here reaches guest memory.
-	v, err := liftTaskReturnValue(nil, pair, []interp.Value{interp.I32(7), interp.I32(9)})
+	v, err := liftTaskReturnValue(nil, pair, []interp.Value{interp.I32(7), interp.I32(9)}, nil)
 	if err != nil {
 		t.Fatalf("a record{a: u32, b: u32} did not lift from two words: %v", err)
 	}
@@ -476,20 +480,20 @@ func TestTaskReturnLiftsARecordFromItsFieldsWords(t *testing.T) {
 
 	// **Too few words**, which is the case the old per-kind arity check could not express: a record's
 	// expected count comes from its fields, so one word for a two-u32 record must be refused.
-	if _, err := liftTaskReturnValue(nil, pair, []interp.Value{interp.I32(7)}); err == nil {
+	if _, err := liftTaskReturnValue(nil, pair, []interp.Value{interp.I32(7)}, nil); err == nil {
 		t.Error("a two-field record lifted from one word")
 	}
 	// **Too many**, which the walk catches by consuming less than arrived rather than by counting up
 	// front. Without the caller's `used != len(args)` comparison this would pass, having lifted a
 	// correct record and ignored a word the guest meant as part of the result.
 	if _, err := liftTaskReturnValue(nil, pair,
-		[]interp.Value{interp.I32(7), interp.I32(9), interp.I32(11)}); err == nil {
+		[]interp.Value{interp.I32(7), interp.I32(9), interp.I32(11)}, nil); err == nil {
 		t.Error("a two-field record lifted from three words; the extra word was silently dropped")
 	}
 
 	// An empty record is refused before `canon.Record` is reached, so the trap names the record rather
 	// than a layout rule three frames down. Unreachable through the decoder, which refuses the type.
-	if _, err := liftTaskReturnValue(nil, ValType{Kind: VRecord}, nil); err == nil {
+	if _, err := liftTaskReturnValue(nil, ValType{Kind: VRecord}, nil, nil); err == nil {
 		t.Error("a record with no fields lifted")
 	}
 }
@@ -505,7 +509,7 @@ func TestTaskReturnLiftsAListFromItsFlatPair(t *testing.T) {
 
 	// A list is two flat words. One is a wrong arity and must be refused as one — the guard the table
 	// above now asserts it is NOT getting.
-	_, err := liftTaskReturnValue(nil, lu32, []interp.Value{interp.I32(0)})
+	_, err := liftTaskReturnValue(nil, lu32, []interp.Value{interp.I32(0)}, nil)
 	if err == nil {
 		t.Fatal("a list result lifted from one flat value; a list is (ptr, count)")
 	}
@@ -527,7 +531,7 @@ func TestTaskReturnLiftsAListFromItsFlatPair(t *testing.T) {
 	// dereference inside a guest-driven load, which is the one failure mode worth a redundant guard. The
 	// first draft of this test asserted the arm's wording and failed, which is how the layering got
 	// established rather than assumed.
-	_, err = liftTaskReturnValue(nil, ValType{Kind: VList}, []interp.Value{interp.I32(0), interp.I32(0)})
+	_, err = liftTaskReturnValue(nil, ValType{Kind: VList}, []interp.Value{interp.I32(0), interp.I32(0)}, nil)
 	if err == nil {
 		t.Fatal("a list with no element type lifted successfully")
 	}
@@ -544,14 +548,14 @@ func TestTaskReturnLiftsAListFromItsFlatPair(t *testing.T) {
 // which is itself the property being relied on — a guard that dereferenced the caller first would turn a
 // wrong arity into a nil dereference.
 func TestTaskReturnChecksItsFlatArity(t *testing.T) {
-	if _, err := liftTaskReturnValue(nil, ValType{Kind: VU32}, nil); err == nil {
+	if _, err := liftTaskReturnValue(nil, ValType{Kind: VU32}, nil, nil); err == nil {
 		t.Fatal("a u32 result with zero flat values lifted successfully")
 	}
-	if _, err := liftTaskReturnValue(nil, ValType{Kind: VString}, nil); err == nil {
+	if _, err := liftTaskReturnValue(nil, ValType{Kind: VString}, nil, nil); err == nil {
 		t.Fatal("a string result with zero flat values lifted successfully")
 	}
 	// One word is right for a u32 and wrong for a string: the two must not share a check.
-	if _, err := liftTaskReturnValue(nil, ValType{Kind: VString}, []interp.Value{interp.I32(0)}); err == nil {
+	if _, err := liftTaskReturnValue(nil, ValType{Kind: VString}, []interp.Value{interp.I32(0)}, nil); err == nil {
 		t.Fatal("a string result with one flat value lifted successfully; a string is two words")
 	}
 }
