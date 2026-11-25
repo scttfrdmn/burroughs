@@ -870,6 +870,16 @@ func (v Value) Option() (payload Value, isSome, ok bool) {
 	return Value{}, false, true
 }
 
+// Case returns a variant value's case name and its payload, nil for a payload-free case, and whether it is a
+// variant at all. A `result` is one (ResultType). wasi:http's host reads a value a guest wrote this way, so it can
+// carry the value on with its strings made none (ADR 0135).
+func (v Value) Case() (name string, payload *Value, ok bool) {
+	if v.Type.Kind != KindVariant || v.u >= uint64(len(v.Type.Cases)) {
+		return "", nil, false
+	}
+	return v.Type.Cases[v.u].Name, v.payload, true
+}
+
 func labelIndex(labels []string, l string) int {
 	for i := range labels {
 		if labels[i] == l {

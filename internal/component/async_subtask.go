@@ -214,6 +214,9 @@ type asyncHandles struct {
 	// filePending is the same count for a write-via-stream's file write (hostfs.go, ADR 0133): a write in flight, or
 	// the finish after the guest's writer dropped. Guarded by mu.
 	filePending int
+	// httpPending is the same count for wasi:http (hosthttpsend.go, ADR 0135): a send whose round trip has not resolved,
+	// and a request body's re-arm or release on its way to the run slot. Guarded by mu.
+	httpPending int
 	// hostIO is the condition a send's writer goroutine waits on for bytes, over mu, made by the first send.
 	// stopProducers broadcasts it, so a waiting writer sees the stop.
 	hostIO *sync.Cond

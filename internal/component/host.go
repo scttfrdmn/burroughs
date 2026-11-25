@@ -100,6 +100,11 @@ type Host struct {
 	// allow-ip-name-lookup`. False, the zero value, denies it: every name is `permanent-resolver-failure`, the code
 	// wasmtime 49.0.3 answers without the flag. It is independent of InheritNetwork, as it is in wasmtime.
 	AllowNameLookup bool
+	// AllowHTTP grants wasi:http/client.send (ADR 0135), wasmtime's `-S http`. False, the zero value, denies it at the
+	// call: send answers `HTTP-request-denied`, where wasmtime 49.0.3 refuses to link the component (Scott's ruling on
+	// #1375). The four wasi:http resources work either way, since they touch no network. It is independent of
+	// InheritNetwork and AllowNameLookup, as `-S http` is in wasmtime.
+	AllowHTTP bool
 	// Preopens are the directories WASI 0.3's get-directories grants (ADR 0133), wasmtime's `--dir`: each a descriptor
 	// over an os.Root of its own, read-only unless Writable. Empty, the zero value, grants nothing, and get-directories
 	// answers an empty list. Each must name an existing directory, or instantiate fails naming it.
@@ -214,6 +219,9 @@ func (h *Host) streamConsumers() map[string]*streamConsumer {
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.write-via-stream", &streamConsumer{bindRes: h.fsWriteViaStream, payload: fsFuturePayloadType})
 	// read-directory is a producer of directory entries (ADR 0134), each lowered inside the reader's own stream.read.
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.read-directory", &streamConsumer{bindRes: h.fsReadDirectory, payload: fsFuturePayloadType, produces: true, elem: fsDirEntryType})
+	// wasi:http's four functions that carry streams and futures (ADR 0135, hosthttpmsg.go): request.new, response.new
+	// and the two consume-bodies. Their whole type is declared in resourceSource's sigs and checked at instantiate.
+	h.httpConsumers(m)
 	return m
 }
 
@@ -479,9 +487,13 @@ func (h *Host) resourceSource() hostResourceSource {
 	// here rather than in wasi(), as tcp-socket.create is. 0.2's stays in wasi(), an empty list.
 	serve(m, wasiP3, "wasi:filesystem/preopens::get-directories", h.getDirectories)
 
+	// wasi:http's four resources and their sync methods (ADR 0135, hosthttp.go), 0.3 only.
+	h.httpResourceTypes(types)
+	h.httpMethods(m)
+
 	mergeExtras(types, h.resourceTypeImpls, "resource type")
 	mergeExtras(m, h.resourceImpls, "resource import")
-	return hostResourceSource{types: types, methods: m}
+	return hostResourceSource{types: types, methods: m, sigs: httpSignatures()}
 }
 
 // mergeExtras merges test-only entries into a production table, refusing one that would shadow a name the

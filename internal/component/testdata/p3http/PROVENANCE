@@ -1,0 +1,26 @@
+E2-out's witness guest (#1383, ADR 0135) — provenance, per ADR 0114's rule for committed guest binaries. Like p3sys,
+it is reproducible from this repository plus the pinned toolchain: p3http/build.sh rebuilds it offline, and builds its
+peer from peer/.
+
+Source:       src/main.rs, wit/world.wit, Cargo.toml, Cargo.lock (this directory)
+WIT:          the nightly's vendored WASI 0.3.0 WIT, library/vendor/wasip3-0.8.0+wasi-0.3.0/wit/deps
+              (random, clocks, cli, filesystem, sockets, http), staged by build.sh, not committed
+Toolchain:    rustc 1.100.0-nightly (0fc141305 2026-09-11), target wasm32-wasip3, from
+              ~/.rustup/toolchains/nightly-aarch64-apple-darwin
+Bindings:     wit-bindgen 0.61.1 (features macros, realloc, async), resolved offline from the local registry
+Validated:    wasm-tools 1.258.0, validate --features all
+Built on:     darwin/arm64, 2026-11-24
+
+  p3http.wasm
+    build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
+    sha256: 43c18cb41e2792b8dabbd6dd4f5c310a6871dc65bb58da1907e41d46b2280654
+    bytes:  340097
+    Its wasi:http/client@0.3.0 send is async-lowered; request.new, response.new and the two consume-bodies are sync
+    lowers whose signatures carry a stream<u8> and futures, and every other wasi:http/types method is a sync lower.
+    Its `run` is async-typed and lifted with no async option, and wit-bindgen's block_on drives it.
+
+THE ORACLE: wasmtime 49.0.3 (f96eabaa1 2026-10-14), .oracle/wasmtime-49.0.3/wasmtime, never the wasmtime on PATH.
+build.sh writes its reading to ../p3http.reading: each row is `wasmtime run -S http p3http.wasm <row> <port>
+<closed-port>` against peer/ on 127.0.0.1, and the denied row is `get` with no -S http, which fails to link. 10 of 10
+runs of every row gave the same stdout, stderr and exit code, which build.sh checks byte for byte before it writes the
+reading. No row needs a DNS server: the one name looked up is a `.invalid` one, which never resolves.

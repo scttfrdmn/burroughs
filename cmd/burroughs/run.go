@@ -376,15 +376,21 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	allowNameLookup := fs.Bool("allow-ip-name-lookup", false, "grant a component wasi:sockets/ip-name-lookup, as "+
 		"wasmtime's -S allow-ip-name-lookup does. Without it every name a component resolves is refused (ADR 0126); "+
 		"a wasip1 command or a core module refuses the flag")
+	allowHTTP := fs.Bool("allow-http", false, "grant a component wasi:http/client's outgoing requests, as wasmtime's "+
+		"-S http does. Without it a component still runs, and its send answers HTTP-request-denied (ADR 0135); a "+
+		"wasip1 command or a core module refuses the flag")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: burroughs run [--strict] [--dir HOST[:/GUEST]]... "+
 			"[--scratch HOST[:/GUEST]]... [--env NAME[=VALUE]]... [--features NAME[,NAME]]... [--inherit-network] "+
-			"[--allow-ip-name-lookup] <file.wasm> [-- <arg>...] | [<func> [<value>...]]")
+			"[--allow-ip-name-lookup] [--allow-http] <file.wasm> [-- <arg>...] | [<func> [<value>...]]")
 		fmt.Fprintln(stderr, "\nA wasip1 command (imports wasi_snapshot_preview1, exports _start) runs; "+
 			"its argv is what follows --, and its exit code becomes this process's. --dir grants it a "+
 			"directory, capability-based: nothing is visible unless named.")
 		fmt.Fprintln(stderr, "\nA component (exports wasi:cli/run) runs the same way, and --dir and --scratch grant it "+
 			"directories\nthrough WASI 0.3's wasi:filesystem, read-only and writable as for a command (ADR 0133).")
+		fmt.Fprintln(stderr, "\n--allow-http grants a component outgoing HTTP through WASI 0.3's wasi:http/client, as "+
+			"wasmtime's -S http\ndoes. Without it the component still links and runs, and every send answers "+
+			"HTTP-request-denied, where\nwasmtime refuses to link it (ADR 0135).")
 		fmt.Fprintln(stderr, "\n--dir's separator is ONE colon: --dir /host/path:/guest/path, and the guest "+
 			"path must be absolute.\nA bare --dir /host/path maps it under its own resolved name. A relative "+
 			"guest path and wasmtime's TWO-colon form (--dir host::guest) are both refused by name (#828): "+
@@ -453,7 +459,7 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	// for a well-formed component. Reading the preamble first routes a component whatever flags are given.
 	if isComp, cerr := burroughs.IsComponent(wasm); cerr == nil && isComp {
 		return runComponent(stdout, stderr, file, wasm, invokeArgs, guestArgs, dirs, envs, scratch, feats,
-			networkGrant{inherit: *inheritNetwork, lookup: *allowNameLookup})
+			networkGrant{inherit: *inheritNetwork, lookup: *allowNameLookup, http: *allowHTTP})
 	}
 	// **`--inherit-network` is a component's grant, refused by name anywhere else** (ADR 0123), #1128's rule: a
 	// wasip1 command's preview-1 host serves no sockets, and a core module takes no capabilities, so the flag
@@ -473,6 +479,15 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	if *allowNameLookup {
 		fmt.Fprintf(stderr, "%s--allow-ip-name-lookup applies to a component; this module is not one, and its host "+
 			"serves no name lookup\n", prefix)
+		return errUsage
+	}
+	// **So is `--allow-http`** (ADR 0135): a preview-1 host serves no wasi:http.
+	//
+	// NEUTER, run: drop this refusal, and TestAllowHTTPIsAComponentsFlag's wasip1 command and core module both run, exit
+	// 0, with the flag ignored.
+	if *allowHTTP {
+		fmt.Fprintf(stderr, "%s--allow-http applies to a component; this module is not one, and its host serves no "+
+			"wasi:http\n", prefix)
 		return errUsage
 	}
 	isCmd, derr := wasiCfg.IsCommand(wasm)
@@ -731,7 +746,8 @@ func exitCode(err error) int {
 //
 // `--inherit-network` reaches `ComponentConfig.InheritNetwork` (ADR 0123): without it, the component's sockets are
 // denied. `--allow-ip-name-lookup` reaches `ComponentConfig.AllowNameLookup` (ADR 0126): without it, every name the
-// component resolves is refused.
+// component resolves is refused. `--allow-http` reaches `ComponentConfig.AllowHTTP` (ADR 0135): without it, every
+// wasi:http send answers HTTP-request-denied at the call, and the component still runs.
 func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs, guestArgs []string,
 	dirs preopenFlag, envs envFlag, scratch scratchFlag, feats featureFlag, grant networkGrant,
 ) error {
@@ -756,6 +772,9 @@ func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs
 		// NEUTER: drop this line, and TestRunAComponentWithAllowIPNameLookupResolves' granted row prints the denied
 		// reading.
 		AllowNameLookup: grant.lookup,
+		// NEUTER, run: drop this line, and TestRunAComponentWithAllowHTTPSends' granted row (and only it) prints
+		// HttpRequestDenied where wasmtime's -S http reading has the peer's status.
+		AllowHTTP: grant.http,
 		// NEUTER, run: drop this line, and TestRunAComponentWithDirAndScratch's granted rows exit 3, granted nothing.
 		Preopens: append(dirs.preopens(), scratch.preopens()...),
 	}.Run(wasm)
@@ -768,5 +787,6 @@ func runComponent(stdout, stderr io.Writer, file string, wasm []byte, invokeArgs
 	return nil
 }
 
-// networkGrant is a component's two network flags, `--inherit-network` and `--allow-ip-name-lookup`.
-type networkGrant struct{ inherit, lookup bool }
+// networkGrant is a component's three network flags, `--inherit-network`, `--allow-ip-name-lookup` and
+// `--allow-http`.
+type networkGrant struct{ inherit, lookup, http bool }

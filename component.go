@@ -130,6 +130,12 @@ func resolveFeatures(fs []Feature) (bin.Features, error) {
 // Two fields this has and a [WASIP1Config] does not: InheritNetwork, the grant of WASI 0.3's TCP sockets
 // (ADR 0123), and AllowNameLookup, the grant of its name lookup (ADR 0126). Each zero value denies, so a
 // configuration that names neither grants no network and no lookup.
+//
+// **AllowHTTP** grants `wasi:http/client@0.3`'s `send`, an outgoing HTTP request over Go's `net/http` (ADR 0135),
+// as wasmtime's `-S http` does. Its zero value denies the call and not the link: a component that imports
+// `wasi:http` instantiates and its `fields`, `request`, `request-options` and `response` resources work, and
+// `send` answers `HTTP-request-denied`. wasmtime 49.0.3 instead refuses to link such a component without the
+// flag, which is a named divergence. It is independent of InheritNetwork and AllowNameLookup, as `-S http` is.
 type ComponentConfig struct {
 	Args   []string  // the component's argv, lowered by wasi:cli/environment.get-arguments
 	Stdin  io.Reader // the component's stdin; nil means an empty stream (NOT os.Stdin — see above)
@@ -144,6 +150,7 @@ type ComponentConfig struct {
 
 	InheritNetwork  bool // wasi:sockets TCP may reach any address; false, the default, denies the network
 	AllowNameLookup bool // wasi:sockets/ip-name-lookup.resolve-addresses; false, the default, denies it
+	AllowHTTP       bool // wasi:http/client.send; false, the default, answers HTTP-request-denied at the call
 
 	// Preopens are the directories wasi:filesystem@0.3 grants the component (ADR 0133); empty, the default,
 	// grants none. Read-only unless Writable. See the type's documentation above.
@@ -193,6 +200,9 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 	h.InheritNetwork = c.InheritNetwork
 	// NEUTER: drop this line, and TestAllowNameLookupReachesBothConfiguredPaths' Run row is denied.
 	h.AllowNameLookup = c.AllowNameLookup
+	// NEUTER, run: drop this line, and TestAllowHTTPReachesBothConfiguredPaths' Run granted row (and only it) prints
+	// HttpRequestDenied, as does cmd/burroughs' TestRunAComponentWithAllowHTTPSends' granted row, whose flag reaches Run.
+	h.AllowHTTP = c.AllowHTTP
 	// NEUTER, run: drop this line, and TestPreopensReachBothConfiguredPaths' Run rows exit 3, granted nothing, and
 	// TestAPreopenThatIsNotADirectoryFailsTheRun's Run succeeds.
 	h.Preopens = c.hostPreopens()
@@ -275,7 +285,7 @@ func (c ComponentConfig) Run(wasm []byte) (exitCode int, err error) {
 // # The defaults are Run's, exactly
 //
 // `nil` Stdout and Stderr **discard**; a `nil` Stdin is an empty stream; `Args`, `Features`,
-// `InheritNetwork`, `AllowNameLookup` and `Preopens` are passed as given. That is not a choice made here — it is the same handling
+// `InheritNetwork`, `AllowNameLookup`, `AllowHTTP` and `Preopens` are passed as given. That is not a choice made here — it is the same handling
 // [ComponentConfig.Run] performs, because two methods on one configuration must mean the same thing
 // by that configuration. `TestAZeroConfigComponentWritesNowhereThroughBothPaths` holds them equal by
 // driving both.
@@ -315,6 +325,9 @@ func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
 	h.InheritNetwork = c.InheritNetwork
 	// NEUTER: drop this line, and TestAllowNameLookupReachesBothConfiguredPaths' LoadComponent row is denied.
 	h.AllowNameLookup = c.AllowNameLookup
+	// NEUTER, run: drop this line, and TestAllowHTTPReachesBothConfiguredPaths' LoadComponent granted row (and only it)
+	// prints HttpRequestDenied.
+	h.AllowHTTP = c.AllowHTTP
 	// NEUTER, run: drop this line, and TestPreopensReachBothConfiguredPaths' LoadComponent granted row reads 0, granted
 	// nothing, and TestAPreopenThatIsNotADirectoryFailsTheRun's LoadComponent succeeds.
 	h.Preopens = c.hostPreopens()
