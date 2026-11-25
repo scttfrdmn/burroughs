@@ -47,14 +47,14 @@ func TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes(t *testing.T) {
 	}
 
 	async := newAsyncHandles()
-	re := &readableStreamEnd{}
+	re := &readableStreamEnd{state: copyStateIdle, elem: byteElem} // a stream<u8> end stream.new mints (#1367's lift)
 	ri := async.addLocked(re)
 	ret, err := writeViaStream(io.Discard)(async)(cc, []interp.Value{interp.I32(int32(ri))})
 	if err != nil {
 		t.Fatalf("write-via-stream: %v", err)
 	}
 	fi := ret[0].Int32()
-	if _, rerr := futureRead(async)(cc, []interp.Value{interp.I32(fi), interp.I32(ptr)}); rerr != nil {
+	if _, rerr := futureRead(async, futureElemAt(async, fi), true)(cc, []interp.Value{interp.I32(fi), interp.I32(ptr)}); rerr != nil {
 		t.Fatalf("future.read: %v", rerr)
 	}
 	if re.onHostComplete == nil {
@@ -157,7 +157,7 @@ func TestWriteViaStreamResolvesAtTheWritersDrop(t *testing.T) {
 	if !fe.resolved {
 		t.Fatal("the writer's drop did not resolve write-via-stream's future")
 	}
-	ret, err = futureRead(h)(cc, []interp.Value{interp.I32(fi), interp.I32(readPtr)})
+	ret, err = futureRead(h, futureElemAt(h, fi), true)(cc, []interp.Value{interp.I32(fi), interp.I32(readPtr)})
 	if err != nil {
 		t.Fatalf("future.read after the drop: %v", err)
 	}

@@ -72,6 +72,12 @@ func TestAWrongKindHandleTraps(t *testing.T) {
 // and a u32 row must return it.
 func runKindRows(t *testing.T, fixture string, wantRows int, needles map[string]string) {
 	t.Helper()
+	runKindRowsWith(t, fixture, wantRows, needles, nil)
+}
+
+// runKindRowsWith is runKindRows with each row instantiated over newHost's host, or the stub host when newHost is nil.
+func runKindRowsWith(t *testing.T, fixture string, wantRows int, needles map[string]string, newHost func() *Host) {
+	t.Helper()
 	b, err := os.ReadFile("testdata/" + fixture + ".wasm")
 	if err != nil {
 		t.Fatalf("the committed fixture is missing: %v", err)
@@ -86,7 +92,11 @@ func runKindRows(t *testing.T, fixture string, wantRows int, needles map[string]
 			t.Run(export+"/gate="+gate, func(t *testing.T) {
 				t.Setenv(asyncGateEnv, "1")
 				t.Setenv(cmThreadsGateEnv, gate)
-				res, err := runTypedStreamRow(t, b, export)
+				var h *Host
+				if newHost != nil {
+					h = newHost()
+				}
+				res, err := runTypedStreamRowWith(t, b, export, h)
 				if strings.HasPrefix(reading, "trap") {
 					needle, ok := needles[export]
 					if !ok {

@@ -55,3 +55,53 @@ future-drop-cancel cancel-read-sync-joined (#1362; wasmtime 49.0.3: trap, synchr
 future-drop-cancel drop-writable-after-reader-dropped (#1362; wasmtime 49.0.3: 1): value 1
 future-drop-cancel cancel-read-async-parked (#1362; wasmtime 49.0.3: 2): value 2
 future-drop-cancel cancel-read-async-joined (#1362; wasmtime 49.0.3: 2): value 2
+future-write-after-cancel cancel-write-parked (#1353; wasmtime 49.0.3: 2): value 2
+future-write-after-cancel write-after-cancel-write (#1353; wasmtime 49.0.3: 4294967295): value 4294967295
+future-write-after-cancel read-after-write-after-cancel-write (#1353; wasmtime 49.0.3: 1792): value 1792
+future-write-after-cancel poll-after-write-after-cancel-write (#1353; wasmtime 49.0.3: 117571589): value 117571589
+future-write-after-cancel write-to-parked-read-after-cancel-write (#1353; wasmtime 49.0.3: 0): value 0
+future-write-after-cancel drop-writable-after-cancel-write (#1353; wasmtime 49.0.3: trap, without first writing a value): trap future.drop-writable
+future-stream-checks drop-readable-read-pending (#1364; wasmtime 49.0.3: trap, busy): trap future.drop-readable
+future-stream-checks drop-readable-event-untaken (#1364; wasmtime 49.0.3: trap, busy): trap future.drop-readable
+future-stream-checks drop-readable-after-event-taken (#1364; wasmtime 49.0.3: 117506052): value 117506052
+future-stream-checks drop-readable-idle (#1364; wasmtime 49.0.3: 7): value 7
+future-stream-checks cancel-write-sync-joined (#1364; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap future.cancel-write
+future-stream-checks cancel-write-idle-joined (#1364; wasmtime 49.0.3: trap, no write is pending): trap future.cancel-write
+future-stream-checks stream-cancel-read-idle-joined (#1364; wasmtime 49.0.3: trap, no read is pending): trap stream.cancel-read
+future-stream-checks stream-cancel-write-idle-joined (#1364; wasmtime 49.0.3: trap, no write is pending): trap stream.cancel-write
+future-stream-checks read-after-read-pending (#1364; wasmtime 49.0.3: trap, concurrent operations): trap future.read
+future-stream-checks read-after-read-event-untaken (#1364; wasmtime 49.0.3: trap, concurrent operations): trap future.read
+future-stream-checks read-after-read-done (#1364; wasmtime 49.0.3: trap, after previous read succeeded): trap future.read
+future-stream-checks cancel-write-async-parked (#1364; wasmtime 49.0.3: 2): value 2
+future-stream-checks cancel-write-async-joined (#1364; wasmtime 49.0.3: 2): value 2
+future-typed-traps mismatch-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.read
+future-typed-traps mismatch-write (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.write
+future-typed-traps mismatch-cancel-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.cancel-read
+future-typed-traps mismatch-cancel-write (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.cancel-write
+future-typed-traps mismatch-drop-readable (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.drop-readable
+future-typed-traps mismatch-drop-writable (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.drop-writable
+future-typed-traps same-structure-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: 4294967295): value 4294967295
+future-typed-traps same-structure-write (#1282 item 1, #1364 item 4; wasmtime 49.0.3: 1792): value 1792
+future-typed-traps mismatch-new32-read8 (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.read
+future-typed-traps nested-same-structure-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: 4294967295): value 4294967295
+future-typed-traps nested-mismatch-read (#1282 item 1, #1364 item 4; wasmtime 49.0.3: trap, of a different type): trap future.read
+future-sync sync-write-to-parked-read (#1352; wasmtime 49.0.3: 0): value 0
+future-sync sync-read-of-parked-write (#1352; wasmtime 49.0.3: 1792): value 1792
+future-sync sync-write-after-reader-dropped (#1352; wasmtime 49.0.3: 1): value 1
+future-sync sync-write-joined (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap future.write
+future-sync sync-read-joined (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap future.read
+future-sync sync-write-no-reader (#1352; wasmtime 49.0.3: hang): HANG
+future-sync sync-read-no-writer (#1352; wasmtime 49.0.3: hang): HANG
+future-sync sync-write-no-reader-sync-typed (#1352; wasmtime 49.0.3: trap, cannot block a synchronous task): trap future.write
+sync-future-own-thread sync-read-own-thread (#1352; wasmtime 49.0.3: 1792): value 1792
+sync-future-own-thread sync-write-own-thread (#1352; wasmtime 49.0.3: 1792): value 1792
+sync-future-own-thread sync-read-own-thread-control (#1352; wasmtime 49.0.3: trap, cannot block a synchronous task): trap run's sync future.read
+sync-future-own-thread sync-read-cancelled-by-thread (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap T's future.cancel-read
+sync-future-own-thread sync-read-joined-by-thread (#1352; wasmtime 49.0.3: trap, synchronously while added to a waitable set): trap T's waitable.join
+host-stream-arg-kind wvs-readable-end (#1367; wasmtime 49.0.3: 7): value 7
+host-stream-arg-kind wvs-writable-end (#1367; wasmtime 49.0.3: trap, not a readable end of a stream): trap write-via-stream's lift
+host-stream-arg-kind wvs-future-end (#1367; wasmtime 49.0.3: trap, not a stream): trap write-via-stream's lift
+host-stream-arg-kind wvs-no-handle (#1367; wasmtime 49.0.3: trap, unknown handle index 99): trap write-via-stream's lift
+host-stream-arg-kind wvs-u32-stream (#1367; wasmtime 49.0.3: trap, a stream of a different type): trap write-via-stream's lift
+host-stream-arg-kind wvs-joined-end (#1367; wasmtime 49.0.3: trap, in a waitable set): trap write-via-stream's lift
+host-stream-arg-kind wvs-reading-end (#1367; wasmtime 49.0.3: trap, busy stream): trap write-via-stream's lift

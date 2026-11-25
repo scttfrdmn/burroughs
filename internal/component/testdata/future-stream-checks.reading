@@ -1,0 +1,58 @@
+# Committed readings for future-stream-checks.wasm (#1364, items 1, 2, 3 and 5). Item 2's async control is
+# future-cancel-write-async.reading's, and item 4 is future-typed-traps.reading's.
+# Built:       wasm-tools parse future-stream-checks.wat -o future-stream-checks.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' future-stream-checks.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken 2026-11-24.
+# Reference:   refread.py's future-stream-checks rows (cmthreads/reference/refread.reading), pin 2e7895c, uv-managed
+#              3.14.8, 16 of 16 runs per line (DETERMINISTIC_PROFILE x 8 seeds). The two oracles agree on every row.
+#
+# Each line is `<export>: <wasmtime's reading>`; a trap is its last line of stderr, the error chain's `1: ` dropped,
+# and its exit status. A poll reads the event code | (payload << 8) | (index << 16) | (the read buffer's byte << 24).
+drop-readable-read-pending: trap: cannot remove busy future (exit 1)
+drop-readable-event-untaken: trap: cannot remove busy future (exit 1)
+drop-readable-after-event-taken: 117506052
+drop-readable-idle: 7
+cancel-write-sync-joined: trap: wasm trap: waitable cannot be used synchronously while added to a waitable set (exit 134)
+cancel-write-idle-joined: trap: stream or future write cancelled when no write is pending (exit 1)
+stream-cancel-read-idle-joined: trap: stream or future read cancelled when no read is pending (exit 1)
+stream-cancel-write-idle-joined: trap: stream or future write cancelled when no write is pending (exit 1)
+read-after-read-pending: trap: wasm trap: cannot have concurrent operations active on a future/stream (exit 134)
+read-after-read-event-untaken: trap: wasm trap: cannot have concurrent operations active on a future/stream (exit 134)
+read-after-read-done: trap: cannot read from future after previous read succeeded (exit 1)
+#
+# The pin, row by row (refread.reading), with the trap_if that raised each trap, read from the Trap's traceback with a
+# scratch script over the same rows:
+#
+#   export                            pin 2e7895c                 the trapping line
+#   drop-readable-read-pending        trap future.drop-readable   def:drop:"trap_if(end.copying_or_cancelling())"
+#   drop-readable-event-untaken       trap future.drop-readable   def:drop:"trap_if(end.copying_or_cancelling())"
+#   drop-readable-after-event-taken   value 117506052
+#   drop-readable-idle                value 7
+#   cancel-write-sync-joined          trap future.cancel-write    def:cancel_copy:"trap_if(end.in_waitable_set() and not async_)"
+#   cancel-write-idle-joined          trap future.cancel-write    def:cancel_copy:"trap_if(end.state != End.State.COPYING)"
+#   stream-cancel-read-idle-joined    trap stream.cancel-read     def:cancel_copy:"trap_if(end.state != End.State.COPYING)"
+#   stream-cancel-write-idle-joined   trap stream.cancel-write    def:cancel_copy:"trap_if(end.state != End.State.COPYING)"
+#   read-after-read-pending           trap future.read            def:copy:"trap_if(end.state != End.State.IDLE)"
+#   read-after-read-event-untaken     trap future.read            def:copy:"trap_if(end.state != End.State.IDLE)"
+#   read-after-read-done              trap future.read            def:copy:"trap_if(end.state != End.State.IDLE)"
+#
+# Meaning.
+#   drop-readable-*   item 1. A reader is COPYING from its read until its event is taken, whether or not a write has
+#                     completed it, and def:drop traps it. The controls: a reader whose COMPLETED a poll took is DONE
+#                     (117506052 is FUTURE_READ (4), COMPLETED, ri 1, byte 7) and drops, and so does an IDLE one.
+#   cancel-write-*    item 2. The sync cancel of a joined writer traps, the join being def:cancel_copy's last check,
+#                     after the state's: a joined writer with no write traps as having none. The async form is not
+#                     guarded (future-cancel-write-async.reading).
+#   stream-cancel-*   item 3. The same order on a stream end: both oracles trap a joined end with no copy at the state
+#                     check, wasmtime's message naming no pending read or write rather than the join.
+#   read-after-read-* item 5. A second future.read on a reader that is not IDLE traps: a read pending or untaken is
+#                     COPYING, and a reader whose COMPLETED was taken is DONE.
+#
+# Burroughs before #1364 (main at 4a30c4f), both gate:cm-threads states:
+#   drop-readable-read-pending, -event-untaken   7: the reader dropped mid-copy.
+#   cancel-write-sync-joined                     2: one form was bound for both, so the sync cancel was unguarded.
+#   stream-cancel-*-idle-joined                  a trap, but syncCancelGuard's, "is joined to a waitable set": the
+#                                                guard ran ahead of the built-in's state check.
+#   read-after-read-*                            a Go error, "future.read: end 1 already read (a future is
+#                                                single-shot)", not a trap.
+#   The four control rows and cancel-write-idle-joined agree.

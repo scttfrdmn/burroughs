@@ -196,7 +196,11 @@ built-ins over a component-level `(type $fut (future u32))`, and a core module w
 get-future (the wrapper mints a readable end and writes its handle), then `future.read`s that handle and
 returns the `BLOCKED` status. The completion + delivery is unit-tested (`TestFutureReadDeliversTheOracleOutcomes`);
 this witnesses the bind + the `BLOCKED` return. Authored from this WAT via `wasm-tools parse` (wasm-tools
-1.258.0; validates `--features all`):
+1.258.0; validates `--features all`). **`run` no longer drops the reader after its read** (#1364 item 1): the read is
+pending, so the reader is mid-copy, and the pin's `drop` traps it, as Burroughs now does. The drop had been
+accepted, so the guest relied on it; `fdrop` stays imported and is not called. **Its `future.read` is `async`**
+(#1352): it was the sync form, which Burroughs bound as the async one and so returned `BLOCKED`. The sync form now
+waits for the read's event, which nothing here completes, so it would never return.
 
 ```wat
 (component
@@ -208,7 +212,7 @@ this witnesses the bind + the `BLOCKED` return. Authored from this WAT via `wasm
     (export "get-future" (func async (result (future u32))))))
   (alias export $src "get-future" (func $getf))
   (core func $lowered (canon lower (func $getf) async (memory $cm)))
-  (core func $fread (canon future.read $fut (memory $cm)))
+  (core func $fread (canon future.read $fut async (memory $cm)))
   (core func $fdrop (canon future.drop-readable $fut))
   (core module $runmod
     (import "" "mem" (memory 1))
@@ -220,7 +224,6 @@ this witnesses the bind + the `BLOCKED` return. Authored from this WAT via `wasm
       (local.set $packed (call $getf (i32.const 0)))
       (local.set $fh (i32.load (i32.const 0)))
       (local.set $rr (call $fread (local.get $fh) (i32.const 8)))
-      (call $fdrop (local.get $fh))
       (local.get $rr)))
   (core instance $runi (instantiate $runmod
     (with "" (instance

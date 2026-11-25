@@ -225,6 +225,49 @@ func writeViaStream(w io.Writer) func(async *asyncHandles) interp.CanonFunc {
 	return func(async *asyncHandles) interp.CanonFunc { return writeViaStreamTo(w, async) }
 }
 
+// liftStreamArgLocked is the lift of a host import's stream<u8> argument, def:lift_async_value (#1367): handle ri must
+// be a readable stream end of the parameter's element, IDLE and joined to no set, and each of the four is a trap, in
+// the pin's order. The parameter's type is the host's declaration, stream<u8>, so byteElem is what the end is compared
+// with. The link does not check the guest's declared parameter (checkConsumerPayload checks the result), so a guest
+// declaring a stream of another element traps here, at the call; it reached the copy's refusal before.
+// `op` names the import. The caller holds asyncHandles.mu.
+//
+// **A wrong kind was ErrLinkRefused**, a Go error an embedder cannot tell from a link failure, and the other three were
+// not checked, so the host took a stream of another element, one joined to a set, and one with a read pending. Both
+// oracles trap all four.
+//
+// **The handle is not removed**, where the pin's lift removes it from the caller's table (`cx.inst.handles.remove(i)`),
+// so a guest may still name an end it has passed to the host. That is not this check's subject.
+func liftStreamArgLocked(h *asyncHandles, op string, ri uint32) (*readableStreamEnd, error) {
+	// def:lift_async_value:"trap_if(not isinstance(end, ReadableEndT))", and def:Table.get's trap on an index with no
+	// entry, through def:Table.remove.
+	//
+	// NEUTER, run: return the ErrLinkRefused it was, and TestAHostStreamArgumentLiftsAsThePinDoes' wvs-writable-end,
+	// wvs-future-end and wvs-no-handle rows (both gate states) fail on the error not being a trap.
+	re, ok := handleAt[*readableStreamEnd](h, ri)
+	if !ok {
+		return nil, wrongKindTrap(op, ri, "a readable stream end", "def:lift_async_value")
+	}
+	// NEUTER, run: drop this check, and TestAHostStreamArgumentLiftsAsThePinDoes' wvs-u32-stream rows (both gate states)
+	// return 7. This and the two checks below were neutered in one run: each of their rows has only its own defect, and
+	// each failed so, while the kind rows and the control passed.
+	if !re.elem.same(byteElem) {
+		return nil, &interp.Trap{Reason: fmt.Sprintf("%s: end %d is a stream of a different type: its element is %s, "+
+			"and the parameter's is u8 (def:lift_async_value: trap_if(end.t != t))", op, ri, re.elem)}
+	}
+	// NEUTER, run: drop this check, and TestAHostStreamArgumentLiftsAsThePinDoes' wvs-reading-end rows return 7.
+	if re.state != copyStateIdle {
+		return nil, &interp.Trap{Reason: fmt.Sprintf("%s: end %d is not IDLE (state %s), so it cannot be passed "+
+			"(def:lift_async_value: trap_if(end.state != End.State.IDLE))", op, ri, re.state.name())}
+	}
+	// NEUTER, run: drop this check, and TestAHostStreamArgumentLiftsAsThePinDoes' wvs-joined-end rows return 7.
+	if re.set != nil {
+		return nil, &interp.Trap{Reason: fmt.Sprintf("%s: end %d is joined to a waitable set, so it cannot be passed "+
+			"(def:lift_async_value: trap_if(end.in_waitable_set()))", op, ri)}
+	}
+	return re, nil
+}
+
 // writeViaStreamTo is writeViaStream's consumer over one writer and one instance's async table.
 func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
@@ -238,9 +281,9 @@ func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 		ri := uint32(args[0].Bits)
 		async.mu.Lock()
 		defer async.mu.Unlock()
-		re, ok := handleAt[*readableStreamEnd](async, ri)
-		if !ok {
-			return nil, fmt.Errorf("%w: write-via-stream on handle %d that is not a readable stream end", ErrLinkRefused, ri)
+		re, err := liftStreamArgLocked(async, "write-via-stream", ri)
+		if err != nil {
+			return nil, err
 		}
 		// A stream the host itself produces (read-via-stream's) has no guest writer to drive the copy, and a
 		// host-to-host copy is not built, so it is refused by name (ADR 0122).
@@ -254,7 +297,14 @@ func writeViaStreamTo(w io.Writer, async *asyncHandles) interp.CanonFunc {
 		// completion wrote `value` as 4 bytes at the reader's pointer where `result<_, error-code>` is 2,
 		// zeroing two guest bytes past the result on every completion. It is a default-on path: gate:async
 		// is on, and every WASI 0.3 guest that writes stdout reaches it.
-		fe := &readableFutureEnd{payload: &okv}
+		//
+		// **The future is typed by its payload** (#1282 item 1), which the link checked is the guest's declared one, so
+		// the guest's future.read names the same type and passes checkFutureEndType.
+		//
+		// NEUTER, run: leave it untyped, and these fail: TestWriteViaStreamCompletionWritesOnlyItsPayloadsBytes,
+		// TestWriteViaStreamResolvesAtTheWritersDrop, six of the fork guests' wasmtime differentials in forkp3_test.go,
+		// and TestC3MultiMRunsOnAtLeastFourAgents. TestP3StdMatchesWasmtime passes: Rust std never reads that future.
+		fe := &readableFutureEnd{payload: &okv, elem: elemOfPayload(&okv)}
 		fe.index = async.addLocked(fe)
 		// **The writer has already dropped** (#1264, ADR 0122): its drop unlinked this end and left DROPPED pending,
 		// so the host's read takes it and the future resolves `ok` inline, as the reference's host would find

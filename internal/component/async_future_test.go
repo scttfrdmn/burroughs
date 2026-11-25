@@ -168,7 +168,7 @@ func TestFutureReadDeliversTheOracleOutcomes(t *testing.T) {
 	for _, fx := range loadFutureReads(t) {
 		t.Run(fx.Name, func(t *testing.T) {
 			h := newAsyncHandles()
-			fe := &readableFutureEnd{}
+			fe := &readableFutureEnd{elem: u32Elem} // the oracle's future<u32>, typed as an async lower mints it
 			if fx.Value != nil {
 				fe.value = uint32(*fx.Value)
 			}
@@ -182,7 +182,7 @@ func TestFutureReadDeliversTheOracleOutcomes(t *testing.T) {
 				t.Fatalf("harness caller: %v", err)
 			}
 			const ptr = 32
-			readRet, err := futureRead(h)(cc, []interp.Value{interp.I32(int32(fe.index)), interp.I32(ptr)})
+			readRet, err := futureRead(h, u32Elem, true)(cc, []interp.Value{interp.I32(int32(fe.index)), interp.I32(ptr)})
 			if err != nil {
 				t.Fatalf("future.read: %v", err)
 			}

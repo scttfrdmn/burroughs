@@ -346,6 +346,15 @@ func waitableJoin(h *asyncHandles) interp.CanonFunc {
 		if !ok {
 			return nil, wrongKindTrap("waitable.join", wi, "a waitable", "def:canon_waitable_join")
 		}
+		// def:canon_waitable_join:"trap_if(w.has_sync_waiter)", for a future end a sync copy waits on (#1352). A sync
+		// subtask.cancel's waiter is not tracked here.
+		//
+		// NEUTER, run: drop this check, and TestASyncFutureCopyBlocksAsThePinDoes' sync-read-joined-by-thread row traps
+		// at run's sync tail instead of in T, T having joined the waiting reader; every other row passes.
+		if sw, has := w.(interface{ syncWaiterLocked() bool }); has && sw.syncWaiterLocked() {
+			return nil, &interp.Trap{Reason: fmt.Sprintf("waitable.join: end %d has a sync copy waiting on it, so another "+
+				"Thread may not join it to a set (def:canon_waitable_join: trap_if(w.has_sync_waiter))", wi)}
+		}
 		// si == 0 unjoins; any other index must name a real set. The order matters: a zero index is NOT
 		// looked up, because handle 0 is the table's reserved nil sentinel and would fail the type check.
 		var set *waitableSet
@@ -566,47 +575,28 @@ var streamBuiltins = [...]struct {
 	{"stream.drop-writable", streamDropWritable}, // 0x14 (gate:async increment 4)
 }
 
-// syncCancelGuard is def:cancel_copy's `trap_if(end.in_waitable_set() and not async_)` for the sync form of
-// stream.cancel-read (0x11) and stream.cancel-write (0x12) (grave #1301). A sync cancel waits for its end's own
-// event, which a waitable set would deliver to a set waiter instead, so the pin refuses it while the end is joined.
-// wasmtime 49.0.3 traps the same: "waitable cannot be used synchronously while added to a waitable set". Burroughs
-// cancelled and returned. The async form is unguarded, as the pin's is.
-//
-// **This wrapper checks the join before the end's state, which the pin does not**: def:cancel_copy traps a reader
-// that is not COPYING first. Both are traps, so only the reason differs, and future.cancel-read (#1362) checks the
-// join inside the built-in, after the state, because a joined reader whose event a poll took is one of its rows
-// (future-drop-cancel's cancel-read-after-event-taken, which both oracles trap as having no read pending).
-//
-// NEUTER: return fn unwrapped, and TestASyncCancelOfAJoinedEndTraps' joined rows return CANCELLED where the oracle
-// traps.
-func syncCancelGuard(h *asyncHandles, op byte, fn interp.CanonFunc) interp.CanonFunc {
-	name := "stream.cancel-read"
-	if op == 0x12 {
-		name = "stream.cancel-write"
+// `syncCancelGuard` lived here, a wrapper of the sync stream cancels that trapped a joined end (grave #1301), and is
+// DELETED, because it checked the join before the built-in's own checks, where def:cancel_copy checks it last (#1364
+// item 3): a joined end with no copy in flight trapped as joined, where both oracles trap it as having no copy. The
+// check is now inside streamCancelReadForm and streamCancelWriteForm, after the state's, as futureCancelRead and
+// futureCancelWrite have it.
+
+// syncCancelOfJoinedEnd is def:cancel_copy's `trap_if(end.in_waitable_set() and not async_)` for a stream cancel
+// (grave #1301): a sync cancel waits for its end's own event, which a waitable set would deliver to a set waiter
+// instead, so the pin refuses it while the end is joined. wasmtime 49.0.3 traps the same: "waitable cannot be used
+// synchronously while added to a waitable set". The async form is unguarded, as the pin's is. `set` is the end's, nil
+// when it is not joined. The caller holds asyncHandles.mu.
+func syncCancelOfJoinedEnd(op string, i uint32, async bool, set *waitableSet) error {
+	if async || set == nil {
+		return nil
 	}
-	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-		if len(args) >= 1 {
-			i := uint32(args[0].Bits)
-			h.mu.Lock()
-			var joined bool
-			if op == 0x11 {
-				if e, ok := handleAt[*readableStreamEnd](h, i); ok {
-					joined = e.currentSet() != nil
-				}
-			} else if e, ok := handleAt[*writableStreamEnd](h, i); ok {
-				joined = e.currentSet() != nil
-			}
-			h.mu.Unlock()
-			if joined {
-				return nil, &interp.Trap{Reason: fmt.Sprintf("%s: end %d is joined to a waitable set, so its sync "+
-					"form cannot wait for its own event (def:cancel_copy); unjoin it first, or cancel with async", name, i)}
-			}
-		}
-		return fn(c, args)
-	}
+	return &interp.Trap{Reason: fmt.Sprintf("%s: end %d is joined to a waitable set, so its sync form cannot wait for "+
+		"its own event (def:cancel_copy: trap_if(end.in_waitable_set() and not async_)); unjoin it first, or cancel "+
+		"with async", op, i)}
 }
 
 // streamBuiltinFunc binds stream built-in op (0x0e to 0x14) over the element type index ti names (ADR 0124).
+// `asyncForm` selects the cancels' form (0x11, 0x12); the other five read their form elsewhere or have none.
 //
 // **A stream of any element the codec lays out is bound**, and the refusal of a `stream.read` whose element is not
 // one byte (ADR 0123) is retired: the copy strides by the element and traps as the pin does. That refusal was the
@@ -614,11 +604,17 @@ func syncCancelGuard(h *asyncHandles, op byte, fn interp.CanonFunc) interp.Canon
 // `stream<own<tcp-socket>>` read into every socket program. **A type index naming no stream, or a stream of an
 // element the codec does not lay out** (a stream, a future, an error-context), is still refused at the call, by
 // name: there is no stride to copy at.
-func (w *walker) streamBuiltinFunc(op byte, ti uint32) interp.CanonFunc {
+func (w *walker) streamBuiltinFunc(op byte, ti uint32, asyncForm bool) interp.CanonFunc {
 	b := streamBuiltins[op-0x0e]
 	el := w.streamElemOf(ti)
 	if !el.modeled {
 		return refusedStreamElem(b.name, ti, el)
+	}
+	switch op {
+	case 0x11:
+		return streamCancelReadForm(w.async, el, asyncForm)
+	case 0x12:
+		return streamCancelWriteForm(w.async, el, asyncForm)
 	}
 	return b.bind(w.async, el)
 }
@@ -643,32 +639,31 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 		return waitableSetDrop(w.async), true
 	case 0x23: // waitable.join
 		return waitableJoin(w.async), true
+	// The six future built-ins are each bound over the element their type index names, which future.new stamps on the
+	// ends it mints and the other five check (#1282 item 1).
 	case 0x16: // future.read (gate:async increment 3)
-		return futureRead(w.async), true
+		return futureRead(w.async, w.futureElemOf(slot), asyncForm), true // its form is kept since #1352
 	case 0x1a: // future.drop-readable
-		return futureDrop(w.async), true
+		return futureDrop(w.async, w.futureElemOf(slot)), true
 	case 0x15: // future.new (2nd async guest) — mints a readable+writable future end pair
-		return futureNew(w.async), true
+		return futureNew(w.async, w.futureElemOf(slot)), true
 	case 0x17: // future.write (2nd async guest) — single-value write; parks with no reader, copies to a pending one
-		return futureWrite(w.async, w.futureElemOf(slot)), true
-	case 0x19: // future.cancel-write (2nd async guest) — the future write arm's running CANCELLED
-		return futureCancelWrite(w.async), true
+		return futureWrite(w.async, w.futureElemOf(slot), asyncForm), true // its form is kept since #1352
+	case 0x19: // future.cancel-write (2nd async guest) — its sync form traps on a joined end (#1364)
+		return futureCancelWrite(w.async, w.futureElemOf(slot), asyncForm), true
 	case 0x18: // future.cancel-read (#1362) — cancel-write's twin; its sync form traps on a joined end
-		return futureCancelRead(w.async, asyncForm), true
+		return futureCancelRead(w.async, w.futureElemOf(slot), asyncForm), true
 	case 0x1b: // future.drop-writable (#1362) — drops only a DONE writer
-		return futureDropWritable(w.async), true
+		return futureDropWritable(w.async, w.futureElemOf(slot)), true
 	case 0x06: // subtask.cancel (gate:async increment 4) — the subtask substrate's cancel path
 		return subtaskCancel(w.async, asyncForm), true
 	case 0x0d: // subtask.drop (gate:async increment 4)
 		return subtaskDrop(w.async), true
 	case 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14:
 		// The stream built-ins, each bound over the element its type index names (ADR 0124). stream.read is bound
-		// in its async form only: the sync form is refused by unbuiltAsyncSurface (ADR 0122).
-		fn := w.streamBuiltinFunc(op, slot)
-		if (op == 0x11 || op == 0x12) && !asyncForm {
-			fn = syncCancelGuard(w.async, op, fn)
-		}
-		return fn, true
+		// in its async form only: the sync form is refused by unbuiltAsyncSurface (ADR 0122). The two cancels are
+		// bound in the form they name (#1364).
+		return w.streamBuiltinFunc(op, slot, asyncForm), true
 	case 0x0a: // context.get (gate:async increment 4) — reads the agent's own context slot
 		return contextGet(w.async, slot), true
 	case 0x0b: // context.set

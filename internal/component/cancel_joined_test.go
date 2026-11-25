@@ -19,7 +19,9 @@ import (
 // the fork's F5 slice (#1240), whose netpoller unjoins before it cancels.
 //
 // Neutered, run: syncCancelGuard returning fn unwrapped, and both joined rows return 2 where the oracle traps, while
-// the unjoined rows still pass.
+// the unjoined rows still pass. The guard is gone since #1364, which moved the check after the state's (item 3), and
+// each of the two checks that replaced it was neutered and run the same way: each row fails alone under its own, as
+// streamCancelReadForm and streamCancelWriteForm record.
 func TestASyncCancelOfAJoinedEndTraps(t *testing.T) {
 	t.Setenv(asyncGateEnv, "1")
 	b, err := os.ReadFile("testdata/cancel-joined.wasm")

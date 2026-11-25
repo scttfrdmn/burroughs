@@ -38,6 +38,7 @@ import os
 import random
 import sys
 import threading
+import time
 
 PIN = "2e7895c76905cd3fb7e6be4ac632258972b1f688"  # the Makefile's CANON_PIN (from 2bed77e, 2026-10-17)
 VENDOR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "canon", "gen", "vendor")
@@ -87,7 +88,14 @@ def watch(body):
     return out.value
 
 
+# REFREAD_ONLY reads only the lines whose name starts with it, to take one fixture's rows while writing them. The
+# committed reading is always the whole battery, regenerated with it unset.
+ONLY = os.environ.get("REFREAD_ONLY")
+
+
 def read(name, body):
+    if ONLY and not name.startswith(ONLY):
+        return
     seen = set()
     for det in (False, True):
         d.DETERMINISTIC_PROFILE = det
@@ -120,10 +128,20 @@ def host_invoke(store, fi, on_resolve):
 
 
 def run_to_resolution(store, fi, out):
-    """The embedder: invoke fi (from a host Thread, see host_invoke) and tick the store until it resolves."""
+    """The embedder: invoke fi (from a host Thread, see host_invoke) and tick the store until it resolves.
+
+    **The ticking stops a second after the watch's bound** (#1367). A scenario that never resolves is HANG once the
+    watch's BOUND_S has passed, so ticking after that observes nothing, and a ticking thread holds the GIL against every
+    later scenario: with #1352's two future-sync HANG rows, 32 such threads spun for the rest of the battery, and later
+    rows that resolve in milliseconds alone read `HANG | value N` in a whole run (sync-future-own-thread's
+    sync-read-own-thread, and host-stream-arg-kind's wvs-readable-end). Stopping changes no reading: the watch has
+    already reported."""
     got = []
     host_invoke(store, fi, lambda r: got.append(r))
+    deadline = time.monotonic() + BOUND_S + 1
     while not got:
+        if time.monotonic() > deadline:
+            return
         store.tick()
     out.value = "value %d" % got[0][0]
     out.done.set()
@@ -1313,6 +1331,378 @@ FUTURE_DROP_CANCEL_ROWS = [
 ]
 
 
+class Ends:
+    """The built-ins a D1 fixture's row calls (#1373), over one future or stream minted per row, a 64 KiB memory and
+    the WAT's buffers: 64 the write buffer (7), 128 the read buffer, 256 a poll's (index, payload). Each call names its
+    built-in in `site` first, so a trap reads as the built-in that raised it. `fu8` is the fixtures' future<u8>, `fu32`
+    a future of another element, and `su8` their stream<u8>."""
+
+    def __init__(self, site, mem):
+        self.site, self.mem = site, mem
+        self.fu8 = d.FutureType(d.U8Type())
+        self.fu32 = d.FutureType(d.U32Type())
+        self.su8 = d.StreamType(d.U8Type())
+        self.r = self.w = None
+
+    def opts(self, async_):
+        return d.CanonicalOptions(async_=async_, memory=self.mem)
+
+    def call(self, name, f, *args):
+        self.site["name"] = name
+        return f(*args)
+
+    def split(self, t=None):
+        [p] = self.call("future.new", d.canon_future_new, t or self.fu8)
+        self.r, self.w = p & 0xffffffff, p >> 32
+        self.mem.bytes[64] = 7
+        self.mem.bytes[128] = 0
+
+    def ssplit(self):
+        [p] = self.call("stream.new", d.canon_stream_new, self.su8)
+        self.r, self.w = p & 0xffffffff, p >> 32
+
+    def read(self, t=None, async_=True):
+        return self.call("future.read", d.canon_future_read, t or self.fu8, self.opts(async_), self.r, 128)[0]
+
+    def write(self, t=None, async_=True):
+        return self.call("future.write", d.canon_future_write, t or self.fu8, self.opts(async_), self.w, 64)[0]
+
+    def cancel_read(self, t=None, async_=False):
+        return self.call("future.cancel-read", d.canon_future_cancel_read, t or self.fu8, async_, self.r)[0]
+
+    def cancel_write(self, t=None, async_=False):
+        return self.call("future.cancel-write", d.canon_future_cancel_write, t or self.fu8, async_, self.w)[0]
+
+    def drop_readable(self, t=None):
+        self.call("future.drop-readable", d.canon_future_drop_readable, t or self.fu8, self.r)
+
+    def drop_writable(self, t=None):
+        self.call("future.drop-writable", d.canon_future_drop_writable, t or self.fu8, self.w)
+
+    def stream_cancel_read(self):
+        return self.call("stream.cancel-read", d.canon_stream_cancel_read, self.su8, False, self.r)[0]
+
+    def stream_cancel_write(self):
+        return self.call("stream.cancel-write", d.canon_stream_cancel_write, self.su8, False, self.w)[0]
+
+    def joinnew(self, h):
+        [s] = self.call("waitable-set.new", d.canon_waitable_set_new)
+        self.call("waitable.join", d.canon_waitable_join, h, s)
+        return s
+
+    def pollone(self, h):
+        s = self.joinnew(h)
+        [code] = self.call("waitable-set.poll", d.canon_waitable_set_poll, self.mem, s, 256)
+        return code | (u32(self.mem, 260) << 8) | (u32(self.mem, 256) << 16) | (self.mem.bytes[128] << 24)
+
+
+def ends_row(steps, sync_typed=False):
+    """A D1 fixture's row (#1373): `steps(x)`, over an Ends, is the WAT export's body step for step, and returns its
+    u32. The export is async-typed and lifted sync, as the WATs' are, or sync-typed with `sync_typed`. The trap site
+    names the built-in that was running."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        x = Ends(site, d.MemInst(bytearray(65536), "i32"))
+
+        def run(args):
+            v = steps(x)
+            site["name"] = "after the row"
+            return [v & 0xffffffff]
+
+        rft = d.FuncType([], [d.U32Type()], async_=not sync_typed)
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
+def _then(*fs):
+    """Each f in turn over the same Ends; the row's result is the last one's."""
+
+    def steps(x):
+        v = None
+        for f in fs:
+            v = f(x)
+        return v
+
+    return steps
+
+
+def _wcancel(x):
+    x.split()
+    x.write()
+    return x.cancel_write()
+
+
+# #1353, future-write-after-cancel.wat: a future.write after a cancelled one. Each row with wasmtime 49.0.3's reading.
+FUTURE_WRITE_AFTER_CANCEL_ROWS = [
+    ("cancel-write-parked", "2", _wcancel),
+    ("write-after-cancel-write", "4294967295", _then(_wcancel, lambda x: x.write())),
+    ("read-after-write-after-cancel-write", "1792",
+     _then(_wcancel, lambda x: x.write(), lambda x: x.read() | (x.mem.bytes[128] << 8))),
+    ("poll-after-write-after-cancel-write", "117571589",
+     _then(_wcancel, lambda x: x.write(), lambda x: x.read(), lambda x: x.pollone(x.w))),
+    ("write-to-parked-read-after-cancel-write", "0", _then(_wcancel, lambda x: x.read(), lambda x: x.write())),
+    ("drop-writable-after-cancel-write", "trap, without first writing a value",
+     _then(_wcancel, lambda x: x.drop_writable(), lambda x: 7)),
+]
+
+
+def _rfirst(x):
+    x.split()
+    x.read()
+    return x.write()
+
+
+def _poll_code(x, s):
+    return x.call("waitable-set.poll", d.canon_waitable_set_poll, x.mem, s, 256)[0]
+
+
+def _drop_readable_after_event_taken(x):
+    _rfirst(x)
+    p = x.pollone(x.r)
+    x.drop_readable()
+    return p
+
+
+def _cancel_write_async_joined(x):
+    x.split()
+    s = x.joinnew(x.w)
+    x.write()
+    c = x.cancel_write(async_=True)
+    return c | (_poll_code(x, s) << 8)
+
+
+# #1364, future-stream-checks.wat (items 1, 2, 3 and 5) and future-cancel-write-async.wat (item 2's async control).
+# Each row with wasmtime 49.0.3's reading.
+FUTURE_STREAM_CHECKS_ROWS = [
+    ("drop-readable-read-pending", "trap, busy",
+     _then(lambda x: x.split(), lambda x: x.read(), lambda x: x.drop_readable(), lambda x: 7)),
+    ("drop-readable-event-untaken", "trap, busy", _then(_rfirst, lambda x: x.drop_readable(), lambda x: 7)),
+    ("drop-readable-after-event-taken", "117506052", _drop_readable_after_event_taken),
+    ("drop-readable-idle", "7", _then(lambda x: x.split(), lambda x: x.drop_readable(), lambda x: 7)),
+    ("cancel-write-sync-joined", "trap, synchronously while added to a waitable set",
+     _then(lambda x: x.split(), lambda x: x.joinnew(x.w), lambda x: x.write(), lambda x: x.cancel_write())),
+    ("cancel-write-idle-joined", "trap, no write is pending",
+     _then(lambda x: x.split(), lambda x: x.joinnew(x.w), lambda x: x.cancel_write())),
+    ("stream-cancel-read-idle-joined", "trap, no read is pending",
+     _then(lambda x: x.ssplit(), lambda x: x.joinnew(x.r), lambda x: x.stream_cancel_read())),
+    ("stream-cancel-write-idle-joined", "trap, no write is pending",
+     _then(lambda x: x.ssplit(), lambda x: x.joinnew(x.w), lambda x: x.stream_cancel_write())),
+    ("read-after-read-pending", "trap, concurrent operations",
+     _then(lambda x: x.split(), lambda x: x.read(), lambda x: x.read())),
+    ("read-after-read-event-untaken", "trap, concurrent operations", _then(_rfirst, lambda x: x.read())),
+    ("read-after-read-done", "trap, after previous read succeeded",
+     _then(_rfirst, lambda x: x.pollone(x.r), lambda x: x.read())),
+    ("cancel-write-async-parked", "2",
+     _then(lambda x: x.split(), lambda x: x.write(), lambda x: x.cancel_write(async_=True))),
+    ("cancel-write-async-joined", "2", _cancel_write_async_joined),
+]
+
+
+def _split32(x):
+    x.split(x.fu32)
+
+
+# #1282 item 1 and #1364 item 4, future-typed-traps.wat: a future end's element type against its built-in's. `fu32`
+# is the mismatched type, and a fresh FutureType(U8Type()) is the second type index naming future<u8>, which the pin's
+# dataclass equality compares by structure. Each row with wasmtime 49.0.3's reading.
+FUTURE_TYPED_TRAPS_ROWS = [
+    ("mismatch-read", "trap, of a different type", _then(lambda x: x.split(), lambda x: x.read(x.fu32))),
+    ("mismatch-write", "trap, of a different type", _then(lambda x: x.split(), lambda x: x.write(x.fu32))),
+    ("mismatch-cancel-read", "trap, of a different type",
+     _then(lambda x: x.split(), lambda x: x.read(), lambda x: x.cancel_read(x.fu32))),
+    ("mismatch-cancel-write", "trap, of a different type",
+     _then(lambda x: x.split(), lambda x: x.write(), lambda x: x.cancel_write(x.fu32))),
+    ("mismatch-drop-readable", "trap, of a different type",
+     _then(lambda x: x.split(), lambda x: x.drop_readable(x.fu32), lambda x: 7)),
+    ("mismatch-drop-writable", "trap, of a different type",
+     _then(_rfirst, lambda x: x.drop_writable(x.fu32), lambda x: 7)),
+    ("same-structure-read", "4294967295",
+     _then(lambda x: x.split(), lambda x: x.read(d.FutureType(d.U8Type())))),
+    ("same-structure-write", "1792",
+     _then(lambda x: x.split(), lambda x: x.read(d.FutureType(d.U8Type())),
+           lambda x: x.write(d.FutureType(d.U8Type())) | (x.mem.bytes[128] << 8))),
+    ("mismatch-new32-read8", "trap, of a different type", _then(_split32, lambda x: x.read())),
+    ("nested-same-structure-read", "4294967295",
+     _then(lambda x: x.split(d.FutureType(x.fu8)), lambda x: x.read(d.FutureType(d.FutureType(d.U8Type()))))),
+    ("nested-mismatch-read", "trap, of a different type",
+     _then(lambda x: x.split(d.FutureType(x.fu8)), lambda x: x.read(d.FutureType(x.fu32)))),
+]
+
+
+def _join(x, h):
+    x.joinnew(h)
+
+
+# #1352, future-sync.wat: future.read and future.write in their SYNC form. Each row with wasmtime 49.0.3's reading,
+# and whether its export is sync-typed.
+FUTURE_SYNC_ROWS = [
+    ("sync-write-to-parked-read", "0", False,
+     _then(lambda x: x.split(), lambda x: x.read(), lambda x: x.write(async_=False))),
+    ("sync-read-of-parked-write", "1792", False,
+     _then(lambda x: x.split(), lambda x: x.write(), lambda x: x.read(async_=False) | (x.mem.bytes[128] << 8))),
+    ("sync-write-after-reader-dropped", "1", False,
+     _then(lambda x: x.split(), lambda x: x.drop_readable(), lambda x: x.write(async_=False))),
+    ("sync-write-joined", "trap, synchronously while added to a waitable set", False,
+     _then(lambda x: x.split(), lambda x: _join(x, x.w), lambda x: x.write(async_=False))),
+    ("sync-read-joined", "trap, synchronously while added to a waitable set", False,
+     _then(lambda x: x.split(), lambda x: _join(x, x.r), lambda x: x.read(async_=False))),
+    ("sync-write-no-reader", "hang", False, _then(lambda x: x.split(), lambda x: x.write(async_=False))),
+    ("sync-read-no-writer", "hang", False, _then(lambda x: x.split(), lambda x: x.read(async_=False))),
+    ("sync-write-no-reader-sync-typed", "trap, cannot block a synchronous task", True,
+     _then(lambda x: x.split(), lambda x: x.write(async_=False))),
+]
+
+
+def sync_future_own_thread(slot):
+    """#1352's cmthreads/sync-future-own-thread.wat: a sync-typed, sync-lifted `run` creates a future<u8>, readies a
+    Thread T, and makes a SYNC copy, which waits. `slot` is T's body as the WAT's table has it: 0 writes 7 (so run's
+    sync read waits for it), 1 reads (so run's sync write of 7 waits for it), 2 does nothing (the control, which the
+    sync tail traps), 3 cancels run's waiting read and 4 joins its reader to a set (each traps in T, the reader having
+    a sync waiter). The result is the sync copy's | (the read buffer's byte << 8)."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        fut = d.FutureType(d.U8Type())
+        aopts = d.CanonicalOptions(async_=True, memory=mem)
+        sopts = d.CanonicalOptions(async_=False, memory=mem)
+
+        def t(args):
+            if slot == 0:
+                mem.bytes[64] = 7
+                site["name"] = "T's future.write"
+                d.canon_future_write(fut, aopts, u32(mem, 20), 64)
+            elif slot == 1:
+                site["name"] = "T's future.read"
+                d.canon_future_read(fut, aopts, u32(mem, 16), 128)
+            elif slot == 3:
+                site["name"] = "T's future.cancel-read"
+                d.canon_future_cancel_read(fut, False, u32(mem, 16))
+            elif slot == 4:
+                [s] = d.canon_waitable_set_new()
+                site["name"] = "T's waitable.join"
+                d.canon_waitable_join(u32(mem, 16), s)
+            return []
+
+        tbl = d.Table()
+        fi = tbl.add(d.CoreFuncRef(BODYT, t))
+
+        def run(args):
+            [packed] = d.canon_future_new(fut)
+            mem.bytes[16:20] = (packed & 0xFFFFFFFF).to_bytes(4, "little")
+            mem.bytes[20:24] = (packed >> 32).to_bytes(4, "little")
+            mem.bytes[128] = 0
+            [ti] = d.canon_thread_new_indirect(BODYT, tbl, fi, 0)
+            d.canon_thread_resume_later(ti)
+            if slot == 1:
+                mem.bytes[64] = 7
+                site["name"] = "run's sync future.write"
+                [r] = d.canon_future_write(fut, sopts, u32(mem, 20), 64)
+            else:
+                site["name"] = "run's sync future.read"
+                [r] = d.canon_future_read(fut, sopts, u32(mem, 16), 128)
+            site["name"] = "after the copy"
+            return [r | (mem.bytes[128] << 8)]
+
+        rft = d.FuncType([], [d.U32Type()])
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
+        got = []
+        host_invoke(store, run_fi, lambda r: got.append(r))
+        out.value = "value %d" % got[0][0]
+        out.done.set()
+
+    return body
+
+
+SYNC_FUTURE_OWN_THREAD_ROWS = [
+    ("sync-read-own-thread", "1792", 0),
+    ("sync-write-own-thread", "1792", 1),
+    ("sync-read-own-thread-control", "trap, cannot block a synchronous task", 2),
+    ("sync-read-cancelled-by-thread", "trap, synchronously while added to a waitable set", 3),
+    ("sync-read-joined-by-thread", "trap, synchronously while added to a waitable set", 4),
+]
+
+
+def host_stream_arg(row):
+    """#1367's host-stream-arg-kind.wat: wasi:cli/stdout's write-via-stream, a host import `func(data: stream<u8>) ->
+    future<result<_, error-code>>` lowered sync, called with the handle each row names. The host here is the pin's own
+    shape of one: its on_start lifts the arguments (def:canon_lower's on_start, def:lift_async_value), and it resolves
+    with a host-owned future. Each export is sync-typed and lifted sync, and returns 7 after the call."""
+
+    def body(out, site):
+        store = d.Store()
+        inst = d.ComponentInstance(store)
+        mem = d.MemInst(bytearray(65536), "i32")
+        su8, su32 = d.StreamType(d.U8Type()), d.StreamType(d.U32Type())
+        res_t = d.ResultType(None, d.EnumType(["io", "illegal-byte-sequence", "pipe"]))
+        ft = d.FuncType([("data", su8)], [d.FutureType(res_t)])
+
+        def wvs(on_start, on_resolve):
+            on_start()
+            (r, _w) = d.new_future(res_t, None)
+            on_resolve([r])
+            return lambda: None
+
+        def call(name, f, *args):
+            site["name"] = name
+            return f(*args)
+
+        def ends(t):
+            [p] = call("stream.new", d.canon_stream_new, t)
+            return p & 0xffffffff, p >> 32
+
+        def handle():
+            if row == "wvs-readable-end":
+                return ends(su8)[0]
+            if row == "wvs-writable-end":
+                return ends(su8)[1]
+            if row == "wvs-future-end":
+                [p] = call("future.new", d.canon_future_new, d.FutureType(d.U8Type()))
+                return p & 0xffffffff
+            if row == "wvs-no-handle":
+                return 99
+            if row == "wvs-u32-stream":
+                return ends(su32)[0]
+            if row == "wvs-joined-end":
+                r = ends(su8)[0]
+                [s] = call("waitable-set.new", d.canon_waitable_set_new)
+                call("waitable.join", d.canon_waitable_join, r, s)
+                return r
+            if row == "wvs-reading-end":
+                r = ends(su8)[0]
+                call("stream.read", d.canon_stream_read, su8, d.CanonicalOptions(async_=True, memory=mem), r, 128, 4)
+                return r
+            raise AssertionError("no such row: " + row)
+
+        def run(args):
+            h = handle()
+            call("write-via-stream's lift", d.canon_lower, wvs, ft, d.CanonicalOptions(memory=mem), [h])
+            site["name"] = "after the call"
+            return [7]
+
+        rft = d.FuncType([], [d.U32Type()])
+        run_fi = store.lift(run, rft, d.CanonicalOptions(), inst)
+        run_to_resolution(store, run_fi, out)
+
+    return body
+
+
+HOST_STREAM_ARG_ROWS = [
+    ("wvs-readable-end", "7"),
+    ("wvs-writable-end", "trap, not a readable end of a stream"),
+    ("wvs-future-end", "trap, not a stream"),
+    ("wvs-no-handle", "trap, unknown handle index 99"),
+    ("wvs-u32-stream", "trap, a stream of a different type"),
+    ("wvs-joined-end", "trap, in a waitable set"),
+    ("wvs-reading-end", "trap, busy stream"),
+]
+
+
 def battery():
     """Every committed scenario, calibration first."""
     read("wait-runs-ready (calibration; wasmtime 49.0.2: 5)", wait_runs_ready)
@@ -1357,6 +1747,18 @@ def battery():
          future_rendezvous(False))
     for row, wt in FUTURE_DROP_CANCEL_ROWS:
         read("future-drop-cancel %s (#1362; wasmtime 49.0.3: %s)" % (row, wt), future_drop_cancel(row))
+    for row, wt, steps in FUTURE_WRITE_AFTER_CANCEL_ROWS:
+        read("future-write-after-cancel %s (#1353; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
+    for row, wt, steps in FUTURE_STREAM_CHECKS_ROWS:
+        read("future-stream-checks %s (#1364; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
+    for row, wt, steps in FUTURE_TYPED_TRAPS_ROWS:
+        read("future-typed-traps %s (#1282 item 1, #1364 item 4; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps))
+    for row, wt, sync_typed, steps in FUTURE_SYNC_ROWS:
+        read("future-sync %s (#1352; wasmtime 49.0.3: %s)" % (row, wt), ends_row(steps, sync_typed))
+    for row, wt, slot in SYNC_FUTURE_OWN_THREAD_ROWS:
+        read("sync-future-own-thread %s (#1352; wasmtime 49.0.3: %s)" % (row, wt), sync_future_own_thread(slot))
+    for row, wt in HOST_STREAM_ARG_ROWS:
+        read("host-stream-arg-kind %s (#1367; wasmtime 49.0.3: %s)" % (row, wt), host_stream_arg(row))
 
 
 if __name__ == "__main__":

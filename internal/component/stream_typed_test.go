@@ -52,7 +52,19 @@ func typedStreamRows(t *testing.T, fixture string) (order []string, want map[str
 // runTypedStreamRow instantiates fixture and calls export, bounded.
 func runTypedStreamRow(t *testing.T, b []byte, export string) ([]canon.Value, error) {
 	t.Helper()
-	in, err := Instantiate(b)
+	return runTypedStreamRowWith(t, b, export, nil)
+}
+
+// runTypedStreamRowWith is runTypedStreamRow over host h, or the stub host when h is nil.
+func runTypedStreamRowWith(t *testing.T, b []byte, export string, h *Host) ([]canon.Value, error) {
+	t.Helper()
+	var in *Instantiated
+	var err error
+	if h != nil {
+		in, err = InstantiateWithHost(b, h)
+	} else {
+		in, err = Instantiate(b)
+	}
 	if err != nil {
 		t.Fatalf("instantiate: %v", err)
 	}
@@ -149,11 +161,13 @@ func TestTypedStreamElementsMatchTheOracle(t *testing.T) {
 }
 
 // TestAHostConsumerReadsOnlyAStreamOfBytes is the host sink's element check (ADR 0124): write-via-stream's `data`
-// parameter is not checked at instantiate, so a guest's stream<u32> handed to it reaches the copy, which refuses it
+// parameter is not checked at instantiate, so a guest's stream<u32> handed to it reached the copy, which refused it
 // by name rather than handing its words to stdout as bytes. A stream<u8>, the control, reaches the sink.
 //
-// **Neuter, run:** drop the check (driveStreamCopyLocked's sink arm), and the stream<u32> write's 8 bytes reach the
-// sink.
+// **Since #1367 the stream<u32> traps at the call**, in liftStreamArgLocked, as the pin's lift of a stream argument
+// does (def:lift_async_value:"trap_if(end.t != t)"), before any copy. So this asserts the lift's trap, and the copy's
+// refusal (driveStreamCopyLocked's sink arm) is no longer reached through write-via-stream: its neuter, which read the
+// stream<u32> write's 8 bytes reaching the sink, would now be vacuous here.
 func TestAHostConsumerReadsOnlyAStreamOfBytes(t *testing.T) {
 	words := &elemType{known: true, modeled: true, t: &canon.Type{Kind: canon.KindU32}, size: 4, align: 4, numeric: true}
 	for _, c := range []struct {
@@ -174,17 +188,20 @@ func TestAHostConsumerReadsOnlyAStreamOfBytes(t *testing.T) {
 			packed := uint64(ret[0].Int64())
 			ri, wi := int32(packed&0xffffffff), int32(packed>>32)
 			var out bytes.Buffer
-			if _, werr := writeViaStream(&out)(h)(cc, []interp.Value{interp.I32(ri)}); werr != nil {
+			_, werr := writeViaStream(&out)(h)(cc, []interp.Value{interp.I32(ri)})
+			if c.refused {
+				var trap *interp.Trap
+				if !errors.As(werr, &trap) || !strings.Contains(werr.Error(), "of a different type") {
+					t.Fatalf("write-via-stream of a stream<u32>: %v; want the lift's trap (#1367)", werr)
+				}
+				return
+			}
+			if werr != nil {
 				t.Fatalf("write-via-stream: %v", werr)
 			}
 			_, err = streamWrite(h, c.elem)(cc, []interp.Value{interp.I32(wi), interp.I32(64), interp.I32(2)})
 			switch {
-			case c.refused && (!errors.Is(err, ErrUnsupportedForm) || !strings.Contains(err.Error(), "stream<u8>")):
-				t.Fatalf("stream.write of stream<u32> to write-via-stream: err = %v, sink got %d bytes; want "+
-					"ErrUnsupportedForm naming the host's stream<u8>", err, out.Len())
-			case c.refused && out.Len() != 0:
-				t.Fatalf("the refused copy still reached the sink with %d bytes", out.Len())
-			case !c.refused && (err != nil || out.Len() != 2):
+			case err != nil || out.Len() != 2:
 				t.Fatalf("stream.write of stream<u8>: err = %v, sink got %d bytes; want 2", err, out.Len())
 			}
 		})

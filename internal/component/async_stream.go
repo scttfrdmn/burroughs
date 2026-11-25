@@ -378,7 +378,9 @@ func driveStreamCopyLocked(r *readableStreamEnd, w *writableStreamEnd) (uint32, 
 		// reaches here, and its words would reach stdout as bytes.
 		//
 		// NEUTER: drop this check, and TestAHostConsumerReadsOnlyAStreamOfBytes's stream<u32> write hands its 8 bytes
-		// to the sink.
+		// to the sink. **Since #1367 that write is not reached**: write-via-stream and tcp-socket.send lift their stream
+		// through liftStreamArgLocked, which traps a stream<u32> at the call, so this neuter is vacuous through both and
+		// the check stays as the copy's own guard.
 		if el.size != 1 {
 			return 0, fmt.Errorf("%w: a host consumer reads a stream<u8>, and this stream's element is %s (ADR 0124)",
 				ErrUnsupportedForm, el)
@@ -484,6 +486,13 @@ func (e *readableStreamEnd) hostReadLocked(c *interp.CanonCaller, ptr, n uint32)
 // cancel-write-after-copy-reader-dropped, poll-after-cancel-write and write-after-cancel-write rows trap "no write
 // in flight".
 func streamCancelWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
+	return streamCancelWriteForm(h, elem, true)
+}
+
+// streamCancelWriteForm is streamCancelWrite in the form `async` names (#1364 item 3). The sync form traps on a writer
+// joined to a set (grave #1301), after the state check, in def:cancel_copy's order; syncCancelGuard, which checked the
+// join first, is gone.
+func streamCancelWriteForm(h *asyncHandles, elem *elemType, async bool) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: stream.cancel-write: got %d args, want (i)", len(args))
@@ -506,6 +515,11 @@ func streamCancelWrite(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		// flight" on `e.resolved`.
 		if !e.hasWrite {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-write: end %d has no write in flight (COPYING)", i)}
+		}
+		// NEUTER, run: drop this check, and TestASyncCancelOfAJoinedEndTraps' write-joined-sync row returns 2 where the
+		// oracle traps; TestFutureAndStreamChecksMatchThePin's stream-cancel-write-idle-joined rows pass either way.
+		if err := syncCancelOfJoinedEnd("stream.cancel-write", i, async, e.set); err != nil {
+			return nil, err
 		}
 		if e.resolved {
 			takeCancelledCopyLocked(&e.result, e.readerDropped)
@@ -605,6 +619,11 @@ func takeCancelledCopyLocked(r *copyResult, otherDropped bool) {
 //
 // `elem` is the element the built-in names, which must be the end's (def:cancel_copy, ADR 0124).
 func streamCancelRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
+	return streamCancelReadForm(h, elem, true)
+}
+
+// streamCancelReadForm is streamCancelRead in the form `async` names (#1364 item 3), streamCancelWriteForm's twin.
+func streamCancelReadForm(h *asyncHandles, elem *elemType, async bool) interp.CanonFunc {
 	return func(_ *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("component: stream.cancel-read: got %d args, want (i)", len(args))
@@ -624,6 +643,11 @@ func streamCancelRead(h *asyncHandles, elem *elemType) interp.CanonFunc {
 		}
 		if e.state != copyStateCopying {
 			return nil, &interp.Trap{Reason: fmt.Sprintf("stream.cancel-read: end %d has no copy in flight (state %s)", i, e.state.name())}
+		}
+		// NEUTER, run: drop this check, and TestASyncCancelOfAJoinedEndTraps' read-joined-sync row returns 2 where the
+		// oracle traps; TestFutureAndStreamChecksMatchThePin's stream-cancel-read-idle-joined rows pass either way.
+		if err := syncCancelOfJoinedEnd("stream.cancel-read", i, async, e.set); err != nil {
+			return nil, err
 		}
 		if e.resolved {
 			takeCancelledCopyLocked(&e.result, e.writerDropped)

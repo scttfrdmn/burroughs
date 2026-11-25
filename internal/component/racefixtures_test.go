@@ -86,6 +86,16 @@ var raceWitnessFixtures = []string{
 	// #1362's witness (TestFutureDropWritableAndCancelReadMatchTheOracles): the copies after a cancel or a drop
 	"future-drop-cancel.wasm",
 	"future-cancel-read-async.wasm",
+	// #1353's witness (TestAFutureWriteAfterACancelledOneMatchesTheOracles): the copy of a second write
+	"future-write-after-cancel.wasm",
+	// #1364's witness (TestFutureAndStreamChecksMatchThePin): the copies its rows complete before each check
+	"future-stream-checks.wasm",
+	"future-cancel-write-async.wasm",
+	// #1282 item 1's witness (TestTypedFutureEndsMatchTheOracles): the same-structure write's copy
+	"future-typed-traps.wasm",
+	// #1352's witness (TestASyncFutureCopyBlocksAsThePinDoes): a sync copy's wait and the Thread copy that wakes it
+	"future-sync.wasm",
+	"cmthreads/sync-future-own-thread.wasm",
 }
 
 // TestRaceWitnessFixturesAreHeapBacked decodes every registered fixture, its nested components included,

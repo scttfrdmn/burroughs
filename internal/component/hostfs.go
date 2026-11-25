@@ -902,7 +902,10 @@ func (h *Host) fsWriteViaStream(async *asyncHandles, res *hostResources) interp.
 				"is not built (ADR 0122)", ErrUnsupportedForm)
 		}
 		okv := fsOK(nil, nil)
-		fe := &readableFutureEnd{payload: &okv}
+		// Typed by its payload (#1282 item 1), as tcpSend's write future is: an untyped end fails the guest's
+		// future.read with "a future of a different type". E1a (#1374) and D1 (#1373) were built in parallel, and this
+		// site is where they met.
+		fe := &readableFutureEnd{payload: &okv, elem: elemOfPayload(&okv)}
 		fe.index = async.addLocked(fe)
 		var ended func()
 		if ff != nil {

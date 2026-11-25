@@ -1,0 +1,39 @@
+# Committed readings for host-stream-arg-kind.wasm (#1367): wasi:cli/stdout's write-via-stream, a host import whose
+# parameter is a stream<u8>, given a handle that is not a readable stream<u8> end it may lift.
+# Built:       wasm-tools parse host-stream-arg-kind.wat -o host-stream-arg-kind.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -S p3=y --invoke '<export>()' host-stream-arg-kind.wasm
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken 2026-11-24.
+# Reference:   refread.py's host-stream-arg-kind rows (cmthreads/reference/refread.reading), pin 2e7895c, uv-managed
+#              3.14.8, 16 of 16 runs per line (DETERMINISTIC_PROFILE x 8 seeds). The host there is a Python callee whose
+#              on_start lifts the arguments, as def:canon_lower's does. The two oracles agree on every row.
+#
+# Each line is `<export>: <wasmtime's reading>`; a trap is its last line of stderr, the error chain's `1: ` dropped,
+# and its exit status.
+wvs-readable-end: 7
+wvs-writable-end: trap: handle is not a readable end of a stream (exit 1)
+wvs-future-end: trap: handle is not a stream (exit 1)
+wvs-no-handle: trap: unknown handle index 99 (exit 1)
+wvs-u32-stream: trap: handle is a stream of a different type (exit 1)
+wvs-joined-end: trap: cannot lift stream while it's in a waitable set (exit 1)
+wvs-reading-end: trap: cannot remove busy stream (exit 1)
+#
+# The pin, row by row (refread.reading), with the trap_if that raised each trap, read from the Trap's traceback with a
+# scratch script over the same rows:
+#
+#   export             pin 2e7895c                        the trapping line
+#   wvs-readable-end   value 7
+#   wvs-writable-end   trap write-via-stream's lift       def:lift_async_value:"trap_if(not isinstance(end, ReadableEndT))"
+#   wvs-future-end     trap write-via-stream's lift       def:lift_async_value:"trap_if(not isinstance(end, ReadableEndT))"
+#   wvs-no-handle      trap write-via-stream's lift       def:Table.get:"trap_if(i >= len(self.array))", through def:Table.remove
+#   wvs-u32-stream     trap write-via-stream's lift       def:lift_async_value:"trap_if(end.t != t)"
+#   wvs-joined-end     trap write-via-stream's lift       def:lift_async_value:"trap_if(end.in_waitable_set())"
+#   wvs-reading-end    trap write-via-stream's lift       def:lift_async_value:"trap_if(end.state != End.State.IDLE)"
+#
+# Meaning. The lift of a stream argument removes the handle from the caller's table and traps unless it is a readable
+# stream end of the parameter's type, IDLE and in no set; the control, a fresh readable stream<u8> end, is taken.
+#
+# Burroughs before #1367 (main at 4a30c4f), both gate:cm-threads states, with NewHost's write-via-stream:
+#   wvs-readable-end                            7, the same.
+#   wvs-writable-end, -future-end, -no-handle   a Go error, ErrLinkRefused: "write-via-stream on handle N that is not a
+#                                               readable stream end", not a trap.
+#   wvs-u32-stream, -joined-end, -reading-end   7: the host took the end, of whatever type and in whatever state.

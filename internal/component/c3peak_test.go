@@ -21,8 +21,9 @@ import (
 )
 
 // c3Guard bounds each wait of TestC3MultiMRunsOnAtLeastFourAgents: READY, each request, and run's return. A harness
-// hang guard, not a measurement: a run that parks fails at a place rather than as the test binary's timeout.
-const c3Guard = 120 * time.Second
+// hang guard, not a measurement: a run that parks fails at a place rather than as the test binary's timeout. It is
+// scaled by raceGuardScale, because under -race the CPU phase outran 120 s on CI's macOS runner (#1390's run).
+const c3Guard = 120 * time.Second * raceGuardScale
 
 // c3Holds is the number of /hold requests p3multim waits for before its forced GC (its source's `holds`).
 const c3Holds = 8

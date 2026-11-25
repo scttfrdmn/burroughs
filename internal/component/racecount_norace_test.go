@@ -7,3 +7,6 @@ package component
 // raceCountScale is 1 without `-race`. The exclusive complement of `racecount_race_test.go`, so exactly one of the
 // two is ever compiled and the constant can never be undefined.
 const raceCountScale = 1
+
+// raceGuardScale is 1 without `-race`, the complement of `racecount_race_test.go`'s.
+const raceGuardScale = 1

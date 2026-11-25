@@ -1226,12 +1226,13 @@ func (h *Host) tcpSend(async *asyncHandles, res *hostResources) interp.CanonFunc
 		sc := sock.takeStream(true)
 		async.mu.Lock()
 		defer async.mu.Unlock()
-		re, ok := handleAt[*readableStreamEnd](async, ri)
-		if !ok {
+		// The data argument lifts as write-via-stream's does, and traps as the pin's lift does (#1367).
+		re, lerr := liftStreamArgLocked(async, "tcp-socket.send", ri)
+		if lerr != nil {
 			if sc != nil {
 				res.net.release(sc) // under h.mu, the permitted order
 			}
-			return nil, fmt.Errorf("%w: tcp-socket.send on handle %d that is not a readable stream end", ErrLinkRefused, ri)
+			return nil, lerr
 		}
 		if re.conn != nil && re.conn.producer != nil {
 			if sc != nil {
@@ -1241,7 +1242,7 @@ func (h *Host) tcpSend(async *asyncHandles, res *hostResources) interp.CanonFunc
 				"(ADR 0122)", ErrUnsupportedForm)
 		}
 		okv := sockOK()
-		fe := &readableFutureEnd{payload: &okv}
+		fe := &readableFutureEnd{payload: &okv, elem: elemOfPayload(&okv)} // typed by its payload (#1282 item 1)
 		fe.index = async.addLocked(fe)
 		var ended func()
 		if sc != nil {

@@ -49,6 +49,81 @@ says what it now requires and what it gives up.
   - **Not yet reached:** WASI 0.2's `wasi:filesystem` (its `get-directories` still answers an empty list), and a Go
     program, until the Phase 4 fork binds its `os` package to this interface (F11).
 
+### Fixed
+
+- **A host import's stream argument lifts as the pin's does, and traps where it returned `ErrLinkRefused`**
+  ([#1367](https://github.com/scttfrdmn/burroughs/issues/1367)). `write-via-stream` and `tcp-socket.send` take their
+  `stream<u8>` through one lift, which traps a handle that is not a readable stream end, as it returned a link
+  refusal, and three cases it did not check: a stream of another element, an end joined to a waitable set, and an
+  end not idle.
+  - **Read on both oracles before the code:** `host-stream-arg-kind.wasm` (7 rows), on wasmtime 49.0.3 (10 of 10)
+    and on the pin 2e7895c (`refread.py`, 16 of 16, its host a Python callee whose `on_start` lifts the arguments).
+    The two agree on every row.
+  - **A stream of another element now traps at the call**, where it reached the copy's refusal by name;
+    `TestAHostConsumerReadsOnlyAStreamOfBytes` asserts the trap.
+  - **The passed handle is still not removed from the guest's table**, as the pin's lift removes it.
+  - **Witness:** `TestAHostStreamArgumentLiftsAsThePinDoes`, in both `gate:cm-threads` states, over `NewHost`. Each
+    check was neutered and run, and its site records the result.
+- **A sync `future.read` or `future.write` waits for its own event, where it returned BLOCKED to a caller that cannot
+  take it** ([#1352](https://github.com/scttfrdmn/burroughs/issues/1352)). The decoder kept the two built-ins' memory
+  but dropped their `async`, so the sync form was bound as the async one.
+  - **Read on both oracles before the code:** `future-sync.wasm` (8 rows) and `cmthreads/sync-future-own-thread.wasm`
+    (5 rows), on wasmtime 49.0.3 (10 of 10, the two hang rows 3 of 3, with `component-model-more-async-builtins`) and
+    on the pin 2e7895c (`refread.py`, 16 of 16). The two agree on every row.
+  - **A sync copy that finds the other end's copy parked completes inline.** One that does not waits inside a blocking
+    excursion that gives up the run slot, so another Thread of the instance can make the other copy and wake it. A
+    sync-typed task with nothing able to wake it traps at the sync tail; an async-typed one blocks until `Close`, as
+    both oracles hang (ADR 0128).
+  - **A sync copy on an end joined to a waitable set traps**, and so does another Thread's `future.cancel-read`,
+    `future.cancel-write` or `waitable.join` of an end a sync copy is waiting on.
+  - **`future-read-synth.wasm`'s read is now `async`**: its sync read relied on the BLOCKED, and now waits on a future
+    nothing resolves.
+  - The sync `stream.write` is still bound as the async form, and the sync `stream.read` is still refused
+    ([#1272](https://github.com/scttfrdmn/burroughs/issues/1272)).
+  - **Witness:** `TestASyncFutureCopyBlocksAsThePinDoes`, the future-sync rows in both `gate:cm-threads` states and the
+    thread rows with it on. A hang row asserts the place, the call parked in the copy's wait, and that `Close` ends it.
+    Each load-bearing line was neutered and run, and its site records the result.
+- **A future end carries its element type, and a future built-in naming another type traps**
+  ([#1282](https://github.com/scttfrdmn/burroughs/issues/1282) item 1, and item 4 of
+  [#1364](https://github.com/scttfrdmn/burroughs/issues/1364)), as stream ends have since ADR 0124. Future ends carried
+  no type, so a read, write, cancel or drop through a future of another element went ahead.
+  - **Read on both oracles before the code:** `future-typed-traps.wasm` (11 rows), on wasmtime 49.0.3 (10 of 10) and
+    on the pin 2e7895c (`refread.py`, 16 of 16). The two agree on every row.
+  - **`future.new` stamps the type it names on both ends**, and a host-minted future is typed by its payload, which
+    the link already checks against the guest's declaration. An async lower's future is a `future<u32>`.
+  - **Two type indices naming one type are one type**, as the pin compares them structurally, including a future of
+    an element the codec does not lay out.
+  - `future.write`'s alignment and range traps (`def:GuestBuffer`), the other half of #1282's item 1, are not
+    modelled yet.
+  - **Witness:** `TestTypedFutureEndsMatchTheOracles`, in both `gate:cm-threads` states. The check, the structural
+    comparison and a host future's type were each neutered and run, and each site records the result.
+- **Four future and stream built-in checks now match the pin** (items 1, 2, 3 and 5 of
+  [#1364](https://github.com/scttfrdmn/burroughs/issues/1364); item 4 is the typed-future entry). Each one let a call
+  through, or trapped for another reason, where the reference traps.
+  - **Read on both oracles before the code:** `future-stream-checks.wasm` (11 rows) and
+    `future-cancel-write-async.wasm` (2 rows), on wasmtime 49.0.3 (10 of 10) and on the pin 2e7895c (`refread.py`,
+    16 of 16). The two agree on every row, and the pin's traceback names the check behind each trap.
+  - **`future.drop-readable` traps a reader mid-copy**: a read pending, or one a write completed whose event is not
+    yet taken. It dropped it.
+  - **The sync `future.cancel-write` traps a writer joined to a waitable set**, after its state check, as the sync
+    `future.cancel-read` already did. One binding served both forms.
+  - **The sync stream cancels check the end's state before the join**, so a joined end with no copy in flight traps as
+    having none, as both oracles read it. `syncCancelGuard`, which checked the join first, is gone; the check is now
+    in each built-in, after the state's.
+  - **A `future.read` on a reader that is not idle traps.** It returned a Go error.
+  - **`future-read-synth.wasm` no longer drops its reader mid-read**, which the first item now traps; its WAT, in the
+    testdata README, is the fixture's source.
+  - **Witnesses:** `TestFutureAndStreamChecksMatchThePin`, in both `gate:cm-threads` states. Each new check was
+    neutered and run, and its site records the result.
+- **A `future.write` after a cancelled one is admitted, where it trapped "not writable"**
+  ([#1353](https://github.com/scttfrdmn/burroughs/issues/1353)). A cancelled write leaves its writable end IDLE, as
+  the pin's `FutureEnd.notify` does, so a second write parks with no reader and a read then completes it.
+  - **Read on both oracles before the code:** `future-write-after-cancel.wasm` (6 rows), on wasmtime 49.0.3 (10 of
+    10) and on the pin 2e7895c (`refread.py`, 16 of 16). The two agree on every row.
+  - **The cancelled writer is still not DONE**, so its drop traps, as both oracles read.
+  - **Witness:** `TestAFutureWriteAfterACancelledOneMatchesTheOracles`, in both `gate:cm-threads` states. The reset
+    was neutered and run, and its site records the result.
+
 ## [0.15.0] - 2026-11-24
 *Implements contract v0.1.*
 
