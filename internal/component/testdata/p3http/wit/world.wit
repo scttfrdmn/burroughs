@@ -1,0 +1,9 @@
+// The interfaces p3http calls explicitly (#1383, ADR 0135). build.sh stages this beside the pinned WASI 0.3.0 WIT the
+// nightly's std vendors (wasip3-0.8.0+wasi-0.3.0), as wit/deps, so the bindings are generated from the same WIT the
+// std guest's own imports are.
+package burroughs:p3http;
+
+world p3http {
+  import wasi:http/types@0.3.0;
+  import wasi:http/client@0.3.0;
+}

@@ -1,0 +1,13 @@
+[package]
+name = "p3http"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# wit-bindgen at the version the nightly's std vendors for its own wasip3 bindings, p3sys's choice (ADR 0119): the
+# macro, the realloc export and the async runtime, which client.send and the body streams need (#1383, ADR 0135).
+[dependencies]
+wit-bindgen = { version = "=0.61.1", default-features = false, features = ["macros", "realloc", "async"] }
+
+[profile.release]
+opt-level = "s"
