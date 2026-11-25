@@ -671,7 +671,8 @@ func (w *walker) asyncBuiltinFunc(op byte, slot uint32, asyncForm bool, resultT 
 	case 0x09: // task.return (2nd async guest) — resolve the current async-lift task
 		// The declared result type reaches it now (#903), so it can lift its argument eagerly — the order
 		// the model uses (definitions.py:canon_task_return:"result = lift_flat_values(cx, MAX_FLAT_PARAMS,"). nil for an export declaring no result.
-		return taskReturn(w.async, resultT), true
+		// The instance's table and type resolver move an own in the result to a host caller's table (ADR 0136).
+		return taskReturn(w.async, resultT, w.hostRes, w.hostResourceAt), true
 	case 0x05: // task.cancel (#864) — traps unless the task was cancelled, which nothing can do yet
 		return taskCancel(w.async), true
 	}
