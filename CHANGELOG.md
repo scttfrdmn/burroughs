@@ -87,6 +87,14 @@ says what it now requires and what it gives up.
     delivers at the guest's returns (`WAIT` or `YIELD`), which is the pull R-5 already names.
   - **R-2's text is unchanged, so this is an append, not an amendment.** The contract stays v0.1. No engine code
     changes here; E2-in (#1384, #1385) builds to this text.
+- **The toolchain pin moves from go1.26.9 to go1.26.11**, clearing two standard-library advisories that become
+  reachable once the engine calls `net/http`'s client:
+  - **GO-2026-6859:** an HTTP/1 server crash from a MaxBytesReader header race in `net/http`, fixed in go1.26.11;
+  - **GO-2026-6809:** compromised intermediate certificates distrusted in `crypto/x509`, fixed in go1.26.10.
+
+  `wasi:http`'s outgoing half (#1383) is the first engine code to call `net/http.Transport`, and `make ci`'s
+  vuln gate refused that tree on go1.26.9. The language line stays `go 1.26`. This is its own gated change, as every
+  toolchain bump is, so the advisory fix and the feature can be reviewed and reverted apart.
 
 ### Fixed
 

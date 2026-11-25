@@ -22,9 +22,13 @@ go 1.26
 // advisory's traces were in the `--scratch` write path, so the gap hid a confinement finding rather
 // than a cosmetic one.
 //
-// # Why 1.26.9 and not 1.27.2, the newest release
+// # Why 1.26.11 and not a 1.27 release
 //
-// 1.26.9 is the smallest change that clears the advisory and keeps the language line at `go 1.26`,
-// which is what `CLAUDE.md` states this project requires. A minor-line move carries new vet and lint
-// behaviour; conflating that with a security fix makes both harder to review and harder to revert.
-toolchain go1.26.9
+// A patch on the 1.26 line is the smallest change that clears an advisory and keeps the language line
+// at `go 1.26`, which is what `CLAUDE.md` states this project requires. A minor-line move carries new
+// vet and lint behaviour; conflating that with a security fix makes both harder to review and revert.
+// That was 1.26.9 for GO-2026-6604. It is 1.26.11 for GO-2026-6859 (a `net/http` MaxBytesReader
+// header race, fixed in 1.26.11) and GO-2026-6809 (compromised intermediates distrusted in
+// `crypto/x509`, fixed in 1.26.10). Both became reachable from the engine when `wasi:http`'s client
+// (#1383) first called `net/http.Transport`, so `make ci`'s vuln gate refused that tree on 1.26.9.
+toolchain go1.26.11
