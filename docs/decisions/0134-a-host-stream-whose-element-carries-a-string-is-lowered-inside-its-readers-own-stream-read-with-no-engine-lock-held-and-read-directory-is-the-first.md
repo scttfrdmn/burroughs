@@ -26,7 +26,7 @@ The pin's reallocation sets `may_leave` false around the call (def@2e7895c:LiftL
 
 ### Both oracles, read before this ADR
 
-`testdata/fs-readdir.wat` (16 rows, every one using the async `stream.read`, since the sync form is refused, #1272) was read on wasmtime 49.0.3 (10 of 10 per row) and on the pin through `refread.py`, with its host written as Burroughs' producer is stated below (16 of 16 seeds per row). The two agree on every row. What they read:
+`testdata/fs-readdir.wat` has 17 rows, every one using the async `stream.read`, since the sync form is refused (#1272). Sixteen were read on wasmtime 49.0.3 (10 of 10 per row), and on the pin through `refread.py`, with its host written as Burroughs' producer is stated below (16 of 16 seeds per row). The seventeenth is the read-only grant's, which wasmtime's CLI cannot grant (ADR 0133). The two oracles agree on every row. What they read:
 
 - **A read that finds entries returns BLOCKED, and its event carries them.** A read of 8 on a three-entry directory is BLOCKED, then `0x31`: DROPPED with progress 3, in the one event. On one entry it is `0x11`, and on five, `0x51`.
 - **A read that finds nothing left takes DROPPED inline:** `0x01` on an empty directory, and on the read after the last entry.
@@ -45,7 +45,7 @@ The pin's reallocation sets `may_leave` false around the call (def@2e7895c:LiftL
 
 **DROPPED with progress.** wasmtime's `0x31` is the event of a read that parked, and the pin admits it there: the event's result is computed when it is taken, from whether the writer is still there (def@2e7895c:StreamEnd.notify.stream_event:"if self.other is None:"), so a host that writes into a parked read and then drops its writer gives that read DROPPED with the copy's progress. **The pin does not admit it inline.** A read that arrives second copies and takes its event in the same step, with the writer present (def@2e7895c:copy:"code,index,payload = end.get_pending_event()"), so an inline return is COMPLETED with its progress. The pin's `writer-first` row reads exactly that: COMPLETED with 1 inline, then DROPPED inline on the next read.
 
-- **(a) Burroughs' byte producers' rule** (ADR 0122): deliver COMPLETED, and finish on the next read. *For:* pin-legal, and one rule for every producer. *Costs:* a listing takes one read more than wasmtime's, and six of the sixteen rows read otherwise than wasmtime: one, one-drain, many, batch and the two one-at-a-time rows.
+- **(a) Burroughs' byte producers' rule** (ADR 0122): deliver COMPLETED, and finish on the next read. *For:* pin-legal, and one rule for every producer. *Costs:* a listing takes one read more than wasmtime's, and five of the sixteen wasmtime rows read otherwise: one, one-drain, many, batch and no-read-flag. (This sentence named the two one-at-a-time rows in place of no-read-flag until the build measured option (a) as a neuter: a read of 1 is never short, so it never finishes early under either option.)
 - **(b) wasmtime's reading:** a read that finds entries parks with its copy's event already pending, and a batch that ends the listing finishes the stream behind it, so the event is DROPPED with the batch's progress. *For:* pin-legal, as above, and every row reads as both oracles do. *Costs:* a read returns BLOCKED with its event already pending, so the guest waits for an event that is there, which is the precedent stdin's end set (ADR 0122's read-park).
 
 ## Choice
@@ -98,6 +98,20 @@ Under `gate:cm-shared-memory` the lowering still runs on the reader's goroutine,
   - A stream.read of a string-carrying element with no `realloc` canonopt is not refused at instantiate, where wasm-tools 1.258.0 refuses it (*"canonical option `realloc` is required"*). It fails at its first name, with `CanonCaller.Realloc`'s error. No canon in this engine enforces that rule yet.
   - `future.read`'s realloc is still dropped at decode (above).
   - Entries come in host order, so a guest that wants an order sorts.
+
+## The build, as measured
+
+On darwin/arm64, in the worktree of #1374's E1b branch. The readings were committed before the engine code (`fs-readdir.reading`, `fs-readdir-run.reading`, and `refread.reading`'s `fs-readdir` lines).
+
+- **`TestFSReadDirectoryMatchesBothOracles`** (`internal/component/hostfs_readdir_test.go`, over `testdata/fs-readdir.wat`): all sixteen wasmtime rows, and the read-only row, matched with `gate:cm-threads` off and on, plain and under `-race`. When each row returned, the instance's registry held only the file descriptors it had left open.
+- **`TestADirectoryReadIsLoweredWithNoEngineLockHeld`** stands inside each of the names row's four realloc calls and finds `asyncHandles.mu`, the registry's lock and the resource table's lock all free. From inside the first, a cancel of the end traps by name, a drop traps mid-copy and a second read traps not IDLE, and the row still reads wasmtime's value.
+- **The public paths:** `TestAComponentListsTheDirectoryItIsGranted` (`ComponentConfig.Run`) and `TestRunAComponentThatListsItsDir` (`burroughs run`) matched `fs-readdir-run.reading`: 134 on `--dir` and `--scratch`, 3 on neither.
+- **What the neuters showed** (each run, each reverted; the full list is at the sites as `NEUTER, run:` comments):
+  - **The realloc is the whole mechanism's precondition.** With it dropped at the decode, or not bound into the built-in, the fifteen rows that lower an entry trap at their first name.
+  - **The three steps are what keep the realloc lock-free.** With `asyncHandles.mu` held across the lowering, all four probes find it held.
+  - **DROPPED with progress is a property of the parked read.** Returning the event inline fails six rows, each with its payload inline: one, one-at-a-time-imm, batch, read-only-one, no-read-flag and early-drop. Option (a), no finish behind the batch, fails six too: one, one-drain, many, batch, read-only-one and no-read-flag.
+  - **The cancel guard is load-bearing:** without it the cancel from inside the realloc returns CANCELLED with the read still being lowered, the drop after it removes the handle, and the guest's wait for its own read traps.
+  - **The copy's refusal of a string element is reached only by asking it:** without it, a directory stream's copy under the lock returns progress 0 and no error.
 
 ## Rollback
 

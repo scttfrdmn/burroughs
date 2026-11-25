@@ -474,6 +474,16 @@ func (w *walker) step(d Def) error {
 					rt := resolveVal(*cn.Result, w.c.sectionTypeAt(), nil)
 					resultT = &rt
 				}
+				// stream.read's realloc, the only one the decoder keeps for a built-in (ADR 0134), is resolved and
+				// type-checked as a lower's is, so a mistyped one is refused here.
+				//
+				// NEUTER, run: ignore the error, and TestAComponentsMistypedReallocIsRefusedAsInvalid's
+				// stream-read-realloc-mistyped row loads at both LoadComponent doors, and Run refuses it for having no run
+				// export rather than as invalid.
+				realloc, err := w.lowerRealloc(cn)
+				if err != nil {
+					return err
+				}
 				w.appendCore(SpaceCoreFunc, coreDef{
 					asyncBuiltin:       true,
 					asyncBuiltinOp:     cn.AsyncOp,
@@ -481,6 +491,7 @@ func (w *walker) step(d Def) error {
 					asyncBuiltinForm:   cn.AsyncForm,
 					asyncBuiltinResult: resultT,
 					lowerMem:           w.lowerMemory(cn),
+					lowerRealloc:       realloc,
 				})
 				return nil
 			}
@@ -648,7 +659,11 @@ func (w *walker) resolverFor(m *bin.Module, args []CoreInstantiateArg) interp.Im
 				if !asyncBuiltinMayLeaveExempt(d.asyncBuiltinOp) {
 					fn = mayLeaveGuard(name, fn)
 				}
-				return w.lowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem}), true
+				// The realloc is stream.read's, nil for every other built-in (ADR 0134).
+				//
+				// NEUTER, run: bind no realloc, and TestFSReadDirectoryMatchesBothOracles' fifteen rows that lower an entry
+				// trap at their first name, "this canon lower declared no realloc option", as under the decoder's neuter.
+				return w.lowerExtern(ft, fn, interp.CanonOptions{Memory: d.lowerMem, Realloc: d.lowerRealloc}), true
 			}
 			return interp.Extern{}, false
 		}

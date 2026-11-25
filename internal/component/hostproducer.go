@@ -97,6 +97,14 @@ type streamProducer struct {
 	// what buf holds for bytes: sockets accepted, adopted into the registry, and not yet delivered.
 	accept *sockAccept
 	socks  []*tcpSocket
+
+	// dir, when set, makes this read-directory's stream<directory-entry> (ADR 0134): its source is a directory, its
+	// elements records carrying a string, and it has **no goroutine**. Each read is served by the reader's own
+	// stream.read, which reads a batch and lowers it through the reader's realloc with no engine lock held
+	// (dirReadLocked). src, srcMu, buf, mapErr, track, accept and socks are unused. serving is set while a read is
+	// served with the lock released, so a cancel of it traps (streamCancelReadForm).
+	dir     *fsDirSource
+	serving bool
 }
 
 // queuedLocked reports something read and not yet delivered: bytes, or accepted sockets. The caller holds p.h.mu.
@@ -145,9 +153,14 @@ func (h *Host) readViaStream(async *asyncHandles) interp.CanonFunc {
 // mintLocked makes the stream's ends and its future, and adds the guest's two to the table: the readable end,
 // then the future. The caller holds p.h.mu. Both ends carry byteElem (ADR 0124): the host writes bytes, and the
 // guest's declared stream<u8> was checked at instantiate (checkConsumerPayload), so its stream.read names that type.
+// A directory's carry dirEntryElem, checked the same way (ADR 0134).
 func (p *streamProducer) mintLocked() (ri, fi int) {
-	p.writer = &writableStreamEnd{producer: p, elem: byteElem}
-	p.reader = &readableStreamEnd{state: copyStateIdle, conn: p.writer, elem: byteElem}
+	el := byteElem
+	if p.dir != nil {
+		el = dirEntryElem
+	}
+	p.writer = &writableStreamEnd{producer: p, elem: el}
+	p.reader = &readableStreamEnd{state: copyStateIdle, conn: p.writer, elem: el}
 	p.writer.conn = p.reader
 	p.future = &readableFutureEnd{payload: &p.ok, elem: elemOfPayload(&p.ok)} // typed by its payload (#1282 item 1)
 	p.reader.index = p.h.addLocked(p.reader)
@@ -206,7 +219,19 @@ func (p *streamProducer) readLocked(e *readableStreamEnd) ([]interp.Value, error
 //
 // NEUTER: drop the rest after a copy, and TestAStreamReadCancelledMidReadServesTheBufferedBytesNext's read after
 // the 4-byte one parks BLOCKED, "ef" lost.
+//
+// **An element that is neither a byte nor an own is refused by name** (ADR 0134). A directory's entries carry a
+// string, which lowers through the reader's `cabi_realloc`, guest code that may not run under this lock nor off the
+// reader's goroutine (`offAgentHeap`). Its reads are served by the reader's own stream.read, which never reaches this
+// copy; this is the arm a delivery or a second arriver would reach if one did.
+//
+// NEUTER, run: drop this refusal, and TestAStringElementIsNeverCopiedUnderTheLock's copy of a directory stream returns
+// progress 0 with no error, its entry neither lowered nor refused.
 func (p *streamProducer) copyIntoLocked(r *readableStreamEnd) (uint32, error) {
+	if el := p.writer.elem; el != byteElem && el.own == nil {
+		return 0, fmt.Errorf("%w: a host stream of %s is lowered only inside its reader's own stream.read, never by a "+
+			"copy under the handle table's lock (ADR 0134)", ErrUnsupportedForm, el)
+	}
 	if own := p.writer.elem.own; own != nil {
 		return p.copyOwnsLocked(r, own)
 	}

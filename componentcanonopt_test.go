@@ -29,6 +29,8 @@ func TestAComponentsMistypedReallocIsRefusedAsInvalid(t *testing.T) {
 	}{
 		{"internal/component/testdata/canon-realloc-mistyped.wasm", true},
 		{"internal/component/testdata/canon-realloc-host.wasm", false},
+		// stream.read's realloc, kept since ADR 0134; its neuter is at the walk's call.
+		{"internal/component/testdata/stream-read-realloc-mistyped.wasm", true},
 	} {
 		wasm, err := os.ReadFile(c.fixture)
 		if err != nil {
