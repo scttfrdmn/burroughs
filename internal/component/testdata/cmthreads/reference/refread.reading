@@ -122,3 +122,10 @@ fs-readdir no-read-flag (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 1179392): 
 fs-readdir read-zero (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 0): value 0
 fs-readdir early-drop (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: 4351): value 4351
 fs-readdir writer-first (#1374 E1b, ADR 0134's host; wasmtime 49.0.3: no row): value 16846864
+task-return-early early (#1384 E2-in-a; wasmtime 49.0.3: 66055): value 66055
+task-return-early later (#1384 E2-in-a; wasmtime 49.0.3: 65799): value 65799 | value 66055
+task-return-early trap-after (#1384 E2-in-a; wasmtime 49.0.3: trap, unreachable): trap g's callback (unreachable)
+task-return-early twice (#1384 E2-in-a; wasmtime 49.0.3: trap, task.return or task.cancel called more than once): trap g's second task.return
+task-return-early no-return (#1384 E2-in-a; wasmtime 49.0.3: trap, async-lifted export failed to produce a result): trap g's EXIT without task.return
+task-return-early at-exit (#1384 E2-in-a; wasmtime 49.0.3: 69895): value 69895 | value 70151
+task-return-early cancel-poll (#1384 E2-in-a; wasmtime 49.0.3: hang, its canceller spinning): value 4615
