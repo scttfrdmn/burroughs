@@ -220,7 +220,7 @@ func (h *Host) responseNew(async *asyncHandles, res *hostResources) interp.Canon
 		if err != nil {
 			return nil, err
 		}
-		r := &httpResponse{status: 200, headers: hdrs, h: async, reg: res.http, body: body}
+		r := &httpResponse{status: 200, headers: hdrs, h: async, reg: res.http, body: body, caller: c}
 		async.mu.Lock()
 		r.sent = mintTransmitLocked(async)
 		async.mu.Unlock()
@@ -274,8 +274,8 @@ func mintEmptyStreamLocked(h *asyncHandles) int {
 }
 
 // requestConsumeBody is `[static]request.consume-body: func(this: request, res: future<result<_, error-code>>) ->
-// tuple<stream<u8>, future<result<option<trailers>, error-code>>>`, (this, res, ret). A request is always the
-// guest's, so it is passThroughLocked's.
+// tuple<stream<u8>, future<result<option<trailers>, error-code>>>`, (this, res, ret). A guest's request is
+// passThroughLocked's, and one the host is serving is the host's body (httpIncoming.consumeLocked, ADR 0137).
 func (h *Host) requestConsumeBody(async *asyncHandles, res *hostResources) interp.CanonFunc {
 	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
 		if err := wantArgs("request.consume-body", args, 3, "this, res, ret"); err != nil {
@@ -292,7 +292,15 @@ func (h *Host) requestConsumeBody(async *asyncHandles, res *hostResources) inter
 			async.mu.Unlock()
 			return nil, err
 		}
-		si, ti, err := passThroughLocked(async, res.http, &r.body, r.sent, resEnd)
+		var si, ti int
+		// NEUTER, run: take the pass-through for an incoming request too, and TestP3ServeMatchesWasmtime does not
+		// complete: it hangs at the dump row, the first to consume a request's body, which has no guest body to hand
+		// back, and the test binary times out.
+		if r.incoming != nil {
+			si, ti, err = r.incoming.consumeLocked(async, res, resEnd)
+		} else {
+			si, ti, err = passThroughLocked(async, res.http, &r.body, r.sent, resEnd)
+		}
 		async.mu.Unlock()
 		if err != nil {
 			return nil, err

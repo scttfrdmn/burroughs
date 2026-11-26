@@ -25,10 +25,48 @@ says what it now requires and what it gives up.
 
 ### Added
 
+- **A component serves HTTP: `Component.Handler()` and `burroughs serve`, `wasi:http@0.3`'s incoming half**
+  ([#1385](https://github.com/scttfrdmn/burroughs/issues/1385), E2-in-b of the v0.16.0 plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0137). **Public API**, on Scott's ruling on
+  [#1375](https://github.com/scttfrdmn/burroughs/issues/1375):
+  - **`func (c *Component) Handler() http.Handler`** serves the component's `wasi:http/handler@0.3.x#handle` export.
+    The embedder owns the listener, TLS and timeouts. Each request is a call of `handle`, answered at its `task.return`
+    (ADR 0136). The response's status and headers are flushed at the answer, and its body is copied as the guest writes
+    it, after `handle` has returned. Its trailers are sent when the request's `TE` names `trailers`, as hyper sends them.
+    `Component.Close` closes the handler. It ends every request's bodies wherever it finds them: a response body not
+    yet recorded, and a request body with no read in flight, are ended too (ADR 0137's postscript).
+  - **`burroughs serve [--addr HOST:PORT] file.wasm`**, mirroring `wasmtime serve`. The default address is
+    `0.0.0.0:8080`, and serve prints `Serving HTTP on http://ADDR/` on stderr once it listens. It grants outgoing HTTP,
+    as wasmtime's does, so it takes no `--allow-http`. It also accepts `run`'s `--dir`, `--scratch`, `--inherit-network`
+    and `--allow-ip-name-lookup`, with their syntax and meaning, and serves until SIGINT or SIGTERM. A component that
+    exports no handler is refused before anything listens, as a usage error.
+  - **Each request runs on an instance of its own**, made from the component's bytes and configuration. An instance is
+    reused only after its earlier request's task has exited cleanly, so a request never enters an instance whose last
+    task has returned and not exited. wasmtime counts its reuse to the return, and its default reuse panics a
+    wit-bindgen guest under a burst. Requests run in parallel, and at most 16 idle instances are kept. There is no
+    knob. The instance `Call` reaches serves no request.
+  - **A failure before the answer is a fixed 500 page**, wasmtime's with `burroughs` in it: an `error-code`, a trap, or
+    an instance that cannot be made. A trap after the answer ends the body cleanly, as wasmtime's does, and trailers
+    resolved as an error cut the connection. A client that goes away cancels nothing, as on wasmtime: a running handler
+    runs on, and one writing its body is told the reader has gone.
+  - **Witnesses:** `p3serve`, a Rust `wasm32-wasip3` guest on wit-bindgen 0.61.1, matches wasmtime 49.0.3 serve's
+    reading on all 24 of its rows (`p3serve.reading`, 10 of 10 drives). The rows cover a request's method, target,
+    headers, options, body and trailers as the guest reads them; a 4 MiB response and a streamed echo; response
+    trailers with and without `TE`; a 418, a fixed length and the 500 page; traps before and after the answer; a body
+    written after a wait; four requests parked at once, as a place; clients that go away; and a send from inside the
+    handler. They pass with `gate:cm-threads` off and on, plain and under `-race`. No serving goroutine survives Close.
+  - **Named divergences:** reuse counted to the exit; the page's name; no log line for an `error-code`; header names in
+    Go's canonical spelling and sorted order; an empty environment, where wasmtime sets `INSTANCE_ID`, and an empty
+    stdin.
+  - **Not yet reached:** a response whose body is a stream the host produces needs a host-to-host copy (E2-in-c,
+    [#1386](https://github.com/scttfrdmn/burroughs/issues/1386)), and is answered with the page. A Go program serves
+    once the Phase 4 fork's reactor exports `handle` (F12-in,
+    [#1387](https://github.com/scttfrdmn/burroughs/issues/1387)).
+
 - **The engine can call an async export as the host and be answered at its `task.return`, with an own carried each
   way: the engine half of serving incoming `wasi:http`** ([#1384](https://github.com/scttfrdmn/burroughs/issues/1384),
   E2-in-a of the v0.16.0 plan [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0136). No public API
-  changes: E2-in-b's `Component.Handler()` is the surface that will use it.
+  changes: E2-in-b's `Component.Handler()`, above, is the surface that uses it.
   - **Answered at the return, run to the exit:** the host's hook is called inside the `task.return` that resolves the
     task, with the lifted result, and the call returns when the task exits, with a trap after the return included.
     `handle`'s shape needs both: a handler returns its response and then writes its body.
@@ -95,8 +133,8 @@ says what it now requires and what it gives up.
   - **Named divergences:** the deny-at-call above. A `DNS-error`'s payload is none where wasmtime's `rcode` carries a
     string. A response's headers come in sorted order, since Go's `Header` is a map. A value carried through a
     transmission future has its strings made none.
-  - **Not yet reached:** incoming `handler.handle` and a serve loop (E2-in), and a Go program, until the Phase 4 fork
-    binds a `RoundTripper` to `send` (F12-out).
+  - **Not yet reached:** a Go program, until the Phase 4 fork binds a `RoundTripper` to `send` (F12-out). Incoming
+    `handler.handle` and its serve loop landed with E2-in-b, above.
 
 - **`wasi:filesystem@0.3` for components, its first slice: a component reads, writes and stats files beneath a
   directory it is granted** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1a of the v0.16.0 plan
@@ -146,6 +184,15 @@ says what it now requires and what it gives up.
   toolchain bump is, so the advisory fix and the feature can be reviewed and reverted apart.
 
 ### Fixed
+
+- **A lower's realloc runs with context storage of its own under an async lift too**
+  ([#1385](https://github.com/scttfrdmn/burroughs/issues/1385), ADR 0137; ADR 0119's twin). ADR 0119 zeroed and
+  restored a stack's context slots around a realloc, which is a sync lift's context, and an async-lifted task's
+  context, its task's, was reached through the realloc's stack all the same. The pin runs a realloc on a Thread of its
+  own whose storage starts at zero. A `wasm32-wasip3` std guest's realloc sets its shadow stack pointer, context slot 0,
+  to 0 on its way out, so every request p3serve's handler served trapped out of bounds at its next frame.
+  `realloc-context-async.wasm`, realloc-context's async twin, reads wasmtime 49.0.3's 12345 << 16 | 0, with
+  `gate:cm-threads` off and on, where Burroughs read 0xdead << 16 | 12345.
 
 - **A composed component's caller is resolved at its callee's `task.return`, not at the callee's exit, and a callee's
   trap ends the call** ([#1384](https://github.com/scttfrdmn/burroughs/issues/1384), ADR 0136). A parent that

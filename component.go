@@ -3,11 +3,13 @@
 package burroughs
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -320,22 +322,29 @@ func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	h := component.NewHost(stdout, stderr, c.Stdin)
-	h.Args = c.Args
-	h.InheritNetwork = c.InheritNetwork
-	// NEUTER: drop this line, and TestAllowNameLookupReachesBothConfiguredPaths' LoadComponent row is denied.
-	h.AllowNameLookup = c.AllowNameLookup
-	// NEUTER, run: drop this line, and TestAllowHTTPReachesBothConfiguredPaths' LoadComponent granted row (and only it)
-	// prints HttpRequestDenied.
-	h.AllowHTTP = c.AllowHTTP
-	// NEUTER, run: drop this line, and TestPreopensReachBothConfiguredPaths' LoadComponent granted row reads 0, granted
-	// nothing, and TestAPreopenThatIsNotADirectoryFailsTheRun's LoadComponent succeeds.
-	h.Preopens = c.hostPreopens()
+	// **The writers are shared by every instance of this Component** (ADR 0137): its own, and each [Component.Handler]
+	// serves a request on. One lock serialises their writes, so an embedder's writer is never written by two at once.
+	var writes sync.Mutex
+	stdout, stderr = &lockedWriter{mu: &writes, w: stdout}, &lockedWriter{mu: &writes, w: stderr}
+	host := func(stdin io.Reader) *component.Host {
+		h := component.NewHost(stdout, stderr, stdin)
+		h.Args = c.Args
+		h.InheritNetwork = c.InheritNetwork
+		// NEUTER: drop this line, and TestAllowNameLookupReachesBothConfiguredPaths' LoadComponent row is denied.
+		h.AllowNameLookup = c.AllowNameLookup
+		// NEUTER, run: drop this line, and TestAllowHTTPReachesBothConfiguredPaths' LoadComponent granted row (and only
+		// it) prints HttpRequestDenied.
+		h.AllowHTTP = c.AllowHTTP
+		// NEUTER, run: drop this line, and TestPreopensReachBothConfiguredPaths' LoadComponent granted row reads 0,
+		// granted nothing, and TestAPreopenThatIsNotADirectoryFailsTheRun's LoadComponent succeeds.
+		h.Preopens = c.hostPreopens()
+		return h
+	}
 	feats, ferr := resolveFeatures(c.Features)
 	if ferr != nil {
 		return nil, ferr
 	}
-	in, err := component.InstantiateWithHostFeatures(wasm, h, feats)
+	in, err := component.InstantiateWithHostFeatures(wasm, host(c.Stdin), feats)
 	if err != nil {
 		// #1162's two verdicts, and #1134's canon option — see ComponentConfig.Run.
 		if errors.Is(err, component.ErrCoreModuleInvalid) || errors.Is(err, component.ErrCanonOptionInvalid) {
@@ -363,7 +372,27 @@ func (c ComponentConfig) LoadComponent(wasm []byte) (*Component, error) {
 		}
 		return nil, err
 	}
-	return &Component{in: in}, nil
+	// Each instance a request is served on is this configuration's, with an empty stdin: two instances reading one
+	// reader would split it between them (ADR 0137).
+	//
+	// NEUTER, run: make them on a bare host instead, and TestHandlerInstancesTakeTheComponentsConfiguration's granted
+	// row reads "send: err ErrorCode::HttpRequestDenied".
+	own := bytes.Clone(wasm)
+	return &Component{in: in, spawn: func() (*component.Instantiated, error) {
+		return component.InstantiateWithHostFeatures(own, host(nil), feats)
+	}}, nil
+}
+
+// lockedWriter is one of a Component's writers, behind the lock its instances share (ADR 0137).
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 // IsComponent reports whether wasm is a WebAssembly component rather than a core module: it reads the
@@ -405,6 +434,12 @@ func IsComponent(wasm []byte) (bool, error) {
 // [ADR 0101]: https://github.com/scttfrdmn/burroughs/blob/main/docs/decisions/0101-a-component-instance-executes-one-task-at-a-time-through-a-run-slot-released-only-where-the-reference-suspends.md
 type Component struct {
 	in *component.Instantiated
+
+	// spawn makes another instance of this component, with its configuration and an empty stdin, for
+	// [Component.Handler] to serve a request on (ADR 0137). srv is that handler's pool, made at the first call of
+	// Handler and closed by Close; guarded by mu.
+	spawn func() (*component.Instantiated, error)
+	srv   *component.HTTPServer
 
 	// mu guards `closed` and the `active` increment, which must be atomic *together*: a Call that read
 	// "not closed" and then incremented after Close had started counting would be a call Close does not
@@ -527,7 +562,10 @@ func LoadComponent(wasm []byte) (*Component, error) {
 		}
 		return nil, err
 	}
-	return &Component{in: in}, nil
+	own := bytes.Clone(wasm)
+	return &Component{in: in, spawn: func() (*component.Instantiated, error) {
+		return component.InstantiateWithHost(own, component.NewHost(io.Discard, io.Discard, nil))
+	}}, nil
 }
 
 // Exports returns the names of this component's callable exports, sorted, in exactly the form
@@ -685,6 +723,10 @@ func (c *Component) Call(ctx context.Context, name string, args ...ComponentValu
 //
 // Close is **idempotent**: a second call returns nil without re-tearing down. An embedder who defers it
 // and also calls it on an error path should not have to track which ran.
+//
+// **It closes the [Component.Handler] too** (ADR 0137), after its own calls and within the same bound: every request
+// still being served has its task cancelled, its bodies let go and its instance closed, and a request after Close is
+// answered with the handler's 500 page. Reaching the bound there is [ErrCloseIncomplete] as well.
 func (c *Component) Close() error {
 	c.mu.Lock()
 	if c.closed {
@@ -695,6 +737,7 @@ func (c *Component) Close() error {
 	// the whole of the guard: cancelling first would leave a window in which a fresh Call starts against
 	// an instance that is already being torn down.
 	c.closed = true
+	srv := c.srv
 	c.mu.Unlock()
 
 	c.in.CancelAll()
@@ -725,9 +768,71 @@ func (c *Component) Close() error {
 	// Teardown runs on **both** paths. A bound reached is not a reason to leak the instance — it is a
 	// reason to say so, which the returned error does.
 	c.in.Close()
+	// NEUTER, run: skip this, and TestComponentCloseClosesItsHandler's held response is still open after Close, its read
+	// ended by the guard's deadline.
+	if srv != nil && !srv.Close(deadline) {
+		incomplete = true
+	}
 	if incomplete {
 		return fmt.Errorf("%w: gave up after %s; the guest did not finish its cancellation",
 			ErrCloseIncomplete, componentCloseBound)
 	}
 	return nil
+}
+
+// Handler serves this component's `wasi:http/handler@0.3` export as an [http.Handler] (ADR 0137): each request is a
+// call of its `handle`, given the request and answered with the response the guest returns. The embedder owns the
+// listener, TLS and timeouts, through whatever [http.Server] it serves the handler with.
+//
+// # What a request is
+//
+// A request crosses as an own `request`: its method; its target's path and query; its scheme and authority only
+// for an absolute-form target, as `wasmtime serve` hands them; its headers, lowercased, sorted, immutable and without
+// the names `wasi:http` forbids (`host`, `connection`, `keep-alive`, `transfer-encoding` and the rest); and its body,
+// a stream the guest reads as the client sends it, with its trailers at the end.
+//
+// # What the response is
+//
+// The guest's status and headers are written, and flushed, when `handle` returns: before its body, which it may go
+// on writing after it has returned, and which is copied to the client as it arrives, flushed after every read. Its
+// trailers are sent when the request's `TE` header names `trailers`, as hyper sends them.
+//
+//   - **An `error-code`, a trap before the answer, or a component that cannot be instantiated** is answered with a
+//     fixed 500 page, `text/html`, that names no error: wasmtime's, with `burroughs` in it.
+//   - **A trap after the answer** ends the body with what was written and no trailers, as `wasmtime serve` does; the
+//     truncation is not marked.
+//   - **Trailers the guest resolves as an error** cut the connection before the body ends.
+//   - **A client that goes away** does not cancel the guest: a handler still running runs on and its answer is
+//     dropped, and one writing its body is told its reader has gone.
+//
+// # Instances, and concurrency
+//
+// **Each request runs on an instance of its own**, made from this component's bytes and configuration, never on the
+// instance [Component.Call] reaches. An instance is reused for a later request only once its earlier request's task
+// has exited cleanly, so a request never enters an instance whose last task has returned and not exited, and a trap
+// ends only the instance it happened on. Requests therefore run in parallel, one per instance, as many as the
+// embedder's server admits; a request may see state an earlier one on the same instance left, as under wasmtime's
+// default reuse. Up to 16 idle instances are kept for the next requests. Every instance writes to the configured
+// Stdout and Stderr, one write at a time, and reads an empty stdin.
+//
+// # What it does not do
+//
+//   - **`wasi:cli/run` is never called**, as `wasmtime serve` never calls it. A component that exports no
+//     `wasi:http/handler@0.3.x#handle` is not refused here, since Handler has no error to return: every request is
+//     answered with the 500 page. [Component.Exports] answers the question first, as `burroughs serve` asks it.
+//   - A response whose body is a stream the host produces, such as a request's body handed straight back, needs a
+//     host-to-host copy that is not built, and is answered with the page.
+//
+// Handler returns the same handler each time. [Component.Close] closes it; a request after Close is answered with
+// the page.
+func (c *Component) Handler() http.Handler {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.srv == nil {
+		c.srv = component.NewHTTPServer(c.spawn, c.in.HTTPHandlerExport())
+		if c.closed {
+			c.srv.Close(time.Now())
+		}
+	}
+	return c.srv
 }

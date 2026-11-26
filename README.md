@@ -40,6 +40,19 @@ $ ./bin/burroughs run examples/add/add.wasm div i32:7 i32:0  # exits 4
 burroughs: trap: integer divide by zero
 ```
 
+## Serving HTTP
+
+A WASI 0.3 component that exports `wasi:http/handler` is served as `wasmtime serve` serves one:
+
+```text
+$ ./bin/burroughs serve --addr 127.0.0.1:8080 service.wasm
+Serving HTTP on http://127.0.0.1:8080/
+```
+
+Each request is a call of the component's `handle`, on an instance of its own, and the component may make outgoing
+requests. `--dir`, `--scratch`, `--inherit-network` and `--allow-ip-name-lookup` grant what they grant to `run`. From
+Go, `Component.Handler()` is an `http.Handler`, served on whatever listener, TLS and timeouts the embedder chooses.
+
 ## From Go
 
 ```go
