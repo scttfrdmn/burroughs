@@ -205,6 +205,11 @@ type asyncHandles struct {
 	producersStopped bool
 	// producerStop is closed by that stop, so a delivery waiting for the run slot gives up rather than storing
 	// into a closed instance. Made with the table.
+	//
+	// **It is the instance's stop for every wait for the run slot that would run guest code, not only a
+	// producer's** (ADR 0139, #1398): acquireRunFor selects on it, so a callback entry and a sync call waiting for
+	// the slot end at Close too. A result store's wait does not, because the store is what wakes a stackless park.
+	// The name is a producer's because that was its first waiter.
 	producerStop chan struct{}
 
 	// sockPending counts this instance's socket work whose result has not yet been stored (hostsock.go, ADR

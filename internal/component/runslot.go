@@ -73,7 +73,39 @@ func runChainFrom(ctx context.Context) *runChain {
 // under `ch`. If `ch` already holds the slot this is a nested entry, and it re-enters rather than waiting.
 // A non-nil `abort` ends the wait without the slot — `false`, and nothing to release — and is passed only
 // where an entry may still be abandoned, which is before the agent has ever entered (enterTask's rule).
+//
+// **A result store waits here, and its wait does not end at Close's stop** (ADR 0139): a store is what wakes a
+// stackless park (`awaitEvent`), which Close does not end directly. A wait that is about to run guest code of its own
+// takes the slot through acquireRunFor instead, which the stop ends.
 func (h *asyncHandles) acquireRun(ch *runChain, rec *cmThread, abort <-chan struct{}) bool {
+	return h.takeRunSlot(ch, rec, abort, nil, nil)
+}
+
+// acquireRunFor is acquireRun for a waiter that will run guest code of its own under the slot: a callback task's
+// entry, or a sync lift's call. **Its wait also ends at the instance's stop and at the engine's** (ADR 0139, #1398),
+// as every other wait does (`waitableSetWait`'s arms): `producerStop`, which Close's `stopProducers` closes across
+// the tree of nested instances before any core instance closes, and `engine`, the waiting agent's thread lifetime
+// context's Done (`interp.CanonCaller.Context`, which its core instance's Close and ADR 0090's teardown end), nil
+// where the waiter is no agent.
+//
+// Until #1398 such a wait could end only at its caller's abort, which an admitted entry and a sync cross-component
+// call never pass. E2-in-a's neuter found the cycle: a child's `task.return` waiting for its parent's slot while
+// holding its own (a result store, acquireRun), and the parent's sync call of the child waiting for the child's
+// (invokeSync, here). Close did not end it. **Ending this half is enough**: the parent's call unwinds and frees the
+// parent's slot, and the child's store then lands under it.
+//
+// NEUTER, run: drop the stop and the engine from takeRunSlot's two selects, and
+// TestCloseEndsACrossInstanceRunSlotDeadlock's Close does not return within closeEndsBound, both waiters parked.
+func (h *asyncHandles) acquireRunFor(ch *runChain, rec *cmThread, abort, engine <-chan struct{}) bool {
+	return h.takeRunSlot(ch, rec, abort, h.producerStop, engine)
+}
+
+// takeRunSlot is the take both acquire forms share: the fence, then the slot, each wait ending at `abort`, `stop` or
+// `engine`, any of which may be nil, which never fires. An ended wait returns false holding nothing: no fence writer,
+// no slot, and no holder recorded. **A wait that finds the slot free still takes it**, since the stop ends a wait and
+// refuses no take; a slot taken is held, so its guest code runs under it, and the core instance's Close ends that code
+// at a safepoint as it ends any.
+func (h *asyncHandles) takeRunSlot(ch *runChain, rec *cmThread, abort, stop, engine <-chan struct{}) bool {
 	h.mu.Lock()
 	if ch != nil && h.runChain == ch { // non-nil: a free slot's nil chain must not read as re-entry
 		h.runDepth++
@@ -86,14 +118,32 @@ func (h *asyncHandles) acquireRun(ch *runChain, rec *cmThread, abort <-chan stru
 	h.mu.Unlock()
 	// The fence first, then the slot (ADR 0095's amendment, F1): a take of this instance's slot is its own
 	// guest execution, so it waits for its callees' in-flight segments, unless ch is one of theirs.
-	if !h.fenceWriterEnter(ch, abort) {
+	if !h.fenceWriterEnter(ch, abort, stop, engine) {
 		return false
 	}
+	// **A free slot is taken before any end is asked about.** One select over the slot and the ends picks among the
+	// ready cases at random, so with the stop already closed a free slot could be refused: the callback re-entry of
+	// TestCloseReachesItsBoundWithANamedOutcome's uncooperative guest ended as "Close ended this entry while it waited
+	// for the run slot", where interp.ErrClosed or interp.ErrTerminated reclaim it (#1398's make ci, under -shuffle).
+	// The fence above already checks admission before it waits, which is this order.
+	//
+	// NEUTER, run: drop this select's first case, and TestAFreeRunSlotIsTakenAfterTheStop refuses 209 of its 300
+	// takes, and TestCloseReachesItsBoundWithANamedOutcome fails 120 of 200 (-count 200).
 	select {
 	case h.runSlot <- struct{}{}:
-	case <-abort:
-		h.fenceWriterLeave()
-		return false
+	default:
+		select {
+		case h.runSlot <- struct{}{}:
+		case <-abort:
+			h.fenceWriterLeave()
+			return false
+		case <-stop: // Close's stop (ADR 0139)
+			h.fenceWriterLeave()
+			return false
+		case <-engine: // the waiting agent's core instance closed or tore down (ADR 0139)
+			h.fenceWriterLeave()
+			return false
+		}
 	}
 	h.mu.Lock()
 	h.runChain, h.runDepth = ch, 1
@@ -348,7 +398,10 @@ func (h *asyncHandles) suspending(c *interp.CanonCaller, ready func() bool, judg
 		if fenceKey != nil {
 			fenceAcquire(h, rec, fenceKey)
 		}
-		h.fenceWriterEnter(rec.saved.chain, nil)
+		// **Not ended by Close's stop** (ADR 0139's "what is not changed"): this waits for this instance's own slot,
+		// whose holder executes guest code, which the core instance's Close ends at a safepoint, or waits for another
+		// slot, which Close's stop ends for every waiter that would run guest code (acquireRunFor).
+		h.fenceWriterEnter(rec.saved.chain, nil, nil, nil)
 		h.runSlot <- struct{}{}
 		h.mu.Lock()
 		h.runChain, h.runDepth, h.lift = rec.saved.chain, rec.saved.depth, rec.saved.lift

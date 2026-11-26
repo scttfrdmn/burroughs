@@ -260,9 +260,30 @@ says what it now requires and what it gives up.
   `wasi:http`'s outgoing half (#1383) is the first engine code to call `net/http.Transport`, and `make ci`'s
   vuln gate refused that tree on go1.26.9. The language line stays `go 1.26`. This is its own gated change, as every
   toolchain bump is, so the advisory fix and the feature can be reviewed and reverted apart.
+- **`make race`'s per-package timeout is 70m, up from 50m, and its budget 4200s, up from 3000s**
+  ([#1391](https://github.com/scttfrdmn/burroughs/issues/1391)). The macOS race job read 72–89% of its budget on
+  main's last eight runs, and 92% on the run #1391 records. The work grew: on the arm64 leg, whose runner does not
+  drift, `cmd/burroughs` went from 52s to 488s under `-race` with C3's multi-M witness (#1345), and
+  `internal/component` from 87s to 632s, while `internal/spec` held. `internal/spec` on macOS measured 2025.317s,
+  which left 50m at 1.48× the largest completed observation. 70m is ≈2.07×, the Makefile's rule, and the budget
+  moves with it.
 
 ### Fixed
 
+- **Close ends a deadlock between two instances' run slots, and `HTTPServer.Close`'s let-go waits only until its
+  deadline** ([#1398](https://github.com/scttfrdmn/burroughs/issues/1398), ADR 0139).
+  - **Which waits now end at Close.** A callback task's entry and a sync lift's call waiting for a run slot end at
+    Close's stop. A sync cross-component caller's wait also ends at its own core instance's Close or teardown. Before,
+    nothing could end either.
+  - **The cycle it ends.** E2-in-a's neuter (#1384) found it: a child's `task.return` storing its parent's result
+    waited for the parent's slot while holding its own, and the parent's sync call of the child waited for the
+    child's. Close did not end it.
+  - **How it ends.** The parent's call now unwinds at the stop, freeing its slot, and the child's store lands.
+  - **Why a result store keeps waiting.** Dropping it at the stop left a caller parked on its event past Close: the
+    first build did this, and `TestACancelRequestedWhileSuspendedIsDeliveredAtTheLoop`'s control hung in 1 of 4 runs.
+  - **The let-go.** `HTTPServer.Close` let a body go by a delivery on its own goroutine, before its bounded wait, so a
+    guest that answered and then computed without yielding held Close there. That delivery now gives up at Close's
+    deadline, and Close reports false, as ADR 0137's postscript anticipated.
 - **A lower's realloc runs with context storage of its own under an async lift too**
   ([#1385](https://github.com/scttfrdmn/burroughs/issues/1385), ADR 0137; ADR 0119's twin). ADR 0119 zeroed and
   restored a stack's context slots around a realloc, which is a sync lift's context, and an async-lifted task's

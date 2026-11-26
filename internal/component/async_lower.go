@@ -344,6 +344,14 @@ func asyncLowerFuncWith(implFor func(*subtask) asyncLowerImpl, hasResult bool, s
 			if ch == nil {
 				ch = &runChain{}
 			}
+			// **Close's stop does not end this wait** (ADR 0139, #1398). A store is what wakes a stackless park
+			// (`awaitEvent`), which Close does not end directly: a callee that Close ended resolves its caller's subtask
+			// here, and its caller, parked in its WAIT arm, wakes and ends. Every holder this wait can wait on unwinds at Close
+			// instead (acquireRunFor), so the store lands.
+			//
+			// NEUTER, run (the build's first form, discarding the store at the stop): the control of
+			// TestACancelRequestedWhileSuspendedIsDeliveredAtTheLoop hung past Close in 1 of 4 runs, its call parked in
+			// awaitEvent on a subtask whose resolution was discarded, where main passed 40 of 40.
 			h.acquireRun(ch, nil, nil)
 			defer h.releaseRunFor(ch)
 			apply(v, guestHeap{c}) // takes h.mu for its bookkeeping only, never across its guest-memory work
