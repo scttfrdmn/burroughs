@@ -209,7 +209,10 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"lock held, and delivers what the write freed under ADR 0101's discipline, which is where a parked " +
 				"guest write's copy runs, under the run slot. It ends when the stream is finished, a write fails, " +
 				"or Close stops it, after writing what its buffer holds; Close waits it out " +
-				"(`TestFSDescriptorMatchesWasmtime`, under -race, which finds no writer left after Close).",
+				"(`TestFSDescriptorMatchesWasmtime`, under -race, which finds no writer left after Close). " +
+				"ADR 0138 extends it to append-via-stream: the same site and the same writer, each write's offset " +
+				"the file's size at the write, taken under the file's own append lock, a leaf held with no other " +
+				"(`TestFSRestMatchesWasmtime`, under -race, which finds no writer left after Close).",
 		},
 		{"internal/component/hostsock.go", "(*Host).tcpConnect"}: {
 			count: 1,

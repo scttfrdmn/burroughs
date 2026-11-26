@@ -24,8 +24,9 @@ import (
 // WASI 0.3's filesystem (#1374's E1a, ADR 0133): `wasi:filesystem/preopens@0.3`'s `get-directories` and
 // `wasi:filesystem/types@0.3`'s `descriptor`, with `open-at`, `stat`, `stat-at`, `get-flags`, `get-type`,
 // `read-via-stream` and `write-via-stream`, E1b's `read-directory` (ADR 0134), whose stream of entries is lowered inside
-// the reader's own stream.read, and E1c's four mutations (ADR 0138, hostfs_mutate.go). Every other method of
-// `descriptor` meets the refusing stub, by name: those are E1d's.
+// the reader's own stream.read, E1c's four mutations (ADR 0138, hostfs_mutate.go), and E1d's rest (ADR 0138,
+// hostfs_rest.go), `append-via-stream` among them, here as write-via-stream's writer. Every method of `descriptor` that
+// wasip3 0.8.0's WIT declares is served.
 //
 // # Confinement is os.Root's
 //
@@ -102,6 +103,22 @@ type fsFile struct {
 	// the file's close to them, for after their flush (ADR 0127's reason, ADR 0133).
 	writers      int
 	leftToWriter bool
+	// appendMu serialises append-via-stream's writes to the file (fsFile.appendAt, ADR 0138). It is its own lock, a
+	// leaf, held across a Stat and a WriteAt and never with the registry's or asyncHandles.mu.
+	appendMu sync.Mutex
+}
+
+// appendAt writes b at the file's end as it is when the write starts, under appendMu, so this instance's appends do
+// not interleave (ADR 0138). It is not O_APPEND's atomicity: Go's WriteAt refuses a file opened O_APPEND, and another
+// process's append between the size and the write can be overwritten.
+func (ff *fsFile) appendAt(b []byte) (int, error) {
+	ff.appendMu.Lock()
+	defer ff.appendMu.Unlock()
+	fi, err := ff.f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return ff.f.WriteAt(b, fi.Size())
 }
 
 // hostFS is one component instance's open files and its file goroutines (ADR 0133), in its hostResources beside
@@ -231,6 +248,9 @@ type fsDescriptor struct {
 	flags uint8
 	dir   *os.Root // a directory's, or nil
 	file  *fsFile  // a file's, or nil
+	// baseMutates is the provenance a file carries (ADR 0138, ADR 0091's fd-provenance precedent): whether the
+	// directory it was opened from had `mutate-directory`, which a file's own flags never carry. set-times asks it.
+	baseMutates bool
 }
 
 // destroyFSDescriptor is the handle's destructor (ADR 0133): a directory's root is closed, and a file's reference
@@ -449,6 +469,8 @@ func fsErrorLabel(err error) string {
 		return "access"
 	case errors.Is(err, os.ErrClosed):
 		return "bad-descriptor"
+	case errors.Is(err, errors.ErrUnsupported):
+		return "unsupported" // a platform with no way this host knows to do it, fsFileTimes' fallback (ADR 0138)
 	default:
 		return "other"
 	}
@@ -544,7 +566,10 @@ func (d *fsDescriptor) openAt(pathFlags uint32, p string, oflags uint32, flags u
 		_ = f.Close() // the open is being refused; nobody reads the close's error
 		return nil, fsErrorLabel(err)
 	}
-	child := &fsDescriptor{fs: d.fs, grant: d.grant, path: path.Join(d.path, filepath.ToSlash(p)), flags: flags & fsFlagsKnown}
+	child := &fsDescriptor{
+		fs: d.fs, grant: d.grant, path: path.Join(d.path, filepath.ToSlash(p)), flags: flags & fsFlagsKnown,
+		baseMutates: d.mutates(),
+	}
 	if fi.IsDir() {
 		// A directory is a nested root, opened from this one, so it can reach nothing this one could not.
 		_ = f.Close() // the probe's handle; nobody reads the close's error
@@ -826,9 +851,22 @@ type fsSend struct {
 	inFlight int
 	closing  bool
 	done     bool
+	// appending is append-via-stream's (ADR 0138): each write's offset is the file's size at the write, not off.
+	appending bool
 }
 
 func (s *fsSend) free() int { return fsWriteBufCap - len(s.buf) - s.inFlight }
+
+// write writes b to the file: at off, or, appending, at the file's end (fsFile.appendAt). It runs with no lock held.
+//
+// NEUTER, run: write at off whether appending or not, and TestFSRestMatchesWasmtime's append row reads 0x0a000030 and
+// append-content 0: both appends land at offset 0, w.txt reads "DEC3456789", and 10 bytes are read back, not 15.
+func (s *fsSend) write(b []byte, off int64) (int, error) {
+	if s.appending {
+		return s.file.appendAt(b)
+	}
+	return s.file.f.WriteAt(b, off)
+}
 
 // armLocked re-arms the host's read of the guest's stream at the room the buffer has, sockSend.armLocked's rule:
 // with room and a guest write parked, the copy runs now, so the caller holds the run slot as well as h.mu.
@@ -858,113 +896,127 @@ func (s *fsSend) armLocked() error {
 // without `write`, a directory included, resolves `err(bad-descriptor)` inline and unlinks the stream, so the
 // guest's write completes DROPPED with 0 bytes, wasmtime 49.0.3's reading.
 //
-// The writer goroutine is authorised by ADR 0133 in the census. It runs no guest code: it waits for bytes on the
-// instance's host-I/O condition, writes them with no lock held, and delivers what the write freed under ADR 0101's
-// discipline. It ends when the stream is finished, a write fails, or Close stops it, and Close waits it out.
+// **appending makes it `append-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>`** (ADR 0138),
+// flattened to (self, data) -> future: the same writer, each write's offset the file's size at the write
+// (fsSend.write).
+//
+// The writer goroutine is authorised by ADR 0133 in the census, and ADR 0138 extends the entry to append's. It runs no
+// guest code: it waits for bytes on the instance's host-I/O condition, writes them with no lock held, and delivers what
+// the write freed under ADR 0101's discipline. It ends when the stream is finished, a write fails, or Close stops it,
+// and Close waits it out.
 //
 // NEUTER, run: drop the write-flag test, and TestFSDescriptorMatchesWasmtime's write-read-only-fd row reads 0x00825000:
 // the guest's write COMPLETED with 5, and only WriteAt's EBADF on the read-only file makes the future
 // err(bad-descriptor), where wasmtime drops the stream with 0 bytes taken.
-func (h *Host) fsWriteViaStream(async *asyncHandles, res *hostResources) interp.CanonFunc {
-	return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
-		if len(args) != 3 {
-			return nil, fmt.Errorf("component: descriptor.write-via-stream: got %d core args, want 3 (self, data, offset)", len(args))
-		}
-		d, release, err := lendAs[*fsDescriptor](res, descriptorResource, args[0].Int32())
-		if err != nil {
-			return nil, err
-		}
-		defer release()
-		ri, off := uint32(args[1].Bits), args[2].Bits
-		label := ""
-		var ff *fsFile
-		switch {
-		case d.file == nil || d.flags&fsFlagWrite == 0:
-			label = "bad-descriptor"
-		case off > math.MaxInt64:
-			label = "invalid"
-		case !res.fs.retain(d.file):
-			label = "bad-descriptor"
-		default:
-			ff = d.file
-		}
-		async.mu.Lock()
-		defer async.mu.Unlock()
-		re, ok := handleAt[*readableStreamEnd](async, ri)
-		if !ok {
-			if ff != nil {
-				res.fs.release(ff) // under h.mu, the permitted order
+func (h *Host) fsWriteViaStream(appending bool) func(async *asyncHandles, res *hostResources) interp.CanonFunc {
+	op, want := "write-via-stream", 3
+	if appending {
+		op, want = "append-via-stream", 2
+	}
+	return func(async *asyncHandles, res *hostResources) interp.CanonFunc {
+		return func(c *interp.CanonCaller, args []interp.Value) ([]interp.Value, error) {
+			if len(args) != want {
+				return nil, fmt.Errorf("component: descriptor.%s: got %d core args, want %d", op, len(args), want)
 			}
-			return nil, fmt.Errorf("%w: descriptor.write-via-stream on handle %d that is not a readable stream end", ErrLinkRefused, ri)
-		}
-		if re.conn != nil && re.conn.producer != nil {
-			if ff != nil {
-				res.fs.release(ff)
-			}
-			return nil, fmt.Errorf("%w: descriptor.write-via-stream of a stream the host produces; a host-to-host copy "+
-				"is not built (ADR 0122)", ErrUnsupportedForm)
-		}
-		okv := fsOK(nil, nil)
-		// Typed by its payload (#1282 item 1), as tcpSend's write future is: an untyped end fails the guest's
-		// future.read with "a future of a different type". E1a (#1374) and D1 (#1373) were built in parallel, and this
-		// site is where they met.
-		fe := &readableFutureEnd{payload: &okv, elem: elemOfPayload(&okv)}
-		fe.index = async.addLocked(fe)
-		var ended func()
-		if ff != nil {
-			if e, tok := res.fs.trackWriter(ff); tok {
-				ended = e
-			} else {
-				res.fs.release(ff)
-				ff, label = nil, "bad-descriptor" // Close has stopped the instance's files
-			}
-		}
-		if ff == nil {
-			bad := fsErr(nil, label)
-			fe.payload = &bad
-			unlinkHostReadLocked(re)
-			if cerr := fe.completeLocked(copyCompleted); cerr != nil {
-				return nil, cerr
-			}
-			return []interp.Value{interp.I32(int32(fe.index))}, nil
-		}
-		if async.hostIO == nil {
-			async.hostIO = sync.NewCond(&async.mu)
-		}
-		s := &fsSend{h: async, fs: res.fs, file: ff, off: int64(off), reader: re, future: fe}
-		if re.writerDropped {
-			s.closing = true // the guest dropped its writer before writing: nothing to write
-		} else {
-			re.hostSink = func(b []byte) error {
-				s.buf = append(s.buf, b...)
-				async.hostIO.Broadcast()
-				return nil
-			}
-			re.onHostComplete = func(r copyResult) {
-				if r == copyCompleted {
-					re.resolved, re.delivered, re.progress = false, false, 0
-					if room := s.free(); room > 0 {
-						re.readN = uint32(room)
-					} else {
-						re.hasRead = false
-					}
-					return
-				}
-				s.closing = true // DROPPED: the guest's writer is gone
-				async.hostIO.Broadcast()
-			}
-			re.caller, re.state = c, copyStateCopying
-			if err := s.armLocked(); err != nil {
-				ended()
-				res.fs.release(ff)
+			d, release, err := lendAs[*fsDescriptor](res, descriptorResource, args[0].Int32())
+			if err != nil {
 				return nil, err
 			}
+			defer release()
+			ri, off := uint32(args[1].Bits), uint64(0)
+			if !appending {
+				off = args[2].Bits
+			}
+			label := ""
+			var ff *fsFile
+			switch {
+			case d.file == nil || d.flags&fsFlagWrite == 0:
+				label = "bad-descriptor"
+			case off > math.MaxInt64:
+				label = "invalid"
+			case !res.fs.retain(d.file):
+				label = "bad-descriptor"
+			default:
+				ff = d.file
+			}
+			async.mu.Lock()
+			defer async.mu.Unlock()
+			re, ok := handleAt[*readableStreamEnd](async, ri)
+			if !ok {
+				if ff != nil {
+					res.fs.release(ff) // under h.mu, the permitted order
+				}
+				return nil, fmt.Errorf("%w: descriptor.%s on handle %d that is not a readable stream end", ErrLinkRefused, op, ri)
+			}
+			if re.conn != nil && re.conn.producer != nil {
+				if ff != nil {
+					res.fs.release(ff)
+				}
+				return nil, fmt.Errorf("%w: descriptor.%s of a stream the host produces; a host-to-host copy "+
+					"is not built (ADR 0122)", ErrUnsupportedForm, op)
+			}
+			okv := fsOK(nil, nil)
+			// Typed by its payload (#1282 item 1), as tcpSend's write future is: an untyped end fails the guest's
+			// future.read with "a future of a different type". E1a (#1374) and D1 (#1373) were built in parallel, and this
+			// site is where they met.
+			fe := &readableFutureEnd{payload: &okv, elem: elemOfPayload(&okv)}
+			fe.index = async.addLocked(fe)
+			var ended func()
+			if ff != nil {
+				if e, tok := res.fs.trackWriter(ff); tok {
+					ended = e
+				} else {
+					res.fs.release(ff)
+					ff, label = nil, "bad-descriptor" // Close has stopped the instance's files
+				}
+			}
+			if ff == nil {
+				bad := fsErr(nil, label)
+				fe.payload = &bad
+				unlinkHostReadLocked(re)
+				if cerr := fe.completeLocked(copyCompleted); cerr != nil {
+					return nil, cerr
+				}
+				return []interp.Value{interp.I32(int32(fe.index))}, nil
+			}
+			if async.hostIO == nil {
+				async.hostIO = sync.NewCond(&async.mu)
+			}
+			s := &fsSend{h: async, fs: res.fs, file: ff, off: int64(off), reader: re, future: fe, appending: appending}
+			if re.writerDropped {
+				s.closing = true // the guest dropped its writer before writing: nothing to write
+			} else {
+				re.hostSink = func(b []byte) error {
+					s.buf = append(s.buf, b...)
+					async.hostIO.Broadcast()
+					return nil
+				}
+				re.onHostComplete = func(r copyResult) {
+					if r == copyCompleted {
+						re.resolved, re.delivered, re.progress = false, false, 0
+						if room := s.free(); room > 0 {
+							re.readN = uint32(room)
+						} else {
+							re.hasRead = false
+						}
+						return
+					}
+					s.closing = true // DROPPED: the guest's writer is gone
+					async.hostIO.Broadcast()
+				}
+				re.caller, re.state = c, copyStateCopying
+				if err := s.armLocked(); err != nil {
+					ended()
+					res.fs.release(ff)
+					return nil, err
+				}
+			}
+			go func() {
+				defer ended()
+				s.run()
+			}()
+			return []interp.Value{interp.I32(int32(fe.index))}, nil
 		}
-		go func() {
-			defer ended()
-			s.run()
-		}()
-		return []interp.Value{interp.I32(int32(fe.index))}, nil
 	}
 }
 
@@ -983,7 +1035,7 @@ func (s *fsSend) run() {
 			s.buf = nil
 			h.mu.Unlock()
 			if len(pending) > 0 {
-				_, _ = s.file.f.WriteAt(pending, off) //nolint:errcheck // the guest has gone: nobody is left to tell of a loss
+				_, _ = s.write(pending, off) //nolint:errcheck // the guest has gone: nobody is left to tell of a loss
 			}
 			return
 		}
@@ -997,7 +1049,7 @@ func (s *fsSend) run() {
 		s.buf, s.inFlight = nil, len(chunk)
 		h.filePending++ // a waker while the write is in flight: its delivery may complete a parked write
 		h.mu.Unlock()
-		n, werr := s.file.f.WriteAt(chunk, off)
+		n, werr := s.write(chunk, off)
 		s.deliver(func() {
 			s.inFlight = 0
 			s.off += int64(n)

@@ -130,6 +130,19 @@ func (h *Host) asyncSource() map[string]asyncImplFor {
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.unlink-file-at", fsPathMethod("unlink-file-at", (*fsDescriptor).unlinkAt))
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.remove-directory-at", fsPathMethod("remove-directory-at", (*fsDescriptor).rmdirAt))
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.rename-at", h.fsRenameAt())
+	// E1d's twelve (ADR 0138, hostfs_rest.go), resolved inline as E1a's are. sync and sync-data are one implementation.
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.readlink-at", h.fsReadlinkAt())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.symlink-at", h.fsSymlinkAt())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.link-at", h.fsLinkAt())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.set-size", h.fsSetSize())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.set-times", h.fsSetTimes())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.set-times-at", h.fsSetTimesAt())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.sync", h.fsSync("sync"))
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.sync-data", h.fsSync("sync-data"))
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.advise", h.fsAdvise())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.metadata-hash", h.fsMetadataHashOf())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.metadata-hash-at", h.fsMetadataHashAt())
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.is-same-object", h.fsIsSameObject())
 	// wasi:http/client's send (ADR 0135, hosthttpsend.go), behind AllowHTTP and denied at the call without it.
 	serve(m, wasiP3, "wasi:http/client::send", h.httpSend)
 	return m

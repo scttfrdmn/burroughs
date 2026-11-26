@@ -216,7 +216,9 @@ func (h *Host) streamConsumers() map[string]*streamConsumer {
 	// descriptor's two stream methods (ADR 0133, hostfs.go): read-via-stream a producer in receive's shape, and
 	// write-via-stream a consumer in send's, each lending its self from the instance's resource table.
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.read-via-stream", &streamConsumer{bindRes: h.fsReadViaStream, payload: fsFuturePayloadType, produces: true})
-	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.write-via-stream", &streamConsumer{bindRes: h.fsWriteViaStream, payload: fsFuturePayloadType})
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.write-via-stream", &streamConsumer{bindRes: h.fsWriteViaStream(false), payload: fsFuturePayloadType})
+	// append-via-stream is write-via-stream's consumer with each write at the file's end (ADR 0138).
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.append-via-stream", &streamConsumer{bindRes: h.fsWriteViaStream(true), payload: fsFuturePayloadType})
 	// read-directory is a producer of directory entries (ADR 0134), each lowered inside the reader's own stream.read.
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.read-directory", &streamConsumer{bindRes: h.fsReadDirectory, payload: fsFuturePayloadType, produces: true, elem: fsDirEntryType})
 	// wasi:http's four functions that carry streams and futures (ADR 0135, hosthttpmsg.go): request.new, response.new

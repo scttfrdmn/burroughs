@@ -63,6 +63,10 @@ After E1a (ADR 0133) and E1b (ADR 0134), `wasi:filesystem/types@0.3.0`'s `descri
 - **A file carries the provenance of the directory it was opened from** (`fsDescriptor.baseMutates`), ADR 0091's fd-provenance precedent. `mutate-directory` *"may only be set on directories"*, so a file's own flags cannot carry it. `set-times` on a file is `read-only` unless the base it was opened from had `mutate-directory`. That keeps a read-only grant's files' times unchanged, and on a writable grant it reads as wasmtime does, a file opened `read` included. `set-size` and `append-via-stream` already need `write`, which a read-only grant refuses at `open-at`.
 - **A child opened without `mutate-directory` answers `read-only`** for every mutation, which is ADR 0133's child flags read through the WIT's text. **This departs from wasmtime,** which mutates through it.
 
+### An empty path
+
+**An empty path is `no-entry`, refused before `os.Root` is asked** (`pathRefusal`), beside ADR 0133's absolute-path refusal, for every method here. That is POSIX's `ENOENT` for an empty pathname, and wasmtime's reading (`fs-mutate`'s mkdir-errors row). `os.Root` answers one with an unexported error of its own (*"empty path"*), which would map to `other`, and its `Chtimes` takes one as the root itself.
+
 ### The mutations
 
 - **`create-directory-at`:** `Root.Mkdir` at 0777 before the umask, `os.Mkdir`'s.
@@ -139,6 +143,28 @@ After E1a (ADR 0133) and E1b (ADR 0134), `wasi:filesystem/types@0.3.0`'s `descri
   - **`append-via-stream` is not atomic against another process's append.**
   - **On Windows, `metadata-hash` is not an identity,** a file opened without `write` cannot have its times set (`SetFileTime` needs write access), and a directory's `sync` does nothing.
   - **On linux, a file's `set-times` needs `/proc` mounted.**
+
+## The build, as measured
+
+On darwin/arm64, in the worktree of #1374's E1c/E1d branch. The readings were committed before the engine code (`fs-mutate.reading`, `fs-rest.reading`).
+
+- **`TestFSMutationsMatchWasmtime`** (`internal/component/hostfs_mutate_test.go`, over `testdata/fs-mutate.wat`): all 25 rows, with `gate:cm-threads` off and on, plain and under `-race`. 19 are wasmtime's readings, one is the WIT's (the read-only grant), and five are this ADR's departures. After each row the host's trees show the row's own writes, the trees' parent still holds only the three trees, and `outside/` is as it was made.
+- **`TestFSRestMatchesWasmtime`** (`internal/component/hostfs_rest_test.go`, over `testdata/fs-rest.wat`): all 41 rows, under the same four runs and the same after-checks, `outside/`'s modification time included. 36 are wasmtime's readings, the advise-bad trap among them, and `read-only-reads` is read on a read-only grant and equals wasmtime's. Two are the WIT's, and three are departures. No file goroutine survived `Close` after any row of either fixture.
+- **The first run of the fixtures found one defect:** `create-directory-at ""` read `other`, `os.Root`'s *"empty path"*, where wasmtime reads `no-entry`. That is the empty-path rule above.
+- **Unit witnesses:**
+  - `TestATwoDescriptorCallAcrossGrantsIsCrossDevice`: two grants of one host directory;
+  - `TestATwoDescriptorCallResolvesEachPathOnItsOwnRoot`: an old path that climbs out of its descriptor;
+  - `TestAnInstantIsNormalisedAndClamped`: the clamp, and no instant becoming the zero time.
+- **What the neuters showed** (each run, each reverted; the full list is at the sites as `NEUTER, run:` comments):
+  - **Every read-only check is the whole of its method's read-only.** Each dropped alone, its method writes on a read-only grant. That held for `create-directory-at`, `unlink-file-at`, `remove-directory-at`, the pair check of `rename-at`, `link-at`'s pair check, `symlink-at`, `set-times-at`, and `set-times` on a directory. Each of those also wrote through a child opened without `mutate-directory`. A file's provenance, dropped, let a read-only grant's file have its times set; no row opens a file from a read-only child.
+  - **`os.Root` is each method's confinement.** Each replaced by path arithmetic, the fixture's escapes reached `outside/`: a directory made there, `victim.txt` unlinked, `victim/` removed, a file renamed in and out, a symlink and a hard link made beside the tree, and `victim.txt`'s times set. `readlink-at`'s `../x` was looked up beside the tree.
+  - **The grant rule is masked through the fixture.** Its two grants are two directories, so the recorded-path check refuses the second grant anyway. The unit witness, two grants of one directory, is the rule's.
+  - **Each descriptor's own resolution, and the recorded-path check, are each a line of their own.** Dropped, a rename landed in the grant outside its descriptor, and a stale descriptor's rename resolved at a path naming nothing.
+  - **Nanosecond file times are `/dev/fd`'s.** With `syscall.Futimes`, `set-times` lost its nanoseconds, and `no-change` was taken as a time.
+  - **The hash is an identity.** With the fallback on darwin, it changed at a write, a `set-times` and a `set-size`.
+  - **Three checks are vacuous where the platform's errno already gives the same answer**, and the sites say so: `link-at`'s directory check (`EPERM`), `set-size`'s `write` check (`EINVAL`), and `sync`'s no-effect arm for a file without `write`. Each is what makes another platform answer alike.
+  - **The instant clamp is the unit witness's alone.** The fixture's timestamps row asserts only results, which darwin's own clamp keeps ok.
+- **Found, not changed here:** E1a's `open-at` and `stat-at` take an empty path to `os.Root` too, so they answer `other` where POSIX says `ENOENT`. Neither is measured on wasmtime, so this slice does not change them.
 
 ## Rollback
 

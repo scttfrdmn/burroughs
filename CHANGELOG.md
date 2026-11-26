@@ -83,6 +83,45 @@ says what it now requires and what it gives up.
   - **Not yet reached:** `task.cancel` still resolves a caller at the task's exit, where the pin resolves at the call.
     Only a top-level own argument crosses, and no borrow, stream or future.
 
+- **The rest of `wasi:filesystem@0.3`'s `descriptor`: links, sizes, times, sync, advice, metadata hashes, identity and
+  appends** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1d of the v0.16.0 plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0138). No public API changes. Every method of
+  `descriptor` that wasip3 0.8.0's WIT declares is now served, and none meets the refusing stub.
+  - **`readlink-at`, `symlink-at` and `link-at`:**
+    - `readlink-at`'s string is lowered through the caller's realloc, on the caller's goroutine, with no engine lock
+      held. Absolute content is `not-permitted`, as the WIT says;
+    - `symlink-at` refuses an absolute target, and makes a relative one that climbs out, as wasmtime does, since
+      following it is refused;
+    - `link-at` links a symlink as itself. It refuses `symlink-follow` with `invalid`, as wasmtime does, and its second
+      descriptor resolves as `rename-at`'s does.
+  - **`set-size`, `set-times` and `set-times-at`:**
+    - times are nanosecond-precise. A file's are set through its fd, by `utimensat` on `/dev/fd/N` on darwin and
+      `/proc/self/fd/N` on linux, and by `SetFileTime` on Windows;
+    - an instant is normalised and clamped to 1677–2262, as darwin clamps;
+    - a file's times need the directory it was opened from to have had `mutate-directory`, so a read-only grant's
+      files keep theirs.
+  - **`sync`, `sync-data` and `advise`:**
+    - `sync` and `sync-data` fsync. A file without `write` is ok with no effect, as the WIT says;
+    - `advise` is ok and changes nothing on a file, and an advice past `no-reuse` traps at the lift.
+  - **`metadata-hash`, `metadata-hash-at` and `is-same-object`:**
+    - `metadata-hash` and `metadata-hash-at` are SHA-256 of the device and inode numbers, wasmtime's inputs, so a write
+      does not change them;
+    - `is-same-object` is `os.SameFile`.
+  - **`append-via-stream`** is `write-via-stream`'s writer, each write at the file's size, under a per-file lock.
+  - **Witnesses:** 36 of `fs-rest.wasm`'s 41 rows match wasmtime 49.0.3's readings, 10 of 10 each, the trap included,
+    and its read-only rows match the WIT's text (`fs-rest.reading`). Every row was run with `gate:cm-threads` off and
+    on, plain and under `-race`, with the host's trees and `outside/`'s times read after each.
+  - **Named departures from wasmtime:**
+    - a link across two grants is `cross-device`;
+    - a directory opened without `mutate-directory` refuses each mutation;
+    - a symlink's own times are `unsupported`, since `os.Root` has no `Lchtimes`.
+  - **Named limits:**
+    - an append is not atomic against another process's;
+    - on Windows, `metadata-hash` hashes the type, size and modification time, and is not an identity. There, a file
+      opened without `write` cannot have its times set, and a directory's `sync` does nothing.
+  - **Not yet reached:** a Go program's `os.Readlink`, `os.Symlink`, `os.Link`, `os.Truncate`, `os.Chtimes` and
+    `os.SameFile`, until the Phase 4 fork binds them (F11c).
+
 - **A component creates, removes and renames beneath a directory it is granted: `wasi:filesystem@0.3`'s four
   mutations** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1c of the v0.16.0 plan
   [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0138). No public API changes: the grant is ADR 0133's
@@ -180,8 +219,8 @@ says what it now requires and what it gives up.
     `open-at`, `stat`, `stat-at`, `get-flags`, `get-type`, `read-via-stream` and `write-via-stream`. Every grant,
     read-only ones too, resolves paths through an `os.Root` of its own, so `..`, a symlink pointing out, or an absolute
     path fails `not-permitted`, as the WIT says. A read-only grant refuses a write, a create or a truncate with
-    `read-only`. The async methods resolve inline, as wasmtime 49.0.3's do. `read-directory` came in E1b (above).
-    Every other `descriptor` method is still refused by name at its call: the mutations are E1c's.
+    `read-only`. The async methods resolve inline, as wasmtime 49.0.3's do. `read-directory` came in E1b, the
+    mutations in E1c, and the rest in E1d (all above).
   - **Witnesses:** `fs-descriptor.wasm`'s twenty rows match wasmtime 49.0.3's readings, 10 of 10 each, and its two
     read-only rows the WIT's text, since wasmtime's CLI has no read-only grant (`fs-descriptor.reading`), with
     `gate:cm-threads` off and on. `fs-run.wasm` exits with wasmtime's reading through `ComponentConfig.Run` and

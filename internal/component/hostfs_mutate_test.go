@@ -195,6 +195,10 @@ func fsNothingEscaped(t *testing.T, base string, mutate bool) {
 	if got := fsListing(t, base, "outside"); got != want {
 		t.Errorf("outside/ holds %q, want %q: a row reached past its grant", got, want)
 	}
+	// Every instant a row sets is 2023-11-14 (1.7e9) or earlier, and outside/ was made at the row's start.
+	if fi, err := os.Lstat(filepath.Join(base, "outside", "victim.txt")); err == nil && fi.ModTime().Unix() <= 1700000000 {
+		t.Errorf("outside/victim.txt's modification time is %v: a row set the times of a file past its grant", fi.ModTime())
+	}
 }
 
 // fsMutateAfter is each fs-mutate row's own after-check: what the row must have written, or must not have.
