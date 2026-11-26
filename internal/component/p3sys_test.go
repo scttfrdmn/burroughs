@@ -122,3 +122,46 @@ func TestReallocRunsWithItsOwnContext(t *testing.T) {
 		t.Errorf("run = %s (run's slot %d, the realloc saw %d), want wasmtime's %s", got, v>>16, v&0xffff, want)
 	}
 }
+
+// TestReallocRunsWithItsOwnContextUnderAnAsyncLift is the same question asked of an async-lifted `run`
+// (realloc-context-async.wasm, #1385), whose context is its task's rather than its stack's: ADR 0119's repair zeroed
+// and restored the stack's slots around a realloc, and a task's storage was reached around it. In the pin the
+// realloc's Thread is its own whatever the caller's lift, and wasmtime 49.0.3 reads 12345 << 16 | 0, gate:cm-threads
+// off and on.
+//
+// It was found by p3serve (ADR 0137): a wasm32-wasip3 std guest's handler is async-lifted, its realloc's task hooks
+// set its shadow stack pointer, context slot 0, to 0 on the way out, and every request trapped out of bounds at the
+// handler's next frame.
+//
+// **NEUTER, run:** drop callerStorage's realloc arm, and this reads 0xdead << 16 | 12345 (3735892025) in both gate
+// states, and every TestP3ServeMatchesWasmtime request traps out of bounds. TestReallocRunsWithItsOwnContext passes
+// under it.
+func TestReallocRunsWithItsOwnContextUnderAnAsyncLift(t *testing.T) {
+	want := readingLine(t, "testdata/realloc-context-async.reading", "wasmtime 49.0.3, 10 of 10")
+	b, err := os.ReadFile("testdata/realloc-context-async.wasm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gate := range []string{"0", "1"} {
+		t.Run("cm-threads="+gate, func(t *testing.T) {
+			t.Setenv(asyncGateEnv, "1")
+			t.Setenv(cmThreadsGateEnv, gate)
+			in, err := InstantiateWithHost(b, NewHost(io.Discard, io.Discard, nil))
+			if err != nil {
+				t.Fatalf("instantiate: %v", err)
+			}
+			defer in.Close()
+			res, err := in.CallValues("run")
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			v, ok := res[0].U32()
+			if !ok {
+				t.Fatalf("run returned %v, not a u32", res[0])
+			}
+			if got := strconv.FormatUint(uint64(v), 10); got != want {
+				t.Errorf("run = %s (run's slot %d, the realloc saw %d), want wasmtime's %s", got, v>>16, v&0xffff, want)
+			}
+		})
+	}
+}

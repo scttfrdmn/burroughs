@@ -39,7 +39,24 @@ import (
 // while an async task waited read the waiting task's context (`context-clobber.wasm`: 5 where both oracles
 // read 0). Only a caller with no Thread record (a core-level call bypassing the component) falls back to
 // `h.lift`, which is all it ever had.
+//
+// **A caller inside a `cabi_realloc` has storage of its own, whatever lift it is nested in** (#1385, ADR 0137): nil,
+// so the stack's slots, which `CanonCaller.Realloc` zeroes and restores around the call (ADR 0119, grave #1260) and
+// a lift's realloc gets fresh on a stack of its own. The pin invokes a realloc as a call of its own, on a new Thread
+// whose storage starts [0, 0] (def:LiftLowerContext.reallocate:"self.inst.store.invoke(realloc, on_start,
+// on_resolve)"). ADR 0119's repair reached only a sync lift's context, which is the stack's: the realloc's stack still
+// carried its caller's Thread index, so under an async lift this returned the caller's task's storage, and a
+// wasm32-wasip3 std guest's realloc, whose task hooks leave context slot 0, its shadow stack pointer, at 0, left its
+// handler's stack pointer there (realloc-context-async.wasm, and every p3serve row).
+//
+// NEUTER, run: drop this arm, and TestReallocRunsWithItsOwnContextUnderAnAsyncLift reads 0xdead << 16 | 12345 in
+// both gate states, where wasmtime 49.0.3 reads 12345 << 16 | 0, and every TestP3ServeMatchesWasmtime request traps
+// out of bounds: the drive fails at forever, the first row that waits on the guest's stderr, every row before it the
+// trap's page. TestReallocRunsWithItsOwnContext, the sync arm, passes under it.
 func callerStorage(h *asyncHandles, c *interp.CanonCaller) *[2]uint32 {
+	if !c.MayLeave() {
+		return nil
+	}
 	if h.threads != nil {
 		if rec := h.threads.current(c); rec != nil {
 			switch {
