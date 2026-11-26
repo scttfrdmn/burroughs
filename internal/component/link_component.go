@@ -204,9 +204,22 @@ func (f *compFunc) invokeSync(ctx context.Context, params []interp.Value, pend [
 	// it. Keyed by agent until #984, which found #976's keying self-deadlocking exactly
 	// that chain (`reenter.wasm`).
 	ch := runChainFrom(ctx)
-	if !f.h.acquireRun(ch, implicit, ctx.Done()) {
-		return liftResult{}, fmt.Errorf("%w: the call's context ended while waiting for this instance to "+
-			"finish executing another task", ErrCancelled)
+	// **A sync cross-component caller's wait ends at its own engine's end too** (ADR 0139, #1398). Its context is
+	// `context.Background()` carrying its chain (`callerChainContext`), so `ctx.Done()` is nil, and before #1398
+	// nothing could end this wait: E2-in-a's neuter found a parent's sync call waiting here for a child's slot while
+	// the child's task.return waited for the parent's. The caller's agent's context is its thread's lifetime, which its
+	// core instance's Close and ADR 0090's teardown end; Close's stop, inside acquireRunFor, ends it for every caller.
+	var engine <-chan struct{}
+	if caller != nil {
+		engine = caller.Context().Done()
+	}
+	if !f.h.acquireRunFor(ch, implicit, ctx.Done(), engine) {
+		if ctx.Err() != nil {
+			return liftResult{}, fmt.Errorf("%w: the call's context ended while waiting for this instance to "+
+				"finish executing another task", ErrCancelled)
+		}
+		return liftResult{}, fmt.Errorf("%w: Close, or its caller's teardown, ended this call while it waited for the "+
+			"run slot", errThreadKilled)
 	}
 	defer f.h.releaseRunFor(ch)
 	// The arguments whose bytes belong in this lift's memory are lowered here, inside the slot, through the
@@ -671,9 +684,10 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 		return nil, fmt.Errorf("%w: the call's context ended while waiting for this instance's execution "+
 			"slot", ErrCancelled)
 	}
-	// The run slot after the entry slot, never before (ADR 0101). Not abandonable: once `enterTask` has
-	// admitted the task, its entries proceed (enterTask's rule), and the holder of the run slot releases it
-	// at its next suspension point or return.
+	// The run slot after the entry slot, never before (ADR 0101). Not abandonable by the call's context: once
+	// `enterTask` has admitted the task, its entries proceed (enterTask's rule), and the holder of the run slot
+	// releases it at its next suspension point or return. **Close's stop ends the wait** (ADR 0139), which ends the
+	// task rather than abandoning a cancellation (`entryEnded`).
 	// A fresh chain per entry, except the first entry of a cross-component callee, which runs on its caller's
 	// chain (`takeFirstChain`, ADR 0095's amendment, F0's corollary). In the reference that segment runs on
 	// the caller's thread, inside the caller's lower, so a call back into the caller's instance from it is a
@@ -682,7 +696,9 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	// Normally unfenced: this is the first entry. It is fenced when it had to wait in `enterTask`, which
 	// ended the first segment before the entry ran (F0), so it is then a segment like any later one (F1).
 	ch := f.entryChain(task, rec)
-	f.h.acquireRun(ch, rec, nil)
+	if !f.h.acquireRunFor(ch, rec, nil, nil) {
+		return nil, f.entryEnded(prev, rec)
+	}
 	// **The entry slot is released BEFORE the run slot** (#1012). The run slot's release can kick the
 	// scheduler, and a Thread it runs must find `exclusive_thread` already clear, as the reference clears it
 	// on the callback's return. Two separate defers ran in the other order (last in, first out), and Windows
@@ -713,6 +729,18 @@ func (f *compFunc) enterInvokeLowering(task *liftTask, target coreDef, args []in
 	f.threads.entering(task.threadIdx)
 	res, err = target.inst.InvokeCMThread(target.name, task.threadIdx, args...)
 	return res, err
+}
+
+// entryEnded is an admitted entry's unwind when Close's stop ended its wait for the run slot (ADR 0139, #1398): the
+// entry slot and the fence reader the entry took are released, in the deferred cleanup's order, and nothing else was
+// taken, so neither the run slot's release nor the YIELD handoff runs. The core func has not run, and the task ends
+// with the error. This does not abandon a cancellation, which enterTask's rule forbids: Close ends the task, as it
+// ends a parked Thread without delivering anything.
+func (f *compFunc) entryEnded(prev *liftTask, rec *cmThread) error {
+	err := fmt.Errorf("%w: Close ended this entry while it waited for the run slot", errThreadKilled)
+	f.h.leaveTask(prev)
+	fenceEntryEnd(rec, nil, err)
+	return err
 }
 
 // entryChain is the chain an entry of task runs on, taking the entry's fence reader if it needs one (F1, the
@@ -761,8 +789,10 @@ func (f *compFunc) enterAndInvoke(task *liftTask, target coreDef, args []interp.
 			"slot", ErrCancelled)
 	}
 	rec := f.threads.get(task.threadIdx)
-	ch := f.entryChain(task, rec) // the reader before the slot (F1), and the chain the entry runs on
-	f.h.acquireRun(ch, rec, nil)  // after the entry slot (ADR 0101)
+	ch := f.entryChain(task, rec)              // the reader before the slot (F1), and the chain the entry runs on
+	if !f.h.acquireRunFor(ch, rec, nil, nil) { // after the entry slot (ADR 0101); Close's stop ends it (ADR 0139)
+		return nil, f.entryEnded(prev, rec)
+	}
 	// The entry slot is released before the run slot, whose release can kick the scheduler (#1012; see
 	// enterInvokeLowering). At YIELD with Threads ready, the run slot is handed to the scheduler instead
 	// (`yieldHandoff`).

@@ -233,7 +233,7 @@ func (n *hostHTTP) stop() {
 	// An incoming request's body Read in flight is ended by a read deadline in the past, so waitAllHTTP does not wait on
 	// a client that never sends more (ADR 0137).
 	for _, b := range incoming {
-		b.abort()
+		b.abort(nil) // inside Close, after its stop, which already ends the delivery's wait for the slot
 	}
 	if tr != nil {
 		tr.CloseIdleConnections()
@@ -544,7 +544,13 @@ func (s *httpSend) cancelSubtask() func() {
 // deliverHTTP runs a store under ADR 0101's discipline, sockSend.deliver's: queued for the run slot's holder while it
 // is in host code, otherwise under the slot on a chain of its own, and dropped if Close has stopped the table. f runs
 // under h.mu; the caller raised h.httpPending, which this lowers whether f runs or not.
-func deliverHTTP(h *asyncHandles, f func()) {
+func deliverHTTP(h *asyncHandles, f func()) { deliverHTTPUntil(h, f, nil) }
+
+// deliverHTTPUntil is deliverHTTP whose wait for the run slot also ends at `until`, nil for never, and the store is
+// then dropped, as at Close's stop. HTTPServer.Close passes its deadline for its let-go (ADR 0139, #1398): the let-go
+// runs on Close's own goroutine before its bounded wait, so a guest that answered and then computes without yielding
+// held Close here, and `producerStop` closes only at the instance's Close, after that wait.
+func deliverHTTPUntil(h *asyncHandles, f func(), until <-chan struct{}) {
 	apply := func() {
 		h.mu.Lock()
 		h.httpPending--
@@ -570,7 +576,7 @@ func deliverHTTP(h *asyncHandles, f func()) {
 		return
 	}
 	ch := &runChain{}
-	if !h.acquireRun(ch, nil, h.producerStop) {
+	if !h.takeRunSlot(ch, nil, until, h.producerStop, nil) {
 		h.mu.Lock()
 		h.httpPending--
 		h.mu.Unlock()
@@ -839,11 +845,18 @@ func (b *httpReqBody) abort() {
 // end lets the guest's ends go, by a delivery: the stream's writes complete DROPPED, and the trailers future's reader
 // is dropped.
 func (b *httpReqBody) Close() error {
+	b.closeUntil(nil)
+	return nil
+}
+
+// closeUntil is Close whose delivery's wait for the run slot ends at `until` (deliverHTTPUntil): HTTPServer.Close's
+// deadline, for its let-go (ADR 0139), or nil for never.
+func (b *httpReqBody) closeUntil(until <-chan struct{}) {
 	h := b.h
 	h.mu.Lock()
 	if b.closed {
 		h.mu.Unlock()
-		return nil
+		return
 	}
 	b.closed = true
 	h.hostIO.Broadcast()
@@ -854,14 +867,13 @@ func (b *httpReqBody) Close() error {
 	h.mu.Unlock()
 	b.reg.unhold(b.reader)
 	if !done {
-		deliverHTTP(h, func() {
+		deliverHTTPUntil(h, func() {
 			unlinkHostReadLocked(b.reader)
 			if !b.tSet {
 				hostDropFutureReaderLocked(b.trailers)
 			}
-		})
+		}, until)
 	}
-	return nil
 }
 
 // httpErrorLabel maps a round trip's or a body Read's error to its error-code case (ADR 0135's table). cause is the

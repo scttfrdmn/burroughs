@@ -201,12 +201,20 @@ func (s *HTTPServer) Close(deadline time.Time) bool {
 	// NEUTER, run: skip it, and TestCloseEndsEveryServedTaskAndItsGoroutine's Close reaches its bound and reports it:
 	// its answered echo, reading a body the client holds open, and its forever, writing a body nobody reads, are parked
 	// with nothing to end them. (Before Close's last wait was bounded, the test binary timed out inside Close.)
+	//
+	// **The deadline bounds the let-go too** (ADR 0139, #1398). Each let-go is a delivery, which waits for the run slot
+	// on this goroutine, so a guest that answered and then computes without yielding held Close here, before the bounded
+	// wait below, and `producerStop` closes only at the instance's Close, after it. Ended at the deadline, a let-go's
+	// store is dropped, the wait below finds the deadline passed, and the instance's Close ends the guest.
+	//
+	// NEUTER, run: pass nil for the let-go's deadline, and TestCloseIsBoundedByItsDeadlineWhileAGuestHoldsTheSlot's
+	// Close is still in the let-go, waiting for the slot, at its hang guard.
+	expiry, stopExpiry := context.WithDeadline(context.Background(), deadline)
+	defer stopExpiry()
 	for _, q := range reqs {
-		q.abortBodies()
+		q.abortBodies(expiry.Done())
 	}
-	timer := time.NewTimer(time.Until(deadline))
-	defer timer.Stop()
-	complete := waitEnded(reqs, timer.C)
+	complete := waitEnded(reqs, expiry.Done())
 	s.mu.Lock()
 	ins := make([]*Instantiated, 0, len(s.live))
 	for in := range s.live {
@@ -223,7 +231,7 @@ func (s *HTTPServer) Close(deadline time.Time) bool {
 }
 
 // waitEnded waits for every task's end until expired fires, and reports whether all ended.
-func waitEnded(reqs []*serveRequest, expired <-chan time.Time) bool {
+func waitEnded(reqs []*serveRequest, expired <-chan struct{}) bool {
 	for _, q := range reqs {
 		select {
 		case <-q.ended:
@@ -338,15 +346,17 @@ func (q *serveRequest) dropAnswer(r []canon.Value, inSlot bool) {
 // once (setBody), and the request body's stream is ended by the host itself rather than through a Read, with any Read
 // after it refused. A let-go that reached only what was in flight left the body it missed held for ever, and Close
 // reached its bound: forever's body, recorded after Close had let the bodies go, on #1401's CI.
-func (q *serveRequest) abortBodies() {
+//
+// `until` ends each let-go's wait for the run slot: Close's deadline (ADR 0139), or nil for never.
+func (q *serveRequest) abortBodies(until <-chan struct{}) {
 	q.mu.Lock()
 	q.letGo = true
 	b := q.body
 	q.mu.Unlock()
 	if b != nil {
-		closeServedBody(b)
+		closeServedBody(b, until)
 	}
-	q.incoming.abort()
+	q.incoming.abort(until)
 }
 
 // run is the task's driver, the one goroutine per request ADR 0137 authorises: the call of `handle`, which returns
@@ -386,7 +396,7 @@ func (q *serveRequest) setBody(b *httpReqBody) {
 		b.taskEnded()
 	}
 	if letGo {
-		closeServedBody(b)
+		closeServedBody(b, nil) // on ServeHTTP's path, not Close's, so no deadline (ADR 0139's named limit)
 	}
 }
 
@@ -590,7 +600,7 @@ func (s *HTTPServer) respond(w http.ResponseWriter, r *http.Request, rc *http.Re
 	h.mu.Lock()
 	h.httpPending--
 	h.mu.Unlock()
-	closeServedBody(b)
+	closeServedBody(b, nil)
 	// The transmission future (response.new's): ok for a response sent whole, the trailers' own code for one they
 	// failed, connection-terminated otherwise. Neither code was read on wasmtime: p3serve's guest drops its future.
 	sent := resp.sent
@@ -611,10 +621,11 @@ func (s *HTTPServer) respond(w http.ResponseWriter, r *http.Request, rc *http.Re
 }
 
 // closeServedBody lets the guest's body go once the host has stopped reading it: httpReqBody.Close for a stream, and
-// for contents none only the trailers future's reader, if its value was never taken.
-func closeServedBody(b *httpReqBody) {
+// for contents none only the trailers future's reader, if its value was never taken. `until` ends the delivery's wait
+// for the run slot (deliverHTTPUntil): Close's deadline, or nil for never.
+func closeServedBody(b *httpReqBody, until <-chan struct{}) {
 	if b.reader != nil {
-		_ = b.Close() // httpReqBody.Close returns nil
+		b.closeUntil(until)
 		return
 	}
 	h := b.h
@@ -633,7 +644,7 @@ func closeServedBody(b *httpReqBody) {
 	}
 	h.mu.Unlock()
 	if !taken {
-		deliverHTTP(h, func() { hostDropFutureReaderLocked(b.trailers) })
+		deliverHTTPUntil(h, func() { hostDropFutureReaderLocked(b.trailers) }, until)
 	}
 }
 
@@ -818,8 +829,9 @@ func (b *httpIncoming) Read(p []byte) (int, error) {
 // abort is Close's let-go of the request body (abortBodies): it ends a Read in flight by a read deadline in the past,
 // refuses every Read after it, and ends the body's stream itself (endIncoming), so the guest is told the body's end
 // whatever it is doing, reading or not. The first two are under mu, so it never touches the controller after finish,
-// and so a Read either is in flight when it runs or starts after it and finds it.
-func (b *httpIncoming) abort() {
+// and so a Read either is in flight when it runs or starts after it and finds it. `until` is Close's deadline, which
+// ends the delivery's wait for the run slot (ADR 0139).
+func (b *httpIncoming) abort(until <-chan struct{}) {
 	b.mu.Lock()
 	b.aborted = true
 	if !b.closed && b.reading {
@@ -827,7 +839,7 @@ func (b *httpIncoming) abort() {
 	}
 	p := b.producer
 	b.mu.Unlock()
-	endIncoming(p)
+	endIncoming(p, until)
 }
 
 // endIncoming ends a request body's stream at Close's let-go, by a delivery under ADR 0101's discipline, since the end
@@ -840,7 +852,7 @@ func (b *httpIncoming) abort() {
 // NEUTER, run: skip this call in abort, and TestCloseEndsATaskAwaitingTheTrailersOfABodyItStoppedReading's Close
 // reaches its bound with the echo parked in awaitEvent, its write told DROPPED and its trailers never resolved, and its
 // ServeHTTP held in a Write.
-func endIncoming(p *streamProducer) {
+func endIncoming(p *streamProducer, until <-chan struct{}) {
 	if p == nil {
 		return
 	}
@@ -852,7 +864,7 @@ func endIncoming(p *streamProducer) {
 	}
 	h.httpPending++
 	h.mu.Unlock()
-	deliverHTTP(h, func() { endIncomingLocked(p) })
+	deliverHTTPUntil(h, func() { endIncomingLocked(p) }, until)
 }
 
 // endIncomingLocked finishes the stream now, as a failed Read would: its future err(HTTP-protocol-error), the code a

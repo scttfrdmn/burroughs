@@ -102,9 +102,11 @@ func TestACrossComponentCallerIsResolvedAtTaskReturn(t *testing.T) {
 // one place the on-return hook leaves the resolution to the exit (ADR 0136).
 //
 // **NEUTER, run:** resolve inside the window too (drop liftAsAsyncImpl's hand-back test), and the first run, gate off,
-// deadlocks, and Close does not end it, so the test binary times out. Its goroutine dump is the cycle: g's taskReturn
+// deadlocks, and Close did not end it, so the test binary timed out. Its goroutine dump is the cycle: g's taskReturn
 // in onResolve's acquireRun, holding g's run slot and waiting for the parent's, and the parent's invokeSync of
-// `exited` in acquireRun, holding the parent's and waiting for g's.
+// `exited` in acquireRun, holding the parent's and waiting for g's. **Since ADR 0139 (#1398) Close ends it**: the same
+// neuter, through the seam `answerInsideHandBack`, reads hang in 20 of 20 runs in both gate states, each ended by the
+// read's Close. TestCloseEndsACrossInstanceRunSlotDeadlock is that witness.
 func TestAReturnInsideTheCancelHandBackIsResolvedAtTheExit(t *testing.T) {
 	for _, gate := range []string{"0", "1"} {
 		got := readTaskReturnEarly(t, 6, gate, 20)

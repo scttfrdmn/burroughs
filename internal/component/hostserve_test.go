@@ -200,7 +200,7 @@ func TestServingAnAbandonedRequestLetsItsTaskExit(t *testing.T) {
 // guest's writer is told its reader has gone, which is what lets a guest writing a body nobody reads exit.
 func TestAResponseBodyRecordedAfterCloseIsLetGoAtOnce(t *testing.T) {
 	q := &serveRequest{incoming: &httpIncoming{}}
-	q.abortBodies() // Close's let-go, with no body recorded yet
+	q.abortBodies(nil) // Close's let-go, with no body recorded yet
 	h := newAsyncHandles()
 	h.hostIO = sync.NewCond(&h.mu)
 	w := &writableStreamEnd{}
@@ -315,7 +315,7 @@ func TestARequestBodyConsumedAfterCloseIsEndedAtOnce(t *testing.T) {
 		t.Error("the body was read")
 		return 0, io.EOF
 	})}
-	b.abort() // Close's, before the guest consumed the body
+	b.abort(nil) // Close's, before the guest consumed the body
 	h.mu.Lock()
 	_, _, err := b.consumeLocked(h, res, nil)
 	p := b.producer
@@ -345,7 +345,7 @@ func TestARequestBodyReadAfterCloseIsRefused(t *testing.T) {
 		read = true // a held body would block here, until a client that never sends more went away
 		return 0, io.EOF
 	})}
-	b.abort() // Close's, with no Read in flight
+	b.abort(nil) // Close's, with no Read in flight
 	n, err := b.Read(make([]byte, 8))
 	if read || n != 0 || !errors.Is(err, errServeClosed) {
 		t.Fatalf("a Read after Close's abort read the body %v and returned %d, %v; want no read and %v", read, n, err,

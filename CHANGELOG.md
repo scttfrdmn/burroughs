@@ -270,6 +270,20 @@ says what it now requires and what it gives up.
 
 ### Fixed
 
+- **Close ends a deadlock between two instances' run slots, and `HTTPServer.Close`'s let-go waits only until its
+  deadline** ([#1398](https://github.com/scttfrdmn/burroughs/issues/1398), ADR 0139).
+  - **Which waits now end at Close.** A callback task's entry and a sync lift's call waiting for a run slot end at
+    Close's stop. A sync cross-component caller's wait also ends at its own core instance's Close or teardown. Before,
+    nothing could end either.
+  - **The cycle it ends.** E2-in-a's neuter (#1384) found it: a child's `task.return` storing its parent's result
+    waited for the parent's slot while holding its own, and the parent's sync call of the child waited for the
+    child's. Close did not end it.
+  - **How it ends.** The parent's call now unwinds at the stop, freeing its slot, and the child's store lands.
+  - **Why a result store keeps waiting.** Dropping it at the stop left a caller parked on its event past Close: the
+    first build did this, and `TestACancelRequestedWhileSuspendedIsDeliveredAtTheLoop`'s control hung in 1 of 4 runs.
+  - **The let-go.** `HTTPServer.Close` let a body go by a delivery on its own goroutine, before its bounded wait, so a
+    guest that answered and then computed without yielding held Close there. That delivery now gives up at Close's
+    deadline, and Close reports false, as ADR 0137's postscript anticipated.
 - **A lower's realloc runs with context storage of its own under an async lift too**
   ([#1385](https://github.com/scttfrdmn/burroughs/issues/1385), ADR 0137; ADR 0119's twin). ADR 0119 zeroed and
   restored a stack's context slots around a realloc, which is a sync lift's context, and an async-lifted task's

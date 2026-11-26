@@ -498,6 +498,12 @@ func flatWords(vt ValType) (int, bool) {
 	}
 }
 
+// answerInsideHandBack is a test seam, false outside tests. It makes liftAsAsyncImpl's on-return hook answer inside
+// upstream #726's hand-back window too, which is ADR 0136's neuter of the hand-back exception and the one path known
+// to reach #1398's cross-instance run-slot deadlock. TestCloseEndsACrossInstanceRunSlotDeadlock sets it, so that
+// Close's end of that deadlock (ADR 0139) is driven rather than argued.
+var answerInsideHandBack bool
+
 // liftAsAsyncImpl adapts a component func whose definition is an async (callback) lift into the
 // `asyncLowerImpl` the lower side already consumes.
 //
@@ -593,14 +599,15 @@ func liftAsAsyncImpl(callee *compFunc, st *subtask, caller *asyncHandles) asyncL
 		// also what a sync canceller's judgement after the hand-back already reads (`subtaskCancel`).
 		//
 		// NEUTER, run: answer inside the window too, and TestAReturnInsideTheCancelHandBackIsResolvedAtTheExit's
-		// first run deadlocks past Close: the child's taskReturn waits in onResolve's acquireRun for the parent's
-		// slot, holding its own, while the parent's sync call of `exited` waits in invokeSync's for the child's.
+		// first run deadlocks: the child's taskReturn waits in onResolve's acquireRun for the parent's slot, holding
+		// its own, while the parent's sync call of `exited` waits in invokeSync's for the child's. Close did not end
+		// it until ADR 0139 (#1398), and the seam answerInsideHandBack is that neuter, for the witness that it does.
 		var answered atomic.Bool
 		task.onReturn = func(r liftResult, from *cmThread) {
 			callee.h.mu.Lock()
 			handingBack := task.inHandBackLocked()
 			callee.h.mu.Unlock()
-			if handingBack {
+			if handingBack && !answerInsideHandBack {
 				return
 			}
 			answered.Store(true)

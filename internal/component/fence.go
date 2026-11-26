@@ -60,8 +60,9 @@ func (h *asyncHandles) writerAdmittedLocked(ch *runChain) bool {
 }
 
 // fenceWriterEnter waits until a writer on chain ch is admitted, then counts it. False, and nothing counted,
-// when abort fires first. A nil abort never fires.
-func (h *asyncHandles) fenceWriterEnter(ch *runChain, abort <-chan struct{}) bool {
+// when abort, stop or engine fires first: the caller's own abort, the instance's stop and the waiting agent's
+// engine, which takeRunSlot passes (ADR 0139). A nil channel never fires.
+func (h *asyncHandles) fenceWriterEnter(ch *runChain, abort, stop, engine <-chan struct{}) bool {
 	for {
 		h.mu.Lock()
 		if h.writerAdmittedLocked(ch) {
@@ -76,6 +77,10 @@ func (h *asyncHandles) fenceWriterEnter(ch *runChain, abort <-chan struct{}) boo
 		select {
 		case <-w:
 		case <-abort:
+			return false
+		case <-stop:
+			return false
+		case <-engine:
 			return false
 		}
 	}
