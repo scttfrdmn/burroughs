@@ -1,8 +1,9 @@
 // Command burroughs is the engine CLI.
 //
 // v0 surface: run (instantiate a module and call an export), inspect (section-level module dump),
-// and version. `run` is a consumer of the public `burroughs` package — decision 0029 — so the CLI
-// and an embedding host cross the same path, and neither is covered without the other.
+// and version; and since v0.16.0's E2-in-b, serve (a component's wasi:http handler, ADR 0137). `run` and
+// `serve` are consumers of the public `burroughs` package — decision 0029 — so the CLI and an embedding
+// host cross the same path, and neither is covered without the other.
 //
 // The **exit codes are the CLI's, not `run`'s** (decision 0033, #373): `inspect` classifies its
 // refusals onto the same public sentinels and returns the same codes for them, so a script that
@@ -15,8 +16,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strings"
+	"syscall"
 
 	"github.com/scttfrdmn/burroughs"
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -89,6 +92,12 @@ func dispatch(stdout, stderr io.Writer, argv []string) int {
 		return exitCode(inspectCmd(stdout, stderr, argv[1]))
 	case "run":
 		return exitCode(runCmd(stdout, stderr, argv[1:]))
+	case "serve":
+		// It serves until an interrupt or a SIGTERM, as wasmtime serve does until ctrl-c.
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(stop)
+		return exitCode(serveCmd(stdout, stderr, argv[1:], stop))
 	default:
 		usage(stderr)
 		return exitUsage
@@ -173,6 +182,7 @@ func inspect(stdout io.Writer, path string) error {
 func usage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "usage: burroughs <command> [arguments]")
 	fmt.Fprintln(stderr, "  run [--strict] file.wasm [func [value...]]   instantiate and call an export")
+	fmt.Fprintln(stderr, "  serve [--addr HOST:PORT] file.wasm           serve a component's wasi:http handler")
 	fmt.Fprintln(stderr, "  inspect file.wasm                            section-level module dump")
 	fmt.Fprintln(stderr, "  version")
 }

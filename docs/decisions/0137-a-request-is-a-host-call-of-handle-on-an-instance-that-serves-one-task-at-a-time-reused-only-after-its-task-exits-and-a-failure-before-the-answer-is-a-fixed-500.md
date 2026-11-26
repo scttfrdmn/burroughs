@@ -32,6 +32,7 @@ E2-out (ADR 0135) serves `wasi:http@0.3`'s four resources and `client.send`. E2-
 | stall | a chunked body the client never finishes, then goes away | **the task is not cancelled**: its body ends `err(HTTP-protocol-error)`, and it returns a response nobody reads |
 | sleep | a handler waiting on a timer, its client gone once it has entered | **the task is not cancelled**: its wait ends and it returns |
 | trailers-err | trailers written `err(internal-error)` | the connection closes before the response ends |
+| send | the handler sends a GET to a peer on 127.0.0.1 | the peer's status and body: `serve` grants outgoing HTTP |
 
 **The parallel F12-in probe read the same oracle with a hand-written WAT reactor** ([#1387](https://github.com/scttfrdmn/burroughs/issues/1387)'s slice 0, relayed to this slice), and agrees where both read: a trap after the answer ends the body cleanly, a trap before it is the 205-byte page, error trailers cut the connection (body bytes lost in 1 of its 5 Go runs, the head too in some of p3serve's), a `date` header is added, and a guest `content-length` passes through. It read three more facts this record uses: **wasmtime's concurrency count ends at `task.return`, not at the task's exit** (`--max-instance-concurrent-reuse-count 1` let a second request into an instance whose first task had returned and not exited, 5 of 5; `--max-instance-reuse-count 1` kept it out, 5 of 5; 30 tasks were live at once in one instance by default); `serve` puts `INSTANCE_ID=<n>` in the guest's environment; and a task that exits with a live subtask is clean for the client.
 
@@ -78,8 +79,8 @@ The request's own crosses into the callee on its entry, and the call is `callRet
 - **for `err(code)`, a task that ends before answering, or an instance that cannot be made, writes the fixed page**: 500, `text/html; charset=UTF-8`, a `Content-Length`, and wasmtime's HTML with `burroughs` where it names `wasmtime` (err, err-internal, trap). The error itself is not sent, as wasmtime does not send it. wasmtime logs it to its stderr; the handler has no log of its own, and adding one would be public surface;
 - **for trailers resolved `err(code)`, aborts the response** (`http.ErrAbortHandler`), so the connection closes before the body ends (trailers-err);
 - **for a task that ends after its answer and before its body does, ends the body cleanly** with what was written and no trailers, which is wasmtime's silent truncation (trap-after), a named reading rather than an endorsement;
-- **for a client gone before the answer, returns**, and the task runs on; its answer, arriving later, is destroyed with the host table (stall, sleep);
-- **for a client gone after the answer** (a write fails), drops the host's reader of the body, so the guest's next write is told DROPPED (forever).
+- **for a client gone before the answer, returns**, and the task runs on; its answer, arriving later, is destroyed at once, inside the `task.return` that gives it, so the body the guest goes on to write is told its reader has gone and the task can exit (stall, sleep). Left in the host table instead, that body's write would be parked for ever;
+- **for a client gone after the answer** (a write fails, or the request's context ends while the guest writes nothing), drops the host's reader of the body, so the guest's next write is told DROPPED (forever). The context's end reaches the body's Read through `context.AfterFunc`, whose goroutine is the context package's and runs only the reader's abort.
 
 ### The pool
 
@@ -90,7 +91,14 @@ The request's own crosses into the callee on its entry, and the call is `callRet
 
 ### Close
 
-`Component.Close` closes the handler's pool after its own calls, in its own order (ADR 0096's): every task in flight is cancelled (`TASK_CANCELLED`, the context the calls carry), a bounded wait lets each guest run its cancellation, and then every instance is closed, idle or not, which stops the producers and the HTTP registry (ADR 0122, ADR 0135) and waits out their goroutines. **No engine goroutine survives it.** A request after Close is answered with the page. The bound is `Component.Close`'s, and reaching it is `ErrCloseIncomplete`, as for a call.
+`Component.Close` closes the handler's pool after its own calls, in its own order (ADR 0096's), under its own bound:
+
+1. every task in flight is cancelled (`TASK_CANCELLED`, the context the calls carry);
+2. **every body is let go**: a response body being copied has its reader dropped by a delivery, so a guest writing it is told DROPPED even while `ServeHTTP` is held in a Write to a client that reads nothing, and a request body's Read in flight is ended by a read deadline in the past, so a guest reading it is told its end. A task that has answered cannot be cancelled, so this is what ends it;
+3. a bounded wait for every task's end;
+4. every instance is closed, idle or not, which stops the producers and the HTTP registry (ADR 0122, ADR 0135) and waits out their goroutines.
+
+**A Close within its bound leaves no serving goroutine running.** One that reaches the bound reports `ErrCloseIncomplete`, as for a call, and does not wait again: an instance's Close ends a task executing guest code, and does not wake one parked on something no host work will deliver, which ends at its park's bound. A request after Close is answered with the page.
 
 ### `wasi:cli/run`, and the CLI
 
@@ -102,7 +110,7 @@ The request's own crosses into the callee on its entry, and the call is `callRet
 - **it prints `Serving HTTP on http://ADDR/` on stderr** once it listens, wasmtime's line with the bound address, which is how a caller learns an ephemeral port;
 - **it grants outgoing HTTP** (`AllowHTTP`), Scott's ruling, so it takes no `--allow-http`;
 - **`--dir`, `--scratch`, `--inherit-network` and `--allow-ip-name-lookup` are `run`'s**, parsed by `run`'s own flag types, so their syntax, refusals and meaning are identical;
-- it serves until SIGINT or SIGTERM, then shuts the server down and closes the component.
+- it serves until SIGINT or SIGTERM, then shuts the server down and closes the component. **Its stop watcher is the one goroutine the command starts**, authorised in the census by this ADR: it waits for a stop or for `Serve` to end, shuts the `http.Server` down under a bound on a stop, runs no guest code and touches the engine only through the public `Component`, and is joined before `serve` returns.
 
 ## Consequences
 
@@ -116,11 +124,32 @@ The request's own crosses into the callee on its entry, and the call is `callRet
   - the guest's environment is empty, where `serve` sets `INSTANCE_ID`; and its stdin is empty;
   - no `date` header is suppressed or added beyond Go's own, which adds one as hyper does.
 - **Named limits:**
-  - **No host-to-host copy** (E2-in-c, #1386): a response whose body is a stream the host produces, an incoming request's body forwarded as is, is refused by name, as ADR 0135's send refuses one.
+  - **No host-to-host copy** (E2-in-c, #1386): a response whose body is a stream the host produces, an incoming request's body forwarded as is, is answered with the page, since a handler has no error to name it in.
   - **Instances are made by parsing the component's bytes again**; a loaded component shared by its instances would parse once.
   - **The re-arm of the body's read waits for the run slot, and only Close abandons that wait** (#1398's subject, `acquireRun`), so a guest computing in a callback holds its response's next flush, and a client gone meanwhile is noticed only after it.
   - **A task's answer to a client already gone still runs to completion** and holds its instance until it exits, as on wasmtime.
   - **HTTP/2 is Go's**: full duplex is native there, and nothing here reads it against the oracle.
+  - **A task parked on nothing the host delivers outlives a Close that reaches its bound**, as above.
+
+### A repair the readings compelled
+
+**A lower's realloc ran in its caller's task's context under an async lift**, and every p3serve request trapped out of bounds on it before anything else here could be read. The pin invokes a realloc as a call of its own, on a new Thread whose storage starts [0, 0] (def:LiftLowerContext.reallocate:"self.inst.store.invoke(realloc, on_start, on_resolve)"). ADR 0119 (grave #1260) made Burroughs zero and restore a stack's context slots around a realloc, which is a sync lift's context; an async lift's context is its task's, found through the Thread index the realloc's stack still carried, and that was not reached. A `wasm32-wasip3` std guest keeps its shadow stack pointer in context slot 0, and its realloc is wrapped in task hooks that move it to a scratch stack and set it to 0 on the way out, which is right for a fresh context. Run in the handler's, it left the handler's stack pointer at 0, so the handler's next frame stored below address 0. p3http never reached it: its `run` is a sync lift. **The repair:** a caller inside a realloc (`MayLeave` false) has the stack's slots, which ADR 0119 already zeroes and restores, whatever lift it is nested in (`callerStorage`). `realloc-context-async.wasm`, realloc-context's async twin, is its witness: wasmtime 49.0.3 reads 12345 << 16 | 0, 10 of 10, and Burroughs at 13f4960 read 0xdead << 16 | 12345, gate:cm-threads off and on. It reverses no stamped ADR: it completes ADR 0119's rule at a lift it did not reach.
+
+## The build, as measured
+
+On darwin/arm64, in the worktree of #1385's branch. The reading was committed before the engine code; the send row, which reads `serve`'s grant of outgoing HTTP, was added with it, taken from wasmtime 49.0.3 by the same driver, 10 of 10, before Burroughs' arm ran against it.
+
+- **`TestP3ServeMatchesWasmtime`** (`p3serve_test.go`): all 24 rows match wasmtime 49.0.3 serve's reading, with `gate:cm-threads` off and on, plain and under `-race`.
+- **`TestReallocRunsWithItsOwnContextUnderAnAsyncLift`**: 809041920, both gate states.
+- **The pool, by places** (`TestAServedInstanceIsReusedOnlyAfterItsTaskExits`): two sequential requests leave one instance, idle; a request served while a held echo's task has answered and not exited runs on a second; 17 held requests run on 17 instances and leave 16 idle when they finish.
+- **An abandoned request** (`TestServingAnAbandonedRequestLetsItsTaskExit`): sleep's handler answers a client already gone, and its task exits; its instance is closed.
+- **Close** (`TestCloseEndsEveryServedTaskAndItsGoroutine`): an answered echo reading a held body, an unanswered stall reading one, and a forever whose client reads nothing are ended within the bound, both gate states, and no goroutine `ServeHTTP` or a request body's Read started is left.
+- **The public doors:** `TestComponentHandlerServesARequest`, `TestHandlerInstancesTakeTheComponentsConfiguration` (the send row answers the peer's status with `AllowHTTP` and `HTTP-request-denied` without), `TestComponentCloseClosesItsHandler` and `TestHandlerOfAComponentWithNoHandleExportAnswersThePage` in the root package; `TestServeAComponent` (the address line, hello, the send row granted), `TestServeRefusesAComponentWithNoHandler` and `TestServeTakesRunsGrantFlags` in `cmd/burroughs`.
+- **What the neuters showed** (each run and reverted; the full list is at the sites as `NEUTER, run:` comments):
+  - **Counting reuse to the answer fails this guest on Burroughs too.** Released at its answer, wasmtime's count, the held echo's instance takes the next request, which is answered with the page, its task ending before an answer, though Burroughs keeps context slots per task. So the panic R2 read on wasmtime is not the only state a second task beside a returned one disturbs.
+  - **The realloc's own context is the whole of the trap.** Without it every request traps out of bounds.
+  - **Each wasmtime rule the rows read is load-bearing on its own row**: the dropped forbidden headers, the incoming body, full duplex, `TE: trailers`, the abort at error trailers, the clean end at a trap after the answer, and the body read's error code.
+  - **Close's cancel is vacuous on these rows**: the one unanswered task, stall, is ended by its body's end first. Dropping the body aborts instead holds Close to its bound.
 
 ## Rollback
 

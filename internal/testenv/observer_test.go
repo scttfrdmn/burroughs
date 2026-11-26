@@ -182,6 +182,24 @@ func TestEveryEngineGoroutineIsAtASiteADecisionAuthorises(t *testing.T) {
 				"(`TestCloseEndsASendInFlightAndItsGoroutine`, `TestACancelledSendResolvesCancelledAndItsGoroutineEnds`, " +
 				"under -race).",
 		},
+		{"internal/component/hostserve.go", "(*HTTPServer).ServeHTTP"}: {
+			count: 1,
+			by: "ADR 0137 — a served request's task driver, one goroutine per request: the host call of the " +
+				"instance's wasi:http/handler `handle` export through `callReturning` (ADR 0136), which returns when " +
+				"the task exits. Its guest code runs under the instance's run slot as any call's does, and the instance " +
+				"serves no other task meanwhile. The answer reaches ServeHTTP, net/http's goroutine, through a buffered " +
+				"channel inside `task.return`; nothing it does touches the ResponseWriter. Its context is the server's, " +
+				"so a client going away cancels nothing (p3serve's stall and sleep rows), and Close cancels every task, " +
+				"lets every body go, closes every instance and waits each out " +
+				"(`TestCloseEndsEveryServedTaskAndItsGoroutine`, under -race).",
+		},
+		{"cmd/burroughs/serve.go", "serve"}: {
+			count: 1,
+			by: "ADR 0137 — `burroughs serve`'s stop watcher, one per serve: it waits for a stop or for Serve to " +
+				"end, and on a stop shuts the net/http server down under a bound. It runs no guest code and touches " +
+				"no engine state but through the public Component, and serve joins it before returning " +
+				"(`TestServeAComponent`).",
+		},
 		{"internal/component/hostfs.go", "(*Host).fsWriteViaStream"}: {
 			count: 1,
 			by: "ADR 0133 — a wasi:filesystem write-via-stream's writer, one goroutine per call, tcp-socket.send's " +

@@ -14,10 +14,10 @@ Built on:     darwin/arm64, 2026-11-25
 
   p3serve.wasm
     build.sh   (cargo build --offline --locked --release --target wasm32-wasip3, in a scratch copy)
-    sha256: 6366ee37bd7e40a9c42c03851c9bff26bab60088e6b6354bf448847eb88f7ccc
-    bytes:  288787
+    sha256: 875c683d01efc23cc0274acebb17ef5b3e2b35c8a0c4b945bfc24e67562027f5
+    bytes:  309518
     A cdylib: its one export is wasi:http/handler@0.3.0, whose handle is async-lifted with a callback, and it has no
-    wasi:cli/run. Each row is a path; most return their response first and write its body from a spawned future,
+    wasi:cli/run. It imports wasi:http/client@0.3.0 for the send row, whose client.send is async-lowered. Each row is a path; most return their response first and write its body from a spawned future,
     the vendored wasip3 crate's examples/http-proxy.rs shape. What only the guest can see, a reader gone or a
     handler entered, it writes to stderr as one line beginning with the row's name.
 

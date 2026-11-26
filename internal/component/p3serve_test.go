@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,8 +137,8 @@ func serveRows() []p3serveRow {
 	get := func(target string, extra ...string) string {
 		return "GET " + target + " HTTP/1.1\r\nHost: p3serve.test\r\n" + strings.Join(extra, "") + "\r\n"
 	}
-	one := func(req string, body ...string) func(a *serveArm) ([]string, error) {
-		return func(a *serveArm) ([]string, error) { return a.exchange(req, body...) }
+	one := func(req string) func(a *serveArm) ([]string, error) {
+		return func(a *serveArm) ([]string, error) { return a.exchange(req) }
 	}
 	chunked := func(path, extra string, chunks []string, trailer string) string {
 		var b strings.Builder
@@ -182,6 +183,14 @@ func serveRows() []p3serveRow {
 			return a.disconnect(get("/sleep"), "", -1, "sleep: the handler entered", "sleep: ")
 		}},
 		{"trailers-err", func(a *serveArm) ([]string, error) { return a.aborted(get("/trailers-err")) }},
+		{"send", func(a *serveArm) ([]string, error) {
+			// The guest sends to a peer on 127.0.0.1 from inside its handler; serve grants it, as wasmtime's does.
+			peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, "peer saw %s %s", r.Method, r.URL.Path)
+			}))
+			defer peer.Close()
+			return a.exchange(get("/send?to=" + peer.Listener.Addr().String()))
+		}},
 	}
 }
 
@@ -205,19 +214,20 @@ func (a *serveArm) dial() (net.Conn, error) {
 }
 
 // exchange writes one request on a connection of its own and records its response.
-func (a *serveArm) exchange(req string, _ ...string) ([]string, error) {
+func (a *serveArm) exchange(req string) ([]string, error) {
 	c, err := a.dial()
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
-	if _, err := io.WriteString(c, req); err != nil {
-		return nil, fmt.Errorf("writing the request: %w", err)
+	if _, werr := io.WriteString(c, req); werr != nil {
+		return nil, fmt.Errorf("writing the request: %w", werr)
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
 	if err != nil {
 		return nil, fmt.Errorf("reading the response's head: %w", err)
 	}
+	defer resp.Body.Close()
 	body, berr := io.ReadAll(resp.Body)
 	return a.capture(resp, body, berr), nil
 }
@@ -232,11 +242,12 @@ func (a *serveArm) aborted(req string) ([]string, error) {
 		return nil, err
 	}
 	defer c.Close()
-	if _, err := io.WriteString(c, req); err != nil {
-		return nil, fmt.Errorf("writing the request: %w", err)
+	if _, werr := io.WriteString(c, req); werr != nil {
+		return nil, fmt.Errorf("writing the request: %w", werr)
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
 	if err == nil {
+		defer resp.Body.Close()
 		_, err = io.ReadAll(resp.Body)
 	}
 	if err == nil {
@@ -333,7 +344,7 @@ func (a *serveArm) concurrent(n int) ([]string, error) {
 		}
 	}
 	for i, h := range hs {
-		resp, err := http.ReadResponse(h.br, nil)
+		resp, err := http.ReadResponse(h.br, nil) //nolint:bodyclose // read to its end below, or its connection closed by the defer
 		if err != nil {
 			return nil, fmt.Errorf("request %d's response head, with every body open: %w", i, err)
 		}
@@ -364,24 +375,25 @@ func (a *serveArm) disconnect(head, more string, keep int, entered, prefix strin
 	if err != nil {
 		return nil, err
 	}
-	if _, err := io.WriteString(c, head+more); err != nil {
+	if _, werr := io.WriteString(c, head+more); werr != nil {
 		c.Close()
-		return nil, err
+		return nil, werr
 	}
 	var out []string
 	if entered != "" {
-		line, next, err := a.stderr.waitPrefix(from, entered)
-		if err != nil {
+		line, next, werr := a.stderr.waitPrefix(from, entered)
+		if werr != nil {
 			c.Close()
-			return nil, err
+			return nil, werr
 		}
 		out, from = append(out, "guest: "+line), next
 	}
 	if keep >= 0 {
-		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
-		if err != nil {
+		// The body is read only in part: the client goes away, and closing the connection is how.
+		resp, rerr := http.ReadResponse(bufio.NewReader(c), nil) //nolint:bodyclose // see above
+		if rerr != nil {
 			c.Close()
-			return nil, fmt.Errorf("reading the response's head: %w", err)
+			return nil, fmt.Errorf("reading the response's head: %w", rerr)
 		}
 		got, rerr := io.ReadFull(resp.Body, make([]byte, keep))
 		out = append(out, "status: "+resp.Status, fmt.Sprintf("read %d bytes, then went away (%v)", got, rerr))
@@ -439,8 +451,8 @@ func startWasmtimeServe(t *testing.T) *serveArm {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
+	if serr := cmd.Start(); serr != nil {
+		t.Fatal(serr)
 	}
 	log := newLineLog()
 	scanned := make(chan struct{})
@@ -470,6 +482,7 @@ func startWasmtimeServe(t *testing.T) *serveArm {
 // takeP3ServeReading drives the oracle p3serveRuns times, a fresh server each, requires every drive to agree, and
 // writes the reading.
 func takeP3ServeReading(t *testing.T) {
+	t.Helper()
 	var first []string
 	for run := 1; run <= p3serveRuns; run++ {
 		lines, err := driveServe(startWasmtimeServe(t))
@@ -526,25 +539,100 @@ func readP3ServeReading(t *testing.T) []string {
 	return lines
 }
 
-// TestP3ServeMatchesWasmtime is E2-in-b's oracle witness (ADR 0137). With -update-p3serve it takes the reading from
-// wasmtime 49.0.3's serve. Without it, it checks that the committed reading has every row the driver drives, in
-// order; the comparison against Burroughs' serving lands with the engine.
+// burroughsServe is Burroughs' arm: an HTTPServer over p3serve.wasm behind an httptest server, its instances' stderr
+// the arm's log.
+type burroughsServe struct {
+	*serveArm
+	srv *HTTPServer
+	ts  *httptest.Server
+}
+
+// startBurroughsServe serves p3serve.wasm with gate:async on and gate:cm-threads in the state given, each instance on
+// a host of its own whose stderr is the arm's log and which grants outgoing HTTP, as `burroughs serve` does. Cleanup
+// closes the client connections, then the server, then the HTTPServer.
+func startBurroughsServe(t *testing.T, gate string) *burroughsServe {
+	t.Helper()
+	t.Setenv(asyncGateEnv, "1")
+	t.Setenv(cmThreadsGateEnv, gate)
+	wasm, err := os.ReadFile(p3serveWasm)
+	if err != nil {
+		t.Fatalf("the committed fixture is missing: %v", err)
+	}
+	log := newLineLog()
+	spawn := func() (*Instantiated, error) {
+		h := NewHost(io.Discard, log, nil)
+		h.AllowHTTP = true
+		return InstantiateWithHost(wasm, h)
+	}
+	first, err := spawn()
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	export := first.HTTPHandlerExport()
+	first.Close()
+	if export != "wasi:http/handler@0.3.0#handle" {
+		t.Fatalf("HTTPHandlerExport = %q, want wasi:http/handler@0.3.0#handle", export)
+	}
+	srv := NewHTTPServer(spawn, export)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(func() {
+		ts.CloseClientConnections()
+		ts.Close()
+		srv.Close(time.Now().Add(p3serveGuard))
+	})
+	return &burroughsServe{
+		serveArm: &serveArm{addr: ts.Listener.Addr().String(), name: "burroughs", stderr: log},
+		srv:      srv, ts: ts,
+	}
+}
+
+// TestP3ServeMatchesWasmtime is E2-in-b's oracle witness (ADR 0137): every row of p3serve.reading, driven against
+// Burroughs' HTTPServer, with gate:cm-threads off and on. The reading is wasmtime 49.0.3's serve, taken by this
+// driver with -update-p3serve. A difference is reported at its first row, with both blocks.
 func TestP3ServeMatchesWasmtime(t *testing.T) {
 	if *updateP3Serve {
 		takeP3ServeReading(t)
 		return
 	}
-	var got []string
-	for _, ln := range readP3ServeReading(t) {
-		if name, ok := strings.CutPrefix(ln, "row: "); ok {
-			got = append(got, name)
+	want := readP3ServeReading(t)
+	for _, gate := range []string{"0", "1"} {
+		t.Run("cm-threads="+gate, func(t *testing.T) {
+			got, err := driveServe(startBurroughsServe(t, gate).serveArm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := firstRowDiff(want, got); diff != "" {
+				t.Fatal(diff)
+			}
+		})
+	}
+}
+
+// firstRowDiff is the first row whose lines differ between the reading and a drive, both blocks, or "".
+func firstRowDiff(want, got []string) string {
+	blocks := func(lines []string) ([]string, map[string][]string) {
+		var order []string
+		m := map[string][]string{}
+		cur := ""
+		for _, ln := range lines {
+			if name, ok := strings.CutPrefix(ln, "row: "); ok {
+				cur = name
+				order = append(order, name)
+				continue
+			}
+			m[cur] = append(m[cur], ln)
+		}
+		return order, m
+	}
+	wo, wm := blocks(want)
+	gotOrder, gm := blocks(got)
+	if strings.Join(wo, ",") != strings.Join(gotOrder, ",") {
+		return fmt.Sprintf("the drive's rows are %v; the reading's are %v", gotOrder, wo)
+	}
+	for _, row := range wo {
+		if a, b := strings.Join(wm[row], "\n"), strings.Join(gm[row], "\n"); a != b {
+			return fmt.Sprintf("row %s differs from wasmtime 49.0.3's reading:\nburroughs:\n%s\nwasmtime:\n%s", row, b, a)
 		}
 	}
-	var want []string
-	for _, r := range serveRows() {
-		want = append(want, r.name)
-	}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("the reading's rows are %v; the driver drives %v", got, want)
-	}
+	return ""
 }

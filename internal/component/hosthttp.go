@@ -826,7 +826,8 @@ type httpGuestBody struct {
 }
 
 // httpRequest is the object behind a `request` handle. Its fields are guarded by mu; body and sent are guarded by
-// asyncHandles.mu, as the ends they hold are.
+// asyncHandles.mu, as the ends they hold are. incoming is set for a request the host minted from one it is serving
+// (hostserve.go, ADR 0137), whose body is the host's rather than the guest's; it is never written after the mint.
 type httpRequest struct {
 	mu        sync.Mutex
 	method    httpCase
@@ -839,6 +840,7 @@ type httpRequest struct {
 	reg       *hostHTTP
 	body      httpGuestBody
 	sent      *readableFutureEnd // new's transmission future
+	incoming  *httpIncoming
 }
 
 // methodValue and schemeValue are a case's value.
@@ -1162,7 +1164,8 @@ func (h *Host) requestGetHeaders(res *hostResources, _ *interp.CanonCaller, r *h
 
 // httpResponse is the object behind a `response` handle: a guest's, from response.new, with its guest body and its
 // transmission future, or a send's, with the host's body (hosthttpsend.go). body, sent and host are guarded by
-// asyncHandles.mu.
+// asyncHandles.mu. caller is response.new's, bound to the guest's memory, so a host serving the response can read its
+// body stream from that memory (hostserve.go, ADR 0137); it is never written after the mint.
 type httpResponse struct {
 	mu      sync.Mutex
 	status  uint16
@@ -1172,6 +1175,7 @@ type httpResponse struct {
 	body    httpGuestBody
 	sent    *readableFutureEnd
 	host    *httpSend
+	caller  *interp.CanonCaller
 }
 
 func (h *Host) responseGetStatus(_ *hostResources, _ *interp.CanonCaller, r *httpResponse, _ []interp.Value) ([]interp.Value, error) {

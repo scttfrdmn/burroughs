@@ -92,11 +92,17 @@ type hostHTTP struct {
 	pending   map[*httpSend]struct{} // round trips not yet resolved: the claim
 	live      map[*httpSend]struct{} // sends whose context Close cancels: until the response body is done
 	held      map[*readableStreamEnd]struct{}
-	wg        sync.WaitGroup
+	// incoming are the bodies of requests this instance is serving (hostserve.go, ADR 0137), whose Read in flight
+	// Close ends.
+	incoming map[*httpIncoming]struct{}
+	wg       sync.WaitGroup
 }
 
 func newHostHTTP() *hostHTTP {
-	return &hostHTTP{pending: map[*httpSend]struct{}{}, live: map[*httpSend]struct{}{}, held: map[*readableStreamEnd]struct{}{}}
+	return &hostHTTP{
+		pending: map[*httpSend]struct{}{}, live: map[*httpSend]struct{}{}, held: map[*readableStreamEnd]struct{}{},
+		incoming: map[*httpIncoming]struct{}{},
+	}
 }
 
 // hold records a stream end as a message's body, and reports false if one already is.
@@ -211,6 +217,10 @@ func (n *hostHTTP) stop() {
 	}
 	n.live = map[*httpSend]struct{}{}
 	tr := n.transport
+	incoming := make([]*httpIncoming, 0, len(n.incoming))
+	for b := range n.incoming {
+		incoming = append(incoming, b)
+	}
 	n.mu.Unlock()
 	for s := range pending {
 		s.h.mu.Lock()
@@ -220,9 +230,27 @@ func (n *hostHTTP) stop() {
 	for _, s := range live {
 		s.cancel(errHTTPStopped)
 	}
+	// An incoming request's body Read in flight is ended by a read deadline in the past, so waitAllHTTP does not wait on
+	// a client that never sends more (ADR 0137).
+	for _, b := range incoming {
+		b.abort()
+	}
 	if tr != nil {
 		tr.CloseIdleConnections()
 	}
+}
+
+// addIncoming and dropIncoming register an incoming request's body for stop, over the life of its ServeHTTP.
+func (n *hostHTTP) addIncoming(b *httpIncoming) {
+	n.mu.Lock()
+	n.incoming[b] = struct{}{}
+	n.mu.Unlock()
+}
+
+func (n *hostHTTP) dropIncoming(b *httpIncoming) {
+	n.mu.Lock()
+	delete(n.incoming, b)
+	n.mu.Unlock()
 }
 
 // wait returns once every send goroutine and response body Read has ended.
@@ -641,6 +669,20 @@ type httpReqBody struct {
 	tSet    bool
 	tErr    string
 	tFields *httpFields
+	// taskGone is the writer's task ended, for a response body the host is serving (ADR 0137): a body that has not
+	// ended by then ends with what was written and no trailers, wasmtime 49.0.3's reading of a trap after the answer.
+	taskGone bool
+}
+
+// taskEnded is the serving host's word that the task writing this body has exited or trapped: Read ends the body once
+// what it holds is read (ADR 0137).
+func (b *httpReqBody) taskEnded() {
+	b.h.mu.Lock()
+	b.taskGone = true
+	if b.h.hostIO != nil {
+		b.h.hostIO.Broadcast()
+	}
+	b.h.mu.Unlock()
 }
 
 func (b *httpReqBody) free() int { return httpBodyBufCap - len(b.buf) }
@@ -735,11 +777,27 @@ func (b *httpReqBody) Read(p []byte) (int, error) {
 					if err := b.armLocked(); err != nil {
 						b.stopping = true // the copy failed: the request fails, and the guest is told by its write
 					}
+					if b.taskGone {
+						h.hostIO.Broadcast() // a Read waiting on the re-arm to judge the end (below)
+					}
 				})
 				return n, nil
 			}
 			h.mu.Unlock()
 			return n, nil
+		}
+		if b.taskGone && !b.arming && (!b.closing || !b.tSet) {
+			// **The writer's task has ended and the body has not** (ADR 0137): what it wrote has been read, and no
+			// re-arm is queued that could copy more, so the body ends here, cleanly and with no trailers, as wasmtime
+			// 49.0.3 ends one whose guest trapped after its answer (p3serve's trap-after row).
+			//
+			// NEUTER, run: wait on instead, and TestP3ServeMatchesWasmtime's trap-after row reads "partial" and then
+			// "body error: the guard expired" where wasmtime's body ends: the trapped guest will never drop its writer.
+			//
+			// eof is left unset, so Close unlinks the stream the guest never finished.
+			b.tFields = nil
+			h.mu.Unlock()
+			return 0, io.EOF
 		}
 		if b.closing && b.tSet {
 			if b.tErr != "" {

@@ -133,3 +133,8 @@ went away before the response
 guest: sleep: the wait ended and the handler returned
 row: trailers-err
 outcome: the connection closed before the response ended
+row: send
+status: 200 OK
+header x-guest: ["send"]
+framing: chunked
+body: "send: status 200, body \"peer saw GET /peer\""

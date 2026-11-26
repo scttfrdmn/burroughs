@@ -17,7 +17,8 @@ use std::future::Future;
 
 use exports::wasi::http::handler::Guest;
 use wasi::clocks::monotonic_clock;
-use wasi::http::types::{ErrorCode, Fields, Request, Response};
+use wasi::http::client;
+use wasi::http::types::{ErrorCode, Fields, Request, Response, Scheme};
 use wit_bindgen::{FutureWriter, StreamReader, StreamResult, StreamWriter};
 
 type Trailers = Result<Option<Fields>, ErrorCode>;
@@ -258,6 +259,30 @@ impl Guest for P3Serve {
                 std::mem::forget(guard);
                 eprintln!("sleep: the wait ended and the handler returned");
                 fixed(200, &[("x-guest", "sleep")], b"slept".to_vec())
+            }
+            "/send" => {
+                // An outgoing request from inside the handler, to the peer the query names: serve grants outgoing
+                // HTTP, as wasmtime's does. The peer's address is not in the answer, only its status and body.
+                let to = pq.split("to=").nth(1).unwrap_or("").to_string();
+                let (tx, rx) = wit_future::new::<Trailers>(|| Ok(None));
+                let (out, _sent) = Request::new(Fields::new(), None, rx, None);
+                drop(tx);
+                out.set_scheme(Some(&Scheme::Http)).unwrap();
+                out.set_authority(Some(&to)).unwrap();
+                out.set_path_with_query(Some("/peer")).unwrap();
+                let line = match client::send(out).await {
+                    Err(e) => format!("send: err {}", ec(&e)),
+                    Ok(resp) => {
+                        let status = resp.get_status_code();
+                        let (res_tx, res_rx) = wit_future::new::<Result<(), ErrorCode>>(|| Ok(()));
+                        let (body, trailers) = Response::consume_body(resp, res_rx);
+                        let b = body.collect().await;
+                        let _ = trailers.await;
+                        drop(res_tx);
+                        format!("send: status {status}, body {:?}", text(&b))
+                    }
+                };
+                fixed(200, &[("x-guest", "send")], line.into_bytes())
             }
             _ => fixed(404, &[("x-guest", "none")], format!("no row {route}").into_bytes()),
         }
