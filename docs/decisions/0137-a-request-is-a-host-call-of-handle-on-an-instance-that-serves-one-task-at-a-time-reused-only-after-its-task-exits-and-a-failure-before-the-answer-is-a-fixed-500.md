@@ -154,3 +154,41 @@ On darwin/arm64, in the worktree of #1385's branch. The reading was committed be
 ## Rollback
 
 Remove `Component.Handler()` and `burroughs serve`: nothing else calls the pool, and `callReturning`, the resources and the send are as ADR 0136 and ADR 0135 left them. The incoming arm of `request.consume-body` is reachable only from a request the pool mints.
+
+## Postscript, 2026-11-25 — Close lets a body go wherever it finds it, and this is a postscript rather than an edit
+
+**What the PR's CI found.** On [#1401](https://github.com/scttfrdmn/burroughs/pull/1401)'s first CI run, `TestCloseEndsEveryServedTaskAndItsGoroutine` reached Close's bound on three jobs (ubuntu-24.04-arm under `burroughs_endtable`, ubuntu-24.04 under `-race`, macos-15), and `TestComponentCloseClosesItsHandler` reached `Component.Close`'s on one (ubuntu-24.04 under `-race`). Every one had passed in the slice's own runs. The witnesses were made to name their place: each task by the request that made it, the engine's record of it when Close was asked and at the bound, and the serving goroutines' stacks. Then the first was reproduced on darwin/arm64 at go1.26.11, `-count` across `-cpu 1,2,4`, beside a CPU load of 24 spinning goroutines in a process of its own. The load ran for most of the reproducing `-race` run, and for all of the run after the repair:
+
+| run | failed |
+|---|---|
+| plain, no load | 0 of 120 |
+| plain, under the load | 0 of 120 |
+| `-race`, under the load | 2 of 60, both `cm-threads=1`, at `-cpu 2` and `-cpu 4` |
+
+Both reproductions name one place: **forever had answered and its head had reached the client, and ServeHTTP had not yet recorded its body when Close let the bodies go.** At the bound, forever's task was parked in `awaitEvent` with its write unread, and its ServeHTTP was held in a Write to a client that reads nothing. The second test was not reproduced, in 0 of 120 runs under `-race` and the load. With both orders forced (below) it fails as its CI line does, at `Component.Close`'s bound with its echo's task parked in `awaitEvent`.
+
+**The cause is Close's step 2, not its named limit.** The let-go reached only what was in flight at its instant: a response body already recorded, and a request body Read already in flight. Close comes at any moment, and three moments fall between those:
+
+1. between a response head's flush and the recording of its body;
+2. between one Read of a request body and the next;
+3. after the last Read a guest makes, when it awaits the body's trailers without reading. p3serve's echo does this once its response's write is told DROPPED.
+
+In each, the body Close missed was held for ever, and the task parked on something this host can deliver. The witness's own place (three tasks in the set, forever's head read) never established that any body was recorded or being Read. Its documentation now says that Close is asked where each body may be either.
+
+**The repair** (`hostserve.go`). Step 2 reads *every body is let go wherever Close finds it*:
+
+- **a response body recorded after the let-go is let go at once** (`serveRequest.setBody`, through a mark `abortBodies` sets under the same lock);
+- **a request body's stream is ended by the host itself**, `err(HTTP-protocol-error)`, the code a Read the deadline ends in flight gives. It is ended by a delivery (`endIncoming`), not through a Read. A body consumed after the let-go is ended as it is made (`httpIncoming.consumeLocked`), and any Read after the let-go is refused (`httpIncoming.Read`). So no Read starts that only ServeHTTP's return could end.
+
+It reverses no stamped ADR and adds no surface. Close's posture, a bounded wait that reports `ErrCloseIncomplete`, is unchanged, and so is the named limit, which now covers only a task parked on something no host work delivers.
+
+**Witnesses, each with its neuter run:**
+
+- `TestAResponseBodyRecordedAfterCloseIsLetGoAtOnce` covers moment 1. Under its neuter the body is left open and its guest writer is not told.
+- `TestARequestBodyReadAfterCloseIsRefused` covers moment 2. Under its neuter the body is read.
+- `TestCloseEndsATaskAwaitingTheTrailersOfABodyItStoppedReading` covers moment 3, at a place. An echo's client streams its body and reads nothing back, so the guest is parked in its write with no Read in flight and its ServeHTTP is held in a Write. Under its neuter Close reaches its bound.
+- `TestARequestBodyConsumedAfterCloseIsEndedAtOnce` covers a body consumed after Close. No p3serve row reaches it.
+
+The two end-to-end witnesses were also run with both orders forced by an experiment, since reverted, that held every Read and every body's recording until Close's let-go. Without the repair, both reached their bounds, with forever and echo parked. With it, both passed. After the repair, under the same load and `-race`, the two Close witnesses failed none of 240 runs (`TestCloseEndsEveryServedTaskAndItsGoroutine` and `TestCloseEndsATaskAwaitingTheTrailersOfABodyItStoppedReading`, 120 each).
+
+**A limit read from the code and not driven.** Close's let-go is a delivery, and a delivery waits for the run slot (`deliverHTTP`). So a guest that has answered and then computes without yielding holds Close inside step 2, before its bounded wait starts. That wait is abandoned only by `producerStop`, which closes at step 4. It is the shape [#1398](https://github.com/scttfrdmn/burroughs/issues/1398) names for `acquireRun`. No p3serve row computes after its answer.
