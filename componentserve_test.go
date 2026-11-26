@@ -4,11 +4,13 @@ package burroughs_test
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +26,56 @@ const p3serveWasm = "internal/component/testdata/p3serve/p3serve.wasm"
 
 // serveGuard bounds a request or a read here: a harness hang guard, not a measurement.
 const serveGuard = 60 * time.Second
+
+// servingPlaces names where serving is, so a Close that reaches its bound names its place the first time it happens:
+// every goroutine whose `created by` function line is internal/component's (a request's task driver, a request body's
+// Read) and every goroutine net/http runs the handler's ServeHTTP on, each by its status line, its innermost frames by
+// bare function name, and its creator.
+func servingPlaces() string {
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	bare := func(ln string) string {
+		fn := strings.TrimPrefix(strings.TrimPrefix(ln, "created by "), "github.com/scttfrdmn/burroughs/internal/")
+		if i := strings.Index(fn, " in goroutine "); i > 0 {
+			fn = fn[:i]
+		}
+		if i := strings.LastIndex(fn, "("); i > 0 && strings.HasSuffix(fn, ")") {
+			fn = fn[:i]
+		}
+		return fn
+	}
+	var b strings.Builder
+	n := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		lines := strings.Split(g, "\n")
+		created, serving := "", false
+		for _, ln := range lines {
+			switch {
+			case strings.HasPrefix(ln, "created by "):
+				created = bare(ln)
+			case !strings.HasPrefix(ln, "\t") && bare(ln) == "component.(*HTTPServer).ServeHTTP":
+				serving = true
+			}
+		}
+		if !strings.HasPrefix(created, "component.") && !serving {
+			continue
+		}
+		n++
+		b.WriteString("\n  " + lines[0])
+		frames := 0
+		for _, ln := range lines[1:] {
+			if frames == 12 || strings.HasPrefix(ln, "created by ") {
+				break
+			}
+			if !strings.HasPrefix(ln, "\t") {
+				b.WriteString("\n    " + bare(ln))
+				frames++
+			}
+		}
+		b.WriteString("\n    created by " + created)
+	}
+	return fmt.Sprintf("%d serving goroutine(s):%s", n, b.String())
+}
 
 func loadP3Serve(t *testing.T, cfg burroughs.ComponentConfig) *burroughs.Component {
 	t.Helper()
@@ -150,7 +202,8 @@ func TestComponentCloseClosesItsHandler(t *testing.T) {
 	defer resp.Body.Close()
 
 	if cerr := c.Close(); cerr != nil {
-		t.Fatalf("Close = %v; want nil, every served task ended within the bound", cerr)
+		t.Fatalf("Close = %v; want nil, every served task ended within the bound. Where serving is:\n%s", cerr,
+			servingPlaces())
 	}
 	if _, rerr := io.ReadAll(resp.Body); rerr != nil && os.IsTimeout(rerr) {
 		t.Fatalf("the held response is still open after Close: %v", rerr)

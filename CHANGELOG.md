@@ -33,7 +33,8 @@ says what it now requires and what it gives up.
     The embedder owns the listener, TLS and timeouts. Each request is a call of `handle`, answered at its `task.return`
     (ADR 0136). The response's status and headers are flushed at the answer, and its body is copied as the guest writes
     it, after `handle` has returned. Its trailers are sent when the request's `TE` names `trailers`, as hyper sends them.
-    `Component.Close` closes the handler.
+    `Component.Close` closes the handler. It ends every request's bodies wherever it finds them: a response body not
+    yet recorded, and a request body with no read in flight, are ended too (ADR 0137's postscript).
   - **`burroughs serve [--addr HOST:PORT] file.wasm`**, mirroring `wasmtime serve`. The default address is
     `0.0.0.0:8080`, and serve prints `Serving HTTP on http://ADDR/` on stderr once it listens. It grants outgoing HTTP,
     as wasmtime's does, so it takes no `--allow-http`. It also accepts `run`'s `--dir`, `--scratch`, `--inherit-network`

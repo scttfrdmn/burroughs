@@ -41,7 +41,8 @@ import (
 //
 // # Locks
 //
-// HTTPServer.mu and serveRequest.mu are leaves. httpIncoming.mu is a leaf, taken with none of the engine's held.
+// HTTPServer.mu and serveRequest.mu are leaves. httpIncoming.mu is a leaf: consume-body takes it under
+// asyncHandles.mu to record its producer, and no engine lock is taken under it.
 
 // serveIdleMax is how many idle instances a server keeps for the next request: wasmtime's per-instance concurrency
 // default (16), reused as a count of warm instances. One returned with this many idle is closed (ADR 0137).
@@ -193,8 +194,9 @@ func (s *HTTPServer) Close(deadline time.Time) bool {
 	// cancel and then tear down, is why it is here.
 	s.cancel()
 	// A task that has answered cannot be cancelled. One still writing its body is told the body's reader has gone, and
-	// one still reading its request's body is told the body ended, so it exits; a task parked with nothing to wake it
-	// would otherwise wait out the park's bound inside Close.
+	// one still reading its request's body, or awaiting its trailers, is told the body ended, so it exits; a task parked
+	// with nothing to wake it would otherwise wait out the park's bound inside Close. Each holds for a body Close finds
+	// at any point of its life, recorded or not, Read or not (abortBodies).
 	//
 	// NEUTER, run: skip it, and TestCloseEndsEveryServedTaskAndItsGoroutine's Close reaches its bound and reports it:
 	// its answered echo, reading a body the client holds open, and its forever, writing a body nobody reads, are parked
@@ -248,6 +250,7 @@ type serveRequest struct {
 	taskDone  bool
 	taskErr   error // what the task's call returned, once taskDone
 	abandoned bool  // ServeHTTP has returned without an answer: one that arrives is let go at once
+	letGo     bool  // Close has let the bodies go: a response body recorded after it is let go at once
 	parts     int   // finishes so far, of two
 	clean     bool  // every finish so far was clean
 }
@@ -325,10 +328,19 @@ func (q *serveRequest) dropAnswer(r []canon.Value, inSlot bool) {
 
 // abortBodies is Close's: a response body ServeHTTP is still copying is let go here, its reader dropped by a delivery
 // so a guest writing it is told DROPPED even while ServeHTTP is held in a Write to a client that reads nothing, and a
-// request body's Read in flight ends, so a guest reading it is told its end. Either way the task can exit before the
-// instance closes, while the deliveries that tell it still run. ServeHTTP's own closeServedBody then finds it closed.
+// request body is ended (httpIncoming.abort), so a guest reading it, or awaiting its trailers, is told its end. Either
+// way the task can exit before the instance closes, while the deliveries that tell it still run. ServeHTTP's own
+// closeServedBody then finds it closed.
+//
+// **Neither half rests on what is in flight at its instant** (ADR 0137's postscript). Close comes at any moment, and
+// there is a moment between a response's head leaving and its body being recorded, and another between one Read of a
+// request body and the next, or after the last a guest makes. So a response body recorded after this is let go at
+// once (setBody), and the request body's stream is ended by the host itself rather than through a Read, with any Read
+// after it refused. A let-go that reached only what was in flight left the body it missed held for ever, and Close
+// reached its bound: forever's body, recorded after Close had let the bodies go, on #1401's CI.
 func (q *serveRequest) abortBodies() {
 	q.mu.Lock()
+	q.letGo = true
 	b := q.body
 	q.mu.Unlock()
 	if b != nil {
@@ -356,14 +368,25 @@ func (q *serveRequest) run(arg canon.Value) {
 	close(q.ended)
 }
 
-// setBody records the response body's reader, and tells it at once if the task has already ended.
+// setBody records the response body's reader, and tells it at once if the task has already ended, and lets it go at
+// once if Close has let the bodies go already (abortBodies). Recorded and judged under q.mu, so it and abortBodies
+// never both miss it. Letting it go before respond's setup delivery is safe in either order of the two: a setup after
+// the unlink arms nothing, the body being closed (armLocked), and an unlink after the setup tells the guest's writer
+// DROPPED, a write parked on it included.
+//
+// NEUTER, run: drop the letGo arm, and TestAResponseBodyRecordedAfterCloseIsLetGoAtOnce reads the body open and its
+// guest writer not told, where it wants both. That is the place #1401's CI run read in
+// TestCloseEndsEveryServedTaskAndItsGoroutine, by chance, with forever parked in its write until Close's bound.
 func (q *serveRequest) setBody(b *httpReqBody) {
 	q.mu.Lock()
 	q.body = b
-	done := q.taskDone
+	done, letGo := q.taskDone, q.letGo
 	q.mu.Unlock()
 	if done {
 		b.taskEnded()
+	}
+	if letGo {
+		closeServedBody(b)
 	}
 }
 
@@ -753,20 +776,33 @@ type httpIncoming struct {
 	trailer http.Header // filled by net/http before Read returns the end
 	rc      *http.ResponseController
 
-	mu      sync.Mutex
-	closed  bool          // ServeHTTP is returning: no Read touches the body after it
-	reading bool          // a Read is in flight
-	idle    chan struct{} // closed when the Read in flight returns
+	mu       sync.Mutex
+	closed   bool            // ServeHTTP is returning: no Read touches the body after it
+	aborted  bool            // Close has let the body go: a Read in flight was ended, and none starts after it
+	reading  bool            // a Read is in flight
+	idle     chan struct{}   // closed when the Read in flight returns
+	producer *streamProducer // the body's producer, once consume-body has made it
 }
 
 var errIncomingClosed = errors.New("component: wasi:http: the request being served has been answered")
 
-// Read is the producer's read of the request body (ADR 0122's site).
+// Read is the producer's read of the request body (ADR 0122's site). After Close's abort it reads nothing and fails, as
+// a Read the abort ended in flight fails, so a guest is told the same end whichever it was: HTTP-protocol-error, the
+// producer's mapping of any failed Read.
+//
+// NEUTER, run: drop the aborted arm, and TestARequestBodyReadAfterCloseIsRefused reads the body and returns io.EOF,
+// where it wants no read and errServeClosed: a held body would have blocked that Read until its client went away. The
+// stream's own end (endIncoming) is a delivery, so a read the guest issues before it lands would otherwise start a
+// Read that only ServeHTTP's return ends, and a ServeHTTP held in a Write does not return.
 func (b *httpIncoming) Read(p []byte) (int, error) {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		return 0, errIncomingClosed
+	}
+	if b.aborted {
+		b.mu.Unlock()
+		return 0, errServeClosed
 	}
 	b.reading, b.idle = true, make(chan struct{})
 	b.mu.Unlock()
@@ -779,14 +815,60 @@ func (b *httpIncoming) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// abort ends a Read in flight by a read deadline in the past, Close's (hostHTTP.stop). Under mu, so it never touches
-// the controller after finish.
+// abort is Close's let-go of the request body (abortBodies): it ends a Read in flight by a read deadline in the past,
+// refuses every Read after it, and ends the body's stream itself (endIncoming), so the guest is told the body's end
+// whatever it is doing, reading or not. The first two are under mu, so it never touches the controller after finish,
+// and so a Read either is in flight when it runs or starts after it and finds it.
 func (b *httpIncoming) abort() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.aborted = true
 	if !b.closed && b.reading {
 		_ = b.rc.SetReadDeadline(time.Unix(1, 0)) //nolint:errcheck // a controller that cannot is HTTP/2's, whose body closes at the return
 	}
+	p := b.producer
+	b.mu.Unlock()
+	endIncoming(p)
+}
+
+// endIncoming ends a request body's stream at Close's let-go, by a delivery under ADR 0101's discipline, since the end
+// may complete a guest's read of the trailers future, which writes its memory. **The let-go cannot rest on a Read**: a
+// producer Reads only while its guest has a read pending (ADR 0122), so a guest that has stopped reading its body and
+// awaits that body's trailers, as p3serve's echo does once its response's write is told DROPPED, has no Read for the
+// deadline to end, and would wait for a future only this host can resolve. nil, a body not consumed yet, has nothing
+// to end here: consumeLocked ends it when it is made.
+//
+// NEUTER, run: skip this call in abort, and TestCloseEndsATaskAwaitingTheTrailersOfABodyItStoppedReading's Close
+// reaches its bound with the echo parked in awaitEvent, its write told DROPPED and its trailers never resolved, and its
+// ServeHTTP held in a Write.
+func endIncoming(p *streamProducer) {
+	if p == nil {
+		return
+	}
+	h := p.h
+	h.mu.Lock()
+	if p.done {
+		h.mu.Unlock()
+		return
+	}
+	h.httpPending++
+	h.mu.Unlock()
+	deliverHTTP(h, func() { endIncomingLocked(p) })
+}
+
+// endIncomingLocked finishes the stream now, as a failed Read would: its future err(HTTP-protocol-error), the code a
+// Read the abort ended in flight gives, unless the source had already ended with nothing left undelivered; what was
+// read and not delivered dropped; and the writer dropped, so a pending read is told DROPPED. A Read still in flight is
+// discarded at its delivery, which finds the producer done. The caller holds p.h.mu and the run slot.
+func endIncomingLocked(p *streamProducer) {
+	if p.done {
+		return
+	}
+	if p.final == nil || p.queuedLocked() {
+		v := p.mapErr(errServeClosed)
+		p.final = &v
+	}
+	p.dropQueueLocked()
+	p.finishLocked()
 }
 
 // finish is ServeHTTP's last act on the body: net/http forbids a Read after the handler returns, so none starts after
@@ -821,6 +903,19 @@ func (b *httpIncoming) consumeLocked(h *asyncHandles, res *hostResources, resEnd
 		atEnd:  func() canon.Value { return b.trailersValue(res) },
 	}
 	si, ti = p.mintLocked()
+	// Recorded for Close's let-go (endIncoming), or, consumed after it, ended now: the ends were minted just now, so no
+	// read of them is pending and the end writes no guest memory. mu is a leaf, so it is taken here under
+	// asyncHandles.mu, and abort either finds the producer or has set aborted before this reads it.
+	//
+	// NEUTER, run: skip the end, and TestARequestBodyConsumedAfterCloseIsEndedAtOnce reads the stream not ended and no
+	// trailers value, where it wants error(HTTP-protocol-error). No p3serve row reaches this arm.
+	b.mu.Lock()
+	b.producer = p
+	aborted := b.aborted
+	b.mu.Unlock()
+	if aborted {
+		endIncomingLocked(p)
+	}
 	err = armHostTakeLocked(resEnd, func(c *interp.CanonCaller, ptr uint32) error {
 		_, lerr := liftTransmitValue(c, ptr)
 		return lerr
