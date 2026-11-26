@@ -83,6 +83,35 @@ says what it now requires and what it gives up.
   - **Not yet reached:** `task.cancel` still resolves a caller at the task's exit, where the pin resolves at the call.
     Only a top-level own argument crosses, and no borrow, stream or future.
 
+- **A component creates, removes and renames beneath a directory it is granted: `wasi:filesystem@0.3`'s four
+  mutations** ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1c of the v0.16.0 plan
+  [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0138). No public API changes: the grant is ADR 0133's
+  `ComponentConfig.Preopens` and `burroughs run --dir`/`--scratch`.
+  - **What is served:** `descriptor`'s `create-directory-at`, `unlink-file-at`, `remove-directory-at` and `rename-at`,
+    each resolved inline and confined by its descriptor's `os.Root`. A descriptor without `mutate-directory` refuses
+    each with `read-only`, before anything is resolved, and that includes a directory opened without it. An empty path
+    is `no-entry`.
+  - **Kinds are asked about first:**
+    - `unlink-file-at` of a directory is `not-permitted` on every platform, since `Root.Remove` would remove an empty
+      one;
+    - `remove-directory-at` of anything but a directory is `not-directory`;
+    - `rename-at` onto an existing directory is answered as POSIX's rename answers it: `is-directory`, `not-empty`, or
+      ok onto itself.
+  - **`rename-at`'s second descriptor:**
+    - the same descriptor renames through its own root;
+    - two grants are `cross-device`;
+    - two descriptors of one grant rename through the grant's root at each one's recorded path. Each path is resolved
+      on its own descriptor's root first, and each recorded path must still name its directory.
+  - **Witnesses:** 19 of `fs-mutate.wasm`'s 25 rows match wasmtime 49.0.3's readings, 10 of 10 each, and its read-only
+    row matches the WIT's text (`fs-mutate.reading`). Every row was run with `gate:cm-threads` off and on, plain and
+    under `-race`, and after each the host's trees show what the row wrote and that nothing escaped the grant.
+  - **Named departures from wasmtime, each a row of its own:**
+    - a rename across two grants is `cross-device`, and so is one into a descriptor whose directory was renamed after
+      it was opened, where wasmtime follows its fds;
+    - a directory opened without `mutate-directory` is `read-only` where wasmtime mutates through it;
+    - a directory renamed onto an empty one is `exist` where POSIX replaces it, as `os.Rename` refuses it.
+  - **Not yet reached:** a Go program's `os.Mkdir`, `os.Remove` and `os.Rename`, until the Phase 4 fork binds them (F11c).
+
 - **A component lists a directory it is granted: `wasi:filesystem@0.3`'s `descriptor.read-directory`**
   ([#1374](https://github.com/scttfrdmn/burroughs/issues/1374), E1b of the v0.16.0 plan
   [#1370](https://github.com/scttfrdmn/burroughs/issues/1370), ADR 0134). No public API changes: the grant is ADR 0133's

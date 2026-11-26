@@ -105,7 +105,7 @@ func (h *Host) monotonicNow(_ *interp.CanonCaller, args []interp.Value) ([]inter
 func (h *Host) mark() uint64 { return uint64(time.Since(h.start).Nanoseconds()) }
 
 // asyncSource is the production async imports (#1233, ADR 0121), WASI 0.3's two waits, tcp-socket's connect
-// (ADR 0123), name lookup (ADR 0126) and five of descriptor's methods (ADR 0133), registered for 0.3 only. Each is a factory the walk calls with the
+// (ADR 0123), name lookup (ADR 0126) and descriptor's async methods (ADR 0133, ADR 0138), registered for 0.3 only. Each is a factory the walk calls with the
 // importing instance's async and resource tables, which hold the work while it is pending, so that instance's
 // Close stops it. A sync lower of any of them is the blocking sync lower (ADR 0126).
 func (h *Host) asyncSource() map[string]asyncImplFor {
@@ -125,6 +125,11 @@ func (h *Host) asyncSource() map[string]asyncImplFor {
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.stat-at", h.fsStatAt())
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.get-flags", h.fsGetFlags())
 	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.get-type", h.fsGetType())
+	// E1c's four mutations (ADR 0138, hostfs_mutate.go), resolved inline as E1a's are.
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.create-directory-at", fsPathMethod("create-directory-at", (*fsDescriptor).mkdirAt))
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.unlink-file-at", fsPathMethod("unlink-file-at", (*fsDescriptor).unlinkAt))
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.remove-directory-at", fsPathMethod("remove-directory-at", (*fsDescriptor).rmdirAt))
+	serve(m, wasiP3, "wasi:filesystem/types::[method]descriptor.rename-at", h.fsRenameAt())
 	// wasi:http/client's send (ADR 0135, hosthttpsend.go), behind AllowHTTP and denied at the call without it.
 	serve(m, wasiP3, "wasi:http/client::send", h.httpSend)
 	return m

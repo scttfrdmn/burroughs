@@ -23,9 +23,9 @@ import (
 
 // WASI 0.3's filesystem (#1374's E1a, ADR 0133): `wasi:filesystem/preopens@0.3`'s `get-directories` and
 // `wasi:filesystem/types@0.3`'s `descriptor`, with `open-at`, `stat`, `stat-at`, `get-flags`, `get-type`,
-// `read-via-stream` and `write-via-stream`, and E1b's `read-directory` (ADR 0134), whose stream of entries is lowered
-// inside the reader's own stream.read. Every other method of `descriptor` meets the refusing stub, by name: the
-// mutations are E1c's.
+// `read-via-stream` and `write-via-stream`, E1b's `read-directory` (ADR 0134), whose stream of entries is lowered inside
+// the reader's own stream.read, and E1c's four mutations (ADR 0138, hostfs_mutate.go). Every other method of
+// `descriptor` meets the refusing stub, by name: those are E1d's.
 //
 // # Confinement is os.Root's
 //
