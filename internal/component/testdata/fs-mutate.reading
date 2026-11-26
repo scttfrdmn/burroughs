@@ -1,0 +1,101 @@
+# Committed readings for fs-mutate.wasm: wasi:filesystem@0.3's create-directory-at, unlink-file-at, remove-directory-at
+# and rename-at at the ABI (#1374 E1c, ADR 0133, ADR 0138). Default path for each Go row: gate:async on, gate:cm-threads
+# both off and on.
+# Built:       wasm-tools parse fs-mutate.wat -o fs-mutate.wasm   (wasm-tools 1.258.0; validates --features all)
+# Invocation:  .oracle/wasmtime-49.0.3/wasmtime run -W component-model-async=y -W component-model-more-async-builtins=y \
+#                -S p3=y --dir <tree>::/ --dir <tree2>::/b --invoke 'run(<row>)' fs-mutate.wasm
+# Tree:        made fresh before every run, three siblings: tree/ holds hello.txt "hello world", w.txt "0123456789",
+#              sub/inner.txt "inner", empty/, full/f "x", in-link -> hello.txt, dir-link -> sub, up-link -> .., and
+#              out-link -> the absolute path of outside/; tree2/ holds other.txt "other"; outside/ holds victim.txt "v"
+#              and victim/. No row reads a directory, so host directory order is never read.
+# Engine:      wasmtime 49.0.3 (f96eabaa1 2026-10-14), darwin/arm64. Runs: 10 of 10 per line, each identical. Taken
+#              2026-11-26, before the engine code.
+#
+# Each line is `<row>: <reading>`, and the test reads them by row. The row's number is its line's position, from 0.
+mkdir: 8782336
+mkdir-errors: 2475071379
+mkdir-escapes: 2661195422
+mkdir-nested: 43909120
+unlink: 9671424
+unlink-kinds: 2533400222
+unlink-escapes: 2661195422
+rmdir: 2476249856
+rmdir-kinds: 2542507927
+rmdir-escapes: 2661195422
+rename: 2466972928
+rename-over: 2542639104
+rename-errors: 2341966739
+rename-escapes: 2661195422
+rename-two: 83886080
+rename-nested-escape: 2661195264
+rename-two-calls: 26412288
+#
+# The next two rows are Burroughs', not wasmtime's, by ADR 0138's two-descriptor rule. The test asserts the value on
+# the line, and wasmtime 49.0.3's reading is given beside it. Across two grants wasmtime renames with renameat over two
+# fds, on one filesystem here; a root cannot span two grants, so Burroughs answers cross-device. Through a descriptor
+# whose directory was renamed after it was opened, wasmtime follows the fd; Burroughs resolves through the grant's root
+# at the descriptor's recorded path, which no longer names it, so it answers cross-device.
+#   rename-cross-grant  wasmtime 365312     (0x00059300): ok; hello.txt gone; moved.txt in the second grant; ok.
+#   rename-stale        wasmtime 2466578432 (0x93050000): ok; ok; sub2/moved.txt a regular-file; hello.txt gone.
+rename-cross-grant: 2744321443
+rename-stale: 93561600
+#
+base-file: 2543294359
+#
+# The next two rows are Burroughs', by ADR 0133's child flags read through the WIT's mutate-directory text (ADR 0138):
+# "When this flag is unset on a descriptor, operations using the descriptor which would create, rename, delete, modify
+# the data or metadata of filesystem objects, or obtain another handle which would permit any of those, shall fail with
+# `error-code::read-only`". wasmtime 49.0.3 does not consult a child's flags, and mutates through it.
+#   child-read       wasmtime 2475884544 (0x93930000): deeper created, inner.txt unlinked, missing.txt no-entry, and
+#                    the rename of inner.txt (gone by then) no-entry.
+#   child-read-more  wasmtime 2258539264 (0x869e9300): hello.txt renamed into sub; missing no-entry; ../x not-permitted;
+#                    inner.txt exist.
+child-read: 2694881440
+child-read-more: 2694881440
+#
+sync-lower: 1280
+#
+# The read-only row comes from the WIT's text, not from wasmtime: wasmtime 49.0.3's `--dir` always grants
+# read|mutate-directory, so its CLI has no read-only grant (ADR 0133). Burroughs runs it on a read-only preopen and the
+# test asserts this value. On wasmtime's grant the row reads 2466250752 (0x93000000): newdir created, hello.txt unlinked,
+# empty removed, and the rename of hello.txt (gone by then) no-entry.
+read-only: 2694881440
+#
+# Meaning: four bytes, byte 0 the low one. An operation's byte is 0 for ok and 0x80 | its error-code case for an error
+# (0x86 exist, 0x8b invalid, 0x8d is-directory, 0x93 no-entry, 0x97 not-directory, 0x98 not-empty, 0x9e not-permitted,
+# 0xa0 read-only, 0xa3 cross-device). A kind byte is stat-at's type when ok (2 directory, 5 regular-file).
+#   mkdir                0x00860200: newdir created; its kind a directory; created again, exist.
+#   mkdir-errors         0x93869793: missing/x no-entry; hello.txt/x not-directory; sub exist; "" no-entry.
+#   mkdir-escapes        0x9e9e9e9e: ../x, /x, up-link/x and out-link/x each not-permitted.
+#   mkdir-nested         0x029e0000: sub opened read|mutate-directory ok; deeper from it ok; ../x from it not-permitted;
+#                        the grant's sub/deeper a directory.
+#   unlink               0x00939300: w.txt unlinked; then no-entry; missing.txt no-entry; in-link unlinked (hello.txt
+#                        stays).
+#   unlink-kinds         0x97009e9e: sub not-permitted; empty not-permitted (and still there); dir-link unlinked (sub
+#                        stays); hello.txt/x not-directory.
+#   unlink-escapes       0x9e9e9e9e: each not-permitted; outside/victim.txt stays.
+#   rmdir                0x93989300: empty removed; then no-entry; full not-empty; missing no-entry.
+#   rmdir-kinds          0x978b9797: hello.txt not-directory; dir-link not-directory; "." invalid; sub/inner.txt
+#                        not-directory.
+#   rmdir-escapes        0x9e9e9e9e: each not-permitted; outside/victim stays.
+#   rename               0x930b0500: hello.txt to moved.txt ok; moved.txt a regular-file of 11 bytes; hello.txt gone.
+#   rename-over          0x978d9800: w.txt over hello.txt ok; empty over full not-empty; hello.txt over sub
+#                        is-directory; empty over hello.txt not-directory.
+#   rename-errors        0x8b979393: missing no-entry; to missing/x no-entry; to hello.txt/x not-directory; sub into
+#                        sub/inner invalid.
+#   rename-escapes       0x9e9e9e9e: each not-permitted; outside/ unchanged, hello.txt stays, no stolen.
+#   rename-two           0x05000000: sub opened ok; hello.txt into sub's moved.txt ok; sub's inner.txt to the grant's
+#                        inner-up.txt ok; sub/moved.txt a regular-file.
+#   rename-nested-escape 0x9e9e9e00: sub opened ok; ../hello.txt from sub, inner.txt to ../x in sub, and hello.txt to
+#                        sub's ../x each not-permitted.
+#   rename-two-calls     0x01930500: into the second call's grant ok; moved.txt a regular-file through it; hello.txt
+#                        gone through the first; the two handles differ.
+#   rename-cross-grant   0xa39305a3: cross-device; hello.txt still a regular-file; no moved.txt in the second grant;
+#                        other.txt to the first grant cross-device.
+#   rename-stale         0x0593a300: sub renamed to sub2 ok; hello.txt into the open sub cross-device; no sub2/moved.txt;
+#                        hello.txt still a regular-file.
+#   base-file            0x97979797: hello.txt opened read as the base of all four: not-directory each.
+#   child-read           0xa0a0a0a0: sub opened read only: each read-only, and the tree is unchanged.
+#   child-read-more      0xa0a0a0a0: each read-only, before the escape and the existing name are resolved.
+#   sync-lower           0x00000500: rename-at through its sync lower ok; moved.txt a regular-file.
+#   read-only            0xa0a0a0a0: on a read-only grant each is read-only, and the tree is unchanged.
